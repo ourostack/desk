@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { runFixedCase } from "../fixed-controller.mjs";
+import { runFixedCase, runFixedController } from "../fixed-controller.mjs";
+import { checkerProcess } from "../checker-process.mjs";
+import { jsonBytes, sha256 } from "../core.mjs";
+import { prepareRunPlan } from "../producer.mjs";
 import { openRunOutput } from "../output.mjs";
 import { privateControllerFixture } from "./helpers/private-controller.mjs";
 import { completedControllerFixture } from "./helpers/completed-controller.mjs";
@@ -155,4 +159,86 @@ test("an exhausted shared deadline still attempts every close and rejects in-bud
   } });
   await assert.rejects(runFixedCase(options(f)), error => error instanceof AggregateError && error.errors.length === 3 && error.errors.every(item => item.code === "NATIVE_OWNER_STOP_UNVERIFIED") && error.observedCounts.admittedGrades === 0);
   assert.equal(closed.length, 3);
+});
+
+for (const phase of ["raw-read", "final-retention"]) test(`review: cleanup ${phase} cannot overrun the deadline and admit the observed judge result`, async t => {
+  const f = await completedControllerFixture("checker-is-enforced");
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const close = f.opened.close;
+  f.opened.close = async function () {
+    const stopped = await close.call(this);
+    const read = stopped.readArtifact;
+    stopped.readArtifact = name => {
+      if (phase === "raw-read") now = f.plan.limits.cleanup.totalMs + 1;
+      return read(name);
+    };
+    return stopped;
+  };
+  const input = options(f);
+  const write = input.output.writeArtifact;
+  input.output = { ...input.output, writeArtifact(name, bytes) {
+    const result = write(name, bytes);
+    if (phase === "final-retention" && name === "owner-1-cleanup.json") now = f.plan.limits.cleanup.totalMs + 1;
+    return result;
+  } };
+  await assert.rejects(runFixedCase(input), error => error instanceof AggregateError && error.errors.some(item => item?.code === "NATIVE_OWNER_STOP_UNVERIFIED") && error.observedCounts.observedRequests === 1 && error.observedCounts.admittedGrades === 0);
+});
+
+test("review: held-out capture receives the captured acquisition signal after protocol replacement", async t => {
+  const f = await completedControllerFixture("checker-is-enforced");
+  const original = new AbortController();
+  const replacement = new AbortController();
+  f.opened.protocol.signal = original.signal;
+  f.input.assertConfinement = async ({ opened }) => { opened.protocol = { ...opened.protocol, signal: replacement.signal }; };
+  const capture = checkerProcess.capture;
+  let observedSignal;
+  t.mock.method(checkerProcess, "capture", async request => {
+    observedSignal = request.signal;
+    original.abort();
+    return capture(request);
+  });
+  const result = await runFixedCase(options(f));
+  assert.equal(observedSignal, original.signal);
+  assert.equal(result.status, "cancelled");
+  assert.equal(replacement.signal.aborted, false);
+});
+
+test("review: subject phases receive the captured acquisition signal after protocol replacement", async () => {
+  const f = await completedControllerFixture("checker-is-enforced");
+  const original = new AbortController();
+  f.opened.protocol.signal = original.signal;
+  f.input.assertConfinement = async ({ opened }) => { opened.protocol = { ...opened.protocol, signal: new AbortController().signal }; };
+  let operations = 0;
+  f.input.subjectBeforeSend = async ({ phase }) => {
+    original.abort();
+    await phase(() => { operations++; });
+  };
+  const result = await runFixedCase(options(f));
+  assert.equal(operations, 0);
+  assert.equal(result.status, "cancelled");
+});
+
+test("review: cancellation during final private retention publishes cancellation and does not attempt another cell", async t => {
+  const f = await privateControllerFixture();
+  const controller = new AbortController();
+  f.opened.protocol.signal = controller.signal;
+  f.expected.cells = [f.cell, ...f.expected.cells.filter(cell => cell.id !== f.cell.id)];
+  f.plan.expectedCells.sha256 = sha256(jsonBytes(f.expected));
+  fs.writeFileSync(path.join(f.inputRoot, "expected-cells.json"), jsonBytes(f.expected));
+  fs.writeFileSync(path.join(f.inputRoot, "plan.json"), jsonBytes(f.plan));
+  f.prepared = prepareRunPlan({ filename: path.join(f.inputRoot, "plan.json"), outputRoot: path.join(f.root, "private-cancel-run") });
+  const originalWrite = fs.writeFileSync;
+  t.mock.method(fs, "writeFileSync", function (filename, ...args) {
+    const result = originalWrite(filename, ...args);
+    if (String(filename).endsWith("/private-trace.json")) controller.abort();
+    return result;
+  });
+  const result = await runFixedController({ prepared: f.prepared, nativeInputs: f.nativeInputs });
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(result.attempts, 1);
+  const receipt = JSON.parse(fs.readFileSync(path.join(f.prepared.root, f.prepared.runSet.attempts[0].receipt.path)));
+  assert.equal(receipt.status, "cancelled");
+  assert.equal(receipt.grade, null);
+  assert.equal(f.prepared.runSet.unstartedCellIds.length, 11);
 });

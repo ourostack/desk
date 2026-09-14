@@ -67,8 +67,9 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
     const runId = randomUUID();
     const opened = await input.open({ cell, plan, fixture, ...options, runId });
     requireCondition(typeof opened?.close === "function", "NATIVE_CALLBACK_UNMAPPED", "Every native acquisition requires its owned, bounded close operation");
-    owners.push({ runId, close: opened.close.bind(opened), signal: opened.protocol?.signal, token: opened.protocol?.token });
-    return opened;
+    const owner = { opened, runId, close: opened.close.bind(opened), signal: opened.protocol?.signal, token: opened.protocol?.token };
+    owners.push(owner);
+    return owner;
   };
   const cancelled = () => owners.some(owner => owner.signal?.aborted);
   const retain = (name, value) => {
@@ -77,18 +78,19 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
     output.writeArtifact(name, bytes);
     return { path: name, sha256: sha256(bytes) };
   };
-  const opened = await acquire();
+  const acquired = await acquire();
+  const { opened } = acquired;
   let failure;
   let failed = false;
   let result;
   const reopen = async options => {
     const next = await acquire(options);
-    requireCondition(await input.assertConfinement({ opened: next, fixture, cell, plan }) !== false, "NATIVE_CONFINEMENT_UNVERIFIED", "The reacquired native owner refused confinement");
+    requireCondition(await input.assertConfinement({ opened: next.opened, fixture, cell, plan }) !== false, "NATIVE_CONFINEMENT_UNVERIFIED", "The reacquired native owner refused confinement");
     return next;
   };
   try {
     requireCondition(await input.assertConfinement({ opened, fixture, cell, plan }) !== false, "NATIVE_CONFINEMENT_UNVERIFIED", "The native owner refused confinement");
-    result = await executeCase({ cell, plan, input, output, outputRoot, definition, fixture, opened, reopen, cancelled });
+    result = await executeCase({ cell, plan, input, output, outputRoot, definition, fixture, acquired, reopen, cancelled });
   } catch (error) { failure = error; failed = true; throw error; }
   finally {
     // Judge artifacts are provisional case evidence until every acquisition has closed.
@@ -103,13 +105,14 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
         ]);
         const receipt = structuredClone(stopped?.receipt);
         requireCondition(performance.now() <= deadline && stopped?.runId === owner.runId && validateCleanupReceipt(receipt, { runId: owner.runId, readArtifact: stopped.readArtifact, requireRunId: true }).ok, "NATIVE_OWNER_STOP_UNVERIFIED", "Every acquisition requires its own generation-bound, within-budget stopped-writer receipt");
-        owner.stopped = { runId: owner.runId, receipt, readArtifact: stopped.readArtifact };
         const captured = structuredClone(receipt);
         for (const key of ["ownedSpawns", "exitObservations"]) for (const [rowIndex, row] of captured[key].entries()) {
           const bytes = readRawReference(row.rawRef, stopped.readArtifact);
           row.rawRef = { ...row.rawRef, ...retain(`owner-${index + 1}-${key}-${rowIndex + 1}.json`, bytes), byteLength: bytes.length };
         }
         retain(`owner-${index + 1}-cleanup.json`, { runId: owner.runId, receipt: captured });
+        requireCondition(performance.now() <= deadline, "NATIVE_OWNER_STOP_UNVERIFIED", "Owned cleanup verification and retention exceeded the shared deadline");
+        owner.stopped = { runId: owner.runId, receipt, readArtifact: stopped.readArtifact };
       }
       catch (error) { errors.push(error); }
       finally { clearTimeout(timer); }
@@ -130,10 +133,12 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
     retain(`private-${check.id}-observation.json`, observation);
     return [check.id, assessCheck({ definition: check.expectation, observation })];
   });
+  if (cancelled()) return { ...unavailable(), status: "cancelled", checks };
   return { ...unavailable(), status: checks.some(([, value]) => value.status === "unavailable") ? "unavailable" : checks.every(([, value]) => value.status === "pass") ? "passed" : "product_failure", checks };
 }
 
-async function executeCase({ cell, plan, input, output, outputRoot, definition, fixture, opened, reopen, cancelled }) {
+async function executeCase({ cell, plan, input, output, outputRoot, definition, fixture, acquired, reopen, cancelled }) {
+  let { opened } = acquired;
   let sequence = 0;
   const retain = (name, value) => {
     const bytes = Buffer.isBuffer(value) ? value : jsonBytes(value);
@@ -167,13 +172,16 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
     for (const [turnIndex, turn] of definition.turns.entries()) {
       if (cancelled()) return { ...unavailable(), status: "cancelled", checkpoints };
       if (turn.restartBefore) { previousSessionId = sessionId; sessionId = randomUUID(); }
-      if (turnIndex > 0) opened = await reopen({ turnIndex, sessionId, resume: !turn.restartBefore });
+      if (turnIndex > 0) {
+        acquired = await reopen({ turnIndex, sessionId, resume: !turn.restartBefore });
+        opened = acquired.opened;
+      }
       if (cancelled()) return { ...unavailable(), status: "cancelled", checkpoints };
       const records = [];
       const files = new Map();
       const subjectTurn = { ...opened.subjectTurn, schemaVersion: 1, caseId: cell.caseId, turnIndex, sessionId, resume: turnIndex > 0 && !turn.restartBefore, actorRoot: fixture.actorView.root, canonicalRoot: fixture.canonicalView.root };
       const current = await runTerminalProtocol({
-        ...opened.protocol, model: cell.subject.model,
+        ...opened.protocol, signal: acquired.signal, model: cell.subject.model,
         limits: { startupSendWorkMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs },
         subjectTurn,
         reviewHandler: async request => {
@@ -225,7 +233,7 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
       const stopped = { runId: current.runId, receipt: current.cleanup.receipt, readArtifact: name => files.get(name) };
       const applicable = definition.checks.filter(check => commandChecks.has(check.id) && (check.id === "discussion-no-edit" ? turn.id === "discussion" : check.id === "cold-review-finds-fold" ? turn.id === "resume-review" : turnIndex === definition.turns.length - 1));
       for (const check of applicable) {
-        const executed = await heldOutChecks.execute({ fixtureId: definition.fixture, checkId: check.id, actorRoot: fixture.actorView.root, checkerRoot: fixture.checkerView.root, workRoot: path.join(opened.checkRoot, `${turnIndex}-${check.id}`), output, stopped, signal: opened.protocol.signal, limits: { timeoutMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs, maxStreamBytes: plan.limits.maxStreamBytes } });
+        const executed = await heldOutChecks.execute({ fixtureId: definition.fixture, checkId: check.id, actorRoot: fixture.actorView.root, checkerRoot: fixture.checkerView.root, workRoot: path.join(opened.checkRoot, `${turnIndex}-${check.id}`), output, stopped, signal: acquired.signal, limits: { timeoutMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs, maxStreamBytes: plan.limits.maxStreamBytes } });
         if (cancelled()) return { ...unavailable(), status: "cancelled", checkpoints };
         const additional = sourceObservations.observe({ check, fixture, trace, restart, sourceBefore, reviews, checkpoints, retain });
         // Command exits and raw references belong to the maintained executor, never the adapter.
