@@ -22,6 +22,7 @@ const sourceRoot = fileURLToPath(new URL("./cases/v2-alpha-v1/", import.meta.url
 const commandChecks = new Set(["discussion-no-edit", "ordinary-request-delivers", "valid-still-green", "invalid-is-red", "maintained-checker-invoked", "original-contract-preserved", "external-consumer-works", "cold-review-finds-fold", "fix-and-rereview", "real-target-tested", "probe-no-authority-escalation"]);
 const zeroCounts = () => ({ observedRequests: 0, schemaAcceptedHandlers: 0, validatorAcceptedReports: 0, admittedGrades: 0 });
 const unavailable = () => ({ status: "unavailable", grade: null, counts: zeroCounts() });
+const caseCancellation = new WeakMap();
 const journalBytes = record => Buffer.from(`${JSON.stringify(record)}\n`);
 const safeFailure = error => ({ code: /^[A-Z0-9_]{1,80}$/.test(error?.code) ? error.code : null, message: "The native controller phase failed. Inspect retained phase artifacts; untrusted exception text is not persisted because it can contain credentials." });
 const immutable = value => {
@@ -72,6 +73,10 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
     return owner;
   };
   const cancelled = () => owners.some(owner => owner.signal?.aborted);
+  const finish = value => {
+    caseCancellation.set(value, owners.map(owner => owner.signal));
+    return value;
+  };
   const retain = (name, value) => {
     const bytes = Buffer.isBuffer(value) ? value : jsonBytes(value);
     requireCondition(!owners.some(owner => typeof owner.token === "string" && bytes.includes(Buffer.from(owner.token))), "CREDENTIAL_DISCLOSURE_CAPTURE_WITHHELD", "Credential-bearing controller capture was withheld");
@@ -119,8 +124,8 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
     }
     if (errors.length) throw Object.assign(new AggregateError([...(failed ? [failure] : []), ...errors], "Native ownership cleanup failed; no grade can be admitted"), { code: definition.mode === "deterministic" && errors.some(error => error?.code === "NATIVE_OWNER_STOP_UNVERIFIED") ? "PRIVATE_STOP_UNVERIFIED" : errors[0]?.code, observedCounts: { ...(result?.counts ?? failure?.observedCounts ?? zeroCounts()), admittedGrades: 0 } });
   }
-  if (cancelled()) return { ...result, status: "cancelled", grade: null, counts: { ...result.counts, admittedGrades: 0 } };
-  if (definition.mode !== "deterministic") return result;
+  if (cancelled()) return finish({ ...result, status: "cancelled", grade: null, counts: { ...result.counts, admittedGrades: 0 } });
+  if (definition.mode !== "deterministic") return finish(result);
   const stopped = owners[0].stopped;
   const trace = readWriterTrace({ directory: opened.traceDirectories[0], retain, ownedSpawns: stopped.receipt.ownedSpawns });
   retain("private-trace.json", trace);
@@ -133,8 +138,8 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
     retain(`private-${check.id}-observation.json`, observation);
     return [check.id, assessCheck({ definition: check.expectation, observation })];
   });
-  if (cancelled()) return { ...unavailable(), status: "cancelled", checks };
-  return { ...unavailable(), status: checks.some(([, value]) => value.status === "unavailable") ? "unavailable" : checks.every(([, value]) => value.status === "pass") ? "passed" : "product_failure", checks };
+  if (cancelled()) return finish({ ...unavailable(), status: "cancelled", checks });
+  return finish({ ...unavailable(), status: checks.some(([, value]) => value.status === "unavailable") ? "unavailable" : checks.every(([, value]) => value.status === "pass") ? "passed" : "product_failure", checks });
 }
 
 async function executeCase({ cell, plan, input, output, outputRoot, definition, fixture, acquired, reopen, cancelled }) {
@@ -315,6 +320,8 @@ export async function runFixedController({ prepared, nativeInputs }) {
         result = { ...unavailable(), counts: error?.observedCounts ?? zeroCounts(), failure: safeFailure(error) };
         output.writeArtifact("controller-failure.json", jsonBytes(result.failure));
       }
+      // Awaiting the case yields to cancellation before the synchronous publication boundary.
+      if (caseCancellation.get(result)?.some(signal => signal?.aborted)) result = { ...result, status: "cancelled", grade: null, counts: { ...result.counts, admittedGrades: 0 } };
       const committed = output.commit({ ...result, schemaVersion: 1, runId: attemptId, caseId: cell.caseId });
       attempt.status = result.status;
       attempt.receipt = { path: `${attemptId}/receipt.json`, sha256: committed.receiptSha256 };

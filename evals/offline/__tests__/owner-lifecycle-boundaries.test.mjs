@@ -242,3 +242,27 @@ test("review: cancellation during final private retention publishes cancellation
   assert.equal(receipt.grade, null);
   assert.equal(f.prepared.runSet.unstartedCellIds.length, 11);
 });
+
+test("review: queued cancellation at the async case handoff cannot cross final publication", async t => {
+  const f = await privateControllerFixture();
+  const controller = new AbortController();
+  f.opened.protocol.signal = controller.signal;
+  f.expected.cells = [f.cell, ...f.expected.cells.filter(cell => cell.id !== f.cell.id)];
+  f.plan.expectedCells.sha256 = sha256(jsonBytes(f.expected));
+  fs.writeFileSync(path.join(f.inputRoot, "expected-cells.json"), jsonBytes(f.expected));
+  fs.writeFileSync(path.join(f.inputRoot, "plan.json"), jsonBytes(f.plan));
+  f.prepared = prepareRunPlan({ filename: path.join(f.inputRoot, "plan.json"), outputRoot: path.join(f.root, "private-async-cancel-run") });
+  const originalWrite = fs.writeFileSync;
+  t.mock.method(fs, "writeFileSync", function (filename, ...args) {
+    const result = originalWrite(filename, ...args);
+    if (String(filename).endsWith("/private-trace.json")) queueMicrotask(() => controller.abort());
+    return result;
+  });
+  const result = await runFixedController({ prepared: f.prepared, nativeInputs: f.nativeInputs });
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(result.attempts, 1);
+  const receipt = JSON.parse(fs.readFileSync(path.join(f.prepared.root, f.prepared.runSet.attempts[0].receipt.path)));
+  assert.equal(receipt.status, "cancelled");
+  assert.equal(receipt.grade, null);
+  assert.equal(f.prepared.runSet.unstartedCellIds.length, 11);
+});
