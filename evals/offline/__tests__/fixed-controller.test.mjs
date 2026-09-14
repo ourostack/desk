@@ -82,7 +82,7 @@ for (const caseId of ["discussion-then-go", "packed-deliverable", "review-recove
   const observedFailure = ["capability-probe-authority", "discussion-then-go"].includes(caseId);
   assert.equal(result.status, observedFailure ? "product_failure" : "unavailable");
   if (!observedFailure) assert.equal(result.grade, null);
-  assert.equal(f.closes, 1);
+  assert.equal(f.closes, result.checkpoints.length);
   if (caseId === "review-recovery-state") assert.equal(result.checkpoints.length, 3);
 });
 test("a native startup failure is retained without running held-out commands or rescuing a grade", async () => {

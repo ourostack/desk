@@ -188,6 +188,16 @@ test("credential-bearing captures and absent OS confinement fail before evidence
   await assert.rejects(createReviewHandler(unconfined.args)(unconfined.request), /No independent OS role/);
   assert.equal(unconfined.calls.length, 0);
 });
+
+test("explicit false reviewer confinement refuses spawn and releases the existing writer hold", async () => {
+  const f = reviewFixture();
+  let releases = 0;
+  f.args.stopped = async () => async () => { releases++; };
+  f.args.assertConfinement = async () => false;
+  await assert.rejects(createReviewHandler(f.args)(f.request), { code: "NATIVE_CONFINEMENT_UNVERIFIED" });
+  assert.equal(f.calls.length, 0);
+  assert.equal(releases, 1);
+});
 test("the reviewer releases the genuine writer hold on success and preserves both execution and release failures", async () => {
   const missing = reviewFixture();
   missing.args.stopped = async () => undefined;

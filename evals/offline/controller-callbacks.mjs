@@ -198,7 +198,7 @@ export function createReviewHandler({ reviewer, runtimePolicy, handoff, runtime,
     fs.mkdirSync(scope, { mode: 0o700 });
     const entry = reviewer.materializeScopedEntry({ dir: scope, node: runtime.node, cli: runtime.copilotEntry, effort: "high" });
     const env = reviewer.buildContainedEnv({ home: path.join(directory, "home"), pathDir: entry.dir, reviewerEnv: reviewer.materializeReviewerEnv({ reviewer: handoff.reviewer }), baseEnv: { PATH: runtime.path, TERM: "dumb", CI: "1" } });
-    await assertConfinement({ directory, target, entry, command, env });
+    requireCondition(await assertConfinement({ directory, target, entry, command, env }) !== false, "NATIVE_CONFINEMENT_UNVERIFIED", "The reviewer owner refused confinement");
     const runner = reviewer.spawnReviewChild({ command, args: target.argv, env, cwd: target.checkout.path, spawnFn: runtime.spawnFn, psFn: runtime.psFn });
     let result;
     let failure;

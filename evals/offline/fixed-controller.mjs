@@ -57,46 +57,68 @@ export function requireNativeInputs(prepared, inputs) {
 // open() supplies live runTerminalProtocol arguments and OS-owned roots, never a case result.
 export async function runFixedCase({ cell, plan, input, output, outputRoot, bindingAdmitted = false }) {
   const definition = dataset.cases.find(value => value.id === cell.caseId);
-  if (definition.mode !== "deterministic") heldOutChecks.assertAvailable();
+  if (definition.mode !== "deterministic") requireCondition(heldOutChecks.assertAvailable() !== false, "NATIVE_QUALIFICATION_REQUIRED", "The held-out owner refused admission");
   const seed = plan.gitSeeds.find(value => value.cellId === cell.id);
   requireCondition(seed, "NATIVE_SEED_UNMAPPED", "Every native fixture requires its frozen Git seed and configured identity");
   const fixture = await materializeFixture({ manifest, fixtureId: definition.fixture, sourceRoot, roots: input.roots, gitIdentity: seed.identity });
   requireCondition(fixture.gitSeed.baseCommit === seed.baseCommit, "NATIVE_SEED_MISMATCH", "Materialized source differs from the predeclared Git seed");
-  const opened = await input.open({ cell, plan, fixture });
-  requireCondition(typeof opened?.close === "function", "NATIVE_CALLBACK_UNMAPPED", "The owning native acquisition must supply bounded close before use");
-  let failure;
-  let failed = false;
-  let result;
-  let stopped;
-  const owners = new Set([opened]);
-  const reopen = async options => {
-    const next = await input.open({ cell, plan, fixture, ...options });
-    requireCondition(typeof next?.close === "function", "NATIVE_CALLBACK_UNMAPPED", "Every native reacquisition requires its owned close operation");
-    owners.add(next);
-    await input.assertConfinement({ opened: next, fixture, cell, plan });
-    return next;
+  const owners = [];
+  const acquire = async (options = {}) => {
+    const runId = randomUUID();
+    const opened = await input.open({ cell, plan, fixture, ...options, runId });
+    requireCondition(typeof opened?.close === "function", "NATIVE_CALLBACK_UNMAPPED", "Every native acquisition requires its owned, bounded close operation");
+    owners.push({ runId, close: opened.close.bind(opened), signal: opened.protocol?.signal, token: opened.protocol?.token });
+    return opened;
   };
-  try {
-    await input.assertConfinement({ opened, fixture, cell, plan });
-    result = await executeCase({ cell, plan, input, output, outputRoot, definition, fixture, opened, reopen });
-  } catch (error) { failure = error; failed = true; throw error; }
-  finally {
-    const errors = [];
-    for (const owner of owners) {
-      try { stopped = await owner.close(); }
-      catch (error) { errors.push(error); }
-    }
-    if (errors.length) throw Object.assign(new AggregateError([...(failed ? [failure] : []), ...errors], "Native ownership cleanup failed; no grade can be admitted"), { observedCounts: { ...(result?.counts ?? failure?.observedCounts ?? zeroCounts()), admittedGrades: 0 } });
-  }
-  if (definition.mode !== "deterministic") return result;
-  requireCondition(stopped && validateCleanupReceipt(stopped.receipt, { runId: stopped.runId, readArtifact: stopped.readArtifact }).ok, "PRIVATE_STOP_UNVERIFIED", "Private route admission requires the same actual stopped-writer receipt as held-out execution");
+  const cancelled = () => owners.some(owner => owner.signal?.aborted);
   const retain = (name, value) => {
     const bytes = Buffer.isBuffer(value) ? value : jsonBytes(value);
-    const token = opened.protocol?.token;
-    requireCondition(typeof token !== "string" || !bytes.includes(Buffer.from(token)), "CREDENTIAL_DISCLOSURE_CAPTURE_WITHHELD", "Credential-bearing controller capture was withheld");
+    requireCondition(!owners.some(owner => typeof owner.token === "string" && bytes.includes(Buffer.from(owner.token))), "CREDENTIAL_DISCLOSURE_CAPTURE_WITHHELD", "Credential-bearing controller capture was withheld");
     output.writeArtifact(name, bytes);
     return { path: name, sha256: sha256(bytes) };
   };
+  const opened = await acquire();
+  let failure;
+  let failed = false;
+  let result;
+  const reopen = async options => {
+    const next = await acquire(options);
+    requireCondition(await input.assertConfinement({ opened: next, fixture, cell, plan }) !== false, "NATIVE_CONFINEMENT_UNVERIFIED", "The reacquired native owner refused confinement");
+    return next;
+  };
+  try {
+    requireCondition(await input.assertConfinement({ opened, fixture, cell, plan }) !== false, "NATIVE_CONFINEMENT_UNVERIFIED", "The native owner refused confinement");
+    result = await executeCase({ cell, plan, input, output, outputRoot, definition, fixture, opened, reopen, cancelled });
+  } catch (error) { failure = error; failed = true; throw error; }
+  finally {
+    // Judge artifacts are provisional case evidence until every acquisition has closed.
+    const errors = [];
+    const deadline = performance.now() + plan.limits.cleanup.totalMs;
+    for (const [index, owner] of owners.entries()) {
+      let timer;
+      try {
+        const stopped = await Promise.race([
+          Promise.resolve().then(owner.close),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("The owned close exceeded the shared cleanup deadline"), { code: "NATIVE_OWNER_STOP_UNVERIFIED" })), Math.max(0, deadline - performance.now())); }),
+        ]);
+        const receipt = structuredClone(stopped?.receipt);
+        requireCondition(performance.now() <= deadline && stopped?.runId === owner.runId && validateCleanupReceipt(receipt, { runId: owner.runId, readArtifact: stopped.readArtifact, requireRunId: true }).ok, "NATIVE_OWNER_STOP_UNVERIFIED", "Every acquisition requires its own generation-bound, within-budget stopped-writer receipt");
+        owner.stopped = { runId: owner.runId, receipt, readArtifact: stopped.readArtifact };
+        const captured = structuredClone(receipt);
+        for (const key of ["ownedSpawns", "exitObservations"]) for (const [rowIndex, row] of captured[key].entries()) {
+          const bytes = readRawReference(row.rawRef, stopped.readArtifact);
+          row.rawRef = { ...row.rawRef, ...retain(`owner-${index + 1}-${key}-${rowIndex + 1}.json`, bytes), byteLength: bytes.length };
+        }
+        retain(`owner-${index + 1}-cleanup.json`, { runId: owner.runId, receipt: captured });
+      }
+      catch (error) { errors.push(error); }
+      finally { clearTimeout(timer); }
+    }
+    if (errors.length) throw Object.assign(new AggregateError([...(failed ? [failure] : []), ...errors], "Native ownership cleanup failed; no grade can be admitted"), { code: definition.mode === "deterministic" && errors.some(error => error?.code === "NATIVE_OWNER_STOP_UNVERIFIED") ? "PRIVATE_STOP_UNVERIFIED" : errors[0]?.code, observedCounts: { ...(result?.counts ?? failure?.observedCounts ?? zeroCounts()), admittedGrades: 0 } });
+  }
+  if (cancelled()) return { ...result, status: "cancelled", grade: null, counts: { ...result.counts, admittedGrades: 0 } };
+  if (definition.mode !== "deterministic") return result;
+  const stopped = owners[0].stopped;
   const trace = readWriterTrace({ directory: opened.traceDirectories[0], retain, ownedSpawns: stopped.receipt.ownedSpawns });
   retain("private-trace.json", trace);
   const checks = definition.checks.map(check => {
@@ -111,7 +133,7 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
   return { ...unavailable(), status: checks.some(([, value]) => value.status === "unavailable") ? "unavailable" : checks.every(([, value]) => value.status === "pass") ? "passed" : "product_failure", checks };
 }
 
-async function executeCase({ cell, plan, input, output, outputRoot, definition, fixture, opened, reopen }) {
+async function executeCase({ cell, plan, input, output, outputRoot, definition, fixture, opened, reopen, cancelled }) {
   let sequence = 0;
   const retain = (name, value) => {
     const bytes = Buffer.isBuffer(value) ? value : jsonBytes(value);
@@ -122,6 +144,7 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
     return { path: filename, sha256: sha256(bytes) };
   };
   retain("fixture.json", fixture);
+  if (cancelled()) return { ...unavailable(), status: "cancelled", checkpoints: [] };
   let active;
   const callbacks = Object.fromEntries(Object.entries({ canonical: ["create", "update", "archive"], private: ["ledger", "feedback"] }).map(([group, names]) => [group, Object.fromEntries(names.map(name => [name, value => active[group][name](value)]))]));
   let canonical;
@@ -142,8 +165,10 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
     return { ...unavailable(), privateOperations: operations };
   } else {
     for (const [turnIndex, turn] of definition.turns.entries()) {
+      if (cancelled()) return { ...unavailable(), status: "cancelled", checkpoints };
       if (turn.restartBefore) { previousSessionId = sessionId; sessionId = randomUUID(); }
       if (turnIndex > 0) opened = await reopen({ turnIndex, sessionId, resume: !turn.restartBefore });
+      if (cancelled()) return { ...unavailable(), status: "cancelled", checkpoints };
       const records = [];
       const files = new Map();
       const subjectTurn = { ...opened.subjectTurn, schemaVersion: 1, caseId: cell.caseId, turnIndex, sessionId, resume: turnIndex > 0 && !turn.restartBefore, actorRoot: fixture.actorView.root, canonicalRoot: fixture.canonicalView.root };
@@ -200,7 +225,8 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
       const stopped = { runId: current.runId, receipt: current.cleanup.receipt, readArtifact: name => files.get(name) };
       const applicable = definition.checks.filter(check => commandChecks.has(check.id) && (check.id === "discussion-no-edit" ? turn.id === "discussion" : check.id === "cold-review-finds-fold" ? turn.id === "resume-review" : turnIndex === definition.turns.length - 1));
       for (const check of applicable) {
-        const executed = await heldOutChecks.execute({ fixtureId: definition.fixture, checkId: check.id, actorRoot: fixture.actorView.root, checkerRoot: fixture.checkerView.root, workRoot: path.join(opened.checkRoot, `${turnIndex}-${check.id}`), output, stopped, limits: { timeoutMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs, maxStreamBytes: plan.limits.maxStreamBytes } });
+        const executed = await heldOutChecks.execute({ fixtureId: definition.fixture, checkId: check.id, actorRoot: fixture.actorView.root, checkerRoot: fixture.checkerView.root, workRoot: path.join(opened.checkRoot, `${turnIndex}-${check.id}`), output, stopped, signal: opened.protocol.signal, limits: { timeoutMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs, maxStreamBytes: plan.limits.maxStreamBytes } });
+        if (cancelled()) return { ...unavailable(), status: "cancelled", checkpoints };
         const additional = sourceObservations.observe({ check, fixture, trace, restart, sourceBefore, reviews, checkpoints, retain });
         // Command exits and raw references belong to the maintained executor, never the adapter.
         const observation = { ...additional, ...executed.observation, availability: additional.availability === "unavailable" ? "unavailable" : executed.observation.availability, traceCoverage: trace.traceCoverage, rawRefs: [...additional.rawRefs, ...executed.observation.rawRefs, ...trace.rawRefs] };
@@ -225,6 +251,7 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
       checks.set(check.id, assessCheck({ definition: check.expectation, observation }));
     }
   }
+  if (cancelled()) return { ...unavailable(), status: "cancelled", checkpoints };
   retain("deterministic-checks.json", [...checks]);
   if ([...checks.values()].some(check => check.status === "unavailable")) return { ...unavailable(), checks: [...checks], checkpoints };
   const evidenceSeal = listRegularFiles(outputRoot).filter(file => file.path !== "receipt.incomplete.json").map(({ path, sha256 }) => ({ path, sha256 }));
@@ -247,13 +274,13 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
 
 export async function runFixedController({ prepared, nativeInputs }) {
   requireNativeInputs(prepared, nativeInputs);
-  heldOutChecks.assertAvailable();
+  requireCondition(heldOutChecks.assertAvailable() !== false, "NATIVE_QUALIFICATION_REQUIRED", "The held-out owner refused admission");
   const plan = immutable(structuredClone(prepared.plan));
   const expected = immutable(structuredClone(prepared.expected));
   const cells = new Map(nativeInputs.cells);
   // These consume the externally owned approval/allocation. No quota, timeout or test receipt substitutes for it.
-  await nativeInputs.assertAllocation({ plan, expected });
-  await nativeInputs.assertSourceAndRuntime({ plan, expected });
+  requireCondition(await nativeInputs.assertAllocation({ plan, expected }) !== false, "NATIVE_QUALIFICATION_REQUIRED", "The native allocation assertion refused admission");
+  requireCondition(await nativeInputs.assertSourceAndRuntime({ plan, expected }) !== false, "NATIVE_QUALIFICATION_REQUIRED", "The native source/runtime assertion refused admission");
   const { root, runSet } = prepared;
   const journal = [];
   const publish = () => {

@@ -230,7 +230,7 @@ export function createReportAdmission({ runId, sessionId, rootAgentId, expectedM
       const result = { schemaVersion: 1, runId, sessionId, status: "unavailable", grade: null, modelProtocolViolation: false, counts, attempts, observation: observed, attemptCoverage, captureErrors: [...captureErrors], qualificationBasis: "caller-supplied-source-evidence-runtime-verification" };
       if (endReason === "cancelled") result.status = "cancelled";
       else if (endReason === "deadline" || endReason === "timed_out" || (observed.rootIdle.receivedAt ?? clock()) >= deadlineAt) result.status = "timed_out";
-      else if (endReason !== "idle" || sourceVerified !== true || evidenceVerified !== true || runtimeVerified !== true || captureErrors.length > 0 || !observed.admissionEligible || !coverageMatches(attemptCoverage, sdk, schema, observed, sessionId, rootAgentId, readArtifact) || !validateCleanupReceipt(cleanupReceipt, { runId, readArtifact }).ok) result.reason = "required_observation_or_verification_unavailable";
+      else if (endReason !== "idle" || sourceVerified !== true || evidenceVerified !== true || runtimeVerified !== true || captureErrors.length > 0 || !observed.admissionEligible || !coverageMatches(attemptCoverage, sdk, schema, observed, sessionId, rootAgentId, readArtifact) || !validateCleanupReceipt(cleanupReceipt, { runId, readArtifact, requireRunId: true }).ok) result.reason = "required_observation_or_verification_unavailable";
       else if (valid.length > 1) {
         result.status = "protocol_failure";
         result.modelProtocolViolation = true;

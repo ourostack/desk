@@ -14,7 +14,7 @@ const runnable = new Set(["discussion-no-edit", "ordinary-request-delivers", "va
 export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, checkerRoot, workRoot, output, stopped, limits, signal }) {
   const definition = dataset.cases.find(value => value.fixture === fixtureId)?.checks.find(value => value.id === checkId);
   requireCondition(definition && runnable.has(checkId), "CHECK_EXECUTOR_UNAVAILABLE", "This fixed check requires a different producer or semantic assessment");
-  requireCondition(stopped && validateCleanupReceipt(stopped.receipt, { runId: stopped.runId, readArtifact: stopped.readArtifact }).ok, "CHECK_ACTOR_STOP_UNVERIFIED", "Held-out execution requires hash-verified exits for the observed actor writers");
+  requireCondition(stopped && validateCleanupReceipt(stopped.receipt, { runId: stopped.runId, readArtifact: stopped.readArtifact, requireRunId: true }).ok, "CHECK_ACTOR_STOP_UNVERIFIED", "Held-out execution requires generation-bound, hash-verified exits for the observed actor writers");
   const roots = [actorRoot, checkerRoot, workRoot].map(absoluteRoot);
   [actorRoot, checkerRoot, workRoot] = roots;
   requireCondition(roots.every((root, index) => roots.slice(index + 1).every(other => !overlaps(root, other))) && roots.every(root => !overlaps(root, fixtureSource)), "CHECK_ROOT_OVERLAP", "Actor, checker, fresh execution and frozen fixture roots must be separate");

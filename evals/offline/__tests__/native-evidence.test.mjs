@@ -66,3 +66,14 @@ test("source-scoped configuration, contiguous streams and actual exit references
     assert.throws(() => verifyProtocolEvidence(rows, plan));
   }
 });
+
+test("native admission refuses generation-free cleanup even when all changed references are rehashed", async () => {
+  const rows = await records();
+  const terminal = rows.find(row => row.kind === "probe-finished");
+  for (const entry of [...terminal.cleanup.receipt.ownedSpawns, ...terminal.cleanup.receipt.exitObservations]) {
+    const artifact = rows.find(row => row.kind === "artifact" && row.ref.path === entry.rawRef.path);
+    changeRaw(artifact, value => { delete value.runId; });
+    Object.assign(entry.rawRef, artifact.ref);
+  }
+  assert.throws(() => verifyProtocolEvidence(rows, plan), { code: "NATIVE_CLEANUP_UNVERIFIED" });
+});

@@ -358,3 +358,19 @@ test("an adaptive scalar spoof can match controller comparisons but cannot becom
   assert.equal(result.reason, "CHECK_TRUSTED_ASSERTIONS_REQUIRED");
   assert.equal(assessCheck({ definition: expectations["external-consumer-works"], observation: result.observation }).status, "unavailable");
 });
+
+test("held-out admission refuses generation-free raw cleanup before creating the execution snapshot", async () => {
+  const f = await fixture("checker-enforcement-v1");
+  const stopped = f.options.stopped;
+  const rewritten = new Map();
+  for (const row of [...stopped.receipt.ownedSpawns, ...stopped.receipt.exitObservations]) {
+    const raw = JSON.parse(stopped.readArtifact(row.rawRef.path));
+    delete raw.runId;
+    const bytes = jsonBytes(raw);
+    rewritten.set(row.rawRef.path, bytes);
+    Object.assign(row.rawRef, { sha256: sha256(bytes), byteLength: bytes.length });
+  }
+  stopped.readArtifact = name => rewritten.get(name);
+  await assert.rejects(executeHeldOutCheck({ ...f.options, checkId: "valid-still-green" }), { code: "CHECK_ACTOR_STOP_UNVERIFIED" });
+  assert.equal(fs.existsSync(f.options.workRoot), false);
+});

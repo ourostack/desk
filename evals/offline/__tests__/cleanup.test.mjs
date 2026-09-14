@@ -103,3 +103,10 @@ test("cleanup raw records are bound to their run when that supported field is pr
   receipt.exitObservations[0].spawnIdentity = "another-process";
   assert.equal(validateCleanupReceipt(receipt, options).ok, false);
 });
+
+test("current admission can require raw generation binding without breaking historical observation reads", async () => {
+  const { validateCleanupReceipt } = await import(moduleUrl);
+  const receipt = { runId: ownership.runId, ownedSpawns: ownership.ownedSpawns, ...observedExit(), completedWithinBudget: true };
+  assert.equal(validateCleanupReceipt(receipt, ownership).ok, true, "Historical records without runId remain readable");
+  assert.equal(validateCleanupReceipt(receipt, { ...ownership, requireRunId: true }).ok, false, "Current admission requires the raw producer's runId, not only a matching envelope");
+});

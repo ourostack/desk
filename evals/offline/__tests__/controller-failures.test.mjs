@@ -6,6 +6,7 @@ import { runFixedCase } from "../fixed-controller.mjs";
 import { openRunOutput } from "../output.mjs";
 import { completedControllerFixture } from "./helpers/completed-controller.mjs";
 import { controllerFixture } from "./helpers/controller-fixture.mjs";
+import { ownerCleanup } from "./helpers/owner-cleanup.mjs";
 
 function input(f) {
   const outputRoot = path.join(f.root, "failure-control");
@@ -87,7 +88,7 @@ test("each resumed or restarted acquisition receives its own confinement check a
   const confined = [];
   const closed = [];
   f.input.open = async args => {
-    const owner = { ...f.opened, close: async () => { closed.push(owner); } };
+    const owner = { ...f.opened, close: async () => { closed.push(owner); return ownerCleanup(args.runId); } };
     opened.push({ owner, args });
     return owner;
   };

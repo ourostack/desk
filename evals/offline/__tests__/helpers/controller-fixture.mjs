@@ -10,6 +10,7 @@ import { fixture } from "./native-sdk.mjs";
 import { engine, plan as judgePlan } from "./native-engine.mjs";
 import { expectedFixture, planFixture } from "./run-set.mjs";
 import { dataRoot, workRoot } from "./paths.mjs";
+import { ownerCleanup } from "./owner-cleanup.mjs";
 import "./controller-evidence.mjs";
 
 let sequence = 0;
@@ -111,10 +112,10 @@ export async function controllerFixture(caseId = "checker-is-enforced", options 
     protocol: { ...actorInput.input, nativeClient: new Client({}) },
     subjectTurn: { person: "operator", taskRef: "track/task/task.md", agent: "fixture-worker", pluginDirectories: [plugin], mcpServers: {}, sourceSeals: [{ root: plugin, files: [{ path: "worker.md", sha256: sha256(fs.readFileSync(path.join(plugin, "worker.md"))) }] }] },
     judge: { plan: value, execute, outputRoot: path.join(root, "judge"), authorizedRoot: root },
-    close: async () => { closes++; await options.close?.(); },
+    close: async function () { closes++; await options.close?.(); return ownerCleanup(this.runId); },
   };
   const input = {
-    roots: roles, open: async () => opened, assertConfinement: async () => { await options.confinement?.(); },
+    roots: roles, open: async ({ runId }) => ({ ...opened, runId }), assertConfinement: async () => { await options.confinement?.(); },
     createDeskCallbacks: async () => callbacks, withPermission: async (name, invoke) => invoke(),
     subjectBeforeSend: async context => { await options.beforeSend?.(context); },
     readCanonical: async () => fs.readFileSync(taskPath),

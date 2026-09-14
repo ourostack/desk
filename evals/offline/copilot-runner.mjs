@@ -1,26 +1,26 @@
 import { nonblank, parseRawJson, plainObject, readRawReference, requireCondition } from "./core.mjs";
 
 const identity = row => JSON.stringify([row.pid, row.spawnIdentity]);
-function observedProcess(row, type, runId, readArtifact) {
+function observedProcess(row, type, runId, readArtifact, requireRunId) {
   requireCondition(plainObject(row) && Number.isSafeInteger(row.pid) && row.pid > 0 && nonblank(row.spawnIdentity), "INVALID_PROCESS_IDENTITY", "Process ownership requires a PID and a unique spawn identity");
   const bytes = readRawReference(row.rawRef, readArtifact);
   const raw = parseRawJson(bytes);
-  requireCondition((row.rawRef.byteLength === undefined || row.rawRef.byteLength === bytes.length) && raw.type === type && raw.pid === row.pid && raw.spawnIdentity === row.spawnIdentity && (raw.runId === undefined || raw.runId === runId), "PROCESS_REFERENCE_MISMATCH", "Process observation does not match its raw reference or run");
+  requireCondition((row.rawRef.byteLength === undefined || row.rawRef.byteLength === bytes.length) && raw.type === type && raw.pid === row.pid && raw.spawnIdentity === row.spawnIdentity && (raw.runId === runId || (!requireRunId && raw.runId === undefined)), "PROCESS_REFERENCE_MISMATCH", "Process observation does not match its raw reference or run");
   if (type === "exit") requireCondition(row.exited === true && raw.exited === true, "PROCESS_EXIT_UNVERIFIED", "An observed exit is required");
   return identity(row);
 }
-function ownedIdentities(rows, runId, readArtifact) {
+function ownedIdentities(rows, runId, readArtifact, requireRunId) {
   requireCondition(Array.isArray(rows) && rows.length > 0 && rows.length <= 1024, "OWNERSHIP_NOT_VERIFIED", "Expected a bounded owned-spawn inventory");
-  const identities = rows.map(row => observedProcess(row, "spawn", runId, readArtifact));
+  const identities = rows.map(row => observedProcess(row, "spawn", runId, readArtifact, requireRunId));
   requireCondition(new Set(identities).size === identities.length, "DUPLICATE_PROCESS_IDENTITY", "Owned spawn identities must be unique");
   return identities;
 }
-export function validateCleanupReceipt(receipt, { runId, readArtifact }) {
+export function validateCleanupReceipt(receipt, { runId, readArtifact, requireRunId = false }) {
   try {
     requireCondition(nonblank(runId) && plainObject(receipt) && receipt.runId === runId && receipt.completedWithinBudget === true && Array.isArray(receipt.unverifiedPids) && receipt.unverifiedPids.length === 0, "INVALID_CLEANUP_RECEIPT", "Cleanup requires a scoped, within-budget receipt without unverified PIDs");
-    const owned = ownedIdentities(receipt.ownedSpawns, runId, readArtifact);
+    const owned = ownedIdentities(receipt.ownedSpawns, runId, readArtifact, requireRunId);
     requireCondition(Array.isArray(receipt.exitObservations) && receipt.exitObservations.length === owned.length, "INCOMPLETE_EXIT_INVENTORY", "Every owned spawn requires exactly one exit observation");
-    const exited = receipt.exitObservations.map(row => observedProcess(row, "exit", runId, readArtifact));
+    const exited = receipt.exitObservations.map(row => observedProcess(row, "exit", runId, readArtifact, requireRunId));
     requireCondition(new Set(exited).size === exited.length && exited.every(key => owned.includes(key)), "EXIT_INVENTORY_MISMATCH", "Exit observations must match the owned spawn inventory");
     return { ok: true };
   } catch (error) { return { ok: false, reason: error.message }; }

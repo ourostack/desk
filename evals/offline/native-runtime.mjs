@@ -118,7 +118,7 @@ export function verifyProtocolEvidence(rows, plan) {
 
 function verifyProtocolCleanup(configuration, terminal, files) {
   const cleanup = terminal.cleanup;
-  requireCondition(cleanup?.complete === true && cleanup.errors.length === 0 && validateCleanupReceipt(cleanup.receipt, { runId: configuration.runId, readArtifact: name => files.get(name) }).ok, "NATIVE_CLEANUP_UNVERIFIED", "Hashed owned-process exits are required");
+  requireCondition(cleanup?.complete === true && cleanup.errors.length === 0 && validateCleanupReceipt(cleanup.receipt, { runId: configuration.runId, readArtifact: name => files.get(name), requireRunId: true }).ok, "NATIVE_CLEANUP_UNVERIFIED", "Generation-bound, hashed owned-process exits are required");
   requireCondition(Array.isArray(configuration.roleProbes) && configuration.roleProbes.length > 0 && new Set(configuration.roleProbes.map(ref => ref.path)).size === configuration.roleProbes.length, "NATIVE_ROLE_UNVERIFIED", "The native role requires its complete retained same-UID probe evidence");
   for (const ref of configuration.roleProbes) {
     const bytes = files.get(ref.path);

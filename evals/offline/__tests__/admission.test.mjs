@@ -72,6 +72,7 @@ async function setup() {
   });
   sdk({ id: "turn-start", type: "assistant.turn_start", parentId: null, timestamp: "2026-01-01T00:00:00Z", data: { turnId: "supported-turn" } });
   const cleanupRecord = (value) => {
+    value = { runId: "fixture-run", ...value };
     const data = Buffer.from(`${JSON.stringify(value)}\n`);
     const path = value.type === "spawn" ? "owned-spawn.json" : "owned-exit.json";
     cleanupArtifacts.set(path, data);
@@ -124,6 +125,24 @@ async function setup() {
   };
   return { admission, sdk, message, schema, handle, complete, coverage, finish, one, cleanupReceipt, artifacts: cleanupArtifacts, setNow: (value) => { now = value; } };
 }
+
+test("current grade admission rejects rehashed generation-free cleanup while keeping the report observed", async () => {
+  const f = await setup();
+  f.one();
+  f.complete("one");
+  for (const row of [...f.cleanupReceipt.ownedSpawns, ...f.cleanupReceipt.exitObservations]) {
+    const raw = JSON.parse(f.artifacts.get(row.rawRef.path));
+    delete raw.runId;
+    const bytes = Buffer.from(`${JSON.stringify(raw)}\n`);
+    f.artifacts.set(row.rawRef.path, bytes);
+    Object.assign(row.rawRef, { sha256: hash(bytes), byteLength: bytes.length });
+  }
+  const result = f.finish();
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.grade, null);
+  assert.equal(result.counts.observedRequests, 1);
+  assert.equal(result.counts.admittedGrades, 0);
+});
 
 for (const mutation of ["unobserved-request", "partial-request", "aborted-terminal", "wrong-terminal-mode", "complete-control"]) test(`I2 full historical root coverage: ${mutation}`, async () => {
   const state = await setup();
