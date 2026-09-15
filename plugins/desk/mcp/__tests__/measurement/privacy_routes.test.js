@@ -854,14 +854,26 @@ test("an online action profile requires a well-formed 64-character hex digest; o
       availability: "available",
     }
 
-    async function evaluations() {
+    async function evaluations(itemId = workItemId) {
       const report = body(
-        await ledger({ deskRoot: fixture.deskRoot, input: { action: "report", work_item_id: workItemId } }),
+        await ledger({ deskRoot: fixture.deskRoot, input: { action: "report", work_item_id: itemId } }),
       ).items[0]
       return report.evaluations.value
     }
 
-    assert.deepEqual(await evaluations(), [], "no receipt exists before any of these calls")
+    // Seed one valid, real receipt first. An empty item cannot witness that a
+    // rejection left existing content untouched — only a populated one can:
+    // an omitted/null/empty/whitespace/short/non-hex digest that instead
+    // deleted or silently replaced the seeded row would still pass an
+    // "ends up empty" assertion, but not a "matches the seeded baseline"
+    // assertion.
+    const seeded = body(
+      await ledger({ deskRoot: fixture.deskRoot, input: { ...base, receipt_sha256: "c".repeat(64) } }),
+    )
+    assert.equal(seeded.status, "evaluation_receipt_linked", seeded.message ?? "")
+    const baseline = await evaluations()
+    assert.equal(baseline.length, 1)
+    assert.equal(baseline[0].receipt_sha256, "c".repeat(64))
 
     const malformed = {
       omitted: undefined,
@@ -885,20 +897,31 @@ test("an online action profile requires a well-formed 64-character hex digest; o
         `an ${label} receipt_sha256 must be refused for online_action_profile`,
       )
       assert.match(body(refused).message, /receipt_sha256/iu)
-      // Checked immediately after this specific rejection, not once at the end.
-      assert.deepEqual(await evaluations(), [], `an ${label} digest must leave zero rows behind`)
+      // Checked immediately after this specific rejection, not only once at
+      // the end, and against the seeded baseline, not merely against zero.
+      assert.deepEqual(
+        await evaluations(),
+        baseline,
+        `an ${label} digest must leave the seeded receipt untouched`,
+      )
     }
 
     // Valid and case-insensitive: lowercase is accepted, stored, and echoed
     // back exactly as sent — not normalized to another case behind the
-    // caller's back.
-    const lower = body(await ledger({ deskRoot: fixture.deskRoot, input: { ...base, receipt_sha256: "a".repeat(64) } }))
+    // caller's back. A fresh item keeps this success case from being
+    // entangled with the untouched-baseline witness above.
+    const lowerItemId = await seedItem(fixture, PERSON)
+    const lower = body(
+      await ledger({
+        deskRoot: fixture.deskRoot,
+        input: { ...base, work_item_id: lowerItemId, receipt_sha256: "a".repeat(64) },
+      }),
+    )
     assert.equal(lower.status, "evaluation_receipt_linked", lower.message ?? "")
     assert.equal(lower.receipt.receipt_sha256, "a".repeat(64))
-    assert.equal((await evaluations()).at(-1).receipt_sha256, "a".repeat(64))
+    assert.equal((await evaluations(lowerItemId))[0].receipt_sha256, "a".repeat(64))
 
-    // Uppercase is equally valid, on a fresh item so the row count stays easy
-    // to reason about.
+    // Uppercase is equally valid, on its own fresh item too.
     const upperItemId = await seedItem(fixture, PERSON)
     const upper = body(
       await ledger({
@@ -908,10 +931,11 @@ test("an online action profile requires a well-formed 64-character hex digest; o
     )
     assert.equal(upper.status, "evaluation_receipt_linked", upper.message ?? "")
     assert.equal(upper.receipt.receipt_sha256, "B".repeat(64))
-    const upperReport = body(
-      await ledger({ deskRoot: fixture.deskRoot, input: { action: "report", work_item_id: upperItemId } }),
-    ).items[0]
-    assert.equal(upperReport.evaluations.value[0].receipt_sha256, "B".repeat(64))
+    assert.equal((await evaluations(upperItemId))[0].receipt_sha256, "B".repeat(64))
+
+    // The seeded baseline itself is still exactly as it was after all of the
+    // above, on the item that carried it throughout.
+    assert.deepEqual(await evaluations(), baseline, "the seeded receipt must still be exactly as it was")
 
     // The hashless offline regression: legacy behavior is completely
     // unaffected. offline_evaluation still accepts no receipt_sha256 at all,
