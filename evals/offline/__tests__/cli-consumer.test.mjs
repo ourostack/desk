@@ -191,3 +191,68 @@ test("the public workflow reports relevant-revision status without carrying any 
   // The single existing verified-pack upload stays last; the status step publishes no second artifact.
   assert.equal(job.split("uses: actions/upload-artifact@v4").length, 2);
 });
+
+// GitHub path filters: ** spans segments, * and ? stay inside one segment.
+function triggerMatches(pattern, target) {
+  const segments = pattern.split("/");
+  const parts = target.split("/");
+  const walk = (segment, part) => {
+    if (segment === segments.length) return part === parts.length;
+    if (segments[segment] === "**") {
+      for (let index = part; index <= parts.length; index += 1) if (walk(segment + 1, index)) return true;
+      return false;
+    }
+    if (part === parts.length) return false;
+    const expression = new RegExp(`^${segments[segment].replace(/[.+^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, "[^/]*").replace(/\?/gu, "[^/]")}$`, "u");
+    return expression.test(parts[part]) && walk(segment + 1, part + 1);
+  };
+  return walk(0, 0);
+}
+
+function workflowPathFilters(workflow) {
+  const lines = workflow.split("\n");
+  const blocks = [];
+  for (const [index, line] of lines.entries()) {
+    if (line !== "    paths:") continue;
+    const filters = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const match = lines[cursor].match(/^ {6}- "(.+)"$/u);
+      if (!match) break;
+      filters.push(match[1]);
+    }
+    blocks.push(filters);
+  }
+  return blocks;
+}
+
+test("every path the status routing calls relevant also starts the public workflow", () => {
+  const workflow = fs.readFileSync(path.join(repository, ".github/workflows/desk-mcp-tests.yml"), "utf8");
+  const blocks = workflowPathFilters(workflow);
+  assert.equal(blocks.length, 2, "pull_request and push both declare path filters");
+  const probes = [
+    "AGENTIC-ENGINEERING-V2.md", "evals/offline/cases/v2-alpha-v1/dataset.json", "evals/engineering-v2-kernel.json",
+    "evals/offline/checks.mjs", "evals/offline/fixed-controller.mjs", "evals/investigation-boundaries.json",
+    "scripts/skill-evals.cjs", "scripts/test-skill-evals.cjs",
+    ".github/workflows/desk-mcp-tests.yml", ".github/workflows/validate-skills.yml",
+    "plugins/desk/mcp/src/index.js", "plugins/desk/mcp/package.json", "plugins/desk/mcp/package-lock.json", "upstream-sources.lock.json",
+    "plugins/desk/principles.md", "plugins/desk/skills/start-task/SKILL.md", "skills/work-doer/SKILL.md",
+    "worker/README.md", "manifest.json", "AGENTS.md", "CLAUDE.md",
+  ];
+  const request = publish("trigger-coverage-request.json", publicRequest(value => { value.changedPaths = probes; }));
+  const report = JSON.parse(legacy(["revision", "--request", request]).stdout);
+  const relevant = report.relevance.paths.filter(entry => entry.relevant).map(entry => entry.path);
+  assert.deepEqual(relevant, probes, "every probe is a relevant category representative");
+  for (const value of relevant) {
+    for (const [index, filters] of blocks.entries()) {
+      assert.ok(filters.some(pattern => triggerMatches(pattern, value)), `path filter block ${index} must start this workflow for ${value}`);
+    }
+  }
+  // An unrelated own-desk note is neither relevant nor a reason to claim evaluation coverage.
+  const unrelated = publish("trigger-unrelated-request.json", publicRequest(value => { value.changedPaths = ["desk/tasks/2026-09-15-notes.md"]; }));
+  const unrelatedReport = JSON.parse(legacy(["revision", "--request", unrelated]).stdout);
+  assert.equal(unrelatedReport.relevance.relevant, false);
+  assert.equal(unrelatedReport.status, "not_applicable");
+  assert.equal(triggerMatches("desk/**", "desk/tasks/2026-09-15-notes.md"), true);
+  assert.equal(triggerMatches("evals/*.json", "evals/offline/checks.mjs"), false);
+  assert.equal(triggerMatches("scripts/*.cjs", "scripts/skill-evals.cjs"), true);
+});

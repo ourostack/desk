@@ -430,12 +430,25 @@ try {
       (value) => { value.attempts = 1; value.attemptStatuses.pop(); },
       (value) => { delete value.attemptStatuses; },
       (value) => { value.attemptStatuses[0] = { attemptId: "attempt-1" }; },
+      (value) => { delete value.attemptStatuses[0].published; },
+      (value) => { value.attemptStatuses[0].extra = true; },
+      (value) => { value.attemptStatuses[0].attemptId = " "; },
+      (value) => { value.attemptStatuses[0].cellId = " "; },
+      (value) => { value.attemptStatuses[0].status = ""; },
+      (value) => { value.attemptStatuses[1].cellId = "cell-1"; },
+      // An attempt that reached a gradable status but was never committed is lost evidence, not a grade.
+      (value) => { value.attemptStatuses[0].published = false; },
+      (value) => { value.attemptStatuses[1].published = "yes"; },
     ]) {
       const report = revisionCase(revisionRequest(), [revisionResult(change)]);
       assert.equal(soleDisposition(report), "HISTORY_GAP");
       assert.equal(report.status, "failed");
       assert.equal(report.green, false);
     }
+    // A cancelled attempt is reported as cancellation even though its publication never happened.
+    const unpublishedCancellation = revisionCase(revisionRequest(), [revisionResult((value) => { value.attemptStatuses[0].status = "cancelled"; value.attemptStatuses[0].published = false; })]);
+    assert.equal(soleDisposition(unpublishedCancellation), "CANCELLED");
+    assert.equal(unpublishedCancellation.green, false);
 
     const unscored = revisionCase(revisionRequest(), [revisionResult((value) => { value.scored = false; })]);
     assert.equal(soleDisposition(unscored), "INVALID_GRADE");

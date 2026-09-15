@@ -219,11 +219,20 @@ function reconcileResult({ value, candidate, trusted, fingerprint }) {
   if (controlsFingerprint(published.controls) !== fingerprint) return { disposition: "CONTROL_FINGERPRINT_MISMATCH", revision: observed };
   if (value.status !== "complete") return { disposition: authReasons.has(value.reason) ? "AUTH_FAILURE" : "RUNTIME_FAILURE", revision: observed };
   const history = value.attemptStatuses;
-  if (!Array.isArray(history) || history.length !== value.attempts || value.attempts !== value.expectedCells || value.unstarted !== 0 || history.some((entry) => !isObject(entry) || !hasText(entry.status))) {
+  if (!Array.isArray(history) || history.length !== value.attempts || value.attempts !== value.expectedCells || value.unstarted !== 0) {
     return { disposition: "HISTORY_GAP", revision: observed };
+  }
+  const cells = new Set();
+  for (const entry of history) {
+    if (!exactly(entry, ["attemptId", "cellId", "status", "published"]) || !boundedText(entry.attemptId, 256) || !boundedText(entry.cellId, 256) || !hasText(entry.status) || typeof entry.published !== "boolean" || cells.has(entry.cellId)) {
+      return { disposition: "HISTORY_GAP", revision: observed };
+    }
+    cells.add(entry.cellId);
   }
   if (history.some((entry) => entry.status === "cancelled")) return { disposition: "CANCELLED", revision: observed };
   if (history.some((entry) => !gradedAttemptStatuses.has(entry.status))) return { disposition: "RUNTIME_FAILURE", revision: observed };
+  // An attempt that reached a gradable status but was never committed is lost evidence, not admitted evidence.
+  if (history.some((entry) => entry.published !== true)) return { disposition: "HISTORY_GAP", revision: observed };
   if (value.scored !== true || value.grade === null || value.grade === undefined) return { disposition: "INVALID_GRADE", revision: observed };
   if (!isObject(value.grade) || Object.keys(value.grade).length === 0) return { disposition: "MALFORMED_GRADE", revision: observed };
   return { disposition: "COMPATIBLE", revision: observed, grade: value.grade };
