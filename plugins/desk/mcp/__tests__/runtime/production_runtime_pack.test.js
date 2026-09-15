@@ -736,3 +736,136 @@ test("CI checks committed generated artifacts before rebuilding runtime dependen
     runtimePackBuild: 4,
   })
 })
+
+// The macOS ARM64 pack is produced on the maintainer's own host, but the Linux and Windows packs are
+// host-bound artifacts this repository can only obtain from a native runner. Until CI produces them
+// independently of the main gate, a release can publish a version whose committed artifact set can
+// never be completed, which is exactly how 1.4.0-alpha.4 first shipped.
+const hostedNativePackLanes = Object.freeze([
+  Object.freeze({
+    target: "linux-x64-node-127",
+    runnerPrefix: "ubuntu",
+    nodeVersion: "22.23.2",
+    platform: "linux",
+    arch: "x64",
+    nodeAbi: "127",
+  }),
+  Object.freeze({
+    target: "win32-x64-node-137",
+    runnerPrefix: "windows",
+    nodeVersion: "24.18.0",
+    platform: "win32",
+    arch: "x64",
+    nodeAbi: "137",
+  }),
+])
+
+function loadWorkflowDocument() {
+  const { load } = require("js-yaml")
+  return load(readFileSync(workflowPath, "utf8"))
+}
+
+function jobStepTexts(job) {
+  return (job.steps ?? []).map((step) => [
+    step.name ?? "",
+    step.run ?? "",
+    step.uses ?? "",
+    JSON.stringify(step.with ?? {}),
+  ].join("\n"))
+}
+
+function jobText(job) {
+  return JSON.stringify(job)
+}
+
+function laneMatrixValues(job) {
+  const include = job.strategy?.matrix?.include
+  return Array.isArray(include) ? include : []
+}
+
+function jobBuildsRuntimeDependencyPack(job) {
+  return jobStepTexts(job).some((text) => /npm run runtime:deps-pack:build\b/u.test(text))
+}
+
+function jobVerifiesRuntimeDependencyPack(job) {
+  return jobStepTexts(job).some((text) => /npm run runtime:deps-pack:verify\b/u.test(text))
+}
+
+function jobUploadsArtifact(job) {
+  return (job.steps ?? []).some((step) => typeof step.uses === "string" && step.uses.startsWith("actions/upload-artifact"))
+}
+
+function artifactNamesFor(job) {
+  return (job.steps ?? [])
+    .filter((step) => typeof step.uses === "string" && step.uses.startsWith("actions/upload-artifact"))
+    .map((step) => String(step.with?.name ?? ""))
+}
+
+test("a hosted native lane produces every host-bound runtime pack target without waiting on the main gate", () => {
+  const workflow = loadWorkflowDocument()
+  const jobs = Object.entries(workflow.jobs ?? {})
+  const publishedTargets = new Set(
+    generatedArtifacts.publishedRuntimePackTargets()
+      .map((target) => `${target.platform}-${target.arch}-node-${target.nodeAbi}`),
+  )
+
+  for (const lane of hostedNativePackLanes) {
+    assert.ok(
+      publishedTargets.has(lane.target),
+      `${lane.target} must stay in the published runtime pack targets the verifier consumes`,
+    )
+
+    const laneJobs = jobs.filter(([, job]) => (
+      jobBuildsRuntimeDependencyPack(job) &&
+      laneMatrixValues(job).some((entry) => (
+        String(entry.target ?? "") === lane.target &&
+        String(entry.runner ?? entry.os ?? "").startsWith(lane.runnerPrefix) &&
+        String(entry.node ?? entry["node-version"] ?? "") === lane.nodeVersion
+      ))
+    ))
+
+    assert.equal(
+      laneJobs.length,
+      1,
+      `exactly one workflow job must build ${lane.target} on ${lane.runnerPrefix} with Node ${lane.nodeVersion}`,
+    )
+
+    const [jobName, job] = laneJobs[0]
+    assert.equal(
+      job.needs ?? null,
+      null,
+      `${jobName} must not wait on another job, so a failing coverage gate cannot stop native pack production`,
+    )
+    assert.ok(
+      jobVerifiesRuntimeDependencyPack(job),
+      `${jobName} must verify the pack it produces with the existing verifier`,
+    )
+    assert.ok(jobUploadsArtifact(job), `${jobName} must upload the verified pack`)
+    assert.ok(
+      artifactNamesFor(job).every((name) => /\$\{\{\s*matrix\.target\s*\}\}/u.test(name)),
+      `${jobName} must give each target its own artifact name`,
+    )
+    assert.deepEqual(
+      job.permissions,
+      { contents: "read" },
+      `${jobName} must stay public and read-only`,
+    )
+    assert.doesNotMatch(
+      jobText(job),
+      /secrets\.|ROBOREV|ANTHROPIC|OPENAI|COPILOT_TOKEN/u,
+      `${jobName} must carry no credential or model access`,
+    )
+    assert.doesNotMatch(
+      jobText(job),
+      /(^|[^\w-])find\s+["'$]/u,
+      `${jobName} runs on Windows too, so it must not discover paths with the Unix-only find(1)`,
+    )
+  }
+
+  const laneJobNames = new Set(
+    hostedNativePackLanes.flatMap((lane) => jobs
+      .filter(([, job]) => laneMatrixValues(job).some((entry) => String(entry.target ?? "") === lane.target))
+      .map(([name]) => name)),
+  )
+  assert.equal(laneJobNames.size, 1, "both host-bound targets belong to one maintained native-pack matrix job")
+})

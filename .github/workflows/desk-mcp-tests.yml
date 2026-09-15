@@ -249,6 +249,155 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  desk-runtime-packs:
+    name: desk runtime pack (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    # A runtime dependency pack embeds its platform's real native binaries, so each target can only be produced
+    # honestly on its own operating system and Node ABI. This lane is deliberately independent: it declares no
+    # `needs`, so a failing coverage gate can never stop the repository from obtaining the host-bound artifacts
+    # the generated-artifact verifier requires. Public, read-only and credential-free; it uploads what it verified
+    # and never writes the repository.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64-node-127
+            runner: ubuntu-latest
+            node: "22.23.2"
+            platform: linux
+            arch: x64
+            node_abi: "127"
+          - target: win32-x64-node-137
+            runner: windows-latest
+            node: "24.18.0"
+            platform: win32
+            arch: x64
+            node_abi: "137"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up the exact pack Node runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+
+      - name: Confirm the runtime identity this pack will claim
+        shell: bash
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          EXPECTED_NODE_ABI: ${{ matrix.node_abi }}
+          EXPECTED_NODE: ${{ matrix.node }}
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          node -e '
+            const actual = {
+              platform: process.platform,
+              arch: process.arch,
+              nodeAbi: process.versions.modules,
+              node: process.versions.node,
+            };
+            const expected = {
+              platform: process.env.EXPECTED_PLATFORM,
+              arch: process.env.EXPECTED_ARCH,
+              nodeAbi: process.env.EXPECTED_NODE_ABI,
+              node: process.env.EXPECTED_NODE,
+            };
+            for (const key of Object.keys(expected)) {
+              if (actual[key] !== expected[key]) {
+                throw new Error(`runtime ${key} mismatch: expected ${expected[key]}, found ${actual[key]}`);
+              }
+            }
+            const target = `${actual.platform}-${actual.arch}-node-${actual.nodeAbi}`;
+            if (target !== process.env.EXPECTED_TARGET) {
+              throw new Error(`runtime target mismatch: expected ${process.env.EXPECTED_TARGET}, found ${target}`);
+            }
+            console.log(`runtime identity confirmed: ${target} on Node ${actual.node}`);
+          '
+
+      - name: Install dependencies from the committed lock
+        working-directory: plugins/desk/mcp
+        run: npm ci
+
+      - name: Build the native runtime dependency pack
+        shell: bash
+        working-directory: plugins/desk/mcp
+        run: npm run runtime:deps-pack:build -- --output-root "$RUNNER_TEMP/desk-runtime-deps"
+
+      - name: Resolve the produced pack directory
+        shell: bash
+        working-directory: plugins/desk/mcp
+        # Path discovery uses the producer's own lock-hash logic instead of a directory search, so it behaves
+        # identically on Linux and Windows and never depends on Unix-only tools.
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const { pathToFileURL } = require("node:url");
+            import(pathToFileURL(path.resolve("src/runtime/runtime-deps.js")).href).then((runtimeDeps) => {
+              const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+              const packageLock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+              const lockHash = runtimeDeps.productionDependencyLockHash({ packageJson, packageLock });
+              const target = `${process.platform}-${process.arch}-node-${process.versions.modules}`;
+              const packDir = path.join(
+                process.env.RUNNER_TEMP,
+                "desk-runtime-deps",
+                packageJson.version,
+                target,
+                lockHash,
+              );
+              for (const file of ["runtime-deps.tgz", "runtime-deps.manifest.json", "runtime-deps.sha256"]) {
+                const candidate = path.join(packDir, file);
+                if (!fs.existsSync(candidate)) throw new Error(`the producer did not write ${candidate}`);
+              }
+              fs.appendFileSync(process.env.GITHUB_ENV, `DESK_PACK_DIR=${packDir}\n`);
+              console.log(`pack directory: ${packDir}`);
+            }).catch((error) => {
+              console.error(error instanceof Error ? error.message : String(error));
+              process.exit(1);
+            });
+          '
+
+      - name: Verify the native runtime dependency pack
+        shell: bash
+        working-directory: plugins/desk/mcp
+        run: npm run runtime:deps-pack:verify -- --pack-dir "$DESK_PACK_DIR"
+
+      - name: Confirm the pack manifest claims this exact host
+        shell: bash
+        working-directory: plugins/desk/mcp
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const manifest = JSON.parse(fs.readFileSync(path.join(process.env.DESK_PACK_DIR, "runtime-deps.manifest.json"), "utf8"));
+            const target = `${manifest.platform.os}-${manifest.platform.arch}-node-${manifest.platform.node_abi}`;
+            if (target !== process.env.EXPECTED_TARGET) {
+              throw new Error(`pack manifest target mismatch: expected ${process.env.EXPECTED_TARGET}, found ${target}`);
+            }
+            const checksum = fs.readFileSync(path.join(process.env.DESK_PACK_DIR, "runtime-deps.sha256"), "utf8").trim().split(/\s+/u)[0];
+            if (checksum !== manifest.archive.sha256) {
+              throw new Error("pack checksum sidecar does not match the manifest archive hash");
+            }
+            console.log(`${target} archive sha256 ${manifest.archive.sha256}`);
+          '
+
+      - name: Retain the verified native runtime dependency pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-runtime-pack-${{ matrix.target }}
+          path: ${{ runner.temp }}/desk-runtime-deps
+          if-no-files-found: error
+          retention-days: 7
+
   desk-feedback-windows:
     name: desk private feedback on native Windows
     runs-on: windows-latest
