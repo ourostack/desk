@@ -510,7 +510,8 @@ contract("preview feedback entries are deterministically targetable in plain Mar
     "it never changes",
     "matches more than one entry",
     "Refuse rather than guess.",
-    "Reread once more immediately before appending",
+    "Allocation is conflict-aware",
+    "the unpublished entry does not keep it",
     "then `100`, `101` and onward",
   ]) {
     assert.ok(skill.includes(required), `missing preview-feedback identity rule: ${required}`);
@@ -577,6 +578,31 @@ contract("preview feedback entries are deterministically targetable in plain Mar
   assert.equal(select("pf-20260914-ari-100", [...saturated, hundredth]).length, 1);
   assert.equal(select("pf-20260914-ari-10", [...saturated, hundredth]).length, 1, "a widened ID must not be confused with a shorter one");
   assert.equal(nextSequence("2026-09-14", "ari", [...saturated, hundredth]), "101");
+
+  // A losing writer renumbers its own unpublished draft; the entry that
+  // actually landed keeps the ID it was published under.
+  const landedElsewhere = `## pf-20260914-ari-03 — 2026-09-14 — ari\n\nMerged from another checkout.\n`;
+  const refreshed = [...entries, landedElsewhere];
+  const draftSequence = nextSequence("2026-09-14", "ari", entries);
+  assert.equal(draftSequence, "03", "the draft was allocated against the stale file");
+  assert.equal(
+    select(`pf-20260914-ari-${draftSequence}`, refreshed).length,
+    1,
+    "the refreshed file already holds that ID, so the draft must not publish under it",
+  );
+  const retrySequence = nextSequence("2026-09-14", "ari", refreshed);
+  assert.equal(retrySequence, "04");
+  const retried = `## pf-20260914-ari-${retrySequence} — 2026-09-14 — ari\n\nThe draft, republished under a free ID.\n`;
+  const published = [...refreshed, retried];
+  const publishedIds = published.map((block) => block.match(entryHeading)[1]);
+  assert.equal(new Set(publishedIds).size, publishedIds.length, "publication must not create a duplicate ID");
+  assert.deepEqual(publishedIds, [
+    "pf-20260914-ari-01",
+    "pf-20260914-ari-02",
+    "pf-20260914-ari-03",
+    "pf-20260914-ari-04",
+  ]);
+  assert.match(select("pf-20260914-ari-03", published)[0], /Merged from another checkout/u, "the landed entry keeps its ID and its words");
 
   // Correcting the first and withdrawing the second leaves both IDs intact and
   // still individually addressable.
