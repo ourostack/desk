@@ -801,6 +801,19 @@ function artifactNamesFor(job) {
     .map((step) => String(step.with?.name ?? ""))
 }
 
+function matrixEntriesForTarget(jobs, target) {
+  return jobs.flatMap(([name, job]) => laneMatrixValues(job)
+    .filter((entry) => String(entry.target ?? "") === target)
+    .map((entry) => ({ name, job, entry })))
+}
+
+// A job that builds a pack without declaring a target matrix is a local smoke build of whatever host it
+// happens to run on, not a source of published artifacts. The main gate does exactly that, after it has
+// already verified the committed artifact set, so it must never masquerade as a native lane.
+function nonMatrixPackBuildingJobs(jobs) {
+  return jobs.filter(([, job]) => jobBuildsRuntimeDependencyPack(job) && laneMatrixValues(job).length === 0)
+}
+
 test("a hosted native lane produces every host-bound runtime pack target without waiting on the main gate", () => {
   const workflow = loadWorkflowDocument()
   const jobs = Object.entries(workflow.jobs ?? {})
@@ -808,6 +821,7 @@ test("a hosted native lane produces every host-bound runtime pack target without
     generatedArtifacts.publishedRuntimePackTargets()
       .map((target) => `${target.platform}-${target.arch}-node-${target.nodeAbi}`),
   )
+  const laneArtifactNames = new Set()
 
   for (const lane of hostedNativePackLanes) {
     assert.ok(
@@ -815,22 +829,27 @@ test("a hosted native lane produces every host-bound runtime pack target without
       `${lane.target} must stay in the published runtime pack targets the verifier consumes`,
     )
 
-    const laneJobs = jobs.filter(([, job]) => (
-      jobBuildsRuntimeDependencyPack(job) &&
-      laneMatrixValues(job).some((entry) => (
-        String(entry.target ?? "") === lane.target &&
-        String(entry.runner ?? entry.os ?? "").startsWith(lane.runnerPrefix) &&
-        String(entry.node ?? entry["node-version"] ?? "") === lane.nodeVersion
-      ))
-    ))
-
+    const laneEntries = matrixEntriesForTarget(jobs, lane.target)
     assert.equal(
-      laneJobs.length,
+      laneEntries.length,
       1,
-      `exactly one workflow job must build ${lane.target} on ${lane.runnerPrefix} with Node ${lane.nodeVersion}`,
+      `exactly one matrix entry may declare ${lane.target}; found ${laneEntries.length}`,
     )
 
-    const [jobName, job] = laneJobs[0]
+    const { name: jobName, job, entry } = laneEntries[0]
+    assert.ok(
+      jobBuildsRuntimeDependencyPack(job),
+      `${jobName} must build the pack it claims for ${lane.target}`,
+    )
+    assert.ok(
+      String(entry.runner ?? entry.os ?? "").startsWith(lane.runnerPrefix),
+      `${lane.target} must be built on a ${lane.runnerPrefix} runner`,
+    )
+    assert.equal(
+      String(entry.node ?? entry["node-version"] ?? ""),
+      lane.nodeVersion,
+      `${lane.target} must pin Node ${lane.nodeVersion} exactly`,
+    )
     assert.equal(
       job.needs ?? null,
       null,
@@ -841,10 +860,12 @@ test("a hosted native lane produces every host-bound runtime pack target without
       `${jobName} must verify the pack it produces with the existing verifier`,
     )
     assert.ok(jobUploadsArtifact(job), `${jobName} must upload the verified pack`)
+    const laneArtifacts = artifactNamesFor(job)
     assert.ok(
-      artifactNamesFor(job).every((name) => /\$\{\{\s*matrix\.target\s*\}\}/u.test(name)),
+      laneArtifacts.length > 0 && laneArtifacts.every((name) => /\$\{\{\s*matrix\.target\s*\}\}/u.test(name)),
       `${jobName} must give each target its own artifact name`,
     )
+    for (const name of laneArtifacts) laneArtifactNames.add(name.replaceAll("${{ matrix.target }}", lane.target))
     assert.deepEqual(
       job.permissions,
       { contents: "read" },
@@ -863,9 +884,31 @@ test("a hosted native lane produces every host-bound runtime pack target without
   }
 
   const laneJobNames = new Set(
-    hostedNativePackLanes.flatMap((lane) => jobs
-      .filter(([, job]) => laneMatrixValues(job).some((entry) => String(entry.target ?? "") === lane.target))
-      .map(([name]) => name)),
+    hostedNativePackLanes.flatMap((lane) => matrixEntriesForTarget(jobs, lane.target).map(({ name }) => name)),
   )
   assert.equal(laneJobNames.size, 1, "both host-bound targets belong to one maintained native-pack matrix job")
+
+  // The main gate still builds a pack for whatever host it runs on, after it has verified the committed
+  // artifact set. That build is a smoke check, so it must stay behind the verifier and must never publish
+  // an artifact under a native lane's name, or a consumer could mistake it for a host-bound release pack.
+  const rawWorkflow = readFileSync(workflowPath, "utf8")
+  for (const [jobName, job] of nonMatrixPackBuildingJobs(jobs)) {
+    const order = workflowStepOrder(workflowJob(rawWorkflow, jobName))
+    assert.notEqual(
+      order.generatedArtifactCheck,
+      -1,
+      `${jobName} builds a pack without declaring a target, so it must first verify the committed artifact set`,
+    )
+    for (const artifactName of artifactNamesFor(job)) {
+      assert.ok(
+        !laneArtifactNames.has(artifactName),
+        `${jobName} must not publish its smoke pack under the native lane artifact name ${artifactName}`,
+      )
+      assert.doesNotMatch(
+        artifactName,
+        /desk-runtime-pack-/u,
+        `${jobName} must not reuse the native lane artifact naming for a host-derived smoke build`,
+      )
+    }
+  }
 })
