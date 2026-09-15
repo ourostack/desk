@@ -924,3 +924,78 @@ test("a hosted native lane produces every host-bound runtime pack target without
     }
   }
 })
+
+// A pack's whole value is that it carries its own platform's real native code. These signatures are the
+// cheapest way to prove a committed pack was not produced by relabelling another host's output.
+const nativeBinarySignatures = Object.freeze({
+  linux: { name: "ELF", bytes: [0x7f, 0x45, 0x4c, 0x46] },
+  win32: { name: "PE/COFF", bytes: [0x4d, 0x5a] },
+  darwin: { name: "Mach-O", bytes: [0xcf, 0xfa, 0xed, 0xfe] },
+})
+
+function archiveEntryBytes(archivePath, entryName) {
+  const { gunzipSync } = require("node:zlib")
+  const tar = gunzipSync(readFileSync(archivePath))
+  for (let offset = 0; offset + 512 <= tar.length;) {
+    const name = tar.subarray(offset, offset + 100).toString("utf8").replace(/\0.*$/su, "")
+    const prefix = tar.subarray(offset + 345, offset + 500).toString("utf8").replace(/\0.*$/su, "")
+    const size = Number.parseInt(tar.subarray(offset + 124, offset + 136).toString("ascii").replace(/\0.*$/su, "").trim() || "0", 8)
+    const full = prefix ? `${prefix}/${name}` : name
+    if (!name) break
+    const body = offset + 512
+    if (full === entryName) return tar.subarray(body, body + size)
+    offset = body + Math.ceil(size / 512) * 512
+  }
+  return null
+}
+
+test("every committed runtime pack carries its own platform's native binaries", () => {
+  const packageJson = loadJson(packageJsonPath)
+  const versionRoot = path.join(mcpRoot, "artifacts", "runtime-deps", packageJson.version)
+  const matrix = loadJson(path.join(versionRoot, "support-matrix.json"))
+  const publishedTargets = generatedArtifacts.publishedRuntimePackTargets()
+
+  assert.deepEqual(
+    matrix.targets.map((target) => target.id).sort(),
+    publishedTargets.map((target) => `${target.platform}-${target.arch}-node-${target.nodeAbi}`).sort(),
+    "the support matrix must describe exactly the published targets the verifier consumes",
+  )
+
+  for (const target of matrix.targets) {
+    const packDir = path.join(versionRoot, target.artifact_path)
+    const manifest = loadJson(path.join(packDir, "runtime-deps.manifest.json"))
+    assert.equal(manifest.plugin.version, packageJson.version, `${target.id} pack must claim the current version`)
+    assert.equal(
+      `${manifest.platform.os}-${manifest.platform.arch}-node-${manifest.platform.node_abi}`,
+      target.id,
+      `${target.id} pack manifest must claim that exact target`,
+    )
+
+    const archivePath = path.join(packDir, "runtime-deps.tgz")
+    assert.equal(
+      sha256(readFileSync(archivePath)),
+      target.archive_sha256,
+      `${target.id} archive bytes must match the support matrix hash`,
+    )
+
+    const addon = archiveEntryBytes(archivePath, "node_modules/better-sqlite3/build/Release/better_sqlite3.node")
+    assert.ok(addon && addon.length > 0, `${target.id} pack must ship the native SQLite addon`)
+    const signature = nativeBinarySignatures[manifest.platform.os]
+    assert.ok(signature, `${target.id} declares an unknown platform ${manifest.platform.os}`)
+    assert.deepEqual(
+      [...addon.subarray(0, signature.bytes.length)],
+      signature.bytes,
+      `${target.id} must carry a ${signature.name} addon, not another host's relabelled output`,
+    )
+
+    const vectorExtension = {
+      linux: "node_modules/sqlite-vec-linux-x64/vec0.so",
+      win32: "node_modules/sqlite-vec-windows-x64/vec0.dll",
+      darwin: "node_modules/sqlite-vec-darwin-arm64/vec0.dylib",
+    }[manifest.platform.os]
+    assert.ok(
+      archiveEntryBytes(archivePath, vectorExtension),
+      `${target.id} must ship ${vectorExtension}, the vector extension built for its own platform`,
+    )
+  }
+})
