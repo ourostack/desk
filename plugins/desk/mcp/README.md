@@ -14,7 +14,7 @@ Or via environment:
 DESK=~/<your-workspace> node ./index.js
 ```
 
-## Tools exposed (15)
+## Tools exposed (16)
 
 **Runtime CRUD:**
 - `task_create`, `task_update`, `task_archive`
@@ -25,6 +25,9 @@ DESK=~/<your-workspace> node ./index.js
 - `desk_status` — session-start-safe MCP health, root, activation, index, snapshot, and vector-pack status
 - `desk_doctor` — healthy-runtime confirmation or precise first-boot failure diagnosis and remediation
 
+**Private work measurement:**
+- `desk_work_ledger` — the owner's own work-item ledger, kept in their private state directory outside Git, the search index and telemetry; it measures work, not people
+
 **Search:**
 - `desk_search` — hybrid lexical + semantic
 - `desk_recall` — semantic-only loose recall with auto-clustering
@@ -33,7 +36,7 @@ DESK=~/<your-workspace> node ./index.js
 - `desk_thread` — provenance walk via refs_graph
 - `desk_reindex` — rebuild or repair the local search index
 
-All 15 tools are wired to real implementations. There is no qualitative feedback tool: preview feedback a participant chooses to offer is written as Markdown in their own desk, and the protected store that already holds private records stays a [storage primitive](docs/private-feedback.md) rather than an MCP route. The optional `desk_doctor` input `{"format":"preview"}` returns a [minimal local diagnostic snapshot](../docs/preview-diagnostics.md), not feedback collection or a network report.
+All 16 tools are wired to real implementations. There is no qualitative feedback tool: preview feedback a participant chooses to offer is written as Markdown in their own desk at `_meta/preview-feedback.md`, and the protected store that already holds private records is retained as a [storage primitive](docs/private-feedback.md) with no route from this server. The optional `desk_doctor` input `{"format":"preview"}` returns a [minimal local diagnostic snapshot](../docs/preview-diagnostics.md), not feedback collection or a network report.
 
 ## How consumers wire this up
 

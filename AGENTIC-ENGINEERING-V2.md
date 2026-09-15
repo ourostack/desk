@@ -82,7 +82,7 @@ Say, for example:
 
 > Record this as preview feedback: "The agent asked for go at the right point, but repeated the same design choice three times."
 
-The agent uses [Preview Feedback](skills/preview-feedback/SKILL.md). There is no feedback tool and no feedback database: your words are written as a dated, attributed Markdown entry in your own desk's `feedback.md`, and nothing is inferred about you or scored. If the agent proposes a summary rather than preserving your text, it must show you that summary and get your confirmation first.
+The agent uses [Preview Feedback](skills/preview-feedback/SKILL.md). There is no feedback tool and no feedback database: your words are written as a dated, attributed Markdown entry in your own desk at `_meta/preview-feedback.md`, and nothing is inferred about you or scored. If the agent proposes a summary rather than preserving your text, it must show you that summary and get your confirmation first.
 
 You can then say "show me my preview feedback", "correct this entry to ...", or "withdraw this entry". The file is ordinary Markdown you own: reading it back, correcting an entry in place, or writing your own tombstone are all edits you can see and review.
 
@@ -94,7 +94,7 @@ Saying something is not consent to publish it. Before writing or sending identif
 
 Your desk is a Git checkout that syncs to a remote, so an entry you confirm is visible to everyone who can read that repository and stays in its history. That is the trade this convention makes plainly rather than quietly: nothing is written until you have seen the exact words and the exact destination.
 
-Private records captured by the earlier preview tool are untouched. That tool is gone from this build, and nothing migrated, indexed, exported, or deleted what it stored: the entries stay in their protected local store, readable only through your own account, and only you can decide to offer any of them again. See the [storage contract](plugins/desk/mcp/docs/private-feedback.md) for platform details and limits.
+Private records captured by the earlier preview tool are untouched. That tool is gone from this build, and nothing migrated, indexed, exported, or deleted what it stored: the entries stay in their protected local store on your own machine. Be aware of the trade — this build ships no way to read or edit them either, so treat them as preserved archival data. Only you can decide to offer any of it again, by saying it here. See the [storage contract](plugins/desk/mcp/docs/private-feedback.md) for platform details and limits.
 
 None of this makes your conversation private from the host or model provider. Text you type, or ask the agent to read back, remains part of that conversation and follows its retention rules. A tombstone in Git, like a deletion in the old local store, cannot erase conversation history, OS backups, or copies already shared. No claim of anonymity, employee-performance measurement, or regulatory compliance is made.
 

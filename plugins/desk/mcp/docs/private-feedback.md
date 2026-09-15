@@ -2,7 +2,7 @@
 
 The V2 Desk tool surface has **no qualitative feedback tool**. `desk_feedback` was retired: it is not advertised in `tools/list`, and a call to that name gets the ordinary unknown-tool response. Preview feedback a participant chooses to offer is written as attributed Markdown in their own desk — a `feedback.md` convention, not an MCP database.
 
-What did *not* happen is just as important: nothing was migrated, exported, indexed, or deleted. Records a participant already captured stay exactly where they were, under the same protections, and the storage primitive described below is retained so they remain readable, correctable and destroyable by their owner.
+What did *not* happen is just as important: nothing was migrated, exported, indexed, or deleted. Records a participant already captured stay exactly where they were, under the same protections, and the storage primitive described below is retained rather than removed. Be precise about what that does and does not give the owner: the files remain theirs on their own machine, but this build ships **no route to them** — no tool, no command, no reader. Treat them as preserved archival data, not as a live surface a participant can be told to inspect or edit through the product.
 
 ## What this store is not
 
@@ -49,7 +49,7 @@ Adapter tests and repacked Windows binaries do not qualify NTFS behavior. The na
 
 An entry is `{ entry_id, preview_version, text, task_ref, revision, captured_at, updated_at }`. `preview_version` is the installed Desk plugin version, not the independently versioned MCP component. It identifies the declared preview release; it is not an independently measured fingerprint of every active plugin.
 
-The retained module (`src/feedback/store.js`) exposes the owner's own operations — record, page, correct, remove — to in-process callers such as the storage tests and the offline source-mirror witness. Pages are live reads under one SQLite transaction, not a frozen export. `correct` still requires the revision the caller last read, so a correction written against a stale read fails with the current revision rather than overwriting an edit it never saw, and a `correct` or `remove` against an unknown `entry_id` is an error, not a quiet success.
+The retained module (`src/feedback/store.js`) still implements record, page, correct and remove, and those operations remain exercised — by the storage suite and by the offline source-mirror witness — so the format stays operable and the data does not rot behind untested code. No shipped surface calls it. Restoring owner access would require a separately proposed, explicitly approved reader; do not add one incidentally, and do not tell a participant an operation is available that this build does not offer. The semantics, if such a reader is ever approved, are unchanged: pages are live reads under one SQLite transaction rather than a frozen export, `correct` requires the revision the caller last read so a stale correction fails with the current revision instead of overwriting an edit it never saw, and a `correct` or `remove` against an unknown `entry_id` is an error rather than a quiet success.
 
 ## What deletion does and does not mean
 

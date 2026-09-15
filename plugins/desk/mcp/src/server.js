@@ -11,9 +11,10 @@
 //   - Private work measurement: desk_work_ledger (OS-user-private work-item ledger)
 //
 // There is no qualitative feedback tool here. Preview feedback a participant
-// chooses to offer is written as Markdown in their own desk; the private store
-// under src/feedback/ stays a protected-storage primitive for records that
-// already exist, not an MCP route.
+// chooses to offer is written as Markdown in their own desk
+// (`_meta/preview-feedback.md`); the private store under src/feedback/ stays a
+// protected-storage primitive for records that already exist, with no route
+// from this server and none to be added without its own approval.
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
