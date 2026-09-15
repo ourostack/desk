@@ -31,6 +31,14 @@ One implementation owner handles all remediation and re-review findings.
 
 Read the existing task card, plan, progress record and explicit mandate before selecting. Do not infer permission from access, tool availability, a paused historical record, or a provider skill's default finish options. Later explicit instructions supersede older state; keep that fact attributable in Desk. A required machine-review gate is not a new request for human go, and an actual human-only approval boundary is respected. Superpowers approval checkpoints consume the already-recorded approval when it covers the same outcome and scope; its worktree and finishing routines cannot change the approved repository, delegate against a prohibition, promote an intentional alpha to main, publish, install into live profiles, or clean up preserved work without authority.
 
+## Incremental delivery
+
+Build the agreed outcome through the smallest coherent milestones that put a working artifact in a real consumer's hands. A milestone may be labeled dogfood, preview, or alpha and remain partially qualified, but its own safety, compatibility, migration, review, and correction path must be honest.
+
+Later evaluation, automation, documentation breadth, platform breadth, and final qualification can continue after that milestone. They must not block an independently usable slice merely because both belong to one final plan. Keep every remaining criterion visible and scope readiness claims to the evidence that exists.
+
+Incremental milestones do not change the authorized endpoint or lower its standards. If no safe intermediate artifact exists, record the concrete coupling that makes delivery atomic instead of assuming one final release by default.
+
 ## Explicit artifact map
 
 Resolve the map once, with explicit existing paths, before handing over:

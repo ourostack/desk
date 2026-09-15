@@ -34,6 +34,11 @@ for (const manifest of manifests) {
 }
 assert.match(pluginSkill, /## Serve the reader/u);
 assert.match(pluginSkill, /## Make the answer easy to find/u);
+assert.match(pluginSkill, /## Translate internal identifiers/u);
+assert.match(pluginSkill, /reader-facing name[\s\S]+internal identifier/iu);
+assert.match(pluginSkill, /every first mention[\s\S]+reader-facing name/iu);
+assert.match(pluginSkill, /identifier is not needed[\s\S]+omit it/iu);
+assert.match(pluginSkill, /never make the reader decode[\s\S]+identifier/iu);
 assert.match(pluginSkill, /## Report work precisely/u);
 assert.match(pluginSkill, /## Preserve meaning/u);
 assert.match(pluginSkill, /## Check before sending/u);
