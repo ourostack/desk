@@ -6,8 +6,7 @@
     "activation_manifest": "plugins/desk/activation/desk.activation.json",
     "desk_plugin": "plugins/desk/plugin.json",
     "superpowers_plugin": "plugins/superpowers/plugin.json",
-    "plain_language_plugin": "plugins/plain-language/plugin.json",
-    "ponytail_plugin": "plugins/ponytail-upstream/plugin.json"
+    "plain_language_plugin": "plugins/plain-language/plugin.json"
   },
   "launch": {
     "agent": "plugins/desk/agents/worker.agent.md",
@@ -16,7 +15,7 @@
   "dependency_closure": [
     {
       "id": "desk",
-      "version": "3.2.0-alpha.3",
+      "version": "3.2.0-alpha.4",
       "plugin": "plugins/desk/plugin.json",
       "skills": "plugins/desk/skills/",
       "agents": "plugins/desk/agents/",
@@ -30,15 +29,9 @@
     },
     {
       "id": "plain-language",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "plugin": "plugins/plain-language/plugin.json",
       "skills": "plugins/plain-language/skills/"
-    },
-    {
-      "id": "ponytail-upstream",
-      "version": "4.9.0",
-      "plugin": "plugins/ponytail-upstream/plugin.json",
-      "skills": "plugins/ponytail-upstream/skills/"
     }
   ],
   "manual_steps": []

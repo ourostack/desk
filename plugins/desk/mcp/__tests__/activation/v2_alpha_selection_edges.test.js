@@ -101,6 +101,11 @@ function omittedSelectionLegacyInput() {
   }
   input.bundle.dependency_closure = input.bundle.dependency_closure.filter((entry) => entry.id !== "superpowers")
   input.bundle.dependency_closure.push({ id: "work-suite", version: legacy.lock.version, plugin: "plugins/work-suite/plugin.json", skills: "plugins/work-suite/skills/" })
+  // The committed bundle is the regenerated three-root V2 artifact, so this legacy fixture
+  // supplies the historical Ponytail closure entry in memory rather than relying on a stale
+  // committed artifact to carry it.
+  input.bundle.dependency_closure.push({ id: "ponytail-upstream", version: "4.9.0", plugin: "plugins/ponytail-upstream/plugin.json", skills: "plugins/ponytail-upstream/skills/" })
+  input.bundle.generated_from.ponytail_plugin = "plugins/ponytail-upstream/plugin.json"
   input.workSuitePlugin = read("plugins/work-suite/plugin.json")
   delete input.activation.provides.activation_targets[0].depends_on
   return input

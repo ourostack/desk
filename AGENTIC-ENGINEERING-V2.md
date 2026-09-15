@@ -2,7 +2,7 @@
 
 This is an opt-in technical alpha for existing Desk users, not the main-branch default or a qualified V1 replacement. It selects pinned Superpowers as the engineering method while retaining Desk/Crew state, authority and approved delivery boundaries. Public implementation evidence is separate from private participant feedback.
 
-**Candidate status:** Current source/package tests do not establish alpha runtime admission. The [historical outcome ledger](evals/engineering-v2-results.md) retains the earlier Work Suite-based preview's method failures, bounded Mac/Windows observations and measurement limits. Those source identities and result tables remain unchanged; they are not evidence that this Superpowers composition passed.
+**Candidate status: pending.** This publication is a dogfoodable source milestone, not a qualified alpha. Native runtime qualification is explicitly pending, the relevant-revision status for this head is `pending` with no result, and mechanical CI success does not turn it green. Current source/package tests do not establish alpha runtime admission. The [historical outcome ledger](evals/engineering-v2-results.md) retains the earlier Work Suite-based preview's method failures, bounded Mac/Windows observations and measurement limits. Those source identities and result tables remain unchanged; they are not evidence that this Superpowers composition passed.
 
 ## The proposal
 
@@ -12,9 +12,10 @@ Keep the durable workspace. Simplify how work happens inside it. Stronger models
 |---|---|
 | The native host and frontier model | Reason, use tools, and execute the agreed work |
 | Desk and Crew | Keep task state, continuity, shared knowledge, attribution, and read-across/write-own boundaries |
-| Pinned Superpowers | Own discovery, planning, implementation and verification through `desk:superpowers-integration`; consume existing approval and canonical Desk records |
-| Independent review | `desk:independent-review` owns finding disposition and re-review; RoboRev is a first-class reviewer through an admitted host integration, with one implementation owner for fixes |
-| Pinned Ponytail | Prefer existing capabilities and the smallest complete implementation, without shrinking scope or proof |
+| Pinned Superpowers | Own discovery, planning, implementation and verification through `desk:using-superpowers-with-desk`, the single adapter between Desk state and pristine provider skills; consume existing approval and canonical Desk records |
+| Independent review | `desk:independent-review` owns finding disposition and re-review; RoboRev reviews continuously, commit by commit, through an admitted host integration, with one implementation owner for fixes |
+| Ready-set scheduling | `desk:work-orchestration` owns the ready set, the dependency graph and delivery milestones: the smallest coherent usable milestone ships first, and later qualification stays visible instead of gating an independently usable slice |
+| Private work measurement | The work-accounting ledger stays in private state on your own machine; only preview feedback you confirm is written to Git |
 | Preview feedback | Let the participant publish comments they explicitly offer, as attributed Markdown in their own desk |
 
 The provider pins `obra/superpowers` at `b36e0829c6d0140e93cfef2ca599b1b07d4a7797` (6.3.0, MIT), with selected-file provenance in `upstream-sources.lock.json`. The authored Copilot hook adapter is separate from pristine upstream hooks. Historical comparisons remain historical; adopting this opt-in composition is not a new measured reliability result or authority to run an always-on review daemon.
@@ -41,15 +42,17 @@ This source contract does not itself install a supervisor or prove a host recove
 
 ## Opt in without mixing versions
 
-The current source candidate is Desk `3.2.0-alpha.3`, Superpowers `6.3.0`, MCP `1.4.0-alpha.3`, Plain Language `0.2.0` and Ponytail `4.9.0`; shared workspaces also consume Crew `0.2.0`. Generic source references use `@v2-alpha`, resolved to an exact commit and content fingerprint for admission. Versions, generated activation and native artifacts must agree. A version label alone is not loaded-artifact identity.
+The current source candidate is Desk `3.2.0-alpha.4`, Superpowers `6.3.0`, MCP `1.4.0-alpha.4` and Plain Language `0.2.1`. Standalone Desk selects exactly those three roots — Desk, Superpowers and Plain Language — with no Ponytail, no Work Suite and no private feedback API. A shared workspace adds Crew `0.2.0` and its organization overlay, which is a five-root consumer composition; a Platform Workflows consumer adds its own root for six. Generic source references use `@v2-alpha`, resolved to an exact commit and content fingerprint for admission. Versions, generated activation and native artifacts must agree. A version label alone is not loaded-artifact identity.
 
-Choose one active workflow version for your work. Retaining an inactive checkout for rollback is fine; enabling V1 and V2 methods together is not. Keep your existing Desk location, Crew person binding, selected overlay, and repository permissions.
+Acquisition is ordinary and single-root: select `desk` and let its declaration pull Superpowers and Plain Language. Agency branch tracking of `@v2-alpha` is the update path, so a later source correction arrives the same ordinary way. This build ships no separate installer, refresh command or rollback channel, and nothing here authorizes mutating an installed profile on your behalf.
+
+Choose one active workflow version for your work. Retaining an inactive checkout is fine; enabling V1 and V2 methods together is not. Keep your existing Desk location, Crew person binding, selected overlay, and repository permissions.
 
 **Use the owning host's explicit opt-in composition.** Do not change a live default profile, replace an existing overlay with the standalone worker or infer transitive native loading from packaging metadata. The admitted Desk root must be the same artifact supplied to native skill loading and the MCP process. Do not guess a sibling cache root or bypass a host's source authority.
 
-The supplied offline runtime packs target ARM macOS with Node 22 and x64 Windows with Node 24. Use the matching Node version on the CLI's `PATH`. The [native Windows CI](https://github.com/ourostack/ouroboros-skills/actions/runs/34266621708) exercises actual NTFS protection, feedback CRUD/reopen and offline source-mirror attribution on that Windows target; it does not qualify a full Windows CLI installation, skill-discovery or rollback flow. A different Node/architecture combination is not qualified by those packs.
+This candidate publishes one offline runtime pack: ARM macOS on Node 22 (ABI 127), built on that host. The Linux x64 and Windows x64 packs for `1.4.0-alpha.4` are not built yet, because each pack must be produced on its own platform and ABI rather than relabelled from another host; until their own hosts produce them, those targets stay pending and the generated-artifact check reports them missing. Earlier candidates' packs remain in place for their own versions. Use the matching Node version on the CLI's `PATH`. The [native Windows CI](https://github.com/ourostack/ouroboros-skills/actions/runs/34266621708) exercised actual NTFS protection, feedback CRUD/reopen and offline source-mirror attribution on an earlier candidate; it does not qualify a full Windows CLI installation or skill discovery here. A different Node/architecture combination is not qualified by these packs.
 
-Keep the existing workspace/person binding, source inventory and overlay chain. An inactive checkout may be retained for rollback. Read-only inventory commands can help establish the selected source:
+Keep the existing workspace/person binding, source inventory and overlay chain. Read-only inventory commands can help establish the selected source:
 
 ```bash
 git -C "$ALPHA_SOURCE" rev-parse HEAD
@@ -66,7 +69,7 @@ Before starting work, inspect the actual skill sources from that project's worki
 copilot skill list --json
 ```
 
-Require Superpowers skills to resolve under the admitted source's `plugins/superpowers/skills/`, with `desk:superpowers-integration`, `desk:independent-review` and Desk state skills under that same source's `plugins/desk/skills/`. Verify actual source paths and content, not just menu names. An enabled Work Suite lifecycle is a conflict; an inactive legacy checkout is not. Preserve operator preferences and interpret retired names through the compatibility map rather than rewriting their text. Ancestor or personal skill shadowing must be resolved through the owning host, not bypassed by deleting guidance.
+Require Superpowers skills to resolve under the admitted source's `plugins/superpowers/skills/`, with `desk:using-superpowers-with-desk`, `desk:independent-review` and Desk state skills under that same source's `plugins/desk/skills/`. Verify actual source paths and content, not just menu names. An enabled Work Suite lifecycle is a conflict; an inactive legacy checkout is not. Preserve operator preferences and interpret retired names through the compatibility map rather than rewriting their text. Ancestor or personal skill shadowing must be resolved through the owning host, not bypassed by deleting guidance.
 
 The legacy Work Suite audit and old preview receipts are not Superpowers admission checks. Freeze current source hashes, selected provider lock, native launch inputs, loaded skills and actual backend identity. Offline fixtures, bootstrap transport and full method-following behavior are distinct evidence classes; do not promote one into another.
 
@@ -100,25 +103,15 @@ None of this makes your conversation private from the host or model provider. Te
 
 The optional [minimal diagnostic](plugins/desk/docs/preview-diagnostics.md) is a separate, on-demand package/process snapshot. It reads no feedback or task data and sends nothing on its own.
 
-## Roll back without moving your desk
+## Correct your source through Agency
 
-Keep the existing workspace and private-state directory. Do not delete either to uninstall the preview.
+Keep the existing workspace and private-state directory. Neither is part of switching source versions, and nothing here asks you to delete either one.
 
-The earlier Work Suite-based preview exercised rollback to `c5a210f91ee59584f5cbcf126966498c17ebccc2`: Desk `3.1.2`, Work Suite `3.0.0` and MCP `1.3.4`, with the same Plain Language and Ponytail versions. The commands below are that historical reference, not proof that the new Superpowers host composition can roll back. Current alpha adoption and rollback require the owning host's separate qualification and authorization.
+Source corrections arrive the ordinary way: Agency tracks the `@v2-alpha` branch for the roots you already selected, so a corrected commit reaches you through the update path you are already using. This build deliberately ships no parallel installer, no manual refresh command and no rollback channel, and it does not modify an installed profile for you. If you need to leave the alpha, that is the owning host's ordinary source-selection decision under its own authority.
 
-```bash
-git clone --no-checkout https://github.com/ourostack/ouroboros-skills.git "$HOME/agentic-engineering-v1"
-git -C "$HOME/agentic-engineering-v1" checkout --detach c5a210f91ee59584f5cbcf126966498c17ebccc2
-copilot plugin marketplace remove ouroboros-skills --force
-copilot plugin marketplace add "$HOME/agentic-engineering-v1"
-copilot plugin install desk@ouroboros-skills
-copilot plugin install work-suite@ouroboros-skills
-copilot plugin install plain-language@ouroboros-skills
-copilot plugin install ponytail-upstream@ouroboros-skills
-copilot plugin list
-```
+For history, the earlier Work Suite-based preview did exercise a manual rollback to `c5a210f91ee59584f5cbcf126966498c17ebccc2` — Desk `3.1.2`, Work Suite `3.0.0` and MCP `1.3.4` — with a preserved workspace sentinel and unchanged private-store bytes across two native Mac cycles. That record stands as history for that composition. It is not an instruction for this build and not evidence that this Superpowers composition can roll back; those manual steps are no longer part of the supported path.
 
-Restore any other previously enabled companion and repeat the skill-source preflight from the same working directory, this time requiring the selected V1 paths. Check again for preview paths after a later reinstall. Then start a fresh session with the same workspace/person binding. Neither V1 nor this build exposes a private-feedback tool, and rollback does not remove the store an earlier preview created; those entries stay on disk either way. Native Mac runs have demonstrated two rollback/reinstall cycles with a preserved workspace sentinel and unchanged private-store bytes during V1, including skill-source checks in both directions; other host routes require their own evidence.
+Whichever source you run, a private store created by the earlier preview stays on disk: this build neither reads, migrates nor deletes it.
 
 ## What qualifies the proposal
 

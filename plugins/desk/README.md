@@ -24,7 +24,7 @@ desk substrate -> desk:worker -> ms-desk:worker -> area overlay
 
 The alpha source is `ourostack/ouroboros-skills:plugins/desk@v2-alpha`. Use the host's admitted, explicit alpha composition instead of changing a live default installation.
 
-The root package declares a flattened closure of Desk, Superpowers, Plain Language and Ponytail. Metadata is not runtime loading proof: the host must load every selected root and prove the actual skill/MCP source identity before admission.
+Acquisition is ordinary and single-root: select `desk` and let its own declaration pull the rest. `plugins/desk/agency.json` declares exactly two generic dependencies — Superpowers and Plain Language, both tracked at `@v2-alpha` — so the standalone composition is the three roots Desk, Superpowers and Plain Language, with no Ponytail, no Work Suite and no private feedback API. A shared-workspace composition adds Crew and its organization overlay (five roots), and a Platform Workflows consumer adds its own root on top (six roots); those are consumer compositions, not this package's closure. Metadata is not runtime loading proof: the host must load every selected root and prove the actual skill/MCP source identity before admission. Later source corrections arrive through ordinary Agency branch tracking of `@v2-alpha`, not a manual refresh or rollback channel.
 
 ### Under Ouroboros
 
@@ -32,15 +32,14 @@ Select `ourostack/ouroboros-skills:plugins/desk@v2-alpha` through the host's sup
 
 The agent's `bundle.json` gains a `plugins[]` entry; the agent's preamble declares `Your desk: ~/AgentBundles/<agent>.ouro/desk/`.
 
-The source bundle carries Desk, Superpowers, Plain Language and Ponytail together. Its packaging contract does not establish full alpha runtime qualification:
+The source bundle carries the three selected roots — Desk, Superpowers and Plain Language — together. Its packaging contract does not establish full alpha runtime qualification:
 
 ```json
 {
   "plugins": [
     "desk",
     "superpowers",
-    "plain-language",
-    "ponytail-upstream"
+    "plain-language"
   ]
 }
 ```
@@ -54,7 +53,7 @@ Your desk: ~/AgentBundles/<agent>.ouro/desk/
 
 ### Under Claude Code
 
-The alpha ships Claude metadata for Desk, Superpowers, Plain Language and Ponytail. Desk declares the companion closure; use a deliberately selected alpha package rather than updating a live default.
+The alpha ships Claude metadata for the selected Desk + Superpowers + Plain Language closure. Desk declares the companion closure; use a deliberately selected alpha package rather than updating a live default.
 
 When transitive dependencies are supported, the host resolves Desk's `.claude-plugin/plugin.json`. Otherwise the host's admitted composition supplies the full selected closure. Background and Agent View inheritance remain unqualified; historical help output is not alpha consumption evidence.
 
@@ -68,9 +67,9 @@ Or inside an existing Claude session: `@desk:worker say hi`. The agent's preambl
 
 ### Under Codex
 
-The plugin ships Codex manifests for Desk and its Superpowers, Plain Language and Ponytail closure. Explicit alpha activation materializes only the owned config/instruction region for the selected mode.
+The plugin ships Codex manifests for Desk and its Superpowers and Plain Language closure. Explicit alpha activation materializes only the owned config/instruction region for the selected mode.
 
-Within explicit alpha activation, the default mode is `global-personal`: Desk and Superpowers are selected together with the owned MCP bridge and instruction block. `project-local` and `manual-only` remain opt-outs. Enabled competing lifecycle configuration is refused, not silently rewritten; operator-owned text and prior approvals remain intact through `desk:superpowers-integration`.
+Within explicit alpha activation, the default mode is `global-personal`: Desk and Superpowers are selected together with the owned MCP bridge and instruction block. `project-local` and `manual-only` remain opt-outs. Enabled competing lifecycle configuration is refused, not silently rewritten; operator-owned text and prior approvals remain intact through `desk:using-superpowers-with-desk`, the active adapter that the retired `desk:superpowers-integration` name now redirects to.
 
 Codex plugin ids use the actual marketplace namespace consistently for Desk, Superpowers and downstream overlays. A namespace or cache version alone does not prove the selected loaded source.
 

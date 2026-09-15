@@ -192,7 +192,8 @@ test("Ouroboros docs specify bundle.json plugin closure and $DESK preamble bindi
   assert.match(section, /"desk"/u)
   assert.match(section, /"superpowers"/u)
   assert.match(section, /"plain-language"/u)
-  assert.match(section, /"ponytail-upstream"/u)
+  // The bundle closure is the selected three roots; Ponytail is no longer part of it.
+  assert.doesNotMatch(section, /"ponytail-upstream"/u)
   assert.match(section, /preamble/u)
   assert.match(section, /\$DESK\s*=\s*~\/AgentBundles\/<agent>\.ouro\/desk\//u)
   assert.doesNotMatch(section, /npm install/u)

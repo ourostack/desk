@@ -181,9 +181,9 @@ test("activation background disclosure names the selected provider without upgra
 
 test("the technical preview guide preflights selected source paths rather than retired lifecycle skills", () => {
   const guide = read("AGENTIC-ENGINEERING-V2.md")
-  const current = guide.split("## Roll back without moving your desk")[0]
+  const current = guide.split("## Correct your source through Agency")[0]
   assert.match(current, /plugins\/superpowers\/skills\//u)
-  assert.match(current, /desk:superpowers-integration/u)
+  assert.match(current, /desk:using-superpowers-with-desk/u)
   assert.doesNotMatch(current, /Require the enabled Work Suite skills|copilot plugin install work-suite@/u)
   assert.doesNotMatch(guide.split("## The proposal")[0], /interactive RFC/iu)
   assert.doesNotMatch(read("README.md").split("\n").slice(0, 10).join("\n"), /interactive RFC/iu)

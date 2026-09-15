@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.4 — 2026-09-15
+
+**The fully assembled generic alpha candidate, published as a dogfoodable source milestone rather than a qualified alpha.** Standalone Desk now selects exactly three roots — Desk, Superpowers and Plain Language. Ponytail and Work Suite are no longer selected for the standalone composition, and no private feedback API ships; the legacy four-root closure survives only for a manifest that declares no selection at all. Acquisition stays ordinary and single-root: `plugins/desk/agency.json` declares the two generic dependencies at `@v2-alpha`, and Agency branch tracking is the update path, so this release adds no installer, refresh command or rollback channel.
+
+Desk `3.2.0-alpha.4` couples to `desk-mcp@1.4.0-alpha.4` and Plain Language `0.2.1`. Plain Language now requires a reader-facing name before any internal identifier, and the engineering seam plans the smallest coherent usable milestone while keeping later qualification visible. `desk:using-superpowers-with-desk` is the active adapter; `desk:superpowers-integration` remains only as a compatibility redirect. Work profiles carry typed action evidence, and the public relevant-revision workflow publishes status read-only, with no model or credential, so the current head stays `pending` until compatible evidence returns.
+
+Generated activation, the flattened Copilot bundle, Codex activation fixtures, host support matrices and the reviewed-source kernel fingerprint were regenerated once from their existing producers for this candidate. The macOS ARM64 runtime pack on Node ABI 127 was built on that host; the Linux x64 and Windows x64 packs for this version remain unbuilt until their own platforms produce them, so generated-artifact verification reports those two targets missing. Native runtime qualification, consumer-composition qualification and the alpha's own evaluation stay pending.
+
 ## 3.2.0-alpha.3 — 2026-09-09
 
 **Opt-in Superpowers source candidate, not a default installation change or native-admission claim.** Desk selects pinned Superpowers 6.3.0 as the sole engineering method. Desk/Crew retain state, existing approvals, delegation limits and intentional alpha/PR-only delivery boundaries. The independent-review contract makes RoboRev a first-class host-provided reviewer with one implementation owner for remediation and re-review. Work Suite remains available as a legacy standalone provider.

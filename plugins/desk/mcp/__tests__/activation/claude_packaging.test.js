@@ -230,7 +230,7 @@ test("Claude plugin metadata declares native Desk surfaces and Superpowers depen
     },
     {
       name: "plain-language",
-      version: "0.2.0",
+      version: "0.2.1",
     },
   ])
   assert.equal(Object.hasOwn(deskPlugin, "activation"), false)

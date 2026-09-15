@@ -133,6 +133,13 @@ function withPonytailSelected(input) {
     resolution: "flattened",
     bundleMetadata: copilotBundlePath,
   }
+  input.bundle.dependency_closure.push({
+    id: "ponytail-upstream",
+    version: "4.9.0",
+    plugin: "plugins/ponytail-upstream/plugin.json",
+    skills: "plugins/ponytail-upstream/skills/",
+  })
+  input.bundle.generated_from.ponytail_plugin = "plugins/ponytail-upstream/plugin.json"
   return input
 }
 
@@ -144,10 +151,6 @@ function expectedCopilotBundle() {
   const lockedPlainLanguageVersion = activation.dependencies.find((dependency) => (
     dependency.id === "plain-language"
   )).lock.version
-  const lockedPonytailVersion = activation.dependencies.find((dependency) => (
-    dependency.id === "ponytail-upstream"
-  )).lock.version
-
   return {
     schema_version: 1,
     host: "copilot-root",
@@ -157,7 +160,6 @@ function expectedCopilotBundle() {
       desk_plugin: "plugins/desk/plugin.json",
       superpowers_plugin: "plugins/superpowers/plugin.json",
       plain_language_plugin: "plugins/plain-language/plugin.json",
-      ponytail_plugin: "plugins/ponytail-upstream/plugin.json",
     },
     launch: {
       agent: `plugins/desk/${copilotWorkerSource}`,
@@ -183,12 +185,6 @@ function expectedCopilotBundle() {
         version: lockedPlainLanguageVersion,
         plugin: "plugins/plain-language/plugin.json",
         skills: "plugins/plain-language/skills/",
-      },
-      {
-        id: "ponytail-upstream",
-        version: lockedPonytailVersion,
-        plugin: "plugins/ponytail-upstream/plugin.json",
-        skills: "plugins/ponytail-upstream/skills/",
       },
     ],
     manual_steps: [],
@@ -256,7 +252,7 @@ test("Copilot root packaging declares a generated flattened dependency closure",
   })
   assert.deepEqual(deskPlugin.activation?.copilot?.dependencies?.["plain-language"], {
     path: "../plain-language",
-    version: "0.2.0",
+    version: "0.2.1",
     resolution: "flattened",
     bundleMetadata: copilotBundlePath,
   })
@@ -292,10 +288,10 @@ test("generated Copilot flattened bundle producer derives the authored three-roo
   assert.equal(Object.hasOwn(freshBundle.generated_from, "ponytail_plugin"), false)
 
   const bundleOnDisk = loadJson(...copilotBundlePath.split("/"))
-  assert.notDeepEqual(
+  assert.deepEqual(
     freshBundle,
     bundleOnDisk,
-    "the checked-in flattened bundle remains the stale four-root artifact; regenerating it is T19's job, not this test's",
+    "the checked-in flattened bundle is the regenerated three-root artifact, so the producer's output and the committed file must agree",
   )
 })
 
@@ -365,7 +361,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.0-alpha.3"],
+    ["Copilot root Desk version must match activation version 3.2.0-alpha.4"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())
@@ -379,7 +375,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   stalePlainLanguageVersion.plainLanguagePlugin.version = "0.0.9"
   assert.deepEqual(
     validateCopilotPackagingContract(stalePlainLanguageVersion),
-    ["Copilot root Plain Language version must match activation lock 0.2.0"],
+    ["Copilot root Plain Language version must match activation lock 0.2.1"],
   )
 
   const stalePonytailVersion = withPonytailSelected(clone(currentCopilotPackagingInput()))
