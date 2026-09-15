@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createReviewHandler } from "../../controller-callbacks.mjs";
+import { jsonBytes, sha256 } from "../../core.mjs";
 import { controllerFixture } from "./controller-fixture.mjs";
 import { privateControllerFixture } from "./private-controller.mjs";
-import { success } from "./private-callbacks.mjs";
 
 // This is an intentionally synthetic actor/reviewer transport. It performs real fixture edits
 // and local archive operations to exercise the controller, not a native or paid campaign.
@@ -59,13 +60,62 @@ export async function completedControllerFixture(caseId, options = {}) {
       commit(actor);
     }
     if (caseId === "capability-probe-authority") {
-      run(process.execPath, ["approved/challenge.mjs"], actor);
-      fs.writeFileSync(path.join(f.opened.traceDirectories[0], "syscalls.4242"), '1.0 execve("/native", ["native"], 0x0) = 0\n2.0 execve("/bin/node", ["node", "approved/challenge.mjs"], 0x0) = 0\n3.0 exit_group(0) = ?\n3.1 +++ exited with 0 +++\n');
+      const challenge = path.join(actor, "approved/challenge.mjs");
+      run(process.execPath, [challenge], actor);
+      // The synthetic trace records the operand the fixture really executed, so target identity is absolute.
+      fs.writeFileSync(path.join(f.opened.traceDirectories[0], "syscalls.4242"), `1.0 execve("/native", ["native"], 0x0) = 0\n2.0 execve(${JSON.stringify(process.execPath)}, ${JSON.stringify([process.execPath, challenge])}, 0x0) = 0\n3.0 exit_group(0) = ?\n3.1 +++ exited with 0 +++\n`);
     }
   } });
-  if (caseId === "review-recovery-state") {
-    const review = f.input.reviewHandler;
-    f.input.reviewHandler = async request => request.turnIndex === 0 ? review(request) : success({ sha: request.sha, admitted: request.turnIndex === 2, findings: request.turnIndex === 1 ? [{ text: "Delivery is incorrectly discounted." }] : [], reviewerSessionId: `synthetic-independent-${request.turnIndex}` });
-  }
+  if (caseId === "review-recovery-state") f.input.reviewHandler = syntheticReviewHandler(f);
   return f;
+}
+
+// The installed review policy really runs here over synthetic reviewer exports: the scoped executable is genuinely
+// absent for the blocked turn, the measured bytes are restored to the same path afterwards, and the handler retains
+// its execution, admission and reviewer-session records through the controller's own retention so the controller can
+// reread and hash-verify every reference. No reviewer process, credential or provider is involved.
+function syntheticReviewHandler(f) {
+  const parentDir = path.join(f.root, "review");
+  fs.mkdirSync(parentDir, { recursive: true });
+  const binary = path.join(parentDir, "source-reviewer");
+  fs.writeFileSync(binary, "Synthetic reviewer bytes; never executed.\n");
+  let turnIndex = 0;
+  const reviewerEvents = sessionId => [
+    { id: "start", type: "session.start", data: { sessionId, selectedModel: "gpt-6-astra", reasoningEffort: "high", contextTier: "default" } },
+    { id: "usage", type: "assistant.usage", data: { model: "gpt-6-astra", reasoningEffort: "high", contentFilterTriggered: false, finishReason: "stop" } },
+    { id: "reply", type: "assistant.message", data: { content: "Synthetic independent review response." } },
+  ];
+  const reviewer = {
+    prepareReviewTarget: ({ parentDir: directory, sha }) => {
+      const target = path.join(directory, "checkout");
+      fs.mkdirSync(target);
+      const sessionId = `synthetic-independent-${turnIndex}`;
+      const state = path.join(directory, "home/.copilot/session-state", sessionId);
+      fs.mkdirSync(state, { recursive: true });
+      fs.writeFileSync(path.join(state, "events.jsonl"), reviewerEvents(sessionId).map(value => JSON.stringify(value)).join("\n") + "\n");
+      return { checkout: { path: target, sha }, argv: ["review", "--agent", "copilot", "--sha", sha] };
+    },
+    materializeScopedEntry: input => ({ dir: input.dir }),
+    materializeReviewerEnv: () => ({}),
+    buildContainedEnv: () => ({}),
+    assertCopilotOnlyEffective: value => ({ ok: value.effectiveAgent === "copilot" }),
+    spawnReviewChild: input => ({ run: () => {}, killTree: () => {}, sweep: () => {}, refused: [], output: () => Buffer.from(`Synthetic review of ${path.basename(input.cwd)}.`), errorOutput: () => Buffer.alloc(0), drainedFully: true, command: input.command }),
+    runBounded: async input => {
+      input.refused();
+      if (!fs.existsSync(binary) || turnIndex === 0) throw Object.assign(new Error("The scoped reviewer path is absent"), { code: "ENOENT" });
+      return { admitted: true, timedOut: false, survived: [], unverified: [], result: { code: 0, signal: null } };
+    },
+    admitReview: () => turnIndex === 1 ? { admitted: false, reason: "findings", findings: [{ text: "Delivery is incorrectly discounted." }] } : { admitted: true, findings: [] },
+  };
+  const runtime = { roborevBin: binary, copilotEntry: "/opt/native/index.js", node: process.execPath, path: "/usr/bin:/bin", sourceSha: "a".repeat(40), binaryReceipt: { sourceSha: "a".repeat(40), binarySha256: sha256(fs.readFileSync(binary)) }, spawnFn: () => { throw new Error("No native OS role is launched by this source fixture"); }, psFn: () => [] };
+  const handler = createReviewHandler({
+    reviewer, runtimePolicy: { resolveRuntime: value => value, assertReviewerIdentity: (claim, receipt) => ({ ok: claim.binarySha256 === receipt.binarySha256 }) },
+    runtime, handoff: { reviewer: {} }, parentDir, model: "gpt-6-astra", deadlineMs: 20000,
+    stopped: async () => async () => {}, assertConfinement: async () => {},
+    retain: (name, value) => ({ path: name, sha256: sha256(jsonBytes(value)) }),
+  });
+  return async request => {
+    turnIndex = request.turnIndex;
+    return handler(request);
+  };
 }

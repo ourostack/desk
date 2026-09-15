@@ -25,6 +25,17 @@ test("private source controls bind actual returned IDs to protected bytes and re
   assert.equal(f.state.recording, false);
   assert.equal(f.state.items.size, 0);
 });
+test("the private ledger alone drives protected recording; no evaluator feedback store is consulted", async () => {
+  const f = privateFixture(directory(), undefined, false);
+  delete f.callbacks.private.feedback;
+  let feedback = 0;
+  Object.defineProperty(f.callbacks.private, "feedback", { get() { feedback++; return undefined; }, configurable: true });
+  const result = await runPrivateOperations(f.options);
+  assert.equal(result.protectedStore, true);
+  assert.equal(result.observations["inspect-correct-delete"].outcome, "intended-record-only");
+  assert.equal(feedback, 0);
+  assert.equal(f.state.recording, false);
+});
 test("missing private context, an existing arbitrary path and unknown initial recording state refuse before capture", async () => {
   const f = privateFixture(directory());
   await assert.rejects(runPrivateOperations({ ...f.options, privateRoot: undefined }), { code: "NATIVE_CALLBACK_UNMAPPED" });

@@ -12,7 +12,10 @@ const preload = path.join(repository, "evals/offline/__tests__/helpers/deny-sdk-
 const run = args => spawnSync(process.execPath, ["--import", preload, cli, "offline", ...args], { cwd: repository, encoding: "utf8", timeout: 15000 });
 
 test("the shipping CLI reports static help, typed invalid invocations and a truthful native hold", () => {
-  assert.match(run(["help"]).stdout, /offline compare/);
+  const help = run(["help"]);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /offline compare/);
+  assert.match(help.stdout, /offline run --plan/);
   for (const args of [[], ["help", "extra"], ["validate"], ["validate", "--dataset", "x", "--dataset", "y"], ["validate", "--dataset", "--bad", "--fixtures", "x"], ["compare", "--left", "x"], ["run", "--plan", "x"]]) {
     const result = run(args);
     assert.equal(result.status, 4, result.stderr);
@@ -21,6 +24,7 @@ test("the shipping CLI reports static help, typed invalid invocations and a trut
   const filename = path.join(root, "plan.json");
   fs.writeFileSync(filename, bytes(planFixture()));
   const output = path.join(root, "must-not-exist");
+  // No parent-owned T13 preflight reaches the shipping CLI route, so conditional admission still refuses.
   const held = run(["run", "--plan", filename, "--output", output]);
   assert.equal(held.status, 3, held.stderr);
   assert.equal(JSON.parse(held.stderr).status, "unavailable");

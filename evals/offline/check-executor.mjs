@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import dataset from "./cases/v2-alpha-v1/dataset.json" with { type: "json" };
 import manifest from "./cases/v2-alpha-v1/fixture-manifest.json" with { type: "json" };
-import { absoluteRoot, canonicalJson, jsonBytes, listRegularFiles, overlaps, pathIdentities, plainObject, readRawReference, readRegular, requireCondition, sha256 } from "./core.mjs";
+import { absoluteRoot, canonicalJson, exactKeys, hashString, jsonBytes, listRegularFiles, overlaps, pathIdentities, plainObject, readRawReference, readRegular, relativeName, requireCondition, sha256 } from "./core.mjs";
 import { validateCleanupReceipt } from "./copilot-runner.mjs";
 import { checkerProcess } from "./checker-process.mjs";
 import { inspectArchive, readSourceState } from "./source-observations.mjs";
@@ -243,8 +243,37 @@ export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, check
   }
 }
 
-export function requireTrustedChecker() {
-  requireCondition(false, "NATIVE_QUALIFICATION_REQUIRED", "Native admission must bind the parent-owned T13 preflight and identity context before starting a campaign. Behavioral observations do not qualify their producer.");
+// Conditional admission. `preflight` is the parent-owned T13 `qualifyCheckerBoundary` receipt; `expected` carries the
+// freshly observed identities and the parent's own evidence reader. Both are ordinary typed data owned by protected
+// controller source: there is no hidden function identity, no candidate-reachable "trusted" flag, and candidate output
+// (including a forged `status: "available"`) is never consulted. Every call rechecks identities and rereads and
+// rehashes every evidence reference, so a receipt admitted at one boundary cannot carry a later mutated one.
+const identityNames = ["controllerSha256", "runtimeSha256", "launcherSha256", "sourceManifestSha256"];
+const preflightChecks = ["isolation", "hiddenAssertionsSeparated", "boundedCapture", "namespaceCleanup", "frozenIdentities"];
+const admissionRequired = (condition, detail) => requireCondition(condition, "NATIVE_QUALIFICATION_REQUIRED", `NATIVE_QUALIFICATION_REQUIRED: ${detail}. Behavioral observations do not qualify their producer.`);
+
+export function requireTrustedChecker(context) {
+  // Explicit missing-argument refusal: absent context is a typed admission refusal, never a destructuring exception.
+  const { preflight, expected } = plainObject(context) ? context : {};
+  admissionRequired(plainObject(preflight) && plainObject(expected), "Native admission requires the parent-owned checker preflight receipt and its freshly observed expected identities");
+  admissionRequired(typeof expected.readEvidence === "function", "The parent must supply its own evidence reader so every retained reference is read and hash-verified before admission");
+  admissionRequired(exactKeys(expected.identities, identityNames) && identityNames.every(name => hashString(expected.identities[name])), "Expected checker identities must be exactly the four lowercase 64-hex source, runtime, launcher and controller digests");
+  admissionRequired(preflight.schemaVersion === 1 && preflight.claimScope === "behavioral_outcome", "Only a schema-1 behavioral-outcome preflight is admissible; a widened claim scope is not native authenticity");
+  admissionRequired(preflight.status === "available", "The parent preflight did not observe an available checker boundary");
+  admissionRequired(exactKeys(preflight.identities, identityNames) && identityNames.every(name => hashString(preflight.identities[name])), "The preflight must carry exactly the four lowercase 64-hex frozen identities");
+  admissionRequired(identityNames.every(name => preflight.identities[name] === expected.identities[name]), "The preflight identities differ from the freshly observed source, runtime, launcher and controller identities");
+  admissionRequired(exactKeys(preflight.checks, preflightChecks) && preflightChecks.every(name => preflight.checks[name] === true), "Isolation, held-out separation, bounded capture, namespace cleanup and frozen identities must all be observed true");
+  admissionRequired(Array.isArray(preflight.evidenceRefs) && preflight.evidenceRefs.length > 0 && preflight.evidenceRefs.length <= 4096, "An available preflight must retain a bounded, nonempty set of raw evidence references");
+  for (const ref of preflight.evidenceRefs) {
+    admissionRequired(plainObject(ref) && hashString(ref.sha256) && typeof ref.path === "string", "Every preflight evidence reference requires a confined relative path and a lowercase 64-hex digest");
+    let bytes = null;
+    try {
+      relativeName(ref.path);
+      bytes = expected.readEvidence(ref.path);
+    } catch { bytes = null; }
+    admissionRequired(Buffer.isBuffer(bytes) && sha256(bytes) === ref.sha256, "A preflight evidence reference is absent, truncated or no longer matches its retained digest");
+  }
+  return true;
 }
 
 export const heldOutChecks = { execute: executeHeldOutCheck, assertAvailable: requireTrustedChecker };

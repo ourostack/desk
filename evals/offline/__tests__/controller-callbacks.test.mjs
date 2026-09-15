@@ -59,10 +59,30 @@ test("all concrete native Desk callbacks are required before any operation", () 
   for (const group of ["canonical", "private"]) for (const name of Object.keys(good[group])) {
     const bad = callbacks();
     delete bad[group][name];
+    if (group === "private" && name === "feedback") {
+      // The sixth fixed case is private work measurement; no qualitative evaluator feedback route is required.
+      assert.equal(requireCallbacks(bad), bad);
+      continue;
+    }
     assert.throws(() => requireCallbacks(bad), { code: "NATIVE_CALLBACK_UNMAPPED" });
     assert.equal(bad.calls.length, 0);
   }
   assert.throws(() => requireCallbacks(null), { code: "NATIVE_CALLBACK_UNMAPPED" });
+});
+
+test("a ledger-only private callback shape still executes every protected recording boundary", async () => {
+  const c = callbacks();
+  delete c.private.feedback;
+  const retained = [];
+  const result = await runPrivateOperations({
+    ...privateOptions(), callbacks: c,
+    retain: (name, value) => { retained.push({ name, value }); return { path: name, sha256: "a".repeat(64) }; },
+    legacy: async () => c.canonical.update({ track: "track", slug: "task", frontmatter: { status: "doing" } }),
+  });
+  assert.equal(result.admitted, false);
+  for (const action of ["report", "set_recording", "intake", "commit", "inspect", "correct", "delete"]) assert.ok(c.calls.some(input => input.action === action), action);
+  assert.equal(c.entries.size, 0);
+  assert.equal(Object.keys(result.observations).length, 4);
 });
 
 test("private operations exercise the real call contract without manufacturing a passing verdict", async () => {

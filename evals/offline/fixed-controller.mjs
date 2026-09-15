@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import dataset from "./cases/v2-alpha-v1/dataset.json" with { type: "json" };
 import manifest from "./cases/v2-alpha-v1/fixture-manifest.json" with { type: "json" };
-import { canonicalJson, jsonBytes, listRegularFiles, parseRawJson, readRawReference, readRegular, requireCondition, sha256 } from "./core.mjs";
+import { canonicalJson, jsonBytes, listRegularFiles, parseRawJson, plainObject, readRawReference, readRegular, requireCondition, sha256 } from "./core.mjs";
 import { heldOutChecks } from "./check-executor.mjs";
 import { assessCheck } from "./checks.mjs";
 import { materializeFixture } from "./materialize.mjs";
@@ -32,6 +32,20 @@ const immutable = value => {
   }
   return value;
 };
+// The parent-owned T13 preflight and its freshly observed expected identities travel as one immutable context. The
+// reader stays a function of the parent's own evidence root, so every recheck rereads and rehashes the raw artifacts.
+// An unshaped context is handed on untouched; `requireTrustedChecker` is the single typed refusal for it.
+function bindChecker(checker) {
+  if (!plainObject(checker) || !plainObject(checker.preflight) || !plainObject(checker.expected)) return checker;
+  return Object.freeze({ preflight: immutable(structuredClone(checker.preflight)), expected: Object.freeze({ ...checker.expected, identities: immutable(structuredClone(checker.expected.identities)) }) });
+}
+// Rechecked before every open, allocation, held-out execution, auth handoff and output finalization.
+function admitChecker(checker) {
+  requireCondition(heldOutChecks.assertAvailable(checker) !== false, "NATIVE_QUALIFICATION_REQUIRED", "The held-out owner refused admission");
+  return checker;
+}
+// Only parent-owned preflight and identity context accompanies held-out execution; nothing else crosses.
+const parentContextFor = checker => plainObject(checker) ? { preflight: checker.preflight, identities: checker.expected.identities } : undefined;
 
 export async function loadNativeInputs({ filename, prepared, inputRoot }) {
   const absolute = path.resolve(filename);
@@ -56,15 +70,18 @@ export function requireNativeInputs(prepared, inputs) {
 }
 
 // open() supplies live runTerminalProtocol arguments and OS-owned roots, never a case result.
-export async function runFixedCase({ cell, plan, input, output, outputRoot, bindingAdmitted = false }) {
+export async function runFixedCase({ cell, plan, input, output, outputRoot, bindingAdmitted = false, checker }) {
   const definition = dataset.cases.find(value => value.id === cell.caseId);
-  if (definition.mode !== "deterministic") requireCondition(heldOutChecks.assertAvailable() !== false, "NATIVE_QUALIFICATION_REQUIRED", "The held-out owner refused admission");
+  const admission = bindChecker(checker);
+  if (definition.mode !== "deterministic") admitChecker(admission);
   const seed = plan.gitSeeds.find(value => value.cellId === cell.id);
   requireCondition(seed, "NATIVE_SEED_UNMAPPED", "Every native fixture requires its frozen Git seed and configured identity");
   const fixture = await materializeFixture({ manifest, fixtureId: definition.fixture, sourceRoot, roots: input.roots, gitIdentity: seed.identity });
   requireCondition(fixture.gitSeed.baseCommit === seed.baseCommit, "NATIVE_SEED_MISMATCH", "Materialized source differs from the predeclared Git seed");
   const owners = [];
   const acquire = async (options = {}) => {
+    // Every acquisition rechecks the frozen preflight before the owner is opened, not once per campaign.
+    if (definition.mode !== "deterministic") admitChecker(admission);
     const runId = randomUUID();
     const opened = await input.open({ cell, plan, fixture, ...options, runId });
     requireCondition(typeof opened?.close === "function", "NATIVE_CALLBACK_UNMAPPED", "Every native acquisition requires its owned, bounded close operation");
@@ -95,7 +112,7 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
   };
   try {
     requireCondition(await input.assertConfinement({ opened, fixture, cell, plan }) !== false, "NATIVE_CONFINEMENT_UNVERIFIED", "The native owner refused confinement");
-    result = await executeCase({ cell, plan, input, output, outputRoot, definition, fixture, acquired, reopen, cancelled });
+    result = await executeCase({ cell, plan, input, output, outputRoot, definition, fixture, acquired, reopen, cancelled, admission });
   } catch (error) { failure = error; failed = true; throw error; }
   finally {
     // Judge artifacts are provisional case evidence until every acquisition has closed.
@@ -142,7 +159,7 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
   return finish({ ...unavailable(), status: checks.some(([, value]) => value.status === "unavailable") ? "unavailable" : checks.every(([, value]) => value.status === "pass") ? "passed" : "product_failure", checks });
 }
 
-async function executeCase({ cell, plan, input, output, outputRoot, definition, fixture, acquired, reopen, cancelled }) {
+async function executeCase({ cell, plan, input, output, outputRoot, definition, fixture, acquired, reopen, cancelled, admission }) {
   let { opened } = acquired;
   let sequence = 0;
   const retain = (name, value) => {
@@ -154,9 +171,12 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
     return { path: filename, sha256: sha256(bytes) };
   };
   retain("fixture.json", fixture);
+  // Parent-owned readback over this attempt's own retained bytes, so review execution/admission/session references
+  // are reread and hash-verified from the controller's run output rather than trusted as returned claims.
+  const readArtifact = name => readRegular(outputRoot, name).bytes;
   if (cancelled()) return { ...unavailable(), status: "cancelled", checkpoints: [] };
   let active;
-  const callbacks = Object.fromEntries(Object.entries({ canonical: ["create", "update", "archive"], private: ["ledger", "feedback"] }).map(([group, names]) => [group, Object.fromEntries(names.map(name => [name, value => active[group][name](value)]))]));
+  const callbacks = Object.fromEntries(Object.entries({ canonical: ["create", "update", "archive"], private: ["ledger"] }).map(([group, names]) => [group, Object.fromEntries(names.map(name => [name, value => active[group][name](value)]))]));
   let canonical;
   const checkpoints = [];
   const checks = new Map();
@@ -165,7 +185,7 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
   let previousSessionId;
   let sessionId = randomUUID();
   let restart;
-  let initialOracleExit;
+  let initialBehavior;
   let lastTrace;
   if (definition.mode === "deterministic") {
     active = requireCallbacks(await input.createDeskCallbacks({ session: opened.session, expectedAgent: opened.subjectTurn.agent, withPermission: input.withPermission }));
@@ -190,9 +210,14 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
         limits: { startupSendWorkMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs },
         subjectTurn,
         reviewHandler: async request => {
-          const result = await input.reviewHandler({ ...request, turnIndex, dependencyAvailable: turn.id !== "review-blocked" });
+          // The installed reviewer retains its raw evidence through the controller's own retention, so every
+          // returned reference resolves inside this attempt's output root.
+          const result = await input.reviewHandler({ ...request, turnIndex, dependencyAvailable: turn.id !== "review-blocked", retain });
           const rawRef = retain(`review-${turnIndex}.json`, { request, result });
-          reviews.push({ ...request, turnIndex, result, rawRef });
+          let returned = null;
+          try { returned = JSON.parse(result?.textResultForLlm); }
+          catch { returned = null; }
+          reviews.push({ ...request, turnIndex, result, rawRef, admissionRef: plainObject(returned) ? returned.admissionRef : undefined });
           if (turn.id === "review-blocked") await canonical.reviewFailure(result);
           return result;
         },
@@ -238,17 +263,16 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
       const stopped = { runId: current.runId, receipt: current.cleanup.receipt, readArtifact: name => files.get(name) };
       const applicable = definition.checks.filter(check => commandChecks.has(check.id) && (check.id === "discussion-no-edit" ? turn.id === "discussion" : check.id === "cold-review-finds-fold" ? turn.id === "resume-review" : turnIndex === definition.turns.length - 1));
       for (const check of applicable) {
-        const executed = await heldOutChecks.execute({ fixtureId: definition.fixture, checkId: check.id, actorRoot: fixture.actorView.root, checkerRoot: fixture.checkerView.root, workRoot: path.join(opened.checkRoot, `${turnIndex}-${check.id}`), output, stopped, signal: acquired.signal, limits: { timeoutMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs, maxStreamBytes: plan.limits.maxStreamBytes } });
+        // Held-out execution is a use boundary: the frozen preflight is rechecked before every candidate command.
+        admitChecker(admission);
+        const executed = await heldOutChecks.execute({ fixtureId: definition.fixture, checkId: check.id, actorRoot: fixture.actorView.root, checkerRoot: fixture.checkerView.root, workRoot: path.join(opened.checkRoot, `${turnIndex}-${check.id}`), output, stopped, signal: acquired.signal, limits: { timeoutMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs, maxStreamBytes: plan.limits.maxStreamBytes }, parentContext: parentContextFor(admission) });
         if (cancelled()) return { ...unavailable(), status: "cancelled", checkpoints };
-        const additional = sourceObservations.observe({ check, fixture, trace, restart, sourceBefore, reviews, checkpoints, retain });
+        const additional = sourceObservations.observe({ check, fixture, trace, restart, sourceBefore, reviews, checkpoints, retain, readArtifact });
         // Command exits and raw references belong to the maintained executor, never the adapter.
         const observation = { ...additional, ...executed.observation, availability: additional.availability === "unavailable" ? "unavailable" : executed.observation.availability, traceCoverage: trace.traceCoverage, rawRefs: [...additional.rawRefs, ...executed.observation.rawRefs, ...trace.rawRefs] };
-        if (check.id === "discussion-no-edit") initialOracleExit = executed.observation.oracleExit;
-        if (check.id === "ordinary-request-delivers") {
-          observation.initialOracleExit = initialOracleExit;
-          observation.finalOracleExit = executed.observation.baselineExit === 0 && executed.observation.baselineUnchanged ? executed.observation.oracleExit : 1;
-        }
-        if (check.id === "cold-review-finds-fold") observation.sourceOracleExit = executed.observation.oracleExit;
+        // The initial turn's observed zero-caller behavior is parent-owned evidence carried forward, not a derived exit.
+        if (check.id === "discussion-no-edit") initialBehavior = executed.observation.behavior;
+        if (check.id === "ordinary-request-delivers") observation.initialBehavior = initialBehavior;
         checks.set(check.id, assessCheck({ definition: check.expectation, observation }));
         retain(`${check.id}-observation.json`, observation);
       }
@@ -259,7 +283,7 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
       }
     }
     for (const check of definition.checks.filter(check => check.kind === "deterministic" && !checks.has(check.id))) {
-      const observation = sourceObservations.observe({ check, fixture, trace: lastTrace, checkpoints, restart, sourceBefore, reviews, retain });
+      const observation = sourceObservations.observe({ check, fixture, trace: lastTrace, checkpoints, restart, sourceBefore, reviews, retain, readArtifact });
       retain(`${check.id}-observation.json`, observation);
       checks.set(check.id, assessCheck({ definition: check.expectation, observation }));
     }
@@ -271,6 +295,8 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
   const assessment = { caseId: cell.caseId, criteria: definition.checks.map(check => check.criterion), fixedVerdicts: definition.checks.filter(check => check.kind === "deterministic").map(check => ({ criterion: check.criterion, verdict: checks.get(check.id).status })), evidenceRoot: outputRoot, evidenceIndex: { files: evidenceSeal.map(file => file.path) }, evidenceSeal };
   output.writeArtifact("controller-assessment.json", jsonBytes(assessment));
   output.writeArtifact("controller-judge-plan.json", jsonBytes({ ...opened.judge.plan, model: cell.judge.model }));
+  // The grader handoff allocates the model and carries the credential envelope; admission is rechecked first.
+  admitChecker(admission);
   const judge = await runRuntimeQualification({ ...opened.judge, plan: { ...opened.judge.plan, model: cell.judge.model }, assessment });
   try {
     retain("judge-return.json", judge);
@@ -285,9 +311,11 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
   }
 }
 
-export async function runFixedController({ prepared, nativeInputs }) {
+export async function runFixedController({ prepared, nativeInputs, checker = nativeInputs?.checker }) {
   requireNativeInputs(prepared, nativeInputs);
-  requireCondition(heldOutChecks.assertAvailable() !== false, "NATIVE_QUALIFICATION_REQUIRED", "The held-out owner refused admission");
+  // Conditional admission precedes allocation, the source/runtime assertion, acquisition and every model attempt.
+  const admission = bindChecker(checker);
+  admitChecker(admission);
   const plan = immutable(structuredClone(prepared.plan));
   const expected = immutable(structuredClone(prepared.expected));
   const cells = new Map(nativeInputs.cells);
@@ -315,13 +343,15 @@ export async function runFixedController({ prepared, nativeInputs }) {
     let result;
     try {
       const output = openRunOutput({ outputRoot, authorizedRoot: root, protectedRoots: [sourceRoot], runContext: { runId: attemptId, cellId: cell.id, planSha256: runSet.plan.sha256, executionKind: cell.executionKind }, limits: plan.limits });
-      try { result = await runFixedCase({ cell, plan, input: cells.get(cell.id), output, outputRoot, bindingAdmitted: true }); }
+      try { result = await runFixedCase({ cell, plan, input: cells.get(cell.id), output, outputRoot, bindingAdmitted: true, checker: admission }); }
       catch (error) {
         result = { ...unavailable(), counts: error?.observedCounts ?? zeroCounts(), failure: safeFailure(error) };
         output.writeArtifact("controller-failure.json", jsonBytes(result.failure));
       }
       // Awaiting the case yields to cancellation before the synchronous publication boundary.
       if (caseCancellation.get(result)?.some(signal => signal?.aborted)) result = { ...result, status: "cancelled", grade: null, counts: { ...result.counts, admittedGrades: 0 } };
+      // Output finalization is the last use boundary: a preflight that went stale during the attempt cannot publish.
+      admitChecker(admission);
       const committed = output.commit({ ...result, schemaVersion: 1, runId: attemptId, caseId: cell.caseId });
       attempt.status = result.status;
       attempt.receipt = { path: `${attemptId}/receipt.json`, sha256: committed.receiptSha256 };

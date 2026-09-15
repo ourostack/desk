@@ -16,7 +16,7 @@ import { ownerCleanup } from "./helpers/owner-cleanup.mjs";
 function options(f, bindingAdmitted = true) {
   const outputRoot = path.join(f.root, "owner-lifecycle");
   const output = openRunOutput({ outputRoot, authorizedRoot: f.root, protectedRoots: [], runContext: { runId: "owner-source-control", cellId: f.cell.id, executionKind: f.cell.executionKind, planSha256: f.prepared.runSet.plan.sha256 }, limits: f.plan.limits });
-  return { cell: f.cell, plan: f.plan, input: f.input, outputRoot, output, bindingAdmitted };
+  return { cell: f.cell, plan: f.plan, input: f.input, outputRoot, output, bindingAdmitted, checker: f.checker };
 }
 
 function owners(f, close = stopped => stopped) {

@@ -7,7 +7,7 @@
   "contextTier": "default",
   "scenario": "terminal-semantic-fail",
   "runtime": {
-    "imageId": "sha256:REPLACE_WITH_THE_VERIFIED_LOCAL_IMAGE_DIGEST",
+    "imageId": "sha256:67878c02286ba10569817b066d8b058022916a4659c14a0fde267d9f624b3ea3",
     "platform": "linux/amd64",
     "nodeVersion": "22.23.2",
     "cliVersion": "1.0.84-1",

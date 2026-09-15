@@ -13,7 +13,7 @@ import { heldOutChecks, requireTrustedChecker } from "../check-executor.mjs";
 function outputFor(f) {
   const outputRoot = path.join(f.root, "case-output");
   const output = openRunOutput({ outputRoot, authorizedRoot: f.root, protectedRoots: [], runContext: { runId: "unit-control", cellId: f.cell.id, executionKind: f.cell.executionKind, planSha256: f.prepared.runSet.plan.sha256 }, limits: f.plan.limits });
-  return { output, outputRoot };
+  return { output, outputRoot, checker: f.checker };
 }
 test("actual held-out capability refusal wins before acquisition, allocation calls or any model attempt", async () => {
   const f = await controllerFixture();
@@ -21,17 +21,69 @@ test("actual held-out capability refusal wins before acquisition, allocation cal
   let allocation = 0;
   f.input.open = async () => { acquisition++; throw new Error("Must not acquire"); };
   f.nativeInputs.assertAllocation = async () => { allocation++; };
+  delete f.nativeInputs.checker;
   const synthetic = heldOutChecks.assertAvailable;
   heldOutChecks.assertAvailable = requireTrustedChecker;
   try {
     await assert.rejects(runFixedController({ prepared: f.prepared, nativeInputs: f.nativeInputs }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
-    await assert.rejects(runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
+    await assert.rejects(runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f), checker: undefined }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
     await assert.rejects(main(["run", "--plan", path.join(f.inputRoot, "plan.json"), "--output", path.join(f.root, "checker-hold")], undefined, f.nativeInputs), error => error.code === "NATIVE_QUALIFICATION_REQUIRED" && error.exitCode === 3 && error.artifacts === path.join(f.root, "checker-hold"));
   } finally { heldOutChecks.assertAvailable = synthetic; }
   assert.equal(acquisition, 0);
   assert.equal(allocation, 0);
   assert.equal(f.prepared.runSet.attempts.length, 0);
   assert.equal(f.prepared.runSet.unstartedCellIds.length, 12);
+});
+for (const [label, damage] of [
+  ["a false isolation check", f => { f.checker.preflight = { ...f.checker.preflight, checks: { ...f.checker.preflight.checks, isolation: false } }; }],
+  ["an unavailable cancelled preflight", f => { f.checker.preflight = { ...f.checker.preflight, status: "unavailable" }; }],
+  ["stale controller identity", f => { f.checker.preflight = { ...f.checker.preflight, identities: { ...f.checker.preflight.identities, controllerSha256: "d".repeat(64) } }; }],
+  ["a truncated evidence reference", f => f.preflight.truncate("hidden-read-probe.json")],
+  ["an absent evidence reference", f => f.preflight.remove("network-denied-status.raw")],
+]) test(`${label} refuses before acquisition, allocation, auth handoff and any published attempt`, async () => {
+  const f = await controllerFixture();
+  let acquisition = 0;
+  let allocation = 0;
+  f.input.open = async () => { acquisition++; throw new Error("Must not acquire"); };
+  f.nativeInputs.assertAllocation = async () => { allocation++; };
+  f.nativeInputs.assertSourceAndRuntime = async () => { allocation++; };
+  damage(f);
+  f.nativeInputs.checker = f.checker;
+  await assert.rejects(runFixedController({ prepared: f.prepared, nativeInputs: f.nativeInputs }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
+  await assert.rejects(runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f), checker: f.checker }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
+  assert.equal(acquisition, 0);
+  assert.equal(allocation, 0);
+  assert.equal(f.prepared.runSet.attempts.length, 0);
+  assert.equal(fs.existsSync(path.join(f.root, "case-output", "COMMITTED.json")), false);
+});
+test("an admitted preflight that changes between open and use withholds the case before its grade", async () => {
+  const f = await controllerFixture("checker-is-enforced");
+  const original = f.input.subjectBeforeSend;
+  f.input.subjectBeforeSend = async context => {
+    // The evidence the parent admitted at open is mutated while the acquired owner is still live.
+    f.preflight.truncate("cancellation-probe.json");
+    return original(context);
+  };
+  await assert.rejects(runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
+  assert.equal(f.closes, 1);
+});
+test("an unshaped preflight context is refused without being frozen into a campaign", async () => {
+  const f = await controllerFixture();
+  let acquisition = 0;
+  f.input.open = async () => { acquisition++; throw new Error("Must not acquire"); };
+  for (const checker of [{ preflight: "receipt", expected: "identities" }, { preflight: f.checker.preflight }, { expected: f.checker.expected }]) {
+    await assert.rejects(runFixedController({ prepared: f.prepared, nativeInputs: { ...f.nativeInputs, checker } }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
+    await assert.rejects(runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, output: null, outputRoot: null, checker }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
+  }
+  assert.equal(acquisition, 0);
+  assert.equal(f.prepared.runSet.attempts.length, 0);
+});
+test("a malformed or non-object review result yields no admission reference and cannot be graded", async () => {
+  const f = await controllerFixture("review-recovery-state");
+  f.input.reviewHandler = async request => request.turnIndex === 0 ? { resultType: "failure", textResultForLlm: "not-json" } : { resultType: "success", textResultForLlm: "null" };
+  const result = await runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) });
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.checkpoints.length, 3);
 });
 test("unmapped native acquisition, canonical, permission, review and admission functions refuse all cells before launch", async () => {
   const f = await controllerFixture();

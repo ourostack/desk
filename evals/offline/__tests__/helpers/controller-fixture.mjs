@@ -11,6 +11,7 @@ import { engine, plan as judgePlan } from "./native-engine.mjs";
 import { expectedFixture, planFixture } from "./run-set.mjs";
 import { dataRoot, workRoot } from "./paths.mjs";
 import { ownerCleanup } from "./owner-cleanup.mjs";
+import { testCheckerPreflight } from "./checker-preflight.mjs";
 import "./controller-evidence.mjs";
 
 let sequence = 0;
@@ -122,5 +123,9 @@ export async function controllerFixture(caseId = "checker-is-enforced", options 
     reviewHandler: async ({ dependencyAvailable }) => dependencyAvailable ? nativeResult({ admitted: false, findings: [{ text: "Synthetic review only" }] }) : { resultType: "failure", textResultForLlm: JSON.stringify({ dependencyFailureObserved: true, completion: "not-complete" }) },
   };
   const nativeInputs = { assertAllocation: async () => {}, assertSourceAndRuntime: async () => {}, cells: new Map(expected.cells.map(value => [value.id, input])) };
-  return { root, inputRoot, prepared, plan, expected, cell, input, opened, actorInput, nativeInputs, callbacks, get closes() { return closes; } };
+  // The parent-owned preflight is produced before any acquisition and never travels through a candidate callback.
+  const preflight = testCheckerPreflight();
+  const fixtureValue = { root, inputRoot, prepared, plan, expected, cell, input, opened, actorInput, nativeInputs, callbacks, preflight, checker: { preflight: preflight.receipt, expected: preflight.expected }, get closes() { return closes; } };
+  nativeInputs.checker = fixtureValue.checker;
+  return fixtureValue;
 }
