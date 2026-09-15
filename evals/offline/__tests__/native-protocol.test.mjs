@@ -49,3 +49,20 @@ test("actual stop errors remain an unsuccessful cleanup rather than a clean comp
   assert.equal(result.cleanup.complete, false);
   assert.match(JSON.stringify(result.cleanup.errors), /owned stop failed/);
 });
+
+test("the optional parent pre-send hook is protected, runs at the actual dispatch and never reaches the session", async () => {
+  const bad = fixture();
+  await assert.rejects(runTerminalProtocol({ ...bad.input, assertAdmitted: "not-a-function" }), { code: "INVALID_NATIVE_PROTOCOL" });
+  assert.equal(bad.state.client, undefined);
+  const control = fixture();
+  assert.equal((await runTerminalProtocol(control.input)).ok, true, "a control without the hook is unaffected");
+  const order = [];
+  const observed = fixture({ send: async ({ configuration, state, emit, event }) => { order.push("send"); state.sent = true; emit(event("idle", "session.idle", { mode: "interactive", aborted: false })); } });
+  const result = await runTerminalProtocol({ ...observed.input, assertAdmitted: () => { order.push("assertAdmitted"); throw Object.assign(new Error("parent refusal"), { code: "NATIVE_QUALIFICATION_REQUIRED" }); } });
+  assert.deepEqual(order, ["assertAdmitted"]);
+  assert.equal(observed.state.sent, undefined);
+  assert.equal(result.ok, false);
+  assert.equal(result.grade, null);
+  assert.equal(JSON.stringify(observed.state.session).includes("assertAdmitted"), false);
+  assert.equal(JSON.stringify(observed.state.records).includes("assertAdmitted"), false);
+});

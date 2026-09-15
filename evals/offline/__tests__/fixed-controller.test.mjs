@@ -143,6 +143,37 @@ test("T15-I1 admission refused immediately before the reviewer handoff never inv
   assert.equal(result.grade, null);
   assert.equal(f.closes, 1);
 });
+test("T15-I1 admission refused during post-callback protocol setup suppresses the actual subject send", async () => {
+  let sends = 0;
+  const f = await controllerFixture("review-recovery-state", { send: () => { sends++; } });
+  let reviews = 0;
+  const reviewHandler = f.input.reviewHandler;
+  f.input.reviewHandler = async request => { reviews++; return reviewHandler(request); };
+  const client = f.opened.protocol.nativeClient;
+  const createSession = client.createSession.bind(client);
+  let metadataReads = 0;
+  client.createSession = async configuration => {
+    const session = await createSession(configuration);
+    const metadata = session.rpc.tools.getCurrentMetadata;
+    session.rpc.tools.getCurrentMetadata = async () => {
+      const value = await metadata();
+      // The controller's own callback has already returned; this read and the activation observation that follows
+      // it are protocol-owned awaited setup that the callback-end check cannot cover.
+      if (++metadataReads === 2) f.preflight.truncate("hidden-read-probe.json");
+      return value;
+    };
+    return session;
+  };
+  const result = await runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) });
+  assert.ok(metadataReads >= 2, `post-callback metadata read never happened (${metadataReads})`);
+  assert.equal(sends, 0);
+  assert.equal(reviews, 0);
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.grade, null);
+  assert.equal(result.counts.admittedGrades, 0);
+  assert.equal(result.failure.code, "NATIVE_QUALIFICATION_REQUIRED");
+  assert.equal(f.closes, 1);
+});
 test("T15-I2 a proof change after the first held-out capture stops the next launch and still retains the first", async t => {
   const f = await controllerFixture("discussion-then-go");
   const capture = checkerProcess.capture;

@@ -233,6 +233,9 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
         ...opened.protocol, signal: acquired.signal, model: cell.subject.model,
         limits: { startupSendWorkMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs },
         subjectTurn,
+        // The protocol performs its own awaited setup after the controller's callback returns, so the parent's
+        // capability is handed to the actual send boundary rather than re-checked only at the callback's end.
+        assertAdmitted: revalidate,
         reviewHandler: async request => {
           // The reviewer handoff is still preventable here: revalidate before the installed reviewer is invoked.
           revalidate();
@@ -393,7 +396,9 @@ export async function runFixedController({ prepared, nativeInputs, checker = nat
         admitted = false;
         result = { ...result, status: "unavailable", grade: null, counts: { ...result.counts, admittedGrades: 0 }, failure: safeFailure(error) };
         attempt.status = result.status;
-        output.writeArtifact("controller-failure.json", jsonBytes({ ...result.failure, counts: result.counts }));
+        // A phase-specific immutable name: the case-failure handler above may already have retained
+        // `controller-failure.json`, and reusing it would manufacture a duplicate-write publisher failure.
+        output.writeArtifact("controller-final-admission-failure.json", jsonBytes({ ...result.failure, counts: result.counts }));
       }
       if (admitted) {
         const committed = output.commit({ ...result, schemaVersion: 1, runId: attemptId, caseId: cell.caseId });
