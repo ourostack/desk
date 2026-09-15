@@ -245,10 +245,12 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
     if (framed) return;
     framing = Buffer.concat([framing, bytes]);
     const end = framing.indexOf(0x0a);
-    if (end < 0) {
+    // The size bound is a property of the record, not of how the transport happened to chunk it: an oversized record
+    // is refused whether or not the chunk that carried its excess bytes also carried its terminator.
+    if (end < 0 || end > MAX_STATUS_RECORD_BYTES) {
       if (framing.length > MAX_STATUS_RECORD_BYTES) {
         framed = true;
-        observed.refused = "STATUS_RECORD_UNFRAMED";
+        observed.refused = end < 0 ? "STATUS_RECORD_UNFRAMED" : "STATUS_RECORD_TOO_LARGE";
       }
       return;
     }

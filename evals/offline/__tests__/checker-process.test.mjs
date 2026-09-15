@@ -802,3 +802,19 @@ for (const tail of ["unreadable", "occupant"]) test(`a process survey that canno
   assert.equal(result.namespaceClosed, false);
   assert.equal(result.availability.cleanupComplete, false);
 });
+
+test("an oversized status record is refused however the transport chunked it", async t => {
+  const tree = roots("checker-status-size");
+  const { transport, options } = linuxLauncher(t, tree);
+  const oversized = `{"child-pid":744,"pad":"${"p".repeat(5000)}"}\n{"exit-code":0}\n`;
+  transport.statusBytes = oversized;
+  transport.statusEof = true;
+  const single = await captureConfinedChecker(options);
+  assert.equal(single.lifetime.statusRefused, "STATUS_RECORD_TOO_LARGE", "A terminator in the same chunk cannot bypass the record bound");
+  assert.equal(single.lifetime.initPid, null);
+  assert.equal(single.lifetime.reconciled, false);
+  transport.statusSplits = [3000];
+  const split = await captureConfinedChecker(options);
+  assert.equal(split.lifetime.statusRefused, "STATUS_RECORD_TOO_LARGE", "The identical record is refused when fragmented too");
+  assert.equal(split.lifetime.initPid, null);
+});
