@@ -65,8 +65,7 @@
         "depends_on": [
           "desk",
           "superpowers",
-          "plain-language",
-          "ponytail-upstream"
+          "plain-language"
         ],
         "entrypoints": {
           "claude": "agents/worker.md",

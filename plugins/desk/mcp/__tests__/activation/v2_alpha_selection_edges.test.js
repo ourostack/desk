@@ -86,15 +86,92 @@ test("manual-only activation with no selected lifecycle does not enable an avail
   assert.equal(result.generatedActivationConfig, "")
 })
 
-test("legacy packaging without target dependency declarations retains its historical diagnostics", () => {
+function omittedSelectionLegacyInput() {
   const input = fixture()
   input.activation.dependencies = input.activation.dependencies.filter((entry) => entry.id !== "superpowers")
   input.activation.dependencies.push(structuredClone(legacy))
   input.deskPlugin.activation.copilot.dependencies["work-suite"] = { ...input.deskPlugin.activation.copilot.dependencies.superpowers, path: "../work-suite", version: legacy.lock.version }
   delete input.deskPlugin.activation.copilot.dependencies.superpowers
+  // An activation manifest with no explicit desk:worker.depends_on is the characterized
+  // pre-V2 legacy shape and retains the historical four-root closure including Ponytail
+  // unconditionally, so the authored root manifest must still carry its bundle metadata
+  // pointer here even though the current real plugin.json (a V2 selection) no longer does.
+  input.deskPlugin.activation.copilot.dependencies["ponytail-upstream"] = {
+    path: "../ponytail-upstream", version: "4.9.0", resolution: "flattened", bundleMetadata: "plugins/desk/activation/copilot-root.flattened-bundle.json",
+  }
   input.bundle.dependency_closure = input.bundle.dependency_closure.filter((entry) => entry.id !== "superpowers")
   input.bundle.dependency_closure.push({ id: "work-suite", version: legacy.lock.version, plugin: "plugins/work-suite/plugin.json", skills: "plugins/work-suite/skills/" })
   input.workSuitePlugin = read("plugins/work-suite/plugin.json")
   delete input.activation.provides.activation_targets[0].depends_on
-  assert.deepEqual(validateCopilotPackagingContract(input), [])
+  return input
+}
+
+test("legacy packaging without target dependency declarations retains its historical diagnostics", () => {
+  assert.deepEqual(validateCopilotPackagingContract(omittedSelectionLegacyInput()), [])
+})
+
+test("omitted desk:worker.depends_on producer builds the historical four-root closure including Ponytail", () => {
+  const { activation } = omittedSelectionLegacyInput()
+  const bundle = buildCopilotBundle({ activation })
+  assert.deepEqual(
+    bundle.dependency_closure.map((entry) => entry.id).sort(),
+    ["desk", "plain-language", "ponytail-upstream", "work-suite"],
+  )
+  assert.equal(Object.hasOwn(bundle.generated_from, "ponytail_plugin"), true)
+})
+
+for (const [label, mutate, expected] of [
+  [
+    "missing Ponytail activation lock",
+    (input) => { input.activation.dependencies = input.activation.dependencies.filter((entry) => entry.id !== "ponytail-upstream") },
+    "Copilot activation must lock Ponytail dependency",
+  ],
+  [
+    "missing Ponytail root bundle metadata",
+    (input) => { delete input.deskPlugin.activation.copilot.dependencies["ponytail-upstream"] },
+    "Copilot Ponytail dependency must point to generated flattened bundle metadata",
+  ],
+  [
+    "missing Ponytail bundle closure entry",
+    (input) => { input.bundle.dependency_closure = input.bundle.dependency_closure.filter((entry) => entry.id !== "ponytail-upstream") },
+    "Copilot flattened bundle must include ponytail-upstream dependency closure",
+  ],
+]) {
+  test(`omitted desk:worker.depends_on validator rejects ${label}`, () => {
+    const input = omittedSelectionLegacyInput()
+    const baseline = validateCopilotPackagingContract(input)
+    assert.deepEqual(baseline, [], "the complete omitted-selection legacy input must be the accepted starting point")
+    mutate(input)
+    assert.deepEqual(validateCopilotPackagingContract(input), [expected])
+  })
+}
+
+
+test("authored V2 closure (selection edges): the real producer builds and validates exactly desk, superpowers, plain-language", () => {
+  const activation = read("plugins/desk/activation/desk.activation.json")
+  const freshBundle = buildCopilotBundle({ activation })
+  const selectedNames = freshBundle.dependency_closure.map((entry) => entry.id)
+  const expected = ["desk", "plain-language", "superpowers"]
+  assert.deepEqual([...selectedNames].sort(), expected)
+  assert.equal(selectedNames.includes("ponytail-upstream"), false)
+  assert.equal(selectedNames.includes("work-suite"), false)
+
+  const deskPlugin = read("plugins/desk/plugin.json")
+  const superpowersPlugin = read("plugins/superpowers/plugin.json")
+  const plainLanguagePlugin = read("plugins/plain-language/plugin.json")
+  assert.deepEqual(
+    validateCopilotPackagingContract({
+      activation, deskPlugin, bundle: freshBundle, superpowersPlugin, plainLanguagePlugin,
+    }),
+    [],
+    "packaging validation must accept the freshly produced three-root closure the real producer builds from the authored manifest",
+  )
+})
+
+test("ordinary Agency declaration (selection edges): desk/agency.json declares only the two generic V2 dependencies", () => {
+  const agency = read("plugins/desk/agency.json")
+  assert.equal(agency.name, "desk")
+  assert.equal(agency.dependencies.length, 2)
+  assert.ok(agency.dependencies.includes("github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha"))
+  assert.ok(agency.dependencies.includes("github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha"))
 })

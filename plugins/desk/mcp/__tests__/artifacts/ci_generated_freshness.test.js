@@ -1438,7 +1438,7 @@ test("root host verifier reports every Codex native surface and missing activati
       for (const message of [
         "Desk version drift", "Desk surfaces drift", "default activation mode drift", "opt-out modes drift",
         "desk:worker source drift", "desk:worker default drift", "Desk MCP manual-registration drift",
-        "Superpowers dependency version drift", "Plain Language dependency version drift", "Ponytail dependency version drift",
+        "Superpowers dependency version drift", "Plain Language dependency version drift",
       ]) assert.ok(result.errors.includes(`codex-plugin ${message}`), result.errors.join("\n"))
       assert.equal(result.errors.includes("codex-plugin manual setup steps drift"), !missing)
     })
@@ -1449,7 +1449,7 @@ test("root host verifier reports native provider lock drift for both host famili
   const verifier = loadHostManifestVerifier()
   for (const host of ["codex", "claude"]) {
     await withHostFreshnessFixture(async (root) => {
-      for (const provider of ["superpowers", "plain-language", "ponytail-upstream"]) {
+      for (const provider of ["superpowers", "plain-language"]) {
         const plugin = loadJson("plugins", provider, `.${host}-plugin`, "plugin.json")
         plugin.version = "0.0.0"
         writeJson(root, `plugins/${provider}/.${host}-plugin/plugin.json`, plugin)
@@ -1458,7 +1458,7 @@ test("root host verifier reports native provider lock drift for both host famili
         repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
       })
       assert.equal(result.ok, false)
-      for (const label of ["Superpowers", "Plain Language", "Ponytail"]) {
+      for (const label of ["Superpowers", "Plain Language"]) {
         assert.ok(result.errors.includes(`${host}-plugin ${label} provider lock drift`), result.errors.join("\n"))
       }
       if (host === "claude") assert.ok(result.errors.includes("claude-plugin Superpowers activation dependency version drift"))
@@ -1475,7 +1475,7 @@ test("root host verifier reports Claude surface and activation-worker drift", as
     plugin.skills = "./wrong/"
     plugin.mcpServers = "./wrong.json"
     plugin.outputStyles = "./wrong/"
-    plugin.dependencies = [{ name: "wrong" }, { name: "wrong" }, { name: "wrong" }]
+    plugin.dependencies = [{ name: "wrong" }, { name: "wrong" }]
     writeJson(root, "plugins/desk/.claude-plugin/plugin.json", plugin)
     const activation = loadJson("plugins", "desk", "activation", "desk.activation.json")
     activation.host_activation.claude.targets["desk:worker"].source = "wrong.md"
@@ -1486,7 +1486,7 @@ test("root host verifier reports Claude surface and activation-worker drift", as
     assert.equal(result.ok, false)
     for (const message of [
       "Desk version drift", "worker exposure drift", "Desk surfaces drift", "output style surface drift",
-      "Superpowers dependency drift", "Plain Language dependency drift", "Ponytail dependency drift",
+      "Superpowers dependency drift", "Plain Language dependency drift",
       "activation worker source drift",
     ]) assert.ok(result.errors.includes(`claude-plugin ${message}`), result.errors.join("\n"))
   })
@@ -1513,7 +1513,6 @@ test("root host verifier rejects absent worker metadata and each authored invari
     for (const message of [
       "claude session-start prompt drift", "principles no-hard-wrap invariant drift",
       "codex activation no-hard-wrap invariant drift", "codex activation Plain Language invariant drift",
-      "codex activation Ponytail invariant drift",
     ]) assert.ok(result.errors.includes(`worker-sources ${message}`), result.errors.join("\n"))
   })
 })

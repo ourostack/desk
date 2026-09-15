@@ -232,10 +232,6 @@ test("Claude plugin metadata declares native Desk surfaces and Superpowers depen
       name: "plain-language",
       version: "0.2.0",
     },
-    {
-      name: "ponytail-upstream",
-      version: "4.9.0",
-    },
   ])
   assert.equal(Object.hasOwn(deskPlugin, "activation"), false)
   assert.equal(superpowersPlugin.version, "6.3.0")

@@ -56,7 +56,6 @@ These always apply across every skill. Details live in named skills; here are th
 - **After go, ask only when blocked** — stop and surface ONLY for: architectural/scope decisions that change the next 3+ actions; unrequested live/shared-state actions; uncovered authorization; or a real blocker. Otherwise proceed; don't ask "for safety."
 - **Lead with action; no trailing offers** — first sentence of every operator-facing response is what's actionable or decided. Recaps go after. Don't paraphrase the request, don't narrate tool calls, don't end with "Let me know if you'd like…" — the operator will ask. Carve-out: artifacts (commits, PR descriptions, code comments) stay normal prose.
 - **Plain Language output** — apply the `plain-language` skill to every human-readable response and artifact while preserving evidence, uncertainty, safety, schemas, exact source content, and the more specific voice rules below.
-- **Ponytail coding** — apply `ponytail` to coding and `ponytail-review` to over-engineering review; it governs implementation size, never requested research, status truth, explanations, or terminal delivery.
 - **Primary sources before recommendations** — when a recommendation depends on external systems, products, policy, market, or current behavior, begin with reasonably available primary evidence; keep verified facts, evidence-based inferences, unknowns, and decisions distinct; and do not hand back while a material primary-source thread remains readable. See `../principles.md` Invariant 9.
 - **Never hard-wrap authored prose** — keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and PR body paragraph on one physical line; use newlines only for real structure or source-preserved semantic breaks. Before finishing, inspect authored/changed prose and join column-wrap continuations without rewriting third-party or historical source. See `../principles.md` Invariant 10.
 - **Fixtures or refusal** — never emit a time / duration / cost / scope estimate without a historical fixture (past run records, stage definitions, telemetry) to anchor it; if there's no fixture, strip the number and say so rather than guessing. Inherited estimates count — relaying another agent's or a tool's number without a fixture is the same fabrication, scrubbed at composition time. See `evidence-discipline`.
@@ -69,7 +68,6 @@ Skills come from Desk and the pinned Superpowers provider, with two first-class 
 - **desk** (this plugin) — substrate: session lifecycle, workspace layout, card formats, PR craft, engineering posture, friction + lesson capture
 - **superpowers** (declared dep) — the sole engineering method, bound to Desk by `desk:superpowers-integration`
 - **plain-language** (declared dep) — reader-centered human-readable output
-- **ponytail-upstream** (declared dep) — upstream minimal-code posture for coding work
 
 | Skill | Trigger |
 |-------|---------|
@@ -105,7 +103,7 @@ Skills come from Desk and the pinned Superpowers provider, with two first-class 
 | `evidence-discipline` | Worker is about to act on assumed-but-unverified evidence in known scenarios |
 | `preflight-actions` | Worker is about to send/post/publish/file/apply/deploy/change shared state with substitutions, tooling mismatch, or a research-derived action outside the mandate |
 | `cdp-headed-browser` | Need Playwright to drive a web UI behind interactive auth (SSO + device check) |
-| `codex-onboarding` | Verify Desk, Superpowers, Plain Language, Ponytail, MCP, cache, and active-session visibility on Codex |
+| `codex-onboarding` | Verify Desk, Superpowers, Plain Language, MCP, cache, and active-session visibility on Codex |
 | `desk:superpowers-integration` | Always bind engineering to existing Desk state, authority, selected capabilities and terminal endpoint |
 | `desk:independent-review` | Independent review and re-review with one implementation owner |
 | `superpowers:brainstorming` | Resolve missing design agreement |

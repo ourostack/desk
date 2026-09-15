@@ -143,3 +143,33 @@ test("manual-only mode characterization has no worker instruction or MCP bridge"
   assert.doesNotMatch(result.generatedConfig, /\[mcp_servers\.desk\]/u)
   assert.equal(result.generatedArtifacts.some((artifact) => artifact.kind === "owned-codex-instructions"), false)
 })
+
+test("authored V2 closure (method): the real producer builds and validates exactly desk, superpowers, plain-language", () => {
+  const activation = readJson("plugins/desk/activation/desk.activation.json")
+  const freshBundle = buildCopilotBundle({ activation })
+  const selectedNames = freshBundle.dependency_closure.map((entry) => entry.id)
+  const expected = ["desk", "plain-language", "superpowers"]
+  assert.deepEqual([...selectedNames].sort(), expected)
+  assert.equal(selectedNames.includes("ponytail-upstream"), false)
+  assert.equal(selectedNames.includes("work-suite"), false)
+
+  const deskPlugin = readJson("plugins/desk/plugin.json")
+  const superpowersPlugin = readJson("plugins/superpowers/plugin.json")
+  const plainLanguagePlugin = readJson("plugins/plain-language/plugin.json")
+  assert.deepEqual(
+    validateCopilotPackagingContract({
+      activation, deskPlugin, bundle: freshBundle, superpowersPlugin, plainLanguagePlugin,
+    }),
+    [],
+    "packaging validation must accept the freshly produced three-root closure the real producer builds from the authored manifest",
+  )
+})
+
+test("ordinary Agency declaration (method): desk/agency.json declares only the two generic V2 dependencies", () => {
+  const agency = readJson("plugins/desk/agency.json")
+  assert.equal(agency.name, "desk")
+  assert.deepEqual(agency.dependencies, [
+    "github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha",
+    "github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha",
+  ])
+})
