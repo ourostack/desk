@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
+import { spawnSync } from "node:child_process"
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
@@ -646,6 +647,28 @@ test("the bundle writer resolves its destination from an explicit root, the envi
     }
     assert.equal(exitCode, 0)
     assert.deepEqual(written, [`wrote ${copilotBundlePath}\n`])
+
+    // …and the shipped script and its package-script wiring are exercised as the operator runs them.
+    rmSync(path.join(scratchRoot, ...copilotBundlePath.split("/")))
+    const scripted = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, "plugins", "desk", "mcp", "scripts", "generate-copilot-bundle.js")],
+      {
+        cwd: path.join(repoRoot, "plugins", "desk", "mcp"),
+        encoding: "utf8",
+        env: { ...process.env, DESK_COPILOT_BUNDLE_REPO_ROOT: scratchRoot },
+      },
+    )
+    assert.equal(scripted.status, 0, scripted.stderr)
+    assert.equal(scripted.stdout, `wrote ${copilotBundlePath}\n`)
+    assert.deepEqual(
+      JSON.parse(readFileSync(path.join(scratchRoot, ...copilotBundlePath.split("/")), "utf8")),
+      expectedCopilotBundle(),
+    )
+    assert.equal(
+      loadJson("plugins", "desk", "mcp", "package.json").scripts["activation:copilot-bundle:generate"],
+      "node scripts/generate-copilot-bundle.js",
+    )
     const generated = generateCopilotBundleArtifact()
     assert.equal(generated.artifactPath, path.join(scratchRoot, ...copilotBundlePath.split("/")))
     assert.deepEqual(JSON.parse(readFileSync(generated.artifactPath, "utf8")), expectedCopilotBundle())
