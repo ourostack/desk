@@ -21,6 +21,14 @@ Read the existing task card, plan, doing record and explicit mandate before sele
 
 Superpowers approval checkpoints consume the already-recorded approval when it covers the same outcome and scope. Its worktree and finishing routines cannot change the approved repository/worktree, delegate against a prohibition, promote an intentional alpha to main, publish, install into live profiles, or clean up preserved work without authority.
 
+## Incremental delivery
+
+Build the agreed outcome through the smallest coherent milestones that put a working artifact in a real consumer's hands. A milestone may be labeled dogfood, preview, or alpha and remain partially qualified, but its own safety, compatibility, migration, review, and correction path must be honest.
+
+Later evaluation, automation, documentation breadth, platform breadth, and final qualification can continue after that milestone. They must not block an independently usable slice merely because both belong to one final plan. Keep every remaining criterion visible and scope readiness claims to the evidence that exists.
+
+Incremental milestones do not change the authorized endpoint or lower its standards. If no safe intermediate artifact exists, record the concrete coupling that makes delivery atomic instead of assuming one final release by default.
+
 ## One state surface
 
 Keep canonical Git-backed Desk/Crew state on main through its established write protocol. An intentional alpha applies to the approved code artifact, not a competing workspace-state branch.

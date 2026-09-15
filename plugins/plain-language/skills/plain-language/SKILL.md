@@ -34,6 +34,15 @@ Before writing, identify what the reader needs to know, decide, or do. Lead with
 - State relationships with words such as `because`, `if`, `before`, `after`, and `therefore` instead of leaving them implicit.
 - Use complete sentences in prose. Fragments belong in headings, labels, table cells, and deliberate status markers.
 
+## Translate internal identifiers
+
+Use a reader-facing name before an internal identifier. Every first mention that includes an identifier must attach it to that reader-facing name. If the identifier is not needed for the reader's action or correlation, omit it entirely.
+
+- Do not write `T17 is implementing`. Write `The public revision evaluation is being built`, or `The public revision evaluation (internal task T17) is being built` when correlation matters. After that, use `public revision evaluation`.
+- Never make the reader decode an identifier such as `T17`, `Q08`, a commit hash, a branch name, an acronym, or a tool-internal label to understand the status, impact, or next action.
+- In a human-facing table, make the reader-facing name the primary column and put the exact identifier in a separate column only when it helps.
+- Keep an included identifier exact. Explain it; do not rename or paraphrase the identifier itself.
+
 ## Make the answer usable
 
 - State the concrete action, decision, verification, or terminal evidence when it exists.
@@ -67,6 +76,7 @@ Read the draft once and fix these failures:
 
 - The opening sentence does not answer the reader's question or state the outcome.
 - The reader must infer who acts, what happens next, why a constraint exists, or whether work is verified.
+- Internal codes or acronyms carry the explanation instead of a reader-facing name.
 - A wall of prose hides parallel items or ordered steps.
 - Different words name the same concept.
 - A simpler rewrite changed a fact, qualifier, warning, attribution, schema, quotation, or completion state.

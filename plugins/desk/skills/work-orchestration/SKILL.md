@@ -13,6 +13,12 @@ Verify repository authority and the approved contribution path before any branch
 
 The cross-repository plan owns an explicit DAG; `repos[]` must never define dependency order. Reject cycles and unknown dependencies. A failed predecessor blocks its dependents, not independent ready nodes. Use isolated worktrees and explicit working directories for authorized parallel work. Serialize shared/version surfaces or merge normally; never force-push through a coordinated conflict.
 
+Plan delivery milestones as well as task dependencies. The target is the smallest coherent, usable milestone for a real consumer: an end-to-end slice with only the nodes required for that slice on its critical path. Keep unrelated qualification, automation, documentation and platform-breadth work downstream.
+
+When the ready set can produce an independently usable artifact, complete that milestone's review and authorized publish, install and consuming-surface smoke. Qualification can continue afterward and must not block an independently usable slice. Record the remaining criteria and keep the milestone's readiness claim narrow.
+
+Do not optimize for one final reveal. Local branches, completed nodes and review receipts are engineering progress, not delivered value. Replan when a consumer is waiting while unrelated tail work gates a safe usable milestone. If an intermediate artifact cannot be safe or coherent, record the exact coupling that requires atomic delivery.
+
 Only a current, unsatisfied `needs-human-approval` is a hard exception. Superseded records do not revoke existing go. Mechanical reviews go to the authorized reviewer. A nested worker returns its frozen brief to the parent rather than self-certifying or waiting for the parent's entire task to finish.
 
 Desk owns task and iteration state and archive transitions. The agreed endpoint determines whether verification ends at an intentional alpha/PR-only branch or includes authorized merge, release/install, consuming-surface smoke and cleanup. Superpowers finish options cannot silently change that endpoint.

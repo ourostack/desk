@@ -24,6 +24,10 @@ for (const event of ["SessionStart", "SubagentStart"]) {
   assert.equal(output.hookSpecificOutput.hookEventName, event);
   assert.match(output.hookSpecificOutput.additionalContext, /^\[PLAIN_LANGUAGE_CONTRACT\]/u);
   assert.match(output.hookSpecificOutput.additionalContext, /## Serve the reader/u);
+  assert.match(output.hookSpecificOutput.additionalContext, /## Translate internal identifiers/u);
+  assert.match(output.hookSpecificOutput.additionalContext, /every first mention[\s\S]+reader-facing name/iu);
+  assert.match(output.hookSpecificOutput.additionalContext, /identifier is not needed[\s\S]+omit it/iu);
+  assert.match(output.hookSpecificOutput.additionalContext, /never make the reader decode[\s\S]+identifier/iu);
   assert.match(output.hookSpecificOutput.additionalContext, /## Report work precisely/u);
   assert.match(output.hookSpecificOutput.additionalContext, /## Check before sending/u);
   assert.match(output.hookSpecificOutput.additionalContext, /The integration test is still running/u);

@@ -83,6 +83,21 @@ assert.match(text("skills/work-planner/SKILL.md"), /skip planning and implement/
 assert.match(text("skills/work-merger/SKILL.md"), /release or install refresh/u);
 assert.match(text("skills/autopilot/SKILL.md"), /needs-human-approval/u);
 assert.match(text("plugins/desk/skills/work-orchestration/SKILL.md"), /Superpowers owns discovery, planning, execution and verification/u);
+requires(
+  "plugins/desk/skills/work-orchestration/SKILL.md",
+  "plans ship the smallest coherent usable milestones",
+  /smallest coherent[\s\S]+usable milestone[\s\S]+real consumer/iu,
+);
+requires(
+  "plugins/desk/skills/work-orchestration/SKILL.md",
+  "later qualification does not block an independently usable slice",
+  /qualification[\s\S]+continue[\s\S]+must not block[\s\S]+independently usable/iu,
+);
+requires(
+  "plugins/desk/skills/superpowers-integration/SKILL.md",
+  "the selected lifecycle delivers through incremental milestones",
+  /incremental delivery[\s\S]+smallest coherent[\s\S]+working artifact[\s\S]+consumer/iu,
+);
 assert.match(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /clear task can remain task-card-only/u);
 assert.match(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /release\/install, consuming-surface smoke, cleanup/u);
 assert.doesNotMatch(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /Operator approves the planning doc/u);
