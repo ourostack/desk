@@ -1,9 +1,16 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, readFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { validateCopilotPackagingContract, buildCopilotBundle } from "../../src/activation/copilot-bundle.js"
+import {
+  buildCopilotBundle,
+  generateCopilotBundleArtifact,
+  resolveBundleRepoRoot,
+  runCopilotBundleGenerator,
+  validateCopilotPackagingContract,
+} from "../../src/activation/copilot-bundle.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -567,4 +574,89 @@ test("ordinary Agency declaration (copilot packaging): desk/agency.json declares
   ])
   assert.equal(agency.dependencies.some((dependency) => dependency.includes("ponytail")), false)
   assert.equal(agency.dependencies.some((dependency) => dependency.includes("work-suite")), false)
+})
+
+// The committed bundle is release output, so these tests exercise the writer against a scratch repository
+// root and never let it touch the real artifact — the accident that made this path untested in the first place.
+test("the bundle writer and its CLI entry point produce the artifact in a scratch repository", () => {
+  const scratchRoot = mkdtempSync(path.join(tmpdir(), "copilot-bundle-writer-"))
+  const committedBundlePath = path.join(repoRoot, ...copilotBundlePath.split("/"))
+  const committedBefore = readFileSync(committedBundlePath)
+  try {
+    for (const relativePath of [activationManifestPath, "plugins/desk/plugin.json", "plugins/superpowers/plugin.json", "plugins/plain-language/plugin.json"]) {
+      const target = path.join(scratchRoot, ...relativePath.split("/"))
+      mkdirSync(path.dirname(target), { recursive: true })
+      copyFileSync(path.join(repoRoot, ...relativePath.split("/")), target)
+    }
+    mkdirSync(path.join(scratchRoot, "plugins", "desk", "activation"), { recursive: true })
+
+    const generated = generateCopilotBundleArtifact({ repoRoot: scratchRoot })
+    assert.equal(generated.outputPath, copilotBundlePath)
+    assert.equal(generated.artifactPath, path.join(scratchRoot, ...copilotBundlePath.split("/")))
+    const writtenText = readFileSync(generated.artifactPath, "utf8")
+    assert.equal(writtenText, `${JSON.stringify(generated.bundle, null, 2)}\n`)
+    assert.deepEqual(JSON.parse(writtenText), expectedCopilotBundle())
+
+    rmSync(generated.artifactPath)
+    const written = []
+    const exitCode = runCopilotBundleGenerator({
+      repoRoot: scratchRoot,
+      io: { write(chunk) { written.push(chunk) } },
+    })
+    assert.equal(exitCode, 0)
+    assert.deepEqual(written, [`wrote ${copilotBundlePath}\n`])
+    assert.deepEqual(JSON.parse(readFileSync(generated.artifactPath, "utf8")), expectedCopilotBundle())
+  } finally {
+    rmSync(scratchRoot, { recursive: true, force: true })
+  }
+  assert.deepEqual(
+    readFileSync(committedBundlePath),
+    committedBefore,
+    "exercising the writer must never modify the committed release artifact",
+  )
+})
+
+test("the bundle writer resolves its destination from an explicit root, the environment, or this repository", () => {
+  assert.equal(resolveBundleRepoRoot({ DESK_COPILOT_BUNDLE_REPO_ROOT: "/scratch/tree" }), "/scratch/tree")
+  assert.equal(resolveBundleRepoRoot({}), repoRoot)
+  assert.equal(resolveBundleRepoRoot(), process.env.DESK_COPILOT_BUNDLE_REPO_ROOT ?? repoRoot)
+
+  const scratchRoot = mkdtempSync(path.join(tmpdir(), "copilot-bundle-env-"))
+  const committedBundlePath = path.join(repoRoot, ...copilotBundlePath.split("/"))
+  const committedBefore = readFileSync(committedBundlePath)
+  const previous = process.env.DESK_COPILOT_BUNDLE_REPO_ROOT
+  try {
+    for (const relativePath of [activationManifestPath, "plugins/desk/plugin.json", "plugins/superpowers/plugin.json", "plugins/plain-language/plugin.json"]) {
+      const target = path.join(scratchRoot, ...relativePath.split("/"))
+      mkdirSync(path.dirname(target), { recursive: true })
+      copyFileSync(path.join(repoRoot, ...relativePath.split("/")), target)
+    }
+
+    // The package-scripted generator calls this with no arguments at all; the redirect is what lets that exact
+    // production path run here without writing the committed artifact.
+    process.env.DESK_COPILOT_BUNDLE_REPO_ROOT = scratchRoot
+    const written = []
+    const stdoutWrite = process.stdout.write
+    process.stdout.write = (chunk) => { written.push(String(chunk)); return true }
+    let exitCode
+    try {
+      exitCode = runCopilotBundleGenerator()
+    } finally {
+      process.stdout.write = stdoutWrite
+    }
+    assert.equal(exitCode, 0)
+    assert.deepEqual(written, [`wrote ${copilotBundlePath}\n`])
+    const generated = generateCopilotBundleArtifact()
+    assert.equal(generated.artifactPath, path.join(scratchRoot, ...copilotBundlePath.split("/")))
+    assert.deepEqual(JSON.parse(readFileSync(generated.artifactPath, "utf8")), expectedCopilotBundle())
+  } finally {
+    if (previous === undefined) delete process.env.DESK_COPILOT_BUNDLE_REPO_ROOT
+    else process.env.DESK_COPILOT_BUNDLE_REPO_ROOT = previous
+    rmSync(scratchRoot, { recursive: true, force: true })
+  }
+  assert.deepEqual(
+    readFileSync(committedBundlePath),
+    committedBefore,
+    "the redirected generator must never modify the committed release artifact",
+  )
 })

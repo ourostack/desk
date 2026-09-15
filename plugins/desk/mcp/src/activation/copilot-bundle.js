@@ -217,28 +217,40 @@ function copilotMethod(activation) {
   return selectEngineeringMethod(selectedDependencyIds(activation))
 }
 
-export function generateCopilotBundleArtifact() {
-  const activation = readJson(activationManifestPath)
+// Writing the flattened bundle is release maintenance, so the destination is explicit. `DESK_COPILOT_BUNDLE_REPO_ROOT`
+// redirects it at a scratch tree, which is how the writer and its CLI entry point are exercised without ever
+// touching the committed release artifact. The package-scripted generator sets nothing and writes this repository.
+export function resolveBundleRepoRoot(env) {
+  const source = env ?? process.env
+  return source.DESK_COPILOT_BUNDLE_REPO_ROOT ?? defaultRepoRoot
+}
+
+export function generateCopilotBundleArtifact(options) {
+  const repoRoot = options?.repoRoot ?? resolveBundleRepoRoot()
+  const activation = readJson(activationManifestPath, repoRoot)
   const bundle = buildCopilotBundle({ activation })
-  writeFileSync(repoPath(outputPath), `${JSON.stringify(bundle, null, 2)}\n`, "utf8")
+  const artifactPath = repoPath(outputPath, repoRoot)
+  writeFileSync(artifactPath, `${JSON.stringify(bundle, null, 2)}\n`, "utf8")
   return {
     outputPath,
+    artifactPath,
     bundle,
   }
 }
 
-export function runCopilotBundleGenerator() {
-  const result = generateCopilotBundleArtifact()
-  process.stdout.write(`wrote ${result.outputPath}\n`)
+export function runCopilotBundleGenerator(options) {
+  const result = generateCopilotBundleArtifact({ repoRoot: options?.repoRoot ?? resolveBundleRepoRoot() })
+  const io = options?.io ?? process.stdout
+  io.write(`wrote ${result.outputPath}\n`)
   return 0
 }
 
-function readJson(relativePath) {
-  return JSON.parse(readFileSync(repoPath(relativePath), "utf8"))
+function readJson(relativePath, repoRoot) {
+  return JSON.parse(readFileSync(repoPath(relativePath, repoRoot), "utf8"))
 }
 
-function repoPath(relativePath) {
-  return path.join(defaultRepoRoot, relativePath)
+function repoPath(relativePath, repoRoot) {
+  return path.join(repoRoot, relativePath)
 }
 
 function asObject(value) {

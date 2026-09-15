@@ -62,3 +62,20 @@ test("a real SQLite constructor failure after file inspection never reaches the 
   assert.equal((await fs.stat(dbPath)).isDirectory(), true)
   assert.equal((await fs.stat(`${dbPath}.before-race`)).size, 0)
 })
+
+test("an explicit plugin root supplies the preview version the entry records", async (t) => {
+  const fixture = await mkFeedbackFixture()
+  t.after(() => cleanup(fixture.base))
+  const pluginRoot = path.join(fixture.base, "selected-desk-plugin")
+  await fs.mkdir(pluginRoot, { recursive: true })
+  await fs.writeFile(path.join(pluginRoot, "plugin.json"), `${JSON.stringify({ name: "desk", version: "9.9.9-fixture" }, null, 2)}\n`, "utf8")
+
+  const captured = await withPrivateStore(
+    { deskRoot: fixture.deskRoot, person: "rowan", pluginRoot, env: { XDG_STATE_HOME: fixture.stateHome } },
+    (store) => store.capture({ text: "an explicitly bound preview note", taskRef: null }),
+  )
+
+  // Without an explicit root the store reads the shipped Desk manifest beside its own module; with one, the
+  // admitted plugin artifact decides the recorded preview version.
+  assert.equal(captured.preview_version, "9.9.9-fixture")
+})
