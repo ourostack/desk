@@ -71,3 +71,40 @@ test("no-create resolution retains alias traversal refusal", async () => {
   await assert.rejects(() => resolveWriteTarget(target({ person: "../member", createPersonRoot: false })), /invalid --person alias/u)
   assert.deepEqual(readdirSync(deskRoot), [])
 })
+
+const progressSegments = ["track", "outcome", "repository", "2026-09-09-initial-impl", "superpowers-progress.md"]
+
+test("an explicit provider progress target resolves under the person prefix without creating directories", async () => {
+  const personRoot = path.join(deskRoot, "desks", "member")
+  mkdirSync(personRoot, { recursive: true })
+  const result = await resolveWriteTarget(target({ segments: progressSegments, createPersonRoot: false }))
+  assert.equal(result, path.join(personRoot, ...progressSegments))
+  assert.deepEqual(readdirSync(personRoot), [])
+})
+
+test("an explicit provider progress target refuses an absent person root without provisioning it", async () => {
+  await assert.rejects(
+    () => resolveWriteTarget(target({ segments: progressSegments, createPersonRoot: false })),
+    /effective write root does not exist/u,
+  )
+  assert.deepEqual(readdirSync(deskRoot), [], "refusing an explicit provider progress path must not create desks or person directories")
+})
+
+test("an explicit provider progress target refuses a symlink that escapes the person root", async () => {
+  const personRoot = path.join(deskRoot, "desks", "member")
+  mkdirSync(personRoot, { recursive: true })
+  mkdirSync(path.join(fixtureRoot, "elsewhere"))
+  symlinkSync(path.join(fixtureRoot, "elsewhere"), path.join(personRoot, "track"), "dir")
+  await assert.rejects(
+    () => resolveWriteTarget(target({ segments: progressSegments, createPersonRoot: false })),
+    /write target resolves outside/u,
+  )
+})
+
+test("a provider progress basename cannot smuggle another person's desk into the write scope", async () => {
+  mkdirSync(path.join(deskRoot, "desks", "member"), { recursive: true })
+  await assert.rejects(
+    () => resolveWriteTarget(target({ segments: ["..", "other", "superpowers-progress.md"], createPersonRoot: false })),
+    /invalid write path segment/u,
+  )
+})

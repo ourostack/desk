@@ -509,6 +509,7 @@ test("a linked receipt cannot smuggle in transcripts, usage rows or a price", as
 
     for (const smuggled of [
       { transcript: "the whole conversation" },
+      { facts: { key: "value" } },
       { events: [{ role: "assistant", content: "..." }] },
       { financial_cost: 12.5 },
       { cost_usd: 12.5 },
@@ -582,6 +583,385 @@ test("a linked receipt reports as declared evidence and never as measured usage"
     await cleanup(fixture.base)
   }
 })
+
+// The seam T04 preserved is not limited to offline evaluation. An
+// independently checked online action profile is the same shape of thing —
+// evidence an owner holds outside Git, referenced here by a pointer and a
+// hash — so it is linked through the exact same route, against a canonical
+// task-bound item, and it reads back byte-for-byte through a real JSON
+// roundtrip rather than as a live in-process reference.
+test("an online action profile is linked as a declared pointer against a canonical-task-bound item", async () => {
+  const fixture = await mkLedgerFixture()
+  const restore = useHostEnv(fixture)
+  try {
+    await callTool({
+      deskRoot: fixture.deskRoot,
+      name: "task_create",
+      person: PERSON,
+      input: { track: "delivery", slug: "profile-task", title: "Profile task" },
+    })
+    const workItemId = await seedItem(fixture)
+    const committed = body(
+      await ledger({
+        deskRoot: fixture.deskRoot,
+        input: {
+          action: "commit",
+          work_item_id: workItemId,
+          outcome: "An outcome an online action profile can be linked against.",
+          scope: "The profiled action only.",
+          evidence: "Profile receipt attached to the task card.",
+          delivery_endpoint: "desks/rowan/delivery/profile-task/task.md",
+          operator_go: { by: "operator", at: "2026-09-08T18:00:00Z" },
+          task_ref: { track: "delivery", slug: "profile-task" },
+        },
+      }),
+    )
+    assert.equal(committed.status, "committed", committed.message ?? "")
+
+    const receiptValues = {
+      action: "link_evaluation_receipt",
+      work_item_id: workItemId,
+      measurement_kind: "online_action_profile",
+      receipt_ref: "private:synthetic-job/profile.json",
+      receipt_sha256: "a".repeat(64),
+      status: "captured",
+      availability: "available",
+    }
+
+    const before = body(
+      await ledger({ deskRoot: fixture.deskRoot, input: { action: "report", work_item_id: workItemId } }),
+    ).items[0]
+    assert.equal(before.evaluations.value.length, 0, "no receipt exists before this call")
+
+    const raw = await ledger({ deskRoot: fixture.deskRoot, input: receiptValues })
+    // Serialize and reparse the response the way a real caller would, over a
+    // real transport, so a field that only survives as a live in-process
+    // reference is caught rather than passing by accident.
+    const linked = JSON.parse(JSON.stringify(body(raw)))
+    assert.equal(linked.status, "evaluation_receipt_linked", linked.message ?? "")
+    assert.equal(linked.receipt.class, "declared")
+    assert.equal(linked.receipt.measurement_kind, "online_action_profile")
+    assert.equal(linked.receipt.receipt_ref, receiptValues.receipt_ref)
+    assert.equal(linked.receipt.receipt_sha256, receiptValues.receipt_sha256)
+    assert.equal(linked.receipt.status, "captured")
+    assert.equal(linked.receipt.availability, "available")
+
+    const inspected = body(
+      await ledger({ deskRoot: fixture.deskRoot, input: { action: "inspect", work_item_id: workItemId } }),
+    )
+    assert.equal(inspected.evaluation_receipts.length, 1)
+    const storedRow = inspected.evaluation_receipts[0]
+    assert.equal(storedRow.measurement_kind, "online_action_profile")
+    assert.equal(storedRow.receipt_ref, receiptValues.receipt_ref)
+    assert.equal(storedRow.receipt_sha256, receiptValues.receipt_sha256)
+    assert.equal(storedRow.status, "captured")
+    assert.equal(storedRow.availability, "available")
+
+    const reported = body(
+      await ledger({ deskRoot: fixture.deskRoot, input: { action: "report", work_item_id: workItemId } }),
+    ).items[0]
+    assert.equal(reported.evaluations.class, "declared")
+    assert.equal(reported.evaluations.value.length, 1)
+    assert.equal(reported.evaluations.value[0].measurement_kind, "online_action_profile")
+    assert.equal(
+      reported.tokens.class,
+      "unavailable",
+      "a declared profile pointer is not measured usage",
+    )
+    assert.equal(reported.financial_cost.class, "unavailable")
+  } finally {
+    restore()
+    await cleanup(fixture.base)
+  }
+})
+
+// Every red case the seam has to hold against, gathered in one place: an item
+// that was never intaken, an item that exists but in someone else's private
+// partition, an unknown kind, a structured value where the digest column can
+// only hold a scalar, and the raw evidence payloads the seam refuses under any
+// kind. A snapshot of the full receipt rows is taken immediately after every
+// single rejection — not once at the end — because only a populated item can
+// witness that a rejection left its existing content untouched, and only an
+// immediate check can pin the rejection to the specific call that caused it.
+test("linking an online action profile refuses every malformed or foreign call and changes nothing", async () => {
+  const fixture = await mkLedgerFixture()
+  const restore = useHostEnv(fixture)
+  try {
+    const workItemId = await seedItem(fixture, PERSON)
+    const base = {
+      action: "link_evaluation_receipt",
+      measurement_kind: "online_action_profile",
+      receipt_ref: "private:synthetic-job/profile.json",
+      receipt_sha256: "f".repeat(64),
+      status: "captured",
+      availability: "available",
+    }
+
+    async function evaluations(person = PERSON) {
+      const report = body(
+        await ledger({
+          deskRoot: fixture.deskRoot,
+          person,
+          input: { action: "report", work_item_id: workItemId },
+        }),
+      ).items[0]
+      return report.evaluations.value
+    }
+
+    // Seed one valid, real receipt first, through the real route. An empty
+    // item cannot witness that a rejection left existing content untouched —
+    // only a populated one can, and it has to be a receipt this same route
+    // actually wrote, not a fixture inserted around the seam.
+    const seeded = body(await ledger({ deskRoot: fixture.deskRoot, input: { ...base, work_item_id: workItemId } }))
+    assert.equal(seeded.status, "evaluation_receipt_linked", seeded.message ?? "")
+    const baseline = await evaluations()
+    assert.equal(baseline.length, 1)
+    assert.equal(baseline[0].receipt_sha256, "f".repeat(64))
+
+    // Missing item: the work_item_id names nothing this ledger ever intook.
+    // Checked immediately after: the fake id stays absent too, so the
+    // rejected call did not implicitly create the item it was refused for.
+    const fakeId = "11111111-2222-3333-4444-555555555555"
+    const missing = await ledger({ deskRoot: fixture.deskRoot, input: { ...base, work_item_id: fakeId } })
+    assert.equal(missing.isError, true)
+    assert.match(body(missing).message, /not found|no work item/iu)
+    const afterMissing = await ledger({
+      deskRoot: fixture.deskRoot,
+      input: { action: "inspect", work_item_id: fakeId },
+    })
+    assert.equal(afterMissing.isError, true, "a rejected call must not implicitly create the item it named")
+    assert.match(body(afterMissing).message, /not found|no work item/iu)
+    assert.deepEqual(
+      await evaluations(),
+      baseline,
+      "the real item's receipts must be untouched by a call naming a different id",
+    )
+
+    // Foreign owner: the item is real, but it belongs to a different
+    // person's private partition. Checked immediately after: it still reads
+    // as absent (not denied), it left no shadow item in the caller's own
+    // partition, and the real owner's receipts are untouched.
+    const foreign = await ledger({
+      deskRoot: fixture.deskRoot,
+      person: "quinn",
+      input: { ...base, work_item_id: workItemId },
+    })
+    assert.equal(foreign.isError, true)
+    assert.match(body(foreign).message, /not found|no work item/iu)
+    const quinnView = await ledger({
+      deskRoot: fixture.deskRoot,
+      person: "quinn",
+      input: { action: "inspect", work_item_id: workItemId },
+    })
+    assert.equal(quinnView.isError, true, "quinn's partition must not gain a shadow item under rowan's id")
+    assert.match(body(quinnView).message, /not found|no work item/iu)
+    assert.deepEqual(
+      await evaluations(),
+      baseline,
+      "the owner's receipts must be untouched by another person's call against the same id",
+    )
+
+    // Recording off: the capture route stops here, before any field is even
+    // considered, and the refusal names the real reason. Checked immediately
+    // after, before the switch is turned back on — not after re-enabling,
+    // which would not distinguish "never written" from "written and undone".
+    await ledger({ deskRoot: fixture.deskRoot, input: { action: "set_recording", enabled: false } })
+    const whileOff = await ledger({ deskRoot: fixture.deskRoot, input: { ...base, work_item_id: workItemId } })
+    assert.equal(whileOff.isError, true)
+    assert.match(body(whileOff).message, /recording (is )?disabled/iu)
+    assert.deepEqual(
+      await evaluations(),
+      baseline,
+      "a refused capture while recording is off must not have written anything, before re-enabling",
+    )
+    await ledger({ deskRoot: fixture.deskRoot, input: { action: "set_recording", enabled: true } })
+
+    // A digest is a scalar column, required and shape-checked for this kind.
+    // An array or an object used to be accepted, stored as SQLite's own
+    // stringification, and echoed back in the shape it arrived in — so the
+    // response and the record disagreed about what had actually been
+    // written. Checked immediately after each one.
+    for (const badDigest of [["a".repeat(64)], { sha256: "a".repeat(64) }]) {
+      const arrayOrObject = await ledger({
+        deskRoot: fixture.deskRoot,
+        input: { ...base, work_item_id: workItemId, receipt_sha256: badDigest },
+      })
+      assert.equal(
+        arrayOrObject.isError,
+        true,
+        `receipt_sha256 must refuse ${Array.isArray(badDigest) ? "an array" : "an object"}`,
+      )
+      assert.match(body(arrayOrObject).message, /receipt_sha256/iu)
+      assert.deepEqual(
+        await evaluations(),
+        baseline,
+        "a rejected digest shape must leave the existing receipt untouched",
+      )
+    }
+
+    // An unknown measurement_kind is not a third owner this seam recognizes.
+    // Checked immediately after.
+    const unknownKind = await ledger({
+      deskRoot: fixture.deskRoot,
+      input: { ...base, work_item_id: workItemId, measurement_kind: "embedded_transcript" },
+    })
+    assert.equal(unknownKind.isError, true)
+    assert.match(body(unknownKind).message, /measurement_kind/iu)
+    assert.deepEqual(await evaluations(), baseline, "an unknown kind must leave the existing receipt untouched")
+
+    // Raw transcript or facts payloads never ride in on any kind, online or
+    // offline — the seam is a pointer plus a hash, never a payload. Checked
+    // immediately after each one.
+    for (const smuggled of [
+      { transcript: "the whole conversation" },
+      { facts: { turns: 12 } },
+    ]) {
+      const refused = await ledger({
+        deskRoot: fixture.deskRoot,
+        input: { ...base, work_item_id: workItemId, ...smuggled },
+      })
+      assert.equal(refused.isError, true, `${Object.keys(smuggled)[0]} must not ride in on a receipt`)
+      assert.match(body(refused).message, /unknown input field/iu)
+      assert.deepEqual(
+        await evaluations(),
+        baseline,
+        `${Object.keys(smuggled)[0]} must leave the existing receipt untouched`,
+      )
+    }
+  } finally {
+    restore()
+    await cleanup(fixture.base)
+  }
+})
+
+// The immutable-pointer promise depends on the pointer actually carrying a
+// digest. An online action profile is required to name one, shaped as exactly
+// 64 hexadecimal characters, case-insensitive — a check on the pointer's
+// shape only, never a fetch of the artefact and never a claim that anything
+// was independently re-verified. Offline evaluation's pre-existing, hash-
+// optional behavior is unchanged and re-proven here, not merely assumed.
+test("an online action profile requires a well-formed 64-character hex digest; offline receipts stay hash-optional", async () => {
+  const fixture = await mkLedgerFixture()
+  const restore = useHostEnv(fixture)
+  try {
+    const workItemId = await seedItem(fixture, PERSON)
+    const base = {
+      action: "link_evaluation_receipt",
+      work_item_id: workItemId,
+      measurement_kind: "online_action_profile",
+      receipt_ref: "private:synthetic-job/profile.json",
+      status: "captured",
+      availability: "available",
+    }
+
+    async function evaluations(itemId = workItemId) {
+      const report = body(
+        await ledger({ deskRoot: fixture.deskRoot, input: { action: "report", work_item_id: itemId } }),
+      ).items[0]
+      return report.evaluations.value
+    }
+
+    // Seed one valid, real receipt first. An empty item cannot witness that a
+    // rejection left existing content untouched — only a populated one can:
+    // an omitted/null/empty/whitespace/short/non-hex digest that instead
+    // deleted or silently replaced the seeded row would still pass an
+    // "ends up empty" assertion, but not a "matches the seeded baseline"
+    // assertion.
+    const seeded = body(
+      await ledger({ deskRoot: fixture.deskRoot, input: { ...base, receipt_sha256: "c".repeat(64) } }),
+    )
+    assert.equal(seeded.status, "evaluation_receipt_linked", seeded.message ?? "")
+    const baseline = await evaluations()
+    assert.equal(baseline.length, 1)
+    assert.equal(baseline[0].receipt_sha256, "c".repeat(64))
+
+    const malformed = {
+      omitted: undefined,
+      null: null,
+      empty: "",
+      whitespace: "   ",
+      short: "a".repeat(63),
+      "non-hex": `${"a".repeat(63)}g`,
+    }
+    for (const [label, value] of Object.entries(malformed)) {
+      const input = { ...base }
+      if (value === undefined) {
+        delete input.receipt_sha256
+      } else {
+        input.receipt_sha256 = value
+      }
+      const refused = await ledger({ deskRoot: fixture.deskRoot, input })
+      assert.equal(
+        refused.isError,
+        true,
+        `an ${label} receipt_sha256 must be refused for online_action_profile`,
+      )
+      assert.match(body(refused).message, /receipt_sha256/iu)
+      // Checked immediately after this specific rejection, not only once at
+      // the end, and against the seeded baseline, not merely against zero.
+      assert.deepEqual(
+        await evaluations(),
+        baseline,
+        `an ${label} digest must leave the seeded receipt untouched`,
+      )
+    }
+
+    // Valid and case-insensitive: lowercase is accepted, stored, and echoed
+    // back exactly as sent — not normalized to another case behind the
+    // caller's back. A fresh item keeps this success case from being
+    // entangled with the untouched-baseline witness above.
+    const lowerItemId = await seedItem(fixture, PERSON)
+    const lower = body(
+      await ledger({
+        deskRoot: fixture.deskRoot,
+        input: { ...base, work_item_id: lowerItemId, receipt_sha256: "a".repeat(64) },
+      }),
+    )
+    assert.equal(lower.status, "evaluation_receipt_linked", lower.message ?? "")
+    assert.equal(lower.receipt.receipt_sha256, "a".repeat(64))
+    assert.equal((await evaluations(lowerItemId))[0].receipt_sha256, "a".repeat(64))
+
+    // Uppercase is equally valid, on its own fresh item too.
+    const upperItemId = await seedItem(fixture, PERSON)
+    const upper = body(
+      await ledger({
+        deskRoot: fixture.deskRoot,
+        input: { ...base, work_item_id: upperItemId, receipt_sha256: "B".repeat(64) },
+      }),
+    )
+    assert.equal(upper.status, "evaluation_receipt_linked", upper.message ?? "")
+    assert.equal(upper.receipt.receipt_sha256, "B".repeat(64))
+    assert.equal((await evaluations(upperItemId))[0].receipt_sha256, "B".repeat(64))
+
+    // The seeded baseline itself is still exactly as it was after all of the
+    // above, on the item that carried it throughout.
+    assert.deepEqual(await evaluations(), baseline, "the seeded receipt must still be exactly as it was")
+
+    // The hashless offline regression: legacy behavior is completely
+    // unaffected. offline_evaluation still accepts no receipt_sha256 at all,
+    // unlike the new kind, and this is unchanged by the requirement above.
+    const offlineItemId = await seedItem(fixture, PERSON)
+    const offline = body(
+      await ledger({
+        deskRoot: fixture.deskRoot,
+        input: {
+          action: "link_evaluation_receipt",
+          work_item_id: offlineItemId,
+          measurement_kind: "offline_evaluation",
+          receipt_ref: "runs/legacy/no-hash/receipt.json",
+          status: "passed",
+          availability: "available",
+        },
+      }),
+    )
+    assert.equal(offline.status, "evaluation_receipt_linked", offline.message ?? "")
+    assert.equal(offline.receipt.receipt_sha256, null, "offline receipts remain hash-optional, unlike the new kind")
+  } finally {
+    restore()
+    await cleanup(fixture.base)
+  }
+})
+
 
 // The point of the switch is that the window stays empty. A ledger that
 // refuses writes while off but then imports the same period once switched

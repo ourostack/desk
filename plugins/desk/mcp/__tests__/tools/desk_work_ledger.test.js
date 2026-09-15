@@ -1011,6 +1011,23 @@ test("desk_work_ledger deletion clears every dependent row and leaves a content-
       },
       "evaluation_receipt_linked",
     )
+    // The same seam, a second declared owner: an independently checked online
+    // action profile, linked by a pointer and a hash, never a payload — using
+    // the exact fixture shape this seam is expected to accept.
+    const receiptValues = {
+      action: "link_evaluation_receipt",
+      measurement_kind: "online_action_profile",
+      receipt_ref: "private:synthetic-job/profile.json",
+      receipt_sha256: "a".repeat(64),
+      status: "captured",
+      availability: "available",
+    }
+    const profileLinked = await ok(
+      { ...receiptValues, work_item_id: child.work_item_id },
+      "evaluation_receipt_linked",
+    )
+    assert.equal(profileLinked.receipt.class, "declared")
+    assert.equal(profileLinked.receipt.measurement_kind, "online_action_profile")
     await ok(
       {
         action: "link",

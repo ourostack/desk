@@ -195,6 +195,7 @@ for (const [name, first, second] of [
   ["negative non-finite exponent versus null", "-1e400", "null"],
   ["unsafe integer metadata", "9007199254740993", "9007199254740992"],
   ["negative unsafe integer metadata", "-9007199254740993", "-9007199254740992"],
+  ["ordinary zero versus negative zero", "0", "-0"],
 ]) {
   test(`raw bytes refuse ${name} before lossy duplicate canonicalization`, (t) => {
     for (const reverse of [false, true]) {
@@ -205,7 +206,7 @@ for (const [name, first, second] of [
   })
 }
 test("safe numeric metadata and fractional usage keep existing numeric semantics", (t) => {
-  for (const [first, second] of [["1", "1.0"], ["0.5", "5e-1"], ["-9007199254740991", "-9007199254740991"]]) {
+  for (const [first, second] of [["1", "1.0"], ["0.5", "5e-1"], ["-9007199254740991", "-9007199254740991"], ["0", "0"]]) {
     const p = accepted(t, numericBytes(first, second))
     assert.equal(p.coverage.duplicate_facts, 1)
     assert.equal(p.observations.events.find((f) => f.fact_id === "alias").ignored_numeric, undefined)
@@ -221,4 +222,24 @@ test("safe numeric metadata and fractional usage keep existing numeric semantics
   assert.equal(p.observations.usage.dimensions.duration_ms.value, 1.5)
   assert.equal(p.observations.usage.dimensions.request_multiplier.value, 0.5)
   assert.equal(p.observations.usage.dimensions.input_tokens.value, null)
+})
+
+test("value_adding Lean classification requires a linked Desk endpoint and measured independent-evaluator readback at the actual CLI boundary", (t) => {
+  const criterion = ["criterion:cli-accepted-endpoint"]
+  const input = snapshot()
+  input.evidence = [{ evidence_id: "self-1", role: "desk", claim_type: "outcome", class: "declared", producer: "agent_annotation", observed_at: "2026-01-01T00:00:00Z", refs: [], fact_ids: [] }]
+  input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Self-declared.", evidence_ids: ["self-1"], waste_kind: null } }]
+  input.outcome = { acceptance: "declared", status: "accepted", evidence_refs: criterion, artifact_refs: [] }
+  refused(t, input, /independent[_-]evaluator|value_adding|endpoint|outcome/i)
+  // Adding an unlinked independent-evaluator entry (empty refs) still refuses: no Desk endpoint, and no shared criterion reference.
+  input.evidence.push({ evidence_id: "indep-unlinked", role: "source_system", claim_type: "outcome", class: "measured", producer: "independent_evaluator", observed_at: "2026-01-01T00:00:01Z", refs: [], fact_ids: [] })
+  input.episodes[0].lean.evidence_ids = ["self-1", "indep-unlinked"]
+  refused(t, input, /independent[_-]evaluator|value_adding|endpoint|outcome/i)
+  // A Desk endpoint entry sharing the criterion ref, plus a measured independent-evaluator readback sharing the
+  // same criterion ref, satisfies both the structural-composition requirement and the value_adding gate.
+  input.evidence.push({ evidence_id: "endpoint-1", role: "desk", claim_type: "endpoint", class: "declared", producer: "agent_annotation", observed_at: "2026-01-01T00:00:02Z", refs: criterion, fact_ids: [] })
+  input.evidence.push({ evidence_id: "indep-linked", role: "source_system", claim_type: "outcome", class: "measured", producer: "independent_evaluator", observed_at: "2026-01-01T00:00:03Z", refs: criterion, fact_ids: [] })
+  input.episodes[0].lean.evidence_ids = ["indep-linked"]
+  const p = accepted(t, input)
+  assert.equal(p.episodes[0].lean.lean_class, "value_adding")
 })

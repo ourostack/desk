@@ -488,10 +488,137 @@ for (const file of [
 contract("preview feedback is canonically copied with explicit capture and confirmed sharing", () => {
   const skill = text("skills/preview-feedback/SKILL.md");
   assert.equal(skill, text("plugins/desk/skills/preview-feedback/SKILL.md"));
-  for (const required of ["explicit capture", "exact excerpt", "exact destination", "confirmation", "tombstone", "next_offset"]) {
+  for (const required of ["explicit capture", "exact excerpt", "exact destination", "confirmation", "tombstone", "_meta/preview-feedback.md"]) {
     assert.ok(skill.includes(required), `missing preview-feedback boundary: ${required}`);
   }
+  // The private feedback API is retired: the skill must say so rather than
+  // sending the agent looking for a tool that no longer exists, and must not
+  // offer preserved private records as material to publish.
+  assert.match(skill, /There is no `desk_feedback` tool in this build/u);
   assert.match(skill, /Never fall back/u);
+  assert.match(skill, /Do not migrate, copy, summarize, index, or quote it/u);
+  // The destination must be unambiguous and must not collide with an
+  // iteration's PR-review `feedback.md`.
+  assert.match(skill, /It is not an iteration's `feedback\.md`/u);
+});
+
+contract("preview feedback entries are deterministically targetable in plain Markdown", () => {
+  const skill = text("skills/preview-feedback/SKILL.md");
+  for (const required of [
+    "`pf-YYYYMMDD-<alias>-NN`",
+    "smallest number from `01` upward",
+    "it never changes",
+    "matches more than one entry",
+    "Refuse rather than guess.",
+    "Allocation is conflict-aware",
+    "the unpublished entry does not keep it",
+    "then `100`, `101` and onward",
+  ]) {
+    assert.ok(skill.includes(required), `missing preview-feedback identity rule: ${required}`);
+  }
+  // Amendment must require the ID *and* the current text, not one or the other.
+  assert.match(skill, /needs the exact entry ID \*\*and\*\* the participant's confirmation of the excerpt currently in the file/u);
+
+  // Two entries, one alias, one date — the case that made a bare
+  // date/alias heading ambiguous. Each must be reachable on its own, and an
+  // amendment must keep the ID it was reached by.
+  const entryHeading = /^## (pf-\d{8}-[a-z0-9][a-z0-9-]*-\d{2,}) — (\d{4}-\d{2}-\d{2}) — ([a-z0-9][a-z0-9-]*)$/mu;
+  const file = [
+    "# Preview feedback",
+    "",
+    "## pf-20260914-ari-01 — 2026-09-14 — ari",
+    "Preview: 3.2.0-alpha.3",
+    "",
+    "The agent asked for go at the right point.",
+    "",
+    "## pf-20260914-ari-02 — 2026-09-14 — ari",
+    "",
+    "It repeated the same design choice three times.",
+    "",
+  ].join("\n");
+
+  const entries = file.split(/\n(?=## )/u).filter((block) => entryHeading.test(block));
+  const ids = entries.map((block) => block.match(entryHeading)[1]);
+  assert.deepEqual(ids, ["pf-20260914-ari-01", "pf-20260914-ari-02"]);
+  assert.equal(new Set(ids).size, ids.length, "same-day entries from one alias must not share an ID");
+
+  const select = (id, blocks = entries) => blocks.filter((block) => block.startsWith(`## ${id} `));
+  for (const id of ids) {
+    assert.equal(select(id).length, 1, `${id} must resolve to exactly one entry`);
+  }
+  assert.equal(select("pf-20260914-ari-03").length, 0, "an unknown ID must resolve to nothing, not to a neighbour");
+
+  // The documented sequence rule: smallest unused two-digit number for that
+  // date and alias, read back from the file rather than counted from memory.
+  const sequenceOf = (id) => id.slice(id.lastIndexOf("-") + 1);
+  const nextSequence = (date, alias, blocks) => {
+    const used = new Set(blocks
+      .map((block) => block.match(entryHeading))
+      .filter((match) => match && match[2] === date && match[3] === alias)
+      .map((match) => sequenceOf(match[1])));
+    for (let candidate = 1; ; candidate += 1) {
+      const padded = String(candidate).padStart(2, "0");
+      if (!used.has(padded)) return padded;
+    }
+  };
+  assert.equal(nextSequence("2026-09-14", "ari", entries), "03");
+  assert.equal(nextSequence("2026-09-15", "ari", entries), "01", "a new date restarts the sequence");
+  assert.equal(nextSequence("2026-09-14", "rowan", entries), "01", "a different alias restarts the sequence");
+
+  // The sequence widens past two digits instead of running out, so a
+  // hundredth entry on one day still has an ID the convention allows.
+  const saturated = Array.from({ length: 99 }, (_, index) => {
+    const padded = String(index + 1).padStart(2, "0");
+    return `## pf-20260914-ari-${padded} — 2026-09-14 — ari\n\nEntry ${padded}.\n`;
+  });
+  assert.equal(saturated.every((block) => entryHeading.test(block)), true);
+  assert.equal(nextSequence("2026-09-14", "ari", saturated), "100");
+  const hundredth = `## pf-20260914-ari-100 — 2026-09-14 — ari\n\nThe hundredth thing said that day.\n`;
+  assert.equal(hundredth.match(entryHeading)[1], "pf-20260914-ari-100");
+  assert.equal(select("pf-20260914-ari-100", [...saturated, hundredth]).length, 1);
+  assert.equal(select("pf-20260914-ari-10", [...saturated, hundredth]).length, 1, "a widened ID must not be confused with a shorter one");
+  assert.equal(nextSequence("2026-09-14", "ari", [...saturated, hundredth]), "101");
+
+  // A losing writer renumbers its own unpublished draft; the entry that
+  // actually landed keeps the ID it was published under.
+  const landedElsewhere = `## pf-20260914-ari-03 — 2026-09-14 — ari\n\nMerged from another checkout.\n`;
+  const refreshed = [...entries, landedElsewhere];
+  const draftSequence = nextSequence("2026-09-14", "ari", entries);
+  assert.equal(draftSequence, "03", "the draft was allocated against the stale file");
+  assert.equal(
+    select(`pf-20260914-ari-${draftSequence}`, refreshed).length,
+    1,
+    "the refreshed file already holds that ID, so the draft must not publish under it",
+  );
+  const retrySequence = nextSequence("2026-09-14", "ari", refreshed);
+  assert.equal(retrySequence, "04");
+  const retried = `## pf-20260914-ari-${retrySequence} — 2026-09-14 — ari\n\nThe draft, republished under a free ID.\n`;
+  const published = [...refreshed, retried];
+  const publishedIds = published.map((block) => block.match(entryHeading)[1]);
+  assert.equal(new Set(publishedIds).size, publishedIds.length, "publication must not create a duplicate ID");
+  assert.deepEqual(publishedIds, [
+    "pf-20260914-ari-01",
+    "pf-20260914-ari-02",
+    "pf-20260914-ari-03",
+    "pf-20260914-ari-04",
+  ]);
+  assert.match(select("pf-20260914-ari-03", published)[0], /Merged from another checkout/u, "the landed entry keeps its ID and its words");
+
+  // Correcting the first and withdrawing the second leaves both IDs intact and
+  // still individually addressable.
+  const amended = [
+    entries[0].replace(
+      "The agent asked for go at the right point.",
+      "The agent asked for go at the right point.\n\nCorrected 2026-09-15: tightened the wording.",
+    ),
+    `## ${ids[1]} — 2026-09-14 — ari\n\nWithdrawn 2026-09-15 by ari: said in the wrong place.\n`,
+  ];
+  assert.deepEqual(amended.map((block) => block.match(entryHeading)[1]), ids);
+  assert.equal(select(ids[0], amended).length, 1);
+  assert.equal(select(ids[1], amended).length, 1);
+  assert.match(select(ids[0], amended)[0], /Corrected 2026-09-15/u);
+  assert.match(select(ids[1], amended)[0], /Withdrawn 2026-09-15 by ari/u);
+  assert.doesNotMatch(select(ids[1], amended)[0], /It repeated the same design choice/u);
 });
 
 assert.equal(

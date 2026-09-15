@@ -96,28 +96,34 @@ for (const kind of ["directory", "file"]) {
   })
 }
 
-test("native: Windows feedback CRUD preserves content across reopen and rejects stale corrections", {
+test("native: Windows private feedback storage preserves content across reopen and rejects stale corrections", {
   skip: isWindows ? false : "requires NTFS and the real Windows ACL provider",
 }, async () => {
   const fixture = await mkFeedbackFixture()
   const restore = useStateHome(fixture.stateHome)
-  const input = (value) => callTool({ deskRoot: fixture.deskRoot, person: "rowan", name: "desk_feedback", input: value })
-  const body = (response) => {
-    assert.equal(response.isError, undefined, JSON.stringify(response.content))
-    return JSON.parse(response.content[0].text)
-  }
+  // The qualitative feedback MCP route is retired; the protected store behind
+  // it is retained for records that already exist, so this native witness
+  // exercises the storage primitive itself. Each call opens its own
+  // connection, so every read below comes back off NTFS.
+  const binding = { deskRoot: fixture.deskRoot, person: "rowan" }
+  const listed = () => withPrivateStore(binding, (store) => store.list({ limit: 20 }))
   try {
-    const captured = body(await input({ action: "capture", text: "native Windows participant feedback" })).entry
-    assert.equal(body(await input({ action: "list" })).entries[0].entry_id, captured.entry_id)
-    const corrected = body(await input({
-      action: "correct", entry_id: captured.entry_id, expected_revision: 1, text: "corrected native Windows feedback",
-    })).entry
+    const captured = await withPrivateStore(binding, (store) =>
+      store.capture({ text: "native Windows participant feedback", taskRef: null }))
+    assert.equal((await listed()).entries[0].entry_id, captured.entry_id)
+    const corrected = await withPrivateStore(binding, (store) => store.correct({
+      entryId: captured.entry_id, expectedRevision: 1, text: "corrected native Windows feedback",
+    }))
     assert.equal(corrected.revision, 2)
-    const stale = await input({ action: "correct", entry_id: captured.entry_id, expected_revision: 1, text: "stale text" })
-    assert.equal(stale.isError, true)
-    assert.equal(body(await input({ action: "list" })).entries[0].text, corrected.text)
-    body(await input({ action: "delete", entry_id: captured.entry_id }))
-    assert.equal(body(await input({ action: "list" })).total, 0)
+    await assert.rejects(
+      () => withPrivateStore(binding, (store) => store.correct({
+        entryId: captured.entry_id, expectedRevision: 1, text: "stale text",
+      })),
+      /changed since it was read/u,
+    )
+    assert.equal((await listed()).entries[0].text, corrected.text)
+    await withPrivateStore(binding, (store) => store.remove({ entryId: captured.entry_id }))
+    assert.equal((await listed()).total, 0)
     const { dbPath } = await resolvePrivateStore({ deskRoot: fixture.deskRoot, person: "rowan" })
     const bytes = await fs.readFile(dbPath)
     assert.equal(bytes.includes(Buffer.from(captured.text)), false)

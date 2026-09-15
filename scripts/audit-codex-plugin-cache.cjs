@@ -14,7 +14,6 @@ const fallbackDeskMcpTools = Object.freeze([
   "track_update",
   "friction_add",
   "lesson_add",
-  "desk_feedback",
   "desk_search",
   "desk_recall",
   "desk_similar",

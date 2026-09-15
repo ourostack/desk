@@ -81,6 +81,13 @@ const REQUIRES_ITEM = new Set([
 // substituted.
 const LINK_RELATIONS = new Set(["child", "parent", "follow_on", "related", "depends_on"])
 
+// The seam is a pointer plus a hash, never a payload, regardless of which kind
+// of independently held evidence it points at. Adding a kind here is adding
+// another owner who is trusted to hold their own artefact and hand over a
+// reference to it — not a new place for a transcript, a profile, or a price to
+// ride in.
+const MEASUREMENT_KINDS = new Set(["offline_evaluation", "online_action_profile"])
+
 // Fields an owner may correct: the ones a person declared. A measured
 // observation is what a source said, and no correction may edit it into saying
 // something else.
@@ -729,22 +736,31 @@ const ROUTES = {
   },
 
   link_evaluation_receipt: ({ db, values, item }) => {
-    // A reference, never a payload. The evaluation owner keeps its own
-    // artefacts; this records that they exist and what they claimed.
+    // A reference, never a payload. The evaluation or profile owner keeps
+    // their own artefacts, independently checked and held outside Git; this
+    // records only that one exists, what it claimed, and a hash to check it
+    // against — never the profile itself.
     const kind = requireText(values, "measurement_kind")
-    if (kind !== "offline_evaluation") {
+    if (!MEASUREMENT_KINDS.has(kind)) {
       throw new Error(
         `${LABEL}: measurement_kind ${JSON.stringify(kind)} is not accepted — this seam ` +
-          `records offline_evaluation receipts only. Feedback and package diagnostics ` +
-          `are not online evaluation, and this ledger is not an assessment engine.`,
+          `records ${[...MEASUREMENT_KINDS].join(" or ")} receipts only. Feedback and ` +
+          `package diagnostics are not measurement, and this ledger is not an ` +
+          `assessment engine.`,
       )
     }
     const receiptRef = requireText(values, "receipt_ref")
     // Validated like its neighbours rather than bound raw: an array digest used
     // to be accepted, stored as SQLite's own stringification, and echoed back to
     // the caller in the shape they sent — so the response and the record
-    // disagreed about what had been written.
-    const receiptSha256 = optionalText(values, "receipt_sha256")
+    // disagreed about what had been written. Offline evaluation keeps that
+    // pre-existing optional, unvalidated digest unchanged; an online action
+    // profile is a pointer that has to carry its digest to be checkable at
+    // all, so it is required and shape-validated here instead.
+    const receiptSha256 =
+      kind === "online_action_profile"
+        ? requireHexDigest(values, "receipt_sha256")
+        : optionalText(values, "receipt_sha256")
     const now = nowIso()
     db.prepare(
       "INSERT INTO evaluations (work_item_id, measurement_kind, receipt_ref, receipt_sha256, run_set_id, run_id, case_id, status, grade, availability, recorded_at) " +
@@ -1223,6 +1239,29 @@ function requireFiniteNumber(values, field) {
   const value = values[field]
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`${LABEL}: ${field} is required and must be a finite number.`)
+  }
+  return value
+}
+
+// Exactly 64 hexadecimal characters, upper or lower case, the whole value —
+// no leading/trailing text, no truncation, no separators. This is a shape
+// check on the pointer's digest, never a fetch of the artefact and never a
+// claim that the ledger has independently verified it.
+const HEX_SHA256 = /^[0-9a-f]{64}$/iu
+
+// The immutable-pointer promise only holds if the pointer actually carries a
+// digest: an online action profile without one is not a hash-checkable
+// reference, it is a bare label. Offline evaluation kept its pre-existing
+// optional, unvalidated digest — this requirement is additive for the new
+// kind only, not a retroactive tightening of the old one.
+function requireHexDigest(values, field) {
+  const value = values[field]
+  if (typeof value !== "string" || !HEX_SHA256.test(value)) {
+    throw new Error(
+      `${LABEL}: ${field} is required for measurement_kind "online_action_profile" and ` +
+        `must be exactly 64 hexadecimal characters (case-insensitive) — the shape of a ` +
+        `SHA-256 digest, not the digest independently checked or the artefact itself.`,
+    )
   }
   return value
 }

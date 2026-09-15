@@ -97,7 +97,7 @@ where no basis has been stated, financial cost is `unavailable` and stays null. 
 - **no silent export.** nothing leaves the drawer unless the owner asks for it, and the report is owner-private.
 - **no raw transcript duplication.** references only.
 - **no quality cuts to make a number look better.** the ledger measures work; it is not a reason to do less of it.
-- **no evaluation engine.** an offline evaluation receipt can be *referenced* with `link_evaluation_receipt` — a link, a hash, a run id, a declared status — and the ledger records it as declared, never as something it verified. feedback capture and package diagnostics are not online evaluation either, and this drawer does not pretend otherwise.
+- **no evaluation engine.** an offline evaluation receipt, or an independently checked online action profile, can be *referenced* with `link_evaluation_receipt` — a link, a hash, a run id, a declared status — and the ledger records it as declared, never as something it verified. `measurement_kind` accepts exactly `offline_evaluation` and `online_action_profile`; either way the profile or evaluation itself is retained outside Git by its own owner and linked by hash, never stored, embedded, or transcribed into the ledger. feedback capture and package diagnostics are not evaluation either, and this drawer does not pretend otherwise.
 
 ## Inspection, correction, deletion
 

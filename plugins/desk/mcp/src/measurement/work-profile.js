@@ -16,6 +16,37 @@ const USAGE_UNITS = {
 }
 const AGGREGATE_UNITS = { durationMs: "milliseconds", totalTokens: "tokens", totalToolCalls: "tool_calls" }
 const COMPACTION_UNITS = { inputTokens: "tokens", outputTokens: "tokens", cacheReadTokens: "tokens", cacheWriteTokens: "tokens", totalNanoAiu: "nano_aiu", duration: "native_duration_unit_unspecified" }
+// Native action-class taxonomy for coverage.native_action_classes. Only classes with an actual mapped
+// KIND are "measured"; an empty list means no capture-adapter evidence exists yet for that class, which
+// must render as an explicit coverage gap rather than an invented zero-activity row. `side_effects` and
+// `cleanup` stay empty (coverage gaps) because membership in an existing KIND does not by itself prove the
+// stronger meaning: `session.start` establishes initialization, not cleanup, and `hook.start`/`hook.end`
+// establish callback activity, not an independently evidenced external side effect. Neither bucket gets a
+// mapping until an actual effect/cleanup-specific event kind is evidenced by the capture adapter.
+const ACTION_CLASSES = {
+  messages: ["user.message", "assistant.message", "system.message"],
+  commands: ["tool.execution_start", "tool.execution_complete"],
+  file_git_mutations: [],
+  review_ci: [],
+  waits_retries_errors: [],
+  delegation_handoffs: ["subagent.started", "subagent.configured", "subagent.completed"],
+  side_effects: [],
+  cleanup: [],
+}
+const BINDING_MODES = ["desk_work_item"]
+const EVIDENCE_ROLES = ["desk", "source_system", "session_history"]
+const CLAIM_TYPES = ["intent", "authority", "endpoint", "mutable_state", "execution", "outcome"]
+const EVIDENCE_CLASSES = ["measured", "declared", "inferred", "estimated", "unavailable"]
+const EVIDENCE_PRODUCERS = ["source_native", "agent_annotation", "independent_evaluator"]
+// Desk owns intent/authority/endpoint; source systems own current mutable state; session history owns raw
+// execution; outcome combines a Desk endpoint declaration with a current external readback, so either role
+// is admissible there. A role outside this list for its claim_type is a contradictory claim, refused rather
+// than silently reconciled.
+const CLAIM_ROLES = { intent: ["desk"], authority: ["desk"], endpoint: ["desk"], mutable_state: ["source_system"], execution: ["session_history"], outcome: ["desk", "source_system"] }
+const EVIDENCE_KEYS = ["evidence_id", "role", "claim_type", "class", "producer", "observed_at", "refs", "fact_ids"]
+const LEAN_CLASSES = ["value_adding", "necessary_non_value", "muda", "unavailable"]
+const WASTE_KINDS = ["defects_rework", "overproduction", "waiting", "unused_capability", "transportation_handoffs", "inventory_wip", "motion_context_switching", "overprocessing"]
+const LEAN_KEYS = ["lean_class", "rationale", "evidence_ids", "waste_kind"]
 const FIELD_NAMES = ["toolCallId", "hookInvocationId", "turnId", "interactionId", "parentToolCallId", "toolName", "hookType", "model", "api_call_id_sha256"]
 const OPERATION_KINDS = {
   "tool.execution_start": ["tool", "start", "toolCallId"],
@@ -54,7 +85,7 @@ function parseSnapshot(bytes) {
   while (pending.length) {
     const [value, depth] = pending.pop()
     requireFact(depth <= 32 && ++nodes <= 500000, "Snapshot structure exceeds 32 levels or 500000 values")
-    if (typeof value === "number") requireFact(Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER, "Snapshot numeric metadata and usage counters must be finite and within the safe numeric range")
+    if (typeof value === "number") requireFact(Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER && !Object.is(value, -0), "Snapshot numeric metadata and usage counters must be finite, within the safe numeric range and not negative zero")
     if (value !== null && typeof value === "object") {
       const children = Object.values(value)
       requireFact(nodes + pending.length + children.length <= 500000, "Snapshot structure exceeds 500000 values")
@@ -63,14 +94,16 @@ function parseSnapshot(bytes) {
   }
   requireFact(object(input) && input.schema_version === 1, "Expected snapshot schema_version 1")
   requireFact(Array.isArray(input.facts) && input.facts.length > 0 && input.facts.length <= 10000, "Snapshot requires 1 to 10000 facts")
+  requireFact(input.binding_mode === undefined || BINDING_MODES.includes(input.binding_mode), "Invalid binding_mode")
   return input
 }
 function refs(value) {
   requireFact(Array.isArray(value) && value.length <= 100 && value.every(text), "Expected at most 100 bounded inert reference strings")
   return [...new Set(value)].sort()
 }
-function readBinding(value) {
+function readBinding(value, bindingMode) {
   requireFact(object(value) && ["native_session_id", "root_agent_id", "dispatch_tool_call_id", "title"].every((name) => text(value[name])) && nullableText(value.work_item_id) && nullableText(value.task_ref), "Invalid snapshot binding")
+  if (bindingMode === "desk_work_item") requireFact(value.work_item_id !== null && value.task_ref !== null, "desk_work_item binding_mode requires work_item_id and task_ref")
   return Object.fromEntries(["native_session_id", "root_agent_id", "dispatch_tool_call_id", "title", "work_item_id", "task_ref"].map((name) => [name, value[name]]))
 }
 function sourceReference(value, session) {
@@ -341,11 +374,84 @@ function usageView(facts) {
     caution: "Input/output/cache/reasoning are source dimensions, not additive token categories. Native accounting units are not dollars. Usage creation timestamps do not anchor execution intervals; no exact model-event or episode join is available.",
   }
 }
+function nativeActionClasses(facts) {
+  const result = {}
+  for (const [name, kinds] of Object.entries(ACTION_CLASSES)) {
+    if (kinds.length === 0) result[name] = { class: "unavailable", count: null, reason: "No native event kind is evidenced by the capture adapter for this class; absence is a coverage gap, not zero activity." }
+    else result[name] = { class: "measured", count: facts.filter((f) => kinds.includes(f.kind)).length }
+  }
+  return result
+}
+function evidenceEntry(value, known) {
+  requireFact(object(value) && Object.keys(value).length === EVIDENCE_KEYS.length && EVIDENCE_KEYS.every((name) => Object.hasOwn(value, name)), "Invalid evidence shape or unsupported raw field")
+  requireFact(text(value.evidence_id), "Invalid evidence_id")
+  requireFact(CLAIM_TYPES.includes(value.claim_type), "Invalid evidence claim_type")
+  requireFact(EVIDENCE_ROLES.includes(value.role) && CLAIM_ROLES[value.claim_type].includes(value.role), "Contradictory evidence role/claim combination")
+  requireFact(EVIDENCE_CLASSES.includes(value.class), "Invalid evidence class")
+  requireFact(EVIDENCE_PRODUCERS.includes(value.producer), "Invalid evidence producer")
+  requireFact(text(value.observed_at) && normalizeTimestamp(value.observed_at) !== null, "Invalid or unbounded evidence observed_at")
+  const factIds = value.fact_ids
+  requireFact(Array.isArray(factIds) && factIds.length <= 100 && factIds.every((id) => known.has(id)), "Evidence cites an out-of-scope fact ID or exceeds the 100-entry bound")
+  return {
+    evidence_id: value.evidence_id, role: value.role, claim_type: value.claim_type, class: value.class, producer: value.producer,
+    observed_at: value.observed_at, refs: refs(value.refs), fact_ids: [...new Set(factIds)].sort(),
+  }
+}
+function evidenceView(input, included) {
+  const supplied = input.evidence === undefined ? [] : input.evidence
+  requireFact(Array.isArray(supplied) && supplied.length <= 100, "Expected at most 100 evidence entries")
+  const known = new Set(included.flatMap((f) => f.fact_ids))
+  const seen = new Set()
+  const evidence = supplied.map((entry) => {
+    const parsed = evidenceEntry(entry, known)
+    requireFact(!seen.has(parsed.evidence_id), "Duplicate evidence_id")
+    seen.add(parsed.evidence_id)
+    return parsed
+  }).sort((a, b) => compare(a.evidence_id, b.evidence_id))
+  return evidence
+}
+const refIntersects = (a, b) => a.length > 0 && b.length > 0 && a.some((ref) => b.includes(ref))
+// An outcome combines a Desk endpoint declaration with a current external readback (decision: outcome
+// composition, T06-I1). Neither owner alone "certifies" the outcome: this is only structurally supported
+// when a role:"desk"/claim_type:"endpoint" entry with a real (non-"unavailable") declaration and a
+// role:"source_system"/claim_type:"outcome" entry that is actually "measured" — not merely attempted and
+// come back unavailable — each share at least one inert reference with the top-level declared outcome
+// criterion (`outcome.evidence_refs`). An "unavailable"-class entry on either side is not real supporting
+// evidence: it explicitly means no information, so it cannot itself establish the relationship. This is a
+// local, existing-fields-only relationship check — no resolver, no new evidence field, and no claim that
+// either side's reference is authentic or current; that remains T28's job.
+function outcomeStructurallySupported(evidence, criterionRefs) {
+  const endpoint = evidence.some((e) => e.role === "desk" && e.claim_type === "endpoint" && e.class !== "unavailable" && refIntersects(e.refs, criterionRefs))
+  const readback = evidence.some((e) => e.role === "source_system" && e.claim_type === "outcome" && e.class === "measured" && refIntersects(e.refs, criterionRefs))
+  return endpoint && readback
+}
+function leanEntry(value, evidenceById, outcome, evidence, criterionRefs) {
+  requireFact(object(value) && Object.keys(value).length === LEAN_KEYS.length && LEAN_KEYS.every((name) => Object.hasOwn(value, name)), "Invalid Lean shape or unsupported raw field")
+  requireFact(LEAN_CLASSES.includes(value.lean_class), "Invalid lean_class")
+  requireFact(text(value.rationale), "Lean annotation requires a rationale")
+  requireFact(value.waste_kind === null || WASTE_KINDS.includes(value.waste_kind), "Invalid waste_kind")
+  const evidenceIds = value.evidence_ids
+  requireFact(Array.isArray(evidenceIds) && evidenceIds.length <= 100 && evidenceIds.every((id) => evidenceById.has(id)), "Lean annotation cites out-of-scope evidence or exceeds the 100-entry bound")
+  const deduped = [...new Set(evidenceIds)].sort()
+  if (value.lean_class === "value_adding") {
+    requireFact(outcome.status === "accepted", "value_adding lean_class requires an accepted endpoint criterion")
+    requireFact(outcomeStructurallySupported(evidence, criterionRefs), "value_adding lean_class requires a linked Desk endpoint and a measured source-system outcome readback sharing the declared outcome criterion reference; an unrelated, absent or unavailable-class counterpart is not a supported outcome")
+    const cited = evidenceIds.map((id) => evidenceById.get(id))
+    requireFact(cited.some((e) => e.role === "source_system" && e.claim_type === "outcome" && e.producer === "independent_evaluator" && e.class === "measured" && refIntersects(e.refs, criterionRefs)), "value_adding lean_class requires a measured, role:\"source_system\" independent_evaluator outcome reference sharing the declared outcome criterion; empty refs, a desk-role label, an unrelated criterion or a separate unlinked entry are not attestation")
+  }
+  return { lean_class: value.lean_class, rationale: value.rationale, evidence_ids: deduped, waste_kind: value.waste_kind }
+}
 function annotations(input, included) {
+  const evidence = evidenceView(input, included)
+  const evidenceById = new Map(evidence.map((entry) => [entry.evidence_id, entry]))
   const supplied = input.episodes === undefined ? [] : input.episodes
   requireFact(Array.isArray(supplied) && supplied.length <= 100, "Expected at most 100 episode annotations")
   const known = new Set(included.flatMap((f) => f.fact_ids))
   const seen = new Set()
+  const outcome = input.outcome === undefined ? { acceptance: "unassessed", status: "unknown", evidence_refs: [], artifact_refs: [] } : input.outcome
+  requireFact(object(outcome) && ["unassessed", "declared"].includes(outcome.acceptance) && ["unknown", "accepted", "not_accepted"].includes(outcome.status), "Invalid outcome annotation")
+  const outcomeEvidenceRefs = refs(outcome.evidence_refs)
+  requireFact(outcome.acceptance === "unassessed" ? outcome.status === "unknown" : outcomeEvidenceRefs.length > 0, "Outcome acceptance requires declared evidence; unassessed acceptance is unknown")
   const episodes = supplied.map((episode) => {
     requireFact(object(episode) && text(episode.episode_id) && text(episode.label) && ["declared", "inferred"].includes(episode.class) && !seen.has(episode.episode_id) && Array.isArray(episode.fact_ids) && episode.fact_ids.length > 0 && episode.fact_ids.length <= 100 && episode.fact_ids.every((id) => known.has(id)), "Invalid episode annotation or out-of-scope fact reference")
     seen.add(episode.episode_id)
@@ -353,18 +459,15 @@ function annotations(input, included) {
       episode_id: episode.episode_id, label: episode.label, class: episode.class,
       fact_ids: [...new Set(episode.fact_ids)].sort(), output_refs: refs(episode.output_refs), evidence_refs: refs(episode.evidence_refs),
       token_usage: unavailable("No supported exact usage-row attribution to episodes; no nearest-timestamp allocation"),
+      lean: episode.lean === undefined ? null : leanEntry(episode.lean, evidenceById, outcome, evidence, outcomeEvidenceRefs),
     }
   }).sort((a, b) => compare(a.episode_id, b.episode_id))
-  const outcome = input.outcome === undefined ? { acceptance: "unassessed", status: "unknown", evidence_refs: [], artifact_refs: [] } : input.outcome
-  requireFact(object(outcome) && ["unassessed", "declared"].includes(outcome.acceptance) && ["unknown", "accepted", "not_accepted"].includes(outcome.status), "Invalid outcome annotation")
-  const evidence_refs = refs(outcome.evidence_refs)
-  requireFact(outcome.acceptance === "unassessed" ? outcome.status === "unknown" : evidence_refs.length > 0, "Outcome acceptance requires declared evidence; unassessed acceptance is unknown")
-  return { episodes, outcome: { acceptance: outcome.acceptance, status: outcome.status, evidence_refs, artifact_refs: refs(outcome.artifact_refs) } }
+  return { evidence, episodes, outcome: { acceptance: outcome.acceptance, status: outcome.status, evidence_refs: outcomeEvidenceRefs, artifact_refs: refs(outcome.artifact_refs) } }
 }
 
 export function buildWorkProfile(bytes) {
   const input = parseSnapshot(bytes)
-  const binding = readBinding(input.binding)
+  const binding = readBinding(input.binding, input.binding_mode)
   const facts = deduplicate(input.facts)
   const root = lineage(facts, binding)
   const included = facts.filter(root.included)
@@ -373,7 +476,7 @@ export function buildWorkProfile(bytes) {
   return {
     schema_version: 1, kind: "desk_work_profile",
     source_snapshot_sha256: createHash("sha256").update(bytes).digest("hex"),
-    binding: { ...binding, class: "declared", canonical_ledger_identity: "unverified", evidence_fact_ids: root.proof },
+    binding: { ...binding, binding_mode: input.binding_mode ?? null, class: "declared", canonical_ledger_identity: "unverified", evidence_fact_ids: root.proof },
     coverage: {
       input_facts: input.facts.length, unique_facts: facts.length, duplicate_facts: input.facts.length - facts.length,
       included_facts: included.length, excluded_facts: facts.length - included.length,
@@ -384,6 +487,7 @@ export function buildWorkProfile(bytes) {
       parent_overhead: unavailable("Shared parent context and foreign workers are excluded"),
       independent_acceptance: unavailable("Supplied acceptance is an annotation, not independently assessed here"),
       causal_productivity: unavailable("Activity and usage do not establish causal productivity"),
+      native_action_classes: nativeActionClasses(included),
       note: "Coverage is limited to this explicit snapshot and bound native session. Missing endpoints are gaps, not zero durations. Source references are inert. Scope correction does not imply defect rework.",
     },
     observations: {
@@ -424,6 +528,8 @@ export function renderWorkProfile(profile, format) {
     if (!profile.episodes.length) rows.push("No episode annotations supplied; episode token usage is unavailable.", "")
     for (const episode of profile.episodes) {
       rows.push(`### ${escape(episode.label)}`, "", `Classification: ${escape(episode.class)}. Source facts: ${episode.fact_ids.length}; output references: ${episode.output_refs.length}. Token allocation: unavailable.`, "")
+      if (episode.lean) rows.push(`Lean: ${escape(episode.lean.lean_class.replaceAll("_", " "))}. Rationale: ${escape(episode.lean.rationale)}. Waste kind: ${escape((episode.lean.waste_kind ?? "none").replaceAll("_", " "))}. Evidence cited: ${episode.lean.evidence_ids.length}.`, "")
+      else rows.push("Lean classification: not supplied.", "")
     }
     rows.push("Scope correction is not automatically defect rework. Episode evidence and output references are preserved in the JSON output and the references below.", "", "## Activity summary", "", `Structurally bound agents: ${profile.observations.agents.length}. Facts: ${profile.coverage.included_facts} included, ${profile.coverage.excluded_facts} excluded, ${profile.coverage.duplicate_facts} duplicate imports.`, "")
     const operationTypes = { tool: "Tool calls", hook: "Hook callbacks", assistant_step: "Assistant steps" }
@@ -448,9 +554,23 @@ export function renderWorkProfile(profile, format) {
     ])
     rows.push("Transport success does not establish command success. A nonzero exit can be a probe result or a dependency failure; it is not automatically a product defect.", "", "## Selected native usage", "", escape(profile.observations.usage.scope), "", `Selected rows: ${profile.observations.usage.selected_rows}; source groups: ${profile.observations.usage.groups.length}. Unknown rows are not zero; the JSON output retains each group's dimensions and source identities.`, "")
     table(["Dimension", "Subtotal", "Known / selected", "Unit"], Object.entries(profile.observations.usage.dimensions).map(([name, dimension]) => [name.replaceAll("_", " "), dimension.value, `${dimension.known_rows} / ${dimension.known_rows + dimension.unknown_rows}`, dimension.unit.replaceAll("_", " ")]))
+    rows.push("### Typed evidence", "")
+    const evidenceList = profile.evidence ?? []
+    if (!evidenceList.length) rows.push("No typed evidence supplied.", "")
+    else {
+      table(["Evidence", "Role", "Claim", "Class", "Producer"], evidenceList.map((e) => [e.evidence_id, e.role.replaceAll("_", " "), e.claim_type.replaceAll("_", " "), e.class, e.producer.replaceAll("_", " ")]))
+      rows.push("Producer is a declared label, not attestation of independence; T28 verifies the source-native reviewer identity before any independent-assessment claim. Observed-at timestamps and refs are preserved in the JSON output.", "")
+    }
     rows.push(escape(profile.observations.usage.caution), "", "## Separate observations", "", `Completion aggregates: ${profile.observations.aggregates.length}. They may overlap selected usage, cover only an earlier interaction, and do not establish final job closure.`, "", `Compaction observations: ${profile.observations.compactions.length}. These are not added to usage rows; non-overlap is unproven and the native duration unit is unspecified. Exact quantities remain in the JSON output.`, "", `Assistant messages: ${profile.observations.assistant_messages}. Model calls: unavailable. ${escape(profile.observations.model_calls.reason)}`, "", "## Coverage limits", "", escape(profile.coverage.note), "")
     for (const name of ["full_job_usage", "parent_overhead", "independent_acceptance", "causal_productivity"]) rows.push(`- ${name.replaceAll("_", " ")}: unavailable. ${escape(profile.coverage[name].reason)}`)
-    rows.push(`- Critical path: unavailable. ${escape(profile.observations.critical_path.reason)}`, "", "## Binding and references", "", `Root agent: ${escape(profile.binding.root_agent_id)}`, "", `Native session: ${escape(profile.binding.native_session_id)}`, "", `Originating dispatch: ${escape(profile.binding.dispatch_tool_call_id)}`, "", `Declared work item: ${escape(profile.binding.work_item_id ?? "not supplied")}. Canonical ledger identity: ${escape(profile.binding.canonical_ledger_identity)}.`, "", `Declared task reference: ${escape(profile.binding.task_ref ?? "not supplied")}`, "", "### Event/source trail", "", `The JSON output with this input hash retains all ${profile.observations.events.length} deduplicated source records, fact-ID aliases, hashes, timestamps, rooted relationships and complete operation spans. This Markdown is a reading summary, not a replacement for that evidence.`, "")
+    rows.push(`- Critical path: unavailable. ${escape(profile.observations.critical_path.reason)}`, "", "### Native action class coverage", "")
+    const nativeActionClassEntries = Object.entries(profile.coverage.native_action_classes ?? {})
+    if (!nativeActionClassEntries.length) rows.push("Native action class coverage is not available in this historical profile.", "")
+    else {
+      table(["Native action class", "Status"], nativeActionClassEntries.map(([name, entry]) => [name.replaceAll("_", " "), entry.class === "measured" ? `measured (${entry.count})` : "coverage gap: not evidenced by the capture adapter"]))
+      rows.push("A coverage gap is an absent capture-adapter kind, not zero activity; only actual source records count toward a measured class.", "")
+    }
+    rows.push("## Binding and references", "", `Root agent: ${escape(profile.binding.root_agent_id)}`, "", `Native session: ${escape(profile.binding.native_session_id)}`, "", `Originating dispatch: ${escape(profile.binding.dispatch_tool_call_id)}`, "", `Binding mode: ${profile.binding.binding_mode ?? "unbound"}`, "", `Declared work item: ${escape(profile.binding.work_item_id ?? "not supplied")}. Canonical ledger identity: ${escape(profile.binding.canonical_ledger_identity)}.`, "", `Declared task reference: ${escape(profile.binding.task_ref ?? "not supplied")}`, "", "### Event/source trail", "", `The JSON output with this input hash retains all ${profile.observations.events.length} deduplicated source records, fact-ID aliases, hashes, timestamps, rooted relationships and complete operation spans. This Markdown is a reading summary, not a replacement for that evidence.`, "")
     references("Source references", profile.coverage.source_refs)
     references("Coverage references", profile.coverage.coverage_refs)
     references("Outcome evidence", profile.outcome.evidence_refs)

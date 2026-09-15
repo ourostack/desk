@@ -1,4 +1,7 @@
-// Private feedback store — the storage contract behind desk_feedback.
+// Private feedback store — the retained protected-storage contract for records
+// participants already hold. The qualitative feedback MCP route is retired; the
+// store stays readable, correctable and deletable by its owner, so its
+// operations are covered here rather than through a tool surface.
 //
 // Permission assertions exercise real directories and SQLite files. Fault injection covers creation errors and races without substituting permission proof.
 
@@ -443,3 +446,121 @@ for (const operation of ["mkdir", "writeFile"]) {
     }
   })
 }
+
+// ── Owner operations on preserved records ───────────────────────────────────
+//
+// These ran through the retired `desk_feedback` API. The operations themselves
+// are retained production code — an owner keeps the right to read back, correct
+// and destroy their own preserved words — so the storage suite owns their
+// coverage now. These are retained storage cases, not replacements that inflate
+// the count of the removed API's tests.
+
+test("private store corrects an entry only against the revision the owner read", async () => {
+  const fixture = await mkFeedbackFixture()
+  const restore = useStateHome(fixture.stateHome)
+  const binding = { deskRoot: fixture.deskRoot, person: "rowan" }
+  try {
+    const captured = await withPrivateStore(binding, (store) =>
+      store.capture({ text: "first wording", taskRef: null }))
+    assert.equal(captured.revision, 1)
+
+    const corrected = await withPrivateStore(binding, (store) => store.correct({
+      entryId: captured.entry_id,
+      expectedRevision: 1,
+      text: "confirmed replacement wording",
+    }))
+    assert.equal(corrected.revision, 2)
+    assert.equal(corrected.text, "confirmed replacement wording")
+    assert.equal(corrected.captured_at, captured.captured_at)
+
+    await assert.rejects(
+      () => withPrivateStore(binding, (store) => store.correct({
+        entryId: captured.entry_id,
+        expectedRevision: 1,
+        text: "written against a stale read",
+      })),
+      /changed since it was read \(expected_revision 1, current revision 2\)/u,
+    )
+
+    const settled = await withPrivateStore(binding, (store) => store.list({ limit: 20 }))
+    assert.deepEqual(settled.entries.map((entry) => entry.text), ["confirmed replacement wording"])
+  } finally {
+    restore()
+    await cleanup(fixture.base)
+  }
+})
+
+test("private store reports an unknown entry instead of a silent no-op", async () => {
+  const fixture = await mkFeedbackFixture()
+  const restore = useStateHome(fixture.stateHome)
+  const binding = { deskRoot: fixture.deskRoot, person: "rowan" }
+  try {
+    await withPrivateStore(binding, (store) => store.capture({ text: "kept", taskRef: null }))
+    await assert.rejects(
+      () => withPrivateStore(binding, (store) => store.correct({
+        entryId: "not-a-real-entry", expectedRevision: 1, text: "nothing to correct",
+      })),
+      /no feedback entry with entry_id not-a-real-entry/u,
+    )
+    await assert.rejects(
+      () => withPrivateStore(binding, (store) => store.remove({ entryId: "not-a-real-entry" })),
+      /no feedback entry with entry_id not-a-real-entry/u,
+    )
+    const kept = await withPrivateStore(binding, (store) => store.list({ limit: 20 }))
+    assert.equal(kept.total, 1)
+  } finally {
+    restore()
+    await cleanup(fixture.base)
+  }
+})
+
+test("private store removal drops the owner's words from the reopened file", async () => {
+  const fixture = await mkFeedbackFixture()
+  const restore = useStateHome(fixture.stateHome)
+  const binding = { deskRoot: fixture.deskRoot, person: "rowan" }
+  try {
+    const captured = await withPrivateStore(binding, (store) =>
+      store.capture({ text: "words the owner later withdrew", taskRef: null }))
+    const { dbPath } = await resolvePrivateStore(binding)
+    assert.equal(
+      (await fs.readFile(dbPath)).includes(Buffer.from(captured.text)),
+      true,
+      "the words must be present before removal for the absence check to mean anything",
+    )
+
+    const removed = await withPrivateStore(binding, (store) =>
+      store.remove({ entryId: captured.entry_id }))
+    assert.deepEqual(removed, { entry_id: captured.entry_id })
+
+    const reopened = await withPrivateStore(binding, (store) => store.list({ limit: 20 }))
+    assert.equal(reopened.total, 0)
+    assert.deepEqual(reopened.entries, [])
+    assert.equal((await fs.readFile(dbPath)).includes(Buffer.from(captured.text)), false)
+  } finally {
+    restore()
+    await cleanup(fixture.base)
+  }
+})
+
+test("private store pages preserved entries newest first and defaults the offset", async () => {
+  const fixture = await mkFeedbackFixture()
+  const restore = useStateHome(fixture.stateHome)
+  const binding = { deskRoot: fixture.deskRoot, person: "rowan" }
+  try {
+    for (const text of ["oldest", "middle", "newest"]) {
+      await withPrivateStore(binding, (store) => store.capture({ text, taskRef: null }))
+      await new Promise((resolve) => setTimeout(resolve, 2))
+    }
+    const firstPage = await withPrivateStore(binding, (store) => store.list({ limit: 2 }))
+    assert.equal(firstPage.total, 3)
+    assert.deepEqual(firstPage.entries.map((entry) => entry.text), ["newest", "middle"])
+
+    const secondPage = await withPrivateStore(binding, (store) =>
+      store.list({ limit: 2, offset: 2 }))
+    assert.equal(secondPage.total, 3)
+    assert.deepEqual(secondPage.entries.map((entry) => entry.text), ["oldest"])
+  } finally {
+    restore()
+    await cleanup(fixture.base)
+  }
+})
