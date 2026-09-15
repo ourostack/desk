@@ -68,6 +68,10 @@ export async function resolveSuperpowersContext(input) {
   if (requestedProgressPath !== null && !isPathContained(personPrefix(deskRoot, person), requestedProgressPath)) {
     throw new Error("Superpowers context: progressPath must be within the effective Desk scope")
   }
+  // Rulings follow the progress record, so another task's canonical state can never become this task's progress store.
+  if (requestedProgressPath !== null && !isPathContained(taskPath, requestedProgressPath)) {
+    throw new Error("Superpowers context: progressPath must be within taskPath")
+  }
   if (isPathContained(deskRoot, evidenceRoot)) {
     throw new Error("Superpowers context: evidenceRoot must be outside Desk")
   }

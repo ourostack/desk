@@ -115,6 +115,22 @@ test("omitted progress still prefers the existing iteration doing record over th
   assert.equal(output.rulingsPath, output.progressPath)
 })
 
+test("explicit provider progress in another task of the same person is refused", async () => {
+  const input = context()
+  const otherTask = path.join(input.deskRoot, "desks", "member", "track", "neighbour-outcome")
+  const otherIteration = path.join(otherTask, "repository", "2026-09-09-initial-impl")
+  const neighbour = context({ taskPath: otherTask, iterationPath: otherIteration, planPath: path.join(otherIteration, "planning.md") })
+  seedCanonicalFiles(neighbour)
+  const before = snapshotTree()
+  const resolveContext = await loadResolver()
+  for (const foreign of [path.join(otherIteration, "doing.md"), path.join(otherTask, "task.md")]) {
+    await assert.rejects(() => resolveContext({ ...input, progressPath: foreign }), {
+      message: "Superpowers context: progressPath must be within taskPath",
+    })
+  }
+  assert.deepEqual(snapshotTree(), before, "refusing a neighbouring task's canonical state must not rewrite it")
+})
+
 test("explicit provider progress in another person's desk is refused rather than written", async () => {
   const input = context()
   const foreignIteration = path.join(input.deskRoot, "desks", "other", "track", "outcome", "repository", "2026-09-09-initial-impl")

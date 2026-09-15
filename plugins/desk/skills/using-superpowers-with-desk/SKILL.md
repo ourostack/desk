@@ -44,7 +44,7 @@ Omit `--person` for a single-person Desk. Use the actually loaded, admitted Desk
 | Option | Meaning |
 | --- | --- |
 | `--plan-path` | Optional. A supplied plan must be an existing regular file within the Desk root; a shared cross-repository plan stays at its existing Desk planning path. Omit it for approved task-card-only work, which returns `planPath: null`. |
-| `--progress-path` | Optional. A supplied progress record must be an existing regular file within the effective person prefix, because progress and rulings are written. Omit it to select the iteration's existing `doing.md`, then the canonical `task.md`. |
+| `--progress-path` | Optional. A supplied progress record must be an existing regular file inside this task's own directory and within the effective person prefix, because progress and rulings are written. Omit it to select the iteration's existing `doing.md`, then the canonical `task.md`. |
 
 Apply the outputs in place of upstream SDD's path-producing helpers: `planPath` is the plan input or `null`; `progressPath` is the existing progress record and `rulingsPath` is derived from it, so a provider progress file never becomes a second ruling store and a legacy `doing.md` is never renamed; `briefPath`, `implementationReportPath`, `reviewPackagePath` and `reviewReportPath` are the explicit artifact destinations under the approved private evidence root. Produce the normal Superpowers brief and review contents at those paths with native file and diff tools. This changes storage binding, not the engineering method.
 
