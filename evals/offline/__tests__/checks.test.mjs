@@ -169,3 +169,10 @@ test("T14 missing archive/member identities cannot match through undefined equal
   for (const key of ["entrySha256", "sourceSha256", "committedSourceSha256", "packageSha256", "sourcePackageSha256", "committedPackageSha256"]) delete observation.archive[key];
   assert.equal(assessCheck({ definition, observation }).status, "unavailable");
 });
+
+test("T14 a completed failed installation is a product failure rather than missing installation evidence", () => {
+  const definition = definitions["external-consumer-works"];
+  const observation = positive(definition);
+  observation.installation.exitCode = 1;
+  assert.equal(assessCheck({ definition, observation }).status, "fail");
+});

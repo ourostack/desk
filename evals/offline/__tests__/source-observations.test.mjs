@@ -213,6 +213,38 @@ test("T14 source readback must not execute candidate Git clean filters in the pa
   assert.equal(observed.commitVerified, false);
   assert.equal(observed.sourceChanged, true);
 });
+
+test("T14 raw Git readback retains deleted, executable-mode and staged-only changes without refreshing the index", async () => {
+  const f = await fixtureFor("discussion-then-go");
+  fs.unlinkSync(path.join(f.actor, "src/policy.mjs"));
+  fs.chmodSync(path.join(f.actor, "baseline.test.mjs"), 0o700);
+  const filename = 'added\n"name.mjs';
+  fs.writeFileSync(path.join(f.actor, filename), "export const added=1;\n");
+  execFileSync("git", ["-C", f.actor, "add", "--", filename, "src/policy.mjs"]);
+  const before = listRegularFiles(f.actor);
+  const state = readSourceState({ root: f.actor, retain });
+  assert.equal(state.changes.find(row => row.path === "src/policy.mjs").observedSha256, null);
+  assert.ok(state.changes.some(row => row.path === "baseline.test.mjs"));
+  assert.ok(state.status.includes(`A  ${JSON.stringify(filename)}`));
+  assert.deepEqual(listRegularFiles(f.actor), before);
+  fs.unlinkSync(path.join(f.actor, filename));
+  assert.ok(readSourceState({ root: f.actor, retain }).status.includes(`A  ${JSON.stringify(filename)}`), "A staged addition cannot be hidden by deleting its working file");
+});
+
+test("T14 source inspection refuses redirected Git metadata before reading another store", async () => {
+  for (const redirect of ["commondir", "objects/info/alternates", "info/grafts", "gitfile"]) {
+    const f = await fixtureFor("discussion-then-go");
+    if (redirect === "gitfile") {
+      fs.renameSync(path.join(f.actor, ".git"), path.join(f.actor, ".saved-git"));
+      fs.writeFileSync(path.join(f.actor, ".git"), "gitdir: /not-the-subject\n");
+    } else {
+      const filename = path.join(f.actor, ".git", redirect);
+      fs.mkdirSync(path.dirname(filename), { recursive: true });
+      fs.writeFileSync(filename, "/not-the-subject\n");
+    }
+    assert.throws(() => readSourceState({ root: f.actor, retain }), { code: "CHECK_SOURCE_IDENTITY_UNAVAILABLE" });
+  }
+});
 test("source challenges and preservation keep observed writes and authority attempts separate from final bytes", async () => {
   const f = await fixtureFor();
   f.args.fixture.writeProbe = { filename: path.join(f.actor, "probe"), rawRef: retain("probe.json", {}) };
