@@ -205,10 +205,12 @@ test("the parent-only checker root is never mounted and the candidate receives o
 test("credential, loader and coverage environment cannot cross into candidate execution", async t => {
   const tree = roots("checker-env");
   const { options } = linuxLauncher(t, tree);
-  for (const name of ["NODE_OPTIONS", "NODE_PATH", "NODE_V8_COVERAGE", "LD_PRELOAD", "GITHUB_TOKEN", "EVAL_API_KEY", "STORE_PASSWORD"]) {
+  for (const name of ["NODE_OPTIONS", "NODE_PATH", "NODE_V8_COVERAGE", "LD_PRELOAD", "GITHUB_TOKEN", "EVAL_API_KEY", "STORE_PASSWORD", "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "AZURE_STORAGE_CONNECTION_STRING", "CI_JOB_TOKEN", "UNDECLARED_VARIABLE"]) {
     await assert.rejects(captureConfinedChecker({ ...options, env: { ...options.env, [name]: "injected" } }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" }, name);
   }
-  await assert.rejects(captureConfinedChecker({ ...options, env: { ...options.env, ORACLE_FILE: path.join(tree.checker, "oracle.test.mjs") } }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" });
+  const declared = await captureConfinedChecker({ ...options, env: { ...options.env, TMPDIR: tree.scratch, npm_config_audit: "false", EVAL_SUBJECT_SNAPSHOT: tree.subject } });
+  assert.equal(declared.exitCode, 0, "The declared allowlist still admits the checker's own execution environment");
+  await assert.rejects(captureConfinedChecker({ ...options, env: { ...options.env, CONFIG_FILE: path.join(tree.checker, "valid-config.json") } }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" });
   await assert.rejects(captureConfinedChecker({ ...options, cwd: tree.root }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" });
   await assert.rejects(captureConfinedChecker({ ...options, cwd: tree.checker }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" });
   await assert.rejects(captureConfinedChecker({ ...options, scratchRoot: tree.subject }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" });
@@ -270,6 +272,7 @@ test("source changed between capture points is not a frozen-input observation", 
   };
   const result = await captureConfinedChecker(options);
   assert.equal(result.availability.frozenInputs, false);
+  assert.equal(result.availability.frozenInputsScope, "endpoint-manifest-equality", "The fact names what it observed, not continuous immutability");
   assert.equal(result.availability.available, false);
   assert.notEqual(result.boundary.inputs.sourceManifestSha256, result.boundary.inputs.sourceManifestSha256After);
 });

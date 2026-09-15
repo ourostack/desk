@@ -4,9 +4,10 @@ import { createHash } from "node:crypto";
 import { absoluteRoot, canonicalJson, jsonBytes, listRegularFiles, overlaps, pathIdentities, plainObject, requireCondition, sha256 } from "./core.mjs";
 import { captureBoundedCommand } from "./output.mjs";
 
-// Loader, coverage and credential carriers never cross into candidate execution.
-const refusedEnvNames = new Set(["NODE_OPTIONS", "NODE_PATH", "NODE_V8_COVERAGE", "NODE_REPL_EXTERNAL_MODULE", "NODE_EXTRA_CA_CERTS", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN", "COPILOT_TOKEN"]);
-const refusedEnvPattern = /(^|_)(API_KEY|SECRET|SECRETS|PASSWORD|PASSPHRASE|CREDENTIAL|CREDENTIALS|PRIVATE_KEY|SESSION_KEY)$/u;
+// A strict allowlist: only these names may cross into candidate execution. Everything else — cloud, CI and provider
+// credentials, loader hooks, coverage preloads — is refused by default rather than enumerated.
+const allowedEnvNames = new Set(["HOME", "PATH", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "CONFIG_FILE", "EVAL_SUBJECT_SNAPSHOT", "CHECKER_CANARY_TOKEN"]);
+const allowedEnvPrefix = "npm_config_";
 
 function boundaryRequired(condition, message) {
   requireCondition(condition, "CHECKER_OS_BOUNDARY_REQUIRED", message);
@@ -76,7 +77,7 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
   const directory = absoluteRoot(cwd);
   boundaryRequired(candidateRoots.some(root => directory === root || directory.startsWith(`${root}${path.sep}`)), "The candidate working directory must be inside its mounted source, inputs or scratch root");
   for (const [name, value] of Object.entries(env)) {
-    boundaryRequired(!refusedEnvNames.has(name) && !refusedEnvPattern.test(name), `Environment ${name} cannot cross the candidate boundary`);
+    boundaryRequired(allowedEnvNames.has(name) || name.startsWith(allowedEnvPrefix), `Environment ${name} is not on the candidate boundary's allowlist`);
     boundaryRequired(!path.isAbsolute(value) || !overlaps(absoluteRoot(value), hidden), `Environment ${name} cannot name a held-out path`);
   }
   const runtimeRoot = path.dirname(path.dirname(fs.realpathSync(process.execPath)));
@@ -84,6 +85,8 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
   boundaryRequired(mounts.every(root => root !== "/" && [parentRoot, hidden, ...candidateRoots].every(other => !overlaps(root, other))), "Runtime mounts must be separate from all candidate, parent and checker inputs");
   fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
   pathIdentities(scratch);
+  // Mode 0700 stays usable inside the sandbox because bwrap maps this caller's uid onto the requested sandbox uid,
+  // so roots this process owns are owned by that uid in the namespace. Roots owned by another user are not usable.
   const before = { source: inputManifest(source), inputs: inputManifest(inputs) };
   const args = ["--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL", "--uid", "65534", "--gid", "65534", "--clearenv"];
   // bwrap closes this monitor-only descriptor in the sandbox child before exec.
@@ -104,6 +107,8 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
   // EOF on the monitor descriptor is the launcher's own teardown, not a PID name or process-group match.
   const namespaceClosed = result.status === "exited" && result.signal === null && result.captureComplete === true && statusPipeEof && execution.status === "observed";
   const facts = {
+    // Endpoint manifest equality across the run, not continuous immutability: it refuses inputs that differ at the
+    // capture points and cannot exclude a trusted-side writer that mutates and restores them mid-run.
     frozenInputs: before.source.sha256 !== null && before.source.sha256 === after.source.sha256 && before.inputs.sha256 === after.inputs.sha256 && (inputs === null || before.inputs.sha256 !== null),
     isolatedSourceAndInputsOnly: writable.length === 1 && writable[0] === scratch && readOnly.length === mounts.length + 1 + (inputs ? 1 : 0) && readOnly.includes(source) && (!inputs || readOnly.includes(inputs)),
     hiddenAssertionsNotMounted: [...readOnly, ...writable].every(root => !overlaps(root, hidden)) && !mountArgs.includes(hidden) && !mountArgs.includes(parentRoot),
@@ -119,7 +124,7 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
     // The launcher reports child exit, not a kernel exec event, assertion, identity or descendant proof.
     launcher: { path: launcher, sha256: launcherSha256, identityScope: "prelaunch-file-only", namespace: "user,mount,pid,network,ipc,uts", execution, nativeQualified: false },
     boundary: { readOnly, writable, hiddenRoots: [hidden, parentRoot], chdir: directory, inputs: { sourceManifestSha256: before.source.sha256, sourceManifestSha256After: after.source.sha256, inputsManifestSha256: before.inputs.sha256, inputsManifestSha256After: after.inputs.sha256 } },
-    availability: { ...facts, available: Object.values(facts).every(Boolean), rawRefs, scope: "observed-boundary-facts-not-attestation" },
+    availability: { ...facts, available: Object.values(facts).every(Boolean), rawRefs, scope: "observed-boundary-facts-not-attestation", frozenInputsScope: "endpoint-manifest-equality" },
   };
 }
 
