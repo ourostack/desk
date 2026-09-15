@@ -509,6 +509,7 @@ test("a linked receipt cannot smuggle in transcripts, usage rows or a price", as
 
     for (const smuggled of [
       { transcript: "the whole conversation" },
+      { facts: { key: "value" } },
       { events: [{ role: "assistant", content: "..." }] },
       { financial_cost: 12.5 },
       { cost_usd: 12.5 },
@@ -577,6 +578,204 @@ test("a linked receipt reports as declared evidence and never as measured usage"
     )
     assert.equal(item.model_time_ms.class, "unavailable")
     assert.equal(item.financial_cost.class, "unavailable")
+  } finally {
+    restore()
+    await cleanup(fixture.base)
+  }
+})
+
+// The seam T04 preserved is not limited to offline evaluation. An
+// independently checked online action profile is the same shape of thing —
+// evidence an owner holds outside Git, referenced here by a pointer and a
+// hash — so it is linked through the exact same route, against a canonical
+// task-bound item, and it reads back byte-for-byte through a real JSON
+// roundtrip rather than as a live in-process reference.
+test("an online action profile is linked as a declared pointer against a canonical-task-bound item", async () => {
+  const fixture = await mkLedgerFixture()
+  const restore = useHostEnv(fixture)
+  try {
+    await callTool({
+      deskRoot: fixture.deskRoot,
+      name: "task_create",
+      person: PERSON,
+      input: { track: "delivery", slug: "profile-task", title: "Profile task" },
+    })
+    const workItemId = await seedItem(fixture)
+    const committed = body(
+      await ledger({
+        deskRoot: fixture.deskRoot,
+        input: {
+          action: "commit",
+          work_item_id: workItemId,
+          outcome: "An outcome an online action profile can be linked against.",
+          scope: "The profiled action only.",
+          evidence: "Profile receipt attached to the task card.",
+          delivery_endpoint: "desks/rowan/delivery/profile-task/task.md",
+          operator_go: { by: "operator", at: "2026-09-08T18:00:00Z" },
+          task_ref: { track: "delivery", slug: "profile-task" },
+        },
+      }),
+    )
+    assert.equal(committed.status, "committed", committed.message ?? "")
+
+    const receiptValues = {
+      action: "link_evaluation_receipt",
+      work_item_id: workItemId,
+      measurement_kind: "online_action_profile",
+      receipt_ref: "private:synthetic-job/profile.json",
+      receipt_sha256: "a".repeat(64),
+      status: "captured",
+      availability: "available",
+    }
+
+    const before = body(
+      await ledger({ deskRoot: fixture.deskRoot, input: { action: "report", work_item_id: workItemId } }),
+    ).items[0]
+    assert.equal(before.evaluations.value.length, 0, "no receipt exists before this call")
+
+    const raw = await ledger({ deskRoot: fixture.deskRoot, input: receiptValues })
+    // Serialize and reparse the response the way a real caller would, over a
+    // real transport, so a field that only survives as a live in-process
+    // reference is caught rather than passing by accident.
+    const linked = JSON.parse(JSON.stringify(body(raw)))
+    assert.equal(linked.status, "evaluation_receipt_linked", linked.message ?? "")
+    assert.equal(linked.receipt.class, "declared")
+    assert.equal(linked.receipt.measurement_kind, "online_action_profile")
+    assert.equal(linked.receipt.receipt_ref, receiptValues.receipt_ref)
+    assert.equal(linked.receipt.receipt_sha256, receiptValues.receipt_sha256)
+    assert.equal(linked.receipt.status, "captured")
+    assert.equal(linked.receipt.availability, "available")
+
+    const inspected = body(
+      await ledger({ deskRoot: fixture.deskRoot, input: { action: "inspect", work_item_id: workItemId } }),
+    )
+    assert.equal(inspected.evaluation_receipts.length, 1)
+    const storedRow = inspected.evaluation_receipts[0]
+    assert.equal(storedRow.measurement_kind, "online_action_profile")
+    assert.equal(storedRow.receipt_ref, receiptValues.receipt_ref)
+    assert.equal(storedRow.receipt_sha256, receiptValues.receipt_sha256)
+    assert.equal(storedRow.status, "captured")
+    assert.equal(storedRow.availability, "available")
+
+    const reported = body(
+      await ledger({ deskRoot: fixture.deskRoot, input: { action: "report", work_item_id: workItemId } }),
+    ).items[0]
+    assert.equal(reported.evaluations.class, "declared")
+    assert.equal(reported.evaluations.value.length, 1)
+    assert.equal(reported.evaluations.value[0].measurement_kind, "online_action_profile")
+    assert.equal(
+      reported.tokens.class,
+      "unavailable",
+      "a declared profile pointer is not measured usage",
+    )
+    assert.equal(reported.financial_cost.class, "unavailable")
+  } finally {
+    restore()
+    await cleanup(fixture.base)
+  }
+})
+
+// Every red case the seam has to hold against, gathered in one place: an item
+// that was never intaken, an item that exists but in someone else's private
+// partition, an unknown kind, a structured value where the digest column can
+// only hold a scalar, and the raw evidence payloads the seam refuses under any
+// kind. Every one of these must leave the evaluations table exactly as it was.
+test("linking an online action profile refuses every malformed or foreign call and changes nothing", async () => {
+  const fixture = await mkLedgerFixture()
+  const restore = useHostEnv(fixture)
+  try {
+    const workItemId = await seedItem(fixture, PERSON)
+    const base = {
+      action: "link_evaluation_receipt",
+      measurement_kind: "online_action_profile",
+      receipt_ref: "private:synthetic-job/profile.json",
+      receipt_sha256: "f".repeat(64),
+      status: "captured",
+      availability: "available",
+    }
+
+    async function rowCount() {
+      const report = body(
+        await ledger({ deskRoot: fixture.deskRoot, input: { action: "report", work_item_id: workItemId } }),
+      ).items[0]
+      return report.evaluations.value.length
+    }
+
+    const initialCount = await rowCount()
+    assert.equal(initialCount, 0)
+
+    // Missing item: the work_item_id names nothing this ledger ever intook.
+    const missing = await ledger({
+      deskRoot: fixture.deskRoot,
+      input: { ...base, work_item_id: "11111111-2222-3333-4444-555555555555" },
+    })
+    assert.equal(missing.isError, true)
+    assert.match(body(missing).message, /not found|no work item/iu)
+
+    // Foreign owner: the item is real, but it belongs to a different person's
+    // private partition. It reads as absent, not as denied.
+    const foreign = await ledger({
+      deskRoot: fixture.deskRoot,
+      person: "quinn",
+      input: { ...base, work_item_id: workItemId },
+    })
+    assert.equal(foreign.isError, true)
+    assert.match(body(foreign).message, /not found|no work item/iu)
+
+    // Recording off: the capture route stops here, before any field is even
+    // considered, and the refusal names the real reason.
+    await ledger({ deskRoot: fixture.deskRoot, input: { action: "set_recording", enabled: false } })
+    const whileOff = await ledger({
+      deskRoot: fixture.deskRoot,
+      input: { ...base, work_item_id: workItemId },
+    })
+    assert.equal(whileOff.isError, true)
+    assert.match(body(whileOff).message, /recording (is )?disabled/iu)
+    await ledger({ deskRoot: fixture.deskRoot, input: { action: "set_recording", enabled: true } })
+
+    // A digest is a scalar column. An array or an object used to be accepted,
+    // stored as SQLite's own stringification, and echoed back in the shape it
+    // arrived in — so the response and the record disagreed about what had
+    // actually been written.
+    for (const badDigest of [["a".repeat(64)], { sha256: "a".repeat(64) }]) {
+      const arrayOrObject = await ledger({
+        deskRoot: fixture.deskRoot,
+        input: { ...base, work_item_id: workItemId, receipt_sha256: badDigest },
+      })
+      assert.equal(
+        arrayOrObject.isError,
+        true,
+        `receipt_sha256 must refuse ${Array.isArray(badDigest) ? "an array" : "an object"}`,
+      )
+      assert.match(body(arrayOrObject).message, /receipt_sha256/iu)
+    }
+
+    // An unknown measurement_kind is not a third owner this seam recognizes.
+    const unknownKind = await ledger({
+      deskRoot: fixture.deskRoot,
+      input: { ...base, work_item_id: workItemId, measurement_kind: "embedded_transcript" },
+    })
+    assert.equal(unknownKind.isError, true)
+    assert.match(body(unknownKind).message, /measurement_kind/iu)
+
+    // Raw transcript or facts payloads never ride in on any kind, online or
+    // offline — the seam is a pointer plus a hash, never a payload.
+    for (const smuggled of [
+      { transcript: "the whole conversation" },
+      { facts: { turns: 12 } },
+    ]) {
+      const refused = await ledger({
+        deskRoot: fixture.deskRoot,
+        input: { ...base, work_item_id: workItemId, ...smuggled },
+      })
+      assert.equal(refused.isError, true, `${Object.keys(smuggled)[0]} must not ride in on a receipt`)
+      assert.match(body(refused).message, /unknown input field/iu)
+    }
+
+    // Every one of the above was rejected before a write happened. Confirm it
+    // rather than infer it: the evaluations row count for this item is still
+    // exactly where it started.
+    assert.equal(await rowCount(), initialCount, "a rejected call must leave zero new rows behind")
   } finally {
     restore()
     await cleanup(fixture.base)

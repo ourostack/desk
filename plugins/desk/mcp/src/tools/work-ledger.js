@@ -81,6 +81,13 @@ const REQUIRES_ITEM = new Set([
 // substituted.
 const LINK_RELATIONS = new Set(["child", "parent", "follow_on", "related", "depends_on"])
 
+// The seam is a pointer plus a hash, never a payload, regardless of which kind
+// of independently held evidence it points at. Adding a kind here is adding
+// another owner who is trusted to hold their own artefact and hand over a
+// reference to it — not a new place for a transcript, a profile, or a price to
+// ride in.
+const MEASUREMENT_KINDS = new Set(["offline_evaluation", "online_action_profile"])
+
 // Fields an owner may correct: the ones a person declared. A measured
 // observation is what a source said, and no correction may edit it into saying
 // something else.
@@ -729,14 +736,17 @@ const ROUTES = {
   },
 
   link_evaluation_receipt: ({ db, values, item }) => {
-    // A reference, never a payload. The evaluation owner keeps its own
-    // artefacts; this records that they exist and what they claimed.
+    // A reference, never a payload. The evaluation or profile owner keeps
+    // their own artefacts, independently checked and held outside Git; this
+    // records only that one exists, what it claimed, and a hash to check it
+    // against — never the profile itself.
     const kind = requireText(values, "measurement_kind")
-    if (kind !== "offline_evaluation") {
+    if (!MEASUREMENT_KINDS.has(kind)) {
       throw new Error(
         `${LABEL}: measurement_kind ${JSON.stringify(kind)} is not accepted — this seam ` +
-          `records offline_evaluation receipts only. Feedback and package diagnostics ` +
-          `are not online evaluation, and this ledger is not an assessment engine.`,
+          `records ${[...MEASUREMENT_KINDS].join(" or ")} receipts only. Feedback and ` +
+          `package diagnostics are not measurement, and this ledger is not an ` +
+          `assessment engine.`,
       )
     }
     const receiptRef = requireText(values, "receipt_ref")
