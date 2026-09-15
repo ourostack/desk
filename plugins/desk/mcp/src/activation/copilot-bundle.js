@@ -32,7 +32,7 @@ export function buildCopilotBundle({ activation }) {
   const plainLanguageDependency = activation.dependencies.find((dependency) => (
     dependency.id === "plain-language"
   ))
-  const includesPonytail = selectedDependencyIds(activation).includes("ponytail-upstream")
+  const includesPonytail = copilotIncludesPonytail(activation)
   const ponytailDependency = includesPonytail
     ? activation.dependencies.find((dependency) => dependency.id === "ponytail-upstream")
     : undefined
@@ -106,7 +106,7 @@ export function validateCopilotPackagingContract(input) {
   const methodLabel = methodId === "superpowers" ? "Superpowers" : "Work Suite"
   const methodPlugin = asObject(input?.[methodId === "superpowers" ? "superpowersPlugin" : "workSuitePlugin"])
   const plainLanguagePlugin = asObject(input?.plainLanguagePlugin)
-  const includesPonytail = selectedDependencyIds(activation).includes("ponytail-upstream")
+  const includesPonytail = copilotIncludesPonytail(activation)
   const ponytailPlugin = asObject(input?.ponytailPlugin)
   const activationDependencies = Array.isArray(activation.dependencies)
     ? activation.dependencies
@@ -194,6 +194,23 @@ export function validateCopilotPackagingContract(input) {
 function selectedDependencyIds(activation) {
   const target = activation?.provides?.activation_targets?.find((entry) => entry.id === "desk:worker")
   return Array.isArray(target?.depends_on) ? target.depends_on : []
+}
+
+// desk:worker.depends_on absent entirely (as opposed to present-but-not-listing-Ponytail)
+// is the characterized pre-V2 legacy shape: an activation manifest with no explicit
+// selection retains the historical four-root closure including Ponytail unconditionally.
+// An explicit selection (any array, even a partial/empty one) means the depends_on
+// content alone decides Ponytail inclusion -- that's the actual V2 selection contract.
+function hasExplicitSelection(activation) {
+  const target = activation?.provides?.activation_targets?.find((entry) => entry.id === "desk:worker")
+  return Array.isArray(target?.depends_on)
+}
+
+function copilotIncludesPonytail(activation) {
+  if (!hasExplicitSelection(activation)) {
+    return true
+  }
+  return selectedDependencyIds(activation).includes("ponytail-upstream")
 }
 
 function copilotMethod(activation) {
