@@ -235,6 +235,7 @@ test("every path the status routing calls relevant also starts the public workfl
     "scripts/skill-evals.cjs", "scripts/test-skill-evals.cjs",
     ".github/workflows/desk-mcp-tests.yml", ".github/workflows/validate-skills.yml",
     "plugins/desk/mcp/src/index.js", "plugins/desk/mcp/package.json", "plugins/desk/mcp/package-lock.json", "upstream-sources.lock.json",
+    "tools/example/package.json", "tools/example/package-lock.json",
     "plugins/desk/principles.md", "plugins/desk/skills/start-task/SKILL.md", "skills/work-doer/SKILL.md",
     "worker/README.md", "manifest.json", "AGENTS.md", "CLAUDE.md",
   ];

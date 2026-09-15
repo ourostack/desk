@@ -223,11 +223,13 @@ function reconcileResult({ value, candidate, trusted, fingerprint }) {
     return { disposition: "HISTORY_GAP", revision: observed };
   }
   const cells = new Set();
+  const attemptIds = new Set();
   for (const entry of history) {
-    if (!exactly(entry, ["attemptId", "cellId", "status", "published"]) || !boundedText(entry.attemptId, 256) || !boundedText(entry.cellId, 256) || !hasText(entry.status) || typeof entry.published !== "boolean" || cells.has(entry.cellId)) {
+    if (!exactly(entry, ["attemptId", "cellId", "status", "published"]) || !boundedText(entry.attemptId, 256) || !boundedText(entry.cellId, 256) || !hasText(entry.status) || typeof entry.published !== "boolean" || cells.has(entry.cellId) || attemptIds.has(entry.attemptId)) {
       return { disposition: "HISTORY_GAP", revision: observed };
     }
     cells.add(entry.cellId);
+    attemptIds.add(entry.attemptId);
   }
   if (history.some((entry) => entry.status === "cancelled")) return { disposition: "CANCELLED", revision: observed };
   if (history.some((entry) => !gradedAttemptStatuses.has(entry.status))) return { disposition: "RUNTIME_FAILURE", revision: observed };

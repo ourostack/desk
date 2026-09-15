@@ -436,6 +436,7 @@ try {
       (value) => { value.attemptStatuses[0].cellId = " "; },
       (value) => { value.attemptStatuses[0].status = ""; },
       (value) => { value.attemptStatuses[1].cellId = "cell-1"; },
+      (value) => { value.attemptStatuses[1].attemptId = "attempt-1"; },
       // An attempt that reached a gradable status but was never committed is lost evidence, not a grade.
       (value) => { value.attemptStatuses[0].published = false; },
       (value) => { value.attemptStatuses[1].published = "yes"; },
