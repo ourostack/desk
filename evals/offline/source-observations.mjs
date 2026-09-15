@@ -194,8 +194,10 @@ function reviewReadback(review, readArtifact) {
   // Explicit native execution failures or missing completion are unavailable evidence, not integrity or parsing errors.
   if (!execution.drainedFully || execution.failure) return null;
   const result = execution.result;
-  requireCondition(plainObject(result) && plainObject(result.result) && Number.isInteger(result.result.code) && (result.result.signal === null || typeof result.result.signal === "string") && Array.isArray(result.survived) && Array.isArray(result.unverified), "REVIEW_READBACK_INVALID", "Native reviewer completion is malformed");
-  if (result.result.code !== 0 || result.result.signal !== null || result.cleanupError || result.timedOut || result.survived.length !== 0 || result.unverified.length !== 0) return null;
+  requireCondition(plainObject(result) && plainObject(result.result)
+    && (Number.isInteger(result.result.code) && result.result.signal === null || result.result.code === null && typeof result.result.signal === "string")
+    && Array.isArray(result.survived) && Array.isArray(result.unverified), "REVIEW_READBACK_INVALID", "Native reviewer completion is malformed");
+  if (result.result.code !== 0 || result.cleanupError || result.timedOut || result.survived.length !== 0 || result.unverified.length !== 0) return null;
   const text = bytes.toString("utf8").trimEnd();
   if (!text) return null;
   const events = text.split("\n").map(line => parseReviewJson(Buffer.from(line)));

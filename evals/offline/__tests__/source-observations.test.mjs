@@ -234,13 +234,13 @@ test("T14-fix I3 native reviewer session digest tampering does not become absent
 
 test("T14-fix I3 complete native identities distinguish missing completion from malformed history", async t => {
   const f = await fixtureFor("review-recovery-state");
-  for (const [mode, code] of [["missing-session", null], ["not-drained", null], ["exit-failure", null], ["empty-session", null], ["no-output", null], ["malformed-history", "REVIEW_READBACK_INVALID"], ["wrong-session", "REVIEW_READBACK_CHANGED"], ["malformed-completion", "REVIEW_READBACK_INVALID"], ["malformed-execution", "REVIEW_READBACK_INVALID"]]) await t.test(mode, () => {
+  for (const [mode, code] of [["missing-session", null], ["not-drained", null], ["execution-failure", null], ["exit-failure", null], ["signal", null], ["empty-session", null], ["no-output", null], ["malformed-history", "REVIEW_READBACK_INVALID"], ["wrong-session", "REVIEW_READBACK_CHANGED"], ["malformed-completion", "REVIEW_READBACK_INVALID"], ["malformed-execution", "REVIEW_READBACK_INVALID"], ["malformed-failure", "REVIEW_READBACK_INVALID"]]) await t.test(mode, () => {
     const artifacts = new Map();
     const put = (name, value) => { const bytes = jsonBytes(value); artifacts.set(name, bytes); return { path: name, sha256: sha256(bytes) }; };
     const events = [{ type: "session.start", data: { sessionId: mode === "wrong-session" ? "other" : "reviewer" } }, { type: "assistant.message", data: { content: "reviewed" } }];
     const bytes = mode === "empty-session" ? Buffer.alloc(0) : mode === "malformed-history" ? Buffer.from("{") : Buffer.from((mode === "no-output" ? events.slice(0, 1) : events).map(event => JSON.stringify(event)).join("\n") + "\n");
     const sessionRef = put("session.json", { base64: bytes.toString("base64"), sha256: sha256(bytes) });
-    const native = { sha: "a".repeat(40), sessionId: "subject", argv: ["review"], outputBase64: "", drainedFully: mode === "malformed-execution" ? "yes" : mode !== "not-drained", failure: null, result: { result: mode === "malformed-completion" ? null : { code: mode === "exit-failure" ? 1 : 0, signal: null }, survived: [], unverified: [] } };
+    const native = { sha: "a".repeat(40), sessionId: "subject", argv: ["review"], outputBase64: "", drainedFully: mode === "malformed-execution" ? "yes" : mode !== "not-drained", failure: mode === "execution-failure" ? { code: "REVIEW_RUNTIME_FAILURE" } : mode === "malformed-failure" ? true : null, result: { result: mode === "malformed-completion" ? null : mode === "signal" ? { code: null, signal: "SIGTERM" } : { code: mode === "exit-failure" ? 1 : 0, signal: null }, survived: [], unverified: [] } };
     const executionRef = put("execution.json", native);
     const admissionRef = put("admission.json", { record: { sha: native.sha, reviewerSessionId: "reviewer", rawRef: sessionRef, outputSha256: sha256(""), argv: native.argv }, admitted: { admitted: true, findings: [] }, rawRef: executionRef });
     const review = { turnIndex: 1, sessionId: "subject", admissionRef, result: { textResultForLlm: JSON.stringify({ rawRef: executionRef }) } };
