@@ -45,7 +45,8 @@ export function testCheckerPreflight() {
     checks: { isolation: true, hiddenAssertionsSeparated: true, boundedCapture: true, namespaceCleanup: true, frozenIdentities: true },
     evidenceRefs,
   };
-  const expected = { identities: observe(), readEvidence: name => readRegular(evidence, name).bytes };
+  // `observeIdentities` is re-read at every admission boundary, so a mid-run source/controller/launcher change refuses.
+  const expected = { identities: observe(), observeIdentities: observe, readEvidence: name => readRegular(evidence, name).bytes };
   // Mutators return a fresh receipt/expected pair so a negative never edits the retained positive control.
   return {
     root, source, controller, evidence, launcher, receipt, expected, observe,

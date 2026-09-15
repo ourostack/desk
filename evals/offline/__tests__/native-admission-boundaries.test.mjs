@@ -50,7 +50,23 @@ for (const [label, mutate] of [
   const f = testCheckerPreflight();
   assert.equal(requireTrustedChecker({ preflight: f.receipt, expected: f.expected }), true);
   mutate(f);
+  // The parent's own observer is re-read at this boundary, so the frozen declared snapshot cannot carry the change.
+  assert.throws(() => requireTrustedChecker({ preflight: f.receipt, expected: f.expected }), qualified);
   assert.throws(() => requireTrustedChecker({ preflight: f.receipt, expected: { ...f.expected, identities: f.observe() } }), qualified);
+});
+test("a declared identity snapshot without an observer still admits, and a malformed observation refuses", () => {
+  const f = testCheckerPreflight();
+  assert.equal(requireTrustedChecker({ preflight: f.receipt, expected: { identities: f.expected.identities, readEvidence: f.expected.readEvidence } }), true);
+  for (const observeIdentities of [() => ({}), () => ({ ...f.expected.identities, runtimeSha256: "NOT-HEX" }), () => ({ ...f.expected.identities, launcherSha256: "e".repeat(64) })]) {
+    assert.throws(() => requireTrustedChecker({ preflight: f.receipt, expected: { ...f.expected, observeIdentities } }), qualified);
+  }
+});
+test("an evidence reader fault is a host failure, not a qualification answer", () => {
+  const f = testCheckerPreflight();
+  const fault = Object.assign(new Error("Synthetic host storage fault"), { code: "EIO" });
+  assert.throws(() => requireTrustedChecker({ preflight: f.receipt, expected: { ...f.expected, readEvidence: () => { throw fault; } } }), error => error === fault);
+  const bug = new TypeError("Synthetic reader defect");
+  assert.throws(() => requireTrustedChecker({ preflight: f.receipt, expected: { ...f.expected, readEvidence: () => { throw bug; } } }), error => error === bug);
 });
 test("a stale receipt whose identities no longer equal freshly observed identities is refused", () => {
   const f = testCheckerPreflight();

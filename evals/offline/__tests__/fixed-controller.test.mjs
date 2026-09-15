@@ -67,6 +67,17 @@ test("an admitted preflight that changes between open and use withholds the case
   await assert.rejects(runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
   assert.equal(f.closes, 1);
 });
+test("a checker identity that changes during a live case refuses at the next boundary", async () => {
+  const f = await controllerFixture("checker-is-enforced");
+  const original = f.input.subjectBeforeSend;
+  f.input.subjectBeforeSend = async context => {
+    // The held-out controller root changes while the acquired owner is still live.
+    f.preflight.mutateController();
+    return original(context);
+  };
+  await assert.rejects(runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
+  assert.equal(f.closes, 1);
+});
 test("an unshaped preflight context is refused without being frozen into a campaign", async () => {
   const f = await controllerFixture();
   let acquisition = 0;

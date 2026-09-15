@@ -250,6 +250,9 @@ export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, check
 // rehashes every evidence reference, so a receipt admitted at one boundary cannot carry a later mutated one.
 const identityNames = ["controllerSha256", "runtimeSha256", "launcherSha256", "sourceManifestSha256"];
 const preflightChecks = ["isolation", "hiddenAssertionsSeparated", "boundedCapture", "namespaceCleanup", "frozenIdentities"];
+// Absence-shaped reads are a qualification answer. Any other reader fault is a host failure and is propagated with
+// its original cause so an unreadable disk can never be reported as missing or mutated qualification evidence.
+const evidenceAbsence = new Set(["ENOENT", "ENOTDIR", "ELOOP", "INVALID_PATH", "LINK_NOT_ALLOWED", "REGULAR_FILE_REQUIRED", "FILE_CHANGED", "FILE_TOO_LARGE"]);
 const admissionRequired = (condition, detail) => requireCondition(condition, "NATIVE_QUALIFICATION_REQUIRED", `NATIVE_QUALIFICATION_REQUIRED: ${detail}. Behavioral observations do not qualify their producer.`);
 
 export function requireTrustedChecker(context) {
@@ -258,10 +261,15 @@ export function requireTrustedChecker(context) {
   admissionRequired(plainObject(preflight) && plainObject(expected), "Native admission requires the parent-owned checker preflight receipt and its freshly observed expected identities");
   admissionRequired(typeof expected.readEvidence === "function", "The parent must supply its own evidence reader so every retained reference is read and hash-verified before admission");
   admissionRequired(exactKeys(expected.identities, identityNames) && identityNames.every(name => hashString(expected.identities[name])), "Expected checker identities must be exactly the four lowercase 64-hex source, runtime, launcher and controller digests");
+  // A declared identity set is a snapshot. When the parent supplies its observer, the digests are read again here so
+  // a source, controller, runtime or launcher that changed after binding refuses at the next boundary.
+  const observed = typeof expected.observeIdentities === "function" ? expected.observeIdentities() : expected.identities;
+  admissionRequired(exactKeys(observed, identityNames) && identityNames.every(name => hashString(observed[name])), "Freshly observed checker identities must be exactly the four lowercase 64-hex digests");
+  admissionRequired(identityNames.every(name => observed[name] === expected.identities[name]), "The freshly observed identities differ from the parent's declared expected identities");
   admissionRequired(preflight.schemaVersion === 1 && preflight.claimScope === "behavioral_outcome", "Only a schema-1 behavioral-outcome preflight is admissible; a widened claim scope is not native authenticity");
   admissionRequired(preflight.status === "available", "The parent preflight did not observe an available checker boundary");
   admissionRequired(exactKeys(preflight.identities, identityNames) && identityNames.every(name => hashString(preflight.identities[name])), "The preflight must carry exactly the four lowercase 64-hex frozen identities");
-  admissionRequired(identityNames.every(name => preflight.identities[name] === expected.identities[name]), "The preflight identities differ from the freshly observed source, runtime, launcher and controller identities");
+  admissionRequired(identityNames.every(name => preflight.identities[name] === observed[name]), "The preflight identities differ from the freshly observed source, runtime, launcher and controller identities");
   admissionRequired(exactKeys(preflight.checks, preflightChecks) && preflightChecks.every(name => preflight.checks[name] === true), "Isolation, held-out separation, bounded capture, namespace cleanup and frozen identities must all be observed true");
   admissionRequired(Array.isArray(preflight.evidenceRefs) && preflight.evidenceRefs.length > 0 && preflight.evidenceRefs.length <= 4096, "An available preflight must retain a bounded, nonempty set of raw evidence references");
   for (const ref of preflight.evidenceRefs) {
@@ -270,7 +278,9 @@ export function requireTrustedChecker(context) {
     try {
       relativeName(ref.path);
       bytes = expected.readEvidence(ref.path);
-    } catch { bytes = null; }
+    } catch (error) {
+      if (!evidenceAbsence.has(error.code)) throw error;
+    }
     admissionRequired(Buffer.isBuffer(bytes) && sha256(bytes) === ref.sha256, "A preflight evidence reference is absent, truncated or no longer matches its retained digest");
   }
   return true;
