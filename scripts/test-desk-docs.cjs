@@ -405,6 +405,60 @@ function validateMcpReadmeToolSurface(errors, {
   if (/\b(?:12|13)\s+tools?\b/u.test(body)) {
     errors.push("plugins/desk/mcp/README.md must not contain stale 12/13 tool counts");
   }
+  // A count and a "mentioned somewhere" check both pass while the enumerated
+  // list quietly drifts, so compare the names the list actually enumerates.
+  const enumerated = enumeratedReadmeTools(body);
+  const missing = tools.filter((tool) => !enumerated.includes(tool));
+  if (missing.length) {
+    errors.push(`plugins/desk/mcp/README.md must enumerate ${missing.join(", ")} in its tool list`);
+  }
+  const unexpected = enumerated.filter((name) => !tools.includes(name));
+  if (unexpected.length) {
+    errors.push(`plugins/desk/mcp/README.md enumerates ${unexpected.join(", ")}, which is not an exposed tool`);
+  }
+}
+
+function readmeToolSection(body) {
+  const start = body.indexOf("## Tools exposed");
+  if (start === -1) return "";
+  const section = body.slice(start);
+  const next = section.indexOf("\n## ");
+  return next === -1 ? section : section.slice(0, next);
+}
+
+function enumeratedReadmeTools(body) {
+  return [...new Set(
+    [...readmeToolSection(body).matchAll(/`([a-z][a-z_]*)`/gu)].map((entry) => entry[1]),
+  )];
+}
+
+function deskMcpRegistryToolNames(readFile) {
+  const source = readFile("plugins/desk/mcp/src/tool-names.js");
+  const match = source.match(/export\s+const\s+TOOL_NAMES\s*=\s*\[([\s\S]*?)\]/u);
+  if (!match) return [];
+  return [...match[1].matchAll(/"([^"]+)"/gu)].map((entry) => entry[1]);
+}
+
+// The documented surface is a copy of the registry, and a copy drifts. Compare
+// them directly so a tool that is added or retired in `tool-names.js` cannot
+// stay undocumented — or stay documented after it is gone.
+function validateMcpToolRegistrySurface(errors, {
+  readFile = (file) => readRepoFile(file),
+  tools = MCP_TOOL_NAMES,
+} = {}) {
+  const registry = deskMcpRegistryToolNames(readFile);
+  if (!registry.length) {
+    errors.push("plugins/desk/mcp/src/tool-names.js must export a readable TOOL_NAMES registry");
+    return;
+  }
+  const undocumented = registry.filter((name) => !tools.includes(name));
+  if (undocumented.length) {
+    errors.push(`the documented MCP tool surface is missing registered tool(s) ${undocumented.join(", ")}`);
+  }
+  const retired = tools.filter((name) => !registry.includes(name));
+  if (retired.length) {
+    errors.push(`the documented MCP tool surface names unregistered tool(s) ${retired.join(", ")}`);
+  }
 }
 
 function validateBrowserFocusPolicy(errors, {
@@ -523,6 +577,7 @@ function validateAll({
   validateWorkflowWiring(errors, { requirements: workflowRequirements, readFile });
   validateHealthyPathLanguage(errors, { docs, readFile, repoRoot });
   validateMcpReadmeToolSurface(errors, { readFile });
+  validateMcpToolRegistrySurface(errors, { readFile });
   validateBrowserFocusPolicy(errors, { readFile });
   validatePrivacyNotes(errors, { docs: privacyRequiredDocs, readFile });
   validateTopicCoverage(errors, { requirements: topicRequirements, readFile, repoRoot });
@@ -574,6 +629,7 @@ module.exports = {
   validateHealthyPathLanguage,
   validateHealthyPathRecord,
   validateMcpReadmeToolSurface,
+  validateMcpToolRegistrySurface,
   validatePrivacyNotes,
   validateTopicCoverage,
   validateValidatorFixtures,

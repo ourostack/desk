@@ -29,6 +29,10 @@ function assertPasses(text, headingPath = [], options = {}) {
   assert.deepEqual(errorsFor(text, headingPath, options), [])
 }
 
+function toolNamesSource(tools = docsValidator.MCP_TOOL_NAMES) {
+  return `export const TOOL_NAMES = [\n${tools.map((tool) => `  "${tool}",`).join("\n")}\n]\n`
+}
+
 function mcpReadmeBody(tools = docsValidator.MCP_TOOL_NAMES) {
   return [
     `## Tools exposed (${tools.length})`,
@@ -49,6 +53,7 @@ test("Desk docs validator exports a testable contract", () => {
     "validateHealthyPathRecord",
     "validatePrivacyNotes",
     "validateMcpReadmeToolSurface",
+    "validateMcpToolRegistrySurface",
     "validateTopicCoverage",
     "validateValidatorFixtures",
     "validateWorkflowWiring",
@@ -177,7 +182,51 @@ test("MCP README validation locks the advertised tool surface", () => {
   assert.ok(staleErrors.some((error) => error.includes("advertise 1 exposed tools")))
   assert.ok(staleErrors.some((error) => error.includes("state all 1 tools are wired")))
   assert.ok(staleErrors.some((error) => error.includes("must list desk_status")))
+  assert.ok(staleErrors.some((error) => error.includes("must enumerate desk_status in its tool list")))
   assert.ok(staleErrors.some((error) => error.includes("stale 12/13 tool counts")))
+
+  const extraErrors = []
+  docsValidator.validateMcpReadmeToolSurface(extraErrors, {
+    tools: ["desk_status"],
+    readFile: () => mcpReadmeBody(["desk_status", "desk_retired"]).replace("(2)", "(1)").replace("All 2", "All 1"),
+  })
+  assert.ok(extraErrors.some((error) => error.includes("enumerates desk_retired, which is not an exposed tool")))
+})
+
+test("MCP tool documentation is compared against the registry rather than a private copy", () => {
+  const matched = []
+  docsValidator.validateMcpToolRegistrySurface(matched, {
+    tools: ["desk_status", "desk_search"],
+    readFile: () => toolNamesSource(["desk_status", "desk_search"]),
+  })
+  assert.deepEqual(matched, [])
+
+  const drifted = []
+  docsValidator.validateMcpToolRegistrySurface(drifted, {
+    tools: ["desk_status", "desk_feedback"],
+    readFile: () => toolNamesSource(["desk_status", "desk_work_ledger"]),
+  })
+  assert.ok(drifted.some((error) => error.includes("missing registered tool(s) desk_work_ledger")))
+  assert.ok(drifted.some((error) => error.includes("unregistered tool(s) desk_feedback")))
+
+  const unreadable = []
+  docsValidator.validateMcpToolRegistrySurface(unreadable, {
+    tools: ["desk_status"],
+    readFile: () => "// no registry here\n",
+  })
+  assert.deepEqual(unreadable, [
+    "plugins/desk/mcp/src/tool-names.js must export a readable TOOL_NAMES registry",
+  ])
+
+  const headless = []
+  docsValidator.validateMcpReadmeToolSurface(headless, {
+    tools: [],
+    readFile: () => "no tool section at all",
+  })
+  assert.deepEqual(headless, [
+    "plugins/desk/mcp/README.md must advertise 0 exposed tools",
+    "plugins/desk/mcp/README.md must state all 0 tools are wired",
+  ])
 })
 
 test("browser focus validation requires background targets and rejects active-tab recipes", () => {
@@ -216,6 +265,7 @@ test("run and startCli expose success, failure, and no-op CLI paths", () => {
       }],
       readFile: (file) => {
         if (file === "plugins/desk/mcp/README.md") return mcpReadmeBody()
+        if (file === "plugins/desk/mcp/src/tool-names.js") return toolNamesSource()
         if (file === "plugins/desk/skills/cdp-headed-browser/SKILL.md") return "Target.createTarget({ url, background: true })"
         return file.endsWith(".yml") ? workflowBody : goodBody
       },
