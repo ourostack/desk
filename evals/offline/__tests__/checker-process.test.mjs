@@ -205,7 +205,7 @@ test("the parent-only checker root is never mounted and the candidate receives o
 test("credential, loader and coverage environment cannot cross into candidate execution", async t => {
   const tree = roots("checker-env");
   const { options } = linuxLauncher(t, tree);
-  for (const name of ["NODE_OPTIONS", "NODE_PATH", "NODE_V8_COVERAGE", "LD_PRELOAD", "GITHUB_TOKEN", "EVAL_API_KEY", "STORE_PASSWORD", "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "AZURE_STORAGE_CONNECTION_STRING", "CI_JOB_TOKEN", "UNDECLARED_VARIABLE"]) {
+  for (const name of ["NODE_OPTIONS", "NODE_PATH", "NODE_V8_COVERAGE", "LD_PRELOAD", "GITHUB_TOKEN", "EVAL_API_KEY", "STORE_PASSWORD", "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "AZURE_STORAGE_CONNECTION_STRING", "CI_JOB_TOKEN", "UNDECLARED_VARIABLE", "npm_config_//registry.npmjs.org/:_authToken", "npm_config_registry"]) {
     await assert.rejects(captureConfinedChecker({ ...options, env: { ...options.env, [name]: "injected" } }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" }, name);
   }
   const declared = await captureConfinedChecker({ ...options, env: { ...options.env, TMPDIR: tree.scratch, npm_config_audit: "false", EVAL_SUBJECT_SNAPSHOT: tree.subject } });

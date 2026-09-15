@@ -6,8 +6,7 @@ import { captureBoundedCommand } from "./output.mjs";
 
 // A strict allowlist: only these names may cross into candidate execution. Everything else — cloud, CI and provider
 // credentials, loader hooks, coverage preloads — is refused by default rather than enumerated.
-const allowedEnvNames = new Set(["HOME", "PATH", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "CONFIG_FILE", "EVAL_SUBJECT_SNAPSHOT", "CHECKER_CANARY_TOKEN"]);
-const allowedEnvPrefix = "npm_config_";
+const allowedEnvNames = new Set(["HOME", "PATH", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE", "CONFIG_FILE", "EVAL_SUBJECT_SNAPSHOT", "CHECKER_CANARY_TOKEN", "npm_config_cache", "npm_config_userconfig", "npm_config_audit", "npm_config_fund"]);
 
 function boundaryRequired(condition, message) {
   requireCondition(condition, "CHECKER_OS_BOUNDARY_REQUIRED", message);
@@ -77,7 +76,7 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
   const directory = absoluteRoot(cwd);
   boundaryRequired(candidateRoots.some(root => directory === root || directory.startsWith(`${root}${path.sep}`)), "The candidate working directory must be inside its mounted source, inputs or scratch root");
   for (const [name, value] of Object.entries(env)) {
-    boundaryRequired(allowedEnvNames.has(name) || name.startsWith(allowedEnvPrefix), `Environment ${name} is not on the candidate boundary's allowlist`);
+    boundaryRequired(allowedEnvNames.has(name), `Environment ${name} is not on the candidate boundary's allowlist`);
     boundaryRequired(!path.isAbsolute(value) || !overlaps(absoluteRoot(value), hidden), `Environment ${name} cannot name a held-out path`);
   }
   const runtimeRoot = path.dirname(path.dirname(fs.realpathSync(process.execPath)));
