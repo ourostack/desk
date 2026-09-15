@@ -193,13 +193,19 @@ const complete = status => `{"child-pid":4242}\n{"exit-code":${status}}\n`;
 // namespace this run created; `initAlive` keeps the launcher's reported init alive in that namespace.
 function procOptions(t) {
   const runNamespace = "pid:[4026999999]";
-  const view = { runNamespace, surveys: 0, initReads: 0, surviving: 0, initAlive: false, unreadable: false, procMissing: false, identityUnobservable: false };
+  const view = { runNamespace, surveys: 0, initReads: 0, surviving: 0, initAlive: false, unreadable: false, unreadableOwned: true, ownershipUnreadable: false, procMissing: false, identityUnobservable: false, identityUnreadable: false, retirementUnreadable: false };
   const readdir = fs.readdirSync;
   t.mock.method(fs, "readdirSync", (target, ...args) => {
     if (target !== "/proc") return readdir(target, ...args);
     if (view.procMissing) throw Object.assign(new Error("no /proc"), { code: "ENOENT" });
     view.surveys += 1;
-    return ["1", "2", "not-a-pid", ...(view.surveys <= view.surviving ? ["5555"] : []), ...(view.unreadable ? ["6666"] : [])];
+    return ["1", "2", "not-a-pid", "7777", ...(view.surveys <= view.surviving ? ["5555"] : []), ...(view.unreadable ? ["6666"] : [])];
+  });
+  const stat = fs.statSync;
+  t.mock.method(fs, "statSync", (target, ...args) => {
+    if (!String(target).startsWith("/proc/")) return stat(target, ...args);
+    if (view.ownershipUnreadable) throw Object.assign(new Error("denied"), { code: "EACCES" });
+    return { uid: view.unreadableOwned ? process.getuid() : 0 };
   });
   const readlink = fs.readlinkSync;
   t.mock.method(fs, "readlinkSync", (target, ...args) => {
@@ -207,14 +213,17 @@ function procOptions(t) {
     if (!value.startsWith("/proc/")) return readlink(target, ...args);
     const pid = value.split("/")[2];
     if (pid === "6666") throw Object.assign(new Error("denied"), { code: "EACCES" });
+    if (pid === "7777") throw Object.assign(new Error("vanished"), { code: "ESRCH" });
     if (pid === "5555") return runNamespace;
     if (pid === "4242") {
       view.initReads += 1;
       // Odd reads happen while the launcher's init is alive; even reads are the post-run retirement check.
       if (view.initReads % 2 === 1) {
+        if (view.identityUnreadable) throw Object.assign(new Error("denied"), { code: "EACCES" });
         if (view.identityUnobservable) throw Object.assign(new Error("already gone"), { code: "ENOENT" });
         return runNamespace;
       }
+      if (view.retirementUnreadable) throw Object.assign(new Error("denied"), { code: "EACCES" });
       if (view.initAlive) return runNamespace;
       throw Object.assign(new Error("gone"), { code: "ENOENT" });
     }
@@ -577,9 +586,30 @@ test("descriptor EOF alone cannot close a namespace the parent still observes", 
   transport.proc.initAlive = false;
   transport.proc.unreadable = true;
   const unreadable = await captureConfinedChecker(options);
-  assert.ok(unreadable.lifetime.unreadable > 0);
-  assert.equal(unreadable.namespaceClosed, false, "Unreadable namespace entries cannot prove absence");
+  assert.equal(unreadable.lifetime.unreadable, 1);
+  assert.equal(unreadable.namespaceClosed, false, "An unreadable process this parent owns cannot prove absence");
+  transport.proc.unreadableOwned = false;
+  const foreign = await captureConfinedChecker(options);
+  assert.equal(foreign.lifetime.unreadable, 0);
+  assert.equal(foreign.lifetime.foreignUnreadable, 1, "Another workload's protected process is recorded, not counted against this run");
+  assert.equal(foreign.namespaceClosed, true, "An unrelated protected process cannot fail an otherwise closed run");
+  transport.proc.ownershipUnreadable = true;
+  const unknownOwner = await captureConfinedChecker(options);
+  assert.equal(unknownOwner.lifetime.foreignUnreadable, 1, "An entry whose ownership cannot be read is not attributed to this run");
+  assert.equal(unknownOwner.namespaceClosed, true);
+  transport.proc.ownershipUnreadable = false;
   transport.proc.unreadable = false;
+  transport.proc.unreadableOwned = true;
+  transport.proc.identityUnreadable = true;
+  const blindIdentity = await captureConfinedChecker(options);
+  assert.equal(blindIdentity.lifetime.namespaceIdentityUnreadable, true);
+  assert.equal(blindIdentity.lifetime.reconciled, false, "An unreadable live namespace is not an absent one");
+  transport.proc.identityUnreadable = false;
+  transport.proc.retirementUnreadable = true;
+  const blindRetirement = await captureConfinedChecker(options);
+  assert.equal(blindRetirement.lifetime.initRetired, null);
+  assert.equal(blindRetirement.lifetime.reconciled, false, "An unreadable retirement check is not proof of retirement");
+  transport.proc.retirementUnreadable = false;
   transport.proc.procMissing = true;
   const blind = await captureConfinedChecker(options);
   assert.equal(blind.lifetime.reconciled, false, "Without a readable process view the parent cannot reconcile anything");

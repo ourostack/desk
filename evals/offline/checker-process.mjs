@@ -89,29 +89,42 @@ function fileDigest(filename) {
 // that closed its inherited descriptors would still hold its namespace open, and that is what this reconciliation
 // detects. Only the run-owned namespace identity is inspected — never a host-wide snapshot difference.
 function namespaceIdentity(pid) {
-  try { return fs.readlinkSync(`/proc/${pid}/ns/pid`); }
-  catch { return null; }
+  try { return { identity: fs.readlinkSync(`/proc/${pid}/ns/pid`), gone: false, unreadable: false }; }
+  catch (error) {
+    // Only disappearance is retirement. Any other observation failure is an unreadable state, never proof of exit.
+    const gone = error.code === "ENOENT" || error.code === "ESRCH";
+    return { identity: null, gone, unreadable: !gone };
+  }
 }
 
 function namespaceOccupants(identity) {
   const occupants = [];
   let unreadable = 0;
+  let foreignUnreadable = 0;
   let listed = [];
   try { listed = fs.readdirSync("/proc").filter(name => /^\d+$/u.test(name)).slice(0, 16384); }
   catch { unreadable += 1; }
   for (const name of listed) {
-    try { if (fs.readlinkSync(`/proc/${name}/ns/pid`) === identity) occupants.push(Number(name)); }
-    catch (error) { unreadable += Number(error.code !== "ENOENT"); }
+    const observed = namespaceIdentity(name);
+    if (observed.identity === identity) occupants.push(Number(name));
+    if (!observed.unreadable) continue;
+    // A namespace this run created can only hold this parent's own descendants, so an entry owned by another user
+    // cannot be one of its members and its unreadability does not bear on this run's closure.
+    let owned = false;
+    try { owned = fs.statSync(`/proc/${name}`).uid === process.getuid(); } catch { owned = false; }
+    if (owned) unreadable += 1;
+    else foreignUnreadable += 1;
   }
-  return { occupants, unreadable };
+  return { occupants, unreadable, foreignUnreadable };
 }
 
-// The launcher's init owns the namespace's lifetime, so a retired init is the parent's lifetime fact; where the init
-// was still observable during the run, its exact namespace must additionally hold no remaining process.
+// The launcher's init owns the namespace's lifetime, so an observed retirement is the parent's lifetime fact; where
+// the init's namespace was readable during the run, that exact namespace must additionally hold no remaining process.
 async function reconcileNamespaceLifetime(observed, execution) {
   const initPid = execution.status === "observed" ? execution.childPid : observed.initPid;
-  const initRetired = initPid === null ? null : namespaceIdentity(initPid) === null;
-  let survey = { occupants: [], unreadable: 0 };
+  const retirement = initPid === null ? null : namespaceIdentity(initPid);
+  const initRetired = retirement === null || retirement.unreadable ? null : retirement.gone;
+  let survey = { occupants: [], unreadable: 0, foreignUnreadable: 0 };
   if (observed.identity !== null) {
     survey = namespaceOccupants(observed.identity);
     for (let attempt = 0; attempt < 4 && survey.occupants.length > 0; attempt += 1) {
@@ -125,9 +138,11 @@ async function reconcileNamespaceLifetime(observed, execution) {
     initRetired,
     namespaceIdentity: observed.identity,
     namespaceIdentityObserved: observed.identity !== null,
+    namespaceIdentityUnreadable: observed.unreadable,
     remainingOccupants: survey.occupants,
     unreadable: survey.unreadable,
-    reconciled: initRetired === true && survey.occupants.length === 0 && survey.unreadable === 0,
+    foreignUnreadable: survey.foreignUnreadable,
+    reconciled: initRetired === true && observed.unreadable === false && survey.occupants.length === 0 && survey.unreadable === 0,
   };
 }
 
@@ -191,13 +206,15 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
   args.push("--", executable, ...argv);
   // The launcher reports its init's PID while that init is still alive, which is the only moment its namespace
   // identity can be read. A run whose init exits first leaves `identity` null and is reconciled by retirement alone.
-  const observed = { initPid: null, identity: null };
+  const observed = { initPid: null, identity: null, unreadable: false };
   const onStatus = bytes => {
     if (observed.initPid !== null) return;
     const pid = Number(String(bytes).match(/"child-pid"\s*:\s*(\d+)/u)?.[1]);
     if (!Number.isSafeInteger(pid) || pid <= 0) return;
     observed.initPid = pid;
-    observed.identity = namespaceIdentity(pid);
+    const live = namespaceIdentity(pid);
+    observed.identity = live.identity;
+    observed.unreadable = live.unreadable;
   };
   const result = await captureBoundedCommand({ executable: launcher, argv: args, cwd: parentRoot, env: { PATH: "/usr/bin:/bin" }, limits, signal, statusPipe: true, onStatus });
   const after = { source: inputManifest(source), inputs: inputManifest(inputs) };
