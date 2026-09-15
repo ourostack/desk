@@ -220,6 +220,11 @@ function triggerMatches(pattern, target) {
   return new RegExp(`^${expression}$`, "u").test(target);
 }
 
+// The set of characters the bounded matcher models: literals plus `*`/`**`. Anything else — `?`, `!`, `+`,
+// bracket expressions and other metacharacters — would be escaped as a literal here while GitHub gives it special
+// meaning, so such a pattern must be refused rather than silently mis-modelled.
+const modelledPattern = (pattern) => /^[A-Za-z0-9._/*-]+$/u.test(pattern);
+
 function workflowPathFilters(workflow) {
   const lines = workflow.split("\n");
   const blocks = [];
@@ -325,7 +330,14 @@ test("every path the status routing calls relevant also starts the public workfl
     assert.ok(filters.includes("package.json") && filters.includes("package-lock.json"), `path filter block ${index} keeps its explicit root manifest entries`);
     assert.ok(filters.includes("**/package.json") && filters.includes("**/package-lock.json"), `path filter block ${index} keeps its recursive manifest entries`);
     // The bounded matcher models `*` and `**` only; these filters must therefore use no other wildcard feature.
-    for (const pattern of filters) assert.doesNotMatch(pattern, /[?!]/u, `path filter ${pattern} stays inside the modelled syntax`);
+    for (const pattern of filters) assert.ok(modelledPattern(pattern), `path filter ${pattern} stays inside the modelled syntax`);
+  }
+  // The syntax guard must refuse every feature the bounded matcher does not model, not only `?` and `!`.
+  for (const unsupported of ["*.jsx?", "!README.md", "page.js+", "docs/[0-9]/*.md", "docs/{a,b}/*.md", "docs/(a|b).md", "docs/a^b.md", "docs/a$b.md", "docs\\a.md"]) {
+    assert.equal(modelledPattern(unsupported), false, `${unsupported} is outside the modelled syntax`);
+  }
+  for (const supported of [".gitattributes", "evals/offline/**", "scripts/*.cjs", "**/package-lock.json", "AGENTIC-ENGINEERING-V2.md", "desk/tasks/2026-06-14-1335-planning-desk-dependency-activation.md"]) {
+    assert.equal(modelledPattern(supported), true, `${supported} is inside the modelled syntax`);
   }
 });
 
