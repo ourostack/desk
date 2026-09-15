@@ -8,6 +8,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { captureBoundedCommand } from "../output.mjs";
+import { ownedDescendant } from "./helpers/owned-descendant.mjs";
 import { workRoot } from "./helpers/paths.mjs";
 
 const root = workRoot("command-capture");
@@ -182,17 +183,21 @@ test("a completed real command reports stream EOF and complete capture with raw 
   assert.equal(result.stdout.byteLength, 4);
 });
 
-test("a real late inherited descriptor withholds EOF and complete capture inside the deadline", async () => {
-  const source = 'const {spawn}=require("node:child_process");spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{detached:true,stdio:["ignore","inherit","inherit"]}).unref();process.stdout.write("parent-exited");';
-  const result = await captureBoundedCommand({ ...options(source), limits: { maxStreamBytes: 64, timeoutMs: 700, cleanupMs: 300 } });
+test("a real late inherited descriptor withholds EOF and complete capture inside the deadline", async t => {
+  const descendant = ownedDescendant(root, "inherited", { stdio: ["ignore", "inherit", "inherit"] });
+  let reconciliation;
+  t.after(() => { reconciliation = descendant.reconcile(); });
+  const result = await captureBoundedCommand({ ...options(`${descendant.source}process.stdout.write("parent-exited");`), limits: { maxStreamBytes: 64, timeoutMs: 700, cleanupMs: 300 } });
   assert.equal(result.stdout.bytes.toString(), "parent-exited");
   assert.equal(result.captureComplete, false, "A surviving descendant holding the pipe is not a completed capture");
   assert.equal(result.status, "timed_out");
+  t.after(() => assert.equal(reconciliation.identity > 0, true, "The fixture recorded and reconciled its own descendant"));
 });
 
-test("a real fork that keeps FD 3 open withholds status-pipe EOF", async () => {
-  const source = 'const {spawn}=require("node:child_process");const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{detached:true,stdio:["ignore","ignore","ignore",3]});child.unref();require("node:fs").writeSync(3,"launcher");';
-  const result = await captureBoundedCommand({ ...options(source), statusPipe: true, limits: { maxStreamBytes: 64, timeoutMs: 700, cleanupMs: 300 } });
+test("a real fork that keeps FD 3 open withholds status-pipe EOF", async t => {
+  const descendant = ownedDescendant(root, "monitor", { stdio: ["ignore", "ignore", "ignore", 3] });
+  t.after(() => descendant.reconcile());
+  const result = await captureBoundedCommand({ ...options(`${descendant.source}require("node:fs").writeSync(3,"launcher");`), statusPipe: true, limits: { maxStreamBytes: 64, timeoutMs: 700, cleanupMs: 300 } });
   assert.equal(result.statusPipe.bytes.toString(), "launcher");
   assert.equal(result.statusPipe.eof, false);
   assert.equal(result.captureComplete, false);

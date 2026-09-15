@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
+import { ownedDescendant } from "./helpers/owned-descendant.mjs";
 import { repository, workRoot } from "./helpers/paths.mjs";
 
 const moduleUrl = pathToFileURL(resolve(repository, "evals/offline/copilot-runner.mjs"));
@@ -111,10 +112,14 @@ test("current admission can require raw generation binding without breaking hist
   assert.equal(validateCleanupReceipt(receipt, { ...ownership, requireRunId: true }).ok, false, "Current admission requires the raw producer's runId, not only a matching envelope");
 });
 
-test("a root exit with a live monitor channel is unavailable, not reconciled cleanup", async () => {
+test("a root exit with a live monitor channel is unavailable, not reconciled cleanup", async (t) => {
   const { captureBoundedCommand } = await import(pathToFileURL(resolve(repository, "evals/offline/output.mjs")));
+  // Registered before workRoot so this fixture reconciles its descendant before the work directory is removed.
+  let descendant;
+  t.after(() => descendant.reconcile());
   const root = workRoot("cleanup-live-monitor");
-  const source = 'const {spawn}=require("node:child_process");spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{detached:true,stdio:["ignore","ignore","ignore",3]}).unref();process.exit(0);';
+  descendant = ownedDescendant(root, "monitor", { stdio: ["ignore", "ignore", "ignore", 3] });
+  const source = `${descendant.source}process.exit(0);`;
   const result = await captureBoundedCommand({ executable: process.execPath, argv: ["-e", source], cwd: root, env: {}, statusPipe: true, limits: { maxStreamBytes: 64, timeoutMs: 700, cleanupMs: 300 } });
   assert.equal(result.statusPipe.eof, false, "The monitor descriptor outlived its root exit");
   assert.equal(result.captureComplete, false);

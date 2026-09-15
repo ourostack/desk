@@ -208,7 +208,7 @@ export async function captureBoundedCommand({ executable, argv, cwd, env, limits
       const processIdentity = child?.pid ? { pid: child.pid, spawnIdentity } : null;
       const channel = name => {
         const bytes = Buffer.concat(captured[name]);
-        return { bytes, truncated: truncatedChannels.has(name), eof: ended[name], byteLength: bytes.length, sha256: sha256(bytes) };
+        return { bytes, truncated: truncatedChannels.has(name), eof: ended[name], byteLength: bytes.length, chunks: captured[name].length, sha256: sha256(bytes) };
       };
       resolve({
         status: failure ? failure.status : "exited", exitCode, signal: exitSignal, failure, errors, elapsedMs: Date.now() - startedAt,
@@ -243,11 +243,15 @@ export async function captureBoundedCommand({ executable, argv, cwd, env, limits
         if (settled) return;
         const streamRemaining = Math.max(0, limits.maxStreamBytes - lengths[channel]);
         const aggregateRemaining = Math.max(0, maxCaptureBytes - capturedBytes);
-        const prefix = bytes.subarray(0, Math.min(streamRemaining, aggregateRemaining));
-        captured[channel].push(Buffer.from(prefix));
-        lengths[channel] += prefix.length;
-        capturedBytes += prefix.length;
-        if (prefix.length !== bytes.length) {
+        const room = Math.min(streamRemaining, aggregateRemaining);
+        // Exhausted budget retains nothing further: no slice, no Buffer copy and no array entry for discarded input.
+        if (room > 0) {
+          const prefix = bytes.subarray(0, room);
+          captured[channel].push(Buffer.from(prefix));
+          lengths[channel] += prefix.length;
+          capturedBytes += prefix.length;
+        }
+        if (room < bytes.length) {
           truncatedChannels.add(channel);
           stop("infrastructure_failure", aggregateRemaining <= streamRemaining ? "COMMAND_CAPTURE_OVERFLOW" : "COMMAND_OUTPUT_OVERFLOW", "Command output exceeded its raw-byte bound");
         }

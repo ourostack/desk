@@ -27,7 +27,7 @@ test("checker namespace construction is fail-closed and never treats launcher ou
   t.after(() => { Object.defineProperty(process, "platform", platform); t.mock.restoreAll(); syncBuiltinESMExports(); });
   const tree = roots("checker-process");
   const root = tree.root;
-  const options = { executable: "/opt/node/bin/node", argv: ["-e", "candidate"], cwd: tree.subject, workRoot: root, subject: tree.subject, checkerRoot: tree.checker, env: { HOME: tree.scratch, PATH: "/opt/node/bin:/usr/bin:/bin" }, limits: { timeoutMs: 1000, maxStreamBytes: 1024, cleanupMs: 100 } };
+  const options = { executable: "/opt/node/bin/node", argv: ["-e", "candidate"], cwd: tree.subject, workRoot: root, subject: tree.subject, checkerRoot: tree.checker, scratchRoot: tree.scratch, env: { HOME: tree.scratch, PATH: "/opt/node/bin:/usr/bin:/bin" }, limits: { timeoutMs: 1000, maxStreamBytes: 1024, cleanupMs: 100 } };
   Object.defineProperty(process, "platform", { value: "darwin" });
   await assert.rejects(captureConfinedChecker(options), { code: "CHECKER_OS_BOUNDARY_REQUIRED" });
   Object.defineProperty(process, "platform", { value: "linux" });
@@ -126,9 +126,14 @@ socket.setTimeout(2000, () => done("timeout"));
 socket.on("error", error => done(error.code));
 socket.on("connect", () => done("connected"));`,
   "fork-setsid": `import { spawn } from "node:child_process";
-const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: ["ignore", "inherit", "inherit"] });
+const child = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 30000)"], { detached: true, stdio: ["ignore", "inherit", "inherit"] });
 child.unref();
 process.stdout.write(JSON.stringify({ escapedPid: child.pid }) + "\\n");`,
+  // A descendant with no inherited descriptor: EOF arrives while it lives, so only namespace reconciliation can refute it.
+  "fork-silent": `import { spawn } from "node:child_process";
+const child = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 30000)"], { detached: true, stdio: ["ignore", "ignore", "ignore"] });
+child.unref();
+process.stdout.write(JSON.stringify({ silentPid: child.pid }) + "\\n");`,
   "capture-bound": `process.stdout.write("x".repeat(1024 * 1024));`,
   cancellation: `setInterval(() => {}, 1000);`,
 };
@@ -145,7 +150,7 @@ function linuxLauncher(t, tree) {
   t.mock.method(fs, "realpathSync", (filename, ...args) => filename === process.execPath ? "/opt/node/bin/node" : realpath(filename, ...args));
   const exists = fs.existsSync;
   t.mock.method(fs, "existsSync", filename => ["/opt/node", "/usr", "/bin", "/lib"].includes(filename) || exists(filename));
-  const transport = { invocation: null, stdout: "", statusBytes: "", statusEof: true, exitCode: 0, exitSignal: null, onSpawn: null };
+  const transport = { invocation: null, stdout: "", statusBytes: "", statusEof: true, exitCode: 0, exitSignal: null, onSpawn: null, ...procOptions(t, tree) };
   t.mock.method(childProcess, "spawn", (executable, argv, settings) => {
     transport.invocation = { executable, argv, settings };
     const child = Object.assign(new EventEmitter(), { pid: 777001, stdout: new PassThrough(), stderr: new PassThrough(), stdio: [null, null, null, new PassThrough()], kill: () => true });
@@ -181,6 +186,41 @@ function linuxLauncher(t, tree) {
 
 const complete = status => `{"child-pid":4242}\n{"exit-code":${status}}\n`;
 
+// The parent's PID-namespace view. `surviving` counts how many post-run snapshots still show a namespace this run
+// created; `initAlive` keeps the launcher's reported init in a namespace the parent never saw before the run.
+function procOptions(t) {
+  const view = { before: true, afterCount: 0, surviving: 0, initAlive: false, unreadable: false, procMissing: false };
+  const readdir = fs.readdirSync;
+  t.mock.method(fs, "readdirSync", (target, ...args) => {
+    if (target !== "/proc") return readdir(target, ...args);
+    if (view.procMissing) throw Object.assign(new Error("no /proc"), { code: "ENOENT" });
+    const base = ["1", "2", "not-a-pid", ...(view.unreadable ? ["6666"] : [])];
+    if (view.before) {
+      view.before = false;
+      view.afterCount = 0;
+      return base;
+    }
+    view.afterCount += 1;
+    const extra = view.afterCount <= view.surviving ? ["5555"] : [];
+    if (extra.length === 0 || view.afterCount >= 5) view.before = true;
+    return [...base, ...extra];
+  });
+  const readlink = fs.readlinkSync;
+  t.mock.method(fs, "readlinkSync", (target, ...args) => {
+    const value = String(target);
+    if (!value.startsWith("/proc/")) return readlink(target, ...args);
+    const pid = value.split("/")[2];
+    if (pid === "6666") throw Object.assign(new Error("denied"), { code: "EACCES" });
+    if (pid === "5555") return "pid:[4026999999]";
+    if (pid === "4242") {
+      if (view.initAlive) return "pid:[4026999998]";
+      throw Object.assign(new Error("gone"), { code: "ENOENT" });
+    }
+    return "pid:[4026531836]";
+  });
+  return { proc: view };
+}
+
 test("the parent-only checker root is never mounted and the candidate receives only source, inputs and its own scratch", async t => {
   const tree = roots("checker-mounts");
   const { transport, options } = linuxLauncher(t, tree);
@@ -196,6 +236,13 @@ test("the parent-only checker root is never mounted and the candidate receives o
   const binds = mountArgs.flatMap((value, index) => value === "--bind" ? [mountArgs[index + 1]] : []);
   assert.ok(roBinds.includes(tree.subject) && roBinds.includes(tree.inputs));
   assert.deepEqual(binds, [tree.scratch], "Only the child-owned scratch root is writable");
+  // An unnamed scratch root defaults to a fresh owned descendant of the work root, never the work root itself.
+  const defaulted = await captureConfinedChecker({ ...options, scratchRoot: undefined, cwd: tree.subject, env: { ...options.env, HOME: path.join(tree.root, "child-scratch") } });
+  assert.deepEqual(defaulted.boundary.writable, [path.join(tree.root, "child-scratch")]);
+  assert.equal(defaulted.availability.hiddenAssertionsNotMounted, true);
+  const withoutInputs = await captureConfinedChecker({ ...options, inputsRoot: null, env: { ...options.env } });
+  assert.equal(withoutInputs.boundary.inputs.inputsManifestSha256, null, "An explicitly absent inputs root mounts nothing extra");
+  assert.equal(withoutInputs.boundary.readOnly.includes(tree.inputs), false);
   assert.equal(result.boundary.hiddenRoots.includes(tree.checker), true);
   assert.equal(result.availability.hiddenAssertionsNotMounted, true);
   assert.equal(result.availability.isolatedSourceAndInputsOnly, true);
@@ -315,12 +362,21 @@ test("the zero-model preflight returns a typed receipt and refuses to claim more
   }
 });
 
-test("an unreadable input root is an unfrozen observation, not an assumed-stable one", async t => {
+test("an input root that becomes unreadable during the run is an unfrozen observation", async t => {
   const tree = roots("checker-unreadable-inputs");
   const { transport, options } = linuxLauncher(t, tree);
   transport.statusBytes = complete(0);
-  const result = await captureConfinedChecker({ ...options, inputsRoot: path.join(tree.root, "absent-inputs") });
-  assert.equal(result.boundary.inputs.inputsManifestSha256, null);
+  const list = fs.opendirSync;
+  transport.onSpawn = child => {
+    t.mock.method(fs, "opendirSync", (target, ...args) => {
+      if (target === tree.inputs) throw Object.assign(new Error("unreadable"), { code: "EACCES" });
+      return list(target, ...args);
+    });
+    child.emit("close", 0, null);
+  };
+  const result = await captureConfinedChecker(options);
+  assert.equal(result.boundary.inputsManifestSha256, undefined);
+  assert.equal(result.boundary.inputs.inputsManifestSha256After, null, "The closing manifest could not be read");
   assert.equal(result.availability.frozenInputs, false);
   assert.equal(result.availability.available, false);
 });
@@ -331,9 +387,10 @@ const probeResponses = {
   "write-denied": '{"source":"EROFS","inputs":"EROFS","scratch":"written"}\n',
   "network-denied": '{"network":"ENETUNREACH"}\n',
   "fork-setsid": '{"escapedPid":31337}\n',
+  "fork-silent": '{"silentPid":31338}\n',
 };
 
-function preflightTransport(t, { hiddenReadable = false, scratchWritable = true, network = "ENETUNREACH", boundedCapture = true } = {}) {
+function preflightTransport(t, { hiddenReadable = false, scratchWritable = true, network = "ENETUNREACH", boundedCapture = true, killable = true } = {}) {
   const platform = Object.getOwnPropertyDescriptor(process, "platform");
   t.after(() => { Object.defineProperty(process, "platform", platform); t.mock.restoreAll(); syncBuiltinESMExports(); });
   Object.defineProperty(process, "platform", { value: "linux" });
@@ -361,10 +418,22 @@ function preflightTransport(t, { hiddenReadable = false, scratchWritable = true,
   });
   const close = fs.closeSync;
   t.mock.method(fs, "closeSync", handle => handle === descriptor ? undefined : close(handle));
+  const view = procOptions(t).proc;
   t.mock.method(childProcess, "spawn", (executable, argv) => {
     const program = argv[argv.indexOf("--") + 2];
     const id = path.basename(program, ".mjs");
-    const child = Object.assign(new EventEmitter(), { pid: 777002, stdout: new PassThrough(), stderr: new PassThrough(), stdio: [null, null, null, new PassThrough()], kill: () => true });
+    const child = Object.assign(new EventEmitter(), { pid: 777002, stdout: new PassThrough(), stderr: new PassThrough(), stdio: [null, null, null, new PassThrough()] });
+    // A real launcher dies on SIGTERM and its streams reach EOF, so a cancelled probe still reconciles its resources.
+    child.kill = () => {
+      if (!killable) return true;
+      queueMicrotask(() => {
+        child.stdout.end("");
+        child.stderr.end("");
+        child.stdio[3].end("");
+        setImmediate(() => child.emit("close", null, "SIGTERM"));
+      });
+      return true;
+    };
     let stdout = probeResponses[id] ?? "";
     if (id === "hidden-read" && hiddenReadable) stdout = stdout.replace('"hiddenReadable":false', '"hiddenReadable":true');
     if (id === "write-denied" && !scratchWritable) stdout = stdout.replace('"scratch":"written"', '"scratch":"EROFS"');
@@ -377,7 +446,7 @@ function preflightTransport(t, { hiddenReadable = false, scratchWritable = true,
     if (!lingering) for (const stream of [child.stdout, child.stderr, child.stdio[3]]) stream.once("end", settle);
     queueMicrotask(() => {
       if (lingering) {
-        // The cancelled probe never exits on its own; only the owner's cleanup budget ends it.
+        // The cancelled probe never exits on its own; only its owner's cancellation and cleanup end it.
         child.stdio[3].write('{"child-pid":4242}\n');
         return;
       }
@@ -388,6 +457,7 @@ function preflightTransport(t, { hiddenReadable = false, scratchWritable = true,
     return child;
   });
   syncBuiltinESMExports();
+  return view;
 }
 
 test("a fully observed zero-model preflight qualifies the boundary and keeps every raw reference", async t => {
@@ -401,7 +471,8 @@ test("a fully observed zero-model preflight qualifies the boundary and keeps eve
   for (const value of Object.values(receipt.identities)) assert.match(value, /^[a-f0-9]{64}$/u);
   for (const ref of receipt.evidenceRefs) assert.equal(sha256(fs.readFileSync(path.join(preflightRoot, ref.path))), ref.sha256);
   const observations = JSON.parse(fs.readFileSync(path.join(preflightRoot, "preflight-observations.json")));
-  assert.deepEqual(observations.observations.map(row => row.id), ["hidden-read", "write-denied", "network-denied", "fork-setsid", "capture-bound", "cancellation"]);
+  assert.deepEqual(observations.observations.map(row => row.id), ["hidden-read", "write-denied", "network-denied", "fork-setsid", "fork-silent", "capture-bound", "cancellation"]);
+  assert.equal(observations.observations.every(row => row.started === true && row.cleanupReconciled === true), true, "Every started probe reconciled its owned resources");
   assert.equal(observations.observations.every(row => row.accepted === true), true);
   assert.equal(observations.observations.find(row => row.id === "cancellation").commandStatus, "cancelled");
   assert.equal(JSON.parse(fs.readFileSync(path.join(preflightRoot, "preflight-receipt.json"))).status, "available");
@@ -430,4 +501,155 @@ for (const [name, faults] of [
 test("the preflight refuses limits it cannot bound", async () => {
   const tree = roots("checker-preflight-limits");
   await assert.rejects(qualifyCheckerBoundary({ workRoot: path.join(tree.root, "preflight"), sourceRoot: tree.subject, controllerRoot: tree.checker, limits: null }), { code: "INVALID_COMMAND_LIMITS" });
+});
+
+test("an aliased source or inputs root fails closed before the transport is reached", async t => {
+  const tree = roots("checker-aliases");
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = complete(0);
+  const sourceAlias = path.join(tree.root, "source-alias");
+  const inputsAlias = path.join(tree.root, "inputs-alias");
+  const checkerAlias = path.join(tree.root, "checker-alias");
+  fs.symlinkSync(tree.checker, sourceAlias);
+  fs.symlinkSync(tree.checker, inputsAlias);
+  fs.symlinkSync(tree.checker, checkerAlias);
+  const linkedAncestor = path.join(tree.root, "linked-ancestor");
+  fs.symlinkSync(tree.subject, linkedAncestor);
+  for (const delta of [{ subject: sourceAlias }, { inputsRoot: inputsAlias }, { checkerRoot: checkerAlias }, { subject: path.join(linkedAncestor, "nested") }, { subject: path.join(tree.root, "absent-source") }, { subject: path.join(tree.subject, "delivered.mjs") }]) {
+    await assert.rejects(captureConfinedChecker({ ...options, ...delta }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" }, JSON.stringify(delta));
+  }
+  assert.equal(transport.invocation, null, "No alias may reach the spawn transport");
+  const unreadable = path.join(tree.root, "vanishing-inputs");
+  fs.mkdirSync(unreadable, { mode: 0o700 });
+  const list = fs.opendirSync;
+  t.mock.method(fs, "opendirSync", (target, ...args) => {
+    if (target === unreadable) throw Object.assign(new Error("unreadable"), { code: "EACCES" });
+    return list(target, ...args);
+  });
+  await assert.rejects(captureConfinedChecker({ ...options, inputsRoot: unreadable }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" });
+  assert.equal(transport.invocation, null, "An unreadable required manifest never reaches the transport either");
+});
+
+test("no candidate mount may be the parent work root or contain it", async t => {
+  const tree = roots("checker-ancestors");
+  const nested = path.join(tree.root, "nested-work");
+  fs.mkdirSync(nested, { recursive: true, mode: 0o700 });
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = complete(0);
+  const ancestor = { ...options, workRoot: nested };
+  for (const delta of [{ scratchRoot: tree.root }, { subject: tree.root }, { inputsRoot: tree.root }]) {
+    await assert.rejects(captureConfinedChecker({ ...ancestor, ...delta, cwd: tree.subject }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" }, JSON.stringify(delta));
+  }
+  assert.equal(transport.invocation, null, "A writable or read-only ancestor bind never reaches the transport");
+  const owned = path.join(nested, "owned-scratch");
+  const descendant = await captureConfinedChecker({ ...ancestor, scratchRoot: owned, cwd: tree.subject, env: { ...options.env, HOME: owned } });
+  assert.equal(descendant.exitCode, 0, "An explicitly owned disjoint descendant of the work root stays legal");
+});
+
+test("descriptor EOF alone cannot close a namespace the parent still observes", async t => {
+  const tree = roots("checker-namespace-lifetime");
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = complete(0);
+  const clean = await captureConfinedChecker(options);
+  assert.equal(clean.statusPipeEof, true);
+  assert.equal(clean.captureComplete, true);
+  assert.equal(clean.lifetime.reconciled, true);
+  assert.equal(clean.namespaceClosed, true);
+  transport.proc.surviving = 99;
+  const surviving = await captureConfinedChecker(options);
+  assert.equal(surviving.statusPipeEof, true, "The monitor channel still reached EOF");
+  assert.equal(surviving.captureComplete, true, "Capture still completed");
+  assert.deepEqual(surviving.lifetime.survivingNamespaces, ["pid:[4026999999]"]);
+  assert.equal(surviving.namespaceClosed, false, "A surviving namespace refuses closure that EOF alone would have granted");
+  assert.equal(surviving.availability.cleanupComplete, false);
+  transport.proc.surviving = 1;
+  const settled = await captureConfinedChecker(options);
+  assert.equal(settled.lifetime.reconciled, true, "A namespace that clears within the bounded recheck reconciles");
+  transport.proc.surviving = 0;
+  transport.proc.initAlive = true;
+  const live = await captureConfinedChecker(options);
+  assert.equal(live.lifetime.initRetired, false);
+  assert.equal(live.namespaceClosed, false, "A launcher init still holding a new namespace is not a closed namespace");
+  transport.proc.initAlive = false;
+  transport.proc.unreadable = true;
+  const unreadable = await captureConfinedChecker(options);
+  assert.ok(unreadable.lifetime.unreadable > 0);
+  assert.equal(unreadable.namespaceClosed, false, "Unreadable namespace entries cannot prove absence");
+  transport.proc.unreadable = false;
+  transport.proc.procMissing = true;
+  const blind = await captureConfinedChecker(options);
+  assert.equal(blind.lifetime.reconciled, false, "Without a readable process view the parent cannot reconcile anything");
+});
+
+test("the preflight composes caller cancellation and stops creating further children", async t => {
+  const tree = roots("checker-preflight-cancel");
+  preflightTransport(t);
+  const preAborted = await qualifyCheckerBoundary({ workRoot: path.join(tree.root, "pre"), sourceRoot: tree.subject, controllerRoot: tree.checker, limits: { timeoutMs: 2000, maxStreamBytes: 65536, cleanupMs: 50 }, signal: AbortSignal.abort() });
+  assert.equal(preAborted.status, "unavailable");
+  const preObservations = JSON.parse(fs.readFileSync(path.join(tree.root, "pre", "preflight-observations.json"))).observations;
+  assert.equal(preObservations.every(row => row.started === false && row.reason === "CALLER_CANCELLED_BEFORE_PROBE"), true, "A pre-aborted caller creates no child at all");
+  const controller = new AbortController();
+  const original = childProcess.spawn;
+  let spawns = 0;
+  t.mock.method(childProcess, "spawn", (...args) => {
+    spawns += 1;
+    if (spawns === 2) controller.abort();
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  const midAborted = await qualifyCheckerBoundary({ workRoot: path.join(tree.root, "mid"), sourceRoot: tree.subject, controllerRoot: tree.checker, limits: { timeoutMs: 2000, maxStreamBytes: 65536, cleanupMs: 50 }, signal: controller.signal });
+  assert.equal(midAborted.status, "unavailable");
+  const midObservations = JSON.parse(fs.readFileSync(path.join(tree.root, "mid", "preflight-observations.json"))).observations;
+  assert.equal(spawns, 2, "No probe is launched after the caller cancelled");
+  assert.equal(midObservations.filter(row => row.started).length, 2);
+  assert.equal(midObservations.at(-1).reason, "CALLER_CANCELLED_BEFORE_PROBE");
+});
+
+test("a probe that cannot reconcile its owned resources cannot qualify the boundary", async t => {
+  const tree = roots("checker-preflight-unreconciled");
+  preflightTransport(t, { killable: false });
+  const preflightRoot = path.join(tree.root, "preflight");
+  // A live, never-aborted caller signal must compose with the probe controller without disturbing the normal path.
+  const receipt = await qualifyCheckerBoundary({ workRoot: preflightRoot, sourceRoot: tree.subject, controllerRoot: tree.checker, limits: { timeoutMs: 2000, maxStreamBytes: 65536, cleanupMs: 50 }, signal: new AbortController().signal });
+  const cancellation = JSON.parse(fs.readFileSync(path.join(preflightRoot, "cancellation-probe.json")));
+  assert.equal(cancellation.commandStatus, "cancelled");
+  assert.equal(cancellation.cleanupReconciled, false, "An unkillable cancelled probe leaves its owned child unverified");
+  assert.equal(cancellation.accepted, false, "Cancelled status alone is not a successful cleanup observation");
+  assert.equal(receipt.checks.namespaceCleanup, false);
+  assert.equal(receipt.status, "unavailable");
+});
+
+test("admitted environment names still carry field-specific value rules", async t => {
+  const tree = roots("checker-env-values");
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = complete(0);
+  const refused = [
+    ["PATH", `/opt/node/bin:${path.join(tree.checker, "private-bin")}`],
+    ["PATH", "/opt/node/bin:relative/bin"],
+    ["PATH", "/opt/node/bin:/etc"],
+    ["PATH", ""],
+    ["CONFIG_FILE", `file://${path.join(tree.checker, "expected.json")}`],
+    ["CONFIG_FILE", "file:///oracle/expected.json"],
+    ["CONFIG_FILE", path.join(tree.root, "outside.json")],
+    ["CONFIG_FILE", "relative.json"],
+    ["HOME", `${tree.scratch}/../checker`],
+    ["npm_config_cache", "/var/cache"],
+    ["npm_config_userconfig", "/etc/npmrc"],
+    ["npm_config_audit", "maybe"],
+    ["npm_config_fund", "1"],
+    ["CHECKER_CANARY_TOKEN", "some-other-value"],
+    ["LANG", "/oracle/locale"],
+    ["LC_ALL", "en_US.UTF-8:/etc"],
+  ];
+  for (const [name, value] of refused) {
+    await assert.rejects(captureConfinedChecker({ ...options, env: { ...options.env, [name]: value } }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" }, `${name}=${value}`);
+  }
+  assert.equal(transport.invocation, null, "No field-rule violation reaches the transport");
+  const admitted = await captureConfinedChecker({ ...options, inputsRoot: tree.inputs, env: {
+    HOME: tree.scratch, PATH: "/opt/node/bin:/usr/bin:/bin", TMPDIR: path.join(tree.scratch, "tmp"),
+    CONFIG_FILE: path.join(tree.inputs, "public-input.json"), EVAL_SUBJECT_SNAPSHOT: tree.subject,
+    npm_config_cache: path.join(tree.scratch, "cache"), npm_config_userconfig: "/dev/null",
+    npm_config_audit: "false", npm_config_fund: "false", CHECKER_CANARY_TOKEN: "untrusted-diagnostic-marker", LANG: "C.UTF-8",
+  } });
+  assert.equal(admitted.exitCode, 0, "The justified canary and exact npm settings still cross the boundary");
 });
