@@ -488,10 +488,15 @@ for (const file of [
 contract("preview feedback is canonically copied with explicit capture and confirmed sharing", () => {
   const skill = text("skills/preview-feedback/SKILL.md");
   assert.equal(skill, text("plugins/desk/skills/preview-feedback/SKILL.md"));
-  for (const required of ["explicit capture", "exact excerpt", "exact destination", "confirmation", "tombstone", "next_offset"]) {
+  for (const required of ["explicit capture", "exact excerpt", "exact destination", "confirmation", "tombstone", "feedback.md"]) {
     assert.ok(skill.includes(required), `missing preview-feedback boundary: ${required}`);
   }
+  // The private feedback API is retired: the skill must say so rather than
+  // sending the agent looking for a tool that no longer exists, and must not
+  // offer preserved private records as material to publish.
+  assert.match(skill, /There is no `desk_feedback` tool in this build/u);
   assert.match(skill, /Never fall back/u);
+  assert.match(skill, /Do not migrate, copy, summarize, index, or quote it/u);
 });
 
 assert.equal(

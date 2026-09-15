@@ -15,7 +15,7 @@ Keep the durable workspace. Simplify how work happens inside it. Stronger models
 | Pinned Superpowers | Own discovery, planning, implementation and verification through `desk:superpowers-integration`; consume existing approval and canonical Desk records |
 | Independent review | `desk:independent-review` owns finding disposition and re-review; RoboRev is a first-class reviewer through an admitted host integration, with one implementation owner for fixes |
 | Pinned Ponytail | Prefer existing capabilities and the smallest complete implementation, without shrinking scope or proof |
-| Private preview feedback | Let the participant capture, inspect, correct, and delete their own comments |
+| Preview feedback | Let the participant publish comments they explicitly offer, as attributed Markdown in their own desk |
 
 The provider pins `obra/superpowers` at `b36e0829c6d0140e93cfef2ca599b1b07d4a7797` (6.3.0, MIT), with selected-file provenance in `upstream-sources.lock.json`. The authored Copilot hook adapter is separate from pristine upstream hooks. Historical comparisons remain historical; adopting this opt-in composition is not a new measured reliability result or authority to run an always-on review daemon.
 
@@ -80,21 +80,23 @@ For isolated installation experiments, changing `HOME` alone is not sufficient w
 
 Say, for example:
 
-> Capture this as private preview feedback: "The agent asked for go at the right point, but repeated the same design choice three times."
+> Record this as preview feedback: "The agent asked for go at the right point, but repeated the same design choice three times."
 
-The agent uses [Preview Feedback](skills/preview-feedback/SKILL.md) and the `desk_feedback` tool. It records the installed Desk version and your words, not an inferred opinion or a performance score. If it proposes a summary rather than preserving your text, it must show you that summary and get your confirmation first.
+The agent uses [Preview Feedback](skills/preview-feedback/SKILL.md). There is no feedback tool and no feedback database: your words are written as a dated, attributed Markdown entry in your own desk's `feedback.md`, and nothing is inferred about you or scored. If the agent proposes a summary rather than preserving your text, it must show you that summary and get your confirmation first.
 
-You can then say "show me my preview feedback", "correct this entry to ...", or "delete this entry". Listing supports pagination; correction uses the revision you actually read so it cannot silently overwrite a concurrent change.
+You can then say "show me my preview feedback", "correct this entry to ...", or "withdraw this entry". The file is ordinary Markdown you own: reading it back, correcting an entry in place, or writing your own tombstone are all edits you can see and review.
 
-Two fixed native Mac scenarios exercised this surface on alpha.2: ordinary discussion with feedback capability available made no capture attempt, and explicitly authorized capture, inspection, same-record correction and deletion completed with an empty final store. The discussion case also attempted an unrelated read that the fixed tool policy denied. These are bounded functional observations, not a general privacy reliability estimate.
+Two fixed native Mac scenarios exercised the earlier private-tool surface on alpha.2: ordinary discussion with feedback capability available made no capture attempt, and explicitly authorized capture, inspection, same-record correction and deletion completed with an empty final store. The discussion case also attempted an unrelated read that the fixed tool policy denied. Those remain bounded historical observations about the retired tool, not a general privacy reliability estimate and not evidence about this Markdown convention.
 
-Capture is not consent to share. Before sending or publishing identifiable feedback, the agent shows the exact excerpt and destination and waits for your confirmation. A publication in Git belongs in your own desk and remains attributed to you. Withdrawing something already published in Git means a tombstone, not erasing its history.
+Saying something is not consent to publish it. Before writing or sending identifiable feedback, the agent shows the exact excerpt and destination and waits for your confirmation. A publication in Git belongs in your own desk and remains attributed to you. Withdrawing something already published in Git means a tombstone, not erasing its history.
 
 ### The privacy boundary
 
-The store is local, separate from your Git workspace, search index, embeddings, and shared snapshots. It has no collector, network operation, export action, or cross-device sync. It uses operating-system access controls rather than encryption and refuses storage when it cannot establish its protection. See the [storage contract](plugins/desk/mcp/docs/private-feedback.md) for platform details and limits.
+Your desk is a Git checkout that syncs to a remote, so an entry you confirm is visible to everyone who can read that repository and stays in its history. That is the trade this convention makes plainly rather than quietly: nothing is written until you have seen the exact words and the exact destination.
 
-This does not make your conversation private from the host or model provider. Text you type, or ask the agent to read back, remains part of that conversation and follows its retention rules. Local deletion removes the live SQLite row and clears its freed pages; it cannot erase conversation history, OS backups, or copies already shared. Agents and administrators with access to your operating-system account are not isolated from you by this store. No claim of anonymity, employee-performance measurement, or regulatory compliance is made.
+Private records captured by the earlier preview tool are untouched. That tool is gone from this build, and nothing migrated, indexed, exported, or deleted what it stored: the entries stay in their protected local store, readable only through your own account, and only you can decide to offer any of them again. See the [storage contract](plugins/desk/mcp/docs/private-feedback.md) for platform details and limits.
+
+None of this makes your conversation private from the host or model provider. Text you type, or ask the agent to read back, remains part of that conversation and follows its retention rules. A tombstone in Git, like a deletion in the old local store, cannot erase conversation history, OS backups, or copies already shared. No claim of anonymity, employee-performance measurement, or regulatory compliance is made.
 
 The optional [minimal diagnostic](plugins/desk/docs/preview-diagnostics.md) is a separate, on-demand package/process snapshot. It reads no feedback or task data and sends nothing on its own.
 
@@ -116,7 +118,7 @@ copilot plugin install ponytail-upstream@ouroboros-skills
 copilot plugin list
 ```
 
-Restore any other previously enabled companion and repeat the skill-source preflight from the same working directory, this time requiring the selected V1 paths. Check again for preview paths after a later reinstall. Then start a fresh session with the same workspace/person binding. V1 does not expose the private-feedback tool, but rollback does not remove its store. Reinstalling the preview against the same resolved workspace and state location makes those entries available again. Native Mac runs have demonstrated two rollback/reinstall cycles with a preserved workspace sentinel and unchanged private-store bytes during V1, including skill-source checks in both directions; other host routes require their own evidence.
+Restore any other previously enabled companion and repeat the skill-source preflight from the same working directory, this time requiring the selected V1 paths. Check again for preview paths after a later reinstall. Then start a fresh session with the same workspace/person binding. Neither V1 nor this build exposes a private-feedback tool, and rollback does not remove the store an earlier preview created; those entries stay on disk either way. Native Mac runs have demonstrated two rollback/reinstall cycles with a preserved workspace sentinel and unchanged private-store bytes during V1, including skill-source checks in both directions; other host routes require their own evidence.
 
 ## What qualifies the proposal
 

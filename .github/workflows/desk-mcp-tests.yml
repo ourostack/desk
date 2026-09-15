@@ -191,7 +191,7 @@ jobs:
       - name: Verify source-bound evaluation contracts on Windows
         run: node scripts/skill-evals.cjs validate
 
-      - name: Exercise real NTFS protection, feedback CRUD and the offline source mirror
+      - name: Exercise real NTFS protection, private-store CRUD and the offline source mirror
         working-directory: plugins/desk/mcp
         run: |
           node --test --test-name-pattern "^native[: ]" __tests__/feedback/windows_acl.test.js __tests__/feedback/windows_store.test.js __tests__/feedback/source_mirror.test.js

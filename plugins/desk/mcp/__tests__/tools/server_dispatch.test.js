@@ -3,12 +3,78 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
+import { createHash } from "node:crypto"
+import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../src/server.js"
 import { mkTempDeskRoot } from "./_helpers.js"
+import { withPrivateStore } from "../../src/feedback/store.js"
+import { cleanup, mkFeedbackFixture, useStateHome } from "../feedback/_helpers.js"
+import { mkLedgerFixture, useHostEnv } from "../measurement/_helpers.js"
+
+// The surface as it was advertised while the private feedback API was still
+// registered. Retiring that API has to remove exactly one name from this list
+// and leave the other routes — person-scoped writes and private measurement
+// included — exactly where they were.
+const SURFACE_BEFORE_FEEDBACK_RETIREMENT = [
+  "task_create",
+  "task_update",
+  "task_archive",
+  "track_create",
+  "track_update",
+  "friction_add",
+  "lesson_add",
+  "desk_feedback",
+  "desk_work_ledger",
+  "desk_search",
+  "desk_recall",
+  "desk_similar",
+  "desk_timeline",
+  "desk_thread",
+  "desk_reindex",
+  "desk_status",
+  "desk_doctor",
+]
 
 function parseResult(res) {
   return JSON.parse(res.content[0].text)
+}
+
+/** Register the real list/call handlers against a caller-supplied server double. */
+async function liveHandlers({ deskRoot, person = null }) {
+  const handlers = []
+  const transport = { kind: "fake-stdio" }
+  const server = {
+    setRequestHandler(schema, handler) {
+      handlers.push(handler)
+    },
+    async connect(received) {
+      assert.equal(received, transport)
+    },
+  }
+  await startServer({ deskRoot, person, server, transport })
+  assert.equal(handlers.length, 2)
+  return { list: handlers[0], call: handlers[1] }
+}
+
+/** Content hash of every file under `dir`, so preserved bytes can be compared. */
+async function hashedTree(dir) {
+  const hashes = {}
+  let entries
+  try {
+    entries = await fs.readdir(dir, { recursive: true, withFileTypes: true })
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error
+    return hashes
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue
+    const file = path.join(entry.parentPath, entry.name)
+    hashes[path.relative(dir, file)] = createHash("sha256")
+      .update(await fs.readFile(file))
+      .digest("hex")
+  }
+  return hashes
 }
 
 test("server.callTool routes task_create to the real implementation", async () => {
@@ -261,4 +327,113 @@ test("server.startServer can construct server and transport through injected fac
 test("server MCP factory helpers construct default SDK instances", () => {
   assert.equal(typeof createMcpServer().setRequestHandler, "function")
   assert.equal(typeof createMcpTransport(), "object")
+})
+
+// ── Retired private feedback API ────────────────────────────────────────────
+//
+// `desk_feedback` is gone from the advertised surface. What must NOT happen is
+// a quiet migration: the participant's preserved private records stay exactly
+// where they are, byte-for-byte, and a call to the retired name is refused by
+// the ordinary unknown-tool path before any feedback storage is opened or
+// created.
+
+test("the live server advertises one tool fewer and no longer names desk_feedback", async () => {
+  const fixture = await mkFeedbackFixture()
+  try {
+    const { list } = await liveHandlers({ deskRoot: fixture.deskRoot, person: "ari" })
+    const listed = await list()
+    const advertised = listed.tools.map((tool) => tool.name)
+
+    assert.equal(listed.tools.some((tool) => tool.name === "desk_feedback"), false)
+    assert.equal(listed.tools.some((tool) => tool.name === "desk_work_ledger"), true)
+    assert.equal(
+      listed.tools.length,
+      SURFACE_BEFORE_FEEDBACK_RETIREMENT.length - 1,
+      `expected exactly one retired tool; advertised: ${advertised.join(", ")}`,
+    )
+    assert.deepEqual(
+      advertised,
+      SURFACE_BEFORE_FEEDBACK_RETIREMENT.filter((name) => name !== "desk_feedback"),
+    )
+    for (const tool of listed.tools) {
+      assert.equal(typeof tool.description, "string")
+      assert.notEqual(tool.description, "")
+    }
+  } finally {
+    await cleanup(fixture.base)
+  }
+})
+
+test("calling desk_feedback is refused without opening or creating feedback storage", async () => {
+  const preserved = await mkFeedbackFixture()
+  const restore = useStateHome(preserved.stateHome)
+  try {
+    // Preserved private bytes: recorded through the retained storage primitive,
+    // never migrated anywhere by this change.
+    const seeded = await withPrivateStore(
+      { deskRoot: preserved.deskRoot, person: "ari" },
+      (store) => store.capture({ text: "preserved private preview feedback", taskRef: null }),
+    )
+    const beforePrivateFiles = await hashedTree(preserved.stateHome)
+    assert.ok(
+      Object.keys(beforePrivateFiles).length > 0,
+      "the fixture must actually hold preserved private bytes",
+    )
+
+    const { call } = await liveHandlers({ deskRoot: preserved.deskRoot, person: "ari" })
+    for (const args of [
+      { action: "list" },
+      { action: "capture", text: "written after retirement" },
+      { action: "delete", entry_id: seeded.entry_id },
+    ]) {
+      const refused = await call({ params: { name: "desk_feedback", arguments: args } })
+      assert.equal(refused.isError, true)
+      assert.equal(refused.content[0].text, "unknown tool: desk_feedback")
+    }
+
+    const afterPrivateFiles = await hashedTree(preserved.stateHome)
+    assert.deepEqual(afterPrivateFiles, beforePrivateFiles)
+    assert.deepEqual(TOOL_IMPLS.desk_feedback, undefined)
+
+    // A binding with no store yet must not gain one from the refusal.
+    const fresh = await mkFeedbackFixture()
+    const restoreFresh = useStateHome(fresh.stateHome)
+    try {
+      const freshCall = (await liveHandlers({ deskRoot: fresh.deskRoot, person: "rowan" })).call
+      const refused = await freshCall({
+        params: { name: "desk_feedback", arguments: { action: "capture", text: "no store, please" } },
+      })
+      assert.equal(refused.isError, true)
+      await assert.rejects(() => fs.stat(fresh.stateHome), /ENOENT/u)
+    } finally {
+      restoreFresh()
+      await cleanup(fresh.base)
+    }
+  } finally {
+    restore()
+    await cleanup(preserved.base)
+  }
+})
+
+test("person scoping and the private measurement route survive the feedback retirement", async () => {
+  const fixture = await mkLedgerFixture()
+  const restore = useHostEnv(fixture)
+  try {
+    const { call } = await liveHandlers({ deskRoot: fixture.deskRoot, person: "rowan" })
+
+    const written = await call({
+      params: { name: "task_create", arguments: { track: "t", slug: "s", title: "T" } },
+    })
+    assert.equal(written.isError, undefined)
+    assert.equal(parseResult(written).path, path.join("desks", "rowan", "t", "s", "task.md"))
+
+    const capabilities = await call({
+      params: { name: "desk_work_ledger", arguments: { action: "capabilities" } },
+    })
+    assert.equal(capabilities.isError, undefined, JSON.stringify(capabilities.content))
+    assert.equal(parseResult(capabilities).status, "ok")
+  } finally {
+    restore()
+    await cleanup(fixture.base)
+  }
 })
