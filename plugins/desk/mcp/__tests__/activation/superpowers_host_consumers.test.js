@@ -99,7 +99,7 @@ test("shipped Copilot closure matches the actual selected worker rather than the
 })
 test("alpha onboarding selects the existing cache audit's Superpowers plugin set explicitly", () => {
   const skill = readFileSync(new URL("../../../skills/codex-onboarding/SKILL.md", import.meta.url), "utf8")
-  assert.match(skill, /--plugins desk,superpowers,plain-language,ponytail-upstream/u)
+  assert.match(skill, /--plugins desk,superpowers,plain-language --strict/u)
 })
 test("existing cache audit CLI accepts the alpha set without changing its legacy default", () => {
   const observed = []
@@ -107,10 +107,10 @@ test("existing cache audit CLI accepts the alpha set without changing its legacy
     argv, auditFn: (options) => { observed.push(options.plugins); return { status: "current" } },
     stdout: { write() {} }, stderr: { write() {} },
   })
-  assert.equal(invoke(["--plugins", "desk,superpowers,plain-language,ponytail-upstream", "--strict"]), 0)
+  assert.equal(invoke(["--plugins", "desk,superpowers,plain-language", "--strict"]), 0)
   assert.equal(invoke([]), 0)
   assert.deepEqual(observed, [
-    ["desk", "superpowers", "plain-language", "ponytail-upstream"],
+    ["desk", "superpowers", "plain-language"],
     ["desk", "work-suite", "plain-language", "ponytail-upstream"],
   ])
 })
@@ -157,7 +157,7 @@ test("Codex provider omits unsupported hooks and retains generated-instructions 
 
 test("Codex onboarding restart instruction names the selected Superpowers composition exactly", () => {
   const skill = readFileSync(new URL("../../../skills/codex-onboarding/SKILL.md", import.meta.url), "utf8")
-  assert.ok(skill.includes("The active Codex session will not gain new plugin skills retroactively. Restart Codex or open a fresh session to confirm that `desk`, `superpowers`, `plain-language`, and `ponytail-upstream` appear in the available plugins/skills list."))
+  assert.ok(skill.includes("The active Codex session will not gain new plugin skills retroactively. Restart Codex or open a fresh session to confirm that `desk`, `superpowers`, and `plain-language` appear in the available plugins/skills list."))
 })
 
 for (const [method, label] of [["superpowers", "Superpowers"], ["work-suite", "Work Suite"]]) {

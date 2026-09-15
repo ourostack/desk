@@ -1,0 +1,19 @@
+{
+  "name": "desk",
+  "version": "3.2.0-alpha.3",
+  "engines": [
+    "copilot"
+  ],
+  "category": "developer-tools",
+  "tags": [
+    "agent-workspace",
+    "tasks",
+    "engineering",
+    "mcp",
+    "long-running-agent"
+  ],
+  "dependencies": [
+    "github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha",
+    "github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha"
+  ]
+}

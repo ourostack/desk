@@ -98,3 +98,22 @@ test("legacy packaging without target dependency declarations retains its histor
   delete input.activation.provides.activation_targets[0].depends_on
   assert.deepEqual(validateCopilotPackagingContract(input), [])
 })
+
+test("authored V2 closure (selection edges): the real desk:worker selection is exactly the three-root closure", () => {
+  const activation = read("plugins/desk/activation/desk.activation.json")
+  const selectedNames = activation.provides.activation_targets.find((target) => (
+    target.id === "desk:worker"
+  )).depends_on
+  const expected = ["desk", "plain-language", "superpowers"]
+  assert.deepEqual([...selectedNames].sort(), expected)
+  assert.equal(selectedNames.includes("ponytail-upstream"), false)
+  assert.equal(selectedNames.includes("work-suite"), false)
+})
+
+test("ordinary Agency declaration (selection edges): desk/agency.json declares only the two generic V2 dependencies", () => {
+  const agency = read("plugins/desk/agency.json")
+  assert.equal(agency.name, "desk")
+  assert.equal(agency.dependencies.length, 2)
+  assert.ok(agency.dependencies.includes("github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha"))
+  assert.ok(agency.dependencies.includes("github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha"))
+})

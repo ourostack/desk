@@ -17,6 +17,7 @@ import {
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { readFileSync } from "node:fs"
 
 import { closeDb, indexDbPath, openDb } from "../../src/db/init.js"
 import { EMBEDDING_DIM } from "../../src/indexer/embed.js"
@@ -532,4 +533,22 @@ test("cold rebuild remains fresh and searchable in degraded lexical mode", async
   } finally {
     await rm(tempRoot, { recursive: true, force: true })
   }
+})
+
+test("authored V2 closure (integration): active worker source drops Ponytail invocation while historical mentions remain", () => {
+  const workerSource = readFileSync(path.join(pluginRoot, "agents", "worker.agent.md"), "utf8")
+  assert.doesNotMatch(workerSource, /apply `ponytail`/iu)
+  assert.doesNotMatch(workerSource, /ponytail-upstream.*declared dep/iu)
+
+  const changelog = readFileSync(path.join(pluginRoot, "CHANGELOG.md"), "utf8")
+  assert.match(changelog, /ponytail/iu, "historical CHANGELOG mentions must not be indiscriminately rejected")
+})
+
+test("ordinary Agency declaration (integration): desk/agency.json declares only the two generic V2 dependencies", () => {
+  const agency = JSON.parse(readFileSync(path.join(pluginRoot, "agency.json"), "utf8"))
+  assert.equal(agency.name, "desk")
+  assert.deepEqual(agency.dependencies, [
+    "github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha",
+    "github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha",
+  ])
 })

@@ -488,3 +488,25 @@ test("Copilot packaging validation rejects incomplete flattened dependency closu
     ["Copilot desk:worker target must use agents/worker.agent.md"],
   )
 })
+
+test("authored V2 closure (copilot packaging): desk:worker selects exactly desk, superpowers, plain-language", () => {
+  const activation = loadJson(activationManifestPath)
+  const selectedNames = activation.provides.activation_targets.find((target) => (
+    target.id === "desk:worker"
+  )).depends_on
+  const expected = ["desk", "plain-language", "superpowers"]
+  assert.deepEqual([...selectedNames].sort(), expected)
+  assert.equal(selectedNames.includes("ponytail-upstream"), false)
+  assert.equal(selectedNames.includes("work-suite"), false)
+})
+
+test("ordinary Agency declaration (copilot packaging): desk/agency.json declares the two generic V2 dependencies", () => {
+  const agency = loadJson("plugins", "desk", "agency.json")
+  assert.equal(agency.name, "desk")
+  assert.deepEqual(agency.dependencies, [
+    "github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha",
+    "github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha",
+  ])
+  assert.equal(agency.dependencies.some((dependency) => dependency.includes("ponytail")), false)
+  assert.equal(agency.dependencies.some((dependency) => dependency.includes("work-suite")), false)
+})

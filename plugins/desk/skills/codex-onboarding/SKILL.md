@@ -52,10 +52,6 @@ Do this before treating `session-start` as healthy:
     {
       "name": "plain-language",
       "source": { "source": "local", "path": "./Projects/ouroboros-skills/plugins/plain-language" }
-    },
-    {
-      "name": "ponytail-upstream",
-      "source": { "source": "local", "path": "./Projects/ouroboros-skills/plugins/ponytail-upstream" }
     }
   ]
 }
@@ -63,12 +59,12 @@ Do this before treating `session-start` as healthy:
 
 Avoid stale copies of Desk, Superpowers and companion plugins. A cache or source label alone does not prove the active artifact; inspect the selected loaded roots and content identity.
 
-2. Ensure the selected source includes `desk`, `superpowers`, `plain-language` and `ponytail-upstream`. Use its actual marketplace namespace, not a hard-coded label. The selected source must be the admitted alpha artifact, not a canonical main checkout substituted because it is convenient.
+2. Ensure the selected source includes `desk`, `superpowers` and `plain-language`. Use its actual marketplace namespace, not a hard-coded label. The selected source must be the admitted alpha artifact, not a canonical main checkout substituted because it is convenient.
 
 Run the source/cache/implicit-marketplace audit after repairs:
 
 ```bash
-node "${ALPHA_SOURCE:?Select the admitted alpha source}/scripts/audit-codex-plugin-cache.cjs" --repo-root "$ALPHA_SOURCE" --plugins desk,superpowers,plain-language,ponytail-upstream --strict
+node "${ALPHA_SOURCE:?Select the admitted alpha source}/scripts/audit-codex-plugin-cache.cjs" --repo-root "$ALPHA_SOURCE" --plugins desk,superpowers,plain-language --strict
 ```
 
 This read-only audit explicitly selects the alpha plugin set; its omitted-option default remains the legacy set. It checks source, cache and host-marketplace metadata, not method-following behavior. Add the selected consumer plugins to that explicit list when auditing an overlay. Cache metadata alone does not establish active-session source identity.
@@ -87,9 +83,6 @@ enabled = true
 enabled = true
 
 [plugins."plain-language@ourostack-local"]
-enabled = true
-
-[plugins."ponytail-upstream@ourostack-local"]
 enabled = true
 
 [plugins."desk@ourostack-local".mcp_servers.desk]
@@ -173,7 +166,7 @@ child.kill("SIGTERM")
 EOF
 ```
 
-The active Codex session will not gain new plugin skills retroactively. Restart Codex or open a fresh session to confirm that `desk`, `superpowers`, `plain-language`, and `ponytail-upstream` appear in the available plugins/skills list.
+The active Codex session will not gain new plugin skills retroactively. Restart Codex or open a fresh session to confirm that `desk`, `superpowers`, and `plain-language` appear in the available plugins/skills list.
 
 6. If you can capture the active tool list, prove MCP visibility separately from cache freshness:
 

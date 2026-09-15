@@ -12,9 +12,6 @@ enabled = true
 [plugins."plain-language@ourostack"]
 enabled = true
 
-[plugins."ponytail-upstream@ourostack"]
-enabled = true
-
 [plugins."desk@ourostack".mcp_servers.desk]
 enabled = true
 default_tools_approval_mode = "prompt"

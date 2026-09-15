@@ -143,3 +143,23 @@ test("manual-only mode characterization has no worker instruction or MCP bridge"
   assert.doesNotMatch(result.generatedConfig, /\[mcp_servers\.desk\]/u)
   assert.equal(result.generatedArtifacts.some((artifact) => artifact.kind === "owned-codex-instructions"), false)
 })
+
+test("authored V2 closure (method): desk:worker selects exactly desk, superpowers, plain-language", () => {
+  const activation = readJson("plugins/desk/activation/desk.activation.json")
+  const selectedNames = activation.provides.activation_targets.find((target) => (
+    target.id === "desk:worker"
+  )).depends_on
+  const expected = ["desk", "plain-language", "superpowers"]
+  assert.deepEqual([...selectedNames].sort(), expected)
+  assert.equal(selectedNames.includes("ponytail-upstream"), false)
+  assert.equal(selectedNames.includes("work-suite"), false)
+})
+
+test("ordinary Agency declaration (method): desk/agency.json declares only the two generic V2 dependencies", () => {
+  const agency = readJson("plugins/desk/agency.json")
+  assert.equal(agency.name, "desk")
+  assert.deepEqual(agency.dependencies, [
+    "github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha",
+    "github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha",
+  ])
+})

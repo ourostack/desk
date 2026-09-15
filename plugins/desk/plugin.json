@@ -40,12 +40,6 @@
           "version": "0.2.0",
           "resolution": "flattened",
           "bundleMetadata": "plugins/desk/activation/copilot-root.flattened-bundle.json"
-        },
-        "ponytail-upstream": {
-          "path": "../ponytail-upstream",
-          "version": "4.9.0",
-          "resolution": "flattened",
-          "bundleMetadata": "plugins/desk/activation/copilot-root.flattened-bundle.json"
         }
       },
       "manualSetupSteps": []

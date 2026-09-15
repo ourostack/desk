@@ -88,3 +88,23 @@ test("manual-only keeps the existing no-worker boundary without rewriting ambien
   assert.equal(result.generatedActivationConfig, "")
   assert.ok(result.generatedConfig.startsWith(config))
 })
+
+test("authored V2 closure (boundary): desk:worker selects exactly desk, superpowers, plain-language", () => {
+  const activation = JSON.parse(readFileSync(new URL("../../../activation/desk.activation.json", import.meta.url), "utf8"))
+  const selectedNames = activation.provides.activation_targets.find((target) => (
+    target.id === "desk:worker"
+  )).depends_on
+  const expected = ["desk", "plain-language", "superpowers"]
+  assert.deepEqual([...selectedNames].sort(), expected)
+  assert.equal(selectedNames.includes("ponytail-upstream"), false)
+  assert.equal(selectedNames.includes("work-suite"), false)
+})
+
+test("ordinary Agency declaration (boundary): desk/agency.json declares only the two generic V2 dependencies", () => {
+  const agency = JSON.parse(readFileSync(new URL("../../../agency.json", import.meta.url), "utf8"))
+  assert.equal(agency.name, "desk")
+  assert.deepEqual(agency.dependencies, [
+    "github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha",
+    "github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha",
+  ])
+})
