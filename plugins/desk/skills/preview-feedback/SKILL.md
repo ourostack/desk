@@ -21,14 +21,33 @@ Never fall back to `friction_add`, a lesson, a task card, another participant's 
 
 The destination is exactly one file: `_meta/preview-feedback.md` in the participant's own desk. It is not an iteration's `feedback.md` — that file is the PR/review feedback record for one iteration directory (see `directory-structure`) and must never receive preview feedback. Do not invent a second location, a shared file, or a root-level variant.
 
+### Every entry carries a stable ID
+
+An entry is named `pf-YYYYMMDD-<alias>-NN`: the date it was recorded, the participant's alias, and a two-digit sequence. Before writing, reread `_meta/preview-feedback.md` and take `NN` as the smallest two-digit number from `01` upward that no entry already uses for that same date and alias. Two things one person offers on the same day are therefore `pf-20260914-ari-01` and `pf-20260914-ari-02`, and each can be named on its own.
+
+The ID goes in the entry's heading, and it never changes. A correction keeps it; a withdrawal keeps it. Do not renumber, reuse, or tidy IDs — not even the ID of a withdrawn entry — because the sequence records what was written, not what survives.
+
+One entry is that heading, the participant's text as written, and an optional `Preview: <installed Desk version>` line recording the installed build (do not invent a version):
+
+```markdown
+## pf-20260914-ari-01 — 2026-09-14 — ari
+Preview: 3.2.0-alpha.3
+
+The agent asked for go at the right point, but repeated the same design choice three times.
+```
+
+### Amend only the entry you have read back
+
 | Intent | Action |
 | --- | --- |
-| Record offered feedback | Append one dated, attributed entry to `_meta/preview-feedback.md`, creating the file with an `# Preview feedback` heading if it does not exist |
+| Record offered feedback | Reread the file, take the next free `NN` for that date and alias, and append one entry under its new ID, creating the file with an `# Preview feedback` heading if it does not exist |
 | Read it back | Read that file; it is ordinary Markdown they own |
-| Correct an entry | Edit that entry in place and note the correction under it, so the change is visible rather than silent |
-| Withdraw an entry | Replace the entry text with a participant-authored tombstone line in the same entry, keeping its heading |
+| Correct an entry | Reread, resolve the exact ID, confirm the text currently under it, then edit that entry in place and append `Corrected <YYYY-MM-DD>: <what changed>` inside it, keeping the heading and its ID |
+| Withdraw an entry | Reread, resolve the exact ID, confirm the text currently under it, then replace that entry's text with `Withdrawn <YYYY-MM-DD> by <alias>: <their reason, if given>`, keeping the heading and its ID so the record of a withdrawal survives |
 
-One entry is a `## <YYYY-MM-DD> — <alias>` heading, the participant's text as written, and an optional `Preview: <installed Desk version>` line. A correction appends `Corrected <YYYY-MM-DD>: <what changed>` inside that entry. A tombstone replaces the text with `Withdrawn <YYYY-MM-DD> by <alias>: <their reason, if given>` and leaves the heading in place so the record of a withdrawal survives.
+A correction or a withdrawal needs the exact entry ID **and** the participant's confirmation of the excerpt currently in the file. A date, a heading, "the last one", or the replacement wording alone does not identify an entry, and two entries from the same person on the same day are exactly the case where guessing amends the wrong attributed statement.
+
+Refuse rather than guess. If the request carries no ID, if the ID matches nothing in the file, or if it matches more than one entry — a hand-edited file can contain duplicates — stop and show the participant the IDs that exist with their current excerpts. Do not amend the nearest match, do not renumber to fix a duplicate, and do not write a new entry to stand in for the one that was meant. If the text under the resolved ID is not what they expect, reconcile with them before writing: their own earlier correction, or someone else's edit, is not yours to overwrite silently.
 
 Before any write, show the exact excerpt and the exact destination path, say who can read it and that a desk is a Git checkout whose history keeps what was pushed, and get visible confirmation for that pair. A request to keep a note private, an earlier general work mandate, or "we should share this later" does not authorize publication.
 
