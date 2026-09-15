@@ -71,13 +71,17 @@ export function ownedDescendant(root, name, { stdio, lifetimeMs = 5000, retireme
     const started = Date.now();
     // A tagged settle: retirement is either the recorded process disappearing or its PID belonging to something else.
     const settle = budgetMs => {
-      for (let waited = 0; waited <= budgetMs; waited += 50) {
+      // Deadline-based: sleep only up to the next observation, and always observe at or after the deadline before
+      // reporting no retirement, so a process that exits inside the final sleep is still seen.
+      const deadline = Date.now() + budgetMs;
+      for (;;) {
         const seen = observe();
         if (seen.absent) return "absent";
         if (seen.started !== outcome.recordedIdentity) return "replaced";
-        pause(50);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return null;
+        pause(Math.min(50, remaining));
       }
-      return null;
     };
     const finish = (state, reason) => {
       outcome.state = reason === "replaced" ? "pid-reused" : state;
