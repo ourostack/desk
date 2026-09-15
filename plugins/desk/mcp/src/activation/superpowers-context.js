@@ -11,7 +11,16 @@ function requiredPath(input, name) {
   return path.resolve(expandHome(value))
 }
 
-async function canonicalFile(deskRoot, person, file, kind) {
+function optionalPath(input, name) {
+  const value = input[name]
+  if (value === undefined || value === null) return null
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`Superpowers context: ${name} must be a non-empty path when supplied`)
+  }
+  return path.resolve(expandHome(value))
+}
+
+async function canonicalFile(deskRoot, person, file, kind, required = true) {
   const root = personPrefix(deskRoot, person)
   const target = await resolveWriteTarget({
     deskRoot,
@@ -24,6 +33,7 @@ async function canonicalFile(deskRoot, person, file, kind) {
     info = await stat(target)
   } catch (error) {
     if (error.code !== "ENOENT") throw error
+    if (!required) return null
     throw new Error(`Superpowers context: canonical ${kind} does not exist: ${target}`)
   }
   if (!info.isFile()) {
@@ -36,7 +46,8 @@ export async function resolveSuperpowersContext(input) {
   const deskRoot = requiredPath(input, "deskRoot")
   const taskPath = requiredPath(input, "taskPath")
   const iterationPath = requiredPath(input, "iterationPath")
-  const planPath = requiredPath(input, "planPath")
+  const planPath = optionalPath(input, "planPath")
+  const requestedProgressPath = optionalPath(input, "progressPath")
   const evidenceRoot = requiredPath(input, "evidenceRoot")
   const person = input.person ?? null
   for (const name of ["step", "attempt"]) {
@@ -50,16 +61,22 @@ export async function resolveSuperpowersContext(input) {
   if (!isPathContained(taskPath, iterationPath)) {
     throw new Error("Superpowers context: iterationPath must be within taskPath")
   }
-  if (!isPathContained(deskRoot, planPath)) {
+  if (planPath !== null && !isPathContained(deskRoot, planPath)) {
     throw new Error("Superpowers context: planPath must be within Desk")
+  }
+  // Progress and rulings are written, so they stay inside the effective person prefix even though a plan may be a shared read reference.
+  if (requestedProgressPath !== null && !isPathContained(personPrefix(deskRoot, person), requestedProgressPath)) {
+    throw new Error("Superpowers context: progressPath must be within the effective Desk scope")
   }
   if (isPathContained(deskRoot, evidenceRoot)) {
     throw new Error("Superpowers context: evidenceRoot must be outside Desk")
   }
   const taskCardPath = await canonicalFile(deskRoot, person, path.join(taskPath, "task.md"), "task card")
-  const progressPath = await canonicalFile(deskRoot, person, path.join(iterationPath, "doing.md"), "progress")
+  const progressPath = requestedProgressPath === null
+    ? (await canonicalFile(deskRoot, person, path.join(iterationPath, "doing.md"), "progress", false)) ?? taskCardPath
+    : await canonicalFile(deskRoot, person, requestedProgressPath, "progress")
   // A plan is a read reference and may live outside the person prefix, but must remain within this Desk root.
-  const canonicalPlan = await canonicalFile(deskRoot, null, planPath, "plan")
+  const canonicalPlan = planPath === null ? null : await canonicalFile(deskRoot, null, planPath, "plan")
   const artifactDirectory = path.join(evidenceRoot, path.relative(deskRoot, iterationPath), "superpowers", `step-${input.step}`, `attempt-${input.attempt}`)
   return {
     taskCardPath,
@@ -84,6 +101,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       "--task-path": "taskPath",
       "--iteration-path": "iterationPath",
       "--plan-path": "planPath",
+      "--progress-path": "progressPath",
       "--evidence-root": "evidenceRoot",
       "--step": "step",
       "--attempt": "attempt",

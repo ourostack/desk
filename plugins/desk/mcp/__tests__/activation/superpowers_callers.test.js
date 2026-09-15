@@ -7,6 +7,7 @@ const repoRoot = new URL("../../../../../", import.meta.url)
 const read = (relativePath) => readFileSync(new URL(relativePath, repoRoot), "utf8")
 const json = (relativePath) => JSON.parse(read(relativePath))
 const integration = "plugins/desk/skills/superpowers-integration/SKILL.md"
+const adapter = "plugins/desk/skills/using-superpowers-with-desk/SKILL.md"
 
 for (const file of [
   "plugins/desk/agents/worker.md",
@@ -46,9 +47,6 @@ for (const [file, directive] of retiredWorkerDirectives) {
 
 for (const [file, retiredDirective] of [
   ["plugins/desk/skills/work-orchestration/SKILL.md", /New engineering work enters `work-ideator`|`work-doer` → `work-merger`/u],
-  ["plugins/desk/skills/task-lifecycle/SKILL.md", /otherwise establish the missing agreement through `work-ideator`|Work-doer decides its own dispatch/u],
-  ["plugins/desk/skills/start-task/SKILL.md", /explicit go-ahead through `work-ideator`/u],
-  ["plugins/desk/skills/session-resumption/SKILL.md", /dispatch `work-doer`|Resume `work-merger`/u],
   ["plugins/desk/skills/codex-onboarding/SKILL.md", /`work-suite@<marketplace-name>` enabled|Desk and Work Suite are installed/u],
 ]) {
   test(`${file} routes active choreography through the alpha integration contract`, () => {
@@ -57,6 +55,89 @@ for (const [file, retiredDirective] of [
     assert.doesNotMatch(text, retiredDirective)
   })
 }
+
+const adapterCallers = [
+  ["plugins/desk/skills/start-task/SKILL.md", "start", /explicit go-ahead through `work-ideator`/u],
+  ["plugins/desk/skills/session-resumption/SKILL.md", "reconciled-resume", /dispatch `work-doer`|Resume `work-merger`/u],
+  ["plugins/desk/skills/task-lifecycle/SKILL.md", "material-redesign", /otherwise establish the missing agreement through `work-ideator`|Work-doer decides its own dispatch/u],
+]
+
+for (const [file, entry, retiredDirective] of adapterCallers) {
+  test(`${file} enters the Desk adapter at its own ${entry} entry`, () => {
+    const text = read(file)
+    assert.match(text, /desk:using-superpowers-with-desk/u)
+    assert.ok(text.includes(entry), `${file} must name its ${entry} adapter entry`)
+    assert.doesNotMatch(text, retiredDirective)
+  })
+}
+
+test("the Desk adapter ships with valid named frontmatter", () => {
+  assert.ok(existsSync(new URL(adapter, repoRoot)), `${adapter} must ship`)
+  const frontmatter = read(adapter).match(/^---\r?\n([\s\S]*?)\r?\n---/u)
+  assert.ok(frontmatter, "using-superpowers-with-desk must have YAML frontmatter")
+  assert.match(frontmatter[1], /^name: using-superpowers-with-desk$/mu)
+  assert.match(frontmatter[1], /^description: .+$/mu)
+})
+
+test("the Desk adapter admits exactly the three recorded entries", () => {
+  const text = read(adapter)
+  assert.match(text, /Entry: start \| reconciled-resume \| material-redesign\./u)
+  for (const rejected of ["review", "recovery", "scheduling", "delivery", "measurement"]) {
+    assert.ok(
+      !new RegExp(`^Entry:.*\\b${rejected}\\b`, "mu").test(text),
+      `${rejected} must not become a fourth adapter entry`,
+    )
+  }
+  assert.match(text, /Do not review, recover, schedule, deliver or measure here\./u)
+})
+
+test("the Desk adapter reads existing state and selects one provider entry", () => {
+  const text = read(adapter)
+  assert.match(text, /Read: canonical task, recorded approval, delivery endpoint, explicit artifact map\./u)
+  assert.match(text, /Select once:/u)
+  assert.match(text, /Pass: task path, design\/plan\/progress pointers, authority and endpoint\./u)
+  assert.match(text, /Return: selected provider entry and mapped context\./u)
+  for (const [condition, entry] of [
+    ["new/material design", "superpowers:brainstorming"],
+    ["approved unplanned design", "superpowers:writing-plans"],
+    ["this approved plan", "superpowers:subagent-driven-development"],
+    ["same ready-set sequential fallback", "superpowers:executing-plans"],
+  ]) {
+    assert.ok(text.includes(entry), `the adapter must name ${entry}`)
+    assert.ok(text.includes(condition), `the adapter must state the ${entry} condition: ${condition}`)
+  }
+})
+
+test("the Desk adapter maps existing artifacts instead of creating a second lifecycle tree", () => {
+  const text = read(adapter)
+  assert.match(text, /--progress-path/u)
+  assert.match(text, /--plan-path/u)
+  assert.match(text, /`rulingsPath`/u)
+  assert.ok(text.includes("Do not create a competing `.superpowers/sdd` tree."), "the adapter must prohibit a second lifecycle tree")
+  assert.match(text, /reads and creates nothing|creates nothing/u)
+})
+
+test("the Desk adapter delegates every non-entry responsibility to its existing owner", () => {
+  const text = read(adapter)
+  for (const owner of [
+    "desk:session-resumption",
+    "desk:independent-review",
+    "desk:work-orchestration",
+    "desk:work-measurement-ledger",
+  ]) {
+    assert.ok(text.includes(owner), `the adapter must route its non-entry responsibility to ${owner}`)
+    const [plugin, skill] = owner.split(":")
+    assert.ok(existsSync(new URL(`plugins/${plugin}/skills/${skill}/SKILL.md`, repoRoot)), `${owner} must be a shipped skill`)
+  }
+  assert.match(text, /recorded repository policy/u)
+})
+
+test("the retired integration name redirects to the adapter without becoming a second contract", () => {
+  const text = read(integration)
+  assert.match(text, /desk:using-superpowers-with-desk/u)
+  assert.match(text, /[Rr]etired/u)
+  assert.doesNotMatch(text, /Entry: start \| reconciled-resume \| material-redesign\./u)
+})
 
 for (const mode of ["global-personal", "project-local"]) {
   test(`${mode} owned instructions contain no active retired lifecycle dispatch`, () => {
@@ -122,15 +203,15 @@ test("the independent-review skill ships with valid named frontmatter", () => {
   assert.match(frontmatter[1], /^description: .+$/mu)
 })
 
-test("integration preserves prior approval, delegation, alpha endpoint and a single remediation owner", () => {
-  const contract = read(integration)
+test("the adapter preserves prior approval, delegation, alpha endpoint and a single remediation owner", () => {
+  const contract = read(adapter)
   for (const invariant of [
     "Prior approval remains valid; do not reopen it without a scope change.",
     "Delegation remains limited by the recorded authority.",
     "An intentional alpha or PR-only delivery endpoint does not authorize main promotion.",
     "One implementation owner handles all remediation and re-review findings.",
   ]) {
-    assert.ok(contract.includes(invariant), `missing integration invariant: ${invariant}`)
+    assert.ok(contract.includes(invariant), `missing adapter invariant: ${invariant}`)
   }
 })
 

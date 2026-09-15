@@ -5,7 +5,7 @@ description: The 8-state task lifecycle machine — states, valid transitions, t
 
 # Task lifecycle
 
-Invoke `desk:superpowers-integration` for engineering. This skill owns Desk state transitions, not a second implementation lifecycle; Superpowers consumes the existing task, approval, plan and terminal boundary.
+Invoke `desk:using-superpowers-with-desk` for engineering, at its `start` entry for new work and at its `material-redesign` entry when an approved outcome changes design or scope materially. This skill owns Desk state transitions, not a second implementation lifecycle; Superpowers consumes the existing task, approval, plan and terminal boundary.
 
 Every task moves through a state machine with 8 states. The `status` field in `task.md` tracks the current state.
 
@@ -15,7 +15,7 @@ Every task moves through a state machine with 8 states. The `status` field in `t
 |-------|-------------|----------------|
 | `drafting` | Clarifying scope and choosing the route; a clear task can remain task-card-only | `work-orchestration` |
 | `processing` | Writing code, running tests, implementing | Selected Superpowers execution skill |
-| `validating` | Verifying the approved delivery endpoint, including authorized PR/release/smoke work | `superpowers:verification-before-completion` through the Desk integration |
+| `validating` | Verifying the approved delivery endpoint, including authorized PR/release/smoke work | `superpowers:verification-before-completion` through the Desk adapter |
 | `collaborating` | Human gate — waiting for operator input/review/approval | Paused for human |
 | `paused` | Temporarily suspended by operator | No active work |
 | `blocked` | External dependency, unclear requirement | No active work |
@@ -109,7 +109,7 @@ Commit messages are not a handoff format. A new session reading the task card mu
 
 ## Adopted tasks with completed planning
 
-When a task comes in from an external bundle with planning and doing docs already written, it still starts in `drafting`. Reuse that work through `desk:superpowers-integration`; do not recreate plans or approval already supplied by the mandate.
+When a task comes in from an external bundle with planning and doing docs already written, it still starts in `drafting`. Reuse that work through `desk:using-superpowers-with-desk`; enter at `material-redesign` only when the adopted design itself materially changes, and do not recreate plans or approval already supplied by the mandate.
 
 Signal via task card frontmatter:
 

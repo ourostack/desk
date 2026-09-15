@@ -5,7 +5,7 @@ description: Checkpoint and resume an authorized non-terminal task, including a 
 
 # Session resumption
 
-Invoke `desk:superpowers-integration` before resuming engineering. Consume the existing approval and canonical Desk paths; do not start another lifecycle or repeat go-ahead.
+Invoke `desk:using-superpowers-with-desk` at its `reconciled-resume` entry once this skill has released the prior writer and reconciled the actual source. Consume the existing approval and canonical Desk paths; do not start another lifecycle or repeat go-ahead.
 
 at the desk again. the operator picked an active task to resume — a manilla envelope already part-filled, papers laid out where the last session left them. pick up where things were, don't start over.
 
@@ -121,7 +121,7 @@ no-op — proceed to Step 3.
 | `drafting` (default) | Read the existing alignment receipt and planning/doing docs. Use `work-orchestration` and transition clear work directly to `processing` only with an agreed definition of done and explicit go-ahead; otherwise resume alignment, not implementation. |
 | `drafting` + `planning_complete: true` | Reuse the plan and recorded go; the flag alone is not approval. Transition to `processing` when authorized and retain the flag for history. |
 | `processing` | Resume the selected Superpowers execution skill from the task, branch and canonical doing record. |
-| `validating` | Resume verification of the agreed endpoint through `desk:superpowers-integration`; do not turn an alpha endpoint into a main merge. |
+| `validating` | Resume verification of the agreed endpoint through `desk:using-superpowers-with-desk` at its `reconciled-resume` entry; do not turn an alpha endpoint into a main merge. |
 | `collaborating` | Show what was waiting on the operator. Ask for the specific input needed and wait. |
 | `paused` | Ask the operator whether they want to resume (go back to the pre-pause state) or update the status. |
 | `blocked` | Show the blocker description + when/why. Ask whether it's resolved. If yes, go back to the pre-block state. |

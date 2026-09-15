@@ -1,45 +1,17 @@
 ---
 name: superpowers-integration
-description: Bind the selected Superpowers engineering method to existing Desk/Crew state, authority, review and delivery boundaries. Invoke before engineering work in the opt-in alpha.
+description: Retired name for the Desk/Superpowers seam. Redirects to desk:using-superpowers-with-desk and retains the Work Suite capability mapping for unchanged standing instructions.
 ---
 
-# Superpowers on Desk
+# Superpowers on Desk (retired name)
 
-Selected engineering lifecycle: Superpowers. Desk owns durable task/iteration state, work identity, authority and the agreed delivery endpoint; Crew adds shared-workspace read-across/write-own rules and main-branch state. Superpowers owns engineering discovery, planning, implementation and verification. Invoke this contract before its skills, including when unchanged standing instructions refer to Work Suite. Interpret those legacy calls through the mapping below, not by loading a second lifecycle.
+**Retired.** The active entry is `desk:using-superpowers-with-desk`. Invoke that adapter for entry selection, authority handover and the explicit artifact map; it is the single seam between Desk state and pristine Superpowers skills.
 
-## Authority and terminal boundary
+This file remains only as a compatibility redirect for unchanged standing instructions that still name `desk:superpowers-integration` or a retired Work Suite skill. Interpret those legacy calls through the mapping below and then enter the adapter. Do not treat this page as a second contract, and do not load a second lifecycle.
 
-Prior approval remains valid; do not reopen it without a scope change.
+Selected engineering lifecycle: Superpowers. Desk owns durable task/iteration state, work identity, authority and the agreed delivery endpoint; Crew adds shared-workspace read-across/write-own rules and main-branch state. Superpowers owns engineering discovery, planning, implementation and verification.
 
-Delegation remains limited by the recorded authority.
-
-An intentional alpha or PR-only delivery endpoint does not authorize main promotion.
-
-One implementation owner handles all remediation and re-review findings.
-
-Read the existing task card, plan, doing record and explicit mandate before selecting the applicable Superpowers skill. Do not infer permission from access, tool availability, a paused historical record, or a skill's default finish options. Later explicit instructions supersede older state; keep that fact attributable in Desk. A required machine-review gate is not a new request for human go. Respect an actual human-only approval boundary.
-
-Superpowers approval checkpoints consume the already-recorded approval when it covers the same outcome and scope. Its worktree and finishing routines cannot change the approved repository/worktree, delegate against a prohibition, promote an intentional alpha to main, publish, install into live profiles, or clean up preserved work without authority.
-
-## One state surface
-
-Keep canonical Git-backed Desk/Crew state on main through its established write protocol. An intentional alpha applies to the approved code artifact, not a competing workspace-state branch.
-
-Use existing Desk task and iteration paths. A single-repository plan belongs in its iteration's `planning.md`; an explicitly chosen cross-repository plan remains at its existing Desk planning path. Do not create a competing `.superpowers/sdd` tree.
-
-Before SDD, invoke the plugin-local helper with explicit existing paths:
-
-```sh
-node <loaded-desk-plugin>/mcp/src/activation/superpowers-context.js --desk-root <desk-root> --person <alias> --task-path <task-directory> --iteration-path <iteration-directory> --plan-path <existing-plan> --evidence-root <approved-private-evidence-root> --step <positive-step> --attempt <positive-attempt>
-```
-
-Omit `--person` for a single-person Desk. Use the actually loaded, admitted Desk artifact, not a guessed sibling directory or mutable cache path. The helper reuses Desk's path authority without creating missing roots, verifies existing regular `task.md`, plan and `doing.md` files, and returns JSON. Missing paths fail; never replace failure with an inferred plan, a mock receipt, or a fallback workspace.
-
-Apply its outputs in place of upstream SDD's path-producing helpers: `planPath` is the plan input; `progressPath` and `rulingsPath` are the same existing `doing.md`; `briefPath`, `implementationReportPath`, `reviewPackagePath` and `reviewReportPath` are the explicit artifact destinations. Produce the normal Superpowers brief and review contents at those paths, using native file/diff tools under the granted authority rather than invoking upstream helpers that select another state directory. This changes storage binding, not the engineering method.
-
-On interruption, read the canonical doing record, not an upstream shadow ledger. Reuse the recorded step/attempt for reading; allocate an explicit new attempt for new output and preserve earlier evidence. Full task/repository/iteration qualification prevents same-basename plan collisions. The helper returns `cleanupPaths: []`; that is no deletion authority. It writes nothing and does not create, discover or protect an evidence store.
-
-The evidence root must be an explicitly approved private artifact location outside Git-backed Desk. It must never be the reserved `<state home>/ouroboros-skills/desk/work-measurement/` ledger partition. File contents remain subject to the repository's write authority and the selected private-storage policy. A printed path is not proof of protection or permission.
+Recovery goes to `desk:session-resumption`; review to `desk:independent-review`; scheduling to `desk:work-orchestration`; accounting to `desk:work-measurement-ledger`; delivery to the recorded repository policy and the existing repository skills. Authority invariants, provider selection and the artifact map live in `desk:using-superpowers-with-desk`, not here.
 
 ## Bounded execution and recovery
 

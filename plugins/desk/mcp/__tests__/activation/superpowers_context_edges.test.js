@@ -13,6 +13,9 @@ const input = { deskRoot: "/desk", taskPath: "/desk/task", iterationPath: "/desk
 for (const [args, expected] of [
   [["--step"], "value required for --step"],
   [["--step", "--attempt", "2"], "value required for --step"],
+  [["--progress-path"], "value required for --progress-path"],
+  [["--progress-path", "--plan-path", "/desk/plan.md"], "value required for --progress-path"],
+  [["--progress", "/desk/progress.md"], "unknown argument --progress"],
   [["constructor", "2"], "unknown argument constructor"],
   [["__proto__", "2"], "unknown argument __proto__"],
 ]) {
@@ -26,6 +29,18 @@ for (const [args, expected] of [
 test("context rejects whitespace-only required paths", async () => {
   await assert.rejects(resolveSuperpowersContext({ ...input, evidenceRoot: " \t " }), { message: "Superpowers context: evidenceRoot is required" })
 })
+for (const key of ["planPath", "progressPath"]) {
+  test(`context rejects a supplied but empty ${key} without filesystem work`, async () => {
+    await assert.rejects(resolveSuperpowersContext({ ...input, [key]: " \t " }), {
+      message: `Superpowers context: ${key} must be a non-empty path when supplied`,
+    })
+  })
+  test(`context rejects a non-string ${key} without filesystem work`, async () => {
+    await assert.rejects(resolveSuperpowersContext({ ...input, [key]: 7 }), {
+      message: `Superpowers context: ${key} must be a non-empty path when supplied`,
+    })
+  })
+}
 for (const key of ["step", "attempt"]) {
   test(`context rejects non-integer ${key} without filesystem work`, async () => {
     await assert.rejects(resolveSuperpowersContext({ ...input, [key]: 1.5 }), { message: `Superpowers context: ${key} must be a positive integer` })
