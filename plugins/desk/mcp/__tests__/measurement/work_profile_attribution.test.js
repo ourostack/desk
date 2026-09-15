@@ -24,6 +24,23 @@ test("a null descendant identity cannot admit unallocated parent context", () =>
   assert.throws(() => buildWorkProfile(Buffer.from(JSON.stringify(snapshot()))), /subagent.*identity/i)
 })
 
+test("typed evidence role/claim ownership is independent of agent lineage attribution", () => {
+  const input = snapshot()
+  input.facts.pop()
+  input.facts.push({
+    fact_id: "child", kind: "subagent.started", agent_id: "worker-b", fields: { toolCallId: "dispatch-b" },
+    structural_parent_agent_id: "worker-a", native_session_id: "session-a", timestamp: "2026-01-01T00:00:00Z",
+    source_ref: { source_id: "events-a", native_session_id: "session-a", event_id: "child" },
+  })
+  input.evidence = [
+    { evidence_id: "authority-1", role: "desk", claim_type: "authority", class: "declared", producer: "agent_annotation", observed_at: "2026-01-01T00:00:00Z", refs: [], fact_ids: [] },
+  ]
+  const p = buildWorkProfile(Buffer.from(JSON.stringify(input)))
+  assert.equal(p.evidence[0].claim_type, "authority")
+  input.evidence[0].role = "session_history"
+  assert.throws(() => buildWorkProfile(Buffer.from(JSON.stringify(input))), /role|claim/i)
+})
+
 test("ambiguous equal-time interaction boundaries cannot manufacture assistant-step intervals", () => {
   const input = snapshot()
   input.facts.pop()

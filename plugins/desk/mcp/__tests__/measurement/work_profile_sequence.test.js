@@ -35,3 +35,26 @@ test("non-interaction native sequence ties remain deterministic and operation ID
   delete second.source_snapshot_sha256
   assert.deepEqual(first, second)
 })
+
+test("typed evidence and Lean annotations are deterministic regardless of their declared input order", () => {
+  const input = {
+    schema_version: 1,
+    binding: { native_session_id: "session-a", root_agent_id: "worker-a", dispatch_tool_call_id: "dispatch-a", title: "Synthetic evidence order", work_item_id: null, task_ref: null },
+    facts: [
+      { fact_id: "dispatch", kind: "tool.execution_start", agent_id: null, native_session_id: "session-a", timestamp: "2026-01-01T00:00:00Z", source_ref: { source_id: "events-a", native_session_id: "session-a", event_id: "dispatch" }, fields: { toolCallId: "dispatch-a" } },
+      { fact_id: "started", kind: "subagent.started", agent_id: "worker-a", native_session_id: "session-a", timestamp: "2026-01-01T00:00:01Z", source_ref: { source_id: "events-a", native_session_id: "session-a", event_id: "started" }, fields: { toolCallId: "dispatch-a" } },
+      { fact_id: "returned", kind: "tool.execution_complete", agent_id: null, native_session_id: "session-a", timestamp: "2026-01-01T00:00:02Z", source_ref: { source_id: "events-a", native_session_id: "session-a", event_id: "returned" }, fields: { toolCallId: "dispatch-a" }, returned_agent_id: "worker-a" },
+    ],
+    evidence: [
+      { evidence_id: "b-state", role: "source_system", claim_type: "mutable_state", class: "measured", producer: "source_native", observed_at: "2026-01-01T00:00:01Z", refs: [], fact_ids: [] },
+      { evidence_id: "a-intent", role: "desk", claim_type: "intent", class: "declared", producer: "agent_annotation", observed_at: "2026-01-01T00:00:00Z", refs: [], fact_ids: [] },
+    ],
+  }
+  const first = buildWorkProfile(Buffer.from(JSON.stringify(input)))
+  input.evidence.reverse()
+  const second = buildWorkProfile(Buffer.from(JSON.stringify(input)))
+  delete first.source_snapshot_sha256
+  delete second.source_snapshot_sha256
+  assert.deepEqual(first, second)
+  assert.deepEqual(first.evidence.map((e) => e.evidence_id), ["a-intent", "b-state"])
+})

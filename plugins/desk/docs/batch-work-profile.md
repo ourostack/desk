@@ -85,11 +85,17 @@ The minimal complete binding proof looks like this synthetic snapshot:
 
 All binding fields shown are required; `work_item_id` and `task_ref` may be null. This association is declared input, not a fabricated or verified canonical ledger row. Native evidence must uniquely connect the originating dispatch start, its completion's `returned_agent_id`, and the root's `subagent.started` in the same source/session. All completions at the exact source/session/owning-agent/call boundary are counted before checking the returned agent; contradictory additional returns refuse. The root dispatch itself is parent context and is excluded from job operation totals.
 
+An optional top-level `binding_mode` of `"desk_work_item"` requires `binding.work_item_id` and `binding.task_ref` to both be nonnull; without it, the historical unbound snapshot shape remains valid with either or both null. Either way, `binding.class` remains `"declared"` and `binding.canonical_ledger_identity` remains `"unverified"` — this schema records a declared association only; a future consumer verifies it against the canonical ledger before ever calling it verified.
+
 Each fact requires `fact_id`, `kind`, nullable `agent_id`, `native_session_id`, `timestamp`, and `source_ref`. Subagent facts require a nonnull agent ID. Timestamps use the existing native normalizer: an offset-bearing instant, or SQLite's space-separated UTC timestamp. Usage creation timestamps do not establish execution intervals.
 
 `source_ref` requires `source_id`, a matching `native_session_id`, and exactly one nonblank `event_id` or nonnegative safe integer `row_id`. Optional retained fields are `record_sha256`, `snapshot_row_sha256` (lowercase SHA-256), `logical_table`, `line`, `byte_offset`, and `byte_length`. Numeric pointers must be nonnegative safe integers. Preserve supplied hashes and pointers from the normalized source, rather than reconstructing them from report text.
 
 Identity is `(source_id, native_session_id, event_id OR row_id)`, not `fact_id`. Identical repeats collapse without inflating counts; all fact-ID aliases remain in the event trail. Any differing payload under the same native identity rejects the whole snapshot, including differences in otherwise ignored fields. Parsed numbers anywhere in the snapshot, including unused metadata, must be finite and have magnitude no greater than `Number.MAX_SAFE_INTEGER`. This refuses numeric overflow and unsafe integers before duplicate fingerprinting can collapse them into null or rounded values; finite fractional quantities retain existing numeric semantics. A fact-ID alias cannot name different native identities. Input reordering and object-key reordering cannot select a different winner.
+
+### Native action classes
+
+`coverage.native_action_classes` reports the messages, commands/tool calls, file/Git mutations, review/CI, waits/retries/errors, delegation/handoffs, side effects and cleanup classes. Only classes with an actual mapped native event kind are `"measured"`, with a count over the included facts; a class with no capture-adapter evidence yet (currently file/Git mutations, review/CI and waits/retries/errors) reports `"unavailable"` with `count: null` and a reason. An unsupported class is a coverage gap, not a fabricated zero, and `KINDS`/the class map are extended only when an actual native event kind is evidenced by the capture adapter — never speculatively.
 
 ### Supported event kinds and metadata
 
@@ -154,6 +160,40 @@ Top-level `source_refs` and `coverage_refs` are arrays of inert strings. All ref
 Episode IDs must be unique, `class` is `declared` or `inferred`, and each episode cites at least one actual in-scope fact ID. Both reference arrays are required. Multiple annotations may cite the same evidence without duplicating resource allocation. Per-episode token use is always unavailable in this schema: there is no supported exact native usage-row-to-model-event join, and timestamp-nearest matching is forbidden. Scope correction is not automatically defect rework or evidence of internal reasoning.
 
 Outcome `acceptance` is `unassessed` or `declared`; `status` is `unknown`, `accepted`, or `not_accepted`. Unassessed acceptance requires unknown status. Declared acceptance requires nonempty evidence references. If absent, outcome is unassessed/unknown with empty references. Publication, a returned worker and independent acceptance are distinct; this command does not assess those references.
+
+### Typed evidence and sparse Lean interpretation
+
+An optional top-level `evidence` array (at most 100 entries) carries typed, sourced claims. Each entry has this exact shape:
+
+```json
+{
+  "evidence_id": "source-state-1",
+  "role": "source_system",
+  "claim_type": "mutable_state",
+  "class": "measured",
+  "producer": "source_native",
+  "observed_at": "2026-09-15T01:00:00Z",
+  "refs": ["source-native:synthetic-commit"],
+  "fact_ids": []
+}
+```
+
+`role` is `desk`, `source_system`, or `session_history`. `claim_type` is `intent`, `authority`, `endpoint`, `mutable_state`, `execution`, or `outcome`. `class` is `measured`, `declared`, `inferred`, `estimated`, or `unavailable`. `producer` is `source_native`, `agent_annotation`, or `independent_evaluator` — a declared label, not attestation of independence. Desk owns `intent`/`authority`/`endpoint`; source systems own current `mutable_state`; session history owns raw `execution`; `outcome` combines a Desk endpoint declaration with a current external readback, so either `desk` or `source_system` is admissible there. A role outside its claim_type's admissible set is a contradictory claim and refuses; it is never silently reconciled. `evidence_id` must be unique across the array. `fact_ids` must cite only actual in-scope fact IDs, bounded at 100 like `refs`. No unrecognized field is accepted — a raw transcript field on an evidence entry refuses rather than being silently dropped. Refs are inert; nothing here resolves a live reference.
+
+An episode may carry an optional `lean` member:
+
+```json
+{
+  "lean_class": "necessary_non_value",
+  "rationale": "Verification protects the accepted endpoint criterion.",
+  "evidence_ids": ["source-state-1"],
+  "waste_kind": null
+}
+```
+
+`lean_class` is `value_adding`, `necessary_non_value`, `muda`, or `unavailable`. `rationale` is required bounded text; an absent or blank rationale refuses. `evidence_ids` must cite only `evidence_id` values present in the top-level `evidence` array, bounded at 100. `waste_kind` is `null` or one of `defects_rework`, `overproduction`, `waiting`, `unused_capability`, `transportation_handoffs`, `inventory_wip`, `motion_context_switching`, or `overprocessing`.
+
+`value_adding` requires the profile's own `outcome.status` to be `"accepted"` — an accepted endpoint criterion — and at least one cited evidence entry with `claim_type: "outcome"` and `producer: "independent_evaluator"`. A declared producer label alone, or a self-declared outcome with no independent-evaluator reference, refuses; the independent verification of that reviewer identity remains a later consumer's job. This schema does not add `mura` or `muri` fields: neither a single observation nor a large token count can establish either, and no automatic derivation from usage or activity counts is performed. Lean interpretation here is annotation, not measured truth, and it never resets or upgrades the declared binding identity.
 
 ## Reading the profile
 

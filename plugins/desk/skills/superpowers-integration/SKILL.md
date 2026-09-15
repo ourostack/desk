@@ -11,15 +11,7 @@ This file remains only as a compatibility redirect for unchanged standing instru
 
 Selected engineering lifecycle: Superpowers. Desk owns durable task/iteration state, work identity, authority and the agreed delivery endpoint; Crew adds shared-workspace read-across/write-own rules and main-branch state. Superpowers owns engineering discovery, planning, implementation and verification.
 
-Recovery goes to `desk:session-resumption`; review to `desk:independent-review`; scheduling to `desk:work-orchestration`; accounting to `desk:work-measurement-ledger`; delivery to the recorded repository policy and the existing repository skills. Authority invariants, provider selection and the artifact map live in `desk:using-superpowers-with-desk`, not here.
-
-## Review and accounting
-
-Invoke `desk:independent-review` for independent review. A host overlay may supply the reviewer launcher; it may not supply a second fix loop. Superpowers' implementation owner dispositions findings, performs in-scope fixes and requests re-review against fresh frozen inputs.
-
-Use Desk's admitted work-accounting contract for intake, commitment, scope changes and links. Intake identifies an independently assessable outcome; commitment records the explicit go and endpoint separately. Rework remains attributed to the original outcome. Do not place private usage or operational evidence in task cards, invent new parameter shapes, or treat unavailable evidence as measured. Preserve provenance classes and observed coverage cutoffs.
-
-At an agreed evaluation endpoint or observation horizon, or for a requested work-item evaluation or retrospective, invoke `desk:online-evaluation` when it is present in the admitted selected-method composition. Otherwise report evaluation unavailable. Delegate ledger capability checks, recording-off behavior and storage authorization to that skill; invocation grants no collection consent or presumed ledger availability. This is a trigger, not another engine, store or lifecycle.
+Recovery goes to `desk:session-resumption`; review to `desk:independent-review`; scheduling to `desk:work-orchestration`; accounting to `desk:work-measurement-ledger`; evaluation to `desk:online-evaluation`; delivery to the recorded repository policy and the existing repository skills. Authority invariants, provider selection and the artifact map live in `desk:using-superpowers-with-desk`, not here.
 
 ## Legacy capability mapping
 

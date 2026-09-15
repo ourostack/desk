@@ -102,6 +102,25 @@ test("markdown renders sparse observations, provenance-labelled episodes and all
   for (const format of ["json", "markdown"]) assert.throws(() => renderWorkProfile(p, format), /output limit/i)
 })
 
+test("markdown labels typed evidence and Lean interpretation as a declared annotation, not independent attestation", () => {
+  const input = fixture()
+  input.evidence = [{ evidence_id: "state-1", role: "source_system", claim_type: "mutable_state", class: "measured", producer: "source_native", observed_at: time(1), refs: ["source-native:synthetic-commit"], fact_ids: ["start"] }]
+  input.episodes = [{
+    episode_id: "correction", label: "Scope correction", class: "declared", fact_ids: ["start"], output_refs: [], evidence_refs: [],
+    lean: { lean_class: "necessary_non_value", rationale: "Verification protects the accepted endpoint criterion.", evidence_ids: ["state-1"], waste_kind: null },
+  }]
+  const p = profile(input)
+  const markdown = renderWorkProfile(p, "markdown")
+  assert.match(markdown, /state-1/)
+  assert.match(markdown, /necessary non value/)
+  assert.match(markdown, /not attestation|declared/i)
+  const json = renderWorkProfile(p, "json")
+  assert.equal(JSON.parse(json).evidence[0].evidence_id, "state-1")
+  for (const line of markdown.split("\n").filter((textLine) => textLine.startsWith("|"))) {
+    assert.ok(line.split("|").length <= 7, "evidence tables must not exceed five columns")
+  }
+})
+
 test("malformed native usage and ambiguous operation endpoints reject at the actual CLI stdout boundary", (t) => {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "desk-profile-cli-")))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
@@ -126,5 +145,34 @@ test("malformed native usage and ambiguous operation endpoints reject at the act
     assert.equal(result.status, 1)
     assert.equal(result.stdout, "")
     assert.match(result.stderr, /profile-work:/)
+  }
+})
+
+test("malformed evidence and Lean payloads reject at the actual CLI stdout boundary alongside other malformed input", (t) => {
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "desk-profile-cli-evidence-")))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const filename = path.join(directory, "input.json")
+  const script = fileURLToPath(new URL("../../scripts/profile-work.js", import.meta.url))
+  const invalid = []
+  const badEvidenceRole = fixture()
+  badEvidenceRole.evidence = [{ evidence_id: "e1", role: "not_a_role", claim_type: "mutable_state", class: "measured", producer: "source_native", observed_at: time(0), refs: [], fact_ids: [] }]
+  invalid.push(badEvidenceRole)
+  const contradictoryClaim = fixture()
+  contradictoryClaim.evidence = [{ evidence_id: "e1", role: "session_history", claim_type: "intent", class: "declared", producer: "agent_annotation", observed_at: time(0), refs: [], fact_ids: [] }]
+  invalid.push(contradictoryClaim)
+  const missingRationale = fixture()
+  missingRationale.evidence = [{ evidence_id: "e1", role: "desk", claim_type: "intent", class: "declared", producer: "agent_annotation", observed_at: time(0), refs: [], fact_ids: [] }]
+  missingRationale.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["dispatch"], output_refs: [], evidence_refs: [], lean: { lean_class: "muda", rationale: "", evidence_ids: ["e1"], waste_kind: null } }]
+  invalid.push(missingRationale)
+  const rawTranscript = fixture()
+  rawTranscript.evidence = [{ evidence_id: "e1", role: "desk", claim_type: "intent", class: "declared", producer: "agent_annotation", observed_at: time(0), refs: [], fact_ids: [], content: "PRIVATE_PAYLOAD" }]
+  invalid.push(rawTranscript)
+  for (const input of invalid) {
+    fs.writeFileSync(filename, JSON.stringify(input))
+    const result = spawnSync(process.execPath, [script, "--input", filename, "--format", "json"], { encoding: "utf8" })
+    assert.equal(result.status, 1)
+    assert.equal(result.stdout, "")
+    assert.match(result.stderr, /profile-work:/)
+    assert.ok(!result.stderr.includes("PRIVATE_PAYLOAD"))
   }
 })

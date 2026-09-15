@@ -9,6 +9,10 @@ Produce an evidence-backed account of real work. Keep outcome quality, flow and 
 
 The selected lifecycle still owns the work and any remediation. This skill reads its evidence and reports what happened. It does not introduce another task store, planner, reviewer-fix loop or model execution service.
 
+## Invocation trigger and boundaries
+
+Invoke this skill (`desk:online-evaluation`), when it is present in the admitted selected-method composition, at an agreed evaluation endpoint or observation horizon, or for a requested work-item evaluation or retrospective. Otherwise report evaluation unavailable. Ledger capability checks, recording-off behavior and storage authorization are this skill's own sections below; invocation grants no collection consent or presumed ledger availability. This is a trigger, not another engine, store or lifecycle.
+
 ## Start from the existing work item
 
 Find the canonical Desk task and active iteration. Keep the same outcome identity through planning, implementation, review, necessary rework and publication. A session, PR, delegated step or report is not another work item. Use the ledger's existing binding rather than creating an item because a report was requested.

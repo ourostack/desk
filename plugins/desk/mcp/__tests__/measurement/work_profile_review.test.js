@@ -222,3 +222,15 @@ test("safe numeric metadata and fractional usage keep existing numeric semantics
   assert.equal(p.observations.usage.dimensions.request_multiplier.value, 0.5)
   assert.equal(p.observations.usage.dimensions.input_tokens.value, null)
 })
+
+test("value_adding Lean classification requires an accepted endpoint and independent-evaluator evidence at the actual CLI boundary", (t) => {
+  const input = snapshot()
+  input.evidence = [{ evidence_id: "self-1", role: "desk", claim_type: "outcome", class: "declared", producer: "agent_annotation", observed_at: "2026-01-01T00:00:00Z", refs: [], fact_ids: [] }]
+  input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Self-declared.", evidence_ids: ["self-1"], waste_kind: null } }]
+  input.outcome = { acceptance: "declared", status: "accepted", evidence_refs: ["r"], artifact_refs: [] }
+  refused(t, input, /independent[_-]evaluator|value_adding/i)
+  input.evidence.push({ evidence_id: "indep-1", role: "source_system", claim_type: "outcome", class: "measured", producer: "independent_evaluator", observed_at: "2026-01-01T00:00:01Z", refs: [], fact_ids: [] })
+  input.episodes[0].lean.evidence_ids = ["self-1", "indep-1"]
+  const p = accepted(t, input)
+  assert.equal(p.episodes[0].lean.lean_class, "value_adding")
+})

@@ -5,20 +5,28 @@ import { readFileSync } from "node:fs"
 
 const repoRoot = new URL("../../../../../", import.meta.url)
 const read = (file) => readFileSync(new URL(file, repoRoot), "utf8")
+const evaluation = () => read("plugins/desk/skills/online-evaluation/SKILL.md")
 const integration = () => read("plugins/desk/skills/superpowers-integration/SKILL.md")
 
-test("selected-method integration invokes the named evaluation skill at the agreed horizon or request", () => {
-  assert.match(integration(), /At an agreed evaluation endpoint or observation horizon, or for a requested work-item evaluation or retrospective, invoke `desk:online-evaluation` when it is present in the admitted selected-method composition\./u)
+test("the evaluation skill states its own agreed-horizon or request trigger, not a second copy on the retired integration seam", () => {
+  assert.match(evaluation(), /at an agreed evaluation endpoint or observation horizon, or for a requested work-item evaluation or retrospective/iu)
+  assert.doesNotMatch(integration(), /agreed evaluation endpoint or observation horizon/iu)
 })
 
-test("the evaluation trigger preserves absent-skill, disabled-recording and collection-authority boundaries", () => {
+test("the evaluation trigger preserves absent-skill, disabled-recording and collection-authority boundaries on its own owning skill", () => {
+  const text = evaluation()
+  assert.match(text, /report evaluation unavailable/iu)
+  assert.match(text, /invocation grants no collection consent or presumed ledger availability/iu)
+  assert.match(text, /this is a trigger, not another engine, store or lifecycle/iu)
+})
+
+test("the retired integration seam no longer carries executable review/accounting instructions", () => {
   const text = integration()
-  assert.match(text, /Otherwise report evaluation unavailable\./u)
-  assert.match(text, /Delegate ledger capability checks, recording-off behavior and storage authorization to that skill; invocation grants no collection consent or presumed ledger availability\./u)
-  assert.match(text, /This is a trigger, not another engine, store or lifecycle\./u)
+  assert.doesNotMatch(text, /^## Review and accounting$/mu)
+  assert.doesNotMatch(text, /invocation grants no collection consent or presumed ledger availability/iu)
 })
 
 test("the packaged evaluation skill is the exact parent-approved body", () => {
   const body = readFileSync(new URL("plugins/desk/skills/online-evaluation/SKILL.md", repoRoot))
-  assert.equal(createHash("sha256").update(body).digest("hex"), "06a6c36d0ca2873a5733048e6d715a094fecc6cf331b3f05c328746122f82fa3")
+  assert.equal(createHash("sha256").update(body).digest("hex"), "725ff989b7497d2767089072ec5e8e9c30727e2f233c237a17d19914e4008ac2")
 })

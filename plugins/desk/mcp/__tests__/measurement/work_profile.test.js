@@ -72,6 +72,13 @@ function richSnapshot() {
   return input
 }
 const profile = (value = snapshot()) => buildWorkProfile(bytes(value))
+function evidenceEntry(id, overrides = {}) {
+  return {
+    evidence_id: id, role: "source_system", claim_type: "mutable_state", class: "measured",
+    producer: "source_native", observed_at: instant(0), refs: ["source-native:synthetic-commit"], fact_ids: [],
+    ...overrides,
+  }
+}
 function temporary(t) {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "desk-profile-test-")))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
@@ -197,6 +204,26 @@ test("missing endpoints are gaps and successful transport does not imply success
   assert.throws(() => profile(ambiguous), /ambiguous operation/i)
 })
 
+test("native action classes come only from actual source records; unsupported classes remain visible coverage gaps", () => {
+  const p = profile(richSnapshot())
+  const classes = p.coverage.native_action_classes
+  for (const name of ["messages", "commands", "delegation_handoffs", "cleanup", "side_effects"]) {
+    assert.equal(classes[name].class, "measured", name)
+    assert.ok(classes[name].count > 0, name)
+  }
+  for (const gap of ["file_git_mutations", "review_ci", "waits_retries_errors"]) {
+    assert.equal(classes[gap].class, "unavailable", gap)
+    assert.equal(classes[gap].count, null, gap)
+    assert.match(classes[gap].reason, /capture adapter/i, gap)
+  }
+  assert.ok(!("mura" in classes) && !("muri" in classes))
+  const empty = profile()
+  assert.equal(empty.coverage.native_action_classes.commands.class, "measured")
+  assert.equal(empty.coverage.native_action_classes.commands.count, 0)
+  assert.equal(empty.coverage.native_action_classes.delegation_handoffs.count, 1)
+  assert.equal(empty.coverage.native_action_classes.file_git_mutations.class, "unavailable")
+})
+
 test("usage dimensions preserve unknowns, partial coverage, native units and separate aggregates", () => {
   const input = richSnapshot()
   const p = profile(input)
@@ -229,6 +256,8 @@ test("episodes cite actual facts without allocating tokens or claiming defect re
   const p = profile(input)
   assert.equal(p.episodes[0].token_usage.class, "unavailable")
   assert.equal(p.episodes[0].class, "declared")
+  assert.equal(p.episodes[0].lean, null)
+  assert.deepEqual(p.evidence, [])
   assert.equal(p.outcome.acceptance, "declared")
   assert.equal(p.coverage.independent_acceptance.class, "unavailable")
   assert.deepEqual(p.coverage.source_refs, input.source_refs)
@@ -238,6 +267,207 @@ test("episodes cite actual facts without allocating tokens or claiming defect re
   assert.throws(() => profile(input), /episode/i)
   input.episodes[0].fact_ids = ["dispatch"]
   assert.throws(() => profile(input), /episode/i)
+})
+
+test("M3 profile requires a bound Desk work item", () => {
+  const input = snapshot()
+  input.binding_mode = "desk_work_item"
+  assert.throws(() => profile(input), /requires work_item_id and task_ref/u)
+})
+
+test("legacy unbound specimen remains readable", () => {
+  assert.equal(profile(snapshot()).binding.work_item_id, null)
+  assert.equal(profile(snapshot()).binding.binding_mode, null)
+})
+
+test("desk_work_item binding mode accepts a fully bound reference and still labels the association declared until T28 checks the ledger", () => {
+  const input = snapshot()
+  input.binding_mode = "desk_work_item"
+  input.binding.work_item_id = "work-a"
+  input.binding.task_ref = "task:synthetic-work"
+  const p = profile(input)
+  assert.equal(p.binding.binding_mode, "desk_work_item")
+  assert.equal(p.binding.class, "declared")
+  assert.equal(p.binding.canonical_ledger_identity, "unverified")
+  const partial = snapshot()
+  partial.binding_mode = "desk_work_item"
+  partial.binding.work_item_id = "work-a"
+  assert.throws(() => profile(partial), /requires work_item_id and task_ref/u)
+})
+
+test("an unsupported binding_mode value refuses instead of being silently ignored", () => {
+  const input = snapshot()
+  input.binding_mode = "native_ledger"
+  assert.throws(() => profile(input), /binding_mode/i)
+})
+
+test("typed evidence cites in-scope facts, honors role/claim combinations and carries a declared Lean interpretation", () => {
+  const input = richSnapshot()
+  input.evidence = [
+    evidenceEntry("intent-1", { role: "desk", claim_type: "intent", class: "declared", producer: "agent_annotation", fact_ids: [] }),
+    evidenceEntry("state-1", { fact_ids: ["tool-1-end"] }),
+    evidenceEntry("exec-1", { role: "session_history", claim_type: "execution", class: "measured", producer: "source_native", fact_ids: [] }),
+    evidenceEntry("endpoint-1", { role: "desk", claim_type: "endpoint", class: "declared", producer: "agent_annotation", fact_ids: [] }),
+    evidenceEntry("outcome-1", { role: "source_system", claim_type: "outcome", class: "measured", producer: "independent_evaluator", fact_ids: [] }),
+  ]
+  input.episodes = [{
+    episode_id: "correction", label: "Scope correction", class: "declared",
+    fact_ids: ["user-2", "turn-2-end"], output_refs: [], evidence_refs: [],
+    lean: { lean_class: "necessary_non_value", rationale: "Verification protects the accepted endpoint criterion.", evidence_ids: ["state-1"], waste_kind: null },
+  }]
+  const p = profile(input)
+  assert.equal(p.evidence.length, 5)
+  assert.deepEqual(p.evidence.map((e) => e.evidence_id), ["endpoint-1", "exec-1", "intent-1", "outcome-1", "state-1"])
+  assert.equal(p.episodes[0].lean.lean_class, "necessary_non_value")
+  assert.equal(p.episodes[0].lean.waste_kind, null)
+  assert.deepEqual(p.episodes[0].lean.evidence_ids, ["state-1"])
+  assert.ok(!("mura" in p) && !("muri" in p))
+})
+
+test("a declared-intent claim cannot masquerade as source-system live state, and role/claim combinations follow Desk/source/session ownership", () => {
+  for (const [claim_type, badRole] of [["intent", "source_system"], ["authority", "session_history"], ["mutable_state", "desk"], ["execution", "desk"], ["endpoint", "source_system"]]) {
+    const input = snapshot()
+    input.evidence = [evidenceEntry("bad-1", { role: badRole, claim_type })]
+    assert.throws(() => profile(input), /role|claim/i, `${claim_type}/${badRole}`)
+  }
+  const outcomeInput = snapshot()
+  outcomeInput.evidence = [evidenceEntry("ok-desk", { role: "desk", claim_type: "outcome" }), evidenceEntry("ok-source", { role: "source_system", claim_type: "outcome" })]
+  assert.equal(profile(outcomeInput).evidence.length, 2)
+})
+
+test("duplicate evidence IDs refuse in either input order", () => {
+  for (const order of [["a", "b"], ["b", "a"]]) {
+    const input = snapshot()
+    input.evidence = order.map((tag) => evidenceEntry("dup", { claim_type: tag === "a" ? "mutable_state" : "execution", role: tag === "a" ? "source_system" : "session_history" }))
+    assert.throws(() => profile(input), /duplicate/i)
+  }
+})
+
+test("evidence citing an out-of-scope fact ID refuses", () => {
+  const input = snapshot()
+  input.evidence = [evidenceEntry("e1", { fact_ids: ["not-a-fact"] })]
+  assert.throws(() => profile(input), /evidence|out-of-scope/i)
+})
+
+test("unsupported evidence and lean enum values refuse rather than being silently accepted", () => {
+  for (const mutate of [
+    (e) => { e.role = "unknown_role" },
+    (e) => { e.claim_type = "unknown_claim" },
+    (e) => { e.class = "unknown_class" },
+    (e) => { e.producer = "unknown_producer" },
+  ]) {
+    const input = snapshot()
+    const entry = evidenceEntry("e1")
+    mutate(entry)
+    input.evidence = [entry]
+    assert.throws(() => profile(input), /evidence|role|claim|class|producer/i)
+  }
+  const leanInput = snapshot()
+  leanInput.evidence = [evidenceEntry("e1", { role: "desk", claim_type: "intent" })]
+  leanInput.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "unknown_lean", rationale: "x", evidence_ids: ["e1"], waste_kind: null } }]
+  assert.throws(() => profile(leanInput), /lean/i)
+  const wasteInput = snapshot()
+  wasteInput.evidence = [evidenceEntry("e1", { role: "desk", claim_type: "intent" })]
+  wasteInput.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "muda", rationale: "x", evidence_ids: ["e1"], waste_kind: "unknown_waste" } }]
+  assert.throws(() => profile(wasteInput), /waste/i)
+})
+
+test("a Lean annotation without rationale refuses", () => {
+  const input = snapshot()
+  input.evidence = [evidenceEntry("e1", { role: "desk", claim_type: "intent" })]
+  input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "muda", rationale: "", evidence_ids: ["e1"], waste_kind: null } }]
+  assert.throws(() => profile(input), /rationale/i)
+})
+
+test("raw transcript-shaped evidence fields refuse rather than silently dropping", () => {
+  const input = snapshot()
+  const entry = evidenceEntry("e1")
+  entry.content = "PRIVATE_PAYLOAD"
+  input.evidence = [entry]
+  assert.throws(() => profile(input), /evidence/i)
+})
+
+test("value_adding requires an accepted endpoint criterion and an independent-evaluator outcome reference, not a declared producer label alone", () => {
+  const input = snapshot()
+  input.evidence = [evidenceEntry("self-1", { role: "desk", claim_type: "outcome", class: "declared", producer: "agent_annotation" })]
+  input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Self-declared.", evidence_ids: ["self-1"], waste_kind: null } }]
+  input.outcome = { acceptance: "declared", status: "accepted", evidence_refs: ["r"], artifact_refs: [] }
+  assert.throws(() => profile(input), /independent[_-]evaluator|value_adding/i)
+  input.evidence.push(evidenceEntry("indep-1", { role: "source_system", claim_type: "outcome", class: "measured", producer: "independent_evaluator" }))
+  input.episodes[0].lean.evidence_ids = ["self-1", "indep-1"]
+  assert.equal(profile(input).episodes[0].lean.lean_class, "value_adding")
+  input.outcome.status = "not_accepted"
+  assert.throws(() => profile(input), /accepted endpoint|value_adding/i)
+})
+
+test("no mura or muri schema field is introduced and a large token count cannot itself establish muda or muri", () => {
+  const input = richSnapshot()
+  input.facts.push(usage("u5", "worker-a", "dispatch-a", { input_tokens: dimension(900000) }))
+  const p = profile(input)
+  assert.ok(!("mura" in p) && !("muri" in p))
+  assert.ok(!("mura" in p.coverage) && !("muri" in p.coverage))
+  for (const episode of p.episodes) assert.ok(!("mura" in episode) && !("muri" in episode))
+})
+
+test("evidence and Lean annotation cannot reset or upgrade the declared binding identity", () => {
+  const input = snapshot()
+  input.binding_mode = "desk_work_item"
+  input.binding.work_item_id = "work-a"
+  input.binding.task_ref = "task:synthetic"
+  input.evidence = [evidenceEntry("rework-1", { role: "desk", claim_type: "outcome", class: "declared", producer: "independent_evaluator" })]
+  input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "muda", rationale: "Rework example.", evidence_ids: ["rework-1"], waste_kind: "defects_rework" } }]
+  const p = profile(input)
+  assert.equal(p.binding.class, "declared")
+  assert.equal(p.binding.canonical_ledger_identity, "unverified")
+})
+
+test("evidence references remain inert bounded strings, deduplicated and sorted like other reference arrays", () => {
+  const input = snapshot()
+  input.evidence = [evidenceEntry("e1", { role: "desk", claim_type: "intent", refs: ["b:two", "a:one", "a:one"] })]
+  const p = profile(input)
+  assert.deepEqual(p.evidence[0].refs, ["a:one", "b:two"])
+})
+
+test("evidence and lean citation arrays remain bounded at the existing 100-entry ceiling", () => {
+  const manyEvidence = snapshot()
+  manyEvidence.evidence = Array.from({ length: 101 }, (_, index) => evidenceEntry(`e${index}`, { role: "desk", claim_type: "intent" }))
+  assert.throws(() => profile(manyEvidence), /100|limit|evidence/i)
+  const manyFactIds = snapshot()
+  manyFactIds.facts.push(...Array.from({ length: 100 }, (_, index) => fact(`extra-${index}`, "user.message", 20 + index, "worker-a")))
+  manyFactIds.evidence = [evidenceEntry("e1", { role: "desk", claim_type: "intent", fact_ids: Array.from({ length: 101 }, (_, index) => `extra-${index}`).slice(0, 101) })]
+  assert.throws(() => profile(manyFactIds), /100|limit|evidence/i)
+  const manyLeanEvidenceIds = snapshot()
+  manyLeanEvidenceIds.evidence = [evidenceEntry("e1", { role: "desk", claim_type: "intent" })]
+  manyLeanEvidenceIds.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "muda", rationale: "x", evidence_ids: Array(101).fill("e1"), waste_kind: null } }]
+  assert.throws(() => profile(manyLeanEvidenceIds), /100|limit|lean/i)
+})
+
+test("the CLI renders typed evidence and Lean interpretation deterministically in JSON and Markdown, and refuses invalid annotations without partial output", (t) => {
+  const dir = temporary(t)
+  const file = path.join(dir, "snapshot.json")
+  const input = richSnapshot()
+  input.evidence = [evidenceEntry("state-1", { fact_ids: ["tool-1-end"] })]
+  input.episodes = [{ episode_id: "correction", label: "Scope correction", class: "declared", fact_ids: ["user-2", "turn-2-end"], output_refs: [], evidence_refs: [], lean: { lean_class: "necessary_non_value", rationale: "Verification protects the accepted endpoint criterion.", evidence_ids: ["state-1"], waste_kind: null } }]
+  fs.writeFileSync(file, bytes(input))
+  const jsonResult = cli(["--input", file, "--format", "json"])
+  assert.equal(jsonResult.status, 0, jsonResult.stderr)
+  const parsed = JSON.parse(jsonResult.stdout)
+  assert.equal(parsed.evidence[0].evidence_id, "state-1")
+  assert.equal(parsed.episodes[0].lean.lean_class, "necessary_non_value")
+  const markdownResult = cli(["--input", file, "--format", "markdown"])
+  assert.equal(markdownResult.status, 0, markdownResult.stderr)
+  assert.match(markdownResult.stdout, /state-1/)
+  assert.match(markdownResult.stdout, /necessary non value/)
+  const invalidFile = path.join(dir, "invalid.json")
+  const invalidInput = structuredClone(input)
+  invalidInput.evidence[0].role = "not_a_role"
+  fs.writeFileSync(invalidFile, bytes(invalidInput))
+  for (const format of ["json", "markdown"]) {
+    const failing = cli(["--input", invalidFile, "--format", format])
+    assert.notEqual(failing.status, 0)
+    assert.equal(failing.stdout, "")
+    assert.match(failing.stderr, /profile-work:/)
+  }
 })
 
 test("output is deterministic, bounded, sanitized and carries the actual byte hash in both formats", () => {
