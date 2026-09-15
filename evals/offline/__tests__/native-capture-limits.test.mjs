@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { runRuntimeQualification } from "../native-runtime.mjs";
 import { runTerminalProtocol } from "../native-protocol.mjs";
+import { captureBoundedCommand } from "../output.mjs";
 import { jsonBytes, sha256 } from "../core.mjs";
 import { fixture } from "./helpers/native-sdk.mjs";
 import { engine, plan, response } from "./helpers/native-engine.mjs";
@@ -59,5 +60,21 @@ test("individually bounded captures also have an aggregate pre-write budget", as
   } finally {
     t.mock.restoreAll();
     syncBuiltinESMExports();
+  }
+});
+
+test("the checker's stdout, stderr and status descriptors share one bounded capture budget", async () => {
+  const root = workRoot("native-capture-aggregate");
+  const source = 'require("node:fs").writeSync(3,"s".repeat(48));process.stdout.write("o".repeat(48));process.stderr.write("e".repeat(48));setInterval(()=>{},1000);';
+  const result = await captureBoundedCommand({ executable: process.execPath, argv: ["-e", source], cwd: root, env: {}, statusPipe: true, limits: { maxStreamBytes: 64, maxCaptureBytes: 96, timeoutMs: 1500, cleanupMs: 300 } });
+  assert.equal(result.failure.code, "COMMAND_CAPTURE_OVERFLOW");
+  const captured = result.stdout.bytes.length + result.stderr.bytes.length + result.statusPipe.bytes.length;
+  assert.equal(captured, 96, "The aggregate descriptor budget bounds capture before any further allocation");
+  assert.equal(result.captureComplete, false);});
+
+test("an aggregate capture budget below its per-stream bound is refused before a child exists", async () => {
+  const root = workRoot("native-capture-aggregate-limits");
+  for (const limits of [{ maxStreamBytes: 64, maxCaptureBytes: 32, timeoutMs: 100 }, { maxStreamBytes: 64, maxCaptureBytes: 0, timeoutMs: 100 }, { maxStreamBytes: 64, maxCaptureBytes: 1.5, timeoutMs: 100 }]) {
+    await assert.rejects(captureBoundedCommand({ executable: process.execPath, argv: ["-e", ""], cwd: root, env: {}, statusPipe: true, limits }), { code: "INVALID_COMMAND_LIMITS" });
   }
 });

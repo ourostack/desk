@@ -266,3 +266,18 @@ test("review: queued cancellation at the async case handoff cannot cross final p
   assert.equal(receipt.grade, null);
   assert.equal(f.prepared.runSet.unstartedCellIds.length, 11);
 });
+
+test("review: a candidate-visible availability claim cannot replace the parent's capture facts", async t => {
+  const f = await completedControllerFixture("checker-is-enforced");
+  const capture = checkerProcess.capture;
+  const observed = [];
+  t.mock.method(checkerProcess, "capture", async request => {
+    const result = await capture(request);
+    observed.push({ captureComplete: result.captureComplete, statusPipeEof: result.statusPipeEof ?? null });
+    // The candidate's own stream bytes claim the opposite of the parent's observation.
+    return { ...result, stdout: { ...result.stdout, bytes: Buffer.from(JSON.stringify({ namespaceClosed: true, captureComplete: true })) } };
+  });
+  await runFixedCase(options(f));
+  assert.ok(observed.length > 0);
+  assert.equal(observed.every(row => row.captureComplete === true), true, "The parent observes real EOF and exit, never the candidate's assertion");
+});

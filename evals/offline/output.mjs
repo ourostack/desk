@@ -179,12 +179,18 @@ export async function captureBoundedCommand({ executable, argv, cwd, env, limits
   const directory = absoluteRoot(cwd);
   pathIdentities(directory);
   requireCondition(plainObject(limits) && Number.isSafeInteger(limits.maxStreamBytes) && limits.maxStreamBytes > 0 && limits.maxStreamBytes <= MAX_FILE_BYTES && Number.isSafeInteger(limits.timeoutMs) && limits.timeoutMs > 0 && limits.timeoutMs <= 3600000, "INVALID_COMMAND_LIMITS", "Expected finite capture and execution bounds");
+  const channelCount = statusPipe ? 3 : 2;
+  const maxCaptureBytes = limits.maxCaptureBytes ?? limits.maxStreamBytes * channelCount;
+  requireCondition(Number.isSafeInteger(maxCaptureBytes) && maxCaptureBytes >= limits.maxStreamBytes && maxCaptureBytes <= MAX_FILE_BYTES * channelCount, "INVALID_COMMAND_LIMITS", "The aggregate descriptor budget must bound, not undercut, its per-stream bound");
   const cleanupMs = limits.cleanupMs ?? 1000;
   requireCondition(Number.isSafeInteger(cleanupMs) && cleanupMs > 0 && cleanupMs <= 30000, "INVALID_COMMAND_CLEANUP_LIMIT", "Command cleanup must also be bounded");
   return new Promise(resolve => {
     const names = ["stdout", "stderr", ...(statusPipe ? ["statusPipe"] : [])];
     const captured = Object.fromEntries(names.map(name => [name, []]));
     const lengths = Object.fromEntries(names.map(name => [name, 0]));
+    const ended = Object.fromEntries(names.map(name => [name, false]));
+    const truncatedChannels = new Set();
+    let capturedBytes = 0;
     const streams = {};
     const timers = [];
     const errors = [];
@@ -200,11 +206,18 @@ export async function captureBoundedCommand({ executable, argv, cwd, env, limits
       timers.forEach(clearTimeout);
       signal?.removeEventListener("abort", abort);
       const processIdentity = child?.pid ? { pid: child.pid, spawnIdentity } : null;
+      const channel = name => {
+        const bytes = Buffer.concat(captured[name]);
+        return { bytes, truncated: truncatedChannels.has(name), eof: ended[name], byteLength: bytes.length, sha256: sha256(bytes) };
+      };
       resolve({
         status: failure ? failure.status : "exited", exitCode, signal: exitSignal, failure, errors, elapsedMs: Date.now() - startedAt,
-        stdout: { bytes: Buffer.concat(captured.stdout), truncated: lengths.stdout >= limits.maxStreamBytes && failure?.code === "COMMAND_OUTPUT_OVERFLOW" },
-        stderr: { bytes: Buffer.concat(captured.stderr), truncated: lengths.stderr >= limits.maxStreamBytes && failure?.code === "COMMAND_OUTPUT_OVERFLOW" },
-        ...(statusPipe ? { statusPipe: { bytes: Buffer.concat(captured.statusPipe), truncated: lengths.statusPipe >= limits.maxStreamBytes && failure?.code === "COMMAND_OUTPUT_OVERFLOW" } } : {}),
+        stdout: channel("stdout"),
+        stderr: channel("stderr"),
+        ...(statusPipe ? { statusPipe: channel("statusPipe") } : {}),
+        // Complete capture is an observed command exit with every captured descriptor at EOF, never an inferred one.
+        captureComplete: !failure && exited === true && names.every(name => ended[name]),
+        limits: { maxStreamBytes: limits.maxStreamBytes, maxCaptureBytes, capturedBytes },
         cleanup: { ownedSpawns: processIdentity ? [processIdentity] : [], exitObservations: processIdentity && exited ? [{ ...processIdentity, exited: true, exitCode, signal: exitSignal }] : [], unverifiedPids: processIdentity && !exited ? [processIdentity.pid] : [], scope: "captured-direct-child-only" },
       });
     }
@@ -228,11 +241,18 @@ export async function captureBoundedCommand({ executable, argv, cwd, env, limits
       streams[channel] = channel === "statusPipe" ? child.stdio[3] : child[channel];
       streams[channel].on("data", bytes => {
         if (settled) return;
-        const prefix = bytes.subarray(0, Math.max(0, limits.maxStreamBytes - lengths[channel]));
+        const streamRemaining = Math.max(0, limits.maxStreamBytes - lengths[channel]);
+        const aggregateRemaining = Math.max(0, maxCaptureBytes - capturedBytes);
+        const prefix = bytes.subarray(0, Math.min(streamRemaining, aggregateRemaining));
         captured[channel].push(Buffer.from(prefix));
         lengths[channel] += prefix.length;
-        if (prefix.length !== bytes.length) stop("infrastructure_failure", "COMMAND_OUTPUT_OVERFLOW", "Command output exceeded its raw-byte bound");
+        capturedBytes += prefix.length;
+        if (prefix.length !== bytes.length) {
+          truncatedChannels.add(channel);
+          stop("infrastructure_failure", aggregateRemaining <= streamRemaining ? "COMMAND_CAPTURE_OVERFLOW" : "COMMAND_OUTPUT_OVERFLOW", "Command output exceeded its raw-byte bound");
+        }
       });
+      streams[channel].once("end", () => { ended[channel] = true; });
       streams[channel].once("error", error => {
         if (settled) return;
         errors.push({ channel, code: error.code, message: error.message });

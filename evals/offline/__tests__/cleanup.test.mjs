@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { repository } from "./helpers/paths.mjs";
+import { repository, workRoot } from "./helpers/paths.mjs";
 
 const moduleUrl = pathToFileURL(resolve(repository, "evals/offline/copilot-runner.mjs"));
 const spawn = { pid: 12345, spawnIdentity: "synthetic-owned-spawn" };
@@ -109,4 +109,26 @@ test("current admission can require raw generation binding without breaking hist
   const receipt = { runId: ownership.runId, ownedSpawns: ownership.ownedSpawns, ...observedExit(), completedWithinBudget: true };
   assert.equal(validateCleanupReceipt(receipt, ownership).ok, true, "Historical records without runId remain readable");
   assert.equal(validateCleanupReceipt(receipt, { ...ownership, requireRunId: true }).ok, false, "Current admission requires the raw producer's runId, not only a matching envelope");
+});
+
+test("a root exit with a live monitor channel is unavailable, not reconciled cleanup", async () => {
+  const { captureBoundedCommand } = await import(pathToFileURL(resolve(repository, "evals/offline/output.mjs")));
+  const root = workRoot("cleanup-live-monitor");
+  const source = 'const {spawn}=require("node:child_process");spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{detached:true,stdio:["ignore","ignore","ignore",3]}).unref();process.exit(0);';
+  const result = await captureBoundedCommand({ executable: process.execPath, argv: ["-e", source], cwd: root, env: {}, statusPipe: true, limits: { maxStreamBytes: 64, timeoutMs: 700, cleanupMs: 300 } });
+  assert.equal(result.statusPipe.eof, false, "The monitor descriptor outlived its root exit");
+  assert.equal(result.captureComplete, false);
+  assert.deepEqual(result.cleanup.unverifiedPids, [result.cleanup.ownedSpawns[0].pid]);
+  assert.equal(result.cleanup.exitObservations.length, 0);
+});
+
+test("an exhausted cleanup budget still resolves with retained raw capture", async () => {
+  const { captureBoundedCommand } = await import(pathToFileURL(resolve(repository, "evals/offline/output.mjs")));
+  const root = workRoot("cleanup-budget");
+  const source = 'process.on("SIGTERM",()=>{});process.stdout.write("before-stop");setInterval(()=>{},1000);';
+  const result = await captureBoundedCommand({ executable: process.execPath, argv: ["-e", source], cwd: root, env: {}, limits: { maxStreamBytes: 64, timeoutMs: 300, cleanupMs: 200 } });
+  assert.equal(result.status, "timed_out");
+  assert.equal(result.stdout.bytes.toString(), "before-stop");
+  assert.equal(result.captureComplete, false);
+  assert.ok(result.elapsedMs >= 300);
 });

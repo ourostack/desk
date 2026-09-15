@@ -1,7 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { overlaps, requireCondition, sha256 } from "./core.mjs";
+import { createHash } from "node:crypto";
+import { absoluteRoot, canonicalJson, jsonBytes, listRegularFiles, overlaps, pathIdentities, plainObject, requireCondition, sha256 } from "./core.mjs";
 import { captureBoundedCommand } from "./output.mjs";
+
+// Loader, coverage and credential carriers never cross into candidate execution.
+const refusedEnvNames = new Set(["NODE_OPTIONS", "NODE_PATH", "NODE_V8_COVERAGE", "NODE_REPL_EXTERNAL_MODULE", "NODE_EXTRA_CA_CERTS", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN", "COPILOT_TOKEN"]);
+const refusedEnvPattern = /(^|_)(API_KEY|SECRET|SECRETS|PASSWORD|PASSPHRASE|CREDENTIAL|CREDENTIALS|PRIVATE_KEY|SESSION_KEY)$/u;
+
+function boundaryRequired(condition, message) {
+  requireCondition(condition, "CHECKER_OS_BOUNDARY_REQUIRED", message);
+}
 
 function launcherExecution(result) {
   const unavailable = { status: "unavailable" };
@@ -18,32 +27,236 @@ function launcherExecution(result) {
   } catch { return unavailable; }
 }
 
+// A parent-side manifest of what the candidate may read. An unreadable manifest is an unfrozen observation, never an assumed-stable one.
+function inputManifest(root) {
+  if (root === null) return { root: null, sha256: null, files: 0 };
+  try {
+    const files = listRegularFiles(root);
+    return { root, sha256: sha256(Buffer.from(canonicalJson(files))), files: files.length };
+  } catch (error) {
+    return { root, sha256: null, files: null, error: { code: error.code, message: String(error.message).slice(0, 256) } };
+  }
+}
+
+function fileDigest(filename) {
+  try {
+    const hash = createHash("sha256");
+    const descriptor = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const buffer = Buffer.alloc(1024 * 1024);
+      let count;
+      while ((count = fs.readSync(descriptor, buffer, 0, buffer.length, null)) > 0) hash.update(buffer.subarray(0, count));
+    } finally { fs.closeSync(descriptor); }
+    return hash.digest("hex");
+  } catch { return null; }
+}
+
 // A PID namespace, not a process group: setsid/double-fork cannot escape its init's lifetime.
-export async function captureConfinedChecker({ executable, argv, cwd, env, limits, signal, workRoot, subject, checkerRoot }) {
-  requireCondition(process.platform === "linux", "CHECKER_OS_BOUNDARY_REQUIRED", "Checker execution requires Linux user/mount/PID/network namespaces and the owned bubblewrap launcher; controller-identity execution is forbidden");
+export async function captureConfinedChecker({ executable, argv, cwd, env, limits, signal, workRoot, subject, checkerRoot, inputsRoot, scratchRoot }) {
+  boundaryRequired(process.platform === "linux", "Checker execution requires Linux user/mount/PID/network namespaces and the owned bubblewrap launcher; controller-identity execution is forbidden");
   const launcher = "/usr/bin/bwrap";
   let identity;
   try { identity = fs.lstatSync(launcher); }
   catch (error) {
     if (error.code !== "ENOENT") throw error;
-    requireCondition(false, "CHECKER_OS_BOUNDARY_REQUIRED", "The maintained /usr/bin/bwrap namespace launcher is unavailable");
+    boundaryRequired(false, "The maintained /usr/bin/bwrap namespace launcher is unavailable");
   }
-  requireCondition(identity.isFile() && identity.uid === 0 && (identity.mode & 0o6022) === 0, "CHECKER_OS_BOUNDARY_REQUIRED", "The checker launcher must be a root-owned non-setid executable, not a link or writable candidate");
+  boundaryRequired(identity.isFile() && identity.uid === 0 && (identity.mode & 0o6022) === 0, "The checker launcher must be a root-owned non-setid executable, not a link or writable candidate");
   const launcherSha256 = sha256(fs.readFileSync(launcher));
+  const parentRoot = absoluteRoot(workRoot);
+  const source = absoluteRoot(subject);
+  // Held-out assertions, expected matrices and parent evidence live here and are never mounted.
+  const hidden = absoluteRoot(checkerRoot);
+  const inputs = inputsRoot === undefined || inputsRoot === null ? null : absoluteRoot(inputsRoot);
+  const scratch = absoluteRoot(scratchRoot ?? path.join(parentRoot, "child-scratch"));
+  const candidateRoots = [source, ...(inputs ? [inputs] : []), scratch];
+  boundaryRequired(candidateRoots.every(root => !overlaps(root, hidden)), "The held-out checker root cannot overlap any root the candidate can reach");
+  boundaryRequired(candidateRoots.every((root, index) => candidateRoots.slice(index + 1).every(other => !overlaps(root, other))), "Candidate source, inputs and scratch must be separate roots");
+  boundaryRequired(candidateRoots.every(root => root !== parentRoot), "The parent work root is never bound into candidate execution");
+  const directory = absoluteRoot(cwd);
+  boundaryRequired(candidateRoots.some(root => directory === root || directory.startsWith(`${root}${path.sep}`)), "The candidate working directory must be inside its mounted source, inputs or scratch root");
+  for (const [name, value] of Object.entries(env)) {
+    boundaryRequired(!refusedEnvNames.has(name) && !refusedEnvPattern.test(name), `Environment ${name} cannot cross the candidate boundary`);
+    boundaryRequired(!path.isAbsolute(value) || !overlaps(absoluteRoot(value), hidden), `Environment ${name} cannot name a held-out path`);
+  }
   const runtimeRoot = path.dirname(path.dirname(fs.realpathSync(process.execPath)));
   const mounts = [...new Set(["/usr", "/bin", "/lib", "/lib64", runtimeRoot].filter(root => fs.existsSync(root)))];
-  requireCondition(mounts.every(root => root !== "/" && [workRoot, subject, checkerRoot].every(other => !overlaps(root, other))), "CHECKER_OS_BOUNDARY_REQUIRED", "Runtime mounts must be separate from all candidate and checker inputs");
+  boundaryRequired(mounts.every(root => root !== "/" && [parentRoot, hidden, ...candidateRoots].every(other => !overlaps(root, other))), "Runtime mounts must be separate from all candidate, parent and checker inputs");
+  fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
+  pathIdentities(scratch);
+  const before = { source: inputManifest(source), inputs: inputManifest(inputs) };
   const args = ["--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL", "--uid", "65534", "--gid", "65534", "--clearenv"];
   // bwrap closes this monitor-only descriptor in the sandbox child before exec.
   args.push("--json-status-fd", "3");
   for (const root of mounts) args.push("--ro-bind", root, root);
-  args.push("--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--bind", workRoot, workRoot, "--ro-bind", subject, subject, "--ro-bind", checkerRoot, checkerRoot, "--chdir", cwd);
+  args.push("--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--ro-bind", source, source);
+  if (inputs) args.push("--ro-bind", inputs, inputs);
+  args.push("--bind", scratch, scratch, "--chdir", directory);
   for (const [name, value] of Object.entries(env)) args.push("--setenv", name, value);
+  const mountArgs = [...args];
   args.push("--", executable, ...argv);
-  const result = await captureBoundedCommand({ executable: launcher, argv: args, cwd: workRoot, env: { PATH: "/usr/bin:/bin" }, limits, signal, statusPipe: true });
-  // The launcher reports child exit, not a kernel exec event, assertion, identity or descendant proof.
-  return { ...result, launcher: { path: launcher, sha256: launcherSha256, identityScope: "prelaunch-file-only", namespace: "user,mount,pid,network,ipc,uts", execution: launcherExecution(result), nativeQualified: false } };
+  const result = await captureBoundedCommand({ executable: launcher, argv: args, cwd: parentRoot, env: { PATH: "/usr/bin:/bin" }, limits, signal, statusPipe: true });
+  const after = { source: inputManifest(source), inputs: inputManifest(inputs) };
+  const execution = launcherExecution(result);
+  const readOnly = mountArgs.flatMap((value, index) => value === "--ro-bind" ? [mountArgs[index + 1]] : []);
+  const writable = mountArgs.flatMap((value, index) => value === "--bind" ? [mountArgs[index + 1]] : []);
+  const statusPipeEof = result.statusPipe.eof === true;
+  // EOF on the monitor descriptor is the launcher's own teardown, not a PID name or process-group match.
+  const namespaceClosed = result.status === "exited" && result.signal === null && result.captureComplete === true && statusPipeEof && execution.status === "observed";
+  const facts = {
+    frozenInputs: before.source.sha256 !== null && before.source.sha256 === after.source.sha256 && before.inputs.sha256 === after.inputs.sha256 && (inputs === null || before.inputs.sha256 !== null),
+    isolatedSourceAndInputsOnly: writable.length === 1 && writable[0] === scratch && readOnly.length === mounts.length + 1 + (inputs ? 1 : 0) && readOnly.includes(source) && (!inputs || readOnly.includes(inputs)),
+    hiddenAssertionsNotMounted: [...readOnly, ...writable].every(root => !overlaps(root, hidden)) && !mountArgs.includes(hidden) && !mountArgs.includes(parentRoot),
+    captureWithinLimits: ![result.stdout, result.stderr, result.statusPipe].some(channel => channel.truncated) && !["COMMAND_OUTPUT_OVERFLOW", "COMMAND_CAPTURE_OVERFLOW"].includes(result.failure?.code),
+    commandExitObserved: result.status === "exited" && Number.isInteger(result.exitCode) && result.signal === null,
+    statusPipeEof,
+    namespaceClosed,
+    cleanupComplete: result.cleanup.unverifiedPids.length === 0 && result.cleanup.ownedSpawns.length > 0 && result.cleanup.exitObservations.length === result.cleanup.ownedSpawns.length,
+  };
+  const rawRefs = Object.fromEntries(["stdout", "stderr", "statusPipe"].map(name => [name, { channel: name, sha256: result[name].sha256, byteLength: result[name].byteLength, truncated: result[name].truncated, eof: result[name].eof }]));
+  return {
+    ...result, statusPipeEof, namespaceClosed,
+    // The launcher reports child exit, not a kernel exec event, assertion, identity or descendant proof.
+    launcher: { path: launcher, sha256: launcherSha256, identityScope: "prelaunch-file-only", namespace: "user,mount,pid,network,ipc,uts", execution, nativeQualified: false },
+    boundary: { readOnly, writable, hiddenRoots: [hidden, parentRoot], chdir: directory, inputs: { sourceManifestSha256: before.source.sha256, sourceManifestSha256After: after.source.sha256, inputsManifestSha256: before.inputs.sha256, inputsManifestSha256After: after.inputs.sha256 } },
+    availability: { ...facts, available: Object.values(facts).every(Boolean), rawRefs, scope: "observed-boundary-facts-not-attestation" },
+  };
+}
+
+const probes = [
+  {
+    id: "hidden-read",
+    // The child is given the actual parent-only path as an adversarial probe, never its contents.
+    program: `import fs from "node:fs";
+process.stdout.write(JSON.stringify({
+  hiddenReadable: fs.existsSync(process.argv[2]),
+  hasNodeOptions: Object.hasOwn(process.env, "NODE_OPTIONS"),
+  hasNodePath: Object.hasOwn(process.env, "NODE_PATH"),
+  hasCoverage: Object.hasOwn(process.env, "NODE_V8_COVERAGE"),
+  environment: Object.keys(process.env).sort(),
+}) + "\\n");`,
+    accept: value => value.hiddenReadable === false && value.hasNodeOptions === false && value.hasNodePath === false && value.hasCoverage === false,
+    contributes: ["hiddenAssertionsSeparated"],
+  },
+  {
+    id: "write-denied",
+    program: `import fs from "node:fs";
+const attempt = target => { try { fs.writeFileSync(target, "candidate"); return "written"; } catch (error) { return error.code; } };
+process.stdout.write(JSON.stringify({ source: attempt(process.argv[3]), inputs: attempt(process.argv[4]), scratch: attempt(process.argv[5]) }) + "\\n");`,
+    accept: value => value.source !== "written" && value.inputs !== "written" && value.scratch === "written",
+    contributes: ["isolation"],
+  },
+  {
+    id: "network-denied",
+    program: `import net from "node:net";
+const done = network => { process.stdout.write(JSON.stringify({ network }) + "\\n"); process.exit(0); };
+const socket = net.connect(443, "93.184.216.34");
+socket.setTimeout(2000, () => done("timeout"));
+socket.on("error", error => done(error.code));
+socket.on("connect", () => done("connected"));`,
+    accept: value => typeof value.network === "string" && value.network !== "connected",
+    contributes: ["isolation"],
+  },
+  {
+    id: "fork-setsid",
+    program: `import { spawn } from "node:child_process";
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: ["ignore", "inherit", "inherit"] });
+child.unref();
+process.stdout.write(JSON.stringify({ escapedPid: child.pid }) + "\\n");`,
+    accept: value => Number.isSafeInteger(value.escapedPid) && value.escapedPid > 0,
+    contributes: ["namespaceCleanup"],
+  },
+  {
+    id: "capture-bound",
+    program: `process.stdout.write("x".repeat(1024 * 1024));`,
+    limits: { maxStreamBytes: 4096 },
+    expect: result => result.stdout.truncated === true && result.stdout.byteLength <= 4096 && result.availability.captureWithinLimits === false && result.availability.available === false,
+    contributes: ["boundedCapture"],
+  },
+  {
+    id: "cancellation",
+    program: `setInterval(() => {}, 1000);`,
+    cancel: true,
+    expect: result => result.status === "cancelled" && result.namespaceClosed === false && result.availability.available === false,
+    contributes: ["namespaceCleanup"],
+  },
+];
+
+// Zero-model observations under a frozen boundary. Not a cryptographic attestation of the runtime.
+export async function qualifyCheckerBoundary({ workRoot, sourceRoot, controllerRoot, limits, signal }) {
+  const root = absoluteRoot(workRoot);
+  const source = absoluteRoot(sourceRoot);
+  const controller = absoluteRoot(controllerRoot);
+  requireCondition(plainObject(limits), "INVALID_COMMAND_LIMITS", "The checker preflight requires explicit capture and execution bounds");
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const evidenceRefs = [];
+  const retain = (name, bytes) => {
+    fs.writeFileSync(path.join(root, name), bytes, { flag: "w", mode: 0o600 });
+    evidenceRefs.push({ path: name, sha256: sha256(bytes) });
+  };
+  const identities = () => ({ controllerSha256: inputManifest(controller).sha256, runtimeSha256: fileDigest(process.execPath), launcherSha256: fileDigest("/usr/bin/bwrap"), sourceManifestSha256: inputManifest(source).sha256 });
+  const identitiesBefore = identities();
+  const observations = [];
+  for (const probe of probes) {
+    const scratch = path.join(root, `${probe.id}-scratch`);
+    const inputs = path.join(root, `${probe.id}-inputs`);
+    fs.mkdirSync(inputs, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(inputs, "public-input.json"), jsonBytes({ probe: probe.id, kind: "public-input" }), { flag: "w", mode: 0o600 });
+    const cancellation = probe.cancel ? new AbortController() : null;
+    const observation = { id: probe.id, contributes: probe.contributes, accepted: false };
+    // The frozen probe program is a parent-owned, read-only input, so argv[1] is the program and argv[2] is the adversarial hidden path.
+    const program = path.join(inputs, `${probe.id}.mjs`);
+    fs.writeFileSync(program, Buffer.from(`${probe.program}\n`), { flag: "w", mode: 0o400 });
+    try {
+      const pending = captureConfinedChecker({
+        executable: process.execPath,
+        argv: [program, controller, path.join(source, ".candidate-write-probe"), path.join(inputs, "public-input.json"), path.join(scratch, "candidate-write-probe")],
+        cwd: scratch, env: { HOME: scratch, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin` },
+        limits: { ...limits, ...probe.limits }, signal: cancellation ? cancellation.signal : signal,
+        workRoot: root, subject: source, checkerRoot: controller, inputsRoot: inputs, scratchRoot: scratch,
+      });
+      if (cancellation) setTimeout(() => cancellation.abort(), 100);
+      const result = await pending;
+      retain(`${probe.id}-stdout.raw`, result.stdout.bytes);
+      retain(`${probe.id}-stderr.raw`, result.stderr.bytes);
+      retain(`${probe.id}-status.raw`, result.statusPipe.bytes);
+      let parsed = null;
+      try { parsed = JSON.parse(result.stdout.bytes.toString("utf8")); } catch { parsed = null; }
+      Object.assign(observation, {
+        status: result.availability.available ? "available" : "unavailable",
+        exitCode: result.exitCode, commandStatus: result.status, captureComplete: result.captureComplete,
+        statusPipeEof: result.statusPipeEof, namespaceClosed: result.namespaceClosed,
+        availability: result.availability, boundary: result.boundary, cleanup: result.cleanup,
+        launcher: { path: result.launcher.path, sha256: result.launcher.sha256, execution: result.launcher.execution, nativeQualified: false },
+        parsedCandidateOutput: parsed,
+        // Candidate output is read only where the parent already observed an available, complete, closed run.
+        accepted: probe.expect
+          ? probe.expect(result)
+          : result.availability.available === true && result.exitCode === 0 && parsed !== null && probe.accept(parsed),
+      });
+    } catch (error) {
+      Object.assign(observation, { status: "unavailable", error: { code: error.code, message: String(error.message).slice(0, 256) } });
+    }
+    retain(`${probe.id}-probe.json`, jsonBytes(observation));
+    observations.push(observation);
+  }
+  const identitiesAfter = identities();
+  const contributed = name => {
+    const rows = observations.filter(row => row.contributes.includes(name));
+    return rows.length > 0 && rows.every(row => row.accepted === true);
+  };
+  const checks = {
+    isolation: contributed("isolation"),
+    hiddenAssertionsSeparated: contributed("hiddenAssertionsSeparated") && observations.every(row => row.availability === undefined || row.availability.hiddenAssertionsNotMounted === true),
+    boundedCapture: contributed("boundedCapture"),
+    namespaceCleanup: contributed("namespaceCleanup"),
+    frozenIdentities: canonicalJson(identitiesBefore) === canonicalJson(identitiesAfter) && Object.values(identitiesBefore).every(value => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value)),
+  };
+  retain("preflight-observations.json", jsonBytes({ schemaVersion: 1, identitiesBefore, identitiesAfter, observations }));
+  const receipt = { schemaVersion: 1, status: Object.values(checks).every(Boolean) ? "available" : "unavailable", claimScope: "behavioral_outcome", identities: identitiesBefore, checks, evidenceRefs };
+  fs.writeFileSync(path.join(root, "preflight-receipt.json"), jsonBytes(receipt), { flag: "w", mode: 0o600 });
+  return receipt;
 }
 
 // The controller owns this dependency. Test transports replace it only in the test process.
-export const checkerProcess = { capture: captureConfinedChecker };
+export const checkerProcess = { capture: captureConfinedChecker, qualify: qualifyCheckerBoundary };

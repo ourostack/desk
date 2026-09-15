@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -170,4 +171,45 @@ test("a launcher status transport error fails capture and still bounds owned-chi
   assert.deepEqual(result.cleanup.unverifiedPids, [child.pid]);
   child.stdout.emit("error", new Error("late stream error"));
   assert.equal(result.errors.length, 1);
+});
+
+test("a completed real command reports stream EOF and complete capture with raw identities", async () => {
+  const result = await captureBoundedCommand(options('process.stdout.write("done");process.exitCode=0'));
+  assert.equal(result.stdout.eof, true);
+  assert.equal(result.stderr.eof, true);
+  assert.equal(result.captureComplete, true);
+  assert.equal(result.stdout.sha256, createHash("sha256").update(result.stdout.bytes).digest("hex"));
+  assert.equal(result.stdout.byteLength, 4);
+});
+
+test("a real late inherited descriptor withholds EOF and complete capture inside the deadline", async () => {
+  const source = 'const {spawn}=require("node:child_process");spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{detached:true,stdio:["ignore","inherit","inherit"]}).unref();process.stdout.write("parent-exited");';
+  const result = await captureBoundedCommand({ ...options(source), limits: { maxStreamBytes: 64, timeoutMs: 700, cleanupMs: 300 } });
+  assert.equal(result.stdout.bytes.toString(), "parent-exited");
+  assert.equal(result.captureComplete, false, "A surviving descendant holding the pipe is not a completed capture");
+  assert.equal(result.status, "timed_out");
+});
+
+test("a real fork that keeps FD 3 open withholds status-pipe EOF", async () => {
+  const source = 'const {spawn}=require("node:child_process");const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{detached:true,stdio:["ignore","ignore","ignore",3]});child.unref();require("node:fs").writeSync(3,"launcher");';
+  const result = await captureBoundedCommand({ ...options(source), statusPipe: true, limits: { maxStreamBytes: 64, timeoutMs: 700, cleanupMs: 300 } });
+  assert.equal(result.statusPipe.bytes.toString(), "launcher");
+  assert.equal(result.statusPipe.eof, false);
+  assert.equal(result.captureComplete, false);
+});
+
+test("a late zero exit after cancellation stays cancelled and incomplete", async () => {
+  const controller = new AbortController();
+  const running = captureBoundedCommand({ ...options('process.on("SIGTERM",()=>{setTimeout(()=>process.exit(0),20)});process.stdout.write("started");setInterval(()=>{},1000)'), signal: controller.signal, limits: { maxStreamBytes: 64, timeoutMs: 5000, cleanupMs: 400 } });
+  setTimeout(() => controller.abort(), 200);
+  const result = await running;
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.failure.code, "COMMAND_CANCELLED");
+  assert.equal(result.captureComplete, false);
+});
+
+test("captured overflow is never a complete capture", async () => {
+  const result = await captureBoundedCommand(options('process.on("SIGTERM",()=>{});const send=()=>process.stdout.write("x".repeat(4096));send();setInterval(send,10)'));
+  assert.equal(result.failure.code, "COMMAND_OUTPUT_OVERFLOW");
+  assert.equal(result.captureComplete, false);
 });
