@@ -10,5 +10,9 @@ for (const surface of ["agents/worker.toml", "output-styles/worker.md"]) {
     assert.match(source, /Long-lived work, bounded processes/u)
     assert.match(source, /session-resumption.*checkpoint|checkpoint.*session-resumption/u)
     assert.match(source, /process exit is not task completion/u)
+    assert.match(source, /mapped.*progress.*rulings/u)
+    assert.match(source, /entire writer tree.*released/u)
+    assert.match(source, /delivery.*git-hygiene/u)
+    assert.match(source, /cleanup_pending.*validating/u)
   })
 }

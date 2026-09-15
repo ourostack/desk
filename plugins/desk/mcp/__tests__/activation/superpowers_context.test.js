@@ -4,7 +4,7 @@ import * as path from "node:path"
 import { tmpdir } from "node:os"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { resolveWriteTarget } from "../../src/util/paths.js"
 
 let fixtureRoot
@@ -86,6 +86,126 @@ test("Superpowers context prints exact paths without introducing a second progre
   assert.equal(JSON.stringify(output).includes(".superpowers"), false)
 })
 
+test("optional plan maps task-card-only work without creating provider files", async () => {
+  const input = context()
+  delete input.planPath
+  rmSync(path.join(input.iterationPath, "doing.md"))
+  const output = await resolve(input)
+  assert.equal(output.planPath, null)
+  assert.equal(output.progressPath, path.join(input.taskPath, "task.md"))
+  assert.equal(output.rulingsPath, path.join(input.taskPath, "task.md"))
+  assert.deepEqual(output.cleanupPaths, [])
+})
+
+test("explicit provider progress wins without renaming legacy doing", async () => {
+  const input = context()
+  input.progressPath = path.join(input.iterationPath, "superpowers-progress.md")
+  writeFileSync(input.progressPath, "# Provider progress\n")
+  const output = await resolve(input)
+  assert.equal(output.progressPath, input.progressPath)
+  assert.equal(output.rulingsPath, input.progressPath)
+  assert.equal(existsSync(path.join(input.iterationPath, "doing.md")), true)
+})
+
+test("omitted progress still prefers the existing iteration doing record over the task card", async () => {
+  const input = context()
+  delete input.progressPath
+  const output = await resolve(input)
+  assert.equal(output.progressPath, path.join(input.iterationPath, "doing.md"))
+  assert.equal(output.rulingsPath, output.progressPath)
+})
+
+test("an in-task symlink to a neighbouring task's record is refused as progress", async () => {
+  const input = context()
+  const otherTask = path.join(input.deskRoot, "desks", "member", "track", "linked-outcome")
+  const otherIteration = path.join(otherTask, "repository", "2026-09-09-initial-impl")
+  const neighbour = context({ taskPath: otherTask, iterationPath: otherIteration, planPath: path.join(otherIteration, "planning.md") })
+  seedCanonicalFiles(neighbour)
+  const links = [
+    [path.join(input.iterationPath, "linked-task-card.md"), path.join(otherTask, "task.md")],
+    [path.join(input.iterationPath, "linked-doing.md"), path.join(otherIteration, "doing.md")],
+  ]
+  for (const [link, destination] of links) symlinkSync(destination, link, "file")
+  const before = snapshotTree()
+  const resolveContext = await loadResolver()
+  for (const [link, destination] of links) {
+    await assert.rejects(() => resolveContext({ ...input, progressPath: link }), {
+      message: "Superpowers context: progressPath must be within taskPath",
+    })
+    assert.equal(realpathSync(link), realpathSync(destination), "the fixture link must really resolve into the neighbouring task")
+    assert.equal(statSync(link).isFile(), true, "the fixture link must look like a regular file to a follow-the-link stat")
+  }
+  assert.deepEqual(snapshotTree(), before, "refusing a task-escaping link must not rewrite the neighbouring task")
+})
+
+test("an in-task symlink to this task's own record stays usable as progress", async () => {
+  const input = context()
+  const link = path.join(input.iterationPath, "superpowers-progress.md")
+  symlinkSync(path.join(input.iterationPath, "doing.md"), link, "file")
+  const output = await resolve({ ...input, progressPath: link })
+  assert.equal(output.progressPath, link)
+  assert.equal(output.rulingsPath, link)
+})
+
+test("explicit provider progress in another task of the same person is refused", async () => {
+  const input = context()
+  const otherTask = path.join(input.deskRoot, "desks", "member", "track", "neighbour-outcome")
+  const otherIteration = path.join(otherTask, "repository", "2026-09-09-initial-impl")
+  const neighbour = context({ taskPath: otherTask, iterationPath: otherIteration, planPath: path.join(otherIteration, "planning.md") })
+  seedCanonicalFiles(neighbour)
+  const before = snapshotTree()
+  const resolveContext = await loadResolver()
+  for (const foreign of [path.join(otherIteration, "doing.md"), path.join(otherTask, "task.md")]) {
+    await assert.rejects(() => resolveContext({ ...input, progressPath: foreign }), {
+      message: "Superpowers context: progressPath must be within taskPath",
+    })
+  }
+  assert.deepEqual(snapshotTree(), before, "refusing a neighbouring task's canonical state must not rewrite it")
+})
+
+test("explicit provider progress in another person's desk is refused rather than written", async () => {
+  const input = context()
+  const foreignIteration = path.join(input.deskRoot, "desks", "other", "track", "outcome", "repository", "2026-09-09-initial-impl")
+  mkdirSync(foreignIteration, { recursive: true })
+  input.progressPath = path.join(foreignIteration, "superpowers-progress.md")
+  writeFileSync(input.progressPath, "# Foreign progress\n")
+  const before = snapshotTree()
+  const resolveContext = await loadResolver()
+  await assert.rejects(() => resolveContext(input), {
+    message: "Superpowers context: progressPath must be within the effective Desk scope",
+  })
+  assert.deepEqual(snapshotTree(), before)
+})
+
+test("explicit provider progress that escapes the person root through a symlink is refused", async () => {
+  const input = context()
+  const elsewhere = path.join(fixtureRoot, "elsewhere")
+  mkdirSync(elsewhere, { recursive: true })
+  writeFileSync(path.join(elsewhere, "superpowers-progress.md"), "# Escaped progress\n")
+  symlinkSync(elsewhere, path.join(input.iterationPath, "escape"), "dir")
+  input.progressPath = path.join(input.iterationPath, "escape", "superpowers-progress.md")
+  const resolveContext = await loadResolver()
+  await assert.rejects(() => resolveContext(input), /write target resolves outside/u)
+})
+
+test("same-basename provider progress in different tasks never shares a ruling store", async () => {
+  const first = context()
+  first.progressPath = path.join(first.iterationPath, "superpowers-progress.md")
+  writeFileSync(first.progressPath, "# First provider progress\n")
+  const taskPath = path.join(first.deskRoot, "desks", "member", "track", "second-outcome")
+  const iterationPath = path.join(taskPath, "repository", "2026-09-09-initial-impl")
+  const second = context({ taskPath, iterationPath, planPath: path.join(iterationPath, "planning.md") })
+  seedCanonicalFiles(second)
+  second.progressPath = path.join(iterationPath, "superpowers-progress.md")
+  writeFileSync(second.progressPath, "# Second provider progress\n")
+  const left = await resolve(first)
+  const right = await resolve(second)
+  assert.equal(path.basename(left.progressPath), path.basename(right.progressPath))
+  assert.notEqual(left.progressPath, right.progressPath)
+  assert.notEqual(left.rulingsPath, right.rulingsPath)
+  assert.notEqual(left.artifactDirectory, right.artifactDirectory)
+})
+
 test("same-basename planning files in different tasks never share artifacts", async () => {
   const first = context()
   const taskPath = path.join(first.deskRoot, "desks", "member", "track", "other-outcome")
@@ -160,13 +280,16 @@ test("context canonical paths agree with existing Desk write-target authority", 
   assert.equal(existsSync(input.taskPath), true)
 })
 
-for (const [label, kind, canonicalPath] of [
-  ["task.md", "task card", (input) => path.join(input.taskPath, "task.md")],
-  ["planning.md", "plan", (input) => input.planPath],
-  ["doing.md", "progress", (input) => path.join(input.iterationPath, "doing.md")],
+for (const [label, kind, canonicalPath, makeExplicit] of [
+  ["task.md", "task card", (input) => path.join(input.taskPath, "task.md"), () => {}],
+  ["planning.md", "plan", (input) => input.planPath, () => {}],
+  ["doing.md", "progress", (input) => path.join(input.iterationPath, "doing.md"), (input) => {
+    input.progressPath = path.join(input.iterationPath, "doing.md")
+  }],
 ]) {
   test(`context refuses missing canonical ${label} without modifying remaining files`, async () => {
     const input = context()
+    makeExplicit(input)
     const missing = canonicalPath(input)
     rmSync(missing)
     const before = snapshotTree()
@@ -177,6 +300,30 @@ for (const [label, kind, canonicalPath] of [
     assert.equal(existsSync(input.evidenceRoot), false)
   })
 }
+
+test("an explicit provider progress path that does not exist is refused instead of defaulted", async () => {
+  const input = context()
+  input.progressPath = path.join(input.iterationPath, "superpowers-progress.md")
+  const before = snapshotTree()
+  const resolveContext = await loadResolver()
+  await assert.rejects(() => resolveContext(input), {
+    message: `Superpowers context: canonical progress does not exist: ${input.progressPath}`,
+  })
+  assert.deepEqual(snapshotTree(), before)
+  assert.equal(existsSync(input.progressPath), false)
+})
+
+test("an explicit provider progress directory is refused rather than treated as a record", async () => {
+  const input = context()
+  input.progressPath = path.join(input.iterationPath, "superpowers-progress.md")
+  mkdirSync(input.progressPath)
+  const before = snapshotTree()
+  const resolveContext = await loadResolver()
+  await assert.rejects(() => resolveContext(input), {
+    message: `Superpowers context: canonical progress must be a regular file: ${input.progressPath}`,
+  })
+  assert.deepEqual(snapshotTree(), before)
+})
 
 test("context refuses a directory in place of a canonical file", async () => {
   const input = context()
@@ -222,17 +369,21 @@ test("person-off context retains the ordinary Desk path authority", async () => 
 
 function commandArgs(input) {
   const helper = fileURLToPath(new URL("../../src/activation/superpowers-context.js", import.meta.url))
-  return [
+  const args = [
     helper,
     "--desk-root", input.deskRoot,
     "--person", input.person,
     "--task-path", input.taskPath,
     "--iteration-path", input.iterationPath,
-    "--plan-path", input.planPath,
+  ]
+  if (input.planPath !== undefined) args.push("--plan-path", input.planPath)
+  if (input.progressPath !== undefined) args.push("--progress-path", input.progressPath)
+  args.push(
     "--evidence-root", input.evidenceRoot,
     "--step", "1",
     "--attempt", "1",
-  ]
+  )
+  return args
 }
 
 function runCommand(args) {
@@ -269,4 +420,33 @@ test("CLI unknown option fails with its own diagnostic and no partial output or 
   assert.equal(result.status, 1)
   assert.equal(result.stdout, "")
   assert.equal(result.stderr.trim(), "Superpowers context: unknown argument --unexpected")
+})
+
+test("the CLI prints the same explicit plan and provider progress paths as the resolver", async () => {
+  const input = context()
+  input.progressPath = path.join(input.iterationPath, "superpowers-progress.md")
+  writeFileSync(input.progressPath, "# Provider progress\n")
+  const before = snapshotTree()
+  const result = runCommand(commandArgs(input))
+  assert.deepEqual(snapshotTree(), before, "CLI resolution must preserve canonical bytes and create no evidence")
+  assert.equal(result.status, 0, result.stderr)
+  const printed = JSON.parse(result.stdout)
+  assert.equal(printed.planPath, input.planPath)
+  assert.equal(printed.progressPath, input.progressPath)
+  assert.equal(printed.rulingsPath, input.progressPath)
+  assert.deepEqual(printed, await resolve(input))
+})
+
+test("the CLI maps task-card-only work when the plan option is omitted", async () => {
+  const input = context()
+  delete input.planPath
+  rmSync(path.join(input.iterationPath, "doing.md"))
+  const before = snapshotTree()
+  const result = runCommand(commandArgs(input))
+  assert.deepEqual(snapshotTree(), before)
+  assert.equal(result.status, 0, result.stderr)
+  const printed = JSON.parse(result.stdout)
+  assert.equal(printed.planPath, null)
+  assert.equal(printed.progressPath, path.join(input.taskPath, "task.md"))
+  assert.deepEqual(printed, await resolve(input))
 })

@@ -1,61 +1,17 @@
 ---
 name: superpowers-integration
-description: Bind the selected Superpowers engineering method to existing Desk/Crew state, authority, review and delivery boundaries. Invoke before engineering work in the opt-in alpha.
+description: Retired name for the Desk/Superpowers seam. Redirects to desk:using-superpowers-with-desk and retains the Work Suite capability mapping for unchanged standing instructions.
 ---
 
-# Superpowers on Desk
+# Superpowers on Desk (retired name)
 
-Selected engineering lifecycle: Superpowers. Desk owns durable task/iteration state, work identity, authority and the agreed delivery endpoint; Crew adds shared-workspace read-across/write-own rules and main-branch state. Superpowers owns engineering discovery, planning, implementation and verification. Invoke this contract before its skills, including when unchanged standing instructions refer to Work Suite. Interpret those legacy calls through the mapping below, not by loading a second lifecycle.
+**Retired.** The active entry is `desk:using-superpowers-with-desk`. Invoke that adapter for entry selection, authority handover and the explicit artifact map; it is the single seam between Desk state and pristine Superpowers skills.
 
-## Authority and terminal boundary
+This file remains only as a compatibility redirect for unchanged standing instructions that still name `desk:superpowers-integration` or a retired Work Suite skill. Interpret those legacy calls through the mapping below and then enter the adapter. Do not treat this page as a second contract, and do not load a second lifecycle.
 
-Prior approval remains valid; do not reopen it without a scope change.
+Selected engineering lifecycle: Superpowers. Desk owns durable task/iteration state, work identity, authority and the agreed delivery endpoint; Crew adds shared-workspace read-across/write-own rules and main-branch state. Superpowers owns engineering discovery, planning, implementation and verification.
 
-Delegation remains limited by the recorded authority.
-
-An intentional alpha or PR-only delivery endpoint does not authorize main promotion.
-
-One implementation owner handles all remediation and re-review findings.
-
-Read the existing task card, plan, doing record and explicit mandate before selecting the applicable Superpowers skill. Do not infer permission from access, tool availability, a paused historical record, or a skill's default finish options. Later explicit instructions supersede older state; keep that fact attributable in Desk. A required machine-review gate is not a new request for human go. Respect an actual human-only approval boundary.
-
-Superpowers approval checkpoints consume the already-recorded approval when it covers the same outcome and scope. Its worktree and finishing routines cannot change the approved repository/worktree, delegate against a prohibition, promote an intentional alpha to main, publish, install into live profiles, or clean up preserved work without authority.
-
-## One state surface
-
-Keep canonical Git-backed Desk/Crew state on main through its established write protocol. An intentional alpha applies to the approved code artifact, not a competing workspace-state branch.
-
-Use existing Desk task and iteration paths. A single-repository plan belongs in its iteration's `planning.md`; an explicitly chosen cross-repository plan remains at its existing Desk planning path. Do not create a competing `.superpowers/sdd` tree.
-
-Before SDD, invoke the plugin-local helper with explicit existing paths:
-
-```sh
-node <loaded-desk-plugin>/mcp/src/activation/superpowers-context.js --desk-root <desk-root> --person <alias> --task-path <task-directory> --iteration-path <iteration-directory> --plan-path <existing-plan> --evidence-root <approved-private-evidence-root> --step <positive-step> --attempt <positive-attempt>
-```
-
-Omit `--person` for a single-person Desk. Use the actually loaded, admitted Desk artifact, not a guessed sibling directory or mutable cache path. The helper reuses Desk's path authority without creating missing roots, verifies existing regular `task.md`, plan and `doing.md` files, and returns JSON. Missing paths fail; never replace failure with an inferred plan, a mock receipt, or a fallback workspace.
-
-Apply its outputs in place of upstream SDD's path-producing helpers: `planPath` is the plan input; `progressPath` and `rulingsPath` are the same existing `doing.md`; `briefPath`, `implementationReportPath`, `reviewPackagePath` and `reviewReportPath` are the explicit artifact destinations. Produce the normal Superpowers brief and review contents at those paths, using native file/diff tools under the granted authority rather than invoking upstream helpers that select another state directory. This changes storage binding, not the engineering method.
-
-On interruption, read the canonical doing record, not an upstream shadow ledger. Reuse the recorded step/attempt for reading; allocate an explicit new attempt for new output and preserve earlier evidence. Full task/repository/iteration qualification prevents same-basename plan collisions. The helper returns `cleanupPaths: []`; that is no deletion authority. It writes nothing and does not create, discover or protect an evidence store.
-
-The evidence root must be an explicitly approved private artifact location outside Git-backed Desk. It must never be the reserved `<state home>/ouroboros-skills/desk/work-measurement/` ledger partition. File contents remain subject to the repository's write authority and the selected private-storage policy. A printed path is not proof of protection or permission.
-
-## Bounded execution and recovery
-
-Use `desk:session-resumption` to checkpoint at completed integration and delegation boundaries and before an unattended batch. Keep one implementation writer per worktree, close completed assignments, and return bounded findings plus artifact pointers rather than repeatedly copying whole histories or command output. The approved outcome continues across process handovers; no new go or lifecycle is created.
-
-Treat a host-observed persistent memory-pressure signal followed by compaction failure as a handover condition: stop starting new work, preserve the current recoverable source/evidence and use the authorized host recovery path. Do not keep retrying failed emergency compaction indefinitely. Context-token usage is not JavaScript heap usage, and more physical memory does not establish a healthy process.
-
-The guard and restart capability must live outside the worker process. Desk owns checkpoint and recovery admission; the host owns process generations, descendant cleanup and the actual launch. A replacement must consume the current Desk record, establish sole-writer ownership, reconcile uncertain side effects and keep the original work identity. Do not put a second scheduler, task ledger or implementation loop into this integration.
-
-The host protocol declares armed and disarmed intent, finite pressure-persistence/checkpoint/handover/acknowledgement limits, and a persisted ceiling on consecutive recoveries without verified durable progress. A launch, heartbeat or self-reported success cannot reset that counter. Explicitly disarm before an intentional stop, pause or completion; recovery must not resurrect stopped work. For non-ready recovery, do not launch or continue the protected workload, report the exact reason and never substitute reduced-capability execution. Independent safe work can continue under the original mandate.
-
-Record the actual fresh-history executable/argv, admitted source/profile and identity in the host receipt without copying credentials or changing permissions. Require a work-item-bound acknowledgement and read-back of the next expected work step before declaring recovery successful; starting a process or delivering a prompt is not that acknowledgement.
-
-Before claiming unattended recovery, exercise two consecutive actual interruption and recovery cycles on the declared consuming host. Confirm preserved partial work and original identity, no competing writers or duplicate external effects, resumed work through the selected source, and ordinary rollback. Retain both attempts and their source/host boundaries. Source instructions, a synthetic process fixture or a successful launch alone are not that proof.
-
-The two cycles include graceful handover and abrupt mid-batch interruption, with actual uncommitted source and an externally visible operation whose response is uncertain. Record the operation identity or idempotency key before issue; use destination read-back instead of blind replay. Prove refusal of a surviving delegated writer, intentional-stop/disarm behavior, the exhausted recovery budget and an incomplete latest checkpoint. Each replacement must perform the next expected work step; two idle restarts cannot satisfy the requirement.
+Recovery goes to `desk:session-resumption`; review to `desk:independent-review`; scheduling to `desk:work-orchestration`; accounting to `desk:work-measurement-ledger`; delivery to the recorded repository policy and the existing repository skills. Authority invariants, provider selection and the artifact map live in `desk:using-superpowers-with-desk`, not here.
 
 ## Review and accounting
 
