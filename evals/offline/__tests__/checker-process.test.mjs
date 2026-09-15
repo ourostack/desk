@@ -767,9 +767,10 @@ test("a fragmented launcher status record cannot let a numeric prefix become the
   assert.equal(unframed.lifetime.reconciled, false);
 });
 
+// Both are interrupted-status paths: the run ends before its launcher writes a complete record.
 for (const [name, statusBytes, statusSplits] of [
   ["cancellation", `{"child-pid":744}\n`, [14]],
-  ["overflow", `{"child-pid":744}\n`, [9]],
+  ["deadline", `{"child-pid":744}\n`, [9]],
 ]) test(`a ${name} run still binds its init from a complete framed record`, async t => {
   const tree = roots(`checker-status-framing-${name}`);
   const { transport, options } = linuxLauncher(t, tree);
@@ -817,4 +818,83 @@ test("an oversized status record is refused however the transport chunked it", a
   const split = await captureConfinedChecker(options);
   assert.equal(split.lifetime.statusRefused, "STATUS_RECORD_TOO_LARGE", "The identical record is refused when fragmented too");
   assert.equal(split.lifetime.initPid, null);
+});
+
+test("the status framer retains only bounded first-record bytes and copies no excess", async t => {
+  const tree = roots("checker-status-allocation");
+  const { transport, options } = linuxLauncher(t, tree);
+  const record = `{"child-pid":744}\n`;
+  const capacity = 4096;
+
+  // One oversized single chunk: its terminator sits past the bound, so none of it is copied.
+  transport.statusBytes = `{"child-pid":744,"pad":"${"p".repeat(5000)}"}\n`;
+  transport.statusEof = true;
+  const oversized = await captureConfinedChecker(options);
+  assert.equal(oversized.lifetime.statusFraming.capacity, capacity);
+  assert.equal(oversized.lifetime.statusFraming.retainedBytes, 0, "An oversized record's bytes are never copied");
+  assert.equal(oversized.lifetime.statusFraming.observedBytes, transport.statusBytes.length);
+  assert.equal(oversized.lifetime.statusFraming.discardedBytes, transport.statusBytes.length);
+  assert.equal(oversized.lifetime.statusRefused, "STATUS_RECORD_TOO_LARGE");
+  assert.equal(oversized.lifetime.initPid, null);
+
+  // An unterminated chunk larger than the bound is refused without copying it either.
+  transport.statusBytes = `{"child-pid":${"7".repeat(5000)}`;
+  transport.statusEof = false;
+  const unframed = await captureConfinedChecker(options);
+  assert.equal(unframed.lifetime.statusFraming.retainedBytes, 0);
+  assert.equal(unframed.lifetime.statusRefused, "STATUS_RECORD_UNFRAMED");
+
+  // A short valid record followed by a large unrelated tail retains only the record.
+  const tail = "x".repeat(32768);
+  transport.statusBytes = `${record}${tail}`;
+  transport.statusEof = true;
+  const withTail = await captureConfinedChecker(options);
+  assert.equal(withTail.lifetime.initPid, 744, "The complete first record still binds the full PID");
+  assert.equal(withTail.lifetime.statusFraming.retainedBytes, record.length - 1, "Only the first record's bytes are retained");
+  assert.equal(withTail.lifetime.statusFraming.observedBytes, record.length + tail.length);
+  assert.equal(withTail.lifetime.statusFraming.discardedBytes, tail.length + 1, "The unrelated tail is discarded, never retained");
+  assert.ok(withTail.lifetime.statusFraming.retainedBytes <= capacity);
+
+  // Fragmentation inside the field name and inside the digits stays within the bound and binds the full PID.
+  for (const splits of [[9], [14], [3, 9, 14, 16]]) {
+    transport.statusBytes = `${record}{"exit-code":0}\n`;
+    transport.statusSplits = splits;
+    const fragmented = await captureConfinedChecker(options);
+    assert.equal(fragmented.lifetime.initPid, 744, JSON.stringify(splits));
+    assert.equal(fragmented.lifetime.statusRefused, null);
+    assert.equal(fragmented.lifetime.statusFraming.retainedBytes, record.length - 1, JSON.stringify(splits));
+    assert.ok(fragmented.lifetime.statusFraming.retainedBytes <= capacity);
+    assert.equal(fragmented.lifetime.launcherAgreement, true);
+  }
+
+  // A terminator that only arrives beyond the bound keeps whatever fit and copies none of the excess.
+  transport.statusBytes = `{"child-pid":744,"pad":"${"p".repeat(5000)}"}\n`;
+  transport.statusSplits = [3000];
+  const late = await captureConfinedChecker(options);
+  assert.equal(late.lifetime.statusFraming.retainedBytes, 3000, "Only the bytes that fit before the bound were copied");
+  assert.ok(late.lifetime.statusFraming.retainedBytes <= capacity);
+  assert.equal(late.lifetime.statusRefused, "STATUS_RECORD_TOO_LARGE");
+  assert.equal(late.lifetime.initPid, null);
+  assert.equal(late.lifetime.reconciled, false);
+});
+
+for (const [name, limits, code] of [
+  ["a stream", { timeoutMs: 2000, maxStreamBytes: 64, cleanupMs: 50 }, "COMMAND_OUTPUT_OVERFLOW"],
+  ["an aggregate", { timeoutMs: 2000, maxStreamBytes: 512, maxCaptureBytes: 512, cleanupMs: 50 }, "COMMAND_CAPTURE_OVERFLOW"],
+]) test(`${name} capture overflow with a fragmented status record still binds the complete init`, async t => {
+  const tree = roots(`checker-overflow-${code}`);
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.stdout = "o".repeat(65536);
+  transport.statusBytes = `{"child-pid":744}\n`;
+  transport.statusSplits = [9, 14];
+  transport.statusEof = false;
+  const result = await captureConfinedChecker({ ...options, limits });
+  assert.equal(result.failure.code, code, "The real overflow path is exercised, not a deadline");
+  assert.equal(result.stdout.truncated, true);
+  assert.equal(result.availability.captureWithinLimits, false);
+  assert.equal(result.lifetime.initPid, 744, "A fragmented record still yields the complete init under overflow");
+  assert.equal(result.lifetime.statusRefused, null);
+  assert.equal(result.lifetime.launcherAgreement, null, "No complete launcher record survives an overflowed capture");
+  assert.equal(result.namespaceClosed, false);
+  assert.equal(result.availability.available, false);
 });

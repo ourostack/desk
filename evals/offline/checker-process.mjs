@@ -162,6 +162,7 @@ async function reconcileNamespaceLifetime(observed, execution) {
     initPid,
     initPidSource: "framed-launcher-status-record",
     statusRefused: observed.refused,
+    statusFraming: { capacity: MAX_STATUS_RECORD_BYTES, retainedBytes: observed.retainedBytes, observedBytes: observed.observedBytes, discardedBytes: observed.discardedBytes },
     launcherAgreement,
     initRetired,
     namespaceIdentity: observed.identity,
@@ -238,25 +239,35 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
   // The launcher reports its init's PID while that init is still alive, which is the only moment its namespace
   // identity can be read. The status stream is framed first: a partial record is never parsed, so a chunk boundary
   // inside the field name or inside the digits can never let a numeric prefix become this run's identity.
-  const observed = { initPid: null, identity: null, unreadable: false, refused: null };
-  let framing = Buffer.alloc(0);
+  const observed = { initPid: null, identity: null, unreadable: false, refused: null, retainedBytes: 0, observedBytes: 0, discardedBytes: 0 };
+  // One bounded destination, allocated once. Nothing is ever concatenated, and an oversized or unterminated record is
+  // refused by inspecting the incoming chunk's delimiter position against the remaining capacity — its excess bytes
+  // are never copied. Bytes after the first complete record are unrelated tail and are discarded, not retained.
+  const framing = Buffer.alloc(MAX_STATUS_RECORD_BYTES);
+  let held = 0;
   let framed = false;
   const onStatus = bytes => {
-    if (framed) return;
-    framing = Buffer.concat([framing, bytes]);
-    const end = framing.indexOf(0x0a);
-    // The size bound is a property of the record, not of how the transport happened to chunk it: an oversized record
-    // is refused whether or not the chunk that carried its excess bytes also carried its terminator.
-    if (end < 0 || end > MAX_STATUS_RECORD_BYTES) {
-      if (framing.length > MAX_STATUS_RECORD_BYTES) {
-        framed = true;
-        observed.refused = end < 0 ? "STATUS_RECORD_UNFRAMED" : "STATUS_RECORD_TOO_LARGE";
-      }
+    observed.observedBytes += bytes.length;
+    if (framed) {
+      observed.discardedBytes += bytes.length;
       return;
     }
+    const delimiter = bytes.indexOf(0x0a);
+    const wanted = delimiter < 0 ? bytes.length : delimiter;
+    if (held + wanted > MAX_STATUS_RECORD_BYTES) {
+      framed = true;
+      observed.refused = delimiter < 0 ? "STATUS_RECORD_UNFRAMED" : "STATUS_RECORD_TOO_LARGE";
+      observed.discardedBytes += bytes.length;
+      return;
+    }
+    bytes.copy(framing, held, 0, wanted);
+    held += wanted;
+    observed.retainedBytes = held;
+    if (delimiter < 0) return;
+    observed.discardedBytes += bytes.length - wanted;
     framed = true;
     let row = null;
-    try { row = JSON.parse(framing.subarray(0, end).toString("utf8")); } catch { row = null; }
+    try { row = JSON.parse(framing.subarray(0, held).toString("utf8")); } catch { row = null; }
     const pid = plainObject(row) ? row["child-pid"] : undefined;
     if (!Number.isSafeInteger(pid) || pid <= 0) {
       observed.refused = row === null ? "STATUS_RECORD_MALFORMED" : "STATUS_INIT_PID_INVALID";
