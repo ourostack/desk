@@ -4,7 +4,7 @@ import * as path from "node:path"
 import { tmpdir } from "node:os"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { resolveWriteTarget } from "../../src/util/paths.js"
 
 let fixtureRoot
@@ -113,6 +113,38 @@ test("omitted progress still prefers the existing iteration doing record over th
   const output = await resolve(input)
   assert.equal(output.progressPath, path.join(input.iterationPath, "doing.md"))
   assert.equal(output.rulingsPath, output.progressPath)
+})
+
+test("an in-task symlink to a neighbouring task's record is refused as progress", async () => {
+  const input = context()
+  const otherTask = path.join(input.deskRoot, "desks", "member", "track", "linked-outcome")
+  const otherIteration = path.join(otherTask, "repository", "2026-09-09-initial-impl")
+  const neighbour = context({ taskPath: otherTask, iterationPath: otherIteration, planPath: path.join(otherIteration, "planning.md") })
+  seedCanonicalFiles(neighbour)
+  const links = [
+    [path.join(input.iterationPath, "linked-task-card.md"), path.join(otherTask, "task.md")],
+    [path.join(input.iterationPath, "linked-doing.md"), path.join(otherIteration, "doing.md")],
+  ]
+  for (const [link, destination] of links) symlinkSync(destination, link, "file")
+  const before = snapshotTree()
+  const resolveContext = await loadResolver()
+  for (const [link, destination] of links) {
+    await assert.rejects(() => resolveContext({ ...input, progressPath: link }), {
+      message: "Superpowers context: progressPath must be within taskPath",
+    })
+    assert.equal(realpathSync(link), realpathSync(destination), "the fixture link must really resolve into the neighbouring task")
+    assert.equal(statSync(link).isFile(), true, "the fixture link must look like a regular file to a follow-the-link stat")
+  }
+  assert.deepEqual(snapshotTree(), before, "refusing a task-escaping link must not rewrite the neighbouring task")
+})
+
+test("an in-task symlink to this task's own record stays usable as progress", async () => {
+  const input = context()
+  const link = path.join(input.iterationPath, "superpowers-progress.md")
+  symlinkSync(path.join(input.iterationPath, "doing.md"), link, "file")
+  const output = await resolve({ ...input, progressPath: link })
+  assert.equal(output.progressPath, link)
+  assert.equal(output.rulingsPath, link)
 })
 
 test("explicit provider progress in another task of the same person is refused", async () => {

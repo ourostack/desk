@@ -1,5 +1,5 @@
 import * as path from "node:path"
-import { stat } from "node:fs/promises"
+import { realpath, stat } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { expandHome, isPathContained, personPrefix, resolveWriteTarget } from "../util/paths.js"
 
@@ -42,6 +42,16 @@ async function canonicalFile(deskRoot, person, file, kind, required = true) {
   return target
 }
 
+// The person-scoped write authority resolves symlinks against the person root, not this task, so a
+// same-person link inside the task can still name a neighbouring task's record. Compare resolved
+// paths so an escaping link is refused rather than adopted as this task's progress and rulings.
+async function assertTaskLocal(taskPath, file, name) {
+  const [realTaskPath, realFile] = await Promise.all([realpath(taskPath), realpath(file)])
+  if (!isPathContained(realTaskPath, realFile)) {
+    throw new Error(`Superpowers context: ${name} must be within taskPath`)
+  }
+}
+
 export async function resolveSuperpowersContext(input) {
   const deskRoot = requiredPath(input, "deskRoot")
   const taskPath = requiredPath(input, "taskPath")
@@ -79,6 +89,7 @@ export async function resolveSuperpowersContext(input) {
   const progressPath = requestedProgressPath === null
     ? (await canonicalFile(deskRoot, person, path.join(iterationPath, "doing.md"), "progress", false)) ?? taskCardPath
     : await canonicalFile(deskRoot, person, requestedProgressPath, "progress")
+  await assertTaskLocal(taskPath, progressPath, "progressPath")
   // A plan is a read reference and may live outside the person prefix, but must remain within this Desk root.
   const canonicalPlan = planPath === null ? null : await canonicalFile(deskRoot, null, planPath, "plan")
   const artifactDirectory = path.join(evidenceRoot, path.relative(deskRoot, iterationPath), "superpowers", `step-${input.step}`, `attempt-${input.attempt}`)
