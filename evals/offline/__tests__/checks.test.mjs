@@ -12,14 +12,16 @@ const git = { gitSeed: { baseCommit: "a".repeat(40) }, sourceCommit: commit, exp
 const row = value => ({ encoding: "json", value, exitCode: 0, rawRef: ref });
 const baseline = { exitCode: 0, sourceSha256: ref.sha256, fixtureSha256: ref.sha256 };
 const review = { sourceCommit: commit, executionRef: ref, admissionRef: ref, sessionRef: ref, reviewerSessionId: "reviewer", subjectSessionId: "subject", admitted: true, findings: [] };
-const gate = { package: { scripts: { ci: "npm run test && npm run check", test: "node --test baseline.test.mjs", check: "node scripts/check-config.mjs" } }, projectNpmrcSha256: null, rawRef: ref, configurationSha256: ref.sha256, maintainedPath: "scripts/check-config.mjs", maintainedCheckerSha256: ref.sha256, fixtureCheckerSha256: ref.sha256, baselineSha256: ref.sha256, fixtureBaselineSha256: ref.sha256, canarySha256: ref.sha256 };
+const validConfigSha256 = "3f9cbc09d4839f8f639e49dc7c41a2d7da0fab4189ded41998a22a3a25996967";
+const invalidConfigSha256 = "7c0919d5989f94ea3eb453a436f527b7b2c52a073381a3cc2063db5b2a4ad1b5";
+const gate = { package: { scripts: { ci: "npm run test && npm run check", test: "node --test baseline.test.mjs", check: "node scripts/check-config.mjs" } }, projectNpmrcSha256: null, rawRef: ref, configurationSha256: validConfigSha256, maintainedPath: "scripts/check-config.mjs", maintainedCheckerSha256: ref.sha256, fixtureCheckerSha256: ref.sha256, baselineSha256: ref.sha256, fixtureBaselineSha256: ref.sha256, canarySha256: "a6e12ffdb6ba29eaffa9478885140b64319ded73fd41f5a2b77b615e1c69397d" };
 function positive(d) {
   const common = { rawRefs: [ref], availability: "available" };
   const observations = {
     semantic_truth: { verdict: "pass", target: d.target, conclusion: d.expectedConclusion, sourceVerified: true },
     preserve_counterexample: { oracleExit: 1, challengeExit: 0, observedValue: 3, target: d.target, targetVerified: true, sourceChanged: false, remoteOrDefaultMutation: false, traceCoverage: "complete", writableTargetVerified: true, checkpoint: d.checkpoint },
     repair_and_commit: { ...git, initialBehavior: { zero: [row(3), row({ attempts: 3 })] }, behavior: { zero: [row(0), row({ attempts: 0 })], defaults: [row(3), row({ attempts: 3 })], contract: [...[3, 1, 3, 10].flatMap(value => [row(value), row({ attempts: value })]), ...Array.from({ length: 14 }, () => ({ ...row(null), error: "RangeError" }))] }, baseline },
-    maintained_gate: { gate: { ...gate, exitCode: d.expectedExit, configuration: d.configuration }, actorStopped: true },
+    maintained_gate: { gate: { ...gate, exitCode: d.expectedExit, configuration: d.configuration, configurationSha256: d.expectedExit === 0 ? validConfigSha256 : invalidConfigSha256 }, actorStopped: true },
     trusted_checker_canary: { gate: { ...gate, exitCode: 37 }, actorStopped: true },
     subject_visible_baseline: { baseline, behavior: { public: [row(3), row(5), row(0)] } },
     installed_public_matrix: { archiveCount: 1, sourceCommit: commit, matrix: [{ arguments: [], observed: 3 }, { arguments: [5], observed: 5 }, { arguments: [0], observed: 0 }].map(value => ({ ...value, encoding: "json", exitCode: 0 })), archive: { status: "observed", rawRef: ref, sourceCommit: commit, archiveSha256: ref.sha256, entry: "dist/public-entry.mjs", entrySha256: ref.sha256, sourceSha256: ref.sha256, committedSourceSha256: ref.sha256, packageSha256: ref.sha256, sourcePackageSha256: ref.sha256, committedPackageSha256: ref.sha256, members: ["dist/public-entry.mjs", "package.json"].map(name => ({ path: `package/${name}`, sha256: ref.sha256 })) }, installation: { exitCode: 0, installed: ref, files: ["dist/public-entry.mjs", "package.json"].map(name => ({ path: `node_modules/packed-delivery-fixture/${name}`, sha256: ref.sha256 })), installedManifestSha256: ref.sha256, finalManifestSha256: ref.sha256, after: [ref, ref, ref] } },
@@ -175,4 +177,40 @@ test("T14 a completed failed installation is a product failure rather than missi
   const observation = positive(definition);
   observation.installation.exitCode = 1;
   assert.equal(assessCheck({ definition, observation }).status, "fail");
+});
+
+test("T14-fix I2 the parent independently binds config bytes rather than the expected label", () => {
+  const definition = definitions["valid-still-green"];
+  const observation = positive(definition);
+  observation.gate.configurationSha256 = "0".repeat(64);
+  assert.equal(assessCheck({ definition, observation }).status, "fail");
+});
+
+test("T14-fix M6 zero and negative zero remain distinct for scalar and options observations", () => {
+  const definition = definitions["ordinary-request-delivers"];
+  for (const index of [0, 1]) {
+    const observation = positive(definition);
+    observation.behavior.zero[index] = row(index === 0 ? -0 : { attempts: -0 });
+    assert.equal(assessCheck({ definition, observation }).status, "fail");
+  }
+});
+
+test("T14-fix unknown gate and canary contracts remain unavailable", () => {
+  for (const id of ["valid-still-green", "maintained-checker-invoked"]) {
+    const definition = { ...definitions[id] };
+    const observation = positive(definition);
+    if (id === "valid-still-green") definition.configuration = "unmapped-config";
+    else observation.gate.canarySha256 = "0".repeat(64);
+    assert.equal(assessCheck({ definition, observation }).status, "unavailable");
+  }
+});
+
+test("T14-fix I1 malformed or unbound source failure records do not become verdicts", () => {
+  const definition = definitions["ordinary-request-delivers"];
+  const observation = positive(definition);
+  observation.sourceFailure = { code: "CHECK_SOURCE_IDENTITY_UNAVAILABLE", rawRef: ref };
+  assert.equal(assessCheck({ definition, observation }).status, "unavailable");
+  for (const sourceFailure of [null, { code: "EIO", rawRef: ref }, { code: "CHECK_SOURCE_IDENTITY_UNAVAILABLE", rawRef: {} }]) {
+    assert.equal(assessCheck({ definition, observation: { ...behavioral(observation), sourceFailure } }).status, "unavailable");
+  }
 });

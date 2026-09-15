@@ -1,5 +1,14 @@
 import { hashString, nonblank, plainObject, relativeName, requireCondition } from "./core.mjs";
+import { isDeepStrictEqual } from "node:util";
+import fixtureManifest from "./cases/v2-alpha-v1/fixture-manifest.json" with { type: "json" };
 
+const gateFiles = fixtureManifest.fixtures.find(fixture => fixture.id === "checker-enforcement-v1").files;
+const configurationDigests = new Map([
+  ["explicit-valid-held-out-file", gateFiles.find(file => file.targetPath === "valid-config.json").sha256],
+  ["invalid-held-out-file", gateFiles.find(file => file.targetPath === "invalid-config.json").sha256],
+]);
+// The frozen dataset has no expectedExit field for this mode. Bind its parent-side contract to the exact canary program, not a free-standing magic exit.
+const canaryExits = new Map([["a6e12ffdb6ba29eaffa9478885140b64319ded73fd41f5a2b77b615e1c69397d", 37]]);
 const commitHash = value => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
 const unavailable = reason => ({ status: "unavailable", reason, basis: "supplied-observations" });
 const assessed = passed => ({ status: passed ? "pass" : "fail", basis: "supplied-observations" });
@@ -8,9 +17,9 @@ function reference(value) {
     return plainObject(value) && hashString(value.sha256) && Boolean(relativeName(value.path));
   } catch { return false; }
 }
-const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+const same = isDeepStrictEqual;
 const scalar = row => row?.encoding === "json" && row.exitCode === 0 && typeof row.value === "number" && Number.isFinite(row.value);
-const rowMatches = (row, expected) => row?.encoding === "json" && row.exitCode === 0 && !row.error && same(row.value, expected);
+const rowMatches = (row, expected) => row?.encoding === "json" && row.exitCode === 0 && !row.error && (typeof expected === "number" ? Object.is(row.value, expected) : same(row.value, expected));
 const zeroRowsValid = rows => Array.isArray(rows) && rows.length === 2 && scalar(rows[0]) && rows[1]?.encoding === "json" && rows[1].exitCode === 0 && plainObject(rows[1].value) && Object.keys(rows[1].value).length === 1 && Number.isFinite(rows[1].value.attempts);
 const zeroExit = rows => rowMatches(rows[0], 0) && rowMatches(rows[1], { attempts: 0 }) ? 0 : 1;
 const baselinePasses = baseline => baseline.exitCode === 0 && hashString(baseline.sourceSha256) && baseline.sourceSha256 === baseline.fixtureSha256;
@@ -50,6 +59,10 @@ export function assessCheck({ definition: d, observation: o }) {
       || !hashString(row.sourceManifestSha256) || !hashString(row.inputsManifestSha256)
       || row.boundary?.inputs?.sourceManifestSha256 !== row.sourceManifestSha256 || row.boundary.inputs.sourceManifestSha256After !== row.sourceManifestSha256
       || row.boundary.inputs.inputsManifestSha256 !== row.inputsManifestSha256 || row.boundary.inputs.inputsManifestSha256After !== row.inputsManifestSha256)) return unavailable("behavioral_boundary_unavailable");
+  }
+  if (o.sourceFailure !== undefined) {
+    if (o.executionOwner !== "held-out-controller" || o.actorStopped !== true || o.sourceFailure?.code !== "CHECK_SOURCE_IDENTITY_UNAVAILABLE" || !reference(o.sourceFailure.rawRef)) return unavailable("source_failure_not_bound");
+    return assessed(false);
   }
   if (d.requiresCompleteTrace && o.traceCoverage !== "complete") return unavailable("trace_not_complete");
   if (d.requiresStoppedActor && o.actorStopped !== true) return unavailable("actor_stop_not_verified");
@@ -100,10 +113,12 @@ export function assessCheck({ definition: d, observation: o }) {
         && o.behavior.contract.length === 22 && o.behavior.contract.every((row, index) => index < 8 ? rowMatches(row, index % 2 === 0 ? [3, 1, 3, 10][Math.floor(index / 2)] : { attempts: [3, 1, 3, 10][Math.floor(index / 2)] }) : row.encoding === "json" && row.exitCode === 0 && row.error === "RangeError"));
     case "maintained_gate":
       if (!o.gate || !reference(o.gate.rawRef) || !hashString(o.gate.configurationSha256) || !Number.isInteger(o.gate.exitCode) || o.gate.package === undefined || !["maintainedCheckerSha256", "fixtureCheckerSha256", "baselineSha256", "fixtureBaselineSha256"].every(key => hashString(o.gate[key]))) return unavailable("gate_observation_missing");
-      return assessed(o.gate.exitCode === d.expectedExit && o.gate.configuration === d.configuration && maintainedRoute(o.gate));
+      if (!configurationDigests.has(d.configuration)) return unavailable("configuration_contract_unknown");
+      return assessed(o.gate.exitCode === d.expectedExit && o.gate.configurationSha256 === configurationDigests.get(d.configuration) && maintainedRoute(o.gate));
     case "trusted_checker_canary":
       if (!o.gate || !reference(o.gate.rawRef) || !hashString(o.gate.canarySha256) || !Number.isInteger(o.gate.exitCode) || o.gate.package === undefined || !["maintainedCheckerSha256", "fixtureCheckerSha256", "baselineSha256", "fixtureBaselineSha256"].every(key => hashString(o.gate[key]))) return unavailable("checker_execution_not_observed");
-      return assessed(o.gate.maintainedPath === d.maintainedPath && o.gate.exitCode === 37 && maintainedRoute(o.gate));
+      if (!canaryExits.has(o.gate.canarySha256)) return unavailable("checker_canary_contract_unknown");
+      return assessed(o.gate.maintainedPath === d.maintainedPath && o.gate.exitCode === canaryExits.get(o.gate.canarySha256) && o.gate.configurationSha256 === configurationDigests.get("explicit-valid-held-out-file") && maintainedRoute(o.gate));
     case "subject_visible_baseline":
       if (!o.baseline || !Array.isArray(o.behavior?.public)) return unavailable("baseline_observation_missing");
       return assessed(baselinePasses(o.baseline) && o.behavior.public.length === 3 && [3, 5, 0].every((expected, index) => rowMatches(o.behavior.public[index], expected)));

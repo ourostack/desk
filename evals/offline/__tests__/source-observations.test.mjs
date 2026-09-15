@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
 import dataset from "../cases/v2-alpha-v1/dataset.json" with { type: "json" };
 import manifest from "../cases/v2-alpha-v1/fixture-manifest.json" with { type: "json" };
@@ -118,6 +118,8 @@ test("review and canonical facts are extracted from actual retained controller r
   assert.equal(f.observe("canonical_identity_truth", { restart, checkpoints: [{ sessionId: "same" }, { sessionId: "same" }] }).freshSessionObserved, false);
   assert.equal(f.observe("repair_and_rereview", { reviews: [record(2, { admitted: true, reviewerSessionId: "subject" })] }).review, null);
   assert.equal(f.observe("expected_dependency_failure", { reviews: [] }).reviewOutcome, "unknown");
+  assert.equal(f.observe("independent_review_truth", { reviews: [] }).review, null);
+  assert.equal(f.observe("repair_and_rereview", { reviews: [] }).review, null);
 });
 
 test("T14 the blocked dependency phase requires native failure readback rather than a failure-shaped message", async () => {
@@ -128,7 +130,7 @@ test("T14 the blocked dependency phase requires native failure readback rather t
   const observed = f.observe("expected_dependency_failure", { reviews: [review], readArtifact: () => bytes });
   assert.equal(observed.reviewOutcome, "unavailable");
   assert.equal(observed.routeBound, true);
-  assert.equal(f.observe("expected_dependency_failure", { reviews: [review], readArtifact: () => Buffer.from("{}") }).routeBound, false);
+  assert.throws(() => f.observe("expected_dependency_failure", { reviews: [review], readArtifact: () => Buffer.from("{}") }), { code: "RAW_REFERENCE_MISMATCH" });
 });
 
 test("T14 native review readback binds exact source, output, distinct session, admission and completed capture", async () => {
@@ -150,11 +152,11 @@ test("T14 native review readback binds exact source, output, distinct session, a
   for (const delta of [{ sha: "0".repeat(40) }, { drainedFully: false }, { result: { ...native.result, survived: [42] } }, { outputBase64: Buffer.from("changed").toString("base64") }]) {
     const changedRef = put("changed-execution.json", { ...native, ...delta });
     review.result.textResultForLlm = JSON.stringify({ rawRef: changedRef });
-    assert.equal(observe(), null);
+    assert.throws(observe, { code: "REVIEW_READBACK_CHANGED" });
   }
   review.result.textResultForLlm = JSON.stringify({ rawRef: executionRef });
   artifacts.set(executionRef.path, Buffer.from("{}"));
-  assert.equal(observe(), null, "A stale reference must not fall back to prose");
+  assert.throws(observe, { code: "RAW_REFERENCE_MISMATCH" }, "A stale reference must not fall back to prose");
 });
 
 test("T14 edit-and-revert remains visible in native writer operations when endpoint trees match", async () => {
@@ -194,11 +196,107 @@ test("T14 absent tar tooling is unavailable evidence, not a corrupt delivered pr
   const filename = path.join(f.actor, "artifact.tgz");
   fs.writeFileSync(filename, "archive");
   const archive = listRegularFiles(f.actor).find(file => file.path === "artifact.tgz");
-  const prior = process.env.PATH;
-  try {
-    process.env.PATH = path.join(f.root, "no-tools");
-    assert.throws(() => inspectArchive({ root: f.actor, archive, sourceCommit: "a".repeat(40), retain }), { code: "CHECK_ARTIFACT_UNAVAILABLE" });
-  } finally { process.env.PATH = prior; }
+  const script = `import {inspectArchive} from ${JSON.stringify(new URL("../source-observations.mjs", import.meta.url).href)};try{inspectArchive({...${JSON.stringify({ root: f.actor, archive, sourceCommit: "a".repeat(40) })},retain:()=>({})});}catch(error){process.stdout.write(error.code);}`;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { env: { ...process.env, PATH: path.join(f.root, "no-tools") }, encoding: "utf8", timeout: 10000, maxBuffer: 8192 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "CHECK_ARTIFACT_UNAVAILABLE");
+});
+
+test("T14-fix I3 dependency artifacts distinguish absence from integrity and parse faults", async t => {
+  const f = await fixtureFor("review-recovery-state");
+  for (const [mode, expected] of [["missing", null], ["io", "EIO"], ["tamper", "RAW_REFERENCE_MISMATCH"], ["parse", "REVIEW_READBACK_INVALID"], ["structure", "JSON_STRUCTURE_LIMIT"], ["bug", "TypeError"]]) await t.test(mode, () => {
+    const bytes = mode === "parse" ? Buffer.from("{") : mode === "structure" ? Buffer.from('{"x":'.repeat(70) + "0" + "}".repeat(70)) : jsonBytes({ sessionId: "subject", sha: "a".repeat(40), failure: { code: "ENOENT" } });
+    const rawRef = { path: "blocked.json", sha256: sha256(bytes) };
+    const review = { turnIndex: 0, sessionId: "subject", result: { textResultForLlm: JSON.stringify({ sha: "a".repeat(40), rawRef, completion: "not-complete" }) } };
+    const readArtifact = () => {
+      if (mode === "missing") return undefined;
+      if (mode === "io") throw Object.assign(new Error("host I/O failure"), { code: "EIO" });
+      if (mode === "bug") throw new TypeError("broken reader");
+      return mode === "tamper" ? Buffer.from("{}") : bytes;
+    };
+    const observe = () => f.observe("expected_dependency_failure", { reviews: [review], readArtifact });
+    if (expected === null) assert.equal(observe().routeBound, false);
+    else assert.throws(observe, expected === "TypeError" ? { name: "TypeError" } : { code: expected });
+  });
+});
+
+test("T14-fix I3 native reviewer session digest tampering does not become absent evidence", async () => {
+  const f = await fixtureFor("review-recovery-state");
+  const artifacts = new Map();
+  const put = (name, value) => { const bytes = jsonBytes(value); artifacts.set(name, bytes); return { path: name, sha256: sha256(bytes) }; };
+  const sessionRef = put("session.json", { base64: Buffer.from("{}\n").toString("base64"), sha256: "0".repeat(64) });
+  const native = { sha: "a".repeat(40), sessionId: "subject", argv: ["review"], outputBase64: "", drainedFully: true, failure: null, result: { result: { code: 0, signal: null }, survived: [], unverified: [] } };
+  const executionRef = put("execution.json", native);
+  const admissionRef = put("admission.json", { record: { sha: native.sha, reviewerSessionId: "reviewer", rawRef: sessionRef, outputSha256: sha256(""), argv: native.argv }, admitted: { admitted: true, findings: [] }, rawRef: executionRef });
+  const review = { turnIndex: 1, sessionId: "subject", admissionRef, result: { textResultForLlm: JSON.stringify({ rawRef: executionRef }) } };
+  assert.throws(() => f.observe("independent_review_truth", { reviews: [review], readArtifact: name => artifacts.get(name) }), { code: "REVIEW_READBACK_CHANGED" });
+});
+
+test("T14-fix I3 complete native identities distinguish missing completion from malformed history", async t => {
+  const f = await fixtureFor("review-recovery-state");
+  for (const [mode, code] of [["missing-session", null], ["not-drained", null], ["exit-failure", null], ["empty-session", null], ["no-output", null], ["malformed-history", "REVIEW_READBACK_INVALID"], ["wrong-session", "REVIEW_READBACK_CHANGED"], ["malformed-completion", "REVIEW_READBACK_INVALID"], ["malformed-execution", "REVIEW_READBACK_INVALID"]]) await t.test(mode, () => {
+    const artifacts = new Map();
+    const put = (name, value) => { const bytes = jsonBytes(value); artifacts.set(name, bytes); return { path: name, sha256: sha256(bytes) }; };
+    const events = [{ type: "session.start", data: { sessionId: mode === "wrong-session" ? "other" : "reviewer" } }, { type: "assistant.message", data: { content: "reviewed" } }];
+    const bytes = mode === "empty-session" ? Buffer.alloc(0) : mode === "malformed-history" ? Buffer.from("{") : Buffer.from((mode === "no-output" ? events.slice(0, 1) : events).map(event => JSON.stringify(event)).join("\n") + "\n");
+    const sessionRef = put("session.json", { base64: bytes.toString("base64"), sha256: sha256(bytes) });
+    const native = { sha: "a".repeat(40), sessionId: "subject", argv: ["review"], outputBase64: "", drainedFully: mode === "malformed-execution" ? "yes" : mode !== "not-drained", failure: null, result: { result: mode === "malformed-completion" ? null : { code: mode === "exit-failure" ? 1 : 0, signal: null }, survived: [], unverified: [] } };
+    const executionRef = put("execution.json", native);
+    const admissionRef = put("admission.json", { record: { sha: native.sha, reviewerSessionId: "reviewer", rawRef: sessionRef, outputSha256: sha256(""), argv: native.argv }, admitted: { admitted: true, findings: [] }, rawRef: executionRef });
+    const review = { turnIndex: 1, sessionId: "subject", admissionRef, result: { textResultForLlm: JSON.stringify({ rawRef: executionRef }) } };
+    if (mode === "missing-session") artifacts.delete(sessionRef.path);
+    const observe = () => f.observe("independent_review_truth", { reviews: [review], readArtifact: name => artifacts.get(name) }).review;
+    if (code === null) assert.equal(observe(), null);
+    else assert.throws(observe, { code });
+  });
+});
+
+test("T14-fix I4 a bounded-size archive with many small members cannot buy unbounded tar processes", async () => {
+  const f = await fixtureFor();
+  const stage = path.join(f.root, "large-stage");
+  fs.mkdirSync(path.join(stage, "package"), { recursive: true });
+  fs.writeFileSync(path.join(stage, "package/large"), Buffer.alloc(1048576, "x"));
+  for (let index = 0; index < 70; index++) fs.writeFileSync(path.join(stage, `package/small-${index}`), "x");
+  const filename = path.join(f.actor, "many-members.tgz");
+  execFileSync("tar", ["-czf", filename, "-C", stage, "package"]);
+  const archive = listRegularFiles(f.actor).find(file => file.path === "many-members.tgz");
+  const evidence = [];
+  assert.throws(() => inspectArchive({ root: f.actor, archive, sourceCommit: "a".repeat(40), retain: (name, value) => { evidence.push(value); return retain(name, value); } }), error => error.code === "CHECK_ARTIFACT_UNAVAILABLE" && error.cause?.code === "ARCHIVE_INSPECTION_LIMIT");
+  assert.equal(evidence.at(-1).inspection.processes, 2, "Reject the declared work before starting the per-member loop");
+});
+
+test("T14-fix I4 each archive command shares one aggregate deadline", async t => {
+  const f = await fixtureFor();
+  const filename = path.join(f.actor, "deadline.tgz");
+  execFileSync("tar", ["-czf", filename, "-C", f.actor, "package.json"]);
+  const archive = listRegularFiles(f.actor).find(file => file.path === "deadline.tgz");
+  let ticks = 0;
+  const start = performance.now();
+  t.mock.method(performance, "now", () => start + (++ticks < 3 ? 0 : 10001));
+  const evidence = [];
+  assert.throws(() => inspectArchive({ root: f.actor, archive, sourceCommit: "a".repeat(40), retain: (name, value) => { evidence.push(value); return retain(name, value); } }), error => error.code === "CHECK_ARTIFACT_UNAVAILABLE" && error.cause?.code === "ARCHIVE_INSPECTION_LIMIT");
+  assert.equal(evidence.at(-1).inspection.processes, 1, "The second command cannot reset the first command's deadline");
+});
+
+test("T14-fix I4 an actual decoded-output overflow remains unavailable evidence", async () => {
+  const f = await fixtureFor();
+  const stage = path.join(f.root, "overflow-stage");
+  fs.mkdirSync(path.join(stage, "package"), { recursive: true });
+  fs.writeFileSync(path.join(stage, "package/oversized"), Buffer.alloc(17 * 1024 * 1024, "x"));
+  const filename = path.join(f.actor, "overflow.tgz");
+  execFileSync("tar", ["-czf", filename, "-C", stage, "package"]);
+  const archive = listRegularFiles(f.actor).find(file => file.path === "overflow.tgz");
+  assert.throws(() => inspectArchive({ root: f.actor, archive, sourceCommit: "a".repeat(40), retain }), error => error.code === "CHECK_ARTIFACT_UNAVAILABLE" && error.cause?.code === "ENOBUFS");
+});
+
+test("T14-fix I1 the source observer retains structural failure without converting host faults", async () => {
+  const f = await fixtureFor("discussion-then-go");
+  fs.rmSync(path.join(f.actor, ".git"), { recursive: true });
+  const observed = f.observe("repair_and_commit");
+  assert.equal(observed.sourceFailure.code, "CHECK_SOURCE_IDENTITY_UNAVAILABLE");
+  assert.match(observed.sourceFailure.rawRef.sha256, /^[a-f0-9]{64}$/);
+  const valid = await fixtureFor("discussion-then-go");
+  assert.throws(() => valid.observe("repair_and_commit", { retain: () => { throw Object.assign(new Error("retention I/O failure"), { code: "EIO" }); } }), { code: "EIO" });
 });
 
 test("T14 source readback must not execute candidate Git clean filters in the parent", async () => {

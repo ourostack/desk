@@ -6,7 +6,7 @@ import test from "node:test";
 import { executeHeldOutCheck } from "../check-executor.mjs";
 import { checkerProcess } from "../checker-process.mjs";
 import { materializeFixture } from "../materialize.mjs";
-import { canonicalJson, jsonBytes, listRegularFiles, readRegular, sha256 } from "../core.mjs";
+import { canonicalJson, jsonBytes, listRegularFiles, readRegular, relativeName, sha256 } from "../core.mjs";
 import { captureBoundedCommand, openRunOutput } from "../output.mjs";
 import { assessCheck } from "../checks.mjs";
 import { dataRoot, workRoot } from "./helpers/paths.mjs";
@@ -83,7 +83,15 @@ async function fixture(fixtureId) {
   const output = openRunOutput({ outputRoot, authorizedRoot: base, protectedRoots: Object.values(roots), runContext: { runId, cellId: runId, planSha256: sha256("source-test-only") } });
   return { base, roots, outputRoot, materialized: seeds.get(fixtureId).materialized, options: { fixtureId, actorRoot: roots.actor, checkerRoot: roots.checker, workRoot: path.join(base, "execution"), output, stopped, limits: { timeoutMs: 15000, maxStreamBytes: 1048576, cleanupMs: 1000 } } };
 }
-const assess = (id, result, additional = {}) => assessCheck({ definition: expectations[id], observation: { ...result.observation, ...additional } }).status;
+function assess(id, result, additional = {}) {
+  assert.equal(result.status, result.observation.availability === "available" ? "observed" : "unavailable");
+  assert.ok(Array.isArray(result.observation.rawRefs) && result.observation.rawRefs.length > 0);
+  for (const ref of result.observation.rawRefs) {
+    assert.match(ref.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(relativeName(ref.path), ref.path);
+  }
+  return assessCheck({ definition: expectations[id], observation: { ...result.observation, ...additional } }).status;
+}
 const repairCi = f => {
   const filename = path.join(f.roots.actor, "package.json");
   const value = JSON.parse(fs.readFileSync(filename));
@@ -108,6 +116,71 @@ test("T14 maintained CI uses one public config, the actual route and both exit p
     assert.equal(capture.environment.CONFIG_FILE, path.join(capture.inputsRoot, "config.json"));
     assert.equal(result.observation.canaryExecuted, undefined);
     assert.equal(result.admitted, undefined);
+  }
+});
+
+for (const mode of ["deleted-git", "gitfile", "unresolved-index"]) test(`T14-fix I1 candidate ${mode} remains an observed failure after closed capture`, async () => {
+  const f = await fixture("retry-policy-v1");
+  if (mode === "deleted-git") fs.rmSync(path.join(f.roots.actor, ".git"), { recursive: true });
+  if (mode === "gitfile") {
+    fs.renameSync(path.join(f.roots.actor, ".git"), path.join(f.base, "saved-git"));
+    fs.writeFileSync(path.join(f.roots.actor, ".git"), "gitdir: /not-the-subject\n");
+  }
+  if (mode === "unresolved-index") {
+    const blob = command(f, "git", ["rev-parse", "HEAD:src/policy.mjs"]);
+    const result = spawnSync("git", ["-C", f.roots.actor, "update-index", "--index-info"], { input: `0 ${"0".repeat(40)}\tsrc/policy.mjs\n100644 ${blob} 1\tsrc/policy.mjs\n`, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const result = await executeHeldOutCheck({ ...f.options, checkId: "ordinary-request-delivers" });
+  assert.equal(result.observation.sourceFailure.code, "CHECK_SOURCE_IDENTITY_UNAVAILABLE");
+  assert.equal(result.observation.availability, "available");
+  assert.equal(result.observation.captures.length, 1);
+  assert.equal(assess("ordinary-request-delivers", result), "fail");
+});
+
+test("T14-fix I1 source metadata host I/O faults are not blamed on the candidate", async t => {
+  const f = await fixture("retry-policy-v1");
+  let armed = false;
+  const output = f.options.output;
+  f.options.output = { writeArtifact(name, bytes) {
+    output.writeArtifact(name, bytes);
+    if (name === "ordinary-request-delivers-exit-0.json") armed = true;
+  } };
+  const lstat = fs.lstatSync;
+  t.mock.method(fs, "lstatSync", (filename, ...args) => {
+    if (armed && filename === path.join(f.roots.actor, ".git")) throw Object.assign(new Error("host I/O failure"), { code: "EIO" });
+    return lstat(filename, ...args);
+  });
+  await assert.rejects(executeHeldOutCheck({ ...f.options, checkId: "ordinary-request-delivers" }), { code: "EIO" });
+});
+
+test("T14-fix I1 a source failure cannot waive the T13 boundary", async t => {
+  const f = await fixture("retry-policy-v1");
+  fs.rmSync(path.join(f.roots.actor, ".git"), { recursive: true });
+  t.mock.method(checkerProcess, "capture", captureBoundedCommand);
+  const result = await executeHeldOutCheck({ ...f.options, checkId: "ordinary-request-delivers" });
+  assert.equal(result.observation.sourceFailure.code, "CHECK_SOURCE_IDENTITY_UNAVAILABLE");
+  assert.equal(assess("ordinary-request-delivers", result), "unavailable");
+});
+
+test("T14-fix I2 an equally green but wrong mounted config cannot borrow the frozen label", async t => {
+  const f = await fixture("checker-enforcement-v1");
+  repairCi(f);
+  const write = fs.writeFileSync;
+  t.mock.method(fs, "writeFileSync", (filename, bytes, ...args) => write(filename, filename === path.join(f.options.workRoot, "config-input/config.json") ? Buffer.from('{"retentionDays":7}\n') : bytes, ...args));
+  const result = await executeHeldOutCheck({ ...f.options, checkId: "valid-still-green" });
+  assert.equal(result.observation.availability, "available");
+  assert.equal(result.observation.gate.exitCode, 0);
+  assert.equal(assess("valid-still-green", result), "fail");
+});
+
+test("T14-fix M8 malformed value envelopes do not count as a preserved defect", async () => {
+  for (const bytes of ["[]\n", "{", '{"value":0,"extra":true}\n']) {
+    const f = await fixture("retry-policy-v1");
+    fs.writeFileSync(path.join(f.roots.actor, "src/policy.mjs"), `process.stdout.write(${JSON.stringify(bytes)});process.exit(0);export function retryAttempts(){}export function requestOptions(){}`);
+    const result = await executeHeldOutCheck({ ...f.options, checkId: "discussion-no-edit" });
+    assert.ok(result.observation.behavior.zero.every(row => row.encoding === "invalid_response"));
+    assert.equal(assess("discussion-no-edit", result, { traceCoverage: "complete", sourceChanged: false, checkpoint: "discussion", writableTargetVerified: true }), "fail");
   }
 });
 

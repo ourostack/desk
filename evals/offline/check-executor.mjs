@@ -29,6 +29,15 @@ function response(bytes) {
   catch { return { encoding: "invalid_response", value: null }; }
 }
 
+function normalizeValue(row) {
+  const envelope = row.value;
+  if (row.encoding === "json" && plainObject(envelope) && Object.keys(envelope).length === 1) {
+    if (Object.hasOwn(envelope, "value")) return { ...row, value: envelope.value };
+    if (typeof envelope.error === "string") return { ...row, error: envelope.error, value: null };
+  }
+  return { ...row, encoding: "invalid_response", value: null };
+}
+
 export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, checkerRoot, workRoot, output, stopped, limits, signal, parentContext }) {
   const definition = dataset.cases.find(value => value.fixture === fixtureId)?.checks.find(value => value.id === checkId);
   requireCondition(definition && runnable.has(checkId), "CHECK_EXECUTOR_UNAVAILABLE", "This fixed check requires a different producer or semantic assessment");
@@ -62,11 +71,10 @@ export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, check
   for (const [group, rows] of Object.entries({ spawn: cleanup.ownedSpawns, exit: cleanup.exitObservations })) {
     for (const [index, row] of rows.entries()) row.rawRef = save(`${group}-${index}.json`, readRawReference(row.rawRef, stopped.readArtifact));
   }
-  const source = readSourceState({ root: actorRoot, files: before, retain });
-  const sourceRef = retain("source.json", { fixtureId, actorRoot, files: before, copiedFiles: snapshot, stoppedRunId: stopped.runId, cleanup, source });
+  const sourceRef = retain("source.json", { fixtureId, actorRoot, files: before, copiedFiles: snapshot, stoppedRunId: stopped.runId, cleanup });
   const contextRef = parentContext === undefined ? undefined : retain("parent-context.json", parentContext);
   const captures = [];
-  const observation = { actorStopped: true, rawRefs, sourceRef, sourceCommit: source.sourceCommit, source, captures, behavior: {}, traceCoverage: "unavailable", executionOwner: "held-out-controller", availability: "unavailable", claimScope: "behavioral_outcome", ...(contextRef ? { parentContextRef: contextRef } : {}) };
+  const observation = { actorStopped: true, rawRefs, sourceRef, captures, behavior: {}, traceCoverage: "unavailable", executionOwner: "held-out-controller", availability: "unavailable", claimScope: "behavioral_outcome", ...(contextRef ? { parentContextRef: contextRef } : {}) };
   let sequence = 0;
   async function run(suffix, executable, argv, { inputs, environment = {}, cwd, scratch } = {}) {
     const inputsRoot = inputs ?? path.join(workRoot, `inputs-${++sequence}`);
@@ -104,7 +112,7 @@ export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, check
   async function value(suffix, module, imports, expression) {
     const script = `import {${imports}} from ${JSON.stringify(pathToFileURL(path.join(subject, module)).href)};try{const value=${expression};process.stdout.write(JSON.stringify({value})+"\\n");}catch(error){process.stdout.write(JSON.stringify({error:error?.name})+"\\n");}`;
     const row = await run(`${suffix}-`, fs.realpathSync(process.execPath), ["--input-type=module", "-e", script]);
-    return { ...row, ...(row.encoding === "json" && row.value && Object.keys(row.value).length === 1 && (Object.hasOwn(row.value, "value") || typeof row.value.error === "string") ? Object.hasOwn(row.value, "value") ? { value: row.value.value } : { error: row.value.error, value: null } : { encoding: "invalid_response", value: null }) };
+    return normalizeValue(row);
   }
   const baseline = async () => {
     const file = fixture.files.find(file => file.role === "subject" && file.targetPath === "baseline.test.mjs");
@@ -112,7 +120,17 @@ export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, check
     return { exitCode: result.exitCode, rawRef: result.rawRef, sourceSha256: readRegular(actorRoot, file.targetPath).sha256, fixtureSha256: file.sha256 };
   };
   try {
-    if (["valid-still-green", "invalid-is-red", "maintained-checker-invoked"].includes(checkId)) {
+    let source;
+    try {
+      source = readSourceState({ root: actorRoot, files: before, retain });
+      Object.assign(observation, { source, sourceCommit: source.sourceCommit });
+    } catch (error) {
+      if (error.code !== "CHECK_SOURCE_IDENTITY_UNAVAILABLE") throw error;
+      observation.sourceFailure = { code: error.code, rawRef: retain("source-failure.json", { code: error.code, sourceRef }) };
+    }
+    if (observation.sourceFailure) {
+      await run("source-identity-", fs.realpathSync(process.execPath), ["-e", ""]);
+    } else if (["valid-still-green", "invalid-is-red", "maintained-checker-invoked"].includes(checkId)) {
       const invalid = checkId === "invalid-is-red";
       const canary = checkId === "maintained-checker-invoked";
       const inputs = path.join(workRoot, "config-input");
@@ -126,7 +144,7 @@ export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, check
       try { packageDescription = JSON.parse(packageBytes); }
       catch { /* Invalid candidate JSON remains a product observation; descriptor reads above must still succeed. */ }
       observation.gate = {
-        configuration: definition.expectation.configuration, configurationSha256: configBytes.sha256,
+        configuration: definition.expectation.configuration, configurationSha256: readRegular(inputs, "config.json").sha256,
         package: packageDescription, projectNpmrcSha256: before.find(file => file.path === ".npmrc")?.sha256 ?? null,
         maintainedPath: "scripts/check-config.mjs", maintainedCheckerSha256: maintained.sha256,
         fixtureCheckerSha256: fixture.files.find(file => file.targetPath === "scripts/check-config.mjs").sha256,
