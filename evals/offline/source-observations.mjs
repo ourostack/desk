@@ -38,7 +38,13 @@ export function readSourceState({ root, files = listRegularFiles(root), baseComm
     }
     for (const record of index) {
       const filename = record.slice(record.indexOf("\t") + 1);
-      if (!tree.some(member => member.path === filename)) statusRows.push(`A  ${display(filename)}`);
+      if (!tree.some(member => member.path === filename)) {
+        const blob = record.split(" ")[1];
+        const indexSha256 = sha256(sourceGit(root, ["cat-file", "blob", blob], null));
+        const actual = files.find(file => file.path === filename);
+        changes.push({ path: filename, committedSha256: null, indexSha256, observedSha256: actual?.sha256 ?? null });
+        statusRows.push(`A${actual ? " " : "D"} ${display(filename)}`);
+      }
     }
   }
   for (const member of files.filter(file => !file.path.startsWith(".git/") && !tree.some(row => row.path === file.path))) statusRows.push(`?? ${display(member.path)}`);

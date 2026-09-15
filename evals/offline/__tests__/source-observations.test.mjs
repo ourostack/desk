@@ -225,10 +225,11 @@ test("T14 raw Git readback retains deleted, executable-mode and staged-only chan
   const state = readSourceState({ root: f.actor, retain });
   assert.equal(state.changes.find(row => row.path === "src/policy.mjs").observedSha256, null);
   assert.ok(state.changes.some(row => row.path === "baseline.test.mjs"));
-  assert.ok(state.status.includes(`A  ${JSON.stringify(filename)}`));
+  const indexSha256 = sha256("export const added=1;\n");
+  assert.deepEqual(state.changes.find(row => row.path === filename), { path: filename, committedSha256: null, indexSha256, observedSha256: indexSha256 });
   assert.deepEqual(listRegularFiles(f.actor), before);
   fs.unlinkSync(path.join(f.actor, filename));
-  assert.ok(readSourceState({ root: f.actor, retain }).status.includes(`A  ${JSON.stringify(filename)}`), "A staged addition cannot be hidden by deleting its working file");
+  assert.deepEqual(readSourceState({ root: f.actor, retain }).changes.find(row => row.path === filename), { path: filename, committedSha256: null, indexSha256, observedSha256: null }, "A staged addition cannot be hidden by deleting its working file");
 });
 
 test("T14 source inspection refuses redirected Git metadata before reading another store", async () => {
