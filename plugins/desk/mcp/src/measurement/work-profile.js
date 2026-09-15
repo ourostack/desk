@@ -417,7 +417,7 @@ function leanEntry(value, evidenceById, outcome) {
   if (value.lean_class === "value_adding") {
     requireFact(outcome.status === "accepted", "value_adding lean_class requires an accepted endpoint criterion")
     const cited = evidenceIds.map((id) => evidenceById.get(id))
-    requireFact(cited.some((e) => e.claim_type === "outcome" && e.producer === "independent_evaluator"), "value_adding lean_class requires an independent_evaluator outcome reference; a declared producer label alone is not attestation")
+    requireFact(cited.some((e) => e.claim_type === "outcome" && e.producer === "independent_evaluator" && e.class === "measured"), "value_adding lean_class requires a measured independent_evaluator outcome reference; a declared producer label or an unavailable-class entry alone is not attestation")
   }
   return { lean_class: value.lean_class, rationale: value.rationale, evidence_ids: deduped, waste_kind: value.waste_kind }
 }

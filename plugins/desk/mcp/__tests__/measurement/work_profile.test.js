@@ -400,6 +400,18 @@ test("value_adding requires an accepted endpoint criterion and an independent-ev
   assert.throws(() => profile(input), /accepted endpoint|value_adding/i)
 })
 
+test("value_adding cannot be satisfied by an unavailable-class independent-evaluator outcome entry; the label alone is not the assessment", () => {
+  const input = snapshot()
+  input.evidence = [evidenceEntry("unassessed-indep", { role: "source_system", claim_type: "outcome", class: "unavailable", producer: "independent_evaluator" })]
+  input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Labelled but unassessed.", evidence_ids: ["unassessed-indep"], waste_kind: null } }]
+  input.outcome = { acceptance: "declared", status: "accepted", evidence_refs: ["r"], artifact_refs: [] }
+  assert.throws(() => profile(input), /independent[_-]evaluator|value_adding/i)
+  input.evidence[0].class = "declared"
+  assert.throws(() => profile(input), /independent[_-]evaluator|value_adding/i)
+  input.evidence[0].class = "measured"
+  assert.equal(profile(input).episodes[0].lean.lean_class, "value_adding")
+})
+
 test("no mura or muri schema field is introduced and a large token count cannot itself establish muda or muri", () => {
   const input = richSnapshot()
   input.facts.push(usage("u5", "worker-a", "dispatch-a", { input_tokens: dimension(900000) }))
