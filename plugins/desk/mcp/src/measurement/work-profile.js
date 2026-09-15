@@ -18,7 +18,11 @@ const AGGREGATE_UNITS = { durationMs: "milliseconds", totalTokens: "tokens", tot
 const COMPACTION_UNITS = { inputTokens: "tokens", outputTokens: "tokens", cacheReadTokens: "tokens", cacheWriteTokens: "tokens", totalNanoAiu: "nano_aiu", duration: "native_duration_unit_unspecified" }
 // Native action-class taxonomy for coverage.native_action_classes. Only classes with an actual mapped
 // KIND are "measured"; an empty list means no capture-adapter evidence exists yet for that class, which
-// must render as an explicit coverage gap rather than an invented zero-activity row.
+// must render as an explicit coverage gap rather than an invented zero-activity row. `side_effects` and
+// `cleanup` stay empty (coverage gaps) because membership in an existing KIND does not by itself prove the
+// stronger meaning: `session.start` establishes initialization, not cleanup, and `hook.start`/`hook.end`
+// establish callback activity, not an independently evidenced external side effect. Neither bucket gets a
+// mapping until an actual effect/cleanup-specific event kind is evidenced by the capture adapter.
 const ACTION_CLASSES = {
   messages: ["user.message", "assistant.message", "system.message"],
   commands: ["tool.execution_start", "tool.execution_complete"],
@@ -26,8 +30,8 @@ const ACTION_CLASSES = {
   review_ci: [],
   waits_retries_errors: [],
   delegation_handoffs: ["subagent.started", "subagent.configured", "subagent.completed"],
-  side_effects: ["hook.start", "hook.end"],
-  cleanup: ["session.start", "session.compaction_start", "session.compaction_complete"],
+  side_effects: [],
+  cleanup: [],
 }
 const BINDING_MODES = ["desk_work_item"]
 const EVIDENCE_ROLES = ["desk", "source_system", "session_history"]
@@ -81,7 +85,7 @@ function parseSnapshot(bytes) {
   while (pending.length) {
     const [value, depth] = pending.pop()
     requireFact(depth <= 32 && ++nodes <= 500000, "Snapshot structure exceeds 32 levels or 500000 values")
-    if (typeof value === "number") requireFact(Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER, "Snapshot numeric metadata and usage counters must be finite and within the safe numeric range")
+    if (typeof value === "number") requireFact(Number.isFinite(value) && Math.abs(value) <= Number.MAX_SAFE_INTEGER && !Object.is(value, -0), "Snapshot numeric metadata and usage counters must be finite, within the safe numeric range and not negative zero")
     if (value !== null && typeof value === "object") {
       const children = Object.values(value)
       requireFact(nodes + pending.length + children.length <= 500000, "Snapshot structure exceeds 500000 values")
@@ -385,7 +389,7 @@ function evidenceEntry(value, known) {
   requireFact(EVIDENCE_ROLES.includes(value.role) && CLAIM_ROLES[value.claim_type].includes(value.role), "Contradictory evidence role/claim combination")
   requireFact(EVIDENCE_CLASSES.includes(value.class), "Invalid evidence class")
   requireFact(EVIDENCE_PRODUCERS.includes(value.producer), "Invalid evidence producer")
-  requireFact(normalizeTimestamp(value.observed_at) !== null, "Invalid evidence observed_at")
+  requireFact(text(value.observed_at) && normalizeTimestamp(value.observed_at) !== null, "Invalid or unbounded evidence observed_at")
   const factIds = value.fact_ids
   requireFact(Array.isArray(factIds) && factIds.length <= 100 && factIds.every((id) => known.has(id)), "Evidence cites an out-of-scope fact ID or exceeds the 100-entry bound")
   return {
@@ -406,7 +410,19 @@ function evidenceView(input, included) {
   }).sort((a, b) => compare(a.evidence_id, b.evidence_id))
   return evidence
 }
-function leanEntry(value, evidenceById, outcome) {
+const refIntersects = (a, b) => a.length > 0 && b.length > 0 && a.some((ref) => b.includes(ref))
+// An outcome combines a Desk endpoint declaration with a current external readback (decision: outcome
+// composition, T06-I1). Neither owner alone "certifies" the outcome: this is only structurally supported
+// when a role:"desk"/claim_type:"endpoint" entry and a role:"source_system"/claim_type:"outcome" entry each
+// share at least one inert reference with the top-level declared outcome criterion (`outcome.evidence_refs`).
+// This is a local, existing-fields-only relationship check — no resolver, no new evidence field, and no claim
+// that either side's reference is authentic or current; that remains T28's job.
+function outcomeStructurallySupported(evidence, criterionRefs) {
+  const endpoint = evidence.some((e) => e.role === "desk" && e.claim_type === "endpoint" && refIntersects(e.refs, criterionRefs))
+  const readback = evidence.some((e) => e.role === "source_system" && e.claim_type === "outcome" && refIntersects(e.refs, criterionRefs))
+  return endpoint && readback
+}
+function leanEntry(value, evidenceById, outcome, evidence, criterionRefs) {
   requireFact(object(value) && Object.keys(value).length === LEAN_KEYS.length && LEAN_KEYS.every((name) => Object.hasOwn(value, name)), "Invalid Lean shape or unsupported raw field")
   requireFact(LEAN_CLASSES.includes(value.lean_class), "Invalid lean_class")
   requireFact(text(value.rationale), "Lean annotation requires a rationale")
@@ -416,8 +432,9 @@ function leanEntry(value, evidenceById, outcome) {
   const deduped = [...new Set(evidenceIds)].sort()
   if (value.lean_class === "value_adding") {
     requireFact(outcome.status === "accepted", "value_adding lean_class requires an accepted endpoint criterion")
+    requireFact(outcomeStructurallySupported(evidence, criterionRefs), "value_adding lean_class requires a linked Desk endpoint and source-system outcome readback sharing the declared outcome criterion reference; an unrelated or absent counterpart is not a supported outcome")
     const cited = evidenceIds.map((id) => evidenceById.get(id))
-    requireFact(cited.some((e) => e.claim_type === "outcome" && e.producer === "independent_evaluator" && e.class === "measured"), "value_adding lean_class requires a measured independent_evaluator outcome reference; a declared producer label or an unavailable-class entry alone is not attestation")
+    requireFact(cited.some((e) => e.claim_type === "outcome" && e.producer === "independent_evaluator" && e.class === "measured" && refIntersects(e.refs, criterionRefs)), "value_adding lean_class requires a measured independent_evaluator outcome reference sharing the declared outcome criterion; empty refs, an unrelated criterion or a separate unlinked entry are not attestation")
   }
   return { lean_class: value.lean_class, rationale: value.rationale, evidence_ids: deduped, waste_kind: value.waste_kind }
 }
@@ -439,7 +456,7 @@ function annotations(input, included) {
       episode_id: episode.episode_id, label: episode.label, class: episode.class,
       fact_ids: [...new Set(episode.fact_ids)].sort(), output_refs: refs(episode.output_refs), evidence_refs: refs(episode.evidence_refs),
       token_usage: unavailable("No supported exact usage-row attribution to episodes; no nearest-timestamp allocation"),
-      lean: episode.lean === undefined ? null : leanEntry(episode.lean, evidenceById, outcome),
+      lean: episode.lean === undefined ? null : leanEntry(episode.lean, evidenceById, outcome, evidence, outcomeEvidenceRefs),
     }
   }).sort((a, b) => compare(a.episode_id, b.episode_id))
   return { evidence, episodes, outcome: { acceptance: outcome.acceptance, status: outcome.status, evidence_refs: outcomeEvidenceRefs, artifact_refs: refs(outcome.artifact_refs) } }
@@ -535,16 +552,22 @@ export function renderWorkProfile(profile, format) {
     rows.push("Transport success does not establish command success. A nonzero exit can be a probe result or a dependency failure; it is not automatically a product defect.", "", "## Selected native usage", "", escape(profile.observations.usage.scope), "", `Selected rows: ${profile.observations.usage.selected_rows}; source groups: ${profile.observations.usage.groups.length}. Unknown rows are not zero; the JSON output retains each group's dimensions and source identities.`, "")
     table(["Dimension", "Subtotal", "Known / selected", "Unit"], Object.entries(profile.observations.usage.dimensions).map(([name, dimension]) => [name.replaceAll("_", " "), dimension.value, `${dimension.known_rows} / ${dimension.known_rows + dimension.unknown_rows}`, dimension.unit.replaceAll("_", " ")]))
     rows.push("### Typed evidence", "")
-    if (!profile.evidence.length) rows.push("No typed evidence supplied.", "")
+    const evidenceList = profile.evidence ?? []
+    if (!evidenceList.length) rows.push("No typed evidence supplied.", "")
     else {
-      table(["Evidence", "Role", "Claim", "Class", "Producer"], profile.evidence.map((e) => [e.evidence_id, e.role.replaceAll("_", " "), e.claim_type.replaceAll("_", " "), e.class, e.producer.replaceAll("_", " ")]))
+      table(["Evidence", "Role", "Claim", "Class", "Producer"], evidenceList.map((e) => [e.evidence_id, e.role.replaceAll("_", " "), e.claim_type.replaceAll("_", " "), e.class, e.producer.replaceAll("_", " ")]))
       rows.push("Producer is a declared label, not attestation of independence; T28 verifies the source-native reviewer identity before any independent-assessment claim. Observed-at timestamps and refs are preserved in the JSON output.", "")
     }
     rows.push(escape(profile.observations.usage.caution), "", "## Separate observations", "", `Completion aggregates: ${profile.observations.aggregates.length}. They may overlap selected usage, cover only an earlier interaction, and do not establish final job closure.`, "", `Compaction observations: ${profile.observations.compactions.length}. These are not added to usage rows; non-overlap is unproven and the native duration unit is unspecified. Exact quantities remain in the JSON output.`, "", `Assistant messages: ${profile.observations.assistant_messages}. Model calls: unavailable. ${escape(profile.observations.model_calls.reason)}`, "", "## Coverage limits", "", escape(profile.coverage.note), "")
     for (const name of ["full_job_usage", "parent_overhead", "independent_acceptance", "causal_productivity"]) rows.push(`- ${name.replaceAll("_", " ")}: unavailable. ${escape(profile.coverage[name].reason)}`)
     rows.push(`- Critical path: unavailable. ${escape(profile.observations.critical_path.reason)}`, "", "### Native action class coverage", "")
-    table(["Native action class", "Status"], Object.entries(profile.coverage.native_action_classes).map(([name, entry]) => [name.replaceAll("_", " "), entry.class === "measured" ? `measured (${entry.count})` : "coverage gap: not evidenced by the capture adapter"]))
-    rows.push("A coverage gap is an absent capture-adapter kind, not zero activity; only actual source records count toward a measured class.", "", "## Binding and references", "", `Root agent: ${escape(profile.binding.root_agent_id)}`, "", `Native session: ${escape(profile.binding.native_session_id)}`, "", `Originating dispatch: ${escape(profile.binding.dispatch_tool_call_id)}`, "", `Binding mode: ${profile.binding.binding_mode ?? "unbound"}`, "", `Declared work item: ${escape(profile.binding.work_item_id ?? "not supplied")}. Canonical ledger identity: ${escape(profile.binding.canonical_ledger_identity)}.`, "", `Declared task reference: ${escape(profile.binding.task_ref ?? "not supplied")}`, "", "### Event/source trail", "", `The JSON output with this input hash retains all ${profile.observations.events.length} deduplicated source records, fact-ID aliases, hashes, timestamps, rooted relationships and complete operation spans. This Markdown is a reading summary, not a replacement for that evidence.`, "")
+    const nativeActionClassEntries = Object.entries(profile.coverage.native_action_classes ?? {})
+    if (!nativeActionClassEntries.length) rows.push("Native action class coverage is not available in this historical profile.", "")
+    else {
+      table(["Native action class", "Status"], nativeActionClassEntries.map(([name, entry]) => [name.replaceAll("_", " "), entry.class === "measured" ? `measured (${entry.count})` : "coverage gap: not evidenced by the capture adapter"]))
+      rows.push("A coverage gap is an absent capture-adapter kind, not zero activity; only actual source records count toward a measured class.", "")
+    }
+    rows.push("## Binding and references", "", `Root agent: ${escape(profile.binding.root_agent_id)}`, "", `Native session: ${escape(profile.binding.native_session_id)}`, "", `Originating dispatch: ${escape(profile.binding.dispatch_tool_call_id)}`, "", `Binding mode: ${profile.binding.binding_mode ?? "unbound"}`, "", `Declared work item: ${escape(profile.binding.work_item_id ?? "not supplied")}. Canonical ledger identity: ${escape(profile.binding.canonical_ledger_identity)}.`, "", `Declared task reference: ${escape(profile.binding.task_ref ?? "not supplied")}`, "", "### Event/source trail", "", `The JSON output with this input hash retains all ${profile.observations.events.length} deduplicated source records, fact-ID aliases, hashes, timestamps, rooted relationships and complete operation spans. This Markdown is a reading summary, not a replacement for that evidence.`, "")
     references("Source references", profile.coverage.source_refs)
     references("Coverage references", profile.coverage.coverage_refs)
     references("Outcome evidence", profile.outcome.evidence_refs)

@@ -207,11 +207,11 @@ test("missing endpoints are gaps and successful transport does not imply success
 test("native action classes come only from actual source records; unsupported classes remain visible coverage gaps", () => {
   const p = profile(richSnapshot())
   const classes = p.coverage.native_action_classes
-  for (const name of ["messages", "commands", "delegation_handoffs", "cleanup", "side_effects"]) {
+  for (const name of ["messages", "commands", "delegation_handoffs"]) {
     assert.equal(classes[name].class, "measured", name)
     assert.ok(classes[name].count > 0, name)
   }
-  for (const gap of ["file_git_mutations", "review_ci", "waits_retries_errors"]) {
+  for (const gap of ["file_git_mutations", "review_ci", "waits_retries_errors", "side_effects", "cleanup"]) {
     assert.equal(classes[gap].class, "unavailable", gap)
     assert.equal(classes[gap].count, null, gap)
     assert.match(classes[gap].reason, /capture adapter/i, gap)
@@ -222,6 +222,52 @@ test("native action classes come only from actual source records; unsupported cl
   assert.equal(empty.coverage.native_action_classes.commands.count, 0)
   assert.equal(empty.coverage.native_action_classes.delegation_handoffs.count, 1)
   assert.equal(empty.coverage.native_action_classes.file_git_mutations.class, "unavailable")
+})
+
+test("session initialization and hook callbacks are not promoted to measured cleanup or side effects without capture-specific evidence", () => {
+  const onlySessionStart = snapshot()
+  onlySessionStart.facts.push(fact("session-start-only", "session.start", 3, "worker-a"))
+  const p1 = profile(onlySessionStart)
+  assert.equal(p1.coverage.native_action_classes.cleanup.class, "unavailable")
+  assert.equal(p1.coverage.native_action_classes.cleanup.count, null)
+  const onlyHookStart = snapshot()
+  onlyHookStart.facts.push(fact("hook-start-only", "hook.start", 3, "worker-a", { hookInvocationId: "orphan-hook" }))
+  const p2 = profile(onlyHookStart)
+  assert.equal(p2.coverage.native_action_classes.side_effects.class, "unavailable")
+  assert.equal(p2.coverage.native_action_classes.side_effects.count, null)
+  // Compaction activity remains distinct from a proven cleanup effect: it is still not counted as measured cleanup.
+  const withCompaction = richSnapshot()
+  assert.equal(profile(withCompaction).coverage.native_action_classes.cleanup.class, "unavailable")
+})
+
+test("removing an entire failed attempt cannot be promoted to complete coverage merely because remaining endpoints balance or an inert coverage ref exists (T06-I7: source-manifest completeness and omitted-attempt detection remain unavailable in this batch API)", () => {
+  const claimedManifest = ["coverage:manifest-claims-three-tool-calls"]
+  const before = richSnapshot()
+  before.coverage_refs = claimedManifest
+  const beforeProfile = profile(before)
+  const beforeToolMatched = beforeProfile.observations.operations.tool.matched
+  const beforeMissing = beforeProfile.coverage.missing_operation_endpoints
+  const beforeIncluded = beforeProfile.coverage.included_facts
+  assert.ok(beforeToolMatched > 0)
+  // Remove BOTH endpoints of one complete tool call ("tool-a", a nonzero-exit attempt) — an entire attempt
+  // vanishes from the bytes buildWorkProfile ever receives. This is a whole-attempt omission, not merely a
+  // missing endpoint: no orphaned start or end remains to surface as a coverage gap.
+  const withOmission = richSnapshot()
+  withOmission.coverage_refs = claimedManifest
+  withOmission.facts = withOmission.facts.filter((f) => f.fact_id !== "tool-1-start" && f.fact_id !== "tool-1-end")
+  const afterProfile = profile(withOmission)
+  assert.equal(afterProfile.observations.operations.tool.matched, beforeToolMatched - 1, "the omitted attempt simply disappears from the matched count")
+  assert.equal(afterProfile.coverage.missing_operation_endpoints, beforeMissing, "an entirely omitted attempt does not surface as a new missing-endpoint gap; supplied endpoints still balance")
+  assert.equal(afterProfile.coverage.included_facts, beforeIncluded - 2)
+  // The supplied coverage_refs are retained verbatim as an inert echo, completely unaffected by the omission:
+  // the reference is never consulted, cross-checked or used to contradict the (unchanged) fact content.
+  assert.deepEqual(afterProfile.coverage.coverage_refs, claimedManifest)
+  assert.deepEqual(afterProfile.coverage.coverage_refs, beforeProfile.coverage.coverage_refs)
+  // This is the documented, ruled limitation, not an oversight: T06 refuses to claim completeness rather than
+  // inventing a manifest schema, a resolver or a live reference read. No such field exists to check.
+  assert.ok(!("manifest_complete" in afterProfile.coverage))
+  assert.ok(!("omitted_attempts" in afterProfile.coverage))
+  assert.ok(!("source_manifest" in afterProfile.coverage))
 })
 
 test("usage dimensions preserve unknowns, partial coverage, native units and separate aggregates", () => {
@@ -387,29 +433,108 @@ test("raw transcript-shaped evidence fields refuse rather than silently dropping
   assert.throws(() => profile(input), /evidence/i)
 })
 
-test("value_adding requires an accepted endpoint criterion and an independent-evaluator outcome reference, not a declared producer label alone", () => {
-  const input = snapshot()
-  input.evidence = [evidenceEntry("self-1", { role: "desk", claim_type: "outcome", class: "declared", producer: "agent_annotation" })]
-  input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Self-declared.", evidence_ids: ["self-1"], waste_kind: null } }]
-  input.outcome = { acceptance: "declared", status: "accepted", evidence_refs: ["r"], artifact_refs: [] }
-  assert.throws(() => profile(input), /independent[_-]evaluator|value_adding/i)
-  input.evidence.push(evidenceEntry("indep-1", { role: "source_system", claim_type: "outcome", class: "measured", producer: "independent_evaluator" }))
-  input.episodes[0].lean.evidence_ids = ["self-1", "indep-1"]
-  assert.equal(profile(input).episodes[0].lean.lean_class, "value_adding")
-  input.outcome.status = "not_accepted"
-  assert.throws(() => profile(input), /accepted endpoint|value_adding/i)
+test("evidence observed_at is bounded text before timestamp normalization; whitespace padding and long fractional forms are both bounded", () => {
+  const timestamp = "2026-09-15T01:00:02Z"
+  const padded = (total) => " ".repeat(total - timestamp.length) + timestamp
+  for (const [label, atLimit, overLimit] of [
+    ["whitespace padding", padded(2048), padded(2049)],
+    ["long fractional seconds", `2026-09-15T01:00:00.${"0".repeat(2048 - 21)}Z`, `2026-09-15T01:00:00.${"0".repeat(2049 - 21)}Z`],
+  ]) {
+    assert.equal(atLimit.length, 2048, label)
+    assert.equal(overLimit.length, 2049, label)
+    const accepted = snapshot()
+    accepted.evidence = [evidenceEntry("e1", { observed_at: atLimit })]
+    assert.equal(profile(accepted).evidence[0].observed_at.length > 0, true, label)
+    const refused = snapshot()
+    refused.evidence = [evidenceEntry("e1", { observed_at: overLimit })]
+    assert.throws(() => profile(refused), /evidence|observed_at|bound/i, label)
+  }
 })
 
-test("value_adding cannot be satisfied by an unavailable-class independent-evaluator outcome entry; the label alone is not the assessment", () => {
-  const input = snapshot()
-  input.evidence = [evidenceEntry("unassessed-indep", { role: "source_system", claim_type: "outcome", class: "unavailable", producer: "independent_evaluator" })]
-  input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Labelled but unassessed.", evidence_ids: ["unassessed-indep"], waste_kind: null } }]
-  input.outcome = { acceptance: "declared", status: "accepted", evidence_refs: ["r"], artifact_refs: [] }
-  assert.throws(() => profile(input), /independent[_-]evaluator|value_adding/i)
-  input.evidence[0].class = "declared"
-  assert.throws(() => profile(input), /independent[_-]evaluator|value_adding/i)
-  input.evidence[0].class = "measured"
-  assert.equal(profile(input).episodes[0].lean.lean_class, "value_adding")
+test("value_adding requires a linked Desk endpoint and source-system readback sharing the declared outcome criterion, plus that same measured independent-evaluator reference — not a declared producer label alone", () => {
+  const criterion = ["criterion:accepted-endpoint-one"]
+  function fixture() {
+    const input = snapshot()
+    input.outcome = { acceptance: "declared", status: "accepted", evidence_refs: criterion, artifact_refs: [] }
+    return input
+  }
+  // Missing side: no Desk endpoint entry at all, only the independent-evaluator outcome readback.
+  {
+    const input = fixture()
+    input.evidence = [evidenceEntry("indep-1", { role: "source_system", claim_type: "outcome", class: "measured", producer: "independent_evaluator", refs: criterion })]
+    input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Missing Desk endpoint.", evidence_ids: ["indep-1"], waste_kind: null } }]
+    assert.throws(() => profile(input), /value_adding|endpoint|outcome/i, "missing Desk endpoint side")
+  }
+  // Missing side: a Desk endpoint entry exists, but no source-system/outcome entry at all (self-declared only).
+  {
+    const input = fixture()
+    input.evidence = [evidenceEntry("endpoint-1", { role: "desk", claim_type: "endpoint", class: "declared", producer: "agent_annotation", refs: criterion })]
+    input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Self-declared.", evidence_ids: ["endpoint-1"], waste_kind: null } }]
+    assert.throws(() => profile(input), /value_adding|endpoint|outcome/i, "missing source-system readback side")
+  }
+  // Unrelated link: both owner roles present, but their refs do not overlap the declared outcome criterion.
+  {
+    const input = fixture()
+    input.evidence = [
+      evidenceEntry("endpoint-1", { role: "desk", claim_type: "endpoint", class: "declared", producer: "agent_annotation", refs: ["criterion:unrelated"] }),
+      evidenceEntry("indep-1", { role: "source_system", claim_type: "outcome", class: "measured", producer: "independent_evaluator", refs: ["criterion:also-unrelated"] }),
+    ]
+    input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Unrelated criterion.", evidence_ids: ["indep-1"], waste_kind: null } }]
+    assert.throws(() => profile(input), /value_adding|endpoint|outcome/i, "unrelated criterion refs on both sides")
+  }
+  // Empty refs on the cited independent-evaluator entry: structurally supported by others, but the cited entry itself carries no reference.
+  {
+    const input = fixture()
+    input.evidence = [
+      evidenceEntry("endpoint-1", { role: "desk", claim_type: "endpoint", class: "declared", producer: "agent_annotation", refs: criterion }),
+      evidenceEntry("readback-1", { role: "source_system", claim_type: "outcome", class: "measured", producer: "source_native", refs: criterion }),
+      evidenceEntry("indep-1", { role: "source_system", claim_type: "outcome", class: "measured", producer: "independent_evaluator", refs: [] }),
+    ]
+    input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Empty evaluator ref.", evidence_ids: ["indep-1"], waste_kind: null } }]
+    assert.throws(() => profile(input), /value_adding|endpoint|outcome/i, "empty refs on the cited independent-evaluator entry")
+  }
+  // Separate unlinked outcome evidence: the profile is structurally supported by OTHER entries, but the cited
+  // independent-evaluator entry itself links to an unrelated criterion, not the declared/supported one.
+  {
+    const input = fixture()
+    input.evidence = [
+      evidenceEntry("endpoint-1", { role: "desk", claim_type: "endpoint", class: "declared", producer: "agent_annotation", refs: criterion }),
+      evidenceEntry("readback-1", { role: "source_system", claim_type: "outcome", class: "measured", producer: "source_native", refs: criterion }),
+      evidenceEntry("indep-unlinked", { role: "source_system", claim_type: "outcome", class: "measured", producer: "independent_evaluator", refs: ["criterion:a-different-job"] }),
+    ]
+    input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Cites an unlinked evaluator entry.", evidence_ids: ["indep-unlinked"], waste_kind: null } }]
+    assert.throws(() => profile(input), /value_adding|endpoint|outcome/i, "cited entry links to a different, unrelated criterion")
+  }
+  // Valid link: Desk endpoint and the measured independent-evaluator outcome readback both share the criterion ref.
+  {
+    const input = fixture()
+    input.evidence = [
+      evidenceEntry("endpoint-1", { role: "desk", claim_type: "endpoint", class: "declared", producer: "agent_annotation", refs: criterion }),
+      evidenceEntry("indep-1", { role: "source_system", claim_type: "outcome", class: "measured", producer: "independent_evaluator", refs: criterion }),
+    ]
+    input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Linked endpoint and evaluator readback.", evidence_ids: ["indep-1"], waste_kind: null } }]
+    const p = profile(input)
+    assert.equal(p.episodes[0].lean.lean_class, "value_adding")
+    input.outcome.status = "not_accepted"
+    assert.throws(() => profile(input), /accepted endpoint|value_adding/i, "accepted status still required")
+  }
+})
+
+test("value_adding cannot be satisfied by an unavailable-class or declared-class independent-evaluator outcome entry, even when properly linked; the label alone is not the assessment", () => {
+  const criterion = ["criterion:accepted-endpoint-two"]
+  function fixture(indepClass) {
+    const input = snapshot()
+    input.outcome = { acceptance: "declared", status: "accepted", evidence_refs: criterion, artifact_refs: [] }
+    input.evidence = [
+      evidenceEntry("endpoint-1", { role: "desk", claim_type: "endpoint", class: "declared", producer: "agent_annotation", refs: criterion }),
+      evidenceEntry("indep-1", { role: "source_system", claim_type: "outcome", class: indepClass, producer: "independent_evaluator", refs: criterion }),
+    ]
+    input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Labelled but unassessed.", evidence_ids: ["indep-1"], waste_kind: null } }]
+    return input
+  }
+  assert.throws(() => profile(fixture("unavailable")), /independent[_-]evaluator|value_adding/i)
+  assert.throws(() => profile(fixture("declared")), /independent[_-]evaluator|value_adding/i)
+  assert.equal(profile(fixture("measured")).episodes[0].lean.lean_class, "value_adding")
 })
 
 test("no mura or muri schema field is introduced and a large token count cannot itself establish muda or muri", () => {

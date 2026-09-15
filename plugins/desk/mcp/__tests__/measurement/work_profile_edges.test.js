@@ -167,6 +167,9 @@ test("malformed evidence and Lean payloads reject at the actual CLI stdout bound
   const rawTranscript = fixture()
   rawTranscript.evidence = [{ evidence_id: "e1", role: "desk", claim_type: "intent", class: "declared", producer: "agent_annotation", observed_at: time(0), refs: [], fact_ids: [], content: "PRIVATE_PAYLOAD" }]
   invalid.push(rawTranscript)
+  const overLongObservedAt = fixture()
+  overLongObservedAt.evidence = [{ evidence_id: "e1", role: "desk", claim_type: "intent", class: "declared", producer: "agent_annotation", observed_at: `${" ".repeat(2040)}2026-09-15T01:00:02Z`, refs: [], fact_ids: [] }]
+  invalid.push(overLongObservedAt)
   for (const input of invalid) {
     fs.writeFileSync(filename, JSON.stringify(input))
     const result = spawnSync(process.execPath, [script, "--input", filename, "--format", "json"], { encoding: "utf8" })
