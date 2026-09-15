@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { absoluteRoot, canonicalJson, jsonBytes, listRegularFiles, overlaps, pathIdentities, plainObject, requireCondition, sha256 } from "./core.mjs";
+import { absoluteRoot, canonicalJson, jsonBytes, listRegularFiles, pathIdentities, plainObject, requireCondition, sha256 } from "./core.mjs";
 import { captureBoundedCommand } from "./output.mjs";
 
 // A strict allowlist: only these names may cross into candidate execution. Everything else — cloud, CI and provider
@@ -14,6 +14,17 @@ const literalValuedEnv = new Map([["npm_config_audit", ["true", "false"]], ["npm
 
 function boundaryRequired(condition, message) {
   requireCondition(condition, "CHECKER_OS_BOUNDARY_REQUIRED", message);
+}
+
+// Root-aware containment. `overlaps` appends a separator, so a filesystem root would compare against "//" and never
+// contain anything; every containment decision on this boundary goes through these two predicates instead.
+function contains(ancestor, descendant) {
+  // This boundary is Linux-only, so "/" is the one ancestor whose separator is already present.
+  return ancestor === descendant || descendant.startsWith(`${ancestor.replace(/\/+$/u, "")}/`);
+}
+
+function intersects(left, right) {
+  return contains(left, right) || contains(right, left);
 }
 
 function insideRoots(value, roots) {
@@ -35,6 +46,7 @@ function admittedEnvironmentValue(name, value, roots) {
 // ancestor, so an alias cannot resolve into held-out or parent-owned data once bwrap resolves the mount.
 function canonicalRoot(value, label) {
   const root = absoluteRoot(value);
+  boundaryRequired(root !== path.parse(root).root, `${label} cannot be the filesystem root`);
   try {
     boundaryRequired(fs.realpathSync(root) === root, `${label} must be its own canonical path, not an alias`);
     boundaryRequired(fs.lstatSync(root).isDirectory(), `${label} must be a directory`);
@@ -97,30 +109,47 @@ function namespaceIdentity(pid) {
   }
 }
 
+const MAX_SURVEYED_PROCESSES = 16384;
+const MAX_STATUS_RECORD_BYTES = 4096;
+
 function namespaceOccupants(identity) {
   const occupants = [];
   // Every process whose namespace cannot be read is counted against closure. Ownership, credentials and command
   // names are not evidence of non-membership — a descendant can change credentials or become non-dumpable — and this
   // boundary has no run-owned lifecycle primitive, so an unobservable process is conservatively unresolved.
   let unreadable = 0;
-  let listed = [];
-  try { listed = fs.readdirSync("/proc").filter(name => /^\d+$/u.test(name)).slice(0, 16384); }
+  let examined = 0;
+  let complete = true;
+  let handle = null;
+  try { handle = fs.opendirSync("/proc"); }
   catch { unreadable += 1; }
-  for (const name of listed) {
-    const observed = namespaceIdentity(name);
-    if (observed.identity === identity) occupants.push(Number(name));
-    unreadable += Number(observed.unreadable);
+  if (handle !== null) {
+    try {
+      let entry;
+      while ((entry = handle.readSync()) !== null) {
+        if (!/^\d+$/u.test(entry.name)) continue;
+        // The bound is applied while enumerating. An unexamined tail makes the survey incomplete rather than
+        // silently producing an apparently empty result for a prefix of the process table.
+        if (examined >= MAX_SURVEYED_PROCESSES) { complete = false; break; }
+        examined += 1;
+        const observed = namespaceIdentity(entry.name);
+        if (observed.identity === identity) occupants.push(Number(entry.name));
+        unreadable += Number(observed.unreadable);
+      }
+    } finally { handle.closeSync(); }
   }
-  return { occupants, unreadable };
+  return { occupants, unreadable, examined, complete };
 }
 
 // The launcher's init owns the namespace's lifetime, so an observed retirement is the parent's lifetime fact; where
 // the init's namespace was readable during the run, that exact namespace must additionally hold no remaining process.
 async function reconcileNamespaceLifetime(observed, execution) {
-  const initPid = execution.status === "observed" ? execution.childPid : observed.initPid;
+  // Only a fully framed and validated initial status record may name this run's init.
+  const initPid = observed.initPid;
+  const launcherAgreement = execution.status === "observed" ? execution.childPid === initPid : null;
   const retirement = initPid === null ? null : namespaceIdentity(initPid);
   const initRetired = retirement === null || retirement.unreadable ? null : retirement.gone;
-  let survey = { occupants: [], unreadable: 0 };
+  let survey = { occupants: [], unreadable: 0, examined: 0, complete: true };
   if (observed.identity !== null) {
     survey = namespaceOccupants(observed.identity);
     for (let attempt = 0; attempt < 4 && survey.occupants.length > 0; attempt += 1) {
@@ -131,13 +160,19 @@ async function reconcileNamespaceLifetime(observed, execution) {
   return {
     scope: "parent-observed-namespace-init-lifetime",
     initPid,
+    initPidSource: "framed-launcher-status-record",
+    statusRefused: observed.refused,
+    launcherAgreement,
     initRetired,
     namespaceIdentity: observed.identity,
     namespaceIdentityObserved: observed.identity !== null,
     namespaceIdentityUnreadable: observed.unreadable,
     remainingOccupants: survey.occupants,
+    surveyExamined: survey.examined,
+    surveyComplete: survey.complete,
     unreadable: survey.unreadable,
-    reconciled: initRetired === true && observed.unreadable === false && survey.occupants.length === 0 && survey.unreadable === 0,
+    reconciled: initPid !== null && observed.refused === null && launcherAgreement !== false && initRetired === true
+      && observed.unreadable === false && survey.complete === true && survey.occupants.length === 0 && survey.unreadable === 0,
   };
 }
 
@@ -161,8 +196,9 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
   const requestedScratch = absoluteRoot(scratchRoot ?? path.join(parentRoot, "child-scratch"));
   // Nothing is created until the requested scratch path is proved disjoint from held-out, source and input data and
   // free of symlinked ancestors, so a refused request never materializes a directory inside protected data.
-  boundaryRequired(![hidden, source, ...(inputs ? [inputs] : [])].some(root => overlaps(requestedScratch, root)), "The child-owned scratch root cannot overlap held-out, source or input data");
-  boundaryRequired(requestedScratch !== parentRoot && !parentRoot.startsWith(`${requestedScratch}${path.sep}`), "The child-owned scratch root cannot be the parent work root or contain it");
+  boundaryRequired(requestedScratch !== path.parse(requestedScratch).root, "The child-owned scratch root cannot be the filesystem root");
+  boundaryRequired(![hidden, source, ...(inputs ? [inputs] : [])].some(root => intersects(requestedScratch, root)), "The child-owned scratch root cannot overlap held-out, source or input data");
+  boundaryRequired(!contains(requestedScratch, parentRoot), "The child-owned scratch root cannot be the parent work root or contain it");
   try { pathIdentities(requestedScratch, true); }
   catch (error) { boundaryRequired(false, `The child-owned scratch root has an unsafe ancestor: ${error.code}`); }
   fs.mkdirSync(requestedScratch, { recursive: true, mode: 0o700 });
@@ -170,15 +206,15 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
   // Mode 0700 stays usable inside the sandbox because bwrap maps this caller's uid onto the requested sandbox uid,
   // so roots this process owns are owned by that uid in the namespace. Roots owned by another user are not usable.
   const candidateRoots = [source, ...(inputs ? [inputs] : []), scratch];
-  boundaryRequired(candidateRoots.every(root => !overlaps(root, hidden)), "The held-out checker root cannot overlap any root the candidate can reach");
-  boundaryRequired(candidateRoots.every((root, index) => candidateRoots.slice(index + 1).every(other => !overlaps(root, other))), "Candidate source, inputs and scratch must be separate roots");
+  boundaryRequired(candidateRoots.every(root => !intersects(root, hidden)), "The held-out checker root cannot overlap any root the candidate can reach");
+  boundaryRequired(candidateRoots.every((root, index) => candidateRoots.slice(index + 1).every(other => !intersects(root, other))), "Candidate source, inputs and scratch must be separate roots");
   // An ancestor bind exposes the parent work root just as wholesale as binding it directly; owned descendants stay legal.
-  boundaryRequired(candidateRoots.every(root => root !== parentRoot && !parentRoot.startsWith(`${root}${path.sep}`)), "No candidate mount may be the parent work root or contain it");
+  boundaryRequired(candidateRoots.every(root => !contains(root, parentRoot)), "No candidate mount may be the parent work root or contain it");
   const directory = absoluteRoot(cwd);
-  boundaryRequired(candidateRoots.some(root => directory === root || directory.startsWith(`${root}${path.sep}`)), "The candidate working directory must be inside its mounted source, inputs or scratch root");
+  boundaryRequired(candidateRoots.some(root => contains(root, directory)), "The candidate working directory must be inside its mounted source, inputs or scratch root");
   const runtimeRoot = path.dirname(path.dirname(fs.realpathSync(process.execPath)));
   const mounts = [...new Set(["/usr", "/bin", "/lib", "/lib64", runtimeRoot].filter(root => fs.existsSync(root)))];
-  boundaryRequired(mounts.every(root => root !== "/" && [parentRoot, hidden, ...candidateRoots].every(other => !overlaps(root, other))), "Runtime mounts must be separate from all candidate, parent and checker inputs");
+  boundaryRequired(mounts.every(root => root !== path.parse(root).root && [parentRoot, hidden, ...candidateRoots].every(other => !intersects(root, other))), "Runtime mounts must be separate from all candidate, parent and checker inputs");
   const reachableRoots = [...mounts, ...candidateRoots];
   for (const [name, value] of Object.entries(env)) {
     boundaryRequired(allowedEnvNames.has(name), `Environment ${name} is not on the candidate boundary's allowlist`);
@@ -200,12 +236,30 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
   const mountArgs = [...args];
   args.push("--", executable, ...argv);
   // The launcher reports its init's PID while that init is still alive, which is the only moment its namespace
-  // identity can be read. A run whose init exits first leaves `identity` null and is reconciled by retirement alone.
-  const observed = { initPid: null, identity: null, unreadable: false };
+  // identity can be read. The status stream is framed first: a partial record is never parsed, so a chunk boundary
+  // inside the field name or inside the digits can never let a numeric prefix become this run's identity.
+  const observed = { initPid: null, identity: null, unreadable: false, refused: null };
+  let framing = Buffer.alloc(0);
+  let framed = false;
   const onStatus = bytes => {
-    if (observed.initPid !== null) return;
-    const pid = Number(String(bytes).match(/"child-pid"\s*:\s*(\d+)/u)?.[1]);
-    if (!Number.isSafeInteger(pid) || pid <= 0) return;
+    if (framed) return;
+    framing = Buffer.concat([framing, bytes]);
+    const end = framing.indexOf(0x0a);
+    if (end < 0) {
+      if (framing.length > MAX_STATUS_RECORD_BYTES) {
+        framed = true;
+        observed.refused = "STATUS_RECORD_UNFRAMED";
+      }
+      return;
+    }
+    framed = true;
+    let row = null;
+    try { row = JSON.parse(framing.subarray(0, end).toString("utf8")); } catch { row = null; }
+    const pid = plainObject(row) ? row["child-pid"] : undefined;
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      observed.refused = row === null ? "STATUS_RECORD_MALFORMED" : "STATUS_INIT_PID_INVALID";
+      return;
+    }
     observed.initPid = pid;
     const live = namespaceIdentity(pid);
     observed.identity = live.identity;
@@ -225,7 +279,7 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
     // capture points and cannot exclude a trusted-side writer that mutates and restores them mid-run.
     frozenInputs: before.source.sha256 === after.source.sha256 && before.inputs.sha256 === after.inputs.sha256,
     isolatedSourceAndInputsOnly: writable.length === 1 && writable[0] === scratch && readOnly.length === mounts.length + 1 + (inputs ? 1 : 0) && readOnly.includes(source) && (!inputs || readOnly.includes(inputs)),
-    hiddenAssertionsNotMounted: [...readOnly, ...writable].every(root => !overlaps(root, hidden)) && !mountArgs.includes(hidden) && !mountArgs.includes(parentRoot),
+    hiddenAssertionsNotMounted: [...readOnly, ...writable].every(root => !intersects(root, hidden)) && !mountArgs.includes(hidden) && !mountArgs.includes(parentRoot),
     captureWithinLimits: ![result.stdout, result.stderr, result.statusPipe].some(channel => channel.truncated) && !["COMMAND_OUTPUT_OVERFLOW", "COMMAND_CAPTURE_OVERFLOW"].includes(result.failure?.code),
     commandExitObserved: result.status === "exited" && Number.isInteger(result.exitCode) && result.signal === null,
     statusPipeEof,

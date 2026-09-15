@@ -150,7 +150,7 @@ function linuxLauncher(t, tree) {
   t.mock.method(fs, "realpathSync", (filename, ...args) => filename === process.execPath ? "/opt/node/bin/node" : realpath(filename, ...args));
   const exists = fs.existsSync;
   t.mock.method(fs, "existsSync", filename => ["/opt/node", "/usr", "/bin", "/lib"].includes(filename) || exists(filename));
-  const transport = { invocation: null, stdout: "", statusBytes: "", statusEof: true, statusChunks: false, exitCode: 0, exitSignal: null, onSpawn: null, ...procOptions(t, tree) };
+  const transport = { invocation: null, stdout: "", statusBytes: "", statusEof: true, statusChunks: false, statusSplits: null, exitCode: 0, exitSignal: null, onSpawn: null, ...procOptions(t, tree) };
   t.mock.method(childProcess, "spawn", (executable, argv, settings) => {
     transport.invocation = { executable, argv, settings };
     const child = Object.assign(new EventEmitter(), { pid: 777001, stdout: new PassThrough(), stderr: new PassThrough(), stdio: [null, null, null, new PassThrough()], kill: () => true });
@@ -169,8 +169,11 @@ function linuxLauncher(t, tree) {
     queueMicrotask(() => {
       child.stdout.end(transport.stdout);
       child.stderr.end("");
-      // A real launcher writes its init line and its exit line as separate status records.
-      const chunks = transport.statusChunks ? transport.statusBytes.split(/(?<=\n)/u) : [transport.statusBytes];
+      // A real launcher writes its init line and its exit line as separate status records, and a record can also be
+      // split at any byte boundary; `statusSplits` names the exact byte offsets to fragment at.
+      const chunks = transport.statusSplits
+        ? transport.statusSplits.concat(transport.statusBytes.length).map((end, index, ends) => transport.statusBytes.slice(index === 0 ? 0 : ends[index - 1], end)).filter(chunk => chunk.length > 0)
+        : transport.statusChunks ? transport.statusBytes.split(/(?<=\n)/u) : [transport.statusBytes];
       for (const chunk of chunks.slice(0, -1)) child.stdio[3].write(chunk);
       if (transport.statusEof) child.stdio[3].end(chunks.at(-1));
       else child.stdio[3].write(chunks.at(-1));
@@ -193,13 +196,22 @@ const complete = status => `{"child-pid":4242}\n{"exit-code":${status}}\n`;
 // namespace this run created; `initAlive` keeps the launcher's reported init alive in that namespace.
 function procOptions(t) {
   const runNamespace = "pid:[4026999999]";
-  const view = { runNamespace, surveys: 0, initReads: 0, surviving: 0, initAlive: false, unreadable: false, procMissing: false, identityUnobservable: false, identityUnreadable: false, retirementUnreadable: false };
-  const readdir = fs.readdirSync;
-  t.mock.method(fs, "readdirSync", (target, ...args) => {
-    if (target !== "/proc") return readdir(target, ...args);
+  const view = { runNamespace, surveys: 0, initReads: 0, surviving: 0, initAlive: false, unreadable: false, tail: null, procMissing: false, identityUnobservable: false, identityUnreadable: false, retirementUnreadable: false };
+  const opendir = fs.opendirSync;
+  t.mock.method(fs, "opendirSync", (target, ...args) => {
+    if (target !== "/proc") return opendir(target, ...args);
     if (view.procMissing) throw Object.assign(new Error("no /proc"), { code: "ENOENT" });
     view.surveys += 1;
-    return ["1", "2", "not-a-pid", "7777", ...(view.surveys <= view.surviving ? ["5555"] : []), ...(view.unreadable ? ["6666"] : [])];
+    const base = ["1", "2", "not-a-pid", "7777", ...(view.surveys <= view.surviving ? ["5555"] : []), ...(view.unreadable ? ["6666"] : [])];
+    let names = base;
+    if (view.tail !== null) {
+      // Exactly one numeric entry beyond the survey bound, with the interesting entry in the omitted position.
+      const numeric = base.filter(name => /^\d+$/u.test(name)).length;
+      const filler = Array.from({ length: 16384 - numeric }, (_, index) => String(100000 + index));
+      names = [...base, ...filler, view.tail === "occupant" ? "5555" : "6666"];
+    }
+    let index = 0;
+    return { readSync: () => index < names.length ? { name: names[index++] } : null, closeSync: () => {} };
   });
   const readlink = fs.readlinkSync;
   t.mock.method(fs, "readlinkSync", (target, ...args) => {
@@ -707,4 +719,86 @@ test("a refused scratch root never materializes a directory inside protected dat
   }
   assert.equal(transport.invocation, null);
   assert.deepEqual(fs.readdirSync(tree.checker).sort(), ["expected-matrix.json", "oracle.test.mjs"], "The held-out root is untouched");
+});
+
+test("the filesystem root and root-adjacent ancestors are refused before any spawn", async t => {
+  const tree = roots("checker-filesystem-root");
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = complete(0);
+  const filesystemRoot = path.parse(tree.root).root;
+  for (const delta of [{ scratchRoot: filesystemRoot }, { subject: filesystemRoot }, { inputsRoot: filesystemRoot }, { checkerRoot: filesystemRoot }, { workRoot: filesystemRoot }]) {
+    await assert.rejects(captureConfinedChecker({ ...options, ...delta }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" }, JSON.stringify(delta));
+  }
+  assert.equal(fs.existsSync(path.join(filesystemRoot, "child-scratch")), false, "A refused filesystem-root request creates nothing");
+  // A root-adjacent ancestor of the work root is equally refused, writable or read-only.
+  const adjacent = path.join(filesystemRoot, tree.root.split(path.sep).filter(Boolean)[0]);
+  for (const delta of [{ scratchRoot: adjacent }, { subject: adjacent }, { inputsRoot: adjacent }]) {
+    await assert.rejects(captureConfinedChecker({ ...options, ...delta }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" }, JSON.stringify(delta));
+  }
+  assert.equal(transport.invocation, null, "No filesystem-root or root-adjacent mount reaches the spawn transport");
+});
+
+test("a fragmented launcher status record cannot let a numeric prefix become the run identity", async t => {
+  const tree = roots("checker-status-framing");
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = `{"child-pid":744}\n{"exit-code":0}\n`;
+  transport.statusSplits = [14, 20];
+  const digits = await captureConfinedChecker(options);
+  assert.equal(digits.lifetime.initPid, 744, "A split inside the digits must not record the prefix");
+  assert.equal(digits.lifetime.statusRefused, null);
+  assert.equal(digits.lifetime.launcherAgreement, true);
+  transport.statusSplits = [9];
+  const fieldName = await captureConfinedChecker(options);
+  assert.equal(fieldName.lifetime.initPid, 744, "A split inside the field name must not record anything");
+  assert.equal(fieldName.lifetime.launcherAgreement, true);
+  transport.statusSplits = null;
+  for (const [bytes, refusal] of [["not json\n", "STATUS_RECORD_MALFORMED"], ['{"exit-code":0}\n', "STATUS_INIT_PID_INVALID"], ['{"child-pid":"744"}\n', "STATUS_INIT_PID_INVALID"], ['{"child-pid":-1}\n', "STATUS_INIT_PID_INVALID"], ['{"child-pid":0}\n', "STATUS_INIT_PID_INVALID"]]) {
+    transport.statusBytes = bytes;
+    const refused = await captureConfinedChecker(options);
+    assert.equal(refused.lifetime.statusRefused, refusal, bytes);
+    assert.equal(refused.lifetime.initPid, null);
+    assert.equal(refused.lifetime.reconciled, false);
+    assert.equal(refused.namespaceClosed, false);
+  }
+  transport.statusBytes = `{"child-pid":${"7".repeat(5000)}`;
+  transport.statusEof = false;
+  const unframed = await captureConfinedChecker(options);
+  assert.equal(unframed.lifetime.statusRefused, "STATUS_RECORD_UNFRAMED", "An unterminated record is refused, never parsed");
+  assert.equal(unframed.lifetime.reconciled, false);
+});
+
+for (const [name, statusBytes, statusSplits] of [
+  ["cancellation", `{"child-pid":744}\n`, [14]],
+  ["overflow", `{"child-pid":744}\n`, [9]],
+]) test(`a ${name} run still binds its init from a complete framed record`, async t => {
+  const tree = roots(`checker-status-framing-${name}`);
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = statusBytes;
+  transport.statusSplits = statusSplits;
+  transport.statusEof = false;
+  transport.onSpawn = () => {};
+  const controller = new AbortController();
+  const pending = captureConfinedChecker({ ...options, signal: controller.signal, limits: { ...options.limits, timeoutMs: name === "cancellation" ? 5000 : 200 } });
+  if (name === "cancellation") setTimeout(() => controller.abort(), 60);
+  const result = await pending;
+  assert.equal(result.status, name === "cancellation" ? "cancelled" : "timed_out");
+  assert.equal(result.lifetime.initPid, 744, "The expected-failure path still identifies the real init, not a prefix");
+  assert.equal(result.lifetime.launcherAgreement, null, "No complete launcher record exists to agree with");
+  assert.equal(result.lifetime.statusRefused, null);
+  assert.equal(result.namespaceClosed, false);
+});
+
+for (const tail of ["unreadable", "occupant"]) test(`a process survey that cannot examine its whole tail is incomplete, not empty (${tail})`, async t => {
+  const tree = roots(`checker-survey-bound-${tail}`);
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = complete(0);
+  transport.proc.tail = tail;
+  const result = await captureConfinedChecker(options);
+  assert.equal(result.lifetime.surveyExamined, 16384, "The bound is applied while enumerating");
+  assert.equal(result.lifetime.surveyComplete, false, "An unexamined tail is reported, never silently dropped");
+  assert.deepEqual(result.lifetime.remainingOccupants, [], "The omitted entry cannot appear as an occupant");
+  assert.equal(result.lifetime.unreadable, 0, "Nor can it be counted as read");
+  assert.equal(result.lifetime.reconciled, false, "An incomplete survey cannot reconcile a namespace");
+  assert.equal(result.namespaceClosed, false);
+  assert.equal(result.availability.cleanupComplete, false);
 });

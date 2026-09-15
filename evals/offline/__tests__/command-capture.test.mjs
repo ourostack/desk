@@ -8,7 +8,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { captureBoundedCommand } from "../output.mjs";
-import { ownedDescendant } from "./helpers/owned-descendant.mjs";
+import { ownedDescendant, processIdentity } from "./helpers/owned-descendant.mjs";
 import { workRoot } from "./helpers/paths.mjs";
 
 const root = workRoot("command-capture");
@@ -217,4 +217,49 @@ test("captured overflow is never a complete capture", async () => {
   const result = await captureBoundedCommand(options('process.on("SIGTERM",()=>{});const send=()=>process.stdout.write("x".repeat(4096));send();setInterval(send,10)'));
   assert.equal(result.failure.code, "COMMAND_OUTPUT_OVERFLOW");
   assert.equal(result.captureComplete, false);
+});
+
+test("an owned descendant's teardown reconciles an exact creation-time identity", async t => {
+  const base = workRoot("owned-descendant-identity");
+  const early = ownedDescendant(base, "early", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 50 });
+  const done = await captureBoundedCommand({ ...options(early.source), cwd: base, limits: { maxStreamBytes: 64, timeoutMs: 5000, cleanupMs: 300 } });
+  assert.equal(done.status, "exited");
+  const identity = JSON.parse(fs.readFileSync(early.identity, "utf8"));
+  assert.ok(Number.isSafeInteger(identity.pid) && identity.pid > 0);
+  assert.ok(typeof identity.started === "string" && identity.started.length > 0, "A start-time identity is recorded at creation, not at teardown");
+  // Wait for the backstop to expire this descendant on its own, so teardown meets an already-retired identity.
+  for (let attempt = 0; attempt < 60 && processIdentity(identity.pid) !== null; attempt += 1) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(processIdentity(identity.pid), null, "The descendant expired under its own backstop");
+  const retired = early.reconcile();
+  assert.equal(retired.state, "already-retired");
+  assert.deepEqual(retired.signals, []);
+
+  // Counterexample: the recorded PID number is alive at teardown but is a different process.
+  const reused = ownedDescendant(base, "reused", { stdio: ["ignore", "ignore", "ignore"] });
+  fs.writeFileSync(reused.identity, JSON.stringify({ pid: process.pid, started: "Thu Jan  1 00:00:00 1970", createdAt: Date.now() }));
+  const recycled = reused.reconcile();
+  assert.equal(recycled.state, "pid-reused");
+  assert.deepEqual(recycled.signals, [], "A recycled PID is never signalled");
+  assert.notEqual(recycled.currentIdentity, recycled.recordedIdentity);
+  assert.equal(processIdentity(process.pid) !== null, true, "The unrelated holder of that PID is left running");
+
+  // A descendant that never recorded its identity fails the teardown instead of being assumed gone.
+  const absent = ownedDescendant(base, "absent", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 10 });
+  assert.throws(() => absent.reconcile(), /never recorded a creation-time identity/u);
+  t.after(() => fs.rmSync(reused.identity, { force: true }));
+});
+
+test("a live owned descendant is signalled by exact PID and its retirement is observed", async t => {
+  const base = workRoot("owned-descendant-retirement");
+  const descendant = ownedDescendant(base, "live", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 60000 });
+  let outcome;
+  t.after(() => { assert.equal(outcome.state, "retired", "Teardown proved retirement rather than assuming it"); });
+  await captureBoundedCommand({ ...options(descendant.source), cwd: base, limits: { maxStreamBytes: 64, timeoutMs: 5000, cleanupMs: 300 } });
+  const recorded = JSON.parse(fs.readFileSync(descendant.identity, "utf8"));
+  assert.equal(processIdentity(recorded.pid), recorded.started, "The descendant is alive under its recorded identity");
+  outcome = descendant.reconcile();
+  assert.deepEqual(outcome.signals.slice(0, 1), ["SIGTERM"]);
+  assert.equal(outcome.identity, recorded.pid);
+  assert.ok(Number.isInteger(outcome.retirementObservedMs));
+  assert.equal(processIdentity(recorded.pid), null, "The exact recorded process is gone");
 });
