@@ -48,8 +48,12 @@ export function createProcessObserver({ directory = readdirSync, stat = pid => r
   };
 }
 
-export async function runTerminalProtocol({ sdk, root, model, token, limits, assessment, subjectTurn, reviewHandler, subjectBeforeSend, nativeClient, signal, emit = record => process.stdout.write(`${JSON.stringify(record)}\n`), processObserver = createProcessObserver(), clock = Date.now }) {
+export async function runTerminalProtocol({ sdk, root, model, token, limits, assessment, subjectTurn, reviewHandler, subjectBeforeSend, assertAdmitted, nativeClient, signal, emit = record => process.stdout.write(`${JSON.stringify(record)}\n`), processObserver = createProcessObserver(), clock = Date.now }) {
   requireCondition(["gpt-6-astra", "claude-opus-5"].includes(model) && typeof token === "string" && token.length > 20 && !/\s/.test(token) && Number.isSafeInteger(limits.startupSendWorkMs) && limits.startupSendWorkMs > 0 && Number.isSafeInteger(limits.cleanupMs) && limits.cleanupMs >= 3 && (signal === undefined || signal instanceof AbortSignal), "INVALID_NATIVE_PROTOCOL", "The control requires explicit auth, pinned model, finite budgets and an optional native AbortSignal");
+  // An optional capability owned by the trusted caller and invoked only here, at the last preventable point before
+  // dispatch. It is never serialized, never offered as a tool, never placed in session configuration or artifacts,
+  // and a control or grader run that supplies none is unaffected.
+  requireCondition(assertAdmitted === undefined || typeof assertAdmitted === "function", "INVALID_NATIVE_PROTOCOL", "A caller pre-send admission hook must be the caller's own function");
   const prepared = assessment === undefined ? null : prepareNativeAssessment(assessment, reportSchema);
   requireCondition(!prepared || subjectTurn === undefined, "INVALID_NATIVE_SUBJECT", "Subject and independent judge roles cannot share a session");
   const subject = subjectTurn === undefined ? null : prepareNativeSubjectTurn(subjectTurn);
@@ -248,6 +252,9 @@ export async function runTerminalProtocol({ sdk, root, model, token, limits, ass
       } else requireCondition(Array.isArray(metadata.tools) && canonicalJson(metadata.tools.map(tool => tool.name).sort()) === canonicalJson(["read_evidence", "report_result"]), "NATIVE_TOOL_SET_MISMATCH", "The observed tool set differs from the empty control");
       send({ kind: "runtime-configuration", runId, sessionId, runtime, roleProbes, modelRequested: model, reasoningEffortRequested: "high", contextTierRequested: "default", tools: metadata.tools });
       if (prepared) artifact("assessment-input.json", { caseId: rubric.caseId, criteria: rubric.criteria, fixedVerdicts: rubric.fixedVerdicts, evidenceIndex: rubric.evidenceIndex, evidenceSeal: rubric.evidenceSeal, promptSha256: prepared.promptSha256, schemaSha256: sha256(jsonBytes(schema)) });
+      // Every awaited setup step — tool initialization, the metadata read and subject activation observation — has
+      // completed. This is the actual send boundary and the last point at which dispatch can still be prevented.
+      if (assertAdmitted) assertAdmitted();
       workDispatched = true;
       await workPhase(() => session.send({ prompt: subject?.prompt ?? prepared?.prompt ?? "Read checks/proof.txt, then submit the complete failing criterion through report_result." }));
       await workPhase(() => idle);

@@ -5,7 +5,7 @@ import test from "node:test";
 import { heldOutChecks } from "../check-executor.mjs";
 import { checkerProcess } from "../checker-process.mjs";
 import { validateCleanupReceipt } from "../copilot-runner.mjs";
-import { jsonBytes, sha256 } from "../core.mjs";
+import { jsonBytes, overlaps, sha256 } from "../core.mjs";
 import { runFixedCase, runFixedController } from "../fixed-controller.mjs";
 import { openRunOutput } from "../output.mjs";
 import { completedControllerFixture } from "./helpers/completed-controller.mjs";
@@ -16,7 +16,7 @@ import { ownerCleanup } from "./helpers/owner-cleanup.mjs";
 function options(f, bindingAdmitted = true) {
   const outputRoot = path.join(f.root, "owner-lifecycle");
   const output = openRunOutput({ outputRoot, authorizedRoot: f.root, protectedRoots: [], runContext: { runId: "owner-source-control", cellId: f.cell.id, executionKind: f.cell.executionKind, planSha256: f.prepared.runSet.plan.sha256 }, limits: f.plan.limits });
-  return { cell: f.cell, plan: f.plan, input: f.input, outputRoot, output, bindingAdmitted };
+  return { cell: f.cell, plan: f.plan, input: f.input, outputRoot, output, bindingAdmitted, checker: f.checker };
 }
 
 function owners(f, close = stopped => stopped) {
@@ -196,4 +196,38 @@ test("a final close is bounded and a late receipt cannot rescue or publish its t
   await pending;
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(fs.existsSync(path.join(input.outputRoot, "owner-1-cleanup.json")), false);
+});
+
+test("every held-out capture request keeps the checker root parent-only and separate from candidate roots", async t => {
+  const f = await completedControllerFixture("review-recovery-state");
+  owners(f);
+  const capture = checkerProcess.capture;
+  const requests = [];
+  t.mock.method(checkerProcess, "capture", async request => {
+    requests.push(request);
+    return capture(request);
+  });
+  const result = await runFixedCase(options(f));
+  assert.equal(result.status, "passed");
+  assert.ok(requests.length > 0);
+  for (const request of requests) {
+    assert.equal(typeof request.checkerRoot, "string");
+    assert.equal(overlaps(request.checkerRoot, request.subject), false, "Held-out inputs are never inside the candidate source");
+    assert.equal(overlaps(request.checkerRoot, request.workRoot), false, "Held-out inputs are never inside the execution root");
+    assert.notEqual(request.subject, request.workRoot);
+  }
+});
+
+test("a root exit without complete capture cannot be recorded as a closed checker observation", async t => {
+  const f = await completedControllerFixture("checker-is-enforced");
+  owners(f);
+  const capture = checkerProcess.capture;
+  t.mock.method(checkerProcess, "capture", async request => {
+    const result = await capture(request);
+    return { ...result, captureComplete: false, statusPipeEof: false, namespaceClosed: false, launcher: { path: "/usr/bin/bwrap", execution: { status: "unavailable" }, nativeQualified: false } };
+  });
+  const input = options(f);
+  const result = await runFixedCase(input);
+  assert.equal(result.grade, null);
+  assert.equal(result.counts.admittedGrades, 0);
 });

@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import { runRuntimeQualification } from "../native-runtime.mjs";
 import { runTerminalProtocol } from "../native-protocol.mjs";
+import { captureBoundedCommand } from "../output.mjs";
 import { jsonBytes, sha256 } from "../core.mjs";
 import { fixture } from "./helpers/native-sdk.mjs";
 import { engine, plan, response } from "./helpers/native-engine.mjs";
@@ -60,4 +64,38 @@ test("individually bounded captures also have an aggregate pre-write budget", as
     t.mock.restoreAll();
     syncBuiltinESMExports();
   }
+});
+
+test("the checker's stdout, stderr and status descriptors share one bounded capture budget", async () => {
+  const root = workRoot("native-capture-aggregate");
+  const source = 'require("node:fs").writeSync(3,"s".repeat(48));process.stdout.write("o".repeat(48));process.stderr.write("e".repeat(48));setInterval(()=>{},1000);';
+  const result = await captureBoundedCommand({ executable: process.execPath, argv: ["-e", source], cwd: root, env: {}, statusPipe: true, limits: { maxStreamBytes: 64, maxCaptureBytes: 96, timeoutMs: 1500, cleanupMs: 300 } });
+  assert.equal(result.failure.code, "COMMAND_CAPTURE_OVERFLOW");
+  const captured = result.stdout.bytes.length + result.stderr.bytes.length + result.statusPipe.bytes.length;
+  assert.equal(captured, 96, "The aggregate descriptor budget bounds capture before any further allocation");
+  assert.equal(result.captureComplete, false);});
+
+test("an aggregate capture budget below its per-stream bound is refused before a child exists", async () => {
+  const root = workRoot("native-capture-aggregate-limits");
+  for (const limits of [{ maxStreamBytes: 64, maxCaptureBytes: 32, timeoutMs: 100 }, { maxStreamBytes: 64, maxCaptureBytes: 0, timeoutMs: 100 }, { maxStreamBytes: 64, maxCaptureBytes: 1.5, timeoutMs: 100 }]) {
+    await assert.rejects(captureBoundedCommand({ executable: process.execPath, argv: ["-e", ""], cwd: root, env: {}, statusPipe: true, limits }), { code: "INVALID_COMMAND_LIMITS" });
+  }
+});
+
+test("discarded input after exhaustion cannot grow capture bookkeeping", async t => {
+  const child = Object.assign(new EventEmitter(), { pid: 424242, stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true });
+  child.stdio = [null, child.stdout, child.stderr];
+  t.mock.method(childProcess, "spawn", () => child);
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const pending = captureBoundedCommand({ executable: process.execPath, argv: ["-e", ""], cwd: workRoot("native-capture-bookkeeping"), env: {}, limits: { maxStreamBytes: 8, timeoutMs: 2000, cleanupMs: 60 } });
+  child.stdout.emit("data", Buffer.from("0123456789"));
+  for (let round = 0; round < 500; round += 1) child.stdout.emit("data", Buffer.from("ignored-after-overflow"));
+  child.stderr.end("");
+  child.emit("close", 0, null);
+  const result = await pending;
+  assert.equal(result.failure.code, "COMMAND_OUTPUT_OVERFLOW");
+  assert.equal(result.stdout.bytes.length, 8);
+  assert.equal(result.stdout.chunks, 1, "Only the chunk that carried retained bytes was allocated");
+  assert.equal(result.stderr.chunks, 0);
 });

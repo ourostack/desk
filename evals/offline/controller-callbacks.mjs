@@ -3,8 +3,10 @@ import path from "node:path";
 import { canonicalJson, listRegularFiles, readRegular, requireCondition, sha256 } from "./core.mjs";
 import { observeEffectiveConfiguration } from "./native-assessment.mjs";
 
+// The sixth fixed case is private work measurement through the protected ledger. No qualitative evaluator feedback
+// route is required or consulted; `requireCallbacks` keeps the canonical create/update/archive contract unchanged.
 export function requireCallbacks(callbacks) {
-  for (const [group, names] of Object.entries({ canonical: ["create", "update", "archive"], private: ["ledger", "feedback"] })) {
+  for (const [group, names] of Object.entries({ canonical: ["create", "update", "archive"], private: ["ledger"] })) {
     for (const name of names) requireCondition(typeof callbacks?.[group]?.[name] === "function", "NATIVE_CALLBACK_UNMAPPED", `The live native callback ${group}.${name} is required`);
   }
   return callbacks;
@@ -171,11 +173,11 @@ export function observeReviewerEvents({ directory, model, retain }) {
   return observed[0];
 }
 
-export function createReviewHandler({ reviewer, runtimePolicy, handoff, runtime, model, parentDir, deadlineMs, stopped, assertConfinement, retain, observeRun = value => observeReviewerEvents({ ...value, model, retain }) }) {
+export function createReviewHandler({ reviewer, runtimePolicy, handoff, runtime, model, parentDir, deadlineMs, stopped, assertConfinement, retain: constructedRetain, observeRun }) {
   const names = ["prepareReviewTarget", "materializeScopedEntry", "materializeReviewerEnv", "buildContainedEnv", "spawnReviewChild", "runBounded", "admitReview", "assertCopilotOnlyEffective"];
   for (const name of names) requireCondition(typeof reviewer?.[name] === "function", "NATIVE_CALLBACK_UNMAPPED", `The installed reviewer must export ${name}`);
   requireCondition(typeof runtimePolicy?.resolveRuntime === "function" && typeof runtimePolicy?.assertReviewerIdentity === "function", "NATIVE_CALLBACK_UNMAPPED", "The installed runtime identity policy is required");
-  requireCondition(handoff?.reviewer && typeof stopped === "function" && typeof assertConfinement === "function" && typeof observeRun === "function" && typeof retain === "function", "NATIVE_CALLBACK_UNMAPPED", "Review requires the initial-controller handoff, stopped-writer check, OS confinement, actual backend/auth observation and retention");
+  requireCondition(handoff?.reviewer && typeof stopped === "function" && typeof assertConfinement === "function" && (observeRun === undefined || typeof observeRun === "function") && typeof constructedRetain === "function", "NATIVE_CALLBACK_UNMAPPED", "Review requires the initial-controller handoff, stopped-writer check, OS confinement, actual backend/auth observation and retention");
   for (const name of ["spawnFn", "psFn"]) requireCondition(typeof runtime?.[name] === "function", "NATIVE_CALLBACK_UNMAPPED", `The admitted reviewer OS role must supply the existing ${name} boundary`);
   const resolved = runtimePolicy.resolveRuntime(runtime);
   const binary = fs.readFileSync(resolved.roborevBin);
@@ -183,7 +185,11 @@ export function createReviewHandler({ reviewer, runtimePolicy, handoff, runtime,
   const dependencyRoot = fs.mkdtempSync(path.join(parentDir, "reviewer-dependency-"));
   const command = path.join(dependencyRoot, "reviewer");
   let restored = false;
-  const review = async ({ sha, sessionId, toolCallId, actorRoot, dependencyAvailable = true }) => {
+  // The caller may supply the controller's own retention so review evidence lands in the attempt output the
+  // controller later rereads and hash-verifies; the constructed retention remains the default.
+  const review = async ({ sha, sessionId, toolCallId, actorRoot, dependencyAvailable = true, retain: requested }) => {
+    requireCondition(requested === undefined || typeof requested === "function", "NATIVE_CALLBACK_UNMAPPED", "Caller-supplied review retention must be an actual retention function");
+    const retain = requested ?? constructedRetain;
     requireCondition(dependencyAvailable || !restored, "REVIEW_DEPENDENCY_CONTROL_REUSED", "A restored reviewer cannot be relabelled as the original unavailable dependency");
     if (dependencyAvailable && !restored) {
       fs.writeFileSync(command, binary, { flag: "wx", mode: 0o500 });
@@ -213,11 +219,12 @@ export function createReviewHandler({ reviewer, runtimePolicy, handoff, runtime,
     if (!dependencyAvailable && failure?.code === "ENOENT") return { resultType: "failure", error: "The declared reviewer executable is unavailable.", textResultForLlm: JSON.stringify({ dependencyFailureObserved: true, completion: "not-complete", sha, rawRef }) };
     if (failed) throw failure;
     requireCondition(result.admitted && !result.cleanupError && !result.timedOut && result.survived.length === 0 && result.unverified.length === 0 && runner.drainedFully && result.result.code === 0 && result.result.signal === null, "REVIEW_EXECUTION_UNAVAILABLE", "The real reviewer failed, timed out, or retained writers; artifacts and checkout are preserved");
-    const observed = await observeRun({ runner, result, target, entry, output, stderr, directory });
+    const observed = await (observeRun ?? (value => observeReviewerEvents({ ...value, model, retain })))({ runner, result, target, entry, output, stderr, directory });
     const record = { ...observed, argv: target.argv, sha, outputSha256: sha256(output), outputBytes: output.length };
     const admitted = reviewer.admitReview({ expected: { argv: target.argv, sha }, exitCode: result.result.code, output, record });
-    retain(`${toolCallId}-admission.json`, { record, admitted, rawRef });
-    return { resultType: admitted.admitted ? "success" : "failure", textResultForLlm: JSON.stringify({ ...admitted, sha, rawRef, reviewerSessionId: observed.reviewerSessionId }), ...(!admitted.admitted ? { error: admitted.reason } : {}) };
+    // The admission record is returned by reference so the trusted caller can reread and hash-verify it.
+    const admissionRef = retain(`${toolCallId}-admission.json`, { record, admitted, rawRef });
+    return { resultType: admitted.admitted ? "success" : "failure", textResultForLlm: JSON.stringify({ ...admitted, sha, rawRef, admissionRef, reviewerSessionId: observed.reviewerSessionId }), ...(!admitted.admitted ? { error: admitted.reason } : {}) };
   };
   return async request => {
     const release = await stopped(request);

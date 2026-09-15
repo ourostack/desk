@@ -255,3 +255,86 @@ test("field-level compatibility does not confuse JSON property order with a chan
   const cells = { schemaVersion: 1, cells: [cell("cell", "case")] };
   assert.equal(checkComparisonCompatibility({ leftPlan, rightPlan, leftCells: cells, rightCells: cells }).compatible, true);
 });
+
+const controllerUrl = pathToFileURL(resolve(repository, "evals/offline/fixed-controller.mjs"));
+const revisionRequest = (head, change = () => {}) => {
+  const value = {
+    schemaVersion: 1,
+    kind: "relevant_revision_request",
+    repository: "owner/approved-repository",
+    ref: "refs/pull/17/merge",
+    head,
+    previousHeads: [],
+    changedPaths: ["evals/offline/fixed-controller.mjs"],
+    events: [{ eventId: "delivery-1", receivedAt: "2026-01-01T00:00:00Z", head }],
+  };
+  change(value);
+  return value;
+};
+
+test("the controller publishes exactly its frozen plan identity as the evaluated revision", async () => {
+  const controller = await import(controllerUrl);
+  assert.equal(typeof controller.revisionPublication, "function", "the controller must publish its revision binding");
+  const frozenPlan = plan();
+  const expected = { schemaVersion: 1, cells: [cell("cell-judged", "case-judged"), { ...cell("cell-fixed", "case-fixed"), executionKind: "deterministic", subject: null, judge: null }] };
+  const head = frozenPlan.candidate.sourceCommit;
+  const published = controller.revisionPublication({ plan: frozenPlan, expected, revision: { repository: "owner/approved-repository", ref: "refs/pull/17/merge", head } });
+  assert.equal(published.repository, "owner/approved-repository");
+  assert.equal(published.ref, "refs/pull/17/merge");
+  assert.equal(published.head, head);
+  assert.deepEqual(published.controls.dataset, frozenPlan.dataset);
+  assert.deepEqual(published.controls.runtime, frozenPlan.runtime);
+  assert.deepEqual(published.controls.baseline, { groupId: frozenPlan.comparison.groupId, policySha256: frozenPlan.comparison.policySha256 });
+  assert.deepEqual(published.controls.expectedCells, { path: frozenPlan.expectedCells.path, sha256: frozenPlan.expectedCells.sha256 });
+  assert.equal(published.controls.cells.length, 2);
+  assert.deepEqual(published.controls.cells[0], {
+    id: "cell-judged",
+    roles: [
+      ["copilot", "gpt-6-astra", "high", "default", "native-subject", sha("native-subject-prompt"), sha("native-subject-options")],
+      ["copilot", "claude-opus-5", "high", "default", "empty-judge", sha("empty-judge-prompt"), sha("empty-judge-options")],
+    ],
+  });
+  assert.deepEqual(published.controls.cells[1], { id: "cell-fixed", roles: [null, null] });
+  assert.equal(controller.revisionPublication({ plan: frozenPlan, expected, revision: undefined }), null);
+  assert.equal(controller.revisionPublication({ plan: frozenPlan, expected, revision: null }), null);
+  for (const [revision, code] of [
+    [{ repository: "owner/other-repository", ref: "refs/heads/main", head }, "REVISION_BINDING_MISMATCH"],
+    [{ repository: "owner/approved-repository", ref: "refs/heads/main", head: "d".repeat(40) }, "REVISION_BINDING_MISMATCH"],
+    [{ repository: "owner/approved-repository", ref: " ", head }, "REVISION_BINDING_INVALID"],
+    [{ repository: "owner/approved-repository", ref: "refs/heads/main", head, grader: "candidate" }, "REVISION_BINDING_INVALID"],
+    [{ repository: "owner/approved-repository", head }, "REVISION_BINDING_INVALID"],
+    ["refs/heads/main", "REVISION_BINDING_INVALID"],
+  ]) assert.throws(() => controller.revisionPublication({ plan: frozenPlan, expected, revision }), { code });
+});
+
+test("a published controller revision reconciles only against its own exact head and frozen controls", async () => {
+  const controller = await import(controllerUrl);
+  const skillEvals = (await import(pathToFileURL(resolve(repository, "scripts/skill-evals.cjs")))).default;
+  assert.equal(typeof skillEvals.revisionStatus, "function", "the CLI must expose relevant-revision status routing");
+  const frozenPlan = plan();
+  const expected = { schemaVersion: 1, cells: [cell("cell-judged", "case-judged")] };
+  const head = frozenPlan.candidate.sourceCommit;
+  const published = controller.revisionPublication({ plan: frozenPlan, expected, revision: { repository: "owner/approved-repository", ref: "refs/pull/17/merge", head } });
+  const trustedControls = { schemaVersion: 1, kind: "trusted_evaluation_controls", source: "trusted_controller", approvedRevision: "9".repeat(40), controls: published.controls };
+  const result = {
+    schemaVersion: 1, status: "complete", expectedCells: 1, attempts: 1, unstarted: 0,
+    scored: true, grade: { summary: "synthetic public evaluation" }, revision: published,
+    attemptStatuses: [{ attemptId: "attempt-1", cellId: "cell-judged", status: "passed", published: true }],
+  };
+  const evaluated = skillEvals.revisionStatus({ request: revisionRequest(head), trustedControls, results: [result] });
+  assert.equal(evaluated.status, "evaluated");
+  assert.equal(evaluated.green, true);
+  assert.equal(evaluated.revision.controlsFingerprint, evaluated.trustedControls.controlsFingerprint);
+  // A candidate that changes its own judge configuration no longer matches the trusted controller's controls.
+  const retuned = { schemaVersion: 1, cells: [{ ...cell("cell-judged", "case-judged"), judge: { ...cell("cell-judged", "case-judged").judge, model: "gpt-6-astra" } }] };
+  const retunedResult = { ...result, revision: controller.revisionPublication({ plan: frozenPlan, expected: retuned, revision: { repository: "owner/approved-repository", ref: "refs/pull/17/merge", head } }) };
+  const incompatible = skillEvals.revisionStatus({ request: revisionRequest(head), trustedControls, results: [retunedResult] });
+  assert.equal(incompatible.results[0].disposition, "CONTROL_FINGERPRINT_MISMATCH");
+  assert.equal(incompatible.status, "pending");
+  assert.equal(incompatible.green, false);
+  // The same published result cannot be inherited by the next head.
+  const nextHead = skillEvals.revisionStatus({ request: revisionRequest("e".repeat(40), value => { value.previousHeads = [head]; }), trustedControls, results: [result] });
+  assert.equal(nextHead.results[0].disposition, "PREVIOUS_HEAD");
+  assert.equal(nextHead.status, "pending");
+  assert.equal(nextHead.green, false);
+});

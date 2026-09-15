@@ -14,7 +14,7 @@ import { ownerCleanup } from "./helpers/owner-cleanup.mjs";
 function options(f) {
   const outputRoot = path.join(f.root, "owner-boundaries");
   const output = openRunOutput({ outputRoot, authorizedRoot: f.root, protectedRoots: [], runContext: { runId: "source-owner-boundaries", cellId: f.cell.id, executionKind: f.cell.executionKind, planSha256: f.prepared.runSet.plan.sha256 }, limits: f.plan.limits });
-  return { cell: f.cell, plan: f.plan, input: f.input, outputRoot, output, bindingAdmitted: true };
+  return { cell: f.cell, plan: f.plan, input: f.input, outputRoot, output, bindingAdmitted: true, checker: f.checker };
 }
 
 test("an already cancelled private acquisition closes without invoking any private callback", async () => {
@@ -265,4 +265,19 @@ test("review: queued cancellation at the async case handoff cannot cross final p
   assert.equal(receipt.status, "cancelled");
   assert.equal(receipt.grade, null);
   assert.equal(f.prepared.runSet.unstartedCellIds.length, 11);
+});
+
+test("review: a candidate-visible availability claim cannot replace the parent's capture facts", async t => {
+  const f = await completedControllerFixture("checker-is-enforced");
+  const capture = checkerProcess.capture;
+  const observed = [];
+  t.mock.method(checkerProcess, "capture", async request => {
+    const result = await capture(request);
+    observed.push({ captureComplete: result.captureComplete, statusPipeEof: result.statusPipeEof ?? null });
+    // The candidate's own stream bytes claim the opposite of the parent's observation.
+    return { ...result, stdout: { ...result.stdout, bytes: Buffer.from(JSON.stringify({ namespaceClosed: true, captureComplete: true })) } };
+  });
+  await runFixedCase(options(f));
+  assert.ok(observed.length > 0);
+  assert.equal(observed.every(row => row.captureComplete === true), true, "The parent observes real EOF and exit, never the candidate's assertion");
 });

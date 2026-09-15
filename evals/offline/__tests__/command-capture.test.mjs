@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -7,6 +8,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { captureBoundedCommand } from "../output.mjs";
+import { ownedDescendant, processIdentity } from "./helpers/owned-descendant.mjs";
 import { workRoot } from "./helpers/paths.mjs";
 
 const root = workRoot("command-capture");
@@ -84,7 +86,7 @@ test("the owning command cancellation is distinct from an SDK invocation's norma
 
 test("command construction rejects malformed argv, environment and limits without starting a child", async () => {
   const valid = options("");
-  for (const delta of [{ statusPipe: "true" }, { argv: "shell string" }, { env: null }, { env: { value: 1 } }, { argv: ["nul\0argument"] }, { limits: { maxStreamBytes: 0, timeoutMs: 1 } }, { limits: { maxStreamBytes: 1, timeoutMs: 1, cleanupMs: 0 } }]) await assert.rejects(() => captureBoundedCommand({ ...valid, ...delta }));
+  for (const delta of [{ statusPipe: "true" }, { onStatus: "not a function" }, { argv: "shell string" }, { env: null }, { env: { value: 1 } }, { argv: ["nul\0argument"] }, { limits: { maxStreamBytes: 0, timeoutMs: 1 } }, { limits: { maxStreamBytes: 1, timeoutMs: 1, cleanupMs: 0 } }]) await assert.rejects(() => captureBoundedCommand({ ...valid, ...delta }));
 });
 
 test("real host transport captures FD 3 separately and bounds its overflow without claiming native isolation", async () => {
@@ -170,4 +172,133 @@ test("a launcher status transport error fails capture and still bounds owned-chi
   assert.deepEqual(result.cleanup.unverifiedPids, [child.pid]);
   child.stdout.emit("error", new Error("late stream error"));
   assert.equal(result.errors.length, 1);
+});
+
+test("a completed real command reports stream EOF and complete capture with raw identities", async () => {
+  const result = await captureBoundedCommand(options('process.stdout.write("done");process.exitCode=0'));
+  assert.equal(result.stdout.eof, true);
+  assert.equal(result.stderr.eof, true);
+  assert.equal(result.captureComplete, true);
+  assert.equal(result.stdout.sha256, createHash("sha256").update(result.stdout.bytes).digest("hex"));
+  assert.equal(result.stdout.byteLength, 4);
+});
+
+test("a real late inherited descriptor withholds EOF and complete capture inside the deadline", async t => {
+  const descendant = ownedDescendant(root, "inherited", { stdio: ["ignore", "inherit", "inherit"] });
+  let reconciliation;
+  t.after(() => { reconciliation = descendant.reconcile(); });
+  const result = await captureBoundedCommand({ ...options(`${descendant.source}process.stdout.write("parent-exited");`), limits: { maxStreamBytes: 64, timeoutMs: 700, cleanupMs: 300 } });
+  assert.equal(result.stdout.bytes.toString(), "parent-exited");
+  assert.equal(result.captureComplete, false, "A surviving descendant holding the pipe is not a completed capture");
+  assert.equal(result.status, "timed_out");
+  t.after(() => assert.equal(reconciliation.identity > 0, true, "The fixture recorded and reconciled its own descendant"));
+});
+
+test("a real fork that keeps FD 3 open withholds status-pipe EOF", async t => {
+  const descendant = ownedDescendant(root, "monitor", { stdio: ["ignore", "ignore", "ignore", 3] });
+  t.after(() => descendant.reconcile());
+  const result = await captureBoundedCommand({ ...options(`${descendant.source}require("node:fs").writeSync(3,"launcher");`), statusPipe: true, limits: { maxStreamBytes: 64, timeoutMs: 700, cleanupMs: 300 } });
+  assert.equal(result.statusPipe.bytes.toString(), "launcher");
+  assert.equal(result.statusPipe.eof, false);
+  assert.equal(result.captureComplete, false);
+});
+
+test("a late zero exit after cancellation stays cancelled and incomplete", async () => {
+  const controller = new AbortController();
+  const running = captureBoundedCommand({ ...options('process.on("SIGTERM",()=>{setTimeout(()=>process.exit(0),20)});process.stdout.write("started");setInterval(()=>{},1000)'), signal: controller.signal, limits: { maxStreamBytes: 64, timeoutMs: 5000, cleanupMs: 400 } });
+  setTimeout(() => controller.abort(), 200);
+  const result = await running;
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.failure.code, "COMMAND_CANCELLED");
+  assert.equal(result.captureComplete, false);
+});
+
+test("captured overflow is never a complete capture", async () => {
+  const result = await captureBoundedCommand(options('process.on("SIGTERM",()=>{});const send=()=>process.stdout.write("x".repeat(4096));send();setInterval(send,10)'));
+  assert.equal(result.failure.code, "COMMAND_OUTPUT_OVERFLOW");
+  assert.equal(result.captureComplete, false);
+});
+
+test("an owned descendant's teardown reconciles an exact creation-time identity", async t => {
+  const base = workRoot("owned-descendant-identity");
+  const early = ownedDescendant(base, "early", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 50 });
+  const done = await captureBoundedCommand({ ...options(early.source), cwd: base, limits: { maxStreamBytes: 64, timeoutMs: 5000, cleanupMs: 300 } });
+  assert.equal(done.status, "exited");
+  const identity = JSON.parse(fs.readFileSync(early.identity, "utf8"));
+  assert.ok(Number.isSafeInteger(identity.pid) && identity.pid > 0);
+  assert.ok(typeof identity.started === "string" && identity.started.length > 0, "A start-time identity is recorded at creation, not at teardown");
+  for (let attempt = 0; attempt < 80 && !processIdentity(identity.pid).absent; attempt += 1) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(processIdentity(identity.pid).absent, true, "The descendant expired under its own backstop");
+  const retired = early.reconcile();
+  assert.equal(retired.state, "already-retired");
+  assert.deepEqual(retired.signals, []);
+
+  // Counterexample: the recorded PID number is alive at teardown but is a different process.
+  const reused = ownedDescendant(base, "reused", { stdio: ["ignore", "ignore", "ignore"] });
+  fs.writeFileSync(reused.identity, JSON.stringify({ pid: process.pid, started: "Thu Jan  1 00:00:00 1970", createdAt: Date.now() }));
+  const recycled = reused.reconcile();
+  assert.equal(recycled.state, "pid-reused");
+  assert.deepEqual(recycled.signals, [], "A recycled PID is never signalled");
+  assert.notEqual(recycled.currentIdentity, recycled.recordedIdentity);
+  assert.equal(processIdentity(process.pid).absent, false, "The unrelated holder of that PID is left running");
+
+  // A descendant that never recorded its identity fails the teardown instead of being assumed gone.
+  const absent = ownedDescendant(base, "absent", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 10 });
+  assert.throws(() => absent.reconcile(), /never recorded a creation-time identity/u);
+});
+
+test("an unreadable process observation fails teardown instead of claiming retirement", async t => {
+  const base = workRoot("owned-descendant-unreadable");
+  const descendant = ownedDescendant(base, "opaque", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 60000, retirementMs: 200 });
+  await captureBoundedCommand({ ...options(descendant.source), cwd: base, limits: { maxStreamBytes: 64, timeoutMs: 5000, cleanupMs: 300 } });
+  const recorded = JSON.parse(fs.readFileSync(descendant.identity, "utf8"));
+  const real = childProcess.execFileSync;
+  t.mock.method(childProcess, "execFileSync", (file, args, settings) => {
+    if (file === "ps") throw Object.assign(new Error("observation timed out"), { status: null, signal: "SIGTERM" });
+    return real(file, args, settings);
+  });
+  syncBuiltinESMExports();
+  assert.throws(() => descendant.reconcile(), /could not be observed; retirement is unproved/u);
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+  assert.equal(processIdentity(recorded.pid).absent, false, "The live descendant is still running and still owned");
+  fs.writeFileSync(descendant.identity, JSON.stringify(recorded));
+  const outcome = descendant.reconcile();
+  assert.equal(outcome.state, "retired-cooperatively");
+  assert.equal(processIdentity(recorded.pid).absent, true);
+});
+
+test("a descendant that ignores its stop marker retires on its backstop, never by signal", async () => {
+  const base = workRoot("owned-descendant-backstop");
+  const descendant = ownedDescendant(base, "stubborn", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 2500, retirementMs: 200, ignoreStop: true });
+  await captureBoundedCommand({ ...options(descendant.source), cwd: base, limits: { maxStreamBytes: 64, timeoutMs: 5000, cleanupMs: 300 } });
+  const recorded = JSON.parse(fs.readFileSync(descendant.identity, "utf8"));
+  assert.equal(processIdentity(recorded.pid).started, recorded.started, "The descendant is alive under its recorded identity");
+  const outcome = descendant.reconcile();
+  assert.equal(outcome.state, "retired-by-backstop", "Its own self-expiry, not a signal, retired it");
+  assert.deepEqual(outcome.signals, [], "No numeric PID was ever signalled, so no signal could race a recycled PID");
+  assert.equal(outcome.identity, recorded.pid);
+  assert.equal(processIdentity(recorded.pid).absent, true, "The exact recorded process is gone");
+});
+
+test("a descendant that retires by neither route fails its teardown rather than being assumed gone", () => {
+  const base = workRoot("owned-descendant-unproved");
+  // This test runner is a live process that will never retire inside the budget and is emphatically not ours to end.
+  const impostor = ownedDescendant(base, "unproved", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 0, retirementMs: 100 });
+  fs.writeFileSync(impostor.identity, JSON.stringify({ pid: process.pid, started: processIdentity(process.pid).started, createdAt: Date.now() - 10000 }));
+  assert.throws(() => impostor.reconcile(), /retired by neither its stop marker nor its backstop/u);
+  assert.equal(processIdentity(process.pid).absent, false, "An unretired process is reported, never signalled");
+});
+
+test("a live owned descendant retires cooperatively without any signal", async () => {
+  const base = workRoot("owned-descendant-retirement");
+  const descendant = ownedDescendant(base, "live", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 60000 });
+  await captureBoundedCommand({ ...options(descendant.source), cwd: base, limits: { maxStreamBytes: 64, timeoutMs: 5000, cleanupMs: 300 } });
+  const recorded = JSON.parse(fs.readFileSync(descendant.identity, "utf8"));
+  assert.equal(processIdentity(recorded.pid).started, recorded.started);
+  const outcome = descendant.reconcile();
+  assert.equal(outcome.state, "retired-cooperatively");
+  assert.deepEqual(outcome.signals, [], "The ordinary path never signals, so it cannot race a recycled PID");
+  assert.ok(Number.isInteger(outcome.retirementObservedMs));
+  assert.equal(processIdentity(recorded.pid).absent, true, "The exact recorded process is gone");
 });

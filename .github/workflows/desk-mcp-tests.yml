@@ -11,6 +11,20 @@ on:
     paths:
       - ".gitattributes"
       - "evals/offline/**"
+      - "evals/*.json"
+      - "AGENTIC-ENGINEERING-V2.md"
+      - "evals/**"
+      - "skills/**"
+      - "worker/**"
+      - "plugins/**"
+      - "manifest.json"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - ".github/workflows/**"
+      - "**/package.json"
+      - "**/package-lock.json"
+      - "package.json"
+      - "package-lock.json"
       - "plugins/desk/mcp/**"
       - "plugins/desk/activation/**"
       - "plugins/desk/.claude-plugin/plugin.json"
@@ -59,6 +73,20 @@ on:
     paths:
       - ".gitattributes"
       - "evals/offline/**"
+      - "evals/*.json"
+      - "AGENTIC-ENGINEERING-V2.md"
+      - "evals/**"
+      - "skills/**"
+      - "worker/**"
+      - "plugins/**"
+      - "manifest.json"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - ".github/workflows/**"
+      - "**/package.json"
+      - "**/package-lock.json"
+      - "package.json"
+      - "package-lock.json"
       - "plugins/desk/mcp/**"
       - "plugins/desk/activation/**"
       - "plugins/desk/.claude-plugin/plugin.json"
@@ -105,6 +133,10 @@ jobs:
   desk-mcp-tests:
     name: desk MCP test suite
     runs-on: ubuntu-latest
+    # Public, read-only and credential-free. This job carries no secret, no Microsoft or private Desk record and no
+    # model access, so it can publish a relevant-revision request and status but can never mint a scored evaluation.
+    permissions:
+      contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -156,6 +188,58 @@ jobs:
       - name: Validate Desk shared artifacts
         working-directory: plugins/desk/mcp
         run: npm run artifact:validate -- --desk-root ../../.. --plugin-root ..
+
+      # Path relevance and evaluation status only. Mechanical success of this job is not a scored evaluation: the
+      # candidate supplies repository, ref, exact head and changed paths as data, while the trusted fixture, grader,
+      # model, reasoning effort, context tier, runtime, baseline and controller stay at the frozen approved revision
+      # outside this job. With no trusted controls and no returned result here, relevant source stays pending.
+      - name: Publish the relevant-revision evaluation request
+        env:
+          REVISION_REPOSITORY: ${{ github.repository }}
+          REVISION_REF: ${{ github.ref }}
+          REVISION_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          REVISION_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          REVISION_EVENT_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          base="${REVISION_BASE:-}"
+          if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="$(git rev-parse "${REVISION_HEAD}^")"
+          fi
+          git diff --name-only "$base" "$REVISION_HEAD" > revision-changed-paths.txt
+          node -e '
+            const fs = require("node:fs");
+            const head = process.env.REVISION_HEAD;
+            fs.writeFileSync("revision-request.json", `${JSON.stringify({
+              schemaVersion: 1,
+              kind: "relevant_revision_request",
+              repository: process.env.REVISION_REPOSITORY,
+              ref: process.env.REVISION_REF,
+              head,
+              previousHeads: [],
+              changedPaths: fs.readFileSync("revision-changed-paths.txt", "utf8").split("\n").filter(Boolean),
+              events: [{ eventId: process.env.REVISION_EVENT_ID, receivedAt: new Date().toISOString(), head }],
+            }, null, 2)}\n`);
+          '
+
+      - name: Report relevant-revision evaluation status
+        run: |
+          set -euo pipefail
+          node scripts/skill-evals.cjs revision --request revision-request.json > revision-status.json
+          node -e '
+            const fs = require("node:fs");
+            const status = JSON.parse(fs.readFileSync("revision-status.json", "utf8"));
+            // Refuse before any reporting surface is touched: a forbidden state must never reach the job log or the
+            // step summary at all, so the guard runs ahead of every console.log and summary append below.
+            if (status.green !== false || status.grade !== null || status.scored !== false || status.status === "evaluated") {
+              throw new Error("Public CI cannot publish a green or graded evaluation status; the trusted controller owns grading.");
+            }
+            const line = `relevant=${status.relevance.relevant} categories=${status.relevance.categories.join("|") || "none"} status=${status.status} reason=${status.reason}`;
+            console.log(line);
+            if (process.env.GITHUB_STEP_SUMMARY) {
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Relevant-revision evaluation status\n\n${line}\n\n\`\`\`json\n${JSON.stringify(status, null, 2)}\n\`\`\`\n`);
+            }
+          '
 
       - name: Retain verified runtime dependency pack
         uses: actions/upload-artifact@v4

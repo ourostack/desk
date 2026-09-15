@@ -8,6 +8,8 @@ import { prepareRunPlan } from "../producer.mjs";
 import { jsonBytes, sha256 } from "../core.mjs";
 import { completedControllerFixture } from "./helpers/completed-controller.mjs";
 import { controllerFixture } from "./helpers/controller-fixture.mjs";
+import { heldOutChecks } from "../check-executor.mjs";
+import { checkerProcess } from "../checker-process.mjs";
 
 async function campaign(judgeStatus = "pass", failLast = false) {
   const first = await completedControllerFixture("discussion-then-go", { judgeStatus });
@@ -71,4 +73,123 @@ test("CLI module loading and publication failures remain stopped, source-bound h
   const result = await runFixedController({ prepared: failure.prepared, nativeInputs: failure.nativeInputs });
   assert.equal(result.exitCode, 3);
   assert.equal(failure.prepared.runSet.attempts[0].commitMarker, null);
+});
+test("preflight evidence mutated during a case cannot be finalized into a committed publication", async () => {
+  const f = await completedControllerFixture("discussion-then-go");
+  const original = f.input.subjectBeforeSend;
+  f.input.subjectBeforeSend = async context => {
+    f.preflight.truncate("fork-setsid-probe.json");
+    return original(context);
+  };
+  const result = await runFixedController({ prepared: f.prepared, nativeInputs: f.nativeInputs });
+  assert.equal(result.exitCode, 3);
+  assert.equal(result.status, "incomplete");
+  assert.equal(f.prepared.runSet.attempts.length, 1);
+  const attempt = f.prepared.runSet.attempts[0];
+  assert.equal(attempt.status, "unavailable");
+  // Output finalization is refused, so no receipt and no commit marker are published for the attempt.
+  assert.equal(attempt.receipt, null);
+  assert.equal(attempt.commitMarker, null);
+  const root = path.join(f.prepared.root, attempt.attemptId);
+  assert.equal(fs.existsSync(path.join(root, "COMMITTED.json")), false);
+  // The case withholds its own grade first, then the publication boundary refuses; each phase keeps its own record.
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, "controller-admission-failure.json"))).code, "NATIVE_QUALIFICATION_REQUIRED");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, "controller-final-admission-failure.json"))).code, "NATIVE_QUALIFICATION_REQUIRED");
+  assert.equal(fs.existsSync(path.join(root, "controller-failure.json")), false);
+  assert.equal(f.prepared.runSet.unstartedCellIds.length, 11);
+});
+// The final publication boundary is the only admission call that follows both the case's own post-cleanup
+// revalidation and an already observed grade, so it is armed by its ordinal rather than by mutating shared proof.
+function armFinalAdmission(f, owners, fault) {
+  const original = heldOutChecks.assertAvailable;
+  let afterCleanup = 0;
+  heldOutChecks.assertAvailable = context => {
+    if (f.closes === owners) afterCleanup++;
+    if (afterCleanup === 2) throw fault;
+    return original(context);
+  };
+  return () => { heldOutChecks.assertAvailable = original; };
+}
+for (const [label, fault] of [
+  ["a stale preflight", Object.assign(new Error("NATIVE_QUALIFICATION_REQUIRED: synthetic final-boundary refusal"), { code: "NATIVE_QUALIFICATION_REQUIRED" })],
+  ["an evidence-reader host fault", Object.assign(new Error("synthetic host storage fault"), { code: "EIO" })],
+]) test(`T15-I4 ${label} at final publication keeps the observed accounting and its durable reason`, async () => {
+  const f = await completedControllerFixture("discussion-then-go");
+  const restore = armFinalAdmission(f, 2, fault);
+  let result;
+  try { result = await runFixedController({ prepared: f.prepared, nativeInputs: f.nativeInputs }); }
+  finally { restore(); }
+  assert.equal(result.exitCode, 3);
+  assert.equal(result.status, "incomplete");
+  assert.equal(result.attempts, 1);
+  assert.equal(f.prepared.runSet.unstartedCellIds.length, 11);
+  const attempt = f.prepared.runSet.attempts[0];
+  assert.equal(attempt.status, "unavailable");
+  assert.equal(attempt.receipt, null);
+  assert.equal(attempt.commitMarker, null);
+  assert.equal(fs.existsSync(path.join(f.prepared.root, attempt.attemptId, "COMMITTED.json")), false);
+  const recorded = JSON.parse(fs.readFileSync(path.join(f.prepared.root, attempt.attemptId, "controller-final-admission-failure.json")));
+  assert.equal(recorded.code, fault.code);
+  assert.equal(fs.existsSync(path.join(f.prepared.root, attempt.attemptId, "controller-failure.json")), false);
+  assert.ok(!JSON.stringify(recorded).includes("synthetic host storage fault"));
+  assert.equal(recorded.counts.admittedGrades, 0);
+  assert.equal(recorded.counts.observedRequests, 1);
+  assert.equal(recorded.counts.validatorAcceptedReports, 1);
+  assert.equal(f.closes, 2);
+});
+test("T15-I5 a case failure and a final admission refusal retain distinct immutable artifacts", async t => {
+  const f = await controllerFixture("discussion-then-go");
+  const capture = checkerProcess.capture;
+  let captures = 0;
+  t.mock.method(checkerProcess, "capture", async request => {
+    captures++;
+    const value = await capture(request);
+    if (captures === 1) f.preflight.truncate("capture-bound-probe.json");
+    return value;
+  });
+  const result = await runFixedController({ prepared: f.prepared, nativeInputs: f.nativeInputs });
+  assert.equal(result.exitCode, 3);
+  assert.equal(result.attempts, 1);
+  assert.equal(f.prepared.runSet.unstartedCellIds.length, 11);
+  const attempt = f.prepared.runSet.attempts[0];
+  assert.equal(attempt.status, "unavailable");
+  assert.equal(attempt.receipt, null);
+  assert.equal(attempt.commitMarker, null);
+  const root = path.join(f.prepared.root, attempt.attemptId);
+  assert.equal(fs.existsSync(path.join(root, "COMMITTED.json")), false);
+  const original = JSON.parse(fs.readFileSync(path.join(root, "controller-failure.json")));
+  assert.equal(original.code, "NATIVE_QUALIFICATION_REQUIRED");
+  const terminal = JSON.parse(fs.readFileSync(path.join(root, "controller-final-admission-failure.json")));
+  assert.equal(terminal.code, "NATIVE_QUALIFICATION_REQUIRED");
+  assert.equal(terminal.counts.admittedGrades, 0);
+  assert.equal(captures, 1);
+  assert.equal(f.closes, 1);
+});
+test("T15-I5 a count-bearing cleanup failure and a final admission refusal preserve both safe records", async () => {
+  const f = await completedControllerFixture("discussion-then-go");
+  const close = f.opened.close;
+  f.opened.close = async function () {
+    await close.call(this);
+    f.preflight.truncate("network-denied-probe.json");
+    // An unverified close after an observed grade: the case failure itself carries the observed accounting.
+    return undefined;
+  };
+  const result = await runFixedController({ prepared: f.prepared, nativeInputs: f.nativeInputs });
+  assert.equal(result.exitCode, 3);
+  assert.equal(result.attempts, 1);
+  const attempt = f.prepared.runSet.attempts[0];
+  assert.equal(attempt.status, "unavailable");
+  assert.equal(attempt.receipt, null);
+  assert.equal(attempt.commitMarker, null);
+  const root = path.join(f.prepared.root, attempt.attemptId);
+  assert.equal(fs.existsSync(path.join(root, "COMMITTED.json")), false);
+  const original = JSON.parse(fs.readFileSync(path.join(root, "controller-failure.json")));
+  assert.equal(original.code, "NATIVE_OWNER_STOP_UNVERIFIED");
+  const terminal = JSON.parse(fs.readFileSync(path.join(root, "controller-final-admission-failure.json")));
+  assert.equal(terminal.code, "NATIVE_QUALIFICATION_REQUIRED");
+  assert.equal(terminal.counts.observedRequests, 1);
+  assert.equal(terminal.counts.validatorAcceptedReports, 1);
+  assert.equal(terminal.counts.admittedGrades, 0);
+  assert.equal(f.prepared.runSet.unstartedCellIds.length, 11);
+  assert.equal(f.closes, 2);
 });

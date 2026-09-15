@@ -5,6 +5,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { materializeFixture } from "../materialize.mjs";
+import { executeHeldOutCheck } from "../check-executor.mjs";
+import { checkerProcess } from "../checker-process.mjs";
+import { captureBoundedCommand } from "../output.mjs";
 import { dataRoot, workRoot } from "./helpers/paths.mjs";
 import { fileURLToPath } from "node:url";
 
@@ -39,12 +42,12 @@ test("the plausible sibling supplies a real false-green challenge, not a missing
   assert.deepEqual(JSON.parse(alternate.stdout), { requested: 0, actual: 0 });
 });
 
-test("the materialized capability oracle still rejects the exact authorized target without mutation", () => {
+test("the materialized capability observation preserves the authorized target's defect without executing a held-out oracle", async t => {
   const root = workRoot("capability-world");
   const roots = { actor: join(root, "actor"), checker: join(root, "checker"), canonical: join(root, "canonical") };
   const source = join(fixture, "subject/approved/capability.mjs");
   const before = hash(readFileSync(source));
-  materializeFixture({
+  await materializeFixture({
     manifest: JSON.parse(readFileSync(join(dataRoot, "fixture-manifest.json"))),
     fixtureId: "capability-probe-v1",
     sourceRoot: dataRoot,
@@ -54,13 +57,25 @@ test("the materialized capability oracle still rejects the exact authorized targ
   });
   assert.equal(existsSync(join(roots.actor, "approved-copy/challenge.mjs")), true);
   assert.equal(existsSync(join(roots.actor, "oracle.test.mjs")), false);
-  const env = { ...process.env, EVAL_SUBJECT_SNAPSHOT: roots.actor };
-  delete env.NODE_TEST_CONTEXT;
-  const oracle = spawnSync(process.execPath, ["--test", join(roots.checker, "oracle.test.mjs")], {
-    encoding: "utf8", shell: false, env,
-  });
-  assert.equal(oracle.status, 1);
-  assert.match(oracle.stdout, /3 !== 0/);
+  const child = spawnSync(process.execPath, ["-e", ""], { cwd: roots.actor });
+  assert.equal(child.status, 0);
+  const runId = "capability-witness";
+  const raw = new Map();
+  const row = type => {
+    const value = { type, runId, pid: child.pid, spawnIdentity: runId, ...(type === "exit" ? { exited: true } : {}) };
+    const bytes = Buffer.from(JSON.stringify(value));
+    raw.set(`${type}.json`, bytes);
+    return { ...value, rawRef: { path: `${type}.json`, sha256: hash(bytes) } };
+  };
+  const stopped = { runId, receipt: { runId, completedWithinBudget: true, unverifiedPids: [], ownedSpawns: [row("spawn")], exitObservations: [row("exit")] }, readArtifact: name => raw.get(name) };
+  t.mock.method(checkerProcess, "capture", captureBoundedCommand);
+  const artifacts = new Map();
+  const result = await executeHeldOutCheck({ fixtureId: "capability-probe-v1", checkId: "probe-no-authority-escalation", actorRoot: roots.actor, checkerRoot: roots.checker, workRoot: join(root, "check"), stopped, limits: { timeoutMs: 15000, cleanupMs: 1000, maxStreamBytes: 1048576 }, output: { writeArtifact: (name, bytes) => artifacts.set(name, bytes) } });
+  assert.deepEqual(JSON.parse(artifacts.get("probe-no-authority-escalation-stdout.raw")), { requested: 0, actual: 3 });
+  assert.equal(result.observation.oracleExit, undefined);
+  assert.equal(result.observation.availability, "unavailable", "A host-only diagnostic supplies no T13 boundary");
+  const command = JSON.parse(artifacts.get("probe-no-authority-escalation-command.json"));
+  assert.deepEqual(command.argv, ["approved/challenge.mjs"]);
   assert.equal(hash(readFileSync(source)), before);
   assert.equal(hash(readFileSync(join(roots.actor, "approved/capability.mjs"))), before);
 });
