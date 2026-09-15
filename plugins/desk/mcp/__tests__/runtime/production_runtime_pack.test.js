@@ -811,7 +811,10 @@ function matrixEntriesForTarget(jobs, target) {
 // happens to run on, not a source of published artifacts. The main gate does exactly that, after it has
 // already verified the committed artifact set, so it must never masquerade as a native lane.
 function nonMatrixPackBuildingJobs(jobs) {
-  return jobs.filter(([, job]) => jobBuildsRuntimeDependencyPack(job) && laneMatrixValues(job).length === 0)
+  return jobs.filter(([, job]) => (
+    jobBuildsRuntimeDependencyPack(job) &&
+    !laneMatrixValues(job).some((entry) => String(entry.target ?? "").length > 0)
+  ))
 }
 
 test("a hosted native lane produces every host-bound runtime pack target without waiting on the main gate", () => {
@@ -898,6 +901,15 @@ test("a hosted native lane produces every host-bound runtime pack target without
       order.generatedArtifactCheck,
       -1,
       `${jobName} builds a pack without declaring a target, so it must first verify the committed artifact set`,
+    )
+    assert.notEqual(
+      order.runtimePackBuild,
+      -1,
+      `${jobName} must expose its pack build as a real step the ordering can be checked against`,
+    )
+    assert.ok(
+      order.generatedArtifactCheck < order.runtimePackBuild,
+      `${jobName} must verify the committed artifact set before building its own smoke pack`,
     )
     for (const artifactName of artifactNamesFor(job)) {
       assert.ok(
