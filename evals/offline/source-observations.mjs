@@ -21,33 +21,38 @@ export function readSourceState({ root, files = listRegularFiles(root), baseComm
     requireCondition(match, "CHECK_SOURCE_IDENTITY_UNAVAILABLE", "The fixture commit must contain regular source blobs");
     return { mode: Number.parseInt(match[1], 8) & 0o777, blob: match[2], path: match[3] };
   });
-  const index = sourceGit(root, ["ls-files", "--stage", "-z"]).split("\0").filter(Boolean);
+  const index = new Map(sourceGit(root, ["ls-files", "--stage", "-z"]).split("\0").filter(Boolean).map(record => {
+    const match = /^([0-7]+) ([a-f0-9]{40}) 0\t([\s\S]+)$/.exec(record);
+    requireCondition(match, "CHECK_SOURCE_IDENTITY_UNAVAILABLE", "Unresolved Git index stages cannot identify committed fixture source");
+    return [match[3], { mode: Number.parseInt(match[1], 8) & 0o777, blob: match[2] }];
+  }));
   const diff = sourceGit(root, ["diff-tree", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv", "-p", ...(baseCommit ? [baseCommit] : []), sourceCommit, "--"]);
   const committed = {};
   const changes = [];
   const statusRows = [];
   const display = filename => /[\n\r\t"]/.test(filename) ? JSON.stringify(filename) : filename;
-  for (const member of tree) {
-    const digest = sha256(sourceGit(root, ["cat-file", "blob", member.blob], null));
-    committed[member.path] = digest;
-    const actual = files.find(file => file.path === member.path);
-    const indexed = index.includes(`${(0o100000 | member.mode).toString(8)} ${member.blob} 0\t${member.path}`);
-    if (!indexed || !actual || actual.sha256 !== digest || (actual.mode & 0o111 ? 0o755 : 0o644) !== member.mode) {
-      changes.push({ path: member.path, committedSha256: digest, observedSha256: actual?.sha256 ?? null });
-      statusRows.push(`${indexed ? " " : "M"}${actual ? "M" : "D"} ${display(member.path)}`);
-    }
-    for (const record of index) {
-      const filename = record.slice(record.indexOf("\t") + 1);
-      if (!tree.some(member => member.path === filename)) {
-        const blob = record.split(" ")[1];
-        const indexSha256 = sha256(sourceGit(root, ["cat-file", "blob", blob], null));
-        const actual = files.find(file => file.path === filename);
-        changes.push({ path: filename, committedSha256: null, indexSha256, observedSha256: actual?.sha256 ?? null });
-        statusRows.push(`A${actual ? " " : "D"} ${display(filename)}`);
-      }
+  const digests = new Map();
+  const digest = blob => {
+    if (!digests.has(blob)) digests.set(blob, sha256(sourceGit(root, ["cat-file", "blob", blob], null)));
+    return digests.get(blob);
+  };
+  for (const member of tree) committed[member.path] = digest(member.blob);
+  for (const filename of new Set([...tree.map(member => member.path), ...index.keys()])) {
+    const head = tree.find(member => member.path === filename);
+    const staged = index.get(filename);
+    const actual = files.find(file => file.path === filename);
+    const indexSha256 = staged ? digest(staged.blob) : null;
+    const first = !head ? "A" : !staged ? "D" : head.blob !== staged.blob || head.mode !== staged.mode ? "M" : " ";
+    const second = !staged ? " " : !actual ? "D" : actual.sha256 !== indexSha256 || (actual.mode & 0o111 ? 0o755 : 0o644) !== staged.mode ? "M" : " ";
+    if (first !== " " || second !== " ") {
+      changes.push({ path: filename, committedSha256: committed[filename] ?? null, indexSha256, observedSha256: actual?.sha256 ?? null });
+      statusRows.push(`${first}${second} ${display(filename)}`);
     }
   }
-  for (const member of files.filter(file => !file.path.startsWith(".git/") && !tree.some(row => row.path === file.path))) statusRows.push(`?? ${display(member.path)}`);
+  for (const member of files.filter(file => !file.path.startsWith(".git/") && !index.has(file.path))) {
+    statusRows.push(`?? ${display(member.path)}`);
+    if (!tree.some(row => row.path === member.path)) changes.push({ path: member.path, committedSha256: null, indexSha256: null, observedSha256: member.sha256 });
+  }
   const value = { sourceCommit, status: statusRows.join("\n"), files, diff, changes, committed, committer: { name, email } };
   return { ...value, rawRef: retain("source-state.json", value) };
 }

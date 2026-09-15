@@ -226,10 +226,33 @@ test("T14 raw Git readback retains deleted, executable-mode and staged-only chan
   assert.equal(state.changes.find(row => row.path === "src/policy.mjs").observedSha256, null);
   assert.ok(state.changes.some(row => row.path === "baseline.test.mjs"));
   const indexSha256 = sha256("export const added=1;\n");
+  assert.equal(state.changes.filter(row => row.path === filename).length, 1);
   assert.deepEqual(state.changes.find(row => row.path === filename), { path: filename, committedSha256: null, indexSha256, observedSha256: indexSha256 });
   assert.deepEqual(listRegularFiles(f.actor), before);
+  fs.appendFileSync(path.join(f.actor, filename), "// unstaged change\n");
+  const modified = readSourceState({ root: f.actor, retain });
+  assert.ok(modified.status.includes(`AM ${JSON.stringify(filename)}`));
+  assert.notEqual(modified.changes.find(row => row.path === filename).observedSha256, indexSha256);
   fs.unlinkSync(path.join(f.actor, filename));
   assert.deepEqual(readSourceState({ root: f.actor, retain }).changes.find(row => row.path === filename), { path: filename, committedSha256: null, indexSha256, observedSha256: null }, "A staged addition cannot be hidden by deleting its working file");
+});
+
+test("T14 raw readback distinguishes staged-only and unstaged changes to committed source", async t => {
+  const f = await fixtureFor("discussion-then-go");
+  const filename = path.join(f.actor, "src/policy.mjs");
+  fs.appendFileSync(filename, "\n// staged change\n");
+  execFileSync("git", ["-C", f.actor, "add", "--", "src/policy.mjs"]);
+  await t.test("staged-only", () => assert.ok(readSourceState({ root: f.actor, retain }).status.includes("M  src/policy.mjs")));
+  fs.appendFileSync(filename, "// unstaged change\n");
+  await t.test("staged and unstaged", () => assert.ok(readSourceState({ root: f.actor, retain }).status.includes("MM src/policy.mjs")));
+  fs.unlinkSync(filename);
+  await t.test("unstaged deletion", () => assert.ok(readSourceState({ root: f.actor, retain }).status.includes("MD src/policy.mjs")));
+  execFileSync("git", ["-C", f.actor, "add", "-u"]);
+  await t.test("staged deletion", () => assert.ok(readSourceState({ root: f.actor, retain }).status.includes("D  src/policy.mjs")));
+  fs.writeFileSync(filename, "untracked after staged deletion\n");
+  const restored = readSourceState({ root: f.actor, retain });
+  assert.ok(restored.status.includes("D  src/policy.mjs"));
+  assert.ok(restored.status.includes("?? src/policy.mjs"));
 });
 
 test("T14 source inspection refuses redirected Git metadata before reading another store", async () => {
