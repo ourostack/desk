@@ -18,6 +18,7 @@ $DESK/
     snapshots/<embedding-spec-id>/
   _meta/
     friction.md                         # append-only friction backlog for this operator
+    preview-feedback.md                 # explicitly offered, attributed preview feedback (see preview-feedback); distinct from an iteration's feedback.md
   <track-name>/                         # one directory per track (maps to an external work-tracking Feature (GitHub Project / Jira Epic / enterprise work-item tracker / etc.))
     track.md                            # track card — dashboard (see track-card-format)
     _friction/                          # per-track friction entries; archived siblings in _friction/_archive/

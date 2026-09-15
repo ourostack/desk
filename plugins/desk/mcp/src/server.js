@@ -1,6 +1,6 @@
 // desk MCP server registration.
 //
-// Registers all 17 tools as stdio MCP handlers. Units 3 + 5 + 6 wire every
+// Registers all 16 tools as stdio MCP handlers. Units 3 + 5 + 6 wire every
 // tool to a real implementation:
 //   - Unit 3: task_create, task_update, task_archive, track_create,
 //             track_update, friction_add, lesson_add
@@ -8,8 +8,13 @@
 //   - Unit 6: desk_thread (refs_graph provenance walk)
 //   - Index mgmt: desk_reindex (wraps ensureIndex + force-rebuild)
 //   - Health/status: desk_status and desk_doctor (session-start-safe, non-mutating)
-//   - Private feedback: desk_feedback (OS-user-private preview feedback CRUD)
 //   - Private work measurement: desk_work_ledger (OS-user-private work-item ledger)
+//
+// There is no qualitative feedback tool here. Preview feedback a participant
+// chooses to offer is written as Markdown in their own desk
+// (`_meta/preview-feedback.md`); the private store under src/feedback/ stays a
+// protected-storage primitive for records that already exist, with no route
+// from this server and none to be added without its own approval.
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
@@ -28,7 +33,6 @@ import {
 import { track_create, track_update } from "./tools/track.js"
 import { friction_add } from "./tools/friction.js"
 import { lesson_add } from "./tools/lesson.js"
-import { desk_feedback } from "./tools/feedback.js"
 import { desk_work_ledger } from "./tools/work-ledger.js"
 import {
   desk_search,
@@ -58,7 +62,6 @@ export const TOOL_IMPLS = {
   track_update,
   friction_add,
   lesson_add,
-  desk_feedback,
   desk_work_ledger,
   desk_search,
   desk_recall,
@@ -83,7 +86,7 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
   }
   const impl = TOOL_IMPLS[name]
   if (!impl) {
-    // All 17 tools wired; this branch only fires if a name exists in
+    // All 16 tools wired; this branch only fires if a name exists in
     // TOOL_NAMES but is missing from TOOL_IMPLS — i.e. a wiring bug.
     // Return a structured payload that points at the cause.
     return {

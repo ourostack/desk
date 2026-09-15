@@ -10,7 +10,8 @@ const validator = require("../../../../../scripts/test-desk-docs.cjs")
 
 for (const name of [
   "validateHealthyPathLanguage", "validatePrivacyNotes", "validateTopicCoverage",
-  "validateWorkflowWiring", "validateMcpReadmeToolSurface", "validateBrowserFocusPolicy",
+  "validateWorkflowWiring", "validateMcpReadmeToolSurface", "validateMcpToolRegistrySurface",
+  "validateBrowserFocusPolicy",
   "validateValidatorFixtures",
 ]) {
   test(`${name} supports its omitted-options API against the actual maintained source`, () => {

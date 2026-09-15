@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { importRuntimeServer } from "../../src/runtime/bootstrap.js"
 
@@ -14,23 +14,23 @@ const runtime = await importRuntimeServer({
   runtimeCacheDir: path.join(fixture.base, "runtime-cache"),
 })
 assert.equal(runtime._deskRuntime.loaded_from_source_mirror, true)
-const captured = await runtime.callTool({
+assert.equal(runtime.TOOL_NAMES.includes("desk_feedback"), false)
+
+// The mirrored copy of the retained protected-storage primitive — the same
+// module the mirrored server would load — must attribute a record to the
+// installed Desk plugin, not to the MCP component or the cache parent.
+const mirroredStore = await import(pathToFileURL(
+  path.join(runtime._deskRuntime.source_mirror_path, "src", "feedback", "store.js"),
+).href)
+const binding = {
   deskRoot: fixture.deskRoot,
-  statusContext: { runtime: runtime._deskRuntime },
-  name: "desk_feedback",
-  input: { action: "capture", text: "Source-mirror feedback fixture." },
-})
-assert.equal(captured.isError, undefined, JSON.stringify(captured.content))
-const { entry } = JSON.parse(captured.content[0].text)
+  pluginRoot: runtime._deskRuntime.plugin_root,
+}
+const entry = await mirroredStore.withPrivateStore(binding, (store) =>
+  store.capture({ text: "Source-mirror feedback fixture.", taskRef: null }))
 assert.equal(entry.preview_version, deskVersion)
 assert.notEqual(entry.preview_version, mcpVersion)
 
-const listed = await runtime.callTool({
-  deskRoot: fixture.deskRoot,
-  statusContext: { runtime: runtime._deskRuntime },
-  name: "desk_feedback",
-  input: { action: "list" },
-})
-assert.equal(listed.isError, undefined, JSON.stringify(listed.content))
-assert.deepEqual(JSON.parse(listed.content[0].text).entries, [entry])
+const listed = await mirroredStore.withPrivateStore(binding, (store) => store.list({ limit: 20 }))
+assert.deepEqual(listed.entries, [entry])
 process.stdout.write("source-mirror-feedback-ok\n")

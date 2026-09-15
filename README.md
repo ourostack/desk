@@ -76,7 +76,7 @@ See the **Contribute** section in [`skills/skill-management/SKILL.md`](skills/sk
 | **work-planner** | Plan coordinated or risky work; skip when the task description is sufficient. |
 | **work-doer** | Implement the smallest complete change test-first, with repository-required coverage and primary outcome evidence. |
 | **work-merger** | Drive a branch through PR, merge, release/install, smoke, cleanup, and continuation. |
-| **preview-feedback** | Keep explicit preview feedback private, inspect or correct it, and share only a confirmed excerpt and destination. |
+| **preview-feedback** | Publish explicitly offered preview feedback as attributed Markdown in the participant's own desk, after a confirmed excerpt and destination. |
 | **visual-qa-dogfood** | Screenshot-backed dogfooding for UI/rendering work so visual absurdity cannot hide behind passing metrics. |
 | **workbench-operator** | Use Ouro Workbench as the native control room for terminal/TUI agents, Desk mirrors, and boss-agent check-ins. |
 | **inch-worm** | Open-ended codebase improvement loop. Seed → fix → log side discoveries → pick next. Each fix is its own PR. |

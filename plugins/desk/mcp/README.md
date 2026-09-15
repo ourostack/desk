@@ -25,8 +25,8 @@ DESK=~/<your-workspace> node ./index.js
 - `desk_status` — session-start-safe MCP health, root, activation, index, snapshot, and vector-pack status
 - `desk_doctor` — healthy-runtime confirmation or precise first-boot failure diagnosis and remediation
 
-**Private preview feedback:**
-- `desk_feedback` — explicit local capture, paged inspection, revision-guarded correction, and deletion outside the desk's Git and search stores; see [the privacy contract](docs/private-feedback.md)
+**Private work measurement:**
+- `desk_work_ledger` — the owner's own work-item ledger, kept in their private state directory outside Git, the search index and telemetry; it measures work, not people
 
 **Search:**
 - `desk_search` — hybrid lexical + semantic
@@ -36,7 +36,7 @@ DESK=~/<your-workspace> node ./index.js
 - `desk_thread` — provenance walk via refs_graph
 - `desk_reindex` — rebuild or repair the local search index
 
-All 16 tools are wired to real implementations. The optional `desk_doctor` input `{"format":"preview"}` returns a [minimal local diagnostic snapshot](../docs/preview-diagnostics.md), not feedback collection or a network report.
+All 16 tools are wired to real implementations. There is no qualitative feedback tool: preview feedback a participant chooses to offer is written as Markdown in their own desk at `_meta/preview-feedback.md`, and the protected store that already holds private records is retained as a [storage primitive](docs/private-feedback.md) with no route from this server. The optional `desk_doctor` input `{"format":"preview"}` returns a [minimal local diagnostic snapshot](../docs/preview-diagnostics.md), not feedback collection or a network report.
 
 ## How consumers wire this up
 
