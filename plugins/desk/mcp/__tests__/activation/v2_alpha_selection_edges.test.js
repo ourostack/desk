@@ -99,15 +99,25 @@ test("legacy packaging without target dependency declarations retains its histor
   assert.deepEqual(validateCopilotPackagingContract(input), [])
 })
 
-test("authored V2 closure (selection edges): the real desk:worker selection is exactly the three-root closure", () => {
+test("authored V2 closure (selection edges): the real producer builds and validates exactly desk, superpowers, plain-language", () => {
   const activation = read("plugins/desk/activation/desk.activation.json")
-  const selectedNames = activation.provides.activation_targets.find((target) => (
-    target.id === "desk:worker"
-  )).depends_on
+  const freshBundle = buildCopilotBundle({ activation })
+  const selectedNames = freshBundle.dependency_closure.map((entry) => entry.id)
   const expected = ["desk", "plain-language", "superpowers"]
   assert.deepEqual([...selectedNames].sort(), expected)
   assert.equal(selectedNames.includes("ponytail-upstream"), false)
   assert.equal(selectedNames.includes("work-suite"), false)
+
+  const deskPlugin = read("plugins/desk/plugin.json")
+  const superpowersPlugin = read("plugins/superpowers/plugin.json")
+  const plainLanguagePlugin = read("plugins/plain-language/plugin.json")
+  assert.deepEqual(
+    validateCopilotPackagingContract({
+      activation, deskPlugin, bundle: freshBundle, superpowersPlugin, plainLanguagePlugin,
+    }),
+    [],
+    "packaging validation must accept the freshly produced three-root closure the real producer builds from the authored manifest",
+  )
 })
 
 test("ordinary Agency declaration (selection edges): desk/agency.json declares only the two generic V2 dependencies", () => {

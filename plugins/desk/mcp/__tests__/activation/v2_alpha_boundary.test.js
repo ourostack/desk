@@ -2,6 +2,11 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
+import { buildCopilotBundle, validateCopilotPackagingContract } from "../../src/activation/copilot-bundle.js"
+
+function readJson(relativePath) {
+  return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), "utf8"))
+}
 
 function inputFor(existingConfig = "", mode = "global-personal") {
   const manifest = JSON.parse(readFileSync(new URL("../../../activation/desk.activation.json", import.meta.url), "utf8"))
@@ -89,15 +94,25 @@ test("manual-only keeps the existing no-worker boundary without rewriting ambien
   assert.ok(result.generatedConfig.startsWith(config))
 })
 
-test("authored V2 closure (boundary): desk:worker selects exactly desk, superpowers, plain-language", () => {
-  const activation = JSON.parse(readFileSync(new URL("../../../activation/desk.activation.json", import.meta.url), "utf8"))
-  const selectedNames = activation.provides.activation_targets.find((target) => (
-    target.id === "desk:worker"
-  )).depends_on
+test("authored V2 closure (boundary): the real producer builds and validates exactly desk, superpowers, plain-language", () => {
+  const activation = readJson("../../../activation/desk.activation.json")
+  const freshBundle = buildCopilotBundle({ activation })
+  const selectedNames = freshBundle.dependency_closure.map((entry) => entry.id)
   const expected = ["desk", "plain-language", "superpowers"]
   assert.deepEqual([...selectedNames].sort(), expected)
   assert.equal(selectedNames.includes("ponytail-upstream"), false)
   assert.equal(selectedNames.includes("work-suite"), false)
+
+  const deskPlugin = readJson("../../../plugin.json")
+  const superpowersPlugin = readJson("../../../../superpowers/plugin.json")
+  const plainLanguagePlugin = readJson("../../../../plain-language/plugin.json")
+  assert.deepEqual(
+    validateCopilotPackagingContract({
+      activation, deskPlugin, bundle: freshBundle, superpowersPlugin, plainLanguagePlugin,
+    }),
+    [],
+    "packaging validation must accept the freshly produced three-root closure the real producer builds from the authored manifest",
+  )
 })
 
 test("ordinary Agency declaration (boundary): desk/agency.json declares only the two generic V2 dependencies", () => {

@@ -32,53 +32,62 @@ export function buildCopilotBundle({ activation }) {
   const plainLanguageDependency = activation.dependencies.find((dependency) => (
     dependency.id === "plain-language"
   ))
-  const ponytailDependency = activation.dependencies.find((dependency) => (
-    dependency.id === "ponytail-upstream"
-  ))
+  const includesPonytail = selectedDependencyIds(activation).includes("ponytail-upstream")
+  const ponytailDependency = includesPonytail
+    ? activation.dependencies.find((dependency) => dependency.id === "ponytail-upstream")
+    : undefined
+
+  const generatedFrom = {
+    activation_manifest: activationManifestPath,
+    desk_plugin: deskPluginPath,
+    [methodId === "superpowers" ? "superpowers_plugin" : "work_suite_plugin"]: methodPluginPath,
+    plain_language_plugin: plainLanguagePluginPath,
+  }
+  if (includesPonytail) {
+    generatedFrom.ponytail_plugin = ponytailPluginPath
+  }
+
+  const dependencyClosure = [
+    {
+      id: "desk",
+      version: activation.version,
+      plugin: deskPluginPath,
+      skills: "plugins/desk/skills/",
+      agents: "plugins/desk/agents/",
+      mcpServers: copilotMcpSource,
+    },
+    {
+      id: methodId,
+      version: methodDependency.lock.version,
+      plugin: methodPluginPath,
+      skills: `plugins/${methodId}/skills/`,
+    },
+    {
+      id: "plain-language",
+      version: plainLanguageDependency.lock.version,
+      plugin: plainLanguagePluginPath,
+      skills: "plugins/plain-language/skills/",
+    },
+  ]
+  if (includesPonytail) {
+    dependencyClosure.push({
+      id: "ponytail-upstream",
+      version: ponytailDependency.lock.version,
+      plugin: ponytailPluginPath,
+      skills: "plugins/ponytail-upstream/skills/",
+    })
+  }
 
   return {
     schema_version: COPILOT_BUNDLE_SCHEMA_VERSION,
     host: "copilot-root",
     generated_by: generatorCommand,
-    generated_from: {
-      activation_manifest: activationManifestPath,
-      desk_plugin: deskPluginPath,
-      [methodId === "superpowers" ? "superpowers_plugin" : "work_suite_plugin"]: methodPluginPath,
-      plain_language_plugin: plainLanguagePluginPath,
-      ponytail_plugin: ponytailPluginPath,
-    },
+    generated_from: generatedFrom,
     launch: {
       agent: `plugins/desk/${copilotWorkerSource}`,
       mcp: copilotMcpSource,
     },
-    dependency_closure: [
-      {
-        id: "desk",
-        version: activation.version,
-        plugin: deskPluginPath,
-        skills: "plugins/desk/skills/",
-        agents: "plugins/desk/agents/",
-        mcpServers: copilotMcpSource,
-      },
-      {
-        id: methodId,
-        version: methodDependency.lock.version,
-        plugin: methodPluginPath,
-        skills: `plugins/${methodId}/skills/`,
-      },
-      {
-        id: "plain-language",
-        version: plainLanguageDependency.lock.version,
-        plugin: plainLanguagePluginPath,
-        skills: "plugins/plain-language/skills/",
-      },
-      {
-        id: "ponytail-upstream",
-        version: ponytailDependency.lock.version,
-        plugin: ponytailPluginPath,
-        skills: "plugins/ponytail-upstream/skills/",
-      },
-    ],
+    dependency_closure: dependencyClosure,
     manual_steps: [],
   }
 }
@@ -97,6 +106,7 @@ export function validateCopilotPackagingContract(input) {
   const methodLabel = methodId === "superpowers" ? "Superpowers" : "Work Suite"
   const methodPlugin = asObject(input?.[methodId === "superpowers" ? "superpowersPlugin" : "workSuitePlugin"])
   const plainLanguagePlugin = asObject(input?.plainLanguagePlugin)
+  const includesPonytail = selectedDependencyIds(activation).includes("ponytail-upstream")
   const ponytailPlugin = asObject(input?.ponytailPlugin)
   const activationDependencies = Array.isArray(activation.dependencies)
     ? activation.dependencies
@@ -145,13 +155,15 @@ export function validateCopilotPackagingContract(input) {
   if (!hasBundleDependency(bundle, "plain-language")) {
     errors.push("Copilot flattened bundle must include plain-language dependency closure")
   }
-  if (lockedPonytailVersion === undefined) {
-    errors.push("Copilot activation must lock Ponytail dependency")
-  } else if (ponytailPlugin.version !== lockedPonytailVersion) {
-    errors.push(`Copilot root Ponytail version must match activation lock ${lockedPonytailVersion}`)
-  }
-  if (!hasBundleDependency(bundle, "ponytail-upstream")) {
-    errors.push("Copilot flattened bundle must include ponytail-upstream dependency closure")
+  if (includesPonytail) {
+    if (lockedPonytailVersion === undefined) {
+      errors.push("Copilot activation must lock Ponytail dependency")
+    } else if (ponytailPlugin.version !== lockedPonytailVersion) {
+      errors.push(`Copilot root Ponytail version must match activation lock ${lockedPonytailVersion}`)
+    }
+    if (!hasBundleDependency(bundle, "ponytail-upstream")) {
+      errors.push("Copilot flattened bundle must include ponytail-upstream dependency closure")
+    }
   }
   if (
     deskPlugin.activation?.copilot?.dependencies?.[methodId]?.bundleMetadata
@@ -166,8 +178,9 @@ export function validateCopilotPackagingContract(input) {
     errors.push("Copilot Plain Language dependency must point to generated flattened bundle metadata")
   }
   if (
-    deskPlugin.activation?.copilot?.dependencies?.["ponytail-upstream"]?.bundleMetadata
-      !== outputPath
+    includesPonytail
+      && deskPlugin.activation?.copilot?.dependencies?.["ponytail-upstream"]?.bundleMetadata
+        !== outputPath
   ) {
     errors.push("Copilot Ponytail dependency must point to generated flattened bundle metadata")
   }
@@ -178,9 +191,13 @@ export function validateCopilotPackagingContract(input) {
   return errors
 }
 
+function selectedDependencyIds(activation) {
+  const target = activation?.provides?.activation_targets?.find((entry) => entry.id === "desk:worker")
+  return Array.isArray(target?.depends_on) ? target.depends_on : []
+}
+
 function copilotMethod(activation) {
-  const target = activation.provides?.activation_targets?.find((entry) => entry.id === "desk:worker")
-  return selectEngineeringMethod(target?.depends_on ?? [])
+  return selectEngineeringMethod(selectedDependencyIds(activation))
 }
 
 export function generateCopilotBundleArtifact() {
