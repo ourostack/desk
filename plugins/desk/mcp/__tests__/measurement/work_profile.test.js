@@ -537,6 +537,22 @@ test("value_adding cannot be satisfied by an unavailable-class or declared-class
   assert.equal(profile(fixture("measured")).episodes[0].lean.lean_class, "value_adding")
 })
 
+test("value_adding cannot be satisfied by splitting the readback across an unavailable source-system entry and a separate desk-role evaluator label; both the structural readback and the cited entry must be a measured source-system outcome", () => {
+  const criterion = ["criterion:split-entry-defect"]
+  const input = snapshot()
+  input.outcome = { acceptance: "declared", status: "accepted", evidence_refs: criterion, artifact_refs: [] }
+  input.evidence = [
+    evidenceEntry("endpoint-1", { role: "desk", claim_type: "endpoint", class: "declared", producer: "agent_annotation", refs: criterion }),
+    // A real external readback attempt exists, but it is unavailable/unassessed — not a supported observation.
+    evidenceEntry("unavailable-readback", { role: "source_system", claim_type: "outcome", class: "unavailable", producer: "source_native", refs: criterion }),
+    // A measured, independent-evaluator-labelled entry exists, but it is declared under role "desk", not
+    // "source_system" — it is not itself a source-system readback, regardless of its producer/class labels.
+    evidenceEntry("desk-role-evaluator", { role: "desk", claim_type: "outcome", class: "measured", producer: "independent_evaluator", refs: criterion }),
+  ]
+  input.episodes = [{ episode_id: "a", label: "A", class: "declared", fact_ids: ["started"], output_refs: [], evidence_refs: [], lean: { lean_class: "value_adding", rationale: "Split-entry attempt.", evidence_ids: ["desk-role-evaluator"], waste_kind: null } }]
+  assert.throws(() => profile(input), /value_adding|source_system|independent[_-]evaluator|outcome/i)
+})
+
 test("no mura or muri schema field is introduced and a large token count cannot itself establish muda or muri", () => {
   const input = richSnapshot()
   input.facts.push(usage("u5", "worker-a", "dispatch-a", { input_tokens: dimension(900000) }))

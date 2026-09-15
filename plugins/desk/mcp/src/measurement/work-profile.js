@@ -413,13 +413,16 @@ function evidenceView(input, included) {
 const refIntersects = (a, b) => a.length > 0 && b.length > 0 && a.some((ref) => b.includes(ref))
 // An outcome combines a Desk endpoint declaration with a current external readback (decision: outcome
 // composition, T06-I1). Neither owner alone "certifies" the outcome: this is only structurally supported
-// when a role:"desk"/claim_type:"endpoint" entry and a role:"source_system"/claim_type:"outcome" entry each
-// share at least one inert reference with the top-level declared outcome criterion (`outcome.evidence_refs`).
-// This is a local, existing-fields-only relationship check — no resolver, no new evidence field, and no claim
-// that either side's reference is authentic or current; that remains T28's job.
+// when a role:"desk"/claim_type:"endpoint" entry with a real (non-"unavailable") declaration and a
+// role:"source_system"/claim_type:"outcome" entry that is actually "measured" — not merely attempted and
+// come back unavailable — each share at least one inert reference with the top-level declared outcome
+// criterion (`outcome.evidence_refs`). An "unavailable"-class entry on either side is not real supporting
+// evidence: it explicitly means no information, so it cannot itself establish the relationship. This is a
+// local, existing-fields-only relationship check — no resolver, no new evidence field, and no claim that
+// either side's reference is authentic or current; that remains T28's job.
 function outcomeStructurallySupported(evidence, criterionRefs) {
-  const endpoint = evidence.some((e) => e.role === "desk" && e.claim_type === "endpoint" && refIntersects(e.refs, criterionRefs))
-  const readback = evidence.some((e) => e.role === "source_system" && e.claim_type === "outcome" && refIntersects(e.refs, criterionRefs))
+  const endpoint = evidence.some((e) => e.role === "desk" && e.claim_type === "endpoint" && e.class !== "unavailable" && refIntersects(e.refs, criterionRefs))
+  const readback = evidence.some((e) => e.role === "source_system" && e.claim_type === "outcome" && e.class === "measured" && refIntersects(e.refs, criterionRefs))
   return endpoint && readback
 }
 function leanEntry(value, evidenceById, outcome, evidence, criterionRefs) {
@@ -432,9 +435,9 @@ function leanEntry(value, evidenceById, outcome, evidence, criterionRefs) {
   const deduped = [...new Set(evidenceIds)].sort()
   if (value.lean_class === "value_adding") {
     requireFact(outcome.status === "accepted", "value_adding lean_class requires an accepted endpoint criterion")
-    requireFact(outcomeStructurallySupported(evidence, criterionRefs), "value_adding lean_class requires a linked Desk endpoint and source-system outcome readback sharing the declared outcome criterion reference; an unrelated or absent counterpart is not a supported outcome")
+    requireFact(outcomeStructurallySupported(evidence, criterionRefs), "value_adding lean_class requires a linked Desk endpoint and a measured source-system outcome readback sharing the declared outcome criterion reference; an unrelated, absent or unavailable-class counterpart is not a supported outcome")
     const cited = evidenceIds.map((id) => evidenceById.get(id))
-    requireFact(cited.some((e) => e.claim_type === "outcome" && e.producer === "independent_evaluator" && e.class === "measured" && refIntersects(e.refs, criterionRefs)), "value_adding lean_class requires a measured independent_evaluator outcome reference sharing the declared outcome criterion; empty refs, an unrelated criterion or a separate unlinked entry are not attestation")
+    requireFact(cited.some((e) => e.role === "source_system" && e.claim_type === "outcome" && e.producer === "independent_evaluator" && e.class === "measured" && refIntersects(e.refs, criterionRefs)), "value_adding lean_class requires a measured, role:\"source_system\" independent_evaluator outcome reference sharing the declared outcome criterion; empty refs, a desk-role label, an unrelated criterion or a separate unlinked entry are not attestation")
   }
   return { lean_class: value.lean_class, rationale: value.rationale, evidence_ids: deduped, waste_kind: value.waste_kind }
 }
