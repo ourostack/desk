@@ -91,6 +91,51 @@ test("task lifecycle uses mapped progress and retains validating until cleanup i
   assert.match(source, /No delivery daemon or schema/u)
 })
 
+test("delivery and resources have one canonical definition and mapped progress home", () => {
+  const source = read("skills/task-lifecycle/SKILL.md")
+  assert.ok(source.includes("The mapped progress record (`progressPath`) is the single canonical home"))
+  assert.ok(source.includes("If `progressPath` resolves to `task.md`, keep the tables there, not in a second record."))
+  assert.ok(source.includes("Markdown convention, not task frontmatter, a ninth state, a database schema or a universal lifecycle schema"))
+  for (const heading of ["Delivery", "Resources"]) {
+    assert.equal(source.split(`\n## ${heading}\n`).length - 1, 1, `${heading} must have one definition`)
+    for (const owner of ["session-resumption", "git-hygiene"]) {
+      assert.ok(!read(`skills/${owner}/SKILL.md`).includes(`\n## ${heading}\n`), `${owner} must not duplicate ${heading}`)
+    }
+  }
+})
+
+for (const [heading, columns] of [
+  ["Delivery", ["State", "Recorded endpoint / policy / authority", "Required gate / evidence", "Responsible owner", "Next action"]],
+  ["Resources", ["Exact resource / generation identity", "Owning task / attempt / generation", "Active writers / consumers", "Intended disposition", "Evidence pointer", "Terminal disposition details"]],
+]) {
+  test(`${heading} defines the required Markdown columns and one illustrative row`, () => {
+    const source = read("skills/task-lifecycle/SKILL.md")
+    const table = source.split(`\n## ${heading}\n\n`)[1]?.split("\n\n")[0]
+    assert.ok(table, `${heading} table must exist`)
+    const rows = table.split("\n").filter(line => line.startsWith("|")).map(line => line.split("|").slice(1, -1).map(cell => cell.trim()))
+    assert.equal(rows.length, 3, "header, separator and one illustrative row")
+    assert.deepEqual(rows[0], columns)
+    assert.equal(rows[2].length, columns.length)
+    assert.match(rows[2].join(" "), /<[^>]+>/u)
+    if (heading === "Delivery") {
+      assert.equal(rows[2][0], "cleanup_pending")
+    } else {
+      for (const detail of ["removed-and-absent", "absence readback", "named transfer", "transferee", "acknowledgement", "retained-with-trigger", "reason", "owner", "cleanup trigger"]) {
+        assert.ok(rows[2].at(-1).includes(detail), `missing terminal detail: ${detail}`)
+      }
+    }
+  })
+}
+
+for (const owner of ["session-resumption", "git-hygiene"]) {
+  test(`${owner} uses the canonical task-lifecycle table definition`, () => {
+    const source = read(`skills/${owner}/SKILL.md`)
+    assert.ok(source.includes("task-lifecycle/SKILL.md#delivery-and-resource-accounting"))
+    assert.match(source, /mapped progress record.*`## Delivery`.*`## Resources`/u)
+    assert.doesNotMatch(source, /existing Markdown (?:delivery and resources tables|resources table|tables)/u)
+  })
+}
+
 test("delivery uses known repository policy, not a late provider finishing menu", () => {
   const source = read("skills/git-hygiene/SKILL.md")
   assert.match(source, /recorded repository policy.*literal finishing menu/u)

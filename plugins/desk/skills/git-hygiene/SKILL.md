@@ -60,7 +60,7 @@ changed command. Reading a branch is not running it.
 
 Production ADO delivery waits only for its required human approval; once recorded, the agent resumes the existing gates, merges and cleans through the approved repository/host path without a second go. This release's alpha-only exception forbids plugin main merge: preserve the named alpha refs and worktree until their recorded transfer or cleanup trigger. Neither technical access nor a provider's finishing options extends publication authority.
 
-Keep delivery and exact resource dispositions in the existing Markdown tables under `desk:task-lifecycle`. Pending cleanup is `cleanup_pending` there while canonical status stays `validating`; a merge receipt alone cannot close the task. The tiny adapter selects an entry, not delivery, recovery, scheduling or accounting.
+Keep delivery and exact resource dispositions in the mapped progress record under `## Delivery` and `## Resources`, using the single [task-lifecycle table definition](../task-lifecycle/SKILL.md#delivery-and-resource-accounting). Pending cleanup is `cleanup_pending` there while canonical status stays `validating`; a merge receipt alone cannot close the task. The tiny adapter selects an entry, not delivery, recovery, scheduling or accounting.
 
 ### Exact-owned cleanup
 

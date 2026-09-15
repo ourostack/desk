@@ -109,7 +109,23 @@ Commit messages are not a handoff format. A new session reading the task card mu
 
 ## Delivery and resource accounting
 
-Use the existing Markdown delivery and resources tables in the mapped progress record or canonical task. Record resources at creation, including their exact repository/worktree path or host resource/operation identity, owning task/attempt and process generation, active writers or consumers, intended cleanup or transfer owner, and evidence pointer. Keep detailed host/private evidence in approved protected storage, not the task card. No delivery daemon or schema is introduced.
+The mapped progress record (`progressPath`) is the single canonical home for delivery and resource accounting. If `progressPath` resolves to `task.md`, keep the tables there, not in a second record. Record resources at creation, including their exact repository/worktree path or host resource/operation identity, owning task/attempt and process generation, active writers or consumers, intended cleanup or transfer owner, and evidence pointer. Keep detailed host/private evidence in approved protected storage, not the task card. No delivery daemon or schema is introduced.
+
+Create the following headings and tables in that record when needed, using this single definition. These tables are a Markdown convention, not task frontmatter, a ninth state, a database schema or a universal lifecycle schema. Each table shows one illustrative placeholder row:
+
+```markdown
+## Delivery
+
+| State | Recorded endpoint / policy / authority | Required gate / evidence | Responsible owner | Next action |
+| --- | --- | --- | --- | --- |
+| cleanup_pending | <recorded endpoint; repository policy; authority reference> | <required gate and evidence pointer> | <responsible owner> | <next action> |
+
+## Resources
+
+| Exact resource / generation identity | Owning task / attempt / generation | Active writers / consumers | Intended disposition | Evidence pointer | Terminal disposition details |
+| --- | --- | --- | --- | --- | --- |
+| <repository/worktree path or host resource/operation identity; exact generation> | <canonical task; attempt; owning process generation> | <exact active writers/consumers or verified none> | <intended disposition and cleanup/transfer owner> | <approved evidence pointer> | <removed-and-absent: absence readback; or named transfer: named transferee and acknowledgement; or retained-with-trigger: reason, owner and cleanup trigger> |
+```
 
 `cleanup_pending` is a Markdown delivery state while the canonical task status stays `validating`; it is not a ninth task state. A process exit, merged PR or successful build is not completion while resources remain unaccounted for. Every resource requires one verified disposition before transition to `done`:
 
