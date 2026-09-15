@@ -77,9 +77,10 @@ function revisionControls(change = () => {}) {
     activation: { subjectAgent: "fixture-worker", compositionSeam: "qualified-native-agent", requestedConfigurationSha256: hex("6") },
     attemptPolicy: { maxAttemptsPerCell: 1, automaticRetry: false },
     baseline: { groupId: "alpha-group", policySha256: hex("7") },
-    roles: [
-      [["copilot", "gpt-6-astra", "high", "default", "native-subject", hex("8"), hex("9")], ["copilot", "claude-opus-5", "high", "default", "empty-judge", hex("a"), hex("b")]],
-      [null, null],
+    expectedCells: { path: "expected-cells.json", sha256: hex("c") },
+    cells: [
+      { id: "cell-1", roles: [["copilot", "gpt-6-astra", "high", "default", "native-subject", hex("8"), hex("9")], ["copilot", "claude-opus-5", "high", "default", "empty-judge", hex("a"), hex("b")]] },
+      { id: "cell-2", roles: [null, null] },
     ],
   };
   change(controls);
@@ -256,6 +257,13 @@ try {
       ["upstream-sources.lock.json", "runtime_source"],
       ["plugins/desk/mcp/src/index.js", "runtime_source"],
       ["plugins/desk/mcp/package-lock.json", "runtime_source"],
+      // T17-I5: dependency manifests are relevant at the repository root and at arbitrary depth, including under
+      // the own-desk tree, which only exempts unrelated own-desk content.
+      ["package.json", "runtime_source"],
+      ["package-lock.json", "runtime_source"],
+      ["desk/package.json", "runtime_source"],
+      ["desk/tools/package-lock.json", "runtime_source"],
+      ["tools/example/package.json", "runtime_source"],
       [".github/workflows/desk-mcp-tests.yml", "workflow_control"],
       ["evals/offline/cases/v2-alpha-v1/dataset.json", "alpha"],
       ["AGENTIC-ENGINEERING-V2.md", "alpha"],
@@ -268,12 +276,17 @@ try {
       assert.notEqual(report.status, "not_applicable", changed);
     }
 
-    for (const changed of ["desk/tasks/2026-09-15-notes.md", "README.md"]) {
+    for (const changed of ["desk/tasks/2026-09-15-notes.md", "README.md", "desk/package.json.md", "desk/tools/notes.md"]) {
       const report = revisionCase(revisionRequest((value) => { value.changedPaths = [changed]; }));
       assert.equal(report.relevance.relevant, false, changed);
       assert.equal(report.status, "not_applicable", changed);
       assert.equal(report.green, false, changed);
     }
+    // A dependency manifest inside the own-desk tree is relevant even though its neighbouring note is not.
+    const deskMixed = revisionCase(revisionRequest((value) => { value.changedPaths = ["desk/tasks/2026-09-15-notes.md", "desk/package.json"]; }));
+    assert.equal(deskMixed.relevance.relevant, true);
+    assert.deepEqual(deskMixed.relevance.paths.map((entry) => entry.category), ["own_desk", "runtime_source"]);
+    assert.equal(deskMixed.status, "pending");
 
     // A mixed revision that also touches own-desk Markdown is still relevant through its evaluator change.
     const mixed = revisionCase(revisionRequest((value) => { value.changedPaths = ["desk/tasks/notes.md", "evals/offline/fixed-controller.mjs"]; }));
@@ -386,12 +399,12 @@ try {
       (controls) => { controls.activation.requestedConfigurationSha256 = hex("a"); },
       (controls) => { controls.runtime.cliVersion = "1.0.85-1"; },
       (controls) => { controls.runtime.nodeVersion = "v24.0.0"; },
-      (controls) => { controls.roles[0][0][1] = "claude-opus-5"; },
-      (controls) => { controls.roles[0][0][2] = "medium"; },
-      (controls) => { controls.roles[0][0][3] = "long_context"; },
-      (controls) => { controls.roles[0][1][1] = "gpt-6-astra"; },
-      (controls) => { controls.roles[1] = [null, null, null]; },
-      (controls) => { controls.attemptPolicy.automaticRetry = true; },
+      (controls) => { controls.cells[0].roles[0][1] = "claude-opus-5"; },
+      (controls) => { controls.cells[0].roles[0][2] = "medium"; },
+      (controls) => { controls.cells[0].roles[0][3] = "long_context"; },
+      (controls) => { controls.cells[0].roles[1][1] = "gpt-6-astra"; },
+      (controls) => { controls.cells[1].id = "cell-9"; },
+      (controls) => { controls.expectedCells.sha256 = hex("a"); },
     ]) {
       const report = revisionCase(revisionRequest(), [revisionResult((value) => { change(value.revision.controls); })]);
       assert.equal(soleDisposition(report), "CONTROL_FINGERPRINT_MISMATCH");
@@ -401,11 +414,108 @@ try {
     const baseline = revisionCase(revisionRequest(), [revisionResult((value) => { value.revision.controls.baseline.policySha256 = hex("a"); })]);
     assert.equal(soleDisposition(baseline), "BASELINE_CHANGED");
     assert.equal(baseline.green, false);
-    const baselineGroup = revisionCase(revisionRequest(), [revisionResult((value) => { delete value.revision.controls.baseline; })]);
+    const baselineGroup = revisionCase(revisionRequest(), [revisionResult((value) => { value.revision.controls.baseline.groupId = "other-group"; })]);
     assert.equal(soleDisposition(baselineGroup), "BASELINE_CHANGED");
+    // A wholly absent baseline is no longer merely a changed baseline: it is an incomplete control envelope.
+    const baselineAbsent = revisionCase(revisionRequest(), [revisionResult((value) => { delete value.revision.controls.baseline; })]);
+    assert.equal(soleDisposition(baselineAbsent), "MALFORMED_CONTROLS");
+    assert.equal(baselineAbsent.green, false);
   }
 
-  // Auth/runtime failure, cancellation, lost history and invalid or multiple grading remain non-green.
+  // T17-I1: an incomplete or malformed control envelope can never authorize a revision identity or a grade.
+  {
+    for (const [change, code] of [
+      [(value) => { delete value.controls.checkerManifestSha256; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls = {}; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls = { baseline: null }; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.unexpected = true; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { delete value.controls.dataset; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.dataset = { id: "engineering-v2-alpha", version: "1.0.0" }; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.dataset.sha256 = "not-a-hash"; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.dataset.id = " "; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.fixtureManifestSha256 = hex("d").slice(1); }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { delete value.controls.runtime.cliVersion; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.runtime = null; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.runtime.sdkLockSha256 = "short"; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.runtime.sessionMode = ""; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { delete value.controls.activation.compositionSeam; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.activation.requestedConfigurationSha256 = 7; }, "INVALID_TRUSTED_CONTROLS"],
+      // The frozen policy is one predeclared attempt per cell with no automatic retry.
+      [(value) => { value.controls.attemptPolicy.maxAttemptsPerCell = 2; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.attemptPolicy.automaticRetry = true; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.baseline = null; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { delete value.controls.baseline.policySha256; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.expectedCells = { path: "expected-cells.json" }; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.expectedCells.path = " "; }, "INVALID_TRUSTED_CONTROLS"],
+      // T17-I2: a zero-cell inventory is not an expected matrix.
+      [(value) => { value.controls.cells = []; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.cells = "cell-1"; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.cells[1].id = "cell-1"; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { delete value.controls.cells[0].id; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.cells[0].extra = true; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.cells[1].roles = [null]; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.cells[1].roles = [null, null, null]; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.cells[0].roles[0] = ["copilot", "gpt-6-astra", "high", "default", "native-subject", hex("8")]; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.cells[0].roles[0][0] = ""; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.cells[0].roles[0][5] = "not-a-hash"; }, "INVALID_TRUSTED_CONTROLS"],
+      [(value) => { value.controls.cells[0].roles[1] = "empty-judge"; }, "INVALID_TRUSTED_CONTROLS"],
+    ]) {
+      assert.throws(() => revisionCase(revisionRequest(), [], trustedControls(change)), (error) => error.code === code, JSON.stringify(String(change)));
+    }
+    // A returned result whose own control envelope is incomplete is never compatible, with or without trusted controls.
+    for (const change of [
+      (value) => { delete value.revision.controls.checkerManifestSha256; },
+      (value) => { value.revision.controls = {}; },
+      (value) => { value.revision.controls = { baseline: null }; },
+      (value) => { value.revision.controls.unexpected = true; },
+      (value) => { value.revision.controls.runtime = { nodeVersion: "v22.23.2" }; },
+      (value) => { value.revision.controls.cells = []; },
+      (value) => { value.revision.controls.cells[0].roles[0] = ["copilot"]; },
+      (value) => { delete value.revision.controls.expectedCells; },
+      // A returned envelope that claims retries is not the frozen one-attempt policy at all.
+      (value) => { value.revision.controls.attemptPolicy.automaticRetry = true; },
+      (value) => { value.revision.controls.attemptPolicy.maxAttemptsPerCell = 3; },
+    ]) {
+      const report = revisionCase(revisionRequest(), [revisionResult(change)]);
+      assert.equal(soleDisposition(report), "MALFORMED_CONTROLS");
+      assert.equal(report.status, "pending");
+      assert.equal(report.green, false);
+      assert.equal(revisionStatus({ request: revisionRequest(), results: [revisionResult(change)] }).results[0].disposition, "MALFORMED_CONTROLS");
+    }
+  }
+
+  // T17-I2: the trusted controller owns the expected inventory; a result cannot redefine completeness.
+  {
+    const expectedIds = ["cell-1", "cell-2"];
+    const entry = (id, index) => ({ attemptId: `attempt-${index + 1}`, cellId: id, status: "passed", published: true });
+    const withHistory = (ids, counts = {}) => revisionResult((value) => {
+      value.attemptStatuses = ids.map(entry);
+      value.attempts = counts.attempts ?? ids.length;
+      value.expectedCells = counts.expectedCells ?? ids.length;
+    });
+    // Self-consistent truncation, a self-consistent empty campaign and foreign or missing cells are all lost history.
+    for (const [ids, counts, label] of [
+      [["cell-1"], {}, "self-consistent truncation"],
+      [[], {}, "self-consistent zero-cell campaign"],
+      [["not-in-frozen-matrix-1", "not-in-frozen-matrix-2"], {}, "wholly foreign cells"],
+      [["cell-1", "not-in-frozen-matrix-2"], {}, "one foreign cell"],
+      [["cell-1", "cell-2", "cell-3"], {}, "extra cell beyond the frozen matrix"],
+      [["cell-1", "cell-2"], { attempts: 1 }, "attempts disagreeing with the trusted count"],
+      [["cell-1", "cell-2"], { expectedCells: 3 }, "denominator disagreeing with the trusted count"],
+    ]) {
+      const report = revisionCase(revisionRequest(), [withHistory(ids, counts)]);
+      assert.equal(soleDisposition(report), "HISTORY_GAP", label);
+      assert.equal(report.status, "failed", label);
+      assert.equal(report.green, false, label);
+    }
+    // A complete inventory reported in a different order is still the same complete campaign.
+    const reordered = revisionCase(revisionRequest(), [withHistory([...expectedIds].reverse())]);
+    assert.equal(soleDisposition(reordered), "COMPATIBLE");
+    assert.equal(reordered.status, "evaluated");
+    assert.equal(reordered.green, true);
+  }
+
+
   {
     const auth = revisionCase(revisionRequest(), [revisionResult((value) => { value.status = "incomplete"; value.reason = "native_producer_not_qualified"; })]);
     assert.equal(soleDisposition(auth), "AUTH_FAILURE");
@@ -459,6 +569,30 @@ try {
     assert.equal(soleDisposition(malformedGrade), "MALFORMED_GRADE");
     const emptyGrade = revisionCase(revisionRequest(), [revisionResult((value) => { value.grade = {}; })]);
     assert.equal(soleDisposition(emptyGrade), "MALFORMED_GRADE");
+    // T17-I4: the aggregate grade contract is one bounded nonblank summary, not any nonempty object.
+    for (const [grade, label] of [
+      [{ summary: null }, "null summary"],
+      [{ summary: "" }, "empty summary"],
+      [{ summary: "   " }, "blank summary"],
+      [{ summary: 7 }, "non-string summary"],
+      [{ summary: ["synthetic"] }, "array summary"],
+      [{ summary: { text: "synthetic" } }, "nested summary object"],
+      [{ summary: "x".repeat(4097) }, "unbounded summary"],
+      [{ unexpected: true }, "no summary at all"],
+      [{ summary: "synthetic public evaluation", verdict: "pass" }, "extra aggregate key"],
+      [{ grades: [{ verdict: "pass" }, { verdict: "fail" }] }, "multiple nested supposed grades"],
+      [{ summary: "synthetic public evaluation", grades: [{ verdict: "pass" }] }, "summary smuggling nested grades"],
+      [[{ summary: "synthetic public evaluation" }], "array of aggregate grades"],
+    ]) {
+      const report = revisionCase(revisionRequest(), [revisionResult((value) => { value.grade = grade; })]);
+      assert.equal(soleDisposition(report), "MALFORMED_GRADE", label);
+      assert.equal(report.status, "failed", label);
+      assert.equal(report.green, false, label);
+      assert.equal(report.grade, null, label);
+    }
+    const boundedSummary = revisionCase(revisionRequest(), [revisionResult((value) => { value.grade = { summary: "x".repeat(4096) }; })]);
+    assert.equal(soleDisposition(boundedSummary), "COMPATIBLE");
+    assert.equal(boundedSummary.green, true);
 
     const multiple = revisionCase(revisionRequest(), [revisionResult(), revisionResult((value) => { value.grade = { summary: "second synthetic evaluation" }; })]);
     assert.equal(multiple.status, "failed");
@@ -471,6 +605,48 @@ try {
     assert.deepEqual(mixed.results.map((entry) => entry.disposition), ["PREVIOUS_HEAD", "CANCELLED"]);
     assert.equal(mixed.status, "failed");
     assert.equal(mixed.green, false);
+  }
+
+  // T17-I3: same-identity contradictory evidence keeps the current run non-green, in either array order.
+  {
+    const contradiction = (change) => revisionResult(change);
+    for (const [change, disposition] of [
+      [(value) => { value.attemptStatuses[0].status = "cancelled"; }, "CANCELLED"],
+      [(value) => { value.attemptStatuses[0].status = "infrastructure_failure"; }, "RUNTIME_FAILURE"],
+      [(value) => { value.attemptStatuses[0].published = false; }, "HISTORY_GAP"],
+      [(value) => { value.grade = null; }, "INVALID_GRADE"],
+      [(value) => { value.grade = "pass"; }, "MALFORMED_GRADE"],
+      [(value) => { value.status = "incomplete"; value.reason = "native_producer_not_qualified"; }, "AUTH_FAILURE"],
+    ]) {
+      for (const [label, results] of [
+        ["compatible first", [revisionResult(), contradiction(change)]],
+        ["contradiction first", [contradiction(change), revisionResult()]],
+      ]) {
+        const report = revisionCase(revisionRequest(), results);
+        assert.equal(report.status, "failed", `${disposition} ${label}`);
+        assert.equal(report.green, false, `${disposition} ${label}`);
+        assert.equal(report.scored, false, `${disposition} ${label}`);
+        assert.equal(report.grade, null, `${disposition} ${label}`);
+        assert.equal(report.reason, disposition, `${disposition} ${label}`);
+        assert.ok(report.results.some((entry) => entry.disposition === "COMPATIBLE"), `${disposition} ${label}`);
+        assert.ok(report.results.some((entry) => entry.disposition === disposition), `${disposition} ${label}`);
+      }
+    }
+    // Previous-head, foreign-head and incompatible-control returns are historical: they never poison the current run.
+    for (const change of [
+      (value) => { value.revision.head = revisionPreviousHead; value.attemptStatuses[0].status = "cancelled"; },
+      (value) => { value.revision.head = "f".repeat(40); value.grade = null; },
+      (value) => { value.revision.controls.checkerManifestSha256 = hex("a"); value.attemptStatuses[0].published = false; },
+      (value) => { value.revision.ref = "refs/heads/main"; value.status = "incomplete"; },
+      (value) => { value.revision.repository = "owner/other"; value.attemptStatuses[0].status = "cancelled"; },
+    ]) {
+      for (const results of [[revisionResult(), revisionResult(change)], [revisionResult(change), revisionResult()]]) {
+        const report = revisionCase(revisionRequest(), results);
+        assert.equal(report.status, "evaluated");
+        assert.equal(report.green, true);
+        assert.deepEqual(report.grade, { summary: "synthetic public evaluation" });
+      }
+    }
   }
 
   // Without installed trusted controls nothing can be inherited, and the revision stays pending.

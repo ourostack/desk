@@ -285,12 +285,16 @@ test("the controller publishes exactly its frozen plan identity as the evaluated
   assert.deepEqual(published.controls.dataset, frozenPlan.dataset);
   assert.deepEqual(published.controls.runtime, frozenPlan.runtime);
   assert.deepEqual(published.controls.baseline, { groupId: frozenPlan.comparison.groupId, policySha256: frozenPlan.comparison.policySha256 });
-  assert.equal(published.controls.roles.length, 2);
-  assert.deepEqual(published.controls.roles[0], [
-    ["copilot", "gpt-6-astra", "high", "default", "native-subject", sha("native-subject-prompt"), sha("native-subject-options")],
-    ["copilot", "claude-opus-5", "high", "default", "empty-judge", sha("empty-judge-prompt"), sha("empty-judge-options")],
-  ]);
-  assert.deepEqual(published.controls.roles[1], [null, null]);
+  assert.deepEqual(published.controls.expectedCells, { path: frozenPlan.expectedCells.path, sha256: frozenPlan.expectedCells.sha256 });
+  assert.equal(published.controls.cells.length, 2);
+  assert.deepEqual(published.controls.cells[0], {
+    id: "cell-judged",
+    roles: [
+      ["copilot", "gpt-6-astra", "high", "default", "native-subject", sha("native-subject-prompt"), sha("native-subject-options")],
+      ["copilot", "claude-opus-5", "high", "default", "empty-judge", sha("empty-judge-prompt"), sha("empty-judge-options")],
+    ],
+  });
+  assert.deepEqual(published.controls.cells[1], { id: "cell-fixed", roles: [null, null] });
   assert.equal(controller.revisionPublication({ plan: frozenPlan, expected, revision: undefined }), null);
   assert.equal(controller.revisionPublication({ plan: frozenPlan, expected, revision: null }), null);
   for (const [revision, code] of [

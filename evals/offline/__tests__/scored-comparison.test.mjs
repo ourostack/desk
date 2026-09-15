@@ -103,6 +103,7 @@ const controlled = (head, change = () => {}) => {
     runtime: { nodeVersion: "v22.23.2", sdkVersion: "1.0.13", sdkLockSha256: "3".repeat(64), cliVersion: "1.0.84-1", cliSha256: "4".repeat(64), qualificationReceiptSha256: "5".repeat(64), sessionMode: "interactive" },
     activation: { subjectAgent: "fixture-worker", compositionSeam: "qualified-native-agent", requestedConfigurationSha256: "6".repeat(64) },
     attemptPolicy: { maxAttemptsPerCell: 1, automaticRetry: false },
+    expectedCells: { path: "expected-cells.json", sha256: "c".repeat(64) },
   };
   const expected = { schemaVersion: 1, cells: [{ id: "cell-1", caseId: "case-1", executionKind: "deterministic", subject: null, judge: null }] };
   change(plan, expected);
@@ -112,7 +113,7 @@ const scoredRequest = head => ({ schemaVersion: 1, kind: "relevant_revision_requ
 const scoredResult = (revision, change = () => {}) => {
   const value = {
     schemaVersion: 1, status: "complete", expectedCells: 1, attempts: 1, unstarted: 0,
-    scored: true, grade: { summary: "synthetic public evaluation", verdict: "pass" }, revision,
+    scored: true, grade: { summary: "synthetic public evaluation" }, revision,
     attemptStatuses: [{ attemptId: "attempt-1", cellId: "cell-1", status: "passed", published: true }],
   };
   change(value);
@@ -130,11 +131,15 @@ test("a published native grade is admitted for exactly one revision and is never
   assert.equal(evaluated.status, "evaluated");
   assert.equal(evaluated.green, true);
   assert.equal(evaluated.scored, true);
-  assert.deepEqual(evaluated.grade, { summary: "synthetic public evaluation", verdict: "pass" });
+  assert.deepEqual(evaluated.grade, { summary: "synthetic public evaluation" });
   for (const [change, disposition] of [
     [value => { value.scored = false; }, "INVALID_GRADE"],
     [value => { value.grade = null; }, "INVALID_GRADE"],
     [value => { value.grade = ["pass"]; }, "MALFORMED_GRADE"],
+    // The aggregate surface is one bounded summary; a nested verdict set is not a single admitted grade.
+    [value => { value.grade = { summary: "synthetic public evaluation", verdict: "pass" }; }, "MALFORMED_GRADE"],
+    [value => { value.grade = { grades: [{ verdict: "pass" }, { verdict: "fail" }] }; }, "MALFORMED_GRADE"],
+    [value => { value.grade = { summary: null }; }, "MALFORMED_GRADE"],
     [value => { value.attemptStatuses[0].status = "cancelled"; }, "CANCELLED"],
     [value => { value.attemptStatuses[0].status = "infrastructure_failure"; }, "RUNTIME_FAILURE"],
     [value => { value.status = "incomplete"; value.reason = "native_producer_not_qualified"; }, "AUTH_FAILURE"],

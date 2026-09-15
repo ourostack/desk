@@ -91,25 +91,37 @@ function readJson(file) {
 const revisionKinds = { request: "relevant_revision_request", controls: "trusted_evaluation_controls", status: "relevant_revision_status" };
 const requestKeys = ["schemaVersion", "kind", "repository", "ref", "head", "previousHeads", "changedPaths", "events"];
 const controlsKeys = ["schemaVersion", "kind", "source", "approvedRevision", "controls"];
+// The complete frozen control contract. Equality of a fingerprint only proves equality of what it covers, so both the
+// trusted envelope and a returned result's own controls must carry every field before either can authorize anything.
+const controlContractKeys = ["dataset", "fixtureManifestSha256", "checkerManifestSha256", "admissionContractSha256", "toolingSourceManifestSha256", "bindingSha256", "runtime", "activation", "attemptPolicy", "baseline", "expectedCells", "cells"];
+const controlHashKeys = ["fixtureManifestSha256", "checkerManifestSha256", "admissionContractSha256", "toolingSourceManifestSha256", "bindingSha256"];
+const runtimeKeys = ["nodeVersion", "sdkVersion", "sdkLockSha256", "cliVersion", "cliSha256", "qualificationReceiptSha256", "sessionMode"];
 // A candidate contributes repository, ref, exact head and public source bytes. Anything that would let it name its
 // own grader, model, runtime, baseline, workflow auth, approval point or grade is refused rather than trusted.
 const candidateControlKeys = new Set(["controls", "control", "fixture", "grader", "judge", "model", "reasoningEffort", "contextTier", "runtime", "baseline", "auth", "credentials", "secrets", "workflow", "approvedRevision", "grade", "green", "scored", "status"]);
 const authReasons = new Set(["native_producer_not_qualified", "native_qualification_required", "auth_unavailable", "capacity_unavailable"]);
 const gradedAttemptStatuses = new Set(["passed", "product_failure", "inconclusive"]);
-const terminalDispositions = new Set(["AUTH_FAILURE", "RUNTIME_FAILURE", "CANCELLED", "HISTORY_GAP", "INVALID_GRADE", "MALFORMED_GRADE"]);
-// Ordered: the first matching rule classifies the path. Own-desk Markdown is checked first so an unrelated desk note
-// is never promoted by a later prefix, and the catch-all keeps every unclassified path explicitly not relevant.
+// Terminal evidence belongs to the current run identity: it is only assigned after repository, ref, exact head and
+// the complete frozen controls already matched. Ordered so the reported reason does not depend on result order.
+const terminalDispositions = ["AUTH_FAILURE", "RUNTIME_FAILURE", "CANCELLED", "HISTORY_GAP", "INVALID_GRADE", "MALFORMED_GRADE"];
+// Ordered: the first matching rule classifies the path. Dependency manifests are recognized at the repository root
+// and at any depth before the own-desk exclusion, which exempts unrelated own-desk content rather than dependency or
+// runtime source. The catch-all keeps every unclassified path explicitly not relevant.
+const dependencyManifest = (value) => value === "package.json" || value === "package-lock.json" || value.endsWith("/package.json") || value.endsWith("/package-lock.json");
 const relevanceRules = [
+  ["runtime_source", true, dependencyManifest],
   ["own_desk", false, (value) => value.startsWith("desk/")],
   ["alpha", true, (value) => value === "AGENTIC-ENGINEERING-V2.md" || value.startsWith("evals/offline/cases/") || value.startsWith("evals/engineering-v2-")],
   ["evaluator_source", true, (value) => value.startsWith("evals/") || value === "scripts/skill-evals.cjs" || value === "scripts/test-skill-evals.cjs"],
   ["workflow_control", true, (value) => value.startsWith(".github/workflows/")],
-  ["runtime_source", true, (value) => value.startsWith("plugins/desk/mcp/") || value === "upstream-sources.lock.json" || value.endsWith("/package.json") || value.endsWith("/package-lock.json")],
+  ["runtime_source", true, (value) => value.startsWith("plugins/desk/mcp/") || value === "upstream-sources.lock.json"],
   ["selected_source", true, (value) => value.startsWith("plugins/") || value.startsWith("skills/") || value.startsWith("worker/") || value === "manifest.json" || value === "AGENTS.md" || value === "CLAUDE.md"],
   ["unrelated", false, () => true],
 ];
 const trustedControlPath = (value) => value.startsWith(".github/workflows/") || value.startsWith("evals/offline/cases/") || value === "scripts/skill-evals.cjs" || value === "evals/offline/fixed-controller.mjs";
 const commitId = (value) => typeof value === "string" && /^[a-f0-9]{40}$/u.test(value);
+const hashValue = (value) => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+const identifier = (value) => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u.test(value);
 const boundedText = (value, maximum) => hasText(value) && value.length <= maximum;
 const repoRelativePath = (value) => typeof value === "string" && value.length > 0 && value.length <= 1024 && !value.includes("\\") && !value.includes("\0") && !value.startsWith("/") && value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 
@@ -129,6 +141,40 @@ function controlsFingerprint(controls) {
 
 function exactly(value, keys) {
   return isObject(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+// A complete role configuration, or an explicit absent one for a deterministic cell. The pinned provider/model set
+// stays owned by the offline run-plan contract; this validates that the tuple is whole, bounded and hash-bound.
+function completeRole(role) {
+  if (role === null) return true;
+  return Array.isArray(role) && role.length === 7
+    && role.slice(0, 5).every((field) => boundedText(field, 256))
+    && hashValue(role[5]) && hashValue(role[6]);
+}
+
+// The authoritative expected inventory: explicit unique cell identities, each with both complete role slots.
+function completeCells(cells) {
+  if (!Array.isArray(cells) || cells.length === 0 || cells.length > 256) return false;
+  const ids = new Set();
+  for (const cell of cells) {
+    if (!exactly(cell, ["id", "roles"]) || !identifier(cell.id) || ids.has(cell.id)) return false;
+    if (!Array.isArray(cell.roles) || cell.roles.length !== 2 || !cell.roles.every(completeRole)) return false;
+    ids.add(cell.id);
+  }
+  return true;
+}
+
+// Validated before a revision identity is formed and again for every returned result's own control envelope.
+function completeControls(controls) {
+  return exactly(controls, controlContractKeys)
+    && exactly(controls.dataset, ["id", "version", "sha256"]) && identifier(controls.dataset.id) && boundedText(controls.dataset.version, 128) && hashValue(controls.dataset.sha256)
+    && controlHashKeys.every((key) => hashValue(controls[key]))
+    && exactly(controls.runtime, runtimeKeys) && ["nodeVersion", "sdkVersion", "cliVersion", "sessionMode"].every((key) => boundedText(controls.runtime[key], 256)) && ["sdkLockSha256", "cliSha256", "qualificationReceiptSha256"].every((key) => hashValue(controls.runtime[key]))
+    && exactly(controls.activation, ["subjectAgent", "compositionSeam", "requestedConfigurationSha256"]) && boundedText(controls.activation.subjectAgent, 256) && boundedText(controls.activation.compositionSeam, 256) && hashValue(controls.activation.requestedConfigurationSha256)
+    && exactly(controls.attemptPolicy, ["maxAttemptsPerCell", "automaticRetry"]) && controls.attemptPolicy.maxAttemptsPerCell === 1 && controls.attemptPolicy.automaticRetry === false
+    && exactly(controls.baseline, ["groupId", "policySha256"]) && identifier(controls.baseline.groupId) && hashValue(controls.baseline.policySha256)
+    && exactly(controls.expectedCells, ["path", "sha256"]) && boundedText(controls.expectedCells.path, 1024) && hashValue(controls.expectedCells.sha256)
+    && completeCells(controls.cells);
 }
 
 function validateRevisionRequest(request) {
@@ -160,8 +206,12 @@ function validateRevisionRequest(request) {
 
 function validateTrustedControls(value, candidate) {
   if (value === undefined || value === null) return null;
-  if (!exactly(value, controlsKeys) || value.schemaVersion !== schemaVersion || value.kind !== revisionKinds.controls || !commitId(value.approvedRevision) || !isObject(value.controls)) {
+  if (!exactly(value, controlsKeys) || value.schemaVersion !== schemaVersion || value.kind !== revisionKinds.controls || !commitId(value.approvedRevision)) {
     refuse("INVALID_TRUSTED_CONTROLS", `trusted controls require exactly ${controlsKeys.join(", ")} at an approved revision`);
+  }
+  // A subset of the frozen controls is not a control identity: refuse before any fingerprint or revision identity.
+  if (!completeControls(value.controls)) {
+    refuse("INVALID_TRUSTED_CONTROLS", `the frozen control contract requires exactly ${controlContractKeys.join(", ")}, a pinned one-attempt policy and a complete expected-cell inventory`);
   }
   if (value.source !== "trusted_controller") refuse("UNTRUSTED_CONTROL_SOURCE", "evaluation controls must come from the trusted controller, never from the candidate");
   if (value.approvedRevision === candidate.head || candidate.previousHeads.includes(value.approvedRevision)) {
@@ -214,12 +264,16 @@ function reconcileResult({ value, candidate, trusted, fingerprint }) {
   if (published.repository !== candidate.repository) return { disposition: "REPOSITORY_MISMATCH", revision: observed };
   if (published.head !== candidate.head) return { disposition: candidate.previousHeads.includes(published.head) ? "PREVIOUS_HEAD" : "FOREIGN_HEAD", revision: observed };
   if (published.ref !== candidate.ref) return { disposition: "REF_MISMATCH", revision: observed };
+  // An incomplete returned control envelope cannot be the frozen identity, whether or not trusted controls are here.
+  if (!completeControls(published.controls)) return { disposition: "MALFORMED_CONTROLS", revision: observed };
   if (trusted === null) return { disposition: "TRUSTED_CONTROLS_UNAVAILABLE", revision: observed };
-  if (controlsFingerprint(published.controls.baseline ?? null) !== controlsFingerprint(trusted.controls.baseline)) return { disposition: "BASELINE_CHANGED", revision: observed };
+  if (controlsFingerprint(published.controls.baseline) !== controlsFingerprint(trusted.controls.baseline)) return { disposition: "BASELINE_CHANGED", revision: observed };
   if (controlsFingerprint(published.controls) !== fingerprint) return { disposition: "CONTROL_FINGERPRINT_MISMATCH", revision: observed };
   if (value.status !== "complete") return { disposition: authReasons.has(value.reason) ? "AUTH_FAILURE" : "RUNTIME_FAILURE", revision: observed };
+  // Completeness is the trusted controller's expected inventory, never the returned result's own accounting.
+  const expectedCellIds = trusted.controls.cells.map((cell) => cell.id);
   const history = value.attemptStatuses;
-  if (!Array.isArray(history) || history.length !== value.attempts || value.attempts !== value.expectedCells || value.unstarted !== 0) {
+  if (!Array.isArray(history) || history.length !== expectedCellIds.length || value.attempts !== expectedCellIds.length || value.expectedCells !== expectedCellIds.length || value.unstarted !== 0) {
     return { disposition: "HISTORY_GAP", revision: observed };
   }
   const cells = new Set();
@@ -231,12 +285,16 @@ function reconcileResult({ value, candidate, trusted, fingerprint }) {
     cells.add(entry.cellId);
     attemptIds.add(entry.attemptId);
   }
+  // Equal counts plus unique reported cells make this exact set equality with the frozen matrix, in any order.
+  if (!expectedCellIds.every((id) => cells.has(id))) return { disposition: "HISTORY_GAP", revision: observed };
   if (history.some((entry) => entry.status === "cancelled")) return { disposition: "CANCELLED", revision: observed };
   if (history.some((entry) => !gradedAttemptStatuses.has(entry.status))) return { disposition: "RUNTIME_FAILURE", revision: observed };
   // An attempt that reached a gradable status but was never committed is lost evidence, not admitted evidence.
   if (history.some((entry) => entry.published !== true)) return { disposition: "HISTORY_GAP", revision: observed };
   if (value.scored !== true || value.grade === null || value.grade === undefined) return { disposition: "INVALID_GRADE", revision: observed };
-  if (!isObject(value.grade) || Object.keys(value.grade).length === 0) return { disposition: "MALFORMED_GRADE", revision: observed };
+  // The supported aggregate surface is exactly one bounded nonblank summary. Anything else — no usable summary, an
+  // extra key, or nested supposed grades that would evade the single-envelope check — is not an admitted grade.
+  if (!exactly(value.grade, ["summary"]) || !boundedText(value.grade.summary, 4096)) return { disposition: "MALFORMED_GRADE", revision: observed };
   return { disposition: "COMPATIBLE", revision: observed, grade: value.grade };
 }
 
@@ -252,7 +310,7 @@ function revisionStatus({ request, trustedControls = null, results = [] }) {
   const revisionId = crypto.createHash("sha256").update(canonicalValue([candidate.repository, candidate.ref, candidate.head, fingerprint])).digest("hex");
   const reconciled = results.map((value, index) => ({ index, ...reconcileResult({ value, candidate, trusted, fingerprint }) }));
   const compatible = reconciled.filter((entry) => entry.disposition === "COMPATIBLE");
-  const terminal = reconciled.find((entry) => terminalDispositions.has(entry.disposition));
+  const terminal = terminalDispositions.find((code) => reconciled.some((entry) => entry.disposition === code));
   let status = "pending";
   let reason = results.length === 0 ? "NO_RESULT_RETURNED" : "NO_COMPATIBLE_RESULT";
   let grade = null;
@@ -262,13 +320,16 @@ function revisionStatus({ request, trustedControls = null, results = [] }) {
   } else if (compatible.length > 1) {
     status = "failed";
     reason = "MULTIPLE_COMPATIBLE_RESULTS";
+  } else if (terminal !== undefined) {
+    // The frozen policy is one predeclared attempt per cell with no automatic retry, so there is no authorized
+    // replacement run that a later compatible envelope could represent. Contradictory evidence for this exact
+    // revision and these exact controls stays non-green rather than being resolved by selecting the green return.
+    status = "failed";
+    reason = terminal;
   } else if (compatible.length === 1) {
     status = "evaluated";
     reason = "COMPATIBLE_RESULT_RETURNED";
     grade = compatible[0].grade;
-  } else if (terminal !== undefined) {
-    status = "failed";
-    reason = terminal.disposition;
   }
   return {
     schemaVersion,

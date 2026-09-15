@@ -50,7 +50,7 @@ const roleTuple = role => role === null ? null : [role.provider, role.model, rol
 // The published result names the one revision it evaluated. The candidate contributes only repository, ref and its
 // exact head, and even those must equal the frozen plan's own candidate identity. Every control value is read back
 // from the frozen plan and expected matrix, so a candidate cannot publish its own fixture, grader, model, reasoning
-// effort, context tier, runtime, baseline or attempt policy alongside a result and have it treated as trusted.
+// effort, context tier, runtime, baseline, expected inventory or attempt policy and have it treated as trusted.
 export function revisionPublication({ plan, expected, revision }) {
   if (revision === undefined || revision === null) return null;
   requireCondition(exactKeys(revision, ["repository", "ref", "head"]) && nonblank(revision.ref) && revision.ref.length <= 1024, "REVISION_BINDING_INVALID", "A published revision binds exactly its repository, ref and exact head");
@@ -68,7 +68,9 @@ export function revisionPublication({ plan, expected, revision }) {
       activation: { subjectAgent: plan.activation.subjectAgent, compositionSeam: plan.activation.compositionSeam, requestedConfigurationSha256: plan.activation.requestedConfigurationSha256 },
       attemptPolicy: plan.attemptPolicy,
       baseline: { groupId: plan.comparison.groupId, policySha256: plan.comparison.policySha256 },
-      roles: expected.cells.map(cell => [roleTuple(cell.subject), roleTuple(cell.judge)]),
+      // The authoritative expected inventory: the frozen matrix artifact plus its explicit cell identities and roles.
+      expectedCells: { path: plan.expectedCells.path, sha256: plan.expectedCells.sha256 },
+      cells: expected.cells.map(cell => ({ id: cell.id, roles: [roleTuple(cell.subject), roleTuple(cell.judge)] })),
     },
   };
 }

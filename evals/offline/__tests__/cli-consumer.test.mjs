@@ -192,21 +192,12 @@ test("the public workflow reports relevant-revision status without carrying any 
   assert.equal(job.split("uses: actions/upload-artifact@v4").length, 2);
 });
 
-// GitHub path filters: ** spans segments, * and ? stay inside one segment.
+// GitHub filter patterns are character-based: `*` matches any characters except `/`, `**` matches any characters
+// including `/`. A segment-based approximation would wrongly let `**/package.json` cover a root manifest.
 function triggerMatches(pattern, target) {
-  const segments = pattern.split("/");
-  const parts = target.split("/");
-  const walk = (segment, part) => {
-    if (segment === segments.length) return part === parts.length;
-    if (segments[segment] === "**") {
-      for (let index = part; index <= parts.length; index += 1) if (walk(segment + 1, index)) return true;
-      return false;
-    }
-    if (part === parts.length) return false;
-    const expression = new RegExp(`^${segments[segment].replace(/[.+^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, "[^/]*").replace(/\?/gu, "[^/]")}$`, "u");
-    return expression.test(parts[part]) && walk(segment + 1, part + 1);
-  };
-  return walk(0, 0);
+  const escape = (value) => value.replace(/[.+^${}()|[\]\\?]/gu, "\\$&");
+  const expression = pattern.split("**").map((part) => escape(part).replace(/\*/gu, "[^/]*")).join(".*");
+  return new RegExp(`^${expression}$`, "u").test(target);
 }
 
 function workflowPathFilters(workflow) {
@@ -225,6 +216,52 @@ function workflowPathFilters(workflow) {
   return blocks;
 }
 
+function embeddedStatusGuard(workflow) {
+  const lines = workflow.split("\n");
+  const start = lines.findIndex(line => line.trim() === "- name: Report relevant-revision evaluation status");
+  assert.notEqual(start, -1, "the workflow must report relevant-revision status");
+  const open = lines.findIndex((line, index) => index > start && line.trim() === "node -e '");
+  assert.notEqual(open, -1, "the status step must embed its refusal script");
+  const close = lines.findIndex((line, index) => index > open && line.trim() === "'");
+  assert.notEqual(close, -1, "the embedded refusal script must terminate");
+  return lines.slice(open + 1, close).map(line => line.slice(12)).join("\n");
+}
+
+test("the public status step refuses a forbidden evaluation state before it publishes anything", () => {
+  const workflow = fs.readFileSync(path.join(repository, ".github/workflows/desk-mcp-tests.yml"), "utf8");
+  const guard = path.join(root, "workflow-status-guard.cjs");
+  fs.writeFileSync(guard, `${embeddedStatusGuard(workflow)}\n`);
+  const runGuard = (status, name) => {
+    const cwd = path.join(root, `guard-${name}`);
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.writeFileSync(path.join(cwd, "revision-status.json"), bytes(status));
+    const summary = path.join(cwd, "summary.md");
+    const result = spawnSync(process.execPath, [guard], { cwd, encoding: "utf8", timeout: 15000, env: { ...process.env, GITHUB_STEP_SUMMARY: summary } });
+    return { ...result, summary: fs.existsSync(summary) ? fs.readFileSync(summary, "utf8") : "" };
+  };
+  const pending = { schemaVersion: 1, kind: "relevant_revision_status", relevance: { relevant: true, categories: ["evaluator_source"], paths: [], trustedControlPaths: [] }, status: "pending", green: false, scored: false, grade: null, reason: "NO_RESULT_RETURNED" };
+  const allowed = runGuard(pending, "pending");
+  assert.equal(allowed.status, 0, allowed.stderr);
+  assert.match(allowed.stdout, /relevant=true categories=evaluator_source status=pending reason=NO_RESULT_RETURNED/);
+  assert.match(allowed.summary, /## Relevant-revision evaluation status/);
+  assert.match(allowed.summary, /"status": "pending"/);
+  // Every forbidden public evaluation state must be refused before a single byte reaches a reporting surface.
+  for (const [forged, name] of [
+    [{ ...pending, status: "evaluated", green: true, scored: true, grade: { summary: "forged" } }, "evaluated"],
+    [{ ...pending, green: true }, "green"],
+    [{ ...pending, grade: { summary: "forged" } }, "graded"],
+    [{ ...pending, scored: true }, "scored"],
+    [{ ...pending, status: "evaluated" }, "status-only"],
+  ]) {
+    const refused = runGuard(forged, name);
+    assert.notEqual(refused.status, 0, name);
+    assert.equal(refused.stdout, "", `${name} must publish no log line`);
+    assert.equal(refused.summary, "", `${name} must append no job summary`);
+    assert.match(refused.stderr, /Public CI cannot publish a green or graded evaluation status/, name);
+    assert.doesNotMatch(refused.stderr, /"green": true|forged/, `${name} must not echo the forbidden status`);
+  }
+});
+
 test("every path the status routing calls relevant also starts the public workflow", () => {
   const workflow = fs.readFileSync(path.join(repository, ".github/workflows/desk-mcp-tests.yml"), "utf8");
   const blocks = workflowPathFilters(workflow);
@@ -236,6 +273,7 @@ test("every path the status routing calls relevant also starts the public workfl
     ".github/workflows/desk-mcp-tests.yml", ".github/workflows/validate-skills.yml",
     "plugins/desk/mcp/src/index.js", "plugins/desk/mcp/package.json", "plugins/desk/mcp/package-lock.json", "upstream-sources.lock.json",
     "tools/example/package.json", "tools/example/package-lock.json",
+    "package.json", "package-lock.json", "desk/package.json", "desk/tools/package-lock.json",
     "plugins/desk/principles.md", "plugins/desk/skills/start-task/SKILL.md", "skills/work-doer/SKILL.md",
     "worker/README.md", "manifest.json", "AGENTS.md", "CLAUDE.md",
   ];
@@ -249,11 +287,16 @@ test("every path the status routing calls relevant also starts the public workfl
     }
   }
   // An unrelated own-desk note is neither relevant nor a reason to claim evaluation coverage.
-  const unrelated = publish("trigger-unrelated-request.json", publicRequest(value => { value.changedPaths = ["desk/tasks/2026-09-15-notes.md"]; }));
+  const unrelated = publish("trigger-unrelated-request.json", publicRequest(value => { value.changedPaths = ["desk/tasks/2026-09-15-notes.md", "desk/tools/notes.md"]; }));
   const unrelatedReport = JSON.parse(legacy(["revision", "--request", unrelated]).stdout);
   assert.equal(unrelatedReport.relevance.relevant, false);
   assert.equal(unrelatedReport.status, "not_applicable");
   assert.equal(triggerMatches("desk/**", "desk/tasks/2026-09-15-notes.md"), true);
   assert.equal(triggerMatches("evals/*.json", "evals/offline/checks.mjs"), false);
   assert.equal(triggerMatches("scripts/*.cjs", "scripts/skill-evals.cjs"), true);
+  assert.equal(triggerMatches("package.json", "package.json"), true);
+  assert.equal(triggerMatches("**/package.json", "desk/tools/package.json"), true);
+  // A `**`-prefixed pattern still needs the separator, so the root manifest needs its own explicit trigger.
+  assert.equal(triggerMatches("**/package.json", "package.json"), false);
+  assert.equal(triggerMatches("evals/**", "evals/offline/cases/v2-alpha-v1/dataset.json"), true);
 });

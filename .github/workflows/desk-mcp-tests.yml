@@ -23,6 +23,8 @@ on:
       - ".github/workflows/**"
       - "**/package.json"
       - "**/package-lock.json"
+      - "package.json"
+      - "package-lock.json"
       - "plugins/desk/mcp/**"
       - "plugins/desk/activation/**"
       - "plugins/desk/.claude-plugin/plugin.json"
@@ -83,6 +85,8 @@ on:
       - ".github/workflows/**"
       - "**/package.json"
       - "**/package-lock.json"
+      - "package.json"
+      - "package-lock.json"
       - "plugins/desk/mcp/**"
       - "plugins/desk/activation/**"
       - "plugins/desk/.claude-plugin/plugin.json"
@@ -225,13 +229,15 @@ jobs:
           node -e '
             const fs = require("node:fs");
             const status = JSON.parse(fs.readFileSync("revision-status.json", "utf8"));
+            // Refuse before any reporting surface is touched: a forbidden state must never reach the job log or the
+            // step summary at all, so the guard runs ahead of every console.log and summary append below.
+            if (status.green !== false || status.grade !== null || status.scored !== false || status.status === "evaluated") {
+              throw new Error("Public CI cannot publish a green or graded evaluation status; the trusted controller owns grading.");
+            }
             const line = `relevant=${status.relevance.relevant} categories=${status.relevance.categories.join("|") || "none"} status=${status.status} reason=${status.reason}`;
             console.log(line);
             if (process.env.GITHUB_STEP_SUMMARY) {
               fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Relevant-revision evaluation status\n\n${line}\n\n\`\`\`json\n${JSON.stringify(status, null, 2)}\n\`\`\`\n`);
-            }
-            if (status.green !== false || status.grade !== null) {
-              throw new Error("Public CI cannot publish a green or graded evaluation status; the trusted controller owns grading.");
             }
           '
 
