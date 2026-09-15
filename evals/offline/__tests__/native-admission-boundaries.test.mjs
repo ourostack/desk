@@ -18,7 +18,7 @@ test("absent, malformed or unexercised admission arguments raise the typed refus
   assert.throws(() => requireTrustedChecker(), qualified);
   for (const context of [null, undefined, "receipt", 7, [], { preflight: undefined, expected: undefined }]) assert.throws(() => requireTrustedChecker(context), qualified);
   const f = testCheckerPreflight();
-  for (const context of [{ preflight: f.receipt }, { expected: f.expected }, { preflight: f.receipt, expected: {} }, { preflight: f.receipt, expected: { identities: f.expected.identities } }, { preflight: f.receipt, expected: { identities: null, readEvidence: f.expected.readEvidence } }]) {
+  for (const context of [{ preflight: f.receipt }, { expected: f.expected }, { preflight: f.receipt, expected: {} }, { preflight: f.receipt, expected: { identities: f.expected.identities } }, { preflight: f.receipt, expected: { identities: null, readEvidence: f.expected.readEvidence, observeIdentities: f.observe } }]) {
     assert.throws(() => requireTrustedChecker(context), qualified);
   }
 });
@@ -50,13 +50,15 @@ for (const [label, mutate] of [
   const f = testCheckerPreflight();
   assert.equal(requireTrustedChecker({ preflight: f.receipt, expected: f.expected }), true);
   mutate(f);
-  // The parent's own observer is re-read at this boundary, so the frozen declared snapshot cannot carry the change.
+  // The parent's own observer is re-read at this boundary, so no frozen declared snapshot can carry the change.
   assert.throws(() => requireTrustedChecker({ preflight: f.receipt, expected: f.expected }), qualified);
   assert.throws(() => requireTrustedChecker({ preflight: f.receipt, expected: { ...f.expected, identities: f.observe() } }), qualified);
 });
-test("a declared identity snapshot without an observer still admits, and a malformed observation refuses", () => {
+test("a declared identity snapshot without an observer cannot admit, and a malformed observation refuses", () => {
   const f = testCheckerPreflight();
-  assert.equal(requireTrustedChecker({ preflight: f.receipt, expected: { identities: f.expected.identities, readEvidence: f.expected.readEvidence } }), true);
+  // A caller that cannot observe identities again has no way to detect drift, so the snapshot alone is refused.
+  assert.throws(() => requireTrustedChecker({ preflight: f.receipt, expected: { identities: f.expected.identities, readEvidence: f.expected.readEvidence } }), qualified);
+  assert.throws(() => requireTrustedChecker({ preflight: f.receipt, expected: { ...f.expected, observeIdentities: f.expected.identities } }), qualified);
   for (const observeIdentities of [() => ({}), () => ({ ...f.expected.identities, runtimeSha256: "NOT-HEX" }), () => ({ ...f.expected.identities, launcherSha256: "e".repeat(64) })]) {
     assert.throws(() => requireTrustedChecker({ preflight: f.receipt, expected: { ...f.expected, observeIdentities } }), qualified);
   }

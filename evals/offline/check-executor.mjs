@@ -259,11 +259,11 @@ export function requireTrustedChecker(context) {
   // Explicit missing-argument refusal: absent context is a typed admission refusal, never a destructuring exception.
   const { preflight, expected } = plainObject(context) ? context : {};
   admissionRequired(plainObject(preflight) && plainObject(expected), "Native admission requires the parent-owned checker preflight receipt and its freshly observed expected identities");
-  admissionRequired(typeof expected.readEvidence === "function", "The parent must supply its own evidence reader so every retained reference is read and hash-verified before admission");
+  admissionRequired(typeof expected.readEvidence === "function" && typeof expected.observeIdentities === "function", "The parent must supply its own evidence reader and identity observer so every retained reference and digest is read again before admission");
   admissionRequired(exactKeys(expected.identities, identityNames) && identityNames.every(name => hashString(expected.identities[name])), "Expected checker identities must be exactly the four lowercase 64-hex source, runtime, launcher and controller digests");
-  // A declared identity set is a snapshot. When the parent supplies its observer, the digests are read again here so
-  // a source, controller, runtime or launcher that changed after binding refuses at the next boundary.
-  const observed = typeof expected.observeIdentities === "function" ? expected.observeIdentities() : expected.identities;
+  // A declared identity set is only a snapshot, so the digests are always observed again here: a source, controller,
+  // runtime or launcher that changed after binding refuses at the next boundary even when its evidence is intact.
+  const observed = expected.observeIdentities();
   admissionRequired(exactKeys(observed, identityNames) && identityNames.every(name => hashString(observed[name])), "Freshly observed checker identities must be exactly the four lowercase 64-hex digests");
   admissionRequired(identityNames.every(name => observed[name] === expected.identities[name]), "The freshly observed identities differ from the parent's declared expected identities");
   admissionRequired(preflight.schemaVersion === 1 && preflight.claimScope === "behavioral_outcome", "Only a schema-1 behavioral-outcome preflight is admissible; a widened claim scope is not native authenticity");
