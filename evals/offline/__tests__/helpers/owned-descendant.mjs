@@ -19,10 +19,10 @@ export function processIdentity(pid) {
 }
 
 // Test fixtures that intentionally create a detached descendant must own it. The creating parent records the exact PID
-// *and* that process's start-time identity at creation. Teardown reconciles against that exact identity, prefers a
-// cooperative stop that needs no signal at all, signals only the exact recorded PID as a last resort, and then
-// observes bounded retirement. Ownership is never inferred from a process name; a recycled PID is never signalled;
-// an unreadable observation or an unproved retirement fails the teardown instead of being assumed gone.
+// *and* that process's start-time identity at creation. Teardown reconciles against that exact identity and retires the
+// descendant cooperatively — a stop marker it watches for, with its own self-expiry backstop behind that. No numeric
+// PID is ever signalled, so no identity-check-then-signal race exists at all. Ownership is never inferred from a
+// process name; an unreadable observation or an unproved retirement fails the teardown instead of being assumed gone.
 export function ownedDescendant(root, name, { stdio, lifetimeMs = 5000, retirementMs = 3000, ignoreStop = false } = {}) {
   const identity = path.join(root, `${name}-descendant.json`);
   const stop = path.join(root, `${name}-descendant.stop`);
@@ -69,44 +69,33 @@ export function ownedDescendant(root, name, { stdio, lifetimeMs = 5000, retireme
       return outcome;
     }
     const started = Date.now();
+    // A tagged settle: retirement is either the recorded process disappearing or its PID belonging to something else.
     const settle = budgetMs => {
-      for (let waited = 0; waited < budgetMs; waited += 50) {
+      for (let waited = 0; waited <= budgetMs; waited += 50) {
         const seen = observe();
-        if (seen.absent || seen.started !== outcome.recordedIdentity) return true;
+        if (seen.absent) return "absent";
+        if (seen.started !== outcome.recordedIdentity) return "replaced";
         pause(50);
       }
-      return false;
+      return null;
     };
-    // Cooperative shutdown first: the descendant watches for its own stop marker, so the ordinary path signals nothing
-    // and cannot race a recycled PID at all.
-    fs.writeFileSync(stop, `${Date.now()}\n`);
-    if (settle(retirementMs)) {
-      outcome.state = "retired-cooperatively";
+    const finish = (state, reason) => {
+      outcome.state = reason === "replaced" ? "pid-reused" : state;
       outcome.retirementObservedMs = Date.now() - started;
       fs.rmSync(stop, { force: true });
       write();
       return outcome;
-    }
-    for (const signal of ["SIGTERM", "SIGKILL"]) {
-      // Re-verify immediately before signalling, and detect a PID recycled inside that window rather than reporting success.
-      const before = observe();
-      if (before.absent || before.started !== outcome.recordedIdentity) break;
-      try { process.kill(recorded.pid, signal); outcome.signals.push(signal); } catch { /* raced its own exit; settled below */ }
-      if (settle(retirementMs / 2)) {
-        const after = processIdentity(recorded.pid);
-        if (!after.absent && after.started !== outcome.recordedIdentity) {
-          outcome.state = "pid-recycled-during-signal";
-          fail(`Owned descendant ${name} (pid ${recorded.pid}) had its PID recycled while being signalled`);
-        }
-        outcome.state = "retired-after-signal";
-        outcome.retirementObservedMs = Date.now() - started;
-        fs.rmSync(stop, { force: true });
-        write();
-        return outcome;
-      }
-    }
+    };
+    // Cooperative shutdown only: the descendant watches for its own stop marker and expires on its own backstop.
+    // This helper never signals a numeric PID, so it can never race a recycled PID into signalling an unrelated
+    // process. A descendant that retires by neither route fails the teardown instead of being assumed gone.
+    fs.writeFileSync(stop, `${Date.now()}\n`);
+    const cooperative = settle(retirementMs);
+    if (cooperative !== null) return finish("retired-cooperatively", cooperative);
+    const backstop = settle(Math.max(0, recorded.createdAt + lifetimeMs + 500 - Date.now()));
+    if (backstop !== null) return finish("retired-by-backstop", backstop);
     outcome.state = "retirement-unproved";
-    fail(`Owned descendant ${name} (pid ${recorded.pid}) could not be proved retired after ${outcome.signals.join(", ") || "cooperative stop"}`);
+    fail(`Owned descendant ${name} (pid ${recorded.pid}) retired by neither its stop marker nor its backstop; this helper never signals a numeric PID`);
   };
   return { source, identity, stop, reconcile };
 }

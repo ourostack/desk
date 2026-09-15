@@ -268,18 +268,26 @@ test("an unreadable process observation fails teardown instead of claiming retir
   assert.equal(processIdentity(recorded.pid).absent, true);
 });
 
-test("a descendant that ignores its stop marker is retired by exact-PID signal and observed", async () => {
-  const base = workRoot("owned-descendant-signal");
-  const descendant = ownedDescendant(base, "stubborn", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 60000, retirementMs: 600, ignoreStop: true });
+test("a descendant that ignores its stop marker retires on its backstop, never by signal", async () => {
+  const base = workRoot("owned-descendant-backstop");
+  const descendant = ownedDescendant(base, "stubborn", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 2500, retirementMs: 200, ignoreStop: true });
   await captureBoundedCommand({ ...options(descendant.source), cwd: base, limits: { maxStreamBytes: 64, timeoutMs: 5000, cleanupMs: 300 } });
   const recorded = JSON.parse(fs.readFileSync(descendant.identity, "utf8"));
   assert.equal(processIdentity(recorded.pid).started, recorded.started, "The descendant is alive under its recorded identity");
   const outcome = descendant.reconcile();
-  assert.equal(outcome.state, "retired-after-signal");
-  assert.deepEqual(outcome.signals, ["SIGTERM"]);
+  assert.equal(outcome.state, "retired-by-backstop", "Its own self-expiry, not a signal, retired it");
+  assert.deepEqual(outcome.signals, [], "No numeric PID was ever signalled, so no signal could race a recycled PID");
   assert.equal(outcome.identity, recorded.pid);
-  assert.ok(Number.isInteger(outcome.retirementObservedMs));
   assert.equal(processIdentity(recorded.pid).absent, true, "The exact recorded process is gone");
+});
+
+test("a descendant that retires by neither route fails its teardown rather than being assumed gone", () => {
+  const base = workRoot("owned-descendant-unproved");
+  // This test runner is a live process that will never retire inside the budget and is emphatically not ours to end.
+  const impostor = ownedDescendant(base, "unproved", { stdio: ["ignore", "ignore", "ignore"], lifetimeMs: 0, retirementMs: 100 });
+  fs.writeFileSync(impostor.identity, JSON.stringify({ pid: process.pid, started: processIdentity(process.pid).started, createdAt: Date.now() - 10000 }));
+  assert.throws(() => impostor.reconcile(), /retired by neither its stop marker nor its backstop/u);
+  assert.equal(processIdentity(process.pid).absent, false, "An unretired process is reported, never signalled");
 });
 
 test("a live owned descendant retires cooperatively without any signal", async () => {
