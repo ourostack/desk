@@ -23,9 +23,11 @@ The destination is exactly one file: `_meta/preview-feedback.md` in the particip
 
 ### Every entry carries a stable ID
 
-An entry is named `pf-YYYYMMDD-<alias>-NN`: the date it was recorded, the participant's alias, and a two-digit sequence. Before writing, reread `_meta/preview-feedback.md` and take `NN` as the smallest two-digit number from `01` upward that no entry already uses for that same date and alias. Two things one person offers on the same day are therefore `pf-20260914-ari-01` and `pf-20260914-ari-02`, and each can be named on its own.
+An entry is named `pf-YYYYMMDD-<alias>-NN`: the date it was recorded, the participant's alias, and a sequence of at least two digits. Before writing, reread `_meta/preview-feedback.md` and take `NN` as the smallest number from `01` upward that no entry already uses for that same date and alias, written with at least two digits — `01` through `99`, then `100`, `101` and onward. The sequence widens; it never wraps, and it never runs out. Two things one person offers on the same day are therefore `pf-20260914-ari-01` and `pf-20260914-ari-02`, and each can be named on its own.
 
 The ID goes in the entry's heading, and it never changes. A correction keeps it; a withdrawal keeps it. Do not renumber, reuse, or tidy IDs — not even the ID of a withdrawn entry — because the sequence records what was written, not what survives.
+
+Reread once more immediately before appending, after the participant has confirmed the words. If the file changed since the read that chose `NN`, or if that ID is now taken, recompute the sequence and show the participant the final entry again before writing. Another session, another checkout, or a merge can land an entry between the read and the write, and two entries sharing an ID would defeat the targeting this ID exists for. If the desk offers a lock or an atomic compare-and-write for this file, use it; the reread is the floor, not a substitute.
 
 One entry is that heading, the participant's text as written, and an optional `Preview: <installed Desk version>` line recording the installed build (do not invent a version):
 
@@ -47,7 +49,7 @@ The agent asked for go at the right point, but repeated the same design choice t
 
 A correction or a withdrawal needs the exact entry ID **and** the participant's confirmation of the excerpt currently in the file. A date, a heading, "the last one", or the replacement wording alone does not identify an entry, and two entries from the same person on the same day are exactly the case where guessing amends the wrong attributed statement.
 
-Refuse rather than guess. If the request carries no ID, if the ID matches nothing in the file, or if it matches more than one entry — a hand-edited file can contain duplicates — stop and show the participant the IDs that exist with their current excerpts. Do not amend the nearest match, do not renumber to fix a duplicate, and do not write a new entry to stand in for the one that was meant. If the text under the resolved ID is not what they expect, reconcile with them before writing: their own earlier correction, or someone else's edit, is not yours to overwrite silently.
+Refuse rather than guess. If the request carries no ID, if the ID matches nothing in the file, or if it matches more than one entry — a hand edit or a merge can still produce duplicates — stop and show the participant the IDs that exist with their current excerpts. Do not amend the nearest match, do not write a new entry to stand in for the one that was meant, and do not renumber an entry to resolve a duplicate: an ID is a record, and only the participant may change their own. Say plainly that the duplicate blocks amendment until they decide which entry keeps the ID. If the text under the resolved ID is not what they expect, reconcile with them before writing: their own earlier correction, or someone else's edit, is not yours to overwrite silently.
 
 Before any write, show the exact excerpt and the exact destination path, say who can read it and that a desk is a Git checkout whose history keeps what was pushed, and get visible confirmation for that pair. A request to keep a note private, an earlier general work mandate, or "we should share this later" does not authorize publication.
 

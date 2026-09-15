@@ -506,10 +506,12 @@ contract("preview feedback entries are deterministically targetable in plain Mar
   const skill = text("skills/preview-feedback/SKILL.md");
   for (const required of [
     "`pf-YYYYMMDD-<alias>-NN`",
-    "smallest two-digit number",
+    "smallest number from `01` upward",
     "it never changes",
     "matches more than one entry",
     "Refuse rather than guess.",
+    "Reread once more immediately before appending",
+    "then `100`, `101` and onward",
   ]) {
     assert.ok(skill.includes(required), `missing preview-feedback identity rule: ${required}`);
   }
@@ -519,7 +521,7 @@ contract("preview feedback entries are deterministically targetable in plain Mar
   // Two entries, one alias, one date — the case that made a bare
   // date/alias heading ambiguous. Each must be reachable on its own, and an
   // amendment must keep the ID it was reached by.
-  const entryHeading = /^## (pf-\d{8}-[a-z0-9][a-z0-9-]*-\d{2}) — (\d{4}-\d{2}-\d{2}) — ([a-z0-9][a-z0-9-]*)$/mu;
+  const entryHeading = /^## (pf-\d{8}-[a-z0-9][a-z0-9-]*-\d{2,}) — (\d{4}-\d{2}-\d{2}) — ([a-z0-9][a-z0-9-]*)$/mu;
   const file = [
     "# Preview feedback",
     "",
@@ -547,20 +549,34 @@ contract("preview feedback entries are deterministically targetable in plain Mar
 
   // The documented sequence rule: smallest unused two-digit number for that
   // date and alias, read back from the file rather than counted from memory.
+  const sequenceOf = (id) => id.slice(id.lastIndexOf("-") + 1);
   const nextSequence = (date, alias, blocks) => {
     const used = new Set(blocks
       .map((block) => block.match(entryHeading))
       .filter((match) => match && match[2] === date && match[3] === alias)
-      .map((match) => match[1].slice(-2)));
-    for (let candidate = 1; candidate < 100; candidate += 1) {
+      .map((match) => sequenceOf(match[1])));
+    for (let candidate = 1; ; candidate += 1) {
       const padded = String(candidate).padStart(2, "0");
       if (!used.has(padded)) return padded;
     }
-    throw new Error("no free sequence");
   };
   assert.equal(nextSequence("2026-09-14", "ari", entries), "03");
   assert.equal(nextSequence("2026-09-15", "ari", entries), "01", "a new date restarts the sequence");
   assert.equal(nextSequence("2026-09-14", "rowan", entries), "01", "a different alias restarts the sequence");
+
+  // The sequence widens past two digits instead of running out, so a
+  // hundredth entry on one day still has an ID the convention allows.
+  const saturated = Array.from({ length: 99 }, (_, index) => {
+    const padded = String(index + 1).padStart(2, "0");
+    return `## pf-20260914-ari-${padded} — 2026-09-14 — ari\n\nEntry ${padded}.\n`;
+  });
+  assert.equal(saturated.every((block) => entryHeading.test(block)), true);
+  assert.equal(nextSequence("2026-09-14", "ari", saturated), "100");
+  const hundredth = `## pf-20260914-ari-100 — 2026-09-14 — ari\n\nThe hundredth thing said that day.\n`;
+  assert.equal(hundredth.match(entryHeading)[1], "pf-20260914-ari-100");
+  assert.equal(select("pf-20260914-ari-100", [...saturated, hundredth]).length, 1);
+  assert.equal(select("pf-20260914-ari-10", [...saturated, hundredth]).length, 1, "a widened ID must not be confused with a shorter one");
+  assert.equal(nextSequence("2026-09-14", "ari", [...saturated, hundredth]), "101");
 
   // Correcting the first and withdrawing the second leaves both IDs intact and
   // still individually addressable.
