@@ -11,11 +11,22 @@ function sourceGit(root, argv, encoding = "utf8", timeoutMs = 10000) {
     throw error;
   }
   requireCondition(metadata.isDirectory() && !["commondir", "objects/info/alternates", "info/grafts"].some(name => fs.existsSync(path.join(root, ".git", name))), "CHECK_SOURCE_IDENTITY_UNAVAILABLE", "The fixture must own its Git metadata and object store without redirects");
-  return execFileSync("git", ["--no-optional-locks", "--no-replace-objects", "--git-dir", path.join(root, ".git"), "--work-tree", root, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...argv], {
-    encoding, timeout: timeoutMs, maxBuffer: 16777216,
-    env: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "", GIT_TERMINAL_PROMPT: "0" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  try {
+    return execFileSync("git", ["--no-optional-locks", "--no-replace-objects", "--git-dir", path.join(root, ".git"), "--work-tree", root, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...argv], {
+      encoding, timeout: timeoutMs, maxBuffer: 16777216,
+      env: { PATH: process.env.PATH, HOME: root, LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "", GIT_TERMINAL_PROMPT: "0" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const diagnostic = String(error.stderr ?? "");
+    const dataInvalid = /not a git repository|bad config line|index file (?:smaller than expected|corrupt)|bad signature|bad object|not a (?:tree|commit) object|not a valid object name|unable to read [a-f0-9]{40}|unknown revision/i.test(diagnostic);
+    const hostFault = /input\/output error|i\/o error|permission denied|operation not permitted|out of memory|cannot allocate memory|too many open files|resource temporarily unavailable|no space left|read-only file system/i.test(diagnostic);
+    // Exit status alone cannot distinguish bad repository bytes from an actual host/tool failure.
+    if (error.code === undefined && error.status === 128 && error.signal === null && dataInvalid && !hostFault) {
+      throw Object.assign(new Error("The delivered Git metadata or objects are invalid"), { code: "CHECK_SOURCE_IDENTITY_UNAVAILABLE", cause: error });
+    }
+    throw error;
+  }
 }
 
 export function readSourceState({ root, files = listRegularFiles(root), baseCommit, retain }) {

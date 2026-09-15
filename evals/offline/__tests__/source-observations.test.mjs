@@ -299,6 +299,28 @@ test("T14-fix I1 the source observer retains structural failure without converti
   assert.throws(() => valid.observe("repair_and_commit", { retain: () => { throw Object.assign(new Error("retention I/O failure"), { code: "EIO" }); } }), { code: "EIO" });
 });
 
+test("T14-fix I1 nonzero Git host diagnostics and spawn failures remain infrastructure faults", async () => {
+  const f = await fixtureFor("discussion-then-go");
+  const tools = path.join(f.root, "host-tools");
+  fs.mkdirSync(tools);
+  const program = `import {readSourceState} from ${JSON.stringify(new URL("../source-observations.mjs", import.meta.url).href)};try{readSourceState({root:${JSON.stringify(f.actor)},retain:()=>({})});}catch(error){process.stdout.write(JSON.stringify({code:error.code??null,status:error.status??null}));}`;
+  for (const diagnostic of [
+    `fatal: unable to read ${"a".repeat(40)}\nerror: Input/output error`,
+    "fatal: bad object HEAD\nerror: Permission denied",
+    "fatal: out of memory",
+    "fatal: unknown internal failure",
+  ]) {
+    fs.writeFileSync(path.join(tools, "git"), `#!/bin/sh\nprintf '%s\\n' '${diagnostic}' >&2\nexit 128\n`, { mode: 0o700 });
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", program], { env: { ...process.env, PATH: tools }, encoding: "utf8", timeout: 10000, maxBuffer: 8192 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { code: null, status: 128 });
+  }
+  fs.unlinkSync(path.join(tools, "git"));
+  const missing = spawnSync(process.execPath, ["--input-type=module", "-e", program], { env: { ...process.env, PATH: tools }, encoding: "utf8", timeout: 10000, maxBuffer: 8192 });
+  assert.equal(missing.status, 0, missing.stderr);
+  assert.equal(JSON.parse(missing.stdout).code, "ENOENT");
+});
+
 test("T14 source readback must not execute candidate Git clean filters in the parent", async () => {
   const f = await fixtureFor("discussion-then-go");
   const marker = path.join(f.root, "parent-filter-ran");

@@ -119,7 +119,7 @@ test("T14 maintained CI uses one public config, the actual route and both exit p
   }
 });
 
-for (const mode of ["deleted-git", "gitfile", "unresolved-index"]) test(`T14-fix I1 candidate ${mode} remains an observed failure after closed capture`, async () => {
+for (const mode of ["deleted-git", "gitfile", "unresolved-index", "missing-head", "corrupt-index", "missing-object", "bad-config", "noncommit-head"]) test(`T14-fix I1 candidate ${mode} remains an observed failure after closed capture`, async () => {
   const f = await fixture("retry-policy-v1");
   if (mode === "deleted-git") fs.rmSync(path.join(f.roots.actor, ".git"), { recursive: true });
   if (mode === "gitfile") {
@@ -131,6 +131,14 @@ for (const mode of ["deleted-git", "gitfile", "unresolved-index"]) test(`T14-fix
     const result = spawnSync("git", ["-C", f.roots.actor, "update-index", "--index-info"], { input: `0 ${"0".repeat(40)}\tsrc/policy.mjs\n100644 ${blob} 1\tsrc/policy.mjs\n`, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
   }
+  if (mode === "missing-head") fs.unlinkSync(path.join(f.roots.actor, ".git/HEAD"));
+  if (mode === "corrupt-index") fs.writeFileSync(path.join(f.roots.actor, ".git/index"), "corrupt");
+  if (mode === "missing-object") {
+    const blob = command(f, "git", ["rev-parse", "HEAD:src/policy.mjs"]);
+    fs.unlinkSync(path.join(f.roots.actor, ".git/objects", blob.slice(0, 2), blob.slice(2)));
+  }
+  if (mode === "bad-config") fs.writeFileSync(path.join(f.roots.actor, ".git/config"), "[broken");
+  if (mode === "noncommit-head") fs.writeFileSync(path.join(f.roots.actor, ".git/HEAD"), command(f, "git", ["rev-parse", "HEAD:src/policy.mjs"]) + "\n");
   const result = await executeHeldOutCheck({ ...f.options, checkId: "ordinary-request-delivers" });
   assert.equal(result.observation.sourceFailure.code, "CHECK_SOURCE_IDENTITY_UNAVAILABLE");
   assert.equal(result.observation.availability, "available");
