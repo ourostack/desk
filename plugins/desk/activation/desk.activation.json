@@ -145,7 +145,7 @@
       "host": "ouroboros-autonomous-agent",
       "status": "supported",
       "dependency_resolution": "flattened",
-      "fallback_behavior": "bundle Desk + Superpowers + Plain Language + Ponytail into the agent bundle and bind $DESK to ~/AgentBundles/<agent>.ouro/desk/; alpha source packaging is not native runtime qualification",
+      "fallback_behavior": "bundle Desk + Superpowers + Plain Language into the agent bundle and bind $DESK to ~/AgentBundles/<agent>.ouro/desk/; alpha source packaging is not native runtime qualification",
       "capabilities": [
         "agents",
         "skills",
@@ -203,11 +203,6 @@
         "plain-language": {
           "path": "../plain-language",
           "version": "0.2.1",
-          "resolution": "native"
-        },
-        "ponytail-upstream": {
-          "path": "../ponytail-upstream",
-          "version": "4.9.0",
           "resolution": "native"
         }
       },

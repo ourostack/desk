@@ -162,7 +162,6 @@ test("Ouroboros/autonomous-agent packaging has a flattened bundle disposition", 
     "plugins/desk/plugin.json",
     "plugins/superpowers/plugin.json",
     "plugins/plain-language/plugin.json",
-    "plugins/ponytail-upstream/plugin.json",
   ], "Ouroboros evidence source_paths")
   assertIncludesAll(evidenceRow.evidence_command_or_doc, [
     unitTestCommand,

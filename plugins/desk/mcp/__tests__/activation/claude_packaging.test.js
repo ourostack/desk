@@ -18,7 +18,6 @@ const expectedClaudeSourcePaths = [
   `plugins/desk/${claudeNativeWorkerSource}`,
   "plugins/superpowers/.claude-plugin/plugin.json",
   "plugins/plain-language/.claude-plugin/plugin.json",
-  "plugins/ponytail-upstream/.claude-plugin/plugin.json",
 ]
 const supportedDispositionStatuses = new Set([
   "supported",

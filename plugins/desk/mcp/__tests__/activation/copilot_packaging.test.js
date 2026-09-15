@@ -22,7 +22,6 @@ const expectedCopilotSourcePaths = [
   "plugins/superpowers/plugin.json",
   "plugins/superpowers/hooks/copilot-hooks.json",
   "plugins/plain-language/plugin.json",
-  "plugins/ponytail-upstream/plugin.json",
   copilotBundlePath,
 ]
 
@@ -318,7 +317,7 @@ test("Copilot root evidence and support matrix record flattened packaging as gen
   assert.deepEqual(evidenceRow.unsupported_primitives, ["transitive-dependency-resolution"])
   assert.equal(
     evidenceRow.fallback_behavior,
-    "load the generated flattened Desk, Superpowers, Plain Language, and Ponytail bundle metadata",
+    "load the generated flattened Desk, Superpowers and Plain Language bundle metadata",
   )
   assert.deepEqual(supportMatrixRow, evidenceRow)
 })
