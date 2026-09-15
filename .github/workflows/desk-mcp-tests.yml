@@ -390,6 +390,28 @@ jobs:
             console.log(`${target} archive sha256 ${manifest.archive.sha256}`);
           '
 
+      - name: Load the packed native code under this runtime
+        shell: bash
+        working-directory: plugins/desk/mcp
+        # Static signatures cannot prove ABI compatibility, so the lane that produced the pack also loads it:
+        # the archive is unpacked into a scratch directory and its own native SQLite addon and vector extension
+        # are opened under the exact Node runtime the pack claims.
+        run: |
+          rm -rf "$RUNNER_TEMP/desk-pack-smoke"
+          mkdir -p "$RUNNER_TEMP/desk-pack-smoke"
+          tar -xzf "$DESK_PACK_DIR/runtime-deps.tgz" -C "$RUNNER_TEMP/desk-pack-smoke"
+          node -e '
+            const path = require("node:path");
+            const root = path.join(process.env.RUNNER_TEMP, "desk-pack-smoke", "node_modules");
+            const Database = require(path.join(root, "better-sqlite3"));
+            const sqliteVec = require(path.join(root, "sqlite-vec"));
+            const db = new Database(":memory:");
+            sqliteVec.load(db);
+            const { version } = db.prepare("select vec_version() as version").get();
+            db.close();
+            console.log(`packed native code loaded on ${process.platform}-${process.arch} node-${process.versions.modules}: sqlite-vec ${version}`);
+          '
+
       - name: Retain the verified native runtime dependency pack
         uses: actions/upload-artifact@v4
         with:

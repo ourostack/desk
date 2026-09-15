@@ -925,13 +925,50 @@ test("a hosted native lane produces every host-bound runtime pack target without
   }
 })
 
-// A pack's whole value is that it carries its own platform's real native code. These signatures are the
-// cheapest way to prove a committed pack was not produced by relabelling another host's output.
-const nativeBinarySignatures = Object.freeze({
-  linux: { name: "ELF", bytes: [0x7f, 0x45, 0x4c, 0x46] },
-  win32: { name: "PE/COFF", bytes: [0x4d, 0x5a] },
-  darwin: { name: "Mach-O", bytes: [0xcf, 0xfa, 0xed, 0xfe] },
+// A pack's whole value is that it carries its own platform's real native code, so a committed pack must be
+// readable as a binary of the exact operating system AND machine architecture it claims. Reading the format's
+// own machine field — not just its leading magic — is what stops a relabelled or wrong-architecture payload.
+const nativeArchitectureFields = Object.freeze({
+  linux: Object.freeze({ x64: 0x3e, arm64: 0xb7 }),
+  win32: Object.freeze({ x64: 0x8664, arm64: 0xaa64 }),
+  darwin: Object.freeze({ x64: 0x01000007, arm64: 0x0100000c }),
 })
+
+function describeNativeBinary(bytes) {
+  if (bytes.length >= 20 && bytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
+    return { os: "linux", format: "ELF", machine: bytes.readUInt16LE(18) }
+  }
+  if (bytes.length >= 8 && bytes.subarray(0, 4).equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe]))) {
+    return { os: "darwin", format: "Mach-O", machine: bytes.readUInt32LE(4) }
+  }
+  if (bytes.length >= 0x40 && bytes.subarray(0, 2).equals(Buffer.from([0x4d, 0x5a]))) {
+    const headerOffset = bytes.readUInt32LE(0x3c)
+    if (bytes.length >= headerOffset + 6 && bytes.subarray(headerOffset, headerOffset + 4).equals(Buffer.from([0x50, 0x45, 0x00, 0x00]))) {
+      return { os: "win32", format: "PE/COFF", machine: bytes.readUInt16LE(headerOffset + 4) }
+    }
+  }
+  return null
+}
+
+function assertNativeBinaryMatchesTarget({ bytes, entryName, platform }) {
+  const described = describeNativeBinary(bytes)
+  assert.ok(described, `${entryName} is not a recognizable native binary`)
+  assert.equal(
+    described.os,
+    platform.os,
+    `${entryName} is a ${described.format} binary, which does not belong to a ${platform.os} pack`,
+  )
+  const expectedMachine = nativeArchitectureFields[platform.os]?.[platform.arch]
+  assert.ok(
+    expectedMachine !== undefined,
+    `${entryName} declares an unsupported ${platform.os}/${platform.arch} combination`,
+  )
+  assert.equal(
+    described.machine,
+    expectedMachine,
+    `${entryName} is built for ${described.format} machine 0x${described.machine.toString(16)}, not ${platform.arch}`,
+  )
+}
 
 function archiveEntryBytes(archivePath, entryName) {
   const { gunzipSync } = require("node:zlib")
@@ -978,24 +1015,20 @@ test("every committed runtime pack carries its own platform's native binaries", 
       `${target.id} archive bytes must match the support matrix hash`,
     )
 
-    const addon = archiveEntryBytes(archivePath, "node_modules/better-sqlite3/build/Release/better_sqlite3.node")
-    assert.ok(addon && addon.length > 0, `${target.id} pack must ship the native SQLite addon`)
-    const signature = nativeBinarySignatures[manifest.platform.os]
-    assert.ok(signature, `${target.id} declares an unknown platform ${manifest.platform.os}`)
-    assert.deepEqual(
-      [...addon.subarray(0, signature.bytes.length)],
-      signature.bytes,
-      `${target.id} must carry a ${signature.name} addon, not another host's relabelled output`,
-    )
-
     const vectorExtension = {
       linux: "node_modules/sqlite-vec-linux-x64/vec0.so",
       win32: "node_modules/sqlite-vec-windows-x64/vec0.dll",
       darwin: "node_modules/sqlite-vec-darwin-arm64/vec0.dylib",
     }[manifest.platform.os]
-    assert.ok(
-      archiveEntryBytes(archivePath, vectorExtension),
-      `${target.id} must ship ${vectorExtension}, the vector extension built for its own platform`,
-    )
+    assert.ok(vectorExtension, `${target.id} declares an unknown platform ${manifest.platform.os}`)
+
+    for (const entryName of [
+      "node_modules/better-sqlite3/build/Release/better_sqlite3.node",
+      vectorExtension,
+    ]) {
+      const bytes = archiveEntryBytes(archivePath, entryName)
+      assert.ok(bytes && bytes.length > 0, `${target.id} pack must ship ${entryName}`)
+      assertNativeBinaryMatchesTarget({ bytes, entryName: `${target.id} ${entryName}`, platform: manifest.platform })
+    }
   }
 })
