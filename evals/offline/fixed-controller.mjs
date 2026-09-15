@@ -381,19 +381,25 @@ export async function runFixedController({ prepared, nativeInputs, checker = nat
       }
       // Awaiting the case yields to cancellation before the synchronous publication boundary.
       if (caseCancellation.get(result)?.some(signal => signal?.aborted)) result = { ...result, status: "cancelled", grade: null, counts: { ...result.counts, admittedGrades: 0 } };
+      let admitted = true;
+      // This catch covers the admission boundary only. Publication I/O keeps its own failure envelope and the outer
+      // handler below, so a failed commit is never reported through a writer that the publisher has already sealed.
       try {
         // Output finalization is the last use boundary: a preflight that went stale during the attempt cannot publish.
         admitChecker(admission);
+      } catch (error) {
+        // Only the admitted grade is withdrawn. The already observed report accounting and the safe fault code stay
+        // durable, the receipt and commit marker stay null, and the campaign stops before the next cell.
+        admitted = false;
+        result = { ...result, status: "unavailable", grade: null, counts: { ...result.counts, admittedGrades: 0 }, failure: safeFailure(error) };
+        attempt.status = result.status;
+        output.writeArtifact("controller-failure.json", jsonBytes({ ...result.failure, counts: result.counts }));
+      }
+      if (admitted) {
         const committed = output.commit({ ...result, schemaVersion: 1, runId: attemptId, caseId: cell.caseId });
         attempt.status = result.status;
         attempt.receipt = { path: `${attemptId}/receipt.json`, sha256: committed.receiptSha256 };
         attempt.commitMarker = { path: `${attemptId}/COMMITTED.json`, sha256: readRegular(outputRoot, "COMMITTED.json").sha256 };
-      } catch (error) {
-        // Only the admitted grade is withdrawn. The already observed report accounting and the safe fault code stay
-        // durable, the receipt and commit marker stay null, and the campaign stops before the next cell.
-        result = { ...result, status: "unavailable", grade: null, counts: { ...result.counts, admittedGrades: 0 }, failure: safeFailure(error) };
-        attempt.status = result.status;
-        output.writeArtifact("controller-failure.json", jsonBytes({ ...result.failure, counts: result.counts }));
       }
     } catch (error) {
       result = { ...unavailable(), failure: safeFailure(error) };
