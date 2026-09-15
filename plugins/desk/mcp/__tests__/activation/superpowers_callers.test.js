@@ -335,3 +335,42 @@ test("work-orchestration invokes only pristine, pinned Superpowers skills for di
     )
   }
 })
+
+// T02-I01 fix: `independent-review/SKILL.md` is an independently callable entrypoint that now owns its own
+// exact-commit acceptance gate. The tests above only bind `work-orchestration/SKILL.md`; these tests read
+// `independent-review/SKILL.md` through the same existing normalized reader and protect that standalone
+// paragraph so its deletion or weakening is caught here, not only through the orchestration cross-reference.
+const independentReview = read("plugins/desk/skills/independent-review/SKILL.md")
+
+test("independent-review requires a terminal exact-commit source=post_commit disposition from the same implementation owner", () => {
+  assert.ok(independentReview.includes("source=post_commit"), "must require the post_commit source")
+  assert.ok(independentReview.includes("terminal exact-commit disposition"), "must require a terminal exact-commit disposition")
+  assert.ok(independentReview.includes("same implementation owner"), "must name the same implementation owner")
+})
+
+test("independent-review rejects promised, in-flight, stale-SHA or duplicate results as acceptance substitutes", () => {
+  assert.ok(
+    independentReview.includes("a promised, in-flight, stale-SHA or duplicate result never substitutes for it"),
+    "must explicitly reject every listed substitute for the terminal exact-commit disposition",
+  )
+})
+
+test("independent-review prohibits roborev fix/refine and any second or parallel remediation loop", () => {
+  assert.ok(independentReview.includes("`roborev fix`"), "must name roborev fix")
+  assert.ok(independentReview.includes("`roborev refine`"), "must name roborev refine")
+  assert.ok(
+    independentReview.includes("Never run `roborev fix` or `roborev refine` as a parallel remediation path"),
+    "must prohibit roborev fix/refine as a parallel remediation path",
+  )
+  assert.ok(
+    independentReview.includes("never open a second fix loop beside the same owner's own loop"),
+    "must prohibit a second fix loop beside the same owner's own loop",
+  )
+})
+
+test("independent-review states that work-orchestration gates ready-node acceptance on exactly this disposition", () => {
+  assert.ok(
+    independentReview.includes("`desk:work-orchestration` gates a ready node's acceptance on exactly this disposition"),
+    "must state the exact cross-reference from independent-review to work-orchestration's acceptance gate",
+  )
+})
