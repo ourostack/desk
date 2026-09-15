@@ -99,23 +99,19 @@ function namespaceIdentity(pid) {
 
 function namespaceOccupants(identity) {
   const occupants = [];
+  // Every process whose namespace cannot be read is counted against closure. Ownership, credentials and command
+  // names are not evidence of non-membership — a descendant can change credentials or become non-dumpable — and this
+  // boundary has no run-owned lifecycle primitive, so an unobservable process is conservatively unresolved.
   let unreadable = 0;
-  let foreignUnreadable = 0;
   let listed = [];
   try { listed = fs.readdirSync("/proc").filter(name => /^\d+$/u.test(name)).slice(0, 16384); }
   catch { unreadable += 1; }
   for (const name of listed) {
     const observed = namespaceIdentity(name);
     if (observed.identity === identity) occupants.push(Number(name));
-    if (!observed.unreadable) continue;
-    // A namespace this run created can only hold this parent's own descendants, so an entry owned by another user
-    // cannot be one of its members and its unreadability does not bear on this run's closure.
-    let owned = false;
-    try { owned = fs.statSync(`/proc/${name}`).uid === process.getuid(); } catch { owned = false; }
-    if (owned) unreadable += 1;
-    else foreignUnreadable += 1;
+    unreadable += Number(observed.unreadable);
   }
-  return { occupants, unreadable, foreignUnreadable };
+  return { occupants, unreadable };
 }
 
 // The launcher's init owns the namespace's lifetime, so an observed retirement is the parent's lifetime fact; where
@@ -124,7 +120,7 @@ async function reconcileNamespaceLifetime(observed, execution) {
   const initPid = execution.status === "observed" ? execution.childPid : observed.initPid;
   const retirement = initPid === null ? null : namespaceIdentity(initPid);
   const initRetired = retirement === null || retirement.unreadable ? null : retirement.gone;
-  let survey = { occupants: [], unreadable: 0, foreignUnreadable: 0 };
+  let survey = { occupants: [], unreadable: 0 };
   if (observed.identity !== null) {
     survey = namespaceOccupants(observed.identity);
     for (let attempt = 0; attempt < 4 && survey.occupants.length > 0; attempt += 1) {
@@ -141,7 +137,6 @@ async function reconcileNamespaceLifetime(observed, execution) {
     namespaceIdentityUnreadable: observed.unreadable,
     remainingOccupants: survey.occupants,
     unreadable: survey.unreadable,
-    foreignUnreadable: survey.foreignUnreadable,
     reconciled: initRetired === true && observed.unreadable === false && survey.occupants.length === 0 && survey.unreadable === 0,
   };
 }
