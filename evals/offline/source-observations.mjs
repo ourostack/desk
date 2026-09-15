@@ -19,7 +19,7 @@ function sourceGit(root, argv, encoding = "utf8", timeoutMs = 10000) {
     });
   } catch (error) {
     const diagnostic = String(error.stderr ?? "");
-    const dataInvalid = /not a git repository|bad config line|index file (?:smaller than expected|corrupt)|bad signature|bad object|not a (?:tree|commit) object|not a valid object name|unable to read [a-f0-9]{40}|unknown revision/i.test(diagnostic);
+    const dataInvalid = /not a git repository|bad config line|index file (?:smaller than expected|corrupt)|bad signature|bad object|not a (?:tree|commit) object|not a valid object name|unable to read (?:tree \()?[a-f0-9]{40}|unknown revision|(?:loose|packed) object .* is corrupt|object file .* is empty|inflate: data stream error/i.test(diagnostic);
     const hostFault = /input\/output error|i\/o error|permission denied|operation not permitted|out of memory|cannot allocate memory|too many open files|resource temporarily unavailable|no space left|read-only file system/i.test(diagnostic);
     // Exit status alone cannot distinguish bad repository bytes from an actual host/tool failure.
     if (error.code === undefined && error.status === 128 && error.signal === null && dataInvalid && !hostFault) {

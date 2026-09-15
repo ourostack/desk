@@ -119,7 +119,7 @@ test("T14 maintained CI uses one public config, the actual route and both exit p
   }
 });
 
-for (const mode of ["deleted-git", "gitfile", "unresolved-index", "missing-head", "corrupt-index", "missing-object", "bad-config", "noncommit-head"]) test(`T14-fix I1 candidate ${mode} remains an observed failure after closed capture`, async () => {
+for (const mode of ["deleted-git", "gitfile", "unresolved-index", "missing-head", "corrupt-index", "missing-object", "bad-config", "noncommit-head", "empty-commit", "corrupt-commit", "empty-tree", "corrupt-tree"]) test(`T14-fix I1 candidate ${mode} remains an observed failure after closed capture`, async () => {
   const f = await fixture("retry-policy-v1");
   if (mode === "deleted-git") fs.rmSync(path.join(f.roots.actor, ".git"), { recursive: true });
   if (mode === "gitfile") {
@@ -139,6 +139,14 @@ for (const mode of ["deleted-git", "gitfile", "unresolved-index", "missing-head"
   }
   if (mode === "bad-config") fs.writeFileSync(path.join(f.roots.actor, ".git/config"), "[broken");
   if (mode === "noncommit-head") fs.writeFileSync(path.join(f.roots.actor, ".git/HEAD"), command(f, "git", ["rev-parse", "HEAD:src/policy.mjs"]) + "\n");
+  if (["empty-commit", "corrupt-commit", "empty-tree", "corrupt-tree"].includes(mode)) {
+    const object = command(f, "git", ["rev-parse", mode.endsWith("tree") ? "HEAD^{tree}" : "HEAD"]);
+    const filename = path.join(f.roots.actor, ".git/objects", object.slice(0, 2), object.slice(2));
+    const permissions = fs.statSync(filename).mode & 0o777;
+    fs.chmodSync(filename, 0o600);
+    fs.writeFileSync(filename, mode.startsWith("empty") ? "" : "invalid compressed object");
+    fs.chmodSync(filename, permissions);
+  }
   const result = await executeHeldOutCheck({ ...f.options, checkId: "ordinary-request-delivers" });
   assert.equal(result.observation.sourceFailure.code, "CHECK_SOURCE_IDENTITY_UNAVAILABLE");
   assert.equal(result.observation.availability, "available");

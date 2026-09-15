@@ -306,6 +306,7 @@ test("T14-fix I1 nonzero Git host diagnostics and spawn failures remain infrastr
   const program = `import {readSourceState} from ${JSON.stringify(new URL("../source-observations.mjs", import.meta.url).href)};try{readSourceState({root:${JSON.stringify(f.actor)},retain:()=>({})});}catch(error){process.stdout.write(JSON.stringify({code:error.code??null,status:error.status??null}));}`;
   for (const diagnostic of [
     `fatal: unable to read ${"a".repeat(40)}\nerror: Input/output error`,
+    `fatal: loose object ${"a".repeat(40)} is corrupt\nerror: Input/output error`,
     "fatal: bad object HEAD\nerror: Permission denied",
     "fatal: out of memory",
     "fatal: unknown internal failure",
