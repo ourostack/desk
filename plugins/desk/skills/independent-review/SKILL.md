@@ -21,6 +21,8 @@ Give each finding a stable identity and a source reference. The implementation o
 
 One implementation owner handles all remediation and re-review findings. Fix accepted in-scope findings through the selected Superpowers method, preserving test-first discipline and the required changed-production coverage. Never run a parallel RoboRev fixer alongside a separate implementation loop.
 
+Acceptance requires a terminal exact-commit disposition with `source=post_commit` from that same implementation owner; a promised, in-flight, stale-SHA or duplicate result never substitutes for it. Never run `roborev fix` or `roborev refine` as a parallel remediation path, and never open a second fix loop beside the same owner's own loop. `desk:work-orchestration` gates a ready node's acceptance on exactly this disposition before it releases the node's reserved resources and recomputes descendants.
+
 Request re-review with fresh source/diff fingerprints and the disposition record after changes. Retain prior reports and failed runs; a newer source fingerprint does not rewrite their outcome. Close the review gate only when the required independent review accepts the actual current input and all required findings have valid dispositions. Review approval does not authorize publication, main promotion, profile changes or cleanup beyond the recorded mandate.
 
 ## Evidence boundary

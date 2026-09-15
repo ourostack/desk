@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { existsSync, readFileSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
 
 const repoRoot = new URL("../../../../../", import.meta.url)
@@ -255,3 +256,82 @@ for (const [retired, owner, requiredLimit] of [
     assert.ok(existsSync(new URL(`plugins/${plugin}/skills/${skill}/SKILL.md`, repoRoot)), `${owner} must be a shipped skill, not an invented entrypoint`)
   })
 }
+
+// T02: Desk's ready-set scheduling and continuous peer review contract.
+// This is a source contract witness over `work-orchestration/SKILL.md`, not proof that natural-language
+// instructions execute correctly at runtime — T24 supplies the actual dispatch/acceptance proof.
+const orchestration = read("plugins/desk/skills/work-orchestration/SKILL.md")
+
+test("work-orchestration's source contract names every required ready-set and review rule", () => {
+  const requiredRules = [
+    "all dependencies accepted",
+    "failure blocks only descendants",
+    "overlapping write sets",
+    "exclusive resources",
+    "missing conflict data",
+    "stable table order",
+    "source=post_commit",
+    "same Superpowers implementation owner",
+  ]
+  for (const rule of requiredRules) assert.ok(orchestration.includes(rule), rule)
+})
+
+test("work-orchestration ships the exact eight-step ready-set algorithm verbatim", () => {
+  const readySetAlgorithm = [
+    "1. Read the plan and progress; reject unknown dependencies and dependency cycles before dispatch.",
+    "2. Ready = pending nodes with all dependencies accepted.",
+    "3. Walk ready nodes in stable table order; reserve complete writes/resources before launching.",
+    "4. Dispatch every non-conflicting ready node through pristine Superpowers skills in its own worktree.",
+    "5. Missing conflict data or unavailable parallel execution serializes the same ready set.",
+    "6. A result is accepted only after spec/targeted proof and terminal exact-commit RoboRev disposition.",
+    "7. On failure, block only descendants; release verified resources and recompute immediately.",
+    "8. A candidate-changing repair invalidates affected descendants and re-enters at the same owner.",
+  ].join("\n")
+  assert.ok(orchestration.includes(readySetAlgorithm), "the exact eight-step algorithm must appear verbatim")
+})
+
+test("work-orchestration explicitly prohibits a parallel RoboRev fixer loop", () => {
+  assert.ok(orchestration.includes("`roborev fix`"), "must name roborev fix")
+  assert.ok(orchestration.includes("`roborev refine`"), "must name roborev refine")
+  assert.ok(
+    orchestration.includes("Never run `roborev fix` or `roborev refine`"),
+    "must explicitly prohibit both as a parallel remediation path",
+  )
+})
+
+test("work-orchestration attributes concurrency relaxation to Desk's own policy, not an upstream Superpowers source change", () => {
+  assert.ok(orchestration.includes("Desk's own approved concurrency policy"), "must attribute the relaxation to Desk")
+  assert.ok(orchestration.includes("not an upstream source change"), "must disclaim an upstream Superpowers change")
+})
+
+test("work-orchestration keeps one coherent task's implement/fix loop sequential while independent nodes may run concurrently", () => {
+  assert.ok(
+    orchestration.includes(
+      "One coherent task's implement/fix loop stays sequential; independent non-conflicting nodes may run concurrently in stable table order.",
+    ),
+    "must state the coherent-task sequencing rule verbatim",
+  )
+})
+
+test("work-orchestration invokes only pristine, pinned Superpowers skills for dispatch and verification, matching the existing provider witness", () => {
+  const lock = json("upstream-sources.lock.json")
+  const source = lock.sources.find((entry) => entry.repository === "obra/superpowers")
+  assert.ok(source, "the existing lock must include the Superpowers provider")
+  for (const skill of [
+    "subagent-driven-development",
+    "dispatching-parallel-agents",
+    "executing-plans",
+    "using-git-worktrees",
+    "verification-before-completion",
+  ]) {
+    assert.ok(orchestration.includes(`superpowers:${skill}`), `orchestration must invoke superpowers:${skill}`)
+    const sourcePath = `skills/${skill}/SKILL.md`
+    const file = source.files.find((entry) => entry.sourcePath === sourcePath)
+    assert.ok(file, `the lock must pin ${sourcePath}`)
+    assert.equal(
+      createHash("sha256").update(readFileSync(new URL(file.generatedPath, repoRoot))).digest("hex"),
+      file.sha256,
+      file.generatedPath,
+    )
+  }
+})
