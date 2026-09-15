@@ -73,7 +73,10 @@ export function requireNativeInputs(prepared, inputs) {
 export async function runFixedCase({ cell, plan, input, output, outputRoot, bindingAdmitted = false, checker }) {
   const definition = dataset.cases.find(value => value.id === cell.caseId);
   const admission = bindChecker(checker);
-  if (definition.mode !== "deterministic") admitChecker(admission);
+  // Deterministic private cells reach no held-out command, subject turn or reviewer handoff, so they carry no
+  // checker requirement. Every other preventable transition revalidates through this one parent-owned capability.
+  const revalidate = () => { if (definition.mode !== "deterministic") admitChecker(admission); };
+  revalidate();
   const seed = plan.gitSeeds.find(value => value.cellId === cell.id);
   requireCondition(seed, "NATIVE_SEED_UNMAPPED", "Every native fixture requires its frozen Git seed and configured identity");
   const fixture = await materializeFixture({ manifest, fixtureId: definition.fixture, sourceRoot, roots: input.roots, gitIdentity: seed.identity });
@@ -81,12 +84,15 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
   const owners = [];
   const acquire = async (options = {}) => {
     // Every acquisition rechecks the frozen preflight before the owner is opened, not once per campaign.
-    if (definition.mode !== "deterministic") admitChecker(admission);
+    revalidate();
     const runId = randomUUID();
     const opened = await input.open({ cell, plan, fixture, ...options, runId });
     requireCondition(typeof opened?.close === "function", "NATIVE_CALLBACK_UNMAPPED", "Every native acquisition requires its owned, bounded close operation");
     const owner = { opened, runId, close: opened.close.bind(opened), signal: opened.protocol?.signal, token: opened.protocol?.token };
     owners.push(owner);
+    // Acquisition is awaited parent work. The owner is registered first, so this refusal still reaches the shared
+    // cleanup path and cannot leave a live acquisition behind.
+    revalidate();
     return owner;
   };
   const cancelled = () => owners.some(owner => owner.signal?.aborted);
@@ -100,19 +106,26 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
     output.writeArtifact(name, bytes);
     return { path: name, sha256: sha256(bytes) };
   };
-  const acquired = await acquire();
-  const { opened } = acquired;
+  let acquired;
+  let opened;
   let failure;
   let failed = false;
   let result;
   const reopen = async options => {
     const next = await acquire(options);
     requireCondition(await input.assertConfinement({ opened: next.opened, fixture, cell, plan }) !== false, "NATIVE_CONFINEMENT_UNVERIFIED", "The reacquired native owner refused confinement");
+    // Confinement is awaited parent setup; the reacquired owner revalidates before it resumes the model protocol.
+    revalidate();
     return next;
   };
+  // Acquisition happens inside this block so every successfully opened owner reaches the shared cleanup path below.
   try {
+    acquired = await acquire();
+    opened = acquired.opened;
     requireCondition(await input.assertConfinement({ opened, fixture, cell, plan }) !== false, "NATIVE_CONFINEMENT_UNVERIFIED", "The native owner refused confinement");
-    result = await executeCase({ cell, plan, input, output, outputRoot, definition, fixture, acquired, reopen, cancelled, admission });
+    // The credential-bearing client and the model session are created inside executeCase; revalidate first.
+    revalidate();
+    result = await executeCase({ cell, plan, input, output, outputRoot, definition, fixture, acquired, reopen, cancelled, admission, revalidate });
   } catch (error) { failure = error; failed = true; throw error; }
   finally {
     // Judge artifacts are provisional case evidence until every acquisition has closed.
@@ -142,7 +155,18 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
     if (errors.length) throw Object.assign(new AggregateError([...(failed ? [failure] : []), ...errors], "Native ownership cleanup failed; no grade can be admitted"), { code: definition.mode === "deterministic" && errors.some(error => error?.code === "NATIVE_OWNER_STOP_UNVERIFIED") ? "PRIVATE_STOP_UNVERIFIED" : errors[0]?.code, observedCounts: { ...(result?.counts ?? failure?.observedCounts ?? zeroCounts()), admittedGrades: 0 } });
   }
   if (cancelled()) return finish({ ...result, status: "cancelled", grade: null, counts: { ...result.counts, admittedGrades: 0 } });
-  if (definition.mode !== "deterministic") return finish(result);
+  if (definition.mode !== "deterministic") {
+    // Owned cleanup is awaited parent work that can invalidate the proof which authorized the grade. This exported
+    // seam is the case's final use boundary: observed accounting and raw evidence survive, the grade does not.
+    try { revalidate(); }
+    catch (error) {
+      const reason = safeFailure(error);
+      const counts = { ...result.counts, admittedGrades: 0 };
+      retain("controller-admission-failure.json", { ...reason, counts });
+      return finish({ ...result, status: "unavailable", grade: null, counts, failure: reason });
+    }
+    return finish(result);
+  }
   const stopped = owners[0].stopped;
   const trace = readWriterTrace({ directory: opened.traceDirectories[0], retain, ownedSpawns: stopped.receipt.ownedSpawns });
   retain("private-trace.json", trace);
@@ -159,7 +183,7 @@ export async function runFixedCase({ cell, plan, input, output, outputRoot, bind
   return finish({ ...unavailable(), status: checks.some(([, value]) => value.status === "unavailable") ? "unavailable" : checks.every(([, value]) => value.status === "pass") ? "passed" : "product_failure", checks });
 }
 
-async function executeCase({ cell, plan, input, output, outputRoot, definition, fixture, acquired, reopen, cancelled, admission }) {
+async function executeCase({ cell, plan, input, output, outputRoot, definition, fixture, acquired, reopen, cancelled, admission, revalidate }) {
   let { opened } = acquired;
   let sequence = 0;
   const retain = (name, value) => {
@@ -210,6 +234,8 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
         limits: { startupSendWorkMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs },
         subjectTurn,
         reviewHandler: async request => {
+          // The reviewer handoff is still preventable here: revalidate before the installed reviewer is invoked.
+          revalidate();
           // The installed reviewer retains its raw evidence through the controller's own retention, so every
           // returned reference resolves inside this attempt's output root.
           const result = await input.reviewHandler({ ...request, turnIndex, dependencyAvailable: turn.id !== "review-blocked", retain });
@@ -247,6 +273,9 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
             if (turn.restartBefore) restart = await canonical.restart(previousSessionId, sessionId);
             if (turn.id === "fix-and-scope") await canonical.scope();
           }
+          // All awaited subject setup is complete and the protocol resumes to the subject send next; this is the
+          // last point at which the dispatch can still be prevented.
+          revalidate();
         },
         emit: record => {
           records.push(record);
@@ -264,8 +293,10 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
       const applicable = definition.checks.filter(check => commandChecks.has(check.id) && (check.id === "discussion-no-edit" ? turn.id === "discussion" : check.id === "cold-review-finds-fold" ? turn.id === "resume-review" : turnIndex === definition.turns.length - 1));
       for (const check of applicable) {
         // Held-out execution is a use boundary: the frozen preflight is rechecked before every candidate command.
-        admitChecker(admission);
-        const executed = await heldOutChecks.execute({ fixtureId: definition.fixture, checkId: check.id, actorRoot: fixture.actorView.root, checkerRoot: fixture.checkerView.root, workRoot: path.join(opened.checkRoot, `${turnIndex}-${check.id}`), output, stopped, signal: acquired.signal, limits: { timeoutMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs, maxStreamBytes: plan.limits.maxStreamBytes }, parentContext: parentContextFor(admission) });
+        // `revalidateAdmission` is the parent's own capability and is never mounted, retained or given to a
+        // candidate; only `parentContext` crosses, and only as `{preflight, identities}`.
+        revalidate();
+        const executed = await heldOutChecks.execute({ fixtureId: definition.fixture, checkId: check.id, actorRoot: fixture.actorView.root, checkerRoot: fixture.checkerView.root, workRoot: path.join(opened.checkRoot, `${turnIndex}-${check.id}`), output, stopped, signal: acquired.signal, limits: { timeoutMs: plan.limits.startupSendWorkMs, cleanupMs: plan.limits.cleanup.totalMs, maxStreamBytes: plan.limits.maxStreamBytes }, parentContext: parentContextFor(admission), revalidateAdmission: revalidate });
         if (cancelled()) return { ...unavailable(), status: "cancelled", checkpoints };
         const additional = sourceObservations.observe({ check, fixture, trace, restart, sourceBefore, reviews, checkpoints, retain, readArtifact });
         // Command exits and raw references belong to the maintained executor, never the adapter.
@@ -296,7 +327,7 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
   output.writeArtifact("controller-assessment.json", jsonBytes(assessment));
   output.writeArtifact("controller-judge-plan.json", jsonBytes({ ...opened.judge.plan, model: cell.judge.model }));
   // The grader handoff allocates the model and carries the credential envelope; admission is rechecked first.
-  admitChecker(admission);
+  revalidate();
   const judge = await runRuntimeQualification({ ...opened.judge, plan: { ...opened.judge.plan, model: cell.judge.model }, assessment });
   try {
     retain("judge-return.json", judge);
@@ -350,12 +381,20 @@ export async function runFixedController({ prepared, nativeInputs, checker = nat
       }
       // Awaiting the case yields to cancellation before the synchronous publication boundary.
       if (caseCancellation.get(result)?.some(signal => signal?.aborted)) result = { ...result, status: "cancelled", grade: null, counts: { ...result.counts, admittedGrades: 0 } };
-      // Output finalization is the last use boundary: a preflight that went stale during the attempt cannot publish.
-      admitChecker(admission);
-      const committed = output.commit({ ...result, schemaVersion: 1, runId: attemptId, caseId: cell.caseId });
-      attempt.status = result.status;
-      attempt.receipt = { path: `${attemptId}/receipt.json`, sha256: committed.receiptSha256 };
-      attempt.commitMarker = { path: `${attemptId}/COMMITTED.json`, sha256: readRegular(outputRoot, "COMMITTED.json").sha256 };
+      try {
+        // Output finalization is the last use boundary: a preflight that went stale during the attempt cannot publish.
+        admitChecker(admission);
+        const committed = output.commit({ ...result, schemaVersion: 1, runId: attemptId, caseId: cell.caseId });
+        attempt.status = result.status;
+        attempt.receipt = { path: `${attemptId}/receipt.json`, sha256: committed.receiptSha256 };
+        attempt.commitMarker = { path: `${attemptId}/COMMITTED.json`, sha256: readRegular(outputRoot, "COMMITTED.json").sha256 };
+      } catch (error) {
+        // Only the admitted grade is withdrawn. The already observed report accounting and the safe fault code stay
+        // durable, the receipt and commit marker stay null, and the campaign stops before the next cell.
+        result = { ...result, status: "unavailable", grade: null, counts: { ...result.counts, admittedGrades: 0 }, failure: safeFailure(error) };
+        attempt.status = result.status;
+        output.writeArtifact("controller-failure.json", jsonBytes({ ...result.failure, counts: result.counts }));
+      }
     } catch (error) {
       result = { ...unavailable(), failure: safeFailure(error) };
     }

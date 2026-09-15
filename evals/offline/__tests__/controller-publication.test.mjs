@@ -8,6 +8,7 @@ import { prepareRunPlan } from "../producer.mjs";
 import { jsonBytes, sha256 } from "../core.mjs";
 import { completedControllerFixture } from "./helpers/completed-controller.mjs";
 import { controllerFixture } from "./helpers/controller-fixture.mjs";
+import { heldOutChecks } from "../check-executor.mjs";
 
 async function campaign(judgeStatus = "pass", failLast = false) {
   const first = await completedControllerFixture("discussion-then-go", { judgeStatus });
@@ -91,4 +92,42 @@ test("preflight evidence mutated during a case cannot be finalized into a commit
   assert.equal(fs.existsSync(path.join(f.prepared.root, attempt.attemptId, "COMMITTED.json")), false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.prepared.root, attempt.attemptId, "controller-failure.json"))).code, "NATIVE_QUALIFICATION_REQUIRED");
   assert.equal(f.prepared.runSet.unstartedCellIds.length, 11);
+});
+// The final publication boundary is the only admission call that follows both the case's own post-cleanup
+// revalidation and an already observed grade, so it is armed by its ordinal rather than by mutating shared proof.
+function armFinalAdmission(f, owners, fault) {
+  const original = heldOutChecks.assertAvailable;
+  let afterCleanup = 0;
+  heldOutChecks.assertAvailable = context => {
+    if (f.closes === owners) afterCleanup++;
+    if (afterCleanup === 2) throw fault;
+    return original(context);
+  };
+  return () => { heldOutChecks.assertAvailable = original; };
+}
+for (const [label, fault] of [
+  ["a stale preflight", Object.assign(new Error("NATIVE_QUALIFICATION_REQUIRED: synthetic final-boundary refusal"), { code: "NATIVE_QUALIFICATION_REQUIRED" })],
+  ["an evidence-reader host fault", Object.assign(new Error("synthetic host storage fault"), { code: "EIO" })],
+]) test(`T15-I4 ${label} at final publication keeps the observed accounting and its durable reason`, async () => {
+  const f = await completedControllerFixture("discussion-then-go");
+  const restore = armFinalAdmission(f, 2, fault);
+  let result;
+  try { result = await runFixedController({ prepared: f.prepared, nativeInputs: f.nativeInputs }); }
+  finally { restore(); }
+  assert.equal(result.exitCode, 3);
+  assert.equal(result.status, "incomplete");
+  assert.equal(result.attempts, 1);
+  assert.equal(f.prepared.runSet.unstartedCellIds.length, 11);
+  const attempt = f.prepared.runSet.attempts[0];
+  assert.equal(attempt.status, "unavailable");
+  assert.equal(attempt.receipt, null);
+  assert.equal(attempt.commitMarker, null);
+  assert.equal(fs.existsSync(path.join(f.prepared.root, attempt.attemptId, "COMMITTED.json")), false);
+  const recorded = JSON.parse(fs.readFileSync(path.join(f.prepared.root, attempt.attemptId, "controller-failure.json")));
+  assert.equal(recorded.code, fault.code);
+  assert.ok(!JSON.stringify(recorded).includes("synthetic host storage fault"));
+  assert.equal(recorded.counts.admittedGrades, 0);
+  assert.equal(recorded.counts.observedRequests, 1);
+  assert.equal(recorded.counts.validatorAcceptedReports, 1);
+  assert.equal(f.closes, 2);
 });

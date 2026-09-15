@@ -7,6 +7,8 @@ import { openRunOutput } from "../output.mjs";
 import { jsonBytes, sha256 } from "../core.mjs";
 import { main } from "../cli.mjs";
 import { controllerFixture } from "./helpers/controller-fixture.mjs";
+import { completedControllerFixture } from "./helpers/completed-controller.mjs";
+import { checkerProcess } from "../checker-process.mjs";
 import { validateRunSetInventory } from "../comparison.mjs";
 import { heldOutChecks, requireTrustedChecker } from "../check-executor.mjs";
 
@@ -64,7 +66,11 @@ test("an admitted preflight that changes between open and use withholds the case
     f.preflight.truncate("cancellation-probe.json");
     return original(context);
   };
-  await assert.rejects(runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
+  const result = await runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) });
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.grade, null);
+  assert.equal(result.counts.admittedGrades, 0);
+  assert.equal(result.failure.code, "NATIVE_QUALIFICATION_REQUIRED");
   assert.equal(f.closes, 1);
 });
 test("a checker identity that changes during a live case refuses at the next boundary", async () => {
@@ -75,7 +81,105 @@ test("a checker identity that changes during a live case refuses at the next bou
     f.preflight.mutateController();
     return original(context);
   };
+  const result = await runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) });
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.grade, null);
+  assert.equal(result.failure.code, "NATIVE_QUALIFICATION_REQUIRED");
+  assert.equal(f.closes, 1);
+});
+test("T15-I1 admission refused after open closes that owner and never reaches confinement or the model protocol", async () => {
+  const f = await controllerFixture("checker-is-enforced");
+  let confinements = 0;
+  const open = f.input.open;
+  f.input.open = async args => {
+    const owner = await open(args);
+    // The proof is invalidated while the owner is being acquired, after `open` has already produced it.
+    f.preflight.truncate("hidden-read-probe.json");
+    return owner;
+  };
+  const confinement = f.input.assertConfinement;
+  f.input.assertConfinement = async args => { confinements++; return confinement(args); };
   await assert.rejects(runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
+  assert.equal(confinements, 0);
+  assert.equal(f.actorInput.state.session, undefined);
+  assert.equal(f.closes, 1);
+});
+test("T15-I1 admission refused after confinement never starts the credential-bearing model protocol", async () => {
+  const f = await controllerFixture("checker-is-enforced", { confinement: () => {} });
+  const confinement = f.input.assertConfinement;
+  let confinements = 0;
+  f.input.assertConfinement = async args => {
+    confinements++;
+    const value = await confinement(args);
+    f.preflight.truncate("write-denied-probe.json");
+    return value;
+  };
+  await assert.rejects(runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
+  assert.equal(confinements, 1);
+  assert.equal(f.actorInput.state.session, undefined);
+  assert.equal(f.closes, 1);
+});
+test("T15-I1 admission refused after subject setup suppresses the subject send", async () => {
+  let sends = 0;
+  const f = await controllerFixture("checker-is-enforced", { send: () => { sends++; } });
+  f.input.subjectBeforeSend = async () => { f.preflight.truncate("network-denied-probe.json"); };
+  const result = await runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) });
+  assert.equal(sends, 0);
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.grade, null);
+  assert.equal(result.failure.code, "NATIVE_QUALIFICATION_REQUIRED");
+  assert.equal(f.closes, 1);
+});
+test("T15-I1 admission refused immediately before the reviewer handoff never invokes the reviewer", async () => {
+  const box = {};
+  const f = await controllerFixture("review-recovery-state", { reviewSha: () => { box.mutate(); return "a".repeat(40); } });
+  box.mutate = () => f.preflight.truncate("fork-setsid-probe.json");
+  let reviews = 0;
+  const reviewHandler = f.input.reviewHandler;
+  f.input.reviewHandler = async request => { reviews++; return reviewHandler(request); };
+  const result = await runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...outputFor(f) });
+  assert.equal(reviews, 0);
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.grade, null);
+  assert.equal(f.closes, 1);
+});
+test("T15-I2 a proof change after the first held-out capture stops the next launch and still retains the first", async t => {
+  const f = await controllerFixture("discussion-then-go");
+  const capture = checkerProcess.capture;
+  let captures = 0;
+  t.mock.method(checkerProcess, "capture", async request => {
+    captures++;
+    const result = await capture(request);
+    // The asynchronously completed capture is retained; the proof is invalidated before the next launch.
+    if (captures === 1) f.preflight.truncate("capture-bound-probe.json");
+    return result;
+  });
+  const options = outputFor(f);
+  await assert.rejects(runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...options }), { code: "NATIVE_QUALIFICATION_REQUIRED" });
+  assert.equal(captures, 1);
+  const retained = fs.readdirSync(options.outputRoot);
+  assert.ok(retained.some(name => /^discussion-no-edit-.*stdout\.raw$/.test(name)), retained.join(","));
+  assert.ok(retained.some(name => /^discussion-no-edit-.*command\.json$/.test(name)), retained.join(","));
+  assert.equal(f.closes, 1);
+});
+test("T15-I3 a proof change during final owner cleanup withholds the observed grade without losing its counts", async () => {
+  const f = await completedControllerFixture("checker-is-enforced");
+  const close = f.opened.close;
+  f.opened.close = async function () {
+    const stopped = await close.call(this);
+    // A valid close coincides with the proof going stale; the observed grade must not survive it.
+    f.preflight.truncate("cancellation-probe.json");
+    return stopped;
+  };
+  const options = outputFor(f);
+  const result = await runFixedCase({ cell: f.cell, plan: f.plan, input: f.input, ...options });
+  assert.equal(result.status, "unavailable");
+  assert.equal(result.grade, null);
+  assert.equal(result.counts.admittedGrades, 0);
+  assert.equal(result.counts.observedRequests, 1);
+  assert.equal(result.counts.validatorAcceptedReports, 1);
+  assert.equal(result.failure.code, "NATIVE_QUALIFICATION_REQUIRED");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(options.outputRoot, "controller-admission-failure.json"))).counts.observedRequests, 1);
   assert.equal(f.closes, 1);
 });
 test("an unshaped preflight context is refused without being frozen into a campaign", async () => {

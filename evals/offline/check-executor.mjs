@@ -38,11 +38,15 @@ function normalizeValue(row) {
   return { ...row, encoding: "invalid_response", value: null };
 }
 
-export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, checkerRoot, workRoot, output, stopped, limits, signal, parentContext }) {
+export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, checkerRoot, workRoot, output, stopped, limits, signal, parentContext, revalidateAdmission }) {
   const definition = dataset.cases.find(value => value.fixture === fixtureId)?.checks.find(value => value.id === checkId);
   requireCondition(definition && runnable.has(checkId), "CHECK_EXECUTOR_UNAVAILABLE", "This fixed check requires a different producer or semantic assessment");
   requireCondition(stopped && validateCleanupReceipt(stopped.receipt, { runId: stopped.runId, readArtifact: stopped.readArtifact, requireRunId: true }).ok, "CHECK_ACTOR_STOP_UNVERIFIED", "Held-out execution requires generation-bound, hash-verified exits for the observed actor writers");
   requireCondition(parentContext === undefined || plainObject(parentContext) && Object.keys(parentContext).every(key => ["preflight", "identities"].includes(key)), "CHECK_PARENT_CONTEXT_INVALID", "Only parent-owned preflight and identity context may accompany execution");
+  // A parent-only capability seam, deliberately separate from `parentContext`: it is never mounted into a candidate
+  // root, never written to an artifact and never reachable from candidate inputs. Absent, it is an inert no-op.
+  requireCondition(revalidateAdmission === undefined || typeof revalidateAdmission === "function", "CHECK_PARENT_CONTEXT_INVALID", "Parent admission revalidation must be the parent's own function");
+  const revalidate = revalidateAdmission ?? (() => {});
   const roots = [actorRoot, checkerRoot, workRoot].map(absoluteRoot);
   [actorRoot, checkerRoot, workRoot] = roots;
   requireCondition(roots.every((root, index) => roots.slice(index + 1).every(other => !overlaps(root, other))) && roots.every(root => !overlaps(root, fixtureSource)), "CHECK_ROOT_OVERLAP", "Actor, checker, execution and frozen fixture roots must be separate");
@@ -88,6 +92,8 @@ export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, check
       ...environment,
     };
     const frozen = { source: manifestHash(subject), inputs: manifestHash(inputsRoot) };
+    // Each candidate launch is its own use boundary; one admission never authorizes a whole multi-command check.
+    revalidate();
     const result = await checkerProcess.capture({ executable, argv, cwd: cwd ?? subject, env, limits, signal, workRoot, subject, checkerRoot, inputsRoot, scratchRoot });
     const stdout = save(`${suffix}stdout.raw`, result.stdout.bytes);
     const stderr = save(`${suffix}stderr.raw`, result.stderr.bytes);
@@ -96,6 +102,9 @@ export async function executeHeldOutCheck({ fixtureId, checkId, actorRoot, check
     retain(`${suffix}inputs-after.json`, listRegularFiles(inputsRoot));
     const binding = { rawRef, executable, argv, cwd: cwd ?? subject, sourceManifestSha256: frozen.source, inputsManifestSha256: frozen.inputs, availability: result.availability, captureComplete: result.captureComplete, namespaceClosed: result.namespaceClosed, lifetime: result.lifetime, boundary: result.boundary };
     captures.push(binding);
+    // The capture completed asynchronously and its evidence is now retained. Revalidate before this observation is
+    // admitted, so a proof that went stale during the command cannot authorize the next phase.
+    revalidate();
     requireCondition(!result.launcher || result.launcher.execution.status === "observed", "CHECKER_NAMESPACE_UNVERIFIED", "The private launcher did not report setup and initial-child exit");
     requireCondition(result.status === "exited" && Number.isInteger(result.exitCode) && result.signal === null && result.cleanup.unverifiedPids.length === 0, "CHECK_COMMAND_UNAVAILABLE", `Check ended without a complete exit: ${result.status}`);
     const boundary = result.boundary;

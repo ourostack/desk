@@ -30,7 +30,21 @@ type CheckerPreflight = {
 
 `expected` is `{identities, observeIdentities, readEvidence}`: the four declared lowercase 64-hex digests, the parent's identity observer and the parent's own artifact reader. All three are required. Admission requires schema 1, `behavioral_outcome` scope, `status: "available"`, exactly the four identities and exactly the five checks all true, and every retained reference read back through `readEvidence` and rehashed. `observeIdentities` is called at every boundary and must agree with the declared snapshot and with the receipt, so a source, controller, runtime or launcher that changes after binding refuses rather than riding a frozen snapshot. A missing, stale, false, cancelled, truncated, absent or mutated reference refuses. Every call revalidates, so a receipt admitted at one boundary cannot carry a later changed one. Only absence-shaped reads (`ENOENT`, `ENOTDIR`, `ELOOP` and the confined-read contract codes) are qualification answers; any other reader fault propagates with its original cause so a host storage failure is never reported as missing qualification evidence.
 
-`runFixedController({prepared, nativeInputs, checker})` and `runFixedCase({..., checker})` thread one immutable context; the controller also accepts it as `nativeInputs.checker` from the source-bound module. It is rechecked before allocation and the source/runtime assertion, before every acquisition `open`, before every held-out command, before the grader handoff, and before output finalization and publication. A refusal at publication leaves the attempt with a null receipt and null commit marker and stops the campaign with exit 3. Only `{preflight, identities}` accompanies held-out execution as `parentContext`; nothing else crosses.
+`runFixedController({prepared, nativeInputs, checker})` and `runFixedCase({..., checker})` thread one immutable context; the controller also accepts it as `nativeInputs.checker` from the source-bound module. Deterministic private cells reach no held-out command, subject turn or reviewer handoff and carry no checker requirement; every other preventable transition revalidates through one parent-owned capability:
+
+- before allocation and the source/runtime assertion;
+- before every acquisition `open`, and again **after** `open` returns — the owner is registered first, so that refusal still reaches the shared cleanup path and cannot leave a live acquisition behind;
+- after every awaited confinement, including reacquisitions, before the credential-bearing client and model session are created;
+- after all awaited `subjectBeforeSend` setup, immediately before the protocol resumes to the subject send;
+- immediately before the installed `reviewHandler` is invoked;
+- before **each** held-out candidate launch and again after each asynchronously completed capture, before that observation authorizes the next phase;
+- before the grader handoff;
+- at the exported case's final handoff, after all owner cleanup and retention have completed and before a semantic grade is returned;
+- before output finalization and publication.
+
+A refusal at the exported case handoff keeps the observed report, schema and validator counts and every retained artifact, sets `grade: null` and `admittedGrades: 0`, retains a bounded `controller-admission-failure.json` and returns `unavailable` instead of a grade. A refusal at publication does the same at campaign level: only the admitted grade is withdrawn, a bounded safe `controller-failure.json` records the original fault code and the preserved counts without credential-bearing exception text, the receipt and commit marker stay null, and the campaign stops before the next cell with exit 3. A host fault such as `EIO` keeps its own code there and stays distinguishable from `NATIVE_QUALIFICATION_REQUIRED`.
+
+Only `{preflight, identities}` accompanies held-out execution as `parentContext`; nothing else crosses. `executeHeldOutCheck` additionally accepts `revalidateAdmission`, the parent's own revalidation function. It is deliberately separate from `parentContext`: it is never mounted into a candidate root, never written to an artifact and never reachable from candidate inputs, and when absent it is an inert no-op.
 
 This admission consumes emulated Linux `amd64` behavioral evidence for Q08. It is not native-x64 proof, not a cryptographic attestation of the runtime, and not a claim about a maliciously compromised host; source inspection and observable behavior do not establish native authenticity.
 
