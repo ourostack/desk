@@ -192,11 +192,31 @@ test("the public workflow reports relevant-revision status without carrying any 
   assert.equal(job.split("uses: actions/upload-artifact@v4").length, 2);
 });
 
-// GitHub filter patterns are character-based: `*` matches any characters except `/`, `**` matches any characters
-// including `/`. A segment-based approximation would wrongly let `**/package.json` cover a root manifest.
+// A bounded model of the GitHub path-filter syntax these filters actually use: whole-path anchoring from the
+// repository root, `*` matching any characters except `/`, `**` matching any characters including `/`, and the
+// `**/` prefix matching zero or more leading directory segments (documented: `**/README.md` matches `README.md`
+// and `js/README.md`). It is deliberately NOT a complete reimplementation of every documented pattern feature —
+// `?` (zero or one of the preceding character) and `!` negation are not modelled — and a maintained assertion
+// below proves both workflow filter blocks use neither, so this bounded model is sufficient for them.
 function triggerMatches(pattern, target) {
   const escape = (value) => value.replace(/[.+^${}()|[\]\\?]/gu, "\\$&");
-  const expression = pattern.split("**").map((part) => escape(part).replace(/\*/gu, "[^/]*")).join(".*");
+  let expression = "";
+  let index = 0;
+  while (index < pattern.length) {
+    if (pattern.startsWith("**/", index)) {
+      expression += "(?:.*/)?";
+      index += 3;
+    } else if (pattern.startsWith("**", index)) {
+      expression += ".*";
+      index += 2;
+    } else if (pattern[index] === "*") {
+      expression += "[^/]*";
+      index += 1;
+    } else {
+      expression += escape(pattern[index]);
+      index += 1;
+    }
+  }
   return new RegExp(`^${expression}$`, "u").test(target);
 }
 
@@ -296,7 +316,63 @@ test("every path the status routing calls relevant also starts the public workfl
   assert.equal(triggerMatches("scripts/*.cjs", "scripts/skill-evals.cjs"), true);
   assert.equal(triggerMatches("package.json", "package.json"), true);
   assert.equal(triggerMatches("**/package.json", "desk/tools/package.json"), true);
-  // A `**`-prefixed pattern still needs the separator, so the root manifest needs its own explicit trigger.
-  assert.equal(triggerMatches("**/package.json", "package.json"), false);
+  // Documented behavior: a `**/` prefix matches zero or more directory segments, so it covers the root manifest
+  // too. The explicit root entries below are retained as harmless redundancy, not as the only root coverage.
+  assert.equal(triggerMatches("**/package.json", "package.json"), true);
   assert.equal(triggerMatches("evals/**", "evals/offline/cases/v2-alpha-v1/dataset.json"), true);
+  for (const [index, filters] of blocks.entries()) {
+    assert.equal(new Set(filters).size, filters.length, `path filter block ${index} must be duplicate-free`);
+    assert.ok(filters.includes("package.json") && filters.includes("package-lock.json"), `path filter block ${index} keeps its explicit root manifest entries`);
+    assert.ok(filters.includes("**/package.json") && filters.includes("**/package-lock.json"), `path filter block ${index} keeps its recursive manifest entries`);
+    // The bounded matcher models `*` and `**` only; these filters must therefore use no other wildcard feature.
+    for (const pattern of filters) assert.doesNotMatch(pattern, /[?!]/u, `path filter ${pattern} stays inside the modelled syntax`);
+  }
+});
+
+// Every row below is quoted from GitHub's official "Patterns to match file paths" table in the workflow-syntax
+// reference. The bounded matcher above must agree with the documented behavior for the syntax these filters use.
+test("the maintained path-filter oracle agrees with GitHub's documented pattern examples", () => {
+  for (const [pattern, target] of [
+    // "A README.md file anywhere in the repository." -> README.md, js/README.md
+    ["**/README.md", "README.md"],
+    ["**/README.md", "js/README.md"],
+    // "A file with a .md suffix anywhere in the docs directory." -> docs/README.md, docs/mona/hello-world.md
+    ["docs/**/*.md", "docs/README.md"],
+    ["docs/**/*.md", "docs/mona/hello-world.md"],
+    ["docs/**/*.md", "docs/a/markdown/file.md"],
+    // "Any files in a docs directory anywhere in the repository." -> docs/hello.md, dir/docs/my-file.txt
+    ["**/docs/**", "docs/hello.md"],
+    ["**/docs/**", "dir/docs/my-file.txt"],
+    ["**/docs/**", "space/docs/plan/space.doc"],
+    // "Any files in the docs directory and its subdirectories at the root of the repository."
+    ["docs/**", "docs/README.md"],
+    ["docs/**", "docs/mona/octocat.txt"],
+    // "All files within the root of the docs directory only."
+    ["docs/*", "docs/README.md"],
+    // "Matches all .js files in the repository." -> index.js, js/index.js, src/js/app.js
+    ["**.js", "index.js"],
+    ["**.js", "js/index.js"],
+    ["**.js", "src/js/app.js"],
+    // "Any file in a folder with a src suffix anywhere in the repository."
+    ["**/*src/**", "a/src/app.js"],
+    ["**/*src/**", "my-src/code/js/app.js"],
+    // "A file with the suffix -post.md anywhere in the repository."
+    ["**/*-post.md", "my-post.md"],
+    ["**/*-post.md", "path/their-post.md"],
+    // The same documented zero-directory case this workflow relies on for root dependency manifests.
+    ["**/package.json", "package.json"],
+    ["**/package.json", "desk/tools/package.json"],
+  ]) assert.equal(triggerMatches(pattern, target), true, `${pattern} must match ${target}`);
+
+  for (const [pattern, target] of [
+    // "The * wildcard matches any character, but does not match slash (/)."
+    ["*.js", "js/index.js"],
+    ["docs/*", "docs/mona/octocat.txt"],
+    ["scripts/*.cjs", "scripts/nested/child.cjs"],
+    ["evals/*.json", "evals/offline/checks.mjs"],
+    // "Path patterns must match the whole path, and start from the repository's root."
+    ["package.json", "desk/package.json"],
+    ["evals/*.json", "vendor/evals/suite.json"],
+    ["docs/**", "other/docs/README.md"],
+  ]) assert.equal(triggerMatches(pattern, target), false, `${pattern} must not match ${target}`);
 });
