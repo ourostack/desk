@@ -426,10 +426,16 @@ function readmeToolSection(body) {
   return next === -1 ? section : section.slice(0, next);
 }
 
+// Only the list itself counts. A tool named in the prose around the list is
+// not discoverable as part of the surface, so counting prose would let a
+// removed bullet pass.
 function enumeratedReadmeTools(body) {
-  return [...new Set(
-    [...readmeToolSection(body).matchAll(/`([a-z][a-z_]*)`/gu)].map((entry) => entry[1]),
-  )];
+  const names = new Set();
+  for (const line of readmeToolSection(body).split(/\r?\n/u)) {
+    if (!/^\s*-\s/u.test(line)) continue;
+    for (const match of line.matchAll(/`([a-z][a-z_]*)`/gu)) names.add(match[1]);
+  }
+  return [...names];
 }
 
 function deskMcpRegistryToolNames(readFile) {

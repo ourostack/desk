@@ -191,6 +191,20 @@ test("MCP README validation locks the advertised tool surface", () => {
     readFile: () => mcpReadmeBody(["desk_status", "desk_retired"]).replace("(2)", "(1)").replace("All 2", "All 1"),
   })
   assert.ok(extraErrors.some((error) => error.includes("enumerates desk_retired, which is not an exposed tool")))
+
+  // A tool named only in the prose around the list is not discoverable from
+  // the list, so a mention must not stand in for a bullet.
+  const proseOnlyErrors = []
+  docsValidator.validateMcpReadmeToolSurface(proseOnlyErrors, {
+    tools: ["desk_status", "desk_doctor"],
+    readFile: () => [
+      "## Tools exposed (2)",
+      "- `desk_status`",
+      "All 2 tools are wired to real implementations. See `desk_doctor` for first-boot diagnosis.",
+    ].join("\n"),
+  })
+  assert.ok(proseOnlyErrors.some((error) => error.includes("must enumerate desk_doctor in its tool list")))
+  assert.equal(proseOnlyErrors.some((error) => error.includes("must list desk_doctor")), false)
 })
 
 test("MCP tool documentation is compared against the registry rather than a private copy", () => {
