@@ -36,7 +36,7 @@ test("selected alpha guidance preserves legacy preferences and explicitly select
   assert.equal(input.existingInstructions, existingInstructions)
   const selectedInstructions = result.generatedInstructions.slice(existingInstructions.length)
   assert.match(selectedInstructions, /Selected engineering lifecycle: Superpowers\./u)
-  assert.match(selectedInstructions, /desk:superpowers-integration/u)
+  assert.match(selectedInstructions, /desk:using-superpowers-with-desk/u)
   assert.match(selectedInstructions, /legacy.*Work Suite|Work Suite.*legacy/iu)
   assert.doesNotMatch(selectedInstructions, /Use Work Suite skills/u)
 })

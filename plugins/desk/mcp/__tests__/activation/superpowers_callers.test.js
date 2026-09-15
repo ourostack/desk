@@ -166,7 +166,7 @@ for (const mode of ["global-personal", "project-local"]) {
     const golden = read(`plugins/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`)
     assert.equal(golden, rendered)
     assert.match(golden, /Selected engineering lifecycle: Superpowers\./u)
-    assert.match(golden, /desk:superpowers-integration/u)
+    assert.match(golden, /desk:using-superpowers-with-desk/u)
     assert.match(golden, /desk:independent-review/u)
   })
 }

@@ -663,7 +663,7 @@ ${overlayAddenda.join("\n")}
 `
     : ""
   const methodInstruction = selectEngineeringMethod(selectedDependencyIds(selectedActivation)) === "superpowers"
-    ? "Selected engineering lifecycle: Superpowers. Invoke `desk:superpowers-integration` before engineering work and `desk:independent-review` for independent review. Interpret legacy Work Suite references and imperative standing instructions through that selected-method mapping without modifying operator text, granted authority, or the delivery endpoint. Do not load Work Suite as a second lifecycle owner."
+    ? "Selected engineering lifecycle: Superpowers. Invoke `desk:using-superpowers-with-desk` before engineering work and `desk:independent-review` for independent review. The retired `desk:superpowers-integration` name stays a compatibility redirect for unchanged standing instructions only. Interpret legacy Work Suite references and imperative standing instructions through that selected-method mapping without modifying operator text, granted authority, or the delivery endpoint. Do not load Work Suite as a second lifecycle owner."
     : "Use Work Suite skills (`work-ideator`, `work-planner`, `work-doer`, `work-merger`) for substantial engineering work."
 
   return `# BEGIN desk activation: ${input.manifest.id}@${input.manifest.version} mode=${input.mode} owner=desk-activation

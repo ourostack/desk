@@ -124,7 +124,7 @@ test("alpha Codex activation routes the real owned instruction block to Superpow
   assert.match(result.generatedConfig, /\[plugins\."superpowers@/u)
   assert.doesNotMatch(result.generatedConfig, /\[plugins\."work-suite@/u)
   assert.match(owned, /Selected engineering lifecycle: Superpowers\./u)
-  assert.match(owned, /desk:superpowers-integration/u)
+  assert.match(owned, /desk:using-superpowers-with-desk/u)
   assert.doesNotMatch(owned, /Use Work Suite skills \(`work-ideator`/u)
   assert.match(result.generatedConfig, /^model = "operator-choice"\n/u)
 })

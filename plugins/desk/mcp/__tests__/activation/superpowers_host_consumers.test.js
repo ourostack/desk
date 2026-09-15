@@ -152,7 +152,37 @@ test("Codex provider omits unsupported hooks and retains generated-instructions 
     existingConfig: "", existingInstructions: "",
   })
   assert.match(result.generatedInstructions, /Selected engineering lifecycle: Superpowers/u)
-  assert.match(result.generatedInstructions, /Invoke `desk:superpowers-integration` before engineering work/u)
+  assert.match(result.generatedInstructions, /Invoke `desk:using-superpowers-with-desk` before engineering work/u)
+})
+
+test("generated Codex instructions send fresh sessions to the active adapter, not the retired redirect", () => {
+  const manifest = activation()
+  for (const mode of ["global-personal", "project-local"]) {
+    const result = materializeCodexActivation({
+      manifest,
+      mode,
+      pluginRoot: "plugins/desk",
+      deskRoot: mode === "project-local" ? ".desk" : "~/desk",
+      existingConfig: "",
+      existingInstructions: "",
+    })
+    assert.match(
+      result.generatedInstructions,
+      /Invoke `desk:using-superpowers-with-desk` before engineering work/u,
+      `${mode} activation must name the active Desk/Superpowers adapter`,
+    )
+    assert.doesNotMatch(
+      result.generatedInstructions,
+      /Invoke `desk:superpowers-integration`/u,
+      `${mode} activation must not direct a fresh session into the retired compatibility redirect`,
+    )
+  }
+
+  // The retired name keeps working for unchanged standing instructions; that is the redirect's job, not the
+  // generated instruction's, so the redirect skill itself must still exist.
+  const redirect = readFileSync(new URL("../../../skills/superpowers-integration/SKILL.md", import.meta.url), "utf8")
+  assert.match(redirect, /Retired/u)
+  assert.match(redirect, /desk:using-superpowers-with-desk/u)
 })
 
 test("Codex onboarding restart instruction names the selected Superpowers composition exactly", () => {
