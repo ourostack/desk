@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "0d4d583331149237b5a03c65ebef43e2c5867e49",
-  "cliSha256": "f4b470d74671cd3c4a31c3f671b2e4207d9eda8e0f4b5d8f399747610630379a",
+  "sourceCommit": "94c2c1c0250b9ed038ac2cf7f7271f4adbfff4d2",
+  "cliSha256": "e10842bb1b801f63081bc9a99fe7a41d85d14571c25011874e62ec8202b87795",
   "nodeVersion": "v22.23.2",
   "cases": {
     "validate-ok": {
@@ -155,7 +155,7 @@
       "argv": [],
       "status": 1,
       "stdoutBase64": "",
-      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0K"
+      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0gfCByZXZpc2lvbiAtLXJlcXVlc3QgPHJlcXVlc3QuanNvbj4gWy0tY29udHJvbHMgPHRydXN0ZWQtY29udHJvbHMuanNvbj5dIFstLXJlc3VsdCA8cHVibGlzaGVkLXN0YXR1cy5qc29uPl0K"
     },
     "unknown-command": {
       "argv": [
@@ -163,7 +163,7 @@
       ],
       "status": 1,
       "stdoutBase64": "",
-      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0K"
+      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0gfCByZXZpc2lvbiAtLXJlcXVlc3QgPHJlcXVlc3QuanNvbj4gWy0tY29udHJvbHMgPHRydXN0ZWQtY29udHJvbHMuanNvbj5dIFstLXJlc3VsdCA8cHVibGlzaGVkLXN0YXR1cy5qc29uPl0K"
     },
     "validate-extra": {
       "argv": [
@@ -173,7 +173,7 @@
       ],
       "status": 1,
       "stdoutBase64": "",
-      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0K"
+      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0gfCByZXZpc2lvbiAtLXJlcXVlc3QgPHJlcXVlc3QuanNvbj4gWy0tY29udHJvbHMgPHRydXN0ZWQtY29udHJvbHMuanNvbj5dIFstLXJlc3VsdCA8cHVibGlzaGVkLXN0YXR1cy5qc29uPl0K"
     },
     "fingerprint-missing": {
       "argv": [
@@ -181,7 +181,7 @@
       ],
       "status": 1,
       "stdoutBase64": "",
-      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0K"
+      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0gfCByZXZpc2lvbiAtLXJlcXVlc3QgPHJlcXVlc3QuanNvbj4gWy0tY29udHJvbHMgPHRydXN0ZWQtY29udHJvbHMuanNvbj5dIFstLXJlc3VsdCA8cHVibGlzaGVkLXN0YXR1cy5qc29uPl0K"
     },
     "verify-missing": {
       "argv": [
@@ -189,7 +189,7 @@
       ],
       "status": 1,
       "stdoutBase64": "",
-      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0K"
+      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0gfCByZXZpc2lvbiAtLXJlcXVlc3QgPHJlcXVlc3QuanNvbj4gWy0tY29udHJvbHMgPHRydXN0ZWQtY29udHJvbHMuanNvbj5dIFstLXJlc3VsdCA8cHVibGlzaGVkLXN0YXR1cy5qc29uPl0K"
     },
     "verify-extra": {
       "argv": [
@@ -200,7 +200,7 @@
       ],
       "status": 1,
       "stdoutBase64": "",
-      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0K"
+      "stderrBase64": "c2tpbGwtZXZhbHM6IHVzYWdlOiBub2RlIHNjcmlwdHMvc2tpbGwtZXZhbHMuY2pzIHZhbGlkYXRlIFtyZXBvUm9vdF0gfCBmaW5nZXJwcmludCA8c3VpdGUtZmlsZT4gW3JlcG9Sb290XSB8IHZlcmlmeSA8cmVzdWx0LWZpbGU+IFtyZXBvUm9vdF0gfCByZXZpc2lvbiAtLXJlcXVlc3QgPHJlcXVlc3QuanNvbj4gWy0tY29udHJvbHMgPHRydXN0ZWQtY29udHJvbHMuanNvbj5dIFstLXJlc3VsdCA8cHVibGlzaGVkLXN0YXR1cy5qc29uPl0K"
     }
   }
 }

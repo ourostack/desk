@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { compareScoredResults, replayScoredCell } from "../scored-comparison.mjs";
 import { runFixedCase } from "../fixed-controller.mjs";
+import * as fixedController from "../fixed-controller.mjs";
 import { openRunOutput } from "../output.mjs";
 import { jsonBytes, sha256 } from "../core.mjs";
 import { controllerFixture } from "./helpers/controller-fixture.mjs";
@@ -88,4 +89,70 @@ test("deterministic cells replay their exact observations with null grades and a
   assert.equal(replayScoredCell(failing).status, "product_failure");
   assert.throws(() => replayScoredCell(f.publication((files, receipt) => { receipt.status = "product_failure"; })), { code: "DETERMINISTIC_RESULT_MISMATCH" });
   assert.throws(() => f.publication((files, receipt) => { receipt.grade = { status: "pass" }; }), { code: "OUTPUT_WRITE_FAILED" });
+});
+
+const skillEvals = (await import(new URL("../../../scripts/skill-evals.cjs", import.meta.url))).default;
+const { revisionPublication } = fixedController;
+const controlled = (head, change = () => {}) => {
+  const plan = {
+    candidate: { repository: "owner/approved-repository", sourceCommit: head },
+    comparison: { groupId: "alpha-group", policySha256: "7".repeat(64) },
+    dataset: { id: "engineering-v2-alpha", version: "1.0.0", sha256: "d".repeat(64) },
+    fixtureManifestSha256: "e".repeat(64), checkerManifestSha256: "f".repeat(64), admissionContractSha256: "0".repeat(64),
+    toolingSourceManifestSha256: "1".repeat(64), bindingSha256: "2".repeat(64),
+    runtime: { nodeVersion: "v22.23.2", sdkVersion: "1.0.13", sdkLockSha256: "3".repeat(64), cliVersion: "1.0.84-1", cliSha256: "4".repeat(64), qualificationReceiptSha256: "5".repeat(64), sessionMode: "interactive" },
+    activation: { subjectAgent: "fixture-worker", compositionSeam: "qualified-native-agent", requestedConfigurationSha256: "6".repeat(64) },
+    attemptPolicy: { maxAttemptsPerCell: 1, automaticRetry: false },
+  };
+  const expected = { schemaVersion: 1, cells: [{ id: "cell-1", caseId: "case-1", executionKind: "deterministic", subject: null, judge: null }] };
+  change(plan, expected);
+  return revisionPublication({ plan, expected, revision: { repository: "owner/approved-repository", ref: "refs/pull/17/merge", head } });
+};
+const scoredRequest = head => ({ schemaVersion: 1, kind: "relevant_revision_request", repository: "owner/approved-repository", ref: "refs/pull/17/merge", head, previousHeads: [], changedPaths: ["evals/offline/scored-comparison.mjs"], events: [{ eventId: "delivery-1", receivedAt: "2026-01-01T00:00:00Z", head }] });
+const scoredResult = (revision, change = () => {}) => {
+  const value = {
+    schemaVersion: 1, status: "complete", expectedCells: 1, attempts: 1, unstarted: 0,
+    scored: true, grade: { summary: "synthetic public evaluation", verdict: "pass" }, revision,
+    attemptStatuses: [{ attemptId: "attempt-1", cellId: "cell-1", status: "passed", published: true }],
+  };
+  change(value);
+  return value;
+};
+
+test("a published native grade is admitted for exactly one revision and is never inherited or duplicated", () => {
+  assert.equal(typeof revisionPublication, "function", "the controller must publish its revision binding");
+  assert.equal(typeof skillEvals.revisionStatus, "function", "the CLI must expose relevant-revision status routing");
+  const head = "a".repeat(40);
+  const revision = controlled(head);
+  const trustedControls = { schemaVersion: 1, kind: "trusted_evaluation_controls", source: "trusted_controller", approvedRevision: "9".repeat(40), controls: revision.controls };
+  const status = (results, request = scoredRequest(head)) => skillEvals.revisionStatus({ request, trustedControls, results });
+  const evaluated = status([scoredResult(revision)]);
+  assert.equal(evaluated.status, "evaluated");
+  assert.equal(evaluated.green, true);
+  assert.equal(evaluated.scored, true);
+  assert.deepEqual(evaluated.grade, { summary: "synthetic public evaluation", verdict: "pass" });
+  for (const [change, disposition] of [
+    [value => { value.scored = false; }, "INVALID_GRADE"],
+    [value => { value.grade = null; }, "INVALID_GRADE"],
+    [value => { value.grade = ["pass"]; }, "MALFORMED_GRADE"],
+    [value => { value.attemptStatuses[0].status = "cancelled"; }, "CANCELLED"],
+    [value => { value.attemptStatuses[0].status = "infrastructure_failure"; }, "RUNTIME_FAILURE"],
+    [value => { value.status = "incomplete"; value.reason = "native_producer_not_qualified"; }, "AUTH_FAILURE"],
+    [value => { value.attempts = 2; }, "HISTORY_GAP"],
+  ]) {
+    const report = status([scoredResult(revision, change)]);
+    assert.equal(report.results[0].disposition, disposition);
+    assert.equal(report.status, "failed");
+    assert.equal(report.green, false);
+    assert.equal(report.grade, null);
+  }
+  const duplicated = status([scoredResult(revision), scoredResult(revision)]);
+  assert.equal(duplicated.reason, "MULTIPLE_COMPATIBLE_RESULTS");
+  assert.equal(duplicated.green, false);
+  const changedGrader = status([scoredResult(controlled(head, plan => { plan.checkerManifestSha256 = "a".repeat(64); }))]);
+  assert.equal(changedGrader.results[0].disposition, "CONTROL_FINGERPRINT_MISMATCH");
+  assert.equal(changedGrader.green, false);
+  const changedBaseline = status([scoredResult(controlled(head, plan => { plan.comparison.policySha256 = "a".repeat(64); }))]);
+  assert.equal(changedBaseline.results[0].disposition, "BASELINE_CHANGED");
+  assert.equal(changedBaseline.green, false);
 });

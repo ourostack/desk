@@ -98,3 +98,96 @@ test("CLI input errors never bypass dataset and raw journal validation", () => {
   fs.appendFileSync(path.join(left.root, "attempt-journal.jsonl"), "partial");
   assert.equal(run(["compare", "--left", left.filename, "--right", right.filename]).status, 4);
 });
+
+const legacy = args => spawnSync(process.execPath, ["--import", preload, cli, ...args], { cwd: repository, encoding: "utf8", timeout: 15000 });
+const publicHead = "1".repeat(40);
+const publicPreviousHead = "2".repeat(40);
+const publicRequest = (change = () => {}) => {
+  const value = {
+    schemaVersion: 1,
+    kind: "relevant_revision_request",
+    repository: "owner/public-alpha",
+    ref: "refs/pull/17/merge",
+    head: publicHead,
+    previousHeads: [publicPreviousHead],
+    changedPaths: ["evals/offline/fixed-controller.mjs"],
+    events: [{ eventId: "delivery-1", receivedAt: "2026-09-15T00:00:00Z", head: publicHead }],
+  };
+  change(value);
+  return value;
+};
+const publish = (name, value) => {
+  const filename = path.join(root, name);
+  fs.writeFileSync(filename, bytes(value));
+  return filename;
+};
+
+test("the shipping CLI publishes a relevant-revision status that no candidate can turn green by itself", () => {
+  const help = legacy(["help"]);
+  assert.equal(help.status, 1, help.stdout);
+  assert.match(help.stderr, /revision --request/);
+  const request = publish("public-revision-request.json", publicRequest());
+  const status = legacy(["revision", "--request", request]);
+  assert.equal(status.status, 0, status.stderr);
+  const report = JSON.parse(status.stdout);
+  assert.equal(report.kind, "relevant_revision_status");
+  assert.equal(report.relevance.relevant, true);
+  assert.equal(report.status, "pending");
+  assert.equal(report.green, false);
+  assert.equal(report.scored, false);
+  assert.equal(report.grade, null);
+  assert.equal(report.trustedControls.available, false);
+  assert.equal(report.revision.head, publicHead);
+  assert.equal(report.runIdentity, report.revision.revisionId);
+  // A candidate that also rewrites the trusted controller and its public workflow is still only data.
+  const rewritten = publish("candidate-control-rewrite.json", publicRequest(value => { value.changedPaths = ["scripts/skill-evals.cjs", ".github/workflows/desk-mcp-tests.yml", "evals/offline/cases/v2-alpha-v1/check-expectations.json"]; }));
+  const rewrittenReport = JSON.parse(legacy(["revision", "--request", rewritten]).stdout);
+  assert.equal(rewrittenReport.status, "pending");
+  assert.equal(rewrittenReport.green, false);
+  assert.deepEqual(rewrittenReport.relevance.trustedControlPaths, ["scripts/skill-evals.cjs", ".github/workflows/desk-mcp-tests.yml", "evals/offline/cases/v2-alpha-v1/check-expectations.json"]);
+  const selfApproved = publish("candidate-self-approval.json", publicRequest(value => { value.approvedRevision = publicHead; }));
+  const refused = legacy(["revision", "--request", selfApproved]);
+  assert.equal(refused.status, 1);
+  assert.equal(refused.stdout, "");
+  assert.match(refused.stderr, /UNTRUSTED_CONTROL_SOURCE/);
+});
+
+test("the current unexecuted relevant source of this repository remains pending", () => {
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" });
+  assert.equal(head.status, 0, head.stderr);
+  const request = publish("current-source-request.json", {
+    schemaVersion: 1,
+    kind: "relevant_revision_request",
+    repository: "shared-internal-tools/ms-desk",
+    ref: "refs/heads/v2-alpha",
+    head: head.stdout.trim(),
+    previousHeads: [],
+    changedPaths: ["evals/offline/fixed-controller.mjs", "scripts/skill-evals.cjs", ".github/workflows/desk-mcp-tests.yml", "desk/tasks/2026-06-14-1335-planning-desk-dependency-activation.md"],
+    events: [{ eventId: "current-source", receivedAt: "2026-09-15T00:00:00Z", head: head.stdout.trim() }],
+  });
+  const report = JSON.parse(legacy(["revision", "--request", request]).stdout);
+  assert.equal(report.relevance.relevant, true);
+  assert.deepEqual(report.relevance.paths.map(entry => entry.category), ["evaluator_source", "evaluator_source", "workflow_control", "own_desk"]);
+  assert.equal(report.status, "pending");
+  assert.equal(report.green, false);
+  assert.equal(report.grade, null);
+  assert.deepEqual(report.results, []);
+  assert.equal(report.reason, "NO_RESULT_RETURNED");
+});
+
+test("the public workflow reports relevant-revision status without carrying any credential", () => {
+  const workflow = fs.readFileSync(path.join(repository, ".github/workflows/desk-mcp-tests.yml"), "utf8");
+  const lines = workflow.split("\n");
+  const start = lines.indexOf("  desk-mcp-tests:");
+  const end = lines.findIndex((line, index) => index > start && /^  [A-Za-z0-9_-]+:\s*$/u.test(line));
+  const job = lines.slice(start, end === -1 ? lines.length : end).join("\n");
+  assert.match(job, /node scripts\/skill-evals\.cjs revision --request/);
+  assert.match(job, /permissions:\n {6}contents: read/);
+  assert.doesNotMatch(job, /secrets\./);
+  assert.doesNotMatch(workflow, /\/Users\/|\.local\/state|private-reports/);
+  for (const trigger of ["evals/offline/**", "evals/*.json", "AGENTIC-ENGINEERING-V2.md"]) {
+    assert.equal(workflow.split(`- "${trigger}"`).length, 3, trigger);
+  }
+  // The single existing verified-pack upload stays last; the status step publishes no second artifact.
+  assert.equal(job.split("uses: actions/upload-artifact@v4").length, 2);
+});

@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import dataset from "./cases/v2-alpha-v1/dataset.json" with { type: "json" };
 import manifest from "./cases/v2-alpha-v1/fixture-manifest.json" with { type: "json" };
-import { canonicalJson, jsonBytes, listRegularFiles, parseRawJson, plainObject, readRawReference, readRegular, requireCondition, sha256 } from "./core.mjs";
+import { canonicalJson, exactKeys, jsonBytes, listRegularFiles, nonblank, parseRawJson, plainObject, readRawReference, readRegular, requireCondition, sha256 } from "./core.mjs";
 import { heldOutChecks } from "./check-executor.mjs";
 import { assessCheck } from "./checks.mjs";
 import { materializeFixture } from "./materialize.mjs";
@@ -46,6 +46,32 @@ function admitChecker(checker) {
 }
 // Only parent-owned preflight and identity context accompanies held-out execution; nothing else crosses.
 const parentContextFor = checker => plainObject(checker) ? { preflight: checker.preflight, identities: checker.expected.identities } : undefined;
+const roleTuple = role => role === null ? null : [role.provider, role.model, role.reasoningEffort, role.contextTier, role.invocationMode, role.promptSha256, role.runtimeOptionsSha256];
+// The published result names the one revision it evaluated. The candidate contributes only repository, ref and its
+// exact head, and even those must equal the frozen plan's own candidate identity. Every control value is read back
+// from the frozen plan and expected matrix, so a candidate cannot publish its own fixture, grader, model, reasoning
+// effort, context tier, runtime, baseline or attempt policy alongside a result and have it treated as trusted.
+export function revisionPublication({ plan, expected, revision }) {
+  if (revision === undefined || revision === null) return null;
+  requireCondition(exactKeys(revision, ["repository", "ref", "head"]) && nonblank(revision.ref) && revision.ref.length <= 1024, "REVISION_BINDING_INVALID", "A published revision binds exactly its repository, ref and exact head");
+  requireCondition(revision.repository === plan.candidate.repository && revision.head === plan.candidate.sourceCommit, "REVISION_BINDING_MISMATCH", "A published revision must be the frozen plan's own repository and exact head");
+  return {
+    repository: revision.repository, ref: revision.ref, head: revision.head,
+    controls: {
+      dataset: plan.dataset,
+      fixtureManifestSha256: plan.fixtureManifestSha256,
+      checkerManifestSha256: plan.checkerManifestSha256,
+      admissionContractSha256: plan.admissionContractSha256,
+      toolingSourceManifestSha256: plan.toolingSourceManifestSha256,
+      bindingSha256: plan.bindingSha256,
+      runtime: plan.runtime,
+      activation: { subjectAgent: plan.activation.subjectAgent, compositionSeam: plan.activation.compositionSeam, requestedConfigurationSha256: plan.activation.requestedConfigurationSha256 },
+      attemptPolicy: plan.attemptPolicy,
+      baseline: { groupId: plan.comparison.groupId, policySha256: plan.comparison.policySha256 },
+      roles: expected.cells.map(cell => [roleTuple(cell.subject), roleTuple(cell.judge)]),
+    },
+  };
+}
 
 export async function loadNativeInputs({ filename, prepared, inputRoot }) {
   const absolute = path.resolve(filename);
@@ -345,13 +371,16 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
   }
 }
 
-export async function runFixedController({ prepared, nativeInputs, checker = nativeInputs?.checker }) {
+export async function runFixedController({ prepared, nativeInputs, checker = nativeInputs?.checker, revision }) {
   requireNativeInputs(prepared, nativeInputs);
   // Conditional admission precedes allocation, the source/runtime assertion, acquisition and every model attempt.
   const admission = bindChecker(checker);
   admitChecker(admission);
   const plan = immutable(structuredClone(prepared.plan));
   const expected = immutable(structuredClone(prepared.expected));
+  // Bound before any model attempt, from the frozen plan only, so the run cannot later be relabelled as evidence
+  // for a different repository, ref, head or control set than the one it actually executed.
+  const publishedRevision = revisionPublication({ plan, expected, revision });
   const cells = new Map(nativeInputs.cells);
   // These consume the externally owned approval/allocation. No quota, timeout or test receipt substitutes for it.
   requireCondition(await nativeInputs.assertAllocation({ plan, expected }) !== false, "NATIVE_QUALIFICATION_REQUIRED", "The native allocation assertion refused admission");
@@ -417,7 +446,7 @@ export async function runFixedController({ prepared, nativeInputs, checker = nat
   runSet.state = runSet.unstartedCellIds.length === 0 && runSet.attempts.every(attempt => attempt.commitMarker !== null) ? "complete" : "incomplete";
   runSet.closedAt = new Date().toISOString();
   publish();
-  const status = { schemaVersion: 1, status: runSet.state, expectedCells: expected.cells.length, attempts: runSet.attempts.length, unstarted: runSet.unstartedCellIds.length, scored: false, grade: null };
+  const status = { schemaVersion: 1, status: runSet.state, expectedCells: expected.cells.length, attempts: runSet.attempts.length, unstarted: runSet.unstartedCellIds.length, scored: false, grade: null, revision: publishedRevision, attemptStatuses: runSet.attempts.map(attempt => ({ attemptId: attempt.attemptId, cellId: attempt.cellId, status: attempt.status, published: attempt.commitMarker !== null })) };
   fs.writeFileSync(path.join(root, "producer-status.json"), jsonBytes(status), { mode: 0o600 });
   return { ...status, artifacts: root, exitCode: runSet.state !== "complete" || runSet.attempts.some(attempt => !["passed", "product_failure", "inconclusive"].includes(attempt.status)) ? 3 : runSet.attempts.some(attempt => attempt.status === "product_failure") ? 1 : runSet.attempts.some(attempt => attempt.status === "inconclusive") ? 2 : 0 };
 }
