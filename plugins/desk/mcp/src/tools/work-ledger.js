@@ -753,8 +753,14 @@ const ROUTES = {
     // Validated like its neighbours rather than bound raw: an array digest used
     // to be accepted, stored as SQLite's own stringification, and echoed back to
     // the caller in the shape they sent — so the response and the record
-    // disagreed about what had been written.
-    const receiptSha256 = optionalText(values, "receipt_sha256")
+    // disagreed about what had been written. Offline evaluation keeps that
+    // pre-existing optional, unvalidated digest unchanged; an online action
+    // profile is a pointer that has to carry its digest to be checkable at
+    // all, so it is required and shape-validated here instead.
+    const receiptSha256 =
+      kind === "online_action_profile"
+        ? requireHexDigest(values, "receipt_sha256")
+        : optionalText(values, "receipt_sha256")
     const now = nowIso()
     db.prepare(
       "INSERT INTO evaluations (work_item_id, measurement_kind, receipt_ref, receipt_sha256, run_set_id, run_id, case_id, status, grade, availability, recorded_at) " +
@@ -1233,6 +1239,29 @@ function requireFiniteNumber(values, field) {
   const value = values[field]
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`${LABEL}: ${field} is required and must be a finite number.`)
+  }
+  return value
+}
+
+// Exactly 64 hexadecimal characters, upper or lower case, the whole value —
+// no leading/trailing text, no truncation, no separators. This is a shape
+// check on the pointer's digest, never a fetch of the artefact and never a
+// claim that the ledger has independently verified it.
+const HEX_SHA256 = /^[0-9a-f]{64}$/iu
+
+// The immutable-pointer promise only holds if the pointer actually carries a
+// digest: an online action profile without one is not a hash-checkable
+// reference, it is a bare label. Offline evaluation kept its pre-existing
+// optional, unvalidated digest — this requirement is additive for the new
+// kind only, not a retroactive tightening of the old one.
+function requireHexDigest(values, field) {
+  const value = values[field]
+  if (typeof value !== "string" || !HEX_SHA256.test(value)) {
+    throw new Error(
+      `${LABEL}: ${field} is required for measurement_kind "online_action_profile" and ` +
+        `must be exactly 64 hexadecimal characters (case-insensitive) — the shape of a ` +
+        `SHA-256 digest, not the digest independently checked or the artefact itself.`,
+    )
   }
   return value
 }
