@@ -13,7 +13,7 @@ The agent's pushes must reach the remote intact and on the right branch. This sk
 
 These are the actual project repos where implementation happens (paths resolved via the `repo-handling` skill).
 
-**Before starting work**:
+**Before starting work**: follow the recorded repository policy. An explicitly frozen base is the authority for that task: verify its exact SHA and branch, do not rebase or move publication refs to follow the normal-main recipe below. Do not describe a frozen or unfetched checkout as current with remote main.
 ```bash
 cd <repo-local-path>
 git fetch origin                          # ALWAYS first — see the stale-status trap below
@@ -56,7 +56,19 @@ changed command. Reading a branch is not running it.
 
 **During work**: the selected Superpowers implementation owner commits and pushes only within the recorded publication authority.
 
-**At the delivery endpoint**: use `desk:superpowers-integration` and `superpowers:verification-before-completion`. Verify main only when a main merge is the authorized endpoint; an intentional alpha or PR-only branch is not authority to promote.
+**At the delivery endpoint**: use `superpowers:verification-before-completion` and the recorded repository policy, not the literal finishing menu of a provider skill or the retired integration contract. Resolve that policy through `repo-handling`, existing PR and host-specific skills; do not invent another delivery engine. If the endpoint or contribution authority is unknown, resolve that specific gap before publication or deletion rather than guessing.
+
+Production ADO delivery waits only for its required human approval; once recorded, the agent resumes the existing gates, merges and cleans through the approved repository/host path without a second go. This release's alpha-only exception forbids plugin main merge: preserve the named alpha refs and worktree until their recorded transfer or cleanup trigger. Neither technical access nor a provider's finishing options extends publication authority.
+
+Keep delivery and exact resource dispositions in the existing Markdown tables under `desk:task-lifecycle`. Pending cleanup is `cleanup_pending` there while canonical status stays `validating`; a merge receipt alone cannot close the task. The tiny adapter selects an entry, not delivery, recovery, scheduling or accounting.
+
+### Exact-owned cleanup
+
+Record resources at creation with their owning task/attempt, repository/path or host operation identity, intended disposition and evidence pointer. Before cleanup, reconcile current ownership and live consumers; a remembered name, old PID, clean status or successful root exit alone is not proof. The host must identify the exact prior process generation and all owned descendants, including delegated/remote writers and MCP/command children. Never use process-name patterns, `pkill`, `killall` or pattern-based process termination; only the owning host's exact-identity cleanup path may terminate a verified task-owned process. Unobservable writers remain non-ready, not absent.
+
+Before deleting a worktree, require exact repository/path/branch ownership and verified absence of all writers and live consumers, plus preservation of uncommitted changes, untracked files and local-only commits. Read back the agreed delivery ref and source content at the destination; for a merged task verify the actual merge and that no post-review source was left behind. Do not use a matching branch-name pattern, a merge flag alone or an archive's mere existence as deletion authority. An intentionally unmerged alpha worktree is retained unless its recorded policy authorizes a verified transfer or later removal.
+
+After exact-owner removal, record **removed-and-absent** only with readback of the resource's absence, including its worktree registration/path or owned process generation/descendants. Otherwise record an acknowledged **named transfer** or **retained-with-trigger** with the responsible owner, exact resource and cleanup trigger through `task-lifecycle`. Failed cleanup, unknown ownership or an unresolved operation stays pending; never force-delete preserved work to manufacture a clean endpoint.
 
 ## Clone hygiene — `main` is the resting state; do work in worktrees
 
@@ -68,13 +80,13 @@ The discipline:
 2. **Do each unit of work in a git worktree off `main`**, not by checking out a branch in the canonical clone:
    ```bash
    git -C <clone> fetch origin
-   git -C <clone> worktree add -b <branch> /tmp/<name> origin/main
+   git -C <clone> worktree add -b <branch> <approved-task-worktree> origin/main
    # edit / commit / push / PR / review / merge from the worktree
    # (use `git -C <worktree>` for EVERY git command — see work-orchestration
    #  "Worktree-isolated sub-agent dispatch" for the cwd-reset trap)
    ```
    The worktree isolates the work: parallel units never collide in the working tree, and the canonical clone's resting state is never perturbed.
-3. **Clean up after yourself — but verify the merge landed first.** Cleanup is GATED on a confirmed merge, never chained unconditionally after `gh pr merge`. The merge CAN fail — a flipped auth identity, a newly-required status check, a mid-air race — and cleanup that assumes success will delete the worktree + branch on a false premise. So: after `gh pr merge`, confirm `gh pr view <id> --json state --jq .state` returns `MERGED`. ONLY then: `git worktree remove <path>`, delete the local branch (`--delete-branch` on the merge removes the remote), and `git -C <clone> pull --ff-only origin main` so the canonical clone absorbs the merge and returns to a clean `main`. The end state has **zero stray worktrees and zero stray `user/*` branches.** If the merge did NOT land, nothing is lost — the commit is safe on the remote branch and the PR stays open; fix the cause and re-merge before cleaning up.
+3. **Clean up after yourself only at the recorded endpoint.** For an authorized merge, confirm the source-system PR state and actual merged source first; for GitHub, `gh pr view <id> --json state --jq .state` must return `MERGED`. This is necessary, not sufficient: apply every exact-owned cleanup gate above before `git worktree remove <path>` or deleting the specific branch. Do not chain removal unconditionally after merge or let a merge command's automatic branch deletion bypass these gates. Reconcile the canonical clone through the recorded repository policy afterward. An alpha or PR-only endpoint instead preserves or transfers the exact refs/worktree with a named owner and trigger. The end state has zero unaccounted-for resources, not zero deliberately retained branches. If merge failed or ownership/absence is uncertain, preserve the work and keep cleanup pending.
 
 **Why:** the clone's checked-out state is cattle, not a pet — only `main` and the remote are durable. This is the working-copy layer of "Never leave state behind" (below) and the branch → PR → merge drive-to-merge motion: branch in a worktree → PR → merge → delete branch → remove worktree → clone back on clean `main`, no residue at any layer.
 
@@ -87,7 +99,7 @@ git -C <clone> fetch origin
 git -C <clone> diff origin/main..<branch> --stat
 ```
 
-Empty diff → the branch's content is fully upstream → safe to delete (use `git branch -D`, since a squash-merge leaves the branch "ahead" in ancestry even when its content is fully merged — trust the content diff, not the commit count). Non-empty diff → the branch carries **real unmerged work**; do NOT delete it. Drive it to merge if it's ready, or preserve it and surface it to the operator. "These were probably just left behind" is a hypothesis to verify, not a license to delete unexamined work.
+Empty diff is content evidence, not deletion authority. Apply the recorded endpoint and all exact-owned cleanup gates before deleting the specific branch, including live-writer/consumer absence and any required retention or transfer. A squash-merge can leave the branch ahead in ancestry even when its content is merged, but that is not permission to bypass ownership checks. Non-empty diff means the branch carries different content: preserve and reconcile it, and pursue merge only when authorized. "These were probably just left behind" is a hypothesis to verify, not a license to delete unexamined work.
 
 ## Reading source as evidence
 
@@ -398,9 +410,7 @@ with real semantic conflicts get resolved normally.
 
 ## Never leave state behind
 
-If the agent changed a file, it's committed and pushed **before the session ends**. Applies to:
-- Task cards and planning/doing docs in any state repo
-- Code changes in code repos (via the selected Superpowers implementation owner)
+Before the session ends, persist task-owned changes through the recorded contribution path. Commit and push only when authorized; a no-push or local-handoff endpoint must preserve the exact commits and required worktree instead. Preserve unfinished source through `desk:session-resumption` when it is not ready to commit, without sweeping unrelated files. Apply this to canonical task/progress state and code changes through their respective owners; persistence is not authority to publish or delete.
 
 At session start, if git status in any repo shows unexpected uncommitted changes, surface them to the operator before doing anything else — they may represent orphaned work from a previous session.
 

@@ -138,6 +138,14 @@ test("the retired integration name redirects to the adapter without becoming a s
   assert.match(text, /desk:using-superpowers-with-desk/u)
   assert.match(text, /[Rr]etired/u)
   assert.doesNotMatch(text, /Entry: start \| reconciled-resume \| material-redesign\./u)
+  assert.doesNotMatch(text, /## Bounded execution and recovery/u)
+  assert.doesNotMatch(text, /host protocol declares armed|two consecutive actual interruption/u)
+  const sections = [...text.matchAll(/^## (.+)$/gmu)].map((match) => match[1])
+  assert.ok(sections.includes("Legacy capability mapping"))
+  assert.ok(sections.length <= 2, "only compatibility mapping and T06's transitional section may remain")
+  for (const section of sections) {
+    assert.ok(["Review and accounting", "Legacy capability mapping"].includes(section), `active contract retained: ${section}`)
+  }
 })
 
 for (const mode of ["global-personal", "project-local"]) {

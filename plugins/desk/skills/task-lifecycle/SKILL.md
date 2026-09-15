@@ -30,9 +30,9 @@ Each transition has a checkpoint type declaring how humans interact at that gate
 |------------|-----------------|---------------|
 | → `drafting` | GATE | Entry point; operator must approve task creation OR worker creates autonomously per agent-initiated path |
 | `drafting` → `processing` | AUTO | The existing alignment receipt records the agreed outcome, definition of done, and explicit go-ahead. New work without it stays in alignment; a clear task or completed plan alone is not authorization. |
-| `processing` → `validating` | AUTO | Worker self-attests that implementation is complete; opens PR; no human gate |
-| `validating` → `done` | AUTO | Work Merger verifies the agreed terminal state plus applicable release/install, consuming-surface smoke, cleanup, and durable state. Normal merge tasks require the exact green merge; a preview-only task preserves its branch without main promotion. Explicit owner policies can still route a required approval through `collaborating`. |
-| Any → `collaborating` | NOTIFY | Worker pauses + tells operator what's needed; resumption is operator-initiated |
+| `processing` → `validating` | AUTO | Implementation is complete; record the authorized delivery ref and open a PR only when repository policy calls for one; no new human go |
+| `validating` → `done` | AUTO | The selected Superpowers implementation owner verifies the agreed terminal state through `verification-before-completion` and the recorded repository policy, including applicable release/install, consuming-surface smoke, resource dispositions and durable state. Normal merge tasks require the exact green merge; a preview-only task preserves its branch without main promotion. Explicit owner policies can still route a required approval through `collaborating`. |
+| Any → `collaborating` | NOTIFY | Worker records the specific unsatisfied human gate and tells the operator what's needed; resume when that required input/approval is recorded, without another go |
 | Any → `paused` | NOTIFY | Operator-requested pause; worker emits a clean handoff state |
 | Any → `blocked` | NOTIFY | External blocker; worker emits the blocker reason + escalation path |
 | Any → `cancelled` | CONFIRM | Operator confirms abandonment; rare; worker doesn't auto-cancel |
@@ -61,25 +61,25 @@ Each transition has a checkpoint type declaring how humans interact at that gate
 
 ## State-change protocol
 
-Every transition writes the applicable durable surfaces in order. Commit-message-only is not sufficient—a new session must reconstruct what happened from the task and track, plus a doing document when one exists.
+Every transition writes the applicable durable surfaces in order. Commit-message-only is not sufficient: a new session must reconstruct what happened from the task, track and mapped progress/rulings. Consume the adapter's mapped `progressPath` and derived `rulingsPath`; an explicit provider progress file is not replaced by a universal `doing.md`. When the map resolves to `task.md`, update it in place rather than writing a duplicate progress record.
 
 ### 1. Task card (`task.md`)
 
 - Update `status` field.
 - Update `updated` timestamp to ISO 8601 UTC.
 - Body updates as transition dictates:
-  - Transitioning to `processing`: add a "Current work" line pointing at the active branch and either the doing document or task card.
-  - Transitioning to `validating`: add a "PRs" section listing every PR URL that represents this task (one per repo in multi-repo tasks), with repo name + PR title + status.
+  - Transitioning to `processing`: add a "Current work" line pointing at the active branch and mapped progress record.
+  - Transitioning to `validating`: record the authorized delivery refs and applicable PR URLs (one per repo in multi-repo tasks), with repo name, title and status; a no-push or local handoff endpoint does not require a PR.
   - Transitioning to `done`: move the PR list to a "Landed" section with merge shas and record applicable release/install, smoke, and cleanup evidence. For an explicitly unmerged terminal outcome, use "Delivered" with the preview or PR ref and its proof; never invent a merge.
   - Transitioning to `blocked` / `collaborating`: a "Blocker" / "Waiting on" line with the specific reason.
 
-### 2. Doing doc, when present (for `processing`, `validating`, `done` transitions)
+### 2. Mapped progress/rulings (for `processing`, `validating`, `done` transitions)
 
-Clear tasks can execute from the task card without a doing document. When a doing document exists, keep it current. At minimum:
+Clear tasks can execute from the task card without a doing document. Update the mapped progress record, whether an explicit provider file, existing `doing.md` or `task.md`; retain historical artifacts without forking the active record. At minimum:
 
 - Check off unit checkboxes (`- [ ]` → `- [x]`) for units completed.
 - If the implementation owner produced a progress log at the top, append the current transition.
-- On `validating`: record the PR URL at the top of the doing doc.
+- On `validating`: record the applicable PR URL or intentional unmerged delivery ref and its remaining obligations.
 
 ### 3. Track card (`track.md`)
 
@@ -105,7 +105,21 @@ Auth and push convention is consumer-specific: corporate-worker overlays push un
 
 ### Why the applicable writes
 
-Commit messages are not a handoff format. A new session reading the task card must see current state, active branch/artifact, open PRs, blockers, and terminal evidence without shell archaeology. Keep the track card aligned and update a doing document only when the task has one.
+Commit messages are not a handoff format. A new session reading the task card must see current state, active branch/artifact, open PRs, blockers, and terminal evidence without shell archaeology. Keep the track card aligned and use the explicit progress/rulings map without creating another state tree.
+
+## Delivery and resource accounting
+
+Use the existing Markdown delivery and resources tables in the mapped progress record or canonical task. Record resources at creation, including their exact repository/worktree path or host resource/operation identity, owning task/attempt and process generation, active writers or consumers, intended cleanup or transfer owner, and evidence pointer. Keep detailed host/private evidence in approved protected storage, not the task card. No delivery daemon or schema is introduced.
+
+`cleanup_pending` is a Markdown delivery state while the canonical task status stays `validating`; it is not a ninth task state. A process exit, merged PR or successful build is not completion while resources remain unaccounted for. Every resource requires one verified disposition before transition to `done`:
+
+- **removed-and-absent**: exact-owner cleanup plus source-system/host readback proving the resource and its owned writers or descendants are absent.
+- **named transfer**: a specific receiving owner has acknowledged the exact resource, ongoing obligations and next step; recording an intended recipient alone is insufficient.
+- **retained-with-trigger**: a responsible owner, reason and explicit cleanup trigger are recorded and verified, including intentional alpha branches/worktrees, protected evidence and any continuing consumers.
+
+Unknown ownership, uncertain external effects or failed absence checks remain unresolved in the table, not silently complete. Reconcile effects and writer release through `desk:session-resumption`; perform repository/process cleanup through `desk:git-hygiene` and the owning host's existing skills. `desk:work-orchestration` owns reservations and ready-set recomputation, and `desk:independent-review` owns exact-commit review admission; resource accounting does not bypass their acceptance or sole-writer gates.
+
+Apply the recorded repository policy through `repo-handling`, `git-hygiene`, PR and host-specific skills, not a fresh literal finishing menu. Use `collaborating` only while an actual required human approval is outstanding; after it is recorded, return to `validating` and continue authorized agent-owned merge/cleanup without asking for another go. An alpha/PR-only endpoint retains its required refs and cannot authorize plugin main promotion.
 
 ## Adopted tasks with completed planning
 
@@ -122,4 +136,4 @@ When resuming a task with `planning_complete: true` and `status: drafting`, reus
 
 ## Dispatch belongs to the selected implementation owner
 
-The selected Superpowers implementation owner chooses a sequential or delegated execution shape within the recorded authority. Historical `Execution Mode` headers do not grant delegation or override current instructions. The canonical doing record remains the same Desk file.
+The selected Superpowers implementation owner chooses a sequential or delegated execution shape within the recorded authority and `desk:work-orchestration`'s ready-set contract. Historical `Execution Mode` headers do not grant delegation or override current instructions. Progress and rulings remain at their explicit mapped Desk paths across delivery and recovery.
