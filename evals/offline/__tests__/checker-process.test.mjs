@@ -150,7 +150,7 @@ function linuxLauncher(t, tree) {
   t.mock.method(fs, "realpathSync", (filename, ...args) => filename === process.execPath ? "/opt/node/bin/node" : realpath(filename, ...args));
   const exists = fs.existsSync;
   t.mock.method(fs, "existsSync", filename => ["/opt/node", "/usr", "/bin", "/lib"].includes(filename) || exists(filename));
-  const transport = { invocation: null, stdout: "", statusBytes: "", statusEof: true, exitCode: 0, exitSignal: null, onSpawn: null, ...procOptions(t, tree) };
+  const transport = { invocation: null, stdout: "", statusBytes: "", statusEof: true, statusChunks: false, exitCode: 0, exitSignal: null, onSpawn: null, ...procOptions(t, tree) };
   t.mock.method(childProcess, "spawn", (executable, argv, settings) => {
     transport.invocation = { executable, argv, settings };
     const child = Object.assign(new EventEmitter(), { pid: 777001, stdout: new PassThrough(), stderr: new PassThrough(), stdio: [null, null, null, new PassThrough()], kill: () => true });
@@ -169,8 +169,11 @@ function linuxLauncher(t, tree) {
     queueMicrotask(() => {
       child.stdout.end(transport.stdout);
       child.stderr.end("");
-      if (transport.statusEof) child.stdio[3].end(transport.statusBytes);
-      else child.stdio[3].write(transport.statusBytes);
+      // A real launcher writes its init line and its exit line as separate status records.
+      const chunks = transport.statusChunks ? transport.statusBytes.split(/(?<=\n)/u) : [transport.statusBytes];
+      for (const chunk of chunks.slice(0, -1)) child.stdio[3].write(chunk);
+      if (transport.statusEof) child.stdio[3].end(chunks.at(-1));
+      else child.stdio[3].write(chunks.at(-1));
     });
     return child;
   });
@@ -186,24 +189,17 @@ function linuxLauncher(t, tree) {
 
 const complete = status => `{"child-pid":4242}\n{"exit-code":${status}}\n`;
 
-// The parent's PID-namespace view. `surviving` counts how many post-run snapshots still show a namespace this run
-// created; `initAlive` keeps the launcher's reported init in a namespace the parent never saw before the run.
+// The parent's namespace view. `surviving` counts how many post-run surveys still find a process inside the exact
+// namespace this run created; `initAlive` keeps the launcher's reported init alive in that namespace.
 function procOptions(t) {
-  const view = { before: true, afterCount: 0, surviving: 0, initAlive: false, unreadable: false, procMissing: false };
+  const runNamespace = "pid:[4026999999]";
+  const view = { runNamespace, surveys: 0, initReads: 0, surviving: 0, initAlive: false, unreadable: false, procMissing: false, identityUnobservable: false };
   const readdir = fs.readdirSync;
   t.mock.method(fs, "readdirSync", (target, ...args) => {
     if (target !== "/proc") return readdir(target, ...args);
     if (view.procMissing) throw Object.assign(new Error("no /proc"), { code: "ENOENT" });
-    const base = ["1", "2", "not-a-pid", ...(view.unreadable ? ["6666"] : [])];
-    if (view.before) {
-      view.before = false;
-      view.afterCount = 0;
-      return base;
-    }
-    view.afterCount += 1;
-    const extra = view.afterCount <= view.surviving ? ["5555"] : [];
-    if (extra.length === 0 || view.afterCount >= 5) view.before = true;
-    return [...base, ...extra];
+    view.surveys += 1;
+    return ["1", "2", "not-a-pid", ...(view.surveys <= view.surviving ? ["5555"] : []), ...(view.unreadable ? ["6666"] : [])];
   });
   const readlink = fs.readlinkSync;
   t.mock.method(fs, "readlinkSync", (target, ...args) => {
@@ -211,9 +207,15 @@ function procOptions(t) {
     if (!value.startsWith("/proc/")) return readlink(target, ...args);
     const pid = value.split("/")[2];
     if (pid === "6666") throw Object.assign(new Error("denied"), { code: "EACCES" });
-    if (pid === "5555") return "pid:[4026999999]";
+    if (pid === "5555") return runNamespace;
     if (pid === "4242") {
-      if (view.initAlive) return "pid:[4026999998]";
+      view.initReads += 1;
+      // Odd reads happen while the launcher's init is alive; even reads are the post-run retirement check.
+      if (view.initReads % 2 === 1) {
+        if (view.identityUnobservable) throw Object.assign(new Error("already gone"), { code: "ENOENT" });
+        return runNamespace;
+      }
+      if (view.initAlive) return runNamespace;
       throw Object.assign(new Error("gone"), { code: "ENOENT" });
     }
     return "pid:[4026531836]";
@@ -452,7 +454,8 @@ function preflightTransport(t, { hiddenReadable = false, scratchWritable = true,
       }
       child.stdout.end(stdout);
       child.stderr.end("");
-      child.stdio[3].end(overflowing ? "" : `{"child-pid":4242}\n{"exit-code":0}\n`);
+      // A real launcher reports its init even for a run that never reaches a clean exit line.
+      child.stdio[3].end(overflowing ? '{"child-pid":4242}\n' : `{"child-pid":4242}\n{"exit-code":0}\n`);
     });
     return child;
   });
@@ -559,7 +562,8 @@ test("descriptor EOF alone cannot close a namespace the parent still observes", 
   const surviving = await captureConfinedChecker(options);
   assert.equal(surviving.statusPipeEof, true, "The monitor channel still reached EOF");
   assert.equal(surviving.captureComplete, true, "Capture still completed");
-  assert.deepEqual(surviving.lifetime.survivingNamespaces, ["pid:[4026999999]"]);
+  assert.equal(surviving.lifetime.namespaceIdentity, "pid:[4026999999]");
+  assert.deepEqual(surviving.lifetime.remainingOccupants, [5555]);
   assert.equal(surviving.namespaceClosed, false, "A surviving namespace refuses closure that EOF alone would have granted");
   assert.equal(surviving.availability.cleanupComplete, false);
   transport.proc.surviving = 1;
@@ -579,6 +583,17 @@ test("descriptor EOF alone cannot close a namespace the parent still observes", 
   transport.proc.procMissing = true;
   const blind = await captureConfinedChecker(options);
   assert.equal(blind.lifetime.reconciled, false, "Without a readable process view the parent cannot reconcile anything");
+  transport.proc.procMissing = false;
+  transport.proc.identityUnobservable = true;
+  const brief = await captureConfinedChecker(options);
+  assert.equal(brief.lifetime.namespaceIdentityObserved, false, "A launcher init that exits first leaves no identity to read");
+  assert.equal(brief.lifetime.initRetired, true);
+  assert.equal(brief.namespaceClosed, true, "Retirement of the reported init is itself the parent's lifetime fact");
+  transport.proc.identityUnobservable = false;
+  transport.statusBytes = "not json\n";
+  const noInit = await captureConfinedChecker(options);
+  assert.equal(noInit.lifetime.initPid, null);
+  assert.equal(noInit.lifetime.reconciled, false, "No observed init is not a reconciled namespace");
 });
 
 test("the preflight composes caller cancellation and stops creating further children", async t => {
@@ -652,4 +667,31 @@ test("admitted environment names still carry field-specific value rules", async 
     npm_config_audit: "false", npm_config_fund: "false", CHECKER_CANARY_TOKEN: "untrusted-diagnostic-marker", LANG: "C.UTF-8",
   } });
   assert.equal(admitted.exitCode, 0, "The justified canary and exact npm settings still cross the boundary");
+});
+
+test("a launcher that reports its init and exit separately still binds one namespace identity", async t => {
+  const tree = roots("checker-status-chunks");
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = complete(0);
+  transport.statusChunks = true;
+  const result = await captureConfinedChecker(options);
+  assert.equal(result.statusPipe.bytes.toString(), complete(0), "Both status records are retained verbatim");
+  assert.equal(result.lifetime.initPid, 4242);
+  assert.equal(result.lifetime.namespaceIdentityObserved, true);
+  assert.equal(result.namespaceClosed, true);
+});
+
+test("a refused scratch root never materializes a directory inside protected data", async t => {
+  const tree = roots("checker-scratch-creation");
+  const { transport, options } = linuxLauncher(t, tree);
+  transport.statusBytes = complete(0);
+  const linkedParent = path.join(tree.root, "linked-parent");
+  fs.symlinkSync(tree.checker, linkedParent);
+  const refused = [path.join(tree.checker, "scratch"), path.join(tree.subject, "scratch"), path.join(tree.inputs, "scratch"), path.join(linkedParent, "scratch")];
+  for (const scratch of refused) {
+    await assert.rejects(captureConfinedChecker({ ...options, scratchRoot: scratch, inputsRoot: tree.inputs }), { code: "CHECKER_OS_BOUNDARY_REQUIRED" }, scratch);
+    assert.equal(fs.existsSync(scratch), false, `${scratch} must not have been created`);
+  }
+  assert.equal(transport.invocation, null);
+  assert.deepEqual(fs.readdirSync(tree.checker).sort(), ["expected-matrix.json", "oracle.test.mjs"], "The held-out root is untouched");
 });

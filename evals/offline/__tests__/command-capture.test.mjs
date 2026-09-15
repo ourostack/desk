@@ -86,7 +86,7 @@ test("the owning command cancellation is distinct from an SDK invocation's norma
 
 test("command construction rejects malformed argv, environment and limits without starting a child", async () => {
   const valid = options("");
-  for (const delta of [{ statusPipe: "true" }, { argv: "shell string" }, { env: null }, { env: { value: 1 } }, { argv: ["nul\0argument"] }, { limits: { maxStreamBytes: 0, timeoutMs: 1 } }, { limits: { maxStreamBytes: 1, timeoutMs: 1, cleanupMs: 0 } }]) await assert.rejects(() => captureBoundedCommand({ ...valid, ...delta }));
+  for (const delta of [{ statusPipe: "true" }, { onStatus: "not a function" }, { argv: "shell string" }, { env: null }, { env: { value: 1 } }, { argv: ["nul\0argument"] }, { limits: { maxStreamBytes: 0, timeoutMs: 1 } }, { limits: { maxStreamBytes: 1, timeoutMs: 1, cleanupMs: 0 } }]) await assert.rejects(() => captureBoundedCommand({ ...valid, ...delta }));
 });
 
 test("real host transport captures FD 3 separately and bounds its overflow without claiming native isolation", async () => {

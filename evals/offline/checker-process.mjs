@@ -85,48 +85,49 @@ function fileDigest(filename) {
   } catch { return null; }
 }
 
-// The parent's own view of which PID namespaces exist. Stream EOF only proves descriptors closed; a descendant that
-// closed its inherited descriptors would still hold its namespace open, and that is what this snapshot detects.
-function pidNamespaceSnapshot() {
-  const namespaces = new Set();
+// The parent's own view of the namespace this run created. Stream EOF only proves descriptors closed; a descendant
+// that closed its inherited descriptors would still hold its namespace open, and that is what this reconciliation
+// detects. Only the run-owned namespace identity is inspected — never a host-wide snapshot difference.
+function namespaceIdentity(pid) {
+  try { return fs.readlinkSync(`/proc/${pid}/ns/pid`); }
+  catch { return null; }
+}
+
+function namespaceOccupants(identity) {
+  const occupants = [];
   let unreadable = 0;
   let listed = [];
   try { listed = fs.readdirSync("/proc").filter(name => /^\d+$/u.test(name)).slice(0, 16384); }
   catch { unreadable += 1; }
   for (const name of listed) {
-    try { namespaces.add(fs.readlinkSync(`/proc/${name}/ns/pid`)); }
+    try { if (fs.readlinkSync(`/proc/${name}/ns/pid`) === identity) occupants.push(Number(name)); }
     catch (error) { unreadable += Number(error.code !== "ENOENT"); }
   }
-  return { namespaces: [...namespaces], unreadable };
+  return { occupants, unreadable };
 }
 
-function survivingNamespaces(before, after) {
-  return after.namespaces.filter(namespace => !before.namespaces.includes(namespace));
-}
-
-// A retired init is one the parent can no longer find, or one whose PID now belongs to a namespace that predates this run.
-function initRetired(childPid, before) {
-  try { return before.namespaces.includes(fs.readlinkSync(`/proc/${childPid}/ns/pid`)); }
-  catch { return true; }
-}
-
-async function reconcileNamespaceLifetime(before, execution) {
-  let after = pidNamespaceSnapshot();
-  for (let attempt = 0; attempt < 4 && survivingNamespaces(before, after).length > 0; attempt += 1) {
-    await new Promise(resolve => setTimeout(resolve, 25));
-    after = pidNamespaceSnapshot();
+// The launcher's init owns the namespace's lifetime, so a retired init is the parent's lifetime fact; where the init
+// was still observable during the run, its exact namespace must additionally hold no remaining process.
+async function reconcileNamespaceLifetime(observed, execution) {
+  const initPid = execution.status === "observed" ? execution.childPid : observed.initPid;
+  const initRetired = initPid === null ? null : namespaceIdentity(initPid) === null;
+  let survey = { occupants: [], unreadable: 0 };
+  if (observed.identity !== null) {
+    survey = namespaceOccupants(observed.identity);
+    for (let attempt = 0; attempt < 4 && survey.occupants.length > 0; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      survey = namespaceOccupants(observed.identity);
+    }
   }
-  const surviving = survivingNamespaces(before, after);
-  const retired = execution.status === "observed" ? initRetired(execution.childPid, before) : null;
   return {
-    scope: "parent-observed-pid-namespace-reconciliation",
-    initPid: execution.status === "observed" ? execution.childPid : null,
-    initRetired: retired,
-    survivingNamespaces: surviving,
-    unreadable: before.unreadable + after.unreadable,
-    observedBefore: before.namespaces.length,
-    observedAfter: after.namespaces.length,
-    reconciled: before.unreadable === 0 && after.unreadable === 0 && before.namespaces.length > 0 && surviving.length === 0 && retired !== false,
+    scope: "parent-observed-namespace-init-lifetime",
+    initPid,
+    initRetired,
+    namespaceIdentity: observed.identity,
+    namespaceIdentityObserved: observed.identity !== null,
+    remainingOccupants: survey.occupants,
+    unreadable: survey.unreadable,
+    reconciled: initRetired === true && survey.occupants.length === 0 && survey.unreadable === 0,
   };
 }
 
@@ -148,6 +149,12 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
   const hidden = canonicalRoot(checkerRoot, "The held-out checker root");
   const inputs = inputsRoot === undefined || inputsRoot === null ? null : canonicalRoot(inputsRoot, "The parent-owned inputs root");
   const requestedScratch = absoluteRoot(scratchRoot ?? path.join(parentRoot, "child-scratch"));
+  // Nothing is created until the requested scratch path is proved disjoint from held-out, source and input data and
+  // free of symlinked ancestors, so a refused request never materializes a directory inside protected data.
+  boundaryRequired(![hidden, source, ...(inputs ? [inputs] : [])].some(root => overlaps(requestedScratch, root)), "The child-owned scratch root cannot overlap held-out, source or input data");
+  boundaryRequired(requestedScratch !== parentRoot && !parentRoot.startsWith(`${requestedScratch}${path.sep}`), "The child-owned scratch root cannot be the parent work root or contain it");
+  try { pathIdentities(requestedScratch, true); }
+  catch (error) { boundaryRequired(false, `The child-owned scratch root has an unsafe ancestor: ${error.code}`); }
   fs.mkdirSync(requestedScratch, { recursive: true, mode: 0o700 });
   const scratch = canonicalRoot(requestedScratch, "The child-owned scratch root");
   // Mode 0700 stays usable inside the sandbox because bwrap maps this caller's uid onto the requested sandbox uid,
@@ -182,11 +189,20 @@ export async function captureConfinedChecker({ executable, argv, cwd, env, limit
   for (const [name, value] of Object.entries(env)) args.push("--setenv", name, value);
   const mountArgs = [...args];
   args.push("--", executable, ...argv);
-  const namespacesBefore = pidNamespaceSnapshot();
-  const result = await captureBoundedCommand({ executable: launcher, argv: args, cwd: parentRoot, env: { PATH: "/usr/bin:/bin" }, limits, signal, statusPipe: true });
+  // The launcher reports its init's PID while that init is still alive, which is the only moment its namespace
+  // identity can be read. A run whose init exits first leaves `identity` null and is reconciled by retirement alone.
+  const observed = { initPid: null, identity: null };
+  const onStatus = bytes => {
+    if (observed.initPid !== null) return;
+    const pid = Number(String(bytes).match(/"child-pid"\s*:\s*(\d+)/u)?.[1]);
+    if (!Number.isSafeInteger(pid) || pid <= 0) return;
+    observed.initPid = pid;
+    observed.identity = namespaceIdentity(pid);
+  };
+  const result = await captureBoundedCommand({ executable: launcher, argv: args, cwd: parentRoot, env: { PATH: "/usr/bin:/bin" }, limits, signal, statusPipe: true, onStatus });
   const after = { source: inputManifest(source), inputs: inputManifest(inputs) };
   const execution = launcherExecution(result);
-  const lifetime = await reconcileNamespaceLifetime(namespacesBefore, execution);
+  const lifetime = await reconcileNamespaceLifetime(observed, execution);
   const readOnly = mountArgs.flatMap((value, index) => value === "--ro-bind" ? [mountArgs[index + 1]] : []);
   const writable = mountArgs.flatMap((value, index) => value === "--bind" ? [mountArgs[index + 1]] : []);
   const statusPipeEof = result.statusPipe.eof === true;

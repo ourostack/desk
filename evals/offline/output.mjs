@@ -173,8 +173,10 @@ export function readCommittedRun(root) {
   validateReceipt(receipt, marker.runId, receipt.executionKind);
   return { marker, inventory, receipt, receiptSha256: receiptMember.sha256, inventorySha256: inventoryMember.sha256 };
 }
-export async function captureBoundedCommand({ executable, argv, cwd, env, limits, signal, statusPipe = false }) {
+export async function captureBoundedCommand({ executable, argv, cwd, env, limits, signal, statusPipe = false, onStatus }) {
   requireCondition(typeof statusPipe === "boolean", "INVALID_COMMAND", "An optional launcher status pipe must be explicitly selected");
+  // A parent-side observer of launcher status lines while the child is still alive. It never influences capture.
+  requireCondition(onStatus === undefined || typeof onStatus === "function", "INVALID_COMMAND", "An optional launcher status observer must be a function");
   requireCondition(nonblank(executable) && Array.isArray(argv) && argv.length <= 256 && argv.every(value => typeof value === "string" && value.length <= 65536 && !value.includes("\0")) && plainObject(env) && Object.entries(env).every(([key, value]) => nonblank(key) && typeof value === "string" && !key.includes("=") && !key.includes("\0") && !value.includes("\0")), "INVALID_COMMAND", "Command capture requires executable, argv and explicit environment, never a shell string");
   const directory = absoluteRoot(cwd);
   pathIdentities(directory);
@@ -241,6 +243,7 @@ export async function captureBoundedCommand({ executable, argv, cwd, env, limits
       streams[channel] = channel === "statusPipe" ? child.stdio[3] : child[channel];
       streams[channel].on("data", bytes => {
         if (settled) return;
+        if (channel === "statusPipe" && onStatus) onStatus(bytes);
         const streamRemaining = Math.max(0, limits.maxStreamBytes - lengths[channel]);
         const aggregateRemaining = Math.max(0, maxCaptureBytes - capturedBytes);
         const room = Math.min(streamRemaining, aggregateRemaining);
