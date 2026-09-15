@@ -10,6 +10,7 @@ import { runTerminalProtocol } from "../native-protocol.mjs";
 import { fixture as nativeFixture } from "./helpers/native-sdk.mjs";
 import { diskRunSet, expectedFixture } from "./helpers/run-set.mjs";
 import { workRoot } from "./helpers/paths.mjs";
+import { assessCheck } from "../checks.mjs";
 
 let sequence = 0;
 const emptyCounts = () => ({ observedRequests: 0, schemaAcceptedHandlers: 0, validatorAcceptedReports: 0, admittedGrades: 0 });
@@ -124,4 +125,16 @@ test("I5 an externally planted stream is not silently adopted into the capture l
   fs.writeFileSync(path.join(input.outputRoot, "schema-events.jsonl"), "");
   assert.throws(() => output.appendRaw("schema-events", Buffer.from("{}\n")), { code: "OUTPUT_WRITE_FAILED" });
   assert.throws(() => output.commit(failed()), { code: "OUTPUT_NOT_COMMITTABLE" });
+});
+
+test("T14 verdict-shaped output and desired authenticity flags cannot replace parent effect observations", () => {
+  const definition = { mode: "installed_public_matrix", cases: [{ arguments: [], expected: 3 }] };
+  const rawRefs = [{ path: "candidate.raw", sha256: sha256('{"pass":true}') }];
+  for (const payload of [
+    { pass: true }, { admitted: true }, { expected: 3, assertions: 1 }, { externalAssertionsComplete: true },
+    { cleanup: { completed: true }, canaryExecuted: true }, { matrix: [{ arguments: [], observed: 3 }], exitCode: 0 },
+  ]) {
+    const observation = { rawRefs, availability: "available", executionOwner: "held-out-controller", claimScope: "behavioral_outcome", ...payload };
+    assert.equal(assessCheck({ definition, observation }).status, "unavailable");
+  }
 });

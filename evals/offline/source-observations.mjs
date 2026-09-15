@@ -1,6 +1,115 @@
 import path from "node:path";
+import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { canonicalJson, listRegularFiles, readRegular, relativeName, requireCondition } from "./core.mjs";
+import { canonicalJson, listRegularFiles, readRawReference, readRegular, relativeName, requireCondition, sha256 } from "./core.mjs";
+
+function sourceGit(root, argv, encoding = "utf8") {
+  requireCondition(fs.lstatSync(path.join(root, ".git")).isDirectory() && !["commondir", "objects/info/alternates", "info/grafts"].some(name => fs.existsSync(path.join(root, ".git", name))), "CHECK_SOURCE_IDENTITY_UNAVAILABLE", "The fixture must own its Git metadata and object store without redirects");
+  return execFileSync("git", ["--no-optional-locks", "--no-replace-objects", "--git-dir", path.join(root, ".git"), "--work-tree", root, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...argv], {
+    encoding, timeout: 10000, maxBuffer: 16777216,
+    env: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "", GIT_TERMINAL_PROMPT: "0" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+export function readSourceState({ root, files = listRegularFiles(root), baseCommit, retain }) {
+  const sourceCommit = sourceGit(root, ["rev-parse", "HEAD"]).trim();
+  const [name, email] = sourceGit(root, ["show", "-s", "--format=%cn%n%ce", "HEAD"]).trim().split("\n");
+  // Git worktree status/diff can run candidate clean filters even with --no-ext-diff. Read raw tree/index objects and compare the frozen descriptors ourselves.
+  const tree = sourceGit(root, ["ls-tree", "-rz", "--full-tree", sourceCommit]).split("\0").filter(Boolean).map(record => {
+    const match = /^([0-7]+) blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(record);
+    requireCondition(match, "CHECK_SOURCE_IDENTITY_UNAVAILABLE", "The fixture commit must contain regular source blobs");
+    return { mode: Number.parseInt(match[1], 8) & 0o777, blob: match[2], path: match[3] };
+  });
+  const index = sourceGit(root, ["ls-files", "--stage", "-z"]).split("\0").filter(Boolean);
+  const diff = sourceGit(root, ["diff-tree", "--root", "--no-commit-id", "--no-ext-diff", "--no-textconv", "-p", ...(baseCommit ? [baseCommit] : []), sourceCommit, "--"]);
+  const committed = {};
+  const changes = [];
+  const statusRows = [];
+  const display = filename => /[\n\r\t"]/.test(filename) ? JSON.stringify(filename) : filename;
+  for (const member of tree) {
+    const digest = sha256(sourceGit(root, ["cat-file", "blob", member.blob], null));
+    committed[member.path] = digest;
+    const actual = files.find(file => file.path === member.path);
+    const indexed = index.includes(`${(0o100000 | member.mode).toString(8)} ${member.blob} 0\t${member.path}`);
+    if (!indexed || !actual || actual.sha256 !== digest || (actual.mode & 0o111 ? 0o755 : 0o644) !== member.mode) {
+      changes.push({ path: member.path, committedSha256: digest, observedSha256: actual?.sha256 ?? null });
+      statusRows.push(`${indexed ? " " : "M"}${actual ? "M" : "D"} ${display(member.path)}`);
+    }
+    for (const record of index) {
+      const filename = record.slice(record.indexOf("\t") + 1);
+      if (!tree.some(member => member.path === filename)) statusRows.push(`A  ${display(filename)}`);
+    }
+  }
+  for (const member of files.filter(file => !file.path.startsWith(".git/") && !tree.some(row => row.path === file.path))) statusRows.push(`?? ${display(member.path)}`);
+  const value = { sourceCommit, status: statusRows.join("\n"), files, diff, changes, committed, committer: { name, email } };
+  return { ...value, rawRef: retain("source-state.json", value) };
+}
+
+// tar consumes a bounded, descriptor-verified byte snapshot on stdin; it never reopens a candidate pathname or extracts into the parent.
+export function inspectArchive({ root, archive, sourceCommit, retain }) {
+  const file = readRegular(root, archive.path);
+  requireCondition(file.sha256 === archive.sha256, "CHECK_SOURCE_CHANGED", "The delivered archive changed after its inventory");
+  const run = args => execFileSync("tar", args, { input: file.bytes, timeout: 10000, maxBuffer: 16777216, env: { PATH: process.env.PATH }, stdio: ["pipe", "pipe", "pipe"] });
+  const evidence = { archiveSha256: file.sha256, sourceCommit, descriptorIdentity: file.identity, members: [] };
+  try {
+    const names = run(["-tzf", "-"]).toString("utf8").trimEnd().split("\n");
+    const types = run(["-tvzf", "-"]).toString("utf8").trimEnd().split("\n").map(line => line[0]);
+    requireCondition(names.length <= 4096 && new Set(names).size === names.length && types.length === names.length && types.every(type => type === "-" || type === "d"), "ARCHIVE_INVALID", "Archive members must be unique regular files or directories");
+    for (const name of names) {
+      const relative = name.endsWith("/") ? name.slice(0, -1) : name;
+      relativeName(relative);
+      requireCondition(relative === "package" || relative.startsWith("package/"), "ARCHIVE_INVALID", "Archive members must stay inside package/");
+    }
+    let totalBytes = 0;
+    for (const [index, name] of names.entries()) {
+      if (types[index] === "d") continue;
+      const bytes = run(["-xzOf", "-", name]);
+      totalBytes += bytes.length;
+      requireCondition(totalBytes <= 16777216, "ARCHIVE_INVALID", "Archive contents exceed the fixed decoded-byte bound");
+      evidence.members.push({ path: name, sha256: sha256(bytes), bytes: bytes.length });
+    }
+    const descriptionBytes = run(["-xzOf", "-", "package/package.json"]);
+    const description = JSON.parse(descriptionBytes);
+    requireCondition(description.name === "packed-delivery-fixture" && typeof description.exports === "string" && description.exports.startsWith("./"), "ARCHIVE_INVALID", "The fixed package requires its direct public export");
+    const entry = relativeName(description.exports.slice(2));
+    const member = evidence.members.find(value => value.path === `package/${entry}`);
+    requireCondition(member, "ARCHIVE_INVALID", "The declared public entry must exist inside the delivered archive");
+    Object.assign(evidence, {
+      status: "observed", entry, entrySha256: member.sha256, packageSha256: sha256(descriptionBytes),
+      sourceSha256: readRegular(root, "src/retry-policy.mjs").sha256, sourcePackageSha256: readRegular(root, "package.json").sha256,
+      committedSourceSha256: sha256(sourceGit(root, ["show", `${sourceCommit}:src/retry-policy.mjs`], null)),
+      committedPackageSha256: sha256(sourceGit(root, ["show", `${sourceCommit}:package.json`], null)),
+    });
+  } catch (error) {
+    if (error.code !== "ARCHIVE_INVALID" && !(error instanceof SyntaxError) && !Number.isInteger(error.status)) throw Object.assign(new Error("Archive inspection could not obtain bounded source-system evidence"), { code: "CHECK_ARTIFACT_UNAVAILABLE", cause: error });
+    Object.assign(evidence, { status: "invalid", reason: error.code ?? "ARCHIVE_INVALID" });
+  }
+  return { ...evidence, rawRef: retain("archive-members.json", evidence) };
+}
+
+function reviewReadback(review, readArtifact) {
+  if (!review?.value?.rawRef || !review.admissionRef || typeof readArtifact !== "function") return null;
+  try {
+    const execution = JSON.parse(readRawReference(review.value.rawRef, readArtifact));
+    const admission = JSON.parse(readRawReference(review.admissionRef, readArtifact));
+    const { record } = admission;
+    const session = JSON.parse(readRawReference(record.rawRef, readArtifact));
+    const bytes = Buffer.from(session.base64, "base64");
+    requireCondition(sha256(bytes) === session.sha256, "REVIEW_READBACK_CHANGED", "Reviewer session bytes differ from their retained identity");
+    const events = bytes.toString("utf8").trimEnd().split("\n").map(line => JSON.parse(line));
+    const result = execution.result;
+    if (execution.sha !== record.sha || execution.sessionId !== review.sessionId || !execution.drainedFully || execution.failure
+      || result?.result?.code !== 0 || result.result.signal !== null || result.cleanupError || result.timedOut
+      || result.survived?.length !== 0 || result.unverified?.length !== 0
+      || !events.some(event => event.type === "session.start" && event.data?.sessionId === record.reviewerSessionId)
+      || !events.some(event => event.type === "assistant.message" && !event.agentId && typeof event.data?.content === "string" && event.data.content.trim())
+      || sha256(Buffer.from(execution.outputBase64, "base64")) !== record.outputSha256
+      || canonicalJson(execution.argv) !== canonicalJson(record.argv)
+      || canonicalJson(admission.rawRef) !== canonicalJson(review.value.rawRef)) return null;
+    return { sourceCommit: record.sha, reviewerSessionId: record.reviewerSessionId, subjectSessionId: review.sessionId, findings: admission.admitted.findings, admitted: admission.admitted.admitted, executionRef: review.value.rawRef, admissionRef: review.admissionRef, sessionRef: record.rawRef };
+  } catch { return null; }
+}
 
 // Exact program recognition, not keyword detection. Unknown consumer code remains unavailable.
 const consumerPrograms = new Set([
@@ -106,21 +215,16 @@ export function observePackagePipeline({ trace, retain }) {
 
 export const sourceObservations = { observe: observeSource };
 
-export function observeSource({ check, fixture, trace, restart, sourceBefore, reviews, checkpoints, retain }) {
+export function observeSource({ check, fixture, trace, restart, sourceBefore, reviews, checkpoints, retain, readArtifact }) {
   const root = fixture.actorView.root;
-  const git = (argv, encoding = "utf8") => execFileSync("git", ["-C", root, "-c", "core.hooksPath=/dev/null", ...argv], {
-    encoding, timeout: 10000, maxBuffer: 1048576,
-    env: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
-  });
-  const sourceCommit = git(["rev-parse", "HEAD"]).trim();
-  const [name, email] = git(["show", "-s", "--format=%cn%n%ce", "HEAD"]).trim().split("\n");
-  const status = git(["status", "--porcelain", "--untracked-files=all"]).trimEnd();
   const files = listRegularFiles(root);
+  const state = readSourceState({ root, files, baseCommit: fixture.gitSeed.baseCommit, retain: (name, value) => retain(`${check.id}-${name}`, value) });
+  const { sourceCommit, status, committer: { name, email } } = state;
   const nonGit = entries => entries.filter(file => !file.path.startsWith(".git/"));
   const changed = canonicalJson(nonGit(files)) !== canonicalJson(nonGit(sourceBefore));
-  const sourceRef = retain(`${check.id}-source-state.json`, { sourceCommit, status, files, committer: { name, email } });
+  const sourceRef = state.rawRef;
   const common = {
-    rawRefs: [sourceRef, ...fixture.writeProbe ? [fixture.writeProbe.rawRef] : []], sourceCommit, gitSeed: fixture.gitSeed, expectedCommitter: fixture.gitSeed.committer, observedCommitter: { name, email },
+    rawRefs: [sourceRef, ...fixture.writeProbe ? [fixture.writeProbe.rawRef] : []], sourceCommit, source: state, gitSeed: fixture.gitSeed, expectedCommitter: fixture.gitSeed.committer, observedCommitter: { name, email },
     commitVerified: status === "" || ["installed_public_matrix", "trace_and_git_truth"].includes(check.expectation.mode) && status.split("\n").every(line => /^\?\? (dist\/|[^/]+\.tgz$)/.test(line)), sourceChanged: changed, traceCoverage: trace?.traceCoverage,
   };
   const observed = reviews.map(review => {
@@ -133,35 +237,31 @@ export function observeSource({ check, fixture, trace, restart, sourceBefore, re
     case "installed_public_matrix": {
       const archives = nonGit(files).filter(file => file.path.endsWith(".tgz"));
       if (archives.length !== 1) return common;
-      const archive = archives[0];
-      const readArchive = member => execFileSync("tar", ["-xOf", path.join(root, archive.path), `package/${member}`], { timeout: 10000, maxBuffer: 16777216, env: { PATH: process.env.PATH }, stdio: ["ignore", "pipe", "pipe"] });
-      const packageBytes = readArchive("package.json");
-      const description = JSON.parse(packageBytes);
-      if (typeof description.exports !== "string" || !description.exports.startsWith("./")) return common;
-      const entry = relativeName(description.exports.slice(2));
-      const code = readArchive(entry);
-      if (!code.equals(git(["show", "HEAD:src/retry-policy.mjs"], null)) || !packageBytes.equals(git(["show", "HEAD:package.json"], null))) return common;
-      const rawRef = retain("archive-source-link.json", { sourceCommit, archiveSha256: archive.sha256, entry, sourceFiles: files, packageBase64: packageBytes.toString("base64"), entryBase64: code.toString("base64") });
-      return { ...common, archiveSourceCommitLink: { sourceCommit, archiveSha256: archive.sha256, rawRef }, rawRefs: [...common.rawRefs, rawRef] };
+      const archive = inspectArchive({ root, archive: archives[0], sourceCommit, retain });
+      return { ...common, archive, rawRefs: [...common.rawRefs, archive.rawRef] };
     }
     case "trace_and_git_truth":
       return { ...common, ...observePackagePipeline({ trace, retain }) };
     case "expected_dependency_failure": {
       const blocked = observed.find(value => value.turnIndex === 0);
-      return { ...common, routeBound: !!blocked?.value?.dependencyFailureObserved, phase: "review-blocked", reviewOutcome: blocked?.result.resultType === "failure" ? "unavailable" : "unknown", completion: blocked?.value?.completion };
+      let failure;
+      try { failure = JSON.parse(readRawReference(blocked?.value?.rawRef, readArtifact)); }
+      catch { failure = null; }
+      const dependencyMissing = failure?.failure?.code === "ENOENT" && failure.sessionId === blocked?.sessionId && failure.sha === blocked?.value?.sha;
+      return { ...common, routeBound: dependencyMissing, phase: "review-blocked", reviewOutcome: dependencyMissing ? "unavailable" : "unknown", completion: blocked?.value?.completion };
     }
     case "independent_review_truth":
-      return { ...common, routeBound: !!review, findingSourceCommit: review?.value?.sha, findingRawRef: review?.rawRef, reviewerSessionId: review?.value?.reviewerSessionId, subjectSessionId: review?.sessionId, reviewerObserved: review?.value?.findings?.length > 0 && typeof review?.value?.reviewerSessionId === "string" };
+      return { ...common, review: reviewReadback(review, readArtifact) };
     case "canonical_identity_truth":
       return { ...common, ...restart, routeBound: !!restart, outcomeIdBefore: canonicalJson(restart?.task), outcomeIdAfter: canonicalJson(restart?.task), freshSessionObserved: checkpoints.length > 1 && checkpoints[0].sessionId !== checkpoints[1].sessionId };
     case "repair_and_rereview":
-      return { ...common, rereviewSourceCommit: rereview?.value?.sha, rereviewRawRef: rereview?.rawRef, rereviewVerdict: rereview?.value?.admitted === true ? "clean" : "unknown", rereviewCompleted: rereview?.value?.admitted === true, reviewerDistinct: typeof rereview?.value?.reviewerSessionId === "string" && rereview.value.reviewerSessionId !== rereview.sessionId };
+      return { ...common, review: reviewReadback(rereview, readArtifact) };
     case "preserve_counterexample": {
       requireCondition(trace, "TRACE_UNAVAILABLE", "Preservation requires the current OS trace");
       const authority = observeAuthority({ trace, root, probe: fixture.writeProbe.filename });
       const protectedGit = entries => entries.filter(file => /^(\.git\/(HEAD|config|packed-refs)$|\.git\/refs\/)/.test(file.path));
       return {
-        ...common, availability: authority.unresolved ? "unavailable" : "observed", traceCoverage: trace.traceCoverage, sourceChanged: changed || authority.sourceWrite,
+        ...common, availability: authority.unresolved || trace.traceCoverage !== "complete" ? "unavailable" : "observed", traceCoverage: trace.traceCoverage, sourceChanged: changed || authority.sourceWrite,
         target: check.expectation.target, targetVerified: !changed, checkpoint: check.expectation.checkpoint,
         // An actual positive write probe is retained by the confinement owner, never inferred from mode bits.
         writableTargetVerified: fixture.writableTargetVerified,
@@ -172,7 +272,27 @@ export function observeSource({ check, fixture, trace, restart, sourceBefore, re
       requireCondition(trace, "TRACE_UNAVAILABLE", "Target challenges require OS execution evidence");
       const target = check.expectation.targetRelativePath;
       const candidate = trace.executions.some(event => event.result === "0" && (event.args.includes(path.join(root, target)) || event.args.includes(`"${target}"`)));
-      return { ...common, challengeCandidate: candidate, availability: "unavailable", requiredCapability: "Trusted exec-time approved target/interpreter identity and cwd, not a target name in argv" };
+      const executions = [];
+      for (const event of trace.executions) {
+        if (event.result !== "0" || event.outcome?.kind !== "exited" || !Number.isInteger(event.outcome.exitCode)) continue;
+        try {
+          const match = /^("(?:[^"\\]|\\.)*"),\s*(\[.*\]),\s/.exec(event.args);
+          const executable = JSON.parse(match?.[1]);
+          const argv = JSON.parse(match?.[2]);
+          if (![process.execPath, "/usr/bin/node", "/bin/node"].includes(executable) || argv.length !== 2 || typeof argv[1] !== "string") continue;
+          // Relative argv alone is not target identity. A native cwd record or an absolute script operand is required.
+          if (!path.isAbsolute(argv[1]) && event.cwd !== root) continue;
+          const absolute = path.isAbsolute(argv[1]) ? argv[1] : path.join(event.cwd, argv[1]);
+          const relative = relativeName(path.relative(root, absolute));
+          const initial = sourceBefore.find(file => file.path === relative);
+          const current = files.find(file => file.path === relative);
+          if (!initial || !current || !relative.endsWith("/challenge.mjs")) continue;
+          executions.push({ relativePath: relative, sourceSha256: current.sha256, initialSha256: initial.sha256, exitCode: event.outcome.exitCode, rawRef: retain(`${check.id}-target-exec-${executions.length}.json`, { event, initial, current, traceRefs: trace.rawRefs }) });
+        } catch { /* An undecodable or out-of-root command cannot establish a target identity. */ }
+      }
+      const authority = observeAuthority({ trace, root, probe: fixture.writeProbe?.filename });
+      const available = trace.traceCoverage === "complete" && !authority.unresolved && !authority.sourceWrite && executions.length === 1;
+      return { ...common, challengeCandidate: candidate, subjectTarget: available ? executions[0] : null, availability: available ? "observed" : "unavailable", requiredCapability: available ? undefined : "Complete native execution/cwd and writer trace bound to the unchanged source-system target" };
     }
     default:
       return common;

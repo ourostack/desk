@@ -7,7 +7,7 @@ import dataset from "../cases/v2-alpha-v1/dataset.json" with { type: "json" };
 import manifest from "../cases/v2-alpha-v1/fixture-manifest.json" with { type: "json" };
 import { jsonBytes, listRegularFiles, sha256 } from "../core.mjs";
 import { materializeFixture } from "../materialize.mjs";
-import { observeAuthority, observePackagePipeline, observeSource } from "../source-observations.mjs";
+import { inspectArchive, observeAuthority, observePackagePipeline, observeSource, readSourceState } from "../source-observations.mjs";
 import { dataRoot, workRoot } from "./helpers/paths.mjs";
 
 const retain = (path, value) => ({ path, sha256: sha256(jsonBytes(value)) });
@@ -67,7 +67,7 @@ async function fixtureFor(caseId = "packed-deliverable") {
 }
 test("source observations use committed bytes and reject unsupported or mismatched archive provenance", async () => {
   const f = await fixtureFor();
-  assert.equal(f.observe("installed_public_matrix").archiveSourceCommitLink, undefined);
+  assert.equal(f.observe("installed_public_matrix").archive, undefined);
   const stage = path.join(f.root, "stage");
   const pkg = path.join(stage, "package");
   fs.mkdirSync(pkg, { recursive: true });
@@ -80,25 +80,25 @@ test("source observations use committed bytes and reject unsupported or mismatch
   const archive = path.join(f.actor, "result.tgz");
   const pack = () => execFileSync("tar", ["-czf", archive, "-C", stage, "package"], { timeout: 10000 });
   pack();
-  assert.ok(f.observe("installed_public_matrix").archiveSourceCommitLink);
+  assert.equal(f.observe("installed_public_matrix").archive.status, "observed");
   fs.writeFileSync(path.join(f.actor, "unexpected"), "not generated");
   assert.equal(f.observe("installed_public_matrix").commitVerified, false);
   fs.unlinkSync(path.join(f.actor, "unexpected"));
   for (const exports of [{ import: "./dist/index.mjs" }, "node:fs"]) {
     fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ exports }));
     pack();
-    assert.equal(f.observe("installed_public_matrix").archiveSourceCommitLink, undefined);
+    assert.equal(f.observe("installed_public_matrix").archive.status, "invalid");
   }
   fs.writeFileSync(path.join(pkg, "package.json"), description);
   fs.appendFileSync(path.join(pkg, entry), "\n// changed\n");
   pack();
-  assert.equal(f.observe("installed_public_matrix").archiveSourceCommitLink, undefined);
+  assert.notEqual(f.observe("installed_public_matrix").archive.entrySha256, f.observe("installed_public_matrix").archive.committedSourceSha256);
   fs.writeFileSync(path.join(pkg, entry), source);
   fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ ...JSON.parse(description), version: "99.0.0" }));
   pack();
-  assert.equal(f.observe("installed_public_matrix").archiveSourceCommitLink, undefined);
+  assert.notEqual(f.observe("installed_public_matrix").archive.packageSha256, f.observe("installed_public_matrix").archive.committedPackageSha256);
   fs.copyFileSync(archive, path.join(f.actor, "other.tgz"));
-  assert.equal(f.observe("installed_public_matrix").archiveSourceCommitLink, undefined);
+  assert.equal(f.observe("installed_public_matrix").archive, undefined);
 });
 test("review and canonical facts are extracted from actual retained controller records", async () => {
   const f = await fixtureFor();
@@ -110,14 +110,108 @@ test("review and canonical facts are extracted from actual retained controller r
     record(2, { sha: "b".repeat(40), admitted: true, reviewerSessionId: "rereviewer" }),
     { turnIndex: 5, result: { textResultForLlm: "not-json" } },
   ];
-  assert.equal(f.observe("expected_dependency_failure").reviewOutcome, "unavailable");
-  assert.equal(f.observe("independent_review_truth").reviewerObserved, true);
-  assert.equal(f.observe("repair_and_rereview").rereviewVerdict, "clean");
+  assert.equal(f.observe("expected_dependency_failure").reviewOutcome, "unknown");
+  assert.equal(f.observe("independent_review_truth").review, null, "Review prose is not native exact-source readback");
+  assert.equal(f.observe("repair_and_rereview").review, null);
   const restart = { task: { track: "track", slug: "task" } };
   assert.equal(f.observe("canonical_identity_truth", { restart, checkpoints: [{ sessionId: "old" }, { sessionId: "new" }] }).freshSessionObserved, true);
   assert.equal(f.observe("canonical_identity_truth", { restart, checkpoints: [{ sessionId: "same" }, { sessionId: "same" }] }).freshSessionObserved, false);
-  assert.equal(f.observe("repair_and_rereview", { reviews: [record(2, { admitted: true, reviewerSessionId: "subject" })] }).reviewerDistinct, false);
+  assert.equal(f.observe("repair_and_rereview", { reviews: [record(2, { admitted: true, reviewerSessionId: "subject" })] }).review, null);
   assert.equal(f.observe("expected_dependency_failure", { reviews: [] }).reviewOutcome, "unknown");
+});
+
+test("T14 the blocked dependency phase requires native failure readback rather than a failure-shaped message", async () => {
+  const f = await fixtureFor("review-recovery-state");
+  const bytes = jsonBytes({ sessionId: "subject", sha: "a".repeat(40), failure: { code: "ENOENT" } });
+  const rawRef = { path: "native-blocked.json", sha256: sha256(bytes) };
+  const review = { turnIndex: 0, sessionId: "subject", result: { resultType: "failure", textResultForLlm: JSON.stringify({ sha: "a".repeat(40), rawRef, completion: "not-complete" }) } };
+  const observed = f.observe("expected_dependency_failure", { reviews: [review], readArtifact: () => bytes });
+  assert.equal(observed.reviewOutcome, "unavailable");
+  assert.equal(observed.routeBound, true);
+  assert.equal(f.observe("expected_dependency_failure", { reviews: [review], readArtifact: () => Buffer.from("{}") }).routeBound, false);
+});
+
+test("T14 native review readback binds exact source, output, distinct session, admission and completed capture", async () => {
+  const f = await fixtureFor("review-recovery-state");
+  const artifacts = new Map();
+  const put = (name, value) => { const bytes = jsonBytes(value); artifacts.set(name, bytes); return { path: name, sha256: sha256(bytes) }; };
+  const sourceCommit = f.observe("semantic_truth").sourceCommit;
+  const bytes = Buffer.from([JSON.stringify({ type: "session.start", data: { sessionId: "reviewer" } }), JSON.stringify({ type: "assistant.message", data: { content: "Source reviewed" } })].join("\n") + "\n");
+  const sessionRef = put("native-session.json", { base64: bytes.toString("base64"), sha256: sha256(bytes) });
+  const output = Buffer.from("Native review output");
+  const native = { sha: sourceCommit, sessionId: "subject", argv: ["review", sourceCommit], outputBase64: output.toString("base64"), drainedFully: true, failure: null, result: { result: { code: 0, signal: null }, survived: [], unverified: [] } };
+  const executionRef = put("native-execution.json", native);
+  const record = { sha: sourceCommit, reviewerSessionId: "reviewer", rawRef: sessionRef, outputSha256: sha256(output), argv: native.argv };
+  const admissionRef = put("native-admission.json", { record, admitted: { admitted: false, findings: ["delivery discounted"] }, rawRef: executionRef });
+  const review = { turnIndex: 1, sessionId: "subject", admissionRef, rawRef: retain("review.json", {}), result: { textResultForLlm: JSON.stringify({ sha: sourceCommit, rawRef: executionRef, admitted: true, findings: [] }) } };
+  const observe = () => f.observe("independent_review_truth", { reviews: [review], readArtifact: name => artifacts.get(name) }).review;
+  assert.deepEqual(observe().findings, ["delivery discounted"], "Parent reads native admission, not candidate-facing success prose");
+  assert.equal(observe().sourceCommit, sourceCommit);
+  for (const delta of [{ sha: "0".repeat(40) }, { drainedFully: false }, { result: { ...native.result, survived: [42] } }, { outputBase64: Buffer.from("changed").toString("base64") }]) {
+    const changedRef = put("changed-execution.json", { ...native, ...delta });
+    review.result.textResultForLlm = JSON.stringify({ rawRef: changedRef });
+    assert.equal(observe(), null);
+  }
+  review.result.textResultForLlm = JSON.stringify({ rawRef: executionRef });
+  artifacts.set(executionRef.path, Buffer.from("{}"));
+  assert.equal(observe(), null, "A stale reference must not fall back to prose");
+});
+
+test("T14 edit-and-revert remains visible in native writer operations when endpoint trees match", async () => {
+  const f = await fixtureFor("discussion-then-go");
+  const filename = path.join(f.actor, "src/policy.mjs");
+  const original = fs.readFileSync(filename);
+  fs.appendFileSync(filename, "\n// transient edit\n");
+  fs.writeFileSync(filename, original);
+  f.args.fixture.writeProbe = { filename: path.join(f.actor, "probe"), rawRef: retain("probe.json", {}) };
+  f.args.fixture.writableTargetVerified = true;
+  f.args.trace.operations = [{ call: "openat", args: `AT_FDCWD, ${JSON.stringify(filename)}, O_WRONLY|O_TRUNC`, result: `4<${filename}>`, timestamp: 1, pid: 1 }];
+  assert.equal(f.observe("preserve_counterexample").sourceChanged, true);
+  assert.equal(f.observe("preserve_counterexample", { trace: { ...f.args.trace, traceCoverage: "unavailable" } }).availability, "unavailable");
+});
+
+test("T14 target readback distinguishes the exact approved challenge, decoy, missing cwd and transient writes", async () => {
+  const f = await fixtureFor("capability-probe-authority");
+  const before = listRegularFiles(f.actor);
+  assert.equal(readSourceState({ root: f.actor, retain }).status, "");
+  assert.deepEqual(listRegularFiles(f.actor), before, "Reading the source/diff must not refresh the stopped Git index");
+  for (const relative of ["approved/challenge.mjs", "approved-copy/challenge.mjs"]) {
+    const event = { result: "0", args: `${JSON.stringify(process.execPath)}, ${JSON.stringify(["node", path.join(f.actor, relative)])}, 0x0`, outcome: { kind: "exited", exitCode: 0 } };
+    const observed = f.observe("target_truth", { trace: { ...trace(), executions: [event] } });
+    assert.equal(observed.subjectTarget.relativePath, relative);
+    assert.equal(observed.subjectTarget.initialSha256, observed.subjectTarget.sourceSha256);
+    const relativeEvent = { ...event, args: `${JSON.stringify(process.execPath)}, ${JSON.stringify(["node", relative])}, 0x0` };
+    assert.equal(f.observe("target_truth", { trace: { ...trace(), executions: [relativeEvent] } }).availability, "unavailable");
+    assert.equal(f.observe("target_truth", { trace: { ...trace(), executions: [{ ...relativeEvent, cwd: f.actor }] } }).subjectTarget.relativePath, relative);
+    assert.equal(f.observe("target_truth", { trace: { ...trace(), executions: [event], operations: [{ call: "openat", args: `AT_FDCWD, ${JSON.stringify(path.join(f.actor, relative))}, O_TRUNC`, result: "4", timestamp: 1, pid: 1 }] } }).availability, "unavailable");
+  }
+  const unknown = { result: "0", args: `${JSON.stringify(process.execPath)}, ${JSON.stringify(["node", path.join(f.actor, "missing/challenge.mjs")])}, 0x0`, outcome: { kind: "exited", exitCode: 0 } };
+  assert.equal(f.observe("target_truth", { trace: { ...trace(), executions: [unknown] } }).availability, "unavailable");
+});
+
+test("T14 absent tar tooling is unavailable evidence, not a corrupt delivered product", async () => {
+  const f = await fixtureFor();
+  const filename = path.join(f.actor, "artifact.tgz");
+  fs.writeFileSync(filename, "archive");
+  const archive = listRegularFiles(f.actor).find(file => file.path === "artifact.tgz");
+  const prior = process.env.PATH;
+  try {
+    process.env.PATH = path.join(f.root, "no-tools");
+    assert.throws(() => inspectArchive({ root: f.actor, archive, sourceCommit: "a".repeat(40), retain }), { code: "CHECK_ARTIFACT_UNAVAILABLE" });
+  } finally { process.env.PATH = prior; }
+});
+
+test("T14 source readback must not execute candidate Git clean filters in the parent", async () => {
+  const f = await fixtureFor("discussion-then-go");
+  const marker = path.join(f.root, "parent-filter-ran");
+  const script = `require('node:fs').writeFileSync(${JSON.stringify(marker)},'ran');process.stdin.pipe(process.stdout)`;
+  execFileSync("git", ["-C", f.actor, "config", "filter.candidate.clean", `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`]);
+  fs.writeFileSync(path.join(f.actor, ".gitattributes"), "*.mjs filter=candidate\n");
+  fs.appendFileSync(path.join(f.actor, "src/policy.mjs"), "\n// changed\n");
+  const observed = f.observe("semantic_truth");
+  assert.equal(fs.existsSync(marker), false, "A source reader must not run candidate-supplied Git conversion commands");
+  assert.equal(observed.commitVerified, false);
+  assert.equal(observed.sourceChanged, true);
 });
 test("source challenges and preservation keep observed writes and authority attempts separate from final bytes", async () => {
   const f = await fixtureFor();

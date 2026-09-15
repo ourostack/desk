@@ -10,6 +10,7 @@ import { verifyProtocolEvidence } from "../native-runtime.mjs";
 import { fixture as nativeFixture } from "./helpers/native-sdk.mjs";
 import { plan as nativePlan } from "./helpers/native-engine.mjs";
 import { workRoot } from "./helpers/paths.mjs";
+import { assessCheck } from "../checks.mjs";
 
 const counts = { observedRequests: 0, schemaAcceptedHandlers: 0, validatorAcceptedReports: 0, admittedGrades: 0 };
 const limits = { maxStreamBytes: 8192, maxFileBytes: 8192, maxTotalBytes: 12288, maxFiles: 32 };
@@ -136,4 +137,12 @@ test("I5 a small result commits within the same aggregate budget", () => {
   output.commit(receipt("infrastructure_failure"));
   assert.equal(readCommittedRun(outputRoot).receipt.status, "infrastructure_failure");
   assert.ok(fs.readdirSync(outputRoot).reduce((sum, name) => sum + fs.statSync(path.join(outputRoot, name)).size, 0) <= limits.maxTotalBytes);
+});
+
+test("T14 stale native-authenticity booleans do not rescue a missing behavioral capture", () => {
+  const rawRef = { path: "old-diagnostic.json", sha256: sha256("diagnostic") };
+  for (const mode of ["maintained_gate", "trusted_checker_canary", "installed_public_matrix", "target_truth"]) {
+    const observation = { availability: "available", executionOwner: "held-out-controller", rawRefs: [rawRef], externalAssertionsComplete: true, canaryExecuted: true, checkerSourceVerified: true, configurationWasPrivileged: true, targetManifestVerified: true, challengeExecuted: true };
+    assert.equal(assessCheck({ definition: { mode }, observation }).status, "unavailable");
+  }
 });
