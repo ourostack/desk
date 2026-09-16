@@ -83,9 +83,14 @@ test("the published revision request covers the whole pushed range, including fi
     const ordinary = runRequestStep({ cwd: scratch, head: third, base: second })
     assert.deepEqual(ordinary.changedPaths, ["plugins/desk/third.md"])
 
-    // A base this clone cannot resolve falls back to the head's parent rather than failing the job.
+    // A base this clone cannot resolve — a force-push past the local history — reports every path at the
+    // pushed head rather than the last commit's alone, because a missing base may only widen relevance.
     const unknownBase = runRequestStep({ cwd: scratch, head: third, base: "f".repeat(40) })
-    assert.deepEqual(unknownBase.changedPaths, ["plugins/desk/third.md"])
+    assert.deepEqual([...unknownBase.changedPaths].sort(), [
+      "plugins/desk/first.md",
+      "plugins/desk/second.md",
+      "plugins/desk/third.md",
+    ])
 
     for (const request of [rootRequest, initialPush, ordinary, unknownBase]) {
       assert.equal(request.kind, "relevant_revision_request")
