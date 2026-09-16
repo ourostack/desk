@@ -1046,3 +1046,22 @@ test("every committed runtime pack carries its own platform's native binaries", 
     }
   }
 })
+
+test("the lane's tar-argument guard sees the exact form that broke the Windows runner", () => {
+  const brokenLane = JSON.stringify({
+    steps: [{ run: 'tar -xzf "$DESK_PACK_DIR/runtime-deps.tgz" -C "$RUNNER_TEMP/desk-pack-smoke"\nnode -e "…"' }],
+  })
+  const fixedLane = JSON.stringify({
+    steps: [{ run: 'cd "$smoke"\ntar -xzf runtime-deps.tgz\nnode -e "…"' }],
+  })
+  const driveLetterLane = JSON.stringify({ steps: [{ run: "tar --file=D:/a/_temp/runtime-deps.tgz -x" }] })
+
+  assert.deepEqual(tarArchiveArguments(brokenLane), ["$DESK_PACK_DIR/runtime-deps.tgz"])
+  assert.deepEqual(tarArchiveArguments(fixedLane), ["runtime-deps.tgz"])
+  assert.deepEqual(tarArchiveArguments(driveLetterLane), ["D:/a/_temp/runtime-deps.tgz"])
+
+  const rejects = (archive) => /[\\/:$]/u.test(archive)
+  assert.equal(rejects(tarArchiveArguments(brokenLane)[0]), true)
+  assert.equal(rejects(tarArchiveArguments(driveLetterLane)[0]), true)
+  assert.equal(rejects(tarArchiveArguments(fixedLane)[0]), false)
+})
