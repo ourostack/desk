@@ -1,5 +1,15 @@
-function clone(value) {
-  return value == null ? value : structuredClone(value)
+function deepFreeze(value) {
+  if (value == null || typeof value !== "object" || Object.isFrozen(value)) {
+    return value
+  }
+  for (const nested of Object.values(value)) {
+    deepFreeze(nested)
+  }
+  return Object.freeze(value)
+}
+
+function snapshot(value) {
+  return value == null ? value : deepFreeze(structuredClone(value))
 }
 
 export function terminalFailure({
@@ -15,9 +25,9 @@ export function terminalFailure({
     phase,
     code,
     retryable: false,
-    expected: clone(expected) ?? {},
-    observed: clone(observed) ?? {},
-    automatic_actions: Array.isArray(automaticActions) ? [...automaticActions] : [],
+    expected: snapshot(expected) ?? {},
+    observed: snapshot(observed) ?? {},
+    automatic_actions: Array.isArray(automaticActions) ? snapshot(automaticActions) : [],
     summary,
   }
 }

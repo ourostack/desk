@@ -1447,6 +1447,45 @@ test("terminal failure helpers produce stable non-retryable activation envelopes
   assert.deepEqual(input, before)
 })
 
+test("terminal failure snapshots automatic actions", async () => {
+  const { ActivationFailure, terminalFailure } = await loadActivationFailures()
+  const retryAction = {
+    action: "retry",
+    params: {
+      delay_ms: 500,
+    },
+  }
+  const automaticActions = [retryAction]
+
+  const envelope = terminalFailure({
+    phase: "VERIFYING",
+    code: "activation_policy_invalid",
+    automaticActions,
+    summary: "Desk requires lexical readiness 'required'.",
+  })
+  const failure = new ActivationFailure({
+    phase: "VERIFYING",
+    code: "activation_policy_invalid",
+    automaticActions,
+    summary: "Desk requires lexical readiness 'required'.",
+  })
+
+  retryAction.params.delay_ms = 2000
+  automaticActions.push({
+    action: "open-docs",
+  })
+
+  assert.deepEqual(envelope.automatic_actions, [
+    {
+      action: "retry",
+      params: {
+        delay_ms: 500,
+      },
+    },
+  ])
+  assert.deepEqual(failure.automatic_actions, envelope.automatic_actions)
+})
+
 test("canonical Desk activation manifest exists and validates", async () => {
   const { validateActivationManifest } = await loadActivationContract()
   const manifestPath = path.join(repoRoot, "plugins", "desk", "activation", "desk.activation.json")
