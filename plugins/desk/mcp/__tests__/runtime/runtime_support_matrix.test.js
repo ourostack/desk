@@ -65,8 +65,8 @@ test("committed runtime support matrix equals the physically shipped runtime pac
     }),
     [],
   )
-  // The 3.2.0-alpha.4 candidate has only the macOS ARM64 pack built on its own host and ABI.
-  // The Linux x64 and Windows x64 packs stay unbuilt until they are produced on those hosts.
+  // Every published target now ships a pack built on its own platform and ABI: macOS ARM64 on the maintainer's
+  // host, Linux x64 and Windows x64 on their native runners.
   assert.deepEqual(committed, {
     schema_version: 1,
     plugin: {
@@ -82,6 +82,24 @@ test("committed runtime support matrix equals the physically shipped runtime pac
         prod_dependency_lock_hash: "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
         archive_sha256: "09cc1e9b5840fb0c9f373371704aef6bc858e890cc61f9ad7af388729335c658",
         artifact_path: "darwin-arm64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
+      },
+      {
+        id: "linux-x64-node-127",
+        platform: "linux",
+        arch: "x64",
+        node_abi: "127",
+        prod_dependency_lock_hash: "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
+        archive_sha256: "898870aa5cb84eeb09c9ebef4db5de9d4a24915a5efc147bf0334925eca6624f",
+        artifact_path: "linux-x64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
+      },
+      {
+        id: "win32-x64-node-137",
+        platform: "win32",
+        arch: "x64",
+        node_abi: "137",
+        prod_dependency_lock_hash: "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
+        archive_sha256: "372957d54286dfd0059f2d066be616c492f684c7e1d651c38b4b5561ecd9f6a2",
+        artifact_path: "win32-x64-node-137/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
       },
     ],
   })
