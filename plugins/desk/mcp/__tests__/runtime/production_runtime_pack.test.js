@@ -884,6 +884,13 @@ test("a hosted native lane produces every host-bound runtime pack target without
       /(^|[^\w-])find\s+["'$]/u,
       `${jobName} runs on Windows too, so it must not discover paths with the Unix-only find(1)`,
     )
+    for (const tarArgument of [...jobText(job).matchAll(/tar\s+-[a-z]*f\s+(?<archive>[^\s\\"']+)/gu)]) {
+      const archive = tarArgument.groups?.archive ?? ""
+      assert.ok(
+        !archive.includes("/") && !archive.includes(":") && !archive.startsWith("$"),
+        `${jobName} must hand tar a bare archive name; a Windows drive-letter path is read as a remote host`,
+      )
+    }
   }
 
   const laneJobNames = new Set(

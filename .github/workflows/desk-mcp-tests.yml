@@ -395,14 +395,25 @@ jobs:
         working-directory: plugins/desk/mcp
         # Static signatures cannot prove ABI compatibility, so the lane that produced the pack also loads it:
         # the archive is unpacked into a scratch directory and its own native SQLite addon and vector extension
-        # are opened under the exact Node runtime the pack claims.
+        # are opened under the exact Node runtime the pack claims. The archive is copied in and extracted by its
+        # bare name, because a Windows drive-letter path handed to tar(1) is read as a remote host specification.
         run: |
-          rm -rf "$RUNNER_TEMP/desk-pack-smoke"
-          mkdir -p "$RUNNER_TEMP/desk-pack-smoke"
-          tar -xzf "$DESK_PACK_DIR/runtime-deps.tgz" -C "$RUNNER_TEMP/desk-pack-smoke"
+          smoke="${RUNNER_TEMP//\\//}/desk-pack-smoke"
+          rm -rf "$smoke"
+          mkdir -p "$smoke"
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            fs.copyFileSync(
+              path.join(process.env.DESK_PACK_DIR, "runtime-deps.tgz"),
+              path.join(process.env.RUNNER_TEMP, "desk-pack-smoke", "runtime-deps.tgz"),
+            );
+          '
+          cd "$smoke"
+          tar -xzf runtime-deps.tgz
           node -e '
             const path = require("node:path");
-            const root = path.join(process.env.RUNNER_TEMP, "desk-pack-smoke", "node_modules");
+            const root = path.join(process.cwd(), "node_modules");
             const Database = require(path.join(root, "better-sqlite3"));
             const sqliteVec = require(path.join(root, "sqlite-vec"));
             const db = new Database(":memory:");
