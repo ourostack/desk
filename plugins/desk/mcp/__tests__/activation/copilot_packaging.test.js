@@ -648,11 +648,12 @@ test("the bundle writer resolves its destination from an explicit root, the envi
     assert.equal(exitCode, 0)
     assert.deepEqual(written, [`wrote ${copilotBundlePath}\n`])
 
-    // …and the shipped script and its package-script wiring are exercised as the operator runs them.
+    // …and the operator's actual command runs end to end: the package script, through the package manager,
+    // with the repository-root redirect pointing at the scratch tree.
     rmSync(path.join(scratchRoot, ...copilotBundlePath.split("/")))
     const scripted = spawnSync(
-      process.execPath,
-      [path.join(repoRoot, "plugins", "desk", "mcp", "scripts", "generate-copilot-bundle.js")],
+      process.platform === "win32" ? "npm.cmd" : "npm",
+      ["--silent", "run", "activation:copilot-bundle:generate"],
       {
         cwd: path.join(repoRoot, "plugins", "desk", "mcp"),
         encoding: "utf8",
@@ -660,14 +661,10 @@ test("the bundle writer resolves its destination from an explicit root, the envi
       },
     )
     assert.equal(scripted.status, 0, scripted.stderr)
-    assert.equal(scripted.stdout, `wrote ${copilotBundlePath}\n`)
+    assert.equal(scripted.stdout.trim(), `wrote ${copilotBundlePath}`)
     assert.deepEqual(
       JSON.parse(readFileSync(path.join(scratchRoot, ...copilotBundlePath.split("/")), "utf8")),
       expectedCopilotBundle(),
-    )
-    assert.equal(
-      loadJson("plugins", "desk", "mcp", "package.json").scripts["activation:copilot-bundle:generate"],
-      "node scripts/generate-copilot-bundle.js",
     )
     const generated = generateCopilotBundleArtifact()
     assert.equal(generated.artifactPath, path.join(scratchRoot, ...copilotBundlePath.split("/")))
