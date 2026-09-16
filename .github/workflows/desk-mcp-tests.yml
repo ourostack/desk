@@ -203,8 +203,22 @@ jobs:
         run: |
           set -euo pipefail
           base="${REVISION_BASE:-}"
-          if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            base="$(git rev-parse "${REVISION_HEAD}^")"
+          # A new branch, a first push and a force-push past the local history all arrive without a usable
+          # "before" commit: GitHub sends the all-zero SHA, or one this clone cannot resolve. Comparing against
+          # the head's parent would then report only the last commit's paths, and a root commit has no parent at
+          # all, so fall back to the empty tree and report every path the push actually carries.
+          if [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base=""
+          fi
+          if [ -n "$base" ] && ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            if git rev-parse --verify --quiet "${REVISION_HEAD}^" >/dev/null; then
+              base="$(git rev-parse "${REVISION_HEAD}^")"
+            else
+              base=""
+            fi
+          fi
+          if [ -z "$base" ]; then
+            base="$(git hash-object -t tree /dev/null)"
           fi
           git diff --name-only "$base" "$REVISION_HEAD" > revision-changed-paths.txt
           node -e '
