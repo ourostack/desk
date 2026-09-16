@@ -801,6 +801,14 @@ function artifactNamesFor(job) {
     .map((step) => String(step.with?.name ?? ""))
 }
 
+// A tar extraction argument is read as `host:path` when it carries a colon, which is exactly what a Windows
+// drive letter looks like. Quotes are stripped first so a quoted path cannot slip past this guard.
+export function tarArchiveArguments(text) {
+  return [...text.matchAll(/tar\s+(?:-[a-zA-Z]*f|--file[= ])\s*(?<archive>\S+)/gu)]
+    .map((match) => (match.groups?.archive ?? "").split("\\n")[0].replaceAll('\\"', "").replaceAll('"', "").replaceAll("'", ""))
+    .filter((archive) => archive.length > 0)
+}
+
 function matrixEntriesForTarget(jobs, target) {
   return jobs.flatMap(([name, job]) => laneMatrixValues(job)
     .filter((entry) => String(entry.target ?? "") === target)
@@ -884,11 +892,10 @@ test("a hosted native lane produces every host-bound runtime pack target without
       /(^|[^\w-])find\s+["'$]/u,
       `${jobName} runs on Windows too, so it must not discover paths with the Unix-only find(1)`,
     )
-    for (const tarArgument of [...jobText(job).matchAll(/tar\s+-[a-z]*f\s+(?<archive>[^\s\\"']+)/gu)]) {
-      const archive = tarArgument.groups?.archive ?? ""
+    for (const archive of tarArchiveArguments(jobText(job))) {
       assert.ok(
-        !archive.includes("/") && !archive.includes(":") && !archive.startsWith("$"),
-        `${jobName} must hand tar a bare archive name; a Windows drive-letter path is read as a remote host`,
+        !/[\\/:$]/u.test(archive),
+        `${jobName} must hand tar the bare archive name, not ${archive}; a Windows drive-letter path is read as a remote host`,
       )
     }
   }
