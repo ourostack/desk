@@ -88,7 +88,11 @@ export async function startReadinessController({
       { encoding: "utf8", mode: 0o600 },
     )
   } catch (error) {
-    await closeServer(server, endpoint, stateDir)
+    try {
+      await closeServer(server, endpoint, stateDir)
+    } catch {
+      // Preserve the publication failure; stale cleanup is recoverable on the next election.
+    }
     throw error
   }
   if (!ephemeral) {
@@ -113,13 +117,17 @@ function listen(server, endpoint) {
 }
 
 function closeServer(server, endpoint, stateDir) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     server.close(() => {
-      if (process.platform !== "win32") {
-        rmSync(endpoint, { force: true })
+      try {
+        if (process.platform !== "win32") {
+          rmSync(endpoint, { force: true })
+        }
+        rmSync(stateDir, { recursive: true, force: true })
+        resolve()
+      } catch (error) {
+        reject(error)
       }
-      rmSync(stateDir, { recursive: true, force: true })
-      resolve()
     })
   })
 }
