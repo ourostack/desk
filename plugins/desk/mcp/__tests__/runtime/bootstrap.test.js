@@ -625,6 +625,49 @@ test("a content-derived source identity rejects changed source on a cold cache",
   }
 })
 
+test("a persisted content identity cannot point at a differently hashed mirror", async () => {
+  const {
+    hashCurrentSource,
+    importRuntimeServer,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    await writeRuntimePack({ mcpRoot: fixture.mcpRoot })
+    const originalHash = hashCurrentSource(fixture.mcpRoot)
+    writeServer(fixture.mcpRoot, "different-source")
+    const differentHash = hashCurrentSource(fixture.mcpRoot)
+    const different = await importRuntimeServer({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      platform: fixturePlatform,
+      arch: fixtureArch,
+      nodeAbi: fixtureNodeAbi,
+      sourceIdentity: "legacy-non-hash-identity",
+    })
+    writeJson(path.join(runtimeCacheDir, ".desk-source-mirror.json"), {
+      schema_version: 1,
+      source_identity: `sha256:${originalHash}`,
+      source_hash: differentHash,
+      mirror_path: different._deskRuntime.source_mirror_path,
+    })
+
+    await assert.rejects(
+      importRuntimeServer({
+        mcpRoot: fixture.mcpRoot,
+        runtimeCacheDir,
+        platform: fixturePlatform,
+        arch: fixtureArch,
+        nodeAbi: fixtureNodeAbi,
+        sourceIdentity: `sha256:${originalHash}`,
+      }),
+      /source identity.*does not match/i,
+    )
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test("restoreRuntimeDependencies repairs corrupt or incomplete cache markers", async () => {
   const { restoreRuntimeDependencies } = await loadBootstrap()
   const fixture = makeMcpFixture()

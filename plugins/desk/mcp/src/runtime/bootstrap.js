@@ -978,6 +978,10 @@ export function resolveAdmittedSourceMirror({
       || admission.source_identity !== sourceIdentity
       || !hasText(admission.source_hash)
       || !hasText(admission.mirror_path)
+      || (
+        sourceIdentity.startsWith("sha256:")
+        && admission.source_hash !== sourceIdentity.slice("sha256:".length)
+      )
     ) {
       return null
     }
