@@ -1486,6 +1486,38 @@ test("terminal failure snapshots automatic actions", async () => {
   assert.deepEqual(failure.automatic_actions, envelope.automatic_actions)
 })
 
+test("terminal failure snapshots cyclic automatic actions", async () => {
+  const { ActivationFailure, terminalFailure } = await loadActivationFailures()
+  const params = {
+    delay_ms: 500,
+  }
+  params.self = params
+  const automaticActions = [
+    {
+      action: "retry",
+      params,
+    },
+  ]
+
+  const envelope = terminalFailure({
+    phase: "VERIFYING",
+    code: "activation_policy_invalid",
+    automaticActions,
+    summary: "Desk requires lexical readiness 'required'.",
+  })
+  const failure = new ActivationFailure({
+    phase: "VERIFYING",
+    code: "activation_policy_invalid",
+    automaticActions,
+    summary: "Desk requires lexical readiness 'required'.",
+  })
+
+  assert.equal(envelope.automatic_actions[0].params.self, envelope.automatic_actions[0].params)
+  assert.equal(failure.automatic_actions[0].params.self, failure.automatic_actions[0].params)
+  assert.equal(Object.isFrozen(envelope.automatic_actions[0].params), true)
+  assert.equal(Object.isFrozen(failure.automatic_actions[0].params), true)
+})
+
 test("canonical Desk activation manifest exists and validates", async () => {
   const { validateActivationManifest } = await loadActivationContract()
   const manifestPath = path.join(repoRoot, "plugins", "desk", "activation", "desk.activation.json")

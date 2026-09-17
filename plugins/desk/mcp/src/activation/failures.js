@@ -1,9 +1,13 @@
-function deepFreeze(value) {
+function deepFreeze(value, seen = new WeakSet()) {
   if (value == null || typeof value !== "object" || Object.isFrozen(value)) {
     return value
   }
+  if (seen.has(value)) {
+    return value
+  }
+  seen.add(value)
   for (const nested of Object.values(value)) {
-    deepFreeze(nested)
+    deepFreeze(nested, seen)
   }
   return Object.freeze(value)
 }
