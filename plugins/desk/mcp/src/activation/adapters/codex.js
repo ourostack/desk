@@ -631,6 +631,8 @@ ${pluginMcpPolicy}${approvalPolicy}${directMcp}
 }
 
 function renderActivationConfig(input, selectedActivation) {
+  const sourceIdentity = input.sourceIdentity
+    ?? input.manifest.dependencies.find((dependency) => dependency.id === "desk")?.lock?.integrity
   return `${JSON.stringify({
     schema_version: 1,
     desk: {
@@ -638,6 +640,7 @@ function renderActivationConfig(input, selectedActivation) {
     },
     runtimeCacheDir: input.runtimeCacheDir,
     activation: {
+      source_identity: sourceIdentity,
       selected_id: selectedActivation.id,
       launch_as: selectedActivation.launchAs,
       mode: input.mode,

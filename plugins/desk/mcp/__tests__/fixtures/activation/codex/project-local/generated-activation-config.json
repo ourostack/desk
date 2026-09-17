@@ -5,6 +5,7 @@
   },
   "runtimeCacheDir": ".codex/desk-runtime-cache",
   "activation": {
+    "source_identity": "sha256-desk-activation-manifest-v1",
     "selected_id": "desk:worker",
     "launch_as": "desk:worker",
     "mode": "project-local",
