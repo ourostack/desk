@@ -48,9 +48,17 @@ import {
   configureRuntimeArtifacts,
   ensureIndex,
 } from "./server-helpers.js"
+import { admitControlPlane } from "./activation/admit.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
-export { configureRuntimeArtifacts, ensureIndex }
+export { admitControlPlane, configureRuntimeArtifacts, ensureIndex }
+
+export async function beginBackgroundConvergence(admission) {
+  if (typeof admission?.controller?.beginConvergence === "function") {
+    return admission.controller.beginConvergence()
+  }
+  return null
+}
 
 // Map tool name → implementation. Every tool now has a real body.
 // Exported so tests can register a probe impl to assert dispatch threading.
