@@ -892,6 +892,12 @@ export function syncSourceMirror({
   const sourceHash = hashCurrentSource(mcpRoot)
   const mirrorPath = path.join(runtimeCacheDir, sourceMirrorDir, sourceHash)
   if (sourceMirrorIsCurrent({ mirrorPath, sourceHash })) {
+    writeSourceMirrorAdmission({
+      mirrorPath,
+      runtimeCacheDir,
+      sourceHash,
+      sourceIdentity,
+    })
     return mirrorPath
   }
   const stagingPath = siblingWorkPath(mirrorPath, "stage")
@@ -920,22 +926,37 @@ export function syncSourceMirror({
         sourceHash,
       }),
     })
-    if (hasText(sourceIdentity)) {
-      writeFileSync(
-        path.join(runtimeCacheDir, sourceMirrorAdmissionFile),
-        `${JSON.stringify({
-          schema_version: 1,
-          source_identity: sourceIdentity,
-          source_hash: sourceHash,
-          mirror_path: mirrorPath,
-        }, null, 2)}\n`,
-        "utf8",
-      )
-    }
+    writeSourceMirrorAdmission({
+      mirrorPath,
+      runtimeCacheDir,
+      sourceHash,
+      sourceIdentity,
+    })
     return mirrorPath
   } finally {
     rmSync(stagingPath, { recursive: true, force: true })
   }
+}
+
+function writeSourceMirrorAdmission({
+  mirrorPath,
+  runtimeCacheDir,
+  sourceHash,
+  sourceIdentity,
+}) {
+  if (!hasText(sourceIdentity)) {
+    return
+  }
+  writeFileSync(
+    path.join(runtimeCacheDir, sourceMirrorAdmissionFile),
+    `${JSON.stringify({
+      schema_version: 1,
+      source_identity: sourceIdentity,
+      source_hash: sourceHash,
+      mirror_path: mirrorPath,
+    }, null, 2)}\n`,
+    "utf8",
+  )
 }
 
 export function resolveAdmittedSourceMirror({

@@ -552,6 +552,51 @@ test("exact admitted source identity reuses a validated source mirror without re
   }
 })
 
+test("an existing valid source mirror is admitted for later warm reuse", async () => {
+  const {
+    importRuntimeServer,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  const sourceIdentity = "commit:fedcba9876543210"
+  try {
+    await writeRuntimePack({ mcpRoot: fixture.mcpRoot })
+    const preexisting = await importRuntimeServer({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      platform: fixturePlatform,
+      arch: fixtureArch,
+      nodeAbi: fixtureNodeAbi,
+    })
+    assert.equal(preexisting.marker, "initial")
+
+    const admitted = await importRuntimeServer({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      platform: fixturePlatform,
+      arch: fixtureArch,
+      nodeAbi: fixtureNodeAbi,
+      sourceIdentity,
+    })
+    assert.equal(admitted.marker, "initial")
+
+    writeServer(fixture.mcpRoot, "unadmitted-change")
+    const warmImport = await importRuntimeServer({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      platform: fixturePlatform,
+      arch: fixtureArch,
+      nodeAbi: fixtureNodeAbi,
+      sourceIdentity,
+    })
+
+    assert.equal(warmImport.marker, "initial")
+    assert.equal(listSourceMirrors(runtimeCacheDir).length, 1)
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test("restoreRuntimeDependencies repairs corrupt or incomplete cache markers", async () => {
   const { restoreRuntimeDependencies } = await loadBootstrap()
   const fixture = makeMcpFixture()
