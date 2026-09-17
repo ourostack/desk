@@ -890,6 +890,11 @@ export function syncSourceMirror({
   sourceIdentity = null,
 }) {
   const sourceHash = hashCurrentSource(mcpRoot)
+  if (sourceIdentity?.startsWith("sha256:") && sourceIdentity.slice("sha256:".length) !== sourceHash) {
+    throw new Error(
+      `Desk source identity ${sourceIdentity} does not match the current source sha256:${sourceHash}.`,
+    )
+  }
   const mirrorPath = path.join(runtimeCacheDir, sourceMirrorDir, sourceHash)
   if (sourceMirrorIsCurrent({ mirrorPath, sourceHash })) {
     writeSourceMirrorAdmission({

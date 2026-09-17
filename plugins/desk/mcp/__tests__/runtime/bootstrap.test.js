@@ -597,6 +597,34 @@ test("an existing valid source mirror is admitted for later warm reuse", async (
   }
 })
 
+test("a content-derived source identity rejects changed source on a cold cache", async () => {
+  const {
+    hashCurrentSource,
+    importRuntimeServer,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    await writeRuntimePack({ mcpRoot: fixture.mcpRoot })
+    const sourceIdentity = `sha256:${hashCurrentSource(fixture.mcpRoot)}`
+    writeServer(fixture.mcpRoot, "changed-before-first-start")
+
+    await assert.rejects(
+      importRuntimeServer({
+        mcpRoot: fixture.mcpRoot,
+        runtimeCacheDir,
+        platform: fixturePlatform,
+        arch: fixtureArch,
+        nodeAbi: fixtureNodeAbi,
+        sourceIdentity,
+      }),
+      /source identity.*does not match/i,
+    )
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test("restoreRuntimeDependencies repairs corrupt or incomplete cache markers", async () => {
   const { restoreRuntimeDependencies } = await loadBootstrap()
   const fixture = makeMcpFixture()
