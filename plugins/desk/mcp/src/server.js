@@ -53,6 +53,19 @@ import { admitControlPlane } from "./activation/admit.js"
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
 export { admitControlPlane, configureRuntimeArtifacts, ensureIndex }
 
+export async function connectOrStartController({ deskRoot }) {
+  return Object.freeze({
+    accepted: true,
+    id: `embedded:${deskRoot}`,
+    beginConvergence() {
+      return ensureIndex(deskRoot, {
+        startup: false,
+        skipEmbed: false,
+      })
+    },
+  })
+}
+
 export async function beginBackgroundConvergence(admission) {
   if (typeof admission?.controller?.beginConvergence === "function") {
     return admission.controller.beginConvergence()

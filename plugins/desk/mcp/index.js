@@ -121,6 +121,20 @@ export function resolveStartupActivationContext({
   }
 }
 
+export function resolveStartupSourceIdentity(activationStatus) {
+  for (const value of [
+    activationStatus?.source_identity,
+    activationStatus?.resolved_commit,
+    activationStatus?.commit,
+    activationStatus?.source?.commit,
+  ]) {
+    if (hasText(value)) {
+      return value
+    }
+  }
+  return null
+}
+
 export function resolveStartupReadinessPolicy({
   args,
   cwd = process.cwd(),
@@ -180,6 +194,8 @@ export async function main({
   nodeCandidateDiscoverer = discoverNodeCandidates,
   nodeSelector = selectCompatibleNode,
   nodeReexecutor = reexecuteWithCompatibleNode,
+  readinessPolicy: injectedReadinessPolicy,
+  authorityProviders = {},
 } = {}) {
   runtimeInspector = resolveRuntimeInspector({ runtimeImporter, runtimeInspector })
   const serverVersion = resolveMcpServerVersion({ mcpRoot })
@@ -192,7 +208,14 @@ export async function main({
   const { root: deskRoot } = rootResolution
   const runtimeCacheDir = resolveStartupRuntimeCacheDir({ args, cwd, env, homeDir })
   const activationStatus = resolveStartupActivationContext({ args, cwd, env, homeDir })
-  const readinessPolicy = resolveStartupReadinessPolicy({ args, cwd, env, homeDir })
+  const sourceIdentity = resolveStartupSourceIdentity(activationStatus)
+  const readinessPolicy = normalizeReadinessPolicy(
+    injectedReadinessPolicy
+      ?? resolveStartupReadinessPolicy({ args, cwd, env, homeDir }),
+  )
+  const authorityProvider = readinessPolicy.authority_provider === null
+    ? null
+    : authorityProviders[readinessPolicy.authority_provider]
   let inspection = null
   let runtimeServer
   if (runtimeInspector !== null) {
@@ -230,6 +253,7 @@ export async function main({
         env,
         mcpRoot,
         runtimeCacheDir,
+        sourceIdentity,
       })
     } catch {
       return startRuntimeDiagnostic({
@@ -246,6 +270,7 @@ export async function main({
       env,
       mcpRoot,
       runtimeCacheDir,
+      sourceIdentity,
     })
   }
   const importedRuntime = runtimeServer._deskRuntime ?? {
@@ -271,6 +296,7 @@ export async function main({
     person: args.person,
     policy: readinessPolicy,
     runtime: runtimeStatus,
+    authorityProvider,
     controllerConnector: runtimeServer.connectOrStartController,
   })
   await runtimeServer.startServer({

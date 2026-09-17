@@ -50,3 +50,38 @@ test("controller refusal becomes a stable terminal activation failure", async ()
     },
   )
 })
+
+test("configured authority providers must be resolved before admission", async () => {
+  await assert.rejects(
+    admitControlPlane({
+      deskRoot: "/desk",
+      person: "ari",
+      policy: normalizeReadinessPolicy({
+        write_authority: "person",
+        authority_provider: "crew-registry",
+      }),
+      verifyRuntime: async () => ({ state: "ready" }),
+      connectController: async () => ({ accepted: true, id: "controller-1" }),
+    }),
+    (error) => {
+      assert.equal(error.code, "authority_invalid")
+      assert.equal(error.observed.authority_provider, "crew-registry")
+      return true
+    },
+  )
+})
+
+test("admission requires a real controller connector", async () => {
+  await assert.rejects(
+    admitControlPlane({
+      deskRoot: "/desk",
+      policy: normalizeReadinessPolicy(),
+      verifyRuntime: async () => ({ state: "ready" }),
+    }),
+    (error) => {
+      assert.equal(error.code, "controller_start_failed")
+      assert.equal(error.observed.connector, "missing")
+      return true
+    },
+  )
+})

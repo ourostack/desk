@@ -9,8 +9,16 @@ export async function admitControlPlane({
   controllerConnector,
   verifyRuntime = async () => runtime ?? { state: "ready" },
   verifyAuthority = defaultVerifyAuthority,
-  connectController = controllerConnector ?? defaultConnectController,
+  connectController = controllerConnector,
 } = {}) {
+  if (typeof connectController !== "function") {
+    throw new ActivationFailure({
+      phase: "VERIFYING",
+      code: "controller_start_failed",
+      observed: { connector: "missing" },
+      summary: "The readiness controller connector is unavailable.",
+    })
+  }
   const verifiedRuntime = await verifyRuntime({ deskRoot, policy })
   const authority = await verifyAuthority({
     deskRoot,
@@ -38,6 +46,20 @@ export async function admitControlPlane({
 }
 
 async function defaultVerifyAuthority({ person, policy, authorityProvider }) {
+  if (policy?.authority_provider !== null && typeof authorityProvider !== "function") {
+    throw new ActivationFailure({
+      phase: "VERIFYING",
+      code: "authority_invalid",
+      expected: {
+        authority_provider: policy.authority_provider,
+      },
+      observed: {
+        authority_provider: policy.authority_provider,
+        resolution: "missing",
+      },
+      summary: `Desk authority provider ${policy.authority_provider} is unavailable.`,
+    })
+  }
   if (typeof authorityProvider === "function") {
     return authorityProvider({ person, policy })
   }
@@ -54,11 +76,4 @@ async function defaultVerifyAuthority({ person, policy, authorityProvider }) {
     return Object.freeze({ mode: "person", person })
   }
   return Object.freeze({ mode: "workspace" })
-}
-
-async function defaultConnectController() {
-  return Object.freeze({
-    accepted: true,
-    id: "embedded-readiness-controller",
-  })
 }
