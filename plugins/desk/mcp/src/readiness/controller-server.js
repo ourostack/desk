@@ -81,11 +81,16 @@ export async function startReadinessController({
   }
 
   await listen(server, endpoint)
-  writeFileSync(
-    path.join(stateDir, "owner.json"),
-    `${JSON.stringify({ schema_version: 1, identity, owner }, null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  )
+  try {
+    writeFileSync(
+      path.join(stateDir, "owner.json"),
+      `${JSON.stringify({ schema_version: 1, identity, owner }, null, 2)}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    )
+  } catch (error) {
+    await closeServer(server, endpoint, stateDir)
+    throw error
+  }
   if (!ephemeral) {
     server.unref()
   }
