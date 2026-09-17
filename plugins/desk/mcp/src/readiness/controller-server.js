@@ -19,11 +19,6 @@ export async function startReadinessController({
     started_at: new Date(Date.now() - Math.floor(process.uptime() * 1000)).toISOString(),
     token: randomUUID(),
   }
-  writeFileSync(
-    path.join(stateDir, "owner.json"),
-    `${JSON.stringify({ schema_version: 1, identity, owner }, null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  )
   let state = "CONTROL_READY"
   const server = net.createServer((socket) => {
     let pending = ""
@@ -86,6 +81,11 @@ export async function startReadinessController({
   }
 
   await listen(server, endpoint)
+  writeFileSync(
+    path.join(stateDir, "owner.json"),
+    `${JSON.stringify({ schema_version: 1, identity, owner }, null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  )
   if (!ephemeral) {
     server.unref()
   }
