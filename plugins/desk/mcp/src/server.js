@@ -49,19 +49,28 @@ import {
   ensureIndex,
 } from "./server-helpers.js"
 import { admitControlPlane } from "./activation/admit.js"
+import { connectOrStartController as connectReadinessController } from "./readiness/controller-client.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
 export { admitControlPlane, configureRuntimeArtifacts, ensureIndex }
 
-export async function connectOrStartController({ deskRoot }) {
-  return Object.freeze({
-    accepted: true,
-    id: `embedded:${deskRoot}`,
-    beginConvergence() {
-      return ensureIndex(deskRoot, {
+export async function connectOrStartController({ deskRoot, policy }) {
+  return connectReadinessController({
+    root: deskRoot,
+    protocolVersion: 1,
+    lexicalContract: {
+      schema: 1,
+      chunker: "markdown-v1",
+      normalization: "unicode-v1",
+      policy: {
+        lexical: policy.lexical,
+      },
+    },
+    handlers: {
+      beginConvergence: () => ensureIndex(deskRoot, {
         startup: false,
         skipEmbed: false,
-      })
+      }),
     },
   })
 }
