@@ -70,6 +70,7 @@ function activationInput(mode, overrides = {}) {
     runtimeCacheDir: mode === "project-local"
       ? ".codex/desk-runtime-cache"
       : "~/.cache/ouroboros-skills/desk",
+    sourceIdentity: `sha256:${"a".repeat(64)}`,
     ...overrides,
   }
 }

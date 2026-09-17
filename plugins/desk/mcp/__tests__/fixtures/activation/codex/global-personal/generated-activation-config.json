@@ -5,7 +5,7 @@
   },
   "runtimeCacheDir": "~/.cache/ouroboros-skills/desk",
   "activation": {
-    "source_identity": "sha256:3ecb8b5f87b6ab8783b05d9a09014dd93244da048a7cd464b349c4149622dfbf",
+    "source_identity": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "selected_id": "desk:worker",
     "launch_as": "desk:worker",
     "mode": "global-personal",
