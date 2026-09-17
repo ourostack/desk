@@ -4,12 +4,14 @@ import * as net from "node:net"
 import * as path from "node:path"
 
 import { responseMessage } from "./protocol.js"
+import { transitionReadiness } from "./state.js"
 
 export async function startReadinessController({
   identity,
   endpoint,
   stateDir,
   handlers = {},
+  ephemeral = false,
 } = {}) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const owner = {
@@ -42,6 +44,9 @@ export async function startReadinessController({
     let request
     try {
       request = JSON.parse(line)
+      if (request.params?.token !== owner.token) {
+        throw new Error("readiness controller authentication failed")
+      }
       const builtin = {
         handshake: () => ({
           accepted: request.params?.identity === identity.id,
@@ -50,9 +55,15 @@ export async function startReadinessController({
         }),
         status: () => ({ state, identity, owner }),
         beginConvergence: async () => {
-          state = "LEXICAL_CONVERGING"
-          const result = await handlers.beginConvergence?.()
-          return result ?? { accepted: true }
+          state = transitionReadiness(state, "LEXICAL_CONVERGING")
+          try {
+            const result = await handlers.beginConvergence?.()
+            state = transitionReadiness(state, "LEXICAL_READY")
+            return result ?? { accepted: true }
+          } catch (error) {
+            state = transitionReadiness(state, "RECOVERING")
+            throw error
+          }
         },
         barrier: () => handlers.barrier?.(request.params) ?? {
           capability: request.params?.capability,
@@ -75,6 +86,9 @@ export async function startReadinessController({
   }
 
   await listen(server, endpoint)
+  if (!ephemeral) {
+    server.unref()
+  }
   return {
     identity,
     owner,

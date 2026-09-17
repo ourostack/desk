@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { realpathSync, statSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 
 export function controllerIdentity({
@@ -9,6 +10,7 @@ export function controllerIdentity({
 } = {}) {
   const canonicalRoot = realpathSync(path.resolve(root))
   const stat = statSync(canonicalRoot)
+  const user = os.userInfo()
   const contract = stableStringify({
     protocol_version: protocolVersion,
     lexical_contract: lexicalContract,
@@ -17,6 +19,10 @@ export function controllerIdentity({
     root: canonicalRoot,
     device: stat.dev,
     inode: stat.ino,
+    user: {
+      uid: user.uid,
+      username: user.username,
+    },
     contract,
   }))
   return Object.freeze({
@@ -24,6 +30,10 @@ export function controllerIdentity({
     root: canonicalRoot,
     protocol_version: protocolVersion,
     lexical_contract: lexicalContract,
+    user: Object.freeze({
+      uid: user.uid,
+      username: user.username,
+    }),
   })
 }
 

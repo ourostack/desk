@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { mkdirSync, rmSync } from "node:fs"
+import { mkdirSync, readFileSync, rmSync, statSync } from "node:fs"
 import * as net from "node:net"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -17,12 +17,13 @@ export async function connectOrStartController({
   lexicalContract = {},
   stateHome = path.join(os.homedir(), ".cache", "ouroboros-skills", "desk", "readiness"),
   handlers,
+  ephemeral = false,
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract })
   const stateDir = path.join(stateHome, identity.id)
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const endpoint = process.platform === "win32"
-    ? `\\\\.\\pipe\\desk-readiness-${identity.id}`
+    ? `\\\\.\\pipe\\desk-readiness-${identity.user.username}-${identity.id}`
     : path.join(stateDir, "controller.sock")
 
   let local = localControllers.get(identity.id)
@@ -31,6 +32,7 @@ export async function connectOrStartController({
     if (!start) {
       start = startOrReuseController({
         endpoint,
+        ephemeral,
         handlers,
         identity,
         stateDir,
@@ -49,56 +51,72 @@ export async function connectOrStartController({
   if (local) {
     local.clients += 1
   }
-
-  async function startOrReuseController({
+  const token = readControllerToken({ identity, stateDir })
+  const handshake = await request({
     endpoint,
-    handlers,
     identity,
-    stateDir,
-  }) {
-    const existing = await tryHandshake({ endpoint, identity })
-    if (existing?.accepted) {
-      return
-    }
-    if (process.platform !== "win32") {
-      rmSync(endpoint, { force: true })
-    }
+    method: "handshake",
+    params: { token },
+  })
+  if (!handshake.accepted) {
+    throw new Error("readiness controller protocol handshake rejected")
+  }
+  return createClient({ endpoint, ephemeral, identity, local, token })
+}
+
+async function startOrReuseController({
+  endpoint,
+  ephemeral,
+  handlers,
+  identity,
+  stateDir,
+}) {
+  const existing = await tryHandshake({ endpoint, identity, stateDir })
+  if (existing?.accepted) {
+    return
+  }
+  if (process.platform !== "win32" && endpointIsReclaimable({ identity, stateDir })) {
+    rmSync(endpoint, { force: true })
+  }
+  try {
     const controller = await startReadinessController({
       identity,
       endpoint,
       stateDir,
       handlers,
+      ephemeral,
     })
     localControllers.set(identity.id, { controller, clients: 0 })
+  } catch (error) {
+    if (error?.code !== "EADDRINUSE") {
+      throw error
+    }
+    await waitForHandshake({ endpoint, identity, stateDir })
   }
-  const handshake = await request({ endpoint, identity, method: "handshake", params: { identity } })
-  if (!handshake.accepted) {
-    throw new Error("readiness controller protocol handshake rejected")
-  }
-  return createClient({ endpoint, identity, local })
 }
 
-function createClient({ endpoint, identity, local }) {
+function createClient({ endpoint, ephemeral, identity, local, token }) {
   let closed = false
+  const call = (method, params = {}) => request({
+    endpoint,
+    identity,
+    method,
+    params: { ...params, token },
+  })
   return {
     accepted: true,
     id: identity.id,
     identity,
-    status: () => request({ endpoint, identity, method: "status" }),
-    beginConvergence: () => request({ endpoint, identity, method: "beginConvergence" }),
-    barrier: (params) => request({ endpoint, identity, method: "barrier", params }),
-    recordChange: (changedPath) => request({
-      endpoint,
-      identity,
-      method: "recordChange",
-      params: { path: changedPath },
-    }),
+    status: () => call("status"),
+    beginConvergence: () => call("beginConvergence"),
+    barrier: (params) => call("barrier", params),
+    recordChange: (changedPath) => call("recordChange", { path: changedPath }),
     async close() {
       if (closed) return
       closed = true
       if (!local) return
       local.clients -= 1
-      if (local.clients === 0) {
+      if (ephemeral && local.clients === 0) {
         localControllers.delete(identity.id)
         await local.controller.close()
       }
@@ -106,17 +124,61 @@ function createClient({ endpoint, identity, local }) {
   }
 }
 
-async function tryHandshake({ endpoint, identity }) {
+async function tryHandshake({ endpoint, identity, stateDir }) {
   try {
+    const token = readControllerToken({ identity, stateDir })
     return await request({
       endpoint,
       identity,
       method: "handshake",
-      params: { identity },
+      params: { token },
       timeoutMs: 100,
     })
   } catch {
     return null
+  }
+}
+
+async function waitForHandshake({ endpoint, identity, stateDir }) {
+  let lastError
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      const result = await tryHandshake({ endpoint, identity, stateDir })
+      if (result?.accepted) return result
+    } catch (error) {
+      lastError = error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw lastError ?? new Error("readiness controller election did not converge")
+}
+
+function readControllerToken({ identity, stateDir }) {
+  const stat = statSync(stateDir)
+  if (process.platform !== "win32" && stat.uid !== process.getuid()) {
+    throw new Error("readiness controller state directory has unsafe ownership")
+  }
+  const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
+  if (record.identity?.id !== identity.id || typeof record.owner?.token !== "string") {
+    throw new Error("readiness controller owner record is invalid")
+  }
+  return record.owner.token
+}
+
+function endpointIsReclaimable({ identity, stateDir }) {
+  try {
+    const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
+    if (record.identity?.id !== identity.id || !Number.isInteger(record.owner?.pid)) {
+      return false
+    }
+    try {
+      process.kill(record.owner.pid, 0)
+      return false
+    } catch (error) {
+      return error?.code === "ESRCH"
+    }
+  } catch {
+    return false
   }
 }
 
@@ -137,10 +199,14 @@ function request({
     }, timeoutMs)
     socket.setEncoding("utf8")
     socket.once("connect", () => {
-      socket.write(`${JSON.stringify(requestMessage({ id, method, params: {
-        ...params,
-        identity: identity.id,
-      } }))}\n`)
+      socket.write(`${JSON.stringify(requestMessage({
+        id,
+        method,
+        params: {
+          ...params,
+          identity: identity.id,
+        },
+      }))}\n`)
     })
     socket.on("data", (chunk) => {
       pending += chunk
