@@ -557,7 +557,7 @@ const ROUTES = {
   work_design_ruling: ({ db, values, item }) => {
     const phase = normalizeIdentifier(values, "phase")
     const cycleNumber = requirePositiveInteger(values, "cycle")
-    const trigger = normalizeIdentifier(values, "trigger")
+    const trigger = requireText(values, "trigger").trim()
     const decision = normalizeIdentifier(values, "decision")
     const reason = requireText(values, "reason").trim()
     const evidence = requireText(values, "evidence").trim()
@@ -599,9 +599,7 @@ const ROUTES = {
             `${cycleNumber}. The helper detects a pivot; it never chooses a ruling.`,
         )
       }
-      const reportedTriggers = JSON.parse(unresolved.convergence_triggers).map((entry) =>
-        entry.code.replaceAll("_", "-"),
-      )
+      const reportedTriggers = JSON.parse(unresolved.convergence_triggers).map((entry) => entry.code)
       if (!reportedTriggers.includes(trigger)) {
         throw new Error(
           `${LABEL}: trigger ${JSON.stringify(trigger)} was not reported for the unresolved ` +
@@ -1582,10 +1580,12 @@ function requireFiniteNumber(values, field) {
 
 function requirePositiveInteger(values, field) {
   const value = values[field]
-  if (!Number.isInteger(value) || value <= 0) {
+  const normalized =
+    typeof value === "string" && /^[0-9]+$/u.test(value) ? Number(value) : value
+  if (!Number.isInteger(normalized) || normalized <= 0) {
     throw new Error(`${LABEL}: ${field} is required and must be a positive integer.`)
   }
-  return value
+  return normalized
 }
 
 function normalizeIdentifier(values, field) {

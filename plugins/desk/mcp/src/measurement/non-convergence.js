@@ -3,7 +3,7 @@ export function assessConvergence({ contract, cycles }) {
   const failedByBoundary = new Map()
 
   for (const cycle of [...cycles].sort((left, right) => left.cycle - right.cycle)) {
-    if (cycle.result === "clean") continue
+    if (cycle.result !== "rejected") continue
     const failed = failedByBoundary.get(cycle.boundary) ?? []
     failed.push(cycle)
     failedByBoundary.set(cycle.boundary, failed)
