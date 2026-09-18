@@ -70,6 +70,88 @@ test("only rejected cycle results count toward the three-cycle pivot", () => {
   assert.deepEqual(convergence, { status: "continue", triggers: [] })
 })
 
+test("introduced architecture mechanisms require a pivot only for exact recognized categories", async (t) => {
+  const recognizedValues = [
+    "subsystem",
+    "service",
+    "registry",
+    "persistent-store",
+    "cross-platform-contract",
+  ]
+  const cases = [
+    ...recognizedValues.map((value) => ({
+      name: `${value} pivots`,
+      introducedMechanisms: [value],
+      expectedValues: [value],
+    })),
+    {
+      name: "an empty list continues",
+      introducedMechanisms: [],
+      expectedValues: [],
+    },
+    {
+      name: "ordinary implementation evidence continues",
+      introducedMechanisms: ["helper", "refactor", "test", "adapter"],
+      expectedValues: [],
+    },
+    {
+      name: "mixed evidence returns only recognized categories in input order",
+      introducedMechanisms: [
+        "helper",
+        "registry",
+        "test",
+        "cross-platform-contract",
+        "service",
+        "adapter",
+      ],
+      expectedValues: ["registry", "cross-platform-contract", "service"],
+    },
+    {
+      name: "substring lookalikes continue",
+      introducedMechanisms: [
+        "subsystem-helper",
+        "service-v2",
+        "my-registry",
+        "persistent-store-cache",
+        "cross-platform-contract-test",
+      ],
+      expectedValues: [],
+    },
+  ]
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, () => {
+      const cycle = {
+        cycle: 7,
+        result: "clean",
+        write_set: [],
+        discriminator: {
+          introduced_mechanisms: testCase.introducedMechanisms,
+        },
+      }
+      const convergence = assessConvergence({ contract: {}, cycles: [cycle] })
+
+      assert.deepEqual(
+        convergence,
+        testCase.expectedValues.length === 0
+          ? { status: "continue", triggers: [] }
+          : {
+              status: "pivot_required",
+              triggers: [
+                {
+                  code: "introduced_mechanism",
+                  evidence: {
+                    cycle: 7,
+                    values: testCase.expectedValues,
+                  },
+                },
+              ],
+            },
+      )
+    })
+  }
+})
+
 test("scope envelope admits exact files and slash-terminated directories", async (t) => {
   const cases = [
     {
