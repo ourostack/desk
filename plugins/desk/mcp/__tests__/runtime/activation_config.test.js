@@ -808,6 +808,11 @@ test("entrypoint stdio startup uses relative activation runtime cache and reuses
     })
     assert.equal(second.initialize.error, undefined, second.stderr || second.stdout)
     assert.equal(second.created.error, undefined, second.stderr || second.stdout)
+    assert.doesNotMatch(
+      second.stderr,
+      /illegal readiness transition: LEXICAL_READY -> LEXICAL_CONVERGING/u,
+      "reused compatible consumers must not request backward lexical convergence",
+    )
 
     assert.equal(hasRuntimeDeps(activationCache), true, "relative activation runtimeCacheDir should receive runtime dependencies")
     assert.equal(hasRuntimeDeps(envCache), false, "DESK_RUNTIME_CACHE_DIR must not receive runtime dependencies when activation config supplies runtimeCacheDir")

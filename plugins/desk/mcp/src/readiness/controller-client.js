@@ -103,12 +103,19 @@ function createClient({ endpoint, ephemeral, identity, local, token }) {
     method,
     params: { ...params, token },
   })
+  const readyStates = new Set(["LEXICAL_READY", "SEMANTIC_CONVERGING", "READY"])
   return {
     accepted: true,
     id: identity.id,
     identity,
     status: () => call("status"),
-    beginConvergence: () => call("beginConvergence"),
+    async beginConvergence() {
+      const current = await call("status")
+      if (readyStates.has(current?.state)) {
+        return { accepted: true, reused: true, state: current.state }
+      }
+      return call("beginConvergence")
+    },
     barrier: (params) => call("barrier", params),
     recordChange: (changedPath) => call("recordChange", { path: changedPath }),
     async close() {

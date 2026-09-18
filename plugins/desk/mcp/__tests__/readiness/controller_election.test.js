@@ -80,3 +80,34 @@ test("successful convergence advances the lexical barrier to ready", async () =>
     rmSync(stateHome, { recursive: true, force: true })
   }
 })
+
+test("a second compatible client does not request backward convergence from lexical ready", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "desk-controller-root-"))
+  const stateHome = mkdtempSync(path.join(tmpdir(), "desk-controller-state-"))
+  let first
+  let second
+  try {
+    const options = {
+      root,
+      stateHome,
+      protocolVersion: 1,
+      lexicalContract: { schema: 1, chunker: "v1", normalization: "v1" },
+      handlers: {
+        beginConvergence: async () => ({ indexed: true }),
+      },
+      ephemeral: true,
+    }
+    first = await connectOrStartController(options)
+    assert.deepEqual(await first.beginConvergence(), { indexed: true })
+    assert.equal((await first.status()).state, "LEXICAL_READY")
+
+    second = await connectOrStartController(options)
+    assert.deepEqual(await second.beginConvergence(), { accepted: true, reused: true, state: "LEXICAL_READY" })
+    assert.equal((await second.status()).state, "LEXICAL_READY")
+  } finally {
+    await second?.close?.()
+    await first?.close?.()
+    rmSync(root, { recursive: true, force: true })
+    rmSync(stateHome, { recursive: true, force: true })
+  }
+})
