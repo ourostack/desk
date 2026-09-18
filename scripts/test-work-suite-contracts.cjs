@@ -405,8 +405,8 @@ for (const file of [
   "plugins/desk/.claude-plugin/plugin.json",
   "plugins/desk/.codex-plugin/plugin.json",
 ]) {
-  contract(`${file} releases Desk 3.2.0-alpha.4`, () => {
-    assert.equal(json(file).version, "3.2.0-alpha.4");
+  contract(`${file} releases Desk 3.2.0-alpha.5`, () => {
+    assert.equal(json(file).version, "3.2.0-alpha.5");
   });
 }
 
@@ -463,7 +463,7 @@ contract("coverage exclusion list has no campaign additions", () => {
 
 assert.equal(json("plugins/plain-language/plugin.json").version, "0.2.1");
 assert.equal(json("plugins/ponytail-upstream/plugin.json").version, "4.9.0");
-assert.equal(json("plugins/desk/mcp/package.json").version, "1.4.0-alpha.4");
+assert.equal(json("plugins/desk/mcp/package.json").version, "1.4.0-alpha.5");
 
 const hookData = fs.mkdtempSync(path.join(os.tmpdir(), "ponytail-provider-"));
 try {
