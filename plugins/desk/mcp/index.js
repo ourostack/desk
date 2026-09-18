@@ -15,10 +15,8 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as path from "node:path"
-import {
-  budgetValue,
-  loadPerformanceBudgets,
-} from "./src/artifacts/performance-budgets.js"
+import { admitControlPlane } from "./src/activation/admit.js"
+import { normalizeReadinessPolicy } from "./src/activation/readiness-policy.js"
 import {
   importRuntimeServer,
   inspectRuntimeDependencyPack,
@@ -123,6 +121,42 @@ export function resolveStartupActivationContext({
   }
 }
 
+export function resolveStartupSourceIdentity(activationStatus) {
+  for (const value of [
+    activationStatus?.source_identity,
+    activationStatus?.resolved_commit,
+    activationStatus?.commit,
+    activationStatus?.source?.commit,
+  ]) {
+    if (hasText(value)) {
+      return value
+    }
+  }
+  return null
+}
+
+export function resolveStartupReadinessPolicy({
+  args,
+  cwd = process.cwd(),
+  env = process.env,
+  homeDir,
+} = {}) {
+  const activationConfig = resolveStartupActivationConfigPath({ args, env })
+  if (!hasText(activationConfig)) {
+    return normalizeReadinessPolicy()
+  }
+  const loadedActivationConfig = loadActivationConfig({
+    configPath: activationConfig,
+    cwd,
+    homeDir,
+  })
+  return normalizeReadinessPolicy(
+    loadedActivationConfig.desk_runtime
+      ?? loadedActivationConfig.desk?.runtime
+      ?? {},
+  )
+}
+
 export function resolveRuntimeInspector({ runtimeImporter, runtimeInspector }) {
   if (runtimeInspector !== undefined) {
     return runtimeInspector
@@ -160,6 +194,8 @@ export async function main({
   nodeCandidateDiscoverer = discoverNodeCandidates,
   nodeSelector = selectCompatibleNode,
   nodeReexecutor = reexecuteWithCompatibleNode,
+  readinessPolicy: injectedReadinessPolicy,
+  authorityProviders = {},
 } = {}) {
   runtimeInspector = resolveRuntimeInspector({ runtimeImporter, runtimeInspector })
   const serverVersion = resolveMcpServerVersion({ mcpRoot })
@@ -172,6 +208,14 @@ export async function main({
   const { root: deskRoot } = rootResolution
   const runtimeCacheDir = resolveStartupRuntimeCacheDir({ args, cwd, env, homeDir })
   const activationStatus = resolveStartupActivationContext({ args, cwd, env, homeDir })
+  const sourceIdentity = resolveStartupSourceIdentity(activationStatus)
+  const readinessPolicy = normalizeReadinessPolicy(
+    injectedReadinessPolicy
+      ?? resolveStartupReadinessPolicy({ args, cwd, env, homeDir }),
+  )
+  const authorityProvider = readinessPolicy.authority_provider === null
+    ? null
+    : authorityProviders[readinessPolicy.authority_provider]
   let inspection = null
   let runtimeServer
   if (runtimeInspector !== null) {
@@ -209,6 +253,7 @@ export async function main({
         env,
         mcpRoot,
         runtimeCacheDir,
+        sourceIdentity,
       })
     } catch {
       return startRuntimeDiagnostic({
@@ -225,6 +270,7 @@ export async function main({
       env,
       mcpRoot,
       runtimeCacheDir,
+      sourceIdentity,
     })
   }
   const importedRuntime = runtimeServer._deskRuntime ?? {
@@ -245,11 +291,13 @@ export async function main({
         runtime_cache_path: importedRuntime.runtime_cache_dir ?? runtimeCacheDir,
         support_matrix_path: inspection.runtime?.support_matrix_path ?? inspection.support_matrix_path,
       }
-  const performanceBudgets = await loadPerformanceBudgets({ mcpRoot })
-  const startupStatus = await runStartupEnsureIndex({
-    budgetMs: budgetValue(performanceBudgets, "startup", "ensure_index_ms"),
+  const admission = await (runtimeServer.admitControlPlane ?? admitControlPlane)({
     deskRoot,
-    runtimeServer,
+    person: args.person,
+    policy: readinessPolicy,
+    runtime: runtimeStatus,
+    authorityProvider,
+    controllerConnector: runtimeServer.connectOrStartController,
   })
   await runtimeServer.startServer({
     deskRoot,
@@ -258,8 +306,12 @@ export async function main({
       root: rootResolution,
       activation: activationStatus,
       runtime: runtimeStatus,
-      startup: startupStatus,
+      admission,
     },
+  })
+  const convergence = runtimeServer.beginBackgroundConvergence?.(admission)
+  Promise.resolve(convergence).catch((error) => {
+    process.stderr.write(`[desk-mcp] background convergence failed: ${error?.message ?? String(error)}\n`)
   })
 }
 
@@ -381,96 +433,6 @@ function runtimeDiagnostic({
     runtimeCachePath: runtimeCacheDir ?? env.DESK_RUNTIME_CACHE_DIR ?? null,
     supportMatrixPath: runtime.support_matrix_path ?? null,
   })
-}
-
-async function runStartupEnsureIndex({ budgetMs, deskRoot, runtimeServer }) {
-  if (typeof runtimeServer.ensureIndex !== "function") {
-    return {
-      fallback_mode: "not_checked",
-      degraded: false,
-      duration_ms: 0,
-      budget_ms: budgetMs,
-    }
-  }
-  const startedAt = Date.now()
-  const controller = new AbortController()
-  let timeout
-  let timedOut = false
-  const ensureIndexPromise = Promise.resolve().then(() => runtimeServer.ensureIndex(deskRoot, {
-    startup: true,
-    budgetMs,
-    signal: controller.signal,
-    skipEmbed: true,
-  }))
-  try {
-    const ensureIndexResult = await Promise.race([
-      ensureIndexPromise,
-      new Promise((resolve) => {
-        timeout = setTimeout(() => {
-          timedOut = true
-          controller.abort()
-          resolve({
-            built: false,
-            reason: "startup_budget_exceeded",
-            deferred: true,
-          })
-        }, budgetMs)
-      }),
-    ])
-    if (timedOut) {
-      ensureIndexPromise.catch(() => {})
-    }
-    clearTimeout(timeout)
-    const fallbackMode = inferStartupFallbackMode(ensureIndexResult)
-    return {
-      ensure_index: ensureIndexResult,
-      duration_ms: Date.now() - startedAt,
-      budget_ms: budgetMs,
-      fallback_mode: fallbackMode,
-      degraded: startupIsDegraded(ensureIndexResult, fallbackMode),
-    }
-  } catch (err) {
-    const ensureIndexResult = {
-      built: false,
-      reason: "startup_error",
-      error: {
-        message: err?.message ?? String(err),
-      },
-    }
-    clearTimeout(timeout)
-    const fallbackMode = inferStartupFallbackMode(ensureIndexResult)
-    return {
-      ensure_index: ensureIndexResult,
-      duration_ms: Date.now() - startedAt,
-      budget_ms: budgetMs,
-      fallback_mode: fallbackMode,
-      degraded: startupIsDegraded(ensureIndexResult, fallbackMode),
-    }
-  }
-}
-
-function inferStartupFallbackMode(ensureIndexResult) {
-  if (ensureIndexResult?.fallback === "vector_packs" && ensureIndexResult?.snapshot?.restored) {
-    return "snapshot_then_vector_packs"
-  }
-  if (ensureIndexResult?.fallback === "vector_packs") return "vector_packs"
-  if (
-    ensureIndexResult?.semantic?.missing_vectors > 0
-  ) {
-    return "lexical_only"
-  }
-  if (ensureIndexResult?.snapshot?.restored) return "snapshot"
-  if (ensureIndexResult?.reason === "startup_error") return "startup_error"
-  if (ensureIndexResult?.reason === "startup_budget_exceeded") return "startup_deferred"
-  return ensureIndexResult?.built ? "rebuild" : "fresh"
-}
-
-function startupIsDegraded(ensureIndexResult, fallbackMode) {
-  return fallbackMode === "lexical_only" ||
-    fallbackMode === "startup_error" ||
-    fallbackMode === "startup_deferred" ||
-    ensureIndexResult?.semantic?.embedding_available === false ||
-    ensureIndexResult?.semantic?.missing_vectors > 0
 }
 
 function hasText(value) {

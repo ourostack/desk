@@ -1,8 +1,13 @@
+import { existsSync } from "node:fs"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
+
 import {
   applyActivationArtifacts,
   deactivateActivationArtifacts,
 } from "../artifact-ledger.js"
 import { resolveActivationChain, selectEngineeringMethod } from "../validate.js"
+import { hashCurrentSource } from "../../runtime/bootstrap.js"
 
 const CODEX_CAPABILITIES = new Set(["Read", "Write", "Interactive"])
 const CODEX_ACTIVATION_LEDGER_PATH = ".codex/desk-activation-ledger.json"
@@ -631,6 +636,8 @@ ${pluginMcpPolicy}${approvalPolicy}${directMcp}
 }
 
 function renderActivationConfig(input, selectedActivation) {
+  const sourceIdentity = input.sourceIdentity
+    ?? `sha256:${hashCurrentSource(resolveMcpRoot(input.pluginRoot))}`
   return `${JSON.stringify({
     schema_version: 1,
     desk: {
@@ -638,12 +645,21 @@ function renderActivationConfig(input, selectedActivation) {
     },
     runtimeCacheDir: input.runtimeCacheDir,
     activation: {
+      source_identity: sourceIdentity,
       selected_id: selectedActivation.id,
       launch_as: selectedActivation.launchAs,
       mode: input.mode,
       chain: selectedActivation.chain.map((entry) => entry.id),
     },
   }, null, 2)}\n`
+}
+
+function resolveMcpRoot(pluginRoot) {
+  const configured = path.resolve(pluginRoot, "mcp")
+  if (existsSync(configured)) {
+    return configured
+  }
+  return path.resolve(fileURLToPath(new URL("../../..", import.meta.url)))
 }
 
 function renderInstructionsBlock(input, modeConfig, selectedActivation) {

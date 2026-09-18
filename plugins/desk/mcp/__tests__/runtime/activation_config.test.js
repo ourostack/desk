@@ -631,6 +631,11 @@ test("entrypoint main resolves startup root before launching injected runtime se
       runtimeImporter: async ({ mcpRoot, runtimeCacheDir }) => {
         calls.push(["runtimeImporter", mcpRoot, runtimeCacheDir])
         return {
+          connectOrStartController: async () => ({
+            accepted: true,
+            id: "controller-1",
+            beginConvergence() {},
+          }),
           startServer: async ({ deskRoot, person }) => {
             calls.push(["startServer", deskRoot, person])
           },

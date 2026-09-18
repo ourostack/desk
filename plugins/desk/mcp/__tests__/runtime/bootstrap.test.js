@@ -516,6 +516,158 @@ test("prepareRuntime restores dependencies, reuses current cache, and imports up
   }
 })
 
+test("exact admitted source identity reuses a validated source mirror without rehashing changed source", async () => {
+  const {
+    importRuntimeServer,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  const sourceIdentity = "commit:0123456789abcdef"
+  try {
+    await writeRuntimePack({ mcpRoot: fixture.mcpRoot })
+    const firstImport = await importRuntimeServer({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      platform: fixturePlatform,
+      arch: fixtureArch,
+      nodeAbi: fixtureNodeAbi,
+      sourceIdentity,
+    })
+    assert.equal(firstImport.marker, "initial")
+
+    writeServer(fixture.mcpRoot, "unadmitted-change")
+    const warmImport = await importRuntimeServer({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      platform: fixturePlatform,
+      arch: fixtureArch,
+      nodeAbi: fixtureNodeAbi,
+      sourceIdentity,
+    })
+
+    assert.equal(warmImport.marker, "initial")
+    assert.equal(listSourceMirrors(runtimeCacheDir).length, 1)
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("an existing valid source mirror is admitted for later warm reuse", async () => {
+  const {
+    importRuntimeServer,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  const sourceIdentity = "commit:fedcba9876543210"
+  try {
+    await writeRuntimePack({ mcpRoot: fixture.mcpRoot })
+    const preexisting = await importRuntimeServer({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      platform: fixturePlatform,
+      arch: fixtureArch,
+      nodeAbi: fixtureNodeAbi,
+    })
+    assert.equal(preexisting.marker, "initial")
+
+    const admitted = await importRuntimeServer({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      platform: fixturePlatform,
+      arch: fixtureArch,
+      nodeAbi: fixtureNodeAbi,
+      sourceIdentity,
+    })
+    assert.equal(admitted.marker, "initial")
+
+    writeServer(fixture.mcpRoot, "unadmitted-change")
+    const warmImport = await importRuntimeServer({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      platform: fixturePlatform,
+      arch: fixtureArch,
+      nodeAbi: fixtureNodeAbi,
+      sourceIdentity,
+    })
+
+    assert.equal(warmImport.marker, "initial")
+    assert.equal(listSourceMirrors(runtimeCacheDir).length, 1)
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("a content-derived source identity rejects changed source on a cold cache", async () => {
+  const {
+    hashCurrentSource,
+    importRuntimeServer,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    await writeRuntimePack({ mcpRoot: fixture.mcpRoot })
+    const sourceIdentity = `sha256:${hashCurrentSource(fixture.mcpRoot)}`
+    writeServer(fixture.mcpRoot, "changed-before-first-start")
+
+    await assert.rejects(
+      importRuntimeServer({
+        mcpRoot: fixture.mcpRoot,
+        runtimeCacheDir,
+        platform: fixturePlatform,
+        arch: fixtureArch,
+        nodeAbi: fixtureNodeAbi,
+        sourceIdentity,
+      }),
+      /source identity.*does not match/i,
+    )
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("a persisted content identity cannot point at a differently hashed mirror", async () => {
+  const {
+    hashCurrentSource,
+    importRuntimeServer,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    await writeRuntimePack({ mcpRoot: fixture.mcpRoot })
+    const originalHash = hashCurrentSource(fixture.mcpRoot)
+    writeServer(fixture.mcpRoot, "different-source")
+    const differentHash = hashCurrentSource(fixture.mcpRoot)
+    const different = await importRuntimeServer({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      platform: fixturePlatform,
+      arch: fixtureArch,
+      nodeAbi: fixtureNodeAbi,
+      sourceIdentity: "legacy-non-hash-identity",
+    })
+    writeJson(path.join(runtimeCacheDir, ".desk-source-mirror.json"), {
+      schema_version: 1,
+      source_identity: `sha256:${originalHash}`,
+      source_hash: differentHash,
+      mirror_path: different._deskRuntime.source_mirror_path,
+    })
+
+    await assert.rejects(
+      importRuntimeServer({
+        mcpRoot: fixture.mcpRoot,
+        runtimeCacheDir,
+        platform: fixturePlatform,
+        arch: fixtureArch,
+        nodeAbi: fixtureNodeAbi,
+        sourceIdentity: `sha256:${originalHash}`,
+      }),
+      /source identity.*does not match/i,
+    )
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test("restoreRuntimeDependencies repairs corrupt or incomplete cache markers", async () => {
   const { restoreRuntimeDependencies } = await loadBootstrap()
   const fixture = makeMcpFixture()

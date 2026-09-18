@@ -99,6 +99,12 @@
       "manual-only"
     ]
   },
+  "desk_runtime": {
+    "root": "workspace",
+    "write_authority": "workspace",
+    "lexical": "required",
+    "semantic": "background"
+  },
   "artifacts": {
     "embeddings": {
       "shared": true,

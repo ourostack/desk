@@ -70,6 +70,7 @@ function activationInput(mode, overrides = {}) {
     runtimeCacheDir: mode === "project-local"
       ? ".codex/desk-runtime-cache"
       : "~/.cache/ouroboros-skills/desk",
+    sourceIdentity: `sha256:${"a".repeat(64)}`,
     ...overrides,
   }
 }
@@ -247,6 +248,7 @@ test("global personal activation materializes worker and Desk as the default", a
   ])
   assert.equal(result.generatedConfig, loadFixture("global-personal", "generated-config.toml"))
   assert.equal(result.generatedActivationConfig, loadFixture("global-personal", "generated-activation-config.json"))
+  assert.match(result.generatedActivationConfig, /"source_identity": "sha256:[0-9a-f]{64}"/u)
   assert.equal(result.generatedInstructions, loadFixture("global-personal", "generated-instructions.md"))
   assertNoManualSetup(result.generatedConfig)
   assert.match(result.generatedConfig, /\[plugins\."desk@ourostack"\]/)
