@@ -1581,9 +1581,9 @@ function requireFiniteNumber(values, field) {
 function requirePositiveInteger(values, field) {
   const value = values[field]
   const normalized =
-    typeof value === "string" && /^[0-9]+$/u.test(value) ? Number(value) : value
-  if (!Number.isInteger(normalized) || normalized <= 0) {
-    throw new Error(`${LABEL}: ${field} is required and must be a positive integer.`)
+    typeof value === "string" && /^[1-9][0-9]*$/u.test(value) ? Number(value) : value
+  if (!Number.isSafeInteger(normalized) || normalized <= 0) {
+    throw new Error(`${LABEL}: ${field} is required and must be a positive safe integer.`)
   }
   return normalized
 }
