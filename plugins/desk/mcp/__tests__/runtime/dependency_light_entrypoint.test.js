@@ -171,7 +171,10 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex")
 }
 
-function makeFixture() {
+function makeFixture({
+  allowLocalIpc = true,
+  deletePreloadAfterLoad = false,
+} = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-entrypoint-"))
   const fixtureMcpRoot = path.join(root, "mcp")
   const deskRoot = path.join(root, "desk")
@@ -192,7 +195,9 @@ function makeFixture() {
   }
   const preloadPath = path.join(root, "forbid-network.mjs")
   const loaderPath = path.join(root, "forbid-network-loader.mjs")
-  const forbiddenNetworkModules = ["http", "https", "net", "tls", "node:http", "node:https", "node:net", "node:tls"]
+  const forbiddenNetworkModules = allowLocalIpc
+    ? ["http", "https", "tls", "node:http", "node:https", "node:tls"]
+    : ["http", "https", "net", "tls", "node:http", "node:https", "node:net", "node:tls"]
   writeFileSync(
     loaderPath,
     [
@@ -213,9 +218,13 @@ function makeFixture() {
     preloadPath,
     [
       `import { register } from "node:module"`,
-      `import { appendFileSync } from "node:fs"`,
+      `import { appendFileSync, rmSync } from "node:fs"`,
       `import Module from "node:module"`,
+      `import { fileURLToPath } from "node:url"`,
       `register(${JSON.stringify(pathToFileURL(loaderPath).href)})`,
+      ...(deletePreloadAfterLoad
+        ? [`rmSync(fileURLToPath(import.meta.url), { force: true })`]
+        : []),
       `const forbidden = new Set(${JSON.stringify(forbiddenNetworkModules)})`,
       `const originalLoad = Module._load`,
       `Module._load = function(request, parent, isMain) {`,
@@ -286,6 +295,25 @@ async function importEntrypointWithoutNodeModules(fixture) {
     cwd: fixture.mcpRoot,
     env: fixtureEnv(fixture),
     timeoutMs: 5000,
+  })
+}
+
+async function importRuntimeServerWithoutConnecting(fixture) {
+  return spawnNode([
+    "--input-type=module",
+    "--eval",
+    [
+      `import path from "node:path";`,
+      `import { pathToFileURL } from "node:url";`,
+      `const { prepareRuntime } = await import(${JSON.stringify(pathToFileURL(path.join(fixture.mcpRoot, "src", "runtime", "bootstrap.js")).href)});`,
+      `const prepared = prepareRuntime({ mcpRoot: ${JSON.stringify(fixture.mcpRoot)}, env: process.env, runtimeCacheDir: ${JSON.stringify(fixture.runtimeCacheDir)} });`,
+      `await import(pathToFileURL(path.join(prepared.sourceMirrorPath, "src", "server.js")).href);`,
+      `process.stdout.write("server-imported\\n")`,
+    ].join("\n"),
+  ], {
+    cwd: fixture.mcpRoot,
+    env: fixtureEnv(fixture),
+    timeoutMs: 10000,
   })
 }
 
@@ -655,6 +683,22 @@ test("dependency-isolated runtime children cannot resolve host modules through N
   } finally {
     if (previousNodePath === undefined) delete process.env.NODE_PATH
     else process.env.NODE_PATH = previousNodePath
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("restored runtime server import stays dependency-light until connectOrStartController", {
+  skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${hostTarget}`,
+}, async () => {
+  const fixture = makeFixture({ allowLocalIpc: false, deletePreloadAfterLoad: true })
+  try {
+    const result = await importRuntimeServerWithoutConnecting(fixture)
+    assert.equal(result.timedOut, false, result.stderr)
+    assert.equal(result.code, 0, result.stderr || result.stdout)
+    assert.equal(result.stdout, "server-imported\n")
+    assert.equal(existsSync(fixture.commandLog), false, "server import must not shell out to npm/npx/curl/wget")
+    assert.equal(existsSync(fixture.networkLog), false, "server import must not touch forbidden network modules before connect")
+  } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
 })

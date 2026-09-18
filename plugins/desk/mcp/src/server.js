@@ -22,8 +22,6 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js"
-import { readFileSync } from "node:fs"
-import { fileURLToPath } from "node:url"
 
 import { TOOL_NAMES, TOOL_DESCRIPTIONS } from "./tool-names.js"
 import { packageMetadata } from "./package-metadata.js"
@@ -51,14 +49,11 @@ import {
   ensureIndex,
 } from "./server-helpers.js"
 import { admitControlPlane } from "./activation/admit.js"
-import { transitionReadiness } from "./readiness/state.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
 export { admitControlPlane, configureRuntimeArtifacts, ensureIndex }
 
-const readinessControllerModulePromise = bootstrapForbidsReadinessNetworking()
-  ? null
-  : import("./readiness/controller-client.js")
+let readinessControllerModulePromise
 
 export async function connectOrStartController({ deskRoot, policy }) {
   const options = {
@@ -79,18 +74,8 @@ export async function connectOrStartController({ deskRoot, policy }) {
       }),
     },
   }
-  if (readinessControllerModulePromise === null) {
-    return createBootstrapLocalController(options.handlers.beginConvergence)
-  }
-  try {
-    const { connectOrStartController: connectReadinessController } = await readinessControllerModulePromise
-    return connectReadinessController(options)
-  } catch (error) {
-    if (!isBootstrapNetworkRestriction(error)) {
-      throw error
-    }
-    return createBootstrapLocalController(options.handlers.beginConvergence)
-  }
+  const { connectOrStartController: connectReadinessController } = await loadReadinessController()
+  return connectReadinessController(options)
 }
 
 export async function beginBackgroundConvergence(admission) {
@@ -100,61 +85,9 @@ export async function beginBackgroundConvergence(admission) {
   return null
 }
 
-function isBootstrapNetworkRestriction(error) {
-  return /network module forbidden during runtime dependency bootstrap: node:net/u.test(
-    error?.message ?? String(error),
-  )
-}
-
-function bootstrapForbidsReadinessNetworking() {
-  const options = process.env.NODE_OPTIONS ?? ""
-  const imports = [...options.matchAll(/(?:^|\s)--import=([^\s]+)/gu)]
-  return imports.some(([, ref]) => {
-    if (!ref?.startsWith("file:")) return false
-    try {
-      const source = readFileSync(fileURLToPath(ref), "utf8")
-      return source.includes("network module forbidden during runtime dependency bootstrap")
-        && source.includes("node:net")
-    } catch {
-      return false
-    }
-  })
-}
-
-function createBootstrapLocalController(beginConvergence) {
-  let state = "CONTROL_READY"
-  const readyStates = new Set(["LEXICAL_READY", "SEMANTIC_CONVERGING", "READY"])
-  return {
-    accepted: true,
-    id: "bootstrap-local-controller",
-    status() {
-      return { state }
-    },
-    async beginConvergence() {
-      if (readyStates.has(state)) {
-        return { accepted: true, reused: true, state }
-      }
-      state = transitionReadiness(state, "LEXICAL_CONVERGING")
-      try {
-        const result = await beginConvergence()
-        state = transitionReadiness(state, "LEXICAL_READY")
-        return result ?? { accepted: true }
-      } catch (error) {
-        state = transitionReadiness(state, "RECOVERING")
-        throw error
-      }
-    },
-    barrier({ capability } = {}) {
-      return {
-        capability,
-        current: state === "LEXICAL_READY" || state === "READY",
-        state,
-      }
-    },
-    recordChange() {
-      return { recorded: true }
-    },
-  }
+function loadReadinessController() {
+  readinessControllerModulePromise ??= import("./readiness/controller-client.js")
+  return readinessControllerModulePromise
 }
 
 // Map tool name → implementation. Every tool now has a real body.
