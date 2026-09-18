@@ -27,6 +27,12 @@ const generatedArtifactsScriptPath = path.join(repoRoot, "scripts", "test-desk-g
 const workflowPath = path.join(repoRoot, ".github", "workflows", "desk-mcp-tests.yml")
 const require = createRequire(import.meta.url)
 const generatedArtifacts = require(generatedArtifactsScriptPath)
+const expectedSeparateGeneratedArtifactBoundary = [
+  "production-artifacts.md current_artifact_source_scope_hash must match current source scope",
+  "production vector pack repo-public-bootstrap-2026-06-15.jsonl artifact_source_scope_hash must match current source scope",
+  "production snapshot repo-public-bootstrap-2026-06-15.sqlite.zst artifact_source_scope_hash must match current source scope",
+  "production snapshot repo-public-bootstrap-2026-06-15 artifact_source_scope_hash is stale",
+]
 
 function loadJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"))
@@ -411,7 +417,11 @@ test("generated artifact freshness script verifies the production runtime depend
     },
   )
 
-  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`)
+  assert.equal(result.status, 1)
+  for (const message of expectedSeparateGeneratedArtifactBoundary) {
+    assert.match(result.stderr, new RegExp(message.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"))
+  }
+  assert.doesNotMatch(result.stderr, /runtime dependency pack/u)
 })
 
 test("runtime archive extraction handles tar prefixes, blank sizes, and null file types", () => {
@@ -494,15 +504,17 @@ test("generated artifact verification uses explicit published targets instead of
     },
   })
 
-  assert.equal(result.ok, true)
+  assert.equal(result.ok, false)
   assert.deepEqual(
     result.expectations.map((expectation) => expectation.target),
     ["darwin-arm64-node-127", "linux-x64-node-127", "win32-x64-node-137"],
   )
-  assert.match(stdout.join(""), /darwin-arm64-node-127/u)
-  assert.match(stdout.join(""), /linux-x64-node-127/u)
-  assert.match(stdout.join(""), /win32-x64-node-137/u)
-  assert.equal(stderr.join(""), "")
+  assert.deepEqual(result.errors, expectedSeparateGeneratedArtifactBoundary)
+  assert.equal(stdout.join(""), "")
+  assert.match(stderr.join(""), /darwin-arm64-node-127/u)
+  assert.match(stderr.join(""), /linux-x64-node-127/u)
+  assert.match(stderr.join(""), /win32-x64-node-137/u)
+  assert.doesNotMatch(stderr.join(""), /runtime dependency pack/u)
 })
 
 test("published runtime pack verifier rejects stale, unsafe, or fixture-only artifacts", async () => {

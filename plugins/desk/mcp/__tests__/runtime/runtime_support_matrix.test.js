@@ -35,7 +35,7 @@ test("Darwin release provenance identifies the installed production build", () =
   const manifest = loadJson(path.join(root, target.artifact_path, "runtime-deps.manifest.json"))
   assert.equal(
     manifest.provenance.source,
-    "Installed production closure on Node 22.23.2/darwin-arm64 (ABI 127); packaged without inferred SQLite build auxiliaries.",
+    "Metadata repack from 1.4.0-alpha.4 runtime dependency archive 09cc1e9b5840fb0c9f373371704aef6bc858e890cc61f9ad7af388729335c658. Original native provenance: Built on the maintainer's Darwin ARM64 host for alpha four and verified against its native payload. Production dependency lock hash unchanged: 0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e. alpha.5 changes only root package metadata (package.json and package-lock.json). No native execution occurred during this repack.",
   )
 })
 
@@ -71,7 +71,7 @@ test("committed runtime support matrix equals the physically shipped runtime pac
     schema_version: 1,
     plugin: {
       name: "@ourostack/desk-mcp",
-      version: "1.4.0-alpha.4",
+    version: "1.4.0-alpha.5",
     },
     targets: [
       {
@@ -80,7 +80,7 @@ test("committed runtime support matrix equals the physically shipped runtime pac
         arch: "arm64",
         node_abi: "127",
         prod_dependency_lock_hash: "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
-        archive_sha256: "09cc1e9b5840fb0c9f373371704aef6bc858e890cc61f9ad7af388729335c658",
+      archive_sha256: "3ad940f1ccfcb1683e7a6a96772a7701f898b5fd18d085d6ac90a169b889753f",
         artifact_path: "darwin-arm64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
       },
       {
@@ -89,7 +89,7 @@ test("committed runtime support matrix equals the physically shipped runtime pac
         arch: "x64",
         node_abi: "127",
         prod_dependency_lock_hash: "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
-        archive_sha256: "898870aa5cb84eeb09c9ebef4db5de9d4a24915a5efc147bf0334925eca6624f",
+      archive_sha256: "ccd4fdfd0889aab47bb54c71d316ea0349ab3489d9435e871585d411a20705e7",
         artifact_path: "linux-x64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
       },
       {
@@ -98,7 +98,7 @@ test("committed runtime support matrix equals the physically shipped runtime pac
         arch: "x64",
         node_abi: "137",
         prod_dependency_lock_hash: "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
-        archive_sha256: "372957d54286dfd0059f2d066be616c492f684c7e1d651c38b4b5561ecd9f6a2",
+      archive_sha256: "96cdd154f7561fd226ea8050b9d69bb021224286c434a030b1a5774dab07457b",
         artifact_path: "win32-x64-node-137/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
       },
     ],
