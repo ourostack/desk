@@ -36,6 +36,25 @@ the ledger refuses `replaces` as a link relation for exactly this reason. there 
 
 `close` keeps cancelled and unfinished work in the drawer. a record of what didn't work is the most expensive record to reconstruct later and the first one a tidy-minded system throws away.
 
+## Work design inside a bounded item
+
+for a bounded engineering loop, the ledger can also record the work design around the lifecycle without taking that lifecycle over. **superpowers remains the engineering lifecycle** — brainstorming, planning, tdd, implementation, review and verification stay there. the ledger records the bounded contract, cycles, convergence evidence, pivot and ruling *around* that lifecycle.
+
+- **record `work_contract`** — currently the `run_contract` route — after the work item is committed and before the first bounded implementation cycle. this is where you declare the exact file/directory scope envelope, the progress and failure signals for the boundary, the non-convergence rule and any fallback paths. the scope envelope is exact on purpose: writes outside the declared files/directories are evidence, not a judgment call.
+- **record `work_cycle`** — currently the `cycle` route — after each boundary attempt. each cycle keeps one candidate, one result and the complete convergence evidence on that cycle. its discriminator is strict and accepts exactly these fields: `hypothesis`, `changed_mechanism`, `expected_observation`, `introduced_mechanisms`, `repeated_boundary_reason`, and `finding_categories`. scalars trim; arrays validate, deduplicate and sort; unknown, missing, null or nested payloads are refused.
+- **record `work_ruling`** — currently the `work_design_ruling` route — only when the recorded cycle says a pivot is required. the model owns the ruling. the ledger records the chosen primary trigger, decision, reason, evidence and cost-if-wrong, while keeping every trigger that fired on the cycle as supporting evidence instead of relabeling history.
+
+the four convergence triggers are:
+
+1. `introduced_mechanism`
+2. `write_set_outside_scope`
+3. `stalled_open_findings`
+4. `three_failed_cycles_at_boundary`
+
+that order is the canonical **primary-trigger precedence**. one ruling is recorded per cycle, but the cycle keeps the full trigger set and evidence. a later cycle is blocked while the latest pivot is unresolved; once a ruling is recorded, the next cycle re-enters the normal post-ruling assessment window and can test the next bounded candidate.
+
+legacy discriminator shapes are tolerated only for read/comparison. they are canonicalized at read time so convergence comparison stays deterministic, but the stored historical bytes are not rewritten.
+
 ## Sizing before, never after
 
 `size` records the *features* of the work — its type, its scope, the systems it touches, the uncertainty, the risk, the verification burden — and it is recorded **before execution**, once. the ledger refuses a late size once execution evidence exists, and refuses a second size outright.
@@ -109,6 +128,6 @@ these are rights, not features.
 
 ## When to reach for it
 
-record intake when the operator asks for something specific enough to assess. commit when the go is real. size before starting. import usage when a session that belongs to the item ends. complete or close when it's over. read the report when the operator asks what something took — and when you read it aloud, carry the provenance classes with you. the honest sentence is "about four hours of wall clock, sixty thousand tokens measured, and no cost figure because nobody stated a rate" — never a single confident number with its uncertainty filed off.
+record intake when the operator asks for something specific enough to assess. commit when the go is real. size before starting. for bounded redesign work, record the work contract before the first cycle, record each cycle at the boundary, and record a ruling only when the pivot is actually required. import usage when a session that belongs to the item ends. complete or close when it's over. read the report when the operator asks what something took — and when you read it aloud, carry the provenance classes with you. the honest sentence is "about four hours of wall clock, sixty thousand tokens measured, and no cost figure because nobody stated a rate" — never a single confident number with its uncertainty filed off.
 
 if you are unsure what this drawer will answer to, ask it: `capabilities` lists every route it will accept and flags which of them capture, derived from the same dispatch table the tool routes on, so it cannot advertise something it will not do.

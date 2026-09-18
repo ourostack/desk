@@ -82,6 +82,13 @@ test("desk_work_ledger is a registered tool the MCP dispatch boundary routes", a
   const registered = tools.tools.find((tool) => tool.name === "desk_work_ledger")
   assert.ok(registered, "desk_work_ledger must be registered with the host")
   assert.match(registered.description, /private/iu)
+  assert.match(registered.description, /work_contract/u)
+  assert.match(registered.description, /work_cycle/u)
+  assert.match(registered.description, /work_ruling/u)
+  assert.match(registered.description, /one-ruling-per-cycle/iu)
+  assert.match(registered.description, /pivot is unresolved/iu)
+  assert.match(registered.description, /model-owned/iu)
+  assert.doesNotMatch(registered.description, /runs superpowers|makes lifecycle decisions/iu)
 })
 
 test("desk_work_ledger records identity at intake before any commitment exists", async () => {

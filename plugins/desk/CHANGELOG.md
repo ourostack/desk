@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.5 — 2026-09-18
+
+**Opt-in dogfood alpha for bounded work design, with deterministic one-ruling semantics and no lifecycle takeover.** Desk now records an exact-file/directory scope envelope and the four convergence controls around Superpowers: declared architecture expansion, write-set escape, stalled findings without new learning, and repeated boundary rejection after three failed cycles at the same boundary. Each cycle keeps the full trigger evidence, but one canonical primary trigger yields one ruling per cycle; the ruling stays model-owned, unresolved pivots block the next cycle, and Superpowers remains the engineering lifecycle owner.
+
+Desk `3.2.0-alpha.5` couples to `desk-mcp@1.4.0-alpha.5`. Legacy discriminator compatibility is read-time only: old shapes are canonicalized for comparison without rewriting stored history. This remains an opt-in dogfood alpha for the source surface and does not replace Superpowers as lifecycle owner. Cross-platform `1.4.0-alpha.5` runtime packs are a separate native-build publication boundary and are not included in this source-surface commit.
+
 ## 3.2.0-alpha.4 — 2026-09-15
 
 **The fully assembled generic alpha candidate, published as a dogfoodable source milestone rather than a qualified alpha.** Standalone Desk now selects exactly three roots — Desk, Superpowers and Plain Language. Ponytail and Work Suite are no longer selected for the standalone composition, and no private feedback API ships; the legacy four-root closure survives only for a manifest that declares no selection at all. Acquisition stays ordinary and single-root: `plugins/desk/agency.json` declares the two generic dependencies at `@v2-alpha`, and Agency branch tracking is the update path, so this release adds no installer, refresh command or rollback channel.

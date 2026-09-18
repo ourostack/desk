@@ -368,7 +368,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.0-alpha.4"],
+    ["Copilot root Desk version must match activation version 3.2.0-alpha.5"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())
@@ -651,15 +651,25 @@ test("the bundle writer resolves its destination from an explicit root, the envi
     // …and the operator's actual command runs end to end: the package script, through the package manager,
     // with the repository-root redirect pointing at the scratch tree.
     rmSync(path.join(scratchRoot, ...copilotBundlePath.split("/")))
-    const scripted = spawnSync(
-      process.platform === "win32" ? "npm.cmd" : "npm",
-      ["--silent", "run", "activation:copilot-bundle:generate"],
-      {
-        cwd: path.join(repoRoot, "plugins", "desk", "mcp"),
-        encoding: "utf8",
-        env: { ...process.env, DESK_COPILOT_BUNDLE_REPO_ROOT: scratchRoot },
-      },
-    )
+    const scripted = process.platform === "win32"
+      ? spawnSync(
+        process.env.ComSpec ?? "cmd.exe",
+        ["/d", "/s", "/c", "npm --silent run activation:copilot-bundle:generate"],
+        {
+          cwd: path.join(repoRoot, "plugins", "desk", "mcp"),
+          encoding: "utf8",
+          env: { ...process.env, DESK_COPILOT_BUNDLE_REPO_ROOT: scratchRoot },
+        },
+      )
+      : spawnSync(
+        "npm",
+        ["--silent", "run", "activation:copilot-bundle:generate"],
+        {
+          cwd: path.join(repoRoot, "plugins", "desk", "mcp"),
+          encoding: "utf8",
+          env: { ...process.env, DESK_COPILOT_BUNDLE_REPO_ROOT: scratchRoot },
+        },
+      )
     assert.equal(scripted.status, 0, scripted.stderr)
     assert.equal(scripted.stdout.trim(), `wrote ${copilotBundlePath}`)
     assert.deepEqual(
