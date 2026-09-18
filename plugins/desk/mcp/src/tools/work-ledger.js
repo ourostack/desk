@@ -508,12 +508,6 @@ const ROUTES = {
           "SELECT MAX(cycle) AS cycle FROM work_design_rulings WHERE work_item_id = ? AND phase = ?",
         )
         .get(item.work_item_id, phase)?.cycle
-      if (latestRuling !== null && latestRuling !== undefined && cycleNumber <= latestRuling) {
-        throw new Error(
-          `${LABEL}: cycle ${cycleNumber} does not open after the ruling at cycle ` +
-            `${latestRuling}. The new assessment window starts after that cycle.`,
-        )
-      }
 
       db.prepare(
         "INSERT INTO cycles (work_item_id, phase, cycle, candidate_ref, boundary, result, " +

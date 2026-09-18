@@ -2,7 +2,10 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
 import { callTool } from "../../src/server.js"
-import { assessConvergence } from "../../src/measurement/non-convergence.js"
+import {
+  assessConvergence,
+  selectPrimaryTrigger,
+} from "../../src/measurement/non-convergence.js"
 import { withLedger } from "../../src/measurement/store.js"
 import { cleanup, mkLedgerFixture, useHostEnv } from "./_helpers.js"
 
@@ -471,6 +474,11 @@ test("only rejected cycle results count toward the three-cycle pivot", () => {
   })
 
   assert.deepEqual(convergence, { status: "continue", triggers: [] })
+})
+
+test("selectPrimaryTrigger returns null when no recognized trigger was reported", () => {
+  assert.equal(selectPrimaryTrigger([]), null)
+  assert.equal(selectPrimaryTrigger([{ code: "not-a-real-trigger" }]), null)
 })
 
 test("introduced architecture mechanisms require a pivot only for exact recognized categories", async (t) => {

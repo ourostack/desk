@@ -70,6 +70,89 @@ const COMMITMENT = {
   operator_go: { by: "operator", at: "2026-09-08T18:00:00Z" },
 }
 
+const WORK_DESIGN_CONTRACT = {
+  phase: "implementation-phase",
+  progress_signal: "The targeted boundary accepts the candidate.",
+  failure_signal: "The targeted boundary rejects the candidate.",
+  non_convergence_rule: "Pivot when the configured convergence controls fire.",
+  scope_envelope: ["plugins/desk/mcp/src/"],
+  fallback_paths: ["simplify", "revert"],
+}
+
+function workDesignCycle(workItemId, cycle, overrides = {}) {
+  const base = {
+    action: "cycle",
+    work_item_id: workItemId,
+    phase: "implementation-phase",
+    cycle,
+    candidate_ref: `candidate-${cycle}`,
+    boundary: "targeted-test",
+    result: "rejected",
+    progress_evidence: "The targeted boundary rejected the candidate.",
+    finding_fingerprint: `sha256:${String(cycle).padStart(64, "0")}`,
+    open_findings: ["finding-a"],
+    closed_findings: [],
+    write_set: ["plugins/desk/mcp/src/tools/work-ledger.js"],
+    discriminator: {
+      hypothesis: `Candidate ${cycle} repeats the same boundary.`,
+      changed_mechanism: `candidate-${cycle}`,
+      expected_observation: "rejected",
+      introduced_mechanisms: [],
+      repeated_boundary_reason: "",
+      finding_categories: ["correctness"],
+    },
+  }
+  return {
+    ...base,
+    ...overrides,
+    discriminator: {
+      ...base.discriminator,
+      ...(overrides.discriminator ?? {}),
+    },
+  }
+}
+
+async function recordRunContract(fixture, workItemId, overrides = {}) {
+  const result = body(
+    await ledger(fixture, {
+      action: "run_contract",
+      work_item_id: workItemId,
+      ...WORK_DESIGN_CONTRACT,
+      ...overrides,
+    }),
+  )
+  assert.equal(result.status, "run_contract_recorded", result.message ?? "")
+  return result
+}
+
+async function recordCycle(fixture, workItemId, cycle, overrides = {}) {
+  const result = body(await ledger(fixture, workDesignCycle(workItemId, cycle, overrides)))
+  assert.ok(
+    ["cycle_recorded", "pivot_required"].includes(result.status),
+    result.message ?? `unexpected cycle status ${result.status}`,
+  )
+  return result
+}
+
+async function recordRuling(fixture, workItemId, cycle, overrides = {}) {
+  const result = body(
+    await ledger(fixture, {
+      action: "work_design_ruling",
+      work_item_id: workItemId,
+      phase: "implementation-phase",
+      cycle,
+      trigger: "introduced_mechanism",
+      decision: "simplify",
+      reason: "The pivot needs an explicit operator decision.",
+      evidence: "The recorded cycle kept the trigger evidence.",
+      cost_if_wrong: "The simplified path may omit a needed guard.",
+      ...overrides,
+    }),
+  )
+  assert.equal(result.status, "work_design_ruling_recorded", result.message ?? "")
+  return result
+}
+
 async function withFixture(run) {
   const fixture = await mkLedgerFixture()
   const restore = useHostEnv(fixture)
@@ -1964,5 +2047,278 @@ test("an evaluation receipt digest must be a scalar the record can hold", async 
       "a".repeat(64),
       "the response must echo the value that was actually stored",
     )
+  })
+})
+
+test("a duplicate run contract for the same phase is refused", async () => {
+  await withFixture(async (fixture) => {
+    const workItemId = await seed(fixture)
+    await recordRunContract(fixture, workItemId)
+    await throws(
+      fixture,
+      {
+        action: "run_contract",
+        work_item_id: workItemId,
+        ...WORK_DESIGN_CONTRACT,
+      },
+      /already has a run contract/i,
+    )
+  })
+})
+
+test("cycle refuses a phase with no run contract before storing the cycle", async () => {
+  await withFixture(async (fixture) => {
+    const workItemId = await seed(fixture)
+    await throws(
+      fixture,
+      workDesignCycle(workItemId, 1),
+      /has no run contract for phase/i,
+    )
+    assert.equal(await countRows(fixture, "cycles", workItemId), 0)
+  })
+})
+
+test("cycle refuses a duplicate cycle number for the same phase", async () => {
+  await withFixture(async (fixture) => {
+    const workItemId = await seed(fixture)
+    await recordRunContract(fixture, workItemId)
+    await recordCycle(fixture, workItemId, 1)
+    await throws(
+      fixture,
+      workDesignCycle(workItemId, 1, {
+        candidate_ref: "candidate-1-repeat",
+        discriminator: { changed_mechanism: "candidate-1-repeat" },
+      }),
+      /already has cycle 1/i,
+    )
+  })
+})
+
+test("work_design_ruling refuses a phase with no run contract", async () => {
+  await withFixture(async (fixture) => {
+    const workItemId = await seed(fixture)
+    await throws(
+      fixture,
+      {
+        action: "work_design_ruling",
+        work_item_id: workItemId,
+        phase: "implementation-phase",
+        cycle: 1,
+        trigger: "introduced_mechanism",
+        decision: "simplify",
+        reason: "A ruling requires a contract.",
+        evidence: "No contract was recorded for this phase.",
+        cost_if_wrong: "The route would accept an unbounded ruling.",
+      },
+      /has no run contract for phase/i,
+    )
+  })
+})
+
+test("work_design_ruling requires a decision from the recorded fallback paths", async () => {
+  await withFixture(async (fixture) => {
+    const workItemId = await seed(fixture)
+    await recordRunContract(fixture, workItemId)
+    await recordCycle(fixture, workItemId, 1, {
+      discriminator: { introduced_mechanisms: ["service"] },
+    })
+    await throws(
+      fixture,
+      {
+        action: "work_design_ruling",
+        work_item_id: workItemId,
+        phase: "implementation-phase",
+        cycle: 1,
+        trigger: "introduced_mechanism",
+        decision: "invent",
+        reason: "The route must reject undeclared fallbacks.",
+        evidence: "Only simplify and revert were recorded.",
+        cost_if_wrong: "A caller could choose a non-contract ruling path.",
+      },
+      /is not an allowed fallback/i,
+    )
+  })
+})
+
+test("work_design_ruling refuses a second ruling for the same cycle", async () => {
+  await withFixture(async (fixture) => {
+    const workItemId = await seed(fixture)
+    await recordRunContract(fixture, workItemId)
+    await recordCycle(fixture, workItemId, 1, {
+      discriminator: { introduced_mechanisms: ["service"] },
+    })
+    await recordRuling(fixture, workItemId, 1)
+    await throws(
+      fixture,
+      {
+        action: "work_design_ruling",
+        work_item_id: workItemId,
+        phase: "implementation-phase",
+        cycle: 1,
+        trigger: "introduced_mechanism",
+        decision: "simplify",
+        reason: "A second ruling must not replace the first.",
+        evidence: "Cycle 1 already carries a recorded ruling.",
+        cost_if_wrong: "The ruling history would cease to be deterministic.",
+      },
+      /already has a ruling for cycle 1/i,
+    )
+  })
+})
+
+test("work_design_ruling refuses a cycle with no unresolved pivot", async () => {
+  await withFixture(async (fixture) => {
+    const workItemId = await seed(fixture)
+    await recordRunContract(fixture, workItemId)
+    await recordCycle(fixture, workItemId, 1, {
+      result: "clean",
+      progress_evidence: "The targeted boundary accepted the candidate.",
+      open_findings: [],
+      closed_findings: ["finding-a"],
+      discriminator: { expected_observation: "clean" },
+    })
+    await throws(
+      fixture,
+      {
+        action: "work_design_ruling",
+        work_item_id: workItemId,
+        phase: "implementation-phase",
+        cycle: 1,
+        trigger: "introduced_mechanism",
+        decision: "simplify",
+        reason: "No pivot was detected on this cycle.",
+        evidence: "The cycle recorded convergence continue.",
+        cost_if_wrong: "The route would invent a ruling without a pivot.",
+      },
+      /has no unresolved pivot at cycle 1/i,
+    )
+  })
+})
+
+test("work-design validators refuse invalid route inputs by name", async () => {
+  await withFixture(async (fixture) => {
+    const workItemId = await seed(fixture)
+    await throws(
+      fixture,
+      {
+        action: "run_contract",
+        work_item_id: workItemId,
+        phase: "Implementation phase!",
+        progress_signal: "The targeted boundary accepts the candidate.",
+        failure_signal: "The targeted boundary rejects the candidate.",
+        non_convergence_rule: "Pivot when the configured convergence controls fire.",
+        scope_envelope: ["plugins/desk/mcp/src/"],
+        fallback_paths: ["simplify"],
+      },
+      /phase must normalize to a stable identifier/i,
+    )
+    await throws(
+      fixture,
+      {
+        action: "run_contract",
+        work_item_id: workItemId,
+        ...WORK_DESIGN_CONTRACT,
+        fallback_paths: [],
+      },
+      /fallback_paths is required and must be a non-empty array/i,
+    )
+    await throws(
+      fixture,
+      {
+        action: "run_contract",
+        work_item_id: workItemId,
+        ...WORK_DESIGN_CONTRACT,
+        fallback_paths: ["invent"],
+      },
+      /fallback path "invent" is not allowed/i,
+    )
+    await throws(
+      fixture,
+      {
+        action: "run_contract",
+        work_item_id: workItemId,
+        ...WORK_DESIGN_CONTRACT,
+        scope_envelope: [],
+      },
+      /scope_envelope is required and must be a non-empty array/i,
+    )
+
+    await recordRunContract(fixture, workItemId)
+
+    for (const [input, pattern] of [
+      [
+        workDesignCycle(workItemId, 1, { write_set: [""] }),
+        /write_set entries must be non-empty repository-relative paths/i,
+      ],
+      [
+        workDesignCycle(workItemId, 1, { write_set: ["C:/temp/file.js"] }),
+        /write_set path "C:\/temp\/file\.js" must be repository-relative/i,
+      ],
+      [
+        workDesignCycle(workItemId, 1, { write_set: ["plugins/desk/mcp/src/"] }),
+        /write_set accepts files only, not slash-terminated directories/i,
+      ],
+      [
+        workDesignCycle(workItemId, 1, { write_set: ["../escape.js"] }),
+        /write_set path "\.\.\/escape\.js" contains traversal or an empty segment/i,
+      ],
+      [
+        workDesignCycle(workItemId, 1, { write_set: "plugins/desk/mcp/src/tools/work-ledger.js" }),
+        /write_set is required and must be an array/i,
+      ],
+      [
+        workDesignCycle(workItemId, 1, { open_findings: "finding-a" }),
+        /open_findings is required and must be an array/i,
+      ],
+      [
+        workDesignCycle(workItemId, 1, { open_findings: [" "] }),
+        /open_findings entries must be non-empty strings/i,
+      ],
+      [
+        workDesignCycle(workItemId, 1, {
+          discriminator: { introduced_mechanisms: "service" },
+        }),
+        /discriminator\.introduced_mechanisms is required and must be an array/i,
+      ],
+    ]) {
+      await throws(fixture, input, pattern)
+    }
+    assert.equal(await countRows(fixture, "cycles", workItemId), 0)
+  })
+})
+
+test("cycle records a missing finding_fingerprint as null and preserves malformed legacy discriminator lists", async () => {
+  await withFixture(async (fixture) => {
+    const workItemId = await seed(fixture)
+    await recordRunContract(fixture, workItemId)
+    const recorded = await recordCycle(fixture, workItemId, 1, {
+      finding_fingerprint: undefined,
+    })
+    assert.equal(recorded.cycle.finding_fingerprint, null)
+
+    await withLedger({ deskRoot: fixture.deskRoot, person: "rowan", env: process.env }, (db) => {
+      db.prepare(
+        "UPDATE cycles SET discriminator = ? WHERE work_item_id = ? AND phase = ? AND cycle = ?",
+      ).run(
+        JSON.stringify({
+          hypothesis: { text: "Legacy persisted malformed scalar." },
+          changed_mechanism: "legacy-shape",
+          expected_observation: "rejected",
+          introduced_mechanisms: [{ kind: "service" }],
+          repeated_boundary_reason: "",
+          finding_categories: ["correctness"],
+        }),
+        workItemId,
+        "implementation-phase",
+        1,
+      )
+    })
+
+    const inspected = body(await ledger(fixture, { action: "inspect", work_item_id: workItemId }))
+    assert.deepEqual(inspected.cycles[0].discriminator.introduced_mechanisms, [{ kind: "service" }])
+    assert.deepEqual(inspected.cycles[0].discriminator.hypothesis, {
+      text: "Legacy persisted malformed scalar.",
+    })
+    assert.equal(inspected.cycles[0].finding_fingerprint, null)
   })
 })
