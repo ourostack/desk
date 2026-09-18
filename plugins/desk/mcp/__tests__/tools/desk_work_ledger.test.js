@@ -82,13 +82,38 @@ test("desk_work_ledger is a registered tool the MCP dispatch boundary routes", a
   const registered = tools.tools.find((tool) => tool.name === "desk_work_ledger")
   assert.ok(registered, "desk_work_ledger must be registered with the host")
   assert.match(registered.description, /private/iu)
-  assert.match(registered.description, /work_contract/u)
-  assert.match(registered.description, /work_cycle/u)
-  assert.match(registered.description, /work_ruling/u)
+  assert.match(registered.description, /run_contract/u)
+  assert.match(registered.description, /`cycle`/u)
+  assert.match(registered.description, /work_design_ruling/u)
+  assert.doesNotMatch(registered.description, /work_contract|work_cycle|work_ruling/u)
   assert.match(registered.description, /one-ruling-per-cycle/iu)
   assert.match(registered.description, /pivot is unresolved/iu)
   assert.match(registered.description, /model-owned/iu)
   assert.doesNotMatch(registered.description, /runs superpowers|makes lifecycle decisions/iu)
+})
+
+test("desk_work_ledger capabilities expose the accepted work-design routes and not invented aliases", async () => {
+  const fixture = await mkLedgerFixture()
+  const restore = useHostEnv(fixture)
+  try {
+    const result = body(
+      await ledger({
+        deskRoot: fixture.deskRoot,
+        input: { action: "capabilities" },
+      }),
+    )
+    const routes = result.routes.map((entry) => entry.route)
+
+    assert.ok(routes.includes("run_contract"))
+    assert.ok(routes.includes("cycle"))
+    assert.ok(routes.includes("work_design_ruling"))
+    assert.equal(routes.includes("work_contract"), false)
+    assert.equal(routes.includes("work_cycle"), false)
+    assert.equal(routes.includes("work_ruling"), false)
+  } finally {
+    restore()
+    await cleanup(fixture.base)
+  }
 })
 
 test("desk_work_ledger records identity at intake before any commitment exists", async () => {
