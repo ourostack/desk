@@ -57,6 +57,316 @@ function findingCycle(workItemId, cycleNumber, { openFindings, discriminator }) 
   }
 }
 
+function discriminator(overrides = {}) {
+  return {
+    hypothesis: "",
+    changed_mechanism: "",
+    expected_observation: "",
+    introduced_mechanisms: [],
+    repeated_boundary_reason: "",
+    finding_categories: [],
+    ...overrides,
+  }
+}
+
+async function prepareWorkDesignItem(fixture, request) {
+  const intake = body(await ledger(fixture, { action: "intake", request }))
+  const recorded = body(
+    await ledger(fixture, {
+      action: "run_contract",
+      work_item_id: intake.work_item_id,
+      phase: "implementation-phase",
+      progress_signal: "The targeted boundary accepts the candidate.",
+      failure_signal: "The targeted boundary rejects the candidate.",
+      non_convergence_rule: "Pivot when the configured convergence controls fire.",
+      scope_envelope: ["plugins/desk/mcp/src/"],
+      fallback_paths: ["simplify"],
+    }),
+  )
+  assert.equal(recorded.status, "run_contract_recorded")
+  return intake.work_item_id
+}
+
+test("a ruling requires the canonical primary trigger and resolves the complete trigger cycle", async (t) => {
+  const fixture = await mkLedgerFixture()
+  t.after(() => cleanup(fixture.base))
+  t.after(useHostEnv(fixture))
+
+  const insidePath = "plugins/desk/mcp/src/measurement/non-convergence.js"
+  const outsidePath = "plugins/desk/mcp/src-other/file.js"
+  const scenarios = [
+    {
+      name: "introduced mechanism outranks outside scope",
+      cycles: [
+        {
+          result: "clean",
+          writeSet: [outsidePath],
+          discriminator: discriminator({ introduced_mechanisms: ["registry"] }),
+        },
+      ],
+      expectedCodes: ["introduced_mechanism", "write_set_outside_scope"],
+    },
+    {
+      name: "outside scope outranks stalled findings",
+      cycles: [
+        {
+          result: "rejected",
+          writeSet: [insidePath],
+          discriminator: discriminator({ hypothesis: "The same hypothesis." }),
+        },
+        {
+          result: "rejected",
+          writeSet: [outsidePath],
+          discriminator: discriminator({ hypothesis: "The same hypothesis." }),
+        },
+      ],
+      expectedCodes: ["write_set_outside_scope", "stalled_open_findings"],
+    },
+    {
+      name: "stalled findings outrank three failed cycles",
+      cycles: [
+        {
+          result: "rejected",
+          writeSet: [insidePath],
+          discriminator: discriminator({ changed_mechanism: "candidate-one" }),
+        },
+        {
+          result: "rejected",
+          writeSet: [insidePath],
+          discriminator: discriminator({ changed_mechanism: "candidate-two" }),
+        },
+        {
+          result: "rejected",
+          writeSet: [insidePath],
+          discriminator: discriminator({ changed_mechanism: "candidate-two" }),
+        },
+      ],
+      expectedCodes: ["stalled_open_findings", "three_failed_cycles_at_boundary"],
+    },
+    {
+      name: "three failed cycles is primary when it is the only trigger",
+      cycles: [
+        {
+          result: "rejected",
+          writeSet: [insidePath],
+          discriminator: discriminator({ changed_mechanism: "candidate-one" }),
+        },
+        {
+          result: "rejected",
+          writeSet: [insidePath],
+          discriminator: discriminator({ changed_mechanism: "candidate-two" }),
+        },
+        {
+          result: "rejected",
+          writeSet: [insidePath],
+          discriminator: discriminator({ changed_mechanism: "candidate-three" }),
+        },
+      ],
+      expectedCodes: ["three_failed_cycles_at_boundary"],
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      const workItemId = await prepareWorkDesignItem(fixture, scenario.name)
+      let pivot = null
+      for (const [index, input] of scenario.cycles.entries()) {
+        pivot = body(
+          await ledger(fixture, {
+            ...cycle(workItemId, index + 1, input.result),
+            write_set: input.writeSet,
+            discriminator: input.discriminator,
+          }),
+        )
+      }
+
+      assert.equal(pivot.status, "pivot_required")
+      assert.deepEqual(
+        pivot.convergence.triggers.map((entry) => entry.code),
+        scenario.expectedCodes,
+      )
+
+      const primaryTrigger = scenario.expectedCodes[0]
+      if (scenario.expectedCodes.length > 1) {
+        const secondary = await ledger(fixture, {
+          action: "work_design_ruling",
+          work_item_id: workItemId,
+          phase: "implementation-phase",
+          cycle: scenario.cycles.length,
+          trigger: scenario.expectedCodes[1],
+          decision: "simplify",
+          reason: "The complete trigger cycle requires one deterministic ruling.",
+          evidence: "The cycle retained every convergence trigger and its evidence.",
+          cost_if_wrong: "The primary label may under-emphasize another trigger.",
+        })
+        assert.equal(secondary.isError, true)
+        assert.match(body(secondary).message, /primary trigger/iu)
+      }
+
+      const ruling = body(
+        await ledger(fixture, {
+          action: "work_design_ruling",
+          work_item_id: workItemId,
+          phase: "implementation-phase",
+          cycle: scenario.cycles.length,
+          trigger: primaryTrigger,
+          decision: "simplify",
+          reason: "The complete trigger cycle requires one deterministic ruling.",
+          evidence: "The cycle retained every convergence trigger and its evidence.",
+          cost_if_wrong: "The primary label may under-emphasize another trigger.",
+        }),
+      )
+      assert.equal(ruling.status, "work_design_ruling_recorded")
+      assert.equal(ruling.ruling.trigger, primaryTrigger)
+
+      const inspected = body(
+        await ledger(fixture, { action: "inspect", work_item_id: workItemId }),
+      )
+      assert.deepEqual(
+        inspected.cycles.at(-1).convergence_triggers,
+        pivot.convergence.triggers,
+      )
+      assert.equal(inspected.work_design_rulings.length, 1)
+
+      const resumed = body(
+        await ledger(fixture, {
+          ...cycle(workItemId, scenario.cycles.length + 1, "clean"),
+          write_set: [insidePath],
+          discriminator: discriminator({ changed_mechanism: "post-ruling-candidate" }),
+        }),
+      )
+      assert.equal(resumed.status, "cycle_recorded")
+      assert.deepEqual(resumed.convergence, { status: "continue", triggers: [] })
+    })
+  }
+})
+
+test("cycle canonicalizes discriminator values before persistence and comparison", async (t) => {
+  const fixture = await mkLedgerFixture()
+  t.after(() => cleanup(fixture.base))
+  t.after(useHostEnv(fixture))
+
+  const workItemId = await prepareWorkDesignItem(
+    fixture,
+    "Canonicalize discriminator values before convergence comparison.",
+  )
+  const canonical = {
+    hypothesis: "The same hypothesis.",
+    changed_mechanism: "parser-v2",
+    expected_observation: "rejected",
+    introduced_mechanisms: ["adapter", "helper"],
+    repeated_boundary_reason: "Same boundary.",
+    finding_categories: ["correctness", "regression-risk"],
+  }
+  const first = body(
+    await ledger(fixture, {
+      ...findingCycle(workItemId, 1, {
+        openFindings: ["finding-a"],
+        discriminator: {
+          hypothesis: "  The same hypothesis.  ",
+          changed_mechanism: " parser-v2 ",
+          expected_observation: " rejected ",
+          introduced_mechanisms: [" helper ", "adapter", "helper"],
+          repeated_boundary_reason: " Same boundary. ",
+          finding_categories: [
+            " Regression Risk ",
+            "correctness",
+            "regression_risk",
+            "correctness",
+          ],
+        },
+      }),
+    }),
+  )
+  assert.equal(first.status, "cycle_recorded")
+  assert.deepEqual(first.cycle.discriminator, canonical)
+
+  const second = body(
+    await ledger(
+      fixture,
+      findingCycle(workItemId, 2, {
+        openFindings: ["finding-a"],
+        discriminator: {
+          finding_categories: ["regression-risk", "correctness"],
+          repeated_boundary_reason: "Same boundary.",
+          introduced_mechanisms: ["adapter", "helper"],
+          expected_observation: "rejected",
+          changed_mechanism: "parser-v2",
+          hypothesis: "The same hypothesis.",
+        },
+      }),
+    ),
+  )
+  assert.equal(second.status, "pivot_required")
+  assert.deepEqual(second.cycle.discriminator, canonical)
+  assert.deepEqual(
+    second.convergence.triggers.map((entry) => entry.code),
+    ["stalled_open_findings"],
+  )
+
+  const inspected = body(
+    await ledger(fixture, { action: "inspect", work_item_id: workItemId }),
+  )
+  assert.deepEqual(
+    inspected.cycles.map((entry) => entry.discriminator),
+    [canonical, canonical],
+  )
+})
+
+test("cycle refuses non-canonical discriminator shapes without storing a cycle", async (t) => {
+  const fixture = await mkLedgerFixture()
+  t.after(() => cleanup(fixture.base))
+  t.after(useHostEnv(fixture))
+
+  const valid = discriminator({ hypothesis: "One hypothesis." })
+  const { hypothesis: _omitted, ...missingHypothesis } = valid
+  const cases = [
+    {
+      name: "unknown field",
+      value: { ...valid, telemetry: "undeclared" },
+    },
+    {
+      name: "missing field",
+      value: missingHypothesis,
+    },
+    {
+      name: "null discriminator",
+      value: null,
+    },
+    {
+      name: "null scalar",
+      value: { ...valid, hypothesis: null },
+    },
+    {
+      name: "nested scalar payload",
+      value: { ...valid, hypothesis: { text: "One hypothesis." } },
+    },
+    {
+      name: "nested list payload",
+      value: { ...valid, introduced_mechanisms: [{ name: "helper" }] },
+    },
+  ]
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const workItemId = await prepareWorkDesignItem(
+        fixture,
+        `Refuse discriminator ${testCase.name}.`,
+      )
+      const response = await ledger(fixture, {
+        ...cycle(workItemId, 1, "clean"),
+        discriminator: testCase.value,
+      })
+      assert.equal(response.isError, true)
+
+      const inspected = body(
+        await ledger(fixture, { action: "inspect", work_item_id: workItemId }),
+      )
+      assert.equal(inspected.cycles.length, 0)
+    })
+  }
+})
+
 test("only rejected cycle results count toward the three-cycle pivot", () => {
   const convergence = assessConvergence({
     contract: {},

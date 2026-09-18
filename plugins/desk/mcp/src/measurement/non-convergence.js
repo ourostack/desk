@@ -10,6 +10,18 @@ const introducedArchitectureMechanisms = new Set([
   "cross-platform-contract",
 ])
 
+const triggerPrecedence = [
+  "introduced_mechanism",
+  "write_set_outside_scope",
+  "stalled_open_findings",
+  "three_failed_cycles_at_boundary",
+]
+
+export function selectPrimaryTrigger(triggers) {
+  const reported = new Set(triggers.map((entry) => entry.code))
+  return triggerPrecedence.find((code) => reported.has(code)) ?? null
+}
+
 export function assessConvergence({ contract, cycles }) {
   const orderedCycles = [...cycles].sort((left, right) => left.cycle - right.cycle)
   const scopeEnvelope = contract.scope_envelope ?? []
@@ -17,8 +29,8 @@ export function assessConvergence({ contract, cycles }) {
     "hypothesis",
     "changed_mechanism",
     "expected_observation",
-    "repeated_boundary_reason",
     "introduced_mechanisms",
+    "repeated_boundary_reason",
     "finding_categories",
   ]
   const failedByBoundary = new Map()

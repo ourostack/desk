@@ -20,7 +20,10 @@ import { randomUUID } from "node:crypto"
 
 import { nowIso } from "../util/fm.js"
 import { isCaptureRoute, LEDGER_ACTIONS } from "../measurement/actions.js"
-import { assessConvergence } from "../measurement/non-convergence.js"
+import {
+  assessConvergence,
+  selectPrimaryTrigger,
+} from "../measurement/non-convergence.js"
 import { withLedger } from "../measurement/store.js"
 import { readCanonicalStatus, resolveTaskRef } from "../measurement/identity.js"
 import {
@@ -454,7 +457,7 @@ const ROUTES = {
         allowDirectories: false,
         requireNonEmpty: false,
       }),
-      discriminator: requireObject(values, "discriminator"),
+      discriminator: normalizeDiscriminator(values),
     }
     const recordedAt = nowIso()
 
@@ -599,11 +602,14 @@ const ROUTES = {
             `${cycleNumber}. The helper detects a pivot; it never chooses a ruling.`,
         )
       }
-      const reportedTriggers = JSON.parse(unresolved.convergence_triggers).map((entry) => entry.code)
-      if (!reportedTriggers.includes(trigger)) {
+      const convergenceTriggers = JSON.parse(unresolved.convergence_triggers)
+      const reportedTriggers = convergenceTriggers.map((entry) => entry.code)
+      const primaryTrigger = selectPrimaryTrigger(convergenceTriggers)
+      if (trigger !== primaryTrigger) {
         throw new Error(
-          `${LABEL}: trigger ${JSON.stringify(trigger)} was not reported for the unresolved ` +
-            `pivot at cycle ${cycleNumber} — expected one of ${reportedTriggers.join(", ")}.`,
+          `${LABEL}: trigger ${JSON.stringify(trigger)} is not the primary trigger for the ` +
+            `unresolved pivot at cycle ${cycleNumber} — expected ${JSON.stringify(primaryTrigger)} ` +
+            `from the complete trigger set ${reportedTriggers.join(", ")}.`,
         )
       }
 
@@ -1672,6 +1678,66 @@ function normalizeTextList(values, field) {
     return value.trim()
   })
   return [...new Set(normalized)].sort((left, right) => left.localeCompare(right))
+}
+
+function normalizeDiscriminator(values) {
+  const source = requireObject(values, "discriminator")
+  const scalarFields = [
+    "hypothesis",
+    "changed_mechanism",
+    "expected_observation",
+    "repeated_boundary_reason",
+  ]
+  const listFields = ["introduced_mechanisms", "finding_categories"]
+  const allowedFields = [
+    "hypothesis",
+    "changed_mechanism",
+    "expected_observation",
+    "introduced_mechanisms",
+    "repeated_boundary_reason",
+    "finding_categories",
+  ]
+
+  for (const key of Object.keys(source)) {
+    if (!allowedFields.includes(key)) {
+      throw new Error(
+        `${LABEL}: discriminator has unknown field ${JSON.stringify(key)} — accepted fields ` +
+          `are exactly ${allowedFields.join(", ")}.`,
+      )
+    }
+  }
+
+  const scalars = {}
+  for (const field of scalarFields) {
+    const value = source[field]
+    if (typeof value !== "string") {
+      throw new Error(`${LABEL}: discriminator.${field} is required and must be a string.`)
+    }
+    scalars[field] = value.trim()
+  }
+
+  const lists = {}
+  for (const field of listFields) {
+    const value = source[field]
+    if (!Array.isArray(value)) {
+      throw new Error(`${LABEL}: discriminator.${field} is required and must be an array.`)
+    }
+    const normalized = value.map((entry) =>
+      normalizeIdentifier({ [field]: entry }, field),
+    )
+    lists[field] = [...new Set(normalized)].sort((left, right) =>
+      left.localeCompare(right),
+    )
+  }
+
+  return {
+    hypothesis: scalars.hypothesis,
+    changed_mechanism: scalars.changed_mechanism,
+    expected_observation: scalars.expected_observation,
+    introduced_mechanisms: lists.introduced_mechanisms,
+    repeated_boundary_reason: scalars.repeated_boundary_reason,
+    finding_categories: lists.finding_categories,
+  }
 }
 
 function requireObject(values, field) {
