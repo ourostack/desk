@@ -70,6 +70,67 @@ test("only rejected cycle results count toward the three-cycle pivot", () => {
   assert.deepEqual(convergence, { status: "continue", triggers: [] })
 })
 
+test("scope envelope admits exact files and slash-terminated directories", async (t) => {
+  const cases = [
+    {
+      name: "exact file admitted",
+      scopeEnvelope: ["src/file.js"],
+      writeSet: ["src/file.js"],
+      expected: { status: "continue", triggers: [] },
+    },
+    {
+      name: "file mismatch pivots",
+      scopeEnvelope: ["src/file.js"],
+      writeSet: ["src/file.js.map"],
+      outsidePaths: ["src/file.js.map"],
+    },
+    {
+      name: "directory descendant admitted",
+      scopeEnvelope: ["src/"],
+      writeSet: ["src/nested/file.js"],
+      expected: { status: "continue", triggers: [] },
+    },
+    {
+      name: "sibling-prefix path pivots",
+      scopeEnvelope: ["src/"],
+      writeSet: ["src-other/file.js"],
+      outsidePaths: ["src-other/file.js"],
+    },
+    {
+      name: "mixed write set returns only outside paths",
+      scopeEnvelope: ["src/", "README.md"],
+      writeSet: ["src/file.js", "README.md", "src-other/file.js", "docs/notes.md"],
+      outsidePaths: ["src-other/file.js", "docs/notes.md"],
+    },
+  ]
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, () => {
+      const convergence = assessConvergence({
+        contract: { scope_envelope: testCase.scopeEnvelope },
+        cycles: [{ cycle: 7, result: "clean", write_set: testCase.writeSet }],
+      })
+
+      assert.deepEqual(
+        convergence,
+        testCase.expected ?? {
+          status: "pivot_required",
+          triggers: [
+            {
+              code: "write_set_outside_scope",
+              evidence: {
+                cycle: 7,
+                paths: testCase.outsidePaths,
+                scope_envelope: testCase.scopeEnvelope,
+              },
+            },
+          ],
+        },
+      )
+    })
+  }
+})
+
 test("a Desk client pivots only when rejected cycles stall without a new discriminator", async (t) => {
   const fixture = await mkLedgerFixture()
   t.after(() => cleanup(fixture.base))
