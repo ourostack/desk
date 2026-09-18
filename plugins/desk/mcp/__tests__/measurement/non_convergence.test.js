@@ -49,6 +49,14 @@ function cycle(workItemId, cycleNumber, result) {
   }
 }
 
+function findingCycle(workItemId, cycleNumber, { openFindings, discriminator }) {
+  return {
+    ...cycle(workItemId, cycleNumber, "rejected"),
+    open_findings: openFindings,
+    discriminator,
+  }
+}
+
 test("only rejected cycle results count toward the three-cycle pivot", () => {
   const convergence = assessConvergence({
     contract: {},
@@ -60,6 +68,144 @@ test("only rejected cycle results count toward the three-cycle pivot", () => {
   })
 
   assert.deepEqual(convergence, { status: "continue", triggers: [] })
+})
+
+test("a Desk client pivots only when rejected cycles stall without a new discriminator", async (t) => {
+  const fixture = await mkLedgerFixture()
+  t.after(() => cleanup(fixture.base))
+  t.after(useHostEnv(fixture))
+
+  const emptyDiscriminator = {
+    hypothesis: "",
+    changed_mechanism: "",
+    expected_observation: "",
+    introduced_mechanisms: [],
+    repeated_boundary_reason: "",
+    finding_categories: [],
+  }
+  const repeatedDiscriminator = {
+    ...emptyDiscriminator,
+    hypothesis: "The parser rejects the same malformed candidate.",
+  }
+  const cases = [
+    {
+      name: "stable finding count with no new discriminator pivots",
+      previousOpenFindings: ["finding-a"],
+      currentOpenFindings: ["finding-a"],
+      previousDiscriminator: emptyDiscriminator,
+      currentDiscriminator: emptyDiscriminator,
+      expectedStatus: "pivot_required",
+    },
+    {
+      name: "shrinking findings continue",
+      previousOpenFindings: ["finding-a", "finding-b"],
+      currentOpenFindings: ["finding-a"],
+      previousDiscriminator: emptyDiscriminator,
+      currentDiscriminator: emptyDiscriminator,
+      expectedStatus: "continue",
+    },
+    {
+      name: "a new discriminator continues",
+      previousOpenFindings: ["finding-a"],
+      currentOpenFindings: ["finding-a"],
+      previousDiscriminator: emptyDiscriminator,
+      currentDiscriminator: {
+        ...emptyDiscriminator,
+        changed_mechanism: "The parser now rejects duplicate keys before validation.",
+      },
+      expectedStatus: "continue",
+    },
+    {
+      name: "a repeated identical discriminator pivots",
+      previousOpenFindings: ["finding-a"],
+      currentOpenFindings: ["finding-a"],
+      previousDiscriminator: repeatedDiscriminator,
+      currentDiscriminator: repeatedDiscriminator,
+      expectedStatus: "pivot_required",
+    },
+  ]
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      const intake = body(
+        await ledger(fixture, {
+          action: "intake",
+          request: `Assess finding movement: ${testCase.name}.`,
+        }),
+      )
+      const workItemId = intake.work_item_id
+      const contract = body(
+        await ledger(fixture, {
+          action: "run_contract",
+          work_item_id: workItemId,
+          phase: "implementation-phase",
+          progress_signal: "Open findings shrink or a new discriminator is recorded.",
+          failure_signal: "Open findings stall without a new discriminator.",
+          non_convergence_rule: "Pivot when rejected cycles stall without new learning.",
+          scope_envelope: ["plugins/desk/mcp/src/"],
+          fallback_paths: ["simplify"],
+        }),
+      )
+      assert.equal(contract.status, "run_contract_recorded")
+
+      const previous = body(
+        await ledger(
+          fixture,
+          findingCycle(workItemId, 1, {
+            openFindings: testCase.previousOpenFindings,
+            discriminator: testCase.previousDiscriminator,
+          }),
+        ),
+      )
+      assert.equal(previous.status, "cycle_recorded")
+      assert.equal(previous.convergence.status, "continue")
+
+      const current = body(
+        await ledger(
+          fixture,
+          findingCycle(workItemId, 2, {
+            openFindings: testCase.currentOpenFindings,
+            discriminator: testCase.currentDiscriminator,
+          }),
+        ),
+      )
+      assert.equal(
+        current.status,
+        testCase.expectedStatus === "continue" ? "cycle_recorded" : "pivot_required",
+      )
+      assert.equal(current.convergence.status, testCase.expectedStatus)
+
+      if (testCase.expectedStatus === "continue") {
+        assert.deepEqual(current.convergence.triggers, [])
+        return
+      }
+
+      assert.equal(current.convergence.triggers.length, 1)
+      const trigger = current.convergence.triggers[0]
+      assert.equal(trigger.code, "stalled_open_findings")
+      assert.deepEqual(Object.keys(trigger.evidence).sort(), [
+        "current_discriminator",
+        "current_open_findings",
+        "cycles",
+        "previous_discriminator",
+        "previous_open_findings",
+      ])
+      assert.deepEqual(
+        trigger.evidence.cycles.map((entry) => entry.cycle),
+        [1, 2],
+      )
+      assert.deepEqual(
+        trigger.evidence.previous_open_findings,
+        testCase.previousOpenFindings,
+      )
+      assert.deepEqual(trigger.evidence.current_open_findings, testCase.currentOpenFindings)
+      assert.deepEqual(
+        trigger.evidence.previous_discriminator,
+        testCase.previousDiscriminator,
+      )
+      assert.deepEqual(trigger.evidence.current_discriminator, testCase.currentDiscriminator)
+    })
+  }
 })
 
 test("a Desk client pivots after three rejected boundary cycles and resumes after a ruling", async (t) => {
