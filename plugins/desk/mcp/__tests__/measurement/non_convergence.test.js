@@ -3,6 +3,7 @@ import { strict as assert } from "node:assert"
 
 import { callTool } from "../../src/server.js"
 import { assessConvergence } from "../../src/measurement/non-convergence.js"
+import { withLedger } from "../../src/measurement/store.js"
 import { cleanup, mkLedgerFixture, useHostEnv } from "./_helpers.js"
 
 function body(result) {
@@ -311,6 +312,98 @@ test("cycle canonicalizes discriminator values before persistence and comparison
     inspected.cycles.map((entry) => entry.discriminator),
     [canonical, canonical],
   )
+})
+
+test("a canonical cycle detects stalled findings against a raw pre-hardening discriminator", async (t) => {
+  const fixture = await mkLedgerFixture()
+  t.after(() => cleanup(fixture.base))
+  t.after(useHostEnv(fixture))
+
+  const workItemId = await prepareWorkDesignItem(
+    fixture,
+    "Compare a canonical discriminator with persisted pre-hardening evidence.",
+  )
+  const canonical = {
+    hypothesis: "The same hypothesis.",
+    changed_mechanism: "parser-v2",
+    expected_observation: "rejected",
+    introduced_mechanisms: ["adapter", "helper"],
+    repeated_boundary_reason: "Same boundary.",
+    finding_categories: ["correctness", "regression-risk"],
+  }
+  const rawLegacy = {
+    hypothesis: "  The same hypothesis.  ",
+    changed_mechanism: " parser-v2 ",
+    expected_observation: " rejected ",
+    introduced_mechanisms: [" helper ", "adapter", "helper"],
+    repeated_boundary_reason: " Same boundary. ",
+    finding_categories: [
+      " Regression Risk ",
+      "correctness",
+      "regression_risk",
+      "correctness",
+    ],
+  }
+  const first = body(
+    await ledger(
+      fixture,
+      findingCycle(workItemId, 1, {
+        openFindings: ["finding-a"],
+        discriminator: canonical,
+      }),
+    ),
+  )
+  assert.equal(first.status, "cycle_recorded")
+
+  const rawLegacyJson = JSON.stringify(rawLegacy)
+  await withLedger(
+    {
+      deskRoot: fixture.deskRoot,
+      person: "rowan",
+      env: process.env,
+    },
+    (db) => {
+      db.prepare(
+        "UPDATE cycles SET discriminator = ? " +
+          "WHERE work_item_id = ? AND phase = ? AND cycle = ?",
+      ).run(rawLegacyJson, workItemId, "implementation-phase", 1)
+    },
+  )
+
+  const second = body(
+    await ledger(
+      fixture,
+      findingCycle(workItemId, 2, {
+        openFindings: ["finding-a"],
+        discriminator: canonical,
+      }),
+    ),
+  )
+  assert.equal(second.status, "pivot_required")
+  assert.deepEqual(
+    second.convergence.triggers.map((entry) => entry.code),
+    ["stalled_open_findings"],
+  )
+  assert.deepEqual(
+    second.convergence.triggers[0].evidence.previous_discriminator,
+    canonical,
+  )
+
+  const storedLegacyJson = await withLedger(
+    {
+      deskRoot: fixture.deskRoot,
+      person: "rowan",
+      env: process.env,
+    },
+    (db) =>
+      db
+        .prepare(
+          "SELECT discriminator FROM cycles " +
+            "WHERE work_item_id = ? AND phase = ? AND cycle = ?",
+        )
+        .get(workItemId, "implementation-phase", 1).discriminator,
+  )
+  assert.equal(storedLegacyJson, rawLegacyJson)
 })
 
 test("cycle refuses non-canonical discriminator shapes without storing a cycle", async (t) => {

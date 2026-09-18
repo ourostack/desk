@@ -1457,7 +1457,7 @@ function shapeCycle(row) {
     open_findings: JSON.parse(row.open_findings),
     closed_findings: JSON.parse(row.closed_findings),
     write_set: JSON.parse(row.write_set),
-    discriminator: JSON.parse(row.discriminator),
+    discriminator: canonicalizeStoredDiscriminator(JSON.parse(row.discriminator)),
     convergence_status: row.convergence_status,
     convergence_triggers: JSON.parse(row.convergence_triggers),
     recorded_at: row.recorded_at,
@@ -1596,7 +1596,7 @@ function requirePositiveInteger(values, field) {
 
 function normalizeIdentifier(values, field) {
   const source = requireText(values, field)
-  const normalized = source.trim().toLowerCase().replace(/[\s_]+/gu, "-")
+  const normalized = canonicalizeIdentifierText(source)
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(normalized)) {
     throw new Error(
       `${LABEL}: ${field} must normalize to a stable identifier made of letters, ` +
@@ -1604,6 +1604,10 @@ function normalizeIdentifier(values, field) {
     )
   }
   return normalized
+}
+
+function canonicalizeIdentifierText(value) {
+  return value.trim().toLowerCase().replace(/[\s_]+/gu, "-")
 }
 
 function normalizeFallbacks(values) {
@@ -1737,6 +1741,28 @@ function normalizeDiscriminator(values) {
     introduced_mechanisms: lists.introduced_mechanisms,
     repeated_boundary_reason: scalars.repeated_boundary_reason,
     finding_categories: lists.finding_categories,
+  }
+}
+
+function canonicalizeStoredDiscriminator(source) {
+  const scalar = (field) =>
+    typeof source[field] === "string" ? source[field].trim() : source[field]
+  const identifiers = (field) => {
+    const value = source[field]
+    if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+      return value
+    }
+    const normalized = value.map(canonicalizeIdentifierText)
+    return [...new Set(normalized)].sort((left, right) => left.localeCompare(right))
+  }
+
+  return {
+    hypothesis: scalar("hypothesis"),
+    changed_mechanism: scalar("changed_mechanism"),
+    expected_observation: scalar("expected_observation"),
+    introduced_mechanisms: identifiers("introduced_mechanisms"),
+    repeated_boundary_reason: scalar("repeated_boundary_reason"),
+    finding_categories: identifiers("finding_categories"),
   }
 }
 
