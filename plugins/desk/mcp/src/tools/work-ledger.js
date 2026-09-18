@@ -19,7 +19,8 @@
 import { randomUUID } from "node:crypto"
 
 import { nowIso } from "../util/fm.js"
-import { CAPTURE_ROUTES, LEDGER_ACTIONS } from "../measurement/actions.js"
+import { isCaptureRoute, LEDGER_ACTIONS } from "../measurement/actions.js"
+import { assessConvergence } from "../measurement/non-convergence.js"
 import { withLedger } from "../measurement/store.js"
 import { readCanonicalStatus, resolveTaskRef } from "../measurement/identity.js"
 import {
@@ -54,6 +55,9 @@ const TRANSITION_GUARDED = new Set([
   "link",
   "complete",
   "close",
+  "run_contract",
+  "cycle",
+  "work_design_ruling",
   "import_usage",
 ])
 
@@ -69,6 +73,9 @@ const REQUIRES_ITEM = new Set([
   "correct",
   "delete",
   "inspect",
+  "run_contract",
+  "cycle",
+  "work_design_ruling",
   "import_usage",
   "cost_basis",
   "link_evaluation_receipt",
@@ -109,6 +116,9 @@ const DELETION_TABLES = [
   ["evaluations", "DELETE FROM evaluations WHERE work_item_id = ?"],
   ["imports", "DELETE FROM imports WHERE work_item_id = ?"],
   ["phases", "DELETE FROM phases WHERE work_item_id = ?"],
+  ["cycles", "DELETE FROM cycles WHERE work_item_id = ?"],
+  ["work_design_rulings", "DELETE FROM work_design_rulings WHERE work_item_id = ?"],
+  ["run_contracts", "DELETE FROM run_contracts WHERE work_item_id = ?"],
   ["scope_changes", "DELETE FROM scope_changes WHERE work_item_id = ?"],
   ["session_bindings", "DELETE FROM session_bindings WHERE work_item_id = ?"],
   ["sizings", "DELETE FROM sizings WHERE work_item_id = ?"],
@@ -167,7 +177,7 @@ export async function desk_work_ledger({ deskRoot, input, person = null, env = p
 // before writing — the caller must not be able to tell which pass refused.
 
 function assertRecordingAllows(db, action) {
-  if (CAPTURE_ROUTES.has(action) && !readRecording(db).enabled) {
+  if (isCaptureRoute(action) && !readRecording(db).enabled) {
     throw new Error(
       `${LABEL}: recording is disabled, so ${action} was refused and nothing was ` +
         `recorded. Re-enable recording to resume capture; the window stays a ` +
@@ -203,7 +213,7 @@ const ROUTES = {
       route,
       availability: "available",
       bound: true,
-      captures: CAPTURE_ROUTES.has(route),
+      captures: isCaptureRoute(route),
       fields: fields.filter((field) => field !== "action"),
     })),
   }),
@@ -377,6 +387,257 @@ const ROUTES = {
       status: "phase_recorded",
       phase: { class: "declared", phase, cycle, started_at: startedAt, ended_at: endedAt },
     }
+  },
+
+  run_contract: ({ db, values, item }) => {
+    const contract = {
+      phase: normalizeIdentifier(values, "phase"),
+      progress_signal: requireText(values, "progress_signal").trim(),
+      failure_signal: requireText(values, "failure_signal").trim(),
+      non_convergence_rule: requireText(values, "non_convergence_rule").trim(),
+      scope_envelope: normalizePaths(values, "scope_envelope", {
+        allowDirectories: true,
+        requireNonEmpty: true,
+      }),
+      fallback_paths: normalizeFallbacks(values),
+    }
+    if (
+      db
+        .prepare("SELECT 1 FROM run_contracts WHERE work_item_id = ? AND phase = ?")
+        .get(item.work_item_id, contract.phase)
+    ) {
+      throw new Error(
+        `${LABEL}: work item ${item.work_item_id} already has a run contract for ` +
+          `phase ${JSON.stringify(contract.phase)}.`,
+      )
+    }
+
+    const recordedAt = nowIso()
+    db.prepare(
+      "INSERT INTO run_contracts (work_item_id, phase, progress_signal, failure_signal, " +
+        "non_convergence_rule, scope_envelope, fallback_paths, recorded_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      item.work_item_id,
+      contract.phase,
+      contract.progress_signal,
+      contract.failure_signal,
+      contract.non_convergence_rule,
+      JSON.stringify(contract.scope_envelope),
+      JSON.stringify(contract.fallback_paths),
+      recordedAt,
+    )
+    return {
+      status: "run_contract_recorded",
+      run_contract: {
+        class: "declared",
+        ...contract,
+        recorded_at: recordedAt,
+      },
+    }
+  },
+
+  cycle: ({ db, values, item }) => {
+    const phase = normalizeIdentifier(values, "phase")
+    const cycleNumber = requirePositiveInteger(values, "cycle")
+    const entry = {
+      phase,
+      cycle: cycleNumber,
+      candidate_ref: requireText(values, "candidate_ref").trim(),
+      boundary: normalizeIdentifier(values, "boundary"),
+      result: normalizeIdentifier(values, "result"),
+      progress_evidence: requireText(values, "progress_evidence").trim(),
+      finding_fingerprint: optionalTrimmedText(values, "finding_fingerprint"),
+      open_findings: normalizeTextList(values, "open_findings"),
+      closed_findings: normalizeTextList(values, "closed_findings"),
+      write_set: normalizePaths(values, "write_set", {
+        allowDirectories: false,
+        requireNonEmpty: false,
+      }),
+      discriminator: requireObject(values, "discriminator"),
+    }
+    const recordedAt = nowIso()
+
+    return db.transaction(() => {
+      const contractRow = db
+        .prepare("SELECT * FROM run_contracts WHERE work_item_id = ? AND phase = ?")
+        .get(item.work_item_id, phase)
+      if (contractRow === undefined) {
+        throw new Error(
+          `${LABEL}: work item ${item.work_item_id} has no run contract for phase ` +
+            `${JSON.stringify(phase)}.`,
+        )
+      }
+      const unresolved = readUnresolvedPivot(db, item.work_item_id, phase)
+      if (unresolved !== undefined) {
+        throw new Error(
+          `${LABEL}: phase ${JSON.stringify(phase)} has an unresolved pivot at cycle ` +
+            `${unresolved.cycle}. Record a work_design_ruling before a later cycle.`,
+        )
+      }
+      if (
+        db
+          .prepare("SELECT 1 FROM cycles WHERE work_item_id = ? AND phase = ? AND cycle = ?")
+          .get(item.work_item_id, phase, cycleNumber)
+      ) {
+        throw new Error(
+          `${LABEL}: work item ${item.work_item_id} already has cycle ${cycleNumber} ` +
+            `for phase ${JSON.stringify(phase)}.`,
+        )
+      }
+
+      const latestRuling = db
+        .prepare(
+          "SELECT MAX(cycle) AS cycle FROM work_design_rulings WHERE work_item_id = ? AND phase = ?",
+        )
+        .get(item.work_item_id, phase)?.cycle
+      if (latestRuling !== null && latestRuling !== undefined && cycleNumber <= latestRuling) {
+        throw new Error(
+          `${LABEL}: cycle ${cycleNumber} does not open after the ruling at cycle ` +
+            `${latestRuling}. The new assessment window starts after that cycle.`,
+        )
+      }
+
+      db.prepare(
+        "INSERT INTO cycles (work_item_id, phase, cycle, candidate_ref, boundary, result, " +
+          "progress_evidence, finding_fingerprint, open_findings, closed_findings, write_set, " +
+          "discriminator, convergence_status, convergence_triggers, recorded_at) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'continue', '[]', ?)",
+      ).run(
+        item.work_item_id,
+        phase,
+        cycleNumber,
+        entry.candidate_ref,
+        entry.boundary,
+        entry.result,
+        entry.progress_evidence,
+        entry.finding_fingerprint,
+        JSON.stringify(entry.open_findings),
+        JSON.stringify(entry.closed_findings),
+        JSON.stringify(entry.write_set),
+        JSON.stringify(entry.discriminator),
+        recordedAt,
+      )
+
+      const windowStart = latestRuling ?? 0
+      const cycles = db
+        .prepare(
+          "SELECT * FROM cycles WHERE work_item_id = ? AND phase = ? AND cycle > ? ORDER BY cycle",
+        )
+        .all(item.work_item_id, phase, windowStart)
+        .map(shapeCycle)
+      const convergence = assessConvergence({
+        contract: shapeRunContract(contractRow),
+        cycles,
+      })
+      db.prepare(
+        "UPDATE cycles SET convergence_status = ?, convergence_triggers = ? " +
+          "WHERE work_item_id = ? AND phase = ? AND cycle = ?",
+      ).run(
+        convergence.status,
+        JSON.stringify(convergence.triggers),
+        item.work_item_id,
+        phase,
+        cycleNumber,
+      )
+      return {
+        status: convergence.status === "pivot_required" ? "pivot_required" : "cycle_recorded",
+        cycle: {
+          class: "declared",
+          ...entry,
+          convergence_status: convergence.status,
+          convergence_triggers: convergence.triggers,
+          recorded_at: recordedAt,
+        },
+        convergence,
+      }
+    })()
+  },
+
+  work_design_ruling: ({ db, values, item }) => {
+    const phase = normalizeIdentifier(values, "phase")
+    const cycleNumber = requirePositiveInteger(values, "cycle")
+    const trigger = normalizeIdentifier(values, "trigger")
+    const decision = normalizeIdentifier(values, "decision")
+    const reason = requireText(values, "reason").trim()
+    const evidence = requireText(values, "evidence").trim()
+    const costIfWrong = requireText(values, "cost_if_wrong").trim()
+    const recordedAt = nowIso()
+
+    return db.transaction(() => {
+      const contractRow = db
+        .prepare("SELECT * FROM run_contracts WHERE work_item_id = ? AND phase = ?")
+        .get(item.work_item_id, phase)
+      if (contractRow === undefined) {
+        throw new Error(
+          `${LABEL}: work item ${item.work_item_id} has no run contract for phase ` +
+            `${JSON.stringify(phase)}.`,
+        )
+      }
+      const contract = shapeRunContract(contractRow)
+      if (!contract.fallback_paths.includes(decision)) {
+        throw new Error(
+          `${LABEL}: decision ${JSON.stringify(decision)} is not an allowed fallback for ` +
+            `phase ${JSON.stringify(phase)} — expected one of ${contract.fallback_paths.join(", ")}.`,
+        )
+      }
+      if (
+        db
+          .prepare(
+            "SELECT 1 FROM work_design_rulings WHERE work_item_id = ? AND phase = ? AND cycle = ?",
+          )
+          .get(item.work_item_id, phase, cycleNumber)
+      ) {
+        throw new Error(
+          `${LABEL}: phase ${JSON.stringify(phase)} already has a ruling for cycle ${cycleNumber}.`,
+        )
+      }
+      const unresolved = readUnresolvedPivot(db, item.work_item_id, phase)
+      if (unresolved === undefined || unresolved.cycle !== cycleNumber) {
+        throw new Error(
+          `${LABEL}: phase ${JSON.stringify(phase)} has no unresolved pivot at cycle ` +
+            `${cycleNumber}. The helper detects a pivot; it never chooses a ruling.`,
+        )
+      }
+      const reportedTriggers = JSON.parse(unresolved.convergence_triggers).map((entry) =>
+        entry.code.replaceAll("_", "-"),
+      )
+      if (!reportedTriggers.includes(trigger)) {
+        throw new Error(
+          `${LABEL}: trigger ${JSON.stringify(trigger)} was not reported for the unresolved ` +
+            `pivot at cycle ${cycleNumber} — expected one of ${reportedTriggers.join(", ")}.`,
+        )
+      }
+
+      db.prepare(
+        "INSERT INTO work_design_rulings (work_item_id, phase, cycle, trigger, decision, reason, " +
+          "evidence, cost_if_wrong, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        item.work_item_id,
+        phase,
+        cycleNumber,
+        trigger,
+        decision,
+        reason,
+        evidence,
+        costIfWrong,
+        recordedAt,
+      )
+      return {
+        status: "work_design_ruling_recorded",
+        ruling: {
+          class: "declared",
+          phase,
+          cycle: cycleNumber,
+          trigger,
+          decision,
+          reason,
+          evidence,
+          cost_if_wrong: costIfWrong,
+          recorded_at: recordedAt,
+        },
+      }
+    })()
   },
 
   scope_change: ({ db, values, item }) => {
@@ -599,6 +860,20 @@ const ROUTES = {
             ended_at: row.ended_at,
             recorded_at: row.recorded_at,
           })),
+        run_contracts: db
+          .prepare("SELECT * FROM run_contracts WHERE work_item_id = ? ORDER BY phase")
+          .all(item.work_item_id)
+          .map(shapeRunContract),
+        cycles: db
+          .prepare("SELECT * FROM cycles WHERE work_item_id = ? ORDER BY phase, cycle")
+          .all(item.work_item_id)
+          .map(shapeCycle),
+        work_design_rulings: db
+          .prepare(
+            "SELECT * FROM work_design_rulings WHERE work_item_id = ? ORDER BY phase, cycle",
+          )
+          .all(item.work_item_id)
+          .map(shapeRuling),
         usage: db
           .prepare("SELECT * FROM usage_events WHERE work_item_id = ? ORDER BY source_event_id")
           .all(item.work_item_id)
@@ -1152,6 +1427,68 @@ function shapeUsage(row) {
   }
 }
 
+function shapeRunContract(row) {
+  return {
+    class: "declared",
+    phase: row.phase,
+    progress_signal: row.progress_signal,
+    failure_signal: row.failure_signal,
+    non_convergence_rule: row.non_convergence_rule,
+    scope_envelope: JSON.parse(row.scope_envelope),
+    fallback_paths: JSON.parse(row.fallback_paths),
+    recorded_at: row.recorded_at,
+  }
+}
+
+function shapeCycle(row) {
+  return {
+    class: "declared",
+    phase: row.phase,
+    cycle: row.cycle,
+    candidate_ref: row.candidate_ref,
+    boundary: row.boundary,
+    result: row.result,
+    progress_evidence: row.progress_evidence,
+    finding_fingerprint: row.finding_fingerprint,
+    open_findings: JSON.parse(row.open_findings),
+    closed_findings: JSON.parse(row.closed_findings),
+    write_set: JSON.parse(row.write_set),
+    discriminator: JSON.parse(row.discriminator),
+    convergence_status: row.convergence_status,
+    convergence_triggers: JSON.parse(row.convergence_triggers),
+    recorded_at: row.recorded_at,
+  }
+}
+
+function shapeRuling(row) {
+  return {
+    class: "declared",
+    phase: row.phase,
+    cycle: row.cycle,
+    trigger: row.trigger,
+    decision: row.decision,
+    reason: row.reason,
+    evidence: row.evidence,
+    cost_if_wrong: row.cost_if_wrong,
+    recorded_at: row.recorded_at,
+  }
+}
+
+function readUnresolvedPivot(db, workItemId, phase) {
+  return db
+    .prepare(
+      "SELECT cycle, convergence_triggers FROM cycles " +
+        "WHERE work_item_id = ? AND phase = ? AND convergence_status = 'pivot_required' " +
+        "AND NOT EXISTS (" +
+        "SELECT 1 FROM work_design_rulings " +
+        "WHERE work_design_rulings.work_item_id = cycles.work_item_id " +
+        "AND work_design_rulings.phase = cycles.phase " +
+        "AND work_design_rulings.cycle = cycles.cycle" +
+        ") ORDER BY cycle DESC LIMIT 1",
+    )
+    .get(workItemId, phase)
+}
+
 // Surrogate ids are stored as text so the primary key stays exact, and read
 // back as numbers. normalizeRow has already refused anything that is not a safe
 // integer, so this round-trip cannot lose or invent a value.
@@ -1241,6 +1578,113 @@ function requireFiniteNumber(values, field) {
     throw new Error(`${LABEL}: ${field} is required and must be a finite number.`)
   }
   return value
+}
+
+function requirePositiveInteger(values, field) {
+  const value = values[field]
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${LABEL}: ${field} is required and must be a positive integer.`)
+  }
+  return value
+}
+
+function normalizeIdentifier(values, field) {
+  const source = requireText(values, field)
+  const normalized = source.trim().toLowerCase().replace(/[\s_]+/gu, "-")
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(normalized)) {
+    throw new Error(
+      `${LABEL}: ${field} must normalize to a stable identifier made of letters, ` +
+        `numbers and single hyphens.`,
+    )
+  }
+  return normalized
+}
+
+function normalizeFallbacks(values) {
+  const allowed = ["correct-and-retry", "simplify", "split", "revert", "replace", "cancel"]
+  const source = values.fallback_paths
+  if (!Array.isArray(source) || source.length === 0) {
+    throw new Error(`${LABEL}: fallback_paths is required and must be a non-empty array.`)
+  }
+  const normalized = source.map((value) =>
+    normalizeIdentifier({ fallback_paths: value }, "fallback_paths"),
+  )
+  for (const value of normalized) {
+    if (!allowed.includes(value)) {
+      throw new Error(
+        `${LABEL}: fallback path ${JSON.stringify(value)} is not allowed — expected a ` +
+          `subset of ${allowed.join(", ")}.`,
+      )
+    }
+  }
+  const selected = new Set(normalized)
+  return allowed.filter((value) => selected.has(value))
+}
+
+function normalizePaths(values, field, { allowDirectories, requireNonEmpty }) {
+  const source = values[field]
+  if (!Array.isArray(source) || (requireNonEmpty && source.length === 0)) {
+    throw new Error(
+      `${LABEL}: ${field} is required and must be ${requireNonEmpty ? "a non-empty" : "an"} array.`,
+    )
+  }
+  const normalized = source.map((value) => normalizeRepositoryPath(value, field, allowDirectories))
+  return [...new Set(normalized)].sort((left, right) => left.localeCompare(right))
+}
+
+function normalizeRepositoryPath(value, field, allowDirectories) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${LABEL}: ${field} entries must be non-empty repository-relative paths.`)
+  }
+  const candidate = value.trim()
+  if (candidate.includes("\\") || candidate.startsWith("/") || /^[a-zA-Z]:\//u.test(candidate)) {
+    throw new Error(
+      `${LABEL}: ${field} path ${JSON.stringify(candidate)} must be repository-relative ` +
+        `and use forward slashes.`,
+    )
+  }
+  const directory = candidate.endsWith("/")
+  if (directory && !allowDirectories) {
+    throw new Error(`${LABEL}: ${field} accepts files only, not slash-terminated directories.`)
+  }
+  const body = directory ? candidate.slice(0, -1) : candidate
+  const segments = body.split("/")
+  if (
+    segments.length === 0
+    || segments.some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    throw new Error(
+      `${LABEL}: ${field} path ${JSON.stringify(candidate)} contains traversal or an empty segment.`,
+    )
+  }
+  return `${segments.join("/")}${directory ? "/" : ""}`
+}
+
+function normalizeTextList(values, field) {
+  const source = values[field]
+  if (!Array.isArray(source)) {
+    throw new Error(`${LABEL}: ${field} is required and must be an array.`)
+  }
+  const normalized = source.map((value) => {
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error(`${LABEL}: ${field} entries must be non-empty strings.`)
+    }
+    return value.trim()
+  })
+  return [...new Set(normalized)].sort((left, right) => left.localeCompare(right))
+}
+
+function requireObject(values, field) {
+  const value = values[field]
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${LABEL}: ${field} is required and must be an object.`)
+  }
+  return value
+}
+
+function optionalTrimmedText(values, field) {
+  const value = optionalText(values, field)
+  return value === null ? null : value.trim()
 }
 
 // Exactly 64 hexadecimal characters, upper or lower case, the whole value —
