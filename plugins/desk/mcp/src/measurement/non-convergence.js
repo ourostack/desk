@@ -1,6 +1,10 @@
+function scopeEntryAdmitsPath(scopeEntry, writePath) {
+  return scopeEntry.endsWith("/") ? writePath.startsWith(scopeEntry) : writePath === scopeEntry
+}
+
 export function assessConvergence({ contract, cycles }) {
-  void contract
   const orderedCycles = [...cycles].sort((left, right) => left.cycle - right.cycle)
+  const scopeEnvelope = contract.scope_envelope ?? []
   const discriminatorFields = [
     "hypothesis",
     "changed_mechanism",
@@ -19,6 +23,22 @@ export function assessConvergence({ contract, cycles }) {
   }
 
   const triggers = []
+  for (const cycle of orderedCycles) {
+    const outsidePaths = (cycle.write_set ?? []).filter(
+      (writePath) =>
+        !scopeEnvelope.some((scopeEntry) => scopeEntryAdmitsPath(scopeEntry, writePath)),
+    )
+    if (outsidePaths.length === 0) continue
+    triggers.push({
+      code: "write_set_outside_scope",
+      evidence: {
+        cycle: cycle.cycle,
+        paths: outsidePaths,
+        scope_envelope: [...scopeEnvelope],
+      },
+    })
+  }
+
   for (let index = 1; index < orderedCycles.length; index += 1) {
     const previous = orderedCycles[index - 1]
     const current = orderedCycles[index]
