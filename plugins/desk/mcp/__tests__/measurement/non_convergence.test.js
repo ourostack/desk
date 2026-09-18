@@ -880,6 +880,112 @@ test("a Desk client pivots after three rejected boundary cycles and resumes afte
   }
 })
 
+test("cycle rejects out-of-order insertions without reopening earlier evidence windows", async (t) => {
+  const fixture = await mkLedgerFixture()
+  t.after(() => cleanup(fixture.base))
+  t.after(useHostEnv(fixture))
+
+  const workItemId = await prepareWorkDesignItem(
+    fixture,
+    "Refuse out-of-order cycles while preserving post-ruling assessment windows.",
+  )
+  const repeatedDiscriminator = discriminator({
+    hypothesis: "The parser rejects the same malformed candidate.",
+  })
+
+  const first = body(
+    await ledger(
+      fixture,
+      findingCycle(workItemId, 4, {
+        openFindings: ["finding-a"],
+        discriminator: repeatedDiscriminator,
+      }),
+    ),
+  )
+  assert.equal(first.status, "cycle_recorded")
+
+  const outOfOrder = await ledger(
+    fixture,
+    findingCycle(workItemId, 2, {
+      openFindings: ["finding-a"],
+      discriminator: repeatedDiscriminator,
+    }),
+  )
+  assert.equal(outOfOrder.isError, true)
+  assert.match(
+    body(outOfOrder).message,
+    /must be greater than the latest recorded cycle/iu,
+  )
+
+  const afterRefusal = body(
+    await ledger(fixture, { action: "inspect", work_item_id: workItemId }),
+  )
+  assert.deepEqual(
+    afterRefusal.cycles.map((entry) => entry.cycle),
+    [4],
+  )
+
+  const firstPivot = body(
+    await ledger(
+      fixture,
+      findingCycle(workItemId, 7, {
+        openFindings: ["finding-a"],
+        discriminator: repeatedDiscriminator,
+      }),
+    ),
+  )
+  assert.equal(firstPivot.status, "pivot_required")
+  assert.deepEqual(
+    firstPivot.convergence.triggers.map((entry) => entry.code),
+    ["stalled_open_findings"],
+  )
+
+  const firstRuling = body(
+    await ledger(fixture, {
+      action: "work_design_ruling",
+      work_item_id: workItemId,
+      phase: "implementation-phase",
+      cycle: 7,
+      trigger: "stalled_open_findings",
+      decision: "simplify",
+      reason: "The higher-numbered retry repeated the same rejected evidence.",
+      evidence: "Cycles 4 and 7 held the same open finding and discriminator.",
+      cost_if_wrong: "The simplified design may omit a required parser guard.",
+    }),
+  )
+  assert.equal(firstRuling.status, "work_design_ruling_recorded")
+
+  const postRulingContinue = body(
+    await ledger(
+      fixture,
+      findingCycle(workItemId, 11, {
+        openFindings: ["finding-a"],
+        discriminator: repeatedDiscriminator,
+      }),
+    ),
+  )
+  assert.equal(postRulingContinue.status, "cycle_recorded")
+
+  const postRulingPivot = body(
+    await ledger(
+      fixture,
+      findingCycle(workItemId, 13, {
+        openFindings: ["finding-a"],
+        discriminator: repeatedDiscriminator,
+      }),
+    ),
+  )
+  assert.equal(postRulingPivot.status, "pivot_required")
+  assert.deepEqual(
+    postRulingPivot.convergence.triggers.map((entry) => entry.code),
+    ["stalled_open_findings"],
+  )
+  assert.deepEqual(
+    postRulingPivot.convergence.triggers[0].evidence.cycles.map((entry) => entry.cycle),
+    [11, 13],
+  )
+})
+
 test("cycle accepts a digit-only decimal string and returns its normalized integer", async (t) => {
   const fixture = await mkLedgerFixture()
   t.after(() => cleanup(fixture.base))

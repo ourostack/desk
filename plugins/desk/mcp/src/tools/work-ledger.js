@@ -489,6 +489,20 @@ const ROUTES = {
         )
       }
 
+      const latestRecordedCycle = db
+        .prepare("SELECT MAX(cycle) AS cycle FROM cycles WHERE work_item_id = ? AND phase = ?")
+        .get(item.work_item_id, phase)?.cycle
+      if (
+        latestRecordedCycle !== null
+        && latestRecordedCycle !== undefined
+        && cycleNumber <= latestRecordedCycle
+      ) {
+        throw new Error(
+          `${LABEL}: cycle ${cycleNumber} must be greater than the latest recorded cycle ` +
+            `${latestRecordedCycle} for phase ${JSON.stringify(phase)}.`,
+        )
+      }
+
       const latestRuling = db
         .prepare(
           "SELECT MAX(cycle) AS cycle FROM work_design_rulings WHERE work_item_id = ? AND phase = ?",
