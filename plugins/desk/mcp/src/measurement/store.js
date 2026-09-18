@@ -75,6 +75,50 @@ CREATE TABLE IF NOT EXISTS phases (
   recorded_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS run_contracts (
+  work_item_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  progress_signal TEXT NOT NULL,
+  failure_signal TEXT NOT NULL,
+  non_convergence_rule TEXT NOT NULL,
+  scope_envelope TEXT NOT NULL,
+  fallback_paths TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  PRIMARY KEY (work_item_id, phase)
+);
+
+CREATE TABLE IF NOT EXISTS cycles (
+  work_item_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  cycle INTEGER NOT NULL,
+  candidate_ref TEXT NOT NULL,
+  boundary TEXT NOT NULL,
+  result TEXT NOT NULL,
+  progress_evidence TEXT NOT NULL,
+  finding_fingerprint TEXT,
+  open_findings TEXT NOT NULL,
+  closed_findings TEXT NOT NULL,
+  write_set TEXT NOT NULL,
+  discriminator TEXT NOT NULL,
+  convergence_status TEXT NOT NULL,
+  convergence_triggers TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  PRIMARY KEY (work_item_id, phase, cycle)
+);
+
+CREATE TABLE IF NOT EXISTS work_design_rulings (
+  work_item_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  cycle INTEGER NOT NULL,
+  trigger TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  evidence TEXT NOT NULL,
+  cost_if_wrong TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  PRIMARY KEY (work_item_id, phase, cycle)
+);
+
 CREATE TABLE IF NOT EXISTS scope_changes (
   change_id INTEGER PRIMARY KEY AUTOINCREMENT,
   work_item_id TEXT NOT NULL,

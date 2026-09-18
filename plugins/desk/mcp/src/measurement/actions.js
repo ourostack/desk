@@ -40,6 +40,42 @@ export const LEDGER_ACTIONS = {
   inspect: ["action", "work_item_id"],
   report: ["action", "work_item_id", "include_phase_span"],
   review: ["action", "since", "until", "carry_forward"],
+  run_contract: [
+    "action",
+    "work_item_id",
+    "phase",
+    "progress_signal",
+    "failure_signal",
+    "non_convergence_rule",
+    "scope_envelope",
+    "fallback_paths",
+  ],
+  cycle: [
+    "action",
+    "work_item_id",
+    "phase",
+    "cycle",
+    "candidate_ref",
+    "boundary",
+    "result",
+    "progress_evidence",
+    "finding_fingerprint",
+    "open_findings",
+    "closed_findings",
+    "write_set",
+    "discriminator",
+  ],
+  work_design_ruling: [
+    "action",
+    "work_item_id",
+    "phase",
+    "cycle",
+    "trigger",
+    "decision",
+    "reason",
+    "evidence",
+    "cost_if_wrong",
+  ],
   import_usage: [
     "action",
     "work_item_id",
@@ -77,10 +113,11 @@ export const LEDGER_ACTIONS = {
 }
 
 /**
- * Routes that write new observations to the ledger. These are the ones the
- * recording switch governs. Inspection, correction, deletion, reporting and the
- * switch itself stay available while recording is off, because those are the
- * owner's rights over what is already held rather than new capture.
+ * The established measurement routes that write new observations. Work-design
+ * capture is a separate route family below; isCaptureRoute is the complete
+ * recording-switch predicate. Inspection, correction, deletion, reporting and
+ * the switch itself stay available while recording is off, because those are
+ * the owner's rights over what is already held rather than new capture.
  */
 export const CAPTURE_ROUTES = new Set([
   "intake",
@@ -95,3 +132,13 @@ export const CAPTURE_ROUTES = new Set([
   "cost_basis",
   "link_evaluation_receipt",
 ])
+
+const WORK_DESIGN_CAPTURE_ROUTES = new Set([
+  "run_contract",
+  "cycle",
+  "work_design_ruling",
+])
+
+export function isCaptureRoute(action) {
+  return CAPTURE_ROUTES.has(action) || WORK_DESIGN_CAPTURE_ROUTES.has(action)
+}
