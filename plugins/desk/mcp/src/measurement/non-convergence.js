@@ -2,6 +2,14 @@ function scopeEntryAdmitsPath(scopeEntry, writePath) {
   return scopeEntry.endsWith("/") ? writePath.startsWith(scopeEntry) : writePath === scopeEntry
 }
 
+const introducedArchitectureMechanisms = new Set([
+  "subsystem",
+  "service",
+  "registry",
+  "persistent-store",
+  "cross-platform-contract",
+])
+
 export function assessConvergence({ contract, cycles }) {
   const orderedCycles = [...cycles].sort((left, right) => left.cycle - right.cycle)
   const scopeEnvelope = contract.scope_envelope ?? []
@@ -23,6 +31,20 @@ export function assessConvergence({ contract, cycles }) {
   }
 
   const triggers = []
+  for (const cycle of orderedCycles) {
+    const values = (cycle.discriminator?.introduced_mechanisms ?? []).filter((value) =>
+      introducedArchitectureMechanisms.has(value),
+    )
+    if (values.length === 0) continue
+    triggers.push({
+      code: "introduced_mechanism",
+      evidence: {
+        cycle: cycle.cycle,
+        values,
+      },
+    })
+  }
+
   for (const cycle of orderedCycles) {
     const outsidePaths = (cycle.write_set ?? []).filter(
       (writePath) =>
