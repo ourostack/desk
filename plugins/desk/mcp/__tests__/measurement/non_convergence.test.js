@@ -219,3 +219,52 @@ test("cycle accepts a digit-only decimal string and returns its normalized integ
   assert.equal(recorded.status, "cycle_recorded", recorded.message ?? "")
   assert.equal(recorded.cycle.cycle, 3)
 })
+
+test("cycle refuses unsafe integer representations before storing them", async (t) => {
+  const fixture = await mkLedgerFixture()
+  t.after(() => cleanup(fixture.base))
+  t.after(useHostEnv(fixture))
+
+  const outcomes = []
+  for (const [representation, unsafeCycle] of [
+    ["number", Number.MAX_SAFE_INTEGER + 1],
+    ["decimal string", "9007199254740993"],
+  ]) {
+    const intake = body(
+      await ledger(fixture, {
+        action: "intake",
+        request: `Refuse one unsafe cycle ${representation}.`,
+      }),
+    )
+    const workItemId = intake.work_item_id
+
+    const contract = body(
+      await ledger(fixture, {
+        action: "run_contract",
+        work_item_id: workItemId,
+        phase: "implementation-phase",
+        progress_signal: "The boundary accepts the candidate.",
+        failure_signal: "The boundary rejects the candidate.",
+        non_convergence_rule: "Pivot after three rejected cycles at one boundary.",
+        scope_envelope: ["plugins/desk/mcp/src/"],
+        fallback_paths: ["simplify"],
+      }),
+    )
+    assert.equal(contract.status, "run_contract_recorded")
+
+    const response = await ledger(fixture, cycle(workItemId, unsafeCycle, "rejected"))
+    const inspected = body(
+      await ledger(fixture, { action: "inspect", work_item_id: workItemId }),
+    )
+    outcomes.push({
+      representation,
+      refused: response.isError === true,
+      stored_cycles: inspected.cycles.length,
+    })
+  }
+
+  assert.deepEqual(outcomes, [
+    { representation: "number", refused: true, stored_cycles: 0 },
+    { representation: "decimal string", refused: true, stored_cycles: 0 },
+  ])
+})
