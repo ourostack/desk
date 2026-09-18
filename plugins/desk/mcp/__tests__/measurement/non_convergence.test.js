@@ -2,6 +2,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
 import { callTool } from "../../src/server.js"
+import { assessConvergence } from "../../src/measurement/non-convergence.js"
 import { cleanup, mkLedgerFixture, useHostEnv } from "./_helpers.js"
 
 function body(result) {
@@ -47,6 +48,19 @@ function cycle(workItemId, cycleNumber, result) {
     },
   }
 }
+
+test("only rejected cycle results count toward the three-cycle pivot", () => {
+  const convergence = assessConvergence({
+    contract: {},
+    cycles: [
+      { cycle: 1, boundary: "targeted-test", result: "unavailable" },
+      { cycle: 2, boundary: "targeted-test", result: "cancelled" },
+      { cycle: 3, boundary: "targeted-test", result: "contradictory" },
+    ],
+  })
+
+  assert.deepEqual(convergence, { status: "continue", triggers: [] })
+})
 
 test("a Desk client pivots after three rejected boundary cycles and resumes after a ruling", async (t) => {
   const fixture = await mkLedgerFixture()
@@ -144,7 +158,7 @@ test("a Desk client pivots after three rejected boundary cycles and resumes afte
     {
       phase: "implementation-phase",
       cycle: 3,
-      trigger: "three-failed-cycles-at-boundary",
+      trigger: "three_failed_cycles_at_boundary",
       decision: "simplify",
       reason: "Three corrections did not change the boundary result.",
       evidence: "Cycles 1, 2, and 3 were rejected at targeted-test.",
@@ -172,4 +186,36 @@ test("a Desk client pivots after three rejected boundary cycles and resumes afte
   for (const table of ["run_contracts", "cycles", "work_design_rulings"]) {
     assert.ok(deleted.removed_rows.some((entry) => entry.table === table), table)
   }
+})
+
+test("cycle accepts a digit-only decimal string and returns its normalized integer", async (t) => {
+  const fixture = await mkLedgerFixture()
+  t.after(() => cleanup(fixture.base))
+  t.after(useHostEnv(fixture))
+
+  const intake = body(
+    await ledger(fixture, {
+      action: "intake",
+      request: "Record one string-numbered cycle.",
+    }),
+  )
+  const workItemId = intake.work_item_id
+
+  const contract = body(
+    await ledger(fixture, {
+      action: "run_contract",
+      work_item_id: workItemId,
+      phase: "implementation-phase",
+      progress_signal: "The boundary accepts the candidate.",
+      failure_signal: "The boundary rejects the candidate.",
+      non_convergence_rule: "Pivot after three rejected cycles at one boundary.",
+      scope_envelope: ["plugins/desk/mcp/src/"],
+      fallback_paths: ["simplify"],
+    }),
+  )
+  assert.equal(contract.status, "run_contract_recorded")
+
+  const recorded = body(await ledger(fixture, cycle(workItemId, "3", "rejected")))
+  assert.equal(recorded.status, "cycle_recorded", recorded.message ?? "")
+  assert.equal(recorded.cycle.cycle, 3)
 })
