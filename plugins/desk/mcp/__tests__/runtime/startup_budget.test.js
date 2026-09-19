@@ -19,6 +19,7 @@ test("startup admits and registers before background convergence without indexin
       env: {},
       cwd: root,
       homeDir: root,
+      readinessPolicy: { write_authority: "person" },
       runtimeImporter: async () => ({
         ensureIndex() {
           throw new Error("ensureIndex must not run during admission")

@@ -16,6 +16,8 @@ for (const scenario of [
   { name: "workspace/raw contradiction", policy: "workspace", raw: "ari", refused: true },
   { name: "provider/raw contradiction", policy: "person", raw: "ari", provider: { mode: "person", person: "bob" }, refused: true },
   { name: "provider workspace/raw contradiction", policy: "workspace", raw: "ari", provider: { mode: "workspace" }, refused: true },
+  { name: "provider workspace/person policy mismatch", policy: "person", provider: { mode: "workspace" }, refused: true },
+  { name: "provider person/workspace policy mismatch", policy: "workspace", provider: { mode: "person", person: "ari" }, refused: true },
 ]) {
   test(`common startup dispatches only admitted authority: ${scenario.name}`, async (t) => {
     const root = mkdtempSync(path.join(tmpdir(), "desk-startup-authority-"))
@@ -85,3 +87,38 @@ test("common startup rejects contradictory authority even from a runtime-provide
   assert.equal(started, false)
   assert.deepEqual(readdirSync(root), [])
 })
+
+for (const scenario of [
+  { policy: "person", authority: { mode: "workspace" }, refused: true },
+  { policy: "workspace", authority: { mode: "person", person: "ari" }, refused: true },
+  { policy: "person", authority: { mode: "person", person: "ari" }, expected: "ari" },
+  { policy: "workspace", authority: { mode: "workspace" }, expected: null },
+]) {
+  test(`prebuilt runtime admission ${scenario.authority.mode} under ${scenario.policy} policy`, async (t) => {
+    const root = mkdtempSync(path.join(tmpdir(), "desk-runtime-authority-"))
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const events = []
+    const starting = main({
+      argv: ["--root", root], env: {},
+      readinessPolicy: { write_authority: scenario.policy, semantic: "required" },
+      runtimeImporter: async () => ({
+        admitControlPlane: async () => ({
+          state: "CONTROL_READY", authority: scenario.authority,
+          controller: {
+            async beginConvergence() { events.push("converge") },
+            async barrier() { return { capability: "semantic", current: true } },
+          },
+        }),
+        async startServer({ person }) { events.push(["start", person]) },
+      }),
+    })
+    if (scenario.refused) {
+      await assert.rejects(starting, (error) => error.code === "authority_invalid" && error.status === "terminal")
+      assert.deepEqual(events, [], "neither convergence nor server exposure is allowed")
+      assert.deepEqual(readdirSync(root), [])
+    } else {
+      await starting
+      assert.deepEqual(events, ["converge", ["start", scenario.expected]])
+    }
+  })
+}

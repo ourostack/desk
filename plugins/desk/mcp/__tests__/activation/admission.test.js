@@ -115,3 +115,42 @@ test("admission preserves a provider-derived person without raw input", async ()
   })
   assert.deepEqual(admission.authority, { mode: "person", person: "ari" })
 })
+
+for (const source of ["provider", "verifier"]) {
+  for (const [policy, authority] of [
+    ["person", { mode: "workspace" }],
+    ["workspace", { mode: "person", person: "ari" }],
+  ]) {
+    test(`${source} cannot override normalized ${policy} write authority before connecting`, async () => {
+      let connected = false
+      await assert.rejects(admitControlPlane({
+        deskRoot: "/desk",
+        policy: normalizeReadinessPolicy({ write_authority: policy, authority_provider: "registry" }),
+        ...(source === "provider"
+          ? { authorityProvider: async () => authority }
+          : { verifyAuthority: async () => authority }),
+        connectController: async () => { connected = true; return { accepted: true } },
+      }), (error) => {
+        assert.equal(error.code, "authority_invalid")
+        assert.equal(error.status, "terminal")
+        assert.equal(error.expected.write_authority, policy)
+        assert.equal(error.observed.authority.mode, authority.mode)
+        return true
+      })
+      assert.equal(connected, false)
+    })
+  }
+}
+
+for (const authority of [{ mode: "workspace" }, { mode: "person", person: "ari" }]) {
+  test(`matching provider ${authority.mode} policy is admitted`, async () => {
+    const result = await admitControlPlane({
+      deskRoot: "/desk",
+      policy: normalizeReadinessPolicy({ write_authority: authority.mode, authority_provider: "registry" }),
+      authorityProvider: async () => authority,
+      connectController: async () => ({ accepted: true }),
+    })
+    assert.equal(result.state, "CONTROL_READY")
+    assert.deepEqual(result.authority, authority)
+  })
+}

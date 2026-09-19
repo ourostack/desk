@@ -1,5 +1,6 @@
 import { ActivationFailure } from "./failures.js"
 import { validateWriteSegment } from "../util/paths.js"
+import { normalizeReadinessPolicy } from "./readiness-policy.js"
 
 export async function admitControlPlane({
   deskRoot,
@@ -12,6 +13,7 @@ export async function admitControlPlane({
   verifyAuthority = defaultVerifyAuthority,
   connectController = controllerConnector,
 } = {}) {
+  policy = normalizeReadinessPolicy(policy)
   if (typeof connectController !== "function") {
     throw new ActivationFailure({
       phase: "VERIFYING",
@@ -27,7 +29,7 @@ export async function admitControlPlane({
     policy,
     authorityProvider,
   })
-  resolveAdmittedPerson({ authority, person })
+  validateAdmissionAuthority({ authority, person, policy })
   const controller = await connectController({ deskRoot, policy })
   if (!controller?.accepted) {
     throw new ActivationFailure({
@@ -45,6 +47,20 @@ export async function admitControlPlane({
     controller,
     automatic_actions: [],
   })
+}
+
+export function validateAdmissionAuthority({ authority, person = null, policy } = {}) {
+  const normalizedPolicy = normalizeReadinessPolicy(policy)
+  if (authority?.mode !== normalizedPolicy.write_authority) {
+    throw new ActivationFailure({
+      phase: "VERIFYING",
+      code: "authority_invalid",
+      expected: { write_authority: normalizedPolicy.write_authority },
+      observed: { authority, person },
+      summary: "Admitted Desk write authority does not match the required policy; server admission refused.",
+    })
+  }
+  return resolveAdmittedPerson({ authority, person })
 }
 
 export function resolveAdmittedPerson({ authority, person = null } = {}) {
