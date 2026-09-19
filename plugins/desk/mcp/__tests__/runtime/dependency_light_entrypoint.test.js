@@ -339,11 +339,12 @@ async function importRuntimeServerWithoutConnecting(fixture) {
   })
 }
 
-async function runMcpListToolsSession(fixture, { timeoutMs = 10000 } = {}) {
+async function runMcpListToolsSession(fixture, { timeoutMs = 10000, activationConfigPath } = {}) {
   const child = spawn(process.execPath, [
     path.join(fixture.mcpRoot, "index.js"),
     "--root",
     fixture.deskRoot,
+    ...(activationConfigPath ? ["--activation-config", activationConfigPath] : []),
   ], {
     cwd: fixture.mcpRoot,
     env: fixtureEnv(fixture),
@@ -876,8 +877,14 @@ test("MCP entrypoint restores runtime dependencies offline and serves list-tools
 }, async () => {
   const fixture = makeFixture()
   try {
+    const activationConfigPath = path.join(fixture.root, "offline.activation.json")
+    writeFileSync(activationConfigPath, JSON.stringify({
+      schema_version: 1,
+      desk: { root: fixture.deskRoot },
+      desk_runtime: { semantic: "unsupported" },
+    }))
     const beforeSource = readFileSync(path.join(fixture.mcpRoot, "src", "tool-names.js"), "utf8")
-    const first = await runMcpListToolsSession(fixture)
+    const first = await runMcpListToolsSession(fixture, { activationConfigPath })
     assert.equal(first.initialize.error, undefined, first.stderr || first.stdout)
     assert.equal(first.tools.error, undefined, first.stderr || first.stdout)
     assert.ok(
@@ -897,7 +904,7 @@ test("MCP entrypoint restores runtime dependencies offline and serves list-tools
       ),
       "utf8",
     )
-    const second = await runMcpListToolsSession(fixture)
+    const second = await runMcpListToolsSession(fixture, { activationConfigPath })
     assert.equal(second.tools.error, undefined, second.stderr || second.stdout)
     assertNoBootstrapSideEffects(fixture)
     const secondMirrors = listSourceMirrors(fixture.runtimeCacheDir)
