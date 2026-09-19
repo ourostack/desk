@@ -53,10 +53,8 @@ test("simultaneous clients share one controller-owned convergence and recover af
     assert.equal((await second.status()).state, "RECOVERING")
     assert.deepEqual(await second.beginConvergence(), { indexed: true })
     assert.equal(calls, 2)
-    assert.deepEqual(await first.beginConvergence(), {
-      accepted: true, reused: true, state: "LEXICAL_READY",
-    })
-    assert.equal(calls, 2)
+    assert.deepEqual(await first.beginConvergence(), { indexed: true })
+    assert.equal(calls, 3)
   } finally {
     release.resolve()
     await outcome
@@ -64,6 +62,49 @@ test("simultaneous clients share one controller-owned convergence and recover af
     await first.close()
   }
 })
+
+for (const mode of ["required", "background", "unsupported"]) {
+  test(`${mode} ready controller shares only the in-flight refresh with later admissions`, async (t) => {
+    const entered = deferred()
+    const release = deferred()
+    let calls = 0
+    const options = fixture(t, async () => {
+      calls += 1
+      if (calls === 2) {
+        entered.resolve("refresh")
+        await release.promise
+      }
+      return { semantic: { chunks_total: 1, vectors_indexed: 1, missing_vectors: 0 } }
+    })
+    options.semanticContract = { mode }
+    const first = await connectOrStartController(options)
+    const second = await connectOrStartController(options)
+    let refresh
+    let waiting
+    try {
+      await first.beginConvergence()
+      refresh = first.beginConvergence()
+      assert.equal(await Promise.race([entered.promise, refresh.then(() => "stale")]), "refresh")
+      assert.deepEqual(await second.beginConvergence(), {
+        accepted: true, reused: true, in_progress: true, state: "LEXICAL_CONVERGING",
+      })
+      const capability = mode === "unsupported" ? "lexical" : "semantic"
+      assert.equal((await second.barrier({ capability })).current, false)
+      waiting = second.barrier({ capability, wait: true })
+      assert.equal(calls, 2)
+      release.resolve()
+      await refresh
+      assert.equal((await waiting).current, true)
+      await second.beginConvergence()
+      assert.equal(calls, 3)
+    } finally {
+      release.resolve()
+      await Promise.allSettled([refresh, waiting])
+      await second.close()
+      await first.close()
+    }
+  })
+}
 
 test("exiting initiating client does not cancel controller-owned work observed by a later client", async (t) => {
   const entered = deferred()

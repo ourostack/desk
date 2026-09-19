@@ -81,7 +81,7 @@ test("successful convergence advances the lexical barrier to ready", async () =>
   }
 })
 
-test("a second compatible client does not request backward convergence from lexical ready", async () => {
+test("a second compatible client refreshes convergence from lexical ready", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "desk-controller-root-"))
   const stateHome = mkdtempSync(path.join(tmpdir(), "desk-controller-state-"))
   let first
@@ -102,7 +102,7 @@ test("a second compatible client does not request backward convergence from lexi
     assert.equal((await first.status()).state, "LEXICAL_READY")
 
     second = await connectOrStartController(options)
-    assert.deepEqual(await second.beginConvergence(), { accepted: true, reused: true, state: "LEXICAL_READY" })
+    assert.deepEqual(await second.beginConvergence(), { indexed: true })
     assert.equal((await second.status()).state, "LEXICAL_READY")
   } finally {
     await second?.close?.()

@@ -53,9 +53,6 @@ export async function startReadinessController({
     if (convergence) {
       return { accepted: true, reused: true, in_progress: true, state }
     }
-    if (state === "READY" || (state === "LEXICAL_READY" && !semanticEnabled)) {
-      return { accepted: true, reused: true, state }
-    }
     if (state === "LEXICAL_READY") state = transitionReadiness(state, "RECOVERING")
     state = transitionReadiness(state, "LEXICAL_CONVERGING")
     convergenceError = null

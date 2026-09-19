@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { main } from "../../index.js"
@@ -205,6 +205,72 @@ for (const coverage of [
       assert.equal((await controller.status()).state, complete ? "READY" : "LEXICAL_READY")
     } finally {
       await controller.close()
+    }
+  })
+}
+
+for (const change of ["modify", "add"]) {
+  test(`later required admissions wait for refreshed document coverage: ${change}`, async (t) => {
+    const root = fixture(t)
+    writeFileSync(path.join(root, "task.md"), "# Original\n\nOriginal task content.\n")
+    const entered = deferred()
+    const release = deferred()
+    const barrierEntered = deferred()
+    const controllers = []
+    let endpointCalls = 0
+    let starts = 0
+    t.mock.method(globalThis, "fetch", async (_url, request) => {
+      endpointCalls += 1
+      if (JSON.parse(request.body).prompt.includes("Refreshed")) {
+        entered.resolve("refresh")
+        await release.promise
+      }
+      return new Response(JSON.stringify({ embedding: Array(768).fill(0.1) }))
+    })
+    const start = () => main({
+      argv: ["--root", root], env: {}, readinessPolicy: { semantic: "required" },
+      runtimeImporter: async () => ({
+        async connectOrStartController(options) {
+          const controller = await connectOrStartController({
+            ...options, stateHome: path.join(root, "state"), ephemeral: true,
+          })
+          controllers.push(controller)
+          const barrier = controller.barrier
+          controller.barrier = (params) => {
+            if (controllers.length === 3) barrierEntered.resolve()
+            return barrier(params)
+          }
+          return controller
+        },
+        async startServer() { starts += 1 },
+      }),
+    })
+    let refresh
+    let concurrent
+    try {
+      await start()
+      const initialCalls = endpointCalls
+      assert.ok(initialCalls > 0)
+      const changedDir = change === "modify" ? root : path.join(root, "added")
+      mkdirSync(changedDir, { recursive: true })
+      writeFileSync(path.join(changedDir, "task.md"), "# Refreshed\n\nRefreshed task content.\n")
+      refresh = start()
+      assert.equal(await Promise.race([entered.promise, refresh.then(() => "stale")]), "refresh")
+      concurrent = start()
+      await barrierEntered.promise
+      assert.equal(new Set(controllers.map((controller) => controller.id)).size, 1)
+      assert.equal(starts, 1)
+      assert.equal((await controllers[0].barrier({ capability: "semantic" })).current, false)
+      assert.equal(endpointCalls, initialCalls + 1)
+      release.resolve()
+      await Promise.all([refresh, concurrent])
+      assert.equal(starts, 3)
+      assert.equal(endpointCalls, initialCalls + 1)
+      assert.equal((await controllers[0].barrier({ capability: "semantic" })).current, true)
+    } finally {
+      release.resolve()
+      await Promise.allSettled([refresh, concurrent])
+      for (const controller of controllers.reverse()) await controller.close()
     }
   })
 }
