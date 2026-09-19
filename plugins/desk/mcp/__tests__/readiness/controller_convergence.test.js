@@ -123,9 +123,7 @@ test("exiting initiating client does not cancel controller-owned work observed b
   })
   const ownerClient = await connectOrStartController(options)
   const owner = JSON.parse(readFileSync(path.join(options.stateHome, ownerClient.id, "owner.json")))
-  const endpoint = process.platform === "win32"
-    ? `\\\\.\\pipe\\desk-readiness-${ownerClient.identity.user.username}-${ownerClient.id}`
-    : path.join(options.stateHome, ownerClient.id, "controller.sock")
+  const endpoint = owner.endpoint
   const child = spawn(process.execPath, ["--input-type=module", "-e", `
     import net from "node:net";
     const socket = net.createConnection(${JSON.stringify(endpoint)});
@@ -141,7 +139,10 @@ test("exiting initiating client does not cancel controller-owned work observed b
   })
   let later
   try {
-    await entered.promise
+    await Promise.race([
+      entered.promise,
+      closed.then((code) => { throw new Error(`initiator exited before convergence: ${code}`) }),
+    ])
     child.stdin.end("exit\n")
     assert.equal(await closed, 0)
     later = await connectOrStartController(options)
