@@ -14,6 +14,10 @@ import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
+import { createHash } from "node:crypto"
+import { configureRuntimeArtifacts } from "../../src/server-helpers.js"
+import { desk_status } from "../../src/tools/status.js"
+import { callTool } from "../../src/server.js"
 
 function deferred() {
   let resolve
@@ -21,9 +25,9 @@ function deferred() {
   return { promise, resolve }
 }
 
-async function fixture(t, { hold = null, certain = true } = {}) {
+async function fixture(t, { hold = null, certain = true, pluginRoot, documentPath = "track/work/task.md" } = {}) {
   const deskRoot = await mkTempDeskRoot()
-  await writeFile(deskRoot, "track/work/task.md", "canonical quartz")
+  await writeFile(deskRoot, documentPath, "canonical quartz")
   let runs = 0
   const options = {
     root: deskRoot, stateHome: path.join(deskRoot, ".state", "controller"), ephemeral: true,
@@ -31,7 +35,7 @@ async function fixture(t, { hold = null, certain = true } = {}) {
     handlers: { async beginConvergence({ eventCursor }) {
       runs++
       if (hold) await hold.promise
-      return { summary: await rebuildIndex(deskRoot, { skipEmbed: true, eventCursor }) }
+      return { summary: await rebuildIndex(deskRoot, { skipEmbed: true, eventCursor, tombstones: { pluginRoot } }) }
     } },
   }
   const controller = await connectOrStartController(options)
@@ -202,6 +206,99 @@ test("snapshot without a controller and generation is not_checked, not an observ
   assert.equal(snapshot.state, "not_checked")
   assert.equal(snapshot.diagnostic, undefined)
   assert.equal(snapshot.lexical.pending_changes, null)
+})
+
+async function policyFixture(t) {
+  const pluginRoot = await mkTempDeskRoot()
+  configureRuntimeArtifacts({ pluginRoot })
+  t.after(() => configureRuntimeArtifacts())
+  const f = await fixture(t, { pluginRoot, documentPath: "task.md" })
+  await f.controller.beginConvergence()
+  const request = { deskRoot: f.deskRoot, query: "quartz" }
+  assert.equal((await f.router.lexical(request)).results[0].snippet, "canonical quartz")
+  assert.deepEqual(f.used, ["indexed"])
+  const status = () => desk_status({
+    deskRoot: f.deskRoot, queryRouter: f.router, statusContext: { admission: { controller: f.controller } },
+  })
+  assert.equal((await status()).lexical.serving_path, "indexed")
+  const ledgerPath = "artifacts/tombstones/tombstones.jsonl"
+  const redact = () => writeFile(pluginRoot, ledgerPath, JSON.stringify({
+    schema_version: 1, document_path: "task.md",
+    document_hash: `sha256:${createHash("sha256").update("canonical quartz").digest("hex")}`,
+    reason: "redacted", redacted_at: "2026-09-19T00:00:00Z",
+    effective_from: "2026-09-19T00:00:00Z", artifact_rotation_id: "F1", actor: "fixture",
+  }) + "\n")
+  return { ...f, pluginRoot, ledgerPath, request, status, redact }
+}
+
+test("F1 external tombstone policy change invalidates indexed serving and observational status", async (t) => {
+  const f = await policyFixture(t)
+  await f.redact()
+  assert.equal((await f.controller.barrier({ capability: "lexical" })).current, true)
+  assert.equal((await f.status()).lexical.serving_path, "direct", "policy lives outside the watched Desk root")
+  const result = await f.router.lexical(f.request)
+  assert.deepEqual(result.results, [], "the now-redacted indexed content must never be returned")
+  assert.equal(result.readiness_diagnostic.reason, "generation_identity_mismatch")
+  assert.deepEqual(f.used, ["indexed", "direct"])
+  assert.equal(f.runs(), 1, "observation and fallback cannot mutate the index")
+})
+
+test("F1 invalid current tombstone policy blocks queries and status instead of returning cached content", async (t) => {
+  const f = await policyFixture(t)
+  await writeFile(f.pluginRoot, f.ledgerPath, "{broken")
+  const status = await f.status()
+  assert.equal(status.lexical.serving_path, "blocked")
+  assert.equal(status.lexical.certain, false)
+  await assert.rejects(f.router.lexical(f.request), { code: "artifact_tombstone_ledger_invalid" })
+  assert.deepEqual(f.used, ["indexed"])
+  const response = await callTool({
+    deskRoot: f.deskRoot, name: "desk_search", input: { query: "quartz" },
+    statusContext: { admission: { controller: f.controller } },
+  })
+  assert.equal(response.isError, true)
+  assert.doesNotMatch(response.content[0].text, /canonical quartz/)
+})
+
+test("F1 indexed proof checks every recorded generation identity, not only cursors", async (t) => {
+  const f = await fixture(t)
+  await f.controller.beginConvergence()
+  const db = new Database(path.join(f.deskRoot, ".state", "desk-index.sqlite"))
+  t.after(() => db.close())
+  const original = db.prepare("SELECT * FROM lexical_generations WHERE id = 1").get()
+  for (const [column, value] of [
+    ["schema_version", 2], ["chunker_id", "other-chunker"], ["normalization_id", "other-normalization"],
+    ["embedding_spec", JSON.stringify({ id: "other-spec" })],
+    ["policy_identity", "other-policy"], ["tombstone_identity", "sha256:obsolete"],
+  ]) {
+    await t.test(column, async () => {
+      db.prepare(`UPDATE lexical_generations SET ${column} = ? WHERE id = 1`).run(value)
+      try {
+        f.used.length = 0
+        const result = await f.router.lexical({ deskRoot: f.deskRoot, query: "quartz" })
+        assert.equal(result.results[0].snippet, "canonical quartz")
+        assert.deepEqual(f.used, ["direct"])
+        assert.equal(result.readiness_diagnostic.reason, "generation_identity_mismatch")
+      } finally {
+        db.prepare(`UPDATE lexical_generations SET ${column} = ? WHERE id = 1`).run(original[column])
+      }
+    })
+  }
+})
+
+test("F1 a policy change while indexed evaluation awaits suppresses the old indexed response", async (t) => {
+  const f = await policyFixture(t)
+  const router = createQueryRouter({
+    controller: f.controller, directBackend: directLexicalSearch,
+    indexedBackend: async (request) => {
+      const result = await indexedSearch({
+        deskRoot: f.deskRoot, db: request.db, input: f.request, opts: { lexicalOnly: true },
+      })
+      await f.redact()
+      return result
+    },
+  })
+  assert.deepEqual((await router.lexical(f.request)).results, [])
+  assert.equal((await router.snapshot({ deskRoot: f.deskRoot })).lexical.serving_path, "direct")
 })
 
 // No runtimeImporter, controller, tool or transport injection: exercise the shipped

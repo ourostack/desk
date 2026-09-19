@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs"
 import Database from "better-sqlite3"
 import { indexDbPath } from "../db/init.js"
-import { directLexicalSearch } from "./direct-lexical.js"
+import { directLexicalSearch, loadCurrentTombstoneLedger } from "./direct-lexical.js"
+import { expectedLexicalGenerationIdentity, matchesLexicalGenerationIdentity } from "./generations.js"
 import { indexedSearch, indexedTimeline } from "../tools/search.js"
 import { indexedThread } from "../tools/thread.js"
 
@@ -33,13 +34,15 @@ function openSnapshot(deskRoot) {
   try {
     db.exec("BEGIN")
     const generation = db.prepare(`
-      SELECT g.id, g.event_cursor FROM lexical_generations g
+      SELECT g.id, g.event_cursor, g.schema_version, g.chunker_id, g.normalization_id,
+             g.embedding_spec, g.tombstone_identity, g.policy_identity
+      FROM lexical_generations g
       JOIN meta m ON m.key = 'active_lexical_generation' AND m.value = CAST(g.id AS TEXT)
       JOIN readiness_operations o ON o.id = g.operation_id AND o.status = 'committed'
     `).get()
     const covered = db.prepare("SELECT value FROM meta WHERE key = 'covered_event_cursor'").get()
     const cursor = generation ? JSON.parse(generation.event_cursor) : null
-    return { db, generation: generation?.id ?? null, cursor,
+    return { db, generation: generation?.id ?? null, identities: generation, cursor,
       covered: covered ? JSON.parse(covered.value) : null }
   } catch (error) {
     db.close()
@@ -69,9 +72,20 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
   void semanticDeadlineMs
   let lastProof = null
 
+  async function currentIdentity(request) {
+    try {
+      const ledger = await cancellable(() => loadCurrentTombstoneLedger(request), request.signal)
+      return expectedLexicalGenerationIdentity({ ledger, policyIdentity: controller?.generationPolicyIdentity })
+    } catch (error) {
+      lastProof = null
+      throw error
+    }
+  }
+
   async function lexical(request = {}) {
     const { signal } = request
     signal?.throwIfAborted()
+    const identity = await currentIdentity(request)
     let snapshot = null
     let proven = false
     let diagnostic = { reason: "controller_unavailable", message: "No readiness controller is available." }
@@ -90,9 +104,10 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
             sameCursor(fence.cursor, observed.freshness.cursor)
           if (currentAndCertain) snapshot = openSnapshot(request.deskRoot)
           proven = currentAndCertain && snapshot?.generation != null && sameCursor(snapshot.cursor, fence.cursor) &&
-            sameCursor(snapshot.covered, fence.cursor)
+            sameCursor(snapshot.covered, fence.cursor) && matchesLexicalGenerationIdentity(snapshot.identities, identity)
           diagnostic = {
-            reason: fence.reason ?? observed.freshness?.reason ?? "generation_unproven",
+            reason: snapshot && !matchesLexicalGenerationIdentity(snapshot.identities, identity)
+              ? "generation_identity_mismatch" : fence.reason ?? observed.freshness?.reason ?? "generation_unproven",
             message: "A current, event-certain lexical generation is not proven.",
           }
           if (proven) lastProof = { generation: snapshot.generation, cursor: snapshot.cursor, owner: observed.owner?.token }
@@ -105,8 +120,10 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
     if (proven) {
       try {
         signal?.throwIfAborted()
-        return await cancellable(() => indexedBackend({ ...request, db: snapshot.db, generation: snapshot.generation }), signal)
-      } finally { snapshot.db.close() }
+        const result = await cancellable(() => indexedBackend({ ...request, db: snapshot.db, generation: snapshot.generation }), signal)
+        if (matchesLexicalGenerationIdentity(snapshot.identities, await currentIdentity(request))) return result
+        diagnostic = { reason: "generation_identity_mismatch", message: "Lexical policy changed during indexed evaluation." }
+      } finally { snapshot.db.close(); snapshot = null }
     }
     snapshot?.db.close()
     lastProof = null
@@ -122,12 +139,14 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
     let observed
     let index
     try {
+      const identity = await currentIdentity(request)
       observed = controller ? await cancellable(() => controller.status(), signal) : { state: "not_checked" }
       index = openSnapshot(request.deskRoot)
       const currentCursor = observed.freshness?.cursor ?? null
       const certain = observed.freshness?.certain === true &&
         lastProof?.owner === observed.owner?.token &&
         lastProof?.generation === index?.generation &&
+        matchesLexicalGenerationIdentity(index?.identities, identity) &&
         sameCursor(lastProof?.cursor, currentCursor) &&
         sameCursor(index?.cursor, currentCursor) && sameCursor(index?.covered, currentCursor)
       const pending = typeof currentCursor?.journal_id === "string" && currentCursor.journal_id === index?.cursor?.journal_id
@@ -149,7 +168,8 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
       return {
         state: "unavailable",
         lexical: { generation: null, event_cursor: null, pending_changes: null, certain: false,
-          current_automatic_action: null, serving_path: directBackend ? "direct" : "blocked" },
+          current_automatic_action: null,
+          serving_path: error.code === "artifact_tombstone_ledger_invalid" ? "blocked" : directBackend ? "direct" : "blocked" },
         diagnostic: { reason: error.code ?? "readiness_unavailable", message: String(error.message ?? error) },
       }
     } finally { index?.db.close() }

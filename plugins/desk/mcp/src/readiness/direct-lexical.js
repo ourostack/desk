@@ -5,22 +5,28 @@ import { loadTombstoneLedger, tombstoneDecisionForDoc } from "../artifacts/tombs
 import { indexedSearch, indexedTimeline } from "../tools/search.js"
 import { resolveEnsureIndexOptions } from "../server-helpers.js"
 
-/**
- * Read canonical files afresh, using the same FTS5 tokenizer/BM25 and query
- * serialization as indexed search. This disposable corpus never opens the
- * persistent index, loads vectors, embeds, or publishes a generation.
- */
-export async function directLexicalSearch({ deskRoot, query, filters, scope, limit, now, signal, kind, from, to }) {
+export async function loadCurrentTombstoneLedger({ deskRoot, signal } = {}) {
   signal?.throwIfAborted()
-  const documents = await discover(deskRoot, { signal })
   const { tombstones } = resolveEnsureIndexOptions({ snapshots: false, vectorPacks: false }, { deskRoot })
   const ledger = await loadTombstoneLedger(tombstones)
+  signal?.throwIfAborted()
   if (!ledger.valid) {
     const error = new Error("artifact tombstone ledger is invalid")
     error.code = "artifact_tombstone_ledger_invalid"
     error.diagnostics = ledger.diagnostics
     throw error
   }
+  return ledger
+}
+
+/**
+ * Read canonical files afresh, using the same FTS5 tokenizer/BM25 and query
+ * serialization as indexed search. This disposable corpus never opens the
+ * persistent index, loads vectors, embeds, or publishes a generation.
+ */
+export async function directLexicalSearch({ deskRoot, query, filters, scope, limit, now, signal, kind, from, to }) {
+  const ledger = await loadCurrentTombstoneLedger({ deskRoot, signal })
+  const documents = await discover(deskRoot, { signal })
   const db = new Database(":memory:")
   try {
     db.exec(`

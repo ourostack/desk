@@ -1,6 +1,23 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { getMeta, setMeta } from "../db/init.js"
 import { stableStringify } from "./identity.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
+
+// Mirrors the identities committed by the canonical indexer, not the event cursor.
+export function expectedLexicalGenerationIdentity({ ledger, policyIdentity = "desk-lexical-required-v1" }) {
+  return {
+    schema_version: 1,
+    chunker_id: ACTIVE_EMBEDDING_SPEC.chunker_id,
+    normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
+    embedding_spec: stableStringify(ACTIVE_EMBEDDING_SPEC),
+    tombstone_identity: `sha256:${createHash("sha256").update(stableStringify(ledger.rows)).digest("hex")}`,
+    policy_identity: policyIdentity,
+  }
+}
+
+export function matchesLexicalGenerationIdentity(stored, expected) {
+  return Object.entries(expected).every(([key, value]) => stored?.[key] === value)
+}
 
 // The callback is synchronous: lexical rows and their coverage are one SQLite commit.
 // Network work (including embedding) belongs after this function returns.

@@ -140,7 +140,9 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
     },
   }
   const { connectOrStartController: connectReadinessController } = await loadReadinessController()
-  return connectReadinessController(options)
+  const controller = await connectReadinessController(options)
+  controller.generationPolicyIdentity = stableStringify(policy)
+  return controller
 }
 
 export async function beginBackgroundConvergence(admission) {
