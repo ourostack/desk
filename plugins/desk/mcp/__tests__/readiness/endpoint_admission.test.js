@@ -55,16 +55,19 @@ async function client(t, root, endpoint, variable = "DESK_EMBED_ENDPOINT") {
 }
 
 for (const variable of ["DESK_EMBED_ENDPOINT", "DESK_OLLAMA_ENDPOINT", "OLLAMA_HOST"]) {
-  test(`two processes with distinct ${variable} endpoints own distinct controllers`, { timeout: 20000 }, async (t) => {
+  test(`two processes with distinct ${variable} endpoints cannot own two lexical controllers`, { timeout: 20000 }, async (t) => {
     const root = fixture(t)
     const firstService = await service(t, true)
     const secondService = await service(t, true)
     const first = await client(t, root, firstService.endpoint, variable)
     const second = await client(t, root, secondService.endpoint, variable)
     assert.equal(first.started, true)
-    assert.equal(second.started, true)
-    assert.notEqual(first.id, second.id)
-    assert.ok(secondService.requests.some(({ prompt }) => prompt === "desk semantic health probe"))
+    assert.equal(second.started, false)
+    assert.equal(second.code, "controller_semantic_mismatch")
+    assert.equal(second.id, undefined, "the mismatched process must not receive a controller client")
+    assert.deepEqual(second.diagnostic.expected, first.contract)
+    assert.equal(second.diagnostic.observed.endpoints[0], secondService.endpoint)
+    assert.equal(secondService.requests.length, 0)
   })
 }
 
@@ -77,9 +80,9 @@ test("required second process cannot borrow the first endpoint's successful prob
   const second = await client(t, root, unavailable.endpoint)
   assert.equal(first.started, true)
   assert.equal(second.started, false)
-  assert.equal(second.code, "semantic_unavailable")
-  assert.notEqual(first.id, second.id)
-  assert.ok(unavailable.requests.some(({ prompt }) => prompt === "desk semantic health probe"))
+  assert.equal(second.code, "controller_semantic_mismatch")
+  assert.equal(second.id, undefined)
+  assert.equal(unavailable.requests.length, 0, "mismatch refuses before another owner's endpoint work")
   assert.equal(available.requests.length, firstRequests, "second admission must not invoke first owner's probe")
 })
 

@@ -16,7 +16,6 @@ export function controllerIdentity({
   const contract = stableStringify({
     protocol_version: protocolVersion,
     lexical_contract: lexicalContract,
-    semantic_contract: semanticContract,
   })
   const id = digest(stableStringify({
     root: canonicalRoot,
@@ -39,6 +38,22 @@ export function controllerIdentity({
       username: user.username,
     }),
   })
+}
+
+export function lexicalControllerIdentity(identity) {
+  const { semantic_contract, ...ownership } = identity
+  return ownership
+}
+
+export function semanticContractDiagnostic(expected, observed) {
+  if (stableStringify(expected) === stableStringify(observed)) return null
+  return {
+    code: "controller_semantic_mismatch",
+    reason: "semantic_contract_mismatch",
+    message: "The root-scoped lexical controller has a different semantic contract. Semantic partitioning is not supported in this alpha.",
+    expected,
+    observed,
+  }
 }
 
 export function semanticPartitionIdentity(embeddingSpec) {
@@ -73,7 +88,7 @@ export function deriveControllerEndpoint({
   if (!Number.isSafeInteger(uid) || uid < 0 || identity.user.uid !== uid) {
     throw new Error("readiness controller identity has unsafe OS-user ownership")
   }
-  const basename = `${digest(stableStringify(identity)).slice(0, 32)}.sock`
+  const basename = `${digest(stableStringify(lexicalControllerIdentity(identity))).slice(0, 32)}.sock`
   const runtimeDir = env.XDG_RUNTIME_DIR
   if (typeof runtimeDir === "string" && path.posix.isAbsolute(runtimeDir)) {
     try {

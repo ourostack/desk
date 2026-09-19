@@ -122,7 +122,7 @@ for (const entry of [
   })
 }
 
-test("endpoint digest distinguishes full identity and OS users, not a truncated id prefix", () => {
+test("F2 endpoint digest distinguishes lexical identity and OS users without semantic partitioning", () => {
   const derive = (value) => endpoints.deriveControllerEndpoint({
     identity: value, platform: "linux", uid: value.user.uid, env: {},
     fs: filesystem({
@@ -134,9 +134,9 @@ test("endpoint digest distinguishes full identity and OS users, not a truncated 
     identity, { ...identity, id: "a".repeat(63) + "b" },
     { ...identity, root: identity.root + "different" },
     { ...identity, user: { uid: 502, username: "alice" } },
-    { ...identity, semantic_contract: { mode: "required" } },
   ]
   assert.equal(new Set(cases.map(derive)).size, cases.length)
+  assert.equal(derive(identity), derive({ ...identity, semantic_contract: { mode: "required", endpoints: ["different"] } }))
   assert.match(derive(cases[3]), /^\/tmp\/desk-readiness-502\//u)
   assert.throws(() => endpoints.deriveControllerEndpoint({
     identity, platform: "linux", uid: 502, env: {}, fs: filesystem(),

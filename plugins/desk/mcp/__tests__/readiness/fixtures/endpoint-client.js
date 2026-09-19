@@ -26,7 +26,7 @@ try {
   })
   process.send({ started, id: controller.id, contract: controller.identity.semantic_contract, requests })
 } catch (error) {
-  process.send({ started, id: controller?.id, code: error.code, message: error.message, requests })
+  process.send({ started, id: controller?.id, code: error.code, message: error.message, diagnostic: error.diagnostic, requests })
 }
 await new Promise((resolve) => process.once("message", resolve))
 await controller?.close()

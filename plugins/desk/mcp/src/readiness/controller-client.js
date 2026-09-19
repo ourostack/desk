@@ -4,7 +4,10 @@ import * as net from "node:net"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { controllerIdentity, deriveControllerEndpoint, stableStringify, validatePrivateDirectory } from "./identity.js"
+import {
+  controllerIdentity, deriveControllerEndpoint, lexicalControllerIdentity,
+  semanticContractDiagnostic, stableStringify, validatePrivateDirectory,
+} from "./identity.js"
 import { requestMessage } from "./protocol.js"
 import { startReadinessController } from "./controller-server.js"
 
@@ -50,9 +53,6 @@ export async function connectOrStartController({
     }
   }
   local = localControllers.get(identity.id)
-  if (local) {
-    local.clients += 1
-  }
   const token = readControllerToken({ identity, stateDir })
   const handshake = await request({
     endpoint,
@@ -60,9 +60,8 @@ export async function connectOrStartController({
     method: "handshake",
     params: { token },
   })
-  if (!handshake.accepted) {
-    throw new Error("readiness controller protocol handshake rejected")
-  }
+  requireCompatibleHandshake(handshake, identity)
+  if (local) local.clients += 1
   return createClient({ endpoint, ephemeral, identity, local, token })
 }
 
@@ -75,7 +74,8 @@ async function startOrReuseController({
   stateDir,
 }) {
   const existing = await tryHandshake({ endpoint, identity, stateDir })
-  if (existing?.accepted) {
+  if (existing) {
+    requireCompatibleHandshake(existing, identity)
     return
   }
   if (process.platform !== "win32" && endpointIsReclaimable({ endpoint, identity, stateDir })) {
@@ -150,7 +150,8 @@ async function tryHandshake({ endpoint, identity, stateDir }) {
       params: { token },
       timeoutMs: 100,
     })
-  } catch {
+  } catch (error) {
+    if (error.code === "controller_semantic_mismatch") throw error
     return null
   }
 }
@@ -160,8 +161,12 @@ async function waitForHandshake({ endpoint, identity, stateDir }) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try {
       const result = await tryHandshake({ endpoint, identity, stateDir })
-      if (result?.accepted) return result
+      if (result) {
+        requireCompatibleHandshake(result, identity)
+        return result
+      }
     } catch (error) {
+      if (error.code === "controller_semantic_mismatch") throw error
       lastError = error
     }
     await new Promise((resolve) => setTimeout(resolve, 25))
@@ -169,10 +174,23 @@ async function waitForHandshake({ endpoint, identity, stateDir }) {
   throw lastError ?? new Error("readiness controller election did not converge")
 }
 
+function requireCompatibleHandshake(handshake, identity) {
+  const diagnostic = handshake.diagnostic ??
+    semanticContractDiagnostic(handshake.identity?.semantic_contract, identity.semantic_contract)
+  if (diagnostic) {
+    throw Object.assign(new Error(diagnostic.message), { code: diagnostic.code, diagnostic })
+  }
+  if (handshake.accepted !== true ||
+      stableStringify(lexicalControllerIdentity(handshake.identity)) !== stableStringify(lexicalControllerIdentity(identity))) {
+    throw new Error("readiness controller protocol handshake rejected")
+  }
+}
+
 function readControllerToken({ identity, stateDir }) {
   if (process.platform !== "win32") validatePrivateDirectory(stateDir)
   const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
-  if (stableStringify(record.identity) !== stableStringify(identity) || typeof record.owner?.token !== "string") {
+  if (stableStringify(lexicalControllerIdentity(record.identity)) !== stableStringify(lexicalControllerIdentity(identity)) ||
+      typeof record.owner?.token !== "string") {
     throw new Error("readiness controller owner record is invalid")
   }
   return record.owner.token
@@ -185,7 +203,7 @@ function endpointIsReclaimable({ endpoint, identity, stateDir }) {
     const stat = lstatSync(endpoint)
     if (!stat.isSocket() || stat.uid !== process.getuid()) return false
     const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
-    if (stableStringify(record.identity) !== stableStringify(identity)
+    if (stableStringify(lexicalControllerIdentity(record.identity)) !== stableStringify(lexicalControllerIdentity(identity))
       || record.endpoint !== endpoint || record.socket?.dev !== stat.dev || record.socket?.ino !== stat.ino
       || !Number.isInteger(record.owner?.pid) || record.owner.pid <= 0) {
       return false
@@ -228,6 +246,7 @@ function request({
         params: {
           ...params,
           identity: identity.id,
+          semantic_contract: identity.semantic_contract,
         },
       }))}\n`)
     })
@@ -242,6 +261,7 @@ function request({
         const error = new Error(response.error.message)
         if (typeof response.error.code === "string") error.code = response.error.code
         if (typeof response.error.reason === "string") error.reason = response.error.reason
+        if (response.error.diagnostic) error.diagnostic = response.error.diagnostic
         reject(error)
       } else {
         resolve(response.result)

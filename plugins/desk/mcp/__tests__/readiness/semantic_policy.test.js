@@ -22,16 +22,16 @@ function fixture(t) {
   return root
 }
 
-test("semantic mode and complete specification participate in controller compatibility", (t) => {
+test("F2 semantic contracts remain explicit but cannot partition lexical controller identity", (t) => {
   const root = fixture(t)
   const id = (mode, spec = { model: "a", dimension: 768 }) => controllerIdentity({
     root, protocolVersion: 1, lexicalContract: { schema: 1 },
     semanticContract: { mode, embedding_spec: spec },
   }).id
-  assert.notEqual(id("unsupported"), id("background"))
-  assert.notEqual(id("required"), id("background"))
-  assert.notEqual(id("background"), id("background", { model: "b", dimension: 768 }))
-  assert.notEqual(id("background"), id("background", { model: "a", dimension: 384 }))
+  assert.equal(id("unsupported"), id("background"))
+  assert.equal(id("required"), id("background"))
+  assert.equal(id("background"), id("background", { model: "b", dimension: 768 }))
+  assert.equal(id("background"), id("background", { model: "a", dimension: 384 }))
   assert.equal(id("background"), id("background", { dimension: 768, model: "a" }))
 })
 

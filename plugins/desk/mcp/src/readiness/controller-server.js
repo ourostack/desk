@@ -5,7 +5,7 @@ import * as path from "node:path"
 
 import { responseMessage } from "./protocol.js"
 import { transitionReadiness } from "./state.js"
-import { validateControllerEndpoint, validatePrivateDirectory } from "./identity.js"
+import { semanticContractDiagnostic, validateControllerEndpoint, validatePrivateDirectory } from "./identity.js"
 import { JournalIntegrityError, openChangeJournal } from "./journal.js"
 import { fenceEvents } from "./watcher.js"
 
@@ -224,11 +224,16 @@ export async function startReadinessController({
       if (request.params?.token !== owner.token) {
         throw new Error("readiness controller authentication failed")
       }
+      const diagnostic = semanticContractDiagnostic(identity.semantic_contract, request.params.semantic_contract ?? null)
+      if (diagnostic && request.method !== "handshake") {
+        throw Object.assign(new Error(diagnostic.message), { code: diagnostic.code, diagnostic })
+      }
       const builtin = {
         handshake: () => ({
-          accepted: request.params?.identity === identity.id,
+          accepted: request.params?.identity === identity.id && diagnostic === null,
           identity,
           owner,
+          ...(diagnostic ? { diagnostic } : {}),
         }),
         status: () => ({
           state, identity, owner, convergence: convergenceStatus(),
@@ -248,7 +253,7 @@ export async function startReadinessController({
     } catch (error) {
       if (!socket.destroyed) socket.end(`${JSON.stringify(responseMessage({
         id: request?.id ?? null,
-        error: { message: error?.message ?? String(error), code: error?.code, reason: error?.reason },
+        error: { message: error?.message ?? String(error), code: error?.code, reason: error?.reason, diagnostic: error?.diagnostic },
       }))}\n`)
     }
   }

@@ -180,9 +180,9 @@ test("required admission cannot reuse a legacy coverage-only controller", async 
   t.mock.method(globalThis, "fetch", async () => { throw new Error("offline") })
   const ordinary = runtime(root)
   try {
-    await assert.rejects(ordinary.start("required"), (error) => error.code === "semantic_unavailable")
+    await assert.rejects(ordinary.start("required"), (error) => error.code === "controller_semantic_mismatch")
     assert.equal(legacyCalls, 0)
-    assert.notEqual(ordinary.controllers[0].id, legacy.id)
+    assert.equal(ordinary.controllers.length, 0, "a legacy semantic contract cannot create a second lexical owner")
     assert.equal(ordinary.starts.length, 0)
   } finally {
     await ordinary.close()
