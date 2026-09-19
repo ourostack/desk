@@ -16,6 +16,7 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
+import { performance } from "node:perf_hooks"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 const repoRoot = path.resolve(
@@ -275,6 +276,9 @@ function fixtureEnv(fixture) {
   return {
     ...process.env,
     DESK_RUNTIME_CACHE_DIR: fixture.runtimeCacheDir,
+    DESK_EMBED_ENDPOINT: "",
+    DESK_OLLAMA_ENDPOINT: "",
+    OLLAMA_HOST: "",
     HOME: path.join(fixture.root, "home"),
     XDG_CACHE_HOME: path.join(fixture.root, "xdg-cache"),
     NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
@@ -410,7 +414,10 @@ async function runMcpListToolsSession(fixture, { timeoutMs = 10000 } = {}) {
   }
 }
 
-async function runMcpStatusSession(fixture, { timeoutMs = 10000 } = {}) {
+async function runMcpStatusSession(fixture, {
+  timeoutMs = 10000,
+  waitForConvergence = false,
+} = {}) {
   const child = spawn(process.execPath, [
     path.join(fixture.mcpRoot, "index.js"),
     "--root",
@@ -424,7 +431,9 @@ async function runMcpStatusSession(fixture, { timeoutMs = 10000 } = {}) {
   let stdoutBuffer = ""
   let stderr = ""
   const responses = []
+  const observedReadiness = []
   let closed
+  let childError
 
   child.stdout.on("data", (chunk) => {
     const text = chunk.toString("utf8")
@@ -444,6 +453,8 @@ async function runMcpStatusSession(fixture, { timeoutMs = 10000 } = {}) {
   child.stderr.on("data", (chunk) => {
     stderr += chunk.toString("utf8")
   })
+  child.once("error", (error) => { childError = error })
+  child.stdin.on("error", (error) => { childError = error })
   const closePromise = new Promise((resolve) => {
     child.once("close", (code, signal) => {
       closed = { code, signal }
@@ -451,92 +462,125 @@ async function runMcpStatusSession(fixture, { timeoutMs = 10000 } = {}) {
     })
   })
 
-  const waitForResponse = (id) => new Promise((resolve, reject) => {
-    const started = Date.now()
-    const timer = setInterval(() => {
-      const response = responses.find((message) => message.id === id)
-      if (response !== undefined) {
-        clearInterval(timer)
-        resolve(response)
-      } else if (closed !== undefined) {
-        clearInterval(timer)
-        reject(new Error(`process exited before response ${id}: ${JSON.stringify(closed)}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-      } else if (Date.now() - started > timeoutMs) {
-        clearInterval(timer)
-        child.kill("SIGTERM")
-        reject(new Error(`timed out waiting for response ${id}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-      }
-    }, 25)
-  })
+  const sessionError = (message) => new Error(
+    `${message}\nobserved readiness states: ${JSON.stringify(observedReadiness)}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+  )
+  const waitForResponse = async (id, deadline = performance.now() + timeoutMs) => {
+    let timer
+    try {
+      return await new Promise((resolve, reject) => {
+        timer = setInterval(() => {
+          const response = responses.find((message) => message.id === id)
+          if (response !== undefined) {
+            resolve(response)
+          } else if (childError !== undefined) {
+            reject(sessionError(`process error before response ${id}: ${childError.message}`))
+          } else if (closed !== undefined) {
+            reject(sessionError(`process exited before response ${id}: ${JSON.stringify(closed)}`))
+          } else if (performance.now() >= deadline) {
+            reject(sessionError(`timed out waiting for response ${id}`))
+          }
+        }, 25)
+      })
+    } finally {
+      clearInterval(timer)
+    }
+  }
 
-  child.stdin.write(JSON.stringify({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: {
+  let nextRequestId = 1
+  const sendRequest = (message) => {
+    child.stdin.write(`${JSON.stringify(message)}\n`)
+  }
+  const request = (method, params, deadline) => {
+    const id = nextRequestId++
+    sendRequest({
+      jsonrpc: "2.0",
+      id,
+      method,
+      params,
+    })
+    return waitForResponse(id, deadline)
+  }
+  const callTool = (name, args = {}, deadline) => request("tools/call", {
+    name,
+    arguments: args,
+  }, deadline)
+  const observeStatus = (response) => {
+    assert.equal(response.error, undefined, sessionError("desk_status request failed").message)
+    assert.equal(response.result.isError, undefined, sessionError("desk_status tool failed").message)
+    const body = JSON.parse(response.result.content[0].text)
+    observedReadiness.push({
+      id: response.id,
+      local_db_exists: body.local_db?.exists,
+      local_db_state: body.local_db?.state,
+      lexical_available: body.lexical_index?.available,
+      document_vectors_state: body.document_vectors?.state,
+      chunks_total: body.document_vectors?.chunks_total,
+    })
+    return body
+  }
+  const stopChild = async () => {
+    if (closed !== undefined) return
+    const killTimer = setTimeout(() => child.kill("SIGKILL"), 1000)
+    try {
+      child.kill("SIGTERM")
+      await closePromise
+    } finally {
+      clearTimeout(killTimer)
+    }
+  }
+
+  try {
+    const initialize = await request("initialize", {
       protocolVersion: "2025-06-18",
       capabilities: {},
       clientInfo: { name: "unit-10a", version: "1.0.0" },
-    },
-  }) + "\n")
-  const initialize = await waitForResponse(1)
-  child.stdin.write(JSON.stringify({
-    jsonrpc: "2.0",
-    method: "notifications/initialized",
-    params: {},
-  }) + "\n")
-  child.stdin.write(JSON.stringify({
-    jsonrpc: "2.0",
-    id: 2,
-    method: "tools/list",
-    params: {},
-  }) + "\n")
-  const tools = await waitForResponse(2)
-  child.stdin.write(JSON.stringify({
-    jsonrpc: "2.0",
-    id: 3,
-    method: "tools/call",
-    params: {
-      name: "desk_status",
-      arguments: {},
-    },
-  }) + "\n")
-  const status = await waitForResponse(3)
-  child.stdin.write(JSON.stringify({
-    jsonrpc: "2.0",
-    id: 4,
-    method: "tools/call",
-    params: {
-      name: "desk_doctor",
-      arguments: {},
-    },
-  }) + "\n")
-  const doctor = await waitForResponse(4)
-  child.stdin.write(JSON.stringify({
-    jsonrpc: "2.0",
-    id: 5,
-    method: "tools/call",
-    params: {
-      name: "task_create",
-      arguments: {
-        track: "diagnostic-probe",
-        slug: "must-not-write",
-        title: "Must not write",
-      },
-    },
-  }) + "\n")
-  const mutation = await waitForResponse(5)
-  child.kill("SIGTERM")
-  await closePromise
-  return {
-    code: 0,
-    initialize,
-    tools,
-    status,
-    doctor,
-    mutation,
-    stdout,
-    stderr,
+    })
+    sendRequest({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+      params: {},
+    })
+    const tools = await request("tools/list", {})
+    const initialStatus = await callTool("desk_status")
+    observeStatus(initialStatus)
+    let status = initialStatus
+    if (waitForConvergence) {
+      const deadline = performance.now() + timeoutMs
+      let body
+      do {
+        if (performance.now() >= deadline) {
+          throw sessionError("timed out waiting for converged desk_status")
+        }
+        status = await callTool("desk_status", {}, deadline)
+        body = observeStatus(status)
+      } while (
+        body.local_db?.exists !== true
+        || body.local_db.state !== "available"
+        || body.lexical_index?.available !== true
+        || !["missing", "partial", "available"].includes(body.document_vectors?.state)
+        || !(body.document_vectors.chunks_total > 0)
+      )
+    }
+    const doctor = await callTool("desk_doctor")
+    const mutation = await callTool("task_create", {
+      track: "diagnostic-probe",
+      slug: "must-not-write",
+      title: "Must not write",
+    })
+    return {
+      code: 0,
+      initialize,
+      tools,
+      initialStatus,
+      status,
+      doctor,
+      mutation,
+      stdout,
+      stderr,
+    }
+  } finally {
+    await stopChild()
   }
 }
 
@@ -593,10 +637,20 @@ function listSourceMirrors(runtimeCacheDir) {
     .sort()
 }
 
-function assertNoBootstrapSideEffects(fixture) {
+function assertNoBootstrapSideEffects(fixture, expectedBlockedFetchEndpoints = []) {
   assert.equal(existsSync(path.join(fixture.mcpRoot, "node_modules")), false)
   assert.equal(existsSync(fixture.commandLog), false, "runtime bootstrap must not shell out to npm/npx/curl/wget")
-  assert.equal(existsSync(fixture.networkLog), false, "runtime bootstrap must not use fetch or network modules")
+  const attempts = existsSync(fixture.networkLog)
+    ? readFileSync(fixture.networkLog, "utf8").trim().split(/\r?\n/u)
+    : []
+  for (const attempt of attempts) {
+    assert.ok(
+      expectedBlockedFetchEndpoints.some((endpoint) => (
+        attempt === JSON.stringify([endpoint, "[object Object]"])
+      )),
+      `unexpected network attempt: ${attempt}`,
+    )
+  }
 }
 
 function assertRuntimeDependenciesRestoredToCache(fixture) {
@@ -752,7 +806,7 @@ test("MCP entrypoint restores runtime dependencies offline and serves list-tools
   }
 })
 
-test("MCP entrypoint serves coherent desk_status from the source mirror after bounded startup fallback", {
+test("MCP entrypoint serves coherent desk_status from the source mirror after background convergence", {
   skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${hostTarget}`,
 }, async () => {
   const fixture = makeFixture()
@@ -760,19 +814,25 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after bo
     mkdirSync(path.join(fixture.deskRoot, "ops", "status-check"), { recursive: true })
     writeFileSync(
       path.join(fixture.deskRoot, "ops", "status-check", "task.md"),
-      "---\nschema_version: 1\nstatus: in_progress\n---\n\n# Status Check\n\nThis file would be indexed if startup ran repair work.\n",
+      "---\nschema_version: 1\nstatus: in_progress\n---\n\n# Status Check\n\nBackground convergence indexes this file.\n",
       "utf8",
     )
 
-    const result = await runMcpStatusSession(fixture)
+    const result = await runMcpStatusSession(fixture, { waitForConvergence: true })
     assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
     assert.equal(result.tools.error, undefined, result.stderr || result.stdout)
+    assert.equal(result.initialStatus.error, undefined, result.stderr || result.stdout)
     assert.equal(result.status.error, undefined, result.stderr || result.stdout)
     assert.equal(result.doctor.error, undefined, result.stderr || result.stdout)
     assert.ok(
       result.tools.result.tools.some((tool) => tool.name === "desk_status"),
       "list-tools response must expose desk_status from the restored runtime server",
     )
+    assert.equal(result.initialStatus.result.isError, undefined, JSON.stringify(result.initialStatus.result))
+    const initialBody = JSON.parse(result.initialStatus.result.content[0].text)
+    assert.equal(initialBody.status, "ok")
+    assert.equal(initialBody.runtime.loaded_from_source_mirror, true)
+    assert.ok(result.status.id > result.initialStatus.id, "converged status must be a later response")
     assert.equal(result.status.result.isError, undefined, JSON.stringify(result.status.result))
     const body = JSON.parse(result.status.result.content[0].text)
     assert.equal(body.status, "ok")
@@ -780,19 +840,11 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after bo
     assert.equal(body.local_db.exists, true)
     assert.equal(body.local_db.state, "available")
     assert.equal(body.lexical_index.available, true)
-    assert.ok(
-      ["lexical_only", "startup_deferred"].includes(body.startup_fallback.mode),
-      `expected bounded lexical or deferred fallback, got ${body.startup_fallback.mode}`,
-    )
-    if (body.startup_fallback.mode === "lexical_only") {
-      assert.equal(body.document_vectors.state, "missing")
-      assert.ok(body.document_vectors.chunks_total > 0)
-      assert.ok(body.document_vectors.repairable_missing_vectors > 0)
-    } else {
-      assert.equal(body.document_vectors.state, "available")
-      assert.equal(body.document_vectors.chunks_total, 0)
-      assert.equal(body.document_vectors.vectors_indexed, 0)
-    }
+    assert.equal(body.startup_fallback.mode, "not_checked")
+    assert.equal(body.document_vectors.state, "missing")
+    assert.ok(body.document_vectors.chunks_total > 0)
+    assert.ok(body.document_vectors.repairable_missing_vectors > 0)
+    assert.equal(body.document_vectors.vectors_indexed, 0)
     assert.equal(body.startup_fallback.degraded, true)
     assert.equal(body.runtime.loaded_from_source_mirror, true)
     assert.ok(
@@ -802,7 +854,7 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after bo
     assert.equal(
       existsSync(path.join(fixture.deskRoot, ".state", "desk-index.sqlite")),
       true,
-      "bounded session-start fallback should create the lexical local index DB",
+      "background convergence should create the lexical local index DB",
     )
     assert.equal(result.doctor.result.isError, undefined, JSON.stringify(result.doctor.result))
     const doctor = JSON.parse(result.doctor.result.content[0].text)
@@ -815,7 +867,7 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after bo
       JSON.parse(result.mutation.result.content[0].text),
       {
         status: "created",
-        path: "diagnostic-probe/must-not-write/task.md",
+        path: path.join("diagnostic-probe", "must-not-write", "task.md"),
       },
       "healthy runtime mode must execute valid mutations rather than returning diagnostic errors",
     )
@@ -823,7 +875,11 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after bo
       existsSync(path.join(fixture.deskRoot, "diagnostic-probe", "must-not-write", "task.md")),
       true,
     )
-    assertNoBootstrapSideEffects(fixture)
+    // The preload blocks background embedding probes as well as bootstrap network access.
+    assertNoBootstrapSideEffects(fixture, [
+      "http://127.0.0.1:11434/api/embeddings",
+      "http://localhost:11434/api/embeddings",
+    ])
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
