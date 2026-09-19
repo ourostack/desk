@@ -1056,6 +1056,10 @@ test("MCP entrypoint keeps a diagnostic MCP live when the current runtime pack i
     assert.equal(result.status.result.isError, undefined)
     const status = JSON.parse(result.status.result.content[0].text)
     assert.equal(status.status, "degraded")
+    assert.equal(status.activation_status, "terminal")
+    assert.equal(status.retryable, false)
+    assert.equal(status.phase, "VERIFYING")
+    assert.equal(status.observed.reason, status.reason)
     assert.equal(status.mode, "diagnostic")
     assert.equal(status.runtime.current_target.id, hostTarget)
     assert.ok(["missing_pack", "unsupported_target", "no_compatible_node"].includes(status.reason))
@@ -1063,16 +1067,23 @@ test("MCP entrypoint keeps a diagnostic MCP live when the current runtime pack i
       status.remediation.some((item) => item.action === "refresh_plugin"),
       true,
     )
-    assert.match(
-      JSON.stringify(status.runtime.paths_checked),
-      new RegExp(escapeRegExp(path.join(artifactsRoot, hostTarget)), "u"),
+    assert.ok(
+      status.runtime.paths_checked.some((checked) =>
+        checked.startsWith(path.join(artifactsRoot, hostTarget) + path.sep)),
+      "diagnostic evidence must include the checked runtime target path",
     )
     assert.equal(result.doctor.result.isError, undefined)
     const doctor = JSON.parse(result.doctor.result.content[0].text)
+    assert.equal(doctor.status, "degraded")
     assert.equal(doctor.mode, "diagnostic")
     assert.deepEqual(doctor.runtime, status.runtime)
     assert.deepEqual(doctor.remediation, status.remediation)
     assert.equal(result.mutation.result.isError, true)
+    const rejected = JSON.parse(result.mutation.result.content[0].text)
+    assert.equal(rejected.status, "degraded")
+    assert.equal(rejected.code, status.code)
+    assert.deepEqual(rejected.observed, status.observed)
+    assert.deepEqual(rejected.remediation, status.remediation)
     assert.match(result.mutation.result.content[0].text, new RegExp(escapeRegExp(hostTarget), "u"))
     assert.match(result.mutation.result.content[0].text, /"action":\s*"refresh_plugin"/u)
     assert.doesNotMatch(result.stderr, /Cannot find package '@modelcontextprotocol\/sdk'/u)

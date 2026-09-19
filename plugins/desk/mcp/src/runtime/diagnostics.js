@@ -61,9 +61,31 @@ export function createRuntimeDiagnostic({
     automaticActions: [],
     summary: details.summary,
   })
+  const remediation = [{
+    action: "refresh_plugin",
+    message: "Refresh or reinstall Desk from its trusted source to restore the committed runtime support matrix and verified dependency packs, then restart the host.",
+  }]
+  if (details.code === "runtime_unsupported") {
+    const abis = [...new Set(shippedTargets.map((target) => target.node_abi).filter(Boolean))]
+    remediation.unshift({
+      action: "use_shipped_node",
+      message: abis.length > 0
+        ? `Start Desk with a local Node runtime matching a shipped platform, architecture, and module ABI (${abis.join(", ")}), then restart the host.`
+        : "Check Desk's runtime support matrix and start with a supported local Node runtime, then restart the host.",
+    })
+  }
+  if (reason === "runtime_restore_failed") {
+    remediation.unshift({
+      action: "check_runtime_cache",
+      message: `Check write permissions and free disk space for ${runtimeCachePath ?? "Desk's runtime cache"}, then restart the host to retry verified offline restoration.`,
+    })
+  }
   Object.assign(diagnostic, {
+    activation_status: diagnostic.status,
+    status: "degraded",
     mode: "diagnostic",
     reason,
+    remediation,
     runtime: {
       current_target: currentTarget,
       shipped_targets: shippedTargets,
