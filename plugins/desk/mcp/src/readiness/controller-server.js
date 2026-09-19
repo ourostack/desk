@@ -6,12 +6,15 @@ import * as path from "node:path"
 import { responseMessage } from "./protocol.js"
 import { transitionReadiness } from "./state.js"
 import { validateControllerEndpoint, validatePrivateDirectory } from "./identity.js"
+import { openChangeJournal } from "./journal.js"
+import { fenceEvents } from "./watcher.js"
 
 export async function startReadinessController({
   identity,
   endpoint,
   stateDir,
   handlers = {},
+  watcher,
   ephemeral = false,
 } = {}) {
   validateControllerEndpoint(endpoint)
@@ -27,6 +30,13 @@ export async function startReadinessController({
   let convergence = null
   let convergenceResult = null
   let convergenceError = null
+  let journal = null
+  let journalWork = Promise.resolve()
+  let journalPoisoned = false
+  let revision = 0
+  let freshnessReason = "initial_scan"
+  let reconcileScheduled = null
+  let closing = false
   const semanticMode = identity.semantic_contract?.mode
   const semanticEnabled = semanticMode === "required" || semanticMode === "background"
   const server = net.createServer((socket) => {
@@ -44,6 +54,49 @@ export async function startReadinessController({
       }
     })
   })
+
+  function withJournal(operation) {
+    const result = journalWork.then(async () => {
+      journal ??= await openChangeJournal({ root: identity.root, stateDir: path.join(stateDir, "journal") })
+      return operation(journal)
+    })
+    journalWork = result.catch(() => {})
+    return result
+  }
+
+  function scheduleReconciliation() {
+    if (closing || reconcileScheduled || convergence) return
+    reconcileScheduled = setImmediate(() => {
+      reconcileScheduled = null
+      // beginConvergence retains the failure in live status; it is not an empty success.
+      void beginConvergence().catch(() => {})
+    })
+  }
+
+  function markUncertain(reason = "freshness_uncertain") {
+    revision += 1
+    freshnessReason = reason
+    if (state !== "RECOVERING") state = transitionReadiness(state, "RECOVERING")
+    scheduleReconciliation()
+    return { certain: false, reason, state }
+  }
+
+  async function recordChange(change) {
+    markUncertain("pending_change")
+    try {
+      const record = await withJournal((active) => active.appendChange({ ...change, root: identity.root }))
+      return { recorded: true, sequence: record.sequence, cursor: journal.cursor }
+    } catch (error) {
+      journalPoisoned = true
+      markUncertain("journal_write_failed")
+      throw error
+    }
+  }
+
+  async function eventFence() {
+    const active = await withJournal((value) => value)
+    return fenceEvents({ controller: { watcher, journal: active, recordChange, markUncertain } })
+  }
 
   function semanticCurrent() {
     const coverage = convergenceResult?.semantic
@@ -87,23 +140,46 @@ export async function startReadinessController({
     if (convergence) {
       return { accepted: true, reused: true, in_progress: true, state }
     }
+    if (reconcileScheduled) clearImmediate(reconcileScheduled)
+    reconcileScheduled = null
     if (state === "LEXICAL_READY") state = transitionReadiness(state, "RECOVERING")
     state = transitionReadiness(state, "LEXICAL_CONVERGING")
     convergenceError = null
     convergenceResult = null
     // The operation belongs to the controller, not the requesting socket.
     server.ref()
-    convergence = Promise.resolve().then(() => handlers.beginConvergence?.()).then((result) => {
+    let startedRevision
+    let eventCursor
+    convergence = Promise.resolve().then(async () => {
+      if (journalPoisoned) {
+        await journalWork
+        await journal?.close()
+        journal = null
+        journalPoisoned = false
+      }
+      await withJournal((active) => {
+        eventCursor = active.cursor
+        startedRevision = revision
+      })
+      return handlers.beginConvergence?.({ eventCursor, reason: freshnessReason, journal })
+    }).then((result) => {
       convergenceResult = result ?? { accepted: true }
-      state = transitionReadiness(state, "LEXICAL_READY")
-      if (semanticCurrent()) state = transitionReadiness(state, "READY")
+      if (revision === startedRevision) {
+        journal.reconciled(eventCursor)
+        freshnessReason = null
+        if (state === "RECOVERING") state = transitionReadiness(state, "LEXICAL_CONVERGING")
+        state = transitionReadiness(state, "LEXICAL_READY")
+        if (semanticCurrent()) state = transitionReadiness(state, "READY")
+      }
       return convergenceResult
     }).catch((error) => {
       convergenceError = error
-      state = transitionReadiness(state, "RECOVERING")
+      freshnessReason ??= "convergence_failed"
+      if (state !== "RECOVERING") state = transitionReadiness(state, "RECOVERING")
       throw error
     }).finally(() => {
       convergence = null
+      if (!convergenceError && revision !== startedRevision) scheduleReconciliation()
       if (!ephemeral) server.unref()
     })
     return convergence
@@ -111,11 +187,12 @@ export async function startReadinessController({
 
   async function barrier(params) {
     if (params?.wait) {
-      if (convergence) await convergence
+      if (reconcileScheduled) beginConvergence()
+      while (convergence) await convergence
       if (convergenceError) throw convergenceError
     }
     if (handlers.barrier) return handlers.barrier(params)
-    const lexicalCurrent = state === "LEXICAL_READY" || state === "READY"
+    const lexicalCurrent = freshnessReason === null && (state === "LEXICAL_READY" || state === "READY")
     return {
       capability: params?.capability,
       current: params?.capability === "semantic"
@@ -138,10 +215,15 @@ export async function startReadinessController({
           identity,
           owner,
         }),
-        status: () => ({ state, identity, owner, convergence: convergenceStatus() }),
+        status: () => ({
+          state, identity, owner, convergence: convergenceStatus(),
+          freshness: { certain: freshnessReason === null, reason: freshnessReason, cursor: journal?.cursor ?? null },
+        }),
         beginConvergence,
         barrier: () => barrier(request.params),
-        recordChange: () => handlers.recordChange?.(request.params) ?? { recorded: true },
+        recordChange: () => recordChange(request.params),
+        markUncertain: () => markUncertain(request.params.reason),
+        fenceEvents: eventFence,
       }[request.method]
       if (!builtin) {
         throw new Error(`unknown readiness controller method: ${request.method}`)
@@ -180,7 +262,14 @@ export async function startReadinessController({
     identity,
     owner,
     server,
-    close: () => closeServer(server, stateDir, owner),
+    async close() {
+      closing = true
+      if (reconcileScheduled) clearImmediate(reconcileScheduled)
+      reconcileScheduled = null
+      await convergence?.catch(() => {})
+      await journalWork
+      try { await journal?.close() } finally { await closeServer(server, stateDir, owner) }
+    },
   }
 }
 

@@ -18,6 +18,7 @@ export async function connectOrStartController({
   semanticContract = null,
   stateHome = path.join(os.homedir(), ".cache", "ouroboros-skills", "desk", "readiness"),
   handlers,
+  watcher,
   ephemeral = false,
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
@@ -34,6 +35,7 @@ export async function connectOrStartController({
         endpoint,
         ephemeral,
         handlers,
+        watcher,
         identity,
         stateDir,
       })
@@ -68,6 +70,7 @@ async function startOrReuseController({
   endpoint,
   ephemeral,
   handlers,
+  watcher,
   identity,
   stateDir,
 }) {
@@ -84,6 +87,7 @@ async function startOrReuseController({
       endpoint,
       stateDir,
       handlers,
+      watcher,
       ephemeral,
     })
     localControllers.set(identity.id, { controller, clients: 0 })
@@ -111,7 +115,10 @@ function createClient({ endpoint, ephemeral, identity, local, token }) {
     status: () => call("status"),
     beginConvergence: () => call("beginConvergence", {}, null),
     barrier: (params) => call("barrier", params, params?.wait ? null : 2_000),
-    recordChange: (changedPath) => call("recordChange", { path: changedPath }),
+    recordChange: (change) => call("recordChange",
+      typeof change === "string" ? { path: change } : change, null),
+    markUncertain: (reason) => call("markUncertain", { reason }),
+    fenceEvents: () => call("fenceEvents", {}, null),
     async close() {
       if (closed) return
       closed = true
