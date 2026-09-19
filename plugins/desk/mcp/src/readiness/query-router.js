@@ -1,6 +1,9 @@
 import { existsSync } from "node:fs"
 import Database from "better-sqlite3"
 import { indexDbPath } from "../db/init.js"
+import { directLexicalSearch } from "./direct-lexical.js"
+import { indexedSearch, indexedTimeline } from "../tools/search.js"
+import { indexedThread } from "../tools/thread.js"
 
 export function semanticScopeError() {
   return {
@@ -74,9 +77,12 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
     let diagnostic = { reason: "controller_unavailable", message: "No readiness controller is available." }
     try {
       if (controller) {
+        if (request.kind === "thread") {
+          await cancellable(() => controller.barrier({ capability: "lexical", wait: true }), signal)
+        }
         const fence = await cancellable(() => controller.fenceEvents({ signal }), signal)
         const barrier = await cancellable(() => controller.barrier({
-          capability: "lexical", ...(request.kind === "thread" ? { wait: true } : {}),
+          capability: "lexical",
         }), signal)
         const observed = await cancellable(() => controller.status(), signal)
         snapshot = openSnapshot(request.deskRoot)
@@ -152,5 +158,26 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
     lexical,
     semantic: async (request = {}) => { request.signal?.throwIfAborted(); return semanticScopeError() },
     snapshot,
+    async reindex(request = {}) {
+      const { signal } = request
+      signal?.throwIfAborted()
+      if (!controller) return readinessError("controller_unavailable", "Reindex requires the shared readiness controller.")
+      const result = await cancellable(() => controller.beginConvergence(), signal)
+      await cancellable(() => controller.barrier({ capability: "lexical", wait: true }), signal)
+      return { status: "ok", action: "controller_convergence", reused: result?.reused === true }
+    },
   }
+}
+
+export function createDeskQueryRouter({ controller } = {}) {
+  return createQueryRouter({
+    controller,
+    directBackend: directLexicalSearch,
+    indexedBackend: (request) => {
+      const backend = request.kind === "thread" ? indexedThread
+        : request.kind === "timeline" ? indexedTimeline : indexedSearch
+      return backend({ deskRoot: request.deskRoot, db: request.db, input: request,
+        opts: { now: request.now, lexicalOnly: true } })
+    },
+  })
 }

@@ -54,6 +54,7 @@ import { openDb, closeDb } from "./db/init.js"
 import { rebuildIndex } from "./indexer/index.js"
 import { stableStringify } from "./readiness/identity.js"
 import { CanonicalWriteRecordingError } from "./readiness/journal.js"
+import { createDeskQueryRouter } from "./readiness/query-router.js"
 import { admitControlPlane } from "./activation/admit.js"
 import { ActivationFailure } from "./activation/failures.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
@@ -173,16 +174,23 @@ export const TOOL_IMPLS = {
   desk_doctor: doctorRuntime,
 }
 
-// These tools can embed through ensureIndex, even without a semantic query.
-const EMBEDDING_TOOLS = new Set([
-  "desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread", "desk_reindex",
-])
+const queryRouters = new WeakMap()
+
+function routerFor(controller) {
+  if (!controller) return createDeskQueryRouter()
+  let router = queryRouters.get(controller)
+  if (!router) {
+    router = createDeskQueryRouter({ controller })
+    queryRouters.set(controller, router)
+  }
+  return router
+}
 
 /**
  * Dispatch a single MCP call. Pulled out from startServer so tests can
  * exercise the dispatch table directly (no stdio transport needed).
  */
-export async function callTool({ deskRoot, name, input, person = null, statusContext = {} }) {
+export async function callTool({ deskRoot, name, input, person = null, statusContext = {}, signal }) {
   if (!TOOL_NAMES.includes(name)) {
     return {
       content: [{ type: "text", text: `unknown tool: ${name}` }],
@@ -208,12 +216,10 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
     }
   }
   try {
-    if (EMBEDDING_TOOLS.has(name)) {
-      verifyEmbeddingModel(statusContext.admission?.controller?.identity?.semantic_contract?.mode ?? null)
-    }
+    const readiness = statusContext.admission ? statusContext.admission.controller ?? null : undefined
     const result = await impl({
-      deskRoot, input: input ?? {}, person, statusContext,
-      readiness: statusContext.admission ? statusContext.admission.controller ?? null : undefined,
+      deskRoot, input: input ?? {}, person, statusContext, readiness,
+      queryRouter: routerFor(readiness), signal,
     })
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
@@ -276,10 +282,10 @@ export async function startServer({
     })),
   }))
 
-  activeServer.setRequestHandler(CallToolRequestSchema, async (request) => {
+  activeServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const name = request.params?.name
     const input = request.params?.arguments ?? {}
-    return callTool({ deskRoot, name, input, person, statusContext })
+    return callTool({ deskRoot, name, input, person, statusContext, signal: extra?.signal })
   })
 
   await activeServer.connect(activeTransport)

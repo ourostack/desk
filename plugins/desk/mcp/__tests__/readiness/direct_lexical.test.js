@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { existsSync } from "node:fs"
 import * as path from "node:path"
 import { directLexicalSearch } from "../../src/readiness/direct-lexical.js"
-import { desk_search } from "../../src/tools/search.js"
+import { indexedSearch } from "../../src/tools/search.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import { mkTempDeskRoot, writeFile, makeFailingFetch } from "../tools/_search_helpers.js"
 
@@ -65,7 +65,7 @@ test("fresh direct lexical search matches indexed paths, filters, ranking, snipp
     { query: "" },
   ]) {
     await t.test(JSON.stringify(input), async () => {
-      const indexed = await desk_search({ deskRoot: root, input, opts: { now, embed: { fetch: makeFailingFetch() } } })
+      const indexed = await indexedSearch({ deskRoot: root, input, opts: { now, embed: { fetch: makeFailingFetch() } } })
       const direct = await directLexicalSearch({ deskRoot: root, ...input, now })
       assert.deepEqual(direct.results, indexed.results)
       assert.equal(direct.query, indexed.query)

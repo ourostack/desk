@@ -2,14 +2,14 @@ import Database from "better-sqlite3"
 import { discover } from "../indexer/discover.js"
 import { chunkBody } from "../indexer/chunk.js"
 import { loadTombstoneLedger, tombstoneDecisionForDoc } from "../artifacts/tombstones.js"
-import { indexedSearch } from "../tools/search.js"
+import { indexedSearch, indexedTimeline } from "../tools/search.js"
 
 /**
  * Read canonical files afresh, using the same FTS5 tokenizer/BM25 and query
  * serialization as indexed search. This disposable corpus never opens the
  * persistent index, loads vectors, embeds, or publishes a generation.
  */
-export async function directLexicalSearch({ deskRoot, query, filters, scope, limit, now, signal }) {
+export async function directLexicalSearch({ deskRoot, query, filters, scope, limit, now, signal, kind, from, to }) {
   signal?.throwIfAborted()
   const documents = await discover(deskRoot, { signal })
   const ledger = await loadTombstoneLedger({})
@@ -47,8 +47,9 @@ export async function directLexicalSearch({ deskRoot, query, filters, scope, lim
       db.exec("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
     })()
     signal?.throwIfAborted()
-    return await indexedSearch({
-      deskRoot, db, input: { query, filters, scope, limit }, opts: { now, lexicalOnly: true },
+    const search = kind === "timeline" ? indexedTimeline : indexedSearch
+    return await search({
+      deskRoot, db, input: { query, filters, scope, limit, from, to }, opts: { now, lexicalOnly: true },
     })
   } finally {
     db.close()

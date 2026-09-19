@@ -19,8 +19,10 @@
 
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { openDb, closeDb } from "../db/init.js"
-import { ensureIndex } from "../server-helpers.js"
+import Database from "better-sqlite3"
+import * as sqliteVec from "sqlite-vec"
+import { indexDbPath, closeDb } from "../db/init.js"
+import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { embedQuery } from "../util/embed-query.js"
 import {
   clipCosine,
@@ -426,11 +428,15 @@ function firstChunkText(row) {
  *   { results: [...], semantic_unavailable: boolean, latency_ms: number,
  *     query: string }
  */
-export async function desk_search({ deskRoot, input, opts }) {
-  if (String(input?.query ?? "").trim()) {
-    await ensureIndex(deskRoot, { embed: opts?.embed ?? {} })
-  }
-  return indexedSearch({ deskRoot, input, opts })
+export async function desk_search({ deskRoot, input, opts, readiness, queryRouter, signal }) {
+  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).lexical({
+    ...input, deskRoot, now: opts?.now, signal, kind: "lexical",
+  })
+}
+
+function openSearchDb(deskRoot) {
+  const db = new Database(indexDbPath(deskRoot), { readonly: true, fileMustExist: true })
+  try { sqliteVec.load(db); return db } catch (error) { db.close(); throw error }
 }
 
 // Shared result contract for the persisted index and a fresh in-memory FTS corpus.
@@ -451,7 +457,7 @@ export async function indexedSearch({ deskRoot, input, opts, db: suppliedDb }) {
   const scope = input?.scope
   const now = opts?.now ?? Date.now()
 
-  const db = suppliedDb ?? openDb(deskRoot)
+  const db = suppliedDb ?? openSearchDb(deskRoot)
   try {
     const { matchExpr, terms } = buildFtsQuery(query)
     const filter = buildDocsFilter(filters)
@@ -574,7 +580,11 @@ export async function indexedSearch({ deskRoot, input, opts, db: suppliedDb }) {
  * Returns: { results, cluster_count?, semantic_unavailable } OR an error
  *   payload when Ollama is down.
  */
-export async function desk_recall({ deskRoot, input, opts }) {
+export async function desk_recall({ input, readiness, queryRouter, signal }) {
+  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).semantic({ ...input, signal })
+}
+
+export async function indexedRecall({ deskRoot, input, opts }) {
   const t0 = Date.now()
   const topic = String(input?.topic ?? "").trim()
   if (!topic) {
@@ -583,8 +593,7 @@ export async function desk_recall({ deskRoot, input, opts }) {
   const limit = clampLimit(input?.limit)
   const scope = input?.scope
 
-  await ensureIndex(deskRoot, { embed: opts?.embed ?? {} })
-  const db = openDb(deskRoot)
+  const db = openSearchDb(deskRoot)
   try {
     const {
       vector: queryVec,
@@ -658,7 +667,11 @@ export async function desk_recall({ deskRoot, input, opts }) {
  * Returns: { results, latency_ms } OR error when path is unknown OR when
  *   the seed has no embeddings (Ollama was down at index time).
  */
-export async function desk_similar({ deskRoot, input, opts }) {
+export async function desk_similar({ input, readiness, queryRouter, signal }) {
+  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).semantic({ ...input, signal })
+}
+
+export async function indexedSimilar({ deskRoot, input }) {
   const t0 = Date.now()
   const seedPath = String(input?.path ?? "").trim()
   if (!seedPath) {
@@ -667,8 +680,7 @@ export async function desk_similar({ deskRoot, input, opts }) {
   const limit = clampLimit(input?.limit)
   const scope = input?.scope
 
-  await ensureIndex(deskRoot, { embed: opts?.embed ?? {} })
-  const db = openDb(deskRoot)
+  const db = openSearchDb(deskRoot)
   try {
     const seedDoc = db
       .prepare("SELECT id, path, kind, track, task_slug FROM docs WHERE path = ?")
@@ -767,7 +779,13 @@ export async function desk_similar({ deskRoot, input, opts }) {
  * Input: { from: ISO, to: ISO, query?: string, limit?: number }
  * Returns: { results, semantic_unavailable, latency_ms }
  */
-export async function desk_timeline({ deskRoot, input, opts }) {
+export async function desk_timeline({ deskRoot, input, opts, readiness, queryRouter, signal }) {
+  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).lexical({
+    ...input, deskRoot, now: opts?.now, signal, kind: "timeline",
+  })
+}
+
+export async function indexedTimeline({ deskRoot, input, opts, db: suppliedDb }) {
   const t0 = Date.now()
   const from = String(input?.from ?? "").trim() || null
   const to = String(input?.to ?? "").trim() || null
@@ -776,8 +794,7 @@ export async function desk_timeline({ deskRoot, input, opts }) {
   const scope = input?.scope
   const now = opts?.now ?? Date.now()
 
-  await ensureIndex(deskRoot, { embed: opts?.embed ?? {} })
-  const db = openDb(deskRoot)
+  const db = suppliedDb ?? openSearchDb(deskRoot)
   try {
     // Window filter clauses for the docs table + scope filter.
     // desk_timeline default: "all" — timeline is already temporally bounded;
@@ -799,7 +816,7 @@ export async function desk_timeline({ deskRoot, input, opts }) {
     let semanticAvailable = false
     let semanticDiagnostic = null
     let queryVec = null
-    if (query) {
+    if (query && !opts?.lexicalOnly) {
       const r = await embedQuery(query, opts?.embed ?? {})
       semanticAvailable = r.available
       queryVec = r.vector
@@ -830,7 +847,7 @@ export async function desk_timeline({ deskRoot, input, opts }) {
       for (const r of ftsRows) idSet.add(r.chunk_id)
       for (const r of vecRows) idSet.add(r.chunk_id)
       const chunkIds = [...idSet]
-      const hydrated = hydrateChunks(db, chunkIds)
+      const hydrated = hydrateChunks(db, chunkIds, opts?.lexicalOnly)
 
       const bm25ByChunk = new Map()
       const bm25Norm = normalizeBm25(ftsRows.map((r) => r.raw_bm25))
@@ -916,7 +933,7 @@ export async function desk_timeline({ deskRoot, input, opts }) {
         : {}),
     }
   } finally {
-    closeDb(db)
+    if (!suppliedDb) closeDb(db)
   }
 }
 
