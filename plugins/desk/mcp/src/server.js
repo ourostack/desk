@@ -47,7 +47,12 @@ import { doctorRuntime } from "./tools/doctor.js"
 import {
   configureRuntimeArtifacts,
   ensureIndex,
+  getSemanticCoverage,
+  resolveEnsureIndexOptions,
 } from "./server-helpers.js"
+import { openDb, closeDb } from "./db/init.js"
+import { rebuildIndex } from "./indexer/index.js"
+import { stableStringify } from "./readiness/identity.js"
 import { admitControlPlane } from "./activation/admit.js"
 import { ActivationFailure } from "./activation/failures.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
@@ -101,12 +106,26 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
       ...(embed === null ? {} : { query_embedding_probe: true, endpoints: embed.endpoints }),
     },
     handlers: {
-      async beginConvergence() {
-        const result = await ensureIndex(deskRoot, {
+      async beginConvergence({ eventCursor, journal }) {
+        const indexOptions = resolveEnsureIndexOptions({
           startup: false,
           skipEmbed: policy.semantic === "unsupported",
           ...(embed === null ? {} : { embed }),
-        })
+          eventCursor,
+          identities: { policy_identity: stableStringify(policy) },
+        }, { deskRoot })
+        const result = await ensureIndex(deskRoot, indexOptions)
+        const db = openDb(deskRoot)
+        try {
+          // A timestamp/snapshot fast path is not proof of journal coverage.
+          if (!result.summary?.lexical_generation) {
+            result.summary = await rebuildIndex(deskRoot, { ...indexOptions, db, reembedMissing: true })
+            result.semantic = { ...result.semantic, ...getSemanticCoverage(db) }
+          }
+          await journal.compact({ db, generationId: result.summary.lexical_generation })
+        } finally {
+          closeDb(db)
+        }
         if (policy.semantic !== "unsupported") {
           result.semantic.query_embedding = await probeEmbeddingService(embed)
         }
