@@ -1,8 +1,11 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync } from "node:fs"
+import { existsSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { createHash } from "node:crypto"
+import Database from "better-sqlite3"
+import { tombstoneDecisionForDoc } from "../../src/artifacts/tombstones.js"
+import { configureRuntimeArtifacts } from "../../src/server-helpers.js"
 import { directLexicalSearch } from "../../src/readiness/direct-lexical.js"
 import { indexedSearch } from "../../src/tools/search.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
@@ -10,6 +13,104 @@ import { mkTempDeskRoot, writeFile, makeFailingFetch } from "../tools/_search_he
 
 const now = Date.parse("2026-09-19T12:00:00Z")
 const p = (...parts) => path.join(...parts)
+
+function redaction(documentPath, body, rotation = "read-consistency") {
+  return {
+    schema_version: 1, document_path: documentPath,
+    document_hash: `sha256:${createHash("sha256").update(body).digest("hex")}`,
+    reason: "redacted", redacted_at: "2026-09-19T00:00:00Z",
+    effective_from: "2026-09-19T00:00:00Z", artifact_rotation_id: rotation, actor: "fixture",
+  }
+}
+
+async function nestedRedactionFixture(t) {
+  const deskRoot = await mkTempDeskRoot()
+  const pluginRoot = await mkTempDeskRoot()
+  await writeFile(deskRoot, p("track", "work", "task.md"), "quartz redacted")
+  await writeFile(deskRoot, p("track", "public", "task.md"), "quartz public")
+  await writeFile(pluginRoot, "artifacts/tombstones/tombstones.jsonl",
+    JSON.stringify(redaction("track/work/task.md", "quartz redacted")) + "\n")
+  configureRuntimeArtifacts({ pluginRoot })
+  t.after(() => configureRuntimeArtifacts())
+  return { deskRoot, pluginRoot }
+}
+
+test("portable tombstones match nested Windows and native document paths without mutating them", () => {
+  const row = redaction("track/private/task.md", "quartz redacted")
+  for (const documentPath of ["track\\private\\task.md", p("track", "private", "task.md")]) {
+    const doc = { path: documentPath, hash: row.document_hash }
+    assert.equal(tombstoneDecisionForDoc({ ledger: { valid: true, rows: [row] }, doc }).tombstoned, true)
+    assert.equal(doc.path, documentPath)
+    assert.equal(tombstoneDecisionForDoc({
+      ledger: { valid: true, rows: [row] }, doc: { ...doc, hash: "different-content" },
+    }).tombstoned, false, "redaction remains content-specific")
+  }
+})
+
+test("portable nested tombstones exclude native paths from direct lexical results", async (t) => {
+  const { deskRoot } = await nestedRedactionFixture(t)
+  const result = await directLexicalSearch({ deskRoot, query: "quartz" })
+  assert.deepEqual(result.results.map((r) => r.path), [p("track", "public", "task.md")])
+  assert.equal(existsSync(path.join(deskRoot, ".state", "desk-index.sqlite")), false)
+})
+
+test("portable nested tombstones exclude native paths from indexed results and generation documents", async (t) => {
+  const { deskRoot, pluginRoot } = await nestedRedactionFixture(t)
+  await rebuildIndex(deskRoot, { skipEmbed: true, tombstones: { pluginRoot } })
+  const db = new Database(path.join(deskRoot, ".state", "desk-index.sqlite"), { readonly: true })
+  try {
+    const generation = db.prepare("SELECT documents FROM lexical_generations").get()
+    assert.deepEqual(JSON.parse(generation.documents).map((doc) => doc.path), [p("track", "public", "task.md")])
+    const result = await indexedSearch({ deskRoot, db, input: { query: "quartz" }, opts: { lexicalOnly: true } })
+    assert.deepEqual(result.results.map((r) => r.path), [p("track", "public", "task.md")])
+  } finally { db.close() }
+})
+
+for (const [kind, phase] of [["lexical", "discovery"], ["lexical", "evaluation"], ["timeline", "discovery"]]) {
+  for (const change of ["valid", "invalid", "repeated"]) {
+    test(`direct policy read consistency handles ${change} change during ${kind} ${phase}`, async (t) => {
+      const deskRoot = await mkTempDeskRoot()
+      const pluginRoot = await mkTempDeskRoot()
+      const ledgerPath = "artifacts/tombstones/tombstones.jsonl"
+      await writeFile(deskRoot, "track/work/task.md", "quartz redacted")
+      await writeFile(deskRoot, "track/public/task.md", "quartz public")
+      await writeFile(deskRoot, "_meta/featured.md", "track\n")
+      await writeFile(pluginRoot, ledgerPath, "")
+      configureRuntimeArtifacts({ pluginRoot })
+      t.after(() => configureRuntimeArtifacts())
+      const target = path.join(deskRoot, ...(phase === "discovery"
+        ? ["track", "work", "task.md"] : ["_meta", "featured.md"]))
+      let scans = 0
+      const readFile = fs.readFile
+      t.mock.method(fs, "readFile", async (file, ...args) => {
+        const contents = await readFile(file, ...args)
+        if (file === target) {
+          scans++
+          if (change === "invalid") {
+            await writeFile(pluginRoot, ledgerPath, "{broken")
+          } else if (scans === 1 || change === "repeated") {
+            const rows = [redaction("track/work/task.md", "quartz redacted")]
+            if (scans > 1) rows.push(redaction("track/public/task.md", "quartz public"))
+            await writeFile(pluginRoot, ledgerPath, rows.map((row) => JSON.stringify(row)).join("\n") + "\n")
+          }
+        }
+        return contents
+      })
+      const pending = directLexicalSearch({ deskRoot, kind, query: "quartz", now })
+      if (change === "valid") {
+        const result = await pending
+        assert.deepEqual(result.results.map((r) => r.path), [p("track", "public", "task.md")])
+        assert.equal(scans, 2, "a valid policy change discards the old corpus and retries once")
+      } else {
+        await assert.rejects(pending, {
+          code: change === "invalid" ? "artifact_tombstone_ledger_invalid" : "readiness_changed_during_read",
+        })
+        assert.equal(scans, change === "invalid" ? 1 : 2, "invalid or unstable policy cannot cause an unbounded scan")
+      }
+      assert.equal(existsSync(path.join(deskRoot, ".state", "desk-index.sqlite")), false)
+    })
+  }
+}
 
 async function fixture() {
   const root = await mkTempDeskRoot()

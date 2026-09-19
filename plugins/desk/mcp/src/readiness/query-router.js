@@ -3,6 +3,7 @@ import Database from "better-sqlite3"
 import { indexDbPath } from "../db/init.js"
 import { directLexicalSearch, loadCurrentTombstoneLedger } from "./direct-lexical.js"
 import { expectedLexicalGenerationIdentity, matchesLexicalGenerationIdentity } from "./generations.js"
+import { stableStringify } from "./identity.js"
 import { indexedSearch, indexedTimeline } from "../tools/search.js"
 import { indexedThread } from "../tools/thread.js"
 
@@ -65,6 +66,7 @@ function cancellable(operation, signal) {
 /**
  * A barrier proves controller readiness; an event fence plus the active
  * generation's durable cursor proves which canonical changes it covers.
+ * The entire proof must survive evaluation unchanged, checked on a new snapshot.
  * Neither cached mtimes nor an old generation alone can authorize an index read.
  */
 export function createQueryRouter({ controller, indexedBackend, directBackend, semanticDeadlineMs } = {}) {
@@ -82,12 +84,41 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
     }
   }
 
+  async function serviceProof(request) {
+    const { signal } = request
+    const fence = await cancellable(() => controller.fenceEvents({ signal }), signal)
+    const barrier = await cancellable(() => controller.barrier({ capability: "lexical" }), signal)
+    const observed = await cancellable(() => controller.status(), signal)
+    const identity = await currentIdentity(request)
+    const currentAndCertain = fence.certain === true && barrier.current === true && barrier.certain !== false &&
+      observed.freshness?.certain === true && sameCursor(fence.cursor, observed.freshness.cursor)
+    const snapshot = currentAndCertain ? openSnapshot(request.deskRoot) : null
+    const proven = currentAndCertain && snapshot?.generation != null && sameCursor(snapshot.cursor, fence.cursor) &&
+      sameCursor(snapshot.covered, fence.cursor) && matchesLexicalGenerationIdentity(snapshot.identities, identity)
+    return {
+      snapshot, proven, owner: observed.owner?.token,
+      identity: proven ? stableStringify({
+        generation: snapshot.generation, cursor: snapshot.cursor, covered: snapshot.covered,
+        identities: snapshot.identities, policy: identity,
+        fence: { cursor: fence.cursor, certain: fence.certain },
+        barrier: { current: barrier.current, certain: barrier.certain ?? null },
+        observed: { cursor: observed.freshness.cursor, certain: observed.freshness.certain,
+          owner: observed.owner?.token ?? null },
+      }) : null,
+      diagnostic: {
+        reason: snapshot && !matchesLexicalGenerationIdentity(snapshot.identities, identity)
+          ? "generation_identity_mismatch" : fence.reason ?? observed.freshness?.reason ?? "generation_unproven",
+        message: "A current, event-certain lexical generation is not proven.",
+      },
+    }
+  }
+
   async function lexical(request = {}) {
     const { signal } = request
     signal?.throwIfAborted()
-    const identity = await currentIdentity(request)
-    let snapshot = null
-    let proven = false
+    lastProof = null
+    await currentIdentity(request)
+    let before = null
     let diagnostic = { reason: "controller_unavailable", message: "No readiness controller is available." }
     try {
       if (controller) {
@@ -96,39 +127,44 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
         }), signal)
         diagnostic = { reason: "reconciliation_pending", message: "A current lexical generation is not proven." }
         if (initial.current === true) {
-          const fence = await cancellable(() => controller.fenceEvents({ signal }), signal)
-          const barrier = await cancellable(() => controller.barrier({ capability: "lexical" }), signal)
-          const observed = await cancellable(() => controller.status(), signal)
-          const currentAndCertain = fence.certain === true && barrier.current === true && barrier.certain !== false &&
-            observed.freshness?.certain === true &&
-            sameCursor(fence.cursor, observed.freshness.cursor)
-          if (currentAndCertain) snapshot = openSnapshot(request.deskRoot)
-          proven = currentAndCertain && snapshot?.generation != null && sameCursor(snapshot.cursor, fence.cursor) &&
-            sameCursor(snapshot.covered, fence.cursor) && matchesLexicalGenerationIdentity(snapshot.identities, identity)
-          diagnostic = {
-            reason: snapshot && !matchesLexicalGenerationIdentity(snapshot.identities, identity)
-              ? "generation_identity_mismatch" : fence.reason ?? observed.freshness?.reason ?? "generation_unproven",
-            message: "A current, event-certain lexical generation is not proven.",
-          }
-          if (proven) lastProof = { generation: snapshot.generation, cursor: snapshot.cursor, owner: observed.owner?.token }
+          before = await serviceProof(request)
+          diagnostic = before.diagnostic
         }
       }
     } catch (error) {
-      if (signal?.aborted) { snapshot?.db.close(); signal.throwIfAborted() }
+      before?.snapshot?.db.close()
+      before = null
+      signal?.throwIfAborted()
+      if (error.code === "artifact_tombstone_ledger_invalid") throw error
       diagnostic = { reason: error.code ?? "readiness_unavailable", message: String(error.message ?? error) }
     }
-    if (proven) {
+    if (before?.proven) {
       try {
         signal?.throwIfAborted()
-        const result = await cancellable(() => indexedBackend({ ...request, db: snapshot.db, generation: snapshot.generation }), signal)
-        if (matchesLexicalGenerationIdentity(snapshot.identities, await currentIdentity(request))) return result
-        diagnostic = { reason: "generation_identity_mismatch", message: "Lexical policy changed during indexed evaluation." }
-      } finally { snapshot.db.close(); snapshot = null }
+        const result = await cancellable(() => indexedBackend({
+          ...request, db: before.snapshot.db, generation: before.snapshot.generation,
+        }), signal)
+        let after
+        try {
+          after = await serviceProof(request)
+          if (after.proven && before.identity === after.identity) {
+            lastProof = { generation: after.snapshot.generation, cursor: after.snapshot.cursor, owner: after.owner }
+            return result
+          }
+          diagnostic = { reason: "readiness_changed_during_read", message: "Lexical proof changed during indexed evaluation." }
+        } catch (error) {
+          signal?.throwIfAborted()
+          if (error.code === "artifact_tombstone_ledger_invalid") throw error
+          diagnostic = { reason: error.code ?? "readiness_unavailable", message: String(error.message ?? error) }
+        } finally { after?.snapshot?.db.close() }
+      } finally { before.snapshot.db.close(); before = null }
     }
-    snapshot?.db.close()
+    before?.snapshot?.db.close()
     lastProof = null
     signal?.throwIfAborted()
-    if (request.kind === "thread") return readinessError(diagnostic.reason, diagnostic.message)
+    if (!["lexical", "timeline"].includes(request.kind ?? "lexical") || !directBackend) {
+      return readinessError(diagnostic.reason, diagnostic.message)
+    }
     const result = await cancellable(() => directBackend(request), signal)
     return { ...result, readiness_diagnostic: diagnostic }
   }

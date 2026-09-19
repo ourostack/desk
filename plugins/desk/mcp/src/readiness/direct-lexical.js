@@ -4,6 +4,7 @@ import { chunkBody } from "../indexer/chunk.js"
 import { loadTombstoneLedger, tombstoneDecisionForDoc } from "../artifacts/tombstones.js"
 import { indexedSearch, indexedTimeline } from "../tools/search.js"
 import { resolveEnsureIndexOptions } from "../server-helpers.js"
+import { expectedLexicalGenerationIdentity } from "./generations.js"
 
 export async function loadCurrentTombstoneLedger({ deskRoot, signal } = {}) {
   signal?.throwIfAborted()
@@ -23,9 +24,22 @@ export async function loadCurrentTombstoneLedger({ deskRoot, signal } = {}) {
  * Read canonical files afresh, using the same FTS5 tokenizer/BM25 and query
  * serialization as indexed search. This disposable corpus never opens the
  * persistent index, loads vectors, embeds, or publishes a generation.
+ * A policy change discards the corpus; only one fresh scan is allowed.
  */
-export async function directLexicalSearch({ deskRoot, query, filters, scope, limit, now, signal, kind, from, to }) {
-  const ledger = await loadCurrentTombstoneLedger({ deskRoot, signal })
+export async function directLexicalSearch(request) {
+  let ledger = await loadCurrentTombstoneLedger(request)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const identity = expectedLexicalGenerationIdentity({ ledger }).tombstone_identity
+    const result = await searchWithLedger(request, ledger)
+    ledger = await loadCurrentTombstoneLedger(request)
+    if (identity === expectedLexicalGenerationIdentity({ ledger }).tombstone_identity) return result
+  }
+  const error = new Error("Tombstone policy changed during both direct lexical scan attempts.")
+  error.code = "readiness_changed_during_read"
+  throw error
+}
+
+async function searchWithLedger({ deskRoot, query, filters, scope, limit, now, signal, kind, from, to }, ledger) {
   const documents = await discover(deskRoot, { signal })
   const db = new Database(":memory:")
   try {

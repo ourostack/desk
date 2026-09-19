@@ -4,7 +4,8 @@ import * as path from "node:path"
 import { createQueryRouter } from "../../src/readiness/query-router.js"
 import { connectOrStartController } from "../../src/readiness/controller-client.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
-import { indexedSearch } from "../../src/tools/search.js"
+import { indexedSearch, indexedTimeline } from "../../src/tools/search.js"
+import { indexedThread } from "../../src/tools/thread.js"
 import { directLexicalSearch } from "../../src/readiness/direct-lexical.js"
 import { mkTempDeskRoot, writeFile } from "../tools/_search_helpers.js"
 import { spawn } from "node:child_process"
@@ -88,8 +89,12 @@ test("short barrier completion uses the index once generation coverage is proven
   const f = await fixture(t)
   await f.controller.beginConvergence()
   const barrier = f.controller.barrier
+  let completed = false
   f.controller.barrier = async (request) => {
-    await f.controller.beginConvergence()
+    if (!completed) {
+      completed = true
+      await f.controller.beginConvergence()
+    }
     return barrier(request)
   }
   const result = await f.router.lexical({ deskRoot: f.deskRoot, query: "quartz" })
@@ -299,6 +304,147 @@ test("F1 a policy change while indexed evaluation awaits suppresses the old inde
   })
   assert.deepEqual((await router.lexical(f.request)).results, [])
   assert.equal((await router.snapshot({ deskRoot: f.deskRoot })).lexical.serving_path, "direct")
+})
+
+for (const kind of ["lexical", "timeline", "thread"]) {
+  test(`read consistency discards ${kind} indexed results after a mutation during evaluation`, async (t) => {
+    const f = await fixture(t)
+    await f.controller.beginConvergence()
+    const entered = deferred()
+    const release = deferred()
+    t.after(() => release.resolve())
+    let indexedResult
+    const backend = kind === "thread" ? indexedThread : kind === "timeline" ? indexedTimeline : indexedSearch
+    const router = createQueryRouter({
+      controller: f.controller,
+      directBackend: directLexicalSearch,
+      indexedBackend: async (request) => {
+        indexedResult = await backend({
+          deskRoot: f.deskRoot, db: request.db, input: request, opts: { lexicalOnly: true },
+        })
+        entered.resolve()
+        await release.promise
+        return indexedResult
+      },
+    })
+    const pending = router.lexical({
+      deskRoot: f.deskRoot, kind, query: "quartz", start_path: path.join("track", "work", "task.md"),
+    })
+    await entered.promise
+    try {
+      await writeFile(f.deskRoot, "track/work/task.md", "replacement quartz")
+      await f.controller.recordChange({ path: path.join("track", "work", "task.md") })
+      await f.controller.barrier({ capability: "lexical", wait: true })
+    } finally { release.resolve() }
+    const result = await pending
+    assert.notStrictEqual(result, indexedResult, "the response evaluated against the old snapshot must be discarded")
+    if (kind === "thread") {
+      assert.equal(result.code, "required_capability_unavailable")
+      assert.equal(result.diagnostic.reason, "readiness_changed_during_read")
+      assert.equal(result.chain, undefined)
+    } else {
+      assert.equal(result.results[0].snippet, "replacement quartz")
+      assert.equal(result.readiness_diagnostic.reason, "readiness_changed_during_read")
+    }
+    assert.equal((await router.snapshot({ deskRoot: f.deskRoot })).lexical.serving_path, "direct")
+  })
+}
+
+test("read consistency rechecks every indexed service proof component on a fresh snapshot", async (t) => {
+  const changes = [
+    ["generation", async (f) => {
+      const { freshness } = await f.controller.status()
+      await rebuildIndex(f.deskRoot, { skipEmbed: true, eventCursor: freshness.cursor })
+    }],
+    ["covered cursor", async (f, db) => {
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'covered_event_cursor'")
+        .run(JSON.stringify({ journal_id: "different-journal", sequence: 0 }))
+    }],
+    ...[
+      ["schema_version", 2], ["chunker_id", "other-chunker"], ["normalization_id", "other-normalization"],
+      ["embedding_spec", "{}"], ["tombstone_identity", "sha256:changed"], ["policy_identity", "other-policy"],
+    ].map(([column, value]) => [column, async (f, db) => {
+      db.prepare(`UPDATE lexical_generations SET ${column} = ? WHERE id = 1`).run(value)
+    }]),
+    ["current policy", async (f) => { f.controller.generationPolicyIdentity = "changed-policy" }],
+    ["fence certainty", async (f) => {
+      const fence = f.controller.fenceEvents
+      f.controller.fenceEvents = async (request) => ({ ...await fence(request), certain: false })
+    }],
+    ["barrier currency", async (f) => {
+      const barrier = f.controller.barrier
+      f.controller.barrier = async (request) => ({ ...await barrier(request), current: false })
+    }],
+    ["barrier certainty", async (f) => {
+      const barrier = f.controller.barrier
+      f.controller.barrier = async (request) => ({ ...await barrier(request), certain: false })
+    }],
+    ["observed certainty", async (f) => {
+      const status = f.controller.status
+      f.controller.status = async () => {
+        const observed = await status()
+        return { ...observed, freshness: { ...observed.freshness, certain: false } }
+      }
+    }],
+    ["observed cursor", async (f) => {
+      const status = f.controller.status
+      f.controller.status = async () => {
+        const observed = await status()
+        return { ...observed, freshness: { ...observed.freshness, cursor: { journal_id: "new", sequence: 0 } } }
+      }
+    }],
+    ["owner", async (f) => {
+      const status = f.controller.status
+      f.controller.status = async () => {
+        const observed = await status()
+        return { ...observed, owner: { ...observed.owner, token: "new-owner" } }
+      }
+    }],
+    ["fence failure", async (f) => {
+      f.controller.fenceEvents = async () => { throw Object.assign(new Error("fence unavailable"), { code: "fence_failed" }) }
+    }],
+  ]
+  for (const [name, change] of changes) {
+    await t.test(name, async (t) => {
+      const f = await fixture(t)
+      await f.controller.beginConvergence()
+      const db = new Database(path.join(f.deskRoot, ".state", "desk-index.sqlite"))
+      t.after(() => db.close())
+      let indexedResult
+      const router = createQueryRouter({
+        controller: f.controller, directBackend: directLexicalSearch,
+        indexedBackend: async (request) => {
+          indexedResult = await indexedSearch({
+            deskRoot: f.deskRoot, db: request.db, input: request, opts: { lexicalOnly: true },
+          })
+          await change(f, db)
+          return indexedResult
+        },
+      })
+      const result = await router.lexical({ deskRoot: f.deskRoot, query: "quartz" })
+      assert.notStrictEqual(result, indexedResult, name)
+      assert.equal(result.results[0].snippet, "canonical quartz")
+      assert.ok(result.readiness_diagnostic, name)
+      assert.equal((await router.snapshot({ deskRoot: f.deskRoot })).lexical.serving_path, "direct")
+    })
+  }
+})
+
+test("read consistency fails closed for a non-direct request if indexed proof changes", async (t) => {
+  const f = await fixture(t)
+  await f.controller.beginConvergence()
+  const router = createQueryRouter({
+    controller: f.controller,
+    directBackend: () => assert.fail("this request has no direct equivalent"),
+    indexedBackend: async () => {
+      await f.controller.beginConvergence()
+      return { stale: true }
+    },
+  })
+  const result = await router.lexical({ deskRoot: f.deskRoot, kind: "graph" })
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.equal(result.diagnostic.reason, "readiness_changed_during_read")
+  assert.equal(result.stale, undefined)
 })
 
 // No runtimeImporter, controller, tool or transport injection: exercise the shipped
