@@ -51,7 +51,7 @@ import {
 import { admitControlPlane } from "./activation/admit.js"
 import { ActivationFailure } from "./activation/failures.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
-import { resolveEmbeddingModel } from "./indexer/embed.js"
+import { probeEmbeddingService, resolveEmbeddingModel } from "./indexer/embed.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
 export { admitControlPlane, configureRuntimeArtifacts, ensureIndex }
@@ -94,12 +94,21 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
     semanticContract: {
       mode: policy.semantic,
       embedding_spec: policy.semantic === "unsupported" ? null : ACTIVE_EMBEDDING_SPEC,
+      ...(policy.semantic === "unsupported" ? {} : { query_embedding_probe: true }),
     },
     handlers: {
-      beginConvergence: () => ensureIndex(deskRoot, {
-        startup: false,
-        skipEmbed: policy.semantic === "unsupported",
-      }),
+      async beginConvergence() {
+        const result = await ensureIndex(deskRoot, {
+          startup: false,
+          skipEmbed: policy.semantic === "unsupported",
+        })
+        if (policy.semantic !== "unsupported") {
+          result.semantic.query_embedding = await probeEmbeddingService({
+            model: ACTIVE_EMBEDDING_SPEC.model,
+          })
+        }
+        return result
+      },
     },
   }
   const { connectOrStartController: connectReadinessController } = await loadReadinessController()

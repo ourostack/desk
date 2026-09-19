@@ -47,6 +47,10 @@ export async function startReadinessController({
       && Number.isSafeInteger(coverage?.chunks_total) && coverage.chunks_total >= 0
       && coverage.vectors_indexed === coverage.chunks_total
       && coverage.missing_vectors === 0
+      && coverage.provenance_current === true
+      && coverage.query_embedding?.available === true
+      && typeof identity.semantic_contract.embedding_spec?.model === "string"
+      && coverage.query_embedding.diagnostic?.model === identity.semantic_contract.embedding_spec.model
   }
 
   function beginConvergence() {

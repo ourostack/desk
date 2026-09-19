@@ -193,7 +193,11 @@ for (const coverage of [
     const controller = await connectController({
       root, stateHome: path.join(root, "state"), ephemeral: true,
       semanticContract: { mode: "required", embedding_spec: ACTIVE_EMBEDDING_SPEC },
-      handlers: { beginConvergence: async () => ({ semantic: coverage }) },
+      handlers: { beginConvergence: async () => ({ semantic: coverage && {
+        ...coverage,
+        provenance_current: true,
+        query_embedding: { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } },
+      } }) },
     })
     try {
       assert.equal((await controller.barrier({ capability: "semantic" })).current, false)
@@ -265,7 +269,7 @@ for (const change of ["modify", "add"]) {
       release.resolve()
       await Promise.all([refresh, concurrent])
       assert.equal(starts, 3)
-      assert.equal(endpointCalls, initialCalls + 1)
+      assert.equal(endpointCalls, initialCalls + 2, "one document embedding and one post-convergence query probe")
       assert.equal((await controllers[0].barrier({ capability: "semantic" })).current, true)
     } finally {
       release.resolve()

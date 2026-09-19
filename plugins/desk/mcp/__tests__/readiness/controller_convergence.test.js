@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { connectOrStartController } from "../../src/readiness/controller-client.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 
 function deferred() {
   let resolve
@@ -74,9 +75,13 @@ for (const mode of ["required", "background", "unsupported"]) {
         entered.resolve("refresh")
         await release.promise
       }
-      return { semantic: { chunks_total: 1, vectors_indexed: 1, missing_vectors: 0 } }
+      return { semantic: {
+        chunks_total: 1, vectors_indexed: 1, missing_vectors: 0,
+        provenance_current: true,
+        query_embedding: { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } },
+      } }
     })
-    options.semanticContract = { mode }
+    options.semanticContract = { mode, embedding_spec: ACTIVE_EMBEDDING_SPEC }
     const first = await connectOrStartController(options)
     const second = await connectOrStartController(options)
     let refresh
