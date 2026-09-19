@@ -12,6 +12,8 @@ import { callTool, connectOrStartController, createMcpServer, startServer } from
 import { main } from "../../index.js"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import { openDb, closeDb } from "../../src/db/init.js"
+import { commitLexicalGeneration } from "../../src/readiness/generations.js"
 
 async function fixture() {
   const root = await mkTempRoot("desk-journal-")
@@ -113,9 +115,12 @@ test("compaction requires committed matching generation coverage and preserves s
   await journal.appendChange({ path: "c.md" })
   const db = new Database(":memory:")
   db.exec("CREATE TABLE lexical_generations (id INTEGER PRIMARY KEY, event_cursor TEXT NOT NULL)")
+  db.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
   try {
     assert.throws(() => journal.compact({ db, generationId: 1 }), /committed generation/)
     db.prepare("INSERT INTO lexical_generations VALUES (1, ?)").run(JSON.stringify(covered))
+    db.prepare("INSERT INTO meta VALUES ('active_lexical_generation', '1')").run()
+    db.prepare("INSERT INTO meta VALUES ('covered_event_cursor', ?)").run(JSON.stringify(covered))
     assert.throws(() => db.transaction(() => journal.compact({ db, generationId: 1 }))(), /committed generation/)
     await journal.compact({ db, generationId: 1 })
     assert.deepEqual(journal.replay().changes.map((change) => change.path), ["c.md"])
@@ -370,6 +375,103 @@ for (const scenario of [
       await client.close()
       await server.close()
       await controller?.close()
+    }
+  })
+}
+
+for (const timing of ["queued", "staged"]) {
+  test(`F2 ${timing} compaction tampering preserves corrupt bytes until recovery quarantines them`, async () => {
+    const f = await fixture()
+    const logPath = path.join(f.stateDir, "changes.jsonl")
+    let tamper = null
+    let damaged
+    const journal = await f.open({ io: {
+      ...fs, fsyncSync(fd) { fs.fsyncSync(fd); const action = tamper; tamper = null; action?.() },
+    } })
+    const db = openDb(f.root)
+    let recovered
+    try {
+      await journal.appendChange({ path: "a.md" })
+      await journal.appendChange({ path: "b.md" })
+      const cursor = journal.cursor
+      journal.reconciled(cursor)
+      assert.equal(journal.replay().certain, true, "the pre-compaction replay/check succeeds")
+      const generationId = commitLexicalGeneration({
+        db, documents: [], eventCursor: cursor,
+        identities: { schema_version: 1, chunker_id: "c", normalization_id: "n", embedding_spec: { id: "e" },
+          tombstone_identity: "none", policy_identity: "fixture" },
+      })
+      const corrupt = () => {
+        fs.appendFileSync(logPath, Buffer.from([0xff, 0x7b]))
+        damaged = fs.readFileSync(logPath)
+      }
+      if (timing === "staged") tamper = corrupt
+      const compacting = journal.compact({ db, generationId })
+      if (timing === "queued") corrupt()
+      await assert.rejects(compacting, { code: "journal_integrity_failed" })
+      assert.deepEqual(fs.readFileSync(logPath), damaged)
+      assert.equal(journal.replay().certain, false)
+      assert.throws(() => journal.reconciled(cursor), { code: "journal_integrity_failed" })
+      await assert.rejects(journal.appendChange({ path: "c.md" }), /recover/)
+      await journal.close()
+      recovered = await f.open()
+      const quarantine = fs.readdirSync(f.stateDir).find((name) => name.startsWith("changes.corrupt-"))
+      assert.deepEqual(fs.readFileSync(path.join(f.stateDir, quarantine)), damaged)
+      assert.deepEqual(recovered.replay().changes.map((change) => change.path), ["a.md", "b.md"])
+    } finally {
+      tamper = null
+      await recovered?.close()
+      await journal.close()
+      closeDb(db)
+    }
+  })
+}
+
+for (const fault of ["missing", "replaced", "unreadable"]) {
+  test(`F3 ${fault} journal stays poisoned after file repair until reopen and reconciliation`, async () => {
+    const f = await fixture()
+    const logPath = path.join(f.stateDir, "changes.jsonl")
+    const backup = path.join(f.stateDir, "saved-log")
+    let unreadable = false
+    const journal = await f.open({ io: {
+      ...fs, readFileSync(...args) {
+        if (unreadable) throw Object.assign(new Error("injected journal read denial"), { code: "EACCES" })
+        return fs.readFileSync(...args)
+      },
+    } })
+    let restarted
+    try {
+      await journal.appendChange({ path: "task.md" })
+      journal.reconciled(journal.cursor)
+      assert.equal(journal.replay().certain, true)
+      const bytes = fs.readFileSync(logPath)
+      if (fault === "unreadable") unreadable = true
+      else {
+        fs.renameSync(logPath, backup)
+        if (fault === "replaced") fs.writeFileSync(logPath, bytes, { mode: 0o600 })
+      }
+      assert.throws(() => journal.replay(), { code: "journal_integrity_failed" })
+      assert.throws(() => journal.reconciled(journal.cursor), { code: "journal_integrity_failed" })
+      unreadable = false
+      if (fault !== "unreadable") {
+        if (fs.existsSync(logPath)) fs.unlinkSync(logPath)
+        fs.renameSync(backup, logPath)
+      }
+      assert.throws(() => journal.replay(), { code: "journal_integrity_failed" })
+      await assert.rejects(journal.appendChange({ path: "later.md" }), /recover/)
+      await journal.close()
+      restarted = await f.open()
+      assert.equal(restarted.replay().certain, false)
+      restarted.reconciled(restarted.cursor)
+      assert.equal(restarted.replay().certain, true)
+    } finally {
+      unreadable = false
+      if (fs.existsSync(backup)) {
+        if (fs.existsSync(logPath)) fs.unlinkSync(logPath)
+        fs.renameSync(backup, logPath)
+      }
+      await restarted?.close()
+      await journal.close()
     }
   })
 }

@@ -5,6 +5,8 @@ import * as path from "node:path"
 import { spawn } from "node:child_process"
 import { openDb, closeDb, getMeta, runMigrations } from "../../src/db/init.js"
 import { connectOrStartController } from "../../src/server.js"
+import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
+import { openChangeJournal } from "../../src/readiness/journal.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const identities = {
@@ -16,6 +18,12 @@ const identities = {
   policy_identity: "fixture-policy",
 }
 const eventCursor = { journal_id: "fixture-journal", sequence: 42 }
+
+function deferred() {
+  let resolve
+  const promise = new Promise((done) => { resolve = done })
+  return { promise, resolve }
+}
 
 async function generationModule() {
   const module = await import("../../src/readiness/generations.js").catch((error) => {
@@ -202,3 +210,140 @@ test("support smoke: process restart replays durable mutations and discovers ext
     assert.equal(fs.readFileSync(path.join(root, "track", "task", "task.md"), "utf8"), canonicalBefore)
   } finally { await restarted.close() }
 })
+
+test("F1 compaction rejects generation A when B becomes active before queued compaction", async () => {
+  const { commitLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-r1-generation-")
+  const stateDir = path.join(root, "journal")
+  const journal = await openChangeJournal({ root, stateDir })
+  const db = openDb(root)
+  try {
+    await journal.appendChange({ path: "task.md" })
+    const original = fs.readFileSync(path.join(stateDir, "changes.jsonl"))
+    const covered = journal.cursor
+    const generationA = commitLexicalGeneration({ db, documents: [], eventCursor: covered, identities })
+    const compacting = journal.compact({ db, generationId: generationA })
+    // Even B with identical coverage supersedes A: the active generation must be checked.
+    const generationB = commitLexicalGeneration({ db, documents: [], eventCursor: covered, identities })
+    await assert.rejects(compacting, { code: "generation_superseded" })
+    assert.equal(getMeta(db, "active_lexical_generation"), String(generationB))
+    assert.deepEqual(fs.readFileSync(path.join(stateDir, "changes.jsonl")), original)
+  } finally { await journal.close(); closeDb(db) }
+})
+
+test("F1 compaction rechecks expected cursor identity after staging and immediately before replacement", async () => {
+  const { commitLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-r1-generation-")
+  const stateDir = path.join(root, "journal")
+  const db = openDb(root)
+  const writer = openDb(root)
+  let race = null
+  const journal = await openChangeJournal({ root, stateDir, io: {
+    ...fs, fsyncSync(fd) { fs.fsyncSync(fd); const intervene = race; race = null; intervene?.() },
+  } })
+  try {
+    await journal.appendChange({ path: "task.md" })
+    const original = fs.readFileSync(path.join(stateDir, "changes.jsonl"))
+    const generationA = commitLexicalGeneration({ db, documents: [], eventCursor: journal.cursor, identities })
+    race = () => {
+      const replaced = JSON.stringify({ journal_id: "foreign-journal", sequence: 1 })
+      writer.transaction(() => {
+        writer.prepare("UPDATE lexical_generations SET event_cursor = ? WHERE id = ?").run(replaced, generationA)
+        writer.prepare("UPDATE meta SET value = ? WHERE key = 'covered_event_cursor'").run(replaced)
+      })()
+    }
+    await assert.rejects(journal.compact({ db, generationId: generationA }), { code: "generation_superseded" })
+    assert.equal(race, null, "the change must happen during staging, not before compact was called")
+    assert.deepEqual(fs.readFileSync(path.join(stateDir, "changes.jsonl")), original)
+  } finally { race = null; await journal.close(); closeDb(writer); closeDb(db) }
+})
+
+test("F1 another SQLite writer cannot advance the generation inside journal replacement", async () => {
+  const { commitLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-r1-generation-")
+  const stateDir = path.join(root, "journal")
+  const db = openDb(root)
+  const writer = openDb(root)
+  writer.pragma("busy_timeout = 0")
+  let competingWrite = null
+  let attempted = false
+  const journal = await openChangeJournal({ root, stateDir, io: {
+    ...fs, renameSync(source, target) {
+      if (competingWrite && target === path.join(stateDir, "changes.jsonl")) {
+        attempted = true
+        assert.throws(competingWrite, { code: "SQLITE_BUSY" })
+      }
+      fs.renameSync(source, target)
+    },
+  } })
+  try {
+    await journal.appendChange({ path: "task.md" })
+    const generationA = commitLexicalGeneration({ db, documents: [], eventCursor: journal.cursor, identities })
+    competingWrite = () => commitLexicalGeneration({ db: writer, documents: [], eventCursor: null, identities })
+    await journal.compact({ db, generationId: generationA })
+    assert.equal(attempted, true)
+    assert.equal(getMeta(db, "active_lexical_generation"), String(generationA))
+    assert.deepEqual(journal.replay().changes, [])
+    competingWrite = null
+    assert.ok(commitLexicalGeneration({ db: writer, documents: [], eventCursor: null, identities }) > generationA)
+  } finally { competingWrite = null; await journal.close(); closeDb(writer); closeDb(db) }
+})
+
+for (const [finding, failure] of [["F1", "generation_superseded"], ["F2", "journal_integrity_failed"]]) {
+test(`${finding} failed compaction keeps controller barriers uncertain and schedules a fresh reconciliation`, async () => {
+  const { commitLexicalGeneration } = await generationModule()
+  const root = await mkTempRoot("desk-r1-generation-controller-")
+  const db = openDb(root)
+  const finished = deferred()
+  const recovering = deferred()
+  const release = deferred()
+  let passes = 0
+  let original
+  const options = { root, stateHome: path.join(root, "state"), ephemeral: true, handlers: {
+    async beginConvergence({ journal, eventCursor }) {
+      const pass = ++passes
+      if (pass === 3) { recovering.resolve(); await release.promise }
+      const id = commitLexicalGeneration({ db, documents: [], eventCursor, identities })
+      const compacting = journal.compact({ db, generationId: id })
+      if (pass === 2) {
+        if (failure === "journal_integrity_failed") {
+          fs.appendFileSync(path.join(options.stateHome, client.id, "journal", "changes.jsonl"), "corrupt\n")
+        }
+        original = fs.readFileSync(path.join(options.stateHome, client.id, "journal", "changes.jsonl"))
+        if (failure === "generation_superseded") {
+          commitLexicalGeneration({ db, documents: [], eventCursor: null, identities })
+        }
+        try {
+          await compacting
+          finished.resolve(null)
+        } catch (error) {
+          finished.resolve(error.code)
+          throw error
+        }
+      } else {
+        await compacting
+      }
+      return { indexed: true }
+    },
+  } }
+  const client = await connectController(options)
+  try {
+    await client.beginConvergence()
+    await client.recordChange("task.md")
+    assert.equal(await finished.promise, failure)
+    await recovering.promise
+    const status = await client.status()
+    assert.equal(status.freshness.certain, false)
+    assert.equal(status.freshness.reason, failure)
+    assert.equal((await client.barrier({ capability: "lexical" })).current, false)
+    const journalDir = path.join(options.stateHome, client.id, "journal")
+    const evidenceFile = failure === "generation_superseded" ? "changes.jsonl"
+      : fs.readdirSync(journalDir).find((name) => name.startsWith("changes.corrupt-"))
+    assert.ok(evidenceFile)
+    assert.deepEqual(fs.readFileSync(path.join(journalDir, evidenceFile)), original)
+    release.resolve()
+    assert.equal((await client.barrier({ capability: "lexical", wait: true })).current, true)
+    assert.equal(passes, 3)
+  } finally { release.resolve(); await client.close(); closeDb(db) }
+})
+}

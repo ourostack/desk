@@ -305,3 +305,49 @@ test("a client rejects the legacy no-op recordChange acknowledgement", async () 
     await new Promise((resolve) => server.close(resolve))
   }
 })
+
+test("F3 fence marks typed journal uncertainty before propagating a replay read failure", async () => {
+  const { fenceEvents } = await fenceModule()
+  const cause = Object.assign(new Error("journal read failed"), { code: "EIO" })
+  const invalidations = []
+  await assert.rejects(fenceEvents({ controller: {
+    watcher: { fence: async () => ({ certain: true }) },
+    journal: { replay() { throw cause } },
+    markUncertain(reason) { invalidations.push(reason) },
+  } }), (error) => {
+    assert.deepEqual(invalidations, ["journal_integrity_failed"])
+    assert.equal(error.code, "journal_integrity_failed")
+    assert.equal(error.cause, cause)
+    return true
+  })
+})
+
+test("F3 missing journal rejects the fence and keeps the live barrier non-current until recovery", async () => {
+  const entered = deferred()
+  const release = deferred()
+  let passes = 0
+  const options = await fixture({
+    watcher: { fence: async () => ({ certain: true }) },
+    handlers: { async beginConvergence() {
+      if (++passes === 2) { entered.resolve(); await release.promise }
+      return { indexed: true }
+    } },
+  })
+  const client = await connectOrStartController(options)
+  try {
+    await client.beginConvergence()
+    assert.equal((await client.barrier({ capability: "lexical" })).current, true)
+    const originalCursor = (await client.status()).freshness.cursor
+    fs.unlinkSync(path.join(options.stateHome, client.id, "journal", "changes.jsonl"))
+    await assert.rejects(client.fenceEvents(), { code: "journal_integrity_failed" })
+    await entered.promise
+    const status = await client.status()
+    assert.equal(status.freshness.certain, false)
+    assert.equal(status.freshness.reason, "journal_integrity_failed")
+    assert.equal((await client.barrier({ capability: "lexical" })).current, false)
+    release.resolve()
+    assert.equal((await client.barrier({ capability: "lexical", wait: true })).current, true)
+    assert.equal(passes, 2)
+    assert.notEqual((await client.status()).freshness.cursor.journal_id, originalCursor.journal_id)
+  } finally { release.resolve(); await client.close() }
+})

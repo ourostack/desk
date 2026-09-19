@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { setMeta } from "../db/init.js"
+import { getMeta, setMeta } from "../db/init.js"
 import { stableStringify } from "./identity.js"
 
 // The callback is synchronous: lexical rows and their coverage are one SQLite commit.
@@ -47,4 +47,30 @@ export function commitLexicalGeneration({ db, documents, eventCursor = null, ide
     setMeta(db, "last_indexed_at", completedAt)
     return row.id
   })()
+}
+
+// Hold SQLite's writer reservation across the final check and synchronous journal swap.
+export function withActiveLexicalGeneration({ db, generationId, eventCursor }, replace) {
+  if (db.inTransaction) throw new Error("journal compaction requires a committed generation")
+  return db.transaction(() => {
+    const row = db.prepare("SELECT event_cursor FROM lexical_generations WHERE id = ?").get(generationId)
+    if (getMeta(db, "active_lexical_generation") !== String(generationId) ||
+        !sameCursor(row?.event_cursor, eventCursor) ||
+        !sameCursor(getMeta(db, "covered_event_cursor"), eventCursor)) {
+      const error = new Error("active lexical generation or journal coverage changed before compaction")
+      error.code = "generation_superseded"
+      throw error
+    }
+    return replace()
+  }).immediate()
+}
+
+function sameCursor(encoded, expected) {
+  try {
+    const cursor = JSON.parse(encoded)
+    return cursor?.journal_id === expected.journal_id && cursor?.sequence === expected.sequence
+  } catch (error) {
+    if (error instanceof SyntaxError) return false
+    throw error
+  }
 }

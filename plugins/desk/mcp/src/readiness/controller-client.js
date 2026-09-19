@@ -239,7 +239,10 @@ function request({
       socket.end()
       const response = JSON.parse(pending.slice(0, newline))
       if (response.error) {
-        reject(new Error(response.error.message))
+        const error = new Error(response.error.message)
+        if (typeof response.error.code === "string") error.code = response.error.code
+        if (typeof response.error.reason === "string") error.reason = response.error.reason
+        reject(error)
       } else {
         resolve(response.result)
       }

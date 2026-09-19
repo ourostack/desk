@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import * as filesystem from "node:fs"
 import * as path from "node:path"
 import { protectWindowsPaths } from "../feedback/windows-acl.js"
+import { withActiveLexicalGeneration } from "./generations.js"
 
 // The elected controller is the sole writer. No journal operation elects another owner.
 export async function openChangeJournal({ root, stateDir, io = filesystem }) {
@@ -37,12 +38,17 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
     throw new Error("journal metadata root or identity is invalid")
   }
   let reason = metadata ? metadata.clean_shutdown ? "watcher_downtime" : "unclean_shutdown" : "initial_scan"
+  if (metadata && !statIfPresent(io, logPath)) {
+    metadata.id = randomUUID()
+    reason = "journal_integrity_failed"
+  }
   metadata ??= { id: randomUUID(), root }
   const raw = statIfPresent(io, logPath) ? io.readFileSync(logPath) : Buffer.alloc(0)
   const { records: initialRecords, corrupt } = parseRecords(raw)
   let records = initialRecords
   let persistedBytes = corrupt ? Buffer.from(serialize(records)) : raw
   let poisoned = false
+  let integrityError = null
   let closed = false
   if (corrupt) {
     // Persist the original bytes before replacing the derived log with its valid prefix.
@@ -53,6 +59,7 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
   }
   if (!statIfPresent(io, logPath)) await writeAtomic(io, logPath, "")
   await writeAtomic(io, metaPath, JSON.stringify({ ...metadata, clean_shutdown: false }))
+  let persistedFile = assertSafeFile(io, logPath)
 
   const cursor = () => ({ journal_id: metadata.id, sequence: records.at(-1)?.sequence ?? 0 })
   let pending = Promise.resolve()
@@ -63,11 +70,31 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
     return result
   }
   function verifyIntegrity() {
-    if (poisoned) return
-    assertSafeFile(io, logPath)
-    if (!io.readFileSync(logPath).equals(persistedBytes)) {
+    if (poisoned) {
+      if (integrityError && reason !== "journal_corrupt") throw integrityError
+      return
+    }
+    let fd
+    try {
+      const before = assertSafeFile(io, logPath)
+      if (!sameFile(before, persistedFile)) throw new Error("journal file was replaced")
+      fd = io.openSync(logPath, io.constants.O_RDONLY | (io.constants.O_NOFOLLOW ?? 0))
+      if (!sameFile(io.fstatSync(fd), persistedFile)) throw new Error("journal file was replaced")
+      const bytes = io.readFileSync(fd)
+      const after = assertSafeFile(io, logPath)
+      if (!sameFile(after, persistedFile)) throw new Error("journal file was replaced")
+      if (!bytes.equals(persistedBytes) || after.size !== persistedBytes.length) {
+        poisoned = true
+        reason = "journal_corrupt"
+        integrityError = new JournalIntegrityError(new Error("journal bytes changed"), reason)
+      }
+    } catch (cause) {
       poisoned = true
-      reason = "journal_corrupt"
+      reason = "journal_integrity_failed"
+      integrityError = new JournalIntegrityError(cause)
+      throw integrityError
+    } finally {
+      if (fd !== undefined) io.closeSync(fd)
     }
   }
   return {
@@ -121,7 +148,8 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
       }
     },
     reconciled(covered) {
-      if (poisoned) throw new Error("journal must recover after a write failure")
+      verifyIntegrity()
+      if (poisoned) throw integrityError ?? new Error("journal must recover after a write failure")
       if (covered?.journal_id === metadata.id && covered.sequence === cursor().sequence) reason = null
     },
     compact({ db, generationId }) {
@@ -134,15 +162,21 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
         throw new Error("journal generation coverage does not match")
       }
       return serialized(async () => {
+        const guarded = (replace) => withActiveLexicalGeneration({ db, generationId, eventCursor: covered }, () => {
+          verifyIntegrity()
+          if (poisoned) throw integrityError ?? new JournalIntegrityError(new Error("journal is poisoned"))
+          return replace()
+        })
         const anchor = records.findLast((record) => record.sequence <= covered.sequence)
-        if (!anchor) return
+        if (!anchor) return guarded(() => {})
         const retained = [
           { ...anchor, checkpoint: true },
           ...records.filter((record) => record.sequence > covered.sequence),
         ]
-        await writeAtomic(io, logPath, serialize(retained))
+        await writeAtomic(io, logPath, serialize(retained), guarded)
         records = retained
         persistedBytes = Buffer.from(serialize(retained))
+        persistedFile = assertSafeFile(io, logPath)
       })
     },
     close() {
@@ -155,6 +189,14 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
         closed = true
       })
     },
+  }
+}
+
+export class JournalIntegrityError extends Error {
+  constructor(cause, reason = "journal_integrity_failed") {
+    super(`journal integrity failed; recovery required: ${cause.message}`, { cause })
+    this.code = "journal_integrity_failed"
+    this.reason = reason
   }
 }
 
@@ -254,6 +296,10 @@ function statIfPresent(io, file) {
   }
 }
 
+function sameFile(actual, expected) {
+  return actual.dev === expected.dev && actual.ino === expected.ino && actual.nlink === 1
+}
+
 function assertSafeFile(io, file) {
   const stat = io.lstatSync(file)
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 ||
@@ -263,7 +309,7 @@ function assertSafeFile(io, file) {
   return stat
 }
 
-async function writeAtomic(io, target, contents) {
+async function writeAtomic(io, target, contents, replace = (operation) => operation()) {
   if (statIfPresent(io, target)) assertSafeFile(io, target)
   const temporary = `${target}.${randomUUID()}.tmp`
   let fd
@@ -276,12 +322,14 @@ async function writeAtomic(io, target, contents) {
     io.fsyncSync(fd)
     io.closeSync(fd)
     fd = undefined
-    io.renameSync(temporary, target)
-    // Windows does not expose POSIX directory fsync; file handles are flushed above.
-    if (process.platform !== "win32") {
-      const directory = io.openSync(path.dirname(target), "r")
-      try { io.fsyncSync(directory) } finally { io.closeSync(directory) }
-    }
+    replace(() => {
+      io.renameSync(temporary, target)
+      // Windows does not expose POSIX directory fsync; file handles are flushed above.
+      if (process.platform !== "win32") {
+        const directory = io.openSync(path.dirname(target), "r")
+        try { io.fsyncSync(directory) } finally { io.closeSync(directory) }
+      }
+    })
   } finally {
     if (fd !== undefined) io.closeSync(fd)
     if (statIfPresent(io, temporary)) io.unlinkSync(temporary)

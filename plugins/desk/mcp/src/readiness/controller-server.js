@@ -6,7 +6,7 @@ import * as path from "node:path"
 import { responseMessage } from "./protocol.js"
 import { transitionReadiness } from "./state.js"
 import { validateControllerEndpoint, validatePrivateDirectory } from "./identity.js"
-import { openChangeJournal } from "./journal.js"
+import { JournalIntegrityError, openChangeJournal } from "./journal.js"
 import { fenceEvents } from "./watcher.js"
 
 export async function startReadinessController({
@@ -75,7 +75,7 @@ export async function startReadinessController({
 
   function markUncertain(reason = "freshness_uncertain") {
     revision += 1
-    if (reason === "journal_corrupt" || reason === "journal_write_failed") journalPoisoned = true
+    if (["journal_corrupt", "journal_write_failed", "journal_integrity_failed"].includes(reason)) journalPoisoned = true
     freshnessReason = reason
     if (state !== "RECOVERING") state = transitionReadiness(state, "RECOVERING")
     scheduleReconciliation()
@@ -95,7 +95,13 @@ export async function startReadinessController({
   }
 
   async function eventFence() {
-    const active = await withJournal((value) => value)
+    let active
+    try {
+      active = await withJournal((value) => value)
+    } catch (error) {
+      markUncertain("journal_integrity_failed")
+      throw error instanceof JournalIntegrityError ? error : new JournalIntegrityError(error)
+    }
     return fenceEvents({ controller: { watcher, journal: active, recordChange, markUncertain } })
   }
 
@@ -151,6 +157,7 @@ export async function startReadinessController({
     server.ref()
     let startedRevision
     let eventCursor
+    let retryConvergence = false
     convergence = Promise.resolve().then(async () => {
       if (journalPoisoned) {
         await journalWork
@@ -175,12 +182,17 @@ export async function startReadinessController({
       return convergenceResult
     }).catch((error) => {
       convergenceError = error
-      freshnessReason ??= "convergence_failed"
-      if (state !== "RECOVERING") state = transitionReadiness(state, "RECOVERING")
+      if (error.code === "generation_superseded" || error.code === "journal_integrity_failed") {
+        markUncertain(error.code)
+        retryConvergence = true
+      } else {
+        freshnessReason ??= "convergence_failed"
+        if (state !== "RECOVERING") state = transitionReadiness(state, "RECOVERING")
+      }
       throw error
     }).finally(() => {
       convergence = null
-      if (!convergenceError && revision !== startedRevision) scheduleReconciliation()
+      if (retryConvergence || (!convergenceError && revision !== startedRevision)) scheduleReconciliation()
       if (!ephemeral) server.unref()
     })
     return convergence
@@ -236,7 +248,7 @@ export async function startReadinessController({
     } catch (error) {
       if (!socket.destroyed) socket.end(`${JSON.stringify(responseMessage({
         id: request?.id ?? null,
-        error: { message: error?.message ?? String(error) },
+        error: { message: error?.message ?? String(error), code: error?.code, reason: error?.reason },
       }))}\n`)
     }
   }
