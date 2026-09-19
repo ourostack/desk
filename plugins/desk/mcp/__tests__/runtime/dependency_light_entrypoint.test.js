@@ -2,6 +2,8 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
+import { once } from "node:events"
+import { createServer } from "node:http"
 import {
   cpSync,
   existsSync,
@@ -175,7 +177,11 @@ function sha256(value) {
 function makeFixture({
   allowLocalIpc = true,
   deletePreloadAfterLoad = false,
+  embeddingEndpoint,
 } = {}) {
+  if (embeddingEndpoint !== undefined) {
+    assert.match(embeddingEndpoint, /^http:\/\/127\.0\.0\.1:\d+\/api\/embeddings$/u)
+  }
   const root = mkdtempSync(path.join(tmpdir(), "desk-entrypoint-"))
   const fixtureMcpRoot = path.join(root, "mcp")
   const deskRoot = path.join(root, "desk")
@@ -235,7 +241,13 @@ function makeFixture({
       `  }`,
       `  return originalLoad.apply(this, arguments)`,
       `}`,
+      ...(embeddingEndpoint ? [`const realFetch = globalThis.fetch`] : []),
       `globalThis.fetch = async (...args) => {`,
+      ...(embeddingEndpoint ? [
+        `  if (String(args[0]) === ${JSON.stringify(embeddingEndpoint)}) {`,
+        `    return realFetch(args[0], { ...args[1], redirect: "error" })`,
+        `  }`,
+      ] : []),
       `  appendFileSync(${JSON.stringify(networkLog)}, JSON.stringify(args.map(String)) + "\\n")`,
       `  throw new Error("network access forbidden during runtime dependency bootstrap")`,
       `}`,
@@ -252,6 +264,7 @@ function makeFixture({
     networkLog,
     commandLog,
     preloadPath,
+    embeddingEndpoint,
   }
 }
 
@@ -276,9 +289,14 @@ function fixtureEnv(fixture) {
   return {
     ...process.env,
     DESK_RUNTIME_CACHE_DIR: fixture.runtimeCacheDir,
-    DESK_EMBED_ENDPOINT: "",
+    DESK_EMBED_ENDPOINT: fixture.embeddingEndpoint ?? "",
     DESK_OLLAMA_ENDPOINT: "",
     OLLAMA_HOST: "",
+    ...(fixture.embeddingEndpoint ? {
+      DESK_EMBED_MODEL: "nomic-embed-text",
+      OLLAMA_EMBED_MODEL: "",
+      DESK_EMBED_TIMEOUT_MS: "15000",
+    } : {}),
     HOME: path.join(fixture.root, "home"),
     XDG_CACHE_HOME: path.join(fixture.root, "xdg-cache"),
     NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
@@ -417,6 +435,7 @@ async function runMcpListToolsSession(fixture, { timeoutMs = 10000 } = {}) {
 async function runMcpStatusSession(fixture, {
   timeoutMs = 10000,
   waitForConvergence = false,
+  onInitialStatus,
 } = {}) {
   const child = spawn(process.execPath, [
     path.join(fixture.mcpRoot, "index.js"),
@@ -516,6 +535,9 @@ async function runMcpStatusSession(fixture, {
       lexical_available: body.lexical_index?.available,
       document_vectors_state: body.document_vectors?.state,
       chunks_total: body.document_vectors?.chunks_total,
+      vectors_indexed: body.document_vectors?.vectors_indexed,
+      missing_vectors: body.document_vectors?.missing_vectors,
+      repairable_missing_vectors: body.document_vectors?.repairable_missing_vectors,
     })
     return body
   }
@@ -543,24 +565,27 @@ async function runMcpStatusSession(fixture, {
     })
     const tools = await request("tools/list", {})
     const initialStatus = await callTool("desk_status")
-    observeStatus(initialStatus)
+    let body = observeStatus(initialStatus)
+    await onInitialStatus?.({ initialize, tools, initialStatus })
     let status = initialStatus
     if (waitForConvergence) {
       const deadline = performance.now() + timeoutMs
-      let body
-      do {
+      while (
+        body.local_db?.exists !== true
+        || body.local_db.state !== "available"
+        || body.lexical_index?.available !== true
+        || body.document_vectors?.state !== "available"
+        || !(body.document_vectors.chunks_total > 0)
+        || !(body.document_vectors.vectors_indexed > 0)
+        || body.document_vectors.missing_vectors !== 0
+        || body.document_vectors.repairable_missing_vectors !== 0
+      ) {
         if (performance.now() >= deadline) {
           throw sessionError("timed out waiting for converged desk_status")
         }
         status = await callTool("desk_status", {}, deadline)
         body = observeStatus(status)
-      } while (
-        body.local_db?.exists !== true
-        || body.local_db.state !== "available"
-        || body.lexical_index?.available !== true
-        || !["missing", "partial", "available"].includes(body.document_vectors?.state)
-        || !(body.document_vectors.chunks_total > 0)
-      )
+      }
     }
     const doctor = await callTool("desk_doctor")
     const mutation = await callTool("task_create", {
@@ -637,20 +662,10 @@ function listSourceMirrors(runtimeCacheDir) {
     .sort()
 }
 
-function assertNoBootstrapSideEffects(fixture, expectedBlockedFetchEndpoints = []) {
+function assertNoBootstrapSideEffects(fixture) {
   assert.equal(existsSync(path.join(fixture.mcpRoot, "node_modules")), false)
   assert.equal(existsSync(fixture.commandLog), false, "runtime bootstrap must not shell out to npm/npx/curl/wget")
-  const attempts = existsSync(fixture.networkLog)
-    ? readFileSync(fixture.networkLog, "utf8").trim().split(/\r?\n/u)
-    : []
-  for (const attempt of attempts) {
-    assert.ok(
-      expectedBlockedFetchEndpoints.some((endpoint) => (
-        attempt === JSON.stringify([endpoint, "[object Object]"])
-      )),
-      `unexpected network attempt: ${attempt}`,
-    )
-  }
+  assert.equal(existsSync(fixture.networkLog), false, "runtime must not attempt forbidden network access")
 }
 
 function assertRuntimeDependenciesRestoredToCache(fixture) {
@@ -675,6 +690,105 @@ function assertRuntimeDependenciesRestoredToCache(fixture) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+}
+
+async function createEmbeddingBarrier() {
+  const requests = []
+  const unexpected = []
+  let firstResponse
+  let released = false
+  let requestStarted
+  const started = new Promise((resolve) => { requestStarted = resolve })
+  const respond = (response) => {
+    response.writeHead(200, { "content-type": "application/json", connection: "close" })
+    response.end(JSON.stringify({ embedding: Array(768).fill(0.125) }))
+  }
+  const server = createServer((request, response) => {
+    let body = ""
+    request.setEncoding("utf8")
+    request.on("data", (chunk) => { body += chunk })
+    request.on("end", () => {
+      const call = {
+        method: request.method,
+        path: request.url,
+        host: request.headers.host,
+        remoteAddress: request.socket.remoteAddress,
+      }
+      try {
+        assert.equal(call.method, "POST")
+        assert.equal(call.path, "/api/embeddings")
+        assert.equal(call.host, `127.0.0.1:${server.address().port}`)
+        assert.equal(call.remoteAddress, "127.0.0.1")
+        const payload = JSON.parse(body)
+        assert.equal(payload.model, "nomic-embed-text")
+        assert.equal(typeof payload.prompt, "string")
+        assert.ok(payload.prompt.length > 0)
+        call.prompt = payload.prompt
+      } catch (error) {
+        unexpected.push({ ...call, error: error.message })
+        response.writeHead(400, { connection: "close" })
+        response.end("unexpected embedding request")
+        return
+      }
+      requests.push(call)
+      if (firstResponse === undefined) {
+        firstResponse = response
+        requestStarted()
+      } else {
+        respond(response)
+      }
+    })
+  })
+  server.on("clientError", (error, socket) => {
+    unexpected.push({ error: error.message })
+    socket.destroy()
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  return {
+    endpoint: `http://127.0.0.1:${server.address().port}/api/embeddings`,
+    requests,
+    unexpected,
+    get released() { return released },
+    get completed() { return firstResponse?.writableFinished === true },
+    get pending() {
+      return firstResponse !== undefined
+        && !firstResponse.destroyed && !firstResponse.writableEnded
+    },
+    async waitForRequest(timeoutMs = 10000) {
+      let timer
+      try {
+        await Promise.race([
+          started,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(
+              `embedding request never reached convergence barrier: ${JSON.stringify(unexpected)}`,
+            )), timeoutMs)
+          }),
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
+    },
+    release() {
+      assert.equal(this.pending, true, "first embedding response must still be pending")
+      assert.equal(released, false)
+      released = true
+      respond(firstResponse)
+    },
+    async close() {
+      let timer
+      try {
+        await new Promise((resolve, reject) => {
+          timer = setTimeout(() => reject(new Error("embedding server cleanup timed out")), 1000)
+          server.close((error) => error ? reject(error) : resolve())
+          server.closeAllConnections()
+        })
+      } finally {
+        clearTimeout(timer)
+      }
+    },
+  }
 }
 
 test("MCP entrypoint is dependency-light before bootstrap", async () => {
@@ -809,8 +923,10 @@ test("MCP entrypoint restores runtime dependencies offline and serves list-tools
 test("MCP entrypoint serves coherent desk_status from the source mirror after background convergence", {
   skip: hostRuntimePackExists ? false : `no committed runtime dependency pack for ${hostTarget}`,
 }, async () => {
-  const fixture = makeFixture()
+  const embedding = await createEmbeddingBarrier()
+  let fixture
   try {
+    fixture = makeFixture({ embeddingEndpoint: embedding.endpoint })
     mkdirSync(path.join(fixture.deskRoot, "ops", "status-check"), { recursive: true })
     writeFileSync(
       path.join(fixture.deskRoot, "ops", "status-check", "task.md"),
@@ -818,20 +934,30 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after ba
       "utf8",
     )
 
-    const result = await runMcpStatusSession(fixture, { waitForConvergence: true })
-    assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
-    assert.equal(result.tools.error, undefined, result.stderr || result.stdout)
-    assert.equal(result.initialStatus.error, undefined, result.stderr || result.stdout)
+    const result = await runMcpStatusSession(fixture, {
+      waitForConvergence: true,
+      onInitialStatus: async ({ initialize, tools, initialStatus }) => {
+        await embedding.waitForRequest()
+        assert.equal(embedding.pending, true, "initial status must arrive while convergence is blocked")
+        assert.equal(embedding.released, false)
+        assert.equal(embedding.completed, false)
+        assert.equal(embedding.requests.length, 1)
+        assert.match(embedding.requests[0].prompt, /Status Check/u)
+        assert.equal(initialize.error, undefined)
+        assert.equal(initialize.result.serverInfo.name, "desk-mcp")
+        assert.equal(tools.error, undefined)
+        assert.ok(tools.result.tools.some((tool) => tool.name === "desk_status"))
+        assert.ok(tools.result.tools.some((tool) => tool.name === "task_create"))
+        assert.equal(initialStatus.error, undefined)
+        assert.equal(initialStatus.result.isError, undefined)
+        const initialBody = JSON.parse(initialStatus.result.content[0].text)
+        assert.equal(initialBody.status, "ok")
+        assert.equal(initialBody.runtime.loaded_from_source_mirror, true)
+        embedding.release()
+      },
+    })
     assert.equal(result.status.error, undefined, result.stderr || result.stdout)
     assert.equal(result.doctor.error, undefined, result.stderr || result.stdout)
-    assert.ok(
-      result.tools.result.tools.some((tool) => tool.name === "desk_status"),
-      "list-tools response must expose desk_status from the restored runtime server",
-    )
-    assert.equal(result.initialStatus.result.isError, undefined, JSON.stringify(result.initialStatus.result))
-    const initialBody = JSON.parse(result.initialStatus.result.content[0].text)
-    assert.equal(initialBody.status, "ok")
-    assert.equal(initialBody.runtime.loaded_from_source_mirror, true)
     assert.ok(result.status.id > result.initialStatus.id, "converged status must be a later response")
     assert.equal(result.status.result.isError, undefined, JSON.stringify(result.status.result))
     const body = JSON.parse(result.status.result.content[0].text)
@@ -841,11 +967,12 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after ba
     assert.equal(body.local_db.state, "available")
     assert.equal(body.lexical_index.available, true)
     assert.equal(body.startup_fallback.mode, "not_checked")
-    assert.equal(body.document_vectors.state, "missing")
+    assert.equal(body.document_vectors.state, "available")
     assert.ok(body.document_vectors.chunks_total > 0)
-    assert.ok(body.document_vectors.repairable_missing_vectors > 0)
-    assert.equal(body.document_vectors.vectors_indexed, 0)
-    assert.equal(body.startup_fallback.degraded, true)
+    assert.ok(body.document_vectors.vectors_indexed > 0)
+    assert.equal(body.document_vectors.missing_vectors, 0)
+    assert.equal(body.document_vectors.repairable_missing_vectors, 0)
+    assert.equal(body.startup_fallback.degraded, false)
     assert.equal(body.runtime.loaded_from_source_mirror, true)
     assert.ok(
       body.runtime.source_mirror_path.startsWith(path.join(fixture.runtimeCacheDir, "source-mirror")),
@@ -875,13 +1002,17 @@ test("MCP entrypoint serves coherent desk_status from the source mirror after ba
       existsSync(path.join(fixture.deskRoot, "diagnostic-probe", "must-not-write", "task.md")),
       true,
     )
-    // The preload blocks background embedding probes as well as bootstrap network access.
-    assertNoBootstrapSideEffects(fixture, [
-      "http://127.0.0.1:11434/api/embeddings",
-      "http://localhost:11434/api/embeddings",
-    ])
+    assert.equal(embedding.released, true)
+    assert.equal(embedding.completed, true)
+    assert.ok(embedding.requests.length > 0)
+    assert.deepEqual(embedding.unexpected, [])
+    assertNoBootstrapSideEffects(fixture)
   } finally {
-    rmSync(fixture.root, { recursive: true, force: true })
+    try {
+      await embedding.close()
+    } finally {
+      if (fixture) rmSync(fixture.root, { recursive: true, force: true })
+    }
   }
 })
 
