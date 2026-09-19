@@ -40,6 +40,22 @@ for (const mode of ["global-personal", "project-local"]) {
       assert.deepEqual(resolveStartupReadinessPolicy({
         args: { activationConfig: configPath }, env: {},
       }), expected)
+      const argv = JSON.parse(result.generatedConfig.match(/^args = (.+)$/mu)[1]).slice(1)
+      argv[argv.indexOf("--activation-config") + 1] = configPath
+      let started
+      await main({
+        argv, env: {}, runtimeInspector: null,
+        runtimeImporter: async () => ({
+          connectOrStartController: async () => ({ accepted: true }),
+          startServer: async (options) => { started = options },
+        }),
+      })
+      assert.deepEqual(started.statusContext.admission.authority, { mode: "workspace" })
+      assert.equal(started.person ?? null, null)
+      assert.equal(
+        await resolveWriteTarget({ deskRoot: root, person: started.person, segments: ["task.md"] }),
+        path.join(root, "task.md"),
+      )
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -79,6 +95,21 @@ test("Codex person policy reaches admission and enforces the generated person ar
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+for (const mode of ["global-personal", "project-local", "manual-only"]) {
+  for (const policy of [undefined, {}, { write_authority: "workspace" }]) {
+    test(`Codex ${mode} rejects person with effective workspace policy: ${JSON.stringify(policy)}`, () => {
+      const activationInput = input(mode, policy, { person: "ari" })
+      const before = JSON.stringify(activationInput)
+      assert.throws(() => materializeCodexActivation(activationInput), (error) => (
+        error.code === "authority_invalid" && error.status === "terminal" && error.retryable === false
+        && error.expected.write_authority === "person"
+        && error.observed.write_authority === "workspace"
+      ))
+      assert.equal(JSON.stringify(activationInput), before)
+    })
+  }
+}
 
 for (const person of [undefined, null, "", " ", "../other", "/tmp/other", 42]) {
   test(`Codex rejects unenforceable person policy (${JSON.stringify(person)})`, () => {

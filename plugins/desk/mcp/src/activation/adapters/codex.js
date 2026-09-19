@@ -722,8 +722,17 @@ export function materializeCodexActivation(input) {
       summary: "Codex standalone activation cannot enforce a named Desk authority provider.",
     })
   }
+  if (input.person != null && readinessPolicy.write_authority !== "person") {
+    throw new ActivationFailure({
+      phase: "VERIFYING",
+      code: "authority_invalid",
+      expected: { write_authority: "person" },
+      observed: { write_authority: readinessPolicy.write_authority },
+      summary: "Codex person input requires person-scoped Desk write authority.",
+    })
+  }
   let person = null
-  if (readinessPolicy.write_authority === "person" || input.person != null) {
+  if (readinessPolicy.write_authority === "person") {
     try {
       person = typeof input.person === "string" ? input.person.trim() : input.person
       validateWriteSegment(person)
