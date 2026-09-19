@@ -1,4 +1,5 @@
 import { ActivationFailure } from "./failures.js"
+import { validateWriteSegment } from "../util/paths.js"
 
 export async function admitControlPlane({
   deskRoot,
@@ -26,6 +27,7 @@ export async function admitControlPlane({
     policy,
     authorityProvider,
   })
+  resolveAdmittedPerson({ authority, person })
   const controller = await connectController({ deskRoot, policy })
   if (!controller?.accepted) {
     throw new ActivationFailure({
@@ -42,6 +44,33 @@ export async function admitControlPlane({
     runtime: verifiedRuntime,
     controller,
     automatic_actions: [],
+  })
+}
+
+export function resolveAdmittedPerson({ authority, person = null } = {}) {
+  if (authority?.mode === "workspace" && authority.person == null && person === null) {
+    return null
+  }
+  if (authority?.mode === "person" && (person === null || person === authority.person)) {
+    try {
+      validateWriteSegment(authority.person)
+    } catch (error) {
+      throw new ActivationFailure({
+        phase: "VERIFYING",
+        code: "authority_invalid",
+        expected: { person: "non-empty single path segment" },
+        observed: { authority, person, message: error.message },
+        summary: "Admitted Desk person authority has no enforceable write identity.",
+      })
+    }
+    return authority.person
+  }
+  throw new ActivationFailure({
+    phase: "VERIFYING",
+    code: "authority_invalid",
+    expected: { authority: "workspace without --person, or person matching the admitted identity" },
+    observed: { authority, person },
+    summary: "Desk write authority is missing, invalid, or contradicts --person; server admission refused.",
   })
 }
 

@@ -85,3 +85,33 @@ test("admission requires a real controller connector", async () => {
     },
   )
 })
+
+for (const scenario of [
+  { name: "workspace with raw person", authority: { mode: "workspace" }, person: "ari" },
+  { name: "provider disagrees with raw person", authority: { mode: "person", person: "bob" }, person: "ari" },
+  { name: "provider missing person", authority: { mode: "person" } },
+  { name: "provider invalid person", authority: { mode: "person", person: "../other" } },
+  { name: "provider missing authority", authority: undefined },
+]) {
+  test(`admission refuses ${scenario.name} before controller ownership`, async () => {
+    let connected = false
+    await assert.rejects(admitControlPlane({
+      deskRoot: "/desk",
+      person: scenario.person,
+      policy: normalizeReadinessPolicy({ write_authority: scenario.authority?.mode ?? "workspace" }),
+      authorityProvider: async () => scenario.authority,
+      connectController: async () => { connected = true; return { accepted: true } },
+    }), (error) => error.code === "authority_invalid" && error.status === "terminal")
+    assert.equal(connected, false)
+  })
+}
+
+test("admission preserves a provider-derived person without raw input", async () => {
+  const admission = await admitControlPlane({
+    deskRoot: "/desk",
+    policy: normalizeReadinessPolicy({ write_authority: "person", authority_provider: "registry" }),
+    authorityProvider: async () => ({ mode: "person", person: "ari" }),
+    connectController: async () => ({ accepted: true }),
+  })
+  assert.deepEqual(admission.authority, { mode: "person", person: "ari" })
+})

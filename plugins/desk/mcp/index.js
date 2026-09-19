@@ -15,7 +15,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as path from "node:path"
-import { admitControlPlane } from "./src/activation/admit.js"
+import { admitControlPlane, resolveAdmittedPerson } from "./src/activation/admit.js"
 import { ActivationFailure } from "./src/activation/failures.js"
 import { normalizeReadinessPolicy } from "./src/activation/readiness-policy.js"
 import {
@@ -300,6 +300,7 @@ export async function main({
     authorityProvider,
     controllerConnector: runtimeServer.connectOrStartController,
   })
+  const person = resolveAdmittedPerson({ authority: admission.authority, person: args.person })
   if (readinessPolicy.semantic === "required") {
     let barrier
     try {
@@ -326,7 +327,7 @@ export async function main({
   }
   await runtimeServer.startServer({
     deskRoot,
-    person: args.person,
+    person,
     statusContext: {
       root: rootResolution,
       activation: activationStatus,

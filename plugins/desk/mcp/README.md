@@ -105,6 +105,8 @@ Diagnostic responses retain `status: "degraded"`, `mode: "diagnostic"`, the prec
 
 Semantic controller admission captures the normalized, ordered effective embedding endpoints once: `DESK_EMBED_ENDPOINT`, `DESK_OLLAMA_ENDPOINT`, `OLLAMA_HOST`, then the existing loopback fallbacks, with duplicates removed. That exact list participates in controller identity and is used for both document convergence and the required query probe. A process with a different endpoint list cannot borrow another controller's probe. Internal embedding callers can supply a nonempty `endpoints` list of already-resolved URLs to use exactly that order without ambient fallback; the single `endpoint` override remains supported.
 
+Common startup routes writes from the admitted authority, not the raw CLI argument. Workspace authority requires no `--person`; person authority uses the admitted person's identity, including a provider-derived identity when the argument is absent. A conflicting `--person`, missing authority, or unenforceable person identity fails closed before the MCP server starts. This applies to direct launches as well as host adapters.
+
 ### Developer notes
 
 Direct development checkouts can still run `npm install` when intentionally working on the MCP package.
