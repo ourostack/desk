@@ -437,6 +437,53 @@ test("legacy scalar mechanisms compare to canonical cycles without rewriting sto
   assert.equal(typeof JSON.parse(stored).introduced_mechanisms, "string")
 })
 
+for (const [name, legacy, current, stalled] of [
+  ["scalar", " Correctness ", ["correctness"], true],
+  ["normalized scalar", " Regression_Risk ", ["regression-risk"], true],
+  ["mixed array", [" Correctness ", null, 42, { security: true }, ["nested"], "correctness"],
+    ["correctness"], true],
+  ["reordered array", [" Regression Risk ", "correctness", "regression_risk"],
+    ["correctness", "regression-risk"], true],
+  ["null", null, [], true],
+  ["empty scalar", "  ", [], true],
+  ["number", 42, [], true],
+  ["boolean", true, [], true],
+  ["object", { correctness: true }, [], true],
+  ["nested array", [["correctness"], null, 42], [], true],
+  ["new category after null", null, ["correctness"], false],
+  ["new category after malformed entries", [{ correctness: true }, ["correctness"]],
+    ["correctness"], false],
+]) {
+  test(`legacy finding categories compare without rewriting stored history: ${name}`, async (t) => {
+    const fixture = await mkLedgerFixture()
+    t.after(() => cleanup(fixture.base))
+    t.after(useHostEnv(fixture))
+    const workItemId = await prepareWorkDesignItem(fixture, "Compare legacy finding categories safely.")
+    const canonical = discriminator({ hypothesis: "Same hypothesis.", finding_categories: current })
+    assert.equal(body(await ledger(fixture, findingCycle(workItemId, 1, {
+      openFindings: ["finding-a"], discriminator: canonical,
+    }))).status, "cycle_recorded")
+    const rawLegacyJson = JSON.stringify({ ...canonical, finding_categories: legacy }, null, 2)
+    const options = { deskRoot: fixture.deskRoot, person: "rowan", env: process.env }
+    await withLedger(options, (db) => {
+      db.prepare("UPDATE cycles SET discriminator = ? WHERE work_item_id = ? AND cycle = 1")
+        .run(rawLegacyJson, workItemId)
+    })
+    const result = await ledger(fixture, findingCycle(workItemId, 2, {
+      openFindings: ["finding-a"], discriminator: canonical,
+    }))
+    assert.notEqual(result.isError, true, JSON.stringify(body(result)))
+    assert.equal(body(result).status, stalled ? "pivot_required" : "cycle_recorded")
+    assert.deepEqual(body(result).convergence.triggers.map((entry) => entry.code),
+      stalled ? ["stalled_open_findings"] : [])
+    const stored = await withLedger(options, (db) =>
+      db.prepare("SELECT discriminator FROM cycles WHERE work_item_id = ? AND cycle = 1")
+        .get(workItemId).discriminator)
+    assert.equal(stored, rawLegacyJson)
+    assert.deepEqual(JSON.parse(stored).finding_categories, legacy)
+  })
+}
+
 test("cycle refuses non-canonical discriminator shapes without storing a cycle", async (t) => {
   const fixture = await mkLedgerFixture()
   t.after(() => cleanup(fixture.base))
