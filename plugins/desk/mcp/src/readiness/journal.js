@@ -150,6 +150,50 @@ export function normalizeChangePath(value) {
   return value.replaceAll("\\", "/")
 }
 
+export class CanonicalWriteRecordingError extends Error {
+  constructor({ paths, recordedPaths, cause, invalidationError }) {
+    super("Canonical files were written or moved, but durable change recording failed; do not repeat the canonical mutation.", { cause })
+    this.code = "canonical_write_recording_failed"
+    this.canonical_written = true
+    this.journal_recorded = false
+    this.retryable = false
+    this.paths = paths
+    this.recorded_paths = recordedPaths
+    this.invalidation_error = invalidationError?.message ?? null
+  }
+
+  toJSON() {
+    return {
+      status: "partial_operation", code: this.code, message: this.message,
+      canonical_written: this.canonical_written, journal_recorded: this.journal_recorded,
+      retryable: this.retryable, paths: this.paths, recorded_paths: this.recorded_paths,
+      invalidation_error: this.invalidation_error,
+      recording_error: this.cause?.message ?? String(this.cause),
+    }
+  }
+}
+
+export async function recordCanonicalChanges({ root, readiness, changes }) {
+  // Unadmitted library callers retain their file-only API; admitted dispatch always supplies readiness.
+  if (readiness === undefined) return
+  const paths = changes.map((change) => change.path.replaceAll("\\", "/"))
+  const recordedPaths = []
+  try {
+    for (const change of changes) {
+      const acknowledgement = await readiness.recordChange({
+        root, path: normalizeChangePath(change.path), operation: change.operation ?? "write",
+        observedAt: new Date().toISOString(),
+      })
+      if (acknowledgement?.recorded !== true) throw new Error("controller did not acknowledge durable recording")
+      recordedPaths.push(change.path.replaceAll("\\", "/"))
+    }
+  } catch (cause) {
+    let invalidationError
+    try { await readiness.markUncertain("journal_write_failed") } catch (error) { invalidationError = error }
+    throw new CanonicalWriteRecordingError({ paths, recordedPaths, cause, invalidationError })
+  }
+}
+
 function validateRecord(record) {
   normalizeChangePath(record.path)
   if (!Number.isSafeInteger(record.sequence) || record.sequence < 1 ||

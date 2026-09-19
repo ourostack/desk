@@ -4,6 +4,11 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import Database from "better-sqlite3"
 import { mkTempRoot } from "../_temp_roots.js"
+import { task_create, task_update, task_archive } from "../../src/tools/task.js"
+import { track_create, track_update } from "../../src/tools/track.js"
+import { friction_add } from "../../src/tools/friction.js"
+import { lesson_add } from "../../src/tools/lesson.js"
+import { callTool } from "../../src/server.js"
 
 async function fixture() {
   const root = await mkTempRoot("desk-journal-")
@@ -137,4 +142,124 @@ test("journal rejects path escape, foreign roots, hard links and symlinked state
   fs.mkdirSync(destination)
   fs.symlinkSync(destination, other.stateDir, "junction")
   await assert.rejects(other.open(), /unsafe.*directory/)
+})
+
+function deferred() {
+  let resolve
+  const promise = new Promise((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+test("canonical mutation cannot return success while durable recording is pending", async () => {
+  const root = await mkTempRoot("desk-mutation-journal-")
+  const entered = deferred()
+  const release = deferred()
+  let recorded = false
+  let settled = false
+  const readiness = { async recordChange(change) {
+    assert.equal(change.path, "track/task/task.md")
+    assert.match(fs.readFileSync(path.join(root, change.path), "utf8"), /Canonical title/)
+    recorded = true
+    entered.resolve()
+    await release.promise
+    return { recorded: true }
+  } }
+  const pending = task_create({ deskRoot: root, readiness, input: { track: "track", slug: "task", title: "Canonical title" } })
+    .then((value) => { settled = true; return value })
+  try {
+    // The old implementation finishes without ever entering recordChange.
+    await Promise.race([entered.promise, pending])
+    assert.equal(recorded, true)
+    assert.equal(settled, false)
+    release.resolve()
+    assert.equal((await pending).status, "created")
+  } finally { release.resolve(); await pending }
+})
+
+const mutations = [
+  ["task_create", task_create, { track: "track", slug: "task", title: "new" }, "track/task/task.md"],
+  ["task_update", task_update, { track: "track", slug: "task", body_append: "updated" }, "track/task/task.md"],
+  ["task_archive", task_archive, { track: "track", slug: "task" }, "track/_archive/task/task.md"],
+  ["track_create", track_create, { slug: "track", title: "new" }, "track/track.md"],
+  ["track_update", track_update, { slug: "track", body_append: "updated" }, "track/track.md"],
+  ["friction_add", friction_add, { body: "new friction" }, "_meta/friction.md"],
+  ["lesson_add", lesson_add, { topic: "Journal", body: "new lesson" }, "_meta/tips/journal.md"],
+]
+
+for (const [name, tool, input, changedPath] of mutations) {
+  test(`${name} preserves canonical work and reports a typed partial operation on recording failure`, async () => {
+    const root = await mkTempRoot("desk-mutation-journal-")
+    if (name === "task_update" || name === "task_archive") {
+      await task_create({ deskRoot: root, input: { track: "track", slug: "task", title: "before" } })
+    }
+    if (name === "track_update") await track_create({ deskRoot: root, input: { slug: "track", title: "before" } })
+    const invalidations = []
+    const readiness = {
+      async recordChange() { throw new Error("injected journal unavailable") },
+      async markUncertain(reason) { invalidations.push(reason) },
+    }
+    await assert.rejects(tool({ deskRoot: root, input, readiness }), (error) => {
+      assert.equal(error.code, "canonical_write_recording_failed")
+      assert.equal(error.canonical_written, true)
+      assert.equal(error.journal_recorded, false)
+      assert.equal(error.retryable, false)
+      assert.match(error.message, /canonical.*written/i)
+      assert.ok(error.paths.length > 0)
+      return true
+    })
+    assert.equal(fs.existsSync(path.join(root, changedPath)), true)
+    assert.deepEqual(invalidations, ["journal_write_failed"])
+  })
+}
+
+test("normal MCP dispatch preserves partial-write fields and invalidation failure diagnostics", async () => {
+  const root = await mkTempRoot("desk-mutation-dispatch-")
+  const result = await callTool({
+    deskRoot: root, name: "task_create", input: { track: "track", slug: "task", title: "kept" },
+    statusContext: { admission: { controller: {
+      async recordChange() { throw new Error("offline journal") },
+      async markUncertain() { throw new Error("controller unreachable") },
+    } } },
+  })
+  assert.equal(result.isError, true)
+  const body = JSON.parse(result.content[0].text)
+  assert.equal(body.status, "partial_operation")
+  assert.equal(body.code, "canonical_write_recording_failed")
+  assert.equal(body.canonical_written, true)
+  assert.equal(body.journal_recorded, false)
+  assert.equal(body.retryable, false)
+  assert.deepEqual(body.paths, ["track/task/task.md"])
+  assert.match(body.invalidation_error, /controller unreachable/)
+  assert.equal(fs.existsSync(path.join(root, "track", "task", "task.md")), true)
+})
+
+test("archive and legacy lesson rename record both removed and new paths", async () => {
+  const root = await mkTempRoot("desk-mutation-moves-")
+  const changes = []
+  const readiness = { async recordChange(change) { changes.push(change); return { recorded: true } } }
+  await task_create({ deskRoot: root, input: { track: "track", slug: "task", title: "before" } })
+  await task_archive({ deskRoot: root, input: { track: "track", slug: "task" }, readiness })
+  assert.deepEqual(changes.map(({ path, operation }) => ({ path, operation })), [
+    { path: "track/task", operation: "delete" },
+    { path: "track/_archive/task", operation: "write" },
+    { path: "track/_archive/task/task.md", operation: "write" },
+  ])
+  changes.length = 0
+  fs.mkdirSync(path.join(root, "_meta", "tips"), { recursive: true })
+  fs.writeFileSync(path.join(root, "_meta", "tips", "Journal.md"), "# Journal\n\nbefore\n")
+  await lesson_add({ deskRoot: root, input: { topic: "Journal", body: "after" }, readiness })
+  // Existing filename-equivalence rules may retain case on case-insensitive hosts.
+  assert.ok(changes.some((change) => change.operation === "write"))
+  assert.match(fs.readFileSync(path.join(root, changes.at(-1).path), "utf8"), /after/)
+})
+
+test("failed canonical validation never appends a journal event", async () => {
+  const root = await mkTempRoot("desk-mutation-validation-")
+  let calls = 0
+  await assert.rejects(task_create({
+    deskRoot: root, input: { track: "..", slug: "task", title: "invalid" },
+    readiness: { recordChange() { calls++ } },
+  }))
+  assert.equal(calls, 0)
+  assert.deepEqual(fs.readdirSync(root), [])
 })

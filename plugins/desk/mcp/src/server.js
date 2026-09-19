@@ -53,6 +53,7 @@ import {
 import { openDb, closeDb } from "./db/init.js"
 import { rebuildIndex } from "./indexer/index.js"
 import { stableStringify } from "./readiness/identity.js"
+import { CanonicalWriteRecordingError } from "./readiness/journal.js"
 import { admitControlPlane } from "./activation/admit.js"
 import { ActivationFailure } from "./activation/failures.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
@@ -208,11 +209,20 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
     if (EMBEDDING_TOOLS.has(name)) {
       verifyEmbeddingModel(statusContext.admission?.controller?.identity?.semantic_contract?.mode ?? null)
     }
-    const result = await impl({ deskRoot, input: input ?? {}, person, statusContext })
+    const result = await impl({
+      deskRoot, input: input ?? {}, person, statusContext,
+      readiness: statusContext.admission ? statusContext.admission.controller ?? null : undefined,
+    })
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
     }
   } catch (err) {
+    if (err instanceof CanonicalWriteRecordingError) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ...err.toJSON(), tool: name }) }],
+        isError: true,
+      }
+    }
     return {
       content: [
         {
