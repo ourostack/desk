@@ -8,6 +8,9 @@ import {
 } from "../artifact-ledger.js"
 import { resolveActivationChain, selectEngineeringMethod } from "../validate.js"
 import { hashCurrentSource } from "../../runtime/bootstrap.js"
+import { normalizeReadinessPolicy } from "../readiness-policy.js"
+import { ActivationFailure } from "../failures.js"
+import { validateWriteSegment } from "../../util/paths.js"
 
 const CODEX_CAPABILITIES = new Set(["Read", "Write", "Interactive"])
 const CODEX_ACTIVATION_LEDGER_PATH = ".codex/desk-activation-ledger.json"
@@ -621,6 +624,7 @@ args = ${tomlArray([
     `${input.pluginRoot}/mcp/index.js`,
     "--activation-config",
     modeConfig.activationConfigPath,
+    ...(input.person ? ["--person", input.person] : []),
   ])}
 cwd = "."
 enabled = true
@@ -643,6 +647,7 @@ function renderActivationConfig(input, selectedActivation) {
     desk: {
       root: input.deskRoot,
     },
+    desk_runtime: input.readinessPolicy,
     runtimeCacheDir: input.runtimeCacheDir,
     activation: {
       source_identity: sourceIdentity,
@@ -707,6 +712,32 @@ function generatedArtifactContent(activation, artifact) {
 }
 
 export function materializeCodexActivation(input) {
+  const readinessPolicy = normalizeReadinessPolicy(input.manifest.desk_runtime)
+  if (readinessPolicy.authority_provider !== null) {
+    throw new ActivationFailure({
+      phase: "VERIFYING",
+      code: "authority_invalid",
+      expected: { authority_provider: readinessPolicy.authority_provider },
+      observed: { resolution: "unsupported-by-codex-launch" },
+      summary: "Codex standalone activation cannot enforce a named Desk authority provider.",
+    })
+  }
+  let person = null
+  if (readinessPolicy.write_authority === "person" || input.person != null) {
+    try {
+      person = typeof input.person === "string" ? input.person.trim() : input.person
+      validateWriteSegment(person)
+    } catch {
+      throw new ActivationFailure({
+        phase: "VERIFYING",
+        code: "authority_invalid",
+        expected: { person: "non-empty single path segment" },
+        observed: { resolution: "missing-or-invalid-person" },
+        summary: "Codex person-scoped Desk activation requires an enforceable person identity.",
+      })
+    }
+  }
+  input = { ...input, readinessPolicy, person }
   const modeConfig = MODE_CONFIG[input.mode]
   assertCodexCapabilities(input.manifest)
   const selectedActivation = selectedActivationFor(input)

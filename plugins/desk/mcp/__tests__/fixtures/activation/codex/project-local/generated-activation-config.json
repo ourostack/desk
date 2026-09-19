@@ -3,6 +3,13 @@
   "desk": {
     "root": ".desk"
   },
+  "desk_runtime": {
+    "root": "workspace",
+    "write_authority": "workspace",
+    "lexical": "required",
+    "semantic": "background",
+    "authority_provider": null
+  },
   "runtimeCacheDir": ".codex/desk-runtime-cache",
   "activation": {
     "source_identity": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
