@@ -610,6 +610,7 @@ test("entrypoint main resolves startup root before launching injected runtime se
   try {
     writeActivationConfig(fixture.configPath, fixture.activationRoot, {
       runtimeCacheDir: fixture.runtimeCache,
+      desk_runtime: { write_authority: "person" },
     })
     const calls = []
     await main({
