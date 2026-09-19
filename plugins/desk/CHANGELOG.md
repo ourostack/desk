@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.6 — 2026-09-19
+
+**Lexical-first alpha: correct lexical answers during startup and file changes, with fresh direct reads when index readiness is uncertain.** This candidate packages the [reviewed lexical milestone](https://github.com/ourostack/ouroboros-skills/commit/0eb9ea139a997c5c39394ac7b95ab02bff7331b5): durable journal/restart behavior, one index writer, and vector cleanup that leaves zero orphan vectors. Uncertain readiness falls back to current source files rather than serving stale indexed answers.
+
+Desk `3.2.0-alpha.6` couples to `desk-mcp@1.4.0-alpha.6`. Release metadata and generated source-scope anchors are refreshed without adding product behavior. All three runtime dependency packs reuse byte-identical, previously native-verified alpha.5 dependency payloads; their manifests record the source archive and native-verification provenance. Repackaging is not fresh native execution or cross-platform qualification.
+
+**Known limits:** semantic scheduling and transactional recovery are not qualified in this alpha. Repeated tombstone-policy changes fail closed but may surface as a generic error rather than typed `readiness_changed_during_read`. This remains an opt-in candidate, not a qualified V1 replacement, publication, or downstream installation change.
+
 ## 3.2.0-alpha.5 — 2026-09-18
 
 **Opt-in dogfood alpha for bounded work design, with deterministic one-ruling semantics and no lifecycle takeover.** Desk now records an exact-file/directory scope envelope and the four convergence controls around Superpowers: declared architecture expansion, write-set escape, stalled findings without new learning, and repeated boundary rejection after three failed cycles at the same boundary. Each cycle keeps the full trigger evidence, but one canonical primary trigger yields one ruling per cycle; the ruling stays model-owned, unresolved pivots block the next cycle, and Superpowers remains the engineering lifecycle owner.
