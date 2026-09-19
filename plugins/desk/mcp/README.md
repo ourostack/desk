@@ -103,7 +103,11 @@ Desk validates the committed runtime support matrix before loading production de
 
 Direct development checkouts can still run `npm install` when intentionally working on the MCP package.
 
-Semantic ranking requires Ollama with `nomic-embed-text` pulled. The MCP resolves the embedding endpoint in this order: explicit test/tool `endpoint`, `DESK_EMBED_ENDPOINT`, `DESK_OLLAMA_ENDPOINT`, `OLLAMA_HOST`, `http://127.0.0.1:11434`, then `http://localhost:11434`. Set `DESK_EMBED_MODEL` to override `nomic-embed-text`, and `DESK_EMBED_TIMEOUT_MS` to adjust the per-endpoint timeout.
+Semantic ranking requires Ollama with `nomic-embed-text` pulled. The active embedding specification pins this model for both document and query embeddings. With semantic mode `background` or `required`, startup refuses an effective `DESK_EMBED_MODEL` (or fallback `OLLAMA_EMBED_MODEL`) that differs from the pinned model, before connecting to a readiness controller or calling an embedding endpoint. Unset the override or set it to `nomic-embed-text`; another model requires a separately versioned embedding specification. The runtime does not rewrite the override or fall back to lexical-only startup for this configuration error.
+
+Semantic mode `unsupported` ignores model configuration at startup and skips embedding during automatic convergence. Explicit indexed queries and `desk_reindex` can still generate embeddings, so their MCP dispatch checks the same model pin before any index or endpoint work, including in `unsupported` mode. A differing model is refused, not silently replaced. This also covers `desk_thread`, whose index refresh can generate document vectors. Low-level embedding helpers retain explicit `opts.model` injection for isolated tests and future specification work, not ordinary runtime model selection.
+
+The MCP resolves the embedding endpoint in this order: explicit test/tool `endpoint`, `DESK_EMBED_ENDPOINT`, `DESK_OLLAMA_ENDPOINT`, `OLLAMA_HOST`, `http://127.0.0.1:11434`, then `http://localhost:11434`. Set `DESK_EMBED_TIMEOUT_MS` to adjust the per-endpoint timeout.
 
 If Ollama is unavailable, search soft-falls-back to FTS5-only with `semantic_unavailable` plus `semantic_diagnostic` and `semantic_repair` fields in the response. If a desk was indexed while Ollama was down, `desk_reindex` without arguments now repairs missing vectors automatically once embeddings are reachable; `force:true` is only needed when you intentionally want to drop and rebuild the whole DB.
 

@@ -49,6 +49,7 @@ import {
   ensureIndex,
 } from "./server-helpers.js"
 import { admitControlPlane } from "./activation/admit.js"
+import { ActivationFailure } from "./activation/failures.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
 import { resolveEmbeddingModel } from "./indexer/embed.js"
 
@@ -57,7 +58,26 @@ export { admitControlPlane, configureRuntimeArtifacts, ensureIndex }
 
 let readinessControllerModulePromise
 
+function verifyEmbeddingModel(semantic) {
+  const model = resolveEmbeddingModel()
+  if (model !== ACTIVE_EMBEDDING_SPEC.model) {
+    throw new ActivationFailure({
+      phase: "VERIFYING",
+      code: "embedding_model_mismatch",
+      expected: {
+        model: ACTIVE_EMBEDDING_SPEC.model,
+        embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id,
+      },
+      observed: { model, semantic },
+      summary: `Desk semantic admission refused: effective embedding model ${JSON.stringify(model)} differs from the pinned model ${ACTIVE_EMBEDDING_SPEC.model}. Unset DESK_EMBED_MODEL / OLLAMA_EMBED_MODEL or set the effective override to the pinned model; another model requires a separately versioned embedding specification.`,
+    })
+  }
+}
+
 export async function connectOrStartController({ deskRoot, policy, stateHome, ephemeral }) {
+  if (policy.semantic !== "unsupported") {
+    verifyEmbeddingModel(policy.semantic)
+  }
   const options = {
     root: deskRoot,
     protocolVersion: 1,
@@ -73,10 +93,7 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
     },
     semanticContract: {
       mode: policy.semantic,
-      embedding_spec: policy.semantic === "unsupported" ? null : {
-        ...ACTIVE_EMBEDDING_SPEC,
-        model: resolveEmbeddingModel(),
-      },
+      embedding_spec: policy.semantic === "unsupported" ? null : ACTIVE_EMBEDDING_SPEC,
     },
     handlers: {
       beginConvergence: () => ensureIndex(deskRoot, {
@@ -122,6 +139,11 @@ export const TOOL_IMPLS = {
   desk_doctor: doctorRuntime,
 }
 
+// These tools can embed through ensureIndex, even without a semantic query.
+const EMBEDDING_TOOLS = new Set([
+  "desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread", "desk_reindex",
+])
+
 /**
  * Dispatch a single MCP call. Pulled out from startServer so tests can
  * exercise the dispatch table directly (no stdio transport needed).
@@ -152,6 +174,9 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
     }
   }
   try {
+    if (EMBEDDING_TOOLS.has(name)) {
+      verifyEmbeddingModel(statusContext.admission?.controller?.identity?.semantic_contract?.mode ?? null)
+    }
     const result = await impl({ deskRoot, input: input ?? {}, person, statusContext })
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
