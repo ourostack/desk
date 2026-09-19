@@ -337,7 +337,7 @@ function gatherVecCandidates(db, queryVec, k) {
  * chunk_id → row with { doc_path, kind, track, task_slug, status,
  * updated_at, text, heading, embedding (decoded array | null) }.
  */
-function hydrateChunks(db, chunkIds) {
+function hydrateChunks(db, chunkIds, lexicalOnly = false) {
   if (!chunkIds.length) return new Map()
   const placeholders = chunkIds.map(() => "?").join(",")
   const rows = db
@@ -345,10 +345,10 @@ function hydrateChunks(db, chunkIds) {
       `SELECT c.id AS chunk_id, c.text, c.heading, c.doc_id,
               d.path AS doc_path, d.kind, d.track, d.task_slug,
               d.status, d.updated_at, d.is_archived,
-              v.embedding AS embedding
+              ${lexicalOnly ? "NULL" : "v.embedding"} AS embedding
        FROM chunks c
        JOIN docs d ON d.id = c.doc_id
-       LEFT JOIN chunk_vecs v ON v.chunk_id = c.id
+       ${lexicalOnly ? "" : "LEFT JOIN chunk_vecs v ON v.chunk_id = c.id"}
        WHERE c.id IN (${placeholders})`,
     )
     .all(...chunkIds)
@@ -427,6 +427,14 @@ function firstChunkText(row) {
  *     query: string }
  */
 export async function desk_search({ deskRoot, input, opts }) {
+  if (String(input?.query ?? "").trim()) {
+    await ensureIndex(deskRoot, { embed: opts?.embed ?? {} })
+  }
+  return indexedSearch({ deskRoot, input, opts })
+}
+
+// Shared result contract for the persisted index and a fresh in-memory FTS corpus.
+export async function indexedSearch({ deskRoot, input, opts, db: suppliedDb }) {
   const t0 = Date.now()
   const query = String(input?.query ?? "").trim()
   if (!query) {
@@ -443,8 +451,7 @@ export async function desk_search({ deskRoot, input, opts }) {
   const scope = input?.scope
   const now = opts?.now ?? Date.now()
 
-  await ensureIndex(deskRoot, { embed: opts?.embed ?? {} })
-  const db = openDb(deskRoot)
+  const db = suppliedDb ?? openDb(deskRoot)
   try {
     const { matchExpr, terms } = buildFtsQuery(query)
     const filter = buildDocsFilter(filters)
@@ -456,7 +463,10 @@ export async function desk_search({ deskRoot, input, opts }) {
       vector: queryVec,
       available: semanticAvailable,
       diagnostic: semanticDiagnostic,
-    } = await embedQuery(
+    } = opts?.lexicalOnly ? {
+      vector: null, available: false,
+      diagnostic: { reason: "alpha_scope", message: "Semantic convergence is not qualified in this alpha." },
+    } : await embedQuery(
       query,
       opts?.embed ?? {},
     )
@@ -478,7 +488,7 @@ export async function desk_search({ deskRoot, input, opts }) {
     for (const r of ftsCandidates) idSet.add(r.chunk_id)
     for (const r of vecCandidates) idSet.add(r.chunk_id)
     const chunkIds = [...idSet]
-    const hydrated = hydrateChunks(db, chunkIds)
+    const hydrated = hydrateChunks(db, chunkIds, opts?.lexicalOnly)
 
     // Normalize BM25 over the FTS candidate set.
     const bm25ByChunk = new Map()
@@ -543,7 +553,7 @@ export async function desk_search({ deskRoot, input, opts }) {
       ...(!semanticAvailable ? semanticUnavailableFields(semanticDiagnostic) : {}),
     }
   } finally {
-    closeDb(db)
+    if (!suppliedDb) closeDb(db)
   }
 }
 
