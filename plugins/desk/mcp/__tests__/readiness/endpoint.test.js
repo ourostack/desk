@@ -10,6 +10,9 @@ import { startReadinessController } from "../../src/readiness/controller-server.
 
 function filesystem(entries = {}) {
   const dirs = new Map(Object.entries({
+    "/": { uid: 0, mode: 0o755 },
+    "/run": { uid: 0, mode: 0o755 },
+    "/run/user": { uid: 0, mode: 0o755 },
     "/tmp": { uid: 0, mode: 0o1777 },
     ...entries,
   }))
@@ -59,6 +62,29 @@ test("short, private XDG_RUNTIME_DIR is preferred without creating a fallback di
   })
   assert.match(endpoint, /^\/run\/user\/501\/[a-f0-9]{32}\.sock$/u)
   assert.deepEqual(fs.created, [])
+})
+
+for (const parent of [{ uid: 0, mode: 0o777 }, { uid: 502, mode: 0o755 }]) {
+  test(`private XDG leaf below an unsafe ancestor is not usable: ${JSON.stringify(parent)}`, () => {
+    const endpoint = endpoints.deriveControllerEndpoint({
+      identity, platform: "linux", uid: 501, env: { XDG_RUNTIME_DIR: "/unsafe/runtime" },
+      fs: filesystem({
+        "/unsafe": parent, "/unsafe/runtime": { uid: 501, mode: 0o700 },
+      }),
+    })
+    assert.match(endpoint, /^\/tmp\/desk-readiness-501\//u)
+  })
+}
+
+test("macOS canonical short temp root remains bounded", () => {
+  const fs = filesystem({
+    "/tmp": { uid: 0, mode: 0o1777, realpath: "/private/tmp" },
+    "/private": { uid: 0, mode: 0o755 },
+    "/private/tmp": { uid: 0, mode: 0o1777 },
+  })
+  const endpoint = endpoints.deriveControllerEndpoint({ identity, platform: "darwin", uid: 501, env: {}, fs })
+  assert.match(endpoint, /^\/private\/tmp\/desk-readiness-501\/[a-f0-9]{32}\.sock$/u)
+  assert.ok(Buffer.byteLength(endpoint) <= 100)
 })
 
 for (const entry of [

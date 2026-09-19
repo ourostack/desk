@@ -78,7 +78,10 @@ export function deriveControllerEndpoint({
   if (typeof runtimeDir === "string" && path.posix.isAbsolute(runtimeDir)) {
     try {
       validatePrivateDirectory(runtimeDir, { uid, fs })
-      const endpoint = path.posix.join(fs.realpathSync(runtimeDir), basename)
+      const canonicalRuntimeDir = fs.realpathSync(runtimeDir)
+      validatePrivateDirectory(canonicalRuntimeDir, { uid, fs })
+      validateRuntimeAncestors(path.posix.dirname(canonicalRuntimeDir), { uid, fs })
+      const endpoint = path.posix.join(canonicalRuntimeDir, basename)
       validateControllerEndpoint(endpoint, platform)
       return endpoint
     } catch {
@@ -87,11 +90,7 @@ export function deriveControllerEndpoint({
   }
   // Do not inherit TMPDIR: it can be long, shared, or caller-controlled.
   const tempRoot = fs.realpathSync("/tmp")
-  const parent = fs.lstatSync(tempRoot)
-  if (!parent.isDirectory() || (parent.uid !== 0 && parent.uid !== uid)
-    || ((parent.mode & 0o022) !== 0 && (parent.mode & 0o1000) === 0)) {
-    throw new Error("readiness controller has unsafe temporary directory ownership or permissions")
-  }
+  validateRuntimeAncestors(tempRoot, { uid, fs })
   const directory = path.posix.join(tempRoot, `desk-readiness-${uid}`)
   const endpoint = path.posix.join(directory, basename)
   validateControllerEndpoint(endpoint, platform)
@@ -102,6 +101,17 @@ export function deriveControllerEndpoint({
   }
   validatePrivateDirectory(directory, { uid, fs })
   return endpoint
+}
+
+function validateRuntimeAncestors(directory, { uid, fs }) {
+  for (let current = directory; ; current = path.posix.dirname(current)) {
+    const stat = fs.lstatSync(current)
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== 0 && stat.uid !== uid)
+      || ((stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0)) {
+      throw new Error("readiness controller has unsafe runtime directory ancestry")
+    }
+    if (current === "/") return
+  }
 }
 
 export function stableStringify(value) {
