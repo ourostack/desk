@@ -166,6 +166,44 @@ test("snapshot observes status without fencing, discovering or starting converge
   assert.equal(f.runs(), before)
 })
 
+test("pending startup dispatches direct search before any event-fence work", async () => {
+  let fences = 0
+  const router = createQueryRouter({
+    controller: {
+      barrier: async () => ({ current: false, state: "LEXICAL_CONVERGING" }),
+      fenceEvents: async () => { fences++; return { certain: false } },
+      status: async () => ({ freshness: { certain: false } }),
+    },
+    directBackend: async () => ({ results: [{ snippet: "canonical now" }] }),
+    indexedBackend: () => assert.fail("pending cannot read index"),
+  })
+  assert.equal((await router.lexical({})).results[0].snippet, "canonical now")
+  assert.equal(fences, 0, "a known-pending request must not wait for a journal open/flush")
+})
+
+test("cancellation before queued controller dispatch starts no readiness operation", async () => {
+  let operations = 0
+  const abort = new AbortController()
+  const router = createQueryRouter({
+    controller: {
+      barrier: async () => { operations++; return { current: false } },
+      fenceEvents: async () => { operations++; return { certain: false } },
+    },
+    directBackend: () => assert.fail("cancelled direct"),
+  })
+  const result = router.lexical({ signal: abort.signal })
+  abort.abort(new Error("cancel queued dispatch"))
+  await assert.rejects(result, /cancel queued dispatch/)
+  assert.equal(operations, 0)
+})
+
+test("snapshot without a controller and generation is not_checked, not an observation failure", async () => {
+  const snapshot = await createQueryRouter({ directBackend: directLexicalSearch }).snapshot()
+  assert.equal(snapshot.state, "not_checked")
+  assert.equal(snapshot.diagnostic, undefined)
+  assert.equal(snapshot.lexical.pending_changes, null)
+})
+
 // No runtimeImporter, controller, tool or transport injection: exercise the shipped
 // entrypoint, runtime source mirror, named pipe and stdio MCP from two OS processes.
 test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {

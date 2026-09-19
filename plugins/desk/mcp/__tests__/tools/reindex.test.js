@@ -49,3 +49,14 @@ test("alpha reindex exposes controller failure rather than success-shaped counts
   }), /journal failed/)
   await assert.rejects(fs.stat(path.join(root, ".state")), { code: "ENOENT" })
 })
+
+test("alpha reindex cannot report success when the controller finishes without current readiness", async () => {
+  const result = await desk_reindex({
+    readiness: {
+      beginConvergence: async () => ({ accepted: true }),
+      barrier: async () => ({ capability: "lexical", current: false, state: "RECOVERING" }),
+    },
+  })
+  assert.equal(result.status, "error")
+  assert.equal(result.code, "required_capability_unavailable")
+})

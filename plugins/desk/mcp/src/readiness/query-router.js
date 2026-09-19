@@ -54,7 +54,7 @@ function cancellable(operation, signal) {
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason)
     signal.addEventListener("abort", abort, { once: true })
-    Promise.resolve().then(operation).then(resolve, reject).finally(() =>
+    Promise.resolve().then(() => { signal.throwIfAborted(); return operation() }).then(resolve, reject).finally(() =>
       signal.removeEventListener("abort", abort))
   })
 }
@@ -77,25 +77,26 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
     let diagnostic = { reason: "controller_unavailable", message: "No readiness controller is available." }
     try {
       if (controller) {
-        if (request.kind === "thread") {
-          await cancellable(() => controller.barrier({ capability: "lexical", wait: true }), signal)
-        }
-        const fence = await cancellable(() => controller.fenceEvents({ signal }), signal)
-        const barrier = await cancellable(() => controller.barrier({
-          capability: "lexical",
+        const initial = await cancellable(() => controller.barrier({
+          capability: "lexical", ...(request.kind === "thread" ? { wait: true } : {}),
         }), signal)
-        const observed = await cancellable(() => controller.status(), signal)
-        snapshot = openSnapshot(request.deskRoot)
-        proven = fence.certain === true && barrier.current === true && barrier.certain !== false &&
-          observed.freshness?.certain === true &&
-          sameCursor(fence.cursor, observed.freshness.cursor) &&
-          snapshot?.generation != null && sameCursor(snapshot.cursor, fence.cursor) &&
-          sameCursor(snapshot.covered, fence.cursor)
-        diagnostic = {
-          reason: fence.reason ?? observed.freshness?.reason ?? "generation_unproven",
-          message: "A current, event-certain lexical generation is not proven.",
+        diagnostic = { reason: "reconciliation_pending", message: "A current lexical generation is not proven." }
+        if (initial.current === true) {
+          const fence = await cancellable(() => controller.fenceEvents({ signal }), signal)
+          const barrier = await cancellable(() => controller.barrier({ capability: "lexical" }), signal)
+          const observed = await cancellable(() => controller.status(), signal)
+          const currentAndCertain = fence.certain === true && barrier.current === true && barrier.certain !== false &&
+            observed.freshness?.certain === true &&
+            sameCursor(fence.cursor, observed.freshness.cursor)
+          if (currentAndCertain) snapshot = openSnapshot(request.deskRoot)
+          proven = currentAndCertain && snapshot?.generation != null && sameCursor(snapshot.cursor, fence.cursor) &&
+            sameCursor(snapshot.covered, fence.cursor)
+          diagnostic = {
+            reason: fence.reason ?? observed.freshness?.reason ?? "generation_unproven",
+            message: "A current, event-certain lexical generation is not proven.",
+          }
+          if (proven) lastProof = { generation: snapshot.generation, cursor: snapshot.cursor, owner: observed.owner?.token }
         }
-        if (proven) lastProof = { generation: snapshot.generation, cursor: snapshot.cursor, owner: observed.owner?.token }
       }
     } catch (error) {
       if (signal?.aborted) { snapshot?.db.close(); signal.throwIfAborted() }
@@ -129,7 +130,7 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
         lastProof?.generation === index?.generation &&
         sameCursor(lastProof?.cursor, currentCursor) &&
         sameCursor(index?.cursor, currentCursor) && sameCursor(index?.covered, currentCursor)
-      const pending = currentCursor?.journal_id === index?.cursor?.journal_id
+      const pending = typeof currentCursor?.journal_id === "string" && currentCursor.journal_id === index?.cursor?.journal_id
         ? Math.max(0, currentCursor.sequence - index.cursor.sequence) : null
       return {
         state: observed.state,
@@ -163,7 +164,10 @@ export function createQueryRouter({ controller, indexedBackend, directBackend, s
       signal?.throwIfAborted()
       if (!controller) return readinessError("controller_unavailable", "Reindex requires the shared readiness controller.")
       const result = await cancellable(() => controller.beginConvergence(), signal)
-      await cancellable(() => controller.barrier({ capability: "lexical", wait: true }), signal)
+      const barrier = await cancellable(() => controller.barrier({ capability: "lexical", wait: true }), signal)
+      if (barrier.current !== true) {
+        return readinessError("reconciliation_pending", "The controller has not completed lexical convergence.")
+      }
       return { status: "ok", action: "controller_convergence", reused: result?.reused === true }
     },
   }

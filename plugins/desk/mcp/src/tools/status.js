@@ -548,10 +548,6 @@ function rootDiagnostic(pathValue) {
   return pathValue === null ? "missing_desk_root" : "desk_root_not_found"
 }
 
-function shouldSkipDir(name) {
-  return name === ".state" || name === ".git" || name === "node_modules"
-}
-
 function summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }) {
   const startupSummary = startupFallback.mode === "not_checked"
     ? "Snapshot restore, vector-pack import, and query embedding probes were not run."

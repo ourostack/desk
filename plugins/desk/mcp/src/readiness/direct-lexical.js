@@ -3,6 +3,7 @@ import { discover } from "../indexer/discover.js"
 import { chunkBody } from "../indexer/chunk.js"
 import { loadTombstoneLedger, tombstoneDecisionForDoc } from "../artifacts/tombstones.js"
 import { indexedSearch, indexedTimeline } from "../tools/search.js"
+import { resolveEnsureIndexOptions } from "../server-helpers.js"
 
 /**
  * Read canonical files afresh, using the same FTS5 tokenizer/BM25 and query
@@ -12,7 +13,8 @@ import { indexedSearch, indexedTimeline } from "../tools/search.js"
 export async function directLexicalSearch({ deskRoot, query, filters, scope, limit, now, signal, kind, from, to }) {
   signal?.throwIfAborted()
   const documents = await discover(deskRoot, { signal })
-  const ledger = await loadTombstoneLedger({})
+  const { tombstones } = resolveEnsureIndexOptions({ snapshots: false, vectorPacks: false }, { deskRoot })
+  const ledger = await loadTombstoneLedger(tombstones)
   if (!ledger.valid) {
     const error = new Error("artifact tombstone ledger is invalid")
     error.code = "artifact_tombstone_ledger_invalid"

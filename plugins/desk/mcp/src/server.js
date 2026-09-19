@@ -6,7 +6,7 @@
 //             track_update, friction_add, lesson_add
 //   - Unit 5: desk_search, desk_recall, desk_similar, desk_timeline
 //   - Unit 6: desk_thread (refs_graph provenance walk)
-//   - Index mgmt: desk_reindex (wraps ensureIndex + force-rebuild)
+//   - Index mgmt: desk_reindex (requests shared controller convergence)
 //   - Health/status: desk_status and desk_doctor (session-start-safe, non-mutating)
 //   - Private work measurement: desk_work_ledger (OS-user-private work-item ledger)
 //

@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync } from "node:fs"
 import * as path from "node:path"
+import { createHash } from "node:crypto"
 import { directLexicalSearch } from "../../src/readiness/direct-lexical.js"
 import { indexedSearch } from "../../src/tools/search.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
@@ -88,4 +89,45 @@ test("direct lexical clamps the actual maximum to fifty", async () => {
   assert.equal((await directLexicalSearch({ deskRoot: root, query: "quartz", limit: 999, now })).results.length, 50)
   assert.equal((await directLexicalSearch({ deskRoot: root, query: "quartz", limit: 0, now })).results.length, 1)
   assert.equal(existsSync(path.join(root, ".state")), false)
+})
+
+test("lexical tie ordering and candidate limits do not depend on index insertion history", async () => {
+  const root = await mkTempDeskRoot()
+  await writeFile(root, "track/zebra/task.md", "quartz equal")
+  await rebuildIndex(root, { skipEmbed: true })
+  for (const slug of ["alpha", "bravo", "charlie", "delta", "echo"]) {
+    await writeFile(root, `track/${slug}/task.md`, "quartz equal")
+  }
+  await rebuildIndex(root, { skipEmbed: true })
+  for (const limit of [1, 50]) {
+    const request = { deskRoot: root, query: "quartz", now, limit }
+    const direct = await directLexicalSearch(request)
+    const indexed = await indexedSearch({ deskRoot: root, input: request, opts: { now, lexicalOnly: true } })
+    assert.deepEqual(indexed.results, direct.results)
+    assert.equal(indexed.results[0].path, path.join("track", "alpha", "task.md"))
+  }
+})
+
+test("direct lexical honors the same configured tombstone policy as controller indexing", async (t) => {
+  const { configureRuntimeArtifacts } = await import("../../src/server-helpers.js")
+  const root = await mkTempDeskRoot()
+  const pluginRoot = await mkTempDeskRoot()
+  const body = "quartz redacted"
+  await writeFile(root, "task.md", body)
+  await writeFile(pluginRoot, "artifacts/tombstones/tombstones.jsonl", JSON.stringify({
+    schema_version: 1, document_path: "task.md",
+    document_hash: `sha256:${createHash("sha256").update(body).digest("hex")}`,
+    reason: "redacted", redacted_at: "2026-09-19T00:00:00Z",
+    effective_from: "2026-09-19T00:00:00Z", artifact_rotation_id: "fixture", actor: "fixture",
+  }) + "\n")
+  configureRuntimeArtifacts({ pluginRoot })
+  t.after(() => configureRuntimeArtifacts())
+  await rebuildIndex(root, { skipEmbed: true, tombstones: { pluginRoot } })
+  assert.deepEqual((await indexedSearch({
+    deskRoot: root, input: { query: "quartz" }, opts: { lexicalOnly: true },
+  })).results, [])
+  assert.deepEqual((await directLexicalSearch({ deskRoot: root, query: "quartz" })).results, [])
+  await writeFile(pluginRoot, "artifacts/tombstones/tombstones.jsonl", "invalid ledger")
+  await assert.rejects(directLexicalSearch({ deskRoot: root, query: "quartz" }),
+    { code: "artifact_tombstone_ledger_invalid" })
 })

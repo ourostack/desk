@@ -26,6 +26,8 @@ test("alpha consumer search reads files immediately without index or embedding w
   })
   assert.equal(result.results[0].snippet, "immediatequartz")
   assert.equal(result.search_mode, "lexical")
+  assert.equal(result.semantic_diagnostic.reason, "alpha_scope")
+  assert.equal(result.semantic_repair, undefined, "alpha must not suggest an unqualified semantic repair")
   assert.equal(independentEmbeds, 0)
   await assert.rejects(fs.stat(path.join(root, ".state", "desk-index.sqlite")), { code: "ENOENT" })
 })
@@ -51,6 +53,10 @@ test("alpha consumer timeline reads a fresh temporal or lexical window without a
     const result = await desk_timeline({ deskRoot: root, input: { from: "2026-01-01", query } })
     assert.deepEqual(result.results.map((r) => r.path), [path.join("track", "new", "task.md")])
     assert.equal(result.search_mode, query ? "lexical" : "temporal")
+    if (query) {
+      assert.equal(result.semantic_diagnostic.reason, "alpha_scope")
+      assert.equal(result.semantic_repair, undefined)
+    }
   }
   await assert.rejects(fs.stat(path.join(root, ".state")), { code: "ENOENT" })
 })

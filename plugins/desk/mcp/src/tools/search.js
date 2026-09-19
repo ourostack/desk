@@ -1,28 +1,22 @@
-// Search tools — desk_search / desk_recall / desk_similar / desk_timeline.
-//
-// W6 Unit 5. Each tool opens the index DB, executes its query, post-ranks in
-// JS, and returns a structured payload. The fifth search tool (desk_thread)
-// lives in src/tools/thread.js — wired in Unit 6 (provenance walk via
-// refs_graph).
+// Public search tools use the controller-owned query router. Search/timeline
+// are lexical in this alpha; recall/similar return the typed semantic refusal.
+// Read-only indexed backends retain the existing ranking/serialization, also
+// used over a disposable FTS corpus for fresh direct-filesystem results.
 //
 // Design references (see desk-search-design.md):
 //   §4 hybrid ranking — semantic 0.55 + bm25 0.25 + recency 0.12 + state 0.08
 //                       + active-iteration-pin (additive +0.30).
 //   §6 — most kill-features (synthesis, clustering, contradiction) are post-MVP.
 //
-// Soft-fail rule: if Ollama is unreachable when embedding the query, the
-// search tools degrade. `desk_search` and `desk_timeline` drop the semantic
-// component and renormalize. `desk_recall` is semantic-only so it errors
-// out. `desk_similar` reads the seed doc's stored embeddings from vec0 (no
-// new embedding needed) so it always works as long as the seed itself was
-// embedded at index time.
+// Legacy indexed ranking can still omit unavailable semantic weights. Public
+// alpha queries never embed or run independent index repairs.
 
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { indexDbPath, closeDb } from "../db/init.js"
-import { createDeskQueryRouter } from "../readiness/query-router.js"
+import { createDeskQueryRouter, semanticScopeError } from "../readiness/query-router.js"
 import { embedQuery } from "../util/embed-query.js"
 import {
   clipCosine,
@@ -45,7 +39,7 @@ function semanticUnavailableFields(diagnostic) {
       ? `Semantic search unavailable: ${diagnostic.message}`
       : "Semantic search unavailable: embedding service did not return a usable vector",
     semantic_diagnostic: diagnostic ?? null,
-    semantic_repair: SEMANTIC_REPAIR_COMMAND,
+    ...(diagnostic?.reason === "alpha_scope" ? {} : { semantic_repair: SEMANTIC_REPAIR_COMMAND }),
   }
 }
 
@@ -310,7 +304,7 @@ function gatherFtsCandidates(db, matchExpr, filterFragment, filterParams, candid
     JOIN chunks c ON c.id = chunks_fts.rowid
     JOIN docs d ON d.id = c.doc_id
     WHERE chunks_fts MATCH ? ${filterFragment}
-    ORDER BY raw_bm25
+    ORDER BY raw_bm25, d.path, c.chunk_index
     LIMIT ?
   `
   return db.prepare(sql).all(matchExpr, ...filterParams, candidateLimit)
@@ -351,7 +345,8 @@ function hydrateChunks(db, chunkIds, lexicalOnly = false) {
        FROM chunks c
        JOIN docs d ON d.id = c.doc_id
        ${lexicalOnly ? "" : "LEFT JOIN chunk_vecs v ON v.chunk_id = c.id"}
-       WHERE c.id IN (${placeholders})`,
+       WHERE c.id IN (${placeholders})
+       ORDER BY d.path, c.chunk_index`,
     )
     .all(...chunkIds)
   const out = new Map()
@@ -471,7 +466,7 @@ export async function indexedSearch({ deskRoot, input, opts, db: suppliedDb }) {
       diagnostic: semanticDiagnostic,
     } = opts?.lexicalOnly ? {
       vector: null, available: false,
-      diagnostic: { reason: "alpha_scope", message: "Semantic convergence is not qualified in this alpha." },
+      diagnostic: semanticScopeError().diagnostic,
     } : await embedQuery(
       query,
       opts?.embed ?? {},
@@ -547,7 +542,7 @@ export async function indexedSearch({ deskRoot, input, opts, db: suppliedDb }) {
     }
 
     const results = [...bestByDoc.values()]
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
       .slice(0, limit)
 
     return {
@@ -814,7 +809,7 @@ export async function indexedTimeline({ deskRoot, input, opts, db: suppliedDb })
     params.push(...scopeFilter.params)
 
     let semanticAvailable = false
-    let semanticDiagnostic = null
+    let semanticDiagnostic = opts?.lexicalOnly ? semanticScopeError().diagnostic : null
     let queryVec = null
     if (query && !opts?.lexicalOnly) {
       const r = await embedQuery(query, opts?.embed ?? {})
@@ -835,7 +830,7 @@ export async function indexedTimeline({ deskRoot, input, opts, db: suppliedDb })
                JOIN chunks c ON c.id = chunks_fts.rowid
                JOIN docs d ON d.id = c.doc_id
                WHERE chunks_fts MATCH ? ${windowSql}
-               ORDER BY raw_bm25
+               ORDER BY raw_bm25, d.path, c.chunk_index
                LIMIT ?`,
             )
             .all(matchExpr, ...params, limit * 4)
@@ -894,7 +889,7 @@ export async function indexedTimeline({ deskRoot, input, opts, db: suppliedDb })
         // Within timeline, sort by updated_at DESC per spec (recency
         // dominates inside an explicit window — score-driven ordering
         // makes more sense for desk_search where the window is implicit).
-        .sort((a, b) => comparableUpdatedAt(b).localeCompare(comparableUpdatedAt(a)))
+        .sort((a, b) => comparableUpdatedAt(b).localeCompare(comparableUpdatedAt(a)) || a.path.localeCompare(b.path))
         .slice(0, limit)
     } else {
       // No query — straight chronological listing within the window.
@@ -905,7 +900,7 @@ export async function indexedTimeline({ deskRoot, input, opts, db: suppliedDb })
                   (SELECT text FROM chunks WHERE doc_id = d.id ORDER BY chunk_index LIMIT 1) AS text
            FROM docs d
            WHERE 1=1 ${windowSql}
-           ORDER BY d.updated_at DESC
+           ORDER BY d.updated_at DESC, d.path
            LIMIT ?`,
         )
         .all(...params, limit)
