@@ -51,7 +51,7 @@ import {
 import { admitControlPlane } from "./activation/admit.js"
 import { ActivationFailure } from "./activation/failures.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
-import { probeEmbeddingService, resolveEmbeddingModel } from "./indexer/embed.js"
+import { probeEmbeddingService, resolveEmbeddingEndpoints, resolveEmbeddingModel } from "./indexer/embed.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
 export { admitControlPlane, configureRuntimeArtifacts, ensureIndex }
@@ -78,6 +78,10 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
   if (policy.semantic !== "unsupported") {
     verifyEmbeddingModel(policy.semantic)
   }
+  const embed = policy.semantic === "unsupported" ? null : Object.freeze({
+    model: ACTIVE_EMBEDDING_SPEC.model,
+    endpoints: Object.freeze(resolveEmbeddingEndpoints()),
+  })
   const options = {
     root: deskRoot,
     protocolVersion: 1,
@@ -94,18 +98,17 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
     semanticContract: {
       mode: policy.semantic,
       embedding_spec: policy.semantic === "unsupported" ? null : ACTIVE_EMBEDDING_SPEC,
-      ...(policy.semantic === "unsupported" ? {} : { query_embedding_probe: true }),
+      ...(embed === null ? {} : { query_embedding_probe: true, endpoints: embed.endpoints }),
     },
     handlers: {
       async beginConvergence() {
         const result = await ensureIndex(deskRoot, {
           startup: false,
           skipEmbed: policy.semantic === "unsupported",
+          ...(embed === null ? {} : { embed }),
         })
         if (policy.semantic !== "unsupported") {
-          result.semantic.query_embedding = await probeEmbeddingService({
-            model: ACTIVE_EMBEDDING_SPEC.model,
-          })
+          result.semantic.query_embedding = await probeEmbeddingService(embed)
         }
         return result
       },
