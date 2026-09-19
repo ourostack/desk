@@ -34,21 +34,24 @@ export async function desk_status({ deskRoot, person, statusContext = {} }) {
     ? inspectLocalDb(root.path)
     : unavailableLocalDb(root.path === null ? null : indexDbPath(root.path), "root_unavailable")
   const startup = normalizeStartup(statusContext.startup)
+  const readiness = await controllerReadiness(statusContext.admission)
   const snapshots = snapshotStatus(startup)
   const vectorPacks = vectorPackStatus(startup)
-  const queryEmbedding = queryEmbeddingStatus(startup)
+  const queryEmbedding = queryEmbeddingStatus(readiness.state === "not_checked" ? startup : {}, readiness)
   const activation = activationStatus(statusContext.activation)
   const startupFallback = startupFallbackStatus({
     startup,
     documentVectors: localDb.document_vectors,
     queryEmbedding,
     lexicalIndex: localDb.lexical_index,
+    readiness,
   })
   const degradedModes = degradedModesFor({
     documentVectors: localDb.document_vectors,
     queryEmbedding,
     lexicalIndex: localDb.lexical_index,
     startupFallback,
+    readiness,
   })
 
   return {
@@ -56,6 +59,7 @@ export async function desk_status({ deskRoot, person, statusContext = {} }) {
     root,
     activation,
     runtime,
+    readiness,
     local_db: localDb.local_db,
     db_schema: localDb.local_db.schema,
     active_embedding_spec: EMBEDDING_SPEC,
@@ -68,6 +72,25 @@ export async function desk_status({ deskRoot, person, statusContext = {} }) {
     degraded_modes: degradedModes,
     write_scope: writeScope,
     summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
+  }
+}
+
+async function controllerReadiness(admission) {
+  const empty = { status: "not_checked", semantic: null, diagnostic: null }
+  if (typeof admission?.controller?.status !== "function") {
+    return { state: "not_checked", convergence: empty }
+  }
+  try {
+    const snapshot = await admission.controller.status()
+    return { state: snapshot.state, convergence: snapshot.convergence ?? empty }
+  } catch (error) {
+    return {
+      state: "unavailable",
+      convergence: {
+        status: "unavailable", semantic: null,
+        diagnostic: { message: String(error?.message ?? error).slice(0, 2048) },
+      },
+    }
   }
 }
 
@@ -199,9 +222,13 @@ function vectorPackStatus(startup) {
   return { ...base, import_state: "absent" }
 }
 
-function queryEmbeddingStatus(startup) {
+function queryEmbeddingStatus(startup, readiness) {
   const semantic = startupEnsure(startup)?.semantic
   const base = { spec_id: EMBEDDING_SPEC.id }
+  const query = readiness.convergence.semantic?.query_embedding
+  if (typeof query?.available === "boolean") {
+    return { ...base, available: query.available, diagnostic: query.diagnostic }
+  }
   if (typeof semantic?.embedding_available === "boolean") {
     return compactObject({
       ...base,
@@ -221,14 +248,16 @@ function startupFallbackStatus({
   documentVectors,
   queryEmbedding,
   lexicalIndex,
+  readiness,
 }) {
   const ensure = startupEnsure(startup)
   const mode = startup.fallback_mode ?? inferStartupFallbackMode({ ensure, lexicalIndex })
-  const degraded = startup.degraded ?? fallbackIsDegraded({
-    documentVectors,
-    mode,
-    queryEmbedding,
-  })
+  const degraded = ["failed", "unavailable"].includes(readiness.convergence.status)
+    || (startup.degraded ?? fallbackIsDegraded({
+      documentVectors,
+      mode,
+      queryEmbedding,
+    }))
   return compactObject({
     mode,
     degraded,
@@ -242,8 +271,11 @@ function degradedModesFor({
   queryEmbedding,
   lexicalIndex,
   startupFallback,
+  readiness,
 }) {
   const modes = []
+  if (readiness.convergence.status === "failed") modes.push("convergence_failed")
+  if (readiness.state === "unavailable") modes.push("readiness_unavailable")
   if (documentVectors.state === "partial") modes.push("document_vectors_partial")
   if (documentVectors.state === "missing") modes.push("document_vectors_missing")
   if (queryEmbedding.available === false) modes.push("query_embedding_unavailable")

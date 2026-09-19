@@ -57,6 +57,32 @@ export async function startReadinessController({
       && coverage.query_embedding.diagnostic?.model === identity.semantic_contract.embedding_spec.model
   }
 
+  function convergenceStatus() {
+    const coverage = convergenceResult?.semantic
+    const query = coverage?.query_embedding
+    return {
+      status: convergence ? "pending" : convergenceError ? "failed"
+        : convergenceResult ? "succeeded" : "not_checked",
+      semantic: coverage ? {
+        chunks_total: coverage.chunks_total,
+        vectors_indexed: coverage.vectors_indexed,
+        missing_vectors: coverage.missing_vectors,
+        provenance_current: coverage.provenance_current,
+        query_embedding: typeof query?.available === "boolean" ? {
+          available: query.available,
+          diagnostic: query.diagnostic ? Object.fromEntries(
+            ["endpoint", "model", "reason", "message"]
+              .filter((key) => typeof query.diagnostic[key] === "string")
+              .map((key) => [key, query.diagnostic[key].slice(0, 2048)]),
+          ) : null,
+        } : null,
+      } : null,
+      diagnostic: convergenceError
+        ? { message: String(convergenceError.message ?? convergenceError).slice(0, 2048) }
+        : null,
+    }
+  }
+
   function beginConvergence() {
     if (convergence) {
       return { accepted: true, reused: true, in_progress: true, state }
@@ -112,7 +138,7 @@ export async function startReadinessController({
           identity,
           owner,
         }),
-        status: () => ({ state, identity, owner }),
+        status: () => ({ state, identity, owner, convergence: convergenceStatus() }),
         beginConvergence,
         barrier: () => barrier(request.params),
         recordChange: () => handlers.recordChange?.(request.params) ?? { recorded: true },
