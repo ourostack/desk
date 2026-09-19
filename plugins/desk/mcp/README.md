@@ -65,6 +65,10 @@ Codex global activation writes an owned `~/.codex/desk.activation.json` file in 
 
 Generated Codex activation configs carry the normalized manifest `desk_runtime` policy. Person-scoped activation requires an explicit valid `person` adapter input and passes it through the existing `--person` launch argument. The standalone Codex adapter refuses named `authority_provider` policies with `authority_invalid`: it cannot serialize or install an authority callback into the child process, and must never substitute workspace authority.
 
+`desk_runtime.semantic` controls startup convergence. `background` serves at `CONTROL_READY` and converges asynchronously. `unsupported` keeps automatic lexical convergence but skips embedding calls. `required` completes convergence and verifies a complete semantic barrier before starting MCP; missing coverage or a failed barrier refuses admission with `semantic_unavailable`. Controller compatibility includes semantic mode and embedding specification as well as the lexical contract.
+
+The controller serializes convergence, not its clients. A concurrent request receives `{ accepted: true, reused: true, in_progress: true }` with the current state; a caller can wait using `barrier({ capability: "lexical" | "semantic", wait: true })`. Disconnecting the requesting client does not cancel the operation. Failed work remains retryable on a subsequent convergence request. The controller process stays live while its operation runs; this does not make it survive termination of the controller process itself.
+
 ## Generic stdio MCP launch
 
 Generic stdio hosts can launch Desk as an MCP-only server, but generic stdio does not activate `worker` and does not resolve plugin dependencies for Work Suite.

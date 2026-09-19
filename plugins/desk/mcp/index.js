@@ -16,6 +16,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as path from "node:path"
 import { admitControlPlane } from "./src/activation/admit.js"
+import { ActivationFailure } from "./src/activation/failures.js"
 import { normalizeReadinessPolicy } from "./src/activation/readiness-policy.js"
 import {
   importRuntimeServer,
@@ -299,6 +300,30 @@ export async function main({
     authorityProvider,
     controllerConnector: runtimeServer.connectOrStartController,
   })
+  if (readinessPolicy.semantic === "required") {
+    let barrier
+    try {
+      await admission.controller.beginConvergence()
+      barrier = await admission.controller.barrier({ capability: "semantic", wait: true })
+    } catch (error) {
+      throw new ActivationFailure({
+        phase: "SEMANTIC_CONVERGING",
+        code: "semantic_unavailable",
+        expected: { semantic: "required" },
+        observed: { message: error?.message ?? String(error) },
+        summary: "Required Desk semantic convergence failed before server admission.",
+      })
+    }
+    if (barrier?.capability !== "semantic" || barrier.current !== true) {
+      throw new ActivationFailure({
+        phase: "SEMANTIC_CONVERGING",
+        code: "semantic_unavailable",
+        expected: { semantic: "required", current: true },
+        observed: barrier ?? null,
+        summary: "Required Desk semantic coverage is incomplete; server admission refused.",
+      })
+    }
+  }
   await runtimeServer.startServer({
     deskRoot,
     person: args.person,
@@ -309,10 +334,12 @@ export async function main({
       admission,
     },
   })
-  const convergence = runtimeServer.beginBackgroundConvergence?.(admission)
-  Promise.resolve(convergence).catch((error) => {
-    process.stderr.write(`[desk-mcp] background convergence failed: ${error?.message ?? String(error)}\n`)
-  })
+  if (readinessPolicy.semantic !== "required") {
+    const convergence = runtimeServer.beginBackgroundConvergence?.(admission)
+    Promise.resolve(convergence).catch((error) => {
+      process.stderr.write(`[desk-mcp] background convergence failed: ${error?.message ?? String(error)}\n`)
+    })
+  }
 }
 
 async function handleUnavailableRuntime({

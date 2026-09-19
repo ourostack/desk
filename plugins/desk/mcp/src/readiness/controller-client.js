@@ -15,11 +15,12 @@ export async function connectOrStartController({
   root,
   protocolVersion = 1,
   lexicalContract = {},
+  semanticContract = null,
   stateHome = path.join(os.homedir(), ".cache", "ouroboros-skills", "desk", "readiness"),
   handlers,
   ephemeral = false,
 } = {}) {
-  const identity = controllerIdentity({ root, protocolVersion, lexicalContract })
+  const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const endpoint = process.platform === "win32"
@@ -97,26 +98,20 @@ async function startOrReuseController({
 
 function createClient({ endpoint, ephemeral, identity, local, token }) {
   let closed = false
-  const call = (method, params = {}) => request({
+  const call = (method, params = {}, timeoutMs = 2_000) => request({
     endpoint,
     identity,
     method,
     params: { ...params, token },
+    timeoutMs,
   })
-  const readyStates = new Set(["LEXICAL_READY", "SEMANTIC_CONVERGING", "READY"])
   return {
     accepted: true,
     id: identity.id,
     identity,
     status: () => call("status"),
-    async beginConvergence() {
-      const current = await call("status")
-      if (readyStates.has(current?.state)) {
-        return { accepted: true, reused: true, state: current.state }
-      }
-      return call("beginConvergence")
-    },
-    barrier: (params) => call("barrier", params),
+    beginConvergence: () => call("beginConvergence", {}, null),
+    barrier: (params) => call("barrier", params, params?.wait ? null : 2_000),
     recordChange: (changedPath) => call("recordChange", { path: changedPath }),
     async close() {
       if (closed) return
@@ -200,7 +195,7 @@ function request({
     const socket = net.createConnection(endpoint)
     const id = randomUUID()
     let pending = ""
-    const timeout = setTimeout(() => {
+    const timeout = timeoutMs === null ? null : setTimeout(() => {
       socket.destroy()
       reject(new Error(`readiness controller request timed out: ${method}`))
     }, timeoutMs)
@@ -231,6 +226,10 @@ function request({
     socket.once("error", (error) => {
       clearTimeout(timeout)
       reject(error)
+    })
+    socket.once("close", () => {
+      clearTimeout(timeout)
+      reject(new Error(`readiness controller connection closed: ${method}`))
     })
   })
 }

@@ -7,6 +7,7 @@ export function controllerIdentity({
   root,
   protocolVersion,
   lexicalContract,
+  semanticContract = null,
 } = {}) {
   const canonicalRoot = realpathSync(path.resolve(root))
   const stat = statSync(canonicalRoot)
@@ -14,6 +15,7 @@ export function controllerIdentity({
   const contract = stableStringify({
     protocol_version: protocolVersion,
     lexical_contract: lexicalContract,
+    semantic_contract: semanticContract,
   })
   const id = digest(stableStringify({
     root: canonicalRoot,
@@ -30,6 +32,7 @@ export function controllerIdentity({
     root: canonicalRoot,
     protocol_version: protocolVersion,
     lexical_contract: lexicalContract,
+    semantic_contract: semanticContract,
     user: Object.freeze({
       uid: user.uid,
       username: user.username,

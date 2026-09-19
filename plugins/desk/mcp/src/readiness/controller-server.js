@@ -20,9 +20,15 @@ export async function startReadinessController({
     token: randomUUID(),
   }
   let state = "CONTROL_READY"
+  let convergence = null
+  let convergenceResult = null
+  let convergenceError = null
+  const semanticMode = identity.semantic_contract?.mode
+  const semanticEnabled = semanticMode === "required" || semanticMode === "background"
   const server = net.createServer((socket) => {
     let pending = ""
     socket.setEncoding("utf8")
+    socket.on("error", () => socket.destroy())
     socket.on("data", (chunk) => {
       pending += chunk
       let newline
@@ -34,6 +40,59 @@ export async function startReadinessController({
       }
     })
   })
+
+  function semanticCurrent() {
+    const coverage = convergenceResult?.semantic
+    return semanticEnabled
+      && Number.isSafeInteger(coverage?.chunks_total) && coverage.chunks_total >= 0
+      && coverage.vectors_indexed === coverage.chunks_total
+      && coverage.missing_vectors === 0
+  }
+
+  function beginConvergence() {
+    if (convergence) {
+      return { accepted: true, reused: true, in_progress: true, state }
+    }
+    if (state === "READY" || (state === "LEXICAL_READY" && !semanticEnabled)) {
+      return { accepted: true, reused: true, state }
+    }
+    if (state === "LEXICAL_READY") state = transitionReadiness(state, "RECOVERING")
+    state = transitionReadiness(state, "LEXICAL_CONVERGING")
+    convergenceError = null
+    convergenceResult = null
+    // The operation belongs to the controller, not the requesting socket.
+    server.ref()
+    convergence = Promise.resolve().then(() => handlers.beginConvergence?.()).then((result) => {
+      convergenceResult = result ?? { accepted: true }
+      state = transitionReadiness(state, "LEXICAL_READY")
+      if (semanticCurrent()) state = transitionReadiness(state, "READY")
+      return convergenceResult
+    }).catch((error) => {
+      convergenceError = error
+      state = transitionReadiness(state, "RECOVERING")
+      throw error
+    }).finally(() => {
+      convergence = null
+      if (!ephemeral) server.unref()
+    })
+    return convergence
+  }
+
+  async function barrier(params) {
+    if (params?.wait) {
+      if (convergence) await convergence
+      if (convergenceError) throw convergenceError
+    }
+    if (handlers.barrier) return handlers.barrier(params)
+    const lexicalCurrent = state === "LEXICAL_READY" || state === "READY"
+    return {
+      capability: params?.capability,
+      current: params?.capability === "semantic"
+        ? lexicalCurrent && semanticCurrent()
+        : params?.capability === "lexical" && lexicalCurrent,
+      state,
+    }
+  }
 
   async function handleLine(line, socket) {
     let request
@@ -49,31 +108,17 @@ export async function startReadinessController({
           owner,
         }),
         status: () => ({ state, identity, owner }),
-        beginConvergence: async () => {
-          state = transitionReadiness(state, "LEXICAL_CONVERGING")
-          try {
-            const result = await handlers.beginConvergence?.()
-            state = transitionReadiness(state, "LEXICAL_READY")
-            return result ?? { accepted: true }
-          } catch (error) {
-            state = transitionReadiness(state, "RECOVERING")
-            throw error
-          }
-        },
-        barrier: () => handlers.barrier?.(request.params) ?? {
-          capability: request.params?.capability,
-          current: state === "LEXICAL_READY" || state === "READY",
-          state,
-        },
+        beginConvergence,
+        barrier: () => barrier(request.params),
         recordChange: () => handlers.recordChange?.(request.params) ?? { recorded: true },
       }[request.method]
       if (!builtin) {
         throw new Error(`unknown readiness controller method: ${request.method}`)
       }
       const result = await builtin()
-      socket.end(`${JSON.stringify(responseMessage({ id: request.id, result }))}\n`)
+      if (!socket.destroyed) socket.end(`${JSON.stringify(responseMessage({ id: request.id, result }))}\n`)
     } catch (error) {
-      socket.end(`${JSON.stringify(responseMessage({
+      if (!socket.destroyed) socket.end(`${JSON.stringify(responseMessage({
         id: request?.id ?? null,
         error: { message: error?.message ?? String(error) },
       }))}\n`)

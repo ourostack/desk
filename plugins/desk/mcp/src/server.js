@@ -49,16 +49,20 @@ import {
   ensureIndex,
 } from "./server-helpers.js"
 import { admitControlPlane } from "./activation/admit.js"
+import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
+import { resolveEmbeddingModel } from "./indexer/embed.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
 export { admitControlPlane, configureRuntimeArtifacts, ensureIndex }
 
 let readinessControllerModulePromise
 
-export async function connectOrStartController({ deskRoot, policy }) {
+export async function connectOrStartController({ deskRoot, policy, stateHome, ephemeral }) {
   const options = {
     root: deskRoot,
     protocolVersion: 1,
+    stateHome,
+    ephemeral,
     lexicalContract: {
       schema: 1,
       chunker: "markdown-v1",
@@ -67,10 +71,17 @@ export async function connectOrStartController({ deskRoot, policy }) {
         lexical: policy.lexical,
       },
     },
+    semanticContract: {
+      mode: policy.semantic,
+      embedding_spec: policy.semantic === "unsupported" ? null : {
+        ...ACTIVE_EMBEDDING_SPEC,
+        model: resolveEmbeddingModel(),
+      },
+    },
     handlers: {
       beginConvergence: () => ensureIndex(deskRoot, {
         startup: false,
-        skipEmbed: false,
+        skipEmbed: policy.semantic === "unsupported",
       }),
     },
   }
