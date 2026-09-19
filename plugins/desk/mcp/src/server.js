@@ -116,7 +116,9 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
           eventCursor,
           identities: { policy_identity: stableStringify(policy) },
         }, { deskRoot })
-        const result = await ensureIndex(deskRoot, indexOptions)
+        // Keep the opt-out at ensureIndex's normalization boundary; resolved
+        // undefined would otherwise re-enable legacy snapshot auto-discovery.
+        const result = await ensureIndex(deskRoot, { ...indexOptions, snapshots: false })
         const db = openDb(deskRoot)
         try {
           // A timestamp/snapshot fast path is not proof of journal coverage.

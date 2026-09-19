@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs"
+import { existsSync, statSync } from "node:fs"
 import * as path from "node:path"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
@@ -6,6 +6,7 @@ import { indexDbPath } from "../db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { personPrefix } from "../util/paths.js"
 import { packageMetadata as packageJson } from "../package-metadata.js"
+import { createDeskQueryRouter } from "../readiness/query-router.js"
 
 const DB_SCHEMA = { id: "desk-index", version: 1 }
 const EMBEDDING_SPEC = {
@@ -19,7 +20,7 @@ const EMBEDDING_SPEC = {
   normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
 }
 
-export async function desk_status({ deskRoot, person, statusContext = {} }) {
+export async function desk_status({ deskRoot, person, statusContext = {}, queryRouter, signal }) {
   const effectiveRoot = personPrefix(deskRoot, person)
   const writeScope = effectiveRoot === deskRoot
     ? { mode: "workspace", person: null, relative_path: "." }
@@ -35,6 +36,10 @@ export async function desk_status({ deskRoot, person, statusContext = {} }) {
     : unavailableLocalDb(root.path === null ? null : indexDbPath(root.path), "root_unavailable")
   const startup = normalizeStartup(statusContext.startup)
   const readiness = await controllerReadiness(statusContext.admission)
+  const observed = await (queryRouter ?? createDeskQueryRouter({
+    controller: statusContext.admission?.controller,
+  })).snapshot({ deskRoot: root.valid ? root.path : null, signal })
+  const lexical = root.valid ? observed.lexical : { ...observed.lexical, serving_path: "blocked" }
   const snapshots = snapshotStatus(startup)
   const vectorPacks = vectorPackStatus(startup)
   const queryEmbedding = queryEmbeddingStatus(readiness.state === "not_checked" ? startup : {}, readiness)
@@ -60,6 +65,7 @@ export async function desk_status({ deskRoot, person, statusContext = {} }) {
     activation,
     runtime,
     readiness,
+    lexical,
     local_db: localDb.local_db,
     db_schema: localDb.local_db.schema,
     active_embedding_spec: EMBEDDING_SPEC,
@@ -434,43 +440,11 @@ function inspectFreshness(deskRoot, db) {
   if (Number.isNaN(indexedMs)) {
     return { state: "unknown", reason: "last_indexed_at_invalid", last_indexed_at: lastIndexedAt }
   }
-  const newest = newestMarkdownFile(deskRoot)
-  if (newest === null) {
-    return { state: "fresh", last_indexed_at: lastIndexedAt, newest_document: null }
-  }
   return {
-    state: newest.mtime_ms > indexedMs ? "stale" : "fresh",
+    state: "unknown",
+    reason: "requires_controller_proof",
     last_indexed_at: lastIndexedAt,
-    newest_document: newest,
   }
-}
-
-function newestMarkdownFile(deskRoot) {
-  let newest = null
-  for (const file of markdownFiles(deskRoot)) {
-    const stat = statSync(path.join(deskRoot, file))
-    const candidate = { path: file, mtime_ms: stat.mtimeMs }
-    if (newest === null || candidate.mtime_ms > newest.mtime_ms) {
-      newest = candidate
-    }
-  }
-  return newest
-}
-
-function markdownFiles(root, current = root) {
-  const out = []
-  for (const entry of readdirSync(current, { withFileTypes: true })) {
-    if (shouldSkipDir(entry.name)) {
-      continue
-    }
-    const absolute = path.join(current, entry.name)
-    if (entry.isDirectory()) {
-      out.push(...markdownFiles(root, absolute))
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      out.push(path.relative(root, absolute))
-    }
-  }
-  return out
 }
 
 function defaultTarget() {

@@ -85,6 +85,10 @@ export function createRuntimeDiagnostic({
     status: "degraded",
     mode: "diagnostic",
     reason,
+    lexical: {
+      generation: null, event_cursor: null, pending_changes: null,
+      certain: false, current_automatic_action: null, serving_path: "blocked",
+    },
     remediation,
     runtime: {
       current_target: currentTarget,

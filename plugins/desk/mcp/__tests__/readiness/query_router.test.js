@@ -7,6 +7,13 @@ import { rebuildIndex } from "../../src/indexer/index.js"
 import { indexedSearch } from "../../src/tools/search.js"
 import { directLexicalSearch } from "../../src/readiness/direct-lexical.js"
 import { mkTempDeskRoot, writeFile } from "../tools/_search_helpers.js"
+import { spawn } from "node:child_process"
+import { createServer } from "node:http"
+import { promises as fs } from "node:fs"
+import { createInterface } from "node:readline"
+import { fileURLToPath } from "node:url"
+import Database from "better-sqlite3"
+import * as sqliteVec from "sqlite-vec"
 
 function deferred() {
   let resolve
@@ -157,4 +164,191 @@ test("snapshot observes status without fencing, discovering or starting converge
   assert.equal(snapshot.lexical.event_cursor.sequence, 0)
   assert.equal(snapshot.lexical.serving_path, "direct")
   assert.equal(f.runs(), before)
+})
+
+// No runtimeImporter, controller, tool or transport injection: exercise the shipped
+// entrypoint, runtime source mirror, named pipe and stdio MCP from two OS processes.
+test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
+  const root = await mkTempDeskRoot()
+  const home = path.join(root, "home")
+  const deskRoot = path.join(root, "desk")
+  const runtimeCache = path.join(root, "runtime-cache")
+  await fs.mkdir(home)
+  await fs.mkdir(deskRoot)
+  await writeFile(deskRoot, "track/work/task.md", "startupquartz")
+  const config = path.join(root, "activation.json")
+  await fs.writeFile(config, JSON.stringify({
+    schema_version: 1, desk: { root: deskRoot }, runtimeCacheDir: runtimeCache,
+    desk_runtime: { semantic: "background" },
+  }))
+  let held = deferred()
+  let entered = deferred()
+  const embedding = createServer(async (request, response) => {
+    request.resume()
+    entered.resolve()
+    await held.promise
+    response.setHeader("Content-Type", "application/json")
+    response.end(JSON.stringify({ embedding: Array(768).fill(0.1) }))
+  })
+  await new Promise((resolve) => embedding.listen(0, "127.0.0.1", resolve))
+  const env = {
+    ...process.env, USERPROFILE: home, HOME: home, XDG_CACHE_HOME: path.join(home, ".cache"),
+    DESK_EMBED_ENDPOINT: `http://127.0.0.1:${embedding.address().port}`,
+    DESK_EMBED_MODEL: "nomic-embed-text", OLLAMA_EMBED_MODEL: "nomic-embed-text",
+    DESK_EMBED_TIMEOUT_MS: "120000",
+  }
+  const sessions = []
+  let observer
+  t.after(async () => {
+    held.resolve()
+    await observer?.close()
+    for (const session of sessions) await session.close()
+    embedding.closeAllConnections()
+    await new Promise((resolve) => embedding.close(resolve))
+  })
+  async function launch() {
+    const child = spawn(process.execPath, [
+      fileURLToPath(new URL("../../index.js", import.meta.url)),
+      "--root", deskRoot, "--activation-config", config,
+    ], { env, stdio: ["pipe", "pipe", "pipe"] })
+    const pending = new Map()
+    let nextId = 0, stderr = ""
+    child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-8000) })
+    createInterface({ input: child.stdout }).on("line", (line) => {
+      const message = JSON.parse(line)
+      const waiter = pending.get(message.id)
+      if (!waiter) return
+      pending.delete(message.id)
+      if (message.error) waiter.reject(new Error(JSON.stringify(message.error)))
+      else waiter.resolve(message.result)
+    })
+    const exit = new Promise((resolve) => child.once("close", (code) => {
+      for (const waiter of pending.values()) waiter.reject(new Error(`MCP exited ${code}: ${stderr}`))
+      pending.clear()
+      resolve(code)
+    }))
+    child.on("error", (error) => {
+      for (const waiter of pending.values()) waiter.reject(error)
+    })
+    let closed = false
+    const session = {
+      pid: child.pid,
+      request(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = ++nextId
+          pending.set(id, { resolve, reject })
+          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n")
+        })
+      },
+      async call(name, args = {}) {
+        const result = await session.request("tools/call", { name, arguments: args })
+        assert.notEqual(result.isError, true, result.content?.[0]?.text)
+        return JSON.parse(result.content[0].text)
+      },
+      async close() {
+        if (closed) return
+        closed = true
+        child.stdin.end()
+        const timer = setTimeout(() => child.kill(), 10_000)
+        try { await exit } finally { clearTimeout(timer) }
+        assert.throws(() => process.kill(child.pid, 0), { code: "ESRCH" })
+      },
+    }
+    sessions.push(session)
+    await session.request("initialize", {
+      protocolVersion: "2024-11-05", capabilities: {},
+      clientInfo: { name: "lexical-alpha-production-smoke", version: "1.0.0" },
+    })
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n")
+    return session
+  }
+  const first = await launch()
+  await t.test("immediate startup query returns canonical fixture during convergence", async () => {
+    const result = await first.call("desk_search", { query: "startupquartz" })
+    assert.equal(result.results[0].snippet, "startupquartz")
+    assert.equal(result.search_mode, "lexical")
+  })
+  await entered.promise
+  const second = await launch()
+  await t.test("second process searches while the controller owns embedding work", async () => {
+    const result = await second.call("desk_search", { query: "startupquartz" })
+    assert.equal(result.results[0].snippet, "startupquartz")
+    const status = await second.call("desk_status")
+    assert.equal(status.lexical.serving_path, "direct")
+    assert.equal(status.lexical.current_automatic_action, "reconciling")
+    assert.ok(status.runtime.source_mirror_path.startsWith(runtimeCache))
+  })
+  await t.test("canonical MCP mutation is visible to the other process immediately", async () => {
+    const written = await first.call("task_create", {
+      track: "track", slug: "canonical", title: "Mutation", body: "mutationquartz",
+    })
+    assert.equal(written.status, "created")
+    const result = await second.call("desk_search", { query: "mutationquartz" })
+    assert.ok(result.results.some((r) => r.path === path.join("track", "canonical", "task.md")))
+  })
+  await t.test("same-mtime external write is visible to the next query", async () => {
+    const file = path.join(deskRoot, "track", "work", "task.md")
+    const before = await fs.stat(file)
+    await fs.writeFile(file, "externlquartz")
+    await fs.utimes(file, before.atime, before.mtime)
+    const result = await second.call("desk_search", { query: "externlquartz" })
+    assert.equal(result.results[0].snippet, "externlquartz")
+  })
+  const stateHome = path.join(home, ".cache", "ouroboros-skills", "desk", "readiness")
+  const [id] = await fs.readdir(stateHome)
+  const record = JSON.parse(await fs.readFile(path.join(stateHome, id, "owner.json"), "utf8"))
+  observer = await connectOrStartController({
+    root: deskRoot, stateHome,
+    lexicalContract: record.identity.lexical_contract,
+    semanticContract: record.identity.semantic_contract,
+  })
+  await t.test("watcher uncertainty uses direct files and never stale indexed text", async () => {
+    await observer.markUncertain("smoke_overflow")
+    await writeFile(deskRoot, "track/work/task.md", "uncertainquartz")
+    const result = await first.call("desk_search", { query: "uncertainquartz" })
+    assert.equal(result.results[0].snippet, "uncertainquartz")
+    assert.ok(result.readiness_diagnostic)
+    assert.equal((await first.call("desk_status")).lexical.serving_path, "direct")
+  })
+  held.resolve()
+  await second.call("desk_reindex", { force: true })
+  await t.test("concurrent startup/search leaves actual vectors and zero orphans", async () => {
+    const db = new Database(path.join(deskRoot, ".state", "desk-index.sqlite"), { readonly: true })
+    try {
+      sqliteVec.load(db)
+      assert.ok(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n > 0)
+      assert.equal(db.prepare(`SELECT COUNT(*) AS orphan_count FROM chunk_vecs v
+        LEFT JOIN chunks c ON c.id = v.chunk_id WHERE c.id IS NULL`).get().orphan_count, 0, JSON.stringify({
+          orphanIds: db.prepare("SELECT v.chunk_id FROM chunk_vecs v LEFT JOIN chunks c ON c.id = v.chunk_id WHERE c.id IS NULL").all(),
+          chunks: db.prepare("SELECT c.id, d.path FROM chunks c JOIN docs d ON d.id = c.doc_id").all(),
+          generations: db.prepare("SELECT id, documents FROM lexical_generations").all(),
+        }))
+    } finally { db.close() }
+  })
+  await t.test("status reports its serving path without changing controller or generation state", async () => {
+    const before = await observer.status()
+    const one = await first.call("desk_status")
+    const two = await first.call("desk_status")
+    const after = await observer.status()
+    assert.deepEqual(two.lexical, one.lexical)
+    assert.deepEqual(after, before)
+    assert.equal(one.lexical.serving_path, "direct")
+    assert.equal(one.lexical.certain, false)
+    assert.ok(one.lexical.generation > 0)
+  })
+  await observer.close()
+  await second.close()
+  await first.close()
+  await writeFile(deskRoot, "track/work/task.md", "restartquartz")
+  held = deferred()
+  entered = deferred()
+  const restarted = await launch()
+  await t.test("restart does not trust the old generation for its first query", async () => {
+    const result = await restarted.call("desk_search", { query: "restartquartz" })
+    assert.equal(result.results[0].snippet, "restartquartz")
+    assert.ok(result.readiness_diagnostic)
+    assert.equal((await restarted.call("desk_status")).lexical.serving_path, "direct")
+  })
+  held.resolve()
+  await restarted.call("desk_reindex")
 })
