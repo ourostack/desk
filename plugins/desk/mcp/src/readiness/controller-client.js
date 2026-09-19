@@ -101,12 +101,13 @@ async function startOrReuseController({
 
 function createClient({ endpoint, ephemeral, identity, local, token }) {
   let closed = false
-  const call = (method, params = {}, timeoutMs = 2_000) => request({
+  const call = (method, params = {}, timeoutMs = 2_000, signal) => request({
     endpoint,
     identity,
     method,
     params: { ...params, token },
     timeoutMs,
+    signal,
   })
   return {
     accepted: true,
@@ -115,10 +116,17 @@ function createClient({ endpoint, ephemeral, identity, local, token }) {
     status: () => call("status"),
     beginConvergence: () => call("beginConvergence", {}, null),
     barrier: (params) => call("barrier", params, params?.wait ? null : 2_000),
-    recordChange: (change) => call("recordChange",
-      typeof change === "string" ? { path: change } : change, null),
+    async recordChange(change) {
+      const result = await call("recordChange", typeof change === "string" ? { path: change } : change, null)
+      if (result?.recorded !== true || !Number.isSafeInteger(result.sequence) || result.sequence < 1 ||
+          typeof result.cursor?.journal_id !== "string" || !result.cursor.journal_id ||
+          !Number.isSafeInteger(result.cursor.sequence) || result.cursor.sequence < result.sequence) {
+        throw new Error("controller returned an unverifiable durable change acknowledgement")
+      }
+      return result
+    },
     markUncertain: (reason) => call("markUncertain", { reason }),
-    fenceEvents: () => call("fenceEvents", {}, null),
+    fenceEvents: ({ signal } = {}) => call("fenceEvents", {}, null, signal),
     async close() {
       if (closed) return
       closed = true
@@ -199,9 +207,13 @@ function request({
   method,
   params = {},
   timeoutMs = 2_000,
+  signal,
 }) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return }
     const socket = net.createConnection(endpoint)
+    const abort = () => { socket.destroy(); reject(signal.reason) }
+    signal?.addEventListener("abort", abort, { once: true })
     const id = randomUUID()
     let pending = ""
     const timeout = timeoutMs === null ? null : setTimeout(() => {
@@ -238,6 +250,7 @@ function request({
     })
     socket.once("close", () => {
       clearTimeout(timeout)
+      signal?.removeEventListener("abort", abort)
       reject(new Error(`readiness controller connection closed: ${method}`))
     })
   })

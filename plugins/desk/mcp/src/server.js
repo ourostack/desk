@@ -122,6 +122,8 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
           if (!result.summary?.lexical_generation) {
             result.summary = await rebuildIndex(deskRoot, { ...indexOptions, db, reembedMissing: true })
             result.semantic = { ...result.semantic, ...getSemanticCoverage(db) }
+            result.built = true
+            result.reason = "journal_reconciled"
           }
           await journal.compact({ db, generationId: result.summary.lexical_generation })
         } finally {

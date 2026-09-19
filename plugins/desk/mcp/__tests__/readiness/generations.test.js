@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import * as fs from "node:fs"
 import * as path from "node:path"
+import { spawn } from "node:child_process"
 import { openDb, closeDb, getMeta, runMigrations } from "../../src/db/init.js"
 import { connectOrStartController } from "../../src/server.js"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -134,4 +135,70 @@ test("controller reconciliation hashes canonical files even when mtimes look fre
     const log = fs.readFileSync(path.join(stateHome, client.id, "journal", "changes.jsonl"), "utf8")
     assert.equal(JSON.parse(log.trim()).checkpoint, true)
   } finally { await client.close() }
+})
+
+test("controller reports a forced generation after a fresh fast path as built", async () => {
+  const directory = await mkTempRoot("desk-generation-status-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const client = await connectOrStartController({
+    deskRoot: root, stateHome: path.join(directory, "state"), ephemeral: true,
+    policy: { lexical: "required", semantic: "unsupported" },
+  })
+  try {
+    await client.beginConvergence()
+    const refreshed = await client.beginConvergence()
+    assert.equal(refreshed.built, true, "status must describe the actual full lexical pass")
+    assert.equal(refreshed.reason, "journal_reconciled")
+  } finally { await client.close() }
+})
+
+test("support smoke: process restart replays durable mutations and discovers external downtime writes", async () => {
+  const directory = await mkTempRoot("desk-task4-restart-")
+  const root = path.join(directory, "workspace")
+  const stateHome = path.join(directory, "state")
+  fs.mkdirSync(root)
+  const options = { deskRoot: root, stateHome, ephemeral: true, policy: { lexical: "required", semantic: "unsupported" } }
+  const serverUrl = new URL("../../src/server.js", import.meta.url).href
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `
+    import { writeFileSync } from 'node:fs';
+    import path from 'node:path';
+    import { connectOrStartController, callTool } from ${JSON.stringify(serverUrl)};
+    const options = ${JSON.stringify(options)};
+    const controller = await connectOrStartController(options);
+    const result = await callTool({
+      deskRoot: options.deskRoot, name: 'task_create',
+      input: { track: 'track', slug: 'task', title: 'durable mutation', body: 'kept across restart' },
+      statusContext: { admission: { controller } },
+    });
+    if (result.isError) throw new Error(JSON.stringify(result));
+    console.log(controller.id);
+    process.exit(0); // Deliberately omit controller.close(): simulate an unclean owner exit.
+  `], { stdio: ["ignore", "pipe", "pipe"] })
+  let stdout = ""
+  let stderr = ""
+  child.stdout.on("data", (chunk) => { stdout += chunk })
+  child.stderr.on("data", (chunk) => { stderr += chunk })
+  const code = await new Promise((resolve, reject) => {
+    child.once("error", reject)
+    child.once("close", resolve)
+  })
+  assert.equal(code, 0, stderr)
+  const id = stdout.trim()
+  assert.equal(JSON.parse(fs.readFileSync(path.join(stateHome, id, "journal", "journal.json"))).clean_shutdown, false)
+  const canonicalBefore = fs.readFileSync(path.join(root, "track", "task", "task.md"), "utf8")
+  fs.writeFileSync(path.join(root, "track", "task", "doing.md"), "# external downtime write\n")
+  const restarted = await connectOrStartController(options)
+  try {
+    assert.equal((await restarted.status()).state, "CONTROL_READY")
+    await restarted.beginConvergence()
+    assert.equal((await restarted.barrier({ capability: "lexical" })).current, true)
+    const db = openDb(root)
+    try {
+      const docs = db.prepare("SELECT path FROM docs ORDER BY path").all().map((row) => row.path)
+      assert.deepEqual(docs, [path.join("track", "task", "doing.md"), path.join("track", "task", "task.md")])
+      assert.equal(JSON.parse(getMeta(db, "covered_event_cursor")).sequence, 1)
+    } finally { closeDb(db) }
+    assert.equal(fs.readFileSync(path.join(root, "track", "task", "task.md"), "utf8"), canonicalBefore)
+  } finally { await restarted.close() }
 })

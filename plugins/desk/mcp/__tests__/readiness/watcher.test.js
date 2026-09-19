@@ -2,7 +2,9 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import * as fs from "node:fs"
 import * as path from "node:path"
+import * as net from "node:net"
 import { connectOrStartController } from "../../src/readiness/controller-client.js"
+import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 function deferred() {
@@ -167,4 +169,139 @@ test("journal append failure is returned as an error and marks controller freshn
     assert.equal((await client.barrier({ capability: "lexical" })).current, false)
     assert.equal((await client.status()).freshness.certain, false)
   } finally { hold.resolve(); await client.close() }
+})
+
+test("contradictory backend evidence and unspecified journal uncertainty never become certain", async () => {
+  const { fenceEvents } = await fenceModule()
+  for (const [backend, replay] of [
+    [{ certain: true, reason: "overflow" }, { certain: true }],
+    [{ certain: true }, { certain: false, reason: null }],
+  ]) {
+    const controller = {
+      watcher: { fence: async () => backend },
+      journal: { cursor: { journal_id: "fixture", sequence: 1 }, replay: () => replay },
+      markUncertain() {},
+    }
+    assert.equal((await fenceEvents({ controller })).certain, false)
+  }
+})
+
+test("a waiting barrier follows invalidation into the queued reconciliation", async () => {
+  const entered = deferred()
+  const release = deferred()
+  const again = deferred()
+  const releaseAgain = deferred()
+  let calls = 0
+  const options = await fixture({ handlers: { async beginConvergence() {
+    if (++calls === 1) { entered.resolve(); await release.promise }
+    if (calls === 2) { again.resolve(); await releaseAgain.promise }
+    return { indexed: true }
+  } } })
+  const client = await connectOrStartController(options)
+  let running
+  let waiting
+  try {
+    running = client.beginConvergence()
+    await entered.promise
+    let settled = false
+    waiting = client.barrier({ capability: "lexical", wait: true }).then((value) => { settled = true; return value })
+    await client.markUncertain("overflow")
+    release.resolve()
+    await running
+    await again.promise
+    // Flush an independent IPC round trip, not an arbitrary sleep.
+    await client.status()
+    assert.equal(settled, false)
+    releaseAgain.resolve()
+    assert.equal((await waiting).current, true)
+  } finally {
+    release.resolve(); releaseAgain.resolve()
+    await Promise.allSettled([running, waiting])
+    await client.close()
+  }
+})
+
+test("cancelling a client fence ends only its request, not controller-owned work", async () => {
+  const { fenceEvents } = await fenceModule()
+  const entered = deferred()
+  const release = deferred()
+  const options = await fixture({
+    watcher: { async fence() { entered.resolve(); await release.promise; return { certain: true } } },
+    handlers: { beginConvergence: async () => ({ indexed: true }) },
+  })
+  const client = await connectOrStartController(options)
+  const abort = new AbortController()
+  let request
+  let settled = false
+  try {
+    await client.beginConvergence()
+    request = fenceEvents({ controller: client, signal: abort.signal })
+      .then((value) => { settled = true; return value }, (error) => { settled = true; return error })
+    await entered.promise
+    abort.abort()
+    await client.status()
+    assert.equal(settled, true)
+    assert.equal((await request).name, "AbortError")
+    release.resolve()
+    assert.equal((await client.barrier({ capability: "lexical" })).current, true)
+  } finally { release.resolve(); await request; await client.close() }
+})
+
+test("a live corrupt journal schedules recovery under a new cursor identity", async () => {
+  const options = await fixture({
+    watcher: { fence: async () => ({ certain: true }) },
+    handlers: { beginConvergence: async () => ({ indexed: true }) },
+  })
+  const client = await connectOrStartController(options)
+  try {
+    await client.beginConvergence()
+    const before = (await client.status()).freshness.cursor
+    fs.appendFileSync(path.join(options.stateHome, client.id, "journal", "changes.jsonl"), "corrupt\n")
+    assert.equal((await client.fenceEvents()).reason, "journal_corrupt")
+    assert.equal((await client.barrier({ capability: "lexical", wait: true })).current, true)
+    assert.notEqual((await client.status()).freshness.cursor.journal_id, before.journal_id)
+  } finally { await client.close() }
+})
+
+test("controller shutdown tolerates removal of its derived journal directory", async () => {
+  const options = await fixture({ handlers: { beginConvergence: async () => ({ indexed: true }) } })
+  const client = await connectOrStartController(options)
+  await client.beginConvergence()
+  fs.rmSync(path.join(options.stateHome, client.id), { recursive: true })
+  await assert.doesNotReject(client.close())
+})
+
+test("a client rejects the legacy no-op recordChange acknowledgement", async () => {
+  const options = await fixture()
+  const identity = controllerIdentity({ root: options.root, protocolVersion: 1, lexicalContract: {}, semanticContract: null })
+  const endpoint = deriveControllerEndpoint({ identity })
+  const directory = path.join(options.stateHome, identity.id)
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+  const server = net.createServer((socket) => {
+    let pending = ""
+    socket.on("data", (data) => {
+      pending += data
+      if (!pending.includes("\n")) return
+      const request = JSON.parse(pending.trim())
+      socket.end(`${JSON.stringify({
+        id: request.id,
+        result: request.method === "handshake" ? { accepted: true, identity } : { recorded: true },
+      })}\n`)
+    })
+  })
+  await new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(endpoint, resolve)
+  })
+  fs.writeFileSync(path.join(directory, "owner.json"), JSON.stringify({
+    identity, owner: { token: "ephemeral-test-token" },
+  }), { mode: 0o600 })
+  let client
+  try {
+    client = await connectOrStartController(options)
+    await assert.rejects(client.recordChange("task.md"), /durable.*acknowledgement/)
+  } finally {
+    await client?.close()
+    await new Promise((resolve) => server.close(resolve))
+  }
 })

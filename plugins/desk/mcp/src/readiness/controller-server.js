@@ -75,6 +75,7 @@ export async function startReadinessController({
 
   function markUncertain(reason = "freshness_uncertain") {
     revision += 1
+    if (reason === "journal_corrupt" || reason === "journal_write_failed") journalPoisoned = true
     freshnessReason = reason
     if (state !== "RECOVERING") state = transitionReadiness(state, "RECOVERING")
     scheduleReconciliation()
@@ -187,8 +188,10 @@ export async function startReadinessController({
 
   async function barrier(params) {
     if (params?.wait) {
-      if (reconcileScheduled) beginConvergence()
-      while (convergence) await convergence
+      while (convergence || reconcileScheduled) {
+        if (!convergence) beginConvergence()
+        await convergence
+      }
       if (convergenceError) throw convergenceError
     }
     if (handlers.barrier) return handlers.barrier(params)

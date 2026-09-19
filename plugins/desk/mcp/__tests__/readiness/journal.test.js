@@ -8,7 +8,10 @@ import { task_create, task_update, task_archive } from "../../src/tools/task.js"
 import { track_create, track_update } from "../../src/tools/track.js"
 import { friction_add } from "../../src/tools/friction.js"
 import { lesson_add } from "../../src/tools/lesson.js"
-import { callTool } from "../../src/server.js"
+import { callTool, connectOrStartController, createMcpServer, startServer } from "../../src/server.js"
+import { main } from "../../index.js"
+import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 
 async function fixture() {
   const root = await mkTempRoot("desk-journal-")
@@ -263,3 +266,110 @@ test("failed canonical validation never appends a journal event", async () => {
   assert.equal(calls, 0)
   assert.deepEqual(fs.readdirSync(root), [])
 })
+
+test("invalid UTF-8 is quarantined byte-for-byte rather than accepted as a changed path", async () => {
+  const f = await fixture()
+  const journal = await f.open()
+  await journal.appendChange({ path: "valid.md" })
+  await journal.close()
+  const corrupt = Buffer.concat([
+    Buffer.from('{"sequence":2,"path":"'),
+    Buffer.from([0xff]),
+    Buffer.from('.md","operation":"write","observed_at":"2026-09-19T16:00:00.000Z"}\n'),
+  ])
+  fs.appendFileSync(path.join(f.stateDir, "changes.jsonl"), corrupt)
+  const original = fs.readFileSync(path.join(f.stateDir, "changes.jsonl"))
+  const recovered = await f.open()
+  try {
+    assert.equal(recovered.replay().reason, "journal_corrupt")
+    const quarantined = fs.readdirSync(f.stateDir).find((name) => name.startsWith("changes.corrupt-"))
+    assert.deepEqual(fs.readFileSync(path.join(f.stateDir, quarantined)), original)
+    assert.deepEqual(recovered.replay().changes.map((change) => change.path), ["valid.md"])
+  } finally { await recovered.close() }
+})
+
+test("live journal corruption invalidates a fence and prevents another successful append", async () => {
+  const f = await fixture()
+  const journal = await f.open()
+  try {
+    await journal.appendChange({ path: "valid.md" })
+    journal.reconciled(journal.cursor)
+    fs.appendFileSync(path.join(f.stateDir, "changes.jsonl"), "damaged tail")
+    assert.equal(journal.replay().certain, false)
+    assert.equal(journal.replay().reason, "journal_corrupt")
+    await assert.rejects(journal.appendChange({ path: "later.md" }), /recover/)
+  } finally { await journal.close() }
+})
+
+test("valid CRLF JSONL replays and remains appendable on either platform", async () => {
+  const f = await fixture()
+  const first = await f.open()
+  await first.appendChange({ path: "first.md" })
+  await first.close()
+  const logPath = path.join(f.stateDir, "changes.jsonl")
+  fs.writeFileSync(logPath, fs.readFileSync(logPath, "utf8").replaceAll("\n", "\r\n"))
+  const restarted = await f.open()
+  try {
+    assert.equal(restarted.replay().reason, "watcher_downtime")
+    assert.equal((await restarted.appendChange({ path: "second.md" })).sequence, 2)
+    assert.deepEqual(restarted.replay().changes.map((change) => change.path), ["first.md", "second.md"])
+  } finally { await restarted.close() }
+})
+
+for (const scenario of [
+  { name: "workspace", policy: "workspace", expected: null },
+  { name: "matching person", policy: "person", raw: "ari", expected: "ari" },
+  { name: "matching provider", policy: "person", raw: "ari", provider: { mode: "person", person: "ari" }, expected: "ari" },
+  { name: "provider-derived person", policy: "person", provider: { mode: "person", person: "ari" }, expected: "ari" },
+]) {
+  test(`admitted ${scenario.name} authority journals a real MCP mutation without widening writes`, async () => {
+    const directory = await mkTempRoot("desk-journal-authority-")
+    const root = path.join(directory, "workspace")
+    fs.mkdirSync(root)
+    const server = createMcpServer()
+    const client = new Client({ name: "task4-authority", version: "1" })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    let controller
+    let effectivePerson
+    try {
+      await main({
+        argv: ["--root", root, ...(scenario.raw ? ["--person", scenario.raw] : [])],
+        env: {},
+        readinessPolicy: {
+          write_authority: scenario.policy, semantic: "unsupported",
+          authority_provider: scenario.provider ? "registry" : null,
+        },
+        authorityProviders: { registry: async () => scenario.provider },
+        runtimeImporter: async () => ({
+          async connectOrStartController(options) {
+            controller = await connectOrStartController({
+              ...options, stateHome: path.join(directory, "state"), ephemeral: true,
+            })
+            return controller
+          },
+          async startServer(options) {
+            effectivePerson = options.person
+            await startServer({ ...options, server, transport: serverTransport })
+          },
+        }),
+      })
+      await client.connect(clientTransport)
+      const result = await client.callTool({
+        name: "task_create",
+        arguments: { track: "ops", slug: "bound", title: "durable", person: "bob" },
+      })
+      assert.equal(result.isError, undefined)
+      assert.equal(effectivePerson, scenario.expected)
+      const prefix = scenario.expected ? ["desks", scenario.expected] : []
+      assert.equal(JSON.parse(result.content[0].text).path, path.join(...prefix, "ops", "bound", "task.md"))
+      assert.equal(fs.existsSync(path.join(root, ...prefix, "ops", "bound", "task.md")), true)
+      assert.equal(fs.existsSync(path.join(root, "desks", "bob")), false)
+      await controller.barrier({ capability: "lexical", wait: true })
+      assert.equal((await controller.status()).freshness.cursor.sequence, 1)
+    } finally {
+      await client.close()
+      await server.close()
+      await controller?.close()
+    }
+  })
+}

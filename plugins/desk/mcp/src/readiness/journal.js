@@ -38,9 +38,10 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
   }
   let reason = metadata ? metadata.clean_shutdown ? "watcher_downtime" : "unclean_shutdown" : "initial_scan"
   metadata ??= { id: randomUUID(), root }
-  const raw = statIfPresent(io, logPath) ? io.readFileSync(logPath, "utf8") : ""
+  const raw = statIfPresent(io, logPath) ? io.readFileSync(logPath) : Buffer.alloc(0)
   const { records: initialRecords, corrupt } = parseRecords(raw)
   let records = initialRecords
+  let persistedBytes = corrupt ? Buffer.from(serialize(records)) : raw
   let poisoned = false
   let closed = false
   if (corrupt) {
@@ -61,41 +62,53 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
     pending = result.catch(() => {})
     return result
   }
+  function verifyIntegrity() {
+    if (poisoned) return
+    assertSafeFile(io, logPath)
+    if (!io.readFileSync(logPath).equals(persistedBytes)) {
+      poisoned = true
+      reason = "journal_corrupt"
+    }
+  }
   return {
     get cursor() { return cursor() },
     appendChange({ root: changedRoot = root, path: changedPath, operation = "write", observedAt = new Date().toISOString() }) {
       return serialized(() => {
-      if (closed || poisoned) throw new Error("journal must recover before accepting changes")
-      if (io.realpathSync(changedRoot) !== root) throw new Error("journal root mismatch")
-      const record = {
-        sequence: cursor().sequence + 1,
-        path: normalizeChangePath(changedPath),
-        operation,
-        observed_at: observedAt,
-      }
-      validateRecord(record)
-      let fd
-      try {
-        const before = assertSafeFile(io, logPath)
-        fd = io.openSync(logPath, io.constants.O_WRONLY | io.constants.O_APPEND | (io.constants.O_NOFOLLOW ?? 0))
-        const opened = io.fstatSync(fd)
-        if (opened.ino !== before.ino || opened.dev !== before.dev || opened.nlink !== 1) {
-          throw new Error("journal has unsafe replaced file")
+        verifyIntegrity()
+        if (closed || poisoned) throw new Error("journal must recover before accepting changes")
+        if (io.realpathSync(changedRoot) !== root) throw new Error("journal root mismatch")
+        const record = {
+          sequence: cursor().sequence + 1,
+          path: normalizeChangePath(changedPath),
+          operation,
+          observed_at: observedAt,
         }
-        io.writeFileSync(fd, `${JSON.stringify(record)}\n`)
-        io.fsyncSync(fd)
-        records.push(record)
-        return record
-      } catch (error) {
-        poisoned = true
-        reason = "journal_write_failed"
-        throw error
-      } finally {
-        if (fd !== undefined) io.closeSync(fd)
-      }
+        validateRecord(record)
+        let fd
+        try {
+          const before = assertSafeFile(io, logPath)
+          fd = io.openSync(logPath, io.constants.O_WRONLY | io.constants.O_APPEND | (io.constants.O_NOFOLLOW ?? 0))
+          const opened = io.fstatSync(fd)
+          if (opened.ino !== before.ino || opened.dev !== before.dev || opened.nlink !== 1) {
+            throw new Error("journal has unsafe replaced file")
+          }
+          const bytes = Buffer.from(`${JSON.stringify(record)}\n`)
+          io.writeFileSync(fd, bytes)
+          io.fsyncSync(fd)
+          persistedBytes = Buffer.concat([persistedBytes, bytes])
+          records.push(record)
+          return record
+        } catch (error) {
+          poisoned = true
+          reason = "journal_write_failed"
+          throw error
+        } finally {
+          if (fd !== undefined) io.closeSync(fd)
+        }
       })
     },
     replay() {
+      verifyIntegrity()
       const changes = new Map()
       for (const record of records) {
         if (!record.checkpoint) changes.set(record.path, record)
@@ -129,12 +142,16 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
         ]
         await writeAtomic(io, logPath, serialize(retained))
         records = retained
+        persistedBytes = Buffer.from(serialize(retained))
       })
     },
     close() {
       return serialized(async () => {
         if (closed) return
-        await writeAtomic(io, metaPath, JSON.stringify({ ...metadata, clean_shutdown: !poisoned }))
+        // Removed derived state has no clean-shutdown marker to persist.
+        if (statIfPresent(io, stateDir)) {
+          await writeAtomic(io, metaPath, JSON.stringify({ ...metadata, clean_shutdown: !poisoned }))
+        }
         closed = true
       })
     },
@@ -207,10 +224,10 @@ function parseRecords(raw) {
   const records = []
   let offset = 0
   while (offset < raw.length) {
-    const end = raw.indexOf("\n", offset)
+    const end = raw.indexOf(0x0a, offset)
     if (end < 0) return { records, corrupt: true }
     try {
-      const record = JSON.parse(raw.slice(offset, end))
+      const record = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw.subarray(offset, end)))
       validateRecord(record)
       if ((records.length && record.sequence !== records.at(-1).sequence + 1) ||
           (record.checkpoint && records.length) ||

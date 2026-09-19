@@ -14,8 +14,8 @@ export async function fenceEvents({ controller, signal }) {
     throw error
   }
   const replay = controller.journal.replay()
-  const reason = replay.certain === false ? replay.reason
-    : result?.certain !== true ? result?.reason ?? "unproven_fence" : null
+  const reason = replay.certain !== true ? replay.reason ?? "journal_uncertain"
+    : result?.reason ?? (result?.certain !== true ? "unproven_fence" : null)
   if (reason !== null) await controller.markUncertain(reason)
   return { certain: reason === null, cursor: controller.journal.cursor, reason }
 }
