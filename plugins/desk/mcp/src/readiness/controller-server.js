@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs"
 import * as net from "node:net"
 import * as path from "node:path"
 
 import { responseMessage } from "./protocol.js"
 import { transitionReadiness } from "./state.js"
+import { validateControllerEndpoint, validatePrivateDirectory } from "./identity.js"
 
 export async function startReadinessController({
   identity,
@@ -13,7 +14,10 @@ export async function startReadinessController({
   handlers = {},
   ephemeral = false,
 } = {}) {
+  validateControllerEndpoint(endpoint)
+  if (process.platform !== "win32") validatePrivateDirectory(path.dirname(endpoint))
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  if (process.platform !== "win32") validatePrivateDirectory(stateDir)
   const owner = {
     pid: process.pid,
     started_at: new Date(Date.now() - Math.floor(process.uptime() * 1000)).toISOString(),
@@ -128,14 +132,16 @@ export async function startReadinessController({
 
   await listen(server, endpoint)
   try {
+    const socketStat = process.platform === "win32" ? null : lstatSync(endpoint)
+    const socket = socketStat === null ? null : { dev: socketStat.dev, ino: socketStat.ino }
     writeFileSync(
       path.join(stateDir, "owner.json"),
-      `${JSON.stringify({ schema_version: 1, identity, owner }, null, 2)}\n`,
+      `${JSON.stringify({ schema_version: 1, identity, owner, endpoint, socket }, null, 2)}\n`,
       { encoding: "utf8", mode: 0o600 },
     )
   } catch (error) {
     try {
-      await closeServer(server, endpoint, stateDir)
+      await closeServer(server, stateDir, owner)
     } catch {
       // Preserve the publication failure; stale cleanup is recoverable on the next election.
     }
@@ -148,7 +154,7 @@ export async function startReadinessController({
     identity,
     owner,
     server,
-    close: () => closeServer(server, endpoint, stateDir),
+    close: () => closeServer(server, stateDir, owner),
   }
 }
 
@@ -162,17 +168,26 @@ function listen(server, endpoint) {
   })
 }
 
-function closeServer(server, endpoint, stateDir) {
+function closeServer(server, stateDir, owner) {
   return new Promise((resolve, reject) => {
     server.close(() => {
       try {
-        if (process.platform !== "win32") {
-          rmSync(endpoint, { force: true })
+        // net.Server removes its own socket. Never unlink an unverified replacement.
+        if (process.platform !== "win32") validatePrivateDirectory(stateDir)
+        const ownerFile = path.join(stateDir, "owner.json")
+        const record = JSON.parse(readFileSync(ownerFile, "utf8"))
+        if (record.owner?.token === owner.token) {
+          unlinkSync(ownerFile)
+          try {
+            rmdirSync(stateDir)
+          } catch (error) {
+            if (error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error
+          }
         }
-        rmSync(stateDir, { recursive: true, force: true })
         resolve()
       } catch (error) {
-        reject(error)
+        if (error.code === "ENOENT") resolve()
+        else reject(error)
       }
     })
   })

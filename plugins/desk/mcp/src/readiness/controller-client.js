@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto"
-import { mkdirSync, readFileSync, rmSync, statSync } from "node:fs"
+import { lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs"
 import * as net from "node:net"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { controllerIdentity } from "./identity.js"
+import { controllerIdentity, deriveControllerEndpoint, stableStringify, validatePrivateDirectory } from "./identity.js"
 import { requestMessage } from "./protocol.js"
 import { startReadinessController } from "./controller-server.js"
 
@@ -23,9 +23,8 @@ export async function connectOrStartController({
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
-  const endpoint = process.platform === "win32"
-    ? `\\\\.\\pipe\\desk-readiness-${identity.user.username}-${identity.id}`
-    : path.join(stateDir, "controller.sock")
+  if (process.platform !== "win32") validatePrivateDirectory(stateDir)
+  const endpoint = deriveControllerEndpoint({ identity })
 
   let local = localControllers.get(identity.id)
   if (!local) {
@@ -76,8 +75,8 @@ async function startOrReuseController({
   if (existing?.accepted) {
     return
   }
-  if (process.platform !== "win32" && endpointIsReclaimable({ identity, stateDir })) {
-    rmSync(endpoint, { force: true })
+  if (process.platform !== "win32" && endpointIsReclaimable({ endpoint, identity, stateDir })) {
+    unlinkSync(endpoint)
   }
   try {
     const controller = await startReadinessController({
@@ -156,21 +155,24 @@ async function waitForHandshake({ endpoint, identity, stateDir }) {
 }
 
 function readControllerToken({ identity, stateDir }) {
-  const stat = statSync(stateDir)
-  if (process.platform !== "win32" && stat.uid !== process.getuid()) {
-    throw new Error("readiness controller state directory has unsafe ownership")
-  }
+  if (process.platform !== "win32") validatePrivateDirectory(stateDir)
   const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
-  if (record.identity?.id !== identity.id || typeof record.owner?.token !== "string") {
+  if (stableStringify(record.identity) !== stableStringify(identity) || typeof record.owner?.token !== "string") {
     throw new Error("readiness controller owner record is invalid")
   }
   return record.owner.token
 }
 
-function endpointIsReclaimable({ identity, stateDir }) {
+function endpointIsReclaimable({ endpoint, identity, stateDir }) {
   try {
+    validatePrivateDirectory(stateDir)
+    validatePrivateDirectory(path.dirname(endpoint))
+    const stat = lstatSync(endpoint)
+    if (!stat.isSocket() || stat.uid !== process.getuid()) return false
     const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
-    if (record.identity?.id !== identity.id || !Number.isInteger(record.owner?.pid)) {
+    if (stableStringify(record.identity) !== stableStringify(identity)
+      || record.endpoint !== endpoint || record.socket?.dev !== stat.dev || record.socket?.ino !== stat.ino
+      || !Number.isInteger(record.owner?.pid) || record.owner.pid <= 0) {
       return false
     }
     try {
