@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "id": "desk",
-  "version": "3.2.0-alpha.5",
+  "version": "3.2.0-alpha.6",
   "dependencies": [
     {
       "id": "desk",
       "kind": "substrate",
-      "version": "3.2.0-alpha.5",
+      "version": "3.2.0-alpha.6",
       "provenance": {
         "source": "plugins/desk/.codex-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
-        "version": "3.2.0-alpha.5",
+        "version": "3.2.0-alpha.6",
         "integrity": "sha256-desk-activation-manifest-v1"
       }
     },
@@ -98,6 +98,12 @@
       "project-local",
       "manual-only"
     ]
+  },
+  "desk_runtime": {
+    "root": "workspace",
+    "write_authority": "workspace",
+    "lexical": "required",
+    "semantic": "background"
   },
   "artifacts": {
     "embeddings": {

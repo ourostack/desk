@@ -1,8 +1,16 @@
+import { existsSync } from "node:fs"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
+
 import {
   applyActivationArtifacts,
   deactivateActivationArtifacts,
 } from "../artifact-ledger.js"
 import { resolveActivationChain, selectEngineeringMethod } from "../validate.js"
+import { hashCurrentSource } from "../../runtime/bootstrap.js"
+import { normalizeReadinessPolicy } from "../readiness-policy.js"
+import { ActivationFailure } from "../failures.js"
+import { validateWriteSegment } from "../../util/paths.js"
 
 const CODEX_CAPABILITIES = new Set(["Read", "Write", "Interactive"])
 const CODEX_ACTIVATION_LEDGER_PATH = ".codex/desk-activation-ledger.json"
@@ -616,6 +624,7 @@ args = ${tomlArray([
     `${input.pluginRoot}/mcp/index.js`,
     "--activation-config",
     modeConfig.activationConfigPath,
+    ...(input.person ? ["--person", input.person] : []),
   ])}
 cwd = "."
 enabled = true
@@ -631,19 +640,31 @@ ${pluginMcpPolicy}${approvalPolicy}${directMcp}
 }
 
 function renderActivationConfig(input, selectedActivation) {
+  const sourceIdentity = input.sourceIdentity
+    ?? `sha256:${hashCurrentSource(resolveMcpRoot(input.pluginRoot))}`
   return `${JSON.stringify({
     schema_version: 1,
     desk: {
       root: input.deskRoot,
     },
+    desk_runtime: input.readinessPolicy,
     runtimeCacheDir: input.runtimeCacheDir,
     activation: {
+      source_identity: sourceIdentity,
       selected_id: selectedActivation.id,
       launch_as: selectedActivation.launchAs,
       mode: input.mode,
       chain: selectedActivation.chain.map((entry) => entry.id),
     },
   }, null, 2)}\n`
+}
+
+function resolveMcpRoot(pluginRoot) {
+  const configured = path.resolve(pluginRoot, "mcp")
+  if (existsSync(configured)) {
+    return configured
+  }
+  return path.resolve(fileURLToPath(new URL("../../..", import.meta.url)))
 }
 
 function renderInstructionsBlock(input, modeConfig, selectedActivation) {
@@ -691,6 +712,41 @@ function generatedArtifactContent(activation, artifact) {
 }
 
 export function materializeCodexActivation(input) {
+  const readinessPolicy = normalizeReadinessPolicy(input.manifest.desk_runtime)
+  if (readinessPolicy.authority_provider !== null) {
+    throw new ActivationFailure({
+      phase: "VERIFYING",
+      code: "authority_invalid",
+      expected: { authority_provider: readinessPolicy.authority_provider },
+      observed: { resolution: "unsupported-by-codex-launch" },
+      summary: "Codex standalone activation cannot enforce a named Desk authority provider.",
+    })
+  }
+  if (input.person != null && readinessPolicy.write_authority !== "person") {
+    throw new ActivationFailure({
+      phase: "VERIFYING",
+      code: "authority_invalid",
+      expected: { write_authority: "person" },
+      observed: { write_authority: readinessPolicy.write_authority },
+      summary: "Codex person input requires person-scoped Desk write authority.",
+    })
+  }
+  let person = null
+  if (readinessPolicy.write_authority === "person") {
+    try {
+      person = typeof input.person === "string" ? input.person.trim() : input.person
+      validateWriteSegment(person)
+    } catch {
+      throw new ActivationFailure({
+        phase: "VERIFYING",
+        code: "authority_invalid",
+        expected: { person: "non-empty single path segment" },
+        observed: { resolution: "missing-or-invalid-person" },
+        summary: "Codex person-scoped Desk activation requires an enforceable person identity.",
+      })
+    }
+  }
+  input = { ...input, readinessPolicy, person }
   const modeConfig = MODE_CONFIG[input.mode]
   assertCodexCapabilities(input.manifest)
   const selectedActivation = selectedActivationFor(input)

@@ -12,6 +12,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.js"
 import { resolveWriteTarget } from "../util/paths.js"
+import { recordCanonicalChanges } from "../readiness/journal.js"
 
 function relPath(deskRoot, absPath) {
   return path.relative(deskRoot, absPath)
@@ -58,7 +59,7 @@ async function resolveTrackFrictionPath({ deskRoot, person, track, themeSlug }) 
  *
  * Returns: { status: "added", path }
  */
-export async function friction_add({ deskRoot, input, person = null }) {
+export async function friction_add({ deskRoot, input, person = null, readiness }) {
   const values = input ?? {}
   const { track, theme, body } = values
   if (!body || typeof body !== "string") {
@@ -102,5 +103,6 @@ export async function friction_add({ deskRoot, input, person = null }) {
     await fs.writeFile(filePath, initial, "utf8")
   }
 
+  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   return { status: "added", path: relPath(deskRoot, filePath) }
 }

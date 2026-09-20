@@ -124,9 +124,10 @@ export function tombstoneDecisionForDoc({ ledger, doc } = {}) {
     return { tombstoned: false }
   }
   const docHash = canonicalDocumentHash(doc.hash)
+  const docPath = typeof doc.path === "string" ? doc.path.replaceAll("\\", "/") : doc.path
   let latest = null
   for (const row of ledger.rows) {
-    if (row.document_path === doc.path && row.document_hash === docHash) {
+    if (row.document_path === docPath && row.document_hash === docHash) {
       latest = row
     }
   }

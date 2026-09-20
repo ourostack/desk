@@ -14,6 +14,7 @@ import {
   pathExists,
 } from "../util/fm.js"
 import { isPathContained, resolveWriteTarget } from "../util/paths.js"
+import { recordCanonicalChanges } from "../readiness/journal.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 
@@ -172,7 +173,7 @@ function splitAbsolutePath(candidate) {
  *
  * Returns: { status: "created", path: "<track>/<slug>/task.md" }
  */
-export async function task_create({ deskRoot, input, person = null }) {
+export async function task_create({ deskRoot, input, person = null, readiness }) {
   const values = input ?? {}
   const { track, slug, title } = values
   if (!Object.hasOwn(values, "track")) {
@@ -210,6 +211,7 @@ export async function task_create({ deskRoot, input, person = null }) {
   }
 
   await writeMarkdown(filePath, data, values.body ?? "")
+  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   return { status: "created", path: relPath(deskRoot, filePath) }
 }
 
@@ -232,7 +234,7 @@ export async function task_create({ deskRoot, input, person = null }) {
  *
  * Returns: { status: "updated", path }
  */
-export async function task_update({ deskRoot, input, person = null }) {
+export async function task_update({ deskRoot, input, person = null, readiness }) {
   const values = input ?? {}
   const { track, slug, frontmatter, body_append } = values
   if (
@@ -274,6 +276,7 @@ export async function task_update({ deskRoot, input, person = null }) {
   }
 
   await writeMarkdown(filePath, merged, newBody)
+  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   return { status: "updated", path: relPath(deskRoot, filePath) }
 }
 
@@ -290,7 +293,7 @@ export async function task_update({ deskRoot, input, person = null }) {
  *
  * Returns: { status: "archived" | "already_archived", path }
  */
-export async function task_archive({ deskRoot, input, person = null }) {
+export async function task_archive({ deskRoot, input, person = null, readiness }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -339,6 +342,11 @@ export async function task_archive({ deskRoot, input, person = null }) {
   // Move the dir. fs.rename is atomic on the same filesystem.
   await fs.mkdir(path.dirname(archiveDir), { recursive: true })
   await fs.rename(srcDir, archiveDir)
+  // A directory move invalidates both subtrees, including companion documents.
+  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
+    { path: relPath(deskRoot, srcDir), operation: "delete" },
+    { path: relPath(deskRoot, archiveDir), operation: "write" },
+  ] })
 
   // Bump task status to `done` (and refresh `updated`) if not already terminal.
   await target([track, "_archive", slug])
@@ -353,6 +361,7 @@ export async function task_archive({ deskRoot, input, person = null }) {
         updated: nowIso(),
       }
       await writeMarkdown(filePath, merged, existing.content)
+      await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
     }
   }
 

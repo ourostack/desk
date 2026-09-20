@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "plugin": {
+    "name": "@ourostack/desk-mcp",
+    "version": "1.4.0-alpha.6"
+  },
+  "targets": [
+    {
+      "id": "darwin-arm64-node-127",
+      "platform": "darwin",
+      "arch": "arm64",
+      "node_abi": "127",
+      "prod_dependency_lock_hash": "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
+      "archive_sha256": "20eded34a9894ff244647fac6141187f06cefbc4eee3407d987915175ca6ba2e",
+      "artifact_path": "darwin-arm64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e"
+    },
+    {
+      "id": "linux-x64-node-127",
+      "platform": "linux",
+      "arch": "x64",
+      "node_abi": "127",
+      "prod_dependency_lock_hash": "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
+      "archive_sha256": "2d54e2dfd6ff33c7ccc97306af421cef745982e40c8a092c47b4e968ad6ae62f",
+      "artifact_path": "linux-x64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e"
+    },
+    {
+      "id": "win32-x64-node-137",
+      "platform": "win32",
+      "arch": "x64",
+      "node_abi": "137",
+      "prod_dependency_lock_hash": "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
+      "archive_sha256": "04556a33027b9f1c5cb270cdedb7ba2c02720332da4e6e48a056f79e9eab3f05",
+      "artifact_path": "win32-x64-node-137/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e"
+    }
+  ]
+}

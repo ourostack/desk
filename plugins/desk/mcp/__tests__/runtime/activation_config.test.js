@@ -610,6 +610,7 @@ test("entrypoint main resolves startup root before launching injected runtime se
   try {
     writeActivationConfig(fixture.configPath, fixture.activationRoot, {
       runtimeCacheDir: fixture.runtimeCache,
+      desk_runtime: { write_authority: "person" },
     })
     const calls = []
     await main({
@@ -631,6 +632,11 @@ test("entrypoint main resolves startup root before launching injected runtime se
       runtimeImporter: async ({ mcpRoot, runtimeCacheDir }) => {
         calls.push(["runtimeImporter", mcpRoot, runtimeCacheDir])
         return {
+          connectOrStartController: async () => ({
+            accepted: true,
+            id: "controller-1",
+            beginConvergence() {},
+          }),
           startServer: async ({ deskRoot, person }) => {
             calls.push(["startServer", deskRoot, person])
           },
@@ -803,6 +809,11 @@ test("entrypoint stdio startup uses relative activation runtime cache and reuses
     })
     assert.equal(second.initialize.error, undefined, second.stderr || second.stdout)
     assert.equal(second.created.error, undefined, second.stderr || second.stdout)
+    assert.doesNotMatch(
+      second.stderr,
+      /illegal readiness transition: LEXICAL_READY -> LEXICAL_CONVERGING/u,
+      "reused compatible consumers must not request backward lexical convergence",
+    )
 
     assert.equal(hasRuntimeDeps(activationCache), true, "relative activation runtimeCacheDir should receive runtime dependencies")
     assert.equal(hasRuntimeDeps(envCache), false, "DESK_RUNTIME_CACHE_DIR must not receive runtime dependencies when activation config supplies runtimeCacheDir")

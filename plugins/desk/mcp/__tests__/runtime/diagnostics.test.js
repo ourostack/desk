@@ -46,6 +46,10 @@ test("runtime diagnostic vocabulary distinguishes every recoverable first-boot f
       cause: new Error("SECRET internal failure\n    at private-frame.js:42:1"),
     })
     assert.equal(diagnostic.status, "degraded")
+    assert.equal(diagnostic.activation_status, "terminal")
+    assert.equal(diagnostic.retryable, false)
+    assert.equal(diagnostic.phase, "VERIFYING")
+    assert.equal(diagnostic.observed.reason, reason)
     assert.equal(diagnostic.mode, "diagnostic")
     assert.equal(diagnostic.reason, reason)
     assert.equal(
@@ -60,7 +64,18 @@ test("runtime diagnostic vocabulary distinguishes every recoverable first-boot f
     ])
     assert.equal(diagnostic.runtime.runtime_cache_path, "/cache/desk/runtime")
     assert.equal(diagnostic.runtime.support_matrix_path, "/plugin/runtime-deps/support-matrix.json")
-    assert.ok(diagnostic.remediation.length > 0, reason)
+    assert.deepEqual(diagnostic.automatic_actions, [])
+    assert.ok(diagnostic.remediation.length > 0)
+    assert.ok(diagnostic.remediation.every(({ action, message }) => action && message))
+    assert.ok(diagnostic.remediation.some(({ action }) => action === "refresh_plugin"))
+    if (diagnostic.code === "runtime_unsupported") {
+      assert.ok(diagnostic.remediation.some(({ action, message }) =>
+        action === "use_shipped_node" && message.includes("127")))
+    }
+    if (reason === "runtime_restore_failed") {
+      assert.ok(diagnostic.remediation.some(({ action, message }) =>
+        action === "check_runtime_cache" && message.includes("/cache/desk/runtime")))
+    }
     assert.match(diagnostic.summary, /Desk|runtime|pack|Node/iu)
     assert.doesNotMatch(JSON.stringify(diagnostic), /SECRET|private-frame|stack/iu)
   }
@@ -84,10 +99,7 @@ test("corrupt-pack diagnostics retain actionable failure kinds", async () => {
     })
 
     assert.equal(diagnostic.failure_kind, failureKind)
-    assert.match(
-      diagnostic.remediation.map((item) => item.message).join("\n"),
-      /refresh|rebuild|pack/iu,
-    )
+    assert.equal(diagnostic.code, "artifact_integrity_invalid")
   }
 })
 
@@ -100,5 +112,8 @@ test("runtime diagnostics provide safe defaults for unknown failures", async () 
   assert.deepEqual(diagnostic.runtime.paths_checked, [])
   assert.equal(diagnostic.runtime.runtime_cache_path, null)
   assert.equal(diagnostic.runtime.support_matrix_path, null)
-  assert.equal(diagnostic.remediation[0].action, "refresh_plugin")
+  assert.equal(diagnostic.code, "artifact_integrity_invalid")
+  assert.deepEqual(diagnostic.automatic_actions, [])
+  assert.equal(diagnostic.status, "degraded")
+  assert.ok(diagnostic.remediation.some(({ action }) => action === "refresh_plugin"))
 })
