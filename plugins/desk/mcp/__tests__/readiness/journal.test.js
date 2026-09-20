@@ -28,6 +28,22 @@ async function fixture() {
 
 const observedAt = "2026-09-19T16:00:00.000Z"
 
+test("Windows journal creation never publishes an unprotected final directory", async () => {
+  const root = await mkTempRoot("desk-journal-windows-create-")
+  const stateDir = path.join(root, "journal")
+  const module = await import("../../src/readiness/journal.js")
+  assert.equal(typeof module.ensurePrivateJournalDirectory, "function")
+  await assert.rejects(module.ensurePrivateJournalDirectory({
+    stateDir,
+    platform: "win32",
+    protect: async () => {
+      assert.equal(fs.existsSync(stateDir), false)
+      throw new Error("injected ACL interruption")
+    },
+  }), /ACL interruption/)
+  assert.equal(fs.existsSync(stateDir), false)
+})
+
 test("journal acknowledges only fsynced records and replays after restart", async () => {
   const f = await fixture()
   let syncs = 0

@@ -17,7 +17,7 @@ const pluginRoot = path.join(repoRoot, "plugins", "desk")
 const mcpRoot = path.join(pluginRoot, "mcp")
 const expectedPluginVersion = "3.2.0-alpha.6"
 const expectedMcpVersion = "1.4.0-alpha.6"
-const expectedReleaseDate = "2026-09-19"
+const expectedReleaseDate = "2026-09-20"
 
 function readJson(...segments) {
   return JSON.parse(readFileSync(path.join(repoRoot, ...segments), "utf8"))

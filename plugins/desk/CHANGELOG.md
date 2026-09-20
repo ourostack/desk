@@ -1,10 +1,10 @@
 # desk plugin — changelog
 
-## 3.2.0-alpha.6 — 2026-09-19
+## 3.2.0-alpha.6 — 2026-09-20
 
 **Lexical-first alpha: correct lexical answers during startup and file changes, with fresh direct reads when index readiness is uncertain.** This candidate packages the [reviewed lexical milestone](https://github.com/ourostack/ouroboros-skills/commit/0eb9ea139a997c5c39394ac7b95ab02bff7331b5): durable journal/restart behavior, one index writer, and vector cleanup that leaves zero orphan vectors. Uncertain readiness falls back to current source files rather than serving stale indexed answers.
 
-Desk `3.2.0-alpha.6` couples to `desk-mcp@1.4.0-alpha.6`. Release metadata and generated source-scope anchors are refreshed without adding product behavior. All three runtime dependency packs reuse byte-identical, previously native-verified alpha.5 dependency payloads; their manifests record the source archive and native-verification provenance. Repackaging is not fresh native execution or cross-platform qualification.
+Desk `3.2.0-alpha.6` couples to `desk-mcp@1.4.0-alpha.6`. Windows readiness journals are protected in a private staging directory before atomic publication, so an interrupted host startup cannot strand an unprotected final journal directory and block lexical convergence on the next launch. Release metadata and generated source-scope anchors are refreshed. All three runtime dependency packs reuse byte-identical, previously native-verified alpha.5 dependency payloads; their manifests record the source archive and native-verification provenance. Repackaging is not fresh native execution or cross-platform qualification.
 
 **Known limits:** semantic scheduling and transactional recovery are not qualified in this alpha. Repeated tombstone-policy changes fail closed but may surface as a generic error rather than typed `readiness_changed_during_read`. This remains an opt-in candidate, not a qualified V1 replacement, publication, or downstream installation change.
 

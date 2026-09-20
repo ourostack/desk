@@ -15,8 +15,7 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
     }
     if (current === path.dirname(current)) break
   }
-  const created = !statIfPresent(io, stateDir)
-  io.mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const created = await ensurePrivateJournalDirectory({ stateDir, io })
   const directoryStat = io.lstatSync(stateDir)
   if (process.platform !== "win32" &&
       (directoryStat.uid !== process.getuid() || (directoryStat.mode & 0o777) !== 0o700)) {
@@ -24,14 +23,14 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
   }
   const logPath = path.join(stateDir, "changes.jsonl")
   const metaPath = path.join(stateDir, "journal.json")
-  const entries = [{ path: stateDir, kind: "directory", created }]
+  const entries = created ? [] : [{ path: stateDir, kind: "directory", created: false }]
   for (const file of [logPath, metaPath]) {
     if (statIfPresent(io, file)) {
       assertSafeFile(io, file)
       entries.push({ path: file, kind: "file", created: false })
     }
   }
-  if (process.platform === "win32") await protectWindowsPaths(entries)
+  if (process.platform === "win32" && entries.length > 0) await protectWindowsPaths(entries)
 
   let metadata = statIfPresent(io, metaPath) ? JSON.parse(io.readFileSync(metaPath, "utf8")) : null
   if (metadata && (metadata.root !== root || typeof metadata.id !== "string" || !metadata.id)) {
@@ -189,6 +188,45 @@ export async function openChangeJournal({ root, stateDir, io = filesystem }) {
         closed = true
       })
     },
+  }
+}
+
+export async function ensurePrivateJournalDirectory({
+  stateDir,
+  io = filesystem,
+  platform = process.platform,
+  protect = protectWindowsPaths,
+  createId = randomUUID,
+} = {}) {
+  if (statIfPresent(io, stateDir)) return false
+  if (platform !== "win32") {
+    io.mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+    return true
+  }
+  io.mkdirSync(path.dirname(stateDir), { recursive: true, mode: 0o700 })
+  const staging = `${stateDir}.creating-${createId()}`
+  let published = false
+  try {
+    io.mkdirSync(staging, { mode: 0o700 })
+    await protect([{ path: staging, kind: "directory", created: true }])
+    try {
+      io.renameSync(staging, stateDir)
+      published = true
+      return true
+    } catch (error) {
+      if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(error?.code) || !statIfPresent(io, stateDir)) {
+        throw error
+      }
+      return false
+    }
+  } finally {
+    if (!published && statIfPresent(io, staging)) {
+      try {
+        io.rmdirSync(staging)
+      } catch {
+        // Preserve the protection/publication failure; an unpublished staging directory is not active state.
+      }
+    }
   }
 }
 
