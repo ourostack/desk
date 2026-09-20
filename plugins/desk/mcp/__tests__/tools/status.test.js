@@ -13,8 +13,6 @@ import Database from "better-sqlite3"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import fsNative from "node:fs"
-import { syncBuiltinESMExports } from "node:module"
 
 import { closeDb, indexDbPath, openDb, setMeta } from "../../src/db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
@@ -33,67 +31,6 @@ function parseToolResult(response) {
   assert.equal(response.isError, undefined, response.content?.[0]?.text)
   return JSON.parse(response.content[0].text)
 }
-
-test("alpha status never discovers files and does not infer freshness from mtimes", async (t) => {
-  const root = makeRoot()
-  t.after(() => rmSync(root, { recursive: true, force: true }))
-  const db = openDb(root)
-  setMeta(db, "last_indexed_at", "2999-01-01T00:00:00.000Z")
-  closeDb(db)
-  const before = readFileSync(indexDbPath(root))
-  t.mock.method(fsNative, "readdirSync", () => { throw new Error("status attempted discovery") })
-  syncBuiltinESMExports()
-  try {
-    const body = parseToolResult(await callTool({ deskRoot: root, name: "desk_status" }))
-    assert.deepEqual(body.lexical, {
-      generation: null, event_cursor: null, pending_changes: null,
-      certain: false, current_automatic_action: null, serving_path: "direct",
-    })
-    assert.equal(body.local_db.freshness.state, "unknown")
-    assert.equal(body.local_db.freshness.reason, "requires_controller_proof")
-    assert.deepEqual(readFileSync(indexDbPath(root)), before)
-  } finally {
-    t.mock.restoreAll()
-    syncBuiltinESMExports()
-  }
-})
-
-test("alpha status reports indexed proof without fencing or changing the serving path", async (t) => {
-  const { connectOrStartController } = await import("../../src/readiness/controller-client.js")
-  const { rebuildIndex } = await import("../../src/indexer/index.js")
-  const root = makeRoot()
-  let fences = 0, runs = 0
-  writeFileSync(path.join(root, "task.md"), "quartz")
-  const controller = await connectOrStartController({
-    root, stateHome: path.join(root, ".state", "controller"), ephemeral: true,
-    watcher: { fence: async () => { fences++; return { certain: true } } },
-    handlers: { beginConvergence: async ({ eventCursor }) => {
-      runs++
-      return { summary: await rebuildIndex(root, { skipEmbed: true, eventCursor }) }
-    } },
-  })
-  t.after(async () => { await controller.close(); rmSync(root, { recursive: true, force: true }) })
-  await controller.beginConvergence()
-  const statusContext = { admission: { controller } }
-  await callTool({ deskRoot: root, name: "desk_search", input: { query: "quartz" }, statusContext })
-  const counts = [fences, runs]
-  const first = parseToolResult(await callTool({ deskRoot: root, name: "desk_status", statusContext }))
-  const second = parseToolResult(await callTool({ deskRoot: root, name: "desk_status", statusContext }))
-  assert.equal(first.lexical.serving_path, "indexed")
-  assert.equal(first.lexical.certain, true)
-  assert.equal(first.lexical.generation, 1)
-  assert.equal(first.lexical.pending_changes, 0)
-  assert.deepEqual(second.lexical, first.lexical)
-  assert.deepEqual([fences, runs], counts)
-})
-
-test("alpha runtime diagnostic reports lexical service blocked rather than a direct path", async () => {
-  const { createRuntimeDiagnostic } = await import("../../src/runtime/diagnostics.js")
-  const diagnostic = createRuntimeDiagnostic({ reason: "missing_pack" })
-  assert.equal(diagnostic.lexical.serving_path, "blocked")
-  assert.equal(diagnostic.lexical.certain, false)
-  assert.equal(diagnostic.lexical.generation, null)
-})
 
 test("desk_status is registered with a session-start-safe description", () => {
   assert.ok(TOOL_NAMES.includes("desk_status"), `registered tools: ${TOOL_NAMES.join(", ")}`)
@@ -329,7 +266,7 @@ test("desk_status normalizes activation aliases and ignores malformed chain entr
   }
 })
 
-test("desk_status does not claim freshness from historical index and filesystem timestamps", async () => {
+test("desk_status reports stale DB by comparing last_indexed_at to markdown mtimes without reindexing", async () => {
   const root = makeRoot()
   try {
     mkdirSync(path.join(root, "ops", "status-check"), { recursive: true })
@@ -358,17 +295,17 @@ test("desk_status does not claim freshness from historical index and filesystem 
     }))
 
     assert.equal(body.local_db.exists, true)
-    assert.equal(body.local_db.state, "available")
-    assert.equal(body.local_db.freshness.state, "unknown")
+    assert.equal(body.local_db.state, "stale")
+    assert.equal(body.local_db.freshness.state, "stale")
     assert.equal(body.local_db.freshness.last_indexed_at, "2000-01-01T00:00:00.000Z")
-    assert.equal(body.local_db.freshness.reason, "requires_controller_proof")
+    assert.equal(body.local_db.freshness.newest_document.path, path.join("ops", "status-check", "z-newer.md"))
     assert.equal(readFileSync(newerPath, "utf8"), beforeStatus)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
 })
 
-test("desk_status leaves freshness unproven even with empty roots or future timestamps", async () => {
+test("desk_status reports fresh and unknown freshness states without repair work", async () => {
   const noDocsRoot = makeRoot()
   const invalidMetaRoot = makeRoot()
   const freshRoot = makeRoot()
@@ -384,8 +321,8 @@ test("desk_status leaves freshness unproven even with empty roots or future time
       name: "desk_status",
       input: {},
     }))
-    assert.equal(noDocsBody.local_db.freshness.state, "unknown")
-    assert.equal(noDocsBody.local_db.freshness.reason, "requires_controller_proof")
+    assert.equal(noDocsBody.local_db.freshness.state, "fresh")
+    assert.equal(noDocsBody.local_db.freshness.newest_document, null)
 
     db = openDb(invalidMetaRoot)
     try {
@@ -415,8 +352,8 @@ test("desk_status leaves freshness unproven even with empty roots or future time
       name: "desk_status",
       input: {},
     }))
-    assert.equal(freshBody.local_db.freshness.state, "unknown")
-    assert.equal(freshBody.local_db.freshness.reason, "requires_controller_proof")
+    assert.equal(freshBody.local_db.freshness.state, "fresh")
+    assert.equal(freshBody.local_db.freshness.newest_document.path, path.join("ops", "fresh.md"))
   } finally {
     rmSync(noDocsRoot, { recursive: true, force: true })
     rmSync(invalidMetaRoot, { recursive: true, force: true })

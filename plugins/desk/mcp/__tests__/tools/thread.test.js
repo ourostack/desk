@@ -11,58 +11,10 @@ import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
-// Graph algorithm tests use an explicitly built index; alpha tests use the routed tool.
-import { desk_thread as routedThread, indexedThread as desk_thread, describeRefKind } from "../../src/tools/thread.js"
+import { desk_thread, describeRefKind } from "../../src/tools/thread.js"
 import { openDb, closeDb } from "../../src/db/init.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import { mkTempRoot } from "../_temp_roots.js"
-
-test("alpha thread waits for controller convergence and never reads an unproven graph", async (t) => {
-  const { connectOrStartController } = await import("../../src/readiness/controller-client.js")
-  const root = await mkTempDeskRoot()
-  await writeFile(root, "track/work/task.md", "quartz")
-  await writeFile(root, "track/work/planning.md", "plan")
-  let release, enter
-  const hold = new Promise((resolve) => { release = resolve })
-  const entered = new Promise((resolve) => { enter = resolve })
-  const controller = await connectOrStartController({
-    root, stateHome: path.join(root, ".state", "controller"), ephemeral: true,
-    watcher: { fence: async () => ({ certain: true }) },
-    handlers: { async beginConvergence({ eventCursor }) {
-      enter(); await hold
-      return { summary: await rebuildIndex(root, { skipEmbed: true, eventCursor }) }
-    } },
-  })
-  t.after(async () => { release(); await controller.close() })
-  const convergence = controller.beginConvergence()
-  await entered
-  const abort = new AbortController()
-  const cancelled = routedThread({
-    deskRoot: root, readiness: controller, signal: abort.signal,
-    input: { start_path: path.join("track", "work", "planning.md") },
-  })
-  const rejected = assert.rejects(cancelled, /caller cancelled/)
-  abort.abort(new Error("caller cancelled"))
-  await rejected
-  const waiting = routedThread({
-    deskRoot: root, readiness: controller,
-    input: { start_path: path.join("track", "work", "planning.md") },
-  })
-  release()
-  await convergence
-  const result = await waiting
-  assert.equal(result.chain.length, 2)
-  assert.equal(result.chain[1].path, path.join("track", "work", "task.md"))
-})
-
-test("alpha thread reports unavailable instead of fabricating a direct graph", async () => {
-  const root = await mkTempDeskRoot()
-  await writeFile(root, "track/work/task.md", "quartz")
-  const result = await routedThread({ deskRoot: root, input: { start_path: "track/work/task.md" } })
-  assert.equal(result.code, "required_capability_unavailable")
-  assert.equal(result.capability, "lexical")
-  await assert.rejects(fs.stat(path.join(root, ".state")), { code: "ENOENT" })
-})
 
 async function mkTempDeskRoot() {
   return mkTempRoot("desk-thread-test-")
@@ -132,16 +84,16 @@ test("desk_thread — one hop forward: planning.md → task.md", async () => {
 
   const res = await desk_thread({
     deskRoot: root,
-    input: { start_path: path.join("trackA", "my-task", "planning.md"), direction: "forward" },
+    input: { start_path: "trackA/my-task/planning.md", direction: "forward" },
   })
 
-  assert.equal(res.start.path, path.join("trackA", "my-task", "planning.md"))
+  assert.equal(res.start.path, "trackA/my-task/planning.md")
   assert.equal(res.start.kind, "planning")
   // chain[0] is the start doc; chain[1] is the task.md (hop 1).
   assert.equal(res.chain.length, 2)
-  assert.equal(res.chain[0].path, path.join("trackA", "my-task", "planning.md"))
+  assert.equal(res.chain[0].path, "trackA/my-task/planning.md")
   assert.equal(res.chain[0].hop_distance, 0)
-  assert.equal(res.chain[1].path, path.join("trackA", "my-task", "task.md"))
+  assert.equal(res.chain[1].path, "trackA/my-task/task.md")
   assert.equal(res.chain[1].hop_distance, 1)
   assert.equal(res.chain[1].ref_kind, "planning_of")
   assert.match(res.chain[1].why_connected, /planning doc of my-task/)
@@ -183,14 +135,14 @@ test("desk_thread — 2-hop forward chain: doing.md → task.md → iteration en
   // doing (hop 2, via doing_of backward edge).
   const res = await desk_thread({
     deskRoot: root,
-    input: { start_path: path.join("trackA", "hubbed", "planning.md"), depth: 2, direction: "both" },
+    input: { start_path: "trackA/hubbed/planning.md", depth: 2, direction: "both" },
   })
 
   const byPath = new Map(res.chain.map((r) => [r.path, r]))
-  assert.equal(byPath.get(path.join("trackA", "hubbed", "planning.md")).hop_distance, 0)
-  assert.equal(byPath.get(path.join("trackA", "hubbed", "task.md")).hop_distance, 1)
-  assert.equal(byPath.get(path.join("trackA", "hubbed", "doing.md")).hop_distance, 2)
-  assert.equal(byPath.get(path.join("trackA", "hubbed", "doing.md")).ref_kind, "doing_of")
+  assert.equal(byPath.get("trackA/hubbed/planning.md").hop_distance, 0)
+  assert.equal(byPath.get("trackA/hubbed/task.md").hop_distance, 1)
+  assert.equal(byPath.get("trackA/hubbed/doing.md").hop_distance, 2)
+  assert.equal(byPath.get("trackA/hubbed/doing.md").ref_kind, "doing_of")
 })
 
 // ---------------------------------------------------------------------------
@@ -223,24 +175,24 @@ test("desk_thread — backward from task.md surfaces planning + doing + feedback
 
   const res = await desk_thread({
     deskRoot: root,
-    input: { start_path: path.join("trackA", "full", "task.md"), direction: "backward" },
+    input: { start_path: "trackA/full/task.md", direction: "backward" },
   })
 
   const paths = res.chain.map((r) => r.path)
-  assert.ok(paths.includes(path.join("trackA", "full", "task.md")))
-  assert.ok(paths.includes(path.join("trackA", "full", "planning.md")))
-  assert.ok(paths.includes(path.join("trackA", "full", "doing.md")))
-  assert.ok(paths.includes(path.join("trackA", "full", "feedback.md")))
+  assert.ok(paths.includes("trackA/full/task.md"))
+  assert.ok(paths.includes("trackA/full/planning.md"))
+  assert.ok(paths.includes("trackA/full/doing.md"))
+  assert.ok(paths.includes("trackA/full/feedback.md"))
   // Start doc is first.
-  assert.equal(res.chain[0].path, path.join("trackA", "full", "task.md"))
+  assert.equal(res.chain[0].path, "trackA/full/task.md")
   assert.equal(res.chain[0].hop_distance, 0)
 
   // why_connected references the task slug.
-  const planning = res.chain.find((r) => r.path === path.join("trackA", "full", "planning.md"))
+  const planning = res.chain.find((r) => r.path === "trackA/full/planning.md")
   assert.match(planning.why_connected, /planning doc of full/)
-  const doing = res.chain.find((r) => r.path === path.join("trackA", "full", "doing.md"))
+  const doing = res.chain.find((r) => r.path === "trackA/full/doing.md")
   assert.match(doing.why_connected, /doing iteration of full/)
-  const feedback = res.chain.find((r) => r.path === path.join("trackA", "full", "feedback.md"))
+  const feedback = res.chain.find((r) => r.path === "trackA/full/feedback.md")
   assert.match(feedback.why_connected, /feedback on full/)
 })
 
@@ -271,21 +223,21 @@ test("desk_thread — both direction returns union of forward + backward", async
   // in Unit 4's structural-only graph).
   const fwd = await desk_thread({
     deskRoot: root,
-    input: { start_path: path.join("trackA", "both", "task.md"), direction: "forward" },
+    input: { start_path: "trackA/both/task.md", direction: "forward" },
   })
   assert.equal(fwd.chain.length, 1, "forward-only from task.md = just the start")
 
   // Backward-only finds planning + doing.
   const bwd = await desk_thread({
     deskRoot: root,
-    input: { start_path: path.join("trackA", "both", "task.md"), direction: "backward" },
+    input: { start_path: "trackA/both/task.md", direction: "backward" },
   })
   assert.equal(bwd.chain.length, 3)
 
   // both = the union; equal to backward here.
   const both = await desk_thread({
     deskRoot: root,
-    input: { start_path: path.join("trackA", "both", "task.md"), direction: "both" },
+    input: { start_path: "trackA/both/task.md", direction: "both" },
   })
   assert.equal(both.chain.length, 3)
 })
@@ -515,8 +467,8 @@ test("desk_thread — absolute start_path is relativized to deskRoot", async () 
     deskRoot: root,
     input: { start_path: abs, direction: "forward" },
   })
-  assert.equal(res.start.path, path.join("trackA", "abs", "planning.md"))
-  assert.equal(res.chain[0].path, path.join("trackA", "abs", "planning.md"))
+  assert.equal(res.start.path, "trackA/abs/planning.md")
+  assert.equal(res.chain[0].path, "trackA/abs/planning.md")
 })
 
 // ---------------------------------------------------------------------------

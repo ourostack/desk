@@ -22,7 +22,6 @@ import {
 
 const cacheMarkerFile = ".desk-runtime-cache.json"
 const sourceMirrorDir = "source-mirror"
-const sourceMirrorAdmissionFile = ".desk-source-mirror.json"
 const embeddedArchiveShaMarker = "<archive-sha256-recorded-in-sidecar>"
 const publicationLockPollMs = 25
 const publicationLockTimeoutMs = 30_000
@@ -86,7 +85,6 @@ export async function importRuntimeServer({
   platform = process.platform,
   arch = process.arch,
   nodeAbi = process.versions.modules,
-  sourceIdentity = null,
 } = {}) {
   const prepared = prepareRuntime({
     mcpRoot,
@@ -95,7 +93,6 @@ export async function importRuntimeServer({
     platform,
     arch,
     nodeAbi,
-    sourceIdentity,
   })
   const runtimeServer = await import(pathToFileURL(path.join(prepared.sourceMirrorPath, "src", "server.js")).href)
   runtimeServer.configureRuntimeArtifacts?.({
@@ -121,7 +118,6 @@ export function prepareRuntime({
   platform = process.platform,
   arch = process.arch,
   nodeAbi = process.versions.modules,
-  sourceIdentity = null,
 } = {}) {
   if (!hasText(mcpRoot)) {
     throw new Error("desk-mcp: mcpRoot is required for runtime dependency bootstrap")
@@ -157,13 +153,9 @@ export function prepareRuntime({
     arch,
     nodeAbi,
   })
-  const sourceMirrorPath = resolveAdmittedSourceMirror({
-    runtimeCacheDir: resolvedRuntimeCacheDir,
-    sourceIdentity,
-  }) ?? syncSourceMirror({
+  const sourceMirrorPath = syncSourceMirror({
     mcpRoot: resolvedMcpRoot,
     runtimeCacheDir: resolvedRuntimeCacheDir,
-    sourceIdentity,
   })
   return {
     runtimeCacheDir: resolvedRuntimeCacheDir,
@@ -887,22 +879,10 @@ export function syncSourceMirror({
   mcpRoot,
   runtimeCacheDir,
   publishDirectory = publishDirectoryAtomically,
-  sourceIdentity = null,
 }) {
   const sourceHash = hashCurrentSource(mcpRoot)
-  if (sourceIdentity?.startsWith("sha256:") && sourceIdentity.slice("sha256:".length) !== sourceHash) {
-    throw new Error(
-      `Desk source identity ${sourceIdentity} does not match the current source sha256:${sourceHash}.`,
-    )
-  }
   const mirrorPath = path.join(runtimeCacheDir, sourceMirrorDir, sourceHash)
   if (sourceMirrorIsCurrent({ mirrorPath, sourceHash })) {
-    writeSourceMirrorAdmission({
-      mirrorPath,
-      runtimeCacheDir,
-      sourceHash,
-      sourceIdentity,
-    })
     return mirrorPath
   }
   const stagingPath = siblingWorkPath(mirrorPath, "stage")
@@ -931,68 +911,9 @@ export function syncSourceMirror({
         sourceHash,
       }),
     })
-    writeSourceMirrorAdmission({
-      mirrorPath,
-      runtimeCacheDir,
-      sourceHash,
-      sourceIdentity,
-    })
     return mirrorPath
   } finally {
     rmSync(stagingPath, { recursive: true, force: true })
-  }
-}
-
-function writeSourceMirrorAdmission({
-  mirrorPath,
-  runtimeCacheDir,
-  sourceHash,
-  sourceIdentity,
-}) {
-  if (!hasText(sourceIdentity)) {
-    return
-  }
-  writeFileSync(
-    path.join(runtimeCacheDir, sourceMirrorAdmissionFile),
-    `${JSON.stringify({
-      schema_version: 1,
-      source_identity: sourceIdentity,
-      source_hash: sourceHash,
-      mirror_path: mirrorPath,
-    }, null, 2)}\n`,
-    "utf8",
-  )
-}
-
-export function resolveAdmittedSourceMirror({
-  runtimeCacheDir,
-  sourceIdentity,
-} = {}) {
-  if (!hasText(runtimeCacheDir) || !hasText(sourceIdentity)) {
-    return null
-  }
-  try {
-    const admission = readJson(path.join(runtimeCacheDir, sourceMirrorAdmissionFile))
-    if (
-      admission.schema_version !== 1
-      || admission.source_identity !== sourceIdentity
-      || !hasText(admission.source_hash)
-      || !hasText(admission.mirror_path)
-      || (
-        sourceIdentity.startsWith("sha256:")
-        && admission.source_hash !== sourceIdentity.slice("sha256:".length)
-      )
-    ) {
-      return null
-    }
-    return sourceMirrorIsCurrent({
-      mirrorPath: admission.mirror_path,
-      sourceHash: admission.source_hash,
-    })
-      ? admission.mirror_path
-      : null
-  } catch {
-    return null
   }
 }
 

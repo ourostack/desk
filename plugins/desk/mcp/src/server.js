@@ -6,7 +6,7 @@
 //             track_update, friction_add, lesson_add
 //   - Unit 5: desk_search, desk_recall, desk_similar, desk_timeline
 //   - Unit 6: desk_thread (refs_graph provenance walk)
-//   - Index mgmt: desk_reindex (requests shared controller convergence)
+//   - Index mgmt: desk_reindex (wraps ensureIndex + force-rebuild)
 //   - Health/status: desk_status and desk_doctor (session-start-safe, non-mutating)
 //   - Private work measurement: desk_work_ledger (OS-user-private work-item ledger)
 //
@@ -47,115 +47,10 @@ import { doctorRuntime } from "./tools/doctor.js"
 import {
   configureRuntimeArtifacts,
   ensureIndex,
-  getSemanticCoverage,
-  resolveEnsureIndexOptions,
 } from "./server-helpers.js"
-import { openDb, closeDb } from "./db/init.js"
-import { rebuildIndex } from "./indexer/index.js"
-import { stableStringify } from "./readiness/identity.js"
-import { CanonicalWriteRecordingError } from "./readiness/journal.js"
-import { createDeskQueryRouter } from "./readiness/query-router.js"
-import { admitControlPlane } from "./activation/admit.js"
-import { ActivationFailure } from "./activation/failures.js"
-import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
-import { probeEmbeddingService, resolveEmbeddingEndpoints, resolveEmbeddingModel } from "./indexer/embed.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
-export { admitControlPlane, configureRuntimeArtifacts, ensureIndex }
-
-let readinessControllerModulePromise
-
-function verifyEmbeddingModel(semantic) {
-  const model = resolveEmbeddingModel()
-  if (model !== ACTIVE_EMBEDDING_SPEC.model) {
-    throw new ActivationFailure({
-      phase: "VERIFYING",
-      code: "embedding_model_mismatch",
-      expected: {
-        model: ACTIVE_EMBEDDING_SPEC.model,
-        embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id,
-      },
-      observed: { model, semantic },
-      summary: `Desk semantic admission refused: effective embedding model ${JSON.stringify(model)} differs from the pinned model ${ACTIVE_EMBEDDING_SPEC.model}. Unset DESK_EMBED_MODEL / OLLAMA_EMBED_MODEL or set the effective override to the pinned model; another model requires a separately versioned embedding specification.`,
-    })
-  }
-}
-
-export async function connectOrStartController({ deskRoot, policy, stateHome, ephemeral }) {
-  if (policy.semantic !== "unsupported") {
-    verifyEmbeddingModel(policy.semantic)
-  }
-  const embed = policy.semantic === "unsupported" ? null : Object.freeze({
-    model: ACTIVE_EMBEDDING_SPEC.model,
-    endpoints: Object.freeze(resolveEmbeddingEndpoints()),
-  })
-  const options = {
-    root: deskRoot,
-    protocolVersion: 1,
-    stateHome,
-    ephemeral,
-    lexicalContract: {
-      schema: 1,
-      chunker: "markdown-v1",
-      normalization: "unicode-v1",
-      policy: {
-        lexical: policy.lexical,
-      },
-    },
-    semanticContract: {
-      mode: policy.semantic,
-      embedding_spec: policy.semantic === "unsupported" ? null : ACTIVE_EMBEDDING_SPEC,
-      ...(embed === null ? {} : { query_embedding_probe: true, endpoints: embed.endpoints }),
-    },
-    handlers: {
-      async beginConvergence({ eventCursor, journal }) {
-        const indexOptions = resolveEnsureIndexOptions({
-          startup: false,
-          skipEmbed: policy.semantic === "unsupported",
-          ...(embed === null ? {} : { embed }),
-          eventCursor,
-          identities: { policy_identity: stableStringify(policy) },
-        }, { deskRoot })
-        // Keep the opt-out at ensureIndex's normalization boundary; resolved
-        // undefined would otherwise re-enable legacy snapshot auto-discovery.
-        const result = await ensureIndex(deskRoot, { ...indexOptions, snapshots: false })
-        const db = openDb(deskRoot)
-        try {
-          // A timestamp/snapshot fast path is not proof of journal coverage.
-          if (!result.summary?.lexical_generation) {
-            result.summary = await rebuildIndex(deskRoot, { ...indexOptions, db, reembedMissing: true })
-            result.semantic = { ...result.semantic, ...getSemanticCoverage(db) }
-            result.built = true
-            result.reason = "journal_reconciled"
-          }
-          await journal.compact({ db, generationId: result.summary.lexical_generation })
-        } finally {
-          closeDb(db)
-        }
-        if (policy.semantic !== "unsupported") {
-          result.semantic.query_embedding = await probeEmbeddingService(embed)
-        }
-        return result
-      },
-    },
-  }
-  const { connectOrStartController: connectReadinessController } = await loadReadinessController()
-  const controller = await connectReadinessController(options)
-  controller.generationPolicyIdentity = stableStringify(policy)
-  return controller
-}
-
-export async function beginBackgroundConvergence(admission) {
-  if (typeof admission?.controller?.beginConvergence === "function") {
-    return admission.controller.beginConvergence()
-  }
-  return null
-}
-
-function loadReadinessController() {
-  readinessControllerModulePromise ??= import("./readiness/controller-client.js")
-  return readinessControllerModulePromise
-}
+export { configureRuntimeArtifacts, ensureIndex }
 
 // Map tool name → implementation. Every tool now has a real body.
 // Exported so tests can register a probe impl to assert dispatch threading.
@@ -178,23 +73,11 @@ export const TOOL_IMPLS = {
   desk_doctor: doctorRuntime,
 }
 
-const queryRouters = new WeakMap()
-
-function routerFor(controller) {
-  if (!controller) return createDeskQueryRouter()
-  let router = queryRouters.get(controller)
-  if (!router) {
-    router = createDeskQueryRouter({ controller })
-    queryRouters.set(controller, router)
-  }
-  return router
-}
-
 /**
  * Dispatch a single MCP call. Pulled out from startServer so tests can
  * exercise the dispatch table directly (no stdio transport needed).
  */
-export async function callTool({ deskRoot, name, input, person = null, statusContext = {}, signal }) {
+export async function callTool({ deskRoot, name, input, person = null, statusContext = {} }) {
   if (!TOOL_NAMES.includes(name)) {
     return {
       content: [{ type: "text", text: `unknown tool: ${name}` }],
@@ -220,21 +103,11 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
     }
   }
   try {
-    const readiness = statusContext.admission ? statusContext.admission.controller ?? null : undefined
-    const result = await impl({
-      deskRoot, input: input ?? {}, person, statusContext, readiness,
-      queryRouter: routerFor(readiness), signal,
-    })
+    const result = await impl({ deskRoot, input: input ?? {}, person, statusContext })
     return {
       content: [{ type: "text", text: JSON.stringify(result) }],
     }
   } catch (err) {
-    if (err instanceof CanonicalWriteRecordingError) {
-      return {
-        content: [{ type: "text", text: JSON.stringify({ ...err.toJSON(), tool: name }) }],
-        isError: true,
-      }
-    }
     return {
       content: [
         {
@@ -286,10 +159,10 @@ export async function startServer({
     })),
   }))
 
-  activeServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  activeServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params?.name
     const input = request.params?.arguments ?? {}
-    return callTool({ deskRoot, name, input, person, statusContext, signal: extra?.signal })
+    return callTool({ deskRoot, name, input, person, statusContext })
   })
 
   await activeServer.connect(activeTransport)

@@ -22,7 +22,6 @@ import { nowIso } from "../util/fm.js"
 import { isCaptureRoute, LEDGER_ACTIONS } from "../measurement/actions.js"
 import {
   assessConvergence,
-  canonicalizeIdentifierText,
   selectPrimaryTrigger,
 } from "../measurement/non-convergence.js"
 import { withLedger } from "../measurement/store.js"
@@ -1613,6 +1612,10 @@ function normalizeIdentifier(values, field) {
     )
   }
   return normalized
+}
+
+function canonicalizeIdentifierText(value) {
+  return value.trim().toLowerCase().replace(/[\s_]+/gu, "-")
 }
 
 function normalizeFallbacks(values) {

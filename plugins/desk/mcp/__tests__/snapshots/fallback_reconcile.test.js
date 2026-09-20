@@ -11,7 +11,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { zstdCompressSync } from "node:zlib"
 import matter from "gray-matter"
 
-import { closeDb, getMeta, indexDbPath, openDb } from "../../src/db/init.js"
+import { closeDb, indexDbPath, openDb } from "../../src/db/init.js"
 import { chunkBody } from "../../src/indexer/chunk.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import {
@@ -288,44 +288,6 @@ async function withPluginRoot(pluginRoot, fn) {
       process.env.DESK_PLUGIN_ROOT = original
     }
   }
-}
-
-for (const coverage of ["complete", "partial", "incompatible"]) {
-  test(`ensureIndex ${coverage} validated snapshot coverage controls active provenance`, async (t) => {
-    const deskRoot = await tmpRoot("desk-provenance-restore-")
-    const sourceDeskRoot = await tmpRoot("desk-provenance-source-")
-    const pluginRoot = await tmpRoot("desk-provenance-snapshot-")
-    t.after(async () => {
-      for (const root of [deskRoot, sourceDeskRoot, pluginRoot]) {
-        await fs.rm(root, { recursive: true, force: true })
-      }
-    })
-    const body = "# Snapshot\n\nTrusted snapshot document.\n"
-    for (const root of [deskRoot, sourceDeskRoot]) await writeFile(root, "task.md", body)
-    await writeSnapshotFromDesk({
-      pluginRoot, snapshotId: "provenance", sourceDeskRoot,
-      rebuildOpts: coverage === "partial" ? { skipEmbed: true } : {
-        embed: { fetch: async () => ({ ok: true, json: async () => ({ embedding: vector(7) }) }) },
-      },
-      manifestOverrides: coverage === "incompatible" ? { dimension: 384 } : {},
-    })
-    let calls = 0
-    const result = await ensureIndex(deskRoot, {
-      snapshots: snapshotContext(pluginRoot), vectorPacks: false,
-      embed: { endpoint: "http://fixture.invalid", fetch: async () => {
-        calls += 1
-        throw new Error("offline")
-      } },
-    })
-    assert.equal(result.semantic.provenance_current, coverage === "complete")
-    assert.equal(result.semantic.missing_vectors, coverage === "complete" ? 0 : 1)
-    assert.equal(calls, coverage === "complete" ? 0 : 1)
-    const db = openDb(deskRoot)
-    try {
-      assert.equal(getMeta(db, "active_vector_provenance") !== null, coverage === "complete")
-      if (coverage === "complete") assertVectorApprox(storedVector(db, "task.md", 0), vector(7))
-    } finally { closeDb(db) }
-  })
 }
 
 test("resolveEnsureIndexOptions preserves explicit artifact opt-outs", () => {

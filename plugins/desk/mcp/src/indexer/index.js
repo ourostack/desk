@@ -8,16 +8,11 @@
 // for new chunks are left absent so semantic search degrades gracefully.
 
 import { promises as fs } from "node:fs"
-import { createHash } from "node:crypto"
 import { openDb, closeDb, setMeta } from "../db/init.js"
 import {
   filterTombstonedDocuments,
-  loadTombstoneLedger,
-  tombstoneDecisionForDoc,
   tombstoneStatusForDocuments,
 } from "../artifacts/tombstones.js"
-import { commitLexicalGeneration } from "../readiness/generations.js"
-import { stableStringify } from "../readiness/identity.js"
 import { discover } from "./discover.js"
 import { chunkBody } from "./chunk.js"
 import {
@@ -54,8 +49,6 @@ const ACTIVE_CHUNK_FAILURE_JOIN = `
  * @param {boolean} [opts.skipEmbed] — skip embedding entirely (testing).
  * @param {boolean} [opts.reembedMissing] — reindex unchanged docs whose
  *   chunks exist but do not have vectors.
- * @param {object|null} [opts.eventCursor] — journal identity/sequence captured before discovery.
- * @param {object} [opts.identities] — controller policy_identity recorded with the generation.
  * @param {object} [opts.vectorPacks] — import shared vector packs before
  *   live embedding generation.
  * @param {string} [opts.vectorPacks.pluginRoot] — plugin root containing
@@ -80,61 +73,72 @@ export async function rebuildIndex(deskRoot, opts = {}) {
 
   try {
     throwIfAborted(opts.signal)
+    writeActiveEmbeddingSpec(db, setMeta)
     const discoveredRaw = await discover(deskRoot, { signal: opts.signal })
-    const ledger = await loadTombstoneLedger({ pluginRoot: opts.tombstones?.pluginRoot })
-    if (!ledger.valid) {
-      const error = new Error("artifact tombstone ledger is invalid")
-      error.code = "artifact_tombstone_ledger_invalid"
-      error.diagnostics = ledger.diagnostics
-      throw error
-    }
-    const discovered = discoveredRaw.filter((doc) => !tombstoneDecisionForDoc({ ledger, doc }).tombstoned)
-    summary.docs_tombstoned = discoveredRaw.length - discovered.length
+    const tombstoneFilter = await filterTombstonedDocuments({
+      pluginRoot: opts.tombstones?.pluginRoot,
+      docs: discoveredRaw,
+    })
+    const discovered = tombstoneFilter.docs
+    summary.docs_tombstoned = tombstoneFilter.tombstoned_count
     throwIfAborted(opts.signal)
     const discoveredByPath = new Map(discovered.map((d) => [d.path, d]))
-    const reindexedDocIds = []
-    const identities = {
-      schema_version: 1,
-      chunker_id: ACTIVE_EMBEDDING_SPEC.chunker_id,
-      normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
-      embedding_spec: ACTIVE_EMBEDDING_SPEC,
-      tombstone_identity: `sha256:${createHash("sha256").update(stableStringify(ledger.rows)).digest("hex")}`,
-      policy_identity: opts.identities?.policy_identity ?? "desk-lexical-required-v1",
+
+    // Compare against existing docs table. Anything no longer on disk gets
+    // deleted (cascade clears chunks + refs).
+    const existing = db
+      .prepare("SELECT id, path, hash, mtime FROM docs")
+      .all()
+    const existingByPath = new Map(existing.map((r) => [r.path, r]))
+
+    const deletedPaths = []
+    for (const row of existing) {
+      throwIfAborted(opts.signal)
+      if (!discoveredByPath.has(row.path)) {
+        deletedPaths.push(row.path)
+      }
+    }
+    if (deletedPaths.length) {
+      const delStmt = db.prepare("DELETE FROM docs WHERE path = ?")
+      const delTxn = db.transaction((paths) => {
+        for (const p of paths) delStmt.run(p)
+      })
+      delTxn(deletedPaths)
+      summary.docs_removed = deletedPaths.length
     }
 
-    summary.lexical_generation = commitLexicalGeneration({
-      db, documents: discovered, eventCursor: opts.eventCursor ?? null, identities,
-      apply() {
-        writeActiveEmbeddingSpec(db, setMeta)
-        const existing = db.prepare("SELECT id, path, hash, mtime FROM docs").all()
-        const existingByPath = new Map(existing.map((row) => [row.path, row]))
-        const delStmt = db.prepare("DELETE FROM docs WHERE path = ?")
-        for (const row of existing) {
-          throwIfAborted(opts.signal)
-          if (!discoveredByPath.has(row.path)) {
-            delStmt.run(row.path)
-            summary.docs_removed += 1
-          }
+    // Decide which docs need reindexing.
+    const toReindex = []
+    for (const doc of discovered) {
+      throwIfAborted(opts.signal)
+      const existingRow = existingByPath.get(doc.path)
+      if (existingRow && existingRow.hash === doc.hash) {
+        if (docNeedsActiveChunkMetadata(db, existingRow.id, doc)) {
+          toReindex.push(doc)
+          continue
         }
-        for (const doc of discovered) {
-          throwIfAborted(opts.signal)
-          const existingRow = existingByPath.get(doc.path)
-          if (existingRow && existingRow.hash === doc.hash &&
-              !docNeedsActiveChunkMetadata(db, existingRow.id, doc) &&
-              !(opts.reembedMissing && !opts.skipEmbed && docHasMissingActiveEmbeddings(db, existingRow.id))) {
-            summary.docs_skipped += 1
-            continue
-          }
-          reindexedDocIds.push(indexOneDoc(db, doc, summary))
-          summary.docs_indexed += 1
+        if (
+          opts.reembedMissing &&
+          !opts.skipEmbed &&
+          docHasMissingActiveEmbeddings(db, existingRow.id)
+        ) {
+          toReindex.push(doc)
+          continue
         }
-        refreshRefs(db, discovered)
-        pruneStaleEmbeddingFailures(db)
-        setMeta(db, "embedding_dim", String(EMBEDDING_DIM))
-        setMeta(db, "embedding_model", opts.embed?.model ?? "nomic-embed-text")
-        throwIfAborted(opts.signal)
-      },
-    })
+        summary.docs_skipped += 1
+        continue
+      }
+      toReindex.push(doc)
+    }
+
+    // Per doc: upsert docs row and replace chunks. Vectors are imported from
+    // committed packs first, then live-generated only for remaining gaps.
+    const reindexedDocIds = []
+    for (const doc of toReindex) {
+      throwIfAborted(opts.signal)
+      reindexedDocIds.push(indexOneDoc(db, doc, summary))
+      summary.docs_indexed += 1
+    }
 
     if (opts.vectorPacks?.pluginRoot) {
       summary.vector_packs = vectorPackImportStatus(await importVectorPackRoots({
@@ -144,11 +148,20 @@ export async function rebuildIndex(deskRoot, opts = {}) {
       }))
     }
 
+    pruneStaleEmbeddingFailures(db)
+
     if (!opts.skipEmbed) {
       throwIfAborted(opts.signal)
       await embedMissingVectors(db, opts, summary, reindexedDocIds)
     }
 
+    // Refs graph — recompute from scratch each pass. Cheap (just a table
+    // scan of docs frontmatter) and avoids stale edges.
+    refreshRefs(db, discovered)
+
+    setMeta(db, "last_indexed_at", new Date().toISOString())
+    setMeta(db, "embedding_dim", String(EMBEDDING_DIM))
+    setMeta(db, "embedding_model", opts.embed?.model ?? "nomic-embed-text")
   } finally {
     if (ownsDb) closeDb(db)
   }

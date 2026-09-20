@@ -26,9 +26,8 @@
 // — consistent with other search-tool error shapes.
 
 import * as path from "node:path"
-import Database from "better-sqlite3"
-import { indexDbPath, closeDb } from "../db/init.js"
-import { createDeskQueryRouter } from "../readiness/query-router.js"
+import { openDb, closeDb } from "../db/init.js"
+import { ensureIndex } from "../server-helpers.js"
 
 const DEFAULT_DEPTH = 4
 const MAX_DEPTH = 32
@@ -156,13 +155,7 @@ function bfs(db, startDocId, depth, direction) {
  * @param {"forward"|"backward"|"both"} [args.input.direction] — default "both"
  * @returns {Promise<{ start, chain } | { error, note }>}
  */
-export async function desk_thread({ deskRoot, input, readiness, queryRouter, signal }) {
-  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).lexical({
-    ...input, deskRoot, signal, kind: "thread",
-  })
-}
-
-export async function indexedThread({ deskRoot, input, db: suppliedDb }) {
+export async function desk_thread({ deskRoot, input }) {
   const rawPath = String(input?.start_path ?? "").trim()
   if (!rawPath) {
     return {
@@ -178,7 +171,8 @@ export async function indexedThread({ deskRoot, input, db: suppliedDb }) {
       ? directionRaw
       : "both"
 
-  const db = suppliedDb ?? new Database(indexDbPath(deskRoot), { readonly: true, fileMustExist: true })
+  await ensureIndex(deskRoot)
+  const db = openDb(deskRoot)
   try {
     const startDoc = db
       .prepare(
@@ -261,6 +255,6 @@ export async function indexedThread({ deskRoot, input, db: suppliedDb }) {
       chain: rows,
     }
   } finally {
-    if (!suppliedDb) closeDb(db)
+    closeDb(db)
   }
 }

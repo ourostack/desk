@@ -35,7 +35,7 @@ test("Darwin release provenance identifies the installed production build", () =
   const manifest = loadJson(path.join(root, target.artifact_path, "runtime-deps.manifest.json"))
   assert.equal(
     manifest.provenance.source,
-    "Metadata repack from 1.4.0-alpha.5 at 6c7cecf7cb5307e4022738e1cbb2aa1e0d8d9299, runtime dependency archive 3ad940f1ccfcb1683e7a6a96772a7701f898b5fd18d085d6ac90a169b889753f. alpha.6 changes only root package metadata; node_modules is byte-identical. No native execution occurred during this repack. Prior provenance: Metadata repack from 1.4.0-alpha.4 runtime dependency archive 09cc1e9b5840fb0c9f373371704aef6bc858e890cc61f9ad7af388729335c658. Original native provenance: Built on the maintainer's Darwin ARM64 host for alpha four and verified against its native payload. Production dependency lock hash unchanged: 0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e. alpha.5 changes only root package metadata (package.json and package-lock.json). No native execution occurred during this repack.",
+    "Metadata repack from 1.4.0-alpha.4 runtime dependency archive 09cc1e9b5840fb0c9f373371704aef6bc858e890cc61f9ad7af388729335c658. Original native provenance: Built on the maintainer's Darwin ARM64 host for alpha four and verified against its native payload. Production dependency lock hash unchanged: 0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e. alpha.5 changes only root package metadata (package.json and package-lock.json). No native execution occurred during this repack.",
   )
 })
 
@@ -65,12 +65,13 @@ test("committed runtime support matrix equals the physically shipped runtime pac
     }),
     [],
   )
-  // Repacked metadata retains the previously native-verified dependency payload for each target.
+  // Every published target now ships a pack built on its own platform and ABI: macOS ARM64 on the maintainer's
+  // host, Linux x64 and Windows x64 on their native runners.
   assert.deepEqual(committed, {
     schema_version: 1,
     plugin: {
       name: "@ourostack/desk-mcp",
-      version: "1.4.0-alpha.6",
+    version: "1.4.0-alpha.5",
     },
     targets: [
       {
@@ -79,7 +80,7 @@ test("committed runtime support matrix equals the physically shipped runtime pac
         arch: "arm64",
         node_abi: "127",
         prod_dependency_lock_hash: "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
-        archive_sha256: "20eded34a9894ff244647fac6141187f06cefbc4eee3407d987915175ca6ba2e",
+      archive_sha256: "3ad940f1ccfcb1683e7a6a96772a7701f898b5fd18d085d6ac90a169b889753f",
         artifact_path: "darwin-arm64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
       },
       {
@@ -88,7 +89,7 @@ test("committed runtime support matrix equals the physically shipped runtime pac
         arch: "x64",
         node_abi: "127",
         prod_dependency_lock_hash: "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
-        archive_sha256: "2d54e2dfd6ff33c7ccc97306af421cef745982e40c8a092c47b4e968ad6ae62f",
+      archive_sha256: "ccd4fdfd0889aab47bb54c71d316ea0349ab3489d9435e871585d411a20705e7",
         artifact_path: "linux-x64-node-127/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
       },
       {
@@ -97,7 +98,7 @@ test("committed runtime support matrix equals the physically shipped runtime pac
         arch: "x64",
         node_abi: "137",
         prod_dependency_lock_hash: "0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
-        archive_sha256: "04556a33027b9f1c5cb270cdedb7ba2c02720332da4e6e48a056f79e9eab3f05",
+      archive_sha256: "96cdd154f7561fd226ea8050b9d69bb021224286c434a030b1a5774dab07457b",
         artifact_path: "win32-x64-node-137/0ad48e8fbdb14119f09db5e1b4b7d5199b9329218a1c1785c6927f609f408a9e",
       },
     ],

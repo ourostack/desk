@@ -1,37 +1,103 @@
-import { terminalFailure } from "../activation/failures.js"
-
 const reasonDetails = {
   unsupported_target: {
     summary: "Desk does not ship an offline runtime dependency pack for the current platform, architecture, and Node ABI.",
-    code: "runtime_unsupported",
+    remediation: [
+      {
+        action: "use_shipped_node",
+        message: "Start Desk with a local Node runtime listed in the shipped runtime support matrix.",
+      },
+      {
+        action: "refresh_plugin",
+        message: "Refresh the Desk plugin if a runtime pack for this machine should be present.",
+      },
+    ],
   },
   missing_pack: {
     summary: "Desk's offline runtime dependency pack is missing for the current Node runtime.",
-    code: "artifact_integrity_invalid",
+    remediation: [
+      {
+        action: "refresh_plugin",
+        message: "Refresh the Desk plugin to restore the committed runtime dependency pack.",
+      },
+      {
+        action: "rebuild_pack",
+        message: "Maintainers can run `npm --prefix plugins/desk/mcp run runtime:deps-pack:build` and commit the generated pack.",
+      },
+    ],
   },
   corrupt_pack: {
     summary: "Desk found an offline runtime dependency pack, but its checksum, manifest, or archive is invalid.",
-    code: "artifact_integrity_invalid",
+    remediation: [
+      {
+        action: "refresh_plugin",
+        message: "Refresh the Desk plugin to replace the corrupt runtime dependency pack.",
+      },
+      {
+        action: "rebuild_pack",
+        message: "Maintainers can rebuild and verify the runtime pack before republishing it.",
+      },
+    ],
   },
   runtime_restore_failed: {
     summary: "Desk validated its offline runtime pack but could not restore a usable runtime cache.",
-    code: "artifact_integrity_invalid",
+    remediation: [
+      {
+        action: "repair_cache",
+        message: "Check that the reported runtime cache path is writable, then restart Desk.",
+      },
+      {
+        action: "refresh_plugin",
+        message: "Refresh the Desk plugin if runtime restoration continues to fail.",
+      },
+    ],
   },
   runtime_inspection_failed: {
     summary: "Desk could not inspect its committed offline runtime metadata safely.",
-    code: "artifact_integrity_invalid",
+    remediation: [
+      {
+        action: "refresh_plugin",
+        message: "Refresh the Desk plugin to restore readable runtime support metadata.",
+      },
+    ],
   },
   node_selection_failed: {
     summary: "Desk could not complete bounded discovery of a compatible local Node runtime.",
-    code: "runtime_unsupported",
+    remediation: [
+      {
+        action: "use_shipped_node",
+        message: "Start Desk directly with a Node runtime listed in the shipped runtime support matrix.",
+      },
+      {
+        action: "refresh_plugin",
+        message: "Refresh the Desk plugin if local Node discovery continues to fail.",
+      },
+    ],
   },
   no_compatible_node: {
     summary: "Desk could not find a local Node runtime matching a shipped offline dependency pack.",
-    code: "runtime_unsupported",
+    remediation: [
+      {
+        action: "use_shipped_node",
+        message: "Start Desk with a local Node runtime whose module ABI appears in the shipped runtime support matrix.",
+      },
+      {
+        action: "refresh_plugin",
+        message: "Refresh the Desk plugin if the committed runtime support matrix or pack is missing.",
+      },
+    ],
   },
   guarded_reexec_failure: {
     summary: "Desk's one-time compatible-Node handoff did not produce a healthy runtime.",
-    code: "runtime_unsupported",
+    remediation: [
+      {
+        action: "use_shipped_node",
+        message: "Start Desk directly with a Node runtime listed in the shipped runtime support matrix.",
+      },
+      {
+        action: "refresh_plugin",
+        message: "Refresh the Desk plugin if the compatible runtime pack is incomplete or stale.",
+      },
+    ],
   },
 }
 
@@ -46,50 +112,18 @@ export function createRuntimeDiagnostic({
 } = {}) {
   const details = reasonDetails[reason] ?? {
     summary: "Desk could not prepare its local runtime.",
-    code: "artifact_integrity_invalid",
+    remediation: [
+      {
+        action: "refresh_plugin",
+        message: "Refresh the Desk plugin and restart the MCP server.",
+      },
+    ],
   }
-  const diagnostic = terminalFailure({
-    phase: "VERIFYING",
-    code: details.code,
-    expected: {
-      runtime: "verified supported artifact",
-    },
-    observed: {
-      reason,
-      failure_kind: failureKind,
-    },
-    automaticActions: [],
-    summary: details.summary,
-  })
-  const remediation = [{
-    action: "refresh_plugin",
-    message: "Refresh or reinstall Desk from its trusted source to restore the committed runtime support matrix and verified dependency packs, then restart the host.",
-  }]
-  if (details.code === "runtime_unsupported") {
-    const abis = [...new Set(shippedTargets.map((target) => target.node_abi).filter(Boolean))]
-    remediation.unshift({
-      action: "use_shipped_node",
-      message: abis.length > 0
-        ? `Start Desk with a local Node runtime matching a shipped platform, architecture, and module ABI (${abis.join(", ")}), then restart the host.`
-        : "Check Desk's runtime support matrix and start with a supported local Node runtime, then restart the host.",
-    })
-  }
-  if (reason === "runtime_restore_failed") {
-    remediation.unshift({
-      action: "check_runtime_cache",
-      message: `Check write permissions and free disk space for ${runtimeCachePath ?? "Desk's runtime cache"}, then restart the host to retry verified offline restoration.`,
-    })
-  }
-  Object.assign(diagnostic, {
-    activation_status: diagnostic.status,
+  const diagnostic = {
     status: "degraded",
     mode: "diagnostic",
     reason,
-    lexical: {
-      generation: null, event_cursor: null, pending_changes: null,
-      certain: false, current_automatic_action: null, serving_path: "blocked",
-    },
-    remediation,
+    summary: details.summary,
     runtime: {
       current_target: currentTarget,
       shipped_targets: shippedTargets,
@@ -97,7 +131,8 @@ export function createRuntimeDiagnostic({
       runtime_cache_path: runtimeCachePath,
       support_matrix_path: supportMatrixPath,
     },
-  })
+    remediation: details.remediation.map((item) => ({ ...item })),
+  }
   if (failureKind !== undefined) {
     diagnostic.failure_kind = failureKind
   }

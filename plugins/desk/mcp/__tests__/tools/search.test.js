@@ -5,8 +5,7 @@ import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
-// Keep legacy indexed ranking coverage separate from the alpha consumer contract.
-import { __searchInternalsForTests, desk_search as routedSearch, indexedSearch as desk_search } from "../../src/tools/search.js"
+import { __searchInternalsForTests, desk_search } from "../../src/tools/search.js"
 import { openDb, closeDb } from "../../src/db/init.js"
 import {
   buildFixtureIndex,
@@ -15,117 +14,6 @@ import {
   mkTempDeskRoot,
   writeFile,
 } from "./_search_helpers.js"
-
-test("alpha consumer search reads files immediately without index or embedding work", async () => {
-  const root = await mkTempDeskRoot()
-  await writeFile(root, "track/work/task.md", "immediatequartz")
-  let independentEmbeds = 0
-  const result = await routedSearch({
-    deskRoot: root, input: { query: "immediatequartz" },
-    opts: { embed: { fetch: async () => { independentEmbeds++; throw new Error("query must not embed") } } },
-  })
-  assert.equal(result.results[0].snippet, "immediatequartz")
-  assert.equal(result.search_mode, "lexical")
-  assert.equal(result.semantic_diagnostic.reason, "alpha_scope")
-  assert.equal(result.semantic_repair, undefined, "alpha must not suggest an unqualified semantic repair")
-  assert.equal(independentEmbeds, 0)
-  await assert.rejects(fs.stat(path.join(root, ".state", "desk-index.sqlite")), { code: "ENOENT" })
-})
-
-test("alpha consumer recall and similar refuse semantic work with the exact typed result", async () => {
-  const { desk_recall, desk_similar } = await import("../../src/tools/search.js")
-  const root = await mkTempDeskRoot()
-  for (const [tool, input] of [[desk_recall, { topic: "quartz" }], [desk_similar, { path: "track/work/task.md" }]]) {
-    assert.deepEqual(await tool({ deskRoot: root, input }), {
-      status: "error", code: "required_capability_unavailable", capability: "semantic",
-      diagnostic: { reason: "alpha_scope", message: "Semantic convergence is not qualified in this alpha." },
-    })
-  }
-  await assert.rejects(fs.stat(path.join(root, ".state")), { code: "ENOENT" })
-})
-
-test("alpha consumer timeline reads a fresh temporal or lexical window without an index", async () => {
-  const { desk_timeline } = await import("../../src/tools/search.js")
-  const root = await mkTempDeskRoot()
-  await writeFile(root, "track/old/task.md", "---\nupdated: 2025-01-01\n---\nquartz old")
-  await writeFile(root, "track/new/task.md", "---\nupdated: 2026-09-19\n---\nquartz current")
-  for (const query of [undefined, "quartz"]) {
-    const result = await desk_timeline({ deskRoot: root, input: { from: "2026-01-01", query } })
-    assert.deepEqual(result.results.map((r) => r.path), [path.join("track", "new", "task.md")])
-    assert.equal(result.search_mode, query ? "lexical" : "temporal")
-    if (query) {
-      assert.equal(result.semantic_diagnostic.reason, "alpha_scope")
-      assert.equal(result.semantic_repair, undefined)
-    }
-  }
-  await assert.rejects(fs.stat(path.join(root, ".state")), { code: "ENOENT" })
-})
-
-test("alpha consumer concurrent startup search and reindex leave zero orphan vectors and one writer", async (t) => {
-  const { connectOrStartController } = await import("../../src/readiness/controller-client.js")
-  const { rebuildIndex } = await import("../../src/indexer/index.js")
-  const { desk_reindex } = await import("../../src/tools/reindex.js")
-  const root = await mkTempDeskRoot()
-  await writeFile(root, "track/work/task.md", "startupquartz")
-  let release, enter
-  const held = new Promise((resolve) => { release = resolve })
-  const entered = new Promise((resolve) => { enter = resolve })
-  let passes = 0, active = 0, maxActive = 0
-  let independentEmbeds = 0
-  const options = {
-    root, stateHome: path.join(root, ".state", "controller"), ephemeral: true,
-    watcher: { fence: async () => ({ certain: true }) },
-    handlers: { async beginConvergence({ eventCursor }) {
-      passes++
-      active++
-      maxActive = Math.max(maxActive, active)
-      try { return { summary: await rebuildIndex(root, {
-        eventCursor, embed: { fetch: async (...args) => {
-          enter(); await held; return makeEmbedFetch()(...args)
-        } },
-      }) } } finally { active-- }
-    } },
-  }
-  const controller = await connectOrStartController(options)
-  const consumer = await connectOrStartController(options)
-  let joined
-  const join = new Promise((resolve) => { joined = resolve })
-  const begin = consumer.beginConvergence
-  consumer.beginConvergence = async () => {
-    const result = await begin()
-    joined()
-    return result
-  }
-  t.after(async () => { release(); await consumer.close(); await controller.close() })
-  const convergence = controller.beginConvergence()
-  await entered
-  let reindex
-  try {
-    const result = await routedSearch({
-      deskRoot: root, readiness: consumer, input: { query: "startupquartz" },
-      opts: { embed: { fetch: async () => { independentEmbeds++; return makeEmbedFetch()() } } },
-    })
-    assert.equal(result.results[0].snippet, "startupquartz")
-    assert.equal(independentEmbeds, 0, "search must not start an ensureIndex repair")
-    reindex = desk_reindex({ deskRoot: root, readiness: consumer, input: { force: true } })
-    const outcome = Promise.allSettled([reindex])
-    await join
-    release()
-    await convergence
-    const [resultReindex] = await outcome
-    assert.equal(resultReindex.status, "fulfilled")
-    assert.equal(resultReindex.value.status, "ok")
-    assert.equal(resultReindex.value.reused, true, "compatibility reindex joins the in-flight controller operation")
-    assert.equal(maxActive, 1, "only the controller serializes index passes, including uncertainty reconciliation")
-    const db = openDb(root)
-    try {
-      assert.equal(db.prepare(`SELECT COUNT(*) AS orphan_count FROM chunk_vecs v
-        LEFT JOIN chunks c ON c.id = v.chunk_id WHERE c.id IS NULL`).get().orphan_count, 0)
-      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 1)
-      assert.equal(db.prepare("SELECT COUNT(*) AS n FROM lexical_generations").get().n, passes)
-    } finally { closeDb(db) }
-  } finally { release(); await Promise.allSettled([convergence, reindex]) }
-})
 
 // Build a fixture desk where chunks across multiple tracks share or differ
 // on the first-word "family" (deterministic 768-dim vectors per
@@ -410,7 +298,7 @@ test("desk_search — single-character query uses semantic candidates without FT
   assert.ok(res.results.length >= 1)
 })
 
-test("indexed search reads vectors after explicit fixture repair, never repairs itself", async () => {
+test("desk_search — repairs a fresh lexical-only index when embeddings are available", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -419,7 +307,6 @@ test("indexed search reads vectors after explicit fixture repair, never repairs 
   )
   const { rebuildIndex } = await import("../../src/indexer/index.js")
   await rebuildIndex(root, { embed: { fetch: makeFailingFetch() } })
-  await rebuildIndex(root, { reembedMissing: true, embed: { fetch: makeEmbedFetch() } })
 
   const res = await desk_search({
     deskRoot: root,
@@ -796,7 +683,7 @@ test("desk_search — long snippets handle start and end query-term boundaries",
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
   const endResult = end.results.find((result) =>
-    result.path.includes(path.join("task-end", "task.md")),
+    result.path.includes("task-end/task.md"),
   )
   assert.ok(endResult, "end-boundary result surfaced")
   assert.match(endResult.snippet, /^\.\.\./u)
@@ -850,10 +737,10 @@ alpha pinned body summary
 
   // The pinned doing.md should rank top — its pin breakdown should be 0.3.
   const pinned = res.results.find((r) =>
-    r.path.includes(path.join("2026-05-01-impl", "doing.md")),
+    r.path.includes("2026-05-01-impl/doing.md"),
   )
   const control = res.results.find((r) =>
-    r.path.includes(path.join("trackQ", "task-other", "doing.md")),
+    r.path.includes("trackQ/task-other/doing.md"),
   )
   assert.ok(pinned, "pinned doc surfaced in results")
   assert.ok(control, "control doc surfaced in results")

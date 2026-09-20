@@ -17,10 +17,6 @@ async function loadActivationContract() {
   return { ...schema, ...validator }
 }
 
-async function loadActivationFailures() {
-  return import(pathToFileURL(path.join(mcpRoot, "src", "activation", "failures.js")))
-}
-
 function validManifest(overrides = {}) {
   return mergeManifest({
     schema_version: 1,
@@ -98,12 +94,6 @@ function validManifest(overrides = {}) {
       policy: "global-default",
       precedence: ["activation", "DESK", "safe-default"],
       opt_out_modes: ["project-local", "manual-only"],
-    },
-    desk_runtime: {
-      root: "workspace",
-      write_authority: "workspace",
-      lexical: "required",
-      semantic: "background",
     },
     artifacts: {
       embeddings: {
@@ -254,7 +244,6 @@ test("activation schema exports the supported version and required top-level fie
       "artifacts",
       "dependencies",
       "desk_root",
-      "desk_runtime",
       "host_support",
       "id",
       "mcp_servers",
@@ -628,35 +617,6 @@ test("activation validation requires MCP, root, artifact, host, and permission p
         desk_root: { policy: "global-default", precedence: ["DESK"], opt_out_modes: undefined },
       }),
       patterns: [/desk_root\.precedence.*activation/i, /desk_root\.opt_out_modes/],
-    },
-    {
-      name: "desk runtime readiness policy",
-      manifest: validManifest({
-        desk_runtime: {
-          root: "workspace",
-          write_authority: "workspace",
-          lexical: "required",
-          semantic: undefined,
-        },
-      }),
-      patterns: [/desk_runtime\.semantic/],
-    },
-    {
-      name: "desk runtime rejects unsupported readiness values",
-      manifest: validManifest({
-        desk_runtime: {
-          root: "ambient",
-          write_authority: "global",
-          lexical: "best-effort",
-          semantic: "eventual",
-        },
-      }),
-      patterns: [
-        /desk_runtime\.root.*activation_policy_invalid/i,
-        /desk_runtime\.write_authority.*activation_policy_invalid/i,
-        /desk_runtime\.lexical.*activation_policy_invalid/i,
-        /desk_runtime\.semantic.*activation_policy_invalid/i,
-      ],
     },
     {
       name: "embedding artifact policy",
@@ -1395,129 +1355,6 @@ test("unsupported hosts produce host-native fallback diagnostics", async () => {
   assert.deepEqual(bareHost.capabilities, [])
 })
 
-test("terminal failure helpers produce stable non-retryable activation envelopes", async () => {
-  const { ActivationFailure, terminalFailure } = await loadActivationFailures()
-  const input = {
-    phase: "VERIFYING",
-    code: "activation_policy_invalid",
-    expected: {
-      lexical: ["required"],
-    },
-    observed: {
-      lexical: "best-effort",
-    },
-    automaticActions: [],
-    summary: "Desk requires lexical readiness 'required'.",
-  }
-  const before = structuredClone(input)
-
-  const envelope = terminalFailure(input)
-  const failure = new ActivationFailure(input)
-
-  assert.deepEqual(envelope, {
-    status: "terminal",
-    phase: "VERIFYING",
-    code: "activation_policy_invalid",
-    retryable: false,
-    expected: {
-      lexical: ["required"],
-    },
-    observed: {
-      lexical: "best-effort",
-    },
-    automatic_actions: [],
-    summary: "Desk requires lexical readiness 'required'.",
-  })
-  assert.equal(failure instanceof Error, true)
-  assert.equal(failure.message, input.summary)
-  assert.equal(failure.name, "ActivationFailure")
-  assert.deepEqual(
-    {
-      status: failure.status,
-      phase: failure.phase,
-      code: failure.code,
-      retryable: failure.retryable,
-      expected: failure.expected,
-      observed: failure.observed,
-      automatic_actions: failure.automatic_actions,
-      summary: failure.summary,
-    },
-    envelope,
-  )
-  assert.deepEqual(input, before)
-})
-
-test("terminal failure snapshots automatic actions", async () => {
-  const { ActivationFailure, terminalFailure } = await loadActivationFailures()
-  const retryAction = {
-    action: "retry",
-    params: {
-      delay_ms: 500,
-    },
-  }
-  const automaticActions = [retryAction]
-
-  const envelope = terminalFailure({
-    phase: "VERIFYING",
-    code: "activation_policy_invalid",
-    automaticActions,
-    summary: "Desk requires lexical readiness 'required'.",
-  })
-  const failure = new ActivationFailure({
-    phase: "VERIFYING",
-    code: "activation_policy_invalid",
-    automaticActions,
-    summary: "Desk requires lexical readiness 'required'.",
-  })
-
-  retryAction.params.delay_ms = 2000
-  automaticActions.push({
-    action: "open-docs",
-  })
-
-  assert.deepEqual(envelope.automatic_actions, [
-    {
-      action: "retry",
-      params: {
-        delay_ms: 500,
-      },
-    },
-  ])
-  assert.deepEqual(failure.automatic_actions, envelope.automatic_actions)
-})
-
-test("terminal failure snapshots cyclic automatic actions", async () => {
-  const { ActivationFailure, terminalFailure } = await loadActivationFailures()
-  const params = {
-    delay_ms: 500,
-  }
-  params.self = params
-  const automaticActions = [
-    {
-      action: "retry",
-      params,
-    },
-  ]
-
-  const envelope = terminalFailure({
-    phase: "VERIFYING",
-    code: "activation_policy_invalid",
-    automaticActions,
-    summary: "Desk requires lexical readiness 'required'.",
-  })
-  const failure = new ActivationFailure({
-    phase: "VERIFYING",
-    code: "activation_policy_invalid",
-    automaticActions,
-    summary: "Desk requires lexical readiness 'required'.",
-  })
-
-  assert.equal(envelope.automatic_actions[0].params.self, envelope.automatic_actions[0].params)
-  assert.equal(failure.automatic_actions[0].params.self, failure.automatic_actions[0].params)
-  assert.equal(Object.isFrozen(envelope.automatic_actions[0].params), true)
-  assert.equal(Object.isFrozen(failure.automatic_actions[0].params), true)
-})
-
 test("canonical Desk activation manifest exists and validates", async () => {
   const { validateActivationManifest } = await loadActivationContract()
   const manifestPath = path.join(repoRoot, "plugins", "desk", "activation", "desk.activation.json")
@@ -1538,10 +1375,4 @@ test("canonical Desk activation manifest exists and validates", async () => {
     result.value.dependencies.some((dependency) => dependency.id === "superpowers"),
     true,
   )
-  assert.deepEqual(result.value.desk_runtime, {
-    root: "workspace",
-    write_authority: "workspace",
-    lexical: "required",
-    semantic: "background",
-  })
 })

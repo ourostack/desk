@@ -9,7 +9,6 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.js"
 import { resolveWriteTarget } from "../util/paths.js"
-import { recordCanonicalChanges } from "../readiness/journal.js"
 
 function relPath(deskRoot, absPath) {
   return path.relative(deskRoot, absPath)
@@ -30,7 +29,7 @@ async function lessonPathMatches(filePath, topicSlug) {
   return firstLine.startsWith("# ") && slugify(firstLine.slice(2)) === topicSlug
 }
 
-async function resolveLessonPath({ directory, topicSlug, canonicalPath, resolveCandidate, deskRoot, readiness }) {
+async function resolveLessonPath({ directory, topicSlug, canonicalPath, resolveCandidate }) {
   const canonicalName = path.basename(canonicalPath)
   const canonicalExistingPath = await findFilenameEquivalent(canonicalPath, resolveCandidate)
   const canonicalExists = canonicalExistingPath !== null
@@ -56,10 +55,6 @@ async function resolveLessonPath({ directory, topicSlug, canonicalPath, resolveC
         ? await availableLessonPath(canonicalName, resolveCandidate)
         : canonicalPath
       await fs.rename(matchedPath, destination)
-      await recordCanonicalChanges({ root: deskRoot, readiness, changes: [
-        { path: relPath(deskRoot, matchedPath), operation: "delete" },
-        { path: relPath(deskRoot, destination), operation: "write" },
-      ] })
       return destination
     }
     return matchedPath
@@ -83,7 +78,7 @@ async function resolveLessonPath({ directory, topicSlug, canonicalPath, resolveC
  *
  * Returns: { status: "added", path }
  */
-export async function lesson_add({ deskRoot, input, person = null, readiness }) {
+export async function lesson_add({ deskRoot, input, person = null }) {
   const values = input ?? {}
   const { topic, body } = values
   if (!topic || typeof topic !== "string") {
@@ -115,8 +110,6 @@ export async function lesson_add({ deskRoot, input, person = null, readiness }) 
     topicSlug,
     canonicalPath: filePath,
     resolveCandidate,
-    deskRoot,
-    readiness,
   })
 
   const trimmedBody = body.endsWith("\n") ? body : `${body}\n`
@@ -131,6 +124,5 @@ export async function lesson_add({ deskRoot, input, person = null, readiness }) 
     await fs.writeFile(filePath, `${header}${trimmedBody}`, "utf8")
   }
 
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   return { status: "added", path: relPath(deskRoot, filePath) }
 }

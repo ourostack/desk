@@ -19,7 +19,7 @@
     "arch": "portable",
     "node_abi": "portable"
   },
-  "artifact_source_scope_hash": "sha256:596246919fc5088c5eface01881ba52ff6baecafed2154c65ee2c691671a44c4",
+  "artifact_source_scope_hash": "sha256:570365742ccc1cbfc9b843c6d9a39bff82ac1834d56cd70dd64bfd18bca2e2a1",
   "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
   "included_pack_ids": [
     "repo-public-bootstrap-2026-06-15"
@@ -30,17 +30,17 @@
       "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
     }
   ],
-  "created_at": "2026-09-20T01:02:53.259Z",
+  "created_at": "2026-09-18T09:28:04.098Z",
   "artifact": {
     "file": "repo-public-bootstrap-2026-06-15.sqlite.zst",
     "format": "sqlite-zstd",
-    "sha256": "sha256:ae5c8cd55f21aeea86aa4c85ebc37d6bbea52b510e2e83c8078d2f1c7fb23862",
+    "sha256": "sha256:3e0f0124101c527467123fdb5cd0992c0a7e6e54b1a563a1bc62c09f7b18e7d1",
     "compressed": true
   },
   "provenance": {
     "builder": "plugins/desk/mcp/scripts/build-snapshot.js",
     "source": "local-db",
-    "commit": "4a1cdde876d6f10d3a566346f7bf5a4e7b964584"
+    "commit": "28b0f276b13ffcf0d67fd713098e4f0cc37107ec"
   },
   "source_paths": [
     "plugins/desk/mcp/src/indexer/index.js",

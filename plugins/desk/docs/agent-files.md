@@ -60,31 +60,6 @@ desk substrate -> desk:worker -> ms-desk:worker -> area overlay
 
 `desk_status` reports the active selected activation and chain when the host passes activation context. For Codex cache/debugging, distinguish `repo-source-current`, `installed-cache-current`, and `active-session-visible`: the first two can be checked by the read-only cache audit, while active session visibility requires a host/session reload proof or an active tool-list snapshot supplied to the cache audit.
 
-### Live readiness diagnostics
-
-With a readiness controller, `desk_status.readiness.state` reports the current
-controller state. `readiness.convergence` contains only the latest convergence
-snapshot: `status` (`not_checked`, `pending`, `succeeded`, or `failed`),
-`semantic` coverage, and a failure `diagnostic` when present. A disconnected
-controller reports `unavailable` with a diagnostic, not a stale ready state.
-Diagnostic text fields are capped at 2,048 characters. Controller tokens and
-owner metadata are not included in the tool response.
-
-Background startup exposes the server before convergence. Initial query
-embedding availability is `not_checked`; once the controller finishes,
-`query_embedding.available` and its diagnostic reflect the active query probe.
-A failed probe leaves the controller `LEXICAL_READY`, reports availability
-`false`, and adds `query_embedding_unavailable` to `degraded_modes`. Complete
-semantic coverage with a successful probe produces `READY`. Required mode
-finishes convergence before exposing the server. A convergence exception adds
-`convergence_failed`; an unreachable controller adds `readiness_unavailable`.
-
-`startup_fallback.mode: not_checked` still means no legacy startup `ensureIndex`
-record exists; it does not mean background convergence is pending.
-`startup_fallback.degraded` also reflects observed query or convergence failures.
-Status reads do not start convergence, probe embeddings, or satisfy readiness
-barriers. Readiness progresses even when no one calls `desk_status`.
-
 ## `$DESK` binding
 
 The agent body uses a `$DESK` placeholder for the workspace directory. The consumer agent's preamble declares the binding — substitute textually when interpreting skill instructions or running shell commands. Defaults are:

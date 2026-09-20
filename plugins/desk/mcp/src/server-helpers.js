@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
 import { closeDb, getMeta, indexDbPath, openDb, setMeta } from "./db/init.js"
 import { discover } from "./indexer/discover.js"
 import { isIndexFresh, rebuildIndex } from "./indexer/index.js"
-import { probeEmbeddingService, resolveEmbeddingModel } from "./indexer/embed.js"
+import { probeEmbeddingService } from "./indexer/embed.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
 import { restoreSnapshotToState } from "./snapshots/restore.js"
 
@@ -21,8 +21,6 @@ const EMBEDDING_GENERATION_FAILURE_DIAGNOSTIC = {
 }
 const VECTOR_PACK_NOOP_REPAIR_SIGNATURE_META_KEY =
   "vector_pack_noop_repair_signature"
-const ACTIVE_VECTOR_PROVENANCE_META_KEY = "active_vector_provenance"
-const ACTIVE_VECTOR_PROVENANCE = vectorProvenance(ACTIVE_EMBEDDING_SPEC)
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_MCP_ROOT = path.resolve(MODULE_DIR, "..")
 const DEFAULT_PLUGIN_ROOT = path.resolve(DEFAULT_MCP_ROOT, "..")
@@ -70,9 +68,6 @@ let configuredArtifactPluginRoot = null
  */
 export async function ensureIndex(deskRoot, opts = {}) {
   const effectiveOpts = resolveEnsureIndexOptions(opts, { deskRoot })
-  if (!effectiveOpts.skipEmbed) {
-    effectiveOpts.embed = { ...effectiveOpts.embed, model: resolveEmbeddingModel(effectiveOpts.embed) }
-  }
   const dbPath = indexDbPath(deskRoot)
   let snapshot = null
   let dbExisted = existsSync(dbPath)
@@ -87,33 +82,6 @@ export async function ensureIndex(deskRoot, opts = {}) {
   throwIfAborted(effectiveOpts.signal)
   const db = openDb(deskRoot)
   try {
-    if (!effectiveOpts.skipEmbed) {
-      const trustedSnapshot = snapshot?.restored
-        && vectorProvenance(effectiveOpts.snapshots?.expectedSpec ?? ACTIVE_EMBEDDING_SPEC) === ACTIVE_VECTOR_PROVENANCE
-        && getSemanticCoverage(db).missing_vectors === 0
-      if ((!trustedSnapshot && getMeta(db, ACTIVE_VECTOR_PROVENANCE_META_KEY) !== ACTIVE_VECTOR_PROVENANCE)
-        || effectiveOpts.embed.model !== ACTIVE_EMBEDDING_SPEC.model) {
-        // Only derived semantic rows are disposable. Lexical state and history survive.
-        db.transaction(() => {
-          db.exec("DELETE FROM chunk_vecs")
-          db.exec("DELETE FROM chunk_embedding_failures")
-          db.prepare("DELETE FROM meta WHERE key IN (?, ?)")
-            .run(ACTIVE_VECTOR_PROVENANCE_META_KEY, VECTOR_PACK_NOOP_REPAIR_SIGNATURE_META_KEY)
-        })()
-      }
-    }
-    const complete = (result) => {
-      if (!effectiveOpts.skipEmbed) {
-        if (result.semantic.missing_vectors === 0
-          && effectiveOpts.embed.model === ACTIVE_EMBEDDING_SPEC.model
-          && getMeta(db, ACTIVE_VECTOR_PROVENANCE_META_KEY) !== ACTIVE_VECTOR_PROVENANCE) {
-          setMeta(db, ACTIVE_VECTOR_PROVENANCE_META_KEY, ACTIVE_VECTOR_PROVENANCE)
-        }
-      }
-      result.semantic.provenance_current =
-        getMeta(db, ACTIVE_VECTOR_PROVENANCE_META_KEY) === ACTIVE_VECTOR_PROVENANCE
-      return result
-    }
     const semanticBefore = getSemanticCoverage(db)
     let repairMissing = false
     if (dbExisted) {
@@ -124,12 +92,12 @@ export async function ensureIndex(deskRoot, opts = {}) {
           effectiveOpts,
           semanticBefore,
         )
-        if (repair) return complete(withSnapshot(repair, snapshot))
+        if (repair) return withSnapshot(repair, snapshot)
         await markRestoredSnapshotFresh(deskRoot, db, effectiveOpts.signal)
-        return complete(withSnapshot(
+        return withSnapshot(
           { built: false, reason: "snapshot_restored", semantic: semanticBefore },
           snapshot,
-        ))
+        )
       }
       const fresh = await isIndexFresh(deskRoot, db, {
         signal: effectiveOpts.signal,
@@ -143,11 +111,11 @@ export async function ensureIndex(deskRoot, opts = {}) {
             effectiveOpts,
             semanticBefore,
           )
-          if (repair) return complete(withSnapshot(repair, snapshot))
-          return complete(withSnapshot(
+          if (repair) return withSnapshot(repair, snapshot)
+          return withSnapshot(
             { built: false, reason: "fresh", semantic: semanticBefore },
             snapshot,
-          ))
+          )
         }
       }
       repairMissing = await shouldRepairMissingEmbeddings(db, effectiveOpts, semanticBefore)
@@ -178,26 +146,12 @@ export async function ensureIndex(deskRoot, opts = {}) {
       }
       if (fallback) result.fallback = fallback
     } else {
-      return complete(withSnapshot(result, snapshot, fallback))
+      return withSnapshot(result, snapshot, fallback)
     }
-    return complete(result)
+    return result
   } finally {
     closeDb(db)
   }
-}
-
-function vectorProvenance(spec) {
-  return JSON.stringify({
-    schema_version: 1,
-    embedding_spec: {
-      id: spec.id,
-      model: spec.model,
-      model_revision: spec.model_revision,
-      dimension: spec.dimension,
-      chunker_id: spec.chunker_id,
-      normalization_id: spec.normalization_id,
-    },
-  })
 }
 
 export function resolveEnsureIndexOptions(opts = {}, context = {}) {

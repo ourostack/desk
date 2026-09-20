@@ -7,7 +7,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import matter from "gray-matter"
 
-import { closeDb, getMeta, openDb } from "../../src/db/init.js"
+import { closeDb, openDb } from "../../src/db/init.js"
 import { chunkBody } from "../../src/indexer/chunk.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import {
@@ -26,13 +26,6 @@ const NO_RELEASE_ARTIFACTS = { snapshots: false, vectorPacks: false }
 
 async function tmpRoot(prefix = "desk-vector-rebuild-") {
   return mkTempRoot(prefix)
-}
-
-async function trustedRoot() {
-  const root = await tmpRoot()
-  // Empty active coverage establishes provenance before testing later chunk failures.
-  await ensureIndex(root, NO_RELEASE_ARTIFACTS)
-  return root
 }
 
 async function writeFile(root, rel, body) {
@@ -145,46 +138,6 @@ function assertVectorApprox(actual, expected) {
   }
 }
 
-for (const coverage of ["complete", "partial", "corrupt"]) {
-  test(`ensureIndex ${coverage} validated pack coverage controls active provenance`, async (t) => {
-    const deskRoot = await tmpRoot()
-    const pluginRoot = await tmpRoot("desk-provenance-pack-")
-    t.after(async () => {
-      await fs.rm(deskRoot, { recursive: true, force: true })
-      await fs.rm(pluginRoot, { recursive: true, force: true })
-    })
-    const body = "# Packed\n\nTrusted pack vector.\n\n## Missing\n\nRemaining vector.\n"
-    await writeFile(deskRoot, "task.md", body)
-    await rebuildIndex(deskRoot, { embed: { model: "historical-custom", fetch: async () => ({
-      ok: true, json: async () => ({ embedding: vector(2) }),
-    }) } })
-    const rows = [rowForDoc({ docPath: "task.md", body, seed: 7 })]
-    if (coverage !== "partial") rows.push(rowForDoc({ docPath: "task.md", body, chunkIndex: 1, seed: 9 }))
-    await writePack({ pluginRoot, packId: "provenance", rows })
-    if (coverage === "corrupt") await corruptPackChecksum({ pluginRoot, packId: "provenance" })
-    let calls = 0
-    const operation = ensureIndex(deskRoot, {
-      snapshots: false, vectorPacks: { pluginRoot },
-      embed: { endpoint: "http://fixture.invalid", fetch: async () => {
-        calls += 1
-        throw new Error("offline")
-      } },
-    })
-    if (coverage === "corrupt") await assert.rejects(operation, /checksum/u)
-    else {
-      const result = await operation
-      assert.equal(result.semantic.provenance_current, coverage === "complete")
-      assert.equal(result.semantic.vectors_indexed, coverage === "complete" ? 2 : 1)
-      assert.equal(calls, coverage === "complete" ? 0 : 1)
-    }
-    const db = openDb(deskRoot)
-    try {
-      assert.equal(getMeta(db, "active_vector_provenance") !== null, coverage === "complete")
-      if (coverage !== "corrupt") assertVectorApprox(storedVector(db, "task.md", 0), vector(7))
-    } finally { closeDb(db) }
-  })
-}
-
 test("rebuildIndex imports fully covered vector packs without live embedding calls", async () => {
   const deskRoot = await tmpRoot()
   const pluginRoot = await tmpRoot("desk-plugin-vector-rebuild-")
@@ -263,7 +216,7 @@ test("rebuildIndex live-generates only chunks missing from vector packs", async 
 })
 
 test("rebuildIndex continues live vector generation after an oversized chunk", async () => {
-  const deskRoot = await trustedRoot()
+  const deskRoot = await tmpRoot()
   const oversizePath = "trackA/task-oversize/task.md"
   const smallPath = "trackA/task-small/task.md"
   await writeFile(
@@ -362,7 +315,7 @@ test("rebuildIndex continues live vector generation after an oversized chunk", a
 })
 
 test("ensureIndex imports vector packs for chunks previously marked unembeddable", async () => {
-  const deskRoot = await trustedRoot()
+  const deskRoot = await tmpRoot()
   const pluginRoot = await tmpRoot("desk-plugin-vector-repair-")
   const oversizePath = "trackA/task-oversize/task.md"
   const oversizeBody = "---\nstatus: processing\n---\noversized semantic body"
@@ -436,7 +389,7 @@ test("ensureIndex imports vector packs for chunks previously marked unembeddable
 })
 
 test("ensureIndex skips repeated no-op vector-pack repair for unchanged known-unembeddable misses", async () => {
-  const deskRoot = await trustedRoot()
+  const deskRoot = await tmpRoot()
   const oversizePath = "trackA/task-oversize/task.md"
   const oversizeBody = "---\nstatus: processing\n---\nknown oversize body"
   await writeFile(deskRoot, oversizePath, oversizeBody)
@@ -541,7 +494,7 @@ test("ensureIndex skips repeated no-op vector-pack repair for unchanged known-un
 })
 
 test("ensureIndex remembers absent vector-pack repair for known-unembeddable misses", async () => {
-  const deskRoot = await trustedRoot()
+  const deskRoot = await tmpRoot()
   const pluginRoot = await tmpRoot("desk-empty-vector-pack-root-")
   const oversizePath = "trackA/task-oversize/task.md"
   await writeFile(
@@ -813,8 +766,7 @@ test("ensureIndex leaves a fresh semantic DB untouched without probing embedding
   const docPath = "trackA/task-1/task.md"
   const body = "---\nstatus: processing\n---\nfresh semantic body"
   await writeFile(deskRoot, docPath, body)
-  await ensureIndex(deskRoot, {
-    ...NO_RELEASE_ARTIFACTS,
+  await rebuildIndex(deskRoot, {
     embed: {
       fetch: async () => ({
         ok: true,
@@ -1036,7 +988,7 @@ test("ensureIndex preserves probe diagnostics when repair records a known unembe
 })
 
 test("ensureIndex treats stale known-unembeddable-only coverage as semantically available", async () => {
-  const deskRoot = await trustedRoot()
+  const deskRoot = await tmpRoot()
   const docPath = "trackA/task-oversize/task.md"
   const body = "---\nstatus: processing\n---\nstale known oversize body"
   await writeFile(deskRoot, docPath, body)

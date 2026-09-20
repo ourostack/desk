@@ -1,5 +1,4 @@
 import { ACTIVATION_SCHEMA_VERSION, activationManifestSchema } from "./schema.js"
-import { normalizeReadinessPolicy } from "./readiness-policy.js"
 
 const ID_RE = /^[a-z0-9][a-z0-9._:-]*$/
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
@@ -72,7 +71,6 @@ export function validateActivationManifest(manifest) {
   const dependencyIds = validateDependencies(manifest.dependencies, errors)
   validateMcpServers(manifest.mcp_servers, errors)
   validateDeskRoot(manifest.desk_root, errors)
-  validateDeskRuntime(manifest.desk_runtime, errors)
   validateArtifacts(manifest.artifacts, errors)
   validateHostSupport(manifest.host_support, errors)
   validatePermissions(manifest.permissions, errors)
@@ -252,27 +250,6 @@ function validateDeskRoot(deskRoot, errors) {
   validateEnum(deskRoot.policy, "desk_root.policy", DESK_ROOT_POLICIES, "invalid_desk_root_policy", "desk root policy is not supported", errors)
   validateStringList(deskRoot.precedence, "desk_root.precedence", "invalid_desk_root_precedence", "desk root precedence entries are not supported", errors, DESK_ROOT_PRECEDENCE)
   validateStringList(deskRoot.opt_out_modes, "desk_root.opt_out_modes", "invalid_opt_out_mode", "desk root opt-out modes are not supported", errors, DESK_ROOT_OPT_OUT_MODES)
-}
-
-function validateDeskRuntime(deskRuntime, errors) {
-  validateRequiredObject(deskRuntime, "desk_runtime", ["root", "write_authority", "lexical", "semantic"], errors)
-  if (!isObject(deskRuntime)) return
-  try {
-    normalizeReadinessPolicy(deskRuntime, { path: "desk_runtime", phase: "VERIFYING" })
-  } catch (error) {
-    if (error?.code !== "activation_policy_invalid") throw error
-    if (Array.isArray(error.diagnostics) && error.diagnostics.length > 0) {
-      for (const diagnosticEntry of error.diagnostics) {
-        errors.push(diagnostic(
-          diagnosticEntry.path ?? "desk_runtime",
-          diagnosticEntry.code ?? "activation_policy_invalid",
-          diagnosticEntry.message ?? error.summary,
-        ))
-      }
-      return
-    }
-    errors.push(diagnostic("desk_runtime", error.code, error.summary ?? "Desk readiness policy is invalid"))
-  }
 }
 
 function validateArtifacts(artifacts, errors) {

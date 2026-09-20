@@ -47,9 +47,6 @@ test("startup assembles inspected runtime status and falls back to diagnostics w
   const root = makeRoot("desk-startup-inspected-runtime-")
   const startCalls = []
   const runtimeServer = {
-    async connectOrStartController() {
-      return { accepted: true, id: "controller-1" }
-    },
     async startServer(args) {
       startCalls.push(args)
     },
@@ -81,14 +78,7 @@ test("startup assembles inspected runtime status and falls back to diagnostics w
       runtime_cache_path: null,
       support_matrix_path: "/plugin/support-matrix.json",
     })
-    assert.deepEqual(startCalls[0].statusContext.admission, {
-      state: "CONTROL_READY",
-      root,
-      authority: { mode: "workspace" },
-      runtime: startCalls[0].statusContext.runtime,
-      controller: { accepted: true, id: "controller-1" },
-      automatic_actions: [],
-    })
+    assert.equal(startCalls[0].statusContext.startup.fallback_mode, "not_checked")
 
     let diagnostic
     await main({

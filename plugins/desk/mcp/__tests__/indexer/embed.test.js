@@ -32,62 +32,6 @@ function mockNetworkErrorFetch() {
   }
 }
 
-function setEnv(t, values) {
-  const before = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]))
-  Object.assign(process.env, values)
-  t.after(() => {
-    for (const [key, value] of Object.entries(before)) {
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
-    }
-  })
-}
-
-test("explicit ordered endpoints exclude ambient and default fallbacks", async (t) => {
-  const endpoints = [
-    "http://first.test:11434/api/embeddings",
-    "http://second.test:11434/api/embeddings",
-  ]
-  setEnv(t, { DESK_EMBED_ENDPOINT: "http://ambient.test:11434" })
-  const calls = []
-  const result = await embedChunkDetailed("explicit endpoints", {
-    endpoints,
-    fetch: async (url) => {
-      calls.push(url)
-      if (url !== endpoints[1]) throw new Error("unavailable")
-      return new Response(JSON.stringify({ embedding: Array(768).fill(0.1) }))
-    },
-  })
-  assert.equal(result.available, true)
-  assert.deepEqual(calls, endpoints)
-  calls.length = 0
-  const failed = await probeEmbeddingService({
-    endpoints,
-    fetch: async (url) => { calls.push(url); throw new Error("offline") },
-  })
-  assert.equal(failed.available, false)
-  assert.deepEqual(calls, endpoints)
-})
-
-test("full embedding URLs normalize and deduplicate without changing fallback order", (t) => {
-  setEnv(t, {
-    DESK_EMBED_ENDPOINT: "HTTP://Example.Test:80/api/embeddings",
-    DESK_OLLAMA_ENDPOINT: "http://example.test/api/embeddings",
-    OLLAMA_HOST: "0.0.0.0:11434/api/embed",
-  })
-  assert.deepEqual(resolveEmbeddingEndpoints(), [
-    "http://example.test/api/embeddings",
-    "http://127.0.0.1:11434/api/embeddings",
-    "http://localhost:11434/api/embeddings",
-  ])
-})
-
-test("explicit endpoint lists reject empty or malformed configurations", () => {
-  for (const endpoints of [[], "", [null], [""]]) {
-    assert.throws(() => resolveEmbeddingEndpoints({ endpoints }), /nonempty.*endpoint/iu)
-  }
-})
-
 test("embedChunk returns a 768-dim array on success", async () => {
   const vec = Array.from({ length: EMBEDDING_DIM }, (_, i) => i / EMBEDDING_DIM)
   const out = await embedChunk("hello world", { fetch: mockOkFetch(vec) })

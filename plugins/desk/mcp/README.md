@@ -2,12 +2,6 @@
 
 Spawned by consumers (Claude Code, Copilot CLI, ouroboros daemon) to expose a uniform tool surface for working with a desk workspace. Tools include task / track / friction / lesson CRUD and hybrid lexical+semantic search.
 
-## Lexical-first alpha candidate
-
-Desk `3.2.0-alpha.6` / `desk-mcp@1.4.0-alpha.6` packages the [reviewed lexical milestone](https://github.com/ourostack/ouroboros-skills/commit/0eb9ea139a997c5c39394ac7b95ab02bff7331b5): correct lexical answers during startup and file changes, fresh direct fallback when readiness is uncertain, durable journal/restart behavior, one index writer, and zero orphan vectors.
-
-Semantic scheduling and transactional recovery are not qualified in this alpha. Repeated tombstone-policy changes fail closed but may return a generic error instead of typed `readiness_changed_during_read`. The semantic mechanisms described below are not a qualification claim. Runtime dependency packs reuse byte-identical, previously native-verified payloads with provenance; repackaging is not fresh native execution.
-
 ## Run it directly
 
 ```sh
@@ -69,14 +63,6 @@ whose relative entrypoint is resolved by their host-specific activation path.
 
 Codex global activation writes an owned `~/.codex/desk.activation.json` file in the default Codex profile. When that file exists, the MCP entrypoint auto-loads it at startup so `desk_status` can report the selected activation target, overlay chain, desk root, and runtime cache. Project-local Codex activation passes the same config explicitly with `--activation-config .codex/desk.activation.json`.
 
-Generated Codex activation configs carry the normalized manifest `desk_runtime` policy. Person-scoped activation requires an explicit valid `person` adapter input and passes it through the existing `--person` launch argument. The standalone Codex adapter refuses named `authority_provider` policies with `authority_invalid`: it cannot serialize or install an authority callback into the child process, and must never substitute workspace authority.
-
-`desk_runtime.semantic` controls startup convergence. `background` serves at `CONTROL_READY` and converges asynchronously. `unsupported` keeps automatic lexical convergence but skips embedding calls. `required` completes convergence and verifies a complete semantic barrier before starting MCP: complete document coverage, current active-vector provenance, and a successful active-model query-embedding probe are all required. Even a warm, fully vectorized index refuses admission with `semantic_unavailable` when that probe fails. Background convergence performs the same probe without blocking startup and remains `LEXICAL_READY`, rather than `READY`, when it fails. Query availability is observed at convergence time, not guaranteed indefinitely. Controller compatibility includes semantic mode and embedding specification as well as the lexical contract.
-
-The controller serializes convergence, not its clients. A concurrent request receives `{ accepted: true, reused: true, in_progress: true }` with the current state; a caller can wait using `barrier({ capability: "lexical" | "semantic", wait: true })`. Disconnecting the requesting client does not cancel the operation. Failed work remains retryable on a subsequent convergence request. The controller process stays live while its operation runs; this does not make it survive termination of the controller process itself.
-
-Semantic-enabled controller compatibility also requires the query-probe contract, so a new consumer cannot reuse a legacy coverage-only controller to bypass admission checks. This does not stop or upgrade already-running legacy consumers.
-
 ## Generic stdio MCP launch
 
 Generic stdio hosts can launch Desk as an MCP-only server, but generic stdio does not activate `worker` and does not resolve plugin dependencies for Work Suite.
@@ -107,23 +93,11 @@ This path provides MCP tools only; there is no worker activation, default agent 
 
 Desk validates the committed runtime support matrix before loading production dependencies. If the host's Node ABI is unsupported, Desk searches only bounded local Node locations (the active executable, `PATH`, and standard NVM, Volta, asdf, and mise locations) and performs at most one guarded stdio-preserving handoff to a compatible runtime. It never installs, downloads, or reaches the network during startup. If no healthy local path exists, a dependency-free diagnostic MCP remains live with `desk_status` and `desk_doctor`; all mutation tools fail closed with the same diagnosis and offline remediation instead of crashing the host.
 
-Diagnostic responses retain `status: "degraded"`, `mode: "diagnostic"`, the precise reason and runtime context, and a nonempty `remediation` list. The failed activation attempt remains visible as `activation_status: "terminal"` with its phase, code, expected/observed evidence, and `retryable: false`; this does not mean the diagnostic server has stopped. Remediation describes operator recovery followed by a host restart. `automatic_actions` is empty when no further automatic recovery is performed.
-
-Semantic controller admission captures the normalized, ordered effective embedding endpoints once: `DESK_EMBED_ENDPOINT`, `DESK_OLLAMA_ENDPOINT`, `OLLAMA_HOST`, then the existing loopback fallbacks, with duplicates removed. That exact list participates in controller identity and is used for both document convergence and the required query probe. A process with a different endpoint list cannot borrow another controller's probe. Internal embedding callers can supply a nonempty `endpoints` list of already-resolved URLs to use exactly that order without ambient fallback; the single `endpoint` override remains supported.
-
-Common startup routes writes from the admitted authority, not the raw CLI argument. Workspace authority requires no `--person`; person authority uses the admitted person's identity, including a provider-derived identity when the argument is absent. A conflicting `--person`, missing authority, or unenforceable person identity fails closed before the MCP server starts. This applies to direct launches as well as host adapters.
-
 ### Developer notes
 
 Direct development checkouts can still run `npm install` when intentionally working on the MCP package.
 
-Semantic ranking requires Ollama with `nomic-embed-text` pulled. The active embedding specification pins this model for both document and query embeddings. With semantic mode `background` or `required`, startup refuses an effective `DESK_EMBED_MODEL` (or fallback `OLLAMA_EMBED_MODEL`) that differs from the pinned model, before connecting to a readiness controller or calling an embedding endpoint. Unset the override or set it to `nomic-embed-text`; another model requires a separately versioned embedding specification. The runtime does not rewrite the override or fall back to lexical-only startup for this configuration error.
-
-Semantic mode `unsupported` ignores model configuration at startup and skips embedding during automatic convergence. Explicit indexed queries and `desk_reindex` can still generate embeddings, so their MCP dispatch checks the same model pin before any index or endpoint work, including in `unsupported` mode. A differing model is refused, not silently replaced. This also covers `desk_thread`, whose index refresh can generate document vectors. Low-level embedding helpers retain explicit `opts.model` injection for isolated tests and future specification work, not ordinary runtime model selection.
-
-Semantic-enabled index convergence automatically migrates legacy vectors whose local `meta` provenance is absent or does not match the complete active embedding specification and provenance version. It discards only derived vectors and embedding-failure tombstones, retaining documents, lexical state, and history. Provenance is established after complete active-model generation, complete validated current-spec artifact coverage, or an empty index. An incomplete migration leaves provenance absent and retries on the next convergence; this can repeat successful partial embedding work. Matching provenance avoids that invalidation. `unsupported` / `skipEmbed` convergence neither invalidates nor establishes provenance; the next semantic-enabled admission performs the migration. No operator repair, schema change, or artifact rebuild is required.
-
-The MCP resolves the embedding endpoint in this order: explicit test/tool `endpoint`, `DESK_EMBED_ENDPOINT`, `DESK_OLLAMA_ENDPOINT`, `OLLAMA_HOST`, `http://127.0.0.1:11434`, then `http://localhost:11434`. Set `DESK_EMBED_TIMEOUT_MS` to adjust the per-endpoint timeout.
+Semantic ranking requires Ollama with `nomic-embed-text` pulled. The MCP resolves the embedding endpoint in this order: explicit test/tool `endpoint`, `DESK_EMBED_ENDPOINT`, `DESK_OLLAMA_ENDPOINT`, `OLLAMA_HOST`, `http://127.0.0.1:11434`, then `http://localhost:11434`. Set `DESK_EMBED_MODEL` to override `nomic-embed-text`, and `DESK_EMBED_TIMEOUT_MS` to adjust the per-endpoint timeout.
 
 If Ollama is unavailable, search soft-falls-back to FTS5-only with `semantic_unavailable` plus `semantic_diagnostic` and `semantic_repair` fields in the response. If a desk was indexed while Ollama was down, `desk_reindex` without arguments now repairs missing vectors automatically once embeddings are reachable; `force:true` is only needed when you intentionally want to drop and rebuild the whole DB.
 

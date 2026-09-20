@@ -459,29 +459,18 @@ function assertPositiveIntegerBudget(value, label) {
   assert.ok(value > 0, `${label} must be positive`)
 }
 
-function runtimeServerWithStartupAdmission(controller = { accepted: true, id: "controller-1" }) {
+function runtimeServerWithEnsureIndex(ensureIndexResult = { built: false, reason: "fresh" }) {
   const ensureCalls = []
-  const controllerCalls = []
   const startCalls = []
-  const convergenceCalls = []
   return {
     ensureCalls,
-    controllerCalls,
     startCalls,
-    convergenceCalls,
     async ensureIndex(deskRoot, opts = {}) {
       ensureCalls.push({ deskRoot, opts })
-      return { built: false, reason: "fresh" }
-    },
-    async connectOrStartController({ deskRoot, policy }) {
-      controllerCalls.push({ deskRoot, policy })
-      return controller
+      return ensureIndexResult
     },
     async startServer(args) {
       startCalls.push(args)
-    },
-    beginBackgroundConvergence(admission) {
-      convergenceCalls.push(admission)
     },
   }
 }
@@ -860,7 +849,7 @@ test("performance budget loader fails closed for malformed, missing, or invalid 
   }
 })
 
-test("MCP startup admits the control plane and begins convergence after start even when a startup budget is configured", async () => {
+test("MCP startup reads ensure-index budget from plugin performance config", async () => {
   const deskRoot = makeTempDir("desk-artifact-scripts-startup-budget-desk-")
   const pluginRoot = makeTempDir("desk-artifact-scripts-startup-budget-plugin-")
   try {
@@ -870,7 +859,7 @@ test("MCP startup admits the control plane and begins convergence after start ev
         ensure_index_ms: 37,
       },
     })
-    const runtimeServer = runtimeServerWithStartupAdmission()
+    const runtimeServer = runtimeServerWithEnsureIndex()
 
     await startMcpServer({
       argv: ["--root", deskRoot],
@@ -881,30 +870,12 @@ test("MCP startup admits the control plane and begins convergence after start ev
       runtimeImporter: async () => runtimeServer,
     })
 
-    assert.deepEqual(runtimeServer.controllerCalls, [{
-      deskRoot,
-      policy: {
-        root: "workspace",
-        write_authority: "workspace",
-        lexical: "required",
-        semantic: "background",
-        authority_provider: null,
-      },
-    }])
-    assert.deepEqual(runtimeServer.ensureCalls, [])
+    assert.equal(runtimeServer.ensureCalls.length, 1)
+    assert.equal(runtimeServer.ensureCalls[0].deskRoot, deskRoot)
+    assert.equal(runtimeServer.ensureCalls[0].opts.startup, true)
+    assert.equal(runtimeServer.ensureCalls[0].opts.budgetMs, 37)
     assert.equal(runtimeServer.startCalls.length, 1)
-    assert.equal(runtimeServer.startCalls[0].statusContext.admission.state, "CONTROL_READY")
-    assert.equal(runtimeServer.startCalls[0].statusContext.admission.controller.id, "controller-1")
-    assert.deepEqual(
-      runtimeServer.startCalls[0].statusContext.admission.runtime,
-      runtimeServer.startCalls[0].statusContext.runtime,
-    )
-    assert.equal(
-      Object.hasOwn(runtimeServer.startCalls[0].statusContext, "startup"),
-      false,
-      "startup status context should not resurrect pre-readiness ensureIndex bookkeeping",
-    )
-    assert.deepEqual(runtimeServer.convergenceCalls, [runtimeServer.startCalls[0].statusContext.admission])
+    assert.equal(runtimeServer.startCalls[0].statusContext.startup.budget_ms, 37)
   } finally {
     rmSync(deskRoot, { recursive: true, force: true })
     rmSync(pluginRoot, { recursive: true, force: true })

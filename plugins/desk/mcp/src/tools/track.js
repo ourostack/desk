@@ -11,7 +11,6 @@ import {
   pathExists,
 } from "../util/fm.js"
 import { resolveWriteTarget } from "../util/paths.js"
-import { recordCanonicalChanges } from "../readiness/journal.js"
 
 // Optional fields a caller may supply at create time.
 const OPTIONAL_TRACK_FIELDS = [
@@ -42,7 +41,7 @@ function relPath(deskRoot, absPath) {
  *
  * Returns: { status: "created", path }
  */
-export async function track_create({ deskRoot, input, person = null, readiness }) {
+export async function track_create({ deskRoot, input, person = null }) {
   const values = input ?? {}
   const { slug, title } = values
   if (!Object.hasOwn(values, "slug")) {
@@ -76,7 +75,6 @@ export async function track_create({ deskRoot, input, person = null, readiness }
   }
 
   await writeMarkdown(filePath, data, values.body ?? "")
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   return { status: "created", path: relPath(deskRoot, filePath) }
 }
 
@@ -98,7 +96,7 @@ export async function track_create({ deskRoot, input, person = null, readiness }
  *
  * Returns: { status: "updated", path }
  */
-export async function track_update({ deskRoot, input, person = null, readiness }) {
+export async function track_update({ deskRoot, input, person = null }) {
   const values = input ?? {}
   const { slug, frontmatter, body_append } = values
   if (!Object.hasOwn(values, "slug")) {
@@ -136,6 +134,5 @@ export async function track_update({ deskRoot, input, person = null, readiness }
   }
 
   await writeMarkdown(filePath, merged, newBody)
-  await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   return { status: "updated", path: relPath(deskRoot, filePath) }
 }

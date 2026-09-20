@@ -77,17 +77,10 @@ export function resolveEmbeddingModel(opts = {}) {
 }
 
 export function resolveEmbeddingEndpoints(opts = {}) {
-  if (opts.endpoints !== undefined) {
-    if (!Array.isArray(opts.endpoints) || opts.endpoints.length === 0
-      || opts.endpoints.some((endpoint) => typeof endpoint !== "string" || !endpoint.trim())) {
-      throw new TypeError("Expected a nonempty ordered list of embedding endpoints.")
-    }
-    return opts.endpoints
-  }
   if (opts.endpoint) return [normalizeEndpoint(opts.endpoint) ?? opts.endpoint]
   return unique([
-    endpointFromBase(envValue("DESK_EMBED_ENDPOINT")),
-    endpointFromBase(envValue("DESK_OLLAMA_ENDPOINT")),
+    normalizeEndpoint(envValue("DESK_EMBED_ENDPOINT")),
+    normalizeEndpoint(envValue("DESK_OLLAMA_ENDPOINT")),
     endpointFromBase(envValue("OLLAMA_HOST")),
     endpointFromBase(DEFAULT_OLLAMA_BASE),
     endpointFromBase(FALLBACK_OLLAMA_BASE),
@@ -143,7 +136,6 @@ async function postEmbedding({ endpoint, model, text, fetchImpl, timeoutMs }) {
  * @param {string} text
  * @param {object} [opts]
  * @param {string} [opts.endpoint] — override the Ollama endpoint URL.
- * @param {string[]} [opts.endpoints] — captured ordered endpoint URLs, used exactly without ambient fallbacks.
  * @param {string} [opts.model] — override the model name.
  * @param {number} [opts.timeoutMs] — per-endpoint timeout in milliseconds.
  * @param {typeof fetch} [opts.fetch] — injection point for tests.

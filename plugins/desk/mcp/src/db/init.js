@@ -44,9 +44,9 @@ export function openDb(deskRoot, opts = {}) {
   const db = new Database(dbPath)
   // Pragmas: WAL gives concurrent-reader friendliness (the search tools will
   // read while the indexer writes). foreign_keys lets ON DELETE CASCADE
-  // actually cascade. FULL makes committed event coverage durable before journal compaction.
+  // actually cascade. synchronous=NORMAL is the WAL recommendation.
   db.pragma("journal_mode = WAL")
-  db.pragma("synchronous = FULL")
+  db.pragma("synchronous = NORMAL")
   db.pragma("foreign_keys = ON")
   // sqlite-vec must be loaded before any vec0 virtual-table reference resolves.
   sqliteVec.load(db)

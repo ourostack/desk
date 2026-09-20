@@ -22,17 +22,6 @@ export function selectPrimaryTrigger(triggers) {
   return triggerPrecedence.find((code) => reported.has(code)) ?? null
 }
 
-export function canonicalizeIdentifierText(value) {
-  return value.trim().toLowerCase().replace(/[\s_]+/gu, "-")
-}
-
-function comparisonIdentifiers(value) {
-  const entries = typeof value === "string" ? [value] : Array.isArray(value) ? value : []
-  return [...new Set(entries
-    .filter((entry) => typeof entry === "string" && entry.trim().length > 0)
-    .map(canonicalizeIdentifierText))]
-}
-
 export function assessConvergence({ contract, cycles }) {
   const orderedCycles = [...cycles].sort((left, right) => left.cycle - right.cycle)
   const scopeEnvelope = contract.scope_envelope ?? []
@@ -55,7 +44,7 @@ export function assessConvergence({ contract, cycles }) {
 
   const triggers = []
   for (const cycle of orderedCycles) {
-    const values = comparisonIdentifiers(cycle.discriminator?.introduced_mechanisms).filter((value) =>
+    const values = (cycle.discriminator?.introduced_mechanisms ?? []).filter((value) =>
       introducedArchitectureMechanisms.has(value),
     )
     if (values.length === 0) continue
@@ -90,19 +79,13 @@ export function assessConvergence({ contract, cycles }) {
     if (previous.result !== "rejected" || current.result !== "rejected") continue
     if (current.open_findings.length < previous.open_findings.length) continue
     const hasNewDiscriminator = discriminatorFields.some((field) => {
-      const isIdentifierList = field === "introduced_mechanisms" || field === "finding_categories"
-      const currentValue = isIdentifierList
-        ? comparisonIdentifiers(current.discriminator?.[field]).sort()
-        : current.discriminator?.[field]
-      const previousValue = isIdentifierList
-        ? comparisonIdentifiers(previous.discriminator?.[field]).sort()
-        : previous.discriminator?.[field]
+      const currentValue = current.discriminator[field]
       const isNonEmpty = Array.isArray(currentValue)
         ? currentValue.length > 0
         : typeof currentValue === "string" && currentValue.trim().length > 0
       return (
         isNonEmpty &&
-        JSON.stringify(currentValue) !== JSON.stringify(previousValue)
+        JSON.stringify(currentValue) !== JSON.stringify(previous.discriminator[field])
       )
     })
     if (hasNewDiscriminator) continue

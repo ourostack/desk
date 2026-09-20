@@ -10,28 +10,6 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT
 );
 
--- A generation is published only in the transaction that changes its lexical rows.
-CREATE TABLE IF NOT EXISTS readiness_operations (
-  id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL,
-  status TEXT NOT NULL,
-  completed_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS lexical_generations (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  schema_version INTEGER NOT NULL,
-  chunker_id TEXT NOT NULL,
-  normalization_id TEXT NOT NULL,
-  embedding_spec TEXT NOT NULL,
-  tombstone_identity TEXT NOT NULL,
-  policy_identity TEXT NOT NULL,
-  documents TEXT NOT NULL,
-  event_cursor TEXT NOT NULL,
-  completed_at TEXT NOT NULL,
-  operation_id TEXT NOT NULL REFERENCES readiness_operations(id)
-);
-
 -- ---------------------------------------------------------------------------
 -- docs: one row per file under <root>/ that gets indexed (task.md,
 -- planning.md, doing.md, friction notes, lessons, etc.).
