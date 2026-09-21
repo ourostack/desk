@@ -1,169 +1,60 @@
 ---
 name: join-crew
-description: Agent-driven onboarding to a shared crew workspace. Use when an operator wants to join a crew repo, the workspace is not cloned locally, or the operator provides a crew-repo pointer. The engine discovers or resolves the workspace, offers once, clones through an overlay-supplied identity provider, maps stable identity to alias through `_meta/desks.md`, copies and verifies the complete `desks/_template/` tree for a new member before registry mutation, scopes writes to `desks/<alias>/`, installs declared tooling, loads repo context, and restarts only when required. Vendor-neutral; identity, transport, and private plugin details come from an overlay.
+description: Migrate a legacy Crew repository in place before existing-member activation, or join a new member to a current V2 Crew workspace. Preserve repository identity, history, member state, shared records, authority boundaries, and conflict-safe shared writes; never create a parallel migration repository.
 ---
 
 # Join a crew workspace
 
-Bring an operator into a shared workspace without asking them to perform work the agent can do. This
-skill owns the vendor-neutral flow. An overlay supplies identity, authentication, clone transport,
-default alias policy, and any private tooling details.
-
-Read `desk:first-run-bootstrap` and `crew:shared-desk-conventions` first.
+Bring an operator into a shared workspace without asking them to perform work the agent can do. This skill owns the vendor-neutral flow. An overlay supplies identity, authentication, transport, default alias policy, target path, and private dependency details. Read `desk:first-run-bootstrap` and `crew:shared-desk-conventions` first.
 
 ## Path 2 — migrate the Crew workspace, then activate members
 
-This skill exposes the generic Crew onboarding entrypoint. Path 2 starts with repository migration, then branches into existing-member activation or new-member join only after the migrated repository is ready.
+Resolve the local workspace before choosing a member flow. An existing legacy repository must complete Phase 1 in place. A repository proven current V2 may skip migration and continue to sync. Remote discovery is only for a workspace that is not already present locally.
 
 ### Phase 1 — repository migration
 
-Migrate the repository before any member activation. Preserve every member-specific subtree under `desks/`, preserve `_shared/landscape/` and `_shared/decisions/`, preserve Git history and origin, preserve the committed registry, preserve durable local state, preserve ignored/untracked inventory, preserve Crew read-across/write-own, and preserve shared-path serialization through the conflict-safe shared-path write protocol. A local workspace already present on disk is still subject to this phase until it is proven to be the current V2 layout; do not bypass migration by jumping straight to session-start sync. The rollback boundary is the pre-migration repository and workspace state at the same path, not a fresh clone or sidecar replacement. Refuse any step that would create a duplicate or parallel Crew repository; there is no parallel migration workspace and no parallel replacement repo.
+Run this executable branch in the existing repository path before member activation.
+
+1. Detect legacy layout and repository identity by proving the current path, Git worktree root, origin, branch and commit, committed registry, legacy Crew-v1 declarations or directories, and the evidence that the workspace is not yet current V2. Only a workspace proven to be current V2 may skip this migration and continue to ordinary sync.
+2. Inventory repository state by recording tracked, ignored, and untracked state, member-specific subtrees, durable local state, `_meta/desks.md`, current dependency declarations, active tooling, machine-local bindings, and shared-path contents.
+3. Record rollback evidence by capturing the current commit or other rollback ref, origin, branch relationship, full status and inventory, legacy declarations, and restoration instructions before mutation.
+4. Reconcile the V2 layout in place by creating or reconciling every required `desks/<alias>/` subtree plus `_shared/landscape/` and `_shared/decisions/`, preserving Git history, origin, committed registry, durable state, ignored and untracked inventory, and every existing member's content.
+5. Reconcile V1-only machinery by mapping it to a reviewed V2 owner, removing it when obsolete, or explicitly retaining it with a recorded reason, dependency, and authority boundary.
+6. Declare the reviewed V2 dependency chain for Crew and its selected overlay without leaving a second active legacy chain.
+7. Verify preservation and authority by proving repository identity, Git history, origin, tracked and local state, registry bindings, each member subtree, Crew read-across/write-own, and conflict-safe shared writes to `_shared/landscape/`, `_shared/decisions/`, and other serialized shared paths.
+8. Mark repository migration complete in durable repository evidence only after every preservation, dependency, authority, and write-safety check passes.
+9. Continue directly to existing-member activation against this migrated repository; do not enter remote or workspace discovery and do not create a duplicate or parallel Crew repository.
 
 ### Phase 2 — existing member activation
 
-Once the migrated repository is ready, an existing member resolves identity to the committed alias and activates against that same migrated repo.
+Read the committed `_meta/desks.md` registry, resolve the authenticated identity to exactly one existing alias, bind the specialist worker to this same repository with `--person <alias>`, verify repo-wide reads and writes rooted under `desks/<alias>/`, load declared tooling and repository context, and continue the existing member's durable work. A returning identity with a registry row must not derive a new alias.
 
 ### Phase 3 — new member join
 
-Once the migrated repository is ready, a new member follows the normal join flow, copies the committed template, verifies every path, and only then adds the new registry row.
+Use this phase only after a current V2 repository is present and the authenticated identity has no registry row. Derive a candidate alias through the overlay, require a nonempty committed `desks/_template/`, copy the complete template tree including hidden and nested paths into `desks/<alias>/`, apply only explicit substitutions, and verify every template-relative path before registry mutation. Commit and push the new member's own-desk tree first, then add the identity-to-alias row and any authority snapshot through the conflict-safe shared-path protocol. Never add a valid-looking registry row for an incomplete desk.
 
 ## Inputs from the overlay
 
-Before starting, obtain:
-
-- a stable authenticated identity;
-- a clone command or equivalent transport;
-- the default alias rule for a brand-new identity;
-- the target local path;
-- the crew plugin locator and any overlay-specific declared dependencies.
-
-If the overlay cannot prove authenticated remote access, stop before touching the filesystem. Do not
-create an offline or local-only copy of a shared workspace.
+Before remote discovery or a new-member join, obtain a stable authenticated identity, transport, alias rule, target local path, Crew plugin locator, and overlay dependencies. If authenticated remote access cannot be proven, stop before filesystem changes; do not create an offline copy of a shared workspace.
 
 ## Step 1: resolve the crew workspace
 
-Use either:
-
-1. a repo pointer supplied by the operator; or
-2. an overlay-provided discovery mechanism that lists accessible shared workspaces.
-
-A candidate is a crew workspace when its root contains `_meta/desks.md` together with `desks/` and
-`_shared/`. Confirm the remote exists and the authenticated identity can read it.
-
-If the workspace already exists at the target path, do not clone it again. First decide whether that
-same local workspace is a legacy Crew-v1 local workspace or a current V2 layout. A legacy Crew-v1
-local workspace must route through Phase 1 repository migration before any activation or scan. Only a
-workspace already proven to be the current V2 layout may proceed directly to session-start sync and
-scan.
+Inspect the target local path first. If it contains a legacy Crew-v1 local workspace, route to Phase 1 repository migration and do not continue to Step 2; after migration, continue directly to Phase 2. If it is already proven to have the current V2 layout, continue to session-start sync and scan, then choose Phase 2 or Phase 3 from the committed registry. Only when no local workspace exists may an operator-supplied repository pointer or overlay discovery resolve a remote candidate.
 
 ## Step 2: offer once, then clone
 
-Ask one yes-or-no question:
+For an absent local workspace only, confirm the remote contains `_meta/desks.md`, `desks/`, and `_shared/`, prove authenticated read access, and ask once whether to clone it to the target path. On yes, run the overlay-supplied transport and verify origin; on no, stop without filesystem changes.
 
-> I found the `<workspace>` crew workspace and you have access. Want me to clone it and set up your desk?
+## Step 3: choose the member phase
 
-On yes, run the overlay-supplied clone transport. On no, stop without filesystem changes.
-
-## Step 3: resolve identity to alias
-
-Read the committed `_meta/desks.md` registry after cloning.
-
-- If a row's stable `identity` matches the authenticated identity, use that row's `alias`.
-- If no row matches, derive a candidate alias with the overlay's default alias rule.
-
-The registry is authoritative. Do not cache the alias in a machine-local marker, and do not derive a
-new alias for a returning member whose identity already has a row.
-
-## Step 4: seed a brand-new member's desk
-
-Skip this step for an existing registry row.
-
-Require `desks/_template/` to exist and contain at least one path. If it is absent or empty, stop before
-creating the member row.
-
-### Copy the complete committed template tree
-
-Copy the entire contents of `desks/_template/` to `desks/<alias>/`, including hidden files and nested
-directories. Do not enumerate expected furniture in this skill. The committed template is the source of
-truth and may grow over time.
-
-Use a copy mechanism that preserves the complete tree. For example:
-
-```bash
-mkdir -p "desks/<alias>"
-cp -R "desks/_template/." "desks/<alias>/"
-```
-
-Apply overlay substitutions only after the copy when the template contains explicit placeholders.
-
-### Verify every template path
-
-Before editing `_meta/desks.md`, enumerate every path relative to `desks/_template/` and require the
-corresponding path under `desks/<alias>/` to exist. Contents may differ only where the overlay applied
-an explicit placeholder substitution.
-
-```bash
-find "desks/_template" -mindepth 1 -print |
-  while IFS= read -r source; do
-    relative=${source#"desks/_template/"}
-    test -e "desks/<alias>/$relative" || exit 1
-  done
-```
-
-If verification fails, remove only the incomplete new `desks/<alias>/` tree and stop. Do not mutate the
-registry.
-
-## Step 5: register the new identity
-
-After the template copy passes:
-
-1. commit and push the new `desks/<alias>/` tree as the new member's own-desk write;
-2. add the `identity` to `alias` row in `_meta/desks.md` through the shared-path conflict-safe protocol;
-3. update any repository-owned authority snapshot required by that workspace in the same shared-path PR.
-
-Never add the registry row first. A row without a complete desk creates a valid-looking broken binding.
-
-## Step 6: bind workspace authority
-
-Bind the specialist worker to the crew repo and launch Desk with `--person <alias>`. Reads remain
-repo-wide; writes are rooted under `desks/<alias>/`.
-
-Confirm the active binding reports:
-
-- the crew repository root;
-- person scope;
-- the resolved alias.
-
-## Step 7: install declared tooling
-
-Install the crew plugin from the workspace's canonical remote source, then install or resolve its
-declared dependencies through the host's normal plugin mechanism. The generic engine does not name a
-specific corporate overlay or reverse dependency direction.
-
-## Step 8: load repo context
-
-Read the crew repo's `AGENTS.md`. If the specialist agent supports load-time imports, use the standard
-clone path expected by that agent. An on-demand read remains the fallback for non-standard paths.
-
-## Step 9: restart only when required
-
-If the host can load the installed plugin immediately, continue in the crew workspace. Otherwise ask
-for one restart and state the resolved workspace and alias.
+Read `_meta/desks.md` after local resolution. An existing identity routes to Phase 2. A new identity routes to Phase 3. The registry is authoritative; do not cache or invent a second binding.
 
 ## Completion check
 
-Onboarding is complete only when:
-
-- remote authentication is healthy;
-- the workspace exists at the target path;
-- the identity maps to exactly one alias;
-- every template path exists for a newly created desk;
-- the registry row exists only after the desk verification passed;
-- the authority binding reports the crew root and resolved alias;
-- declared tooling and repo context are available.
+Onboarding is complete only when repository identity and origin are proven, any required Crew-v1 migration is marked complete with rollback evidence, the identity maps to exactly one alias, member state and shared records are preserved, authority reports the Crew root and alias, read-across/write-own and conflict-safe shared writes are verified, declared tooling and repository context are available, and a new registry row exists only after complete desk verification.
 
 ## Cross-references
 
-- `desk:first-run-bootstrap`: the single-operator bootstrap shape.
-- `crew:shared-desk-conventions`: layout, ownership, and shared-path protocol.
-- The active overlay's identity and transport skill: authentication, clone command, and alias defaults.
+- `desk:first-run-bootstrap`: the single-operator Desk path.
+- `crew:shared-desk-conventions`: layout, ownership, and shared-path serialization.
+- The active overlay's identity and transport skill: authentication, transport, and alias defaults.

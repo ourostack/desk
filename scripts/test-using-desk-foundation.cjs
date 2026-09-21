@@ -181,10 +181,19 @@ function main() {
   ]);
 
   assertSectionPhrases(section(skill, "Child-agent boundary"), "using-desk Child-agent boundary", [
-    "Child agents extend the current unit of work",
-    "do not mint new authority",
-    "new durable task identities",
-    "single work record",
+    "in-process children are not assumed to rerun startup hooks",
+    "outcome",
+    "scope",
+    "authority",
+    "source",
+    "write set",
+    "dependencies",
+    "success evidence",
+    "prohibited actions",
+    "return contract",
+    "no new authority",
+    "no new durable task identity",
+    "root retains final accountability",
   ]);
 
   assertSectionPhrases(section(skill, "What this skill does not own"), "using-desk What this skill does not own", [

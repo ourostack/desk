@@ -46,7 +46,7 @@ The canonical rationale lives in `plugins/desk/docs/agentic-engineering-v2-rfc.m
 
 ## Child-agent boundary
 
-Child agents extend the current unit of work; they do not mint new authority, new durable task identities, or a second lifecycle policy. Use child agents for bounded execution or research, then fold their evidence back into the parent's single work record.
+In-process children are not assumed to rerun startup hooks. Every delegation brief therefore carries the bounded outcome, scope, authority, source, write set, dependencies, success evidence, prohibited actions, and return contract. A child gains no new authority, no new durable task identity, and no second lifecycle policy; the root retains final accountability and folds returned evidence into the same work record.
 
 ## What this skill does not own
 

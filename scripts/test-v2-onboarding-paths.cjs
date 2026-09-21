@@ -65,6 +65,15 @@ function childHeadingTitles(markdown, headings, heading, level) {
     .map((candidate) => candidate.title);
 }
 
+function assertOrderedPhrases(body, label, phrases) {
+  let cursor = -1;
+  for (const phrase of phrases) {
+    const index = body.indexOf(phrase);
+    assert.ok(index > cursor, `${label} must contain "${phrase}" in executable order`);
+    cursor = index;
+  }
+}
+
 function listTrackedMarkdownFiles() {
   return execFileSync("git", ["ls-files"], {
     cwd: repoRoot,
@@ -118,6 +127,37 @@ function main() {
   const path1 = findHeading(firstRunHeadings, 2, "Path 1 — start or upgrade a Desk");
   assert.ok(path1, "first-run-bootstrap must expose Path 1");
   assert.deepStrictEqual(childHeadingTitles(firstRun, firstRunHeadings, path1, 3), PATH_1_HEADINGS);
+  const entranceA = findHeading(firstRunHeadings, 3, "Entrance A — new to Desk");
+  assert.ok(entranceA, "Path 1 must define Entrance A");
+  const entranceAText = sectionText(firstRun, firstRunHeadings, entranceA);
+  assert.match(entranceAText, /remote discovery/iu);
+  assert.match(entranceAText, /clone or fresh-create/iu);
+  assert.match(entranceAText, /operator-provided path/iu);
+  assert.match(entranceAText, /skip/iu);
+  const entranceB = findHeading(firstRunHeadings, 3, "Entrance B — existing V1 Desk");
+  assert.ok(entranceB, "Path 1 must define Entrance B");
+  const entranceBText = sectionText(firstRun, firstRunHeadings, entranceB);
+  assertOrderedPhrases(entranceBText, "Entrance B", [
+    "1. Detect and inventory",
+    "2. Record rollback evidence",
+    "3. Preserve the same workspace",
+    "4. Replace V1 declarations",
+    "5. Reconcile retired V1-only capabilities",
+    "6. Activate and verify V2",
+    "7. Resume the existing task or start the first V2 job",
+  ]);
+  for (const phrase of [
+    "workspace and Git state",
+    "durable task state",
+    "rollback ref",
+    "reviewed V2 chain",
+    "selected roots",
+    "MCP readiness",
+    "startup readiness",
+  ]) {
+    assert.match(entranceBText, new RegExp(phrase, "iu"), `Entrance B must bind ${phrase}`);
+  }
+  assert.doesNotMatch(entranceBText, /\bclone\b|\bfresh-create\b|operator-provided path|\bskip\b/iu);
   const convergedEndpoint = findHeading(firstRunHeadings, 3, "Converged endpoint");
   assert.ok(convergedEndpoint, "Path 1 must define a converged endpoint");
   assert.match(sectionText(firstRun, firstRunHeadings, convergedEndpoint), /same durable workspace/iu);
@@ -127,9 +167,33 @@ function main() {
   assert.deepStrictEqual(childHeadingTitles(joinCrew, joinCrewHeadings, path2, 3), PATH_2_HEADINGS);
   const repositoryMigration = findHeading(joinCrewHeadings, 3, "Phase 1 — repository migration");
   assert.ok(repositoryMigration, "Path 2 must begin with repository migration");
-  assert.match(sectionText(joinCrew, joinCrewHeadings, repositoryMigration), /parallel Crew repository/iu);
-  assert.match(sectionText(joinCrew, joinCrewHeadings, repositoryMigration), /ignored\/untracked inventory|untracked\/ignored inventory|untracked inventory and ignored files/iu);
-  assert.match(sectionText(joinCrew, joinCrewHeadings, repositoryMigration), /rollback boundary/iu);
+  const repositoryMigrationText = sectionText(joinCrew, joinCrewHeadings, repositoryMigration);
+  assertOrderedPhrases(repositoryMigrationText, "Crew-v1 repository migration", [
+    "1. Detect legacy layout and repository identity",
+    "2. Inventory repository state",
+    "3. Record rollback evidence",
+    "4. Reconcile the V2 layout",
+    "5. Reconcile V1-only machinery",
+    "6. Declare the reviewed V2 dependency chain",
+    "7. Verify preservation and authority",
+    "8. Mark repository migration complete",
+    "9. Continue directly to existing-member activation",
+  ]);
+  for (const phrase of [
+    "tracked, ignored, and untracked state",
+    "desks/<alias>/",
+    "_shared/landscape/",
+    "_shared/decisions/",
+    "Git history",
+    "origin",
+    "read-across/write-own",
+    "conflict-safe shared writes",
+    "Only a workspace proven to be current V2",
+  ]) {
+    assert.match(repositoryMigrationText, new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "iu"), `Crew-v1 migration must bind ${phrase}`);
+  }
+  assert.match(repositoryMigrationText, /do not enter remote or workspace discovery/iu);
+  assert.doesNotMatch(repositoryMigrationText, /\bclone\b/iu);
 
   const joinCrewStep1 = findHeading(joinCrewHeadings, 2, "Step 1: resolve the crew workspace");
   assert.ok(joinCrewStep1, "join-crew must keep Step 1 as the existing-workspace router");
@@ -138,6 +202,7 @@ function main() {
   assert.match(joinCrewStep1Text, /Phase 1 repository migration/iu);
   assert.match(joinCrewStep1Text, /current V2 layout/iu);
   assert.match(joinCrewStep1Text, /session-start sync\s+and\s+scan/iu);
+  assert.match(joinCrewStep1Text, /do not continue to Step 2/iu);
 
   const step2 = findHeading(sessionStartHeadings, 2, "Step 2 — Workspace sync");
   assert.ok(step2, "session-start must keep Step 2 as the existing-workspace router");
