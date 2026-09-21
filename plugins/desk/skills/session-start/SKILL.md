@@ -134,7 +134,11 @@ look in the output for `The github.com token in oauth_token is no longer valid` 
 
 ## Step 2 — Workspace sync
 
-if `$DESK/` doesn't exist → hand off to the `first-run-bootstrap` skill (it has its own gh-auth hard-gate; never proceed to bootstrap if step 1 is still red).
+if `$DESK/` doesn't exist → hand off to `first-run-bootstrap` Entrance A (it has its own gh-auth hard-gate; never proceed to bootstrap if step 1 is still red).
+
+### Existing-workspace V1 upgrade branch
+
+If `$DESK/` already exists and the workspace still shows V1 evidence instead of an already-migrated V2 Desk, do not continue straight into ordinary sync and resumption. Ground that decision in existing Desk layout and activation evidence: durable Desk state is already present in the documented workspace layout (for example task cards or system directories such as `_meta/`, `_archive/`, or `artifacts/`), but the V2 startup foundations and activation-owned worker surface described in `plugins/desk/README.md` and `desk:codex-onboarding` are not yet in place. In that case, hand off to `first-run-bootstrap` Entrance B so it inventories and upgrades the same workspace in place, preserves the same workspace, and avoids cloning or creating a parallel Desk. Once that same workspace has completed the V1-to-V2 upgrade, later session-start runs skip this branch and continue with ordinary sync + scan.
 
 if it exists, pull the latest:
 ```bash

@@ -13,7 +13,7 @@ this skill is the auto-heal lane. every plugin can drop `migrations/<NN>-<slug>.
 
 **self-evidencing predicates, no marker file.** a migration's `Detect` block answers "is this machine still in the pre-migration state?" by inspecting the actual state — `[ -d ~/old-dir ]`, `[ -L ~/some-symlink ] && readlink ~/some-symlink | grep -q old-target`, etc. there's no "I've already run" cookie that can desync from reality on a restored backup, a partially-restored Time Machine snapshot, or a borrowed home dir. if the predicate says "needed," it's needed; if it says "not needed," it's truly already done.
 
-Path migrations must complete before any path-dependent startup scans run, including Desk or Crew onboarding checks that assume canonical locations already exist. Once those migrations have converged and onboarding is complete, completed onboarding is not replayed during normal resumption; later sessions should resume work against the repaired paths instead of re-running first-run choreography.
+Path migrations must complete before any path-dependent startup scans run, including Desk or Crew onboarding checks that assume canonical locations already exist. This skill owns stale-path repair only; if a workspace is already present at the canonical path but still needs the V1-to-V2 Desk bootstrap, `desk:session-start` routes that same workspace through `desk:first-run-bootstrap` Entrance B before ordinary resumption. Once those migrations have converged and onboarding is complete, completed onboarding is not replayed during normal resumption; later sessions should resume work against the repaired paths instead of re-running first-run choreography.
 
 ## When this skill fires
 
