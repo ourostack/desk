@@ -95,6 +95,31 @@ function countOccurrences(value, phrase) {
   return value.split(phrase).length - 1;
 }
 
+function assertLightweightCopilotStartupHookSource(source, errors) {
+  if (!/const foundationPath = path\.join\(pluginRoot,\s*"skills",\s*"using-desk",\s*"SKILL\.md"\);/u.test(source)) {
+    errors.push("startup-composition Copilot hook must read the canonical using-desk skill at runtime");
+  }
+  if (!/const foundation = fs\.readFileSync\(foundationPath,\s*"utf8"\)\.trimEnd\(\);/u.test(source)) {
+    errors.push("startup-composition Copilot hook must read only the canonical using-desk skill body");
+  }
+  const readCount = (source.match(/\breadFileSync\(/gu) ?? []).length;
+  if (readCount !== 1) {
+    errors.push(`startup-composition Copilot hook must keep exactly one local file read; found ${readCount}`);
+  }
+  if (/\b(?:spawnSync|execSync|execFileSync|fork|fetch)\b/u.test(source)) {
+    errors.push("startup-composition Copilot hook must not execute commands or fetch network resources");
+  }
+  if (/"node:(?:child_process|http|https|net|dns|tls)"/u.test(source)) {
+    errors.push("startup-composition Copilot hook must stay local-only and avoid network or process modules");
+  }
+  if (/\b(?:readdirSync|opendirSync|globSync|task\.md)\b/u.test(source)) {
+    errors.push("startup-composition Copilot hook must not scan workspace or task files");
+  }
+  if (/path\.join\([^)]*"skills"[^)]*"(?:session-start|session-start-migrations|rfc[^"]*|first-run-bootstrap)"/iu.test(source)) {
+    errors.push("startup-composition Copilot hook must not read onboarding, migration, session-start, or RFC files");
+  }
+}
+
 function skillBody(value) {
   return value.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/u, "").trim();
 }
@@ -486,12 +511,20 @@ async function checkStartupComposition({ repoRoot, mcpRoot, errors, checked }) {
   if (copilotWorker.includes(foundation)) {
     errors.push("startup-composition Copilot agent body must not duplicate the canonical using-desk body");
   }
+  if (/Compact working foundation carried once in this Copilot agent source/u.test(copilotWorker)) {
+    errors.push("startup-composition Copilot agent source must not claim it carries using-desk inline");
+  }
+  if (!/sessionStart` hook injects the full `using-desk` foundation exactly once/u.test(copilotWorker)) {
+    errors.push("startup-composition Copilot agent source must describe runtime injection from the Desk-owned sessionStart hook");
+  }
 
   const sessionStartHook = readText(repoRoot, "plugins/desk/hooks/session-start.sh");
   // A hook-side partial scan duplicates desk:session-start, adds boot work, and can disagree with synchronized workspace state.
   if (/find\s+.*task\.md|(^|[;&|]\s*|\$\()\s*(git|gh|curl)\s/mu.test(sessionStartHook)) {
     errors.push("startup-composition Claude hook must not scan tasks or run git, gh, or curl");
   }
+  const copilotSessionStartHook = readText(repoRoot, "plugins/desk/hooks/copilot-session-start.cjs");
+  assertLightweightCopilotStartupHookSource(copilotSessionStartHook, errors);
   const sessionStartSkill = readText(repoRoot, "plugins/desk/skills/session-start/SKILL.md");
   if (!/authoritative.*scan/iu.test(sessionStartSkill)) {
     errors.push("startup-composition desk:session-start must declare the authoritative scan");

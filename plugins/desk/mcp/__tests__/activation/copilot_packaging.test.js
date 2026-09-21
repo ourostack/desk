@@ -117,6 +117,44 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
+function assertLightweightCopilotStartupHookSource(source) {
+  assert.match(
+    source,
+    /const foundationPath = path\.join\(pluginRoot,\s*"skills",\s*"using-desk",\s*"SKILL\.md"\);/u,
+    "the Copilot startup hook must read the canonical using-desk skill at runtime",
+  )
+  assert.match(
+    source,
+    /const foundation = fs\.readFileSync\(foundationPath,\s*"utf8"\)\.trimEnd\(\);/u,
+    "the Copilot startup hook must keep its single file read pointed at the canonical using-desk skill",
+  )
+  assert.equal(
+    (source.match(/\breadFileSync\(/gu) ?? []).length,
+    1,
+    "the Copilot startup hook must keep exactly one local file read",
+  )
+  assert.doesNotMatch(
+    source,
+    /\b(?:spawnSync|execSync|execFileSync|fork|fetch)\b/u,
+    "the Copilot startup hook must not execute commands or fetch network resources",
+  )
+  assert.doesNotMatch(
+    source,
+    /"node:(?:child_process|http|https|net|dns|tls)"/u,
+    "the Copilot startup hook must stay local-only and avoid network or process modules",
+  )
+  assert.doesNotMatch(
+    source,
+    /\b(?:readdirSync|opendirSync|globSync|task\.md)\b/u,
+    "the Copilot startup hook must not scan workspace or task files",
+  )
+  assert.doesNotMatch(
+    source,
+    /path\.join\([^)]*"skills"[^)]*"(?:session-start|session-start-migrations|rfc[^"]*|first-run-bootstrap)"/iu,
+    "the Copilot startup hook must not read onboarding, migration, session-start, or RFC files",
+  )
+}
+
 function currentCopilotPackagingInput() {
   const activation = loadJson(activationManifestPath)
   return {
@@ -341,6 +379,11 @@ test("Copilot root package docs avoid healthy-path manual dependency setup", () 
   assert.doesNotMatch(readme, /copilot plugin install ourostack\/ouroboros-skills:plugins\/work-suite/u)
   assert.doesNotMatch(agentDocs, /Copilot CLI doesn't auto-resolve transitive plugin deps/u)
   assert.doesNotMatch(workSuiteReadme, /copilot plugin install ourostack\/ouroboros-skills:plugins\/work-suite/u)
+})
+
+test("Copilot sessionStart hook stays lightweight and local-only", () => {
+  const hookSource = readText("plugins", "desk", "hooks", "copilot-session-start.cjs")
+  assertLightweightCopilotStartupHookSource(hookSource)
 })
 
 test("Copilot packaging validation rejects missing root surfaces and stale versions", () => {

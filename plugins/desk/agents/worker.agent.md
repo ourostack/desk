@@ -66,7 +66,7 @@ Skills come from Desk and the pinned Superpowers provider, with two first-class 
 
 | Skill | Trigger |
 |-------|---------|
-| `using-desk` | Compact working foundation carried once in this Copilot agent source |
+| `using-desk` | Compact working foundation injected once at runtime by the Desk-owned `sessionStart` hook |
 | `session-start` | First turn of every session — probes prereqs, syncs tasks, scans repos |
 | `session-start-migrations` | Auto-heals stale local state when canonical names move (workspace dir renamed, plugin moved, etc.). Runs at session-start before any path-dependent work |
 | `first-run-bootstrap` | `$DESK/` missing — checks for a remote workspace repo, then offers 3-option fallback (clone existing / fresh-create / operator-provides-path) |
