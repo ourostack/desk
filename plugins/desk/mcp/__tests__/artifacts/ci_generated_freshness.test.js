@@ -269,6 +269,7 @@ For non-Ouro apps, rename these env vars
     )
 
     for (const script of [
+      "scripts/test-git-hygiene-contracts.cjs",
       "scripts/test-using-desk-foundation.cjs",
       "scripts/test-autopilot-state-audit.cjs",
       "scripts/test-work-suite-runtime-audit.cjs",

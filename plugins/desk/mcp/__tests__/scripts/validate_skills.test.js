@@ -201,12 +201,13 @@ test("validate-skills exports a testable CLI contract and validates a healthy re
     validator.validateAll({
       repoRoot: fixtureRoot,
       childStdio: "pipe",
-      spawnSync: spawnSequence([0, 0, 0, 0, 0, 0, 0, 0], calls),
+      spawnSync: spawnSequence([0, 0, 0, 0, 0, 0, 0, 0, 0], calls),
     })
 
     assert.deepEqual(calls.map((call) => call.args.join(" ")), [
       "scripts/check-apple-distribution-kit-skill.cjs",
       "scripts/test-using-desk-foundation.cjs",
+      "scripts/test-git-hygiene-contracts.cjs",
       "scripts/test-desk-host-manifests.cjs",
       "scripts/test-desk-generated-artifacts.cjs",
       "scripts/test-codex-plugin-cache-audit.cjs",
@@ -226,7 +227,7 @@ test("validate-skills exports a testable CLI contract and validates a healthy re
       validator.run({
         repoRoot: fixtureRoot,
         childStdio: "pipe",
-        spawnSync: spawnSequence([0, 0, 0, 0, 0, 0, 0, 0]),
+        spawnSync: spawnSequence([0, 0, 0, 0, 0, 0, 0, 0, 0]),
         stdout: { write: (text) => stdout.push(text) },
         stderr: { write: (text) => stderr.push(text) },
       }),
@@ -682,13 +683,21 @@ test("freshness and runtime child checks propagate child process failures", asyn
         childStdio: "pipe",
         spawnSync: spawnSequence([0, 1]),
       }),
-      /desk host manifest freshness tests failed/u,
+      /git-hygiene contract tests failed/u,
     )
     assert.throws(
       () => validator.runDeskFreshnessChecks({
         repoRoot: fixtureRoot,
         childStdio: "pipe",
         spawnSync: spawnSequence([0, 0, 1]),
+      }),
+      /desk host manifest freshness tests failed/u,
+    )
+    assert.throws(
+      () => validator.runDeskFreshnessChecks({
+        repoRoot: fixtureRoot,
+        childStdio: "pipe",
+        spawnSync: spawnSequence([0, 0, 0, 1]),
       }),
       /desk generated artifact freshness tests failed/u,
     )
@@ -698,7 +707,7 @@ test("freshness and runtime child checks propagate child process failures", asyn
         childStdio: "pipe",
         spawnSync: spawnSequence([0, {}]),
       }),
-      /desk host manifest freshness tests failed/u,
+      /git-hygiene contract tests failed/u,
     )
     assert.throws(
       () => validator.runDeskFreshnessChecks({
@@ -706,13 +715,21 @@ test("freshness and runtime child checks propagate child process failures", asyn
         childStdio: "pipe",
         spawnSync: spawnSequence([0, 0, {}]),
       }),
+      /desk host manifest freshness tests failed/u,
+    )
+    assert.throws(
+      () => validator.runDeskFreshnessChecks({
+        repoRoot: fixtureRoot,
+        childStdio: "pipe",
+        spawnSync: spawnSequence([0, 0, 0, {}]),
+      }),
       /desk generated artifact freshness tests failed/u,
     )
     assert.throws(
       () => validator.runDeskFreshnessChecks({
         repoRoot: fixtureRoot,
         childStdio: "pipe",
-        spawnSync: spawnSequence([0, 0, 0, 1]),
+        spawnSync: spawnSequence([0, 0, 0, 0, 1]),
       }),
       /codex plugin cache audit tests failed/u,
     )
@@ -720,7 +737,7 @@ test("freshness and runtime child checks propagate child process failures", asyn
       () => validator.runDeskFreshnessChecks({
         repoRoot: fixtureRoot,
         childStdio: "pipe",
-        spawnSync: spawnSequence([0, 0, 0, {}]),
+        spawnSync: spawnSequence([0, 0, 0, 0, {}]),
       }),
       /codex plugin cache audit tests failed/u,
     )

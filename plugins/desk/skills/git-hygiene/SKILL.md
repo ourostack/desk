@@ -13,7 +13,7 @@ The agent's pushes must reach the remote intact and on the right branch. This sk
 
 These are the actual project repos where implementation happens (paths resolved via the `repo-handling` skill).
 
-**Before starting work**: follow the recorded repository policy. An explicitly frozen base is the authority for that task: before the first write or worktree, verify its exact SHA and branch relationship plus the relevant version surface, do not rebase or move publication refs to follow the normal-main recipe below, and do not describe a frozen or unfetched checkout as current with remote main.
+**Before starting work**: follow the recorded repository policy. Pinned or frozen task refs are the authority for that task: before the first write or worktree, verify the exact ref identity, branch relationship, and relevant version surface, keep frozen SHA coverage when the recorded ref is a commit, do not rebase or move publication refs to follow the normal-main recipe below, and do not describe a frozen or unfetched checkout as current with remote main.
 ```bash
 cd <repo-local-path>
 git fetch origin                          # ALWAYS first — see the stale-status trap below

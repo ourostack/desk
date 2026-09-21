@@ -34,10 +34,12 @@ function main() {
   const neverLeaveStateBehind = section(skill, "Never leave state behind");
 
   for (const phrase of [
-    "An explicitly frozen base is the authority for that task",
+    "Pinned or frozen task refs are the authority for that task",
     "before the first write or worktree",
-    "verify its exact SHA and branch relationship",
+    "verify the exact ref identity",
+    "branch relationship",
     "relevant version surface",
+    "frozen SHA",
     "do not rebase or move publication refs to follow the normal-main recipe below",
   ]) {
     assert.match(codeRepos, new RegExp(escapeRegExp(phrase), "iu"), `Code repos must mention "${phrase}"`);

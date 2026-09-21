@@ -119,6 +119,28 @@ function main() {
     ],
   );
 
+  assertSectionPhrases(
+    section(skill, "Requirements that arrive during execution"),
+    "using-desk Requirements that arrive during execution",
+    [
+      "same durable task",
+      "governing spec",
+      "numbered plan",
+      "progress ledger",
+      "dependencies",
+      "sequencing",
+      "authority",
+      "tests",
+      "review evidence",
+      "invalidated evidence",
+      "unaffected authorized work moving",
+      "implementation and review gates",
+      "must not silently absorb contradictory scope",
+      "must not restart the whole task without cause",
+      "must not return control merely because the plan changed",
+    ],
+  );
+
   assertSectionPhrases(section(skill, "Visual proof when it helps"), "using-desk Visual proof when it helps", [
     "working or doing logs",
     "intermediate milestones",

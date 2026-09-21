@@ -42,6 +42,8 @@ The foundation should help an agent choose the lightest workflow that still prot
 
 What it does require is that delegation and workflow choice remain visible. A runtime or overlay may automate the selection, but the resulting path still needs clear contracts for ownership, checkpoints, and proof.
 
+When a material requirement arrives during execution, continuity stays on the same durable task rather than breaking into a side quest or a silent restart. The governing work record should be updated before implementation, invalidated evidence should be called out explicitly, unaffected work continues, and the affected change returns through the normal implementation and review gates instead of slipping around them.
+
 ## Instruction coherence
 
 Layering only helps when the instructions compose cleanly. V2 therefore favors a single canonical substrate body with additive overlays instead of repeated copies that drift apart. Startup guidance, activation rules, and task-specific instructions should agree on the same boundaries and terminology.

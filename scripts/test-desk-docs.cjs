@@ -400,6 +400,18 @@ function findCanonicalRfcCopies({
   });
 }
 
+function markdownSection(markdown, title) {
+  const heading = `## ${title}\n\n`;
+  const start = markdown.indexOf(heading);
+  assert.notEqual(start, -1, `missing RFC section: ${title}`);
+  const contentStart = start + heading.length;
+  const nextLevelTwo = markdown.indexOf("\n## ", contentStart);
+  const nextLevelOne = markdown.indexOf("\n# ", contentStart);
+  const candidates = [nextLevelTwo, nextLevelOne].filter((index) => index !== -1);
+  const end = candidates.length > 0 ? Math.min(...candidates) : markdown.length;
+  return markdown.slice(contentStart, end).trim();
+}
+
 function validateCanonicalRfc(errors, {
   readFile = (file) => readRepoFile(file),
   repoRoot = defaultRepoRoot,
@@ -412,6 +424,17 @@ function validateCanonicalRfc(errors, {
   assert.match(rfc, /## Start or upgrade a Desk/);
   assert.match(rfc, /## Migrate a Crew workspace/);
   assert.doesNotMatch(rfc, denylist);
+  const flowAndDelegation = markdownSection(rfc, "Flow and delegation judgment");
+  for (const phrase of [
+    "same durable task",
+    "governing work record",
+    "before implementation",
+    "invalidated evidence",
+    "unaffected work continues",
+    "normal implementation and review gates",
+  ]) {
+    assert.match(flowAndDelegation, new RegExp(escapeRegExp(phrase), "iu"));
+  }
   assert.deepStrictEqual(findCanonicalRfcCopies({ repoRoot, readFile }), [canonicalRfc]);
 }
 
