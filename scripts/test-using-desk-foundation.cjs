@@ -73,6 +73,7 @@ function main() {
     "waiting, repeated synchronization, avoidable rework, or churn",
     "delay, batching, freezing, or resequencing",
     "not maximum agent utilization",
+    "verification, review, safety, authority, and real urgency controls intact",
     "must not be silently confused",
     "agentic-engineering-v2-rfc.md",
     "does not automatically read the RFC",
