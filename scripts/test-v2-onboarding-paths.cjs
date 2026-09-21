@@ -8,6 +8,12 @@ const path = require("node:path");
 
 const repoRoot = path.resolve(__dirname, "..");
 const CANONICAL_RFC = "plugins/desk/docs/agentic-engineering-v2-rfc.md";
+const OPERATIONAL_ONBOARDING_SKILLS = [
+  "plugins/desk/skills/first-run-bootstrap/SKILL.md",
+  "plugins/crew/skills/join-crew/SKILL.md",
+  "plugins/desk/skills/session-start/SKILL.md",
+  "plugins/desk/skills/session-start-migrations/SKILL.md",
+];
 const PATH_1_HEADINGS = [
   "Entrance A — new to Desk",
   "Entrance B — existing V1 Desk",
@@ -90,6 +96,24 @@ function main() {
     rfcHeadings.filter((heading) => heading.level === 2 && /Desk|Crew workspace/u.test(heading.title)).map((heading) => heading.title),
     ["Start or upgrade a Desk", "Migrate a Crew workspace"],
   );
+  assert.deepStrictEqual(
+    OPERATIONAL_ONBOARDING_SKILLS.flatMap((file) =>
+      parseHeadings(read(file))
+        .filter((heading) => heading.level === 2 && /^Path\b/u.test(heading.title))
+        .map((heading) => ({ file, title: heading.title })),
+    ),
+    [
+      {
+        file: "plugins/desk/skills/first-run-bootstrap/SKILL.md",
+        title: "Path 1 — start or upgrade a Desk",
+      },
+      {
+        file: "plugins/crew/skills/join-crew/SKILL.md",
+        title: "Path 2 — migrate the Crew workspace, then activate members",
+      },
+    ],
+    "Operational onboarding skills must expose exactly Path 1 and Path 2, with no third top-level path heading.",
+  );
 
   const path1 = findHeading(firstRunHeadings, 2, "Path 1 — start or upgrade a Desk");
   assert.ok(path1, "first-run-bootstrap must expose Path 1");
@@ -104,6 +128,16 @@ function main() {
   const repositoryMigration = findHeading(joinCrewHeadings, 3, "Phase 1 — repository migration");
   assert.ok(repositoryMigration, "Path 2 must begin with repository migration");
   assert.match(sectionText(joinCrew, joinCrewHeadings, repositoryMigration), /parallel Crew repository/iu);
+  assert.match(sectionText(joinCrew, joinCrewHeadings, repositoryMigration), /ignored\/untracked inventory|untracked\/ignored inventory|untracked inventory and ignored files/iu);
+  assert.match(sectionText(joinCrew, joinCrewHeadings, repositoryMigration), /rollback boundary/iu);
+
+  const joinCrewStep1 = findHeading(joinCrewHeadings, 2, "Step 1: resolve the crew workspace");
+  assert.ok(joinCrewStep1, "join-crew must keep Step 1 as the existing-workspace router");
+  const joinCrewStep1Text = sectionText(joinCrew, joinCrewHeadings, joinCrewStep1);
+  assert.match(joinCrewStep1Text, /legacy Crew-v1 local workspace/iu);
+  assert.match(joinCrewStep1Text, /Phase 1 repository migration/iu);
+  assert.match(joinCrewStep1Text, /current V2 layout/iu);
+  assert.match(joinCrewStep1Text, /session-start sync\s+and\s+scan/iu);
 
   const step2 = findHeading(sessionStartHeadings, 2, "Step 2 — Workspace sync");
   assert.ok(step2, "session-start must keep Step 2 as the existing-workspace router");

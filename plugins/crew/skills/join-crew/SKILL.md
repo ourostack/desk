@@ -17,7 +17,7 @@ This skill exposes the generic Crew onboarding entrypoint. Path 2 starts with re
 
 ### Phase 1 — repository migration
 
-Migrate the repository before any member activation. Preserve every member-specific subtree under `desks/`, preserve `_shared/landscape/` and `_shared/decisions/`, preserve Git history and origin, preserve the committed registry, preserve Crew read-across/write-own, and preserve shared-path serialization through the conflict-safe shared-path write protocol. Refuse any step that would create a duplicate or parallel Crew repository; there is no parallel migration workspace and no parallel replacement repo.
+Migrate the repository before any member activation. Preserve every member-specific subtree under `desks/`, preserve `_shared/landscape/` and `_shared/decisions/`, preserve Git history and origin, preserve the committed registry, preserve durable local state, preserve ignored/untracked inventory, preserve Crew read-across/write-own, and preserve shared-path serialization through the conflict-safe shared-path write protocol. A local workspace already present on disk is still subject to this phase until it is proven to be the current V2 layout; do not bypass migration by jumping straight to session-start sync. The rollback boundary is the pre-migration repository and workspace state at the same path, not a fresh clone or sidecar replacement. Refuse any step that would create a duplicate or parallel Crew repository; there is no parallel migration workspace and no parallel replacement repo.
 
 ### Phase 2 — existing member activation
 
@@ -50,8 +50,11 @@ Use either:
 A candidate is a crew workspace when its root contains `_meta/desks.md` together with `desks/` and
 `_shared/`. Confirm the remote exists and the authenticated identity can read it.
 
-If the workspace already exists at the target path, do not clone it again. Hand off to session-start
-sync and scan.
+If the workspace already exists at the target path, do not clone it again. First decide whether that
+same local workspace is a legacy Crew-v1 local workspace or a current V2 layout. A legacy Crew-v1
+local workspace must route through Phase 1 repository migration before any activation or scan. Only a
+workspace already proven to be the current V2 layout may proceed directly to session-start sync and
+scan.
 
 ## Step 2: offer once, then clone
 
