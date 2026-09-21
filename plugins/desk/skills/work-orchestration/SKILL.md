@@ -19,7 +19,13 @@ When the ready set can produce an independently usable artifact, complete that m
 
 Do not optimize for one final reveal. Local branches, completed nodes and review receipts are engineering progress, not delivered value. Replan when a consumer is waiting while unrelated tail work gates a safe usable milestone. If an intermediate artifact cannot be safe or coherent, record the exact coupling that requires atomic delivery.
 
-Only a current, unsatisfied `needs-human-approval` is a hard exception. Superseded records do not revoke existing go. Mechanical reviews go to the authorized reviewer. A nested worker returns its frozen brief to the parent rather than self-certifying or waiting for the parent's entire task to finish.
+Only a current, unsatisfied `needs-human-approval` is a hard exception. A producer may use `needs reviewer gate` only when it explicitly permits machine review. Superseded records do not revoke existing go. Mechanical reviews go to the authorized reviewer. A nested worker returns its frozen brief to the parent rather than self-certifying or waiting for the parent's entire task to finish.
+
+Before any fan-out, the root identifies dependencies, write sets, exclusive resources, the integration fold, the evidence each child must return, and the final synthesis it will own. If those stay implicit, the work is not ready to split.
+
+Each repository retains its own branch and merge cycle. The isolation and shared-surface rules above apply at that repository boundary.
+
+If material resequencing becomes necessary, record the observed waste pattern, the recommendation, and the consequence of not resequencing before changing the plan.
 
 Desk owns task and iteration state and archive transitions. The agreed endpoint determines whether verification ends at an intentional alpha/PR-only branch or includes authorized merge, release/install, consuming-surface smoke and cleanup. Superpowers finish options cannot silently change that endpoint.
 
