@@ -82,6 +82,14 @@ function main() {
     assert.match(skill, new RegExp(escapeRegExp(phrase), "iu"));
   }
 
+  const flowSection = skill.match(/## Flow judgment\n\n([\s\S]*?)\n\n## Delegation judgment/u);
+  assert.ok(flowSection, "using-desk must include the Flow judgment section");
+  assert.equal(
+    flowSection[1].split("\n").length,
+    1,
+    "using-desk Flow judgment prose must stay on one physical line",
+  );
+
   assert.doesNotMatch(skill, /\bADO\b|\bTeams\b|\bMicrosoft\b|\bPWF\b|submissionId|approvals_create/u);
 
   console.log("using-desk foundation contract passed.");

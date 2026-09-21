@@ -367,8 +367,47 @@ function effectiveClaudeStartup(repoRoot) {
 }
 
 function effectiveCopilotStartup(repoRoot) {
-  const bundle = readJson(repoRoot, copilotBundlePath);
-  return readText(repoRoot, bundle.launch.agent);
+  const pluginRoot = path.join(repoRoot, "plugins", "desk");
+  const plugin = readJson(repoRoot, "plugins/desk/plugin.json");
+  if (plugin.hooks !== "./hooks/copilot-hooks.json") {
+    throw new Error("Desk Copilot plugin must register ./hooks/copilot-hooks.json");
+  }
+
+  const hookManifest = readJson(repoRoot, path.posix.join("plugins/desk", plugin.hooks));
+  if (hookManifest.version !== 1) {
+    throw new Error("Desk Copilot hook manifest must use version 1");
+  }
+
+  const sessionStartHooks = hookManifest.hooks?.sessionStart;
+  if (!Array.isArray(sessionStartHooks) || sessionStartHooks.length !== 1) {
+    throw new Error("Desk Copilot hook manifest must configure exactly one sessionStart hook");
+  }
+
+  const command = sessionStartHooks[0]?.bash;
+  if (typeof command !== "string" || command.length === 0) {
+    throw new Error("Desk Copilot sessionStart hook must configure a bash command");
+  }
+
+  const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "desk-copilot-startup-"));
+  try {
+    const result = spawnSync("bash", ["-lc", command], {
+      cwd: pluginRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        COPILOT_PLUGIN_DATA: pluginData,
+        DESK: path.join(pluginData, "desk"),
+        PLUGIN_ROOT: pluginRoot,
+      },
+    });
+    if (result.status !== 0) {
+      throw new Error(`Copilot sessionStart hook failed: ${result.stderr.trim()}`);
+    }
+    const payload = JSON.parse(result.stdout);
+    return payload.additionalContext ?? "";
+  } finally {
+    fs.rmSync(pluginData, { recursive: true, force: true });
+  }
 }
 
 function codexActivationInput(manifest, mode) {
@@ -411,13 +450,17 @@ async function checkStartupComposition({ repoRoot, mcpRoot, errors, checked }) {
   }
   const startups = [
     ["claude", effectiveClaudeStartup(repoRoot)],
-    ["copilot", effectiveCopilotStartup(repoRoot)],
     [
       "codex",
       materializeCodexActivation(codexActivationInput(manifest, "global-personal"))
         .generatedInstructions,
     ],
   ];
+  try {
+    startups.splice(1, 0, ["copilot", effectiveCopilotStartup(repoRoot)]);
+  } catch (error) {
+    errors.push(`startup-composition copilot hook execution failed: ${error.message}`);
+  }
   const foundation = skillBody(readText(
     repoRoot,
     "plugins/desk/skills/using-desk/SKILL.md",
@@ -437,6 +480,11 @@ async function checkStartupComposition({ repoRoot, mcpRoot, errors, checked }) {
         errors.push(`startup-composition ${host} must include "${phrase}" exactly once; found ${count}`);
       }
     }
+  }
+
+  const copilotWorker = readText(repoRoot, "plugins/desk/agents/worker.agent.md");
+  if (copilotWorker.includes(foundation)) {
+    errors.push("startup-composition Copilot agent body must not duplicate the canonical using-desk body");
   }
 
   const sessionStartHook = readText(repoRoot, "plugins/desk/hooks/session-start.sh");

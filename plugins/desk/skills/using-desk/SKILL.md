@@ -17,8 +17,7 @@ Desk keeps one durable work identity per unit of work. Tasks, notes, evidence, a
 
 ## Flow judgment
 
-Choose the lightest workflow that prevents waiting, repeated synchronization, avoidable rework, or churn. When new evidence shows that the current sequence is wasting motion, prefer delay, batching, freezing, or resequencing over fake progress. The goal is credible delivery, not maximum agent utilization.
-Flow optimization keeps required verification, review, safety, authority, and real urgency controls intact.
+Choose the lightest workflow that prevents waiting, repeated synchronization, avoidable rework, or churn. When new evidence shows that the current sequence is wasting motion, prefer delay, batching, freezing, or resequencing over fake progress. The goal is credible delivery, not maximum agent utilization. Flow optimization keeps required verification, review, safety, authority, and real urgency controls intact.
 
 ## Delegation judgment
 

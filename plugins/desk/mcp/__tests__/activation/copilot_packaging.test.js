@@ -26,6 +26,8 @@ const copilotBundleCommand =
 const expectedCopilotSourcePaths = [
   "plugins/desk/plugin.json",
   "plugins/desk/agents/worker.agent.md",
+  "plugins/desk/hooks/copilot-hooks.json",
+  "plugins/desk/hooks/copilot-session-start.cjs",
   "plugins/desk/.mcp.copilot.json",
   "plugins/superpowers/plugin.json",
   "plugins/superpowers/hooks/copilot-hooks.json",
@@ -215,6 +217,7 @@ test("Copilot root plugin metadata exposes Desk worker and MCP without manual re
   assert.equal(deskPlugin.agents, "./agents/")
   assert.equal(deskPlugin.skills, "./skills/")
   assert.equal(deskPlugin.mcpServers, "./.mcp.copilot.json")
+  assert.equal(deskPlugin.hooks, "./hooks/copilot-hooks.json")
   assert.deepEqual(deskPlugin.activation?.copilot?.targets?.["desk:worker"], {
     default: true,
     source: copilotWorkerSource,
@@ -362,6 +365,13 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   assert.deepEqual(
     validateCopilotPackagingContract(missingMcp),
     ["Copilot root plugin metadata must expose ./.mcp.copilot.json"],
+  )
+
+  const missingHooks = clone(currentCopilotPackagingInput())
+  delete missingHooks.deskPlugin.hooks
+  assert.deepEqual(
+    validateCopilotPackagingContract(missingHooks),
+    ["Copilot root plugin metadata must expose ./hooks/copilot-hooks.json"],
   )
 
   const staleDeskVersion = clone(currentCopilotPackagingInput())

@@ -126,6 +126,8 @@ const hostManifestFixtureFiles = [
   "plugins/desk/agents/worker.md",
   "plugins/desk/agents/worker.toml",
   "plugins/desk/hooks/hooks.json",
+  "plugins/desk/hooks/copilot-hooks.json",
+  "plugins/desk/hooks/copilot-session-start.cjs",
   "plugins/desk/hooks/session-start.sh",
   "plugins/desk/skills/humanize/LICENSE",
   "plugins/desk/skills/humanize/SKILL.md",
