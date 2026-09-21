@@ -70,6 +70,22 @@ function main() {
     "The human supplies intent",
     "The agent owns execution",
     "one durable work identity",
+    "pinned or frozen source ref",
+    "outranks the default start-from-main recipe",
+    "exact ref and branch relationship",
+    "version surface",
+    "not move the base simply because another branch is newer",
+    "git-hygiene",
+    "owns the detailed procedure",
+    "working or doing logs",
+    "intermediate milestones",
+    "pull request opened, reviewed, or merged states",
+    "supplements rather than replaces",
+    "system-of-record evidence, tests, logs, API/DB verification, or authority checks",
+    "Capture only the relevant bounded view",
+    "do not expose secrets or sensitive/private content",
+    "strongest safe alternative",
+    "Do not turn nonvisual terminal work into artificial screenshots",
     "waiting, repeated synchronization, avoidable rework, or churn",
     "delay, batching, freezing, or resequencing",
     "not maximum agent utilization",
@@ -88,6 +104,34 @@ function main() {
     flowSection[1].split("\n").length,
     1,
     "using-desk Flow judgment prose must stay on one physical line",
+  );
+
+  const sourceAuthoritySection = skill.match(/## Source authority before work begins\n\n([\s\S]*?)\n\n## Visual proof when it helps/u);
+  assert.ok(sourceAuthoritySection, "using-desk must include the Source authority before work begins section");
+  assert.equal(
+    sourceAuthoritySection[1].split("\n").length,
+    1,
+    "using-desk Source authority before work begins prose must stay on one physical line",
+  );
+
+  const visualProofSection = skill.match(/## Visual proof when it helps\n\n([\s\S]*?)\n\n## Flow judgment/u);
+  assert.ok(visualProofSection, "using-desk must include the Visual proof when it helps section");
+  assert.equal(
+    visualProofSection[1].split("\n").length,
+    1,
+    "using-desk Visual proof when it helps prose must stay on one physical line",
+  );
+
+  assert.doesNotMatch(
+    skill,
+    /git fetch origin|git pull origin main|git rev-list --count HEAD\.\.origin\/main|git worktree add/u,
+    "using-desk must keep detailed git procedure in git-hygiene instead of duplicating it",
+  );
+
+  assert.doesNotMatch(
+    skill,
+    /(?<!not\s)\bonly\b[^.\n]{0,80}\b(final|terminal)[ -]?(delivery|state|stage)\b/iu,
+    "using-desk must not regress to terminal-state-only visual proof guidance",
   );
 
   assert.doesNotMatch(skill, /\bADO\b|\bTeams\b|\bMicrosoft\b|\bPWF\b|submissionId|approvals_create/u);

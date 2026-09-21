@@ -15,6 +15,14 @@ The human supplies intent, authority, and any irreversible approval that policy 
 
 Desk keeps one durable work identity per unit of work. Tasks, notes, evidence, and follow-on execution should converge on that identity instead of splitting into parallel half-truths. Authority comes from the selected runtime and overlay surface; provider-specific setup stays out of this foundation.
 
+## Source authority before work begins
+
+Before the first repository write or worktree creation, a recorded pinned or frozen source ref outranks the default start-from-main recipe. Verify the exact ref and branch relationship plus the relevant version surface instead of assuming fresh main is the right product base, and do not move the base simply because another branch is newer. `git-hygiene` owns the detailed procedure.
+
+## Visual proof when it helps
+
+At every meaningful stage where the state or result is visually inspectable and a visual would help a human verify or understand it, capture and attach bounded visual proof at that stage, including working or doing logs and intermediate milestones, not only final delivery; examples include pull request opened, reviewed, or merged states, UI before or after states, rollout or deployment state, rendered artifacts, and other visual surfaces. Visual proof supplements rather than replaces system-of-record evidence, tests, logs, API/DB verification, or authority checks. Capture only the relevant bounded view, do not expose secrets or sensitive/private content, and if visual capture is impossible or inappropriate, record why and use the strongest safe alternative. Do not turn nonvisual terminal work into artificial screenshots.
+
 ## Flow judgment
 
 Choose the lightest workflow that prevents waiting, repeated synchronization, avoidable rework, or churn. When new evidence shows that the current sequence is wasting motion, prefer delay, batching, freezing, or resequencing over fake progress. The goal is credible delivery, not maximum agent utilization. Flow optimization keeps required verification, review, safety, authority, and real urgency controls intact.
