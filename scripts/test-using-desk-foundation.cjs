@@ -40,6 +40,29 @@ function frontmatterScalar(frontmatter, key) {
   return match[1].trim().replace(/^['"]|['"]$/gu, "");
 }
 
+function section(markdown, title) {
+  const heading = `## ${title}\n\n`;
+  const start = markdown.indexOf(heading);
+  assert.notEqual(start, -1, `using-desk must include the ${title} section`);
+  const contentStart = start + heading.length;
+  const nextLevelTwo = markdown.indexOf("\n## ", contentStart);
+  const nextLevelOne = markdown.indexOf("\n# ", contentStart);
+  const candidates = [nextLevelTwo, nextLevelOne].filter((index) => index !== -1);
+  const end = candidates.length > 0 ? Math.min(...candidates) : markdown.length;
+  return markdown.slice(contentStart, end).trim();
+}
+
+function assertSinglePhysicalLine(body, label) {
+  assert.equal(body.split("\n").length, 1, `${label} prose must stay on one physical line`);
+}
+
+function assertSectionPhrases(body, label, phrases) {
+  assertSinglePhysicalLine(body, label);
+  for (const phrase of phrases) {
+    assert.match(body, new RegExp(escapeRegExp(phrase), "iu"), `${label} must mention "${phrase}"`);
+  }
+}
+
 function main() {
   assert.ok(fs.existsSync(skillPath), `missing skill file: ${path.relative(repoRoot, skillPath)}`);
 
@@ -66,61 +89,87 @@ function main() {
   );
   assert.equal(usingDeskSkills[0], skillPath, "using-desk must live at plugins/desk/skills/using-desk/SKILL.md");
 
-  for (const phrase of [
+  assertSectionPhrases(section(skill, "Human and agent"), "using-desk Human and agent", [
     "The human supplies intent",
+    "authority",
+    "irreversible approval",
     "The agent owns execution",
+    "reading instructions",
+    "finishing the work",
+  ]);
+
+  assertSectionPhrases(section(skill, "Durable work and authority"), "using-desk Durable work and authority", [
     "one durable work identity",
-    "pinned or frozen source ref",
-    "outranks the default start-from-main recipe",
-    "exact ref and branch relationship",
-    "version surface",
-    "not move the base simply because another branch is newer",
-    "git-hygiene",
-    "owns the detailed procedure",
+    "Tasks, notes, evidence, and follow-on execution should converge",
+    "Authority comes from the selected runtime and overlay surface",
+    "provider-specific setup stays out of this foundation",
+  ]);
+
+  assertSectionPhrases(
+    section(skill, "Source authority before work begins"),
+    "using-desk Source authority before work begins",
+    [
+      "Before the first repository write or worktree creation",
+      "pinned or frozen source ref",
+      "outranks the default start-from-main recipe",
+      "exact ref and branch relationship",
+      "version surface",
+      "do not move the base simply because another branch is newer",
+      "`git-hygiene` owns the detailed procedure",
+    ],
+  );
+
+  assertSectionPhrases(section(skill, "Visual proof when it helps"), "using-desk Visual proof when it helps", [
     "working or doing logs",
     "intermediate milestones",
     "pull request opened, reviewed, or merged states",
-    "supplements rather than replaces",
+    "Visual proof supplements rather than replaces",
     "system-of-record evidence, tests, logs, API/DB verification, or authority checks",
     "Capture only the relevant bounded view",
     "do not expose secrets or sensitive/private content",
     "strongest safe alternative",
     "Do not turn nonvisual terminal work into artificial screenshots",
+  ]);
+
+  assertSectionPhrases(section(skill, "Flow judgment"), "using-desk Flow judgment", [
     "waiting, repeated synchronization, avoidable rework, or churn",
     "delay, batching, freezing, or resequencing",
     "not maximum agent utilization",
     "verification, review, safety, authority, and real urgency controls intact",
+  ]);
+
+  assertSectionPhrases(section(skill, "Delegation judgment"), "using-desk Delegation judgment", [
+    "Delegate only when a helper will make the result clearer, safer, or more bounded",
+    "parent keeps ownership of the work identity",
+    "crisp objective and return contract",
+    "folds the result back into the main line of work",
+  ]);
+
+  assertSectionPhrases(section(skill, "Instruction coherence"), "using-desk Instruction coherence", [
     "must not be silently confused",
-    "agentic-engineering-v2-rfc.md",
+    "stable foundation",
+    "adapters bridge into an engineering stack",
+    "detailed procedures stay with the skills that actually run them",
+  ]);
+
+  assertSectionPhrases(section(skill, "The RFC is on demand"), "using-desk The RFC is on demand", [
+    "plugins/desk/docs/agentic-engineering-v2-rfc.md",
     "does not automatically read the RFC",
-    "child agents",
-  ]) {
-    assert.match(skill, new RegExp(escapeRegExp(phrase), "iu"));
-  }
+    "on demand",
+  ]);
 
-  const flowSection = skill.match(/## Flow judgment\n\n([\s\S]*?)\n\n## Delegation judgment/u);
-  assert.ok(flowSection, "using-desk must include the Flow judgment section");
-  assert.equal(
-    flowSection[1].split("\n").length,
-    1,
-    "using-desk Flow judgment prose must stay on one physical line",
-  );
+  assertSectionPhrases(section(skill, "Child-agent boundary"), "using-desk Child-agent boundary", [
+    "Child agents extend the current unit of work",
+    "do not mint new authority",
+    "new durable task identities",
+    "single work record",
+  ]);
 
-  const sourceAuthoritySection = skill.match(/## Source authority before work begins\n\n([\s\S]*?)\n\n## Visual proof when it helps/u);
-  assert.ok(sourceAuthoritySection, "using-desk must include the Source authority before work begins section");
-  assert.equal(
-    sourceAuthoritySection[1].split("\n").length,
-    1,
-    "using-desk Source authority before work begins prose must stay on one physical line",
-  );
-
-  const visualProofSection = skill.match(/## Visual proof when it helps\n\n([\s\S]*?)\n\n## Flow judgment/u);
-  assert.ok(visualProofSection, "using-desk must include the Visual proof when it helps section");
-  assert.equal(
-    visualProofSection[1].split("\n").length,
-    1,
-    "using-desk Visual proof when it helps prose must stay on one physical line",
-  );
+  assertSectionPhrases(section(skill, "What this skill does not own"), "using-desk What this skill does not own", [
+    "does not own startup choreography, provider activation, approval mechanics, or detailed orchestration and lifecycle procedures",
+    "`using-superpowers-with-desk` chooses the engineering entry path",
+    "triggered skills keep their own operational clauses",
+  ]);
 
   assert.doesNotMatch(
     skill,

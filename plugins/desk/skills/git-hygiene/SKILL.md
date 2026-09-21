@@ -13,7 +13,7 @@ The agent's pushes must reach the remote intact and on the right branch. This sk
 
 These are the actual project repos where implementation happens (paths resolved via the `repo-handling` skill).
 
-**Before starting work**: follow the recorded repository policy. An explicitly frozen base is the authority for that task: verify its exact SHA and branch, do not rebase or move publication refs to follow the normal-main recipe below. Do not describe a frozen or unfetched checkout as current with remote main.
+**Before starting work**: follow the recorded repository policy. An explicitly frozen base is the authority for that task: before the first write or worktree, verify its exact SHA and branch relationship plus the relevant version surface, do not rebase or move publication refs to follow the normal-main recipe below, and do not describe a frozen or unfetched checkout as current with remote main.
 ```bash
 cd <repo-local-path>
 git fetch origin                          # ALWAYS first — see the stale-status trap below
@@ -413,6 +413,8 @@ with real semantic conflicts get resolved normally.
 Before the session ends, persist task-owned changes through the recorded contribution path. Commit and push only when authorized; a no-push or local-handoff endpoint must preserve the exact commits and required worktree instead. Preserve unfinished source through `desk:session-resumption` when it is not ready to commit, without sweeping unrelated files. Apply this to canonical task/progress state and code changes through their respective owners; persistence is not authority to publish or delete.
 
 At session start, if git status in any repo shows unexpected uncommitted changes, surface them to the operator before doing anything else — they may represent orphaned work from a previous session.
+
+Never reconcile a dirty checked-out state repository by moving the branch ref in place with `git update-ref` or an equivalent ref move under the existing index/worktree. Start from a clean temporary worktree based on the current remote destination, replay only the exact task-owned change, stage only an explicit staged-path allowlist, inspect `git diff --cached --name-status` against that allowlist, then inspect the full staged diff before commit.
 
 (overlay users: consumer overlays often ship a state-repo-specific
 anti-pattern note — never branch/PR on a state repo even when

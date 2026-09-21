@@ -372,6 +372,14 @@ function runDeskFreshnessChecks(options = {}) {
     throw new Error("using-desk foundation contract tests failed");
   }
 
+  const gitHygieneContractResult = spawnSync(process.execPath, ["scripts/test-git-hygiene-contracts.cjs"], {
+    cwd: repoRoot,
+    stdio: childStdio,
+  });
+  if ((gitHygieneContractResult.status ?? 1) !== 0) {
+    throw new Error("git-hygiene contract tests failed");
+  }
+
   const hostManifestResult = spawnSync(process.execPath, ["scripts/test-desk-host-manifests.cjs"], {
     cwd: repoRoot,
     stdio: childStdio,
