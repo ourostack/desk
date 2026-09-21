@@ -9,6 +9,23 @@ const path = require("node:path");
 const defaultRepoRoot = path.resolve(__dirname, "..");
 const CANONICAL_RFC = "plugins/desk/docs/agentic-engineering-v2-rfc.md";
 const PUBLIC_RFC_DENYLIST = /\bMicrosoft\b|\bPWF\b|\bADO\b|\bTeams\b|arimendelow|platform-workflows|dev\.azure\.com|microsoft\.com/u;
+const REQUIRED_RFC_TOP_LEVEL_SECTIONS = Object.freeze([
+  "Status and audience",
+  "The unresolved problem",
+  "The V2 thesis",
+  "Human and agent responsibilities",
+  "Runtime, substrate, provider, overlay, and domain boundaries",
+  "Authority, continuity, and evidence",
+  "Flow and delegation judgment",
+  "Instruction coherence",
+  "Startup composition",
+  "Start or upgrade a Desk",
+  "Migrate a Crew workspace",
+  "Installation, readiness, and first work",
+  "Compatibility and rollback",
+  "Soak, release, and residual risk",
+  "Alternatives and rejected designs",
+]);
 
 const DOCS = Object.freeze([
   "plugins/desk/README.md",
@@ -412,6 +429,21 @@ function markdownSection(markdown, title) {
   return markdown.slice(contentStart, end).trim();
 }
 
+function topLevelSectionTitles(markdown) {
+  const titles = [];
+  let inFence = false;
+  for (const line of markdown.split(/\r?\n/u)) {
+    if (/^\s*```/u.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const heading = line.match(/^##\s+(.+?)\s*#*\s*$/u);
+    if (heading) titles.push(heading[1]);
+  }
+  return titles;
+}
+
 function validateCanonicalRfc(errors, {
   readFile = (file) => readRepoFile(file),
   repoRoot = defaultRepoRoot,
@@ -424,6 +456,11 @@ function validateCanonicalRfc(errors, {
   assert.match(rfc, /## Start or upgrade a Desk/);
   assert.match(rfc, /## Migrate a Crew workspace/);
   assert.doesNotMatch(rfc, denylist);
+  assert.deepStrictEqual(
+    topLevelSectionTitles(rfc),
+    REQUIRED_RFC_TOP_LEVEL_SECTIONS,
+    "RFC top-level H2 sections must exactly match the required order and names",
+  );
   const flowAndDelegation = markdownSection(rfc, "Flow and delegation judgment");
   for (const phrase of [
     "same durable task",

@@ -41,6 +41,60 @@ function mcpReadmeBody(tools = docsValidator.MCP_TOOL_NAMES) {
   ].join("\n")
 }
 
+const canonicalRfcPath = "plugins/desk/docs/agentic-engineering-v2-rfc.md"
+const requiredRfcTopLevelSections = [
+  "Status and audience",
+  "The unresolved problem",
+  "The V2 thesis",
+  "Human and agent responsibilities",
+  "Runtime, substrate, provider, overlay, and domain boundaries",
+  "Authority, continuity, and evidence",
+  "Flow and delegation judgment",
+  "Instruction coherence",
+  "Startup composition",
+  "Start or upgrade a Desk",
+  "Migrate a Crew workspace",
+  "Installation, readiness, and first work",
+  "Compatibility and rollback",
+  "Soak, release, and residual risk",
+  "Alternatives and rejected designs",
+]
+
+function canonicalRfcBody(sectionTitles = requiredRfcTopLevelSections) {
+  const bodyBySection = new Map([
+    ["Status and audience", "This public RFC is for maintainers and operators."],
+    ["The unresolved problem", "Public-safe rationale needs a single canonical source."],
+    ["The V2 thesis", "V2 keeps the foundation layered and explicit."],
+    ["Human and agent responsibilities", "Humans hold authority and agents execute within it."],
+    ["Runtime, substrate, provider, overlay, and domain boundaries", "The layers depend downward rather than sideways."],
+    ["Authority, continuity, and evidence", "Authority, continuity, and evidence travel together."],
+    ["Flow and delegation judgment", [
+      "When a material requirement arrives during execution, continuity stays on the same durable task rather than breaking into a side quest.",
+      "The governing work record is updated before implementation, invalidated evidence is called out explicitly, unaffected work continues, and the affected change returns through the normal implementation and review gates.",
+      "### Lower-level headings stay allowed",
+      "Only the exact top-level H2 list is fixed.",
+    ].join("\n\n")],
+    ["Instruction coherence", "The public rationale lives in one canonical RFC."],
+    ["Startup composition", "Startup stays minimal and links here for rationale."],
+    ["Start or upgrade a Desk", "Desk startup keeps the durable workspace promises explicit."],
+    ["Migrate a Crew workspace", "Crew migration preserves durable work and explicit authorship."],
+    ["Installation, readiness, and first work", "Readiness means the runtime can start real work safely."],
+    ["Compatibility and rollback", "Adoption and rollback both happen in layers."],
+    ["Soak, release, and residual risk", "Fail-closed docs tests guard the public contract."],
+    ["Alternatives and rejected designs", "Duplicating private write-ups would drift and leak context."],
+  ])
+  return [
+    "# Agentic Engineering V2",
+    "",
+    ...sectionTitles.flatMap((title) => [
+      `## ${title}`,
+      "",
+      bodyBySection.get(title) ?? "Placeholder section content.",
+      "",
+    ]),
+  ].join("\n")
+}
+
 test("Desk docs validator exports a testable contract", () => {
   for (const exportName of [
     "DOCS",
@@ -258,6 +312,28 @@ test("browser focus validation requires background targets and rejects active-ta
   assert.ok(staleErrors.some((error) => error.includes("foregrounding CDP HTTP endpoints")))
 })
 
+test("canonical RFC validation fails closed on the exact required top-level H2 list while allowing lower-level headings", () => {
+  docsValidator.validateCanonicalRfc([], {
+    readFile: (file) => file === canonicalRfcPath ? canonicalRfcBody() : "Not the canonical RFC.",
+    repoRoot,
+  })
+
+  for (const sectionTitles of [
+    requiredRfcTopLevelSections.slice(0, -1),
+    [...requiredRfcTopLevelSections, "Unexpected appendix"],
+    [requiredRfcTopLevelSections[1], requiredRfcTopLevelSections[0], ...requiredRfcTopLevelSections.slice(2)],
+    requiredRfcTopLevelSections.map((title) => title === "Startup composition" ? "Startup setup" : title),
+  ]) {
+    assert.throws(
+      () => docsValidator.validateCanonicalRfc([], {
+        readFile: (file) => file === canonicalRfcPath ? canonicalRfcBody(sectionTitles) : "Not the canonical RFC.",
+        repoRoot,
+      }),
+      /RFC top-level H2 sections must exactly match the required order and names/u,
+    )
+  }
+})
+
 test("run and startCli expose success, failure, and no-op CLI paths", () => {
   const goodBody = "Embeddings and snapshots are derivative data and may carry privacy risk."
   const workflowBody = [
@@ -278,9 +354,7 @@ test("run and startCli expose success, failure, and no-op CLI paths", () => {
         paths: ["plugins/desk/README.md"],
       }],
       readFile: (file) => {
-        if (file === "plugins/desk/docs/agentic-engineering-v2-rfc.md") {
-          return "# Agentic Engineering V2\n\n## Start or upgrade a Desk\n\n## Migrate a Crew workspace\n"
-        }
+        if (file === canonicalRfcPath) return canonicalRfcBody()
         if (file === "plugins/desk/mcp/README.md") return mcpReadmeBody()
         if (file === "plugins/desk/mcp/src/tool-names.js") return toolNamesSource()
         if (file === "plugins/desk/skills/cdp-headed-browser/SKILL.md") return "Target.createTarget({ url, background: true })"
