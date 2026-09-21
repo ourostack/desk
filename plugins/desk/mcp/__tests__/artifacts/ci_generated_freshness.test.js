@@ -106,6 +106,7 @@ const requiredHostManifestChecks = [
   "claude-plugin",
   "worker-sources",
   "humanize-skill",
+  "startup-composition",
   "codex-fixtures",
 ]
 
@@ -125,8 +126,11 @@ const hostManifestFixtureFiles = [
   "plugins/desk/agents/worker.md",
   "plugins/desk/agents/worker.toml",
   "plugins/desk/hooks/hooks.json",
+  "plugins/desk/hooks/session-start.sh",
   "plugins/desk/skills/humanize/LICENSE",
   "plugins/desk/skills/humanize/SKILL.md",
+  "plugins/desk/skills/session-start/SKILL.md",
+  "plugins/desk/skills/using-desk/SKILL.md",
   "plugins/desk/mcp/src/activation/adapters/codex.js",
   "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-activation-config.json",
   "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml",
@@ -263,6 +267,7 @@ For non-Ouro apps, rename these env vars
     )
 
     for (const script of [
+      "scripts/test-using-desk-foundation.cjs",
       "scripts/test-autopilot-state-audit.cjs",
       "scripts/test-work-suite-runtime-audit.cjs",
       "scripts/audit-work-suite-runtime.cjs",

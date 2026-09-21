@@ -45,6 +45,17 @@ function loadFixture(mode, fileName) {
   return readFileSync(path.join(fixturesRoot, mode, fileName), "utf8")
 }
 
+function countOccurrences(value, phrase) {
+  return value.split(phrase).length - 1
+}
+
+function deskFoundationBody() {
+  return readFileSync(
+    path.join(repoRoot, "plugins", "desk", "skills", "using-desk", "SKILL.md"),
+    "utf8",
+  ).replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/u, "").trim()
+}
+
 function withTempHost(fn) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-codex-activation-"))
   try {
@@ -258,6 +269,27 @@ test("global personal activation materializes worker and Desk as the default", a
   assert.match(result.generatedInstructions, /desk worker by default/)
   assert.match(result.generatedInstructions, /Run the `desk:session-start` skill/)
   assertDeskMcpHealthGuard(result.generatedInstructions)
+})
+
+test("Codex activation injects the full Desk foundation once in automatic modes", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+
+  for (const mode of ["global-personal", "project-local"]) {
+    const startup = materializeCodexActivation(activationInput(mode)).generatedInstructions
+    assert.equal(countOccurrences(startup, deskFoundationBody()), 1, `${mode}: canonical foundation`)
+    for (const phrase of [
+      "The human supplies intent",
+      "The agent owns execution",
+      "must not be silently confused",
+    ]) {
+      assert.equal(countOccurrences(startup, phrase), 1, `${mode}: ${phrase}`)
+    }
+  }
+
+  assert.equal(
+    materializeCodexActivation(activationInput("manual-only")).generatedInstructions,
+    "",
+  )
 })
 
 test("global personal activation can select a downstream Desk overlay worker", async () => {

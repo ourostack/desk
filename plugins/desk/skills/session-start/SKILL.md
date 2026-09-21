@@ -7,6 +7,8 @@ description: Session-start checklist. Invoke as the FIRST thing in every agent s
 
 sitting down at the desk. the first thing every session — turn on the lamp, check the tools are where they were left, see what's still open across the drawers, surface it for the operator. the prereq probe has teeth: a real miss is a hard stop, not a hint to route around.
 
+This skill is the authoritative owner of migration ordering, workspace sync, task discovery, and resumption routing. The startup hook never performs a partial duplicate scan; it only injects the Desk foundation and points here.
+
 > **overlay users**: consumer overlays may extend session-start with their own identity-resolve, work-item-tracker staleness probes, and additional PR fan-out steps. this skill stays generic.
 
 ## Step 0 — Host identity probe

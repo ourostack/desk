@@ -2,7 +2,9 @@
 "use strict";
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 
 const defaultRepoRoot = path.resolve(__dirname, "..");
@@ -87,6 +89,14 @@ function sameJson(left, right) {
 
 function normalizeNewlines(value) {
   return value.replaceAll("\r\n", "\n");
+}
+
+function countOccurrences(value, phrase) {
+  return value.split(phrase).length - 1;
+}
+
+function skillBody(value) {
+  return value.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/u, "").trim();
 }
 
 function pushMismatch(errors, label, actual, expected) {
@@ -293,6 +303,9 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
     ["copilot", copilotWorker],
     ["claude-output-style", outputStyleWorker],
   ]) {
+    if (!body.includes("using-desk")) {
+      errors.push(`worker-sources ${surface} using-desk activation drift`);
+    }
     if (!body.includes("Never hard-wrap authored prose") || !body.includes("authored/changed prose")) {
       errors.push(`worker-sources ${surface} no-hard-wrap invariant drift`);
     }
@@ -327,44 +340,132 @@ function checkHumanizePackaging({ repoRoot, errors, checked }) {
   }
 }
 
-async function expectedCodexFixtures({ repoRoot, mcpRoot }) {
-  const { materializeCodexActivation } = await import(pathToFileURL(
-    path.join(mcpRoot, "src", "activation", "adapters", "codex.js"),
-  ).href);
-  const manifest = readJson(repoRoot, activationManifestPath);
-  const existingConfig = [
-    "# user-authored Codex config",
-    "model = \"gpt-5.4\"",
-    "approval_policy = \"on-request\"",
-    "",
-  ].join("\n");
-  const existingInstructions = [
-    "# user-authored Codex guidance",
-    "Keep repo-local rules intact.",
-    "",
-  ].join("\n");
-  const inputForMode = (mode) => ({
+function effectiveClaudeStartup(repoRoot) {
+  const deskRoot = fs.mkdtempSync(path.join(os.tmpdir(), "desk-claude-startup-"));
+  try {
+    const result = spawnSync(
+      "bash",
+      [path.join(repoRoot, "plugins", "desk", "hooks", "session-start.sh")],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CLAUDE_PLUGIN_ROOT: path.join(repoRoot, "plugins", "desk"),
+          DESK: deskRoot,
+        },
+      },
+    );
+    if (result.status !== 0) {
+      throw new Error(`Claude SessionStart hook failed: ${result.stderr.trim()}`);
+    }
+    const payload = JSON.parse(result.stdout);
+    return payload.hookSpecificOutput?.additionalContext ?? "";
+  } finally {
+    fs.rmSync(deskRoot, { recursive: true, force: true });
+  }
+}
+
+function effectiveCopilotStartup(repoRoot) {
+  const bundle = readJson(repoRoot, copilotBundlePath);
+  return readText(repoRoot, bundle.launch.agent);
+}
+
+function codexActivationInput(manifest, mode) {
+  return {
     manifest,
     mode,
-    existingConfig,
-    existingInstructions,
+    existingConfig: [
+      "# user-authored Codex config",
+      "model = \"gpt-5.4\"",
+      "approval_policy = \"on-request\"",
+      "",
+    ].join("\n"),
+    existingInstructions: [
+      "# user-authored Codex guidance",
+      "Keep repo-local rules intact.",
+      "",
+    ].join("\n"),
     pluginRoot: "plugins/desk",
     deskRoot: mode === "project-local" ? ".desk" : "~/desk",
     runtimeCacheDir: mode === "project-local"
       ? ".codex/desk-runtime-cache"
       : "~/.cache/ouroboros-skills/desk",
-  });
+  };
+}
+
+async function checkStartupComposition({ repoRoot, mcpRoot, errors, checked }) {
+  checked.push("startup-composition");
+  const { materializeCodexActivation } = await import(pathToFileURL(
+    path.join(mcpRoot, "src", "activation", "adapters", "codex.js"),
+  ).href);
+  const manifest = readJson(repoRoot, activationManifestPath);
+  const activationTarget = manifest.provides.activation_targets.find((target) => (
+    target.id === "desk:worker"
+  ));
+  if (!sameJson(activationTarget?.startup, {
+    foundation: "skills/using-desk/SKILL.md",
+    authoritative_scan: "skills/session-start/SKILL.md",
+  })) {
+    errors.push("startup-composition desk:worker startup contract drift");
+  }
+  const startups = [
+    ["claude", effectiveClaudeStartup(repoRoot)],
+    ["copilot", effectiveCopilotStartup(repoRoot)],
+    [
+      "codex",
+      materializeCodexActivation(codexActivationInput(manifest, "global-personal"))
+        .generatedInstructions,
+    ],
+  ];
+  const foundation = skillBody(readText(
+    repoRoot,
+    "plugins/desk/skills/using-desk/SKILL.md",
+  ));
+  for (const [host, startup] of startups) {
+    const foundationCount = countOccurrences(startup, foundation);
+    if (foundationCount !== 1) {
+      errors.push(`startup-composition ${host} must include the canonical using-desk body exactly once; found ${foundationCount}`);
+    }
+    for (const phrase of [
+      "The human supplies intent",
+      "The agent owns execution",
+      "must not be silently confused",
+    ]) {
+      const count = countOccurrences(startup, phrase);
+      if (count !== 1) {
+        errors.push(`startup-composition ${host} must include "${phrase}" exactly once; found ${count}`);
+      }
+    }
+  }
+
+  const sessionStartHook = readText(repoRoot, "plugins/desk/hooks/session-start.sh");
+  // A hook-side partial scan duplicates desk:session-start, adds boot work, and can disagree with synchronized workspace state.
+  if (/find\s+.*task\.md|(^|[;&|]\s*|\$\()\s*(git|gh|curl)\s/mu.test(sessionStartHook)) {
+    errors.push("startup-composition Claude hook must not scan tasks or run git, gh, or curl");
+  }
+  const sessionStartSkill = readText(repoRoot, "plugins/desk/skills/session-start/SKILL.md");
+  if (!/authoritative.*scan/iu.test(sessionStartSkill)) {
+    errors.push("startup-composition desk:session-start must declare the authoritative scan");
+  }
+}
+
+async function expectedCodexFixtures({ repoRoot, mcpRoot }) {
+  const { materializeCodexActivation } = await import(pathToFileURL(
+    path.join(mcpRoot, "src", "activation", "adapters", "codex.js"),
+  ).href);
+  const manifest = readJson(repoRoot, activationManifestPath);
   return {
     "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml":
-      materializeCodexActivation(inputForMode("global-personal")).generatedConfig,
+      materializeCodexActivation(codexActivationInput(manifest, "global-personal")).generatedConfig,
     "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-instructions.md":
-      materializeCodexActivation(inputForMode("global-personal")).generatedInstructions,
+      materializeCodexActivation(codexActivationInput(manifest, "global-personal")).generatedInstructions,
     "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-config.toml":
-      materializeCodexActivation(inputForMode("project-local")).generatedConfig,
+      materializeCodexActivation(codexActivationInput(manifest, "project-local")).generatedConfig,
     "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md":
-      materializeCodexActivation(inputForMode("project-local")).generatedInstructions,
+      materializeCodexActivation(codexActivationInput(manifest, "project-local")).generatedInstructions,
     "plugins/desk/mcp/__tests__/fixtures/activation/codex/manual-only/generated-config.toml":
-      materializeCodexActivation(inputForMode("manual-only")).generatedConfig,
+      materializeCodexActivation(codexActivationInput(manifest, "manual-only")).generatedConfig,
   };
 }
 
@@ -400,6 +501,7 @@ async function verifyDeskHostManifests(options = {}) {
     checkClaudePlugin({ repoRoot, methodId, errors, checked });
     checkWorkerSources({ repoRoot, errors, checked });
     checkHumanizePackaging({ repoRoot, errors, checked });
+    await checkStartupComposition({ repoRoot, mcpRoot, errors, checked });
     await checkCodexFixtures({ repoRoot, mcpRoot, errors, checked });
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
