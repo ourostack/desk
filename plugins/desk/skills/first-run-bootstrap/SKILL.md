@@ -1,139 +1,63 @@
 ---
 name: first-run-bootstrap
-description: Bootstrap the agent's `$DESK/` workspace repo on a machine where it doesn't exist yet. FIRST checks whether the operator already has a remote workspace repo on GitHub and offers to clone it. Only falls through to the fresh-create / operator-provides-path / skip menu if no remote is found. Hard-gates on `gh auth status` — if gh auth is broken, STOPS and waits — does NOT fall through to local-only init, because that forks operator state silently. Use when `session-start` discovers that `$DESK/` is missing.
+description: Bootstrap a new Desk or upgrade an existing V1 Desk in place. Fresh bootstrap may discover, clone, create, bind, or skip a workspace; V1 upgrade preserves the existing workspace and durable state, records rollback evidence, replaces declarations with the reviewed V2 chain, verifies readiness, and resumes work.
 ---
 
 # First-run bootstrap
 
-a new room. no desk in it yet. but most operators already have a desk somewhere — from a previous machine or an earlier onboarding — so the first move is the quiet one: look on GitHub, find the desk that's already mine, bring it here.
+Use this skill only when `session-start` routes into Path 1. Consumer overlays may supply identity, repository naming, richer templates, and private activation details, but they must preserve the two branch boundaries below.
 
-> **overlay users**: consumer overlays may layer richer first-run scaffolding on top of this generic skeleton (e.g. additional system directories, an AGENTS.md, a workspace MCP-config seed, and the overlay's identity / repo conventions).
+## Path 1 — start or upgrade a Desk
 
-## Step 0 — Hard-gate on gh auth
+Choose exactly one entrance from current workspace evidence. Entrance A owns fresh bootstrap choices. Entrance B owns in-place V1 migration and must not execute any fresh-bootstrap choice. Both converge on one readiness and first-job endpoint without forking durable work.
 
-**Do not touch the filesystem (no `mkdir`, no `git init`) if gh auth is broken.** a local-only init without the remote check forks operator state: the operator may already have a desk repo on GitHub, and creating a local orphan here risks divergent history, accidental push under the wrong identity, or silent loss of the real source of truth.
+### Entrance A — new to Desk
 
-```bash
-gh auth status
-```
+Use this entrance only when no Desk workspace exists at the selected path.
 
-If the output shows any of:
-- "No accounts found"
-- "The github.com token in oauth_token is no longer valid"
-- Any other auth failure
+#### A1. Gate remote discovery on authentication
 
-then **stop**. surface the specific issue and the remediation (usually `gh auth login --hostname github.com`). wait for the operator to fix it and re-run. do NOT proceed to "create a fresh one" as a workaround — that's the orphan-producing path.
+Run `gh auth status` before filesystem writes. If authentication is unhealthy, stop with the concrete repair; do not create a local orphan that could fork an existing remote Desk.
 
-this applies under auto mode too. auto-mode autonomy is for execution, not for skipping the gate that prevents state divergence.
+#### A2. Run remote discovery
 
-> account-specific checks (e.g. enterprise-managed-identity conventions where the operator's git-author identity differs from their public account) live in the consumer overlay.
+Probe the overlay-supplied expected remote. If it exists, offer one clone into `$DESK/`. If no remote exists or the operator declines it, offer only these fresh-bootstrap choices: clone or fresh-create, use an operator-provided path or URL, or skip workspace persistence for this session.
 
-## Step 1 — Check for an existing remote
+#### A3. Execute the selected fresh bootstrap
 
-with gh auth confirmed working, probe for the operator's expected desk remote:
+For clone, use the authenticated remote and verify origin plus expected Desk shape. For fresh-create, create the minimal `_archive/`, `_meta/`, `.gitignore`, and README scaffold, initialize Git, and offer remote creation without silently choosing visibility or owner. For an operator-provided path, bind or symlink the existing local path without copying it; for a URL, clone it into `$DESK/`. For skip, warn that task lifecycle, recall, resumption, friction, and lesson persistence are unavailable or degraded.
 
-```bash
-gh repo view <owner>/<workspace-repo> --json name,url 2>/dev/null
-```
+#### A4. Activate and verify V2
 
-the exact `<owner>/<workspace-repo>` value is consumer-supplied — consumer overlays pick their own convention (typically the operator's git account + a fixed workspace-repo name).
+Declare and activate the reviewed V2 plugin chain supplied by the selected runtime or overlay, verify the selected roots, confirm admitted MCPs and startup foundations are available, and route to the first real job.
 
-**if the repo exists**, ask ONE yes/no question:
+### Entrance B — existing V1 Desk
 
-> i found `<owner>/<workspace-repo>` on GitHub. Clone it to `$DESK/`?
+Use this entrance only when the Desk workspace already exists and current evidence shows V1 declarations or missing V2 startup foundations. This branch is an in-place migration of that existing workspace.
 
-if yes:
-```bash
-git clone https://github.com/<owner>/<workspace-repo>.git "$DESK"
-```
-done. return to `session-start` Step 2 (sync + scan).
+1. Detect and inventory the existing workspace and Git state, durable task state, active V1 declarations, installed or linked capabilities, selected runtime roots, MCP configuration, startup surfaces, ignored files, and untracked files.
+2. Record rollback evidence before mutation: capture the current commit or other rollback ref, origin and branch relationship, status and inventory, active declarations, and any machine-local bindings needed to restore the pre-migration state.
+3. Preserve the same workspace, Git history, durable records, task identity, and local path throughout the migration.
+4. Replace V1 declarations with the reviewed V2 chain for the selected runtime or overlay; remove superseded declarations rather than layering a second active chain beside them.
+5. Reconcile retired V1-only capabilities by mapping them to reviewed V2 owners, removing them when obsolete, or explicitly retaining them with a recorded reason and authority boundary.
+6. Activate and verify V2 by loading the selected roots, proving the active plugin chain, confirming admitted Desk MCP readiness, checking startup readiness and foundation presence, and verifying that the existing durable state remains readable.
+7. Resume the existing task or start the first V2 job in that workspace, recording migration evidence on the same durable work record when one already exists.
 
-**if no remote is found, or the operator declines**, fall through to Step 2.
+Entrance B must never route into Entrance A choices or initialize over the existing V1 workspace.
 
-## Step 2 — Present the options
+### Converged endpoint
 
-```
-$DESK/ not found locally and no remote workspace repo discovered.
-How do you want to set up task state?
-```
+Both entrances end at one Desk, one active plugin chain, admitted MCPs, startup foundations present, and the operator ready to resume or start the first real job from the same durable workspace. Later healthy sessions resume through ordinary `session-start` flow instead of replaying onboarding.
 
-offer (exact labels for menu-rendering):
-- "Create a fresh one for me"
-- "I have it at a different location (I'll provide the path/URL)"
-- "Skip — continue this session without workspace persistence"
+The public RFC stays optional and on demand. Use it when the operator wants design context; do not require healthy startup or resumption to reread it.
 
-## Option A — Create fresh
+## Completion evidence
 
-lay down the bare bones of the room — empty drawers, the corkboard, a small readme by the door:
+Record which entrance ran, the source and destination state, the active V2 roots and declarations, MCP and startup readiness, the durable task resumed or first job started, and any explicitly retained legacy capability. For Entrance B, include the rollback ref and pre-migration inventory.
 
-```bash
-mkdir -p "$DESK/_archive" "$DESK/_meta"
-cd "$DESK" && git init
-touch _archive/.gitkeep
+## Cross-references
 
-cat > .gitignore <<'EOF'
-.DS_Store
-*.log
-.machine-local.yml
-EOF
-
-cat > _meta/friction.md <<'EOF'
-# Friction Backlog
-
-Running log of pain points encountered while using this agent. Each
-entry is a seed for an improvement to the agent definition, one of
-its skills, or surrounding tooling.
-
-Entry format: `## YYYY-MM-DD — <short title>` / **What happened** /
-**Why it hurt** / **Proposed fix** / **Status**: `open | in-progress`.
-
-Landed entries are moved to `_meta/_archive/` in the same commit
-that ships the fix.
-
----
-EOF
-
-cat > README.md <<'EOF'
-# desk workspace
-
-Task state for this agent. Tracks, tasks, planning docs, and doing
-docs live here. The agent definition itself lives in a separate
-repo — this repo is only state.
-
-See `desk:directory-structure` for the canonical layout.
-EOF
-
-git add -A && git commit -m "init: desk workspace scaffold"
-```
-
-then ask:
-
-> Want to add a GitHub remote? (Recommended — keeps the desk in sync across machines.)
-
-if yes, walk the operator through `gh repo create` + `git remote add origin` + `git push -u origin main`. consumer overlays can preconfigure the owner/visibility defaults.
-
-> **Rich-template overlays** — consumers that need scaffolded `_reviews/`, `_landscape/`, `AGENTS.md`, or a workspace MCP config file ship those via their own first-run-templates skill.
-
-## Option B — Operator provides URL or path
-
-the desk already exists somewhere; we just need to point at it.
-
-1. operator gives a repo URL or local path.
-2. if URL: `git clone <url> "$DESK"`.
-3. if local path: symlink or use literally — do not copy.
-4. verify the directory has the expected shape (or accept an empty repo with just `_meta/` / `_archive/`).
-
-## Option C — Skip
-
-the session continues without a desk. **warn the operator**:
-- no task cards will be created or read.
-- any skill that needs `$DESK/` (status, session-resumption, start-task, friction-management, etc.) will be unavailable or degraded.
-- intended for one-shot exploratory sessions only.
-
-## After bootstrap
-
-return to `session-start` Step 2 (sync + scan) and continue.
-
-- see `desk:directory-structure` for the floor plan.
-- see `desk:session-start` Step 4.7 for the workspace MCP config link ritual (post-bootstrap, consumer-managed).
-- see `desk:start-task` for laying down the first folder.
+- `desk:session-start` owns routing, normal sync, task discovery, and resumption.
+- `desk:session-start-migrations` owns machine-local stale-path repair before path-dependent scans.
+- `desk:directory-structure` owns the canonical Desk layout.
+- `desk:start-task` owns creation of a new durable task.

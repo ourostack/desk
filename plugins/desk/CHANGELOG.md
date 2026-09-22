@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.7 — 2026-09-21
+
+**Public V2 foundation/onboarding source candidate: one RFC, one concise always-on Desk foundation, one authoritative startup scan, and exactly two blessed onboarding paths.** Desk now publishes a public Agentic Engineering V2 RFC, reduces the always-on Desk body to concise `using-desk` foundation clauses, keeps Claude/Copilot/Codex startup ownership lightweight and exact-once, and leaves the authoritative migration, sync, task discovery, and resumption scan in `desk:session-start` instead of duplicating partial startup scans. The source contract now makes source authority explicit before work begins, keeps material mid-execution requirements on the same durable task with updated evidence and review gates, requires stage-local visual proof when it helps, clarifies flow and delegation judgment, strengthens instruction coherence, and tightens safe dirty-state reconciliation. Onboarding now blesses exactly two public entry paths: Path 1 starts or upgrades the same Desk in place, including the executable V1-to-V2 upgrade entrance, and Path 2 begins with repository-first Crew-v1 migration before any member activation or join.
+
+Desk `3.2.0-alpha.7` continues to couple to `desk-mcp@1.4.0-alpha.6`. This remains opt-in, source-candidate work on `v2-alpha`; installed-consumer qualification and native runtime qualification remain separate, and this release makes no default-installation change or production-support claim.
+
 ## 3.2.0-alpha.6 — 2026-09-20
 
 **Lexical-first alpha: correct lexical answers during startup and file changes, with fresh direct reads when index readiness is uncertain.** This candidate packages the [reviewed lexical milestone](https://github.com/ourostack/ouroboros-skills/commit/0eb9ea139a997c5c39394ac7b95ab02bff7331b5): durable journal/restart behavior, one index writer, and vector cleanup that leaves zero orphan vectors. Uncertain readiness falls back to current source files rather than serving stale indexed answers.

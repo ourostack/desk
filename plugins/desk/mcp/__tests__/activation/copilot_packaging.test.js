@@ -26,6 +26,8 @@ const copilotBundleCommand =
 const expectedCopilotSourcePaths = [
   "plugins/desk/plugin.json",
   "plugins/desk/agents/worker.agent.md",
+  "plugins/desk/hooks/copilot-hooks.json",
+  "plugins/desk/hooks/copilot-session-start.cjs",
   "plugins/desk/.mcp.copilot.json",
   "plugins/superpowers/plugin.json",
   "plugins/superpowers/hooks/copilot-hooks.json",
@@ -113,6 +115,44 @@ function findByField(rows, field, value, source) {
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
+}
+
+function assertLightweightCopilotStartupHookSource(source) {
+  assert.match(
+    source,
+    /const foundationPath = path\.join\(pluginRoot,\s*"skills",\s*"using-desk",\s*"SKILL\.md"\);/u,
+    "the Copilot startup hook must read the canonical using-desk skill at runtime",
+  )
+  assert.match(
+    source,
+    /const foundation = fs\.readFileSync\(foundationPath,\s*"utf8"\)\.trimEnd\(\);/u,
+    "the Copilot startup hook must keep its single file read pointed at the canonical using-desk skill",
+  )
+  assert.equal(
+    (source.match(/\breadFileSync\(/gu) ?? []).length,
+    1,
+    "the Copilot startup hook must keep exactly one local file read",
+  )
+  assert.doesNotMatch(
+    source,
+    /\b(?:spawnSync|execSync|execFileSync|fork|fetch)\b/u,
+    "the Copilot startup hook must not execute commands or fetch network resources",
+  )
+  assert.doesNotMatch(
+    source,
+    /"node:(?:child_process|http|https|net|dns|tls)"/u,
+    "the Copilot startup hook must stay local-only and avoid network or process modules",
+  )
+  assert.doesNotMatch(
+    source,
+    /\b(?:readdirSync|opendirSync|globSync|task\.md)\b/u,
+    "the Copilot startup hook must not scan workspace or task files",
+  )
+  assert.doesNotMatch(
+    source,
+    /path\.join\([^)]*"skills"[^)]*"(?:session-start|session-start-migrations|rfc[^"]*|first-run-bootstrap)"/iu,
+    "the Copilot startup hook must not read onboarding, migration, session-start, or RFC files",
+  )
 }
 
 function currentCopilotPackagingInput() {
@@ -215,6 +255,7 @@ test("Copilot root plugin metadata exposes Desk worker and MCP without manual re
   assert.equal(deskPlugin.agents, "./agents/")
   assert.equal(deskPlugin.skills, "./skills/")
   assert.equal(deskPlugin.mcpServers, "./.mcp.copilot.json")
+  assert.equal(deskPlugin.hooks, "./hooks/copilot-hooks.json")
   assert.deepEqual(deskPlugin.activation?.copilot?.targets?.["desk:worker"], {
     default: true,
     source: copilotWorkerSource,
@@ -340,6 +381,11 @@ test("Copilot root package docs avoid healthy-path manual dependency setup", () 
   assert.doesNotMatch(workSuiteReadme, /copilot plugin install ourostack\/ouroboros-skills:plugins\/work-suite/u)
 })
 
+test("Copilot sessionStart hook stays lightweight and local-only", () => {
+  const hookSource = readText("plugins", "desk", "hooks", "copilot-session-start.cjs")
+  assertLightweightCopilotStartupHookSource(hookSource)
+})
+
 test("Copilot packaging validation rejects missing root surfaces and stale versions", () => {
   assert.deepEqual(validateCopilotPackagingContract(currentCopilotPackagingInput()), [])
 
@@ -364,11 +410,18 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
     ["Copilot root plugin metadata must expose ./.mcp.copilot.json"],
   )
 
+  const missingHooks = clone(currentCopilotPackagingInput())
+  delete missingHooks.deskPlugin.hooks
+  assert.deepEqual(
+    validateCopilotPackagingContract(missingHooks),
+    ["Copilot root plugin metadata must expose ./hooks/copilot-hooks.json"],
+  )
+
   const staleDeskVersion = clone(currentCopilotPackagingInput())
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.0-alpha.6"],
+    ["Copilot root Desk version must match activation version 3.2.0-alpha.7"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())

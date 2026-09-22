@@ -28,6 +28,8 @@ copilot --agent desk:worker
 
 The root package carries generated flattened Superpowers metadata for Copilot-compatible hosts. Desk + Superpowers and the declared companion closure must be loaded from the admitted roots; metadata alone is not runtime proof. The existing overlay keeps its own worker instead of launching the standalone agent above.
 
+The root plugin also registers a Desk-owned `sessionStart` hook. Copilot executes that hook with the installed plugin root, and the hook reads `skills/using-desk/SKILL.md` at runtime to emit the canonical foundation as `additionalContext`; `worker.agent.md` does not carry a copied foundation body.
+
 ### Codex CLI / Codex App
 
 Within explicit alpha activation, Codex selects Desk and Superpowers with one owned Desk MCP bridge and worker instruction block. `global-personal` is the selected activation's default mode, not permission to replace an existing installation. Operator-owned text, prior approvals and opt-outs remain intact through `desk:superpowers-integration`.

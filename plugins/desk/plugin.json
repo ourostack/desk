@@ -1,6 +1,6 @@
 {
   "name": "desk",
-  "version": "3.2.0-alpha.6",
+  "version": "3.2.0-alpha.7",
   "description": "A quiet workspace substrate for long-running engineering agents: tracks, tasks, friction notes, lessons, lifecycle skills, and an MCP server for desk CRUD plus search. Ships a default 'worker' agent that makes the plugin standalone-functional; overlays (corporate, autonomous, personal-coding) layer their own agents on top.",
   "author": {
     "name": "ourostack",
@@ -18,6 +18,7 @@
   ],
   "agents": "./agents/",
   "skills": "./skills/",
+  "hooks": "./hooks/copilot-hooks.json",
   "mcpServers": "./.mcp.copilot.json",
   "activation": {
     "copilot": {

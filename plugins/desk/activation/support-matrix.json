@@ -49,6 +49,8 @@
       "source_paths": [
         "plugins/desk/plugin.json",
         "plugins/desk/agents/worker.agent.md",
+        "plugins/desk/hooks/copilot-hooks.json",
+        "plugins/desk/hooks/copilot-session-start.cjs",
         "plugins/desk/.mcp.copilot.json",
         "plugins/superpowers/plugin.json",
         "plugins/superpowers/hooks/copilot-hooks.json",
