@@ -4,13 +4,16 @@ import * as path from "node:path"
 import { createQueryRouter } from "../../src/readiness/query-router.js"
 import { connectOrStartController } from "../../src/readiness/controller-client.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
-import { indexedSearch, indexedTimeline } from "../../src/tools/search.js"
+import { indexedRecall, indexedSearch, indexedSimilar, indexedTimeline } from "../../src/tools/search.js"
 import { indexedThread } from "../../src/tools/thread.js"
 import { directLexicalSearch } from "../../src/readiness/direct-lexical.js"
-import { mkTempDeskRoot, writeFile } from "../tools/_search_helpers.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import { getSemanticCoverage } from "../../src/server-helpers.js"
+import { mkTempDeskRoot, writeFile, makeEmbedFetch } from "../tools/_search_helpers.js"
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
 import { promises as fs } from "node:fs"
+import { mkdirSync } from "node:fs"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
 import Database from "better-sqlite3"
@@ -26,18 +29,59 @@ function deferred() {
   return { promise, resolve }
 }
 
-async function fixture(t, { hold = null, certain = true, pluginRoot, documentPath = "track/work/task.md" } = {}) {
-  const deskRoot = await mkTempDeskRoot()
+async function fixture(t, {
+  hold = null,
+  certain = true,
+  pluginRoot,
+  documentPath = "track/work/task.md",
+  semanticCurrent = null,
+  mutateDuringSemanticRead = false,
+} = {}) {
+  const tempRoot = await mkTempDeskRoot()
+  const deskRoot = await fs.realpath(tempRoot)
   await writeFile(deskRoot, documentPath, "canonical quartz")
+  const stateHome = path.join(deskRoot, "controller-state")
+  mkdirSync(stateHome, { recursive: true, mode: 0o700 })
   let runs = 0
   const options = {
-    root: deskRoot, stateHome: path.join(deskRoot, ".state", "controller"), ephemeral: true,
+    root: deskRoot, stateHome, ephemeral: true,
     watcher: { fence: async () => ({ certain, ...(certain ? {} : { reason: "overflow" }) }) },
     handlers: { async beginConvergence({ eventCursor }) {
       runs++
       if (hold) await hold.promise
-      return { summary: await rebuildIndex(deskRoot, { skipEmbed: true, eventCursor, tombstones: { pluginRoot } }) }
+      const summary = await rebuildIndex(deskRoot, {
+        eventCursor,
+        tombstones: { pluginRoot },
+        ...(semanticCurrent === null ? { skipEmbed: true } : { embed: { fetch: makeEmbedFetch() } }),
+      })
+      if (semanticCurrent === null) return { summary }
+      const db = new Database(path.join(deskRoot, ".state", "desk-index.sqlite"))
+      try {
+        sqliteVec.load(db)
+        return {
+          summary,
+          semantic: {
+            ...getSemanticCoverage(db),
+            provenance_current: semanticCurrent,
+            query_embedding: semanticCurrent
+              ? { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } }
+              : {
+                  available: false,
+                  diagnostic: {
+                    model: ACTIVE_EMBEDDING_SPEC.model,
+                    reason: "semantic_unavailable",
+                    message: "semantic convergence is not current for the active generation",
+                  },
+                },
+          },
+        }
+      } finally {
+        db.close()
+      }
     } },
+    ...(semanticCurrent === null ? {} : {
+      semanticContract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC },
+    }),
   }
   const controller = await connectOrStartController(options)
   t.after(async () => { hold?.resolve(); await controller.close() })
@@ -51,6 +95,17 @@ async function fixture(t, { hold = null, certain = true, pluginRoot, documentPat
     directBackend: async (request) => {
       used.push("direct")
       return directLexicalSearch(request)
+    },
+    semanticBackend: async (request) => {
+      used.push("semantic")
+      const result = request.kind === "similar"
+        ? await indexedSimilar({ deskRoot, db: request.db, input: request, opts: request.opts })
+        : await indexedRecall({ deskRoot, db: request.db, input: request, opts: request.opts })
+      if (mutateDuringSemanticRead) {
+        await writeFile(deskRoot, documentPath, "canonical rollout replacement")
+        await controller.recordChange({ path: documentPath })
+      }
+      return result
     },
     semanticDeadlineMs: 5,
   })
@@ -136,16 +191,45 @@ test("controller restart refuses a previously committed but unproven generation"
   assert.equal((await router.lexical({ deskRoot: f.deskRoot, query: "quartz" })).results[0].snippet, "afterrestart quartz")
 })
 
-test("semantic requests return the exact alpha-scope error without convergence work", async () => {
-  const router = createQueryRouter({
-    controller: { beginConvergence: () => assert.fail("semantic scheduling is out of scope") },
-    indexedBackend: () => assert.fail("semantic index"),
-    directBackend: () => assert.fail("fake semantic fallback"),
+test("semantic request starts or reuses convergence and executes one proven semantic snapshot", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const result = await f.router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "recall",
+    topic: "quartz",
+    opts: { embed: { fetch: makeEmbedFetch() } },
   })
-  assert.deepEqual(await router.semantic({ topic: "quartz" }), {
-    status: "error", code: "required_capability_unavailable", capability: "semantic",
-    diagnostic: { reason: "alpha_scope", message: "Semantic convergence is not qualified in this alpha." },
+  assert.equal(result.results[0].path, "track/work/task.md")
+  assert.deepEqual(f.used, ["semantic"])
+})
+
+test("semantic request never executes against an unproven generation", async (t) => {
+  const f = await fixture(t, { semanticCurrent: false })
+  const result = await f.router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "recall",
+    topic: "quartz",
+    opts: { embed: { fetch: makeEmbedFetch() } },
   })
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.deepEqual(f.used, [])
+})
+
+test("semantic result is discarded when readiness changes during evaluation", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true, mutateDuringSemanticRead: true })
+  const result = await f.router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "similar",
+    path: "track/work/task.md",
+  })
+  assert.equal(result.diagnostic.reason, "readiness_changed_during_read")
+})
+
+test("hybrid search falls back to proven lexical ranking while semantic convergence is unavailable", async (t) => {
+  const f = await fixture(t, { semanticCurrent: false })
+  const result = await f.router.lexical({ deskRoot: f.deskRoot, kind: "lexical", query: "quartz" })
+  assert.equal(result.search_mode, "lexical")
+  assert.equal(result.semantic_unavailable, true)
 })
 
 test("a covered old cursor cannot authorize an index read after a canonical mutation", async (t) => {

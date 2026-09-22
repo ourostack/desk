@@ -1,9 +1,9 @@
-// recall.test.js — desk_recall semantic-only loose-recall.
+// recall.test.js — indexedRecall semantic ranking/serialization.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { desk_recall } from "../../src/tools/search.js"
+import { indexedRecall as desk_recall } from "../../src/tools/search.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,

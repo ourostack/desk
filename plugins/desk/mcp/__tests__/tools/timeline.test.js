@@ -1,9 +1,9 @@
-// timeline.test.js — desk_timeline temporal queries.
+// timeline.test.js — indexedTimeline temporal ranking and windowing.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { desk_timeline } from "../../src/tools/search.js"
+import { indexedTimeline as desk_timeline } from "../../src/tools/search.js"
 import { openDb, closeDb } from "../../src/db/init.js"
 import {
   buildFixtureIndex,

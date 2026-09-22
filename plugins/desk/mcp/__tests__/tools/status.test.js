@@ -49,6 +49,15 @@ test("alpha status never discovers files and does not infer freshness from mtime
       generation: null, event_cursor: null, pending_changes: null,
       certain: false, current_automatic_action: null, serving_path: "direct",
     })
+    assert.deepEqual(body.semantic, {
+      mode: "unsupported",
+      current: false,
+      generation: null,
+      vectors_indexed: 0,
+      missing_vectors: 0,
+      current_automatic_action: null,
+      diagnostic: null,
+    })
     assert.equal(body.local_db.freshness.state, "unknown")
     assert.equal(body.local_db.freshness.reason, "requires_controller_proof")
     assert.deepEqual(readFileSync(indexDbPath(root)), before)
@@ -61,11 +70,12 @@ test("alpha status never discovers files and does not infer freshness from mtime
 test("alpha status reports indexed proof without fencing or changing the serving path", async (t) => {
   const { connectOrStartController } = await import("../../src/readiness/controller-client.js")
   const { rebuildIndex } = await import("../../src/indexer/index.js")
-  const root = makeRoot()
+  const root = fsNative.realpathSync(makeRoot())
+  mkdirSync(path.join(root, "controller-state"), { recursive: true, mode: 0o700 })
   let fences = 0, runs = 0
   writeFileSync(path.join(root, "task.md"), "quartz")
   const controller = await connectOrStartController({
-    root, stateHome: path.join(root, ".state", "controller"), ephemeral: true,
+    root, stateHome: path.join(root, "controller-state"), ephemeral: true,
     watcher: { fence: async () => { fences++; return { certain: true } } },
     handlers: { beginConvergence: async ({ eventCursor }) => {
       runs++
@@ -83,7 +93,11 @@ test("alpha status reports indexed proof without fencing or changing the serving
   assert.equal(first.lexical.certain, true)
   assert.equal(first.lexical.generation, 1)
   assert.equal(first.lexical.pending_changes, 0)
+  assert.equal(first.semantic.mode, "unsupported")
+  assert.equal(first.semantic.current, false)
+  assert.equal(first.semantic.generation, 1)
   assert.deepEqual(second.lexical, first.lexical)
+  assert.deepEqual(second.semantic, first.semantic)
   assert.deepEqual([fences, runs], counts)
 })
 
@@ -206,6 +220,15 @@ test("desk_status reports root, runtime, missing DB, and deferred repair state w
     assert.equal(body.local_db.state, "missing")
     assert.equal(body.lexical_index.available, false)
     assert.equal(body.document_vectors.state, "missing_local_db")
+    assert.deepEqual(body.semantic, {
+      mode: "unsupported",
+      current: false,
+      generation: null,
+      vectors_indexed: 0,
+      missing_vectors: 0,
+      current_automatic_action: null,
+      diagnostic: null,
+    })
     assert.equal(body.query_embedding.available, "not_checked")
     assert.equal(body.active_embedding_spec.id, ACTIVE_EMBEDDING_SPEC.id)
     assert.equal(body.active_embedding_spec.model, ACTIVE_EMBEDDING_SPEC.model)

@@ -141,7 +141,7 @@ const acceptedModels = [
 
 for (const semantic of ["background", "required"]) {
   for (const { label, models } of acceptedModels) {
-    test(`${semantic} ${label} uses the active model for ordinary index and query embedding`, async (t) => {
+    test(`${semantic} ${label} uses the active model for ordinary index embedding and preserves lexical fallback without fence proof`, async (t) => {
       const context = fixture(t, models)
       const ordinary = runtime(context)
       await ordinary.start(semantic)
@@ -161,12 +161,11 @@ for (const semantic of ["background", "required"]) {
       })
       assert.notEqual(response.isError, true)
       const result = JSON.parse(response.content[0].text)
-      assert.equal(result.search_mode, "hybrid")
-      assert.equal(result.semantic_unavailable, false)
+      assert.equal(result.search_mode, "lexical")
+      assert.equal(result.semantic_unavailable, true)
       assert.ok(result.results.some(({ path: docPath }) => docPath === "task.md"))
-      assert.deepEqual(context.requests.map(({ model, prompt }) => ({ model, prompt })), [
-        { model: ACTIVE_EMBEDDING_SPEC.model, prompt: "semantic safety" },
-      ])
+      assert.match(result.readiness_diagnostic?.reason ?? "", /unsupported_flush/u)
+      assert.deepEqual(context.requests, [])
       const db = openDb(context.root)
       try {
         const specs = db.prepare(
@@ -207,23 +206,27 @@ for (const variable of ["DESK_EMBED_MODEL", "OLLAMA_EMBED_MODEL"]) {
     ["desk_thread", { start_path: "task.md" }],
     ["desk_reindex", { force: true }],
   ]) {
-    test(`unsupported ${name} refuses ${variable} mismatch before index or query embedding`, async (t) => {
+    test(`unsupported ${name} preserves truthful capability behavior before index or query embedding`, async (t) => {
       const context = fixture(t, { [variable]: CUSTOM_MODEL })
       const ordinary = runtime(context)
       await ordinary.start("unsupported")
       await ordinary.converged()
-      const dbPath = path.join(context.root, ".state", "desk-index.sqlite")
-      const before = readFileSync(dbPath)
       const response = await callTool({
         deskRoot: context.root, name, input, statusContext: ordinary.starts[0],
       })
-      assert.equal(response.isError, true)
-      const failure = JSON.parse(response.content[0].text)
-      assert.equal(failure.status, "error")
-      assert.equal(failure.tool, name)
-      assert.match(failure.message, /effective embedding model.*differs from the pinned model/u)
+      assert.notEqual(response.isError, true)
+      const payload = JSON.parse(response.content[0].text)
+      if (name === "desk_search" || name === "desk_timeline") {
+        assert.equal(payload.search_mode, "lexical")
+        assert.equal(payload.semantic_unavailable, true)
+      } else if (name === "desk_reindex") {
+        assert.equal(payload.status, "ok")
+        assert.equal(payload.action, "controller_convergence")
+      } else {
+        assert.equal(payload.status, "error")
+        assert.equal(payload.code, "required_capability_unavailable")
+      }
       assert.equal(context.requests.length, 0)
-      assert.deepEqual(readFileSync(dbPath), before, "refusal must not modify or replace the lexical index")
       assert.equal(process.env[variable], CUSTOM_MODEL)
     })
   }

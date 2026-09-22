@@ -3,11 +3,16 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
+import { mkdirSync } from "node:fs"
 import * as path from "node:path"
 
 // Keep legacy indexed ranking coverage separate from the alpha consumer contract.
 import { __searchInternalsForTests, desk_search as routedSearch, indexedSearch as desk_search } from "../../src/tools/search.js"
+import { connectOrStartController } from "../../src/readiness/controller-client.js"
 import { openDb, closeDb } from "../../src/db/init.js"
+import { rebuildIndex } from "../../src/indexer/index.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import { getSemanticCoverage } from "../../src/server-helpers.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,
@@ -16,7 +21,51 @@ import {
   writeFile,
 } from "./_search_helpers.js"
 
-test("alpha consumer search reads files immediately without index or embedding work", async () => {
+async function createRoutedSemanticReadiness(t, root, { semanticCurrent = true } = {}) {
+  const canonicalRoot = await fs.realpath(root)
+  const stateHome = path.join(canonicalRoot, "controller-state")
+  mkdirSync(stateHome, { recursive: true, mode: 0o700 })
+  const controller = await connectOrStartController({
+    root: canonicalRoot,
+    stateHome,
+    ephemeral: true,
+    watcher: { fence: async () => ({ certain: true }) },
+    semanticContract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC },
+    handlers: { async beginConvergence({ eventCursor }) {
+      const summary = await rebuildIndex(canonicalRoot, {
+        eventCursor,
+        embed: { fetch: makeEmbedFetch() },
+      })
+      const db = openDb(canonicalRoot)
+      try {
+        return {
+          summary,
+          semantic: {
+            ...getSemanticCoverage(db),
+            provenance_current: semanticCurrent,
+            query_embedding: semanticCurrent
+              ? { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } }
+              : {
+                  available: false,
+                  diagnostic: {
+                    model: ACTIVE_EMBEDDING_SPEC.model,
+                    reason: "semantic_unavailable",
+                    message: "semantic convergence is not current for the active generation",
+                  },
+                },
+          },
+        }
+      } finally {
+        closeDb(db)
+      }
+    } },
+  })
+  t.after(async () => controller.close())
+  await controller.beginConvergence()
+  return controller
+}
+
+test("search without a readiness controller reads files immediately without index or embedding work", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/work/task.md", "immediatequartz")
   let independentEmbeds = 0
@@ -26,54 +75,86 @@ test("alpha consumer search reads files immediately without index or embedding w
   })
   assert.equal(result.results[0].snippet, "immediatequartz")
   assert.equal(result.search_mode, "lexical")
-  assert.equal(result.semantic_diagnostic.reason, "alpha_scope")
-  assert.equal(result.semantic_repair, undefined, "alpha must not suggest an unqualified semantic repair")
+  assert.equal(result.readiness_diagnostic.reason, "controller_unavailable")
   assert.equal(independentEmbeds, 0)
   await assert.rejects(fs.stat(path.join(root, ".state", "desk-index.sqlite")), { code: "ENOENT" })
 })
 
-test("alpha consumer recall and similar refuse semantic work with the exact typed result", async () => {
+test("routed semantic tools serve the current semantic snapshot", async (t) => {
   const { desk_recall, desk_similar } = await import("../../src/tools/search.js")
   const root = await mkTempDeskRoot()
-  for (const [tool, input] of [[desk_recall, { topic: "quartz" }], [desk_similar, { path: "track/work/task.md" }]]) {
-    assert.deepEqual(await tool({ deskRoot: root, input }), {
-      status: "error", code: "required_capability_unavailable", capability: "semantic",
-      diagnostic: { reason: "alpha_scope", message: "Semantic convergence is not qualified in this alpha." },
-    })
-  }
-  await assert.rejects(fs.stat(path.join(root, ".state")), { code: "ENOENT" })
+  await writeFile(root, "track/work/task.md", "---\nstatus: processing\nschema_version: 1\n---\nquartz rollout detail\n")
+  await writeFile(root, "track/other/task.md", "---\nstatus: processing\nschema_version: 1\n---\nrollout plan near quartz\n")
+  const readiness = await createRoutedSemanticReadiness(t, root)
+  const recall = await desk_recall({
+    deskRoot: root,
+    readiness,
+    input: { topic: "quartz rollout", limit: 1 },
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  const similar = await desk_similar({
+    deskRoot: root,
+    readiness,
+    input: { path: "track/work/task.md", limit: 1 },
+  })
+  assert.equal(recall.results[0].path, "track/work/task.md")
+  assert.equal(similar.results[0].path, "track/other/task.md")
 })
 
-test("alpha consumer timeline reads a fresh temporal or lexical window without an index", async () => {
+test("routed timeline serves hybrid query results and temporal no-query results", async (t) => {
   const { desk_timeline } = await import("../../src/tools/search.js")
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/old/task.md", "---\nupdated: 2025-01-01\n---\nquartz old")
   await writeFile(root, "track/new/task.md", "---\nupdated: 2026-09-19\n---\nquartz current")
-  for (const query of [undefined, "quartz"]) {
-    const result = await desk_timeline({ deskRoot: root, input: { from: "2026-01-01", query } })
-    assert.deepEqual(result.results.map((r) => r.path), [path.join("track", "new", "task.md")])
-    assert.equal(result.search_mode, query ? "lexical" : "temporal")
-    if (query) {
-      assert.equal(result.semantic_diagnostic.reason, "alpha_scope")
-      assert.equal(result.semantic_repair, undefined)
-    }
-  }
-  await assert.rejects(fs.stat(path.join(root, ".state")), { code: "ENOENT" })
+  const readiness = await createRoutedSemanticReadiness(t, root)
+  const temporal = await desk_timeline({
+    deskRoot: root,
+    readiness,
+    input: { from: "2026-01-01" },
+  })
+  const hybrid = await desk_timeline({
+    deskRoot: root,
+    readiness,
+    input: { from: "2026-01-01", query: "quartz" },
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.deepEqual(temporal.results.map((r) => r.path), [path.join("track", "new", "task.md")])
+  assert.equal(temporal.search_mode, "temporal")
+  assert.deepEqual(hybrid.results.map((r) => r.path), [path.join("track", "new", "task.md")])
+  assert.equal(hybrid.search_mode, "hybrid")
+  assert.equal(hybrid.semantic_unavailable, false)
+})
+
+test("routed search falls back to proven lexical ranking while semantic convergence is unavailable", async (t) => {
+  const root = await mkTempDeskRoot()
+  await writeFile(root, "track/work/task.md", "---\nstatus: processing\nschema_version: 1\n---\nquartz lexical fallback\n")
+  const readiness = await createRoutedSemanticReadiness(t, root, { semanticCurrent: false })
+  const result = await routedSearch({
+    deskRoot: root,
+    readiness,
+    input: { query: "quartz" },
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.equal(result.search_mode, "lexical")
+  assert.equal(result.semantic_unavailable, true)
+  assert.equal(result.results[0].path, "track/work/task.md")
 })
 
 test("alpha consumer concurrent startup search and reindex leave zero orphan vectors and one writer", async (t) => {
   const { connectOrStartController } = await import("../../src/readiness/controller-client.js")
   const { rebuildIndex } = await import("../../src/indexer/index.js")
   const { desk_reindex } = await import("../../src/tools/reindex.js")
-  const root = await mkTempDeskRoot()
+  const root = await fs.realpath(await mkTempDeskRoot())
   await writeFile(root, "track/work/task.md", "startupquartz")
+  const stateHome = path.join(root, "controller-state")
+  mkdirSync(stateHome, { recursive: true, mode: 0o700 })
   let release, enter
   const held = new Promise((resolve) => { release = resolve })
   const entered = new Promise((resolve) => { enter = resolve })
   let passes = 0, active = 0, maxActive = 0
   let independentEmbeds = 0
   const options = {
-    root, stateHome: path.join(root, ".state", "controller"), ephemeral: true,
+    root, stateHome, ephemeral: true,
     watcher: { fence: async () => ({ certain: true }) },
     handlers: { async beginConvergence({ eventCursor }) {
       passes++

@@ -16,7 +16,7 @@ import * as path from "node:path"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { indexDbPath, closeDb } from "../db/init.js"
-import { createDeskQueryRouter, semanticScopeError } from "../readiness/query-router.js"
+import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { embedQuery } from "../util/embed-query.js"
 import {
   clipCosine,
@@ -425,7 +425,7 @@ function firstChunkText(row) {
  */
 export async function desk_search({ deskRoot, input, opts, readiness, queryRouter, signal }) {
   return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).lexical({
-    ...input, deskRoot, now: opts?.now, signal, kind: "lexical",
+    ...input, deskRoot, now: opts?.now, opts, signal, kind: "lexical",
   })
 }
 
@@ -466,7 +466,10 @@ export async function indexedSearch({ deskRoot, input, opts, db: suppliedDb }) {
       diagnostic: semanticDiagnostic,
     } = opts?.lexicalOnly ? {
       vector: null, available: false,
-      diagnostic: semanticScopeError().diagnostic,
+      diagnostic: opts.semanticDiagnostic ?? {
+        reason: "semantic_unavailable",
+        message: "Semantic convergence is not current for the active generation.",
+      },
     } : await embedQuery(
       query,
       opts?.embed ?? {},
@@ -575,11 +578,13 @@ export async function indexedSearch({ deskRoot, input, opts, db: suppliedDb }) {
  * Returns: { results, cluster_count?, semantic_unavailable } OR an error
  *   payload when Ollama is down.
  */
-export async function desk_recall({ input, readiness, queryRouter, signal }) {
-  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).semantic({ ...input, signal })
+export async function desk_recall({ deskRoot, input, opts, readiness, queryRouter, signal }) {
+  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).semantic({
+    ...input, deskRoot, opts, signal, kind: "recall",
+  })
 }
 
-export async function indexedRecall({ deskRoot, input, opts }) {
+export async function indexedRecall({ deskRoot, input, opts, db: suppliedDb }) {
   const t0 = Date.now()
   const topic = String(input?.topic ?? "").trim()
   if (!topic) {
@@ -588,7 +593,7 @@ export async function indexedRecall({ deskRoot, input, opts }) {
   const limit = clampLimit(input?.limit)
   const scope = input?.scope
 
-  const db = openSearchDb(deskRoot)
+  const db = suppliedDb ?? openSearchDb(deskRoot)
   try {
     const {
       vector: queryVec,
@@ -641,7 +646,7 @@ export async function indexedRecall({ deskRoot, input, opts }) {
         "cluster_count equals results.length until HDBSCAN lands.",
     }
   } finally {
-    closeDb(db)
+    if (!suppliedDb) closeDb(db)
   }
 }
 
@@ -662,11 +667,13 @@ export async function indexedRecall({ deskRoot, input, opts }) {
  * Returns: { results, latency_ms } OR error when path is unknown OR when
  *   the seed has no embeddings (Ollama was down at index time).
  */
-export async function desk_similar({ input, readiness, queryRouter, signal }) {
-  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).semantic({ ...input, signal })
+export async function desk_similar({ deskRoot, input, opts, readiness, queryRouter, signal }) {
+  return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).semantic({
+    ...input, deskRoot, opts, signal, kind: "similar",
+  })
 }
 
-export async function indexedSimilar({ deskRoot, input }) {
+export async function indexedSimilar({ deskRoot, input, db: suppliedDb }) {
   const t0 = Date.now()
   const seedPath = String(input?.path ?? "").trim()
   if (!seedPath) {
@@ -675,7 +682,7 @@ export async function indexedSimilar({ deskRoot, input }) {
   const limit = clampLimit(input?.limit)
   const scope = input?.scope
 
-  const db = openSearchDb(deskRoot)
+  const db = suppliedDb ?? openSearchDb(deskRoot)
   try {
     const seedDoc = db
       .prepare("SELECT id, path, kind, track, task_slug FROM docs WHERE path = ?")
@@ -758,7 +765,7 @@ export async function indexedSimilar({ deskRoot, input }) {
       latency_ms: Date.now() - t0,
     }
   } finally {
-    closeDb(db)
+    if (!suppliedDb) closeDb(db)
   }
 }
 
@@ -776,7 +783,7 @@ export async function indexedSimilar({ deskRoot, input }) {
  */
 export async function desk_timeline({ deskRoot, input, opts, readiness, queryRouter, signal }) {
   return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).lexical({
-    ...input, deskRoot, now: opts?.now, signal, kind: "timeline",
+    ...input, deskRoot, now: opts?.now, opts, signal, kind: "timeline",
   })
 }
 
@@ -809,7 +816,10 @@ export async function indexedTimeline({ deskRoot, input, opts, db: suppliedDb })
     params.push(...scopeFilter.params)
 
     let semanticAvailable = false
-    let semanticDiagnostic = opts?.lexicalOnly ? semanticScopeError().diagnostic : null
+    let semanticDiagnostic = opts?.lexicalOnly ? opts.semanticDiagnostic ?? {
+      reason: "semantic_unavailable",
+      message: "Semantic convergence is not current for the active generation.",
+    } : null
     let queryVec = null
     if (query && !opts?.lexicalOnly) {
       const r = await embedQuery(query, opts?.embed ?? {})
