@@ -27,6 +27,10 @@ function semanticCapabilityError(reason, message) {
   }
 }
 
+function isSemanticKind(kind) {
+  return kind === "recall" || kind === "similar"
+}
+
 function sameCursor(a, b) {
   return typeof a?.journal_id === "string" && a.journal_id.length > 0 &&
     Number.isSafeInteger(a.sequence) && a.sequence >= 0 &&
@@ -334,6 +338,12 @@ export function createQueryRouter({
     const { signal } = request
     signal?.throwIfAborted()
     lastProof = null
+    if (!isSemanticKind(request.kind)) {
+      return semanticCapabilityError(
+        "invalid_request",
+        'Semantic requests must set kind to "recall" or "similar".',
+      )
+    }
     await currentIdentity(request)
     if (!controller || !semanticBackend) {
       return semanticScopeError()
@@ -478,6 +488,9 @@ export function createDeskQueryRouter({ controller } = {}) {
         } })
     },
     semanticBackend: (request) => {
+      if (request.kind !== "recall" && request.kind !== "similar") {
+        throw new Error(`Unsupported semantic request kind: ${request.kind}`)
+      }
       const backend = request.kind === "recall" ? indexedRecall : indexedSimilar
       return backend({ deskRoot: request.deskRoot, db: request.db, input: request, opts: request.opts })
     },

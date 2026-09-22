@@ -225,6 +225,25 @@ test("semantic result is discarded when readiness changes during evaluation", as
   assert.equal(result.diagnostic.reason, "readiness_changed_during_read")
 })
 
+for (const invalidKind of [undefined, null, "", "timeline", "thread"]) {
+  test(`semantic request rejects unsupported kind ${JSON.stringify(invalidKind)}`, async (t) => {
+    const f = await fixture(t, { semanticCurrent: true })
+    const result = await f.router.semantic({
+      deskRoot: f.deskRoot,
+      kind: invalidKind,
+      topic: "quartz",
+      path: "track/work/task.md",
+      opts: { embed: { fetch: makeEmbedFetch() } },
+    })
+    assert.equal(result.status, "error")
+    assert.equal(result.code, "required_capability_unavailable")
+    assert.equal(result.capability, "semantic")
+    assert.equal(result.diagnostic.reason, "invalid_request")
+    assert.match(result.diagnostic.message, /"recall" or "similar"/u)
+    assert.deepEqual(f.used, [])
+  })
+}
+
 test("hybrid search falls back to proven lexical ranking while semantic convergence is unavailable", async (t) => {
   const f = await fixture(t, { semanticCurrent: false })
   const result = await f.router.lexical({ deskRoot: f.deskRoot, kind: "lexical", query: "quartz" })

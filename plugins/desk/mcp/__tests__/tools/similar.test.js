@@ -1,9 +1,9 @@
-// similar.test.js — indexedSimilar centroid-based "more like this".
+// similar.test.js — public desk_similar wrapper + indexedSimilar coverage.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { indexedSimilar as desk_similar } from "../../src/tools/search.js"
+import { desk_similar, indexedSimilar } from "../../src/tools/search.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,
@@ -12,7 +12,33 @@ import {
   writeFile,
 } from "./_search_helpers.js"
 
-test("desk_similar — happy path returns docs near the seed centroid", async () => {
+test("desk_similar routes similarity requests through the public query router", async () => {
+  const queryRouter = {
+    async semantic(request) {
+      return { routed: true, request }
+    },
+  }
+
+  const result = await desk_similar({
+    deskRoot: "/tmp/desk",
+    input: { path: "track/seed/task.md", limit: 4 },
+    queryRouter,
+  })
+
+  assert.deepEqual(result, {
+    routed: true,
+    request: {
+      deskRoot: "/tmp/desk",
+      kind: "similar",
+      limit: 4,
+      opts: undefined,
+      path: "track/seed/task.md",
+      signal: undefined,
+    },
+  })
+})
+
+test("indexedSimilar — happy path returns docs near the seed centroid", async () => {
   const root = await mkTempDeskRoot()
   // Seed doc — alpha family.
   await writeFile(
@@ -39,7 +65,7 @@ test("desk_similar — happy path returns docs near the seed centroid", async ()
   )
   await buildFixtureIndex(root)
 
-  const res = await desk_similar({
+  const res = await indexedSimilar({
     deskRoot: root,
     input: { path: "trackA/seed/task.md" },
   })
@@ -65,7 +91,7 @@ test("desk_similar — happy path returns docs near the seed centroid", async ()
   }
 })
 
-test("desk_similar — nonexistent path → not_found error", async () => {
+test("indexedSimilar — nonexistent path → not_found error", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -74,21 +100,21 @@ test("desk_similar — nonexistent path → not_found error", async () => {
   )
   await buildFixtureIndex(root)
 
-  const res = await desk_similar({
+  const res = await indexedSimilar({
     deskRoot: root,
     input: { path: "this/does/not/exist.md" },
   })
   assert.equal(res.error, "not_found")
 })
 
-test("desk_similar — missing path arg → invalid_input error", async () => {
+test("indexedSimilar — missing path arg → invalid_input error", async () => {
   const root = await mkTempDeskRoot()
   await buildFixtureIndex(root)
-  const res = await desk_similar({ deskRoot: root, input: {} })
+  const res = await indexedSimilar({ deskRoot: root, input: {} })
   assert.equal(res.error, "invalid_input")
 })
 
-test("desk_similar — seed without embeddings returns semantic_unavailable", async () => {
+test("indexedSimilar — seed without embeddings returns semantic_unavailable", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -99,7 +125,7 @@ test("desk_similar — seed without embeddings returns semantic_unavailable", as
   const { rebuildIndex } = await import("../../src/indexer/index.js")
   await rebuildIndex(root, { embed: { fetch: makeFailingFetch() } })
 
-  const res = await desk_similar({
+  const res = await indexedSimilar({
     deskRoot: root,
     input: { path: "trackA/seed/task.md" },
     opts: { embed: { fetch: makeFailingFetch() } },
@@ -108,7 +134,7 @@ test("desk_similar — seed without embeddings returns semantic_unavailable", as
   assert.match(res.semantic_repair, /desk_reindex/)
 })
 
-test("desk_similar — dedupes by doc_id (one entry per similar doc)", async () => {
+test("indexedSimilar — dedupes by doc_id (one entry per similar doc)", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -126,7 +152,7 @@ test("desk_similar — dedupes by doc_id (one entry per similar doc)", async () 
   )
   await buildFixtureIndex(root)
 
-  const res = await desk_similar({
+  const res = await indexedSimilar({
     deskRoot: root,
     input: { path: "trackA/seed/task.md" },
   })
@@ -135,7 +161,7 @@ test("desk_similar — dedupes by doc_id (one entry per similar doc)", async () 
   assert.equal(paths.length, unique.size, "no duplicate doc paths in results")
 })
 
-test("desk_similar — scope can restrict archived neighbours", async () => {
+test("indexedSimilar — scope can restrict archived neighbours", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -154,7 +180,7 @@ test("desk_similar — scope can restrict archived neighbours", async () => {
   )
   await buildFixtureIndex(root)
 
-  const archived = await desk_similar({
+  const archived = await indexedSimilar({
     deskRoot: root,
     input: { path: "trackA/seed/task.md", scope: "archived" },
   })
