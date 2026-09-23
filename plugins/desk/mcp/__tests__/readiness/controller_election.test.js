@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { fork } from "node:child_process"
 import { createConnection } from "node:net"
 import Database from "better-sqlite3"
@@ -9,6 +9,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 
 import { connectOrStartController } from "../../src/readiness/controller-client.js"
+import * as endpoints from "../../src/readiness/identity.js"
 
 function tempFixture(prefix) {
   return mkdtempSync(path.join(realpathSync(tmpdir()), prefix))
@@ -180,6 +181,71 @@ test("F2 wire handshake preserves semantic diagnostics and mismatched mutations 
   assert.equal(mutations, 0)
   assert.equal(existsSync(path.join(root, ".state")), false)
   assert.equal(existsSync(path.join(stateHome, client.id, "journal")), false)
+})
+
+test("compatible clients reuse an already running external controller through the owner handshake", async (t) => {
+  const root = tempFixture("desk-owner-reuse-")
+  const stateHome = path.join(root, "state")
+  const contract = { mode: "background", embedding_spec: { model: "fixture", dimension: 768 }, endpoints: ["http://first.invalid"] }
+  const owner = await ownershipProcess(root, stateHome, contract)
+  t.after(async () => { await owner.close(); rmSync(root, { recursive: true, force: true }) })
+  owner.send("start")
+  const accepted = await owner.wait("accepted")
+  const client = await connectOrStartController({
+    root, stateHome, protocolVersion: 1, lexicalContract: { schema: 1 }, semanticContract: contract, ephemeral: true,
+  })
+  try {
+    assert.equal(client.id, accepted.id)
+    assert.equal((await client.status()).owner.pid, accepted.ownerPid)
+  } finally {
+    await client.close()
+  }
+})
+
+test("invalid local owner records are refused without retaining a phantom client", async (t) => {
+  const root = tempFixture("desk-owner-invalid-")
+  const stateHome = path.join(root, "state")
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const client = await connectOrStartController({ root, stateHome, ephemeral: true })
+  const ownerPath = path.join(stateHome, client.id, "owner.json")
+  writeFileSync(ownerPath, JSON.stringify({ identity: client.identity, owner: { token: 42 } }))
+  await assert.rejects(
+    () => connectOrStartController({ root, stateHome, ephemeral: true }),
+    /owner record is invalid/u,
+  )
+  await client.close()
+  const replacement = await connectOrStartController({ root, stateHome, ephemeral: true })
+  try { assert.equal((await replacement.status()).state, "CONTROL_READY") }
+  finally { await replacement.close() }
+})
+
+test("controller publication failures propagate without treating them as election collisions", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const root = tempFixture("desk-owner-publish-")
+  const stateHome = path.join(root, "state")
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const identity = endpoints.controllerIdentity({ root, protocolVersion: 1, lexicalContract: {}, semanticContract: null })
+  const stateDir = path.join(stateHome, identity.id)
+  mkdirSync(path.join(stateDir, "owner.json"), { recursive: true, mode: 0o700 })
+  const endpoint = endpoints.deriveControllerEndpoint({ identity })
+  t.after(() => rmSync(endpoint, { force: true }))
+  await assert.rejects(
+    () => connectOrStartController({ root, stateHome, ephemeral: true }),
+    { code: "EISDIR" },
+  )
+  assert.equal(existsSync(endpoint), false)
+})
+
+test("aborted controller requests fail before opening a socket", async (t) => {
+  const root = tempFixture("desk-owner-abort-")
+  const stateHome = path.join(root, "state")
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const client = await connectOrStartController({ root, stateHome, ephemeral: true })
+  t.after(() => client.close())
+  const abort = new AbortController()
+  abort.abort(new Error("caller stopped waiting"))
+  await assert.rejects(client.fenceEvents({ signal: abort.signal }), /caller stopped waiting/u)
 })
 
 async function ownershipProcess(root, stateHome, semanticContract) {

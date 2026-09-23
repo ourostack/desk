@@ -258,6 +258,10 @@ test("search internals cover defensive helper branches", async () => {
     /embedding service did not return/u,
   )
   assert.equal(helpers.semanticUnavailableFields(undefined).semantic_diagnostic, null)
+  assert.equal(
+    Object.hasOwn(helpers.semanticUnavailableFields({ reason: "alpha_scope", message: "semantic intentionally out of scope" }), "semantic_repair"),
+    false,
+  )
 
   assert.deepEqual(helpers.buildFtsQuery(null), { matchExpr: null, terms: [] })
   assert.deepEqual(helpers.buildFtsQuery("a"), { matchExpr: null, terms: [] })

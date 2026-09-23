@@ -19,6 +19,7 @@ import { syncBuiltinESMExports } from "node:module"
 import { closeDb, indexDbPath, openDb, setMeta } from "../../src/db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 import { callTool, TOOL_IMPLS } from "../../src/server.js"
+import { desk_status } from "../../src/tools/status.js"
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../src/tool-names.js"
 
 const packageJson = JSON.parse(
@@ -151,6 +152,63 @@ test("desk_status reports the exact normalized person write scope", async () => 
       person: "ari",
       relative_path: "desks/ari",
     })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("desk_status normalizes controller snapshots without convergence payloads", async () => {
+  const root = makeRoot()
+  try {
+    const body = await desk_status({
+      deskRoot: root,
+      statusContext: {
+        admission: {
+          controller: {
+            status: async () => ({ state: "READY" }),
+          },
+        },
+      },
+      queryRouter: {
+        snapshot: async () => ({
+          state: "READY",
+          lexical: { generation: null, event_cursor: null, pending_changes: null, certain: false, current_automatic_action: null, serving_path: "direct" },
+          semantic: { mode: "unsupported", current: false, generation: null, vectors_indexed: 0, missing_vectors: 0, current_automatic_action: null, diagnostic: null },
+        }),
+      },
+    })
+    assert.deepEqual(body.readiness.convergence, {
+      status: "not_checked",
+      semantic: null,
+      diagnostic: null,
+    })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("desk_status reports non-Error controller readiness failures", async () => {
+  const root = makeRoot()
+  try {
+    const body = await desk_status({
+      deskRoot: root,
+      statusContext: {
+        admission: {
+          controller: {
+            status: async () => { throw "controller offline" },
+          },
+        },
+      },
+      queryRouter: {
+        snapshot: async () => ({
+          state: "unavailable",
+          lexical: { generation: null, event_cursor: null, pending_changes: null, certain: false, current_automatic_action: null, serving_path: "direct" },
+          semantic: { mode: "unsupported", current: false, generation: null, vectors_indexed: 0, missing_vectors: 0, current_automatic_action: null, diagnostic: null },
+        }),
+      },
+    })
+    assert.equal(body.readiness.state, "unavailable")
+    assert.equal(body.readiness.convergence.diagnostic.message, "controller offline")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
