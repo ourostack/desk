@@ -120,9 +120,7 @@ export function collectChangedFiles({ repoRoot, spawn = spawnSync, env = process
 
 export function changedSinceMergeBase({ repoRoot, spawn = spawnSync, env = process.env }) {
   const base = resolveCoverageBase({ repoRoot, spawn, env })
-  return base
-    ? gitLines({ repoRoot, spawn, args: ["diff", "--name-only", "--diff-filter=AM", `${base}..HEAD`] })
-    : []
+  return gitLines({ repoRoot, spawn, args: ["diff", "--name-only", "--diff-filter=AM", `${base}..HEAD`] })
 }
 
 export function resolveCoverageBase({ repoRoot, spawn = spawnSync, env = process.env }) {
@@ -130,7 +128,7 @@ export function resolveCoverageBase({ repoRoot, spawn = spawnSync, env = process
     const base = gitText({ repoRoot, spawn, args: ["merge-base", candidate, "HEAD"] })
     if (base) return base
   }
-  return ""
+  throw new Error("coverage baseline could not be resolved safely")
 }
 
 function coverageBaseCandidates({ repoRoot, spawn, env }) {
@@ -141,14 +139,15 @@ function coverageBaseCandidates({ repoRoot, spawn, env }) {
     pushIfSet(candidates, `origin/${pullRequestBase}`)
     pushIfSet(candidates, pullRequestBase)
   }
-  pushIfSet(
-    candidates,
-    gitText({
-      repoRoot,
-      spawn,
-      args: ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
-    }),
-  )
+  const localUpstream = gitText({
+    repoRoot,
+    spawn,
+    args: ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+  })
+  const currentBranch = localUpstream
+    ? gitText({ repoRoot, spawn, args: ["rev-parse", "--abbrev-ref", "HEAD"] })
+    : ""
+  if (!isSelfUpstream(localUpstream, currentBranch)) pushIfSet(candidates, localUpstream)
   pushIfSet(candidates, "origin/main")
   pushIfSet(candidates, "main")
   return unique(candidates)
@@ -274,6 +273,14 @@ function pushIfSet(values, value) {
 
 function cleanText(value) {
   return typeof value === "string" ? value.trim() : ""
+}
+
+function isSelfUpstream(upstream, currentBranch) {
+  const cleanUpstream = cleanText(upstream).replace(/^refs\/remotes\//u, "")
+  const cleanBranch = cleanText(currentBranch)
+  return cleanBranch.length > 0 &&
+    cleanBranch !== "HEAD" &&
+    (cleanUpstream === cleanBranch || cleanUpstream.endsWith(`/${cleanBranch}`))
 }
 
 function unique(values) {

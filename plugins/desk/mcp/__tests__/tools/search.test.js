@@ -5,9 +5,11 @@ import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import { mkdirSync } from "node:fs"
 import * as path from "node:path"
+import Database from "better-sqlite3"
+import * as sqliteVec from "sqlite-vec"
 
 // Keep legacy indexed ranking coverage separate from the alpha consumer contract.
-import { __searchInternalsForTests, desk_search as routedSearch, indexedSearch as desk_search } from "../../src/tools/search.js"
+import { __searchInternalsForTests, desk_search as routedSearch, indexedSearch as desk_search, indexedTimeline } from "../../src/tools/search.js"
 import { connectOrStartController } from "../../src/readiness/controller-client.js"
 import { openDb, closeDb } from "../../src/db/init.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
@@ -18,6 +20,7 @@ import {
   makeEmbedFetch,
   makeFailingFetch,
   mkTempDeskRoot,
+  topicVector,
   writeFile,
 } from "./_search_helpers.js"
 
@@ -80,6 +83,20 @@ test("search without a readiness controller reads files immediately without inde
   await assert.rejects(fs.stat(path.join(root, ".state", "desk-index.sqlite")), { code: "ENOENT" })
 })
 
+test("indexed search closes and propagates sqlite extension load failures", async (t) => {
+  const root = await mkTempDeskRoot()
+  await buildFixtureIndex(root, {
+    files: [{ path: "track/work/task.md", text: "indexed quartz" }],
+  })
+  const original = Database.prototype.loadExtension
+  Database.prototype.loadExtension = () => { throw new Error("sqlite vec load failed") }
+  t.after(() => { Database.prototype.loadExtension = original })
+  await assert.rejects(
+    () => desk_search({ deskRoot: root, input: { query: "quartz" } }),
+    /sqlite vec load failed/u,
+  )
+})
+
 test("routed semantic tools serve the current semantic snapshot", async (t) => {
   const { desk_recall, desk_similar } = await import("../../src/tools/search.js")
   const root = await mkTempDeskRoot()
@@ -123,6 +140,33 @@ test("routed timeline serves hybrid query results and temporal no-query results"
   assert.deepEqual(hybrid.results.map((r) => r.path), [path.join("track", "new", "task.md")])
   assert.equal(hybrid.search_mode, "hybrid")
   assert.equal(hybrid.semantic_unavailable, false)
+})
+
+test("timeline hybrid keeps the strongest chunk per document", async () => {
+  const root = await mkTempDeskRoot()
+  await writeFile(root, "track/work/task.md", "---\nupdated: 2026-09-19\n---\nalpha opening")
+  await buildFixtureIndex(root)
+  const db = new Database(path.join(root, ".state", "desk-index.sqlite"))
+  try {
+    sqliteVec.load(db)
+    const doc = db.prepare("SELECT id FROM docs WHERE path = ?").get("track/work/task.md")
+    const info = db.prepare(`INSERT INTO chunks
+      (doc_id, chunk_index, chunk_key, text_hash, embedding_spec_id, chunker_id, normalization_id, text)
+      SELECT doc_id, 1, chunk_key || '-second', text_hash || '-second', embedding_spec_id, chunker_id, normalization_id, ?
+      FROM chunks WHERE doc_id = ? AND chunk_index = 0`).run("alpha later stronger detail", doc.id)
+    db.prepare("INSERT INTO chunks_fts(rowid, text) VALUES (?, ?)").run(info.lastInsertRowid, "alpha later stronger detail")
+    db.prepare("INSERT INTO chunk_vecs (chunk_id, embedding) VALUES (?, ?)").run(BigInt(info.lastInsertRowid), new Float32Array(topicVector("alpha later stronger detail")))
+  } finally {
+    db.close()
+  }
+  const result = await indexedTimeline({
+    deskRoot: root,
+    input: { from: "2026-01-01", query: "alpha" },
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.equal(result.search_mode, "hybrid")
+  assert.equal(result.results.length, 1)
+  assert.equal(result.results[0].path, "track/work/task.md")
 })
 
 test("routed search falls back to proven lexical ranking while semantic convergence is unavailable", async (t) => {
@@ -607,6 +651,16 @@ test("desk_search — invalid and empty filters behave as no-ops", async () => {
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.ok(emptyArrays.results.length >= 1)
+
+  const nonStringTrack = await desk_search({
+    deskRoot: root,
+    input: {
+      query: "alpha",
+      filters: { track: 42 },
+    },
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.deepEqual(nonStringTrack.results, [])
 })
 
 test("desk_search — track array filter excludes semantic candidates outside the set", async () => {

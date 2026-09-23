@@ -38,12 +38,25 @@ function runProducerFixture(t, { complete, includeUnexecuted = false, viaChild =
       .map(name => [name, process.env[name]]),
   )
   Object.assign(env, {
+    DESK_COVERAGE_BASE_REF: "HEAD",
     GIT_CONFIG_GLOBAL: globalConfig,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TEMPLATE_DIR: templateDirectory,
   })
   const git = spawnSync("git", ["init", "--quiet", repoRoot], { env, encoding: "utf8" })
   assert.equal(git.status, 0, git.stderr)
+  const baseline = spawnSync("git", [
+    "-c",
+    "user.name=Coverage Producer Test",
+    "-c",
+    "user.email=coverage-producer@example.invalid",
+    "commit",
+    "--allow-empty",
+    "--quiet",
+    "-m",
+    "fixture baseline",
+  ], { cwd: repoRoot, env, encoding: "utf8" })
+  assert.equal(baseline.status, 0, baseline.stderr)
   const configPath = writeSource("plugins/desk/mcp/config/coverage-gate.json", JSON.stringify({
     thresholds: { lines: 100, branches: 100, functions: 100, statements: 100 },
     exclusions,

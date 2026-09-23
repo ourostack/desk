@@ -110,7 +110,7 @@ function withDeadline(operation, timeoutMs, reason, message) {
   ]).finally(() => clearTimeout(timer))
 }
 
-function hasQuery(request = {}) {
+function hasQuery(request) {
   return typeof request.query === "string" && request.query.trim().length > 0
 }
 
@@ -147,13 +147,6 @@ function semanticDiagnostic(proof) {
 
 async function semanticBarrierState(controller, request, semanticDeadlineMs) {
   const signal = request.signal
-  if (!controller) {
-    return {
-      current: false,
-      reason: "semantic_unavailable",
-      message: "No readiness controller is available for semantic serving.",
-    }
-  }
   try {
     const initial = await cancellable(() => controller.barrier({ capability: "semantic" }), signal)
     if (initial.current === true) return initial
@@ -286,8 +279,8 @@ export function createQueryRouter({
         if (initial.current === true) {
           if (semanticDesired) {
             try { await semanticBarrierState(controller, request, semanticDeadlineMs) } catch (error) {
-              if (error.code !== "semantic_deadline") throw error
-              diagnostic = { reason: error.code, message: String(error.message ?? error) }
+              signal?.throwIfAborted()
+              diagnostic = { reason: error.code, message: error.message }
             }
           }
           before = await serviceProof(request)
@@ -383,7 +376,7 @@ export function createQueryRouter({
       signal?.throwIfAborted()
       if (error.code === "artifact_tombstone_ledger_invalid") throw error
       if (error.code === "semantic_deadline") {
-        return semanticCapabilityError("semantic_deadline", String(error.message ?? error))
+        return semanticCapabilityError("semantic_deadline", error.message)
       }
       return semanticCapabilityError(error.code ?? "semantic_unavailable", String(error.message ?? error))
     } finally {
@@ -488,9 +481,6 @@ export function createDeskQueryRouter({ controller } = {}) {
         } })
     },
     semanticBackend: (request) => {
-      if (request.kind !== "recall" && request.kind !== "similar") {
-        throw new Error(`Unsupported semantic request kind: ${request.kind}`)
-      }
       const backend = request.kind === "recall" ? indexedRecall : indexedSimilar
       return backend({ deskRoot: request.deskRoot, db: request.db, input: request, opts: request.opts })
     },

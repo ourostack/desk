@@ -13,6 +13,11 @@ import { startReadinessController } from "./controller-server.js"
 
 const localControllers = new Map()
 const controllerStarts = new Map()
+const privateDirectoryValidators = {
+  win32: Object,
+  darwin: validatePrivateDirectory,
+  linux: validatePrivateDirectory,
+}
 
 export async function connectOrStartController({
   root,
@@ -27,7 +32,7 @@ export async function connectOrStartController({
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
-  if (process.platform !== "win32") validatePrivateDirectory(stateDir)
+  privateDirectoryValidators[process.platform](stateDir)
   const endpoint = deriveControllerEndpoint({ identity })
 
   let local = localControllers.get(identity.id)
@@ -191,7 +196,7 @@ function requireCompatibleHandshake(handshake, identity) {
 }
 
 function readControllerToken({ identity, stateDir }) {
-  if (process.platform !== "win32") validatePrivateDirectory(stateDir)
+  privateDirectoryValidators[process.platform](stateDir)
   const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
   if (stableStringify(lexicalControllerIdentity(record.identity)) !== stableStringify(lexicalControllerIdentity(identity)) ||
       typeof record.owner?.token !== "string") {
@@ -205,7 +210,8 @@ function endpointIsReclaimable({ endpoint, identity, stateDir }) {
     validatePrivateDirectory(stateDir)
     validatePrivateDirectory(path.dirname(endpoint))
     const stat = lstatSync(endpoint)
-    if (!stat.isSocket() || stat.uid !== process.getuid()) return false
+    const reclaimableSocket = Number(stat.isSocket()) * Number(stat.uid === process.getuid()) === 1
+    if (!reclaimableSocket) return false
     const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
     if (stableStringify(lexicalControllerIdentity(record.identity)) !== stableStringify(lexicalControllerIdentity(identity))
       || record.endpoint !== endpoint || record.socket?.dev !== stat.dev || record.socket?.ino !== stat.ino
@@ -227,7 +233,7 @@ function request({
   endpoint,
   identity,
   method,
-  params = {},
+  params,
   timeoutMs = 2_000,
   signal,
 }) {

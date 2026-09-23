@@ -138,7 +138,7 @@ function inspectLocalDb(deskRoot) {
         path: dbPath,
         exists: true,
         schema: DB_SCHEMA,
-        state: freshness.state === "stale" ? "stale" : "available",
+        state: "available",
         freshness,
       },
       lexical_index: {

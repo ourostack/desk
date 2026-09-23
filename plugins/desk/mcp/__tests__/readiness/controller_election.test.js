@@ -1,8 +1,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { fork } from "node:child_process"
-import { createConnection } from "node:net"
+import { createConnection, createServer } from "node:net"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { tmpdir } from "node:os"
@@ -88,6 +88,32 @@ test("successful convergence advances the lexical barrier to ready", async () =>
     rmSync(root, { recursive: true, force: true })
     rmSync(stateHome, { recursive: true, force: true })
   }
+})
+
+test("controller uses the default state home under the current HOME when stateHome is omitted", async (t) => {
+  const root = tempFixture("desk-controller-root-")
+  const home = tempFixture("desk-controller-home-")
+  const previousHome = process.env.HOME
+  process.env.HOME = home
+  t.after(() => {
+    process.env.HOME = previousHome
+    rmSync(root, { recursive: true, force: true })
+    rmSync(home, { recursive: true, force: true })
+  })
+  const client = await connectOrStartController({ root, ephemeral: true })
+  try {
+    assert.equal(client.accepted, true)
+    assert.equal(existsSync(path.join(home, ".cache", "ouroboros-skills", "desk", "readiness", client.id, "owner.json")), true)
+  } finally {
+    await client.close()
+  }
+})
+
+test("controller startup without options fails before creating an owner", async () => {
+  await assert.rejects(
+    () => connectOrStartController(),
+    { code: "ERR_INVALID_ARG_TYPE" },
+  )
 })
 
 test("a second compatible client refreshes convergence from lexical ready", async () => {
@@ -246,6 +272,189 @@ test("aborted controller requests fail before opening a socket", async (t) => {
   const abort = new AbortController()
   abort.abort(new Error("caller stopped waiting"))
   await assert.rejects(client.fenceEvents({ signal: abort.signal }), /caller stopped waiting/u)
+})
+
+test("controller election waits through a listener collision until the owner handshakes", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const root = tempFixture("desk-owner-wait-")
+  const stateHome = path.join(root, "state")
+  const identity = endpoints.controllerIdentity({ root, protocolVersion: 1, lexicalContract: {}, semanticContract: null })
+  const stateDir = path.join(stateHome, identity.id)
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const endpoint = endpoints.deriveControllerEndpoint({ identity })
+  const token = "owner-token"
+  let requests = 0
+  const server = createServer((socket) => {
+    let pending = ""
+    socket.on("data", (chunk) => {
+      pending += chunk
+      if (!pending.includes("\n")) return
+      requests++
+      if (requests === 1) {
+        socket.destroy()
+        return
+      }
+      if (requests === 2) {
+        const message = JSON.parse(pending.split("\n")[0])
+        socket.end(`${JSON.stringify({
+          id: message.id,
+          result: { accepted: false, identity },
+        })}\n`)
+        return
+      }
+      const message = JSON.parse(pending.split("\n")[0])
+      socket.end(`${JSON.stringify({
+        id: message.id,
+        result: { accepted: true, identity },
+      })}\n`)
+    })
+  })
+  await new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(endpoint, resolve)
+  })
+  const stat = lstatSync(endpoint)
+  writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({
+    identity,
+    endpoint,
+    socket: { dev: stat.dev, ino: stat.ino },
+    owner: { token, pid: process.pid },
+  }))
+  t.after(() => {
+    server.close()
+    rmSync(root, { recursive: true, force: true })
+    rmSync(endpoint, { force: true })
+  })
+  const client = await connectOrStartController({ root, stateHome, ephemeral: true })
+  await client.close()
+  assert.equal(requests >= 3, true)
+})
+
+test("external controller semantic mismatch during discovery is surfaced without takeover", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const root = tempFixture("desk-owner-semantic-discovery-")
+  const stateHome = path.join(root, "state")
+  const expected = { mode: "background", endpoints: ["http://owner.invalid"] }
+  const observed = { mode: "required", endpoints: ["http://caller.invalid"] }
+  const identity = endpoints.controllerIdentity({ root, protocolVersion: 1, lexicalContract: {}, semanticContract: expected })
+  const stateDir = path.join(stateHome, identity.id)
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const endpoint = endpoints.deriveControllerEndpoint({ identity })
+  const token = "owner-token"
+  writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({ identity, owner: { token } }))
+  const server = createServer((socket) => {
+    let pending = ""
+    socket.on("data", (chunk) => {
+      pending += chunk
+      if (!pending.includes("\n")) return
+      const message = JSON.parse(pending.split("\n")[0])
+      socket.end(`${JSON.stringify({
+        id: message.id,
+        error: {
+          code: "controller_semantic_mismatch",
+          message: "semantic mismatch",
+          diagnostic: { expected, observed },
+        },
+      })}\n`)
+    })
+  })
+  await new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(endpoint, resolve)
+  })
+  t.after(() => {
+    server.close()
+    rmSync(root, { recursive: true, force: true })
+    rmSync(endpoint, { force: true })
+  })
+  await assert.rejects(
+    () => connectOrStartController({ root, stateHome, semanticContract: expected, ephemeral: true }),
+    { code: "controller_semantic_mismatch" },
+  )
+})
+
+test("controller request timeout rejects bounded calls when an owner stops responding", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const root = tempFixture("desk-owner-timeout-")
+  const stateHome = path.join(root, "state")
+  const identity = endpoints.controllerIdentity({ root, protocolVersion: 1, lexicalContract: {}, semanticContract: null })
+  const stateDir = path.join(stateHome, identity.id)
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const endpoint = endpoints.deriveControllerEndpoint({ identity })
+  const token = "owner-token"
+  writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({ identity, owner: { token } }))
+  const server = createServer((socket) => {
+    let pending = ""
+    socket.on("data", (chunk) => {
+      pending += chunk
+      if (!pending.includes("\n")) return
+      const message = JSON.parse(pending.split("\n")[0])
+      if (message.method === "handshake") {
+        socket.end(`${JSON.stringify({ id: message.id, result: { accepted: true, identity } })}\n`)
+      }
+    })
+  })
+  await new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(endpoint, resolve)
+  })
+  t.after(() => {
+    server.close()
+    rmSync(root, { recursive: true, force: true })
+    rmSync(endpoint, { force: true })
+  })
+  const client = await connectOrStartController({ root, stateHome, ephemeral: true })
+  await assert.rejects(client.status(), /readiness controller request timed out: status/u)
+  await client.close()
+})
+
+test("controller request errors preserve diagnostic payloads", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const root = tempFixture("desk-owner-diagnostic-")
+  const stateHome = path.join(root, "state")
+  const identity = endpoints.controllerIdentity({ root, protocolVersion: 1, lexicalContract: {}, semanticContract: null })
+  const stateDir = path.join(stateHome, identity.id)
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const endpoint = endpoints.deriveControllerEndpoint({ identity })
+  const token = "owner-token"
+  writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({ identity, owner: { token } }))
+  const diagnostic = { reason: "fixture_reason", message: "fixture diagnostic" }
+  const server = createServer((socket) => {
+    let pending = ""
+    socket.on("data", (chunk) => {
+      pending += chunk
+      if (!pending.includes("\n")) return
+      const message = JSON.parse(pending.split("\n")[0])
+      if (message.method === "handshake") {
+        socket.end(`${JSON.stringify({ id: message.id, result: { accepted: true, identity } })}\n`)
+        return
+      }
+      socket.end(`${JSON.stringify({
+        id: message.id,
+        error: { code: "fixture_error", reason: "fixture_reason", message: "fixture failed", diagnostic },
+      })}\n`)
+    })
+  })
+  await new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(endpoint, resolve)
+  })
+  t.after(() => {
+    server.close()
+    rmSync(root, { recursive: true, force: true })
+    rmSync(endpoint, { force: true })
+  })
+  const client = await connectOrStartController({ root, stateHome, ephemeral: true })
+  await assert.rejects(client.status(), {
+    code: "fixture_error",
+    reason: "fixture_reason",
+    diagnostic,
+  })
+  await client.close()
 })
 
 async function ownershipProcess(root, stateHome, semanticContract) {
