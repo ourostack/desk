@@ -428,20 +428,29 @@ function declaresCanonicalRfc(body) {
   return body
     .split(/[.!?\n]+/u)
     .some((sentence) => {
-      const subject = sentence.match(/\bthis(?:\s+(?:document|file|rfc))?\b/iu);
-      if (!subject || !/\bcanonical\b/iu.test(sentence) || !/\brfc\b/iu.test(sentence)) {
-        return false;
-      }
-      const tail = sentence.slice(subject.index + subject[0].length);
-      const positivePredicate = /^\s+(?:is|serves as|constitutes|defines|establishes|acts as|becomes|remains)\b/iu.test(tail);
-      const positiveAfterContrast = /\bbut\s+(?:is|serves as|constitutes|defines|establishes|acts as|becomes|remains)\b[^.!?]*\bcanonical\b[^.!?]*\brfc\b/iu.test(tail);
-      if (positiveAfterContrast) return true;
-      if (!positivePredicate) return false;
-      if (/\b(?:not|never|does not|is not|isn't|doesn't|cannot|can't|no longer|neither|nor)\b/iu.test(tail)) {
-        return false;
-      }
-      return !/\bcanonical\b[^.!?]*\brfc\b\s+(?:pointer|redirect|link|reference)\b/iu.test(tail);
+      const [head, ...contrasts] = sentence.split(/\bbut\b/iu);
+      const subject = head.match(/\bthis(?:\s+(?:document|file|rfc))?\b/iu);
+      if (!subject) return false;
+      const predicates = [
+        head.slice(subject.index + subject[0].length),
+        ...contrasts,
+      ];
+      return predicates.some(isCanonicalAssertionClause);
     });
+}
+
+function isCanonicalAssertionClause(clause) {
+  if (!/^\s+(?:is|serves as|constitutes|defines|establishes|acts as|becomes|remains)\b/iu.test(clause)) {
+    return false;
+  }
+  if (!/\bcanonical\b/iu.test(clause) || !/\brfc\b/iu.test(clause)) return false;
+  if (/\b(?:not|never|does not|is not|isn't|doesn't|cannot|can't|no longer|neither|nor)\b/iu.test(clause)) {
+    return false;
+  }
+  if (/\b(?:is|serves as|acts as)\s+(?:an?\s+|the\s+)?(?:active\s+)?(?:canonical\s+rfc\s+)?(?:pointer|redirect|link|reference)\s+to\s+[^.!?]*\bcanonical\b[^.!?]*\brfc\b/iu.test(clause)) {
+    return false;
+  }
+  return !/\bcanonical\b[^.!?]*\brfc\b\s+(?:pointer|redirect|link|reference)\b/iu.test(clause);
 }
 
 function markdownLinkDestinations(body) {

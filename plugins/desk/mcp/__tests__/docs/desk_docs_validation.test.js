@@ -391,6 +391,8 @@ test("canonical RFC discovery rejects another active canonical declaration", () 
     "This document does not serve as the canonical Agentic Engineering V2 RFC.",
     "This RFC is no longer the canonical Agentic Engineering V2 RFC.",
     "This RFC establishes neither the canonical Agentic Engineering V2 RFC nor its successor.",
+    "This document was previously authoritative but is not the canonical Agentic Engineering V2 RFC.",
+    "This document is a pointer to the canonical Agentic Engineering V2 RFC.",
   ]) {
     docsValidator.validateCanonicalRfc([], {
       readFile: (file) => {
