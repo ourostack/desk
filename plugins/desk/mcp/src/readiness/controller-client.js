@@ -27,6 +27,7 @@ export async function connectOrStartController({
   stateHome = path.join(os.homedir(), ".cache", "ouroboros-skills", "desk", "readiness"),
   handlers,
   watcher,
+  watcherFactory,
   ephemeral = false,
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
@@ -44,6 +45,7 @@ export async function connectOrStartController({
         ephemeral,
         handlers,
         watcher,
+        watcherFactory,
         identity,
         stateDir,
       })
@@ -75,6 +77,7 @@ async function startOrReuseController({
   ephemeral,
   handlers,
   watcher,
+  watcherFactory,
   identity,
   stateDir,
 }) {
@@ -86,17 +89,20 @@ async function startOrReuseController({
   if (process.platform !== "win32" && endpointIsReclaimable({ endpoint, identity, stateDir })) {
     unlinkSync(endpoint)
   }
+  let ownedWatcher = watcher
   try {
+    ownedWatcher ??= await watcherFactory?.({ root: identity.root })
     const controller = await startReadinessController({
       identity,
       endpoint,
       stateDir,
       handlers,
-      watcher,
+      watcher: ownedWatcher,
       ephemeral,
     })
     localControllers.set(identity.id, { controller, clients: 0 })
   } catch (error) {
+    ownedWatcher?.close?.()
     if (!isControllerElectionCollision(error)) {
       throw error
     }

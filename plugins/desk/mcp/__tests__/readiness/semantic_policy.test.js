@@ -180,6 +180,28 @@ for (const semantic of ["background", "required"]) {
   })
 }
 
+test("background convergence helper returns null when no controller start was admitted", async () => {
+  assert.equal(await beginBackgroundConvergence(null), null)
+  assert.equal(await beginBackgroundConvergence({ controller: {} }), null)
+})
+
+test("server controller connector works without an explicit state home and still converges", async (t) => {
+  const root = fixture(t)
+  writeFileSync(path.join(root, "task.md"), "# Lexical only\n\nNo explicit state home.\n")
+  const controller = await connectOrStartController({
+    deskRoot: root,
+    policy: normalizeReadinessPolicy({ semantic: "unsupported" }),
+    ephemeral: true,
+  })
+  try {
+    const result = await controller.beginConvergence()
+    assert.ok(result.summary.lexical_generation >= 1)
+    assert.equal((await controller.barrier({ capability: "lexical" })).current, true)
+  } finally {
+    await controller.close()
+  }
+})
+
 for (const coverage of [
   undefined,
   { chunks_total: 1, vectors_indexed: 0, missing_vectors: 1 },

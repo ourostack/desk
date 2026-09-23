@@ -218,6 +218,28 @@ test("server.callTool defaults omitted input to an empty object", async () => {
   }
 })
 
+test("server.callTool treats admitted readiness without a live controller as an explicit null readiness handle", async () => {
+  const root = await mkTempDeskRoot()
+  let received
+  const original = TOOL_IMPLS.task_create
+  TOOL_IMPLS.task_create = async (arg) => {
+    received = arg
+    return { status: "probed" }
+  }
+  try {
+    const res = await callTool({
+      deskRoot: root,
+      name: "task_create",
+      input: {},
+      statusContext: { admission: { state: "CONTROL_READY" } },
+    })
+    assert.equal(res.isError, undefined)
+    assert.equal(received.readiness, null)
+  } finally {
+    TOOL_IMPLS.task_create = original
+  }
+})
+
 test("server.callTool routes a person-scoped write end-to-end (path shows desks/<alias>/)", async () => {
   const root = await mkTempDeskRoot()
   const res = await callTool({

@@ -100,7 +100,7 @@ export async function startReadinessController({
       active = await withJournal((value) => value)
     } catch (error) {
       markUncertain("journal_integrity_failed")
-      throw error instanceof JournalIntegrityError ? error : new JournalIntegrityError(error)
+      throw new JournalIntegrityError(error)
     }
     return fenceEvents({ controller: { watcher, journal: active, recordChange, markUncertain } })
   }
@@ -175,7 +175,6 @@ export async function startReadinessController({
       if (revision === startedRevision) {
         journal.reconciled(eventCursor)
         freshnessReason = null
-        if (state === "RECOVERING") state = transitionReadiness(state, "LEXICAL_CONVERGING")
         state = transitionReadiness(state, "LEXICAL_READY")
         if (semanticCurrent()) state = transitionReadiness(state, "READY")
       }
@@ -288,7 +287,12 @@ export async function startReadinessController({
       reconcileScheduled = null
       await convergence?.catch(() => {})
       await journalWork
-      try { await journal?.close() } finally { await closeServer(server, stateDir, owner) }
+      try {
+        await journal?.close()
+      } finally {
+        watcher?.close?.()
+        await closeServer(server, stateDir, owner)
+      }
     },
   }
 }

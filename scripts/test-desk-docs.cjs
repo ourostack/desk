@@ -839,6 +839,8 @@ module.exports = {
   fixtureRecord,
   fixtureErrors,
   markdownLines,
+  listTrackedMarkdownFiles,
+  localMarkdownLinkPaths,
   run,
   startCli,
   validateAll,

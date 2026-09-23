@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
+import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import * as path from "node:path"
@@ -27,6 +28,10 @@ function assertFails(text, expected, headingPath = [], options = {}) {
 
 function assertPasses(text, headingPath = [], options = {}) {
   assert.deepEqual(errorsFor(text, headingPath, options), [])
+}
+
+function readText(relativePath) {
+  return readFileSync(path.join(repoRoot, relativePath), "utf8")
 }
 
 function toolNamesSource(tools = docsValidator.MCP_TOOL_NAMES) {
@@ -531,6 +536,98 @@ test("public RFC pointers reject denylisted context and broken local links", () 
   assert.deepEqual(linkedImageErrors, [
     `${topLevelRfcPointer} must link to ${canonicalRfcPath}`,
   ])
+})
+
+test("default markdown discovery paths cover tracked docs, archive filtering, reference fallbacks, and local-link defaults", () => {
+  assert.equal(docsValidator.listTrackedMarkdownFiles().includes(canonicalRfcPath), true)
+  assert.deepEqual(
+    docsValidator.findCanonicalRfcCopies({
+      repoRoot: "/unused",
+      markdownFiles: [canonicalRfcPath, "_archive/old.md"],
+      readFile: () => canonicalRfcBody(),
+    }),
+    [canonicalRfcPath],
+  )
+
+  const existing = path.join(repoRoot, "plugins", "desk", "README.md")
+  const exists = (candidate) => candidate === existing
+
+  const implicitLinkErrors = []
+  docsValidator.validateLocalMarkdownLinks(implicitLinkErrors, {
+    file: "notes.md",
+    body: [
+      "[Implicit][]",
+      "[Implicit]: plugins/desk/README.md",
+      "[Missing][nope]",
+    ].join("\n"),
+    repoRoot,
+    exists,
+  })
+  assert.deepEqual(implicitLinkErrors, [])
+
+  const linkErrors = []
+  docsValidator.validateLocalMarkdownLinks(linkErrors, {
+    file: "notes.md",
+    body: "[Broken](./missing.md)",
+    repoRoot,
+    exists: () => false,
+  })
+  assert.deepEqual(linkErrors, [
+    "notes.md has broken local link missing.md",
+  ])
+
+  assert.deepEqual(docsValidator.findCanonicalRfcCopies(), [canonicalRfcPath])
+  docsValidator.validateCanonicalRfc([])
+  const pointerErrors = []
+  docsValidator.validateCanonicalRfcPointers(pointerErrors)
+  assert.deepEqual(pointerErrors, [])
+})
+
+test("docs validator exports also pass through their repository defaults", () => {
+  assert.equal(docsValidator.markdownLines("plugins/desk/README.md").length > 0, true)
+  assert.deepEqual(docsValidator.fixtureRecord("fixture text"), {
+    file: "fixture.md",
+    line: 1,
+    text: "fixture text",
+    lower: "fixture text",
+    headingPath: [],
+    inFence: false,
+  })
+  assert.deepEqual(docsValidator.fixtureErrors("healthy path"), [])
+
+  const errors = []
+  docsValidator.validateHealthyPathLanguage(errors)
+  docsValidator.validatePrivacyNotes(errors)
+  docsValidator.validateTopicCoverage(errors)
+  docsValidator.validateWorkflowWiring(errors)
+  docsValidator.validateMcpReadmeToolSurface(errors)
+  docsValidator.validateMcpToolRegistrySurface(errors)
+  docsValidator.validateBrowserFocusPolicy(errors)
+  assert.deepEqual(errors, [])
+
+  assert.throws(() => docsValidator.validateLocalMarkdownLinks([]), /replace/u)
+  docsValidator.validateLocalMarkdownLinks([], {
+    file: canonicalRfcPath,
+    body: readText(canonicalRfcPath),
+  })
+  assert.throws(() => docsValidator.localMarkdownLinkPaths(), /replace/u)
+  assert.equal(
+    docsValidator.localMarkdownLinkPaths({
+      file: canonicalRfcPath,
+      body: readText(canonicalRfcPath),
+    }).every((entry) => path.isAbsolute(entry)),
+    true,
+  )
+
+  assert.equal(docsValidator.run(), 0)
+  const previousExitCode = process.exitCode
+  try {
+    process.exitCode = undefined
+    assert.equal(docsValidator.startCli({ isMain: true }), 0)
+    assert.equal(process.exitCode, 0)
+  } finally {
+    process.exitCode = previousExitCode
+  }
 })
 
 test("run and startCli expose success, failure, and no-op CLI paths", () => {

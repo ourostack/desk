@@ -5,12 +5,51 @@ import * as path from "node:path"
 import * as net from "node:net"
 import { connectOrStartController } from "../../src/readiness/controller-client.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
+import { createWorkspaceWatcher } from "../../src/readiness/workspace-watcher.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 function deferred() {
   let resolve
   const promise = new Promise((done) => { resolve = done })
   return { promise, resolve }
+}
+
+function createWatchHarness() {
+  let callback = null
+  let errorHandler = null
+  let closed = false
+  return {
+    watchFactory(root, options, handler) {
+      callback = handler
+      return {
+        on(event, listener) {
+          if (event === "error") errorHandler = listener
+        },
+        close() {
+          closed = true
+        },
+      }
+    },
+    emit(eventType, filename) {
+      callback(eventType, filename)
+    },
+    fail(error = new Error("watcher exploded")) {
+      errorHandler?.(error)
+    },
+    isClosed() {
+      return closed
+    },
+  }
+}
+
+async function waitForFenceMarker(root) {
+  const markerDir = path.join(root, ".state", "readiness-fences")
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [marker] = fs.existsSync(markerDir) ? fs.readdirSync(markerDir) : []
+    if (marker) return path.join(markerDir, marker)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error("workspace watcher marker was never created")
 }
 
 async function fixture(options = {}) {
@@ -28,6 +67,13 @@ async function fenceModule() {
   assert.equal(typeof module.fenceEvents, "function", "event fence must exist")
   return module
 }
+
+test("workspace watcher construction without a root fails immediately", async () => {
+  await assert.rejects(
+    () => createWorkspaceWatcher(),
+    { code: "ERR_INVALID_ARG_TYPE" },
+  )
+})
 
 for (const reason of ["overflow", "lost_history", "journal_corrupt", "clock_uncertain", "unclean_shutdown", "unsupported_flush"]) {
   test(`fence never converts ${reason} into certainty`, async () => {
@@ -103,6 +149,7 @@ test("external write immediately before a fence is durably delivered, not silent
       return { indexed: true }
     } },
   })
+
   const client = await connectOrStartController(options)
   try {
     await client.beginConvergence()
@@ -117,6 +164,338 @@ test("external write immediately before a fence is durably delivered, not silent
     release.resolve()
     await client.barrier({ capability: "lexical", wait: true })
   } finally { release.resolve(); await client.close() }
+})
+
+test("production workspace watcher fences and delivers external writes", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const watcher = await createWorkspaceWatcher({ root, timeoutMs: 5_000 })
+  t.after(() => watcher.close())
+
+  fs.writeFileSync(path.join(root, "external.md"), "# external")
+  const changes = []
+  const fence = await watcher.fence({
+    recordChange(change) {
+      changes.push(change)
+      return { recorded: true }
+    },
+  })
+
+  assert.deepEqual(fence, { certain: true })
+  assert.deepEqual(changes.map(({ path, operation }) => ({ path, operation })), [
+    { path: "external.md", operation: "write" },
+  ])
+})
+
+test("production workspace watcher propagates durable recording failures", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-recording-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, timeoutMs: 5_000, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  fs.writeFileSync(path.join(root, "external.md"), "# external")
+  harness.emit("change", "external.md")
+  const fence = watcher.fence({
+    recordChange() {
+      throw new Error("durable recording failed")
+    },
+  })
+  const marker = await waitForFenceMarker(root)
+  harness.emit("change", path.relative(root, marker))
+  await assert.rejects(
+    fence,
+    /durable recording failed/u,
+  )
+})
+
+test("workspace watcher reports lost history when the backend omits the filename", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-lost-history-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  harness.emit("change", null)
+  assert.deepEqual(await watcher.fence(), { certain: false, reason: "lost_history" })
+})
+
+test("workspace watcher reports lost history when the backend emits an unsafe relative path", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-invalid-path-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  harness.emit("change", "../outside.md")
+  assert.deepEqual(await watcher.fence(), { certain: false, reason: "lost_history" })
+})
+
+test("workspace watcher fails closed after a timeout waiting for the marker event", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-timeout-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, timeoutMs: 20, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  assert.deepEqual(await watcher.fence(), { certain: false, reason: "clock_uncertain" })
+})
+
+test("workspace watcher fails closed when marker creation cannot be written", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-write-failure-")
+  const root = path.join(directory, "workspace")
+  const markerDir = path.join(root, ".state", "readiness-fences")
+  fs.mkdirSync(root, { recursive: true })
+  const watcher = await createWorkspaceWatcher({ root })
+  t.after(() => watcher.close())
+
+  fs.rmSync(markerDir, { recursive: true, force: true })
+  fs.mkdirSync(markerDir)
+  fs.writeFileSync(path.join(markerDir, "sentinel"), "occupied")
+  fs.writeFileSync(path.join(markerDir, "forced-file"), "forced")
+  fs.rmSync(markerDir, { recursive: true, force: true })
+  fs.writeFileSync(markerDir, "not a directory")
+  assert.deepEqual(await watcher.fence(), { certain: false, reason: "watcher_failed" })
+})
+
+test("workspace watcher aborts an in-flight fence without inferring certainty", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-abort-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  const abort = new AbortController()
+  const fence = watcher.fence({ signal: abort.signal })
+  await waitForFenceMarker(root)
+  abort.abort(new Error("caller stopped waiting"))
+  await assert.rejects(fence, /caller stopped waiting/u)
+})
+
+test("workspace watcher ignores .state and configured state roots, reports nested deletes, and accepts an idle fence", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-ignore-")
+  const root = path.join(directory, "workspace")
+  const stateHome = path.join(directory, "state-home")
+  const externalStateRoot = path.join(root, "external-state")
+  const nestedDir = path.join(root, "nested")
+  fs.mkdirSync(root)
+  fs.mkdirSync(stateHome)
+  fs.mkdirSync(externalStateRoot)
+  fs.mkdirSync(nestedDir)
+  fs.writeFileSync(path.join(nestedDir, "task.md"), "# nested")
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({
+    root,
+    ignoredPaths: [stateHome, externalStateRoot, path.join(directory, "outside-state")],
+    watchFactory: harness.watchFactory,
+  })
+  t.after(() => watcher.close())
+
+  const idleFence = watcher.fence({ recordChange() { assert.fail("idle fence should not record changes") } })
+  const idleMarker = await waitForFenceMarker(root)
+  harness.emit("change", path.relative(root, idleMarker))
+  assert.deepEqual(await idleFence, { certain: true })
+
+  fs.writeFileSync(path.join(root, ".state", "transient.md"), "ignored state")
+  fs.writeFileSync(path.join(externalStateRoot, "ignored.md"), "ignored state root")
+  fs.unlinkSync(path.join(nestedDir, "task.md"))
+  harness.emit("change", ".state/transient.md")
+  harness.emit("change", "external-state/ignored.md")
+  harness.emit("change", "nested/task.md")
+  const changes = []
+  const fence = watcher.fence({
+    recordChange(change) {
+      changes.push(change)
+      return { recorded: true }
+    },
+  })
+  const marker = await waitForFenceMarker(root)
+  harness.emit("change", path.relative(root, marker))
+  assert.deepEqual(await fence, { certain: true })
+  assert.deepEqual(changes.map(({ path, operation }) => ({ path, operation })), [
+    { path: "nested/task.md", operation: "delete" },
+  ])
+})
+
+test("workspace watcher accepts buffered relative filenames and does not require an error listener", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-buffer-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  let callback
+  const watcher = await createWorkspaceWatcher({
+    root,
+    watchFactory(_root, _options, handler) {
+      callback = handler
+      return {
+        close() {},
+      }
+    },
+  })
+  t.after(() => watcher.close())
+
+  fs.writeFileSync(path.join(root, "buffered.md"), "# buffered")
+  const changes = []
+  callback("change", Buffer.from("./buffered.md"))
+  const fence = watcher.fence({
+    recordChange(change) {
+      changes.push(change)
+      return { recorded: true }
+    },
+  })
+  const marker = await waitForFenceMarker(root)
+  callback("change", Buffer.from(path.relative(root, marker)))
+  assert.deepEqual(await fence, { certain: true })
+  assert.deepEqual(changes.map(({ path, operation }) => ({ path, operation })), [
+    { path: "buffered.md", operation: "write" },
+  ])
+})
+
+test("workspace watcher closes cleanly and then fails closed", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-close-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, watchFactory: harness.watchFactory })
+
+  watcher.close()
+  t.after(() => watcher.close())
+  assert.equal(harness.isClosed(), true)
+  assert.deepEqual(await watcher.fence(), { certain: false, reason: "watcher_closed" })
+})
+
+test("workspace watcher returns watcher_failed when the backend reports an error", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-error-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  harness.fail()
+  assert.deepEqual(await watcher.fence(), { certain: false, reason: "watcher_failed" })
+})
+
+test("workspace watcher fails closed when marker cleanup cannot unlink the marker path", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-marker-cleanup-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  const fence = watcher.fence()
+  const markerPath = await waitForFenceMarker(root)
+  fs.unlinkSync(markerPath)
+  fs.mkdirSync(markerPath)
+  harness.emit("change", path.relative(root, markerPath))
+  assert.deepEqual(await fence, { certain: false, reason: "watcher_failed" })
+})
+
+test("workspace watcher tolerates a marker path already removed by cleanup racing with the callback", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-marker-enoent-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  const fence = watcher.fence()
+  const markerPath = await waitForFenceMarker(root)
+  fs.unlinkSync(markerPath)
+  harness.emit("change", path.relative(root, markerPath))
+  assert.deepEqual(await fence, { certain: true })
+})
+
+test("workspace watcher fails closed when it cannot rescan the workspace after a marker event", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-scan-failure-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  fs.writeFileSync(path.join(root, "external.md"), "# external")
+  harness.emit("change", "external.md")
+  const fence = watcher.fence()
+  const markerPath = await waitForFenceMarker(root)
+  fs.rmSync(root, { recursive: true, force: true })
+  harness.emit("change", path.relative(root, markerPath))
+  assert.deepEqual(await fence, { certain: false, reason: "watcher_failed" })
+})
+
+test("workspace watcher fails closed when the backend fails after observing the marker but before the certainty check", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-post-marker-failure-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  const fence = watcher.fence()
+  const markerPath = await waitForFenceMarker(root)
+  harness.emit("change", path.relative(root, markerPath))
+  harness.fail()
+  assert.deepEqual(await fence, { certain: false, reason: "watcher_failed" })
+})
+
+test("workspace watcher preserves a newer sequence for the same path across serialized fences", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-sequence-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  const file = path.join(root, "task.md")
+  fs.writeFileSync(file, "# first")
+  harness.emit("change", "task.md")
+  const firstFence = watcher.fence({
+    recordChange(change) {
+      fs.writeFileSync(file, "# second")
+      harness.emit("change", "task.md")
+      return { recorded: true, change }
+    },
+  })
+  const firstMarker = await waitForFenceMarker(root)
+  harness.emit("change", path.relative(root, firstMarker))
+  assert.deepEqual(await firstFence, { certain: true })
+
+  const secondChanges = []
+  const secondFence = watcher.fence({
+    recordChange(change) {
+      secondChanges.push(change)
+      return { recorded: true }
+    },
+  })
+  const secondMarker = await waitForFenceMarker(root)
+  harness.emit("change", path.relative(root, secondMarker))
+  assert.deepEqual(await secondFence, { certain: true })
+  assert.deepEqual(secondChanges.map(({ path, operation }) => ({ path, operation })), [
+    { path: "task.md", operation: "write" },
+  ])
+})
+
+test("workspace watcher ignores non-file entries during scans", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-symlink-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const target = path.join(directory, "target.md")
+  fs.writeFileSync(target, "# target")
+  fs.symlinkSync(target, path.join(root, "linked.md"))
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  const fence = watcher.fence({ recordChange() { assert.fail("symlink should not be recorded as a file") } })
+  const marker = await waitForFenceMarker(root)
+  harness.emit("change", path.relative(root, marker))
+  assert.deepEqual(await fence, { certain: true })
 })
 
 test("uncertainty during convergence cannot be overwritten by the old pass", async () => {
@@ -350,4 +729,19 @@ test("F3 missing journal rejects the fence and keeps the live barrier non-curren
     assert.equal(passes, 2)
     assert.notEqual((await client.status()).freshness.cursor.journal_id, originalCursor.journal_id)
   } finally { release.resolve(); await client.close() }
+})
+
+test("controller fence rejects a journal backend that cannot open before watcher evidence is considered", async () => {
+  const options = await fixture({
+    watcher: { fence: async () => ({ certain: true }) },
+    handlers: { beginConvergence: async () => ({ indexed: true }) },
+  })
+  const client = await connectOrStartController(options)
+  try {
+    fs.writeFileSync(path.join(options.stateHome, client.id, "journal"), "not a directory")
+    await assert.rejects(client.fenceEvents(), { code: "journal_integrity_failed" })
+    const status = await client.status()
+    assert.equal(status.freshness.certain, false)
+    assert.equal(status.freshness.reason, "journal_integrity_failed")
+  } finally { await client.close() }
 })
