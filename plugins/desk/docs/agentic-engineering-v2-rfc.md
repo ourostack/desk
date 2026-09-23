@@ -76,15 +76,15 @@ Public generic policy stays here and in the compact Desk foundation. Environment
 
 ## Current status — September 23, 2026
 
-**Alpha 1 pre-final candidate; Windows and Linux receipts pending.** The candidate follows the moving `v2-alpha` branches. Exact commits, trees and content digests are qualification evidence, not installation authority.
+**Alpha 1 pre-final candidate; Windows PWF delta and hosted Linux receipts pending.** The candidate follows the moving `v2-alpha` branches. Exact commits, trees and content digests are qualification evidence, not installation authority.
 
-The completed source and macOS evidence establishes restored semantic behavior, fail-closed watcher reconciliation, the complete Desk source gate, a seven-root Copilot composition with native Superpowers review, zero excluded review-provider context in the admitted normal session, deterministic work-measurement formulas, macOS fresh-process continuity, and `old -> current -> old -> current` rollback and forward resumption. Agency-managed work remains Copilot-only. Claude uses standalone root Desk outside that overlay composition and its approval integration; a failed Agency Claude launch is therefore negative-boundary evidence, not a product failure.
+The completed source, macOS and Windows evidence establishes restored semantic behavior, fail-closed watcher reconciliation, the complete Desk source gate, a seven-root Copilot composition with native Superpowers review, zero excluded review-provider context in the admitted normal session, deterministic work-measurement formulas, macOS and Windows fresh-process continuity, person-scoped authority, real local Ollama repeatability, exact-owned Windows cleanup, and `old -> current -> old -> current` rollback and forward resumption. The Windows pass binds PWF `7770499f3c483328df2a61c41a3a0e8e945539e3`; the current PWF candidate `d6f45e777510d42f8aeaa3dc091c658348548be4` still needs its targeted registry-authority delta receipt. Agency-managed work remains Copilot-only. Claude uses standalone root Desk outside that overlay composition and its approval integration; a failed Agency Claude launch is therefore negative-boundary evidence, not a product failure.
 
 Two release rows remain open:
 
-- **Managed Windows final qualification:** running externally; no final receipt is available yet.
+- **Managed Windows PWF delta:** the registry-authority correction must pass the bounded Windows mission against the changed PWF bytes.
 - **Hosted Linux source qualification:** source gates must be reused from authorized source pull-request CI; the current Docker registry `ECONNRESET` leaves this coverage unavailable, and no duplicate temporary CI infrastructure will be created.
 
 The Alpha 1 measurement packet uses manually normalized, safe events and the reusable deterministic formula kernel. It reports what happened, what mattered, what was muda, how the system flowed, and what coverage is unavailable. Missing intervals, spend and cross-host receipts remain unavailable rather than becoming zero, and this one lineage does not establish causal productivity improvement.
 
-Until both pending receipts exist and the pre-final packet is regenerated against them, this RFC does not claim opt-in qualification, publication, default adoption, RC readiness, or stable support. Future DevRel “show one” examples remain a non-blocking refinement.
+Until the Windows delta and hosted Linux receipts exist and the pre-final packet is regenerated against them, this RFC does not claim opt-in qualification, publication, default adoption, RC readiness, or stable support. Future DevRel “show one” examples remain a non-blocking refinement.
