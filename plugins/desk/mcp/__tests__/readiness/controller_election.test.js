@@ -285,11 +285,18 @@ test("controller publication failures propagate without treating them as electio
   const stateDir = path.join(stateHome, identity.id)
   mkdirSync(path.join(stateDir, "owner.json"), { recursive: true, mode: 0o700 })
   const endpoint = endpoints.deriveControllerEndpoint({ identity })
+  let watcherCloses = 0
   t.after(() => rmSync(endpoint, { force: true }))
   await assert.rejects(
-    () => connectOrStartController({ root, stateHome, ephemeral: true }),
+    () => connectOrStartController({
+      root,
+      stateHome,
+      ephemeral: true,
+      watcherFactory: async () => ({ close() { watcherCloses += 1 } }),
+    }),
     { code: "EISDIR" },
   )
+  assert.equal(watcherCloses, 1)
   assert.equal(existsSync(endpoint), false)
 })
 
