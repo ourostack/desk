@@ -74,19 +74,17 @@ V2 does not grant repository ownership, publication authority, destructive autho
 
 Public generic policy stays here and in the compact Desk foundation. Environment-specific rules belong in consumer overlays, product behavior belongs in the product repository, and operator preferences belong in the operator's workspace.
 
-## Current status — September 22, 2026
+## Current status — September 23, 2026
 
-**Alpha 1 candidate under qualification.** This dated capsule intentionally records the September 22, 2026 candidate state while the evergreen contract above remains current.
+**Alpha 1 pre-final candidate; Windows and Linux receipts pending.** The candidate follows the moving `v2-alpha` branches. Exact commits, trees and content digests are qualification evidence, not installation authority.
 
-The candidate remains gated on:
+The completed source and macOS evidence establishes restored semantic behavior, fail-closed watcher reconciliation, the complete Desk source gate, a seven-root Copilot composition with native Superpowers review, zero excluded review-provider context in the admitted normal session, deterministic work-measurement formulas, macOS fresh-process continuity, and `old -> current -> old -> current` rollback and forward resumption. Agency-managed work remains Copilot-only. Claude uses standalone root Desk outside that overlay composition and its approval integration; a failed Agency Claude launch is therefore negative-boundary evidence, not a product failure.
 
-- restored semantic behavior under the readiness contract;
-- zero excluded review-provider context in a fresh normal session and its first review transition;
-- the complete required Desk suite passing without weakened thresholds or suppressed failures;
-- installed macOS and Windows continuity, authority, restart, rollback, and forward resumption;
-- complete Linux automated qualification;
-- fresh-session delegation coaching and authority behavior;
-- reusable deterministic measurement formulas with adversarial fixtures;
-- a final evidence matrix that maps every release claim to exact source, command or scenario, result, environment, review disposition, and known limit.
+Two release rows remain open:
 
-Until those gates pass, this RFC describes an opt-in candidate on the moving alpha source. It does not claim publication, default adoption, release qualification, or stable support.
+- **Managed Windows final qualification:** running externally; no final receipt is available yet.
+- **Hosted Linux source qualification:** source gates must be reused from authorized source pull-request CI; the current Docker registry `ECONNRESET` leaves this coverage unavailable, and no duplicate temporary CI infrastructure will be created.
+
+The Alpha 1 measurement packet uses manually normalized, safe events and the reusable deterministic formula kernel. It reports what happened, what mattered, what was muda, how the system flowed, and what coverage is unavailable. Missing intervals, spend and cross-host receipts remain unavailable rather than becoming zero, and this one lineage does not establish causal productivity improvement.
+
+Until both pending receipts exist and the pre-final packet is regenerated against them, this RFC does not claim opt-in qualification, publication, default adoption, RC readiness, or stable support. Future DevRel “show one” examples remain a non-blocking refinement.
