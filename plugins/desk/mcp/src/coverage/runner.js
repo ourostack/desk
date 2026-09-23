@@ -43,6 +43,7 @@ export function runCoverageCommand(options = {}) {
   const requiredFiles = collectChangedCoverageFiles({
     repoRoot,
     spawn,
+    env,
   })
   const coverageIncludeFiles = filterCoverageIncludeFiles({
     requiredFiles,
@@ -93,8 +94,8 @@ export function runCoverageCommand(options = {}) {
   }
 }
 
-export function collectChangedCoverageFiles({ repoRoot, spawn = spawnSync }) {
-  const changed = new Set(collectChangedFiles({ repoRoot, spawn }))
+export function collectChangedCoverageFiles({ repoRoot, spawn = spawnSync, env = process.env }) {
+  const changed = new Set(collectChangedFiles({ repoRoot, spawn, env }))
   return collectCoverageRequiredFiles({ repoRoot })
     .filter((file) => changed.has(file))
 }
@@ -108,22 +109,49 @@ export function filterCoverageIncludeFiles({ requiredFiles, exclusions = [] }) {
   return requiredFiles.filter((file) => !excludedPaths.has(normalizePath(file)))
 }
 
-export function collectChangedFiles({ repoRoot, spawn = spawnSync }) {
+export function collectChangedFiles({ repoRoot, spawn = spawnSync, env = process.env }) {
   return unique([
-    ...changedSinceMergeBase({ repoRoot, spawn }),
+    ...changedSinceMergeBase({ repoRoot, spawn, env }),
     ...gitLines({ repoRoot, spawn, args: ["diff", "--name-only", "--diff-filter=AM"] }),
     ...gitLines({ repoRoot, spawn, args: ["diff", "--cached", "--name-only", "--diff-filter=AM"] }),
     ...gitLines({ repoRoot, spawn, args: ["ls-files", "--others", "--exclude-standard"] }),
   ].map(normalizePath))
 }
 
-export function changedSinceMergeBase({ repoRoot, spawn = spawnSync }) {
-  const base =
-    gitText({ repoRoot, spawn, args: ["merge-base", "origin/main", "HEAD"] }) ||
-    gitText({ repoRoot, spawn, args: ["merge-base", "main", "HEAD"] })
+export function changedSinceMergeBase({ repoRoot, spawn = spawnSync, env = process.env }) {
+  const base = resolveCoverageBase({ repoRoot, spawn, env })
   return base
     ? gitLines({ repoRoot, spawn, args: ["diff", "--name-only", "--diff-filter=AM", `${base}..HEAD`] })
     : []
+}
+
+export function resolveCoverageBase({ repoRoot, spawn = spawnSync, env = process.env }) {
+  for (const candidate of coverageBaseCandidates({ repoRoot, spawn, env })) {
+    const base = gitText({ repoRoot, spawn, args: ["merge-base", candidate, "HEAD"] })
+    if (base) return base
+  }
+  return ""
+}
+
+function coverageBaseCandidates({ repoRoot, spawn, env }) {
+  const candidates = []
+  pushIfSet(candidates, env.DESK_COVERAGE_BASE_REF)
+  const pullRequestBase = cleanText(env.GITHUB_BASE_REF)
+  if (pullRequestBase) {
+    pushIfSet(candidates, `origin/${pullRequestBase}`)
+    pushIfSet(candidates, pullRequestBase)
+  }
+  pushIfSet(
+    candidates,
+    gitText({
+      repoRoot,
+      spawn,
+      args: ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+    }),
+  )
+  pushIfSet(candidates, "origin/main")
+  pushIfSet(candidates, "main")
+  return unique(candidates)
 }
 
 function runInstrumentedTests({
@@ -237,6 +265,15 @@ function gitLines({ repoRoot, spawn, args }) {
 
 function normalizePath(file) {
   return file.replaceAll(path.sep, "/")
+}
+
+function pushIfSet(values, value) {
+  const text = cleanText(value)
+  if (text) values.push(text)
+}
+
+function cleanText(value) {
+  return typeof value === "string" ? value.trim() : ""
 }
 
 function unique(values) {
