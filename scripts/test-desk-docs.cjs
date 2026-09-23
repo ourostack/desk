@@ -427,21 +427,30 @@ function findCanonicalRfcCopies({
 function declaresCanonicalRfc(body) {
   return body
     .split(/[.!?\n]+/u)
-    .flatMap((sentence) => sentence.split(/\b(?:and|but|while|although|though)\b|[;:]/iu))
-    .some((clause) => (
-      /\bthis(?:\s+(?:document|file|rfc))?\s+(?:is|serves as|constitutes|defines|establishes|acts as|becomes|remains)\b/iu.test(clause) &&
-      /\bcanonical\b/iu.test(clause) &&
-      /\brfc\b/iu.test(clause) &&
-      !/\b(?:not|never|does not|is not|isn't|doesn't|cannot|can't|no longer|neither|nor)\b/iu.test(clause) &&
-      !/\b(?:pointer|redirect|link|reference)\b/iu.test(clause)
-    ));
+    .some((sentence) => {
+      const subject = sentence.match(/\bthis(?:\s+(?:document|file|rfc))?\b/iu);
+      if (!subject || !/\bcanonical\b/iu.test(sentence) || !/\brfc\b/iu.test(sentence)) {
+        return false;
+      }
+      const tail = sentence.slice(subject.index + subject[0].length);
+      const positivePredicate = /^\s+(?:is|serves as|constitutes|defines|establishes|acts as|becomes|remains)\b/iu.test(tail);
+      const positiveAfterContrast = /\bbut\s+(?:is|serves as|constitutes|defines|establishes|acts as|becomes|remains)\b[^.!?]*\bcanonical\b[^.!?]*\brfc\b/iu.test(tail);
+      if (positiveAfterContrast) return true;
+      if (!positivePredicate) return false;
+      if (/\b(?:not|never|does not|is not|isn't|doesn't|cannot|can't|no longer|neither|nor)\b/iu.test(tail)) {
+        return false;
+      }
+      return !/\bcanonical\b[^.!?]*\brfc\b\s+(?:pointer|redirect|link|reference)\b/iu.test(tail);
+    });
 }
 
 function markdownLinkDestinations(body) {
   const renderedBody = body
     .replace(/<!--[\s\S]*?-->/gu, "")
     .replace(/^\s{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\s*\1\s*$/gmu, "")
-    .replace(/(`+)[^`\n]*\1/gu, "");
+    .replace(/(`+)[^`\n]*\1/gu, "")
+    .replace(/!\[[^\]]*\]\([^)\n]*\)/gu, "")
+    .replace(/!\[[^\]]*\]\[[^\]]*\]/gu, "");
   const definitions = new Map();
   for (const match of renderedBody.matchAll(
     /^\s{0,3}\[([^\]]+)\]:\s*(?:<([^>\n]+)>|([^\s]+))(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*$/gmu,

@@ -326,6 +326,24 @@ test("canonical RFC discovery rejects another active canonical declaration", () 
     /exactly one active canonical/iu,
   )
 
+  for (const declaration of [
+    "This RFC is not merely a pointer but is the canonical Agentic Engineering V2 RFC.",
+    "This document is the canonical Agentic Engineering V2 RFC, with a link to migration notes.",
+  ]) {
+    assert.throws(
+      () => docsValidator.validateCanonicalRfc([], {
+        readFile: (file) => {
+          if (file === canonicalRfcPath) return canonicalRfcBody()
+          if (file === "SECOND-RFC.md") return `# Another RFC\n\n${declaration}\n`
+          return "Not canonical."
+        },
+        repoRoot,
+        markdownFiles: [canonicalRfcPath, "SECOND-RFC.md"],
+      }),
+      /exactly one active canonical/iu,
+    )
+  }
+
   assert.throws(
     () => docsValidator.validateCanonicalRfc([], {
       readFile: (file) => {
@@ -498,6 +516,16 @@ test("public RFC pointers reject denylisted context and broken local links", () 
       `${topLevelRfcPointer} must link to ${canonicalRfcPath}`,
     ])
   }
+
+  const linkedImageErrors = []
+  docsValidator.validateCanonicalRfcPointers(linkedImageErrors, {
+    pointers: [topLevelRfcPointer],
+    readFile: () => `[![RFC](${canonicalRfcPath})](plugins/desk/README.md)`,
+    repoRoot,
+  })
+  assert.deepEqual(linkedImageErrors, [
+    `${topLevelRfcPointer} must link to ${canonicalRfcPath}`,
+  ])
 })
 
 test("run and startCli expose success, failure, and no-op CLI paths", () => {
