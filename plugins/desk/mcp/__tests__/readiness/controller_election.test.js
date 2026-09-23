@@ -8,7 +8,10 @@ import * as sqliteVec from "sqlite-vec"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
-import { connectOrStartController } from "../../src/readiness/controller-client.js"
+import {
+  connectOrStartController,
+  createControllerResponseAccumulator,
+} from "../../src/readiness/controller-client.js"
 import { startReadinessController } from "../../src/readiness/controller-server.js"
 import * as endpoints from "../../src/readiness/identity.js"
 
@@ -21,6 +24,15 @@ function deferred() {
   const promise = new Promise((done) => { resolve = done })
   return { promise, resolve }
 }
+
+test("controller response buffering waits for a newline across chunks", () => {
+  const lines = []
+  const append = createControllerResponseAccumulator((line) => lines.push(line))
+  append('{"id":')
+  assert.deepEqual(lines, [])
+  append('1,"result":{}}\n')
+  assert.deepEqual(lines, ['{"id":1,"result":{}}'])
+})
 
 test("simultaneous compatible starters elect one controller", async () => {
   const root = tempFixture("desk-controller-root-")
@@ -448,7 +460,7 @@ test("controller request timeout rejects bounded calls when an owner stops respo
   await client.close()
 })
 
-test("controller request errors preserve diagnostic payloads across fragmented responses", {
+test("controller request errors preserve diagnostic payloads", {
   skip: process.platform === "win32",
 }, async (t) => {
   const root = tempFixture("desk-owner-diagnostic-")
@@ -470,13 +482,10 @@ test("controller request errors preserve diagnostic payloads across fragmented r
         socket.end(`${JSON.stringify({ id: message.id, result: { accepted: true, identity } })}\n`)
         return
       }
-      const response = `${JSON.stringify({
+      socket.end(`${JSON.stringify({
         id: message.id,
         error: { code: "fixture_error", reason: "fixture_reason", message: "fixture failed", diagnostic },
-      })}\n`
-      socket.write(response.slice(0, 1), () => {
-        setImmediate(() => socket.end(response.slice(1)))
-      })
+      })}\n`)
     })
   })
   await new Promise((resolve, reject) => {

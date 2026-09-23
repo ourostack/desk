@@ -235,6 +235,18 @@ function endpointIsReclaimable({ endpoint, identity, stateDir }) {
   }
 }
 
+export function createControllerResponseAccumulator(onLine) {
+  let pending = ""
+  return (chunk) => {
+    pending += chunk
+    const newline = pending.indexOf("\n")
+    if (newline < 0) return
+    const line = pending.slice(0, newline)
+    pending = pending.slice(newline + 1)
+    onLine(line)
+  }
+}
+
 function request({
   endpoint,
   identity,
@@ -249,7 +261,6 @@ function request({
     const abort = () => { socket.destroy(); reject(signal.reason) }
     signal?.addEventListener("abort", abort, { once: true })
     const id = randomUUID()
-    let pending = ""
     const timeout = timeoutMs === null ? null : setTimeout(() => {
       socket.destroy()
       reject(new Error(`readiness controller request timed out: ${method}`))
@@ -266,13 +277,10 @@ function request({
         },
       }))}\n`)
     })
-    socket.on("data", (chunk) => {
-      pending += chunk
-      const newline = pending.indexOf("\n")
-      if (newline < 0) return
+    socket.on("data", createControllerResponseAccumulator((line) => {
       clearTimeout(timeout)
       socket.end()
-      const response = JSON.parse(pending.slice(0, newline))
+      const response = JSON.parse(line)
       if (response.error) {
         const error = new Error(response.error.message)
         if (typeof response.error.code === "string") error.code = response.error.code
@@ -282,7 +290,7 @@ function request({
       } else {
         resolve(response.result)
       }
-    })
+    }))
     socket.once("error", (error) => {
       clearTimeout(timeout)
       reject(error)
