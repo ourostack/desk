@@ -428,11 +428,38 @@ function declaresCanonicalRfc(body) {
   return body
     .split(/[.!?\n]+/u)
     .some((sentence) => (
-      /\bthis(?:\s+(?:document|file|rfc))?\s+(?:is|serves as|constitutes|defines)\b/iu.test(sentence) &&
+      /\bthis(?:\s+(?:document|file|rfc))?\s+(?:is|serves as|constitutes|defines|establishes|acts as|becomes|remains)\b/iu.test(sentence) &&
       /\bcanonical\b/iu.test(sentence) &&
       /\brfc\b/iu.test(sentence) &&
+      !/\b(?:not|never|does not|is not|isn't|doesn't|cannot|can't)\b/iu.test(sentence) &&
       !/\b(?:pointer|redirect|link|reference)\b/iu.test(sentence)
     ));
+}
+
+function markdownLinkDestinations(body) {
+  const definitions = new Map();
+  for (const match of body.matchAll(
+    /^\s{0,3}\[([^\]]+)\]:\s*(?:<([^>\n]+)>|([^\s]+))(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*$/gmu,
+  )) {
+    definitions.set(normalizeReferenceLabel(match[1]), match[2] ?? match[3]);
+  }
+
+  const destinations = [];
+  for (const match of body.matchAll(
+    /\[[^\]]+\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/gu,
+  )) {
+    destinations.push(match[1] ?? match[2]);
+  }
+  for (const match of body.matchAll(/\[([^\]]+)\]\[([^\]]*)\]/gu)) {
+    const label = normalizeReferenceLabel(match[2] || match[1]);
+    const destination = definitions.get(label);
+    if (destination) destinations.push(destination);
+  }
+  return destinations;
+}
+
+function normalizeReferenceLabel(label) {
+  return label.trim().replace(/\s+/gu, " ").toLowerCase();
 }
 
 function localMarkdownLinkPaths({
@@ -440,15 +467,15 @@ function localMarkdownLinkPaths({
   body,
   repoRoot = defaultRepoRoot,
 } = {}) {
-  const links = [];
-  for (const match of body.matchAll(/\[[^\]]+\]\(([^)]+)\)/gu)) {
-    const target = match[1].trim();
-    if (!target || /^(?:https?:|mailto:|#)/iu.test(target)) continue;
-    const pathOnly = target.split("#")[0].split("?")[0];
-    if (!pathOnly) continue;
-    links.push(path.resolve(repoRoot, path.dirname(file), decodeURIComponent(pathOnly)));
-  }
-  return links;
+  return markdownLinkDestinations(body)
+    .filter((target) => target && !/^(?:https?:|mailto:|#)/iu.test(target))
+    .map((target) => target.split("#")[0].split("?")[0])
+    .filter(Boolean)
+    .map((target) => path.resolve(
+      repoRoot,
+      path.dirname(file),
+      decodeURIComponent(target),
+    ));
 }
 
 function validateLocalMarkdownLinks(errors, {

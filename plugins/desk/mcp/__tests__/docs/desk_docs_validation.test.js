@@ -341,6 +341,21 @@ test("canonical RFC discovery rejects another active canonical declaration", () 
     /exactly one active canonical/iu,
   )
 
+  assert.throws(
+    () => docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => {
+        if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === "SECOND-RFC.md") {
+          return "# Another RFC\n\nThis RFC establishes the canonical Agentic Engineering V2 RFC.\n"
+        }
+        return "Not canonical."
+      },
+      repoRoot,
+      markdownFiles: [canonicalRfcPath, "SECOND-RFC.md"],
+    }),
+    /exactly one active canonical/iu,
+  )
+
   docsValidator.validateCanonicalRfc([], {
     readFile: (file) => {
       if (file === canonicalRfcPath) return canonicalRfcBody()
@@ -352,6 +367,21 @@ test("canonical RFC discovery rejects another active canonical declaration", () 
     repoRoot,
     markdownFiles: [canonicalRfcPath, "RFC-POINTER.md"],
   })
+
+  for (const disclaimer of [
+    "This RFC is not the canonical Agentic Engineering V2 RFC.",
+    "This document does not serve as the canonical Agentic Engineering V2 RFC.",
+  ]) {
+    docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => {
+        if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === "DISCLAIMER.md") return `# Disclaimer\n\n${disclaimer}\n`
+        return "Not canonical."
+      },
+      repoRoot,
+      markdownFiles: [canonicalRfcPath, "DISCLAIMER.md"],
+    })
+  }
 
   assert.throws(
     () => docsValidator.validateCanonicalRfc([], {
@@ -420,6 +450,20 @@ test("public RFC pointers reject denylisted context and broken local links", () 
   assert.deepEqual(barePathErrors, [
     `${topLevelRfcPointer} must link to ${canonicalRfcPath}`,
   ])
+
+  for (const body of [
+    `[RFC](<${canonicalRfcPath}>)`,
+    `[RFC](${canonicalRfcPath} "Canonical RFC")`,
+    `[RFC][canonical-rfc]\n\n[canonical-rfc]: ${canonicalRfcPath} "Canonical RFC"`,
+  ]) {
+    const standardLinkErrors = []
+    docsValidator.validateCanonicalRfcPointers(standardLinkErrors, {
+      pointers: [topLevelRfcPointer],
+      readFile: () => body,
+      repoRoot,
+    })
+    assert.deepEqual(standardLinkErrors, [])
+  }
 })
 
 test("run and startCli expose success, failure, and no-op CLI paths", () => {
