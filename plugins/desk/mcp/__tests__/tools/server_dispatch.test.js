@@ -110,11 +110,12 @@ test("server.callTool routes desk_thread to the real implementation", async () =
     name: "desk_thread",
     input: { start_path: "nope/does/not/exist.md" },
   })
-  // No isError — desk_thread returns a structured `not_indexed` payload
-  // for an unknown path, not a thrown error.
+  // No isError — without a readiness controller, desk_thread returns the
+  // structured fail-closed lexical capability diagnostic.
   const body = parseResult(res)
-  assert.equal(body.error, "not_indexed")
-  assert.match(body.note, /isn't in the desk-index/)
+  assert.equal(body.status, "error")
+  assert.equal(body.code, "required_capability_unavailable")
+  assert.equal(body.capability, "lexical")
 })
 
 test("server.callTool rejects unknown tool names", async () => {

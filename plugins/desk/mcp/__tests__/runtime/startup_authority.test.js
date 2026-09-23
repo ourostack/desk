@@ -1,12 +1,37 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { main } from "../../index.js"
 import { createMcpServer, startServer } from "../../src/server.js"
+
+function tempRoot(prefix) {
+  return mkdtempSync(path.join(realpathSync(tmpdir()), prefix))
+}
+
+function admittedController(events = []) {
+  return {
+    accepted: true,
+    async recordChange(change) {
+      events.push(["recordChange", change])
+      return { recorded: true }
+    },
+    async markUncertain(reason) {
+      events.push(["markUncertain", reason])
+      return { uncertain: true }
+    },
+    async beginConvergence() {
+      events.push("converge")
+      return { reused: false }
+    },
+    async barrier({ capability }) {
+      return { capability, current: true, certain: true }
+    },
+  }
+}
 
 for (const scenario of [
   { name: "workspace", policy: "workspace", expectedPerson: null },
@@ -20,13 +45,14 @@ for (const scenario of [
   { name: "provider person/workspace policy mismatch", policy: "workspace", provider: { mode: "person", person: "ari" }, refused: true },
 ]) {
   test(`common startup dispatches only admitted authority: ${scenario.name}`, async (t) => {
-    const root = mkdtempSync(path.join(tmpdir(), "desk-startup-authority-"))
+    const root = tempRoot("desk-startup-authority-")
     t.after(() => rmSync(root, { recursive: true, force: true }))
     const server = createMcpServer()
     const client = new Client({ name: "authority-smoke", version: "1.0.0" })
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
     let started = false
     let effectivePerson
+    const controllerEvents = []
     try {
       const starting = main({
         argv: ["--root", root, ...(scenario.raw === undefined ? [] : ["--person", scenario.raw])],
@@ -37,7 +63,7 @@ for (const scenario of [
         },
         authorityProviders: { registry: async () => scenario.provider },
         runtimeImporter: async () => ({
-          connectOrStartController: async () => ({ accepted: true }),
+          connectOrStartController: async () => admittedController(controllerEvents),
           async startServer(options) {
             started = true
             effectivePerson = options.person
@@ -63,6 +89,8 @@ for (const scenario of [
       assert.equal(JSON.parse(result.content[0].text).path, expectedPath)
       assert.equal(effectivePerson, scenario.expectedPerson)
       assert.equal(existsSync(path.join(root, expectedPath)), true)
+      assert.deepEqual(controllerEvents.map(([method]) => method), ["recordChange"])
+      assert.equal(controllerEvents[0][1].path, expectedPath)
       const wrongPrefix = scenario.expectedPerson === null ? ["desks", "ari"] : []
       assert.equal(existsSync(path.join(root, ...wrongPrefix, "ops", "authority-route", "task.md")), false)
       assert.equal(existsSync(path.join(root, "desks", "bob")), false)
@@ -74,7 +102,7 @@ for (const scenario of [
 }
 
 test("common startup rejects contradictory authority even from a runtime-provided admission implementation", async (t) => {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-custom-admission-"))
+  const root = tempRoot("desk-custom-admission-")
   t.after(() => rmSync(root, { recursive: true, force: true }))
   let started = false
   await assert.rejects(main({
@@ -95,7 +123,7 @@ for (const scenario of [
   { policy: "workspace", authority: { mode: "workspace" }, expected: null },
 ]) {
   test(`prebuilt runtime admission ${scenario.authority.mode} under ${scenario.policy} policy`, async (t) => {
-    const root = mkdtempSync(path.join(tmpdir(), "desk-runtime-authority-"))
+    const root = tempRoot("desk-runtime-authority-")
     t.after(() => rmSync(root, { recursive: true, force: true }))
     const events = []
     const starting = main({

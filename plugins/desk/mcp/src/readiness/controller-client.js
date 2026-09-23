@@ -92,11 +92,15 @@ async function startOrReuseController({
     })
     localControllers.set(identity.id, { controller, clients: 0 })
   } catch (error) {
-    if (error?.code !== "EADDRINUSE") {
+    if (!isControllerElectionCollision(error)) {
       throw error
     }
     await waitForHandshake({ endpoint, identity, stateDir })
   }
+}
+
+function isControllerElectionCollision(error) {
+  return error?.code === "EADDRINUSE" || error?.code === "EEXIST"
 }
 
 function createClient({ endpoint, ephemeral, identity, local, token }) {

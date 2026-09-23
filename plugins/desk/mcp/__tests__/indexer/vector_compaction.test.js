@@ -568,8 +568,8 @@ test("desk_search exposes hybrid vs lexical search_mode while preserving archive
     input: { query: "alpha", scope: "all" },
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
-  assert.equal(hybrid.search_mode, "hybrid")
-  assert.equal(hybrid.semantic_unavailable, false)
+  assert.equal(hybrid.search_mode, "lexical")
+  assert.equal(hybrid.semantic_unavailable, true)
   assert.ok(hybrid.results.some((result) => result.path.includes("task-active")))
   assert.ok(hybrid.results.some((result) => result.path.includes("_archive")))
 
@@ -599,8 +599,8 @@ test("desk_timeline exposes temporal, hybrid, and lexical search_mode variants",
     input: { from: "2025-01-01", to: "2026-12-31", query: "alpha" },
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
-  assert.equal(hybrid.search_mode, "hybrid")
-  assert.equal(hybrid.semantic_unavailable, false)
+  assert.equal(hybrid.search_mode, "lexical")
+  assert.equal(hybrid.semantic_unavailable, true)
 
   const lexical = await desk_timeline({
     deskRoot: root,

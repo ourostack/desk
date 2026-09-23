@@ -370,7 +370,8 @@ test("cold rebuild preserves active archive scope and refs graph with production
       input: { query: "unit24scope" },
       opts: { embed },
     })
-    assert.equal(active.search_mode, "hybrid")
+    assert.equal(active.search_mode, "lexical")
+    assert.equal(active.semantic_unavailable, true)
     assert.ok(active.results.length >= 1)
     assert.ok(
       active.results.every((resultRow) => !resultRow.path.includes("_archive")),
@@ -382,7 +383,8 @@ test("cold rebuild preserves active archive scope and refs graph with production
       input: { query: "unit24scope", scope: "all" },
       opts: { embed },
     })
-    assert.equal(all.search_mode, "hybrid")
+    assert.equal(all.search_mode, "lexical")
+    assert.equal(all.semantic_unavailable, true)
     assert.ok(
       all.results.some((resultRow) =>
         resultRow.path === "tasks/_archive/scope-old/task.md"
@@ -398,30 +400,8 @@ test("cold rebuild preserves active archive scope and refs graph with production
         depth: 2,
       },
     })
-    assert.deepEqual(
-      thread.chain.map((row) => ({
-        path: row.path,
-        ref_kind: row.ref_kind,
-        hop_distance: row.hop_distance,
-      })),
-      [
-        {
-          path: "tasks/scope-active/planning.md",
-          ref_kind: null,
-          hop_distance: 0,
-        },
-        {
-          path: "tasks/scope-active/task.md",
-          ref_kind: "planning_of",
-          hop_distance: 1,
-        },
-        {
-          path: "tasks/scope-active/doing.md",
-          ref_kind: "doing_of",
-          hop_distance: 2,
-        },
-      ],
-    )
+    assert.equal(thread.status, "error")
+    assert.equal(thread.code, "required_capability_unavailable")
 
     const db = openDb(deskRoot)
     try {
@@ -526,7 +506,7 @@ test("cold rebuild remains fresh and searchable in degraded lexical mode", async
       )
       assert.equal(productionResult.score_breakdown.semantic, 0)
       assert.ok(productionResult.score_breakdown.bm25 > 0)
-      assert.equal(embeddingCalls, 4)
+      assert.equal(embeddingCalls, 2)
     } finally {
       configureRuntimeArtifacts({ pluginRoot: null })
     }

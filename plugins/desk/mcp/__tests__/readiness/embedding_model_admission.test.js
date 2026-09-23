@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { Socket } from "node:net"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
@@ -14,7 +14,7 @@ import { beginBackgroundConvergence, callTool, connectOrStartController } from "
 const CUSTOM_MODEL = "other-768-dimensional-model"
 
 function fixture(t, models) {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-model-admission-"))
+  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-model-admission-"))
   const stateHome = path.join(root, "controller-state")
   const cleanups = []
   t.after(async () => {

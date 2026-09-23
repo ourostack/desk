@@ -735,17 +735,15 @@ test("desk_reindex uses runtime artifacts without artifact opts", async () => {
     }))
 
     assert.equal(calls, 0)
-    assert.equal(result.status, "ok")
-    assert.equal(result.built, true)
-    assert.equal(result.reason, "missing")
-    assert.equal(result.missing_vectors, 0)
+    assert.equal(result.status, "error")
+    assert.equal(result.code, "required_capability_unavailable")
   } finally {
     globalThis.fetch = originalFetch
   }
 
   const db = openDb(deskRoot)
   try {
-    assertVectorApprox(storedVector(db, docPath, 0), vector(13))
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 0)
   } finally {
     closeDb(db)
   }

@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -182,7 +183,7 @@ function makeFixture({
   if (embeddingEndpoint !== undefined) {
     assert.match(embeddingEndpoint, /^http:\/\/127\.0\.0\.1:\d+\/api\/embeddings$/u)
   }
-  const root = mkdtempSync(path.join(tmpdir(), "desk-entrypoint-"))
+  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-entrypoint-"))
   const fixtureMcpRoot = path.join(root, "mcp")
   const deskRoot = path.join(root, "desk")
   const runtimeCacheDir = path.join(root, "runtime-cache")

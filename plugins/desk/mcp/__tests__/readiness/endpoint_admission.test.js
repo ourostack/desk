@@ -3,13 +3,13 @@ import assert from "node:assert/strict"
 import { fork } from "node:child_process"
 import { once } from "node:events"
 import { createServer } from "node:http"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { connectOrStartController } from "../../src/server.js"
 
 function fixture(t) {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-endpoints-"))
+  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-endpoints-"))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   writeFileSync(path.join(root, "task.md"), "# Endpoint capture\n\nDocument vector.\n")
   return root
