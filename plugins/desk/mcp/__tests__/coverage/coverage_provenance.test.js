@@ -207,7 +207,7 @@ test("the actual producer invocation binds the maintained loader, dependency cwd
   assert.equal(run.producerConfig.cwd, run.canonicalRepoRoot)
   assert.equal(run.producerConfig.reportDir, run.reportDirectory)
   assert.equal(run.producerConfig.tempDir, path.join(run.reportDirectory, "raw"))
-  assert.deepEqual(run.producerConfig.reporter, ["json-summary", "json"])
+  assert.deepEqual(run.producerConfig.reporter, ["json-summary", "json", "text"])
   const importIndex = args.indexOf("--import")
   assert.notEqual(importIndex, -1)
   assert.equal(args[importIndex - 1], process.execPath)

@@ -175,7 +175,7 @@ function runInstrumentedTests({
     // The maintained offline selection is only parsed and measured when its own extensions are admitted; without them nyc silently reports no entry at all for those production leaves.
     extension: [".js", ".cjs", ...(offline.selected ? [".mjs", ".ts"] : [])],
     ...(offline.requiresTypeScript ? { parserPlugins: ["typescript"] } : {}),
-    reporter: ["json-summary", "json"],
+    reporter: ["json-summary", "json", "text"],
     reportDir: reportDirectory,
     tempDir: path.join(reportDirectory, "raw"),
     cache: false,
