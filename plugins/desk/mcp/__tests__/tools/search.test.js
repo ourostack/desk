@@ -121,6 +121,9 @@ test("routed semantic tools serve the current semantic snapshot", async (t) => {
 test("routed timeline serves hybrid query results and temporal no-query results", async (t) => {
   const { desk_timeline } = await import("../../src/tools/search.js")
   const root = await mkTempDeskRoot()
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => { throw new Error("routed timeline must use the injected embedding fetch") }
+  t.after(() => { globalThis.fetch = originalFetch })
   await writeFile(root, "track/old/task.md", "---\nupdated: 2025-01-01\n---\nquartz old")
   await writeFile(root, "track/new/task.md", "---\nupdated: 2026-09-19\n---\nquartz current")
   const readiness = await createRoutedSemanticReadiness(t, root)

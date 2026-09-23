@@ -475,6 +475,7 @@ export function createDeskQueryRouter({ controller } = {}) {
         : request.kind === "timeline" ? indexedTimeline : indexedSearch
       return backend({ deskRoot: request.deskRoot, db: request.db, input: request,
         opts: {
+          ...request.opts,
           now: request.now,
           lexicalOnly: request.semanticCurrent !== true,
           semanticDiagnostic: request.semanticDiagnostic ?? null,
