@@ -138,7 +138,7 @@ test("routed timeline serves hybrid query results and temporal no-query results"
   assert.deepEqual(temporal.results.map((r) => r.path), [path.join("track", "new", "task.md")])
   assert.equal(temporal.search_mode, "temporal")
   assert.deepEqual(hybrid.results.map((r) => r.path), [path.join("track", "new", "task.md")])
-  assert.equal(hybrid.search_mode, "hybrid")
+  assert.equal(hybrid.search_mode, "hybrid", JSON.stringify(hybrid))
   assert.equal(hybrid.semantic_unavailable, false)
 })
 
