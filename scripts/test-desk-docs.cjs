@@ -447,7 +447,7 @@ function isCanonicalAssertionClause(clause) {
   if (/\b(?:not|never|does not|is not|isn't|doesn't|cannot|can't|no longer|neither|nor)\b/iu.test(clause)) {
     return false;
   }
-  if (/\b(?:is|serves as|acts as)\s+(?:an?\s+|the\s+)?(?:active\s+)?(?:canonical\s+rfc\s+)?(?:pointer|redirect|link|reference)\s+to\s+[^.!?]*\bcanonical\b[^.!?]*\brfc\b/iu.test(clause)) {
+  if (/\b(?:is|serves as|constitutes|defines|establishes|acts as|becomes|remains)\s+(?:(?:merely|only|just)\s+)?(?:an?\s+|the\s+)?(?:active\s+)?(?:canonical\s+rfc\s+)?(?:pointer|redirect|link|reference)\s+to\s+[^.!?]*\bcanonical\b[^.!?]*\brfc\b/iu.test(clause)) {
     return false;
   }
   return !/\bcanonical\b[^.!?]*\brfc\b\s+(?:pointer|redirect|link|reference)\b/iu.test(clause);
