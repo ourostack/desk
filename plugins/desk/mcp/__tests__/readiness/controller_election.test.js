@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { fork } from "node:child_process"
 import { createConnection } from "node:net"
 import Database from "better-sqlite3"
@@ -10,9 +10,13 @@ import * as path from "node:path"
 
 import { connectOrStartController } from "../../src/readiness/controller-client.js"
 
+function tempFixture(prefix) {
+  return mkdtempSync(path.join(realpathSync(tmpdir()), prefix))
+}
+
 test("simultaneous compatible starters elect one controller", async () => {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-controller-root-"))
-  const stateHome = mkdtempSync(path.join(tmpdir(), "desk-controller-state-"))
+  const root = tempFixture("desk-controller-root-")
+  const stateHome = tempFixture("desk-controller-state-")
   try {
     const options = {
       root,
@@ -39,8 +43,8 @@ test("simultaneous compatible starters elect one controller", async () => {
 })
 
 test("incompatible protocols use isolated controller namespaces", async () => {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-controller-root-"))
-  const stateHome = mkdtempSync(path.join(tmpdir(), "desk-controller-state-"))
+  const root = tempFixture("desk-controller-root-")
+  const stateHome = tempFixture("desk-controller-state-")
   try {
     const common = {
       root,
@@ -59,8 +63,8 @@ test("incompatible protocols use isolated controller namespaces", async () => {
 })
 
 test("successful convergence advances the lexical barrier to ready", async () => {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-controller-root-"))
-  const stateHome = mkdtempSync(path.join(tmpdir(), "desk-controller-state-"))
+  const root = tempFixture("desk-controller-root-")
+  const stateHome = tempFixture("desk-controller-state-")
   try {
     const client = await connectOrStartController({
       root,
@@ -86,8 +90,8 @@ test("successful convergence advances the lexical barrier to ready", async () =>
 })
 
 test("a second compatible client refreshes convergence from lexical ready", async () => {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-controller-root-"))
-  const stateHome = mkdtempSync(path.join(tmpdir(), "desk-controller-state-"))
+  const root = tempFixture("desk-controller-root-")
+  const stateHome = tempFixture("desk-controller-state-")
   let first
   let second
   try {
@@ -117,7 +121,7 @@ test("a second compatible client refreshes convergence from lexical ready", asyn
 })
 
 test("F2 in-process semantic mismatch refuses without retaining a phantom client", async (t) => {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-owner-local-"))
+  const root = tempFixture("desk-owner-local-")
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const common = { root, stateHome: path.join(root, "state"), ephemeral: true }
   const firstContract = { mode: "background", endpoints: ["http://first.invalid"] }
@@ -140,7 +144,7 @@ test("F2 in-process semantic mismatch refuses without retaining a phantom client
 })
 
 test("F2 wire handshake preserves semantic diagnostics and mismatched mutations are refused", async (t) => {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-owner-wire-"))
+  const root = tempFixture("desk-owner-wire-")
   const stateHome = path.join(root, "state")
   const expected = { mode: "background", embedding_spec: { id: "active", dimension: 768 }, endpoints: ["http://first.invalid"] }
   const observed = { ...expected, endpoints: ["http://other.invalid"] }
@@ -222,7 +226,7 @@ async function ownershipProcess(root, stateHome, semanticContract) {
 
 for (const difference of ["mode", "endpoints"]) {
   test(`F2 concurrent processes differing by semantic ${difference} elect exactly one lexical writer`, { timeout: 60_000 }, async (t) => {
-    const root = mkdtempSync(path.join(tmpdir(), "desk-owner-process-"))
+    const root = tempFixture("desk-owner-process-")
     const stateHome = path.join(root, "state")
     const processes = []
     t.after(async () => {

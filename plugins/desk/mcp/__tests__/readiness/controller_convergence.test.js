@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtempSync, rmSync, readFileSync } from "node:fs"
+import { mkdtempSync, rmSync, readFileSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { connectOrStartController } from "../../src/readiness/controller-client.js"
@@ -14,7 +14,7 @@ function deferred() {
 }
 
 function fixture(t, handler) {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-convergence-"))
+  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-convergence-"))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   return { root, stateHome: path.join(root, "state"), ephemeral: true,
     handlers: { beginConvergence: handler } }
