@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
+import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import * as path from "node:path"
@@ -29,6 +30,10 @@ function assertPasses(text, headingPath = [], options = {}) {
   assert.deepEqual(errorsFor(text, headingPath, options), [])
 }
 
+function readText(relativePath) {
+  return readFileSync(path.join(repoRoot, relativePath), "utf8")
+}
+
 function toolNamesSource(tools = docsValidator.MCP_TOOL_NAMES) {
   return `export const TOOL_NAMES = [\n${tools.map((tool) => `  "${tool}",`).join("\n")}\n]\n`
 }
@@ -42,56 +47,23 @@ function mcpReadmeBody(tools = docsValidator.MCP_TOOL_NAMES) {
 }
 
 const canonicalRfcPath = "plugins/desk/docs/agentic-engineering-v2-rfc.md"
-const requiredRfcTopLevelSections = [
-  "Status and audience",
-  "The unresolved problem",
-  "The V2 thesis",
-  "Human and agent responsibilities",
-  "Runtime, substrate, provider, overlay, and domain boundaries",
-  "Authority, continuity, and evidence",
-  "Flow and delegation judgment",
-  "Instruction coherence",
-  "Startup composition",
-  "Start or upgrade a Desk",
-  "Migrate a Crew workspace",
-  "Installation, readiness, and first work",
-  "Compatibility and rollback",
-  "Soak, release, and residual risk",
-  "Alternatives and rejected designs",
-]
+const canonicalRfcMarker = "<!-- canonical-agentic-engineering-v2-rfc -->"
+const topLevelRfcPointer = "AGENTIC-ENGINEERING-V2.md"
 
-function canonicalRfcBody(sectionTitles = requiredRfcTopLevelSections) {
-  const bodyBySection = new Map([
-    ["Status and audience", "This public RFC is for maintainers and operators."],
-    ["The unresolved problem", "Public-safe rationale needs a single canonical source."],
-    ["The V2 thesis", "V2 keeps the foundation layered and explicit."],
-    ["Human and agent responsibilities", "Humans hold authority and agents execute within it."],
-    ["Runtime, substrate, provider, overlay, and domain boundaries", "The layers depend downward rather than sideways."],
-    ["Authority, continuity, and evidence", "Authority, continuity, and evidence travel together."],
-    ["Flow and delegation judgment", [
-      "When a material requirement arrives during execution, continuity stays on the same durable task rather than breaking into a side quest.",
-      "The governing work record is updated before implementation, invalidated evidence is called out explicitly, unaffected work continues, and the affected change returns through the normal implementation and review gates.",
-      "### Lower-level headings stay allowed",
-      "Only the exact top-level H2 list is fixed.",
-    ].join("\n\n")],
-    ["Instruction coherence", "The public rationale lives in one canonical RFC."],
-    ["Startup composition", "Startup stays minimal and links here for rationale."],
-    ["Start or upgrade a Desk", "Desk startup keeps the durable workspace promises explicit."],
-    ["Migrate a Crew workspace", "Crew migration preserves durable work and explicit authorship."],
-    ["Installation, readiness, and first work", "Readiness means the runtime can start real work safely."],
-    ["Compatibility and rollback", "Adoption and rollback both happen in layers."],
-    ["Soak, release, and residual risk", "Fail-closed docs tests guard the public contract."],
-    ["Alternatives and rejected designs", "Duplicating private write-ups would drift and leak context."],
-  ])
+function canonicalRfcBody({ marker = canonicalRfcMarker, extraSection = "" } = {}) {
   return [
+    marker,
     "# Agentic Engineering V2",
     "",
-    ...sectionTitles.flatMap((title) => [
-      `## ${title}`,
-      "",
-      bodyBySection.get(title) ?? "Placeholder section content.",
-      "",
-    ]),
+    "## Purpose",
+    "",
+    "This public RFC is for maintainers and operators.",
+    "",
+    "## Current status — September 22, 2026",
+    "",
+    "Alpha 1 candidate under qualification.",
+    "",
+    extraSection,
   ].join("\n")
 }
 
@@ -312,25 +284,349 @@ test("browser focus validation requires background targets and rejects active-ta
   assert.ok(staleErrors.some((error) => error.includes("foregrounding CDP HTTP endpoints")))
 })
 
-test("canonical RFC validation fails closed on the exact required top-level H2 list while allowing lower-level headings", () => {
+test("canonical RFC validation is structural rather than prose-locking", () => {
   docsValidator.validateCanonicalRfc([], {
     readFile: (file) => file === canonicalRfcPath ? canonicalRfcBody() : "Not the canonical RFC.",
     repoRoot,
   })
 
-  for (const sectionTitles of [
-    requiredRfcTopLevelSections.slice(0, -1),
-    [...requiredRfcTopLevelSections, "Unexpected appendix"],
-    [requiredRfcTopLevelSections[1], requiredRfcTopLevelSections[0], ...requiredRfcTopLevelSections.slice(2)],
-    requiredRfcTopLevelSections.map((title) => title === "Startup composition" ? "Startup setup" : title),
+  docsValidator.validateCanonicalRfc([], {
+    readFile: (file) => file === canonicalRfcPath
+      ? canonicalRfcBody({ extraSection: "## An editorially flexible section\n\nNew public-safe prose." })
+      : "Not the canonical RFC.",
+    repoRoot,
+  })
+})
+
+test("canonical RFC validation requires one marker and the blessed top-level pointer", () => {
+  assert.throws(
+    () => docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => file === canonicalRfcPath ? canonicalRfcBody({ marker: "" }) : "Not the canonical RFC.",
+      repoRoot,
+    }),
+    /canonical marker/iu,
+  )
+
+  const errors = []
+  docsValidator.validateCanonicalRfcPointers(errors, {
+    pointers: [topLevelRfcPointer],
+    readFile: () => "# Pointer\n\nNo canonical destination here.\n",
+  })
+  assert.deepEqual(errors, [
+    `${topLevelRfcPointer} must link to ${canonicalRfcPath}`,
+  ])
+})
+
+test("canonical RFC discovery rejects another active canonical declaration", () => {
+  assert.throws(
+    () => docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => {
+        if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === "SECOND-RFC.md") return `${canonicalRfcMarker}\n# Another RFC\n`
+        return "Not canonical."
+      },
+      repoRoot,
+      markdownFiles: [canonicalRfcPath, "SECOND-RFC.md"],
+    }),
+    /exactly one active canonical/iu,
+  )
+
+  for (const declaration of [
+    "This RFC is not merely a pointer but is the canonical Agentic Engineering V2 RFC.",
+    "This document is the canonical Agentic Engineering V2 RFC, with a link to migration notes.",
   ]) {
     assert.throws(
       () => docsValidator.validateCanonicalRfc([], {
-        readFile: (file) => file === canonicalRfcPath ? canonicalRfcBody(sectionTitles) : "Not the canonical RFC.",
+        readFile: (file) => {
+          if (file === canonicalRfcPath) return canonicalRfcBody()
+          if (file === "SECOND-RFC.md") return `# Another RFC\n\n${declaration}\n`
+          return "Not canonical."
+        },
         repoRoot,
+        markdownFiles: [canonicalRfcPath, "SECOND-RFC.md"],
       }),
-      /RFC top-level H2 sections must exactly match the required order and names/u,
+      /exactly one active canonical/iu,
     )
+  }
+
+  assert.throws(
+    () => docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => {
+        if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === "SECOND-RFC.md") {
+          return "# Another RFC\n\nThis RFC is the canonical Agentic Engineering V2 RFC.\n"
+        }
+        return "Not canonical."
+      },
+      repoRoot,
+      markdownFiles: [canonicalRfcPath, "SECOND-RFC.md"],
+    }),
+    /exactly one active canonical/iu,
+  )
+
+  assert.throws(
+    () => docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => {
+        if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === "SECOND-RFC.md") {
+          return "# Another RFC\n\nThis RFC establishes the canonical Agentic Engineering V2 RFC.\n"
+        }
+        return "Not canonical."
+      },
+      repoRoot,
+      markdownFiles: [canonicalRfcPath, "SECOND-RFC.md"],
+    }),
+    /exactly one active canonical/iu,
+  )
+
+  docsValidator.validateCanonicalRfc([], {
+    readFile: (file) => {
+      if (file === canonicalRfcPath) return canonicalRfcBody()
+      if (file === "RFC-POINTER.md") {
+        return "# Pointer\n\nThis document is the canonical RFC pointer and redirect.\n"
+      }
+      return "Not canonical."
+    },
+    repoRoot,
+    markdownFiles: [canonicalRfcPath, "RFC-POINTER.md"],
+  })
+
+  for (const disclaimer of [
+    "This RFC is not the canonical Agentic Engineering V2 RFC.",
+    "This document does not serve as the canonical Agentic Engineering V2 RFC.",
+    "This RFC is no longer the canonical Agentic Engineering V2 RFC.",
+    "This RFC establishes neither the canonical Agentic Engineering V2 RFC nor its successor.",
+    "This document was previously authoritative but is not the canonical Agentic Engineering V2 RFC.",
+    "This document is a pointer to the canonical Agentic Engineering V2 RFC.",
+    "This document is merely a pointer to the canonical Agentic Engineering V2 RFC.",
+    "This document remains a pointer to the canonical Agentic Engineering V2 RFC.",
+    "This document constitutes a reference to the canonical Agentic Engineering V2 RFC.",
+  ]) {
+    docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => {
+        if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === "DISCLAIMER.md") return `# Disclaimer\n\n${disclaimer}\n`
+        return "Not canonical."
+      },
+      repoRoot,
+      markdownFiles: [canonicalRfcPath, "DISCLAIMER.md"],
+    })
+  }
+
+  assert.throws(
+    () => docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => {
+        if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === "SECOND-RFC.md") {
+          return "# Another RFC\n\nThis document establishes the canonical Agentic Engineering V2 RFC and includes a link to it.\n"
+        }
+        return "Not canonical."
+      },
+      repoRoot,
+      markdownFiles: [canonicalRfcPath, "SECOND-RFC.md"],
+    }),
+    /exactly one active canonical/iu,
+  )
+
+  assert.throws(
+    () => docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => {
+        if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === "SECOND-RFC.md") {
+          return "# Another RFC\n\nThis is the active canonical Agentic Engineering V2 RFC.\n"
+        }
+        return "Not canonical."
+      },
+      repoRoot,
+      markdownFiles: [canonicalRfcPath, "SECOND-RFC.md"],
+    }),
+    /exactly one active canonical/iu,
+  )
+})
+
+test("canonical RFC validation rejects broken local links", () => {
+  assert.throws(
+    () => docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => file === canonicalRfcPath
+        ? canonicalRfcBody({ extraSection: "[Missing](./does-not-exist.md)" })
+        : "Not canonical.",
+      repoRoot,
+      markdownFiles: [canonicalRfcPath],
+      exists: (file) => file.endsWith(canonicalRfcPath),
+    }),
+    /broken local link/iu,
+  )
+})
+
+test("public RFC pointers reject denylisted context and broken local links", () => {
+  const privateErrors = []
+  docsValidator.validateCanonicalRfcPointers(privateErrors, {
+    readFile: (file) => file === topLevelRfcPointer
+      ? `# Pointer\n\nSee [the RFC](${canonicalRfcPath}). Microsoft-only context.\n`
+      : "See [the RFC](./docs/agentic-engineering-v2-rfc.md).\n",
+    repoRoot,
+  })
+  assert.ok(privateErrors.some((error) => error.includes("public-safety")))
+
+  const linkErrors = []
+  docsValidator.validateCanonicalRfcPointers(linkErrors, {
+    readFile: (file) => file === "plugins/desk/README.md"
+      ? "See [the RFC](./docs/agentic-engineering-v2-rfc.md) and [missing context](./docs/missing-rfc.md).\n"
+      : `See [the RFC](${canonicalRfcPath}).\n`,
+    repoRoot,
+    exists: (file) => !file.endsWith("missing-rfc.md"),
+  })
+  assert.ok(linkErrors.some((error) => (
+    error.includes("plugins/desk/README.md has broken local link")
+  )))
+
+  const barePathErrors = []
+  docsValidator.validateCanonicalRfcPointers(barePathErrors, {
+    pointers: [topLevelRfcPointer],
+    readFile: () => [
+      "# Pointer",
+      "",
+      `Canonical path: \`${canonicalRfcPath}\`.`,
+      "",
+      "[Another document](plugins/desk/README.md)",
+    ].join("\n"),
+    repoRoot,
+  })
+  assert.deepEqual(barePathErrors, [
+    `${topLevelRfcPointer} must link to ${canonicalRfcPath}`,
+  ])
+
+  for (const body of [
+    `[RFC](<${canonicalRfcPath}>)`,
+    `[RFC](${canonicalRfcPath} "Canonical RFC")`,
+    `[RFC][canonical-rfc]\n\n[canonical-rfc]: ${canonicalRfcPath} "Canonical RFC"`,
+  ]) {
+    const standardLinkErrors = []
+    docsValidator.validateCanonicalRfcPointers(standardLinkErrors, {
+      pointers: [topLevelRfcPointer],
+      readFile: () => body,
+      repoRoot,
+    })
+    assert.deepEqual(standardLinkErrors, [])
+  }
+
+  for (const body of [
+    `Use \`[RFC](${canonicalRfcPath})\`.`,
+    `\`\`\`markdown\n[RFC](${canonicalRfcPath})\n\`\`\``,
+    `![RFC](${canonicalRfcPath})`,
+    `<!-- [RFC](${canonicalRfcPath}) -->`,
+  ]) {
+    const nonNavigableErrors = []
+    docsValidator.validateCanonicalRfcPointers(nonNavigableErrors, {
+      pointers: [topLevelRfcPointer],
+      readFile: () => body,
+      repoRoot,
+    })
+    assert.deepEqual(nonNavigableErrors, [
+      `${topLevelRfcPointer} must link to ${canonicalRfcPath}`,
+    ])
+  }
+
+  const linkedImageErrors = []
+  docsValidator.validateCanonicalRfcPointers(linkedImageErrors, {
+    pointers: [topLevelRfcPointer],
+    readFile: () => `[![RFC](${canonicalRfcPath})](plugins/desk/README.md)`,
+    repoRoot,
+  })
+  assert.deepEqual(linkedImageErrors, [
+    `${topLevelRfcPointer} must link to ${canonicalRfcPath}`,
+  ])
+})
+
+test("default markdown discovery paths cover tracked docs, archive filtering, reference fallbacks, and local-link defaults", () => {
+  assert.equal(docsValidator.listTrackedMarkdownFiles().includes(canonicalRfcPath), true)
+  assert.deepEqual(
+    docsValidator.findCanonicalRfcCopies({
+      repoRoot: "/unused",
+      markdownFiles: [canonicalRfcPath, "_archive/old.md"],
+      readFile: () => canonicalRfcBody(),
+    }),
+    [canonicalRfcPath],
+  )
+
+  const existing = path.join(repoRoot, "plugins", "desk", "README.md")
+  const exists = (candidate) => candidate === existing
+
+  const implicitLinkErrors = []
+  docsValidator.validateLocalMarkdownLinks(implicitLinkErrors, {
+    file: "notes.md",
+    body: [
+      "[Implicit][]",
+      "[Implicit]: plugins/desk/README.md",
+      "[Missing][nope]",
+    ].join("\n"),
+    repoRoot,
+    exists,
+  })
+  assert.deepEqual(implicitLinkErrors, [])
+
+  const linkErrors = []
+  docsValidator.validateLocalMarkdownLinks(linkErrors, {
+    file: "notes.md",
+    body: "[Broken](./missing.md)",
+    repoRoot,
+    exists: () => false,
+  })
+  assert.deepEqual(linkErrors, [
+    "notes.md has broken local link missing.md",
+  ])
+
+  assert.deepEqual(docsValidator.findCanonicalRfcCopies(), [canonicalRfcPath])
+  docsValidator.validateCanonicalRfc([])
+  const pointerErrors = []
+  docsValidator.validateCanonicalRfcPointers(pointerErrors)
+  assert.deepEqual(pointerErrors, [])
+})
+
+test("docs validator exports also pass through their repository defaults", () => {
+  assert.equal(docsValidator.markdownLines("plugins/desk/README.md").length > 0, true)
+  assert.deepEqual(docsValidator.fixtureRecord("fixture text"), {
+    file: "fixture.md",
+    line: 1,
+    text: "fixture text",
+    lower: "fixture text",
+    headingPath: [],
+    inFence: false,
+  })
+  assert.deepEqual(docsValidator.fixtureErrors("healthy path"), [])
+
+  const errors = []
+  docsValidator.validateHealthyPathLanguage(errors)
+  docsValidator.validatePrivacyNotes(errors)
+  docsValidator.validateTopicCoverage(errors)
+  docsValidator.validateWorkflowWiring(errors)
+  docsValidator.validateMcpReadmeToolSurface(errors)
+  docsValidator.validateMcpToolRegistrySurface(errors)
+  docsValidator.validateBrowserFocusPolicy(errors)
+  assert.deepEqual(errors, [])
+
+  assert.throws(() => docsValidator.validateLocalMarkdownLinks([]), /replace/u)
+  docsValidator.validateLocalMarkdownLinks([], {
+    file: canonicalRfcPath,
+    body: readText(canonicalRfcPath),
+  })
+  assert.throws(() => docsValidator.localMarkdownLinkPaths(), /replace/u)
+  assert.equal(
+    docsValidator.localMarkdownLinkPaths({
+      file: canonicalRfcPath,
+      body: readText(canonicalRfcPath),
+    }).every((entry) => path.isAbsolute(entry)),
+    true,
+  )
+
+  assert.equal(docsValidator.run(), 0)
+  const previousExitCode = process.exitCode
+  try {
+    process.exitCode = undefined
+    assert.equal(docsValidator.startCli({ isMain: true }), 0)
+    assert.equal(process.exitCode, 0)
+  } finally {
+    process.exitCode = previousExitCode
   }
 })
 
@@ -355,6 +651,10 @@ test("run and startCli expose success, failure, and no-op CLI paths", () => {
       }],
       readFile: (file) => {
         if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === topLevelRfcPointer) return `[Canonical RFC](${canonicalRfcPath})`
+        if (file === "plugins/desk/README.md") {
+          return `${goodBody}\n[Canonical RFC](./docs/agentic-engineering-v2-rfc.md)`
+        }
         if (file === "plugins/desk/mcp/README.md") return mcpReadmeBody()
         if (file === "plugins/desk/mcp/src/tool-names.js") return toolNamesSource()
         if (file === "plugins/desk/skills/cdp-headed-browser/SKILL.md") return "Target.createTarget({ url, background: true })"

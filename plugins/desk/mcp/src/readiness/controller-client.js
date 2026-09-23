@@ -13,6 +13,11 @@ import { startReadinessController } from "./controller-server.js"
 
 const localControllers = new Map()
 const controllerStarts = new Map()
+const privateDirectoryValidators = {
+  win32: Object,
+  darwin: validatePrivateDirectory,
+  linux: validatePrivateDirectory,
+}
 
 export async function connectOrStartController({
   root,
@@ -22,12 +27,13 @@ export async function connectOrStartController({
   stateHome = path.join(os.homedir(), ".cache", "ouroboros-skills", "desk", "readiness"),
   handlers,
   watcher,
+  watcherFactory,
   ephemeral = false,
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
-  if (process.platform !== "win32") validatePrivateDirectory(stateDir)
+  privateDirectoryValidators[process.platform](stateDir)
   const endpoint = deriveControllerEndpoint({ identity })
 
   let local = localControllers.get(identity.id)
@@ -39,6 +45,7 @@ export async function connectOrStartController({
         ephemeral,
         handlers,
         watcher,
+        watcherFactory,
         identity,
         stateDir,
       })
@@ -70,6 +77,7 @@ async function startOrReuseController({
   ephemeral,
   handlers,
   watcher,
+  watcherFactory,
   identity,
   stateDir,
 }) {
@@ -81,22 +89,29 @@ async function startOrReuseController({
   if (process.platform !== "win32" && endpointIsReclaimable({ endpoint, identity, stateDir })) {
     unlinkSync(endpoint)
   }
+  let ownedWatcher = watcher
   try {
+    ownedWatcher ??= await watcherFactory?.({ root: identity.root })
     const controller = await startReadinessController({
       identity,
       endpoint,
       stateDir,
       handlers,
-      watcher,
+      watcher: ownedWatcher,
       ephemeral,
     })
     localControllers.set(identity.id, { controller, clients: 0 })
   } catch (error) {
-    if (error?.code !== "EADDRINUSE") {
+    ownedWatcher?.close?.()
+    if (!isControllerElectionCollision(error)) {
       throw error
     }
     await waitForHandshake({ endpoint, identity, stateDir })
   }
+}
+
+function isControllerElectionCollision(error) {
+  return error?.code === "EADDRINUSE" || error?.code === "EEXIST"
 }
 
 function createClient({ endpoint, ephemeral, identity, local, token }) {
@@ -187,7 +202,7 @@ function requireCompatibleHandshake(handshake, identity) {
 }
 
 function readControllerToken({ identity, stateDir }) {
-  if (process.platform !== "win32") validatePrivateDirectory(stateDir)
+  privateDirectoryValidators[process.platform](stateDir)
   const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
   if (stableStringify(lexicalControllerIdentity(record.identity)) !== stableStringify(lexicalControllerIdentity(identity)) ||
       typeof record.owner?.token !== "string") {
@@ -201,7 +216,8 @@ function endpointIsReclaimable({ endpoint, identity, stateDir }) {
     validatePrivateDirectory(stateDir)
     validatePrivateDirectory(path.dirname(endpoint))
     const stat = lstatSync(endpoint)
-    if (!stat.isSocket() || stat.uid !== process.getuid()) return false
+    const reclaimableSocket = Number(stat.isSocket()) * Number(stat.uid === process.getuid()) === 1
+    if (!reclaimableSocket) return false
     const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
     if (stableStringify(lexicalControllerIdentity(record.identity)) !== stableStringify(lexicalControllerIdentity(identity))
       || record.endpoint !== endpoint || record.socket?.dev !== stat.dev || record.socket?.ino !== stat.ino
@@ -219,11 +235,23 @@ function endpointIsReclaimable({ endpoint, identity, stateDir }) {
   }
 }
 
+export function createControllerResponseAccumulator(onLine) {
+  let pending = ""
+  return (chunk) => {
+    pending += chunk
+    const newline = pending.indexOf("\n")
+    if (newline < 0) return
+    const line = pending.slice(0, newline)
+    pending = pending.slice(newline + 1)
+    onLine(line)
+  }
+}
+
 function request({
   endpoint,
   identity,
   method,
-  params = {},
+  params,
   timeoutMs = 2_000,
   signal,
 }) {
@@ -233,7 +261,6 @@ function request({
     const abort = () => { socket.destroy(); reject(signal.reason) }
     signal?.addEventListener("abort", abort, { once: true })
     const id = randomUUID()
-    let pending = ""
     const timeout = timeoutMs === null ? null : setTimeout(() => {
       socket.destroy()
       reject(new Error(`readiness controller request timed out: ${method}`))
@@ -250,13 +277,10 @@ function request({
         },
       }))}\n`)
     })
-    socket.on("data", (chunk) => {
-      pending += chunk
-      const newline = pending.indexOf("\n")
-      if (newline < 0) return
+    socket.on("data", createControllerResponseAccumulator((line) => {
       clearTimeout(timeout)
       socket.end()
-      const response = JSON.parse(pending.slice(0, newline))
+      const response = JSON.parse(line)
       if (response.error) {
         const error = new Error(response.error.message)
         if (typeof response.error.code === "string") error.code = response.error.code
@@ -266,7 +290,7 @@ function request({
       } else {
         resolve(response.result)
       }
-    })
+    }))
     socket.once("error", (error) => {
       clearTimeout(timeout)
       reject(error)

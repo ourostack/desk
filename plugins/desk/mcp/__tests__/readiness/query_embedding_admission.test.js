@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { main } from "../../index.js"
@@ -17,7 +17,7 @@ function deferred() {
 }
 
 function fixture(t, withDoc = true) {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-query-admission-"))
+  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-query-admission-"))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   if (withDoc) writeFileSync(path.join(root, "task.md"), "# Query health\n\nActive document vector.\n")
   return root

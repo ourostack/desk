@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
@@ -18,7 +18,7 @@ function deferred() {
 }
 
 async function session(t, { semantic = "background", handler } = {}) {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-live-status-"))
+  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-live-status-"))
   const server = createMcpServer()
   const client = new Client({ name: "live-status-smoke", version: "1.0.0" })
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()

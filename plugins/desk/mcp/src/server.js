@@ -58,6 +58,7 @@ import { createDeskQueryRouter } from "./readiness/query-router.js"
 import { admitControlPlane } from "./activation/admit.js"
 import { ActivationFailure } from "./activation/failures.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
+import { createWorkspaceWatcher } from "./readiness/workspace-watcher.js"
 import { probeEmbeddingService, resolveEmbeddingEndpoints, resolveEmbeddingModel } from "./indexer/embed.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
@@ -138,6 +139,10 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
         return result
       },
     },
+    watcherFactory: ({ root }) => createWorkspaceWatcher({
+      root,
+      ignoredPaths: stateHome ? [stateHome] : [],
+    }),
   }
   const { connectOrStartController: connectReadinessController } = await loadReadinessController()
   const controller = await connectReadinessController(options)

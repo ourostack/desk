@@ -110,11 +110,12 @@ test("server.callTool routes desk_thread to the real implementation", async () =
     name: "desk_thread",
     input: { start_path: "nope/does/not/exist.md" },
   })
-  // No isError — desk_thread returns a structured `not_indexed` payload
-  // for an unknown path, not a thrown error.
+  // No isError — without a readiness controller, desk_thread returns the
+  // structured fail-closed lexical capability diagnostic.
   const body = parseResult(res)
-  assert.equal(body.error, "not_indexed")
-  assert.match(body.note, /isn't in the desk-index/)
+  assert.equal(body.status, "error")
+  assert.equal(body.code, "required_capability_unavailable")
+  assert.equal(body.capability, "lexical")
 })
 
 test("server.callTool rejects unknown tool names", async () => {
@@ -212,6 +213,28 @@ test("server.callTool defaults omitted input to an empty object", async () => {
     })
     assert.equal(res.isError, undefined)
     assert.deepEqual(received.input, {})
+  } finally {
+    TOOL_IMPLS.task_create = original
+  }
+})
+
+test("server.callTool treats admitted readiness without a live controller as an explicit null readiness handle", async () => {
+  const root = await mkTempDeskRoot()
+  let received
+  const original = TOOL_IMPLS.task_create
+  TOOL_IMPLS.task_create = async (arg) => {
+    received = arg
+    return { status: "probed" }
+  }
+  try {
+    const res = await callTool({
+      deskRoot: root,
+      name: "task_create",
+      input: {},
+      statusContext: { admission: { state: "CONTROL_READY" } },
+    })
+    assert.equal(res.isError, undefined)
+    assert.equal(received.readiness, null)
   } finally {
     TOOL_IMPLS.task_create = original
   }

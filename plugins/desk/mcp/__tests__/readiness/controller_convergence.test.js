@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtempSync, rmSync, readFileSync } from "node:fs"
+import { mkdtempSync, rmSync, readFileSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { connectOrStartController } from "../../src/readiness/controller-client.js"
@@ -14,7 +14,7 @@ function deferred() {
 }
 
 function fixture(t, handler) {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-convergence-"))
+  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-convergence-"))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   return { root, stateHome: path.join(root, "state"), ephemeral: true,
     handlers: { beginConvergence: handler } }
@@ -175,6 +175,59 @@ test("convergence may exceed the control request timeout without losing its resu
   const client = await connectOrStartController(options)
   try {
     assert.deepEqual(await client.beginConvergence(), { indexed: true })
+  } finally {
+    await client.close()
+  }
+})
+
+test("journal integrity convergence failures keep the controller uncertain until the queued retry succeeds", async (t) => {
+  const entered = deferred()
+  const release = deferred()
+  let calls = 0
+  const options = fixture(t, async () => {
+    calls += 1
+    if (calls === 1) {
+      throw Object.assign(new Error("journal corrupted"), { code: "journal_integrity_failed" })
+    }
+    entered.resolve()
+    await release.promise
+    return { indexed: true }
+  })
+  const client = await connectOrStartController(options)
+  try {
+    await assert.rejects(client.beginConvergence(), { code: "journal_integrity_failed" })
+    const failed = await client.status()
+    assert.equal(failed.state, "LEXICAL_CONVERGING")
+    assert.equal(failed.freshness.reason, "journal_integrity_failed")
+    await entered.promise
+    assert.equal((await client.barrier({ capability: "lexical" })).current, false)
+    release.resolve()
+    assert.equal((await client.barrier({ capability: "lexical", wait: true })).current, true)
+  } finally {
+    release.resolve()
+    await client.close()
+  }
+})
+
+test("controller barrier delegates to the handler override when one is supplied", async (t) => {
+  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-convergence-"))
+  const stateHome = path.join(root, "state")
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const client = await connectOrStartController({
+    root,
+    stateHome,
+    ephemeral: true,
+    handlers: {
+      beginConvergence: async () => ({ indexed: true }),
+      barrier: (params) => ({ capability: params.capability, current: "delegated", state: "CUSTOM" }),
+    },
+  })
+  try {
+    assert.deepEqual(await client.barrier({ capability: "lexical" }), {
+      capability: "lexical",
+      current: "delegated",
+      state: "CUSTOM",
+    })
   } finally {
     await client.close()
   }

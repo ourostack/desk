@@ -1,9 +1,9 @@
-// timeline.test.js — desk_timeline temporal queries.
+// timeline.test.js — public desk_timeline wrapper + indexedTimeline coverage.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { desk_timeline } from "../../src/tools/search.js"
+import { desk_timeline, indexedTimeline } from "../../src/tools/search.js"
 import { openDb, closeDb } from "../../src/db/init.js"
 import {
   buildFixtureIndex,
@@ -32,11 +32,40 @@ async function buildTimelineDesk() {
   return root
 }
 
-test("desk_timeline — without query: chronological listing within window", async () => {
+test("desk_timeline routes timeline requests through the public query router", async () => {
+  const embedFetch = makeEmbedFetch()
+  const queryRouter = {
+    async lexical(request) {
+      return { routed: true, request }
+    },
+  }
+
+  const result = await desk_timeline({
+    deskRoot: "/tmp/desk",
+    input: { query: "alpha", from: "2025-01-01" },
+    opts: { now: 12345, embed: { fetch: embedFetch } },
+    queryRouter,
+  })
+
+  assert.deepEqual(result, {
+    routed: true,
+    request: {
+      deskRoot: "/tmp/desk",
+      from: "2025-01-01",
+      kind: "timeline",
+      now: 12345,
+      opts: { now: 12345, embed: { fetch: embedFetch } },
+      query: "alpha",
+      signal: undefined,
+    },
+  })
+})
+
+test("indexedTimeline — without query: chronological listing within window", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
 
-  const res = await desk_timeline({
+  const res = await indexedTimeline({
     deskRoot: root,
     input: { from: "2025-01-01", to: "2026-12-31" },
   })
@@ -57,11 +86,11 @@ test("desk_timeline — without query: chronological listing within window", asy
   }
 })
 
-test("desk_timeline — with query: hybrid ranking inside the window", async () => {
+test("indexedTimeline — with query: hybrid ranking inside the window", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
 
-  const res = await desk_timeline({
+  const res = await indexedTimeline({
     deskRoot: root,
     input: {
       from: "2025-01-01",
@@ -79,13 +108,13 @@ test("desk_timeline — with query: hybrid ranking inside the window", async () 
   assert.ok(!paths.some((p) => p.includes("/old/")), "old out of window")
 })
 
-test("desk_timeline — default embed options use global fetch", async () => {
+test("indexedTimeline — default embed options use global fetch", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
   const originalFetch = globalThis.fetch
   globalThis.fetch = makeEmbedFetch()
   try {
-    const res = await desk_timeline({
+    const res = await indexedTimeline({
       deskRoot: root,
       input: {
         from: "2025-01-01",
@@ -105,11 +134,11 @@ test("desk_timeline — default embed options use global fetch", async () => {
   }
 })
 
-test("desk_timeline — single-character query uses semantic candidates without FTS", async () => {
+test("indexedTimeline — single-character query uses semantic candidates without FTS", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
 
-  const res = await desk_timeline({
+  const res = await indexedTimeline({
     deskRoot: root,
     input: { query: "a" },
     opts: { embed: { fetch: makeEmbedFetch() } },
@@ -120,11 +149,11 @@ test("desk_timeline — single-character query uses semantic candidates without 
   assert.ok(res.results.length >= 1)
 })
 
-test("desk_timeline — query window skips semantic candidates outside bounds", async () => {
+test("indexedTimeline — query window skips semantic candidates outside bounds", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
 
-  const res = await desk_timeline({
+  const res = await indexedTimeline({
     deskRoot: root,
     input: { query: "a", to: "2025-12-31" },
     opts: { embed: { fetch: makeEmbedFetch() } },
@@ -135,7 +164,7 @@ test("desk_timeline — query window skips semantic candidates outside bounds", 
   assert.ok(!paths.some((p) => p.includes("/recent/")))
 })
 
-test("desk_timeline — scope can restrict archived entries", async () => {
+test("indexedTimeline — scope can restrict archived entries", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -149,7 +178,7 @@ test("desk_timeline — scope can restrict archived entries", async () => {
   )
   await buildFixtureIndex(root)
 
-  const archived = await desk_timeline({
+  const archived = await indexedTimeline({
     deskRoot: root,
     input: { query: "alpha", scope: "archived" },
     opts: { embed: { fetch: makeEmbedFetch() } },
@@ -159,11 +188,11 @@ test("desk_timeline — scope can restrict archived entries", async () => {
   assert.ok(archived.results.every((result) => result.path.includes("_archive")))
 })
 
-test("desk_timeline — `from` alone is honoured", async () => {
+test("indexedTimeline — `from` alone is honoured", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
 
-  const res = await desk_timeline({
+  const res = await indexedTimeline({
     deskRoot: root,
     input: { from: "2026-01-01" },
   })
@@ -175,11 +204,11 @@ test("desk_timeline — `from` alone is honoured", async () => {
   }
 })
 
-test("desk_timeline — `to` alone is honoured", async () => {
+test("indexedTimeline — `to` alone is honoured", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
 
-  const res = await desk_timeline({
+  const res = await indexedTimeline({
     deskRoot: root,
     input: { to: "2025-01-01" },
   })
@@ -191,15 +220,15 @@ test("desk_timeline — `to` alone is honoured", async () => {
   }
 })
 
-test("desk_timeline — no window args lists everything (recency-ordered)", async () => {
+test("indexedTimeline — no window args lists everything (recency-ordered)", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
 
-  const res = await desk_timeline({ deskRoot: root, input: {} })
+  const res = await indexedTimeline({ deskRoot: root, input: {} })
   assert.ok(res.results.length >= 3)
 })
 
-test("desk_timeline — no-query snippets trim long first chunks", async () => {
+test("indexedTimeline — no-query snippets trim long first chunks", async () => {
   const root = await mkTempDeskRoot()
   const longBody = Array.from({ length: 120 }, (_, index) => `word${index}`).join(" ")
   await writeFile(
@@ -209,13 +238,13 @@ test("desk_timeline — no-query snippets trim long first chunks", async () => {
   )
   await buildFixtureIndex(root)
 
-  const res = await desk_timeline({ deskRoot: root, input: {} })
+  const res = await indexedTimeline({ deskRoot: root, input: {} })
   assert.equal(res.search_mode, "temporal")
   assert.ok(res.results[0].snippet.length <= 283)
   assert.match(res.results[0].snippet, /\.\.\.$/u)
 })
 
-test("desk_timeline — no-query path tolerates empty docs and missing timestamps", async () => {
+test("indexedTimeline — no-query path tolerates empty docs and missing timestamps", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -238,17 +267,17 @@ test("desk_timeline — no-query path tolerates empty docs and missing timestamp
     closeDb(db)
   }
 
-  const res = await desk_timeline({ deskRoot: root, input: {} })
+  const res = await indexedTimeline({ deskRoot: root, input: {} })
   assert.ok(res.results.some((result) => result.path === "trackA/empty/task.md"))
   const empty = res.results.find((result) => result.path === "trackA/empty/task.md")
   assert.equal(empty.snippet, "")
 })
 
-test("desk_timeline — limit clamped to [1, 50]", async () => {
+test("indexedTimeline — limit clamped to [1, 50]", async () => {
   const root = await buildTimelineDesk()
   await buildFixtureIndex(root)
 
-  const res = await desk_timeline({
+  const res = await indexedTimeline({
     deskRoot: root,
     input: { limit: 9999 },
   })

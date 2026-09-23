@@ -501,7 +501,7 @@ assigned to a unit or dispositioned.
 
 ## Phase 7 — Execute
 
-The same Superpowers implementation owner handles all fixes, following the approved DAG and delegation limits. Use `desk:independent-review` for finding disposition and re-review; this PR intake does not start another fix loop. Strict TDD, repository checks and the recorded publication endpoint still apply.
+The same Superpowers implementation owner handles all fixes, following the approved DAG and delegation limits. Use `superpowers:requesting-code-review` against the frozen candidate for finding disposition and affected re-review; this PR intake does not start another fix loop. Strict TDD, repository checks and the recorded publication endpoint still apply.
 
 **doing.md kept live:** every unit completion triggers
 `docs(doing): complete Unit X` — unit status flip `⬜ → ✅`,

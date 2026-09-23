@@ -43,6 +43,7 @@ export function runCoverageCommand(options = {}) {
   const requiredFiles = collectChangedCoverageFiles({
     repoRoot,
     spawn,
+    env,
   })
   const coverageIncludeFiles = filterCoverageIncludeFiles({
     requiredFiles,
@@ -93,8 +94,8 @@ export function runCoverageCommand(options = {}) {
   }
 }
 
-export function collectChangedCoverageFiles({ repoRoot, spawn = spawnSync }) {
-  const changed = new Set(collectChangedFiles({ repoRoot, spawn }))
+export function collectChangedCoverageFiles({ repoRoot, spawn = spawnSync, env = process.env }) {
+  const changed = new Set(collectChangedFiles({ repoRoot, spawn, env }))
   return collectCoverageRequiredFiles({ repoRoot })
     .filter((file) => changed.has(file))
 }
@@ -108,22 +109,48 @@ export function filterCoverageIncludeFiles({ requiredFiles, exclusions = [] }) {
   return requiredFiles.filter((file) => !excludedPaths.has(normalizePath(file)))
 }
 
-export function collectChangedFiles({ repoRoot, spawn = spawnSync }) {
+export function collectChangedFiles({ repoRoot, spawn = spawnSync, env = process.env }) {
   return unique([
-    ...changedSinceMergeBase({ repoRoot, spawn }),
+    ...changedSinceMergeBase({ repoRoot, spawn, env }),
     ...gitLines({ repoRoot, spawn, args: ["diff", "--name-only", "--diff-filter=AM"] }),
     ...gitLines({ repoRoot, spawn, args: ["diff", "--cached", "--name-only", "--diff-filter=AM"] }),
     ...gitLines({ repoRoot, spawn, args: ["ls-files", "--others", "--exclude-standard"] }),
   ].map(normalizePath))
 }
 
-export function changedSinceMergeBase({ repoRoot, spawn = spawnSync }) {
-  const base =
-    gitText({ repoRoot, spawn, args: ["merge-base", "origin/main", "HEAD"] }) ||
-    gitText({ repoRoot, spawn, args: ["merge-base", "main", "HEAD"] })
-  return base
-    ? gitLines({ repoRoot, spawn, args: ["diff", "--name-only", "--diff-filter=AM", `${base}..HEAD`] })
-    : []
+export function changedSinceMergeBase({ repoRoot, spawn = spawnSync, env = process.env }) {
+  const base = resolveCoverageBase({ repoRoot, spawn, env })
+  return gitLines({ repoRoot, spawn, args: ["diff", "--name-only", "--diff-filter=AM", `${base}..HEAD`] })
+}
+
+export function resolveCoverageBase({ repoRoot, spawn = spawnSync, env = process.env }) {
+  for (const candidate of coverageBaseCandidates({ repoRoot, spawn, env })) {
+    const base = gitText({ repoRoot, spawn, args: ["merge-base", candidate, "HEAD"] })
+    if (base) return base
+  }
+  throw new Error("coverage baseline could not be resolved safely")
+}
+
+function coverageBaseCandidates({ repoRoot, spawn, env }) {
+  const candidates = []
+  pushIfSet(candidates, env.DESK_COVERAGE_BASE_REF)
+  const pullRequestBase = cleanText(env.GITHUB_BASE_REF)
+  if (pullRequestBase) {
+    pushIfSet(candidates, `origin/${pullRequestBase}`)
+    pushIfSet(candidates, pullRequestBase)
+  }
+  const localUpstream = gitText({
+    repoRoot,
+    spawn,
+    args: ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+  })
+  const currentBranch = localUpstream
+    ? gitText({ repoRoot, spawn, args: ["rev-parse", "--abbrev-ref", "HEAD"] })
+    : ""
+  if (!isSelfUpstream(localUpstream, currentBranch)) pushIfSet(candidates, localUpstream)
+  pushIfSet(candidates, "origin/main")
+  pushIfSet(candidates, "main")
+  return unique(candidates)
 }
 
 function runInstrumentedTests({
@@ -148,7 +175,7 @@ function runInstrumentedTests({
     // The maintained offline selection is only parsed and measured when its own extensions are admitted; without them nyc silently reports no entry at all for those production leaves.
     extension: [".js", ".cjs", ...(offline.selected ? [".mjs", ".ts"] : [])],
     ...(offline.requiresTypeScript ? { parserPlugins: ["typescript"] } : {}),
-    reporter: ["json-summary", "json"],
+    reporter: ["json-summary", "json", "text"],
     reportDir: reportDirectory,
     tempDir: path.join(reportDirectory, "raw"),
     cache: false,
@@ -237,6 +264,23 @@ function gitLines({ repoRoot, spawn, args }) {
 
 function normalizePath(file) {
   return file.replaceAll(path.sep, "/")
+}
+
+function pushIfSet(values, value) {
+  const text = cleanText(value)
+  if (text) values.push(text)
+}
+
+function cleanText(value) {
+  return typeof value === "string" ? value.trim() : ""
+}
+
+function isSelfUpstream(upstream, currentBranch) {
+  const cleanUpstream = cleanText(upstream).replace(/^refs\/remotes\//u, "")
+  const cleanBranch = cleanText(currentBranch)
+  return cleanBranch.length > 0 &&
+    cleanBranch !== "HEAD" &&
+    (cleanUpstream === cleanBranch || cleanUpstream.endsWith(`/${cleanBranch}`))
 }
 
 function unique(values) {

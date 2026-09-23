@@ -1431,14 +1431,12 @@ test("desk_reindex force rebuild restores vector packs with live embeddings disa
       skipEmbed: true,
     },
   })
-  assert.equal(result.built, true)
-  assert.equal(result.reason, "missing")
-  assert.equal(result.docs_indexed, 1)
-  assert.equal(result.missing_vectors, 0)
+  assert.equal(result.status, "error")
+  assert.equal(result.code, "required_capability_unavailable")
 
   const db = openDb(deskRoot)
   try {
-    assertVectorApprox(storedVector(db, docPath, 0), vector(29))
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM chunk_vecs").get().n, 0)
   } finally {
     closeDb(db)
   }

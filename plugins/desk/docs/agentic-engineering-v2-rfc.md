@@ -1,93 +1,87 @@
+<!-- canonical-agentic-engineering-v2-rfc -->
 # Agentic Engineering V2
 
-## Status and audience
+## Purpose
 
-This RFC proposes the public foundation for Agentic Engineering V2 as of September 21, 2026. It is for maintainers of Desk, overlay authors, and operators who need to understand why startup, delegation, continuity, and evidence handling are structured the way they are.
+Agentic Engineering V2 is a layered toolshop for long-running engineering work. It gives an agent one durable work identity, one selected engineering lifecycle, explicit authority, and evidence that reaches the real consumer result. The goal is not more ceremony or maximum autonomy. The goal is reliable outcome ownership with the lightest controls that preserve safety, continuity, review, and truthful delivery.
 
-V2 is a proposal for a safer default foundation, not a claim that every consumer already runs it. Ordinary startup can point people here for rationale, but startup itself should stay short and operational rather than auto-reading the full RFC.
+This is the only active canonical public RFC for Agentic Engineering V2. Startup and onboarding surfaces may point here on demand, but they should not load this long-form rationale into every normal session.
 
-## The unresolved problem
+## The engineering problem
 
-Long-running engineering agents need continuity, clear authority, reliable tool surfaces, and a way to separate reusable substrate behavior from environment-specific concerns. Earlier foundations proved the value of that direction, but the public story remained scattered across onboarding notes, local conventions, and private examples.
+An agent can produce plausible local progress while still failing the actual job. It may start from the wrong source, split one outcome across competing task records, stop at a command that printed success, delegate without a bounded return contract, or treat a passing proxy as proof that an installed or rendered result works. These failures become more likely when runtime setup, durable state, engineering method, repository policy, and domain instructions are copied into overlapping instruction bodies.
 
-That scatter creates two problems. First, downstream adopters cannot easily tell which parts are durable product contracts and which are merely one team's operating habits. Second, implementation work risks copying private context into public docs when the canonical design is not already written in a public-safe form.
+V2 addresses that problem by separating ownership. Each layer has one job, and evidence must cross the layer boundaries instead of being replaced by claims.
 
-## The V2 thesis
+## The layered toolshop
 
-V2 treats the engineering agent stack as a layered system with explicit contracts between the runtime, the Desk substrate, providers, overlays, and domain-specific additions. The goal is not to make every stack identical; it is to make the shared boundaries clear enough that different hosts and overlays can compose the same foundation without hidden assumptions.
+| Layer | Ownership |
+| --- | --- |
+| Host and acquisition runtime | Select and materialize the admitted plugin composition, expose tools, and report the source actually loaded. |
+| Desk and Crew | Preserve durable task identity, continuity, authority boundaries, shared knowledge, and attributed state. |
+| Superpowers | Own engineering discovery, planning, test-first implementation, verification, and the normal code-review transition. |
+| Consumer overlays | Add identity, organization or environment policy without copying the generic foundation. |
+| Repository policy | Define contribution authority, build and test gates, delivery endpoints, and cleanup rules for the product being changed. |
+| Evidence | Prove source, behavior, review, consumer outcome, rollback, and resource settlement at the layer where each claim is true. |
 
-The thesis is that startup should stay small, activation should be owned, durable work should live in Desk, and specialized behavior should be layered rather than copied. A public RFC becomes the canonical explanation for those choices so later docs, tests, and onboarding flows can point to one stable source.
+Layers depend downward instead of redefining one another. Desk does not become a second engineering method. Superpowers does not create a second durable task store. An overlay does not copy the Desk foundation. Repository access does not create contribution authority.
 
-## Human and agent responsibilities
+## Human and agent contract
 
-Humans decide contribution authority, approve irreversible actions when policy requires it, and set the operational environment in which the agent works. Agents own the mechanical execution inside that authority: reading instructions, preserving continuity, running tests, gathering evidence, and keeping the work durable.
+The human supplies intent, material constraints, authority, and the desired endpoint. The agent owns sequencing, tool choice, decomposition, implementation, verification, recovery, and cleanup inside that authority. Broad autonomy does not expand publication, destructive, rollout, repository, or product authority.
 
-This split matters because V2 is designed for long-lived work, not single-shot prompts. The system should make it obvious which decisions are delegated, which remain human-only, and which need explicit evidence before they can be trusted.
+The agent calibrates delegation to the outcome rather than maximizing it. If an already-authorized outcome arrives one mechanical step at a time, the agent briefly states that it will own the sequence and return at a genuine decision or the endpoint. If a mandate is too broad to identify one assessable outcome, authorized surfaces, or irreversible boundaries, the agent narrows and records the work before execution. Genuinely bounded help stays bounded instead of being inflated into a whole project.
 
-## Runtime, substrate, provider, overlay, and domain boundaries
+Coaching happens once, stays actionable, and does not become a recurring approval gate. After the corrected work shape is recorded, the agent continues wherever authority is sufficient.
 
-The runtime is the host that runs the agent and exposes tools. Desk is the reusable substrate that gives the agent a durable workspace, work lifecycle, and shared operating conventions. Providers supply environment-specific integrations such as model routing, plugin activation, or tool transport. Overlays add identity, organization-specific rules, and local workflow expectations. Domain layers add topic-specific knowledge for a particular product, team, or problem space.
+## Automated controls and truthful failure
 
-Those layers should depend downward, not sideways. An overlay should extend Desk rather than copying Desk behavior into a second source of truth. A domain pack should rely on the selected overlay for environment details instead of redefining provider rules inside every task-specific instruction set.
+V2 automates practices that are safely determinable: source-authority checks, exact worktree isolation, test-first gates, generated-artifact freshness, structural document checks, review transitions, evidence readback, and resource accounting. Automation should reduce repeated decisions, not hide them.
 
-## Authority, continuity, and evidence
+When intent quality, authority, or the requested outcome cannot be determined safely, the agent coaches or stops at that exact boundary. It does not invent authority, silently weaken acceptance criteria, convert missing evidence into success, or ask the human to repeat a decision already recorded.
 
-V2 assumes that agent work is only trustworthy when authority, continuity, and evidence travel together. Authority answers what the agent is allowed to do. Continuity answers where the agent keeps durable task state across sessions. Evidence answers how the agent proves that an action, observation, or claim is real.
+## Source authority and continuity
 
-Desk is the continuity layer. Runtime and overlay configuration provide the active authority surface. Tests, tool output, and durable notes provide evidence. Weakness in any one of the three makes the whole workflow less reliable, so the design keeps them explicit instead of implicit.
+Every repository starts from its recorded source authority. That authority may be a moving branch, a frozen candidate, or another explicit source contract. A newer branch does not automatically outrank the selected source shape. The agent verifies the branch relationship and materialized source before the first write, then preserves that authority through implementation and review.
 
-## Flow and delegation judgment
+One durable task carries the outcome through changed requirements, corrections, review findings, installed proof, and cleanup. New material requirements update the governing work record and invalidate only affected evidence. Bounded processes may hand work over, but a replacement must reconcile the same task, source, authority, and uncertain effects before writing.
 
-The foundation should help an agent choose the lightest workflow that still protects correctness. Some work is direct execution in a single session. Some work needs handoff, review, or explicit approval gates. Some work benefits from specialized helpers. V2 does not force one orchestration shape for all of them.
+## Consumer-visible validation
 
-What it does require is that delegation and workflow choice remain visible. A runtime or overlay may automate the selection, but the resulting path still needs clear contracts for ownership, checkpoints, and proof.
+Verification must reach the altitude of the claim. A source test cannot prove an installed workflow, a terminal success line cannot prove a rendered artifact, and an opened change request cannot prove merged state. When the milestone claims a rendered, installed, merged, rollout, restart, rollback, or resumed result, evidence must show that real consumer-visible state.
 
-When a material requirement arrives during execution, continuity stays on the same durable task rather than breaking into a side quest or a silent restart. The governing work record should be updated before implementation, invalidated evidence should be called out explicitly, unaffected work continues, and the affected change returns through the normal implementation and review gates instead of slipping around them.
+The smallest coherent consumer boundary should follow the smallest coherent green implementation. Later platform breadth, automation, documentation, and final qualification remain visible, but they should not block an independently usable slice unless the coupling is concrete and recorded.
 
-## Instruction coherence
+## Visual proof
 
-Layering only helps when the instructions compose cleanly. V2 therefore favors a single canonical substrate body with additive overlays instead of repeated copies that drift apart. Startup guidance, activation rules, and task-specific instructions should agree on the same boundaries and terminology.
+Visual proof helps a human understand or verify a state that is genuinely visual. Capture a bounded view of the rendered interface, installed composition, merged checks, rollout state, or persisted result when that view adds information. Name the stronger system-of-record evidence that the image supplements.
 
-This RFC is part of that coherence strategy. It gives later docs and tests one stable place to validate the public rationale rather than asking each README or onboarding note to restate the entire design.
+Visual proof never replaces tests, logs, APIs, database readback, source identity, or authority checks. Do not expose secrets or sensitive content, and do not manufacture screenshots for nonvisual terminal work.
 
-## Startup composition
+## Review and correction
 
-Startup should be compositional and minimal. The runtime loads the selected agent surface, provider-owned activation makes the expected tool and plugin surfaces available, and Desk supplies the durable work substrate. Startup should verify the required surfaces and direct repair when they are missing, but it should avoid re-explaining every architectural choice inline.
+The normal review transition is `superpowers:requesting-code-review`. Review uses a frozen candidate and relevant evidence, records finding disposition, keeps one implementation owner for corrections, and requests affected re-review after a bounded correction wave. Review does not create a parallel implementation owner or reopen accepted architecture without new evidence.
 
-That is why ordinary startup can link to this RFC instead of embedding the whole argument. The startup flow remains actionable, while the design rationale remains canonical, versioned, and testable.
+## Measurement
 
-## Start or upgrade a Desk
+V2 measures work from evidence the job already creates. Useful views include lead time, active span, active occupancy, wait span, work in progress, boundary cadence, first-pass yield, correction waves, finding movement, rework proportion, and flow efficiency. Wall-clock interval union, summed occupancy, and attributable consumption are different quantities and stay separate.
 
-Starting or upgrading a Desk should preserve the same core promises: a durable workspace, a known lifecycle for tracks and tasks, a substrate-default worker, and explicit activation boundaries. The exact installation path can differ by runtime, but the public contract should stay stable.
+Every reported value carries a provenance class such as measured, declared, inferred, estimated, or unavailable, plus a source reference. Missing anchors remain unavailable rather than becoming zero. Measurement does not copy raw transcripts into Git, rank people, infer attention from silence, or add status ceremony merely to create data.
 
-Operators should expect activation-owned setup, a clear selected worker surface, and a repair path when the expected runtime tools are missing. They should not need to reconstruct the architecture from scattered notes to know what Desk is supposed to provide.
+## Limits
 
-## Migrate a Crew workspace
+V2 does not grant repository ownership, publication authority, destructive authority, or rollout authority. It does not promise that every host supports every background, visual, review, or recovery capability. It does not make structural tests a substitute for installed behavior or editorial judgment. It does not treat one successful job as causal proof of productivity improvement.
 
-A Crew workspace migration should preserve durable state while making shared facts, attributed perspectives, and agreed decisions easier to reason about. The migration is successful when the workspace layout and instructions support the same continuity promises as Desk without forcing a rewrite of every local convention at once.
+Public generic policy stays here and in the compact Desk foundation. Environment-specific rules belong in consumer overlays, product behavior belongs in the product repository, and operator preferences belong in the operator's workspace.
 
-The public contract is deliberately generic: preserve durable work, keep authorship explicit, and separate shared facts from personal perspective and team decisions. Specific migration tooling or local choreography belongs in operational docs, not in this RFC.
+## Current status — September 23, 2026
 
-## Installation, readiness, and first work
+**Alpha 1 qualified for opt-in use.** Qualification is bound to the final current source cohort: Desk `8e465274543aabf9ef2e0fa9b3d6fa2a86b3ad46`, consumer overlay `271196050c5628458d74a680175eff4c3614ab04`, and workflow overlay `506fc4e377ab3855458e72679676c1a954824366`. The alpha continues through the moving `v2-alpha` branches; exact commits, trees, content digests, delta evidence, and hosted receipts identify what was qualified, while installation authority still comes from the admitted source flow.
 
-Installation should aim for a healthy default path rather than a checklist of manual patch-ups. Readiness means the runtime can see the selected agent surface, the required Desk capabilities are available, and the operator can start real work without reconstructing missing pieces from memory.
+The qualified envelope establishes restored semantic behavior and fail-closed watcher reconciliation; the complete Desk source gate; the composed Copilot workflow with the native Superpowers lifecycle and `superpowers:requesting-code-review`; and standalone Claude plugin loading. Final hosted Desk qualification ran 2,177 tests with 2,168 passes, nine platform skips, and zero failures and 100% statement, branch, function, and line coverage across changed production files, together with Linux x64 and Windows x64 runtime packs, Windows private feedback, skills validation, and Claude plugin load. Agency-managed work remains Copilot-only; standalone Claude uses root Desk with Superpowers outside that overlay composition.
 
-First-work guidance should stay short and point to the right operational skills or docs. This RFC explains why the pieces exist and how they fit together; it is not the step-by-step onboarding script.
+Installed macOS and Windows evidence passed fresh-process continuity, person-scoped authority, semantic restoration, rollback, cleanup, and forward resumption through `old -> current -> old -> current`. The installed proof is bound to its recorded candidates; later moving-branch heads were qualified through exact source deltas and hosted receipts, not represented as full installed reruns.
 
-## Compatibility and rollback
+The bounded measurement packet was generated twice from the same retained lineage, producing byte-identical retained input, JSON profile, and Markdown profile. It reports the available flow, rework, value, waste, and coverage signals through deterministic formulas; missing intervals, attributable spend, and evidence outside that lineage remain unavailable rather than becoming zero. This result proves deterministic reproduction for one retained lineage and does not establish causal productivity improvement.
 
-V2 should be adoptable in layers. A host can keep the prior worker surface while adding the public RFC, README pointer, and safety tests first. It can then move startup composition, activation ownership, or overlay boundaries onto the new model without requiring a flag day.
-
-Rollback should be equally clear: if a later change to startup or activation proves unsafe, the system can fall back to the last known-good operational path without losing the RFC itself. The RFC is descriptive and contractual; it is not a migration trap.
-
-## Soak, release, and residual risk
-
-The public foundation should soak in documentation and validation before broader rollout depends on it. Fail-closed tests should prove that the canonical RFC exists, stays in its blessed path, and remains free of private-context leakage. That keeps the public story stable while deeper runtime and overlay work continues.
-
-Residual risk remains in drift: startup docs can still diverge from the RFC, overlays can still over-copy substrate behavior, and private examples can still slip into public prose if validation is too narrow. The design therefore treats repository-level docs tests as part of the contract, not as optional polish.
-
-## Alternatives and rejected designs
-
-One alternative is to keep the rationale implicit in startup skills and onboarding notes. That is cheaper in the short term, but it leaves no public canonical source and makes later validation fragile.
-
-Another alternative is to duplicate a private design write-up into several public docs. That creates drift and raises the chance of leaking environment-specific details. V2 instead chooses one public-safe RFC, one README pointer, and fail-closed tests that guard the boundary.
+This qualification does not publish a version bump, tag, release, default-installation change, RC or stable claim, or promotion to `main`. Future moving-branch heads require their own exact delta and hosted qualification evidence, and broader installed platform or engine coverage remains outside this Alpha 1 claim.

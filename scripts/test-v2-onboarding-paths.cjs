@@ -95,16 +95,11 @@ function main() {
   const joinCrew = read("plugins/crew/skills/join-crew/SKILL.md");
   const sessionStart = read("plugins/desk/skills/session-start/SKILL.md");
   const sessionStartMigrations = read("plugins/desk/skills/session-start-migrations/SKILL.md");
-  const rfcHeadings = parseHeadings(rfc);
   const firstRunHeadings = parseHeadings(firstRun);
   const joinCrewHeadings = parseHeadings(joinCrew);
   const sessionStartHeadings = parseHeadings(sessionStart);
 
   assert.deepStrictEqual(findCanonicalRfcCopies(), [CANONICAL_RFC]);
-  assert.deepStrictEqual(
-    rfcHeadings.filter((heading) => heading.level === 2 && /Desk|Crew workspace/u.test(heading.title)).map((heading) => heading.title),
-    ["Start or upgrade a Desk", "Migrate a Crew workspace"],
-  );
   assert.deepStrictEqual(
     OPERATIONAL_ONBOARDING_SKILLS.flatMap((file) =>
       parseHeadings(read(file))

@@ -47,7 +47,7 @@ Before treating that ceremony as healthy, run the `session-start` MCP availabili
 
 ## Skills
 
-Selected engineering lifecycle: Superpowers. Invoke `desk:superpowers-integration` before engineering work and `desk:independent-review` for independent review. Desk retains state and authority; the pinned Superpowers provider supplies engineering skills. Preserve existing approvals and operator text, interpreting legacy method references through the integration contract rather than loading another lifecycle. Plain Language governs prose. Desk entrypoints include `session-start`, `start-task`, `task-lifecycle`, `work-orchestration`, card formats, friction, lessons and status. The full operating manual is `desk:worker` plus `principles.md`.
+Selected engineering lifecycle: Superpowers. Invoke `desk:superpowers-integration` before engineering work and `superpowers:requesting-code-review` for review. Desk retains state and authority; the pinned Superpowers provider supplies engineering skills. Preserve existing approvals and operator text, interpreting legacy method references through the integration contract rather than loading another lifecycle. Plain Language governs prose. Desk entrypoints include `session-start`, `start-task`, `task-lifecycle`, `work-orchestration`, card formats, friction, lessons and status. The full operating manual is `desk:worker` plus `principles.md`.
 
 ## Operator preferences
 

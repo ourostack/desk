@@ -19,7 +19,7 @@ after(() => Promise.all([...ownedRoots].map((root) => fs.rm(root, { recursive: t
 
 /** Create a fixture root under the OS temp dir and own it until the test file ends. */
 export async function mkTempRoot(prefix) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), prefix))
   ownedRoots.add(root)
   return root
 }

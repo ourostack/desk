@@ -7,7 +7,7 @@ description: Bind authorized engineering work to the selected Superpowers method
 
 Invoke `desk:superpowers-integration`. This Desk compatibility entrypoint selects no second engineering method: Superpowers owns discovery, planning, execution and verification; Desk owns the work state and approved terminal boundary.
 
-Read the existing task, agreement and plan before choosing the matching Superpowers skill. Consume prior approval without reopening it. Use `superpowers:brainstorming` for missing design agreement, `superpowers:writing-plans` when a plan is needed, and `superpowers:executing-plans` or authorized `superpowers:subagent-driven-development` for implementation. Keep plans and progress on Desk. Invoke `desk:independent-review` for the required independent gate.
+Read the existing task, agreement and plan before choosing the matching Superpowers skill. Consume prior approval without reopening it. Use `superpowers:brainstorming` for missing design agreement, `superpowers:writing-plans` when a plan is needed, and `superpowers:executing-plans` or authorized `superpowers:subagent-driven-development` for implementation. Keep plans and progress on Desk. Invoke `superpowers:requesting-code-review` for the normal review transition.
 
 Verify repository authority and the approved contribution path before any branch, worktree or source edit. Read-only requests remain read-only. Delegation and worktree creation stay within the recorded mandate.
 
@@ -29,7 +29,7 @@ If material resequencing becomes necessary, record the observed waste pattern, t
 
 Desk owns task and iteration state and archive transitions. The agreed endpoint determines whether verification ends at an intentional alpha/PR-only branch or includes authorized merge, release/install, consuming-surface smoke and cleanup. Superpowers finish options cannot silently change that endpoint.
 
-Invoke `desk:independent-review` for a fresh cold branch review at the diff boundary, using frozen source and evidence inputs. This is the same independent-review cycle with one Superpowers remediation owner, not a second implementation loop or a repeated per-edit ceremony.
+Invoke `superpowers:requesting-code-review` once at the diff boundary with a frozen candidate and the relevant evidence. Record every finding disposition, keep one Superpowers implementation owner, run one bounded correction wave, and request affected re-review rather than opening a second implementation loop or repeating review after every edit.
 
 ## Ready-set scheduling and continuous peer review
 
@@ -41,7 +41,7 @@ This section consumes the cross-repository plan's five-column Markdown DAG, its 
 3. Walk ready nodes in stable table order; reserve complete writes/resources before launching.
 4. Dispatch every non-conflicting ready node through pristine Superpowers skills in its own worktree.
 5. Missing conflict data or unavailable parallel execution serializes the same ready set.
-6. A result is accepted only after spec/targeted proof and terminal exact-commit RoboRev disposition.
+6. A result is accepted only after spec/targeted proof and native Superpowers review disposition.
 7. On failure, block only descendants; release verified resources and recompute immediately.
 8. A candidate-changing repair invalidates affected descendants and re-enters at the same owner.
 ```
@@ -50,8 +50,8 @@ Ready is exactly step 2's definition: pending nodes with all dependencies accept
 
 Dispatch every non-conflicting ready node through pristine Superpowers skills in its own worktree: `superpowers:using-git-worktrees` gives each dispatched node its own isolated worktree so no two ready nodes share a writer; `superpowers:dispatching-parallel-agents` fans genuinely independent, non-conflicting nodes out; `superpowers:subagent-driven-development` and `superpowers:executing-plans` carry out one dispatched node's own implement/fix loop; `superpowers:verification-before-completion` runs before any acceptance. One coherent task's implement/fix loop stays sequential; independent non-conflicting nodes may run concurrently in stable table order.
 
-A candidate is accepted only after spec/targeted proof and a terminal exact-commit disposition with `source=post_commit` from the same Superpowers implementation owner through `desk:independent-review` — a promised, in-flight, stale-SHA or duplicate result is not acceptance. Never run `roborev fix` or `roborev refine` as a parallel remediation path, and never open a second fix loop beside the implementation owner's own loop.
+A candidate is accepted only after spec/targeted proof and a completed finding disposition from `superpowers:requesting-code-review` against the frozen candidate. The same Superpowers implementation owner handles one bounded correction wave and the affected re-review; never open a second fix loop beside that owner's loop.
 
-On failure, failure blocks only descendants: independent ready nodes already dispatched keep running, the failed node's reserved resources are released, and the ready set is recomputed immediately rather than held open. A candidate-changing repair invalidates its affected descendants' prior acceptance and re-enters at the same Superpowers implementation owner, not a new one — the same single-owner remediation rule `desk:independent-review` already requires.
+On failure, failure blocks only descendants: independent ready nodes already dispatched keep running, the failed node's reserved resources are released, and the ready set is recomputed immediately rather than held open. A candidate-changing repair invalidates its affected descendants' prior acceptance and re-enters at the same Superpowers implementation owner, not a new one.
 
 Final behavioral scheduling proof — that dispatch, serialization and acceptance actually execute this way at runtime — belongs to a later task; this section ships the source contract and the real caller/provider witnesses only.

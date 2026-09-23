@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { main } from "../../index.js"
@@ -17,7 +17,7 @@ function deferred() {
 }
 
 function fixture(t) {
-  const root = mkdtempSync(path.join(tmpdir(), "desk-semantic-policy-"))
+  const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-semantic-policy-"))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   return root
 }
@@ -179,6 +179,28 @@ for (const semantic of ["background", "required"]) {
     }
   })
 }
+
+test("background convergence helper returns null when no controller start was admitted", async () => {
+  assert.equal(await beginBackgroundConvergence(null), null)
+  assert.equal(await beginBackgroundConvergence({ controller: {} }), null)
+})
+
+test("server controller connector works without an explicit state home and still converges", async (t) => {
+  const root = fixture(t)
+  writeFileSync(path.join(root, "task.md"), "# Lexical only\n\nNo explicit state home.\n")
+  const controller = await connectOrStartController({
+    deskRoot: root,
+    policy: normalizeReadinessPolicy({ semantic: "unsupported" }),
+    ephemeral: true,
+  })
+  try {
+    const result = await controller.beginConvergence()
+    assert.ok(result.summary.lexical_generation >= 1)
+    assert.equal((await controller.barrier({ capability: "lexical" })).current, true)
+  } finally {
+    await controller.close()
+  }
+})
 
 for (const coverage of [
   undefined,

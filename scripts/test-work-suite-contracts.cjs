@@ -352,7 +352,7 @@ for (const file of [
   requires(file, "orchestration leaves task lifecycle to Desk", /Desk[\s\S]+task[\s\S]+iteration[\s\S]+state/iu);
   requires(file, "orchestration returns nested review to its parent", /nested[\s\S]+parent/iu);
   requires(file, "orchestration preserves explicit human approval", /needs-human-approval[\s\S]+hard exception/iu);
-  requires(file, "orchestration scopes branch review to the diff boundary", /fresh cold branch review[\s\S]+diff boundary/iu);
+  requires(file, "orchestration scopes native review to a frozen diff boundary", /requesting-code-review[\s\S]+diff boundary[\s\S]+frozen candidate/iu);
   contract("orchestration never downgrades explicit human approval", () => {
     assert.doesNotMatch(text(file), /needs-human-approval[\s\S]{0,120}(?:otherwise )?map(?:s)? it to blocking `needs reviewer gate`/iu);
   });

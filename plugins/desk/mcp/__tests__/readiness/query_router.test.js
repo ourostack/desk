@@ -4,13 +4,16 @@ import * as path from "node:path"
 import { createQueryRouter } from "../../src/readiness/query-router.js"
 import { connectOrStartController } from "../../src/readiness/controller-client.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
-import { indexedSearch, indexedTimeline } from "../../src/tools/search.js"
+import { indexedRecall, indexedSearch, indexedSimilar, indexedTimeline } from "../../src/tools/search.js"
 import { indexedThread } from "../../src/tools/thread.js"
 import { directLexicalSearch } from "../../src/readiness/direct-lexical.js"
-import { mkTempDeskRoot, writeFile } from "../tools/_search_helpers.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import { getSemanticCoverage } from "../../src/server-helpers.js"
+import { mkTempDeskRoot, writeFile, makeEmbedFetch } from "../tools/_search_helpers.js"
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
 import { promises as fs } from "node:fs"
+import { mkdirSync } from "node:fs"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
 import Database from "better-sqlite3"
@@ -26,18 +29,59 @@ function deferred() {
   return { promise, resolve }
 }
 
-async function fixture(t, { hold = null, certain = true, pluginRoot, documentPath = "track/work/task.md" } = {}) {
-  const deskRoot = await mkTempDeskRoot()
+async function fixture(t, {
+  hold = null,
+  certain = true,
+  pluginRoot,
+  documentPath = "track/work/task.md",
+  semanticCurrent = null,
+  mutateDuringSemanticRead = false,
+} = {}) {
+  const tempRoot = await mkTempDeskRoot()
+  const deskRoot = await fs.realpath(tempRoot)
   await writeFile(deskRoot, documentPath, "canonical quartz")
+  const stateHome = path.join(deskRoot, "controller-state")
+  mkdirSync(stateHome, { recursive: true, mode: 0o700 })
   let runs = 0
   const options = {
-    root: deskRoot, stateHome: path.join(deskRoot, ".state", "controller"), ephemeral: true,
+    root: deskRoot, stateHome, ephemeral: true,
     watcher: { fence: async () => ({ certain, ...(certain ? {} : { reason: "overflow" }) }) },
     handlers: { async beginConvergence({ eventCursor }) {
       runs++
       if (hold) await hold.promise
-      return { summary: await rebuildIndex(deskRoot, { skipEmbed: true, eventCursor, tombstones: { pluginRoot } }) }
+      const summary = await rebuildIndex(deskRoot, {
+        eventCursor,
+        tombstones: { pluginRoot },
+        ...(semanticCurrent === null ? { skipEmbed: true } : { embed: { fetch: makeEmbedFetch() } }),
+      })
+      if (semanticCurrent === null) return { summary }
+      const db = new Database(path.join(deskRoot, ".state", "desk-index.sqlite"))
+      try {
+        sqliteVec.load(db)
+        return {
+          summary,
+          semantic: {
+            ...getSemanticCoverage(db),
+            provenance_current: semanticCurrent,
+            query_embedding: semanticCurrent
+              ? { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } }
+              : {
+                  available: false,
+                  diagnostic: {
+                    model: ACTIVE_EMBEDDING_SPEC.model,
+                    reason: "semantic_unavailable",
+                    message: "semantic convergence is not current for the active generation",
+                  },
+                },
+          },
+        }
+      } finally {
+        db.close()
+      }
     } },
+    ...(semanticCurrent === null ? {} : {
+      semanticContract: { mode: "background", embedding_spec: ACTIVE_EMBEDDING_SPEC },
+    }),
   }
   const controller = await connectOrStartController(options)
   t.after(async () => { hold?.resolve(); await controller.close() })
@@ -51,6 +95,17 @@ async function fixture(t, { hold = null, certain = true, pluginRoot, documentPat
     directBackend: async (request) => {
       used.push("direct")
       return directLexicalSearch(request)
+    },
+    semanticBackend: async (request) => {
+      used.push("semantic")
+      const result = request.kind === "similar"
+        ? await indexedSimilar({ deskRoot, db: request.db, input: request, opts: request.opts })
+        : await indexedRecall({ deskRoot, db: request.db, input: request, opts: request.opts })
+      if (mutateDuringSemanticRead) {
+        await writeFile(deskRoot, documentPath, "canonical rollout replacement")
+        await controller.recordChange({ path: documentPath })
+      }
+      return result
     },
     semanticDeadlineMs: 5,
   })
@@ -121,6 +176,15 @@ test("caller cancellation propagates while a barrier is pending and never calls 
   hold.resolve({ current: false })
 })
 
+test("lexical request defaults to an empty request object", async () => {
+  const router = createQueryRouter({
+    directBackend: async () => ({ results: [{ snippet: "default lexical" }] }),
+  })
+  const result = await router.lexical()
+  assert.equal(result.results[0].snippet, "default lexical")
+  assert.equal(result.readiness_diagnostic.reason, "controller_unavailable")
+})
+
 test("controller restart refuses a previously committed but unproven generation", async (t) => {
   const f = await fixture(t)
   await f.controller.beginConvergence()
@@ -136,16 +200,595 @@ test("controller restart refuses a previously committed but unproven generation"
   assert.equal((await router.lexical({ deskRoot: f.deskRoot, query: "quartz" })).results[0].snippet, "afterrestart quartz")
 })
 
-test("semantic requests return the exact alpha-scope error without convergence work", async () => {
+test("semantic request starts or reuses convergence and executes one proven semantic snapshot", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const result = await f.router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "recall",
+    topic: "quartz",
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.equal(result.results[0].path, "track/work/task.md")
+  assert.deepEqual(f.used, ["semantic"])
+})
+
+test("semantic request never executes against an unproven generation", async (t) => {
+  const f = await fixture(t, { semanticCurrent: false })
+  const result = await f.router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "recall",
+    topic: "quartz",
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.deepEqual(f.used, [])
+})
+
+test("semantic result is discarded when readiness changes during evaluation", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true, mutateDuringSemanticRead: true })
+  const result = await f.router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "similar",
+    path: "track/work/task.md",
+  })
+  assert.equal(result.diagnostic.reason, "readiness_changed_during_read")
+})
+
+test("semantic request without a controller returns the alpha semantic scope refusal", async () => {
   const router = createQueryRouter({
-    controller: { beginConvergence: () => assert.fail("semantic scheduling is out of scope") },
-    indexedBackend: () => assert.fail("semantic index"),
-    directBackend: () => assert.fail("fake semantic fallback"),
+    semanticBackend: () => assert.fail("semantic backend requires controller proof"),
   })
-  assert.deepEqual(await router.semantic({ topic: "quartz" }), {
-    status: "error", code: "required_capability_unavailable", capability: "semantic",
-    diagnostic: { reason: "alpha_scope", message: "Semantic convergence is not qualified in this alpha." },
+  const result = await router.semantic({ kind: "recall", topic: "quartz" })
+  assert.equal(result.status, "error")
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.equal(result.capability, "semantic")
+  assert.equal(result.diagnostic.reason, "semantic_unavailable")
+  assert.match(result.diagnostic.message, /not current/u)
+})
+
+test("semantic request defaults to an invalid semantic request", async () => {
+  const router = createQueryRouter({
+    semanticBackend: () => assert.fail("invalid semantic request cannot call backend"),
   })
+  const result = await router.semantic()
+  assert.equal(result.status, "error")
+  assert.equal(result.diagnostic.reason, "invalid_request")
+})
+
+test("semantic request with no positive deadline uses the waited barrier result", async () => {
+  let convergence = 0
+  const router = createQueryRouter({
+    semanticDeadlineMs: 0,
+    controller: {
+      barrier: async (request) => request?.wait
+        ? { current: false, reason: "semantic_unavailable", message: "semantic remained unavailable" }
+        : { current: false },
+      beginConvergence: async () => { convergence++; return { accepted: true } },
+    },
+    semanticBackend: () => assert.fail("unavailable semantic proof cannot call backend"),
+  })
+  const result = await router.semantic({ kind: "similar", path: "track/work/task.md" })
+  assert.equal(convergence, 1)
+  assert.equal(result.diagnostic.reason, "semantic_unavailable")
+  assert.equal(result.diagnostic.message, "semantic remained unavailable")
+})
+
+test("semantic barrier exceptions become semantic capability diagnostics", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      barrier: async () => { throw Object.assign(new Error("query embedding probe failed"), { code: "query_embedding_failed" }) },
+      beginConvergence: () => assert.fail("barrier exceptions are not convergence requests"),
+    },
+    semanticBackend: () => assert.fail("unavailable semantic proof cannot call backend"),
+  })
+  const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
+  assert.equal(result.status, "error")
+  assert.equal(result.diagnostic.reason, "query_embedding_failed")
+  assert.equal(result.diagnostic.message, "query embedding probe failed")
+})
+
+test("semantic barrier exceptions without codes use the semantic unavailable diagnostic", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      barrier: async () => { throw new Error("semantic probe threw without code") },
+      beginConvergence: () => assert.fail("barrier exceptions are not convergence requests"),
+    },
+    semanticBackend: () => assert.fail("unavailable semantic proof cannot call backend"),
+  })
+  const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
+  assert.equal(result.status, "error")
+  assert.equal(result.diagnostic.reason, "semantic_unavailable")
+  assert.equal(result.diagnostic.message, "semantic probe threw without code")
+})
+
+test("semantic barrier string failures use semantic-unavailable string diagnostics", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      barrier: async () => { throw "semantic string failure" },
+      beginConvergence: () => assert.fail("barrier exceptions are not convergence requests"),
+    },
+    semanticBackend: () => assert.fail("unavailable semantic proof cannot call backend"),
+  })
+  const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
+  assert.equal(result.diagnostic.reason, "semantic_unavailable")
+  assert.equal(result.diagnostic.message, "semantic string failure")
+})
+
+test("semantic proof without a durable snapshot returns an embedding identity diagnostic", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      barrier: async () => ({ current: true }),
+      fenceEvents: async () => ({ certain: true, cursor: { journal_id: "j", sequence: 1 } }),
+      status: async () => ({
+        freshness: { certain: true, cursor: { journal_id: "j", sequence: 1 } },
+        convergence: { semantic: { query_embedding: { available: true, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } } } },
+      }),
+    },
+    semanticBackend: () => assert.fail("unproven semantic snapshot cannot call backend"),
+  })
+  const result = await router.semantic({ deskRoot: root, kind: "similar", path: "track/work/task.md" })
+  assert.equal(result.status, "error")
+  assert.equal(result.diagnostic.reason, "semantic_unavailable")
+  assert.equal(result.diagnostic.message, "The active embedding specification does not match the proven generation.")
+})
+
+test("semantic proof rejects snapshots with missing vectors", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  await f.controller.beginConvergence()
+  const db = new Database(path.join(f.deskRoot, ".state", "desk-index.sqlite"))
+  try {
+    sqliteVec.load(db)
+    db.prepare("DELETE FROM chunk_vecs").run()
+  } finally { db.close() }
+  const result = await f.router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "recall",
+    topic: "quartz",
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.equal(result.status, "error")
+  assert.equal(result.diagnostic.message, "Semantic vectors are incomplete for the proven generation.")
+})
+
+test("semantic proof rejects unavailable query embedding diagnostics", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const originalStatus = f.controller.status
+  f.controller.status = async () => {
+    const status = await originalStatus()
+    return {
+      ...status,
+      convergence: {
+        ...status.convergence,
+        semantic: {
+          ...status.convergence.semantic,
+          query_embedding: { available: false, diagnostic: { model: ACTIVE_EMBEDDING_SPEC.model } },
+        },
+      },
+    }
+  }
+  const result = await f.router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "similar",
+    path: "track/work/task.md",
+  })
+  assert.equal(result.status, "error")
+  assert.equal(result.diagnostic.message, "Query embedding is not available for the active semantic generation.")
+})
+
+test("lexical search records a semantic deadline while preserving direct fallback", async () => {
+  let semanticWaits = 0
+  const router = createQueryRouter({
+    semanticDeadlineMs: 1,
+    controller: {
+      identity: { semantic_contract: { mode: "background" } },
+      barrier: async (request) => {
+        if (request.capability === "lexical") return { current: true }
+        if (request.wait) {
+          semanticWaits++
+          return new Promise((resolve) => setTimeout(() => resolve({ current: false }), 50))
+        }
+        return { current: false }
+      },
+      beginConvergence: async () => ({ accepted: true }),
+      fenceEvents: async () => ({ certain: false, reason: "overflow" }),
+      status: async () => ({ freshness: { certain: false, reason: "overflow" }, convergence: {} }),
+    },
+    indexedBackend: () => assert.fail("unproven lexical proof cannot call indexed backend"),
+    directBackend: async () => ({ results: [{ snippet: "fallback quartz" }] }),
+  })
+  const result = await router.lexical({ kind: "lexical", query: "quartz" })
+  assert.equal(semanticWaits, 1)
+  assert.equal(result.results[0].snippet, "fallback quartz")
+  assert.equal(result.readiness_diagnostic.reason, "overflow")
+})
+
+test("lexical service proof records semantic barrier probe failures as unavailable", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      identity: { semantic_contract: { mode: "background" } },
+      barrier: async (request) => {
+        if (request.capability === "lexical") return { current: true }
+        throw Object.assign(new Error("semantic probe failed"), { code: "semantic_probe_failed" })
+      },
+      fenceEvents: async () => ({ certain: false, reason: "overflow" }),
+      status: async () => ({ freshness: { certain: false, reason: "overflow" }, convergence: {} }),
+    },
+    indexedBackend: () => assert.fail("unproven lexical proof cannot call indexed backend"),
+    directBackend: async () => ({ results: [{ snippet: "fallback" }] }),
+  })
+  const result = await router.lexical({ deskRoot: root, kind: "lexical", query: "quartz" })
+  assert.equal(result.results[0].snippet, "fallback")
+  assert.equal(result.readiness_diagnostic.reason, "overflow")
+})
+
+test("lexical service proof records string semantic probe failures as unavailable", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      identity: { semantic_contract: { mode: "background" } },
+      barrier: async (request) => {
+        if (request.capability === "lexical") return { current: true }
+        throw "semantic string probe"
+      },
+      fenceEvents: async () => ({ certain: false, reason: "overflow" }),
+      status: async () => ({ freshness: { certain: false, reason: "overflow" }, convergence: {} }),
+    },
+    indexedBackend: () => assert.fail("unproven lexical proof cannot call indexed backend"),
+    directBackend: async () => ({ results: [{ snippet: "fallback" }] }),
+  })
+  const result = await router.lexical({ deskRoot: root, kind: "lexical", query: "quartz" })
+  assert.equal(result.results[0].snippet, "fallback")
+  assert.equal(result.readiness_diagnostic.reason, "overflow")
+})
+
+test("lexical semantic preflight propagates non-deadline barrier failures to direct fallback", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      identity: { semantic_contract: { mode: "background" } },
+      generationPolicyIdentity: {},
+      barrier: async (request) => {
+        if (request.capability === "lexical") return { current: true }
+        throw Object.assign(new Error("semantic preflight rejected"), { code: "semantic_preflight_rejected" })
+      },
+      fenceEvents: async () => ({ certain: false, reason: "overflow" }),
+      status: async () => ({ freshness: { certain: false, reason: "overflow" }, convergence: {} }),
+      beginConvergence: () => assert.fail("non-deadline semantic preflight failure is not retried"),
+    },
+    indexedBackend: () => assert.fail("failed semantic preflight cannot call indexed backend"),
+    directBackend: async () => ({ results: [{ snippet: "direct fallback" }] }),
+  })
+  const result = await router.lexical({ deskRoot: root, kind: "lexical", query: "quartz" })
+  assert.equal(result.results[0].snippet, "direct fallback")
+  assert.equal(result.readiness_diagnostic.reason, "overflow")
+})
+
+test("lexical readiness errors without a code become readiness-unavailable diagnostics", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      barrier: async () => { throw new Error("barrier offline") },
+    },
+    directBackend: async () => ({ results: [{ snippet: "fallback" }] }),
+  })
+  const result = await router.lexical({ deskRoot: root, query: "quartz" })
+  assert.equal(result.results[0].snippet, "fallback")
+  assert.equal(result.readiness_diagnostic.reason, "readiness_unavailable")
+  assert.equal(result.readiness_diagnostic.message, "barrier offline")
+})
+
+test("lexical readiness string errors become readiness-unavailable diagnostics", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      barrier: async () => { throw "lexical string barrier" },
+    },
+    directBackend: async () => ({ results: [{ snippet: "fallback" }] }),
+  })
+  const result = await router.lexical({ deskRoot: root, query: "quartz" })
+  assert.equal(result.readiness_diagnostic.reason, "readiness_unavailable")
+  assert.equal(result.readiness_diagnostic.message, "lexical string barrier")
+})
+
+test("lexical recheck errors without codes become readiness-unavailable diagnostics", async (t) => {
+  const f = await fixture(t)
+  await f.controller.beginConvergence()
+  const originalStatus = f.controller.status
+  let calls = 0
+  f.controller.status = async () => {
+    calls++
+    if (calls > 1) throw new Error("post-read proof unavailable")
+    return originalStatus()
+  }
+  const result = await f.router.lexical({ deskRoot: f.deskRoot, query: "quartz" })
+  assert.equal(result.results[0].snippet, "canonical quartz")
+  assert.equal(result.readiness_diagnostic.reason, "readiness_unavailable")
+  assert.equal(result.readiness_diagnostic.message, "post-read proof unavailable")
+  assert.deepEqual(f.used, ["indexed", "direct"])
+})
+
+test("lexical recheck string failures become readiness-unavailable diagnostics", async (t) => {
+  const f = await fixture(t)
+  await f.controller.beginConvergence()
+  const originalStatus = f.controller.status
+  let calls = 0
+  f.controller.status = async () => {
+    calls++
+    if (calls > 1) throw "post-read string failure"
+    return originalStatus()
+  }
+  const result = await f.router.lexical({ deskRoot: f.deskRoot, query: "quartz" })
+  assert.equal(result.readiness_diagnostic.reason, "readiness_unavailable")
+  assert.equal(result.readiness_diagnostic.message, "post-read string failure")
+})
+
+test("lexical readiness preserves artifact tombstone failures before fallback", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      barrier: async () => { throw Object.assign(new Error("invalid tombstone ledger"), { code: "artifact_tombstone_ledger_invalid" }) },
+    },
+    directBackend: () => assert.fail("artifact policy failures must not fall back"),
+  })
+  await assert.rejects(
+    () => router.lexical({ deskRoot: root, query: "quartz" }),
+    { code: "artifact_tombstone_ledger_invalid" },
+  )
+})
+
+test("lexical recheck preserves artifact tombstone failures after indexed evaluation", async (t) => {
+  const f = await fixture(t)
+  await f.controller.beginConvergence()
+  const originalStatus = f.controller.status
+  let calls = 0
+  f.controller.status = async () => {
+    calls++
+    if (calls > 1) {
+      throw Object.assign(new Error("invalid tombstone ledger"), { code: "artifact_tombstone_ledger_invalid" })
+    }
+    return originalStatus()
+  }
+  await assert.rejects(
+    () => f.router.lexical({ deskRoot: f.deskRoot, query: "quartz" }),
+    { code: "artifact_tombstone_ledger_invalid" },
+  )
+  assert.deepEqual(f.used, ["indexed"])
+})
+
+test("semantic deadline failures are returned as semantic deadline diagnostics", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    semanticDeadlineMs: 1,
+    controller: {
+      barrier: async (request) => request?.wait
+        ? new Promise((resolve) => setTimeout(() => resolve({ current: false }), 50))
+        : { current: false },
+      beginConvergence: async () => ({ accepted: true }),
+    },
+    semanticBackend: () => assert.fail("deadline cannot call semantic backend"),
+  })
+  const result = await router.semantic({ deskRoot: root, kind: "recall", topic: "quartz" })
+  assert.equal(result.diagnostic.reason, "semantic_deadline")
+  assert.match(result.diagnostic.message, /did not become current/u)
+})
+
+test("semantic indexed evaluation preserves artifact tombstone failures", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const router = createQueryRouter({
+    controller: f.controller,
+    semanticBackend: async () => { throw Object.assign(new Error("invalid tombstone ledger"), { code: "artifact_tombstone_ledger_invalid" }) },
+  })
+  await assert.rejects(
+    () => router.semantic({ deskRoot: f.deskRoot, kind: "recall", topic: "quartz", opts: { embed: { fetch: makeEmbedFetch() } } }),
+    { code: "artifact_tombstone_ledger_invalid" },
+  )
+})
+
+test("semantic backend unavailability is converted to the typed capability diagnostic", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const router = createQueryRouter({
+    controller: f.controller,
+    semanticDeadlineMs: 5,
+    semanticBackend: async () => ({ error: "semantic_unavailable", note: "backend vector read unavailable" }),
+  })
+  const result = await router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "recall",
+    topic: "quartz",
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.equal(result.status, "error")
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.equal(result.diagnostic.reason, "semantic_unavailable")
+  assert.equal(result.diagnostic.message, "backend vector read unavailable")
+})
+
+test("semantic backend unavailability without a note uses the standard semantic diagnostic", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const router = createQueryRouter({
+    controller: f.controller,
+    semanticDeadlineMs: 5,
+    semanticBackend: async () => ({ error: "semantic_unavailable" }),
+  })
+  const result = await router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "recall",
+    topic: "quartz",
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.equal(result.status, "error")
+  assert.equal(result.diagnostic.reason, "semantic_unavailable")
+  assert.equal(result.diagnostic.message, "Semantic serving is unavailable for this request.")
+})
+
+test("semantic backend exceptions are converted without leaking partial results", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const router = createQueryRouter({
+    controller: f.controller,
+    semanticDeadlineMs: 5,
+    semanticBackend: async () => { throw new Error("backend exploded") },
+  })
+  const result = await router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "similar",
+    path: "track/work/task.md",
+  })
+  assert.equal(result.status, "error")
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.equal(result.diagnostic.reason, "semantic_unavailable")
+  assert.equal(result.diagnostic.message, "backend exploded")
+})
+
+test("semantic backend exceptions without codes use semantic-unavailable diagnostics", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const router = createQueryRouter({
+    controller: f.controller,
+    semanticDeadlineMs: 5,
+    semanticBackend: async () => { throw new Error("plain semantic failure") },
+  })
+  const result = await router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "recall",
+    topic: "quartz",
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.equal(result.status, "error")
+  assert.equal(result.diagnostic.reason, "semantic_unavailable")
+  assert.equal(result.diagnostic.message, "plain semantic failure")
+})
+
+test("semantic backend string failures use semantic-unavailable string diagnostics", async (t) => {
+  const f = await fixture(t, { semanticCurrent: true })
+  const router = createQueryRouter({
+    controller: f.controller,
+    semanticDeadlineMs: 5,
+    semanticBackend: async () => { throw "semantic string backend failure" },
+  })
+  const result = await router.semantic({
+    deskRoot: f.deskRoot,
+    kind: "recall",
+    topic: "quartz",
+    opts: { embed: { fetch: makeEmbedFetch() } },
+  })
+  assert.equal(result.diagnostic.reason, "semantic_unavailable")
+  assert.equal(result.diagnostic.message, "semantic string backend failure")
+})
+
+for (const invalidKind of [undefined, null, "", "timeline", "thread"]) {
+  test(`semantic request rejects unsupported kind ${JSON.stringify(invalidKind)}`, async (t) => {
+    const f = await fixture(t, { semanticCurrent: true })
+    const result = await f.router.semantic({
+      deskRoot: f.deskRoot,
+      kind: invalidKind,
+      topic: "quartz",
+      path: "track/work/task.md",
+      opts: { embed: { fetch: makeEmbedFetch() } },
+    })
+    assert.equal(result.status, "error")
+    assert.equal(result.code, "required_capability_unavailable")
+    assert.equal(result.capability, "semantic")
+    assert.equal(result.diagnostic.reason, "invalid_request")
+    assert.match(result.diagnostic.message, /"recall" or "similar"/u)
+    assert.deepEqual(f.used, [])
+  })
+}
+
+test("hybrid search falls back to proven lexical ranking while semantic convergence is unavailable", async (t) => {
+  const f = await fixture(t, { semanticCurrent: false })
+  const result = await f.router.lexical({ deskRoot: f.deskRoot, kind: "lexical", query: "quartz" })
+  assert.equal(result.search_mode, "lexical")
+  assert.equal(result.semantic_unavailable, true)
+})
+
+test("snapshot reports indexed serving after a proven lexical read without an owner token", async (t) => {
+  const f = await fixture(t)
+  await f.controller.beginConvergence()
+  const originalStatus = f.controller.status
+  f.controller.status = async () => {
+    const status = await originalStatus()
+    return { ...status, owner: undefined }
+  }
+  await f.router.lexical({ deskRoot: f.deskRoot, query: "quartz" })
+  const snapshot = await f.router.snapshot({ deskRoot: f.deskRoot })
+  assert.equal(snapshot.lexical.serving_path, "indexed")
+  assert.equal(snapshot.lexical.certain, true)
+})
+
+test("snapshot reports direct serving when the current generation is not certain", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      status: async () => ({ state: "CONTROL_READY", freshness: { certain: false }, convergence: {} }),
+    },
+    directBackend: async () => ({ results: [] }),
+  })
+  const snapshot = await router.snapshot({ deskRoot: root })
+  assert.equal(snapshot.lexical.serving_path, "direct")
+  assert.equal(snapshot.lexical.certain, false)
+})
+
+test("snapshot reports direct serving for an indexed generation that is no longer certain", async (t) => {
+  const f = await fixture(t)
+  await f.controller.beginConvergence()
+  const originalStatus = f.controller.status
+  f.controller.status = async () => {
+    const status = await originalStatus()
+    return { ...status, freshness: { ...status.freshness, certain: false } }
+  }
+  const snapshot = await f.router.snapshot({ deskRoot: f.deskRoot })
+  assert.equal(snapshot.state, "LEXICAL_READY")
+  assert.equal(snapshot.lexical.serving_path, "direct")
+  assert.equal(snapshot.lexical.certain, false)
+})
+
+test("snapshot reports blocked serving for an uncertain generation without direct fallback", async (t) => {
+  const f = await fixture(t)
+  await f.controller.beginConvergence()
+  const originalStatus = f.controller.status
+  f.controller.status = async () => {
+    const status = await originalStatus()
+    return { ...status, freshness: { ...status.freshness, certain: false } }
+  }
+  const router = createQueryRouter({ controller: f.controller })
+  const snapshot = await router.snapshot({ deskRoot: f.deskRoot })
+  assert.equal(snapshot.state, "LEXICAL_READY")
+  assert.equal(snapshot.lexical.serving_path, "blocked")
+  assert.equal(snapshot.lexical.certain, false)
+})
+
+test("snapshot readiness failures without codes return unavailable diagnostics", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      status: async () => { throw new Error("snapshot proof failed") },
+    },
+    directBackend: async () => ({ results: [] }),
+  })
+  const snapshot = await router.snapshot({ deskRoot: root })
+  assert.equal(snapshot.state, "unavailable")
+  assert.equal(snapshot.lexical.serving_path, "direct")
+  assert.equal(snapshot.diagnostic.reason, "readiness_unavailable")
+  assert.equal(snapshot.diagnostic.message, "snapshot proof failed")
+  assert.equal(snapshot.semantic.diagnostic.reason, "readiness_unavailable")
+})
+
+test("snapshot readiness string failures return blocked unavailable diagnostics", async () => {
+  const root = await mkTempDeskRoot()
+  const router = createQueryRouter({
+    controller: {
+      status: async () => { throw "snapshot string failure" },
+    },
+  })
+  const snapshot = await router.snapshot({ deskRoot: root })
+  assert.equal(snapshot.lexical.serving_path, "blocked")
+  assert.equal(snapshot.diagnostic.reason, "readiness_unavailable")
+  assert.equal(snapshot.diagnostic.message, "snapshot string failure")
+  assert.equal(snapshot.semantic.diagnostic.message, "snapshot string failure")
 })
 
 test("a covered old cursor cannot authorize an index read after a canonical mutation", async (t) => {
@@ -211,6 +854,33 @@ test("snapshot without a controller and generation is not_checked, not an observ
   assert.equal(snapshot.state, "not_checked")
   assert.equal(snapshot.diagnostic, undefined)
   assert.equal(snapshot.lexical.pending_changes, null)
+})
+
+test("snapshot without a direct backend reports blocked serving when readiness is unavailable", async () => {
+  const router = createQueryRouter({
+    controller: {
+      status: async () => { throw Object.assign(new Error("status offline"), { code: "status_failed" }) },
+    },
+  })
+  const snapshot = await router.snapshot()
+  assert.equal(snapshot.state, "unavailable")
+  assert.equal(snapshot.lexical.serving_path, "blocked")
+  assert.equal(snapshot.semantic.diagnostic.reason, "status_failed")
+})
+
+test("reindex without a controller and pending controller convergence fail closed", async () => {
+  const withoutController = createQueryRouter()
+  assert.equal((await withoutController.reindex()).diagnostic.reason, "controller_unavailable")
+  const pending = createQueryRouter({
+    controller: {
+      beginConvergence: async () => ({ reused: false }),
+      barrier: async () => ({ current: false }),
+    },
+  })
+  const result = await pending.reindex()
+  assert.equal(result.status, "error")
+  assert.equal(result.code, "required_capability_unavailable")
+  assert.equal(result.diagnostic.reason, "reconciliation_pending")
 })
 
 async function policyFixture(t) {

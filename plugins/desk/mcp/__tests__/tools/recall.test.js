@@ -1,9 +1,9 @@
-// recall.test.js — desk_recall semantic-only loose-recall.
+// recall.test.js — public desk_recall wrapper + indexedRecall backend coverage.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { desk_recall } from "../../src/tools/search.js"
+import { desk_recall, indexedRecall } from "../../src/tools/search.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,
@@ -12,7 +12,35 @@ import {
   writeFile,
 } from "./_search_helpers.js"
 
-test("desk_recall — happy path returns semantic matches", async () => {
+test("desk_recall routes semantic recall requests through the public query router", async () => {
+  const embedFetch = makeEmbedFetch()
+  const queryRouter = {
+    async semantic(request) {
+      return { routed: true, request }
+    },
+  }
+
+  const result = await desk_recall({
+    deskRoot: "/tmp/desk",
+    input: { topic: "alpha", limit: 3 },
+    opts: { embed: { fetch: embedFetch } },
+    queryRouter,
+  })
+
+  assert.deepEqual(result, {
+    routed: true,
+    request: {
+      deskRoot: "/tmp/desk",
+      kind: "recall",
+      limit: 3,
+      opts: { embed: { fetch: embedFetch } },
+      signal: undefined,
+      topic: "alpha",
+    },
+  })
+})
+
+test("indexedRecall — happy path returns semantic matches", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -26,7 +54,7 @@ test("desk_recall — happy path returns semantic matches", async () => {
   )
   await buildFixtureIndex(root)
 
-  const res = await desk_recall({
+  const res = await indexedRecall({
     deskRoot: root,
     input: { topic: "alpha" },
     opts: { embed: { fetch: makeEmbedFetch() } },
@@ -40,7 +68,7 @@ test("desk_recall — happy path returns semantic matches", async () => {
   assert.equal(res.cluster_count, res.results.length, "MVP cluster_count = results.length")
 })
 
-test("desk_recall — Ollama-down returns semantic_unavailable error", async () => {
+test("indexedRecall — Ollama-down returns semantic_unavailable error", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -49,7 +77,7 @@ test("desk_recall — Ollama-down returns semantic_unavailable error", async () 
   )
   await buildFixtureIndex(root)
 
-  const res = await desk_recall({
+  const res = await indexedRecall({
     deskRoot: root,
     input: { topic: "alpha" },
     opts: { embed: { fetch: makeFailingFetch() } },
@@ -61,25 +89,25 @@ test("desk_recall — Ollama-down returns semantic_unavailable error", async () 
   assert.equal(res.results, undefined, "no results in error payload")
 })
 
-test("desk_recall — empty topic returns empty results", async () => {
+test("indexedRecall — empty topic returns empty results", async () => {
   const root = await mkTempDeskRoot()
   await buildFixtureIndex(root)
 
-  const res = await desk_recall({
+  const res = await indexedRecall({
     deskRoot: root,
     input: { topic: "" },
     opts: { embed: { fetch: makeEmbedFetch() } },
   })
   assert.deepEqual(res.results, [])
 
-  const missing = await desk_recall({
+  const missing = await indexedRecall({
     deskRoot: root,
     input: null,
   })
   assert.deepEqual(missing.results, [])
 })
 
-test("desk_recall — default embed options use global fetch", async () => {
+test("indexedRecall — default embed options use global fetch", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -91,7 +119,7 @@ test("desk_recall — default embed options use global fetch", async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = makeEmbedFetch()
   try {
-    const res = await desk_recall({
+    const res = await indexedRecall({
       deskRoot: root,
       input: { topic: "alpha" },
     })
@@ -106,7 +134,7 @@ test("desk_recall — default embed options use global fetch", async () => {
   }
 })
 
-test("desk_recall — scope can restrict archived history", async () => {
+test("indexedRecall — scope can restrict archived history", async () => {
   const root = await mkTempDeskRoot()
   await writeFile(
     root,
@@ -120,7 +148,7 @@ test("desk_recall — scope can restrict archived history", async () => {
   )
   await buildFixtureIndex(root)
 
-  const archived = await desk_recall({
+  const archived = await indexedRecall({
     deskRoot: root,
     input: { topic: "alpha", scope: "archived" },
     opts: { embed: { fetch: makeEmbedFetch() } },
@@ -129,7 +157,7 @@ test("desk_recall — scope can restrict archived history", async () => {
   assert.ok(archived.results.every((result) => result.path.includes("_archive")))
 })
 
-test("desk_recall — limit is honoured", async () => {
+test("indexedRecall — limit is honoured", async () => {
   const root = await mkTempDeskRoot()
   for (let i = 0; i < 8; i++) {
     await writeFile(
@@ -140,7 +168,7 @@ test("desk_recall — limit is honoured", async () => {
   }
   await buildFixtureIndex(root)
 
-  const res = await desk_recall({
+  const res = await indexedRecall({
     deskRoot: root,
     input: { topic: "alpha", limit: 3 },
     opts: { embed: { fetch: makeEmbedFetch() } },
@@ -148,7 +176,7 @@ test("desk_recall — limit is honoured", async () => {
   assert.ok(res.results.length <= 3, `expected <=3, got ${res.results.length}`)
 })
 
-test("desk_recall — dedupes by doc_id (one entry per doc)", async () => {
+test("indexedRecall — dedupes by doc_id (one entry per doc)", async () => {
   const root = await mkTempDeskRoot()
   // A doc with multiple chunks — should still produce a single recall entry.
   const longBody = Array.from({ length: 5 }, (_, i) =>
@@ -161,7 +189,7 @@ test("desk_recall — dedupes by doc_id (one entry per doc)", async () => {
   )
   await buildFixtureIndex(root)
 
-  const res = await desk_recall({
+  const res = await indexedRecall({
     deskRoot: root,
     input: { topic: "alpha" },
     opts: { embed: { fetch: makeEmbedFetch() } },

@@ -40,6 +40,12 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
     controller: statusContext.admission?.controller,
   })).snapshot({ deskRoot: root.valid ? root.path : null, signal })
   const lexical = root.valid ? observed.lexical : { ...observed.lexical, serving_path: "blocked" }
+  const semantic = root.valid ? observed.semantic : {
+    ...observed.semantic,
+    current: false,
+    generation: null,
+    current_automatic_action: null,
+  }
   const snapshots = snapshotStatus(startup)
   const vectorPacks = vectorPackStatus(startup)
   const queryEmbedding = queryEmbeddingStatus(readiness.state === "not_checked" ? startup : {}, readiness)
@@ -66,6 +72,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
     runtime,
     readiness,
     lexical,
+    semantic,
     local_db: localDb.local_db,
     db_schema: localDb.local_db.schema,
     active_embedding_spec: EMBEDDING_SPEC,
@@ -131,7 +138,7 @@ function inspectLocalDb(deskRoot) {
         path: dbPath,
         exists: true,
         schema: DB_SCHEMA,
-        state: freshness.state === "stale" ? "stale" : "available",
+        state: "available",
         freshness,
       },
       lexical_index: {

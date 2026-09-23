@@ -129,7 +129,7 @@ no-op — proceed to Step 3.
 
 ## Step 3 — Re-enter the right phase
 
-Only after writer release, source and effect reconciliation, current authority and required capabilities are established, invoke the adapter once at `reconciled-resume` for an authorized active task. Pass the same mapped progress/rulings and next expected step; do not invoke it again at each state row. A paused, blocked or human-gated task does not enter until its specific gate is satisfied. Resume scheduling through `desk:work-orchestration` and review through `desk:independent-review`, consuming their existing ready-set and terminal exact-commit acceptance contract without resetting attempts or opening another fix loop.
+Only after writer release, source and effect reconciliation, current authority and required capabilities are established, invoke the adapter once at `reconciled-resume` for an authorized active task. Pass the same mapped progress/rulings and next expected step; do not invoke it again at each state row. A paused, blocked or human-gated task does not enter until its specific gate is satisfied. Resume scheduling through `desk:work-orchestration` and review through `superpowers:requesting-code-review`, consuming their existing ready-set, frozen-candidate, finding-disposition and affected re-review contract without resetting attempts or opening another fix loop.
 
 | Status | Resume action |
 |--------|---------------|

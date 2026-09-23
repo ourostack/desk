@@ -292,6 +292,20 @@ test("Codex activation injects the full Desk foundation once in automatic modes"
   )
 })
 
+test("Codex activation refuses a manifest whose desk:worker foundation source is missing", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const input = activationInput("global-personal")
+  input.manifest.provides.activation_targets = input.manifest.provides.activation_targets.map((target) =>
+    target.id === "desk:worker"
+      ? { ...target, startup: { ...target.startup, foundation: "" } }
+      : target)
+
+  assert.throws(
+    () => materializeCodexActivation(input),
+    /startup foundation source is missing/u,
+  )
+})
+
 test("global personal activation can select a downstream Desk overlay worker", async () => {
   const { materializeCodexActivation } = await loadCodexAdapter()
   const result = materializeCodexActivation(activationInput("global-personal", {

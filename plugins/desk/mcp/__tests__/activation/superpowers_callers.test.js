@@ -9,19 +9,40 @@ const read = (relativePath) => readFileSync(new URL(relativePath, repoRoot), "ut
 const json = (relativePath) => JSON.parse(read(relativePath))
 const integration = "plugins/desk/skills/superpowers-integration/SKILL.md"
 const adapter = "plugins/desk/skills/using-superpowers-with-desk/SKILL.md"
-
-for (const file of [
+const excludedProviderPattern = new RegExp(["robo", "rev"].join(""), "iu")
+const normalWorkerSurfaces = [
   "plugins/desk/agents/worker.md",
   "plugins/desk/agents/worker.agent.md",
   "plugins/desk/agents/worker.toml",
   "plugins/desk/output-styles/worker.md",
-]) {
-  test(`${file} selects the sole method and independent-review contracts`, () => {
+]
+
+for (const file of normalWorkerSurfaces) {
+  test(`${file} selects the sole method and native Superpowers review`, () => {
     const text = read(file)
     assert.match(text, /desk:superpowers-integration/u)
-    assert.match(text, /desk:independent-review/u)
+    assert.match(text, /superpowers:requesting-code-review/u)
+    assert.doesNotMatch(text, /desk:independent-review/u)
+    assert.doesNotMatch(text, excludedProviderPattern)
   })
 }
+
+test("normal generic orchestration and compatibility policy select native Superpowers review", () => {
+  for (const file of [
+    "plugins/desk/skills/work-orchestration/SKILL.md",
+    integration,
+    adapter,
+    "plugins/desk/skills/session-resumption/SKILL.md",
+    "plugins/desk/skills/task-lifecycle/SKILL.md",
+    "plugins/desk/skills/pr-feedback-on-own-pr/SKILL.md",
+    "plugins/desk/skills/pr-self-review/SKILL.md",
+  ]) {
+    const text = read(file)
+    assert.match(text, /superpowers:requesting-code-review/u)
+    assert.doesNotMatch(text, /desk:independent-review/u)
+    assert.doesNotMatch(text, excludedProviderPattern)
+  }
+})
 
 const retiredWorkerDirectives = [
   ["plugins/desk/agents/worker.md", /Skills come from the Desk and Work Suite plugins/u],
@@ -122,7 +143,7 @@ test("the Desk adapter delegates every non-entry responsibility to its existing 
   const text = read(adapter)
   for (const owner of [
     "desk:session-resumption",
-    "desk:independent-review",
+    "superpowers:requesting-code-review",
     "desk:work-orchestration",
     "desk:work-measurement-ledger",
   ]) {
@@ -167,7 +188,9 @@ for (const mode of ["global-personal", "project-local"]) {
     assert.equal(golden, rendered)
     assert.match(golden, /Selected engineering lifecycle: Superpowers\./u)
     assert.match(golden, /desk:using-superpowers-with-desk/u)
-    assert.match(golden, /desk:independent-review/u)
+    assert.match(golden, /superpowers:requesting-code-review/u)
+    assert.doesNotMatch(golden, /desk:independent-review/u)
+    assert.doesNotMatch(golden, excludedProviderPattern)
   })
 }
 
@@ -181,11 +204,9 @@ test("activation background disclosure names the selected provider without upgra
 
 test("the technical preview guide preflights selected source paths rather than retired lifecycle skills", () => {
   const guide = read("AGENTIC-ENGINEERING-V2.md")
-  const current = guide.split("## Correct your source through Agency")[0]
-  assert.match(current, /plugins\/superpowers\/skills\//u)
-  assert.match(current, /desk:using-superpowers-with-desk/u)
-  assert.doesNotMatch(current, /Require the enabled Work Suite skills|copilot plugin install work-suite@/u)
-  assert.doesNotMatch(guide.split("## The proposal")[0], /interactive RFC/iu)
+  assert.match(guide, /plugins\/desk\/docs\/agentic-engineering-v2-rfc\.md/u)
+  assert.doesNotMatch(guide, /^## /mu)
+  assert.doesNotMatch(guide, /Require the enabled Work Suite skills|copilot plugin install work-suite@/u)
   assert.doesNotMatch(read("README.md").split("\n").slice(0, 10).join("\n"), /interactive RFC/iu)
 })
 
@@ -275,7 +296,10 @@ test("work-orchestration's source contract names every required ready-set and re
     "exclusive resources",
     "missing conflict data",
     "stable table order",
-    "source=post_commit",
+    "frozen candidate",
+    "finding disposition",
+    "bounded correction",
+    "affected re-review",
     "same Superpowers implementation owner",
   ]
   for (const rule of requiredRules) assert.ok(orchestration.includes(rule), rule)
@@ -288,20 +312,18 @@ test("work-orchestration ships the exact eight-step ready-set algorithm verbatim
     "3. Walk ready nodes in stable table order; reserve complete writes/resources before launching.",
     "4. Dispatch every non-conflicting ready node through pristine Superpowers skills in its own worktree.",
     "5. Missing conflict data or unavailable parallel execution serializes the same ready set.",
-    "6. A result is accepted only after spec/targeted proof and terminal exact-commit RoboRev disposition.",
+    "6. A result is accepted only after spec/targeted proof and native Superpowers review disposition.",
     "7. On failure, block only descendants; release verified resources and recompute immediately.",
     "8. A candidate-changing repair invalidates affected descendants and re-enters at the same owner.",
   ].join("\n")
   assert.ok(orchestration.includes(readySetAlgorithm), "the exact eight-step algorithm must appear verbatim")
 })
 
-test("work-orchestration explicitly prohibits a parallel RoboRev fixer loop", () => {
-  assert.ok(orchestration.includes("`roborev fix`"), "must name roborev fix")
-  assert.ok(orchestration.includes("`roborev refine`"), "must name roborev refine")
-  assert.ok(
-    orchestration.includes("Never run `roborev fix` or `roborev refine`"),
-    "must explicitly prohibit both as a parallel remediation path",
-  )
+test("work-orchestration keeps correction and affected re-review with the implementation owner", () => {
+  assert.match(orchestration, /bounded correction/iu)
+  assert.match(orchestration, /affected re-review/iu)
+  assert.match(orchestration, /same Superpowers implementation owner/iu)
+  assert.doesNotMatch(orchestration, excludedProviderPattern)
 })
 
 test("work-orchestration attributes concurrency relaxation to Desk's own policy, not an upstream Superpowers source change", () => {

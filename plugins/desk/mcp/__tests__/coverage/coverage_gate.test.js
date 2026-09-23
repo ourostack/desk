@@ -62,6 +62,48 @@ function normalizePaths(paths) {
   return [...paths].map((file) => file.replaceAll(path.sep, "/")).sort()
 }
 
+function makeBaselineSpawn({
+  mergeBases = {},
+  upstream = "",
+  currentBranch = "",
+  diffs = {},
+  unstaged = "scratch/unstaged.js\n",
+  staged = "scratch/staged.js\n",
+  untracked = "scratch/untracked.js\n",
+} = {}) {
+  const calls = []
+  const spawn = (command, args) => {
+    assert.equal(command, "git")
+    calls.push(args)
+    if (args[0] === "merge-base") {
+      const base = mergeBases[args[1]] ?? ""
+      return base
+        ? { status: 0, stdout: `${base}\n`, stderr: "" }
+        : { status: 1, stdout: "", stderr: "missing ref\n" }
+    }
+    if (args[0] === "rev-parse" && args.includes("@{upstream}")) {
+      return upstream
+        ? { status: 0, stdout: `${upstream}\n`, stderr: "" }
+        : { status: 1, stdout: "", stderr: "no upstream\n" }
+    }
+    if (args[0] === "rev-parse" && args.at(-1) === "HEAD") {
+      return currentBranch
+        ? { status: 0, stdout: `${currentBranch}\n`, stderr: "" }
+        : { status: 1, stdout: "", stderr: "no current branch\n" }
+    }
+    if (args[0] === "diff" && args.at(-1)?.endsWith("..HEAD")) {
+      return { status: 0, stdout: diffs[args.at(-1)] ?? "", stderr: "" }
+    }
+    if (args[0] === "diff" && args.includes("--cached")) {
+      return { status: 0, stdout: staged, stderr: "" }
+    }
+    if (args[0] === "diff") return { status: 0, stdout: unstaged, stderr: "" }
+    if (args[0] === "ls-files") return { status: 0, stdout: untracked, stderr: "" }
+    return { status: 1, stdout: "", stderr: `unexpected git ${args.join(" ")}\n` }
+  }
+  return { calls, spawn }
+}
+
 test("coverage gate reports a missing coverage report as a hard failure", async () => {
   const { evaluateCoverageReport } = await loadGate()
   const tmp = makeTempDir()
@@ -458,6 +500,9 @@ test("coverage runner discovers changed files from git state and falls back from
       if (key === "merge-base main HEAD") {
         return { status: 0, stdout: "base-main\n", stderr: "" }
       }
+      if (key === "rev-parse --abbrev-ref --symbolic-full-name @{upstream}") {
+        return { status: 1, stdout: "", stderr: "no upstream\n" }
+      }
       if (key === "diff --name-only --diff-filter=AM base-main..HEAD") {
         return {
           status: 0,
@@ -484,7 +529,7 @@ test("coverage runner discovers changed files from git state and falls back from
     }
 
     assert.deepEqual(
-      normalizePaths(changedSinceMergeBase({ repoRoot: fixtureRoot, spawn })),
+      normalizePaths(changedSinceMergeBase({ repoRoot: fixtureRoot, spawn, env: {} })),
       [
         "plugins/desk/mcp/index.js",
         "plugins/desk/mcp/src/coverage/gate.js",
@@ -494,7 +539,7 @@ test("coverage runner discovers changed files from git state and falls back from
       ],
     )
     assert.deepEqual(
-      normalizePaths(collectChangedFiles({ repoRoot: fixtureRoot, spawn })),
+      normalizePaths(collectChangedFiles({ repoRoot: fixtureRoot, spawn, env: {} })),
       [
         "plugins/desk/mcp/__tests__/coverage/coverage_gate.test.js",
         "plugins/desk/mcp/index.js",
@@ -507,7 +552,7 @@ test("coverage runner discovers changed files from git state and falls back from
       ],
     )
     assert.deepEqual(
-      normalizePaths(collectChangedCoverageFiles({ repoRoot: fixtureRoot, spawn })),
+      normalizePaths(collectChangedCoverageFiles({ repoRoot: fixtureRoot, spawn, env: {} })),
       included.sort(),
     )
   } finally {
@@ -515,10 +560,205 @@ test("coverage runner discovers changed files from git state and falls back from
   }
 })
 
-test("coverage runner reports no merge-base diff when neither main ref resolves", async () => {
-  const { changedSinceMergeBase } = await loadRunner()
+test("coverage runner uses DESK_COVERAGE_BASE_REF before PR, upstream and main baselines", async () => {
+  const { collectChangedFiles } = await loadRunner()
+  const { calls, spawn } = makeBaselineSpawn({
+    mergeBases: {
+      "event-base": "base-event",
+      "origin/release-candidate": "base-pr",
+      "origin/v2-alpha": "base-upstream",
+      "origin/main": "base-main",
+    },
+    upstream: "origin/v2-alpha",
+    diffs: {
+      "base-event..HEAD": "plugins/desk/mcp/src/coverage/runner.js\n",
+    },
+  })
+
+  assert.deepEqual(
+    normalizePaths(collectChangedFiles({
+      repoRoot,
+      spawn,
+      env: {
+        DESK_COVERAGE_BASE_REF: "event-base",
+        GITHUB_BASE_REF: "release-candidate",
+      },
+    })),
+    [
+      "plugins/desk/mcp/src/coverage/runner.js",
+      "scratch/staged.js",
+      "scratch/unstaged.js",
+      "scratch/untracked.js",
+    ],
+  )
+  assert.deepEqual(
+    calls.filter((args) => args[0] === "merge-base").map((args) => args[1]),
+    ["event-base"],
+  )
+})
+
+test("coverage runner uses GITHUB_BASE_REF origin form before local PR base", async () => {
+  const { collectChangedFiles } = await loadRunner()
+  const { calls, spawn } = makeBaselineSpawn({
+    mergeBases: {
+      "origin/release-candidate": "base-pr-origin",
+      "release-candidate": "base-pr-local",
+      "origin/v2-alpha": "base-upstream",
+      "origin/main": "base-main",
+    },
+    upstream: "origin/v2-alpha",
+    diffs: {
+      "base-pr-origin..HEAD": "plugins/desk/mcp/src/readiness/controller-client.js\n",
+    },
+  })
+
+  assert.ok(collectChangedFiles({
+    repoRoot,
+    spawn,
+    env: { GITHUB_BASE_REF: "release-candidate" },
+  }).includes("plugins/desk/mcp/src/readiness/controller-client.js"))
+  assert.deepEqual(
+    calls.filter((args) => args[0] === "merge-base").map((args) => args[1]),
+    ["origin/release-candidate"],
+  )
+})
+
+test("coverage runner falls back from unresolved PR origin ref to local PR base", async () => {
+  const { collectChangedFiles } = await loadRunner()
+  const { calls, spawn } = makeBaselineSpawn({
+    mergeBases: {
+      "release-candidate": "base-pr-local",
+      "origin/v2-alpha": "base-upstream",
+      "origin/main": "base-main",
+    },
+    upstream: "origin/v2-alpha",
+    diffs: {
+      "base-pr-local..HEAD": "plugins/desk/mcp/src/tools/status.js\n",
+    },
+  })
+
+  assert.ok(collectChangedFiles({
+    repoRoot,
+    spawn,
+    env: { GITHUB_BASE_REF: "release-candidate" },
+  }).includes("plugins/desk/mcp/src/tools/status.js"))
+  assert.deepEqual(
+    calls.filter((args) => args[0] === "merge-base").map((args) => args[1]),
+    ["origin/release-candidate", "release-candidate"],
+  )
+})
+
+test("coverage runner uses configured local upstream before main fallbacks", async () => {
+  const { collectChangedFiles } = await loadRunner()
+  const { calls, spawn } = makeBaselineSpawn({
+    mergeBases: {
+      "origin/v2-alpha": "base-upstream",
+      "origin/main": "base-main",
+    },
+    upstream: "origin/v2-alpha",
+    diffs: {
+      "base-upstream..HEAD": "plugins/desk/mcp/src/tools/search.js\n",
+    },
+  })
+
+  assert.ok(collectChangedFiles({ repoRoot, spawn, env: {} }).includes(
+    "plugins/desk/mcp/src/tools/search.js",
+  ))
+  assert.deepEqual(
+    calls.filter((args) => args[0] === "merge-base").map((args) => args[1]),
+    ["origin/v2-alpha"],
+  )
+})
+
+test("coverage runner rejects a pushed feature branch self-upstream as a committed baseline", async () => {
+  const { collectChangedFiles } = await loadRunner()
+  const { calls, spawn } = makeBaselineSpawn({
+    mergeBases: {
+      "origin/user/example": "head-sha",
+      "origin/main": "base-main",
+    },
+    currentBranch: "user/example",
+    upstream: "origin/user/example",
+    diffs: {
+      "base-main..HEAD": "plugins/desk/mcp/src/coverage/runner.js\n",
+    },
+    unstaged: "",
+    staged: "",
+    untracked: "",
+  })
+
+  assert.deepEqual(
+    normalizePaths(collectChangedFiles({ repoRoot, spawn, env: {} })),
+    ["plugins/desk/mcp/src/coverage/runner.js"],
+  )
+  assert.deepEqual(
+    calls.filter((args) => args[0] === "merge-base").map((args) => args[1]),
+    ["origin/main"],
+  )
+})
+
+test("coverage runner falls back to origin/main and then main", async () => {
+  const { collectChangedFiles } = await loadRunner()
+  const originMain = makeBaselineSpawn({
+    mergeBases: {
+      "origin/main": "base-origin-main",
+      "main": "base-main",
+    },
+    diffs: {
+      "base-origin-main..HEAD": "plugins/desk/mcp/src/server.js\n",
+    },
+  })
+  assert.ok(collectChangedFiles({
+    repoRoot,
+    spawn: originMain.spawn,
+    env: {},
+  }).includes("plugins/desk/mcp/src/server.js"))
+  assert.deepEqual(
+    originMain.calls.filter((args) => args[0] === "merge-base").map((args) => args[1]),
+    ["origin/main"],
+  )
+
+  const localMain = makeBaselineSpawn({
+    mergeBases: {
+      "main": "base-main",
+    },
+    diffs: {
+      "base-main..HEAD": "plugins/desk/mcp/src/server-helpers.js\n",
+    },
+  })
+  assert.ok(collectChangedFiles({
+    repoRoot,
+    spawn: localMain.spawn,
+    env: {},
+  }).includes("plugins/desk/mcp/src/server-helpers.js"))
+  assert.deepEqual(
+    localMain.calls.filter((args) => args[0] === "merge-base").map((args) => args[1]),
+    ["origin/main", "main"],
+  )
+})
+
+test("coverage runner fails safely when no baseline candidate resolves", async () => {
+  const { changedSinceMergeBase, resolveCoverageBase } = await loadRunner()
   const spawn = () => ({ status: 1, stdout: "", stderr: "missing ref" })
-  assert.deepEqual(changedSinceMergeBase({ repoRoot, spawn }), [])
+  assert.throws(
+    () => changedSinceMergeBase({ repoRoot, spawn }),
+    /coverage baseline could not be resolved safely/u,
+  )
+  assert.throws(
+    () => resolveCoverageBase({ repoRoot, spawn }),
+    /coverage baseline could not be resolved safely/u,
+  )
+  assert.throws(
+    () => resolveCoverageBase({ repoRoot, spawn, env: {} }),
+    /coverage baseline could not be resolved safely/u,
+  )
+})
+
+test("coverage runner default adapters use the current process environment", async () => {
+  const { collectChangedCoverageFiles, collectChangedFiles, resolveCoverageBase } = await loadRunner()
+  assert.match(resolveCoverageBase({ repoRoot }), /^[0-9a-f]{40}$/u)
+  assert.ok(Array.isArray(collectChangedFiles({ repoRoot })))
+  assert.ok(Array.isArray(collectChangedCoverageFiles({ repoRoot })))
 })
 
 test("coverage discovery's default Git adapters read a real uncommitted source fixture", async t => {
@@ -529,17 +769,42 @@ test("coverage discovery's default Git adapters read a real uncommitted source f
   const initialized = spawnSync("git", ["init", "--quiet", fixtureRoot], { encoding: "utf8" })
   assert.equal(initialized.status, 0, initialized.stderr)
   const file = "plugins/desk/mcp/src/changed.js"
+  writeFixture(fixtureRoot, file, "export const changed = false\n")
+  assert.equal(spawnSync("git", ["add", file], { cwd: fixtureRoot, encoding: "utf8" }).status, 0)
+  const committed = spawnSync("git", [
+    "-c",
+    "user.name=Coverage Gate Test",
+    "-c",
+    "user.email=coverage-gate@example.invalid",
+    "commit",
+    "--quiet",
+    "-m",
+    "fixture baseline",
+  ], { cwd: fixtureRoot, encoding: "utf8" })
+  assert.equal(committed.status, 0, committed.stderr)
   writeFixture(fixtureRoot, file, "export const changed = true\n")
-  assert.deepEqual(collectChangedFiles({ repoRoot: fixtureRoot }), [file])
-  assert.deepEqual(collectChangedCoverageFiles({ repoRoot: fixtureRoot }), [file])
-  assert.deepEqual(changedSinceMergeBase({ repoRoot: fixtureRoot }), [])
+  assert.deepEqual(collectChangedFiles({
+    repoRoot: fixtureRoot,
+    env: { ...process.env, DESK_COVERAGE_BASE_REF: "HEAD" },
+  }), [file])
+  assert.deepEqual(collectChangedCoverageFiles({
+    repoRoot: fixtureRoot,
+    env: { ...process.env, DESK_COVERAGE_BASE_REF: "HEAD" },
+  }), [file])
+  assert.deepEqual(changedSinceMergeBase({
+    repoRoot: fixtureRoot,
+    env: { ...process.env, DESK_COVERAGE_BASE_REF: "HEAD" },
+  }), [])
 })
 
 test("coverage runner preserves the environment and recursion marker at the producer boundary", async () => {
   const { runCoverageCommand } = await loadRunner()
   let captured = null
   const spawn = (cmd, args, options) => {
-    if (cmd !== process.execPath) return { status: 0, stdout: "", stderr: "" }
+    if (cmd !== process.execPath) {
+      if (args[0] === "merge-base") return { status: 0, stdout: "base-sha\n", stderr: "" }
+      return { status: 0, stdout: "", stderr: "" }
+    }
     captured = { cmd, args, options }
     const directory = path.dirname(args[args.indexOf("--nycrc-path") + 1])
     writeCoverageSummary(directory, {})
@@ -548,7 +813,7 @@ test("coverage runner preserves the environment and recursion marker at the prod
 
   const result = runCoverageCommand({
     spawn,
-    env: { CUSTOM_ENV: "1" },
+    env: { CUSTOM_ENV: "1", DESK_COVERAGE_BASE_REF: "origin/main" },
   })
 
   assert.equal(result, 0)

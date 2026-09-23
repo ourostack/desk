@@ -15,7 +15,7 @@ const tempDeskRoots = new Set()
 after(() => Promise.all([...tempDeskRoots].map((root) => fs.rm(root, { recursive: true, force: true }))))
 
 export async function mkTempDeskRoot() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-search-test-"))
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desk-search-test-"))
   tempDeskRoots.add(root)
   return root
 }

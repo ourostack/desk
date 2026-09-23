@@ -67,7 +67,7 @@ The evidence root must be an explicitly approved private artifact location outsi
 | Responsibility | Owner |
 | --- | --- |
 | Checkpoint, interruption and replacement-writer recovery | `desk:session-resumption` |
-| Independent review of implementation commits | `desk:independent-review` |
+| Code review and affected re-review | `superpowers:requesting-code-review` |
 | Ready-set scheduling, conflicts and dispatch | `desk:work-orchestration` |
 | Work accounting, intake, commitment and evaluation triggers | `desk:work-measurement-ledger` |
 | Delivery and promotion | the recorded repository policy and the existing repository skills |
