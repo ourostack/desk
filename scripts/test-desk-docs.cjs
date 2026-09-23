@@ -427,30 +427,35 @@ function findCanonicalRfcCopies({
 function declaresCanonicalRfc(body) {
   return body
     .split(/[.!?\n]+/u)
-    .some((sentence) => (
-      /\bthis(?:\s+(?:document|file|rfc))?\s+(?:is|serves as|constitutes|defines|establishes|acts as|becomes|remains)\b/iu.test(sentence) &&
-      /\bcanonical\b/iu.test(sentence) &&
-      /\brfc\b/iu.test(sentence) &&
-      !/\b(?:not|never|does not|is not|isn't|doesn't|cannot|can't)\b/iu.test(sentence) &&
-      !/\b(?:pointer|redirect|link|reference)\b/iu.test(sentence)
+    .flatMap((sentence) => sentence.split(/\b(?:and|but|while|although|though)\b|[;:]/iu))
+    .some((clause) => (
+      /\bthis(?:\s+(?:document|file|rfc))?\s+(?:is|serves as|constitutes|defines|establishes|acts as|becomes|remains)\b/iu.test(clause) &&
+      /\bcanonical\b/iu.test(clause) &&
+      /\brfc\b/iu.test(clause) &&
+      !/\b(?:not|never|does not|is not|isn't|doesn't|cannot|can't|no longer|neither|nor)\b/iu.test(clause) &&
+      !/\b(?:pointer|redirect|link|reference)\b/iu.test(clause)
     ));
 }
 
 function markdownLinkDestinations(body) {
+  const renderedBody = body
+    .replace(/<!--[\s\S]*?-->/gu, "")
+    .replace(/^\s{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^\s*\1\s*$/gmu, "")
+    .replace(/(`+)[^`\n]*\1/gu, "");
   const definitions = new Map();
-  for (const match of body.matchAll(
+  for (const match of renderedBody.matchAll(
     /^\s{0,3}\[([^\]]+)\]:\s*(?:<([^>\n]+)>|([^\s]+))(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*$/gmu,
   )) {
     definitions.set(normalizeReferenceLabel(match[1]), match[2] ?? match[3]);
   }
 
   const destinations = [];
-  for (const match of body.matchAll(
-    /\[[^\]]+\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/gu,
+  for (const match of renderedBody.matchAll(
+    /(?<!!)\[[^\]]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/gu,
   )) {
     destinations.push(match[1] ?? match[2]);
   }
-  for (const match of body.matchAll(/\[([^\]]+)\]\[([^\]]*)\]/gu)) {
+  for (const match of renderedBody.matchAll(/(?<!!)\[([^\]]*)\]\[([^\]]*)\]/gu)) {
     const label = normalizeReferenceLabel(match[2] || match[1]);
     const destination = definitions.get(label);
     if (destination) destinations.push(destination);

@@ -371,6 +371,8 @@ test("canonical RFC discovery rejects another active canonical declaration", () 
   for (const disclaimer of [
     "This RFC is not the canonical Agentic Engineering V2 RFC.",
     "This document does not serve as the canonical Agentic Engineering V2 RFC.",
+    "This RFC is no longer the canonical Agentic Engineering V2 RFC.",
+    "This RFC establishes neither the canonical Agentic Engineering V2 RFC nor its successor.",
   ]) {
     docsValidator.validateCanonicalRfc([], {
       readFile: (file) => {
@@ -382,6 +384,21 @@ test("canonical RFC discovery rejects another active canonical declaration", () 
       markdownFiles: [canonicalRfcPath, "DISCLAIMER.md"],
     })
   }
+
+  assert.throws(
+    () => docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => {
+        if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === "SECOND-RFC.md") {
+          return "# Another RFC\n\nThis document establishes the canonical Agentic Engineering V2 RFC and includes a link to it.\n"
+        }
+        return "Not canonical."
+      },
+      repoRoot,
+      markdownFiles: [canonicalRfcPath, "SECOND-RFC.md"],
+    }),
+    /exactly one active canonical/iu,
+  )
 
   assert.throws(
     () => docsValidator.validateCanonicalRfc([], {
@@ -463,6 +480,23 @@ test("public RFC pointers reject denylisted context and broken local links", () 
       repoRoot,
     })
     assert.deepEqual(standardLinkErrors, [])
+  }
+
+  for (const body of [
+    `Use \`[RFC](${canonicalRfcPath})\`.`,
+    `\`\`\`markdown\n[RFC](${canonicalRfcPath})\n\`\`\``,
+    `![RFC](${canonicalRfcPath})`,
+    `<!-- [RFC](${canonicalRfcPath}) -->`,
+  ]) {
+    const nonNavigableErrors = []
+    docsValidator.validateCanonicalRfcPointers(nonNavigableErrors, {
+      pointers: [topLevelRfcPointer],
+      readFile: () => body,
+      repoRoot,
+    })
+    assert.deepEqual(nonNavigableErrors, [
+      `${topLevelRfcPointer} must link to ${canonicalRfcPath}`,
+    ])
   }
 })
 
