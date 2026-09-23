@@ -10,6 +10,16 @@ const defaultRepoRoot = path.resolve(__dirname, "..");
 const CANONICAL_RFC = "plugins/desk/docs/agentic-engineering-v2-rfc.md";
 const CANONICAL_RFC_MARKER = "<!-- canonical-agentic-engineering-v2-rfc -->";
 const TOP_LEVEL_RFC_POINTERS = Object.freeze(["AGENTIC-ENGINEERING-V2.md"]);
+const PUBLIC_RFC_POINTERS = Object.freeze([
+  Object.freeze({
+    file: "AGENTIC-ENGINEERING-V2.md",
+    target: CANONICAL_RFC,
+  }),
+  Object.freeze({
+    file: "plugins/desk/README.md",
+    target: "docs/agentic-engineering-v2-rfc.md",
+  }),
+]);
 const PUBLIC_RFC_DENYLIST = new RegExp([
   "\\bMicrosoft\\b",
   "\\bPWF\\b",
@@ -410,7 +420,8 @@ function findCanonicalRfcCopies({
   return markdownFiles.filter((file) => {
     if (/(^|\/)(?:_?archive)(?:\/|$)/iu.test(file)) return false;
     const body = readFile(file);
-    return body.includes(CANONICAL_RFC_MARKER);
+    return body.includes(CANONICAL_RFC_MARKER) ||
+      /\b(?:this(?: document)? is|this document serves as)\s+the\s+(?:active\s+)?canonical\s+(?:public\s+)?(?:agentic engineering v2\s+)?rfc\b/iu.test(body);
   });
 }
 
@@ -458,19 +469,25 @@ function validateCanonicalRfc(errors, {
 }
 
 function validateCanonicalRfcPointers(errors, {
-  pointers = TOP_LEVEL_RFC_POINTERS,
-  canonicalRfc = CANONICAL_RFC,
+  pointers = PUBLIC_RFC_POINTERS,
+  denylist = PUBLIC_RFC_DENYLIST,
   readFile = (file) => readRepoFile(file),
   repoRoot = defaultRepoRoot,
   exists = fs.existsSync,
 } = {}) {
   for (const pointer of pointers) {
-    const body = readFile(pointer);
-    if (!body.includes(canonicalRfc)) {
-      errors.push(`${pointer} must link to ${canonicalRfc}`);
+    const { file, target } = typeof pointer === "string"
+      ? { file: pointer, target: CANONICAL_RFC }
+      : pointer;
+    const body = readFile(file);
+    if (!body.includes(target)) {
+      errors.push(`${file} must link to ${target}`);
       continue;
     }
-    validateLocalMarkdownLinks(errors, { file: pointer, body, repoRoot, exists });
+    if (denylist.test(body)) {
+      errors.push(`${file} violates the public-safety denylist`);
+    }
+    validateLocalMarkdownLinks(errors, { file, body, repoRoot, exists });
   }
 }
 
@@ -738,6 +755,7 @@ module.exports = {
   DOCS,
   MCP_TOOL_NAMES,
   PRIVACY_REQUIRED_DOCS,
+  PUBLIC_RFC_POINTERS,
   TOP_LEVEL_RFC_POINTERS,
   TOPIC_REQUIREMENTS,
   WORKFLOW_REQUIREMENTS,

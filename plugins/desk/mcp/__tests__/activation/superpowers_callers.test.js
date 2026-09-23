@@ -32,6 +32,10 @@ test("normal generic orchestration and compatibility policy select native Superp
     "plugins/desk/skills/work-orchestration/SKILL.md",
     integration,
     adapter,
+    "plugins/desk/skills/session-resumption/SKILL.md",
+    "plugins/desk/skills/task-lifecycle/SKILL.md",
+    "plugins/desk/skills/pr-feedback-on-own-pr/SKILL.md",
+    "plugins/desk/skills/pr-self-review/SKILL.md",
   ]) {
     const text = read(file)
     assert.match(text, /superpowers:requesting-code-review/u)

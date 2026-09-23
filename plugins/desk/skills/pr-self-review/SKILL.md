@@ -1,11 +1,11 @@
 ---
 name: pr-self-review
-description: Read-only PR evaluation when the operator requests a self-review or final polish pass. Fact-check and classify findings, then hand them to the single independent-review cycle and existing Superpowers implementation owner. Not a substitute for required reviewer approval.
+description: Read-only PR evaluation when the operator requests a self-review or final polish pass. Fact-check and classify findings, then hand them to the selected Superpowers review cycle and existing implementation owner. Not a substitute for required reviewer approval.
 ---
 
 # pr-self-review
 
-Invoke `desk:superpowers-integration` and `desk:independent-review`. The evaluation phases below supply the PR-specific rubric. Remediation and re-review belong to that one independent-review cycle; any convergence instructions below are details of that same cycle, not authority to create a second fix owner or loop.
+Invoke `desk:superpowers-integration` and `superpowers:requesting-code-review`. The evaluation phases below supply the PR-specific rubric. Remediation and affected re-review belong to that one frozen-candidate review cycle; any convergence instructions below are details of that same cycle, not authority to create a second fix owner or loop.
 
 ## Invariants
 
@@ -13,7 +13,7 @@ These seven properties define what pr-self-review IS and IS NOT. They
 are not preferences. Any change that violates one of these is a
 redesign, not a tweak.
 
-1. **Review content is borrowed, not a second method.** Read the repository's `AGENTS.md` / `CLAUDE.md`, code standards and personas, falling back to the language-agnostic rubric below. Preflight, evaluation, fact-checking and reporting feed `desk:independent-review`; the same selected Superpowers owner applies any authorized changes.
+1. **Review content is borrowed, not a second method.** Read the repository's `AGENTS.md` / `CLAUDE.md`, code standards and personas, falling back to the language-agnostic rubric below. Preflight, evaluation, fact-checking and reporting feed `superpowers:requesting-code-review`; the same selected Superpowers owner applies any authorized changes and records every finding disposition.
 
 2. **Best model throughout.** No multi-model cost optimization. A
    cheap stage contaminates every downstream stage that depends on
@@ -46,7 +46,7 @@ redesign, not a tweak.
    for future per-rule effectiveness tracking and for stable cross-
    references from findings back to the rule that produced them.
 
-6. **One convergence owner.** `desk:independent-review` owns disposition and re-review, with one Superpowers implementation owner for all remediation. The operator or approved mandate selects when review runs. PR-specific intake and the convergence details below are invoked within that cycle, never beside it; they cannot enlarge delegation or replace an intentional alpha endpoint with main promotion.
+6. **One convergence owner.** `superpowers:requesting-code-review` owns frozen-candidate finding disposition and affected re-review, with one Superpowers implementation owner for all remediation. The operator or approved mandate selects when review runs. PR-specific intake and the convergence details below are invoked within that cycle, never beside it; they cannot enlarge delegation or replace an intentional alpha endpoint with main promotion.
 
 7. **Collab before convergence.** Do not invoke pr-self-review before
    the operator-worker collab of step 3 in the broader PR lifecycle

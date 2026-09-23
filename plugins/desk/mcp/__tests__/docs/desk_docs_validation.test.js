@@ -304,6 +304,7 @@ test("canonical RFC validation requires one marker and the blessed top-level poi
 
   const errors = []
   docsValidator.validateCanonicalRfcPointers(errors, {
+    pointers: [topLevelRfcPointer],
     readFile: () => "# Pointer\n\nNo canonical destination here.\n",
   })
   assert.deepEqual(errors, [
@@ -317,6 +318,21 @@ test("canonical RFC discovery rejects another active canonical declaration", () 
       readFile: (file) => {
         if (file === canonicalRfcPath) return canonicalRfcBody()
         if (file === "SECOND-RFC.md") return `${canonicalRfcMarker}\n# Another RFC\n`
+        return "Not canonical."
+      },
+      repoRoot,
+      markdownFiles: [canonicalRfcPath, "SECOND-RFC.md"],
+    }),
+    /exactly one active canonical/iu,
+  )
+
+  assert.throws(
+    () => docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => {
+        if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === "SECOND-RFC.md") {
+          return "# Another RFC\n\nThis is the active canonical Agentic Engineering V2 RFC.\n"
+        }
         return "Not canonical."
       },
       repoRoot,
@@ -338,6 +354,29 @@ test("canonical RFC validation rejects broken local links", () => {
     }),
     /broken local link/iu,
   )
+})
+
+test("public RFC pointers reject denylisted context and broken local links", () => {
+  const privateErrors = []
+  docsValidator.validateCanonicalRfcPointers(privateErrors, {
+    readFile: (file) => file === topLevelRfcPointer
+      ? `# Pointer\n\nSee [the RFC](${canonicalRfcPath}). Microsoft-only context.\n`
+      : "See [the RFC](./docs/agentic-engineering-v2-rfc.md).\n",
+    repoRoot,
+  })
+  assert.ok(privateErrors.some((error) => error.includes("public-safety")))
+
+  const linkErrors = []
+  docsValidator.validateCanonicalRfcPointers(linkErrors, {
+    readFile: (file) => file === "plugins/desk/README.md"
+      ? "See [the RFC](./docs/agentic-engineering-v2-rfc.md) and [missing context](./docs/missing-rfc.md).\n"
+      : `See [the RFC](${canonicalRfcPath}).\n`,
+    repoRoot,
+    exists: (file) => !file.endsWith("missing-rfc.md"),
+  })
+  assert.ok(linkErrors.some((error) => (
+    error.includes("plugins/desk/README.md has broken local link")
+  )))
 })
 
 test("run and startCli expose success, failure, and no-op CLI paths", () => {
@@ -362,6 +401,9 @@ test("run and startCli expose success, failure, and no-op CLI paths", () => {
       readFile: (file) => {
         if (file === canonicalRfcPath) return canonicalRfcBody()
         if (file === topLevelRfcPointer) return `[Canonical RFC](${canonicalRfcPath})`
+        if (file === "plugins/desk/README.md") {
+          return `${goodBody}\n[Canonical RFC](./docs/agentic-engineering-v2-rfc.md)`
+        }
         if (file === "plugins/desk/mcp/README.md") return mcpReadmeBody()
         if (file === "plugins/desk/mcp/src/tool-names.js") return toolNamesSource()
         if (file === "plugins/desk/skills/cdp-headed-browser/SKILL.md") return "Target.createTarget({ url, background: true })"
