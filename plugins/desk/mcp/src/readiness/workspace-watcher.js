@@ -98,7 +98,7 @@ export async function createWorkspaceWatcher({
 
     let current
     try {
-      current = changes.size > 0 ? scanWorkspace(root, ignoredRelativePaths) : baseline
+      current = scanWorkspace(root, ignoredRelativePaths)
     } catch {
       failureReason = "watcher_failed"
       return { certain: false, reason: failureReason }

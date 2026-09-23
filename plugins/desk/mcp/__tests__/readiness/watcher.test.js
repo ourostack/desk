@@ -188,6 +188,64 @@ test("production workspace watcher fences and delivers external writes", async (
   ])
 })
 
+test("production workspace watcher reconciles actual workspace state when an external callback is missed", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-missed-callback-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const harness = createWatchHarness()
+  const watcher = await createWorkspaceWatcher({ root, timeoutMs: 5_000, watchFactory: harness.watchFactory })
+  t.after(() => watcher.close())
+
+  fs.writeFileSync(path.join(root, "missed.md"), "# missed")
+  const changes = []
+  const fence = watcher.fence({
+    recordChange(change) {
+      changes.push(change)
+      return { recorded: true }
+    },
+  })
+  const marker = await waitForFenceMarker(root)
+  harness.emit("change", path.relative(root, marker))
+  assert.deepEqual(await fence, { certain: true })
+  assert.deepEqual(changes.map(({ path, operation }) => ({ path, operation })), [
+    { path: "missed.md", operation: "write" },
+  ])
+})
+
+test("production workspace watcher reconciles changes created during watcher construction", async (t) => {
+  const directory = await mkTempRoot("desk-workspace-watcher-construction-gap-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  let callback
+  const watcher = await createWorkspaceWatcher({
+    root,
+    timeoutMs: 5_000,
+    watchFactory(_root, _options, handler) {
+      fs.writeFileSync(path.join(root, "construction-gap.md"), "# construction gap")
+      callback = handler
+      return {
+        on() {},
+        close() {},
+      }
+    },
+  })
+  t.after(() => watcher.close())
+
+  const changes = []
+  const fence = watcher.fence({
+    recordChange(change) {
+      changes.push(change)
+      return { recorded: true }
+    },
+  })
+  const marker = await waitForFenceMarker(root)
+  callback("change", path.relative(root, marker))
+  assert.deepEqual(await fence, { certain: true })
+  assert.deepEqual(changes.map(({ path, operation }) => ({ path, operation })), [
+    { path: "construction-gap.md", operation: "write" },
+  ])
+})
+
 test("production workspace watcher propagates durable recording failures", async (t) => {
   const directory = await mkTempRoot("desk-workspace-watcher-recording-")
   const root = path.join(directory, "workspace")
