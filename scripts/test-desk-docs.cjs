@@ -420,9 +420,35 @@ function findCanonicalRfcCopies({
   return markdownFiles.filter((file) => {
     if (/(^|\/)(?:_?archive)(?:\/|$)/iu.test(file)) return false;
     const body = readFile(file);
-    return body.includes(CANONICAL_RFC_MARKER) ||
-      /\b(?:this(?: document)? is|this document serves as)\s+the\s+(?:active\s+)?canonical\s+(?:public\s+)?(?:agentic engineering v2\s+)?rfc\b/iu.test(body);
+    return body.includes(CANONICAL_RFC_MARKER) || declaresCanonicalRfc(body);
   });
+}
+
+function declaresCanonicalRfc(body) {
+  return body
+    .split(/[.!?\n]+/u)
+    .some((sentence) => (
+      /\bthis(?:\s+(?:document|file|rfc))?\s+(?:is|serves as|constitutes|defines)\b/iu.test(sentence) &&
+      /\bcanonical\b/iu.test(sentence) &&
+      /\brfc\b/iu.test(sentence) &&
+      !/\b(?:pointer|redirect|link|reference)\b/iu.test(sentence)
+    ));
+}
+
+function localMarkdownLinkPaths({
+  file,
+  body,
+  repoRoot = defaultRepoRoot,
+} = {}) {
+  const links = [];
+  for (const match of body.matchAll(/\[[^\]]+\]\(([^)]+)\)/gu)) {
+    const target = match[1].trim();
+    if (!target || /^(?:https?:|mailto:|#)/iu.test(target)) continue;
+    const pathOnly = target.split("#")[0].split("?")[0];
+    if (!pathOnly) continue;
+    links.push(path.resolve(repoRoot, path.dirname(file), decodeURIComponent(pathOnly)));
+  }
+  return links;
 }
 
 function validateLocalMarkdownLinks(errors, {
@@ -431,13 +457,11 @@ function validateLocalMarkdownLinks(errors, {
   repoRoot = defaultRepoRoot,
   exists = fs.existsSync,
 } = {}) {
-  for (const match of body.matchAll(/\[[^\]]+\]\(([^)]+)\)/gu)) {
-    const target = match[1].trim();
-    if (!target || /^(?:https?:|mailto:|#)/iu.test(target)) continue;
-    const pathOnly = target.split("#")[0].split("?")[0];
-    if (!pathOnly) continue;
-    const resolved = path.resolve(repoRoot, path.dirname(file), decodeURIComponent(pathOnly));
-    if (!exists(resolved)) errors.push(`${file} has broken local link ${target}`);
+  const resolvedLinks = localMarkdownLinkPaths({ file, body, repoRoot });
+  for (const resolved of resolvedLinks) {
+    if (!exists(resolved)) {
+      errors.push(`${file} has broken local link ${path.relative(path.join(repoRoot, path.dirname(file)), resolved)}`);
+    }
   }
 }
 
@@ -480,7 +504,9 @@ function validateCanonicalRfcPointers(errors, {
       ? { file: pointer, target: CANONICAL_RFC }
       : pointer;
     const body = readFile(file);
-    if (!body.includes(target)) {
+    const expectedTarget = path.resolve(repoRoot, path.dirname(file), target);
+    const linkedTargets = localMarkdownLinkPaths({ file, body, repoRoot });
+    if (!linkedTargets.includes(expectedTarget)) {
       errors.push(`${file} must link to ${target}`);
       continue;
     }

@@ -331,6 +331,33 @@ test("canonical RFC discovery rejects another active canonical declaration", () 
       readFile: (file) => {
         if (file === canonicalRfcPath) return canonicalRfcBody()
         if (file === "SECOND-RFC.md") {
+          return "# Another RFC\n\nThis RFC is the canonical Agentic Engineering V2 RFC.\n"
+        }
+        return "Not canonical."
+      },
+      repoRoot,
+      markdownFiles: [canonicalRfcPath, "SECOND-RFC.md"],
+    }),
+    /exactly one active canonical/iu,
+  )
+
+  docsValidator.validateCanonicalRfc([], {
+    readFile: (file) => {
+      if (file === canonicalRfcPath) return canonicalRfcBody()
+      if (file === "RFC-POINTER.md") {
+        return "# Pointer\n\nThis document is the canonical RFC pointer and redirect.\n"
+      }
+      return "Not canonical."
+    },
+    repoRoot,
+    markdownFiles: [canonicalRfcPath, "RFC-POINTER.md"],
+  })
+
+  assert.throws(
+    () => docsValidator.validateCanonicalRfc([], {
+      readFile: (file) => {
+        if (file === canonicalRfcPath) return canonicalRfcBody()
+        if (file === "SECOND-RFC.md") {
           return "# Another RFC\n\nThis is the active canonical Agentic Engineering V2 RFC.\n"
         }
         return "Not canonical."
@@ -377,6 +404,22 @@ test("public RFC pointers reject denylisted context and broken local links", () 
   assert.ok(linkErrors.some((error) => (
     error.includes("plugins/desk/README.md has broken local link")
   )))
+
+  const barePathErrors = []
+  docsValidator.validateCanonicalRfcPointers(barePathErrors, {
+    pointers: [topLevelRfcPointer],
+    readFile: () => [
+      "# Pointer",
+      "",
+      `Canonical path: \`${canonicalRfcPath}\`.`,
+      "",
+      "[Another document](plugins/desk/README.md)",
+    ].join("\n"),
+    repoRoot,
+  })
+  assert.deepEqual(barePathErrors, [
+    `${topLevelRfcPointer} must link to ${canonicalRfcPath}`,
+  ])
 })
 
 test("run and startCli expose success, failure, and no-op CLI paths", () => {
