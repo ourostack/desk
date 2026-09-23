@@ -448,7 +448,7 @@ test("controller request timeout rejects bounded calls when an owner stops respo
   await client.close()
 })
 
-test("controller request errors preserve diagnostic payloads", {
+test("controller request errors preserve diagnostic payloads across fragmented responses", {
   skip: process.platform === "win32",
 }, async (t) => {
   const root = tempFixture("desk-owner-diagnostic-")
@@ -470,10 +470,13 @@ test("controller request errors preserve diagnostic payloads", {
         socket.end(`${JSON.stringify({ id: message.id, result: { accepted: true, identity } })}\n`)
         return
       }
-      socket.end(`${JSON.stringify({
+      const response = `${JSON.stringify({
         id: message.id,
         error: { code: "fixture_error", reason: "fixture_reason", message: "fixture failed", diagnostic },
-      })}\n`)
+      })}\n`
+      socket.write(response.slice(0, 1), () => {
+        setImmediate(() => socket.end(response.slice(1)))
+      })
     })
   })
   await new Promise((resolve, reject) => {
