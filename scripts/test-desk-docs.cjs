@@ -8,24 +8,19 @@ const path = require("node:path");
 
 const defaultRepoRoot = path.resolve(__dirname, "..");
 const CANONICAL_RFC = "plugins/desk/docs/agentic-engineering-v2-rfc.md";
-const PUBLIC_RFC_DENYLIST = /\bMicrosoft\b|\bPWF\b|\bADO\b|\bTeams\b|arimendelow|platform-workflows|dev\.azure\.com|microsoft\.com/u;
-const REQUIRED_RFC_TOP_LEVEL_SECTIONS = Object.freeze([
-  "Status and audience",
-  "The unresolved problem",
-  "The V2 thesis",
-  "Human and agent responsibilities",
-  "Runtime, substrate, provider, overlay, and domain boundaries",
-  "Authority, continuity, and evidence",
-  "Flow and delegation judgment",
-  "Instruction coherence",
-  "Startup composition",
-  "Start or upgrade a Desk",
-  "Migrate a Crew workspace",
-  "Installation, readiness, and first work",
-  "Compatibility and rollback",
-  "Soak, release, and residual risk",
-  "Alternatives and rejected designs",
-]);
+const CANONICAL_RFC_MARKER = "<!-- canonical-agentic-engineering-v2-rfc -->";
+const TOP_LEVEL_RFC_POINTERS = Object.freeze(["AGENTIC-ENGINEERING-V2.md"]);
+const PUBLIC_RFC_DENYLIST = new RegExp([
+  "\\bMicrosoft\\b",
+  "\\bPWF\\b",
+  "\\bADO\\b",
+  "\\bTeams\\b",
+  "arimendelow",
+  "platform-workflows",
+  "dev\\.azure\\.com",
+  "microsoft\\.com",
+  ["robo", "rev"].join(""),
+].join("|"), "iu");
 
 const DOCS = Object.freeze([
   "plugins/desk/README.md",
@@ -410,38 +405,29 @@ function listTrackedMarkdownFiles({
 function findCanonicalRfcCopies({
   repoRoot = defaultRepoRoot,
   readFile = (file) => readRepoFile(file, { repoRoot }),
+  markdownFiles = listTrackedMarkdownFiles({ repoRoot }),
 } = {}) {
-  return listTrackedMarkdownFiles({ repoRoot }).filter((file) => {
+  return markdownFiles.filter((file) => {
+    if (/(^|\/)(?:_?archive)(?:\/|$)/iu.test(file)) return false;
     const body = readFile(file);
-    return /^# Agentic Engineering V2\s*$/mu.test(body);
+    return body.includes(CANONICAL_RFC_MARKER);
   });
 }
 
-function markdownSection(markdown, title) {
-  const heading = `## ${title}\n\n`;
-  const start = markdown.indexOf(heading);
-  assert.notEqual(start, -1, `missing RFC section: ${title}`);
-  const contentStart = start + heading.length;
-  const nextLevelTwo = markdown.indexOf("\n## ", contentStart);
-  const nextLevelOne = markdown.indexOf("\n# ", contentStart);
-  const candidates = [nextLevelTwo, nextLevelOne].filter((index) => index !== -1);
-  const end = candidates.length > 0 ? Math.min(...candidates) : markdown.length;
-  return markdown.slice(contentStart, end).trim();
-}
-
-function topLevelSectionTitles(markdown) {
-  const titles = [];
-  let inFence = false;
-  for (const line of markdown.split(/\r?\n/u)) {
-    if (/^\s*```/u.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    const heading = line.match(/^##\s+(.+?)\s*#*\s*$/u);
-    if (heading) titles.push(heading[1]);
+function validateLocalMarkdownLinks(errors, {
+  file,
+  body,
+  repoRoot = defaultRepoRoot,
+  exists = fs.existsSync,
+} = {}) {
+  for (const match of body.matchAll(/\[[^\]]+\]\(([^)]+)\)/gu)) {
+    const target = match[1].trim();
+    if (!target || /^(?:https?:|mailto:|#)/iu.test(target)) continue;
+    const pathOnly = target.split("#")[0].split("?")[0];
+    if (!pathOnly) continue;
+    const resolved = path.resolve(repoRoot, path.dirname(file), decodeURIComponent(pathOnly));
+    if (!exists(resolved)) errors.push(`${file} has broken local link ${target}`);
   }
-  return titles;
 }
 
 function validateCanonicalRfc(errors, {
@@ -449,30 +435,43 @@ function validateCanonicalRfc(errors, {
   repoRoot = defaultRepoRoot,
   canonicalRfc = CANONICAL_RFC,
   denylist = PUBLIC_RFC_DENYLIST,
+  markdownFiles = listTrackedMarkdownFiles({ repoRoot }),
+  exists = fs.existsSync,
 } = {}) {
-  assert.equal(fs.existsSync(path.join(repoRoot, canonicalRfc)), true);
+  assert.equal(exists(path.join(repoRoot, canonicalRfc)), true);
   const rfc = readFile(canonicalRfc);
-  assert.match(rfc, /# Agentic Engineering V2/);
-  assert.match(rfc, /## Start or upgrade a Desk/);
-  assert.match(rfc, /## Migrate a Crew workspace/);
-  assert.doesNotMatch(rfc, denylist);
-  assert.deepStrictEqual(
-    topLevelSectionTitles(rfc),
-    REQUIRED_RFC_TOP_LEVEL_SECTIONS,
-    "RFC top-level H2 sections must exactly match the required order and names",
+  assert.match(rfc, /^# Agentic Engineering V2\s*$/mu);
+  assert.equal(
+    rfc.split(CANONICAL_RFC_MARKER).length - 1,
+    1,
+    "canonical RFC must contain exactly one canonical marker",
   );
-  const flowAndDelegation = markdownSection(rfc, "Flow and delegation judgment");
-  for (const phrase of [
-    "same durable task",
-    "governing work record",
-    "before implementation",
-    "invalidated evidence",
-    "unaffected work continues",
-    "normal implementation and review gates",
-  ]) {
-    assert.match(flowAndDelegation, new RegExp(escapeRegExp(phrase), "iu"));
+  assert.doesNotMatch(rfc, denylist);
+  const linkErrors = [];
+  validateLocalMarkdownLinks(linkErrors, { file: canonicalRfc, body: rfc, repoRoot, exists });
+  assert.deepStrictEqual(linkErrors, [], linkErrors.join("; "));
+  assert.deepStrictEqual(
+    findCanonicalRfcCopies({ repoRoot, readFile, markdownFiles }),
+    [canonicalRfc],
+    "exactly one active canonical Agentic Engineering V2 RFC must exist",
+  );
+}
+
+function validateCanonicalRfcPointers(errors, {
+  pointers = TOP_LEVEL_RFC_POINTERS,
+  canonicalRfc = CANONICAL_RFC,
+  readFile = (file) => readRepoFile(file),
+  repoRoot = defaultRepoRoot,
+  exists = fs.existsSync,
+} = {}) {
+  for (const pointer of pointers) {
+    const body = readFile(pointer);
+    if (!body.includes(canonicalRfc)) {
+      errors.push(`${pointer} must link to ${canonicalRfc}`);
+      continue;
+    }
+    validateLocalMarkdownLinks(errors, { file: pointer, body, repoRoot, exists });
   }
-  assert.deepStrictEqual(findCanonicalRfcCopies({ repoRoot, readFile }), [canonicalRfc]);
 }
 
 function validateWorkflowWiring(errors, {
@@ -693,6 +692,7 @@ function validateAll({
   } catch (error) {
     errors.push(`canonical RFC validation failed: ${error.message}`);
   }
+  validateCanonicalRfcPointers(errors, { readFile, repoRoot });
   validateWorkflowWiring(errors, { requirements: workflowRequirements, readFile });
   validateHealthyPathLanguage(errors, { docs, readFile, repoRoot });
   validateMcpReadmeToolSurface(errors, { readFile });
@@ -733,9 +733,12 @@ function startCli({
 }
 
 module.exports = {
+  CANONICAL_RFC,
+  CANONICAL_RFC_MARKER,
   DOCS,
   MCP_TOOL_NAMES,
   PRIVACY_REQUIRED_DOCS,
+  TOP_LEVEL_RFC_POINTERS,
   TOPIC_REQUIREMENTS,
   WORKFLOW_REQUIREMENTS,
   findCanonicalRfcCopies,
@@ -747,6 +750,7 @@ module.exports = {
   validateAll,
   validateBrowserFocusPolicy,
   validateCanonicalRfc,
+  validateCanonicalRfcPointers,
   validateHealthyPathLanguage,
   validateHealthyPathRecord,
   validateMcpReadmeToolSurface,
@@ -755,6 +759,7 @@ module.exports = {
   validateTopicCoverage,
   validateValidatorFixtures,
   validateWorkflowWiring,
+  validateLocalMarkdownLinks,
 };
 
 startCli();

@@ -9,7 +9,7 @@ user-invocable: true
 
 Before operating, review `../principles.md`. Its cross-cutting invariants apply to every skill below.
 
-Selected engineering lifecycle: Superpowers. Invoke `desk:superpowers-integration` before engineering work and `desk:independent-review` for independent review. Preserve unchanged operator preferences; legacy method references use that compatibility mapping, not a second lifecycle.
+Selected engineering lifecycle: Superpowers. Invoke `desk:superpowers-integration` before engineering work and `superpowers:requesting-code-review` for review. Preserve unchanged operator preferences; legacy method references use that compatibility mapping, not a second lifecycle.
 
 I'm **worker** — a long-running engineering agent. I ship real code: ideate, plan, implement, review, open PRs, address feedback, merge. I keep my work on the desk so the next session picks up where the last one left off.
 
@@ -101,7 +101,7 @@ Skills come from Desk and the pinned Superpowers provider, with two first-class 
 | `cdp-headed-browser` | Need Playwright to drive a web UI behind interactive auth (SSO + device check) |
 | `codex-onboarding` | Verify Desk, Superpowers, Plain Language, MCP, cache, and active-session visibility on Codex |
 | `desk:superpowers-integration` | Always bind engineering to existing Desk state, authority, selected capabilities and terminal endpoint |
-| `desk:independent-review` | Independent review and re-review with one implementation owner |
+| `superpowers:requesting-code-review` | Review a frozen candidate, disposition findings, and request affected re-review after bounded corrections |
 | `superpowers:brainstorming` | Resolve missing design agreement |
 | `superpowers:writing-plans` | Write a needed plan at the approved Desk path |
 | `superpowers:executing-plans` | Execute authorized work with the available host capabilities |

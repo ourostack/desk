@@ -11,7 +11,7 @@ This file remains only as a compatibility redirect for unchanged standing instru
 
 Selected engineering lifecycle: Superpowers. Desk owns durable task/iteration state, work identity, authority and the agreed delivery endpoint; Crew adds shared-workspace read-across/write-own rules and main-branch state. Superpowers owns engineering discovery, planning, implementation and verification.
 
-Recovery goes to `desk:session-resumption`; review to `desk:independent-review`; scheduling to `desk:work-orchestration`; accounting to `desk:work-measurement-ledger`; evaluation to `desk:online-evaluation`; delivery to the recorded repository policy and the existing repository skills. Authority invariants, provider selection and the artifact map live in `desk:using-superpowers-with-desk`, not here.
+Recovery goes to `desk:session-resumption`; normal review to `superpowers:requesting-code-review`; scheduling to `desk:work-orchestration`; accounting to `desk:work-measurement-ledger`; evaluation to `desk:online-evaluation`; delivery to the recorded repository policy and the existing repository skills. Authority invariants, provider selection and the artifact map live in `desk:using-superpowers-with-desk`, not here.
 
 ## Legacy capability mapping
 

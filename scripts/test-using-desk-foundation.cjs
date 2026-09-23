@@ -63,6 +63,13 @@ function assertSectionPhrases(body, label, phrases) {
   }
 }
 
+function assertSectionConcepts(body, concepts) {
+  assertSinglePhysicalLine(body, "using-desk section");
+  for (const concept of concepts) {
+    assert.match(body, concept);
+  }
+}
+
 function main() {
   assert.ok(fs.existsSync(skillPath), `missing skill file: ${path.relative(repoRoot, skillPath)}`);
 
@@ -89,13 +96,9 @@ function main() {
   );
   assert.equal(usingDeskSkills[0], skillPath, "using-desk must live at plugins/desk/skills/using-desk/SKILL.md");
 
-  assertSectionPhrases(section(skill, "Human and agent"), "using-desk Human and agent", [
-    "The human supplies intent",
-    "authority",
-    "irreversible approval",
-    "The agent owns execution",
-    "reading instructions",
-    "finishing the work",
+  assertSectionConcepts(section(skill, "Human and agent"), [
+    /human supplies intent.*authority.*endpoint/iu,
+    /agent owns.*sequencing.*verification.*cleanup/iu,
   ]);
 
   assertSectionPhrases(section(skill, "Durable work and authority"), "using-desk Durable work and authority", [
@@ -105,19 +108,19 @@ function main() {
     "provider-specific setup stays out of this foundation",
   ]);
 
-  assertSectionPhrases(
-    section(skill, "Source authority before work begins"),
-    "using-desk Source authority before work begins",
-    [
-      "Before the first repository write or worktree creation",
-      "pinned or frozen source ref",
-      "outranks the default start-from-main recipe",
-      "exact ref and branch relationship",
-      "version surface",
-      "do not move the base simply because another branch is newer",
-      "`git-hygiene` owns the detailed procedure",
-    ],
-  );
+  assertSectionConcepts(section(skill, "Delegation calibration"), [
+    /underdelegat/iu,
+    /overdelegat|overbroad/iu,
+    /bounded help/iu,
+    /does not expand.*authority/iu,
+    /coach.*once.*continue/iu,
+  ]);
+
+  assertSectionConcepts(section(skill, "Source authority before work begins"), [
+    /recorded source authority/iu,
+    /moving branch/iu,
+    /frozen candidate/iu,
+  ]);
 
   assertSectionPhrases(
     section(skill, "Requirements that arrive during execution"),
@@ -145,6 +148,9 @@ function main() {
     "working or doing logs",
     "intermediate milestones",
     "pull request opened, reviewed, or merged states",
+    "consumer-visible",
+    "rendered, installed, merged, rollout",
+    "terminal success line",
     "Visual proof supplements rather than replaces",
     "system-of-record evidence, tests, logs, API/DB verification, or authority checks",
     "Capture only the relevant bounded view",
@@ -158,13 +164,6 @@ function main() {
     "delay, batching, freezing, or resequencing",
     "not maximum agent utilization",
     "verification, review, safety, authority, and real urgency controls intact",
-  ]);
-
-  assertSectionPhrases(section(skill, "Delegation judgment"), "using-desk Delegation judgment", [
-    "Delegate only when a helper will make the result clearer, safer, or more bounded",
-    "parent keeps ownership of the work identity",
-    "crisp objective and return contract",
-    "folds the result back into the main line of work",
   ]);
 
   assertSectionPhrases(section(skill, "Instruction coherence"), "using-desk Instruction coherence", [

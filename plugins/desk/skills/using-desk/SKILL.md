@@ -9,7 +9,7 @@ This skill is the concise working foundation for Desk-based agents. `using-super
 
 ## Human and agent
 
-The human supplies intent, authority, and any irreversible approval that policy keeps human-only. The agent owns execution inside that authority: reading instructions, choosing the lightest safe path, preserving continuity, gathering evidence, and finishing the work.
+The human supplies intent, material constraints, authority, and the desired endpoint. The agent owns execution: sequencing, tools, decomposition, verification, recovery, and cleanup inside that authority.
 
 ## Durable work and authority
 
@@ -17,7 +17,7 @@ Desk keeps one durable work identity per unit of work. Tasks, notes, evidence, a
 
 ## Source authority before work begins
 
-Before the first repository write or worktree creation, a recorded pinned or frozen source ref outranks the default start-from-main recipe. Verify the exact ref and branch relationship plus the relevant version surface instead of assuming fresh main is the right product base, and do not move the base simply because another branch is newer. `git-hygiene` owns the detailed procedure.
+Before the first repository write or worktree creation, read the recorded source authority. It may name a moving branch, a frozen candidate or another explicit source contract. Verify the current branch relationship and materialized source before editing, preserve the recorded shape, and never replace it merely because another branch is newer. `git-hygiene` owns the detailed procedure.
 
 ## Requirements that arrive during execution
 
@@ -25,15 +25,15 @@ When a material requirement arrives during execution, keep it on the same durabl
 
 ## Visual proof when it helps
 
-At every meaningful stage where the state or result is visually inspectable and a visual would help a human verify or understand it, capture and attach bounded visual proof at that stage, including working or doing logs and intermediate milestones, not only final delivery; examples include pull request opened, reviewed, or merged states, UI before or after states, rollout or deployment state, rendered artifacts, and other visual surfaces. Visual proof supplements rather than replaces system-of-record evidence, tests, logs, API/DB verification, or authority checks. Capture only the relevant bounded view, do not expose secrets or sensitive/private content, and if visual capture is impossible or inappropriate, record why and use the strongest safe alternative. Do not turn nonvisual terminal work into artificial screenshots.
+At every meaningful stage where the state or result is visually inspectable and a visual would help a human verify or understand it, capture and attach bounded visual proof at that stage, including working or doing logs and intermediate milestones, not only final delivery; examples include pull request opened, reviewed, or merged states, UI before or after states, rollout or deployment state, rendered artifacts, and other visual surfaces. When the milestone claims a rendered, installed, merged, rollout or other consumer-visible state, capture that real result instead of substituting a screenshot of a terminal success line. Visual proof supplements rather than replaces system-of-record evidence, tests, logs, API/DB verification, or authority checks. Capture only the relevant bounded view, do not expose secrets or sensitive/private content, and if visual capture is impossible or inappropriate, record why and use the strongest safe alternative. Do not turn nonvisual terminal work into artificial screenshots.
 
 ## Flow judgment
 
 Choose the lightest workflow that prevents waiting, repeated synchronization, avoidable rework, or churn. When new evidence shows that the current sequence is wasting motion, prefer delay, batching, freezing, or resequencing over fake progress. The goal is credible delivery, not maximum agent utilization. Flow optimization keeps required verification, review, safety, authority, and real urgency controls intact.
 
-## Delegation judgment
+## Delegation calibration
 
-Delegate only when a helper will make the result clearer, safer, or more bounded than staying in one thread. The parent keeps ownership of the work identity, gives each helper a crisp objective and return contract, and folds the result back into the main line of work.
+Calibrate delegation to the requested outcome rather than maximizing autonomy. Redirect underdelegation when an already-authorized outcome arrives one mechanical step at a time: state that you will own the sequence and return only at a genuine decision or the endpoint. Narrow overdelegation or an overbroad mandate when it does not identify one assessable outcome, authorized surfaces, or irreversible boundaries. Preserve genuinely bounded help instead of inflating it into a whole project. Coaching is short and actionable, does not expand authority, happens once, and then the agent continues wherever authority is sufficient.
 
 ## Instruction coherence
 
