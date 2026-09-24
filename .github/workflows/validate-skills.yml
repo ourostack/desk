@@ -14,6 +14,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # The release-integrity check diffs each plugin against the pull request base.
+          fetch-depth: 0
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -31,6 +34,9 @@ jobs:
 
       - name: Check plugin dependencies track release channels
         run: node scripts/check-dependency-channels.cjs
+
+      - name: Check every changed plugin ships a new version
+        run: node scripts/check-release-integrity.cjs
 
       - name: Validate skill eval contracts
         run: node scripts/test-skill-evals.cjs && node scripts/skill-evals.cjs validate
