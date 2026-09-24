@@ -6,7 +6,7 @@
   "encoding": "float32-json",
   "row_count": 2,
   "rows_sha256": "edf5dd39ec4a23020fe05769dd0e4e65b45c2143d1c02365793681ac2ba5bad8",
-  "artifact_source_scope_hash": "sha256:596246919fc5088c5eface01881ba52ff6baecafed2154c65ee2c691671a44c4",
+  "artifact_source_scope_hash": "sha256:939dfa59685ff7c8291003a9115b430d2a8540922a7ef3aa28fcb349715c6c09",
   "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
   "represented_documents": [
     {
@@ -14,19 +14,23 @@
       "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
     }
   ],
-  "created_at": "2026-09-24T00:06:16.645Z",
+  "created_at": "2026-09-24T00:32:12.374Z",
   "provenance": {
     "builder": "plugins/desk/mcp/scripts/build-vector-pack.js",
     "source": "local-db",
-    "commit": "ffaa2eea5775156c7ed5554b9d54cd61b1e7462c"
+    "commit": "7d661fb07c3e25f42eb0ece49868c0618c5ecee4"
   },
   "source_paths": [
+    "plugins/desk/mcp/config/artifact-source-scope.json",
+    "plugins/desk/mcp/src/indexer/chunk.js",
     "plugins/desk/mcp/src/indexer/index.js",
+    "plugins/desk/mcp/src/indexer/spec.js",
     "plugins/desk/mcp/src/indexer/vector-packs.js",
     "plugins/desk/mcp/src/snapshots/manifest.js",
     "plugins/desk/mcp/src/snapshots/restore.js",
     "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
     "plugins/desk/mcp/src/artifacts/policy.js",
+    "plugins/desk/mcp/src/artifacts/source-scope.js",
     "plugins/desk/mcp/scripts/build-vector-pack.js",
     "plugins/desk/mcp/scripts/build-snapshot.js",
     "plugins/desk/mcp/scripts/verify-snapshot.js",
