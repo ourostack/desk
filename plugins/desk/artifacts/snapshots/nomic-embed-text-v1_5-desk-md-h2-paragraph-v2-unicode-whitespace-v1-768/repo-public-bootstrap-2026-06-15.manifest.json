@@ -19,7 +19,7 @@
     "arch": "portable",
     "node_abi": "portable"
   },
-  "artifact_source_scope_hash": "sha256:36f20b15e28e88a750421a7e1cc9f1c55e264cc07ff4cc24d9a881f62727ac5d",
+  "artifact_source_scope_hash": "sha256:a0ae309cfbcc53403916090fd08a33b89b891b2492652fe648f677ae77d64ac6",
   "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
   "included_pack_ids": [
     "repo-public-bootstrap-2026-06-15"
@@ -30,7 +30,7 @@
       "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
     }
   ],
-  "created_at": "2026-09-24T02:10:04.061Z",
+  "created_at": "2026-09-24T03:50:15.777Z",
   "artifact": {
     "file": "repo-public-bootstrap-2026-06-15.sqlite.zst",
     "format": "sqlite-zstd",
@@ -40,7 +40,7 @@
   "provenance": {
     "builder": "plugins/desk/mcp/scripts/build-snapshot.js",
     "source": "local-db",
-    "commit": "1e10f7a641b80039a2aaa4e7f4d3bcc79bd59785"
+    "commit": "0055396f26bf694c1433907931ac73502852c89e"
   },
   "source_paths": [
     "plugins/desk/mcp/config/artifact-source-scope.json",
