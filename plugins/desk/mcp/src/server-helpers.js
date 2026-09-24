@@ -14,6 +14,7 @@ import { isIndexFresh, rebuildIndex } from "./indexer/index.js"
 import { probeEmbeddingService, resolveEmbeddingModel } from "./indexer/embed.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
 import { restoreSnapshotToState } from "./snapshots/restore.js"
+import { artifactSourceScopeHash } from "./artifacts/source-scope.js"
 
 const EMBEDDING_GENERATION_FAILURE_DIAGNOSTIC = {
   reason: "embedding_generation_failed",
@@ -33,21 +34,6 @@ const SNAPSHOT_PORTABLE_RUNTIME = Object.freeze({
   arch: "portable",
   node_abi: "portable",
 })
-const ARTIFACT_SOURCE_SCOPE_PATHS = Object.freeze([
-  "plugins/desk/mcp/src/indexer/index.js",
-  "plugins/desk/mcp/src/indexer/vector-packs.js",
-  "plugins/desk/mcp/src/snapshots/manifest.js",
-  "plugins/desk/mcp/src/snapshots/restore.js",
-  "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
-  "plugins/desk/mcp/src/artifacts/policy.js",
-  "plugins/desk/mcp/scripts/build-vector-pack.js",
-  "plugins/desk/mcp/scripts/build-snapshot.js",
-  "plugins/desk/mcp/scripts/verify-snapshot.js",
-  "plugins/desk/mcp/scripts/validate-artifacts.js",
-  "plugins/desk/mcp/src/db/schema.sql",
-  "plugins/desk/mcp/package.json",
-  "plugins/desk/mcp/package-lock.json",
-])
 let configuredArtifactPluginRoot = null
 
 /**
@@ -331,7 +317,7 @@ function defaultSnapshotCompatibilityContext({ deskRoot, signal } = {}) {
       table: SNAPSHOT_SQLITE_VEC_TABLE,
     },
     expectedRuntime: SNAPSHOT_PORTABLE_RUNTIME,
-    expectedArtifactSourceScopeHash: artifactSourceScopeHash(),
+    expectedArtifactSourceScopeHash: artifactSourceScopeHash(DEFAULT_MCP_ROOT),
     expectedDocumentTreeHash: () => currentDocumentTreeHash(deskRoot, signal),
   }
 }
@@ -351,17 +337,6 @@ function documentTreeHash(docs) {
   const hash = createHash("sha256")
   for (const doc of docs) {
     hash.update(`${normalizeArtifactPath(doc.path)}\0sha256:${doc.hash}\0`)
-  }
-  return `sha256:${hash.digest("hex")}`
-}
-
-function artifactSourceScopeHash() {
-  const hash = createHash("sha256")
-  for (const repoPath of ARTIFACT_SOURCE_SCOPE_PATHS) {
-    const relFromMcp = repoPath.replace(/^plugins\/desk\/mcp\//u, "")
-    hash.update(`${repoPath}\0`)
-    hash.update(readFileSync(path.join(DEFAULT_MCP_ROOT, relFromMcp)))
-    hash.update("\0")
   }
   return `sha256:${hash.digest("hex")}`
 }

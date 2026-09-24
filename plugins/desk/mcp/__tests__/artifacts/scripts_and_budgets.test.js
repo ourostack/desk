@@ -87,6 +87,35 @@ const ARTIFACT_SCRIPT_TARGETS = Object.freeze([
   }),
 ])
 
+test("artifact source scope includes chunk boundaries and active embedding identity", () => {
+  const expected = [
+    "plugins/desk/mcp/src/indexer/chunk.js",
+    "plugins/desk/mcp/src/indexer/spec.js",
+  ]
+  assert.deepEqual(
+    __artifactScriptInternalsForTests.sourcePaths.filter((entry) => expected.includes(entry)),
+    expected,
+  )
+  assert.equal(typeof __artifactScriptInternalsForTests.artifactSourceScopeHash, "function")
+
+  const fixtureRoot = makeTempDir("desk-artifact-source-scope-")
+  try {
+    for (const sourcePath of __artifactScriptInternalsForTests.sourcePaths) {
+      writeFile(
+        fixtureRoot,
+        sourcePath.replace(/^plugins\/desk\/mcp\//u, ""),
+        `${sourcePath}\n`,
+      )
+    }
+    const before = __artifactScriptInternalsForTests.artifactSourceScopeHash(fixtureRoot)
+    writeFile(fixtureRoot, "src/indexer/chunk.js", "changed chunker\n")
+    const after = __artifactScriptInternalsForTests.artifactSourceScopeHash(fixtureRoot)
+    assert.notEqual(after, before)
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true })
+  }
+})
+
 function loadJson(file) {
   return JSON.parse(readFileSync(file, "utf8"))
 }

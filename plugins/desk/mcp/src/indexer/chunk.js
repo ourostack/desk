@@ -86,12 +86,16 @@ function splitByH2(body) {
   const sections = []
   let current = { lines: [], heading: null, startOffset: 0 }
   let offset = 0
-  let inFence = false
+  let fence = null
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    const isFence = /^```/.test(line)
-    if (isFence) inFence = !inFence
-    const isH2 = !inFence && /^##\s+\S/.test(line)
+    const marker = fenceMarker(line)
+    if (fence && isClosingFence(line, fence)) {
+      fence = null
+    } else if (!fence && marker) {
+      fence = marker
+    }
+    const isH2 = !fence && /^##\s+\S/.test(line)
     if (isH2) {
       if (current.lines.length > 0) {
         sections.push({
@@ -131,16 +135,22 @@ function splitParagraphs(text, baseOffset) {
   let buf = []
   let bufStart = baseOffset
   let cursor = baseOffset
-  let inFence = false
+  let fence = null
   for (const line of lines) {
-    const isFence = /^```/.test(line)
-    if (isFence) {
+    const marker = fenceMarker(line)
+    if (fence && isClosingFence(line, fence)) {
       buf.push(line)
       cursor += line.length + 1
-      inFence = !inFence
+      fence = null
       continue
     }
-    if (inFence) {
+    if (!fence && marker) {
+      buf.push(line)
+      cursor += line.length + 1
+      fence = marker
+      continue
+    }
+    if (fence) {
       buf.push(line)
       cursor += line.length + 1
       continue
@@ -165,7 +175,7 @@ function splitParagraphs(text, baseOffset) {
 }
 
 function splitOversizedParagraph(paragraph) {
-  if (paragraph.text.length <= MAX_CHUNK_CHARS || /^```/mu.test(paragraph.text)) {
+  if (paragraph.text.length <= MAX_CHUNK_CHARS || hasFenceLine(paragraph.text)) {
     return [paragraph]
   }
 
@@ -181,6 +191,10 @@ function splitOversizedParagraph(paragraph) {
       while (boundary > cursor && !/\s/u.test(paragraph.text[boundary])) boundary -= 1
       if (boundary > cursor) end = boundary
     }
+    if (isHighSurrogate(paragraph.text.charCodeAt(end - 1))
+      && isLowSurrogate(paragraph.text.charCodeAt(end))) {
+      end -= 1
+    }
 
     const text = paragraph.text.slice(cursor, end).trimEnd()
     out.push({
@@ -190,4 +204,28 @@ function splitOversizedParagraph(paragraph) {
     cursor = end
   }
   return out
+}
+
+function hasFenceLine(text) {
+  return text.split("\n").some((line) => fenceMarker(line) !== null)
+}
+
+function fenceMarker(line) {
+  const match = /^( {0,3})(`{3,}|~{3,})/u.exec(line)
+  if (!match) return null
+  return { character: match[2][0], length: match[2].length }
+}
+
+function isClosingFence(line, fence) {
+  const marker = fenceMarker(line)
+  if (!marker || marker.character !== fence.character || marker.length < fence.length) return false
+  return /^( {0,3})(`{3,}|~{3,})\s*$/u.test(line)
+}
+
+function isHighSurrogate(codeUnit) {
+  return codeUnit >= 0xd800 && codeUnit <= 0xdbff
+}
+
+function isLowSurrogate(codeUnit) {
+  return codeUnit >= 0xdc00 && codeUnit <= 0xdfff
 }

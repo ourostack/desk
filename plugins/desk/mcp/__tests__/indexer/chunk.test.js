@@ -73,6 +73,28 @@ test("oversized single paragraph splits into embeddable chunks with source offse
   }
 })
 
+test("oversized prose splits without breaking Unicode surrogate pairs", () => {
+  const body = `## Emoji\n${"😀".repeat(500)}`
+  const out = chunkBody(body)
+
+  assert.ok(out.length > 1, `expected multiple chunks, got ${out.length}`)
+  for (const chunk of out) {
+    assert.ok(chunk.text.length <= 800, `chunk length ${chunk.text.length} exceeds 800`)
+    assert.equal(body.slice(chunk.start_offset, chunk.end_offset), chunk.text)
+    for (let index = 0; index < chunk.text.length; index += 1) {
+      const codeUnit = chunk.text.charCodeAt(index)
+      if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+        const next = chunk.text.charCodeAt(index + 1)
+        assert.ok(next >= 0xdc00 && next <= 0xdfff, "high surrogate must retain its low surrogate")
+      }
+      if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+        const previous = chunk.text.charCodeAt(index - 1)
+        assert.ok(previous >= 0xd800 && previous <= 0xdbff, "low surrogate must retain its high surrogate")
+      }
+    }
+  }
+})
+
 test("code fence is never split mid-fence", () => {
   // Build a fenced block that itself exceeds the threshold + a heading
   // before it so we know which section the fence lives in.
@@ -89,6 +111,25 @@ test("code fence is never split mid-fence", () => {
     1,
     `expected exactly one chunk to contain the full fence; got ${out.length} chunks`,
   )
+})
+
+test("indented backtick and tilde fences remain atomic when oversized", () => {
+  for (const [opening, closing] of [
+    ["   ```js", "   ```"],
+    ["~~~js", "~~~"],
+  ]) {
+    const fence = [opening, "x".repeat(900), closing].join("\n")
+    const body = ["## Has code", fence].join("\n")
+    const out = chunkBody(body)
+    const fenceChunks = out.filter(
+      (chunk) => chunk.text.includes(opening) && chunk.text.endsWith(closing),
+    )
+    assert.equal(
+      fenceChunks.length,
+      1,
+      `expected one atomic ${opening.trimStart()[0]} fence, got ${out.length} chunks`,
+    )
+  }
 })
 
 test("H2 lookalike inside code fence does not trigger split", () => {
