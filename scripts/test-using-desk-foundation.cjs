@@ -108,6 +108,13 @@ function main() {
     "provider-specific setup stays out of this foundation",
   ]);
 
+  assertSectionPhrases(section(skill, "Durable context and attribution"), "using-desk Durable context and attribution", [
+    "lives in the desk, a Git repository",
+    "machine-local memory or config directory",
+    "thin pointer to the desk",
+    "Never add AI attribution",
+    "`Co-Authored-By` trailers",
+  ]);
   assertSectionConcepts(section(skill, "Delegation calibration"), [
     /underdelegat/iu,
     /overdelegat|overbroad/iu,

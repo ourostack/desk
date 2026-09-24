@@ -55,17 +55,9 @@ Your desk: ~/AgentBundles/<agent>.ouro/desk/
 
 ### Under Claude Code
 
-The alpha ships Claude metadata for the selected Desk + Superpowers + Plain Language closure. Desk declares the companion closure; use a deliberately selected alpha package rather than updating a live default.
+Setup is agent-driven: give Claude Code the link to [`SETUP.md`](../../SETUP.md) and say "set this up". It installs Desk from `ourostack/ouroboros-skills#v2-alpha` at user scope (Superpowers and Plain Language come with it as declared dependencies), sets the host defaults (no Claude memory, no AI attribution), turns `~/.claude/CLAUDE.md` into a thin pointer, and finds or creates the desk.
 
-When transitive dependencies are supported, the host resolves Desk's `.claude-plugin/plugin.json`. Otherwise the host's admitted composition supplies the full selected closure. Background and Agent View inheritance remain unqualified; historical help output is not alpha consumption evidence.
-
-Once the host has activated the plugin package, launch the default worker agent:
-
-```bash
-claude --agent desk:worker
-```
-
-Or inside an existing Claude session: `@desk:worker say hi`. The agent's preamble auto-loads with the cozy library voice and a placeholder `$DESK` binding (typically `~/desk/`). See [`docs/agent-files.md`](./docs/agent-files.md) for the full agent file reference.
+Desk ships `desk:worker` as the default agent for new sessions (`settings.json`); an explicit `--agent` still wins. Desk binds the desk in this order: an explicit root, then the project folder when it is itself a desk, then the saved binding at `$CLAUDE_PLUGIN_DATA/desk.activation.json`, then `$DESK` and the home fallbacks. With no desk bound, the Desk MCP stays up in setup mode and routes to `first-run-bootstrap` instead of being unavailable. A plugin loaded with `--plugin-dir` takes precedence over the installed copy for that session, so overlay launchers do not load Desk twice. Background and Agent View inheritance remain unqualified.
 
 ### Under Codex
 

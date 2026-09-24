@@ -3,7 +3,6 @@
 #
 # Fast, non-blocking foundation injected as additionalContext, followed by a pointer to the authoritative `desk:session-start` scan. Deliberately does no workspace, network, or Git work. MUST always exit 0 because a nonzero SessionStart hook blocks the session from starting.
 
-DESK="${DESK:-$HOME/desk}"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 FOUNDATION_SKILL="${1:-$PLUGIN_ROOT/skills/using-desk/SKILL.md}"
 
@@ -28,10 +27,20 @@ foundation=$(cat "$FOUNDATION_SKILL" 2>/dev/null) || {
   exit 0
 }
 
-if [ -d "$DESK" ]; then
-  direction="Desk startup: \$DESK is $DESK. Invoke desk:session-start now for the authoritative workspace scan before other work."
+# Ask the MCP server's own resolver which desk this session binds, so the hook
+# and the server can never disagree. It honours the Claude project, the saved
+# binding, $DESK and the home fallbacks, and always exits 0.
+root=""
+if command -v node >/dev/null 2>&1; then
+  root=$(node "$PLUGIN_ROOT/mcp/scripts/resolve-desk-root.js" --root-only 2>/dev/null)
+elif [ -n "${DESK:-}" ] && [ -d "$DESK" ]; then
+  root="$DESK"
+fi
+
+if [ -n "$root" ]; then
+  direction="Desk startup: \$DESK is $root. Invoke desk:session-start now for the authoritative workspace scan before other work."
 else
-  direction="Desk startup: \$DESK ($DESK) does not exist yet. Invoke desk:session-start now for the authoritative workspace scan; it will route to first-run-bootstrap."
+  direction="Desk startup: no desk is bound yet, so Desk is in setup mode. Invoke desk:first-run-bootstrap now: it looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one. Do not offer to continue without Desk. After setup, desk:session-start remains the authoritative workspace scan."
 fi
 
 emit "${foundation}

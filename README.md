@@ -4,6 +4,8 @@ Shared skill repository for the Ouroboros agent ecosystem. Skills are reusable i
 
 Any agent with the **skill-management** skill installed can browse, install, update, and contribute skills from this repo.
 
+**To set up, give your agent the link to [SETUP.md](SETUP.md) and say "set this up".**
+
 This branch hosts the **[Agentic Engineering V2 technical alpha](AGENTIC-ENGINEERING-V2.md)**: pinned Superpowers with Desk/Crew state and authority, independent review, and explicit opt-in source selection. It is not the main-branch default or a qualified V1 replacement. Historical preview results remain historical.
 
 ## Repository Structure

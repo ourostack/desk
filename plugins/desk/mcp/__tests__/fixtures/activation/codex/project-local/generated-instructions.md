@@ -1,7 +1,7 @@
 # user-authored Codex guidance
 Keep repo-local rules intact.
 
-# BEGIN desk activation: desk@3.2.0-alpha.7 mode=project-local owner=desk-activation
+# BEGIN desk activation: desk@3.2.0-alpha.8 mode=project-local owner=desk-activation
 You are the desk worker by default in this project.
 
 # Using Desk
@@ -15,6 +15,10 @@ The human supplies intent, material constraints, authority, and the desired endp
 ## Durable work and authority
 
 Desk keeps one durable work identity per unit of work. Tasks, notes, evidence, and follow-on execution should converge on that identity instead of splitting into parallel half-truths. Authority comes from the selected runtime and overlay surface; provider-specific setup stays out of this foundation.
+
+## Durable context and attribution
+
+Durable context — instructions, preferences, task state, and memory — lives in the desk, a Git repository, so it follows the operator across machines and harnesses. Do not keep it in a host's machine-local memory or config directory; the host's own instruction file stays a thin pointer to the desk. Never add AI attribution: no `Co-Authored-By` trailers, no "Generated with" lines, and no AI credit in commits, pull requests, code comments, or documents.
 
 ## Source authority before work begins
 

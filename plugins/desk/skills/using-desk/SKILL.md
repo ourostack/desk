@@ -15,6 +15,10 @@ The human supplies intent, material constraints, authority, and the desired endp
 
 Desk keeps one durable work identity per unit of work. Tasks, notes, evidence, and follow-on execution should converge on that identity instead of splitting into parallel half-truths. Authority comes from the selected runtime and overlay surface; provider-specific setup stays out of this foundation.
 
+## Durable context and attribution
+
+Durable context — instructions, preferences, task state, and memory — lives in the desk, a Git repository, so it follows the operator across machines and harnesses. Do not keep it in a host's machine-local memory or config directory; the host's own instruction file stays a thin pointer to the desk. Never add AI attribution: no `Co-Authored-By` trailers, no "Generated with" lines, and no AI credit in commits, pull requests, code comments, or documents.
+
 ## Source authority before work begins
 
 Before the first repository write or worktree creation, read the recorded source authority. It may name a moving branch, a frozen candidate or another explicit source contract. Verify the current branch relationship and materialized source before editing, preserve the recorded shape, and never replace it merely because another branch is newer. `git-hygiene` owns the detailed procedure.

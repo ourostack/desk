@@ -12,7 +12,7 @@
 // CLI, ouroboros daemon per agent). Each consumer supplies or discovers its
 // own root/activation context without needing a bespoke Desk CLI.
 
-import { existsSync, readFileSync, realpathSync } from "node:fs"
+import { readFileSync, realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as path from "node:path"
 import { admitControlPlane, validateAdmissionAuthority } from "./src/activation/admit.js"
@@ -23,14 +23,21 @@ import {
   inspectRuntimeDependencyPack,
 } from "./src/runtime/bootstrap.js"
 import { startDiagnosticServer } from "./src/runtime/diagnostic-server.js"
-import { createRuntimeDiagnostic } from "./src/runtime/diagnostics.js"
+import { createRuntimeDiagnostic, createSetupDiagnostic } from "./src/runtime/diagnostics.js"
 import {
   discoverNodeCandidates,
   REEXEC_ATTEMPT_ENV,
   reexecuteWithCompatibleNode,
   selectCompatibleNode,
 } from "./src/runtime/node-selection.js"
-import { expandHome, loadActivationConfig, resolveDeskRootWithSource } from "./src/util/paths.js"
+import {
+  claudeBindingPath,
+  DESK_ROOT_NOT_FOUND,
+  expandHome,
+  loadActivationConfig,
+  resolveActivationConfigPath,
+  resolveDeskRootWithSource,
+} from "./src/util/paths.js"
 
 const MCP_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$/u
 
@@ -56,24 +63,13 @@ export function resolveStartupDeskRoot({ args, env = process.env, homeDir } = {}
     env,
     explicitRoot: args?.root,
     homeDir,
+    hostProjectRoot: env.CLAUDE_PROJECT_DIR,
     hostSessionRoot: args?.hostSessionRoot,
   })
 }
 
 export function resolveStartupActivationConfigPath({ args, env = process.env } = {}) {
-  if (hasText(args?.activationConfig)) {
-    return args.activationConfig
-  }
-  if (hasText(env.DESK_ACTIVATION_CONFIG)) {
-    return env.DESK_ACTIVATION_CONFIG
-  }
-  if (hasText(env.CODEX_HOME)) {
-    const candidate = path.join(env.CODEX_HOME, "desk.activation.json")
-    if (existsSync(candidate)) {
-      return candidate
-    }
-  }
-  return null
+  return resolveActivationConfigPath({ explicit: args?.activationConfig, env })
 }
 
 export function resolveStartupRuntimeCacheDir({
@@ -205,7 +201,20 @@ export async function main({
     serverVersion,
   })
   const args = parseArgs(argv)
-  const rootResolution = resolveStartupDeskRoot({ args, env, homeDir })
+  let rootResolution
+  try {
+    rootResolution = resolveStartupDeskRoot({ args, env, homeDir })
+  } catch (error) {
+    if (error?.code !== DESK_ROOT_NOT_FOUND) throw error
+    // No desk yet is a setup state, not a failure: keep desk_status and
+    // desk_doctor answering so the agent can route into first-run bootstrap.
+    return startRuntimeDiagnostic({
+      diagnostic: createSetupDiagnostic({
+        pathsTried: error.tried,
+        bindingPath: claudeBindingPath(env),
+      }),
+    })
+  }
   const { root: deskRoot } = rootResolution
   const runtimeCacheDir = resolveStartupRuntimeCacheDir({ args, cwd, env, homeDir })
   const activationStatus = resolveStartupActivationContext({ args, cwd, env, homeDir })

@@ -5,6 +5,8 @@
 // Resolution order:
 //   1. Explicit --root argument (if path exists)
 //   2. Host/session root (if provided and path exists)
+//   2b. Host project directory, only when it is itself a desk workspace
+//       (Claude Code passes CLAUDE_PROJECT_DIR; opening a desk binds to it)
 //   3. Activation config desk.root (if provided and path exists)
 //   4. $DESK env var (if set and path exists)
 //   5. $HOME/ms-desk/ (if exists)
@@ -22,7 +24,11 @@
 
 import * as path from "node:path"
 import * as os from "node:os"
-import { existsSync, readFileSync, promises as fs } from "node:fs"
+import { existsSync, readFileSync, statSync, promises as fs } from "node:fs"
+
+// Raised only when no source names a desk at all, as opposed to an explicit
+// root that is wrong. Hosts may treat it as "no desk yet" and start setup.
+export const DESK_ROOT_NOT_FOUND = "DESK_ROOT_NOT_FOUND"
 
 export function resolveDeskRoot(explicit, options = {}) {
   return resolveDeskRootWithSource({
@@ -37,6 +43,7 @@ export function resolveDeskRootWithSource({
   env = process.env,
   explicitRoot,
   homeDir = os.homedir(),
+  hostProjectRoot,
   hostSessionRoot,
 } = {}) {
   const tried = []
@@ -57,6 +64,14 @@ export function resolveDeskRootWithSource({
     tried.push({ source: "host-session-root", path: resolved })
     if (existsSync(resolved)) return { root: resolved, source: "host-session-root", tried }
     throw new Error(`desk-mcp: host/session root path does not exist: ${resolved}.`)
+  }
+
+  // A host project that is itself a desk wins over machine-wide defaults: the
+  // operator opened that desk. Any other project falls through silently.
+  if (hasText(hostProjectRoot)) {
+    const resolved = resolveRootPath(hostProjectRoot, { cwd, homeDir })
+    tried.push({ source: "host-project", path: resolved })
+    if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
   }
 
   const activationConfig = loadActivationConfig({ configPath: activationConfigPath, cwd, homeDir })
@@ -88,11 +103,50 @@ export function resolveDeskRootWithSource({
   }
 
   // Fail with diagnostic listing every path tried.
-  throw new Error(
+  const error = new Error(
     `desk-mcp: no desk workspace found. Tried (in order):\n` +
       tried.map((entry) => `  - ${formatTriedEntry(entry)}`).join("\n") +
       `\nPass --root <path> pointing at an existing desk workspace, or set $DESK.`,
   )
+  error.code = DESK_ROOT_NOT_FOUND
+  error.tried = tried
+  throw error
+}
+
+// A desk workspace has `_meta/` plus either `_archive/` (a solo desk) or
+// `desks/` (a crew workspace). `_meta/` alone is too common to trust.
+export function isDeskWorkspace(dir) {
+  if (!hasText(dir)) return false
+  const isDir = (child) => {
+    try {
+      return statSync(path.join(dir, child)).isDirectory()
+    } catch {
+      return false
+    }
+  }
+  return isDir("_meta") && (isDir("_archive") || isDir("desks"))
+}
+
+// Where Claude Code keeps this plugin's desk binding. CLAUDE_PLUGIN_DATA
+// survives plugin updates, so a binding written once stays bound.
+export function claudeBindingPath(env = process.env) {
+  return hasText(env?.CLAUDE_PLUGIN_DATA)
+    ? path.join(env.CLAUDE_PLUGIN_DATA, "desk.activation.json")
+    : null
+}
+
+// The activation config a host session uses: an explicit path, then
+// $DESK_ACTIVATION_CONFIG, then Codex's and Claude's host-owned bindings.
+export function resolveActivationConfigPath({ explicit, env = process.env } = {}) {
+  if (hasText(explicit)) return explicit
+  if (hasText(env.DESK_ACTIVATION_CONFIG)) return env.DESK_ACTIVATION_CONFIG
+  if (hasText(env.CODEX_HOME)) {
+    const candidate = path.join(env.CODEX_HOME, "desk.activation.json")
+    if (existsSync(candidate)) return candidate
+  }
+  const claudeBinding = claudeBindingPath(env)
+  if (claudeBinding !== null && existsSync(claudeBinding)) return claudeBinding
+  return null
 }
 
 export function loadActivationConfig({ configPath, cwd = process.cwd(), homeDir = os.homedir() } = {}) {
