@@ -896,6 +896,63 @@ test("source mirror admission rejects Windows and backslash paths on POSIX hosts
   }
 })
 
+test("source mirror admission rejects symlinked ancestors and undeclared files", async (t) => {
+  const {
+    hashCurrentSource,
+    resolveAdmittedSourceMirror,
+    syncSourceMirror,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    const sourceHash = hashCurrentSource(fixture.mcpRoot)
+    const sourceIdentity = `sha256:${sourceHash}`
+    const mirrorPath = syncSourceMirror({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      sourceIdentity,
+    })
+
+    const undeclared = path.join(mirrorPath, "node_modules", "shadow", "package.json")
+    writeJson(undeclared, { name: "shadow" })
+    assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    rmSync(path.join(mirrorPath, "node_modules"), { recursive: true, force: true })
+
+    const markerPath = path.join(mirrorPath, ".complete.json")
+    const admissionPath = path.join(runtimeCacheDir, ".desk-source-mirror.json")
+    const external = path.join(fixture.root, "external")
+    writeText(path.join(external, "payload.js"), "payload\n")
+    const linked = path.join(mirrorPath, "linked")
+    try {
+      symlinkSync(external, linked)
+      const sourceFiles = ["linked/payload.js"]
+      const linkedHash = sourceFilesHash(mirrorPath, sourceFiles)
+      const linkedIdentity = `sha256:${linkedHash}`
+      writeJson(markerPath, {
+        schema_version: 1,
+        kind: "source-mirror",
+        source_hash: linkedHash,
+        source_files: sourceFiles,
+      })
+      writeJson(admissionPath, {
+        schema_version: 1,
+        source_identity: linkedIdentity,
+        source_hash: linkedHash,
+        mirror_path: mirrorPath,
+      })
+      assert.equal(resolveAdmittedSourceMirror({
+        runtimeCacheDir,
+        sourceIdentity: linkedIdentity,
+      }), null)
+    } catch (error) {
+      if (!["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) throw error
+      t.diagnostic(`symlink ancestor case unavailable: ${error.code}`)
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test("bootstrap pack verifier rejects missing metadata, drift, corrupt archives, and bundled source", async () => {
   const { verifyBootstrapRuntimeDependencyPack } = await loadBootstrap()
   const fixture = makeMcpFixture()

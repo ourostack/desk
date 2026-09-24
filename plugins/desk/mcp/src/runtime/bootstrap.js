@@ -908,17 +908,57 @@ function sourceMirrorIsCurrent({ mirrorPath, sourceHash }) {
     const canonical = [...new Set(normalized)].sort()
     if (!isDeepStrictEqual(normalized, canonical)) return false
 
+    const inventory = sourceMirrorInventory(mirrorPath)
+    if (!isDeepStrictEqual(inventory.files, canonical)) return false
+    const expectedDirectories = [...new Set(canonical.flatMap((file) => {
+      const directories = []
+      let current = path.posix.dirname(file)
+      while (current !== ".") {
+        directories.push(current)
+        current = path.posix.dirname(current)
+      }
+      return directories
+    }))].sort()
+    if (!isDeepStrictEqual(inventory.directories, expectedDirectories)) return false
+
     const hash = createHash("sha256")
     for (const file of canonical) {
       const absolute = path.join(mirrorPath, file)
-      const stat = lstatSync(absolute)
-      if (!stat.isFile() || stat.isSymbolicLink()) return false
       hash.update(file)
       hash.update("\0")
       hash.update(readFileSync(absolute))
       hash.update("\0")
     }
     return hash.digest("hex") === sourceHash
+  }
+
+  function sourceMirrorInventory(mirrorPath) {
+    const files = []
+    const directories = []
+    const visit = (current) => {
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        if (current === mirrorPath && entry.name === ".complete.json") continue
+        const absolute = path.join(current, entry.name)
+        const stat = lstatSync(absolute)
+        const relative = normalizePath(path.relative(mirrorPath, absolute))
+        if (stat.isSymbolicLink()) {
+          throw new Error("source mirror must not contain symbolic links")
+        }
+        if (stat.isDirectory()) {
+          directories.push(relative)
+          visit(absolute)
+        } else if (stat.isFile()) {
+          files.push(relative)
+        } else {
+          throw new Error("source mirror must contain only regular files and directories")
+        }
+      }
+    }
+    visit(mirrorPath)
+    return {
+      files: files.sort(),
+      directories: directories.sort(),
+    }
   }
 }
 
