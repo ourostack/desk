@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -396,7 +397,8 @@ test("Claude hook and MCP configuration stay plugin-relative and non-manual", ()
   const hooks = loadJson("plugins", "desk", "hooks", "hooks.json")
   const mcp = loadJson("plugins", "desk", ".mcp.json")
 
-  assert.equal(hooks.hooks.SessionStart[0].matcher, "startup|resume|clear")
+  // compact: the foundation must survive context compaction, as Superpowers and Plain Language already do.
+  assert.equal(hooks.hooks.SessionStart[0].matcher, "startup|resume|clear|compact")
   assert.equal(
     hooks.hooks.SessionStart[0].hooks[0].command,
     "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh ${CLAUDE_PLUGIN_ROOT}/skills/using-desk/SKILL.md",
@@ -435,6 +437,31 @@ test("Claude SessionStart injects the full Desk foundation once without scanning
     hook,
     /find\s+.*task\.md|(^|[;&|]\s*|\$\()\s*(git|gh|curl)\s/mu,
   )
+})
+
+test("Claude SessionStart with no desk routes to bootstrap instead of offering to continue without Desk", () => {
+  const scratch = mkdtempSync(path.join(tmpdir(), "desk-claude-nodesk-"))
+  try {
+    const project = path.join(scratch, "code-repo")
+    mkdirSync(project, { recursive: true })
+    const env = { ...process.env, CLAUDE_PLUGIN_ROOT: path.join(repoRoot, "plugins", "desk"), CLAUDE_PROJECT_DIR: project, HOME: path.join(scratch, "home") }
+    delete env.DESK
+    delete env.CLAUDE_PLUGIN_DATA
+    delete env.DESK_ACTIVATION_CONFIG
+    delete env.CODEX_HOME
+    const result = spawnSync("bash", [path.join(repoRoot, "plugins", "desk", "hooks", "session-start.sh")], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env,
+    })
+    assert.equal(result.status, 0, result.stderr)
+    const startup = JSON.parse(result.stdout).hookSpecificOutput.additionalContext
+    assert.match(startup, /no desk is bound yet/u)
+    assert.match(startup, /desk:first-run-bootstrap now/u)
+    assert.match(startup, /Do not offer to continue without Desk/u)
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
 })
 
 test("Claude-facing manifests stay version-aligned with activation and marketplace metadata", () => {

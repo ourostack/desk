@@ -5,7 +5,7 @@ const diagnosticToolNames = ["desk_status", "desk_doctor"]
 const diagnosticTools = diagnosticToolNames.map((name) => ({
   name,
   description: name === "desk_status"
-    ? "Report why Desk is running in diagnostic mode and how to recover."
+    ? "Report why Desk is running in diagnostic or setup mode and what to do next."
     : "Diagnose Desk runtime startup and return concrete remediation.",
   inputSchema: {
     type: "object",

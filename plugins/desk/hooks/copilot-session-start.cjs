@@ -2,23 +2,39 @@
 "use strict";
 
 const fs = require("node:fs");
-const os = require("node:os");
+const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 
 const pluginRoot = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
 const foundationPath = path.join(pluginRoot, "skills", "using-desk", "SKILL.md");
-const deskRoot = process.env.DESK || path.join(os.homedir(), "desk");
+
+// Ask the MCP server's own resolver which desk this session binds, so the hook
+// and the server can never disagree.
+async function resolveDeskRoot() {
+  try {
+    const paths = await import(pathToFileURL(path.join(pluginRoot, "mcp", "src", "util", "paths.js")).href);
+    return paths.resolveDeskRootWithSource({
+      activationConfigPath: paths.resolveActivationConfigPath({ env: process.env }),
+      env: process.env,
+    }).root;
+  } catch {
+    return null;
+  }
+}
 
 function emit(additionalContext) {
   process.stdout.write(JSON.stringify({ additionalContext }));
 }
 
-try {
-  const foundation = fs.readFileSync(foundationPath, "utf8").trimEnd();
-  const direction = fs.existsSync(deskRoot)
-    ? `Desk startup: $DESK is ${deskRoot}. Invoke desk:session-start now for the authoritative workspace scan before other work.`
-    : `Desk startup: $DESK (${deskRoot}) does not exist yet. Invoke desk:session-start now for the authoritative workspace scan; it will route to first-run-bootstrap.`;
-  emit(`${foundation}\n\n${direction}`);
-} catch {
-  emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. Invoke desk:session-start before other work; it remains the authoritative workspace scan.`);
-}
+(async () => {
+  try {
+    const foundation = fs.readFileSync(foundationPath, "utf8").trimEnd();
+    const deskRoot = await resolveDeskRoot();
+    const direction = deskRoot
+      ? `Desk startup: $DESK is ${deskRoot}. Invoke desk:session-start now for the authoritative workspace scan before other work.`
+      : "Desk startup: no desk is bound yet, so Desk is in setup mode. Invoke desk:first-run-bootstrap now: it looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one. Do not offer to continue without Desk. After setup, desk:session-start remains the authoritative workspace scan.";
+    emit(`${foundation}\n\n${direction}`);
+  } catch {
+    emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. Invoke desk:session-start before other work; it remains the authoritative workspace scan.`);
+  }
+})();
