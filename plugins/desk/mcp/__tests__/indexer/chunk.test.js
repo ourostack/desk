@@ -41,6 +41,23 @@ test("H2-bounded doc splits into one chunk per section + preamble", () => {
   )
 })
 
+test("blank preamble before the first H2 does not emit an empty chunk", () => {
+  const body = [
+    "",
+    "## Execution Flow",
+    "Create the meeting.",
+  ].join("\n")
+
+  const out = chunkBody(body)
+
+  assert.equal(out.length, 1)
+  assert.equal(out[0].heading, "Execution Flow")
+  assert.equal(out[0].text, "## Execution Flow\nCreate the meeting.")
+  assert.equal(out[0].start_offset, 1)
+  assert.equal(out[0].end_offset, body.length)
+  assert.equal(body.slice(out[0].start_offset, out[0].end_offset), out[0].text)
+})
+
 test("oversized section splits on paragraph boundary", () => {
   const big = "lorem ipsum dolor sit amet, ".repeat(40) // ~1120 chars
   const second = "second paragraph that is also reasonably long. ".repeat(15)
