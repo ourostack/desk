@@ -895,8 +895,9 @@ function sourceMirrorIsCurrent({ mirrorPath, sourceHash }) {
       const repoPath = normalizePath(file)
       if (
         repoPath !== file ||
-        path.isAbsolute(file) ||
-        /^[a-z]:\//iu.test(repoPath) ||
+        file.includes("\\") ||
+        path.posix.isAbsolute(file) ||
+        path.win32.isAbsolute(file) ||
         repoPath.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
       ) {
         return null

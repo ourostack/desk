@@ -50,6 +50,17 @@ function readJson(file) {
   return JSON.parse(readFileSync(file, "utf8"))
 }
 
+function sourceFilesHash(root, files) {
+  const hash = createHash("sha256")
+  for (const file of files) {
+    hash.update(file)
+    hash.update("\0")
+    hash.update(readFileSync(path.join(root, file)))
+    hash.update("\0")
+  }
+  return hash.digest("hex")
+}
+
 function makeMcpFixture({ serverMarker = "initial", includePackageLock = true } = {}) {
   const root = makeTempDir()
   const fixtureMcpRoot = path.join(root, "mcp")
@@ -801,6 +812,7 @@ test("source mirror admission rejects marker traversal, omissions, directories, 
       runtimeCacheDir,
       sourceIdentity,
     })
+
     const markerPath = path.join(mirrorPath, ".complete.json")
     const marker = readJson(markerPath)
     const configPath = path.join(mirrorPath, "config", "artifact-source-scope.json")
@@ -835,6 +847,50 @@ test("source mirror admission rejects marker traversal, omissions, directories, 
       resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }),
       mirrorPath,
     )
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("source mirror admission rejects Windows and backslash paths on POSIX hosts", async () => {
+  const {
+    resolveAdmittedSourceMirror,
+    syncSourceMirror,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    const mirrorPath = syncSourceMirror({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+    })
+    const markerPath = path.join(mirrorPath, ".complete.json")
+    const admissionPath = path.join(runtimeCacheDir, ".desk-source-mirror.json")
+
+    for (const file of [
+      "C:\\payload.js",
+      "\\\\server\\share\\payload.js",
+      "config\\artifact-source-scope.json",
+    ]) {
+      writeText(path.join(mirrorPath, file), "payload\n")
+      const sourceFiles = [file]
+      const sourceHash = sourceFilesHash(mirrorPath, sourceFiles)
+      const sourceIdentity = `sha256:${sourceHash}`
+      writeJson(markerPath, {
+        schema_version: 1,
+        kind: "source-mirror",
+        source_hash: sourceHash,
+        source_files: sourceFiles,
+      })
+      writeJson(admissionPath, {
+        schema_version: 1,
+        source_identity: sourceIdentity,
+        source_hash: sourceHash,
+        mirror_path: mirrorPath,
+      })
+
+      assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    }
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
