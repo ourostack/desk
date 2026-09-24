@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -875,14 +876,48 @@ function sourceMirrorIsCurrent({ mirrorPath, sourceHash }) {
     return marker.schema_version === 1
       && marker.kind === "source-mirror"
       && marker.source_hash === sourceHash
-      && Array.isArray(marker.source_files)
-      && marker.source_files.length > 0
-      && marker.source_files.every((file) => existsSync(path.join(mirrorPath, file)))
+      && sourceMirrorFilesAreCurrent({
+        mirrorPath,
+        sourceFiles: marker.source_files,
+        sourceHash,
+      })
       && existsSync(path.join(mirrorPath, "index.js"))
       && existsSync(path.join(mirrorPath, "package.json"))
       && existsSync(path.join(mirrorPath, "src"))
   } catch {
     return false
+  }
+
+  function sourceMirrorFilesAreCurrent({ mirrorPath, sourceFiles, sourceHash }) {
+    if (!Array.isArray(sourceFiles) || sourceFiles.length === 0) return false
+    const normalized = sourceFiles.map((file) => {
+      if (typeof file !== "string" || file.length === 0) return null
+      const repoPath = normalizePath(file)
+      if (
+        repoPath !== file ||
+        path.isAbsolute(file) ||
+        /^[a-z]:\//iu.test(repoPath) ||
+        repoPath.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+      ) {
+        return null
+      }
+      return repoPath
+    })
+    if (normalized.includes(null)) return false
+    const canonical = [...new Set(normalized)].sort()
+    if (!isDeepStrictEqual(normalized, canonical)) return false
+
+    const hash = createHash("sha256")
+    for (const file of canonical) {
+      const absolute = path.join(mirrorPath, file)
+      const stat = lstatSync(absolute)
+      if (!stat.isFile() || stat.isSymbolicLink()) return false
+      hash.update(file)
+      hash.update("\0")
+      hash.update(readFileSync(absolute))
+      hash.update("\0")
+    }
+    return hash.digest("hex") === sourceHash
   }
 }
 

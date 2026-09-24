@@ -10,6 +10,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs"
 import { homedir, tmpdir } from "node:os"
@@ -778,6 +779,61 @@ test("source hashing ignores nested node_modules and mirrors clean up staging di
     assert.equal(
       readdirSync(path.dirname(firstMirror)).some((entry) => entry.includes(".tmp-")),
       false,
+    )
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("source mirror admission rejects marker traversal, omissions, directories, and symlinks", async (t) => {
+  const {
+    hashCurrentSource,
+    resolveAdmittedSourceMirror,
+    syncSourceMirror,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    const sourceHash = hashCurrentSource(fixture.mcpRoot)
+    const sourceIdentity = `sha256:${sourceHash}`
+    const mirrorPath = syncSourceMirror({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      sourceIdentity,
+    })
+    const markerPath = path.join(mirrorPath, ".complete.json")
+    const marker = readJson(markerPath)
+    const configPath = path.join(mirrorPath, "config", "artifact-source-scope.json")
+    const configBytes = readFileSync(configPath)
+
+    for (const sourceFiles of [
+      ["../../package.json", ...marker.source_files.slice(1)],
+      marker.source_files.slice(1),
+      marker.source_files.map((file) =>
+        file === "config/artifact-source-scope.json" ? "src" : file
+      ).sort(),
+    ]) {
+      writeJson(markerPath, { ...marker, source_files: sourceFiles })
+      assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    }
+
+    writeJson(markerPath, marker)
+    rmSync(configPath)
+    try {
+      symlinkSync(path.join(fixture.mcpRoot, "config", "artifact-source-scope.json"), configPath)
+      assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    } catch (error) {
+      if (!["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) throw error
+      t.diagnostic(`symlink case unavailable: ${error.code}`)
+    } finally {
+      rmSync(configPath, { force: true })
+      writeFileSync(configPath, configBytes)
+      writeJson(markerPath, marker)
+    }
+
+    assert.equal(
+      resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }),
+      mirrorPath,
     )
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
