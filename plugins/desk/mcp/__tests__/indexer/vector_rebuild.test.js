@@ -10,6 +10,7 @@ import matter from "gray-matter"
 import { closeDb, getMeta, openDb } from "../../src/db/init.js"
 import { chunkBody } from "../../src/indexer/chunk.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
 import {
   ACTIVE_EMBEDDING_SPEC,
   chunkIdentity,
@@ -91,11 +92,16 @@ async function writePack({ pluginRoot, packId, rows }) {
       encoding: "float32-json",
       row_count: rows.length,
       rows_sha256: packSha,
+      artifact_source_scope_hash: `sha256:${"a".repeat(64)}`,
+      document_tree_hash: `sha256:${"b".repeat(64)}`,
+      represented_documents: [],
       created_at: "2026-06-15T00:00:00.000Z",
       provenance: {
         builder: "artifact:vector-pack:build",
         source: "unit-test",
+        commit: "0123456789abcdef0123456789abcdef01234567",
       },
+      source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS],
     }, null, 2)}\n`,
     "utf8",
   )
