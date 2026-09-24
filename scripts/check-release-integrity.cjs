@@ -70,8 +70,11 @@ function checkReleaseIntegrity({ repoRoot = process.cwd(), base = null, git = de
       continue;
     }
     if (base === null) continue;
-    const changed = git(["diff", "--name-only", `${base}...HEAD`, "--", dir]).trim();
-    if (changed === "") continue;
+    // Tests do not change what users run, so they need no release.
+    const changed = git(["diff", "--name-only", `${base}...HEAD`, "--", dir])
+      .split("\n")
+      .filter((file) => file !== "" && !/(^|\/)__tests__\//u.test(file));
+    if (changed.length === 0) continue;
     const baseVersion = readJsonAt({ git, ref: base, file: `${dir}/.claude-plugin/plugin.json`, repoRoot })?.version;
     if (baseVersion === undefined) continue;
     const [version] = distinct;

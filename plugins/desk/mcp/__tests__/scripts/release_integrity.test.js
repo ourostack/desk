@@ -94,6 +94,15 @@ test("a changed plugin must carry a higher version; unchanged plugins need nothi
   })
 })
 
+test("a test-only change needs no release", () => {
+  withRepo((root) => {
+    mkdirSync(path.join(root, "plugins", "alpha", "__tests__"), { recursive: true })
+    writeFileSync(path.join(root, "plugins", "alpha", "__tests__", "a.test.js"), "test\n")
+    commit(root)
+    assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [])
+  })
+})
+
 test("a lower or unparseable version is rejected", () => {
   withRepo((root) => {
     setVersion(root, "beta", "1.9.9")
