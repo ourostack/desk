@@ -21,11 +21,19 @@ import { fileURLToPath } from "node:url"
 import { main as startMcpServer } from "../../index.js"
 import {
   __artifactScriptInternalsForTests,
+  buildSnapshotFromLocalDb,
+  buildVectorPackFromLocalDb,
   runArtifactValidateCli,
   runSnapshotBuildCli,
   runSnapshotVerifyCli,
   runVectorPackBuildCli,
+  validateArtifacts,
+  verifySnapshotArtifact,
 } from "../../src/artifacts/artifact-scripts.js"
+import {
+  assertCanonicalArtifactSourcePaths,
+  artifactSourceScopeHash,
+} from "../../src/artifacts/source-scope.js"
 import {
   __performanceBudgetInternalsForTests,
   assertBudgetAllowsStart,
@@ -86,6 +94,48 @@ const ARTIFACT_SCRIPT_TARGETS = Object.freeze([
     ),
   }),
 ])
+
+test("artifact source scope includes chunk boundaries and active embedding identity", () => {
+  const expected = [
+    "plugins/desk/mcp/src/indexer/chunk.js",
+    "plugins/desk/mcp/src/indexer/spec.js",
+  ]
+  assert.deepEqual(
+    __artifactScriptInternalsForTests.sourcePaths.filter((entry) => expected.includes(entry)),
+    expected,
+  )
+  assert.equal(typeof __artifactScriptInternalsForTests.artifactSourceScopeHash, "function")
+
+  const fixtureRoot = makeTempDir("desk-artifact-source-scope-")
+  try {
+    for (const sourcePath of __artifactScriptInternalsForTests.sourcePaths) {
+      writeFile(
+        fixtureRoot,
+        sourcePath.replace(/^plugins\/desk\/mcp\//u, ""),
+        `${sourcePath}\n`,
+      )
+    }
+    const before = __artifactScriptInternalsForTests.artifactSourceScopeHash(fixtureRoot)
+    writeFile(fixtureRoot, "src/indexer/chunk.js", "changed chunker\n")
+    const after = __artifactScriptInternalsForTests.artifactSourceScopeHash(fixtureRoot)
+    assert.notEqual(after, before)
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true })
+  }
+})
+
+test("artifact maintenance APIs preserve their documented defaults", async () => {
+  assert.match(artifactSourceScopeHash(mcpRoot), /^sha256:[a-f0-9]{64}$/u)
+  assert.throws(
+    () => assertCanonicalArtifactSourcePaths([]),
+    /artifact manifest source_paths must match the canonical source scope/u,
+  )
+  await assert.rejects(() => buildVectorPackFromLocalDb(), /deskRoot/u)
+  await assert.rejects(() => buildSnapshotFromLocalDb(), /deskRoot/u)
+  assert.equal((await verifySnapshotArtifact()).ok, true)
+  assert.equal((await validateArtifacts()).ok, true)
+  assert.equal(await runArtifactValidateCli(), 1)
+})
 
 function loadJson(file) {
   return JSON.parse(readFileSync(file, "utf8"))

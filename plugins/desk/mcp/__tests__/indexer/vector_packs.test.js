@@ -13,6 +13,7 @@ import {
   ACTIVE_EMBEDDING_SPEC,
   chunkIdentity,
 } from "../../src/indexer/spec.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
@@ -97,10 +98,20 @@ async function writePack({
     row_count: rows.length,
     rows_sha256: packSha,
     created_at: "2026-06-15T00:00:00.000Z",
+    artifact_source_scope_hash: `sha256:${"a".repeat(64)}`,
+    document_tree_hash: `sha256:${"b".repeat(64)}`,
+    represented_documents: [
+      {
+        path: "tasks/example/task.md",
+        hash: `sha256:${"c".repeat(64)}`,
+      },
+    ],
     provenance: {
       builder: "artifact:vector-pack:build",
       source: "unit-test",
+      commit: "0123456789abcdef0123456789abcdef01234567",
     },
+    source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS],
     ...manifest,
   }
   await fs.writeFile(packPath, jsonl, "utf8")
@@ -254,6 +265,25 @@ test("vector pack paths are canonical, plugin-root relative, and spec-scoped", a
     }),
     /invalid embedding_spec_id|path traversal/u,
   )
+})
+
+test("vector pack public APIs apply defaults before rejecting missing required inputs", async () => {
+  const {
+    deriveVectorPackPaths,
+    importVectorPacks,
+    validateVectorPackFile,
+    writeVectorPackArtifact,
+  } = await loadVectorPackModule()
+  const pluginRoot = await tmpRoot()
+
+  assert.equal(
+    deriveVectorPackPaths({ pluginRoot, packId: "default-spec" }).packDir.includes(ACTIVE_EMBEDDING_SPEC.id),
+    true,
+  )
+  assert.throws(() => deriveVectorPackPaths(), /pluginRoot|pack_id/u)
+  await assert.rejects(() => writeVectorPackArtifact(), /pluginRoot|pack_id|deskRoot/u)
+  await assert.rejects(() => validateVectorPackFile(), /pack path is required/u)
+  await assert.rejects(() => importVectorPacks(), /path/u)
 })
 
 test("valid vector packs require adjacent manifest and checksum sidecars", async () => {
@@ -574,6 +604,91 @@ test("vector pack validation rejects malformed manifests before import", async (
       pattern: /row_count.*non-negative integer/u,
     },
     {
+      name: "bad-source-hash",
+      manifest: { artifact_source_scope_hash: "not-a-sha" },
+      pattern: /artifact_source_scope_hash/u,
+    },
+    {
+      name: "bad-document-hash",
+      manifest: { document_tree_hash: "not-a-sha" },
+      pattern: /document_tree_hash/u,
+    },
+    {
+      name: "bad-created-at",
+      manifest: { created_at: "not-a-date" },
+      pattern: /created_at/u,
+    },
+    {
+      name: "non-string-created-at",
+      manifest: { created_at: 0 },
+      pattern: /created_at/u,
+    },
+    {
+      name: "array-provenance",
+      manifest: { provenance: [] },
+      pattern: /provenance is required/u,
+    },
+    {
+      name: "empty-provenance-builder",
+      manifest: {
+        provenance: {
+          builder: "",
+          source: "unit-test",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+        },
+      },
+      pattern: /provenance builder/u,
+    },
+    {
+      name: "empty-provenance-source",
+      manifest: {
+        provenance: {
+          builder: "unit-test",
+          source: "",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+        },
+      },
+      pattern: /provenance source/u,
+    },
+    {
+      name: "bad-provenance-commit",
+      manifest: {
+        provenance: {
+          builder: "unit-test",
+          source: "unit-test",
+          commit: "not-a-sha",
+        },
+      },
+      pattern: /provenance commit/u,
+    },
+    {
+      name: "bad-provenance",
+      manifest: { provenance: { builder: "", source: "unit-test", commit: "not-a-sha" } },
+      pattern: /provenance/u,
+    },
+    {
+      name: "missing-source-path",
+      manifest: { source_paths: ARTIFACT_SOURCE_SCOPE_PATHS.slice(1) },
+      pattern: /canonical source scope/u,
+    },
+    {
+      name: "duplicate-source-path",
+      manifest: {
+        source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS, ARTIFACT_SOURCE_SCOPE_PATHS[0]],
+      },
+      pattern: /canonical source scope/u,
+    },
+    {
+      name: "reordered-source-paths",
+      manifest: { source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS].reverse() },
+      pattern: /canonical source scope/u,
+    },
+    {
+      name: "absolute-source-path",
+      manifest: { source_paths: ["/Users/ari/secret.md"] },
+      pattern: /canonical source scope/u,
+    },
+    {
       name: "bad-rows-sha",
       manifest: { rows_sha256: "0".repeat(64) },
       pattern: /rows_sha256.*match/u,
@@ -843,6 +958,7 @@ test("vector pack validation surfaces unexpected pack stream failures", async ()
     packId: "pack-stream-failure",
     rows: [],
   })
+
   await fs.rm(paths.packPath)
   await fs.mkdir(paths.packPath)
 
@@ -852,6 +968,29 @@ test("vector pack validation surfaces unexpected pack stream failures", async ()
       manifestPath: paths.manifestPath,
       checksumPath: paths.checksumPath,
       expectedSpec: ACTIVE_EMBEDDING_SPEC,
+    }),
+    (error) => error.code === "EISDIR",
+  )
+})
+
+test("vector pack validation preserves unexpected sidecar filesystem errors", async () => {
+  const { validateVectorPackFile } = await loadVectorPackModule()
+  const root = await tmpRoot()
+  const pluginRoot = path.join(root, "plugins", "desk")
+  const paths = await writePack({
+    pluginRoot,
+    packId: "manifest-read-failure",
+    rows: [],
+  })
+  await fs.rm(paths.manifestPath)
+  await fs.mkdir(paths.manifestPath)
+
+  await assert.rejects(
+    () => validateVectorPackFile({
+      pluginRoot,
+      packPath: paths.packPath,
+      manifestPath: paths.manifestPath,
+      checksumPath: paths.checksumPath,
     }),
     (error) => error.code === "EISDIR",
   )

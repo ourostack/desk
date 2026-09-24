@@ -10,9 +10,11 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs"
 import { homedir, tmpdir } from "node:os"
+import { spawnSync } from "node:child_process"
 import { gzipSync } from "node:zlib"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -49,6 +51,17 @@ function readJson(file) {
   return JSON.parse(readFileSync(file, "utf8"))
 }
 
+function sourceFilesHash(root, files) {
+  const hash = createHash("sha256")
+  for (const file of files) {
+    hash.update(file)
+    hash.update("\0")
+    hash.update(readFileSync(path.join(root, file)))
+    hash.update("\0")
+  }
+  return hash.digest("hex")
+}
+
 function makeMcpFixture({ serverMarker = "initial", includePackageLock = true } = {}) {
   const root = makeTempDir()
   const fixtureMcpRoot = path.join(root, "mcp")
@@ -75,6 +88,9 @@ function makeMcpFixture({ serverMarker = "initial", includePackageLock = true } 
     writeJson(path.join(fixtureMcpRoot, "package-lock.json"), packageLock)
   }
   writeText(path.join(fixtureMcpRoot, "index.js"), "export const entrypoint = true\n")
+  writeJson(path.join(fixtureMcpRoot, "config", "artifact-source-scope.json"), {
+    source_paths: ["plugins/desk/mcp/config/artifact-source-scope.json"],
+  })
   writeServer(fixtureMcpRoot, serverMarker)
   writeText(path.join(fixtureMcpRoot, "scripts", "build-vector-pack.js"), "export const script = true\n")
   writeText(path.join(fixtureMcpRoot, "scripts", "node_modules", "ignored.js"), "ignored\n")
@@ -748,6 +764,7 @@ test("source hashing ignores nested node_modules and mirrors clean up staging di
     const files = sourceFilesForHash(fixture.mcpRoot)
     assert.ok(files.includes("index.js"))
     assert.ok(files.includes("package.json"))
+    assert.ok(files.includes("config/artifact-source-scope.json"))
     assert.ok(files.includes("scripts/build-vector-pack.js"))
     assert.ok(files.includes("src/server.js"))
     assert.ok(files.includes("src/nested/visible.js"))
@@ -768,12 +785,232 @@ test("source hashing ignores nested node_modules and mirrors clean up staging di
     const firstMirror = syncSourceMirror({ mcpRoot: fixture.mcpRoot, runtimeCacheDir })
     const secondMirror = syncSourceMirror({ mcpRoot: fixture.mcpRoot, runtimeCacheDir })
     assert.equal(secondMirror, firstMirror)
+    assert.equal(existsSync(path.join(firstMirror, "config", "artifact-source-scope.json")), true)
     assert.equal(existsSync(path.join(firstMirror, "scripts", "build-vector-pack.js")), true)
     assert.equal(existsSync(path.join(firstMirror, "scripts", "node_modules", "ignored.js")), false)
     assert.equal(
       readdirSync(path.dirname(firstMirror)).some((entry) => entry.includes(".tmp-")),
       false,
     )
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("source mirror admission rejects marker traversal, omissions, directories, and symlinks", async (t) => {
+  const {
+    hashCurrentSource,
+    resolveAdmittedSourceMirror,
+    syncSourceMirror,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    const sourceHash = hashCurrentSource(fixture.mcpRoot)
+    const sourceIdentity = `sha256:${sourceHash}`
+    const mirrorPath = syncSourceMirror({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      sourceIdentity,
+    })
+
+    const markerPath = path.join(mirrorPath, ".complete.json")
+    const marker = readJson(markerPath)
+    const configPath = path.join(mirrorPath, "config", "artifact-source-scope.json")
+    const configBytes = readFileSync(configPath)
+
+    for (const sourceFiles of [
+      ["../../package.json", ...marker.source_files.slice(1)],
+      marker.source_files.slice(1),
+      marker.source_files.map((file) =>
+        file === "config/artifact-source-scope.json" ? "src" : file
+      ).sort(),
+    ]) {
+      writeJson(markerPath, { ...marker, source_files: sourceFiles })
+      assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    }
+
+    writeJson(markerPath, marker)
+    rmSync(configPath)
+    try {
+      symlinkSync(path.join(fixture.mcpRoot, "config", "artifact-source-scope.json"), configPath)
+      assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    } catch (error) {
+      if (!["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) throw error
+      t.diagnostic(`symlink case unavailable: ${error.code}`)
+    } finally {
+      rmSync(configPath, { force: true })
+      writeFileSync(configPath, configBytes)
+      writeJson(markerPath, marker)
+    }
+
+    assert.equal(
+      resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }),
+      mirrorPath,
+    )
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("source mirror admission rejects Windows and backslash paths on POSIX hosts", async () => {
+  const {
+    resolveAdmittedSourceMirror,
+    syncSourceMirror,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    const mirrorPath = syncSourceMirror({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+    })
+    const markerPath = path.join(mirrorPath, ".complete.json")
+    const admissionPath = path.join(runtimeCacheDir, ".desk-source-mirror.json")
+
+    for (const file of [
+      "C:\\payload.js",
+      "\\\\server\\share\\payload.js",
+      "config\\artifact-source-scope.json",
+    ]) {
+      writeText(path.join(mirrorPath, file), "payload\n")
+      const sourceFiles = [file]
+      const sourceHash = sourceFilesHash(mirrorPath, sourceFiles)
+      const sourceIdentity = `sha256:${sourceHash}`
+      writeJson(markerPath, {
+        schema_version: 1,
+        kind: "source-mirror",
+        source_hash: sourceHash,
+        source_files: sourceFiles,
+      })
+      writeJson(admissionPath, {
+        schema_version: 1,
+        source_identity: sourceIdentity,
+        source_hash: sourceHash,
+        mirror_path: mirrorPath,
+      })
+
+      assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("source mirror admission rejects symlinked ancestors and undeclared files", async (t) => {
+  const {
+    hashCurrentSource,
+    resolveAdmittedSourceMirror,
+    syncSourceMirror,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    const sourceHash = hashCurrentSource(fixture.mcpRoot)
+    const sourceIdentity = `sha256:${sourceHash}`
+    const mirrorPath = syncSourceMirror({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      sourceIdentity,
+    })
+
+    const undeclared = path.join(mirrorPath, "node_modules", "shadow", "package.json")
+    writeJson(undeclared, { name: "shadow" })
+    assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    rmSync(path.join(mirrorPath, "node_modules"), { recursive: true, force: true })
+
+    const markerPath = path.join(mirrorPath, ".complete.json")
+    const admissionPath = path.join(runtimeCacheDir, ".desk-source-mirror.json")
+    const external = path.join(fixture.root, "external")
+    writeText(path.join(external, "payload.js"), "payload\n")
+    const linked = path.join(mirrorPath, "linked")
+    try {
+      symlinkSync(external, linked)
+      const sourceFiles = ["linked/payload.js"]
+      const linkedHash = sourceFilesHash(mirrorPath, sourceFiles)
+      const linkedIdentity = `sha256:${linkedHash}`
+      writeJson(markerPath, {
+        schema_version: 1,
+        kind: "source-mirror",
+        source_hash: linkedHash,
+        source_files: sourceFiles,
+      })
+      writeJson(admissionPath, {
+        schema_version: 1,
+        source_identity: linkedIdentity,
+        source_hash: linkedHash,
+        mirror_path: mirrorPath,
+      })
+      assert.equal(resolveAdmittedSourceMirror({
+        runtimeCacheDir,
+        sourceIdentity: linkedIdentity,
+      }), null)
+    } catch (error) {
+      if (!["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) throw error
+      t.diagnostic(`symlink ancestor case unavailable: ${error.code}`)
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("source mirror admission rejects incomplete inventories and special files", async (t) => {
+  const {
+    hashCurrentSource,
+    resolveAdmittedSourceMirror,
+    syncSourceMirror,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    const sourceHash = hashCurrentSource(fixture.mcpRoot)
+    const sourceIdentity = `sha256:${sourceHash}`
+    const mirrorPath = syncSourceMirror({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      sourceIdentity,
+    })
+    const markerPath = path.join(mirrorPath, ".complete.json")
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"))
+
+    for (const sourceFiles of [[], [""], [...marker.source_files].reverse()]) {
+      writeJson(markerPath, { ...marker, source_files: sourceFiles })
+      assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    }
+
+    writeJson(markerPath, marker)
+    mkdirSync(path.join(mirrorPath, "undeclared-empty"))
+    assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    rmSync(path.join(mirrorPath, "undeclared-empty"), { recursive: true, force: true })
+
+    const fifoPath = path.join(mirrorPath, "undeclared-fifo")
+    const fifo = spawnSync("mkfifo", [fifoPath])
+    if (fifo.status === 0) {
+      assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+      rmSync(fifoPath, { force: true })
+    } else {
+      t.diagnostic("mkfifo unavailable; special-file assertion skipped")
+    }
+
+    assert.equal(resolveAdmittedSourceMirror(), null)
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("source mirroring supports fixtures without optional package and config roots", async () => {
+  const { syncSourceMirror } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  try {
+    for (const entry of ["package-lock.json", "config", "scripts"]) {
+      rmSync(path.join(fixture.mcpRoot, entry), { recursive: true, force: true })
+    }
+    const mirrorPath = syncSourceMirror({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir: path.join(fixture.root, "runtime-cache"),
+    })
+    assert.equal(existsSync(path.join(mirrorPath, "index.js")), true)
+    assert.equal(existsSync(path.join(mirrorPath, "config")), false)
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }

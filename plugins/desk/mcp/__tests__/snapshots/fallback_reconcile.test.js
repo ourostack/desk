@@ -14,6 +14,7 @@ import matter from "gray-matter"
 import { closeDb, getMeta, indexDbPath, openDb } from "../../src/db/init.js"
 import { chunkBody } from "../../src/indexer/chunk.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
 import {
   ACTIVE_EMBEDDING_SPEC,
   chunkIdentity,
@@ -103,11 +104,16 @@ async function writePack({ pluginRoot, packId, rows }) {
       encoding: "float32-json",
       row_count: rows.length,
       rows_sha256: rowsSha,
+      artifact_source_scope_hash: SOURCE_SCOPE_HASH,
+      document_tree_hash: CURRENT_DOCUMENT_TREE_HASH,
+      represented_documents: [],
       created_at: "2026-06-15T00:00:00.000Z",
       provenance: {
         builder: "artifact:vector-pack:build",
         source: "unit-test",
+        commit: "0123456789abcdef0123456789abcdef01234567",
       },
+      source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS],
     }, null, 2)}\n`,
     "utf8",
   )
@@ -158,11 +164,7 @@ function validManifest({
       source: "unit-test",
       commit: "0123456789abcdef0123456789abcdef01234567",
     },
-    source_paths: [
-      "plugins/desk/mcp/src/snapshots/restore.js",
-      "plugins/desk/mcp/src/db/schema.sql",
-      "plugins/desk/mcp/package-lock.json",
-    ],
+    source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS],
     ...overrides,
   }
 }
@@ -696,6 +698,7 @@ test("ensureIndex auto-discovers snapshots from the runtime plugin root", async 
       },
     },
   })
+
   await writeFile(deskRoot, docPath, body)
   const old = new Date("2020-01-01T00:00:00.000Z")
   await fs.utimes(path.join(deskRoot, docPath), old, old)
@@ -707,6 +710,38 @@ test("ensureIndex auto-discovers snapshots from the runtime plugin root", async 
   assert.equal(ensured.snapshot.restored, true)
   assert.equal(ensured.snapshot.reconciled, true)
   assert.equal(ensured.semantic.missing_vectors, 0)
+})
+
+test("stale snapshot reconciliation reports vector packs used as fallback", async () => {
+  const deskRoot = await tmpRoot("desk-snapshot-vector-fallback-desk-")
+  const pluginRoot = await tmpRoot("desk-snapshot-vector-fallback-plugin-")
+  const snapshotSourceRoot = await tmpRoot("desk-snapshot-vector-fallback-source-")
+  const docPath = "trackA/task-1/task.md"
+  const body = "---\nstatus: processing\n---\nstale snapshot vector fallback body"
+  await writeFile(snapshotSourceRoot, docPath, body)
+  await writeSnapshotFromDesk({
+    pluginRoot,
+    snapshotId: "stale-vector-fallback",
+    sourceDeskRoot: snapshotSourceRoot,
+    rebuildOpts: { skipEmbed: true },
+  })
+  await writePack({
+    pluginRoot,
+    packId: "stale-vector-fallback",
+    rows: [rowForDoc({ docPath, body, seed: 23 })],
+  })
+  await writeFile(deskRoot, docPath, body)
+  const old = new Date("2020-01-01T00:00:00.000Z")
+  await fs.utimes(path.join(deskRoot, docPath), old, old)
+
+  const ensured = await withPluginRoot(pluginRoot, () => ensureIndex(deskRoot, {
+    skipEmbed: true,
+  }))
+
+  assert.equal(ensured.reason, "stale_snapshot_reconciled")
+  assert.equal(ensured.snapshot.restored, true)
+  assert.equal(ensured.fallback, "vector_packs")
+  assert.equal(ensured.vector_packs.rows_imported, 1)
 })
 
 test("desk_reindex uses runtime artifacts without artifact opts", async () => {

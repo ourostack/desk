@@ -12,6 +12,7 @@ import { zstdCompressSync } from "node:zlib"
 
 import { indexDbPath } from "../../src/db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const SOURCE_SCOPE_HASH = `sha256:${"a".repeat(64)}`
@@ -76,11 +77,7 @@ function validManifest({
       source: "unit-test",
       commit: "0123456789abcdef0123456789abcdef01234567",
     },
-    source_paths: [
-      "plugins/desk/mcp/src/snapshots/restore.js",
-      "plugins/desk/mcp/src/db/schema.sql",
-      "plugins/desk/mcp/package-lock.json",
-    ],
+    source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS],
   }
 }
 

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -875,11 +876,89 @@ function sourceMirrorIsCurrent({ mirrorPath, sourceHash }) {
     return marker.schema_version === 1
       && marker.kind === "source-mirror"
       && marker.source_hash === sourceHash
+      && sourceMirrorFilesAreCurrent({
+        mirrorPath,
+        sourceFiles: marker.source_files,
+        sourceHash,
+      })
       && existsSync(path.join(mirrorPath, "index.js"))
       && existsSync(path.join(mirrorPath, "package.json"))
       && existsSync(path.join(mirrorPath, "src"))
   } catch {
     return false
+  }
+
+  function sourceMirrorFilesAreCurrent({ mirrorPath, sourceFiles, sourceHash }) {
+    if (!Array.isArray(sourceFiles) || sourceFiles.length === 0) return false
+    const normalized = sourceFiles.map((file) => {
+      if (typeof file !== "string" || file.length === 0) return null
+      const repoPath = normalizePath(file)
+      if (
+        repoPath !== file ||
+        file.includes("\\") ||
+        path.posix.isAbsolute(file) ||
+        path.win32.isAbsolute(file) ||
+        repoPath.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+      ) {
+        return null
+      }
+      return repoPath
+    })
+    if (normalized.includes(null)) return false
+    const canonical = [...new Set(normalized)].sort()
+    if (!isDeepStrictEqual(normalized, canonical)) return false
+
+    const inventory = sourceMirrorInventory(mirrorPath)
+    if (!isDeepStrictEqual(inventory.files, canonical)) return false
+    const expectedDirectories = [...new Set(canonical.flatMap((file) => {
+      const directories = []
+      let current = path.posix.dirname(file)
+      while (current !== ".") {
+        directories.push(current)
+        current = path.posix.dirname(current)
+      }
+      return directories
+    }))].sort()
+    if (!isDeepStrictEqual(inventory.directories, expectedDirectories)) return false
+
+    const hash = createHash("sha256")
+    for (const file of canonical) {
+      const absolute = path.join(mirrorPath, file)
+      hash.update(file)
+      hash.update("\0")
+      hash.update(readFileSync(absolute))
+      hash.update("\0")
+    }
+    return hash.digest("hex") === sourceHash
+  }
+
+  function sourceMirrorInventory(mirrorPath) {
+    const files = []
+    const directories = []
+    const visit = (current) => {
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        if (current === mirrorPath && entry.name === ".complete.json") continue
+        const absolute = path.join(current, entry.name)
+        const stat = lstatSync(absolute)
+        const relative = normalizePath(path.relative(mirrorPath, absolute))
+        if (stat.isSymbolicLink()) {
+          throw new Error("source mirror must not contain symbolic links")
+        }
+        if (stat.isDirectory()) {
+          directories.push(relative)
+          visit(absolute)
+        } else if (stat.isFile()) {
+          files.push(relative)
+        } else {
+          throw new Error("source mirror must contain only regular files and directories")
+        }
+      }
+    }
+    visit(mirrorPath)
+    return {
+      files: files.sort(),
+      directories: directories.sort(),
+    }
   }
 }
 
@@ -908,7 +987,8 @@ export function syncSourceMirror({
   const stagingPath = siblingWorkPath(mirrorPath, "stage")
   try {
     mkdirSync(stagingPath, { recursive: true })
-    for (const entry of ["index.js", "package.json", "package-lock.json", "scripts", "src"]) {
+    for (const entry of ["index.js", "package.json", "package-lock.json", "config", "scripts", "src"]) {
+      if (!existsSync(path.join(mcpRoot, entry))) continue
       cpSync(path.join(mcpRoot, entry), path.join(stagingPath, entry), {
         recursive: true,
         filter: (source) => !source.split(path.sep).includes("node_modules"),
@@ -920,6 +1000,7 @@ export function syncSourceMirror({
         schema_version: 1,
         kind: "source-mirror",
         source_hash: sourceHash,
+        source_files: sourceFilesForHash(mcpRoot),
       }, null, 2)}\n`,
       "utf8",
     )
@@ -1008,7 +1089,7 @@ export function hashCurrentSource(mcpRoot) {
 }
 
 export function sourceFilesForHash(mcpRoot) {
-  const roots = ["index.js", "package.json", "package-lock.json", "scripts", "src"]
+  const roots = ["index.js", "package.json", "package-lock.json", "config", "scripts", "src"]
   const files = []
   for (const entry of roots) {
     const absolute = path.join(mcpRoot, entry)

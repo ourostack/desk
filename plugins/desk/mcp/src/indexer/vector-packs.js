@@ -11,6 +11,7 @@ import {
   assertArtifactDoesNotRepresentTombstones,
   assertArtifactInputsDoNotContainTombstones,
 } from "../artifacts/tombstones.js"
+import { assertCanonicalArtifactSourcePaths } from "../artifacts/source-scope.js"
 import { assertArtifactInputsAllowed } from "./exclusions.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./spec.js"
 
@@ -274,11 +275,44 @@ function validateManifestShape({ manifest, expectedSpec, label }) {
   if (!Number.isInteger(manifest.row_count) || manifest.row_count < 0) {
     throw new Error(`${label}: manifest row_count must be a non-negative integer`)
   }
+  assertSha(manifest.artifact_source_scope_hash, "artifact_source_scope_hash", label)
+  assertSha(manifest.document_tree_hash, "document_tree_hash", label)
+  assertIsoTimestamp(manifest.created_at, "created_at", label)
+  assertProvenance(manifest.provenance, label)
+  assertCanonicalArtifactSourcePaths(manifest.source_paths, `${label}: manifest`)
 }
 
 function validateManifestHash({ manifest, packSha, label }) {
   if (manifest.rows_sha256 !== packSha) {
     throw new Error(`${label}: manifest rows_sha256 must match vector pack`)
+  }
+}
+
+function assertSha(value, field, label) {
+  if (typeof value !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(value)) {
+    throw new Error(`${label}: manifest ${field} must be sha256:<hex>`)
+  }
+}
+
+function assertIsoTimestamp(value, field, label) {
+  const parsed = typeof value === "string" ? new Date(value) : null
+  if (!parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString() !== value) {
+    throw new Error(`${label}: manifest ${field} must be an ISO timestamp`)
+  }
+}
+
+function assertProvenance(provenance, label) {
+  if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)) {
+    throw new Error(`${label}: manifest provenance is required`)
+  }
+  if (typeof provenance.builder !== "string" || provenance.builder.trim() === "") {
+    throw new Error(`${label}: manifest provenance builder is required`)
+  }
+  if (typeof provenance.source !== "string" || provenance.source.trim() === "") {
+    throw new Error(`${label}: manifest provenance source is required`)
+  }
+  if (typeof provenance.commit !== "string" || !/^[a-f0-9]{40}$/u.test(provenance.commit)) {
+    throw new Error(`${label}: manifest provenance commit must be a git sha`)
   }
 }
 

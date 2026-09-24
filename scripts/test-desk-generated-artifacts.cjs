@@ -25,21 +25,9 @@ const defaultProductionNotesPath = path.join(
 const productionCurrentSourceHashField = "current_artifact_source_scope_hash";
 const productionCurrentDocumentHashField = "current_document_tree_hash";
 const productionArtifactTypes = Object.freeze(["vector-pack", "snapshot"]);
-const snapshotSourceScopePaths = Object.freeze([
-  "plugins/desk/mcp/src/indexer/index.js",
-  "plugins/desk/mcp/src/indexer/vector-packs.js",
-  "plugins/desk/mcp/src/snapshots/manifest.js",
-  "plugins/desk/mcp/src/snapshots/restore.js",
-  "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
-  "plugins/desk/mcp/src/artifacts/policy.js",
-  "plugins/desk/mcp/scripts/build-vector-pack.js",
-  "plugins/desk/mcp/scripts/build-snapshot.js",
-  "plugins/desk/mcp/scripts/verify-snapshot.js",
-  "plugins/desk/mcp/scripts/validate-artifacts.js",
-  "plugins/desk/mcp/src/db/schema.sql",
-  "plugins/desk/mcp/package.json",
-  "plugins/desk/mcp/package-lock.json",
-]);
+const snapshotSourceScopePaths = Object.freeze(readJson(
+  path.join(defaultMcpRoot, "config", "artifact-source-scope.json"),
+).source_paths);
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -784,6 +772,13 @@ function verifyFreshnessManifests({ errors, expectation, expectedHashes, vectorP
 }
 
 function verifyFreshnessFields({ errors, label, manifest, expectedHashes }) {
+  if (
+    !Array.isArray(manifest.source_paths) ||
+    manifest.source_paths.length !== snapshotSourceScopePaths.length ||
+    manifest.source_paths.some((sourcePath, index) => sourcePath !== snapshotSourceScopePaths[index])
+  ) {
+    errors.push(`${label} source_paths must match canonical source scope`);
+  }
   if (manifest.artifact_source_scope_hash !== expectedHashes.artifactSourceScopeHash) {
     errors.push(`${label} artifact_source_scope_hash must match current source scope`);
   }
@@ -994,11 +989,13 @@ module.exports = {
     readTrackedFileBytes,
     validatePublishedArchiveShape,
     verifyProductionArtifactChecksum,
+    verifyFreshnessFields,
   },
   defaultMcpRoot,
   defaultPublishedRuntimePackTargets,
   defaultProductionNotesPath,
   defaultRepoRoot,
+  artifactSourceScopePaths: snapshotSourceScopePaths,
   artifactSourceScopeHash,
   documentTreeHash,
   extractTarGzContents,

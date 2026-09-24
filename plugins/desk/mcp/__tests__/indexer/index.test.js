@@ -117,7 +117,7 @@ test("indexer records active embedding spec metadata and stable chunk keys", asy
     const activeSpecId = getMeta(db, "active_embedding_spec_id")
     assert.ok(activeSpecId, "missing active_embedding_spec_id meta")
     assert.match(activeSpecId, /nomic-embed-text-v1_5/u)
-    assert.equal(getMeta(db, "active_chunker_id"), "desk-md-h2-paragraph-v1")
+    assert.equal(getMeta(db, "active_chunker_id"), "desk-md-h2-paragraph-v2")
     assert.equal(getMeta(db, "active_normalization_id"), "unicode-whitespace-v1")
 
     const rows = db
@@ -132,7 +132,7 @@ test("indexer records active embedding spec metadata and stable chunk keys", asy
       assert.match(row.chunk_key, /^ck_/u)
       assert.match(row.text_hash, /^sha256:/u)
       assert.equal(row.embedding_spec_id, activeSpecId)
-      assert.equal(row.chunker_id, "desk-md-h2-paragraph-v1")
+      assert.equal(row.chunker_id, "desk-md-h2-paragraph-v2")
       assert.equal(row.normalization_id, "unicode-whitespace-v1")
     }
     firstKeys = rows.map((row) => row.chunk_key)

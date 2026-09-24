@@ -10,6 +10,7 @@ import matter from "gray-matter"
 import { closeDb, getMeta, openDb } from "../../src/db/init.js"
 import { chunkBody } from "../../src/indexer/chunk.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
 import {
   ACTIVE_EMBEDDING_SPEC,
   chunkIdentity,
@@ -91,11 +92,16 @@ async function writePack({ pluginRoot, packId, rows }) {
       encoding: "float32-json",
       row_count: rows.length,
       rows_sha256: packSha,
+      artifact_source_scope_hash: `sha256:${"a".repeat(64)}`,
+      document_tree_hash: `sha256:${"b".repeat(64)}`,
+      represented_documents: [],
       created_at: "2026-06-15T00:00:00.000Z",
       provenance: {
         builder: "artifact:vector-pack:build",
         source: "unit-test",
+        commit: "0123456789abcdef0123456789abcdef01234567",
       },
+      source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS],
     }, null, 2)}\n`,
     "utf8",
   )
@@ -904,6 +910,48 @@ test("ensureIndex probes with default embed options when none are provided", asy
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test("resolveEnsureIndexOptions supports omitted arguments", () => {
+  const resolved = resolveEnsureIndexOptions()
+  assert.equal(typeof resolved.tombstones.pluginRoot, "string")
+})
+
+test("ensureIndex tolerates incomplete ignored vector packs while recording known failures", async () => {
+  const deskRoot = await tmpRoot()
+  const pluginRoot = await tmpRoot("desk-plugin-vector-sidecars-")
+  const docPath = "trackA/task-oversize/task.md"
+  await writeFile(deskRoot, docPath, "---\nstatus: processing\n---\nknown failure body")
+  await rebuildIndex(deskRoot, {
+    ...NO_RELEASE_ARTIFACTS,
+    embed: {
+      fetch: async () => ({
+        ok: false,
+        status: 500,
+        json: async () => ({ error: "the input length exceeds the context length" }),
+      }),
+    },
+  })
+  const packDir = path.join(
+    pluginRoot,
+    "artifacts",
+    "vector-packs",
+    ACTIVE_EMBEDDING_SPEC.id,
+  )
+  await fs.mkdir(packDir, { recursive: true })
+  await fs.writeFile(path.join(packDir, "incomplete.jsonl"), "", "utf8")
+
+  const ensured = await ensureIndex(deskRoot, {
+    snapshots: false,
+    skipEmbed: true,
+    vectorPacks: {
+      pluginRoot,
+      ignoreInvalidRoots: true,
+    },
+  })
+
+  assert.equal(ensured.semantic.known_unembeddable_vectors, 1)
+  assert.equal(ensured.vector_packs.import_errors.length, 1)
 })
 
 test("ensureIndex calls embeddings only after vector-pack import leaves missing chunks", async () => {

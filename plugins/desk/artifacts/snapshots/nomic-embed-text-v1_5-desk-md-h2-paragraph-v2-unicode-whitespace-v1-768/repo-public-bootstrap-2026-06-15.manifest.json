@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "snapshot_id": "repo-public-bootstrap-2026-06-15",
+  "embedding_spec_id": "nomic-embed-text-v1_5-desk-md-h2-paragraph-v2-unicode-whitespace-v1-768",
+  "dimension": 768,
+  "chunker_id": "desk-md-h2-paragraph-v2",
+  "normalization_id": "unicode-whitespace-v1",
+  "db_schema": {
+    "id": "desk-index-sqlite-v1",
+    "version": 1
+  },
+  "sqlite_vec": {
+    "package": "sqlite-vec",
+    "version": "0.1.9",
+    "table": "vec0"
+  },
+  "runtime": {
+    "platform": "portable",
+    "arch": "portable",
+    "node_abi": "portable"
+  },
+  "artifact_source_scope_hash": "sha256:36f20b15e28e88a750421a7e1cc9f1c55e264cc07ff4cc24d9a881f62727ac5d",
+  "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
+  "included_pack_ids": [
+    "repo-public-bootstrap-2026-06-15"
+  ],
+  "represented_documents": [
+    {
+      "path": "tasks/dependency-activation/task.md",
+      "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
+    }
+  ],
+  "created_at": "2026-09-24T02:10:04.061Z",
+  "artifact": {
+    "file": "repo-public-bootstrap-2026-06-15.sqlite.zst",
+    "format": "sqlite-zstd",
+    "sha256": "sha256:5fde90db26523f0a5750b1296ed0618e83c0190b0da39ce7a396e81ed532a116",
+    "compressed": true
+  },
+  "provenance": {
+    "builder": "plugins/desk/mcp/scripts/build-snapshot.js",
+    "source": "local-db",
+    "commit": "1e10f7a641b80039a2aaa4e7f4d3bcc79bd59785"
+  },
+  "source_paths": [
+    "plugins/desk/mcp/config/artifact-source-scope.json",
+    "plugins/desk/mcp/src/indexer/chunk.js",
+    "plugins/desk/mcp/src/indexer/index.js",
+    "plugins/desk/mcp/src/indexer/spec.js",
+    "plugins/desk/mcp/src/indexer/vector-packs.js",
+    "plugins/desk/mcp/src/snapshots/manifest.js",
+    "plugins/desk/mcp/src/snapshots/restore.js",
+    "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
+    "plugins/desk/mcp/src/artifacts/policy.js",
+    "plugins/desk/mcp/src/artifacts/source-scope.js",
+    "plugins/desk/mcp/scripts/build-vector-pack.js",
+    "plugins/desk/mcp/scripts/build-snapshot.js",
+    "plugins/desk/mcp/scripts/verify-snapshot.js",
+    "plugins/desk/mcp/scripts/validate-artifacts.js",
+    "plugins/desk/mcp/src/db/schema.sql",
+    "plugins/desk/mcp/package.json",
+    "plugins/desk/mcp/package-lock.json"
+  ]
+}

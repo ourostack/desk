@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto"
 
 export const ACTIVE_EMBEDDING_SPEC = Object.freeze({
-  id: "nomic-embed-text-v1_5-desk-md-h2-paragraph-v1-unicode-whitespace-v1-768",
+  id: "nomic-embed-text-v1_5-desk-md-h2-paragraph-v2-unicode-whitespace-v1-768",
   model: "nomic-embed-text",
   model_revision: "nomic-embed-text-v1.5",
   dimension: 768,
-  chunker_id: "desk-md-h2-paragraph-v1",
+  chunker_id: "desk-md-h2-paragraph-v2",
   normalization_id: "unicode-whitespace-v1",
   is_active: true,
 })

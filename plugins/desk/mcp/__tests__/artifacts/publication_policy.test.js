@@ -8,6 +8,7 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
 import { ensureIndex } from "../../src/server-helpers.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
@@ -142,11 +143,16 @@ async function seedCommittedArtifactFixture(artifactsRoot) {
       encoding: "float32-json",
       row_count: 0,
       rows_sha256: packSha,
+      artifact_source_scope_hash: `sha256:${"a".repeat(64)}`,
+      document_tree_hash: `sha256:${"b".repeat(64)}`,
+      represented_documents: [],
       created_at: "2026-06-15T00:00:00.000Z",
       provenance: {
         builder: "artifact:vector-pack:build",
         source: "unit-test",
+        commit: "0123456789abcdef0123456789abcdef01234567",
       },
+      source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS],
     }, null, 2)}\n`,
     "utf8",
   )
@@ -189,11 +195,7 @@ async function seedCommittedArtifactFixture(artifactsRoot) {
         source: "unit-test",
         commit: "0123456789abcdef0123456789abcdef01234567",
       },
-      source_paths: [
-        "plugins/desk/mcp/src/snapshots/restore.js",
-        "plugins/desk/mcp/src/db/schema.sql",
-        "plugins/desk/mcp/package-lock.json",
-      ],
+      source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS],
     }, null, 2)}\n`,
     "utf8",
   )

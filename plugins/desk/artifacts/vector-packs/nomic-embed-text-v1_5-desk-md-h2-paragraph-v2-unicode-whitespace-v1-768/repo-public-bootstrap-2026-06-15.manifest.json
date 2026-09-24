@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "pack_id": "repo-public-bootstrap-2026-06-15",
+  "embedding_spec_id": "nomic-embed-text-v1_5-desk-md-h2-paragraph-v2-unicode-whitespace-v1-768",
+  "dimension": 768,
+  "encoding": "float32-json",
+  "row_count": 2,
+  "rows_sha256": "edf5dd39ec4a23020fe05769dd0e4e65b45c2143d1c02365793681ac2ba5bad8",
+  "artifact_source_scope_hash": "sha256:36f20b15e28e88a750421a7e1cc9f1c55e264cc07ff4cc24d9a881f62727ac5d",
+  "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
+  "represented_documents": [
+    {
+      "path": "tasks/dependency-activation/task.md",
+      "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
+    }
+  ],
+  "created_at": "2026-09-24T02:10:03.556Z",
+  "provenance": {
+    "builder": "plugins/desk/mcp/scripts/build-vector-pack.js",
+    "source": "local-db",
+    "commit": "1e10f7a641b80039a2aaa4e7f4d3bcc79bd59785"
+  },
+  "source_paths": [
+    "plugins/desk/mcp/config/artifact-source-scope.json",
+    "plugins/desk/mcp/src/indexer/chunk.js",
+    "plugins/desk/mcp/src/indexer/index.js",
+    "plugins/desk/mcp/src/indexer/spec.js",
+    "plugins/desk/mcp/src/indexer/vector-packs.js",
+    "plugins/desk/mcp/src/snapshots/manifest.js",
+    "plugins/desk/mcp/src/snapshots/restore.js",
+    "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
+    "plugins/desk/mcp/src/artifacts/policy.js",
+    "plugins/desk/mcp/src/artifacts/source-scope.js",
+    "plugins/desk/mcp/scripts/build-vector-pack.js",
+    "plugins/desk/mcp/scripts/build-snapshot.js",
+    "plugins/desk/mcp/scripts/verify-snapshot.js",
+    "plugins/desk/mcp/scripts/validate-artifacts.js",
+    "plugins/desk/mcp/src/db/schema.sql",
+    "plugins/desk/mcp/package.json",
+    "plugins/desk/mcp/package-lock.json"
+  ]
+}

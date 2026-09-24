@@ -275,6 +275,7 @@ function copyMcpPackage(targetRoot) {
     "index.js",
     "package.json",
     "package-lock.json",
+    "config",
     "scripts",
     "src",
     "artifacts",

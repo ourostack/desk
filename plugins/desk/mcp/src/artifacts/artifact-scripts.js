@@ -24,6 +24,10 @@ import {
   budgetValue,
   loadPerformanceBudgets,
 } from "./performance-budgets.js"
+import {
+  ARTIFACT_SOURCE_SCOPE_PATHS,
+  artifactSourceScopeHash as computeArtifactSourceScopeHash,
+} from "./source-scope.js"
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_MCP_ROOT = path.resolve(MODULE_DIR, "..", "..")
@@ -36,22 +40,6 @@ const SNAPSHOT_PORTABLE_RUNTIME = Object.freeze({
   node_abi: "portable",
 })
 const VECTOR_ENCODING = "float32-json"
-const DEFAULT_SOURCE_PATHS = Object.freeze([
-  "plugins/desk/mcp/src/indexer/index.js",
-  "plugins/desk/mcp/src/indexer/vector-packs.js",
-  "plugins/desk/mcp/src/snapshots/manifest.js",
-  "plugins/desk/mcp/src/snapshots/restore.js",
-  "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
-  "plugins/desk/mcp/src/artifacts/policy.js",
-  "plugins/desk/mcp/scripts/build-vector-pack.js",
-  "plugins/desk/mcp/scripts/build-snapshot.js",
-  "plugins/desk/mcp/scripts/verify-snapshot.js",
-  "plugins/desk/mcp/scripts/validate-artifacts.js",
-  "plugins/desk/mcp/src/db/schema.sql",
-  "plugins/desk/mcp/package.json",
-  "plugins/desk/mcp/package-lock.json",
-])
-
 export async function runVectorPackBuildCli(options = {}) {
   return runCli({
     argv: options.argv,
@@ -144,7 +132,7 @@ export async function buildVectorPackFromLocalDb({
         source: "local-db",
         commit: provenanceCommit ?? gitCommit(),
       },
-      source_paths: DEFAULT_SOURCE_PATHS,
+      source_paths: ARTIFACT_SOURCE_SCOPE_PATHS,
     }
     const paths = await writeVectorPackArtifact({
       pluginRoot,
@@ -223,7 +211,7 @@ export async function buildSnapshotFromLocalDb({
         source: "local-db",
         commit: provenanceCommit ?? gitCommit(),
       },
-      source_paths: DEFAULT_SOURCE_PATHS,
+      source_paths: ARTIFACT_SOURCE_SCOPE_PATHS,
     }
     const paths = await writeSnapshotArtifact({
       pluginRoot,
@@ -421,7 +409,7 @@ async function validateAllSnapshots({ pluginRoot, mcpRoot }) {
   }
 }
 
-function snapshotCompatibilityContext({ mcpRoot = DEFAULT_MCP_ROOT, docs = [] } = {}) {
+function snapshotCompatibilityContext({ mcpRoot, docs }) {
   return {
     expectedSqliteVec: {
       package: "sqlite-vec",
@@ -435,14 +423,7 @@ function snapshotCompatibilityContext({ mcpRoot = DEFAULT_MCP_ROOT, docs = [] } 
 }
 
 function artifactSourceScopeHash(mcpRoot) {
-  const hash = createHash("sha256")
-  for (const repoPath of DEFAULT_SOURCE_PATHS) {
-    const relFromMcp = repoPath.replace(/^plugins\/desk\/mcp\//u, "")
-    hash.update(`${repoPath}\0`)
-    hash.update(readFileOrEmpty(path.join(mcpRoot, relFromMcp)))
-    hash.update("\0")
-  }
-  return `sha256:${hash.digest("hex")}`
+  return computeArtifactSourceScopeHash(mcpRoot, readFileOrEmpty)
 }
 
 function documentTreeHash(docs) {
@@ -692,6 +673,7 @@ function compressSnapshotBytes(sqliteBytes, codec = zlib) {
 }
 
 export const __artifactScriptInternalsForTests = {
+  artifactSourceScopeHash,
   commonRoots,
   checkpointDb,
   compressSnapshotBytes,
@@ -703,5 +685,6 @@ export const __artifactScriptInternalsForTests = {
   optionalString,
   readFileOrEmpty,
   requiredPath,
+  sourcePaths: ARTIFACT_SOURCE_SCOPE_PATHS,
   valuesFor,
 }

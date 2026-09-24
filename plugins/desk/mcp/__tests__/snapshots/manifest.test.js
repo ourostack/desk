@@ -10,6 +10,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
@@ -60,11 +61,7 @@ function validManifest({ artifactSha, snapshotId = SNAPSHOT_ID } = {}) {
       source: "unit-test",
       commit: "0123456789abcdef0123456789abcdef01234567",
     },
-    source_paths: [
-      "plugins/desk/mcp/src/indexer/index.js",
-      "plugins/desk/mcp/src/db/schema.sql",
-      "plugins/desk/mcp/package-lock.json",
-    ],
+    source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS],
   }
 }
 
@@ -132,6 +129,25 @@ test("snapshot paths are canonical, plugin-root relative, and spec-scoped", asyn
     }),
     /invalid embedding_spec_id|path traversal/u,
   )
+})
+
+test("snapshot public APIs apply defaults before rejecting missing required inputs", async () => {
+  const {
+    deriveSnapshotPaths,
+    validateSnapshotArtifact,
+    validateSnapshotManifest,
+    writeSnapshotArtifact,
+  } = await loadManifestModule()
+  const pluginRoot = await tmpPluginRoot()
+
+  assert.equal(
+    deriveSnapshotPaths({ pluginRoot, snapshotId: "default-spec" }).snapshotDir.includes(ACTIVE_EMBEDDING_SPEC.id),
+    true,
+  )
+  assert.throws(() => deriveSnapshotPaths(), /pluginRoot|snapshot_id/u)
+  await assert.rejects(() => writeSnapshotArtifact(), /pluginRoot|snapshot_id|deskRoot/u)
+  await assert.rejects(() => validateSnapshotArtifact(), /snapshot path is required/u)
+  assert.throws(() => validateSnapshotManifest(), /manifest must be an object/u)
 })
 
 test("valid snapshot artifacts require manifest fields and checksum sidecars", async () => {
@@ -314,7 +330,7 @@ test("snapshot manifest rejects compatibility and provenance drift", async () =>
   )
 })
 
-test("snapshot manifests reject absolute, traversal, and unexpected source paths", async () => {
+test("snapshot manifests require the exact canonical source scope", async () => {
   const { validateSnapshotManifest } = await loadManifestModule()
   const artifactSha = `sha256:${"d".repeat(64)}`
   const validate = (sourcePaths) => validateSnapshotManifest({
@@ -328,23 +344,35 @@ test("snapshot manifests reject absolute, traversal, and unexpected source paths
     expectedDocumentTreeHash: DOCUMENT_TREE_HASH,
   })
 
-  assert.throws(() => validate(["/Users/ari/secret.md"]), /absolute source path/u)
-  assert.throws(() => validate(["plugins/desk/../secret.md"]), /source path traversal/u)
+  assert.throws(() => validate(["/Users/ari/secret.md"]), /canonical source scope/u)
+  assert.throws(() => validate(["plugins/desk/../secret.md"]), /canonical source scope/u)
   assert.throws(
     () => validate(["plugins/desk/mcp/src/indexer/C:\\Users\\ari\\secret.md"]),
-    /normalized repo path/u,
+    /canonical source scope/u,
   )
   assert.throws(
     () => validate(["plugins/desk/mcp/src/indexer/C:/Users/ari/secret.md"]),
-    /normalized repo path/u,
+    /canonical source scope/u,
   )
   assert.throws(
     () => validate(["private/customer-secrets.md"]),
     (error) => {
-      assert.match(error.message, /unexpected source path/u)
+      assert.match(error.message, /canonical source scope/u)
       assert.doesNotMatch(error.message, /private|customer-secrets/u)
       return true
     },
+  )
+  assert.throws(
+    () => validate(ARTIFACT_SOURCE_SCOPE_PATHS.slice(1)),
+    /canonical source scope/u,
+  )
+  assert.throws(
+    () => validate([...ARTIFACT_SOURCE_SCOPE_PATHS, ARTIFACT_SOURCE_SCOPE_PATHS[0]]),
+    /canonical source scope/u,
+  )
+  assert.throws(
+    () => validate([...ARTIFACT_SOURCE_SCOPE_PATHS].reverse()),
+    /canonical source scope/u,
   )
 })
 
