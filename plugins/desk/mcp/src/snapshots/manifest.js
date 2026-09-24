@@ -20,6 +20,7 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
   "plugins/desk/mcp/scripts/",
 ])
 const ALLOWED_SOURCE_FILES = Object.freeze([
+  "plugins/desk/mcp/config/artifact-source-scope.json",
   "plugins/desk/mcp/src/db/schema.sql",
   "plugins/desk/mcp/package.json",
   "plugins/desk/mcp/package-lock.json",
