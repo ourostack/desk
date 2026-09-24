@@ -210,7 +210,7 @@ export async function main({
     // desk_doctor answering so the agent can route into first-run bootstrap.
     return startRuntimeDiagnostic({
       diagnostic: createSetupDiagnostic({
-        pathsTried: error.tried ?? [],
+        pathsTried: error.tried,
         bindingPath: claudeBindingPath(env),
       }),
     })

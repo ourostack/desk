@@ -25,8 +25,8 @@ try {
     root: null,
     source: null,
     binding_path: bindingPath,
-    tried: error?.tried ?? [],
-    error: error?.message ?? String(error),
+    tried: error.tried ?? [],
+    error: error.message,
   }
 }
 process.stdout.write(

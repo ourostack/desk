@@ -405,8 +405,8 @@ for (const file of [
   "plugins/desk/.claude-plugin/plugin.json",
   "plugins/desk/.codex-plugin/plugin.json",
 ]) {
-  contract(`${file} releases Desk 3.2.0-alpha.7`, () => {
-    assert.equal(json(file).version, "3.2.0-alpha.7");
+  contract(`${file} releases Desk 3.2.0-alpha.8`, () => {
+    assert.equal(json(file).version, "3.2.0-alpha.8");
   });
 }
 

@@ -17,10 +17,10 @@ Use this entrance when no desk is bound: the startup hook says so, or `desk_stat
 
 #### A1. Look for a desk that already exists, locally
 
-Many operators already have a desk clone that simply is not bound. A desk has `_meta/` plus `_archive/` (solo) or `desks/` (crew). Check the paths `desk_status` already tried, then scan the usual places without writing anything:
+Many operators already have a desk clone that simply is not bound. A desk has `_meta/` plus `_archive/` (solo) or `desks/` (crew). Check the paths `desk_status` already tried, then scan the usual places without writing anything. This works in both bash and zsh; a glob loop does not, because zsh aborts on a pattern that matches nothing:
 
 ```bash
-for d in ~/*desk* ~/code/* ~/Projects/* ~/src/* ~/dev/* ~/repos/* ~/github/*; do [ -d "$d/_meta" ] && { [ -d "$d/_archive" ] || [ -d "$d/desks" ]; } && echo "$d $(git -C "$d" remote get-url origin 2>/dev/null)"; done 2>/dev/null
+find ~ ~/code ~/Projects ~/src ~/dev ~/repos ~/github -maxdepth 2 -type d -name _meta 2>/dev/null | while read -r m; do d=$(dirname "$m"); { [ -d "$d/_archive" ] || [ -d "$d/desks" ]; } && echo "$d $(git -C "$d" remote get-url origin 2>/dev/null)"; done | sort -u
 ```
 
 Also include the current project directory when it has the desk shape.

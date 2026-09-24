@@ -1,5 +1,16 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.8 — 2026-09-24
+
+Setup no longer ends at "Desk MCP is unavailable". Ships `desk-mcp@1.4.0-alpha.6` source with the changes below; the MCP version and its runtime dependency packs are unchanged because the packs carry only third-party dependencies.
+
+- **Setup mode instead of an exit.** With no desk bound, the Desk MCP stays up and `desk_status`/`desk_doctor` report `mode: setup`, the paths tried, the binding file and the next step, instead of the server exiting.
+- **Claude binds the right desk.** A session opened in a desk binds that desk (`CLAUDE_PROJECT_DIR`, only when it has the desk shape); otherwise the binding saved at `$CLAUDE_PLUGIN_DATA/desk.activation.json`, which survives plugin updates. Explicit, host-session, activation, `$DESK` and home fallbacks keep their precedence.
+- **Hooks agree with the server.** The Claude and Copilot startup hooks use the server's own root resolver, route a missing desk straight to `first-run-bootstrap`, and the Claude hook re-injects the foundation after compaction.
+- **Onboarding looks before it asks.** Bootstrap Entrance A scans for existing local desks, discovers the operator's desk repository with `gh`, asks once with what it found, offers a fresh desk when nothing exists, and saves the binding. A real MCP outage is repaired first; continuing without Desk is the last resort.
+- **One-link setup.** `SETUP.md` is written for the agent: give it the link and say "set this up". Desk ships `desk:worker` as Claude's default agent.
+- **Durable context and attribution.** The foundation states on every host that durable context lives in the desk and that no AI attribution is added to commits, pull requests, comments or documents.
+
 ## 3.2.0-alpha.7 — 2026-09-21
 
 **Public V2 foundation/onboarding source candidate: one RFC, one concise always-on Desk foundation, one authoritative startup scan, and exactly two blessed onboarding paths.** Desk now publishes a public Agentic Engineering V2 RFC, reduces the always-on Desk body to concise `using-desk` foundation clauses, keeps Claude/Copilot/Codex startup ownership lightweight and exact-once, and leaves the authoritative migration, sync, task discovery, and resumption scan in `desk:session-start` instead of duplicating partial startup scans. The source contract now makes source authority explicit before work begins, keeps material mid-execution requirements on the same durable task with updated evidence and review gates, requires stage-local visual proof when it helps, clarifies flow and delegation judgment, strengthens instruction coherence, and tightens safe dirty-state reconciliation. Onboarding now blesses exactly two public entry paths: Path 1 starts or upgrades the same Desk in place, including the executable V1-to-V2 upgrade entrance, and Path 2 begins with repository-first Crew-v1 migration before any member activation or join.

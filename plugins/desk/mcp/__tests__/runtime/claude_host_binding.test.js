@@ -36,6 +36,16 @@ function makeFixture() {
   return dirs
 }
 
+// Inherit the runner's environment (including any coverage hook in
+// NODE_OPTIONS) but drop the host variables each case sets explicitly.
+function childEnv(values) {
+  const env = { ...process.env, ...values }
+  for (const key of ["DESK", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR"]) {
+    if (!(key in values)) delete env[key]
+  }
+  return env
+}
+
 function writeBinding(pluginData, rootPath) {
   writeFileSync(
     path.join(pluginData, "desk.activation.json"),
@@ -221,7 +231,7 @@ test("resolve-desk-root script reports the same root the server would use", () =
   try {
     const run = (env) => JSON.parse(execFileSync(process.execPath, [resolveRootScript], {
       encoding: "utf8",
-      env: { PATH: process.env.PATH, HOME: fixture.home, ...env },
+      env: childEnv({ HOME: fixture.home, ...env }),
     }))
     const project = run({ CLAUDE_PROJECT_DIR: fixture.project })
     assert.equal(project.root, fixture.project)
