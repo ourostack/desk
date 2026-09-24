@@ -149,3 +149,32 @@ test("H2 lookalike inside code fence does not trigger split", () => {
   const headings = out.map((c) => c.heading)
   assert.deepEqual(headings.sort(), ["Other heading", "Real heading"].sort())
 })
+
+test("invalid backtick info strings do not suppress later H2 headings", () => {
+  const body = [
+    "## First",
+    "```bad`info",
+    "ordinary text",
+    "## Second",
+    "tail",
+  ].join("\n")
+
+  const out = chunkBody(body)
+
+  assert.deepEqual(out.map((chunk) => chunk.heading), ["First", "Second"])
+})
+
+test("valid unclosed fences remain atomic through end of file", () => {
+  const body = [
+    "## First",
+    "```text",
+    "## still fenced",
+    "x".repeat(900),
+  ].join("\n")
+
+  const out = chunkBody(body)
+
+  assert.equal(out.length, 1)
+  assert.equal(out[0].heading, "First")
+  assert.equal(out[0].text, body)
+})

@@ -128,7 +128,10 @@ function writeAmbiguousProductionNotes(filePath, { sourceHash, staleDocumentTree
 
 function writePrimaryWithSidecars({ dir, id, primarySuffix, manifest }) {
   writeFile(dir, `${id}${primarySuffix}`, "artifact bytes\n")
-  writeJson(dir, `${id}.manifest.json`, manifest)
+  writeJson(dir, `${id}.manifest.json`, {
+    source_paths: [...generatedArtifacts.artifactSourceScopePaths],
+    ...manifest,
+  })
   writeFile(dir, `${id}.sha256`, `${sha256("artifact bytes\n")}  ${id}${primarySuffix}\n`)
 }
 
@@ -152,6 +155,27 @@ function greenValidation() {
       }],
     },
   }
+
+  test("production freshness requires the canonical artifact source path set", () => {
+    const errors = []
+    generatedArtifacts.__generatedArtifactVerifierInternalsForTests.verifyFreshnessFields({
+      errors,
+      label: "production vector pack unit-pack",
+      manifest: {
+        source_paths: generatedArtifacts.artifactSourceScopePaths.slice(1),
+        artifact_source_scope_hash: sha256("source"),
+        document_tree_hash: sha256("documents"),
+      },
+      expectedHashes: {
+        artifactSourceScopeHash: sha256("source"),
+        documentTreeHash: sha256("documents"),
+      },
+    })
+
+    assert.deepEqual(errors, [
+      "production vector pack unit-pack source_paths must match canonical source scope",
+    ])
+  })
 }
 
 function trackedArtifactSpawn({ blobs = new Map(), dirty = new Set() } = {}) {
@@ -490,6 +514,7 @@ test("production verifier reports plain validation failures", async () => {
       artifact_source_scope_hash: sourceHash,
       document_tree_hash: docTree(currentDocs),
       represented_documents: currentDocs,
+      source_paths: [...generatedArtifacts.artifactSourceScopePaths],
     }
     writePrimaryWithSidecars({
       dir: path.join(expectation.vectorPackDir),
@@ -595,6 +620,7 @@ test("production artifact checksums can be validated from string git blobs", asy
       artifact_source_scope_hash: sourceHash,
       document_tree_hash: docTree(currentDocs),
       represented_documents: currentDocs,
+      source_paths: [...generatedArtifacts.artifactSourceScopePaths],
     }
     const vectorPrimaryPath = writeFile(expectation.vectorPackDir, "unit-pack.jsonl", "artifact bytes\n")
     const vectorChecksumPath = writeFile(
@@ -685,6 +711,7 @@ test("production verifier propagates validator freshness for vector packs and sn
       artifact_source_scope_hash: sourceHash,
       document_tree_hash: docTree(currentDocs),
       represented_documents: currentDocs,
+      source_paths: generatedArtifacts.artifactSourceScopePaths.slice(1),
     }
     writePrimaryWithSidecars({
       dir: path.join(expectation.vectorPackDir),

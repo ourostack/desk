@@ -13,6 +13,7 @@ import {
   ACTIVE_EMBEDDING_SPEC,
   chunkIdentity,
 } from "../../src/indexer/spec.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
 
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
@@ -97,10 +98,20 @@ async function writePack({
     row_count: rows.length,
     rows_sha256: packSha,
     created_at: "2026-06-15T00:00:00.000Z",
+    artifact_source_scope_hash: `sha256:${"a".repeat(64)}`,
+    document_tree_hash: `sha256:${"b".repeat(64)}`,
+    represented_documents: [
+      {
+        path: "tasks/example/task.md",
+        hash: `sha256:${"c".repeat(64)}`,
+      },
+    ],
     provenance: {
       builder: "artifact:vector-pack:build",
       source: "unit-test",
+      commit: "0123456789abcdef0123456789abcdef01234567",
     },
+    source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS],
     ...manifest,
   }
   await fs.writeFile(packPath, jsonl, "utf8")
@@ -572,6 +583,48 @@ test("vector pack validation rejects malformed manifests before import", async (
       name: "bad-row-count",
       manifest: { row_count: -1 },
       pattern: /row_count.*non-negative integer/u,
+    },
+    {
+      name: "bad-source-hash",
+      manifest: { artifact_source_scope_hash: "not-a-sha" },
+      pattern: /artifact_source_scope_hash/u,
+    },
+    {
+      name: "bad-document-hash",
+      manifest: { document_tree_hash: "not-a-sha" },
+      pattern: /document_tree_hash/u,
+    },
+    {
+      name: "bad-created-at",
+      manifest: { created_at: "not-a-date" },
+      pattern: /created_at/u,
+    },
+    {
+      name: "bad-provenance",
+      manifest: { provenance: { builder: "", source: "unit-test", commit: "not-a-sha" } },
+      pattern: /provenance/u,
+    },
+    {
+      name: "missing-source-path",
+      manifest: { source_paths: ARTIFACT_SOURCE_SCOPE_PATHS.slice(1) },
+      pattern: /canonical source scope/u,
+    },
+    {
+      name: "duplicate-source-path",
+      manifest: {
+        source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS, ARTIFACT_SOURCE_SCOPE_PATHS[0]],
+      },
+      pattern: /canonical source scope/u,
+    },
+    {
+      name: "reordered-source-paths",
+      manifest: { source_paths: [...ARTIFACT_SOURCE_SCOPE_PATHS].reverse() },
+      pattern: /canonical source scope/u,
+    },
+    {
+      name: "absolute-source-path",
+      manifest: { source_paths: ["/Users/ari/secret.md"] },
+      pattern: /canonical source scope/u,
     },
     {
       name: "bad-rows-sha",

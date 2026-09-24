@@ -772,6 +772,13 @@ function verifyFreshnessManifests({ errors, expectation, expectedHashes, vectorP
 }
 
 function verifyFreshnessFields({ errors, label, manifest, expectedHashes }) {
+  if (
+    !Array.isArray(manifest.source_paths) ||
+    manifest.source_paths.length !== snapshotSourceScopePaths.length ||
+    manifest.source_paths.some((sourcePath, index) => sourcePath !== snapshotSourceScopePaths[index])
+  ) {
+    errors.push(`${label} source_paths must match canonical source scope`);
+  }
   if (manifest.artifact_source_scope_hash !== expectedHashes.artifactSourceScopeHash) {
     errors.push(`${label} artifact_source_scope_hash must match current source scope`);
   }
@@ -982,11 +989,13 @@ module.exports = {
     readTrackedFileBytes,
     validatePublishedArchiveShape,
     verifyProductionArtifactChecksum,
+    verifyFreshnessFields,
   },
   defaultMcpRoot,
   defaultPublishedRuntimePackTargets,
   defaultProductionNotesPath,
   defaultRepoRoot,
+  artifactSourceScopePaths: snapshotSourceScopePaths,
   artifactSourceScopeHash,
   documentTreeHash,
   extractTarGzContents,

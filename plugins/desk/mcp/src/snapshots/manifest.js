@@ -11,20 +11,9 @@ import {
 } from "../artifacts/tombstones.js"
 import { assertArtifactInputsAllowed } from "../indexer/exclusions.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
+import { assertCanonicalArtifactSourcePaths } from "../artifacts/source-scope.js"
 
 const SNAPSHOT_FORMAT = "sqlite-zstd"
-const ALLOWED_SOURCE_PREFIXES = Object.freeze([
-  "plugins/desk/mcp/src/indexer/",
-  "plugins/desk/mcp/src/snapshots/",
-  "plugins/desk/mcp/src/artifacts/",
-  "plugins/desk/mcp/scripts/",
-])
-const ALLOWED_SOURCE_FILES = Object.freeze([
-  "plugins/desk/mcp/config/artifact-source-scope.json",
-  "plugins/desk/mcp/src/db/schema.sql",
-  "plugins/desk/mcp/package.json",
-  "plugins/desk/mcp/package-lock.json",
-])
 
 export function deriveSnapshotPaths({
   pluginRoot,
@@ -179,7 +168,7 @@ export function validateSnapshotManifest({
   assertIsoTimestamp(manifest.created_at, "created_at")
   assertArtifact(manifest, artifactSha256)
   assertProvenance(manifest.provenance)
-  assertSourcePaths(manifest.source_paths)
+  assertCanonicalArtifactSourcePaths(manifest.source_paths, "snapshot manifest")
 
   return {
     compatible: true,
@@ -241,39 +230,6 @@ function assertProvenance(provenance) {
     !/^[a-f0-9]{40}$/u.test(provenance.commit)
   ) {
     throw new Error("snapshot manifest provenance commit must be a git sha")
-  }
-}
-
-function assertSourcePaths(sourcePaths) {
-  if (!Array.isArray(sourcePaths) || sourcePaths.length === 0) {
-    throw new Error("snapshot manifest source_paths must be a non-empty array")
-  }
-  for (const sourcePath of sourcePaths) {
-    if (typeof sourcePath !== "string" || sourcePath.trim() === "") {
-      throw new Error("snapshot manifest source_paths must be strings")
-    }
-    const segments = sourcePath.split(/[\\/]+/u)
-    if (path.isAbsolute(sourcePath)) {
-      throw new Error("snapshot manifest must not include absolute source path")
-    }
-    if (
-      sourcePath.includes("\\") ||
-      segments.some((segment) => /^[a-z]:$/iu.test(segment))
-    ) {
-      throw new Error("snapshot manifest source path must be a normalized repo path")
-    }
-    if (
-      segments.some((segment) => segment === "..")
-    ) {
-      throw new Error("snapshot manifest source path traversal is not allowed")
-    }
-    const normalized = normalizePath(path.normalize(sourcePath))
-    const allowed =
-      ALLOWED_SOURCE_FILES.includes(normalized) ||
-      ALLOWED_SOURCE_PREFIXES.some((prefix) => normalized.startsWith(prefix))
-    if (!allowed) {
-      throw new Error("snapshot manifest unexpected source path")
-    }
   }
 }
 

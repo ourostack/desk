@@ -89,7 +89,7 @@ function splitByH2(body) {
   let fence = null
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    const marker = fenceMarker(line)
+    const marker = openingFence(line)
     if (fence && isClosingFence(line, fence)) {
       fence = null
     } else if (!fence && marker) {
@@ -137,7 +137,7 @@ function splitParagraphs(text, baseOffset) {
   let cursor = baseOffset
   let fence = null
   for (const line of lines) {
-    const marker = fenceMarker(line)
+    const marker = openingFence(line)
     if (fence && isClosingFence(line, fence)) {
       buf.push(line)
       cursor += line.length + 1
@@ -207,19 +207,22 @@ function splitOversizedParagraph(paragraph) {
 }
 
 function hasFenceLine(text) {
-  return text.split("\n").some((line) => fenceMarker(line) !== null)
+  return text.split("\n").some((line) => openingFence(line) !== null)
 }
 
-function fenceMarker(line) {
-  const match = /^( {0,3})(`{3,}|~{3,})/u.exec(line)
+function openingFence(line) {
+  const match = /^( {0,3})(`{3,}|~{3,})(.*)$/u.exec(line)
   if (!match) return null
+  if (match[2][0] === "`" && match[3].includes("`")) return null
   return { character: match[2][0], length: match[2].length }
 }
 
 function isClosingFence(line, fence) {
-  const marker = fenceMarker(line)
+  const match = /^( {0,3})(`{3,}|~{3,})\s*$/u.exec(line)
+  if (!match) return false
+  const marker = { character: match[2][0], length: match[2].length }
   if (!marker || marker.character !== fence.character || marker.length < fence.length) return false
-  return /^( {0,3})(`{3,}|~{3,})\s*$/u.test(line)
+  return true
 }
 
 function isHighSurrogate(codeUnit) {

@@ -17,6 +17,16 @@ export const ARTIFACT_SOURCE_SCOPE_PATHS = Object.freeze([
   ...SOURCE_SCOPE_CONFIG.source_paths,
 ])
 
+export function assertCanonicalArtifactSourcePaths(sourcePaths, label = "artifact manifest") {
+  if (
+    !Array.isArray(sourcePaths) ||
+    sourcePaths.length !== ARTIFACT_SOURCE_SCOPE_PATHS.length ||
+    sourcePaths.some((sourcePath, index) => sourcePath !== ARTIFACT_SOURCE_SCOPE_PATHS[index])
+  ) {
+    throw new Error(`${label} source_paths must match the canonical source scope`)
+  }
+}
+
 export function artifactSourceScopeHash(
   mcpRoot,
   readFile = readFileSync,
