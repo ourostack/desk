@@ -32,6 +32,46 @@ switch (request.payload.fixture) {
     }));
     process.exitCode = 18;
     break;
+  case 'structured-human-auth-required':
+    process.stdout.write(JSON.stringify({
+      code: 'HUMAN_AUTH_REQUIRED',
+      message: 'Interactive sign-in is required',
+      details: { contextId: 'requested', reason: 'NO_PRIMARY_AAD_ACCOUNT' },
+    }));
+    process.exitCode = 20;
+    break;
+  case 'structured-visible-attestation-indeterminate':
+    process.stdout.write(JSON.stringify({
+      code: 'VISIBLE_ATTESTATION_INDETERMINATE',
+      message: 'Visible account evidence is ambiguous',
+      details: { contextId: 'requested', reason: 'AMBIGUOUS_PRIMARY_ACCOUNT' },
+    }));
+    process.exitCode = 21;
+    break;
+  case 'structured-visible-attestation-cleanup-failed':
+    process.stdout.write(JSON.stringify({
+      code: 'VISIBLE_ATTESTATION_CLEANUP_FAILED',
+      message: 'Visible attestation target could not be removed',
+      details: { contextId: 'requested', targetId: 'target-visible' },
+    }));
+    process.exitCode = 22;
+    break;
+  case 'structured-recovery-process-changed':
+    process.stdout.write(JSON.stringify({
+      code: 'RECOVERY_PROCESS_CHANGED',
+      message: 'Browser process generation changed before recovery',
+      details: { contextId: 'requested', pid: 4001 },
+    }));
+    process.exitCode = 23;
+    break;
+  case 'structured-recovery-termination-failed':
+    process.stdout.write(JSON.stringify({
+      code: 'RECOVERY_TERMINATION_FAILED',
+      message: 'Exact browser process tree did not terminate',
+      details: { contextId: 'requested', pids: [4001, 4002] },
+    }));
+    process.exitCode = 24;
+    break;
   case 'exit-malformed-error':
     process.stdout.write('{broken');
     process.exitCode = 11;

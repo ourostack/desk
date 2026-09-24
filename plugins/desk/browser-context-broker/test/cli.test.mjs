@@ -173,7 +173,27 @@ test('CLI failures use stable JSON error envelopes and exit codes', async () => 
   });
 });
 
-test('status redacts tokens, secrets, environment, and provider configuration', async () => {
+test('acquire rejects an unsupported recovery mode before provider use', async () => {
+  const fake = await startFakeCdpServer();
+  const directory = await stateDir();
+  const configPath = await writeConfig(directory, fake.endpoint);
+  const result = await run([
+    'acquire',
+    '--config', configPath,
+    '--state-dir', directory,
+    '--alias', 'default',
+    '--recovery-mode', 'destructive-always',
+    '--json',
+  ]);
+  await fake.close();
+
+  assert.equal(result.exitCode, 2);
+  const envelope = JSON.parse(result.stderr);
+  assert.equal(envelope.error.code, 'INVALID_ARGUMENTS');
+  assert.match(envelope.error.message, /recovery mode/u);
+});
+
+test('status reports the raw context endpoint while redacting tokens, secrets, environment, and provider configuration', async () => {
   const fake = await startFakeCdpServer();
   const directory = await stateDir();
   const configPath = await writeConfig(directory, fake.endpoint);
@@ -193,7 +213,7 @@ test('status redacts tokens, secrets, environment, and provider configuration', 
   assert.ok(!output.includes('must-not-appear'));
   assert.ok(!output.includes('environment'));
   assert.ok(!output.includes(providerFixture.toLowerCase()));
-  assert.ok(!result.stdout.includes(fake.endpoint));
+  assert.ok(result.stdout.includes(fake.endpoint));
 });
 
 test('status does not publish a usable authenticated proxy endpoint', async () => {
@@ -222,6 +242,44 @@ test('status does not publish a usable authenticated proxy endpoint', async () =
   assert.equal(result.exitCode, 0, result.stderr);
   assert.ok(!result.stdout.includes(proxyToken));
   assert.ok(!result.stdout.includes('/devtools/browser/'));
+});
+
+test('status reports non-secret attestation and recovery summaries', async () => {
+  const directory = await stateDir();
+  await writeRegistry(directory, {
+    version: 1,
+    contexts: {
+      work: {
+        contextId: 'work',
+        claims: { identity: 'requested@example.test', tenant: 'tenant-a' },
+        endpoint: 'http://127.0.0.1:45555',
+        processIdentity: testProcessIdentity,
+        lastAttestedAt: '2026-09-24T00:00:00.000Z',
+        attestation: {
+          visible: {
+            configured: true,
+            matched: true,
+            checked: ['identity', 'tenant'],
+            source: 'edge-signin-internals',
+          },
+        },
+        recovery: {
+          mode: 'non-destructive',
+          result: 'healthy',
+          reason: 'ENDPOINT_UNHEALTHY',
+          at: '2026-09-24T00:00:01.000Z',
+        },
+      },
+    },
+    leases: {},
+  });
+
+  const result = await run(['status', '--state-dir', directory, '--json']);
+  const context = JSON.parse(result.stdout).result.contexts[0];
+
+  assert.equal(context.endpoint, 'http://127.0.0.1:45555');
+  assert.equal(context.attestation.visible.source, 'edge-signin-internals');
+  assert.equal(context.recovery.mode, 'non-destructive');
 });
 
 test('doctor reports stale leases without exposing their proxy token', async () => {
@@ -279,7 +337,43 @@ test('doctor freshly attests registry observations through the configured provid
   assert.equal(envelope.result.contextHealth[0].status, 'absent');
   assert.equal(envelope.result.contextHealth[0].reason, 'TEST_ATTESTATION_FAILED');
   assert.ok(envelope.result.diagnostics.some(({ code }) => code === 'CONTEXT_ATTESTATION_FAILED'));
-  assert.ok(!result.stdout.includes(fake.endpoint));
+  assert.ok(result.stdout.includes(fake.endpoint));
+});
+
+test('doctor reports recovery eligibility and active lease blockers', async () => {
+  const fake = await startFakeCdpServer();
+  const directory = await stateDir();
+  const configPath = await writeConfig(directory, fake.endpoint);
+  await run([
+    'acquire',
+    '--config', configPath,
+    '--state-dir', directory,
+    '--alias', 'default',
+    '--owner', 'agent-a',
+    '--json',
+  ]);
+  const config = JSON.parse(await readFile(configPath, 'utf8'));
+  config.contexts[0].testAttestation = 'endpoint-unhealthy';
+  config.contexts[0].recovery = { restart: true };
+  await writeFile(configPath, JSON.stringify(config));
+
+  const result = await run([
+    'doctor',
+    '--config', configPath,
+    '--state-dir', directory,
+    '--json',
+  ]);
+  await fake.close();
+
+  const envelope = JSON.parse(result.stdout);
+  const health = envelope.result.contextHealth[0];
+  assert.equal(health.reason, 'ENDPOINT_UNHEALTHY');
+  assert.equal(health.recovery.restartAuthorized, true);
+  assert.equal(health.recovery.autonomous, false);
+  assert.equal(health.recovery.blockingLeases[0].owner, 'agent-a');
+  assert.ok(envelope.result.diagnostics.some(
+    ({ code }) => code === 'CONTEXT_RECOVERY_CONFLICT',
+  ));
 });
 
 test('cleanup expires only the specified stale lease and its owned targets', async () => {

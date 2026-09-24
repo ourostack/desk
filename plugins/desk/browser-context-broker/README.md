@@ -70,4 +70,20 @@ The broker sends one JSON request on stdin and expects one JSON result on stdout
 {"code":"ENDPOINT_COLLISION","message":"Selected endpoint was claimed before launch","details":{"attempt":1}}
 ```
 
-The envelope contains only `code`, non-empty `message`, and optional object-valued `details`. The broker preserves the approved provider codes `ENDPOINT_COLLISION` and `UNSUPPORTED_CONTEXT_RECOVERY`, including their details. Unknown codes, malformed JSON, invalid field types, and extra fields are reported as `PROVIDER_EXITED`; provider stdout is not copied into that fallback diagnostic.
+The envelope contains only `code`, non-empty `message`, and optional object-valued `details`. The broker preserves approved provider codes for endpoint collisions, recovery conflicts and failures, and visible-attestation failures, including their non-secret details. Unknown codes, malformed JSON, invalid field types, and extra fields are reported as `PROVIDER_EXITED`; provider stdout is not copied into that fallback diagnostic.
+
+## Atomic acquisition and recovery
+
+`acquire` holds the context lock until it has selected or provisioned the context and created the caller's lease. Concurrent acquisitions can therefore share one attested context without receiving the same lease or observing a lease-free recovery gap.
+
+Recovery is always scoped to the requested declaration:
+
+1. Freshly attest the registered exact process generation.
+2. Ask the provider for bounded non-destructive recovery.
+3. If that fails and any unexpired, non-releasing lease exists for the context, return `CONTEXT_RECOVERY_CONFLICT` with non-secret lease-owner summaries. A lease from an older observed generation still blocks destructive recovery.
+4. With no blocking leases, allow provider restart only when the declaration explicitly authorizes it. The provider must re-attest the exact process generation before acting.
+5. Re-attest the replacement and create the caller's lease before releasing the context lock.
+
+`--recovery-mode non-destructive` suppresses restart for protected validation and diagnostics. The default `full` mode permits only declaration-authorized recovery. Browser-visible mismatch, ambiguous evidence, process-generation change, endpoint/process mismatch, and human authentication requirements never authorize destructive recovery.
+
+`status` exposes the context's loopback endpoint, exact process identity, claims, last non-secret attestation/recovery summaries, and leases. `doctor` adds recovery eligibility, declaration authorization, autonomous-recovery eligibility, and blocking lease owners. Neither command exposes proxy credentials, cookies, tokens, provider environment, or an authenticated lease-proxy URL.

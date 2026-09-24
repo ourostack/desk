@@ -28,14 +28,20 @@ if (request.operation === 'discover') {
 } else if (request.operation === 'attest') {
   const absent = declaration.testAttestation === 'absent';
   const replacement = declaration.testAttestation === 'replacement';
+  const endpointUnhealthy = declaration.testAttestation === 'endpoint-unhealthy';
   const processIdentity = replacement
     ? { ...observation.processIdentity, startIdentity: 'replacement-generation' }
     : observation.processIdentity;
   process.stdout.write(JSON.stringify({
-    healthy: declaration.testAttestation !== 'unhealthy' && !absent,
+    healthy:
+      declaration.testAttestation !== 'unhealthy' &&
+      !endpointUnhealthy &&
+      !absent,
     reason:
       declaration.testAttestation === 'unhealthy'
         ? 'TEST_ATTESTATION_FAILED'
+        : endpointUnhealthy
+          ? 'ENDPOINT_UNHEALTHY'
         : absent
           ? 'PROCESS_ABSENT'
           : undefined,

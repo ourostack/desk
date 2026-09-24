@@ -10,7 +10,7 @@ import WebSocket from 'ws';
 import { startLeaseProxy } from '../src/cdp-proxy.mjs';
 import { createLease, releaseLease } from '../src/leases.mjs';
 import { withBrokerLock } from '../src/lock.mjs';
-import { readRegistry } from '../src/registry.mjs';
+import { readRegistry, writeRegistry } from '../src/registry.mjs';
 import { startFakeCdpServer } from './fixtures/fake-cdp-server.mjs';
 
 const scratchRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '.proxy-state');
@@ -219,6 +219,7 @@ test('proxy startup closes its listener when registry publication fails', async 
     rawEndpoint: fake.endpoint,
     processIdentity,
   });
+
   const port = await availablePort();
   let proxy;
   let failure;
@@ -233,12 +234,135 @@ test('proxy startup closes its listener when registry publication fails', async 
         throw new Error('record proxy failed');
       },
     });
+
   } catch (error) {
     failure = error;
   }
   if (proxy) await proxy.close();
 
   assert.match(failure?.message ?? '', /record proxy failed/);
+  assert.equal(await canConnect(port), false);
+});
+
+test('proxy closes when its lease heartbeat reports expiration', async (t) => {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const lease = await createLease({
+    stateDir: directory,
+    context: declaration,
+    owner: 'agent-expiring',
+    rawEndpoint: fake.endpoint,
+    processIdentity,
+  });
+  const proxy = await startLeaseProxy({
+    stateDir: directory,
+    leaseId: lease.id,
+    declaration,
+    providerInvoker: attestingProvider,
+    heartbeatLeaseFn: async () => {
+      const error = new Error('expired');
+      error.code = 'LEASE_EXPIRED';
+      throw error;
+    },
+    heartbeatIntervalMs: 5,
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  await assert.rejects(fetch(`${proxy.endpoint}/json/version`));
+})
+
+test('proxy closes when its lease starts releasing', async (t) => {
+  const fake = await startFakeCdpServer();
+  t.after(() => fake.close());
+  const directory = await stateDir();
+  const lease = await createLease({
+    stateDir: directory,
+    context: declaration,
+    owner: 'agent-releasing',
+    rawEndpoint: fake.endpoint,
+    processIdentity,
+  });
+  const proxy = await startLeaseProxy({
+    stateDir: directory,
+    leaseId: lease.id,
+    declaration,
+    providerInvoker: attestingProvider,
+    heartbeatLeaseFn: async () => {
+      const error = new Error('releasing');
+      error.code = 'LEASE_RELEASING';
+      throw error;
+    },
+    heartbeatIntervalMs: 5,
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  await assert.rejects(fetch(`${proxy.endpoint}/json/version`));
+})
+
+test('proxy startup rejects a lease that already expired', async () => {
+  const fake = await startFakeCdpServer();
+  cleanups.push(() => fake.close());
+  const directory = await stateDir();
+  const lease = await createLease({
+    stateDir: directory,
+    context: declaration,
+    owner: 'agent-expired',
+    rawEndpoint: fake.endpoint,
+    processIdentity,
+  });
+  await withBrokerLock(directory, async () => {
+    const registry = await readRegistry(directory);
+    registry.leases[lease.id].expiresAt = new Date(Date.now() - 1_000).toISOString();
+    await writeRegistry(directory, registry);
+  });
+  const port = await availablePort();
+
+  await assert.rejects(
+    startLeaseProxy({
+      stateDir: directory,
+      leaseId: lease.id,
+      declaration,
+      providerInvoker: attestingProvider,
+      port,
+    }),
+    (error) => error.code === 'LEASE_EXPIRED',
+  );
+  assert.equal(await canConnect(port), false);
+});
+
+test('proxy publication rejects expiration during startup', async () => {
+  const fake = await startFakeCdpServer();
+  cleanups.push(() => fake.close());
+  const directory = await stateDir();
+  const lease = await createLease({
+    stateDir: directory,
+    context: declaration,
+    owner: 'agent-expiring-during-startup',
+    rawEndpoint: fake.endpoint,
+    processIdentity,
+  });
+  const port = await availablePort();
+
+  await assert.rejects(
+    startLeaseProxy({
+      stateDir: directory,
+      leaseId: lease.id,
+      declaration,
+      providerInvoker: attestingProvider,
+      port,
+      recordProxyFn: async (...args) => {
+        await withBrokerLock(directory, async () => {
+          const registry = await readRegistry(directory);
+          registry.leases[lease.id].expiresAt = new Date(Date.now() - 1_000).toISOString();
+          await writeRegistry(directory, registry);
+        });
+        const { recordProxy } = await import('../src/leases.mjs');
+        return recordProxy(...args);
+      },
+    }),
+    (error) => error.code === 'LEASE_EXPIRED',
+  );
   assert.equal(await canConnect(port), false);
 });
 

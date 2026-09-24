@@ -63,6 +63,36 @@ test('invokeProvider preserves approved structured provider errors', async () =>
       message: 'Selected endpoint was claimed before launch',
       details: {},
     },
+    {
+      fixture: 'structured-human-auth-required',
+      code: 'HUMAN_AUTH_REQUIRED',
+      message: 'Interactive sign-in is required',
+      details: { contextId: 'requested', reason: 'NO_PRIMARY_AAD_ACCOUNT' },
+    },
+    {
+      fixture: 'structured-visible-attestation-indeterminate',
+      code: 'VISIBLE_ATTESTATION_INDETERMINATE',
+      message: 'Visible account evidence is ambiguous',
+      details: { contextId: 'requested', reason: 'AMBIGUOUS_PRIMARY_ACCOUNT' },
+    },
+    {
+      fixture: 'structured-visible-attestation-cleanup-failed',
+      code: 'VISIBLE_ATTESTATION_CLEANUP_FAILED',
+      message: 'Visible attestation target could not be removed',
+      details: { contextId: 'requested', targetId: 'target-visible' },
+    },
+    {
+      fixture: 'structured-recovery-process-changed',
+      code: 'RECOVERY_PROCESS_CHANGED',
+      message: 'Browser process generation changed before recovery',
+      details: { contextId: 'requested', pid: 4001 },
+    },
+    {
+      fixture: 'structured-recovery-termination-failed',
+      code: 'RECOVERY_TERMINATION_FAILED',
+      message: 'Exact browser process tree did not terminate',
+      details: { contextId: 'requested', pids: [4001, 4002] },
+    },
   ];
 
   for (const expected of cases) {

@@ -4,14 +4,22 @@ import { randomUUID } from 'node:crypto';
 import { chmod, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { acquireContext } from '../src/broker.mjs';
+import { acquireLease } from '../src/broker.mjs';
 import { startLeaseProxy } from '../src/cdp-proxy.mjs';
 import { BrokerError } from '../src/claims.mjs';
-import { cleanupStaleLease, createLease, releaseLease } from '../src/leases.mjs';
+import {
+  cleanupStaleLease,
+  releaseLease,
+  summarizeContextLeases,
+} from '../src/leases.mjs';
 import { invokeProvider } from '../src/provider.mjs';
 import { readRegistry, reconcileContext } from '../src/registry.mjs';
 
 const SECRET_KEY = /(token|secret|password|cookie|authorization|environment|^env$)/i;
+const RECOVERABLE_REASONS = new Set([
+  'ENDPOINT_UNAVAILABLE',
+  'ENDPOINT_UNHEALTHY',
+]);
 const HELP = `browser-context-broker <command> [options]
 
 Commands:
@@ -84,8 +92,11 @@ function statusResult(registry) {
     contexts: Object.values(registry.contexts).map((context) => ({
       contextId: context.contextId,
       claims: context.claims ?? {},
+      endpoint: context.endpoint,
       processIdentity: context.processIdentity,
       lastAttestedAt: context.lastAttestedAt,
+      attestation: context.attestation,
+      recovery: context.recovery,
       health: context.processIdentity ? 'observed' : 'unknown',
     })),
     leases: Object.values(registry.leases).map((lease) => ({
@@ -127,18 +138,20 @@ async function run(command, options) {
     const request = options.alias
       ? { alias: options.alias }
       : JSON.parse(requireOption(options, 'request'));
-    const acquired = await acquireContext({
+    const recoveryMode = options['recovery-mode'] ?? 'full';
+    if (!['full', 'non-destructive'].includes(recoveryMode)) {
+      throw new BrokerError(
+        'INVALID_ARGUMENTS',
+        `Unsupported recovery mode: ${recoveryMode}`,
+      );
+    }
+    const { acquired, lease } = await acquireLease({
       config,
       request,
       stateDir,
-      providerInvoker: providerFor(config),
-    });
-    const lease = await createLease({
-      stateDir,
-      context: acquired.context,
       owner: options.owner ?? process.env.USER ?? `pid-${process.pid}`,
-      rawEndpoint: acquired.rawEndpoint,
-      processIdentity: acquired.processIdentity,
+      recoveryMode,
+      providerInvoker: providerFor(config),
     });
     return {
       leaseId: lease.id,
@@ -245,15 +258,53 @@ async function run(command, options) {
           observation,
           providerInvoker,
         );
+        const blockingLeases = summarizeContextLeases(
+          registry,
+          observation.contextId,
+          observation.processIdentity,
+          now,
+        );
+        const recoveryEligible = RECOVERABLE_REASONS.has(health.reason);
+        const recovery = {
+          eligible: recoveryEligible,
+          restartAuthorized: declaration.recovery?.restart === true,
+          autonomous:
+            recoveryEligible &&
+            declaration.recovery?.restart === true &&
+            blockingLeases.length === 0,
+          blockingLeases,
+        };
         contextHealth.push({
           contextId: observation.contextId,
           status: health.status,
           reason: health.reason,
+          endpoint: observation.endpoint,
+          attestation: health.evidence
+            ? { visible: health.evidence.visibleClaims }
+            : observation.attestation,
+          recovery,
         });
-        if (health.status !== 'healthy') {
+        if (recoveryEligible && blockingLeases.length > 0) {
           diagnostics.push({
             severity: 'error',
-            code: 'CONTEXT_ATTESTATION_FAILED',
+            code: 'CONTEXT_RECOVERY_CONFLICT',
+            contextId: observation.contextId,
+            reason: health.reason,
+            leases: blockingLeases,
+            message: 'Context recovery is blocked by active leases.',
+          });
+        }
+        if (health.status !== 'healthy') {
+          const code = [
+            'HUMAN_AUTH_REQUIRED',
+            'VISIBLE_ATTESTATION_INDETERMINATE',
+            'VISIBLE_CLAIM_MISMATCH',
+          ].includes(health.reason)
+            ? health.reason
+            : 'CONTEXT_ATTESTATION_FAILED';
+          diagnostics.push({
+            severity: 'error',
+            code,
             contextId: observation.contextId,
             reason: health.reason,
             message: 'Fresh provider attestation did not validate this context observation.',

@@ -91,6 +91,7 @@ export async function reconcileContext(declaration, observation, provider) {
     return {
       status: 'absent',
       reason: attestation?.reason ?? 'ATTESTATION_UNHEALTHY',
+      ...(attestation?.evidence ? { evidence: attestation.evidence } : {}),
       discardObservation: true,
     };
   }

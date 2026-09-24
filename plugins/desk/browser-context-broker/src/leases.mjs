@@ -23,6 +23,10 @@ function leaseLockName(leaseId) {
   return `lease-${createHash('sha256').update(leaseId).digest('hex')}`;
 }
 
+function contextLockName(contextId) {
+  return `context-${createHash('sha256').update(contextId).digest('hex')}`;
+}
+
 export function withLeaseOperation(stateDir, leaseId, operation) {
   return withBrokerLock(stateDir, operation, { name: leaseLockName(leaseId) });
 }
@@ -35,6 +39,32 @@ function sameProcessIdentity(left, right) {
     left?.executable === right?.executable &&
     left?.profileRoot === right?.profileRoot
   );
+}
+
+export function summarizeContextLeases(
+  registry,
+  contextId,
+  processIdentity,
+  now = Date.now(),
+) {
+  return Object.values(registry.leases)
+    .filter((lease) =>
+      lease.contextId === contextId &&
+      Number.isFinite(Date.parse(lease.expiresAt)) &&
+      Date.parse(lease.expiresAt) > now)
+    .map((lease) => ({
+      leaseId: lease.id,
+      owner: lease.owner,
+      heartbeatAt: lease.heartbeatAt,
+      expiresAt: lease.expiresAt,
+      targetCount: lease.targetIds?.length ?? 0,
+      releasing: lease.releasing === true,
+      processGenerationMatch: sameProcessIdentity(
+        lease.processIdentity,
+        processIdentity,
+      ),
+    }))
+    .sort((left, right) => left.leaseId.localeCompare(right.leaseId));
 }
 
 async function readLease(stateDir, leaseId) {
@@ -677,13 +707,24 @@ export async function removeOwnedTarget(stateDir, leaseId, targetId) {
 }
 
 export async function recordProxy(stateDir, leaseId, endpoint) {
-  return mutateLease(stateDir, leaseId, (lease) => {
-    lease.proxy = {
-      listener: endpoint,
-      pid: process.pid,
-      startIdentity: PROCESS_START_IDENTITY,
-      heartbeatAt: new Date().toISOString(),
-    };
+  return withLeaseOperation(stateDir, leaseId, () => {
+    return mutateLease(stateDir, leaseId, (lease) => {
+      if (lease.releasing) {
+        throw new BrokerError('LEASE_RELEASING', `Lease is being released: ${leaseId}`);
+      }
+      const now = new Date();
+      if (Date.parse(lease.expiresAt) <= now.getTime()) {
+        throw new BrokerError('LEASE_EXPIRED', `Lease has expired: ${leaseId}`);
+      }
+      lease.heartbeatAt = now.toISOString();
+      lease.expiresAt = new Date(now.getTime() + 300_000).toISOString();
+      lease.proxy = {
+        listener: endpoint,
+        pid: process.pid,
+        startIdentity: PROCESS_START_IDENTITY,
+        heartbeatAt: now.toISOString(),
+      };
+    });
   });
 }
 
@@ -694,6 +735,9 @@ export async function heartbeatLease(stateDir, leaseId, ttlMs = 300_000) {
         throw new BrokerError('LEASE_RELEASING', `Lease is being released: ${leaseId}`);
       }
       const now = new Date();
+      if (Date.parse(lease.expiresAt) <= now.getTime()) {
+        throw new BrokerError('LEASE_EXPIRED', `Lease has expired: ${leaseId}`);
+      }
       lease.heartbeatAt = now.toISOString();
       lease.expiresAt = new Date(now.getTime() + ttlMs).toISOString();
       if (lease.proxy) lease.proxy.heartbeatAt = now.toISOString();
@@ -708,56 +752,60 @@ export async function releaseLease({
   providerInvoker,
   cdpClientOptions,
 }) {
-  return withLeaseOperation(stateDir, leaseId, async () => {
-    await attestLeaseContext({ stateDir, leaseId, declaration, providerInvoker });
-    const lease = await mutateLease(stateDir, leaseId, (record) => {
-      record.releasing = true;
-      return structuredClone(record);
-    });
-    const pendingCreateFailures = await reconcilePendingTargetCreates(
-      stateDir,
-      leaseId,
-      lease.rawEndpoint,
-      cdpClientOptions,
-    );
-    if (pendingCreateFailures.length > 0) {
-      throw new BrokerError(
-        'PARTIAL_RELEASE',
-        `Lease release has indeterminate target creation: ${leaseId}`,
-        { leaseId, pendingTargetCreates: pendingCreateFailures },
+  return withBrokerLock(
+    stateDir,
+    () => withLeaseOperation(stateDir, leaseId, async () => {
+      await attestLeaseContext({ stateDir, leaseId, declaration, providerInvoker });
+      const lease = await mutateLease(stateDir, leaseId, (record) => {
+        record.releasing = true;
+        return structuredClone(record);
+      });
+      const pendingCreateFailures = await reconcilePendingTargetCreates(
+        stateDir,
+        leaseId,
+        lease.rawEndpoint,
+        cdpClientOptions,
       );
-    }
-    const current = await readLease(stateDir, leaseId);
-    const {
-      closedTargetIds,
-      failedTargetIds,
-      failureDiagnostics,
-    } = await closeOwnedTargets(
-      lease.rawEndpoint,
-      current.targetIds,
-      cdpClientOptions,
-    );
-    const result = await recordTargetClosures(
-      stateDir,
-      leaseId,
-      closedTargetIds,
-      failedTargetIds,
-      failureDiagnostics,
-      { retainReleasing: true },
-    );
-    if (!result.released) {
-      throw new BrokerError(
-        'PARTIAL_RELEASE',
-        `Lease release incomplete: ${leaseId}`,
-        {
-          leaseId,
-          failedTargetIds: result.failedTargetIds,
-          targetFailures: failureDiagnostics,
-        },
+      if (pendingCreateFailures.length > 0) {
+        throw new BrokerError(
+          'PARTIAL_RELEASE',
+          `Lease release has indeterminate target creation: ${leaseId}`,
+          { leaseId, pendingTargetCreates: pendingCreateFailures },
+        );
+      }
+      const current = await readLease(stateDir, leaseId);
+      const {
+        closedTargetIds,
+        failedTargetIds,
+        failureDiagnostics,
+      } = await closeOwnedTargets(
+        lease.rawEndpoint,
+        current.targetIds,
+        cdpClientOptions,
       );
-    }
-    return result;
-  });
+      const result = await recordTargetClosures(
+        stateDir,
+        leaseId,
+        closedTargetIds,
+        failedTargetIds,
+        failureDiagnostics,
+        { retainReleasing: true },
+      );
+      if (!result.released) {
+        throw new BrokerError(
+          'PARTIAL_RELEASE',
+          `Lease release incomplete: ${leaseId}`,
+          {
+            leaseId,
+            failedTargetIds: result.failedTargetIds,
+            targetFailures: failureDiagnostics,
+          },
+        );
+      }
+      return result;
+    }),
+    { name: contextLockName(declaration.id) },
+  );
 }
 
 export async function cleanupStaleLease({
@@ -767,7 +815,9 @@ export async function cleanupStaleLease({
   providerInvoker,
   cdpClientOptions,
 }) {
-  return withLeaseOperation(stateDir, leaseId, async () => {
+  return withBrokerLock(
+    stateDir,
+    () => withLeaseOperation(stateDir, leaseId, async () => {
     await mutateLease(stateDir, leaseId, (record) => {
       if (record.releasing) {
         throw new BrokerError('LEASE_RELEASING', `Lease is being released: ${leaseId}`);
@@ -844,5 +894,7 @@ export async function cleanupStaleLease({
       });
       throw error;
     }
-  });
+    }),
+    { name: contextLockName(declaration.id) },
+  );
 }

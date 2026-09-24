@@ -439,7 +439,7 @@ test('release fails disconnected when fresh attestation observes another process
   assert.ok(fake.targets.has(lease.targetIds[0]));
 });
 
-test('cleanup rejects when a heartbeat renews a lease after stale observation', async (t) => {
+test('heartbeat refuses to renew an expired lease so cleanup remains authoritative', async (t) => {
   const fake = await startFakeCdpServer();
   t.after(() => fake.close());
   const directory = await stateDir();
@@ -454,24 +454,21 @@ test('cleanup rejects when a heartbeat renews a lease after stale observation', 
   registry.leases[lease.id].expiresAt = new Date(0).toISOString();
   await writeRegistry(directory, registry);
 
-  const observedByCleanupCli = (await readRegistry(directory)).leases[lease.id];
-  assert.ok(Date.parse(observedByCleanupCli.expiresAt) <= Date.now());
-  await heartbeatLease(directory, lease.id);
-
   await assert.rejects(
-    cleanupStaleLease({
-      stateDir: directory,
-      leaseId: lease.id,
-      declaration,
-      providerInvoker: attestingProvider,
-    }),
-    (error) => error.code === 'LEASE_NOT_STALE',
+    heartbeatLease(directory, lease.id),
+    (error) => error.code === 'LEASE_EXPIRED',
   );
 
-  const current = (await readRegistry(directory)).leases[lease.id];
-  assert.ok(current);
-  assert.ok(Date.parse(current.expiresAt) > Date.now());
-  assert.ok(fake.targets.has(lease.targetIds[0]));
+  const result = await cleanupStaleLease({
+    stateDir: directory,
+    leaseId: lease.id,
+    declaration,
+    providerInvoker: attestingProvider,
+  });
+
+  assert.equal(result.released, true);
+  assert.equal((await readRegistry(directory)).leases[lease.id], undefined);
+  assert.equal(fake.targets.has(lease.targetIds[0]), false);
 });
 
 test('heartbeat serializes with and refuses a releasing lease', async (t) => {

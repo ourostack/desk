@@ -41,7 +41,7 @@ Aliases are convenience only. The broker expands them to claims and applies the 
 
 The installed launcher performs this sequence:
 
-1. Run `"$BROWSER_CONTEXT_BROKER_BIN" acquire` with the exact alias or JSON claim request.
+1. Run `"$BROWSER_CONTEXT_BROKER_BIN" acquire` with the exact alias or JSON claim request, a distinct lease owner, and the intended recovery mode.
 2. Start `"$BROWSER_CONTEXT_BROKER_BIN" proxy` for the returned lease and wait for its owner-private readiness file.
 3. Start Playwright MCP with `--cdp-endpoint` set to the lease proxy endpoint from that file.
 4. Run `"$BROWSER_CONTEXT_BROKER_BIN" release` for the exact lease when Playwright MCP exits.
@@ -53,6 +53,8 @@ Example contract:
   --config "$BROWSER_CONTEXT_CONFIG" \
   --state-dir "$BROWSER_CONTEXT_STATE" \
   --alias "$BROWSER_CONTEXT_ALIAS" \
+  --owner "$BROWSER_CONTEXT_LEASE_OWNER" \
+  --recovery-mode full \
   --json
 
 "$BROWSER_CONTEXT_BROKER_BIN" proxy \
@@ -140,15 +142,19 @@ Use broker diagnostics rather than inspecting ports or process-name patterns:
   --json
 ```
 
-`status` reports non-secret context observations, claims, process identities, owners, and leases. `doctor` identifies expired leases and actionable reconciliation problems without exposing raw endpoints, provider environment, credentials, cookies, or tokens.
+`status` reports non-secret context observations, loopback context endpoints, claims, process identities, attestation/recovery summaries, owners, and leases. `doctor` identifies expired leases, restart authorization, autonomous-recovery eligibility, blocking lease owners, and actionable reconciliation problems without exposing lease-proxy endpoints, provider environment, credentials, cookies, or tokens.
 
 Recovery is requested-context-only:
 
 - A stale observation is discarded only after fresh provider attestation fails.
 - An absent requested context is provisioned without selecting or modifying another live context.
 - Endpoint collisions allocate another dynamic endpoint.
-- A crashed requested context is repaired on the next acquisition.
+- An unhealthy exact context first receives bounded non-destructive recovery.
+- Destructive restart is allowed only when the declaration authorizes it and no active lease blocks it. Active leases return `CONTEXT_RECOVERY_CONFLICT` with their non-secret owners instead of disrupting them.
+- The provider must freshly prove the exact process generation immediately before any destructive action and re-attest the replacement before acquisition succeeds.
+- A crashed requested context is repaired on the next acquisition when those safety checks pass.
 - An unrelated context is never stopped, relaunched, or substituted.
+- Browser-visible claim mismatch, ambiguous evidence, process-generation change, and human authentication requirements fail closed without restart.
 
 ## Cleanup
 
@@ -175,6 +181,12 @@ Do not terminate browsers by executable name, profile-name pattern, or guessed p
 - **`LAUNCH_ATTESTATION_FAILED`** — the provider launched something that did not prove the declared executable, profile, owner, endpoint correlation, or configured visible claims.
 - **`ENDPOINT_COLLISION`** — dynamic allocation could not find a usable endpoint within the configured attempts.
 - **`UNSUPPORTED_CONTEXT_RECOVERY`** — the provider proved the requested context exists but cannot safely recover that exact process generation. Preserve its provider-supplied reason and generation evidence; do not substitute another browser or collapse it to a generic launch failure.
+- **`CONTEXT_RECOVERY_CONFLICT`** — destructive recovery is blocked by one or more active leases. Preserve the listed lease owners; do not remove their leases or restart the context.
+- **`DESTRUCTIVE_RECOVERY_DISABLED`** — acquisition was explicitly limited to non-destructive recovery, or the declaration does not authorize restart.
+- **`RECOVERY_PROCESS_CHANGED`** — exact process identity changed during recovery. Nothing may be signaled until a later fresh acquisition proves a stable generation.
+- **`RECOVERY_TERMINATION_FAILED`** — the provider could not prove the exact declared process tree exited. Do not launch a replacement against the same profile.
+- **`HUMAN_AUTH_REQUIRED`** — authoritative provider evidence proves the requested context has no usable authenticated principal and requires genuine interactive authentication.
+- **`VISIBLE_CLAIM_MISMATCH` / `VISIBLE_ATTESTATION_INDETERMINATE` / `VISIBLE_ATTESTATION_CLEANUP_FAILED`** — browser-visible evidence did not match, could not be interpreted uniquely, or its exact temporary attestation target could not be proven removed. All fail closed without substituting or restarting another context.
 - **`LEASE_NOT_FOUND`** — the lease was released, expired and cleaned, or the wrong state directory was supplied.
 - **`STALE_LEASE` from `doctor`** — run `cleanup` for that exact lease after confirming it is no longer active.
 - **Cleanup reports `OWNER_GENERATION_GONE`** — the provider freshly proved the lease's original process generation absent/disconnected. The lease record was removed, no replacement endpoint was contacted, and its recorded target IDs could not be closed.
