@@ -6,6 +6,7 @@ import { strict as assert } from "node:assert"
 import { chunkBody } from "../../src/indexer/chunk.js"
 
 test("empty / whitespace body yields zero chunks", () => {
+  assert.deepEqual(chunkBody(), [])
   assert.deepEqual(chunkBody(""), [])
   assert.deepEqual(chunkBody("   \n\n  "), [])
 })
@@ -177,4 +178,49 @@ test("valid unclosed fences remain atomic through end of file", () => {
   assert.equal(out.length, 1)
   assert.equal(out[0].heading, "First")
   assert.equal(out[0].text, body)
+})
+
+test("oversized prose consumes trailing whitespace without emitting an empty chunk", () => {
+  const body = `${"x".repeat(800)}   `
+  const out = chunkBody(body)
+
+  assert.equal(out.length, 1)
+  assert.equal(out[0].text, "x".repeat(800))
+})
+
+test("oversized sections ignore repeated leading and trailing blank paragraphs", () => {
+  const body = `\n\n${"word ".repeat(200)}\n\n`
+  const out = chunkBody(body)
+
+  assert.ok(out.length > 1)
+  assert.equal(out[0].text.startsWith("word"), true)
+  assert.equal(out.at(-1).text.endsWith("word"), true)
+})
+
+test("oversized prose handles repeated hard splits and standalone surrogate boundaries", () => {
+  const repeated = chunkBody("x".repeat(1700))
+  assert.deepEqual(repeated.map((chunk) => chunk.text.length), [800, 800, 100])
+
+  const standaloneHighSurrogate = chunkBody(`${"x".repeat(799)}\ud800tail`)
+  assert.equal(standaloneHighSurrogate[0].text.length, 800)
+  assert.equal(standaloneHighSurrogate[0].text.charCodeAt(799), 0xd800)
+
+  const pairedSurrogate = chunkBody(`a${"😀".repeat(500)}`)
+  assert.equal(pairedSurrogate[0].text.length, 799)
+  assert.equal(pairedSurrogate[1].text.startsWith("😀"), true)
+})
+
+test("mismatched and undersized closing fences remain inside the active fence", () => {
+  for (const closing of ["~~~", "``"]) {
+    const body = [
+      "## First",
+      "````text",
+      closing,
+      "## still fenced",
+      "tail",
+    ].join("\n")
+    const out = chunkBody(body)
+    assert.equal(out.length, 1)
+    assert.equal(out[0].heading, "First")
+  }
 })

@@ -65,7 +65,6 @@ export function chunkBody(body) {
 
 function pushChunk(out, text, heading, startOffset) {
   const trimmed = text.trim()
-  if (!trimmed) return
   out.push({
     index: out.length,
     text: trimmed,
@@ -115,13 +114,11 @@ function splitByH2(body) {
     // +1 for the newline that follows every line except possibly the last.
     offset += line.length + 1
   }
-  if (current.lines.length > 0) {
-    sections.push({
-      text: current.lines.join("\n"),
-      heading: current.heading,
-      startOffset: current.startOffset,
-    })
-  }
+  sections.push({
+    text: current.lines.join("\n"),
+    heading: current.heading,
+    startOffset: current.startOffset,
+  })
   return sections
 }
 
@@ -221,7 +218,7 @@ function isClosingFence(line, fence) {
   const match = /^( {0,3})(`{3,}|~{3,})\s*$/u.exec(line)
   if (!match) return false
   const marker = { character: match[2][0], length: match[2].length }
-  if (!marker || marker.character !== fence.character || marker.length < fence.length) return false
+  if (marker.character !== fence.character || marker.length < fence.length) return false
   return true
 }
 

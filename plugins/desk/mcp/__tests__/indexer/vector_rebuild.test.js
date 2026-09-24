@@ -912,6 +912,48 @@ test("ensureIndex probes with default embed options when none are provided", asy
   }
 })
 
+test("resolveEnsureIndexOptions supports omitted arguments", () => {
+  const resolved = resolveEnsureIndexOptions()
+  assert.equal(typeof resolved.tombstones.pluginRoot, "string")
+})
+
+test("ensureIndex tolerates incomplete ignored vector packs while recording known failures", async () => {
+  const deskRoot = await tmpRoot()
+  const pluginRoot = await tmpRoot("desk-plugin-vector-sidecars-")
+  const docPath = "trackA/task-oversize/task.md"
+  await writeFile(deskRoot, docPath, "---\nstatus: processing\n---\nknown failure body")
+  await rebuildIndex(deskRoot, {
+    ...NO_RELEASE_ARTIFACTS,
+    embed: {
+      fetch: async () => ({
+        ok: false,
+        status: 500,
+        json: async () => ({ error: "the input length exceeds the context length" }),
+      }),
+    },
+  })
+  const packDir = path.join(
+    pluginRoot,
+    "artifacts",
+    "vector-packs",
+    ACTIVE_EMBEDDING_SPEC.id,
+  )
+  await fs.mkdir(packDir, { recursive: true })
+  await fs.writeFile(path.join(packDir, "incomplete.jsonl"), "", "utf8")
+
+  const ensured = await ensureIndex(deskRoot, {
+    snapshots: false,
+    skipEmbed: true,
+    vectorPacks: {
+      pluginRoot,
+      ignoreInvalidRoots: true,
+    },
+  })
+
+  assert.equal(ensured.semantic.known_unembeddable_vectors, 1)
+  assert.equal(ensured.vector_packs.import_errors.length, 1)
+})
+
 test("ensureIndex calls embeddings only after vector-pack import leaves missing chunks", async () => {
   const deskRoot = await tmpRoot()
   const pluginRoot = await tmpRoot("desk-plugin-vector-rebuild-")

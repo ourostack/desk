@@ -409,7 +409,7 @@ async function validateAllSnapshots({ pluginRoot, mcpRoot }) {
   }
 }
 
-function snapshotCompatibilityContext({ mcpRoot = DEFAULT_MCP_ROOT, docs = [] } = {}) {
+function snapshotCompatibilityContext({ mcpRoot, docs }) {
   return {
     expectedSqliteVec: {
       package: "sqlite-vec",

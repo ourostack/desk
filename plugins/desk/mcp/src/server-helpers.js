@@ -308,7 +308,7 @@ async function restoreSnapshotWithFallback({
   return firstMiss
 }
 
-function defaultSnapshotCompatibilityContext({ deskRoot, signal } = {}) {
+function defaultSnapshotCompatibilityContext({ deskRoot, signal }) {
   return {
     expectedDbSchema: SNAPSHOT_DB_SCHEMA,
     expectedSqliteVec: {
@@ -437,7 +437,7 @@ async function shouldRepairMissingEmbeddings(db, opts, semantic) {
   }
   if (semantic.repairable_missing_vectors <= 0) return false
   if (opts.skipEmbed) return false
-  const probe = await probeEmbeddingService(opts.embed ?? {})
+  const probe = await probeEmbeddingService(opts.embed)
   semantic.embedding_available = probe.available
   semantic.embedding_diagnostic = probe.diagnostic
   return probe.available
@@ -480,17 +480,13 @@ function assignEmbeddingAvailability(target, source, summary) {
     }
   } else if (source.embedding_available === true) {
     target.embedding_available = true
-    if (source.embedding_diagnostic) {
-      target.embedding_diagnostic = source.embedding_diagnostic
-    }
+    target.embedding_diagnostic = source.embedding_diagnostic
   } else if (source.embedding_available === false) {
     if (summary.chunks_inserted > 0 && target.missing_vectors === 0) {
       target.embedding_available = true
     } else {
       target.embedding_available = false
-      if (source.embedding_diagnostic) {
-        target.embedding_diagnostic = source.embedding_diagnostic
-      }
+      target.embedding_diagnostic = source.embedding_diagnostic
     }
   }
   return target

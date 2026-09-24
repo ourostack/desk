@@ -131,6 +131,25 @@ test("snapshot paths are canonical, plugin-root relative, and spec-scoped", asyn
   )
 })
 
+test("snapshot public APIs apply defaults before rejecting missing required inputs", async () => {
+  const {
+    deriveSnapshotPaths,
+    validateSnapshotArtifact,
+    validateSnapshotManifest,
+    writeSnapshotArtifact,
+  } = await loadManifestModule()
+  const pluginRoot = await tmpPluginRoot()
+
+  assert.equal(
+    deriveSnapshotPaths({ pluginRoot, snapshotId: "default-spec" }).snapshotDir.includes(ACTIVE_EMBEDDING_SPEC.id),
+    true,
+  )
+  assert.throws(() => deriveSnapshotPaths(), /pluginRoot|snapshot_id/u)
+  await assert.rejects(() => writeSnapshotArtifact(), /pluginRoot|snapshot_id|deskRoot/u)
+  await assert.rejects(() => validateSnapshotArtifact(), /snapshot path is required/u)
+  assert.throws(() => validateSnapshotManifest(), /manifest must be an object/u)
+})
+
 test("valid snapshot artifacts require manifest fields and checksum sidecars", async () => {
   const { validateSnapshotArtifact } = await loadManifestModule()
   const pluginRoot = await tmpPluginRoot()

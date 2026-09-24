@@ -21,11 +21,19 @@ import { fileURLToPath } from "node:url"
 import { main as startMcpServer } from "../../index.js"
 import {
   __artifactScriptInternalsForTests,
+  buildSnapshotFromLocalDb,
+  buildVectorPackFromLocalDb,
   runArtifactValidateCli,
   runSnapshotBuildCli,
   runSnapshotVerifyCli,
   runVectorPackBuildCli,
+  validateArtifacts,
+  verifySnapshotArtifact,
 } from "../../src/artifacts/artifact-scripts.js"
+import {
+  assertCanonicalArtifactSourcePaths,
+  artifactSourceScopeHash,
+} from "../../src/artifacts/source-scope.js"
 import {
   __performanceBudgetInternalsForTests,
   assertBudgetAllowsStart,
@@ -114,6 +122,19 @@ test("artifact source scope includes chunk boundaries and active embedding ident
   } finally {
     rmSync(fixtureRoot, { recursive: true, force: true })
   }
+})
+
+test("artifact maintenance APIs preserve their documented defaults", async () => {
+  assert.match(artifactSourceScopeHash(mcpRoot), /^sha256:[a-f0-9]{64}$/u)
+  assert.throws(
+    () => assertCanonicalArtifactSourcePaths([]),
+    /artifact manifest source_paths must match the canonical source scope/u,
+  )
+  await assert.rejects(() => buildVectorPackFromLocalDb(), /deskRoot/u)
+  await assert.rejects(() => buildSnapshotFromLocalDb(), /deskRoot/u)
+  assert.equal((await verifySnapshotArtifact()).ok, true)
+  assert.equal((await validateArtifacts()).ok, true)
+  assert.equal(await runArtifactValidateCli(), 1)
 })
 
 function loadJson(file) {

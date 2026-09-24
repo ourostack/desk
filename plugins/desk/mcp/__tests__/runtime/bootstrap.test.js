@@ -14,6 +14,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import { homedir, tmpdir } from "node:os"
+import { spawnSync } from "node:child_process"
 import { gzipSync } from "node:zlib"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -948,6 +949,68 @@ test("source mirror admission rejects symlinked ancestors and undeclared files",
       if (!["EPERM", "EACCES", "ENOTSUP"].includes(error?.code)) throw error
       t.diagnostic(`symlink ancestor case unavailable: ${error.code}`)
     }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("source mirror admission rejects incomplete inventories and special files", async (t) => {
+  const {
+    hashCurrentSource,
+    resolveAdmittedSourceMirror,
+    syncSourceMirror,
+  } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  const runtimeCacheDir = path.join(fixture.root, "runtime-cache")
+  try {
+    const sourceHash = hashCurrentSource(fixture.mcpRoot)
+    const sourceIdentity = `sha256:${sourceHash}`
+    const mirrorPath = syncSourceMirror({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir,
+      sourceIdentity,
+    })
+    const markerPath = path.join(mirrorPath, ".complete.json")
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"))
+
+    for (const sourceFiles of [[], [""], [...marker.source_files].reverse()]) {
+      writeJson(markerPath, { ...marker, source_files: sourceFiles })
+      assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    }
+
+    writeJson(markerPath, marker)
+    mkdirSync(path.join(mirrorPath, "undeclared-empty"))
+    assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+    rmSync(path.join(mirrorPath, "undeclared-empty"), { recursive: true, force: true })
+
+    const fifoPath = path.join(mirrorPath, "undeclared-fifo")
+    const fifo = spawnSync("mkfifo", [fifoPath])
+    if (fifo.status === 0) {
+      assert.equal(resolveAdmittedSourceMirror({ runtimeCacheDir, sourceIdentity }), null)
+      rmSync(fifoPath, { force: true })
+    } else {
+      t.diagnostic("mkfifo unavailable; special-file assertion skipped")
+    }
+
+    assert.equal(resolveAdmittedSourceMirror(), null)
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("source mirroring supports fixtures without optional package and config roots", async () => {
+  const { syncSourceMirror } = await loadBootstrap()
+  const fixture = makeMcpFixture()
+  try {
+    for (const entry of ["package-lock.json", "config", "scripts"]) {
+      rmSync(path.join(fixture.mcpRoot, entry), { recursive: true, force: true })
+    }
+    const mirrorPath = syncSourceMirror({
+      mcpRoot: fixture.mcpRoot,
+      runtimeCacheDir: path.join(fixture.root, "runtime-cache"),
+    })
+    assert.equal(existsSync(path.join(mirrorPath, "index.js")), true)
+    assert.equal(existsSync(path.join(mirrorPath, "config")), false)
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
