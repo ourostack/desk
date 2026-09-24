@@ -65,6 +65,7 @@ export function chunkBody(body) {
 
 function pushChunk(out, text, heading, startOffset) {
   const trimmed = text.trim()
+  if (!trimmed) return
   out.push({
     index: out.length,
     text: trimmed,
