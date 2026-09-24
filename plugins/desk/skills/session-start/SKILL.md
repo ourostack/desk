@@ -49,7 +49,7 @@ on a machine with no pending migrations (the common case) this step is a few che
 
 ## Step 0.75 — Desk MCP availability checkpoint
 
-**no desk yet comes first.** if the startup hook said no desk is bound yet, or `desk_status` reports `mode: setup` (`status: setup_required`), this is a first run, not an outage: go straight to `desk:first-run-bootstrap` Entrance A and skip the rest of this step and Steps 1–2. do not present the fix/continue decision below — a missing desk is fixed by finding or creating the desk, and Desk keeps running in setup mode until then.
+**no desk yet comes first.** if the startup hook said no desk is bound yet, or `desk_status` reports `mode: setup` (`status: setup_required`), this is a first run, not an outage: go straight to the onboarding path `desk_status` names in `onboarding_skill` — `desk:first-run-bootstrap` Entrance A by default, or an overlay's own path such as `crew:join-crew` — and skip the rest of this step and Steps 1–2. do not present the fix/continue decision below — a missing desk is fixed by finding or creating the desk, and Desk keeps running in setup mode until then.
 
 otherwise, before treating session-start as healthy, check whether the active host session exposes the Desk MCP tool surface. this applies to every agent built on `desk:worker`, including downstream overlays like `ms-desk` and area-specific workers. overlays may add their own MCP checks, but they inherit this substrate check rather than re-implementing it.
 

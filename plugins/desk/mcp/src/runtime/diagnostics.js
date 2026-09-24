@@ -106,31 +106,51 @@ export function createRuntimeDiagnostic({
 
 // No desk is bound yet. This is the normal first-run state, so Desk keeps
 // answering desk_status/desk_doctor and points at setup instead of exiting.
-export function createSetupDiagnostic({ pathsTried = [], bindingPath = null } = {}) {
+// Overlays that own onboarding (a crew workspace, for example) name their own
+// skill; they also own the binding, so only the default path names the file.
+export const DEFAULT_ONBOARDING_SKILL = "desk:first-run-bootstrap"
+
+export function createSetupDiagnostic({
+  pathsTried = [],
+  bindingPath = null,
+  onboardingSkill = DEFAULT_ONBOARDING_SKILL,
+  reasonDetail = null,
+} = {}) {
+  const overlay = onboardingSkill !== DEFAULT_ONBOARDING_SKILL
   const bindStep = bindingPath === null
     ? "Bind the chosen desk by exporting DESK=<path> for the host, or by writing an activation config with {\"schema_version\":1,\"desk\":{\"root\":\"<path>\"}}."
     : `Bind the chosen desk by writing {"schema_version":1,"desk":{"root":"<absolute path>"}} to ${bindingPath}. The binding survives plugin updates.`
+  const remediation = overlay
+    ? [{
+        action: "run_onboarding",
+        message: `Run ${onboardingSkill} now: the active overlay owns onboarding and binding for this workspace. Do not offer to continue without Desk.`,
+      }]
+    : [
+        {
+          action: "run_first_run_bootstrap",
+          message: "Run desk:first-run-bootstrap now. It looks for an existing local desk, then for the operator's desk repository on GitHub, and otherwise offers to create a fresh desk. Do not offer to continue without Desk.",
+        },
+        { action: "bind_desk", message: bindStep },
+      ]
+  remediation.push({
+    action: "restart_session",
+    message: overlay
+      ? "Start a new session once onboarding completes so Desk loads the workspace."
+      : "Start a new session so Desk loads the bound desk. Opening the desk folder itself as the project also binds it.",
+  })
   return {
     status: "setup_required",
     mode: "setup",
     reason: "no_desk_root",
-    summary: "No desk is bound yet. Desk is running in setup mode: find or create the desk, bind it, then start a new session.",
+    summary: `No desk is bound yet. Desk is running in setup mode: run ${onboardingSkill}, then start a new session.`,
+    onboarding_skill: onboardingSkill,
+    reason_detail: reasonDetail ?? null,
     paths_tried: pathsTried,
     binding_path: bindingPath,
     lexical: {
       generation: null, event_cursor: null, pending_changes: null,
       certain: false, current_automatic_action: null, serving_path: "blocked",
     },
-    remediation: [
-      {
-        action: "run_first_run_bootstrap",
-        message: "Run desk:first-run-bootstrap now. It looks for an existing local desk, then for the operator's desk repository on GitHub, and otherwise offers to create a fresh desk. Do not offer to continue without Desk.",
-      },
-      { action: "bind_desk", message: bindStep },
-      {
-        action: "restart_session",
-        message: "Start a new session so Desk loads the bound desk. Opening the desk folder itself as the project also binds it.",
-      },
-    ],
+    remediation,
   }
 }

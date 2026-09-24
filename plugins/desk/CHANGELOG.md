@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.9 — 2026-09-24
+
+Overlays get the same friction-free first run. Ships `desk-mcp@1.4.0-alpha.6` source with the change below; the MCP version and runtime packs are unchanged.
+
+- **Overlay onboarding.** An overlay that owns its workspace root launches the Desk MCP with `--onboarding <skill>` (and optionally `--onboarding-reason`) when it cannot resolve one. Desk starts in setup mode on that path, skipping home fallbacks that belong to other desks, and `desk_status` reports `onboarding_skill` and `reason_detail`. The startup hooks, `session-start`, `first-run-bootstrap` and the worker guards route to the named path, such as `crew:join-crew`, instead of solo bootstrap.
+- **Dependencies track channels.** `git-hygiene` states that plugin dependency declarations track their release channel branch (such as `@v2-alpha`) from the canonical repository, never an exact commit or a fork, and `scripts/check-dependency-channels.cjs` enforces it in CI.
+- **Setup handles Node.** `SETUP.md` has the agent install a supported Node or switch the default itself, involving the operator only for something only they can do.
+
 ## 3.2.0-alpha.8 — 2026-09-24
 
 Setup no longer ends at "Desk MCP is unavailable". Ships `desk-mcp@1.4.0-alpha.6` source with the changes below; the MCP version and its runtime dependency packs are unchanged because the packs carry only third-party dependencies.

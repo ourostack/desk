@@ -457,7 +457,8 @@ test("Claude SessionStart with no desk routes to bootstrap instead of offering t
     assert.equal(result.status, 0, result.stderr)
     const startup = JSON.parse(result.stdout).hookSpecificOutput.additionalContext
     assert.match(startup, /no desk is bound yet/u)
-    assert.match(startup, /desk:first-run-bootstrap now/u)
+    assert.match(startup, /Run the onboarding path desk_status names now — desk:first-run-bootstrap by default/u)
+    assert.match(startup, /crew:join-crew/u)
     assert.match(startup, /Do not offer to continue without Desk/u)
   } finally {
     rmSync(scratch, { recursive: true, force: true })

@@ -59,6 +59,10 @@ Setup is agent-driven: give Claude Code the link to [`SETUP.md`](../../SETUP.md)
 
 Desk ships `desk:worker` as the default agent for new sessions (`settings.json`); an explicit `--agent` still wins. Desk binds the desk in this order: an explicit root, then the project folder when it is itself a desk, then the saved binding at `$CLAUDE_PLUGIN_DATA/desk.activation.json`, then `$DESK` and the home fallbacks. With no desk bound, the Desk MCP stays up in setup mode and routes to `first-run-bootstrap` instead of being unavailable. A plugin loaded with `--plugin-dir` takes precedence over the installed copy for that session, so overlay launchers do not load Desk twice. Background and Agent View inheritance remain unqualified.
 
+### Overlays that own their workspace
+
+An overlay that resolves its own root (a crew launcher that maps the operator's identity to a shared workspace, for example) launches the Desk MCP with `--root <workspace>` when it can, and with `--onboarding <skill>` when it cannot, optionally adding `--onboarding-reason "<what is missing>"`. Desk then starts in setup mode on that path instead of exiting or guessing a home fallback that belongs to a different desk; `desk_status` reports the skill and the reason, and the startup hook and `session-start` route to it. Failing closed leaves the operator with an unavailable Desk MCP, so launchers should prefer `--onboarding`.
+
 ### Under Codex
 
 The plugin ships Codex manifests for Desk and its Superpowers and Plain Language closure. Explicit alpha activation materializes only the owned config/instruction region for the selected mode.

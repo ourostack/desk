@@ -13,7 +13,7 @@ Choose exactly one entrance from current workspace evidence. Entrance A owns fre
 
 ### Entrance A — new to Desk
 
-Use this entrance when no desk is bound: the startup hook says so, or `desk_status` reports setup mode. Desk stays running in setup mode throughout; never end onboarding by leaving Desk unavailable. Look first, then ask once with what you found.
+Use this entrance when no desk is bound: the startup hook says so, or `desk_status` reports setup mode. If `desk_status` names a different `onboarding_skill` — an overlay that owns its workspace, such as a crew's `crew:join-crew` — follow that path instead; it owns discovery and binding for that workspace. Desk stays running in setup mode throughout; never end onboarding by leaving Desk unavailable. Look first, then ask once with what you found.
 
 #### A1. Look for a desk that already exists, locally
 

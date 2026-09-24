@@ -48,6 +48,10 @@ export function parseArgs(argv) {
       args.root = argv[++i]
     } else if (argv[i] === "--host-session-root" && argv[i + 1]) {
       args.hostSessionRoot = argv[++i]
+    } else if (argv[i] === "--onboarding" && argv[i + 1]) {
+      args.onboarding = argv[++i]
+    } else if (argv[i] === "--onboarding-reason" && argv[i + 1]) {
+      args.onboardingReason = argv[++i]
     } else if (argv[i] === "--person" && argv[i + 1]) {
       args.person = argv[++i]
     } else if (argv[i] === "--activation-config" && argv[i + 1]) {
@@ -201,6 +205,19 @@ export async function main({
     serverVersion,
   })
   const args = parseArgs(argv)
+  // An overlay that owns root resolution (for example a crew launcher that
+  // maps identity to a shared workspace) passes --onboarding when it could not
+  // resolve a root. Desk then goes straight to setup mode on that path rather
+  // than guessing a home fallback that belongs to a different desk.
+  if (hasText(args.onboarding) && !hasText(args.root) && !hasText(args.hostSessionRoot)) {
+    return startRuntimeDiagnostic({
+      diagnostic: createSetupDiagnostic({
+        onboardingSkill: args.onboarding,
+        reasonDetail: args.onboardingReason,
+        bindingPath: claudeBindingPath(env),
+      }),
+    })
+  }
   let rootResolution
   try {
     rootResolution = resolveStartupDeskRoot({ args, env, homeDir })
