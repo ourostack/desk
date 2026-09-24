@@ -6,7 +6,7 @@
   "encoding": "float32-json",
   "row_count": 2,
   "rows_sha256": "edf5dd39ec4a23020fe05769dd0e4e65b45c2143d1c02365793681ac2ba5bad8",
-  "artifact_source_scope_hash": "sha256:939dfa59685ff7c8291003a9115b430d2a8540922a7ef3aa28fcb349715c6c09",
+  "artifact_source_scope_hash": "sha256:90cd2643871a4235f5a595a362f5b15f9dd64646dca5f7d399a4b33749e0f832",
   "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
   "represented_documents": [
     {
@@ -14,11 +14,11 @@
       "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
     }
   ],
-  "created_at": "2026-09-24T00:32:12.374Z",
+  "created_at": "2026-09-24T00:54:54.614Z",
   "provenance": {
     "builder": "plugins/desk/mcp/scripts/build-vector-pack.js",
     "source": "local-db",
-    "commit": "7d661fb07c3e25f42eb0ece49868c0618c5ecee4"
+    "commit": "2ac7147e9f83e99bc59820a614ce9d17db3b104b"
   },
   "source_paths": [
     "plugins/desk/mcp/config/artifact-source-scope.json",
