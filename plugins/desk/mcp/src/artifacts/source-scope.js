@@ -1,24 +1,20 @@
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
+
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
+const SOURCE_SCOPE_CONFIG_PATH = path.resolve(
+  MODULE_DIR,
+  "..",
+  "..",
+  "config",
+  "artifact-source-scope.json",
+)
+const SOURCE_SCOPE_CONFIG = JSON.parse(readFileSync(SOURCE_SCOPE_CONFIG_PATH, "utf8"))
 
 export const ARTIFACT_SOURCE_SCOPE_PATHS = Object.freeze([
-  "plugins/desk/mcp/src/indexer/chunk.js",
-  "plugins/desk/mcp/src/indexer/index.js",
-  "plugins/desk/mcp/src/indexer/spec.js",
-  "plugins/desk/mcp/src/indexer/vector-packs.js",
-  "plugins/desk/mcp/src/snapshots/manifest.js",
-  "plugins/desk/mcp/src/snapshots/restore.js",
-  "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
-  "plugins/desk/mcp/src/artifacts/policy.js",
-  "plugins/desk/mcp/src/artifacts/source-scope.js",
-  "plugins/desk/mcp/scripts/build-vector-pack.js",
-  "plugins/desk/mcp/scripts/build-snapshot.js",
-  "plugins/desk/mcp/scripts/verify-snapshot.js",
-  "plugins/desk/mcp/scripts/validate-artifacts.js",
-  "plugins/desk/mcp/src/db/schema.sql",
-  "plugins/desk/mcp/package.json",
-  "plugins/desk/mcp/package-lock.json",
+  ...SOURCE_SCOPE_CONFIG.source_paths,
 ])
 
 export function artifactSourceScopeHash(

@@ -25,21 +25,9 @@ const defaultProductionNotesPath = path.join(
 const productionCurrentSourceHashField = "current_artifact_source_scope_hash";
 const productionCurrentDocumentHashField = "current_document_tree_hash";
 const productionArtifactTypes = Object.freeze(["vector-pack", "snapshot"]);
-const snapshotSourceScopePaths = Object.freeze([
-  "plugins/desk/mcp/src/indexer/index.js",
-  "plugins/desk/mcp/src/indexer/vector-packs.js",
-  "plugins/desk/mcp/src/snapshots/manifest.js",
-  "plugins/desk/mcp/src/snapshots/restore.js",
-  "plugins/desk/mcp/src/artifacts/artifact-scripts.js",
-  "plugins/desk/mcp/src/artifacts/policy.js",
-  "plugins/desk/mcp/scripts/build-vector-pack.js",
-  "plugins/desk/mcp/scripts/build-snapshot.js",
-  "plugins/desk/mcp/scripts/verify-snapshot.js",
-  "plugins/desk/mcp/scripts/validate-artifacts.js",
-  "plugins/desk/mcp/src/db/schema.sql",
-  "plugins/desk/mcp/package.json",
-  "plugins/desk/mcp/package-lock.json",
-]);
+const snapshotSourceScopePaths = Object.freeze(readJson(
+  path.join(defaultMcpRoot, "config", "artifact-source-scope.json"),
+).source_paths);
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
