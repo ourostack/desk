@@ -53,6 +53,9 @@ test("blank preamble before the first H2 does not emit an empty chunk", () => {
   assert.equal(out.length, 1)
   assert.equal(out[0].heading, "Execution Flow")
   assert.equal(out[0].text, "## Execution Flow\nCreate the meeting.")
+  assert.equal(out[0].start_offset, 1)
+  assert.equal(out[0].end_offset, body.length)
+  assert.equal(body.slice(out[0].start_offset, out[0].end_offset), out[0].text)
 })
 
 test("oversized section splits on paragraph boundary", () => {
