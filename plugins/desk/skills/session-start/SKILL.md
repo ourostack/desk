@@ -49,7 +49,9 @@ on a machine with no pending migrations (the common case) this step is a few che
 
 ## Step 0.75 — Desk MCP availability checkpoint
 
-before treating session-start as healthy, check whether the active host session exposes the Desk MCP tool surface. this applies to every agent built on `desk:worker`, including downstream overlays like `ms-desk` and area-specific workers. overlays may add their own MCP checks, but they inherit this substrate check rather than re-implementing it.
+**no desk yet comes first.** if the startup hook said no desk is bound yet, or `desk_status` reports `mode: setup` (`status: setup_required`), this is a first run, not an outage: go straight to `desk:first-run-bootstrap` Entrance A and skip the rest of this step and Steps 1–2. do not present the fix/continue decision below — a missing desk is fixed by finding or creating the desk, and Desk keeps running in setup mode until then.
+
+otherwise, before treating session-start as healthy, check whether the active host session exposes the Desk MCP tool surface. this applies to every agent built on `desk:worker`, including downstream overlays like `ms-desk` and area-specific workers. overlays may add their own MCP checks, but they inherit this substrate check rather than re-implementing it.
 
 the minimum sentinel is `desk_status`. if the host exposes an active tool list, look for `desk_status` or the Desk MCP namespace. if the host does not expose a tool-list API, infer from the callable tools available in the current session. this is an active-session check: repo source and plugin cache can both be current while this running agent still lacks the MCP because the host has not reloaded or the MCP failed to launch.
 
@@ -61,7 +63,8 @@ when `desk_status` is callable:
 when `desk_status` or the Desk MCP namespace is absent:
 - do **not** silently continue in local-only mode.
 - explain the impact in plain language: Desk MCP is the structured access path for task/track CRUD, durable status, friction/lesson writes, search/recall/timeline/thread queries, reindexing, snapshots, and vector-pack health. without it, a desk-based agent can still use shell/file/git tools, but durable task lifecycle updates, historical recall, cross-session resumption, and shared-worker continuity are weaker and easier to fork.
-- present exactly one decision group:
+- repair first, without asking: an unavailable Desk MCP reads as broken, so leaving it off is the last resort. check that the Desk plugin is enabled and loaded for this host, run `desk_doctor` if any Desk tool responds, and apply the host repair path — `codex-onboarding` under Codex; under Claude Code, `claude plugin list` to confirm `desk@<marketplace>` is installed and enabled, `claude plugin install desk@<marketplace>` or enable it if not, then `/reload-plugins` or a fresh session because MCP servers load at session start.
+- only when repair needs something the operator must do (a restart, a reinstall they have not authorized) present exactly one decision group:
 
 ```text
 Desk MCP is not available in this session. Want me to fix/reload it now, or continue without Desk MCP and stop reminding you?
@@ -70,7 +73,7 @@ Desk MCP is not available in this session. Want me to fix/reload it now, or cont
 - Continue without reminders: I will mute generic Desk MCP absence reminders. I will still mention the limitation if you ask for something that specifically needs MCP-backed desk search, task CRUD, reindexing, or durable friction/lesson writes.
 ```
 
-if the operator chooses **Fix Desk MCP now**, route to `codex-onboarding` when available. otherwise surface the host repair checklist for plugin enablement, activation-owned MCP bridge, runtime-pack health, and fresh-session reload. if repair requires a restart, stop after explaining the exact restart/reopen step; do not keep working as if the MCP is healthy.
+if the operator chooses **Fix Desk MCP now**, route to `codex-onboarding` under Codex and to the Claude Code steps above under Claude. otherwise surface the host repair checklist for plugin enablement, activation-owned MCP bridge, runtime-pack health, and fresh-session reload. if repair requires a restart, stop after explaining the exact restart/reopen step; do not keep working as if the MCP is healthy.
 
 if the operator chooses **Continue without reminders**, honor the mute for the rest of the session. if they explicitly ask for a durable no-reminder preference, record it in `$DESK/AGENTS.md` as an operator preference so future worker-based agents inherit it across machines. do not silently switch the activation to `manual-only`: explain that durable manual-only mode disables default worker/MCP autostart, while a reminder mute only suppresses the generic warning.
 
@@ -134,7 +137,7 @@ look in the output for `The github.com token in oauth_token is no longer valid` 
 
 ## Step 2 — Workspace sync
 
-if `$DESK/` doesn't exist → hand off to `first-run-bootstrap` Entrance A (it has its own gh-auth hard-gate; never proceed to bootstrap if step 1 is still red).
+if no desk is bound (`$DESK/` doesn't exist, or `desk_status` reports setup mode) → hand off to `first-run-bootstrap` Entrance A. Its local discovery needs no network; it gates only remote discovery and remote creation on `gh auth status`.
 
 ### Existing-workspace V1 upgrade branch
 
