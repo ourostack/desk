@@ -3,7 +3,8 @@
 // Strategy (per Unit 4 spec):
 //   1. Split on H2 boundaries (`## `).
 //   2. If a chunk is >800 chars, split further on paragraph boundaries
-//      (blank-line separators). Code fences are never split.
+//      (blank-line separators), then split oversized prose paragraphs on
+//      whitespace. Code fences are never split.
 //   3. Each chunk carries a stable 0-based index and the nearest preceding
 //      heading so search results can show the section the hit came from.
 //
@@ -37,6 +38,7 @@ export function chunkBody(body) {
       continue
     }
     const paragraphs = splitParagraphs(sec.text, sec.startOffset)
+      .flatMap(splitOversizedParagraph)
     let buf = ""
     let bufStart = sec.startOffset
     for (const para of paragraphs) {
@@ -50,9 +52,6 @@ export function chunkBody(body) {
       } else {
         buf += "\n\n" + para.text
       }
-      // If a single paragraph is itself oversized, emit it as one chunk
-      // anyway — splitting mid-paragraph would hurt search quality more
-      // than oversized chunks hurt embedding cost.
       if (buf.length >= MAX_CHUNK_CHARS) {
         pushChunk(out, buf, sec.heading, bufStart)
         buf = ""
@@ -161,6 +160,34 @@ function splitParagraphs(text, baseOffset) {
   }
   if (buf.length > 0) {
     out.push({ text: buf.join("\n"), startOffset: bufStart })
+  }
+  return out
+}
+
+function splitOversizedParagraph(paragraph) {
+  if (paragraph.text.length <= MAX_CHUNK_CHARS || /^```/mu.test(paragraph.text)) {
+    return [paragraph]
+  }
+
+  const out = []
+  let cursor = 0
+  while (cursor < paragraph.text.length) {
+    while (/\s/u.test(paragraph.text[cursor] ?? "")) cursor += 1
+    if (cursor >= paragraph.text.length) break
+
+    let end = Math.min(cursor + MAX_CHUNK_CHARS, paragraph.text.length)
+    if (end < paragraph.text.length) {
+      let boundary = end
+      while (boundary > cursor && !/\s/u.test(paragraph.text[boundary])) boundary -= 1
+      if (boundary > cursor) end = boundary
+    }
+
+    const text = paragraph.text.slice(cursor, end).trimEnd()
+    out.push({
+      text,
+      startOffset: paragraph.startOffset + cursor,
+    })
+    cursor = end
   }
   return out
 }

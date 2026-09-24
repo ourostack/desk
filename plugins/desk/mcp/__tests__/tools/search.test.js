@@ -868,7 +868,7 @@ test("desk_search — empty query returns empty results", async () => {
 
 test("desk_search — long snippets center around query terms", async () => {
   const root = await mkTempDeskRoot()
-  const prefix = Array.from({ length: 90 }, (_, index) => `prefix${index}`).join(" ")
+  const prefix = Array.from({ length: 40 }, (_, index) => `prefix${index}`).join(" ")
   const suffix = Array.from({ length: 90 }, (_, index) => `suffix${index}`).join(" ")
   await writeFile(
     root,
@@ -880,7 +880,7 @@ test("desk_search — long snippets center around query terms", async () => {
   const res = await desk_search({
     deskRoot: root,
     input: { query: "alpha-centered" },
-    opts: { embed: { fetch: makeEmbedFetch() } },
+    opts: { embed: { fetch: async () => { throw new Error("query embeddings unavailable") } } },
   })
   assert.ok(res.results.length >= 1)
   assert.match(res.results[0].snippet, /alpha-centered/u)

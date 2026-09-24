@@ -23,7 +23,7 @@ test("active embedding spec is versioned, path-safe, and tied to chunker identit
   assert.equal(active.model, "nomic-embed-text")
   assert.equal(active.model_revision, "nomic-embed-text-v1.5")
   assert.equal(active.dimension, 768)
-  assert.equal(active.chunker_id, "desk-md-h2-paragraph-v1")
+  assert.equal(active.chunker_id, "desk-md-h2-paragraph-v2")
   assert.equal(active.normalization_id, "unicode-whitespace-v1")
   assert.match(active.id, /nomic-embed-text-v1_5/u)
   assert.doesNotMatch(active.id, /[\\/: \t\r\n]/u)

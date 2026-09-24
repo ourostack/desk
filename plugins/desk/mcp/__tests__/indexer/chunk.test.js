@@ -61,6 +61,18 @@ test("oversized section splits on paragraph boundary", () => {
   }
 })
 
+test("oversized single paragraph splits into embeddable chunks with source offsets", () => {
+  const body = `## Transcript\n${"spoken-word ".repeat(400).trim()}`
+  const out = chunkBody(body)
+
+  assert.ok(out.length > 1, `expected multiple chunks, got ${out.length}`)
+  for (const chunk of out) {
+    assert.ok(chunk.text.length <= 800, `chunk length ${chunk.text.length} exceeds 800`)
+    assert.equal(body.slice(chunk.start_offset, chunk.end_offset).trim(), chunk.text)
+    assert.equal(chunk.heading, "Transcript")
+  }
+})
+
 test("code fence is never split mid-fence", () => {
   // Build a fenced block that itself exceeds the threshold + a heading
   // before it so we know which section the fence lives in.
