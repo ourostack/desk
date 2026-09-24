@@ -875,6 +875,9 @@ function sourceMirrorIsCurrent({ mirrorPath, sourceHash }) {
     return marker.schema_version === 1
       && marker.kind === "source-mirror"
       && marker.source_hash === sourceHash
+      && Array.isArray(marker.source_files)
+      && marker.source_files.length > 0
+      && marker.source_files.every((file) => existsSync(path.join(mirrorPath, file)))
       && existsSync(path.join(mirrorPath, "index.js"))
       && existsSync(path.join(mirrorPath, "package.json"))
       && existsSync(path.join(mirrorPath, "src"))
@@ -908,7 +911,8 @@ export function syncSourceMirror({
   const stagingPath = siblingWorkPath(mirrorPath, "stage")
   try {
     mkdirSync(stagingPath, { recursive: true })
-    for (const entry of ["index.js", "package.json", "package-lock.json", "scripts", "src"]) {
+    for (const entry of ["index.js", "package.json", "package-lock.json", "config", "scripts", "src"]) {
+      if (!existsSync(path.join(mcpRoot, entry))) continue
       cpSync(path.join(mcpRoot, entry), path.join(stagingPath, entry), {
         recursive: true,
         filter: (source) => !source.split(path.sep).includes("node_modules"),
@@ -920,6 +924,7 @@ export function syncSourceMirror({
         schema_version: 1,
         kind: "source-mirror",
         source_hash: sourceHash,
+        source_files: sourceFilesForHash(mcpRoot),
       }, null, 2)}\n`,
       "utf8",
     )
@@ -1008,7 +1013,7 @@ export function hashCurrentSource(mcpRoot) {
 }
 
 export function sourceFilesForHash(mcpRoot) {
-  const roots = ["index.js", "package.json", "package-lock.json", "scripts", "src"]
+  const roots = ["index.js", "package.json", "package-lock.json", "config", "scripts", "src"]
   const files = []
   for (const entry of roots) {
     const absolute = path.join(mcpRoot, entry)

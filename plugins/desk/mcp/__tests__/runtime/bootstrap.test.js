@@ -75,6 +75,9 @@ function makeMcpFixture({ serverMarker = "initial", includePackageLock = true } 
     writeJson(path.join(fixtureMcpRoot, "package-lock.json"), packageLock)
   }
   writeText(path.join(fixtureMcpRoot, "index.js"), "export const entrypoint = true\n")
+  writeJson(path.join(fixtureMcpRoot, "config", "artifact-source-scope.json"), {
+    source_paths: ["plugins/desk/mcp/config/artifact-source-scope.json"],
+  })
   writeServer(fixtureMcpRoot, serverMarker)
   writeText(path.join(fixtureMcpRoot, "scripts", "build-vector-pack.js"), "export const script = true\n")
   writeText(path.join(fixtureMcpRoot, "scripts", "node_modules", "ignored.js"), "ignored\n")
@@ -748,6 +751,7 @@ test("source hashing ignores nested node_modules and mirrors clean up staging di
     const files = sourceFilesForHash(fixture.mcpRoot)
     assert.ok(files.includes("index.js"))
     assert.ok(files.includes("package.json"))
+    assert.ok(files.includes("config/artifact-source-scope.json"))
     assert.ok(files.includes("scripts/build-vector-pack.js"))
     assert.ok(files.includes("src/server.js"))
     assert.ok(files.includes("src/nested/visible.js"))
@@ -768,6 +772,7 @@ test("source hashing ignores nested node_modules and mirrors clean up staging di
     const firstMirror = syncSourceMirror({ mcpRoot: fixture.mcpRoot, runtimeCacheDir })
     const secondMirror = syncSourceMirror({ mcpRoot: fixture.mcpRoot, runtimeCacheDir })
     assert.equal(secondMirror, firstMirror)
+    assert.equal(existsSync(path.join(firstMirror, "config", "artifact-source-scope.json")), true)
     assert.equal(existsSync(path.join(firstMirror, "scripts", "build-vector-pack.js")), true)
     assert.equal(existsSync(path.join(firstMirror, "scripts", "node_modules", "ignored.js")), false)
     assert.equal(
