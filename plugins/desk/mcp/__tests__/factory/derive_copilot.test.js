@@ -1,0 +1,715 @@
+// The Copilot CLI deriver, against synthetic fixtures only. No test reads
+// anything under the real `~/.copilot`: each builds its own Copilot home in
+// a temp folder, copies in the checked-in `events.jsonl` fixtures and builds
+// a synthetic `session-store.db` there with `node:sqlite`.
+
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import * as os from "node:os"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
+import v8 from "node:v8"
+import vm from "node:vm"
+
+import { deriveCopilotSession, __internals__ } from "../../src/factory/derive-copilot.js"
+import { readSessionRefs } from "../../src/factory/copilot-usage.js"
+import { validateFacts, validateFactsBytes } from "../../src/factory/schema.js"
+import {
+  SENTINEL,
+  SESSIONS,
+  FULL_FINAL_METRICS,
+  OTHER_SESSION,
+  at,
+  buildSessionStore,
+  defaultStoreRows,
+  eventWriter,
+  manySubagentsText,
+  usageRow,
+  writeLargeEvents,
+} from "./fixtures/copilot/make.js"
+
+const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "copilot")
+const CONTRIBUTOR = "0f3a9c1d2b4e6f70"
+const PLUGINS = [{ name: "desk", version: "3.2.0-alpha.22" }]
+
+/** A fresh Copilot home holding the named fixture sessions and, unless `store` is null, a synthetic database. */
+function makeHome({ sessions = Object.values(SESSIONS), store = defaultStoreRows(), texts = {} } = {}) {
+  const home = mkdtempSync(path.join(os.tmpdir(), "desk-copilot-home-"))
+  for (const id of sessions) {
+    const dir = path.join(home, "session-state", id)
+    mkdirSync(dir, { recursive: true })
+    cpSync(path.join(FIXTURES, id, "events.jsonl"), path.join(dir, "events.jsonl"))
+    cpSync(path.join(FIXTURES, id, "workspace.yaml"), path.join(dir, "workspace.yaml"))
+  }
+  for (const [id, text] of Object.entries(texts)) {
+    const dir = path.join(home, "session-state", id)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, "events.jsonl"), text)
+  }
+  if (store !== null) buildSessionStore(path.join(home, "session-store.db"), store)
+  return home
+}
+
+function derive(home, sessionId, overrides = {}) {
+  return deriveCopilotSession({
+    sessionId,
+    copilotHome: home,
+    contributor: CONTRIBUTOR,
+    plugins: PLUGINS,
+    endReason: "complete",
+    ...overrides,
+  })
+}
+
+function assertValid(facts) {
+  const result = validateFacts(facts)
+  assert.deepEqual(result.errors, [], "facts must always pass validateFacts")
+  assert.equal(validateFactsBytes(JSON.stringify(facts)).ok, true, "the canonical bytes must pass too")
+}
+
+function intervalsOf(facts, kind) {
+  return facts.intervals.filter((interval) => interval.kind === kind)
+}
+
+function span(start, end) {
+  return { start: at(start), end: at(end) }
+}
+
+// ---------------------------------------------------------------------------
+// Missing and unusable sources.
+// ---------------------------------------------------------------------------
+
+test("a missing events log returns log_missing", async () => {
+  const home = makeHome({ sessions: [], store: null })
+  try {
+    assert.deepEqual(await derive(home, SESSIONS.full), { facts: null, events: null, reason: "log_missing" })
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("an events log with no session.start envelope is source_unreadable, never invented", async () => {
+  const home = makeHome({ sessions: [SESSIONS.noEnvelope], store: null })
+  try {
+    assert.deepEqual(await derive(home, SESSIONS.noEnvelope), { facts: null, events: null, reason: "source_unreadable" })
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// The full session.
+// ---------------------------------------------------------------------------
+
+test("the full session derives one valid session across three resumes and four shutdowns", async () => {
+  const home = makeHome()
+  try {
+    const { facts } = await derive(home, SESSIONS.full)
+    assertValid(facts)
+    assert.deepEqual(facts.session, {
+      host: "copilot-cli",
+      id: SESSIONS.full,
+      host_version: "1.0.88",
+      entrypoint: "cli",
+      started_at: at(0),
+      ended_at: at(99),
+      end_reason: "complete",
+      derived_through: at(99),
+    })
+    assert.equal(facts.schema, "desk.factory.facts/1")
+    assert.equal(facts.contributor, CONTRIBUTOR)
+    assert.deepEqual(facts.jobs, [])
+    assert.deepEqual(intervalsOf(facts, "turn").map(({ start, end }) => ({ start, end })), [span(3, 43), span(61, 74), span(91, 92), span(96, 97)])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("usage comes from the last shutdown when one exists, never added to the database rows", async () => {
+  const home = makeHome()
+  try {
+    const { facts } = await derive(home, SESSIONS.full)
+    const expected = Object.keys(FULL_FINAL_METRICS).sort().map((id) => {
+      const metric = FULL_FINAL_METRICS[id]
+      return {
+        id,
+        requests: metric.requests.count,
+        tokens: {
+          input: metric.usage.inputTokens,
+          output: metric.usage.outputTokens,
+          cache_read: metric.usage.cacheReadTokens,
+          cache_write: metric.usage.cacheWriteTokens,
+          reasoning: metric.usage.reasoningTokens ?? null,
+        },
+      }
+    })
+    assert.deepEqual(facts.models, expected)
+    assert.ok(!JSON.stringify(facts).includes("999999"), "the database row of this session was not added")
+    assert.equal(facts.unavailable.some((entry) => entry.field === "tokens"), false)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("usage comes from the database rows of this session only when there is no shutdown", async () => {
+  const home = makeHome()
+  try {
+    const { facts } = await derive(home, SESSIONS.noShutdown, { endReason: null })
+    assertValid(facts)
+    assert.deepEqual(facts.models, [
+      { id: "claude-opus-5-5", requests: 2, tokens: { input: 300, output: 20, cache_read: 2000, cache_write: 100, reasoning: null } },
+      { id: "gpt-5.2", requests: 1, tokens: { input: 100, output: 10, cache_read: 1000, cache_write: 50, reasoning: 3 } },
+    ])
+    assert.ok(!JSON.stringify(facts).includes("555555"), "another session's rows never leak in")
+    assert.deepEqual(
+      facts.unavailable.filter((entry) => entry.field === "tokens" || entry.field === "models"),
+      [{ field: "models", reason: "source_unreadable" }, { field: "tokens", reason: "source_unreadable" }],
+    )
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("with neither a shutdown nor database rows, tokens are unavailable, not zero", async () => {
+  const home = makeHome({ store: null })
+  try {
+    const { facts } = await derive(home, SESSIONS.noUsage)
+    assertValid(facts)
+    assert.deepEqual(facts.models, [])
+    assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "unknown" }])
+    assert.deepEqual(facts.unavailable, [
+      { field: "tokens", reason: "session_open" },
+      { field: "commits", reason: "log_missing" },
+      { field: "ci_runs", reason: "not_collected_in_slice_1" },
+    ])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("tool outcomes: exit code 1 is an error, a failure is an error, a denial is denied", async () => {
+  const home = makeHome()
+  try {
+    const { facts } = await derive(home, SESSIONS.full)
+    const tools = intervalsOf(facts, "tool").map(({ agent, tool, outcome, start, end }) => ({ agent, tool, outcome, start, end }))
+    assert.deepEqual(tools, [
+      { agent: 0, tool: "shell", outcome: "error", ...span(5, 7) },
+      { agent: 0, tool: "shell", outcome: "ok", ...span(8, 9) },
+      { agent: 0, tool: "edit", outcome: "ok", ...span(10, 11) },
+      { agent: 0, tool: "edit", outcome: "error", ...span(12, 13) },
+      { agent: 0, tool: "edit", outcome: "ok", ...span(14, 15) },
+      { agent: 0, tool: "read", outcome: "denied", ...span(16, 21) },
+      { agent: 0, tool: "shell", outcome: "ok", ...span(22, 24) },
+      { agent: 0, tool: "desk", outcome: "ok", ...span(25, 26) },
+      { agent: 0, tool: "desk", outcome: "error", ...span(27, 27.5) },
+      { agent: 0, tool: "desk", outcome: "ok", ...span(28, 28.5) },
+      { agent: 1, tool: "search", outcome: "ok", ...span(32, 33) },
+      { agent: 2, tool: "read", outcome: "ok", ...span(36, 37) },
+    ])
+    assert.deepEqual(facts.counts, {
+      tool_calls: { shell: 3, edit: 3, read: 2, desk: 3, agent: 2, search: 1 },
+      tool_failures: { shell: 1, edit: 1, read: 1, desk: 1 },
+      tool_retries: 3,
+      api_retries: 3,
+      compactions: 1,
+    })
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("a permission answered by a human is a wait; an unattended fallback is not", async () => {
+  const home = makeHome()
+  try {
+    const { facts } = await derive(home, SESSIONS.full)
+    assert.deepEqual(intervalsOf(facts, "permission_wait"), [{ kind: "permission_wait", agent: 0, ...span(16, 20) }])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("human waits run from a turn end to the next user message, for agent 0 only", async () => {
+  const home = makeHome()
+  try {
+    const { facts } = await derive(home, SESSIONS.full)
+    assert.deepEqual(intervalsOf(facts, "human_wait"), [
+      { kind: "human_wait", agent: 0, ...span(43, 60) },
+      { kind: "human_wait", agent: 0, ...span(74, 90) },
+      { kind: "human_wait", agent: 0, ...span(92, 95) },
+    ])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("subagents get the next agent numbers, their own tools, their model and their parent", async () => {
+  const home = makeHome()
+  try {
+    const { facts } = await derive(home, SESSIONS.full)
+    assert.deepEqual(facts.agents, [
+      { n: 0, parent: null, model: "claude-opus-5-5" },
+      { n: 1, parent: 0, model: "claude-sonnet-5" },
+      { n: 2, parent: 1, model: "gpt-5.2" },
+    ])
+    assert.deepEqual(intervalsOf(facts, "subagent"), [
+      { kind: "subagent", agent: 0, ...span(31, 40) },
+      { kind: "subagent", agent: 1, ...span(35, 38) },
+    ])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("API retries under both event spellings, and compactions", async () => {
+  const home = makeHome()
+  try {
+    const { facts } = await derive(home, SESSIONS.full)
+    assert.deepEqual(intervalsOf(facts, "api_retry"), [
+      { kind: "api_retry", agent: 0, ...span(62, 63) },
+      { kind: "api_retry", agent: 0, ...span(64, 65) },
+      { kind: "api_retry", agent: 0, ...span(66, 67) },
+    ])
+    assert.deepEqual(intervalsOf(facts, "compaction"), [{ kind: "compaction", agent: 0, ...span(69, 72) }])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("plugins merge the marker's list with skill.invoked plugin versions", async () => {
+  const home = makeHome()
+  try {
+    const { facts } = await derive(home, SESSIONS.full)
+    assert.deepEqual(facts.plugins, [
+      { name: "desk", version: "3.2.0-alpha.22" },
+      { name: "superpowers", version: "5.1.0" },
+    ])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("refs come from this session's session_refs rows, validated", async () => {
+  const home = makeHome()
+  try {
+    const { facts, events } = await derive(home, SESSIONS.full)
+    assert.deepEqual(facts.refs, {
+      prs: [
+        { repo: "ourostack/desk", number: 12 },
+        { repo: "ourostack/factory", number: 3 },
+      ],
+      commits: [
+        { sha: "abcdef0000000000000000000000000000000001" },
+        { sha: "fc6ea8a0000000000000000000000000000000aa" },
+      ],
+    })
+    assert.deepEqual(events.commitShas, ["abcdef0000000000000000000000000000000001", "fc6ea8a0000000000000000000000000000000aa"])
+    assert.ok(!JSON.stringify(facts).includes(OTHER_SESSION))
+    assert.ok(!JSON.stringify(facts).includes("ourostack/secret"))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("binding events: Desk task tools with track and slug, and only successful file writes", async () => {
+  const home = makeHome()
+  try {
+    const { events } = await derive(home, SESSIONS.full)
+    assert.deepEqual(events.deskToolCalls, [
+      { at: at(25), name: "desk-task_update", track: "eng", slug: "m3-3", person: null, status: "processing", ok: true },
+      { at: at(27), name: "desk-task_create", track: "eng", slug: "other", person: "ari", status: null, ok: false },
+    ])
+    assert.deepEqual(events.fileWrites, [
+      { at: at(10), path: `/tmp/${SENTINEL}/desk/eng/m3-3/task.md` },
+      { at: at(14), path: `/tmp/${SENTINEL}/desk/eng/m3-3/notes.md` },
+      { at: at(14), path: `/tmp/${SENTINEL}/desk/eng/m3-3/task.md` },
+      { at: at(14), path: `/tmp/${SENTINEL}/desk/eng/m3-3/old.md` },
+    ])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("no content from any fixture field ever reaches the facts", async () => {
+  const home = makeHome()
+  try {
+    for (const [sessionId, endReason] of [[SESSIONS.full, "complete"], [SESSIONS.noShutdown, null], [SESSIONS.noUsage, "user_exit"]]) {
+      const { facts, events } = await derive(home, sessionId, { endReason })
+      assertValid(facts)
+      assert.ok(!JSON.stringify(facts).includes(SENTINEL), `${sessionId}: the sentinel leaked into facts`)
+      if (sessionId === SESSIONS.full) assert.ok(JSON.stringify(events).includes(SENTINEL), "the fixture really planted the sentinel")
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// The open session.
+// ---------------------------------------------------------------------------
+
+test("an open session: open turn, orphan tool, failed subagent, truncated last line", async () => {
+  const home = makeHome()
+  try {
+    const { facts } = await derive(home, SESSIONS.noShutdown, { endReason: null, entrypoint: "launcher" })
+    assertValid(facts)
+    assert.equal(facts.session.entrypoint, "launcher")
+    assert.equal(facts.session.host_version, "1.0.85")
+    assert.equal(facts.session.ended_at, null)
+    assert.equal(facts.session.end_reason, null)
+    assert.equal(facts.session.derived_through, at(22))
+    assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "claude-opus-5-5" }, { n: 1, parent: 0, model: "unknown" }])
+    assert.deepEqual(intervalsOf(facts, "subagent"), [{ kind: "subagent", agent: 0, ...span(6, 8) }])
+    assert.deepEqual(intervalsOf(facts, "turn"), [{ kind: "turn", agent: 0, ...span(2, 11) }])
+    assert.deepEqual(intervalsOf(facts, "human_wait"), [{ kind: "human_wait", agent: 0, ...span(11, 20) }])
+    assert.deepEqual(facts.counts.tool_calls, { shell: 1, agent: 1 })
+    assert.deepEqual(facts.counts.tool_failures, { agent: 1 })
+    assert.deepEqual(facts.unavailable, [
+      { field: "models", reason: "source_unreadable" },
+      { field: "tokens", reason: "source_unreadable" },
+      { field: "ended_at", reason: "session_open" },
+      { field: "turns", reason: "log_truncated" },
+      { field: "tool_durations", reason: "session_open" },
+      { field: "turns", reason: "session_open" },
+      { field: "ci_runs", reason: "not_collected_in_slice_1" },
+    ])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Streaming and memory.
+// ---------------------------------------------------------------------------
+
+test("a 1,000,000-line events log derives in a single pass with bounded memory", { timeout: 600_000 }, async (t) => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "desk-copilot-large-"))
+  try {
+    const sessionId = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+    const dir = path.join(home, "session-state", sessionId)
+    mkdirSync(dir, { recursive: true })
+    const written = writeLargeEvents(path.join(dir, "events.jsonl"), { sessionId, lines: 1_000_000 })
+    assert.ok(written >= 1_000_000)
+
+    // Live heap, not garbage: a full collection runs before every sample, so
+    // the bound measures what the deriver holds rather than when V8 happened
+    // to collect the lines it already let go of.
+    v8.setFlagsFromString("--expose-gc")
+    const gc = vm.runInNewContext("gc")
+    gc()
+    const baseline = process.memoryUsage().heapUsed
+    let peak = baseline
+    const sample = () => {
+      gc()
+      peak = Math.max(peak, process.memoryUsage().heapUsed)
+    }
+    const sampler = setInterval(sample, 100)
+    const started = Date.now()
+    let result
+    try {
+      result = await derive(home, sessionId)
+    } finally {
+      clearInterval(sampler)
+    }
+    sample()
+    const growth = peak - baseline
+    t.diagnostic(`live heap growth ${(growth / 1024 / 1024).toFixed(1)} MiB over ${written} lines in ${Date.now() - started} ms`)
+    assert.ok(growth < 64 * 1024 * 1024, `heap grew ${Math.round(growth / 1024 / 1024)} MiB`)
+
+    const { facts } = result
+    assertValid(facts)
+    assert.equal(facts.intervals.length, 100000, "intervals are capped at the schema limit")
+    assert.ok(facts.unavailable.some((entry) => entry.field === "tool_durations" && entry.reason === "log_truncated"))
+    assert.ok(facts.counts.tool_calls.shell >= 399000, "every call is still counted past the interval cap")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Unexpected shapes. None may throw or produce facts that fail validation.
+// ---------------------------------------------------------------------------
+
+const EDGE = "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e"
+
+function textOf(events) {
+  return `${events.map((event) => (typeof event === "string" ? event : JSON.stringify(event))).join("\n")}\n`
+}
+
+function start(ev, seconds = 0, copilotVersion = "1.0.88") {
+  return ev("session.start", seconds, { sessionId: EDGE, copilotVersion, producer: "copilot-agent", context: { cwd: `/tmp/${SENTINEL}` } })
+}
+
+async function deriveText(events, { store = null, ...overrides } = {}) {
+  const home = makeHome({ sessions: [], store, texts: { [EDGE]: textOf(events) } })
+  try {
+    const result = await derive(home, EDGE, overrides)
+    if (result.facts !== null) {
+      assertValid(result.facts)
+      assert.ok(!JSON.stringify(result.facts).includes(SENTINEL))
+    }
+    return result
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+test("an invalid contributor is a caller bug and throws", async () => {
+  await assert.rejects(() => deriveCopilotSession({ sessionId: EDGE, copilotHome: "/nonexistent", contributor: "Nope", plugins: [], endReason: null }), TypeError)
+  await assert.rejects(() => deriveCopilotSession({ sessionId: EDGE, copilotHome: "/nonexistent", contributor: 7, plugins: [], endReason: null }), TypeError)
+})
+
+test("a session id that is not a UUID is refused before any path is built", async () => {
+  for (const sessionId of ["../../etc", 42, undefined]) {
+    assert.deepEqual(await derive("/nonexistent", sessionId), { facts: null, events: null, reason: "source_unreadable" })
+  }
+})
+
+test("the Copilot home defaults to COPILOT_HOME, then to ~/.copilot", async () => {
+  const home = makeHome({ sessions: [SESSIONS.noUsage], store: null })
+  const saved = { COPILOT_HOME: process.env.COPILOT_HOME, HOME: process.env.HOME }
+  try {
+    process.env.COPILOT_HOME = home
+    assert.equal((await derive(undefined, SESSIONS.noUsage)).facts.session.id, SESSIONS.noUsage)
+    delete process.env.COPILOT_HOME
+    // `os.homedir()` follows HOME, so the default resolves inside a temp folder, never the real one.
+    const fakeHome = mkdtempSync(path.join(os.tmpdir(), "desk-copilot-user-"))
+    process.env.HOME = fakeHome
+    mkdirSync(path.join(fakeHome, ".copilot", "session-state", SESSIONS.noUsage), { recursive: true })
+    cpSync(path.join(FIXTURES, SESSIONS.noUsage, "events.jsonl"), path.join(fakeHome, ".copilot", "session-state", SESSIONS.noUsage, "events.jsonl"))
+    assert.equal((await derive(undefined, SESSIONS.noUsage)).facts.session.id, SESSIONS.noUsage)
+    rmSync(fakeHome, { recursive: true, force: true })
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("an events path that cannot be read as a file is source_unreadable", async () => {
+  const home = makeHome({ sessions: [], store: null })
+  try {
+    mkdirSync(path.join(home, "session-state", EDGE, "events.jsonl"), { recursive: true })
+    assert.deepEqual(await derive(home, EDGE), { facts: null, events: null, reason: "source_unreadable" })
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("envelope edge cases: a bad timestamp, a bad version, a second start", async () => {
+  const ev = eventWriter()
+  const badTime = start(ev, 0)
+  badTime.timestamp = `yesterday ${SENTINEL}`
+  const { facts } = await deriveText([badTime, start(ev, 1, `1.0-${SENTINEL} x`), start(ev, 2, "1.0.90"), start(ev, 3, "1.0.91")])
+  assert.equal(facts.session.host_version, "1.0.90")
+  assert.equal(facts.session.started_at, at(1))
+})
+
+test("odd turn, tool, permission, subagent and compaction shapes are skipped or flagged, never thrown", async () => {
+  const ev = eventWriter()
+  const badStart = ev("assistant.turn_start", 5, { turnId: "bad" })
+  badStart.timestamp = SENTINEL
+  const badEditStart = ev("tool.execution_start", 60, { toolCallId: "e-bad", toolName: "edit", arguments: { path: `/tmp/${SENTINEL}` } })
+  badEditStart.timestamp = null
+  const lines = [
+    start(ev),
+    ev("assistant.turn_start", 1, {}),
+    ev("assistant.turn_end", 2, {}),
+    ev("assistant.turn_end", 3, { turnId: "never-started" }),
+    badStart,
+    ev("assistant.turn_end", 6, { turnId: "bad" }),
+    ev("tool.execution_start", 10, { toolName: "bash" }),
+    ev("tool.execution_complete", 11, { success: true }),
+    ev("tool.execution_complete", 12, { toolCallId: "unknown", success: true }),
+    // Completes before it started: dropped as unreadable, still counted.
+    ev("tool.execution_start", 20, { toolCallId: "backwards", toolName: "view", arguments: { path: SENTINEL } }),
+    ev("tool.execution_complete", 19, { toolCallId: "backwards", success: true }),
+    ev("tool.execution_start", 21, { toolCallId: "orphan-parent", toolName: "view", parentToolCallId: "no-such-subagent" }),
+    ev("tool.execution_complete", 22, { toolCallId: "orphan-parent", success: true }),
+    // File-write shapes that yield no path.
+    ev("tool.execution_start", 30, { toolCallId: "w1", toolName: "create", arguments: { file_text: SENTINEL } }),
+    ev("tool.execution_complete", 31, { toolCallId: "w1", success: true }),
+    ev("tool.execution_start", 32, { toolCallId: "w2", toolName: "edit", arguments: `path ${SENTINEL}` }),
+    ev("tool.execution_complete", 33, { toolCallId: "w2", success: true }),
+    ev("tool.execution_start", 34, { toolCallId: "w3", toolName: "apply_patch", arguments: `*** Begin Patch\n*** Update File: /tmp/${SENTINEL}/raw.md\r\n*** End Patch` }),
+    ev("tool.execution_complete", 35, { toolCallId: "w3", success: true }),
+    ev("tool.execution_start", 36, { toolCallId: "w4", toolName: "apply_patch", arguments: { input: `no headers ${SENTINEL}` } }),
+    ev("tool.execution_complete", 37, { toolCallId: "w4", success: true }),
+    ev("tool.execution_start", 38, { toolCallId: "w5", toolName: "apply_patch", arguments: [SENTINEL] }),
+    ev("tool.execution_complete", 39, { toolCallId: "w5", success: true }),
+    ev("tool.execution_start", 40, { toolCallId: "w6", toolName: "desk-task_update", arguments: `track ${SENTINEL}` }),
+    ev("tool.execution_complete", 41, { toolCallId: "w6", success: true }),
+    ev("tool.execution_start", 42, { toolCallId: "w7", arguments: { track: "eng", slug: "x" } }),
+    ev("tool.execution_complete", 43, { toolCallId: "w7", success: true }),
+    badEditStart,
+    ev("tool.execution_complete", 61, { toolCallId: "e-bad", success: true }),
+    ev("permission.requested", 50, {}),
+    ev("permission.completed", 51, { decisionSource: "human_response" }),
+    ev("permission.completed", 52, { requestId: "never", decisionSource: "human_response" }),
+    ev("subagent.started", 70, {}),
+    ev("subagent.started", 71, { toolCallId: "sa" }),
+    ev("subagent.started", 72, { toolCallId: "sa", model: "gpt-5.2" }),
+    ev("subagent.completed", 73, {}),
+    ev("subagent.completed", 74, { toolCallId: "never" }),
+    ev("subagent.completed", 75, { toolCallId: "sa" }),
+    ev("session.compaction_complete", 80, { success: true, summaryContent: SENTINEL }),
+    ev("session.error", 81, { statusCode: "503", message: SENTINEL }),
+    ev("model.turn_retry", 82, { turnId: "x", reason: SENTINEL }),
+    ev("model.call_failure", 83, { errorMessage: SENTINEL }),
+    ev("model.model_call_failure", 84, { errorMessage: SENTINEL }),
+    ev("model.turn_retry", 85, { turnId: "x" }),
+    ev("skill.invoked", 86, { name: SENTINEL, pluginName: `Bad ${SENTINEL}`, pluginVersion: "1.0.0" }),
+    ev("skill.invoked", 87, { name: SENTINEL, pluginName: "extra", pluginVersion: "1.0.0" }),
+    ev("skill.invoked", 88, { name: SENTINEL, pluginName: "extra", pluginVersion: "1.0.0" }),
+    ev("skill.invoked", 88.5, { name: SENTINEL, pluginName: "extra" }),
+    ev(`custom.${SENTINEL}`, 89, { note: SENTINEL }),
+    { type: "tool.execution_start", timestamp: at(90), data: SENTINEL },
+    { type: "constructor", timestamp: at(91), data: {} },
+    `{"broken ${SENTINEL}`,
+    ev("user.message", 92, { content: SENTINEL }),
+  ]
+  const { facts, events } = await deriveText(lines)
+  assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "unknown" }, { n: 1, parent: 0, model: "unknown" }])
+  assert.deepEqual(intervalsOf(facts, "subagent"), [{ kind: "subagent", agent: 0, ...span(71, 75) }])
+  assert.deepEqual(intervalsOf(facts, "tool").map(({ agent, tool }) => ({ agent, tool })), [
+    { agent: 0, tool: "read" },
+    { agent: 0, tool: "edit" },
+    { agent: 0, tool: "edit" },
+    { agent: 0, tool: "edit" },
+    { agent: 0, tool: "edit" },
+    { agent: 0, tool: "edit" },
+    { agent: 0, tool: "desk" },
+    { agent: 0, tool: "other" },
+  ])
+  assert.equal(intervalsOf(facts, "compaction").length, 0)
+  assert.equal(facts.counts.compactions, 1)
+  assert.equal(facts.counts.api_retries, 2)
+  assert.deepEqual(intervalsOf(facts, "api_retry"), [{ kind: "api_retry", agent: 0, ...span(83, 85) }])
+  assert.equal(intervalsOf(facts, "permission_wait").length, 0)
+  assert.deepEqual(facts.plugins, [...PLUGINS, { name: "extra", version: "1.0.0" }])
+  assert.deepEqual(events.fileWrites, [{ at: at(34), path: `/tmp/${SENTINEL}/raw.md` }])
+  assert.deepEqual(events.deskToolCalls, [])
+  assert.deepEqual(facts.unavailable, [
+    { field: "turns", reason: "source_unreadable" },
+    { field: "tool_durations", reason: "source_unreadable" },
+    { field: "plugins", reason: "source_unreadable" },
+    { field: "tokens", reason: "session_open" },
+    { field: "commits", reason: "log_missing" },
+    { field: "ci_runs", reason: "not_collected_in_slice_1" },
+  ])
+})
+
+test("shutdown metrics of odd shapes: a non-object, a bad model key, missing counts", async () => {
+  const ev = eventWriter()
+  const metrics = {
+    [`bad model ${SENTINEL}`]: { requests: { count: 1 }, usage: {} },
+    "model-a": "not an object",
+    "model-b": { requests: { count: -1 }, usage: { inputTokens: 1.5, outputTokens: 2 } },
+    "model-c": { usage: "nope" },
+  }
+  let { facts } = await deriveText([start(ev), ev("session.shutdown", 1, { modelMetrics: metrics, codeChanges: { filesModified: [SENTINEL] } })])
+  const nullTokens = { input: null, output: null, cache_read: null, cache_write: null, reasoning: null }
+  assert.deepEqual(facts.models, [
+    { id: "model-a", requests: null, tokens: nullTokens },
+    { id: "model-b", requests: null, tokens: { ...nullTokens, output: 2 } },
+    { id: "model-c", requests: null, tokens: nullTokens },
+  ])
+  assert.equal(facts.agents[0].model, "model-a")
+  assert.ok(facts.unavailable.some((entry) => entry.field === "models" && entry.reason === "source_unreadable"))
+
+  ;({ facts } = await deriveText([start(ev), ev("session.shutdown", 1, { modelMetrics: SENTINEL })]))
+  assert.deepEqual(facts.models, [])
+  assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
+})
+
+test("more than 32 models, 64 plugins or 2000 commits are trimmed with log_truncated", async () => {
+  const ev = eventWriter()
+  const metrics = Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`model-${String(index).padStart(2, "0")}`, { requests: { count: index }, usage: {} }]))
+  const plugins = Array.from({ length: 65 }, (_, index) => ({ name: `plugin-${index}`, version: "1.0.0" }))
+  const commits = Array.from({ length: 2001 }, (_, index) => [EDGE, "commit", index.toString(16).padStart(40, "0")])
+  const { facts } = await deriveText([start(ev), ev("session.shutdown", 1, { modelMetrics: metrics })], {
+    plugins,
+    store: { sessions: [EDGE], usage: [], refs: commits },
+  })
+  assert.equal(facts.models.length, 32)
+  assert.equal(facts.plugins.length, 64)
+  assert.equal(facts.refs.commits.length, 2000)
+  for (const field of ["models", "plugins", "commits"]) {
+    assert.ok(facts.unavailable.some((entry) => entry.field === field && entry.reason === "log_truncated"), field)
+  }
+})
+
+test("invalid marker plugins are dropped; a non-array marker list is empty", async () => {
+  const ev = eventWriter()
+  let { facts } = await deriveText([start(ev)], { plugins: [{ name: SENTINEL, version: "1.0.0" }, null, { name: "ok", version: SENTINEL }, { name: "ok", version: "1.0.0" }] })
+  assert.deepEqual(facts.plugins, [{ name: "ok", version: "1.0.0" }])
+  assert.ok(facts.unavailable.some((entry) => entry.field === "plugins" && entry.reason === "source_unreadable"))
+  ;({ facts } = await deriveText([start(ev)], { plugins: SENTINEL }))
+  assert.deepEqual(facts.plugins, [])
+})
+
+test("an unreadable session database flags tokens and commits as source_unreadable", async () => {
+  const home = makeHome({ sessions: [SESSIONS.noShutdown], store: null })
+  try {
+    writeFileSync(path.join(home, "session-store.db"), `not a database ${SENTINEL}\n`)
+    const { facts } = await derive(home, SESSIONS.noShutdown, { endReason: null })
+    assertValid(facts)
+    assert.deepEqual(facts.models, [])
+    assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
+    assert.ok(facts.unavailable.some((entry) => entry.field === "commits" && entry.reason === "source_unreadable"))
+    assert.ok(!facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "session_open"))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("database token sums that would exceed a safe integer become null, not wrong", async () => {
+  const ev = eventWriter()
+  const big = 2 ** 52
+  const { facts } = await deriveText([start(ev)], {
+    store: { sessions: [EDGE], usage: [usageRow(EDGE, "gpt-5.2", { input_tokens: big }), usageRow(EDGE, "gpt-5.2", { input_tokens: big })], refs: [[EDGE, "pr", null], [EDGE, "pr", "ourostack/desk#99999999999999999999"]] },
+  })
+  assert.deepEqual(facts.models, [{ id: "gpt-5.2", requests: 2, tokens: { input: null, output: 20, cache_read: 2000, cache_write: 100, reasoning: null } }])
+  assert.deepEqual(facts.refs.prs, [])
+})
+
+test("the agent cap: past 9999 subagents, later ones are dropped and their tools fall back to agent 0", async () => {
+  const home = makeHome({ sessions: [], store: null, texts: { [EDGE]: manySubagentsText(EDGE, 10000) } })
+  try {
+    const { facts } = await derive(home, EDGE)
+    assertValid(facts)
+    assert.equal(facts.agents.length, 10000)
+    assert.deepEqual(intervalsOf(facts, "tool").map(({ agent }) => agent), [0])
+    assert.ok(facts.unavailable.some((entry) => entry.field === "turns" && entry.reason === "log_truncated"))
+    assert.ok(facts.unavailable.some((entry) => entry.field === "tool_durations" && entry.reason === "log_truncated"))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("the sort comparators order every direction", () => {
+  const { compareByStart, compareModels, comparePrs } = __internals__
+  assert.equal(compareByStart({ start: at(1) }, { start: at(2) }), -1)
+  assert.equal(compareByStart({ start: at(2) }, { start: at(1) }), 1)
+  assert.equal(compareByStart({ start: at(1) }, { start: at(1) }), 0)
+  assert.equal(compareModels({ id: "a" }, { id: "b" }), -1)
+  assert.equal(compareModels({ id: "b" }, { id: "a" }), 1)
+  assert.equal(comparePrs({ repo: "a/x", number: 2 }, { repo: "b/x", number: 1 }), -1)
+  assert.equal(comparePrs({ repo: "b/x", number: 1 }, { repo: "a/x", number: 2 }), 1)
+  assert.equal(comparePrs({ repo: "a/x", number: 1 }, { repo: "a/x", number: 2 }), -1)
+})
+
+test("readSessionRefs reads the ambient COPILOT_HOME when no environment is passed", () => {
+  const home = makeHome({ sessions: [] })
+  const saved = process.env.COPILOT_HOME
+  try {
+    process.env.COPILOT_HOME = home
+    assert.deepEqual(readSessionRefs({ sessionId: OTHER_SESSION }).rows.map((row) => row.ref_type), ["pr", "commit"])
+  } finally {
+    if (saved === undefined) delete process.env.COPILOT_HOME
+    else process.env.COPILOT_HOME = saved
+    rmSync(home, { recursive: true, force: true })
+  }
+})
