@@ -1,201 +1,199 @@
 ---
 name: cdp-headed-browser
-description: Invoke when the agent needs Playwright to drive a web UI behind an interactive auth flow (SSO + device check + FIDO / hardware-key prompts) that a throwaway isolated Chromium can't complete, OR when the operator wants multiple agents to share one auth'd browser, OR when a Playwright MCP session fails because the user-data-dir is unrecognized. Covers the CDP-attach architecture (long-running headed browser + Playwright MCP attaches via `--cdp-endpoint`), the launch ritual, the macOS first-launch trap, focus-preserving background targets, and reusable `connectOverCDP` patterns. Do NOT invoke for browser tasks against sites where a throwaway isolated Chromium suffices, for headless scraping that doesn't need auth, or when the operator's current Playwright MCP is already working — the architecture switch has a relaunch cost and shouldn't be paid speculatively.
+description: Invoke when the agent needs Playwright to drive a web UI behind an interactive authentication flow that a throwaway isolated browser cannot complete, when several agents need one persistent authenticated context without sharing tabs, or when the operator's existing Playwright MCP cannot reuse the required browser state. Covers claims-based context acquisition, lease-isolated CDP proxying, background-safe target creation, exact lease release, and broker status and recovery. Do NOT invoke for browser tasks where an isolated browser works, for unauthenticated scraping, or when the current Playwright MCP is already healthy.
 ---
 
 # cdp-headed-browser
 
 This skill inherits all invariants in `../../principles.md`. Read them first if they are not already in context.
 
-> **overlay users**: consumer overlays for org-managed Macs may ship their own managed-browser skill (covering corporate IdP conditional access, platform SSO, and managed-Edge specifics). This skill stays generic.
+> **Overlay users:** consumer overlays provide browser-specific context declarations, launch behavior, and process attestation. This skill stays generic.
 
-The default Playwright MCP shape (throwaway isolated Chromium per session) breaks against any web surface with strict auth because:
+A persistent headed browser is useful when authentication depends on durable browser state or human interaction. Direct attachment to an arbitrary debugging endpoint is not safe, however: a port proves transport availability, not the intended profile, identity, posture, or ownership.
 
-1. **Device-binding checks fail on fresh profiles** — a fresh `--user-data-dir` is an unrecognized device. SSO can refuse the sign-in before auth even gets to FIDO / hardware key.
-2. **Sessions can't share state** — every isolated launch starts from scratch; even if you somehow auth once, the next agent invocation re-FIDOs.
-3. **Headless mode silently swallows interactive auth prompts** — Windows Hello / hardware-key prompts can't be completed; the script just hangs at "Please wait."
+Use the claims-based `browser-context-broker`. It matches the requested declaration conjunctively, freshly attests the process and endpoint, provisions only the requested context when needed, and exposes a lease proxy that shows only lease-owned targets.
 
-The fix is a different architecture: one **long-running headed browser** outside any agent session, with **Playwright MCP attaching to it via CDP**. Each session opens its own tab; auth state lives in the shared browser profile; multiple agents can drive concurrently without profile-lock conflicts.
+## When to use it
 
-This skill covers how to set that up, the gotchas the agent has actually hit, and the patterns to drive a CDP-attached browser without trampling the operator.
+Use a brokered headed context when:
 
-## When to set this up vs. when to leave it alone
+- The surface requires interactive authentication that cannot complete in a throwaway browser.
+- Several agents need the same persistent authenticated context while keeping their targets isolated.
+- A provider-backed persistent profile is required for the task.
 
-Setting it up costs a relaunch ritual and a one-time browser profile bootstrap. Pay that cost when:
+Keep the default isolated browser when it works. Broker setup has a persistent-context and provider cost that unauthenticated tasks do not need.
 
-- The operator's task needs an authenticated web UI that won't complete in an isolated Chromium.
-- Multiple agents need to drive Playwright concurrently against the same surface.
-- A previous attempt with the default isolated Chromium hit a device-binding / SSO error or got stuck at a hardware-key prompt.
+## Required runtime inputs
 
-Don't pay it for one-off scraping against external sites where the isolated Chromium works fine.
+The consuming overlay supplies:
 
-## The 3-constraint architecture
+- The exact executable path in `BROWSER_CONTEXT_BROKER_BIN`.
+- A user-private broker configuration containing aliases and context declarations.
+- An external provider command implementing discovery, launch, health, and attestation.
+- A user-private state directory.
+- A launcher that requests the intended alias or claim set.
 
-| Constraint | Default isolated MCP | CDP-attach to headed browser |
-|---|---|---|
-| Any number of agents | Each spawns own Chromium. No state shared. | All MCP sessions attach to one browser, each opens its own tab. |
-| Headed for human interaction + oversight | Headless by default; FIDO un-completable. | Browser is a real window; operator can intervene. |
-| Maintain session context (auth) | Fresh profile each session; auth lost. | Profile is persistent in `~/.playwright-agent-browser`. |
+The released Desk package is the canonical plugin-relative source at `browser-context-broker/`. An ordinary Desk install does not place `browser-context-broker` on `PATH`. A host overlay that offers this optional capability owns a runtime installer: it copies or installs that plugin-relative package, installs production dependencies, and supplies the resulting executable path to its launcher as `BROWSER_CONTEXT_BROKER_BIN`.
 
-## Workspace MCP config
+Aliases are convenience only. The broker expands them to claims and applies the same exact, conjunctive comparison. Missing evidence, zero matches, and ambiguous matches fail closed.
 
-Workspace MCP config `[mcps.servers.playwright]` block for CDP-attach:
+## Normal launcher flow
 
-```toml
-[mcps.servers.playwright]
-type = "stdio"
-command = "npx"
-args = [
-  "-y",
-  "@playwright/mcp@latest",
-  "--cdp-endpoint", "http://localhost:9222",
-]
-```
+The installed launcher performs this sequence:
 
-No `--browser`, no `--isolated`, no `--user-data-dir`, no `--headless`. The browser running at `:9222` dictates the rest.
+1. Run `"$BROWSER_CONTEXT_BROKER_BIN" acquire` with the exact alias or JSON claim request, a distinct lease owner, and the intended recovery mode.
+2. Start `"$BROWSER_CONTEXT_BROKER_BIN" proxy` for the returned lease and wait for its owner-private readiness file.
+3. Start Playwright MCP with `--cdp-endpoint` set to the lease proxy endpoint from that file.
+4. Run `"$BROWSER_CONTEXT_BROKER_BIN" release` for the exact lease when Playwright MCP exits.
 
-After editing the workspace MCP config, the operator must relaunch the agent for the MCP to re-read its config.
-
-## Browser launch
-
-Pick a Chromium-derived browser the operator has installed (Chrome, Edge, Chromium, Brave). Launch it with a persistent profile directory and the CDP debugging port:
+Example contract:
 
 ```bash
-nohup "<path-to-browser-binary>" \
-  --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/.playwright-agent-browser" \
-  > /tmp/agent-browser.log 2>&1 &
-disown
+"$BROWSER_CONTEXT_BROKER_BIN" acquire \
+  --config "$BROWSER_CONTEXT_CONFIG" \
+  --state-dir "$BROWSER_CONTEXT_STATE" \
+  --alias "$BROWSER_CONTEXT_ALIAS" \
+  --owner "$BROWSER_CONTEXT_LEASE_OWNER" \
+  --recovery-mode full \
+  --json
+
+"$BROWSER_CONTEXT_BROKER_BIN" proxy \
+  --config "$BROWSER_CONTEXT_CONFIG" \
+  --state-dir "$BROWSER_CONTEXT_STATE" \
+  --lease "$LEASE_ID" \
+  --json-ready "$PROXY_READY_FILE"
+
+npx -y @playwright/mcp@latest --cdp-endpoint "$LEASE_PROXY_ENDPOINT"
+
+"$BROWSER_CONTEXT_BROKER_BIN" release \
+  --config "$BROWSER_CONTEXT_CONFIG" \
+  --state-dir "$BROWSER_CONTEXT_STATE" \
+  --lease "$LEASE_ID" \
+  --json
 ```
 
-Then verify CDP is listening:
+`acquire` returns only non-secret lease and context metadata. The proxy reads its raw endpoint and credential from the owner-private registry, then publishes the authenticated endpoint only through the mode-0600 readiness file. Treat that endpoint as lease-scoped connection material; do not place it in logs, status reports, task records, or shared configuration.
 
-```bash
-curl -s http://localhost:9222/json/version | jq '.Browser'
-```
+## Lease isolation
 
-Expected: a string identifying the browser and version.
+Every acquisition creates a distinct lease and an initial background target. The lease proxy:
 
-(overlay users on an org-managed Mac: consumer overlays may ship the specific managed-Edge binary path, platform SSO behavior, and conditional-access notes.)
+- Filters target discovery and target events to lease-owned targets.
+- Owns targets returned by `Target.createTarget`.
+- Inherits popup descendants whose opener is lease-owned.
+- Rejects attaching to, activating, or closing an unowned target.
+- Rejects commands addressed to an unowned target session.
+- Allows only the browser-level commands required to discover, create, attach to, and close owned targets.
+- Rewrites browser-level `Target.getTargetInfo` barriers to an owned target, so current Playwright can complete its CDP handshake without learning about another lease's target.
+- Rejects browser termination and other browser-global mutation; target-session commands are forwarded only for sessions owned by the lease.
 
-## macOS first-launch trap
+Never search a persistent browser's global page list for a convenient existing tab. Work only through the lease proxy; all pages visible there are owned targets for that lease.
 
-On the very first launch with a new `--user-data-dir`, macOS Chromium-derived browsers tend to prioritize their first-run UX (welcome page, default-browser ask, sync setup) over any URL passed as a positional argument. The URL gets dropped on the floor.
-
-Workaround: launch without a URL, wait for CDP to come up, then create the target with the background-safe CDP pattern below. Do not use the HTTP `/json/new` endpoint: Chromium creates that tab as active and may foreground the browser.
-
-After the profile is established (the first run is over), subsequent launches honor a URL arg normally. The trap only bites once per `--user-data-dir`.
+The persistent profile is the security-principal boundary. Leases separate target visibility, ownership, and cleanup for cooperating callers that intentionally share that profile; they do not make those callers mutually untrusted. A caller that can navigate its owned page can act with the authentication that profile presents to the loaded origin. Different identities, tenants, trust postures, or mutually untrusted callers require separate declarations backed by provider-isolated profiles or browsers.
 
 ## Focus preservation
 
-The shared headed browser is background infrastructure, not a remote-control surface. **Never call `page.bringToFront()`, `Target.activateTarget`, `/json/activate`, or `/json/new` during unattended automation.** The first three explicitly activate a target; `/json/new` looks like a creation endpoint but creates an active tab and may foreground the browser.
+The headed browser is background infrastructure, not a remote-control surface. Never call `page.bringToFront()` or `Target.activateTarget` during unattended automation. The lease proxy rejects those activation commands.
 
-This is invisible under the prior `--isolated` headless mode (no window = nothing to raise) but extremely visible under a CDP-attached headed browser. Operators have called it out by name as a focus-grabbing trap.
-
-Prefer a direct HTTP/API path when the surface exposes one. If a browser tab is required, create it explicitly in the background:
+When a new page is required, create it in the background:
 
 ```js
-const beforePages = new Set(ctx.pages());
 const cdp = await browser.newBrowserCDPSession();
-const { targetId } = await cdp.send('Target.createTarget', { url: '<target-url>', background: true });
-let page;
-for (let i = 0; i < 40 && !page; i++) {
-  await new Promise(resolve => setTimeout(resolve, 50));
-  for (const candidate of ctx.pages().filter(candidate => !beforePages.has(candidate))) {
-    const session = await ctx.newCDPSession(candidate);
-    const { targetInfo } = await session.send('Target.getTargetInfo');
-    await session.detach();
-    if (targetInfo.targetId === targetId) page = candidate;
-  }
-}
-if (!page) throw new Error(`background target ${targetId} did not attach`);
+const { targetId } = await cdp.send("Target.createTarget", {
+  url: targetUrl,
+  background: true,
+});
 ```
 
-Playwright's CDP-synthesized click/fill events don't require the window to be in foreground. Keep the page backgrounded for the entire automation, close it with `page.close()` or `Target.closeTarget`, then detach from the browser.
+The proxy records the returned target for the current lease. Popup targets inherit ownership only when their opener is already owned.
 
-If a specific action genuinely needs the page visible (a Save-As dialog, an OS-level permission prompt — rare), surface that to the operator instead of grabbing focus silently.
+Playwright's synthesized click and fill events do not require foreground activation. If an action genuinely requires an operating-system dialog or visible human interaction, surface that requirement instead of grabbing focus.
 
-## Sending to a real human — read the authoritative outbound layer before you send
+## Direct `connectOverCDP` use
 
-The highest-stakes operation on a CDP-driven UI is pressing Send on a message to a real person. A rich web editor (Teams, OWA, Slack, etc.) keeps an internal **model** separate from the **DOM**: a real paste or a real keystroke commits to the model, but `document.execCommand('insertText')` and similar DOM-injection only rewrite the DOM. Pressing Send transmits the **model**, not the DOM. So a script that injects into the DOM, "verifies" by reading `innerText` (the DOM), and presses Send can transmit content the agent never actually saw — including stale or wrong content it had explicitly rejected.
+When a short Node script must connect directly, use only the lease proxy endpoint produced by `proxy`:
 
-**HARD RULE: never send without reading the EXACT content that will transmit, via the authoritative path — never a layer you just manipulated.** If you can't reliably read what will go out, you don't send.
+```js
+import { chromium } from "playwright";
 
-Mechanics:
+const browser = await chromium.connectOverCDP(process.env.LEASE_PROXY_ENDPOINT);
+const context = browser.contexts()[0];
+const page = context.pages()[0];
 
-1. **Enter text via a method that commits to the editor model** — a real paste of verified-current clipboard, or real keyboard typing (Shift+Enter for newlines) — NOT `execCommand` DOM injection.
-2. **Read the committed / rendered state back** (the model's rendered output, not the layer you injected), confirm it matches the intended text, THEN send.
-3. **Don't use the shared OS clipboard as a private staging buffer when a human shares the machine.** A human actively using the box can clobber your clipboard between stage and paste, so the *path* pastes instead of your message; prefer keyboard entry that doesn't depend on clipboard state, or re-read the clipboard immediately before paste.
-4. **For outbound messages to real people, default to surfacing the final text for operator confirmation before send**, unless explicitly told to fire autonomously.
+// Interact only with pages visible through this lease proxy.
 
-Companion: any composer with an autocomplete picker (@-mentions, recipient fields) has its own chip-verification trap on top of this — route through the host context's dedicated posting skill when one exists, which encodes those gates.
+await browser.close({ reason: "lease client detached" });
+```
 
-## CDP HTTP API — what you can do without Playwright
+For an attached client, `browser.close()` detaches that client; it does not terminate the persistent provider-owned browser. The launcher still releases the lease separately so owned targets are closed and registry state is removed.
 
-The browser's CDP server exposes a small HTTP surface (default `:9222`) that's useful for cheap operations without spinning up the Playwright library:
+## Status and recovery
+
+Use broker diagnostics rather than inspecting ports or process-name patterns:
 
 ```bash
-# List all tabs (filter to type=page to skip background_page extensions)
-curl -s http://localhost:9222/json | jq -r '.[] | select(.type=="page") | "\(.id)\t\(.title)\t\(.url)"'
+"$BROWSER_CONTEXT_BROKER_BIN" status \
+  --state-dir "$BROWSER_CONTEXT_STATE" \
+  --json
 
-# Browser metadata
-curl -s http://localhost:9222/json/version
-
-# Close a tab
-curl -X PUT "http://localhost:9222/json/close/<tab-id>"
+"$BROWSER_CONTEXT_BROKER_BIN" doctor \
+  --config "$BROWSER_CONTEXT_CONFIG" \
+  --state-dir "$BROWSER_CONTEXT_STATE" \
+  --json
 ```
 
-The HTTP surface also exposes `/json/new` and `/json/activate`, but both activate targets and are forbidden for unattended work. For background-safe creation or anything that requires interaction, use Playwright's `chromium.connectOverCDP()` and `Target.createTarget({ background: true })`.
+`status` reports non-secret context observations, loopback context endpoints, claims, process identities, attestation/recovery summaries, owners, and leases. `doctor` identifies expired leases, restart authorization, autonomous-recovery eligibility, blocking lease owners, and actionable reconciliation problems without exposing lease-proxy endpoints, provider environment, credentials, cookies, or tokens.
 
-## Playwright `connectOverCDP` template
+Recovery is requested-context-only:
 
-When the agent needs to drive the attached browser from a Node script (e.g. when the Playwright MCP isn't loaded yet but the browser is already running):
-
-```js
-import { chromium } from 'playwright';
-// (path to playwright will vary — typically ~/.npm/_npx/<hash>/node_modules/playwright/index.mjs
-// after any prior `npx @playwright/mcp@latest` has populated the cache)
-
-const browser = await chromium.connectOverCDP('http://localhost:9222');
-const ctx = browser.contexts()[0];                  // default persistent context
-const page = ctx.pages().find(p => p.url().includes('<target>')) || ctx.pages()[0];
-
-// Keep the page backgrounded — see Focus preservation above.
-
-await page.locator('[aria-label="<label>"]').click();
-// ...
-
-await browser.close({ reason: 'detach' });          // disconnects MCP from browser;
-                                                    // browser keeps running.
-```
-
-Important: on a CDP-attached browser, `browser.close()` only detaches Playwright — the browser process keeps running for the next agent. That is a property of the attachment, not of the `{ reason }` option: Playwright did not launch this browser, so it does not terminate it. The `reason` is a label that makes a stray call easier to trace, so keep passing it, but do not treat it as the guard. (A browser from `chromium.launch()` *is* owned by the script, and closing that one does terminate it.) To actually terminate an attached browser, use `pkill` (see Cleanup).
-
-There is no `browser.disconnect()`. Calling it throws `TypeError: browser.disconnect is not a function` (checked against `playwright-core` 1.62.1). `close()` is the release call.
+- A stale observation is discarded only after fresh provider attestation fails.
+- An absent requested context is provisioned without selecting or modifying another live context.
+- Endpoint collisions allocate another dynamic endpoint.
+- An unhealthy exact context first receives bounded non-destructive recovery.
+- Destructive restart is allowed only when the declaration authorizes it and no active lease blocks it. Active leases return `CONTEXT_RECOVERY_CONFLICT` with their non-secret owners instead of disrupting them.
+- The provider must freshly prove the exact process generation immediately before any destructive action and re-attest the replacement before acquisition succeeds.
+- A crashed requested context is repaired on the next acquisition when those safety checks pass.
+- An unrelated context is never stopped, relaunched, or substituted.
+- Browser-visible claim mismatch, ambiguous evidence, process-generation change, and human authentication requirements fail closed without restart.
 
 ## Cleanup
 
-When the operator says "close the browser" or the agent is done with a one-off CDP-attached session:
+Normal completion uses `release` for the exact lease. It closes only targets recorded to that lease, removes only that lease record, and leaves the persistent browser alive.
+
+For an expired lease identified by `doctor`, use exact cleanup:
 
 ```bash
-pkill -f "user-data-dir=.*playwright-agent-browser"
-# Verify:
-pgrep -lf playwright-agent-browser || echo "(cleared)"
-curl -s --max-time 2 http://localhost:9222/json/version || echo "(CDP gone)"
+"$BROWSER_CONTEXT_BROKER_BIN" cleanup \
+  --config "$BROWSER_CONTEXT_CONFIG" \
+  --state-dir "$BROWSER_CONTEXT_STATE" \
+  --lease "$STALE_LEASE_ID" \
+  --json
 ```
 
-Chromium-derived browsers spawn helper processes (renderer, GPU, utility) that may need a second pass — repeat the `pkill` if any survive. The `--user-data-dir` itself stays on disk; auth state in it persists for the next launch.
+Cleanup freshly attests the process generation recorded on that exact lease. If it is still the same live generation, cleanup closes the recorded targets and removes the lease. If the provider proves that original generation is absent or disconnected, cleanup removes the stale lease without connecting to the endpoint and reports the recorded targets as unclosed because their owner generation is gone. A live replacement or mismatched generation remains `CONTEXT_DISCONNECTED`; cleanup never follows it or touches its targets.
+
+Do not terminate browsers by executable name, profile-name pattern, or guessed process identifier. Context termination, when genuinely required, belongs to the attesting provider and must operate only on a process identity it proves it owns.
 
 ## Failure modes
 
-- **CDP not listening (`curl ... | head -c 50` returns empty / connection refused)** — the browser isn't running, or running without `--remote-debugging-port`, or another process is holding the port. Verify with `lsof -i :9222`.
-- **SSO / device-binding error on auth** — the user-data-dir isn't recognized by the IdP. overlay users: consumer overlays may ship IdP-specific fallbacks. Otherwise: accept the one-time interactive auth and rely on cached cookies.
-- **First navigation lands at a welcome / first-run page regardless of URL arg** — first-launch trap; create the target with `Target.createTarget({ background: true })`.
-- **Operator's focus keeps getting stolen** — search for every activation path, not just `bringToFront()`: `/json/new`, `/json/activate`, `Target.activateTarget`, and `page.bringToFront()`.
-- **Playwright `connectOverCDP` returns 0 contexts** — the browser crashed or restarted without the CDP flag. Re-launch.
-- **Never releasing the connection** — every `connectOverCDP` holds one of a small pool of websocket slots on the debug port. A script that exits without calling `browser.close()`, or a loop that reconnects per poll, holds slots indefinitely and eventually starves every session on the machine. The signature is `connectOverCDP` timing out after 30s while `curl` against the same port answers instantly. Diagnose with `lsof -nP -iTCP:9222`, and identify each holder's owner before touching anything — a connection you did not open is not yours to close. Long-running loops connect once and reuse, reconnecting only when `browser.isConnected()` is false.
+- **`NO_CONTEXT_MATCH`** — no declaration contains all requested evidence. Fix the request or provider configuration; do not broaden matching.
+- **`AMBIGUOUS_CONTEXT_MATCH`** — several declarations match. Make their claims distinct; do not choose by ordering.
+- **`LAUNCH_ATTESTATION_FAILED`** — the provider launched something that did not prove the declared executable, profile, owner, endpoint correlation, or configured visible claims.
+- **`ENDPOINT_COLLISION`** — dynamic allocation could not find a usable endpoint within the configured attempts.
+- **`UNSUPPORTED_CONTEXT_RECOVERY`** — the provider proved the requested context exists but cannot safely recover that exact process generation. Preserve its provider-supplied reason and generation evidence; do not substitute another browser or collapse it to a generic launch failure.
+- **`CONTEXT_RECOVERY_CONFLICT`** — destructive recovery is blocked by one or more active leases. Preserve the listed lease owners; do not remove their leases or restart the context.
+- **`DESTRUCTIVE_RECOVERY_DISABLED`** — acquisition was explicitly limited to non-destructive recovery, or the declaration does not authorize restart.
+- **`RECOVERY_PROCESS_CHANGED`** — exact process identity changed during recovery. Nothing may be signaled until a later fresh acquisition proves a stable generation.
+- **`RECOVERY_TERMINATION_FAILED`** — the provider could not prove the exact declared process tree exited. Do not launch a replacement against the same profile.
+- **`HUMAN_AUTH_REQUIRED`** — authoritative provider evidence proves the requested context has no usable authenticated principal and requires genuine interactive authentication.
+- **`VISIBLE_CLAIM_MISMATCH` / `VISIBLE_ATTESTATION_INDETERMINATE` / `VISIBLE_ATTESTATION_CLEANUP_FAILED`** — browser-visible evidence did not match, could not be interpreted uniquely, or its exact temporary attestation target could not be proven removed. All fail closed without substituting or restarting another context.
+- **`LEASE_NOT_FOUND`** — the lease was released, expired and cleaned, or the wrong state directory was supplied.
+- **`STALE_LEASE` from `doctor`** — run `cleanup` for that exact lease after confirming it is no longer active.
+- **Cleanup reports `OWNER_GENERATION_GONE`** — the provider freshly proved the lease's original process generation absent/disconnected. The lease record was removed, no replacement endpoint was contacted, and its recorded target IDs could not be closed.
+- **Disconnected context** — reacquire the same requested context. Never attach to a different live browser as a fallback.
 
 ## Cross-references
 
-- **Workspace MCP config schema** — see `desk:add-workspace-mcp` for the `[mcps.servers.<alias>]` shape and the runtime-spawner gotchas around `type = "npx"` vs `type = "stdio"`.
-- **The persistent `~/.playwright-agent-browser` directory** is sacred state. Don't delete it; it holds auth.
+- **Workspace MCP configuration:** use `desk:add-workspace-mcp` for the runtime's stdio server shape.
+- **Provider-specific launch and attestation:** follow the consuming overlay's browser-provider skill.
+- **Persistent profiles:** provider-owned profile roots are durable authentication state. Never delete or repurpose them as cleanup.

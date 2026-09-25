@@ -671,11 +671,43 @@ function validateBrowserFocusPolicy(errors, {
   readFile = (file) => readRepoFile(file),
 } = {}) {
   const body = readFile("plugins/desk/skills/cdp-headed-browser/SKILL.md");
+  const lower = body.toLowerCase();
+  if (
+    !lower.includes("browser-context-broker") ||
+    !["acquire", "proxy", "release", "status", "doctor"].every((term) => lower.includes(term))
+  ) {
+    errors.push("cdp-headed-browser must route acquisition, proxying, release, status, and doctor through the browser context broker");
+  }
+  if (!/\blease\b[\s\S]+\bowned targets?\b/iu.test(body)) {
+    errors.push("cdp-headed-browser must describe lease-owned target isolation");
+  }
+  if (
+    !body.includes("$BROWSER_CONTEXT_BROKER_BIN") ||
+    !lower.includes("plugin-relative") ||
+    !lower.includes("does not place") ||
+    !lower.includes("path")
+  ) {
+    errors.push("cdp-headed-browser must document the overlay-supplied plugin-relative broker executable contract without claiming PATH installation");
+  }
+  if (/\bbrowser-context-broker (?:acquire|proxy|release|status|doctor|cleanup)\b/u.test(body)) {
+    errors.push("cdp-headed-browser must not assume the broker is available as a bare PATH command");
+  }
   if (!body.includes("Target.createTarget") || !/background:\s*true/u.test(body)) {
     errors.push("cdp-headed-browser must document background target creation");
   }
-  if (/curl[^\n]*\/json\/(?:new|activate)/u.test(body)) {
-    errors.push("cdp-headed-browser must not present foregrounding CDP HTTP endpoints as executable recipes");
+  if (
+    /(?:localhost|127\.0\.0\.1):\d+/u.test(body) ||
+    /remote-debugging-port=\d+/u.test(body) ||
+    /curl[^\n]*\/json\//u.test(body) ||
+    /lsof[^\n]*:\d+/u.test(body)
+  ) {
+    errors.push("cdp-headed-browser must not recommend fixed-port or arbitrary endpoint discovery");
+  }
+  if (/\b(?:pkill|killall|pgrep)\b/u.test(body)) {
+    errors.push("cdp-headed-browser must not recommend process-pattern cleanup");
+  }
+  if (/ctx\.pages\(\)\.find/iu.test(body)) {
+    errors.push("cdp-headed-browser must not recommend cross-lease page selection");
   }
 }
 
