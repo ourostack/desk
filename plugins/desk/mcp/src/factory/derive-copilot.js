@@ -1,15 +1,18 @@
 // Copilot CLI deriver: turns one session's native `events.jsonl` (under
 // `<copilotHome>/session-state/<sessionId>/`) plus that session's rows in the
-// host's `session-store.db` into a facts object (`jobs: []`, filled in later
-// by M3-4) and in-memory binding events for M3-4 to match against Desk tool
-// calls, file writes and commits.
+// host's `session-store.db` into a local facts object
+// (`desk.factory.local/1`; `jobs: []`, filled in by `binding.js`) and
+// in-memory binding events for M3-4 to match against Desk tool calls, file
+// writes and commits.
 //
 // What is read. Of each event only `type`, `timestamp`, the envelope
 // `agentId` (present means a subagent's event; read for classification only)
-// and these `data` fields: `session.start.copilotVersion`; for binding only,
-// `session.start`/`session.resume` `context.cwd` and the `command` argument
-// of a `bash` or `powershell` call, matched in memory for `git … commit`
-// and never kept;
+// and these `data` fields: `session.start.copilotVersion`;
+// `session.start`/`session.resume` `context.repository` and
+// `context.hostType`, to name the repository of the session's own commits;
+// for binding only, `session.start`/`session.resume` `context.cwd` and the
+// `command` argument of a `bash` or `powershell` call, matched in memory for
+// `git … commit` and never kept;
 // `session.shutdown.modelMetrics` (never `codeChanges`);
 // `assistant.turn_start.{turnId, interactionId}` and `turn_end.turnId`;
 // `user.message.{source, isAutopilotContinuation}` (classification only);
@@ -32,7 +35,7 @@
 // Every fact is a count, a duration, an enum bucket or a pattern-shaped id,
 // and every copied value is checked against its schema pattern first. A value
 // that fails is dropped with a matching `unavailable` entry, so the output
-// always passes `validateFacts`. Track, slug and file paths reach only
+// always passes `validateLocalFacts`. Track, slug and file paths reach only
 // `events`, which the caller keeps in memory and never writes.
 //
 // Single pass, small state. The log is read once through `readline`, and
@@ -116,7 +119,14 @@
 //   - Plugins: the caller's marker list merged with valid `skill.invoked`
 //     name/version pairs, deduplicated.
 //   - Refs: `session_refs` `pr` rows (`owner/repo#n` or a github.com PR URL)
-//     and `commit` rows (40 hex) for this session. The commit SHAs also go to
+//     and `commit` rows (40 hex) for this session. These commits are the
+//     session's own (M3-4 binds them directly), so each carries the
+//     session's repository: the `context.repository` of its
+//     `session.start`/`session.resume` events when every context that names
+//     one names the same valid `owner/repo` with `hostType: "github"`. A
+//     context naming none (a directory outside a repository) says nothing;
+//     two repositories, another host or an invalid name leave it `null`,
+//     which the publishing transform drops and counts as private. The commit SHAs also go to
 //     `events.commitShas` for M3-4. No database: `{commits, log_missing}`;
 //     an unreadable one (including no `node:sqlite`): `{commits,
 //     source_unreadable}`, and the same for tokens when they were needed.
@@ -139,11 +149,12 @@
 //     without both times, or lost at a resume, gives no event.
 //     `nativeCommitShas` is the session's `session_refs` commits (the same
 //     list as `commitShas`), which M3-4 binds directly.
-//   - Capped arrays are trimmed to their schema limits with a
-//     `log_truncated` entry; an interval whose end precedes its start, or
-//     whose timestamp is invalid, is dropped with `source_unreadable`.
-//   - `contributor` is the caller's own value; an invalid one is a caller bug
-//     and throws a TypeError.
+//   - Capped arrays (intervals, agents, models, plugins, commits) are trimmed
+//     to their schema limits with a `capped` entry (`log_truncated` is kept
+//     for a log that ends mid-record); an interval whose end precedes its
+//     start, or whose timestamp is invalid, is dropped with
+//     `source_unreadable`.
+//   - Local facts carry no contributor.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -154,7 +165,7 @@ import * as path from "node:path"
 import { createInterface } from "node:readline"
 
 import { normalizeRow, readSessionRefs, readSessionRows } from "./copilot-usage.js"
-import { ENUMS, LIMITS, PATTERNS } from "./schema.js"
+import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
 import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
@@ -239,6 +250,14 @@ function contextCwd(data) {
   return isObject(data.context) ? stringOrNull(data.context.cwd) : null
 }
 
+// The GitHub repository a start or resume context names: `undefined` when it
+// names none, `null` when what it names cannot be used.
+function contextRepository(data) {
+  if (!isObject(data.context) || data.context.repository === undefined) return undefined
+  const { repository, hostType } = data.context
+  return hostType === "github" && typeof repository === "string" && PATTERNS.prRepo.test(repository) ? repository : null
+}
+
 function prRefOf(value) {
   if (typeof value !== "string") return null
   const match = PR_SHORT.exec(value) ?? PR_URL.exec(value)
@@ -282,7 +301,7 @@ function createSessionFold() {
 
   const intervals = []
   const pushInterval = (interval, field) => {
-    if (intervals.length >= LIMITS.intervals) flag(field, "log_truncated")
+    if (intervals.length >= LIMITS.intervals) flag(field, "capped")
     else intervals.push(interval)
   }
   const addTimed = (fields, start, end, field) => {
@@ -341,15 +360,25 @@ function createSessionFold() {
     if (retryStart === null && isRetryableFailure(data)) retryStart = at
   }
 
+  // Every repository the start and resume contexts name; `null` stands for
+  // one that cannot be used.
+  const repositories = new Set()
+  const noteRepository = (data) => {
+    const repository = contextRepository(data)
+    if (repository !== undefined) repositories.add(repository)
+  }
+
   const handlers = {
     "session.start"(data, at) {
       sessionCwd = contextCwd(data)
+      noteRepository(data)
       if (hostVersion === null && at !== null && typeof data.copilotVersion === "string" && PATTERNS.semver.test(data.copilotVersion)) {
         hostVersion = data.copilotVersion
       }
     },
     "session.resume"(data) {
       sessionCwd = contextCwd(data)
+      noteRepository(data)
       if (interaction !== null) closeInteraction()
       if (pendingTools.size + pendingSubagents.size > 0) lostCalls = true
       pendingTools.clear()
@@ -448,7 +477,7 @@ function createSessionFold() {
       const toolCallId = stringOrNull(data.toolCallId)
       if (toolCallId === null || subagentByCall.has(toolCallId)) return
       if (agents.length >= LIMITS.agents) {
-        flag("turns", "log_truncated")
+        flag("turns", "capped")
         return
       }
       let model = "unknown"
@@ -510,8 +539,10 @@ function createSessionFold() {
     },
     finish() {
       if (interaction !== null) closeInteraction()
+      const [onlyRepository] = repositories
       return {
         flags,
+        repository: repositories.size === 1 ? onlyRepository : null,
         hostVersion,
         earliest,
         latest,
@@ -626,7 +657,7 @@ function refsFromDatabase(sessionId, env, flag) {
     }
   }
   const sortedCommits = [...commits].sort()
-  if (sortedCommits.length > LIMITS.commits) flag("commits", "log_truncated")
+  if (sortedCommits.length > LIMITS.commits) flag("commits", "capped")
   return {
     prs: [...prs.values()].sort(comparePrs).slice(0, LIMITS.prs),
     commits: sortedCommits.slice(0, LIMITS.commits),
@@ -654,7 +685,7 @@ function mergePlugins(input, skillPlugins, flag) {
     }
   }
   for (const plugin of skillPlugins) add(plugin)
-  if (merged.length > LIMITS.plugins) flag("plugins", "log_truncated")
+  if (merged.length > LIMITS.plugins) flag("plugins", "capped")
   return merged.slice(0, LIMITS.plugins)
 }
 
@@ -678,10 +709,7 @@ function selectUsage({ shutdown, sessionId, env, flags, flag, openOrTruncated })
   return []
 }
 
-export async function deriveCopilotSession({ sessionId, copilotHome, contributor, plugins, endReason, entrypoint = "cli" }) {
-  if (typeof contributor !== "string" || !PATTERNS.contributor.test(contributor)) {
-    throw new TypeError("deriveCopilotSession: contributor must be 16 lowercase hex characters")
-  }
+export async function deriveCopilotSession({ sessionId, copilotHome, plugins, endReason, entrypoint = "cli" }) {
   if (typeof sessionId !== "string" || !PATTERNS.sessionId.test(sessionId)) {
     return { facts: null, events: null, reason: "source_unreadable" }
   }
@@ -706,7 +734,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, contributor
 
   let models = selectUsage({ shutdown: state.shutdown, sessionId, env, flags: state.flags, flag, openOrTruncated })
   models.sort(compareModels)
-  if (models.length > LIMITS.models) flag("models", "log_truncated")
+  if (models.length > LIMITS.models) flag("models", "capped")
   models = models.slice(0, LIMITS.models)
   state.agents[0].model = rootModel(models)
 
@@ -721,8 +749,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, contributor
   flag("ci_runs", "not_collected_in_slice_1")
 
   const facts = {
-    schema: "desk.factory.facts/1",
-    contributor,
+    schema: LOCAL_SCHEMA,
     session: {
       host: HOST,
       id: sessionId,
@@ -744,7 +771,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, contributor
       api_retries: state.apiRetries,
       compactions: state.compactions,
     },
-    refs: { prs: refs.prs, commits: refs.commits.map((sha) => ({ sha })) },
+    refs: { prs: refs.prs, commits: refs.commits.map((sha) => ({ repo: state.repository, sha })) },
     jobs: [],
     unavailable: [...state.flags.values()].slice(0, LIMITS.unavailable),
   }

@@ -12,7 +12,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { deriveClaudeSession, __internals__ } from "../../src/factory/derive-claude.js"
-import { validateFacts } from "../../src/factory/schema.js"
+import { validateLocalFacts as validateFacts } from "../../src/factory/schema.js"
 import {
   SENTINEL,
   COMMIT_SHA,
@@ -26,13 +26,11 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const fixturesDir = path.join(here, "fixtures", "claude")
 const transcriptPath = (sessionId) => path.join(fixturesDir, `${sessionId}.jsonl`)
 
-const CONTRIBUTOR = "0f3a9c1d2b4e6f70"
 const PLUGINS = [{ name: "desk", version: "3.2.0-alpha.21" }]
 
 function deriveFull(overrides = {}) {
   return deriveClaudeSession({
     transcriptPath: transcriptPath(SESSION_IDS.full),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: "prompt_input_exit",
     ...overrides,
@@ -48,7 +46,6 @@ function findInterval(intervals, predicate) {
 test("a missing transcript returns facts: null, events: null, reason: log_missing", async () => {
   const result = await deriveClaudeSession({
     transcriptPath: path.join(fixturesDir, "does-not-exist.jsonl"),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: null,
   })
@@ -58,7 +55,6 @@ test("a missing transcript returns facts: null, events: null, reason: log_missin
 test("a transcript with no root line yielding both a valid timestamp and a valid version returns source_unreadable", async () => {
   const result = await deriveClaudeSession({
     transcriptPath: transcriptPath(SESSION_IDS.noEnvelope),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: null,
   })
@@ -68,18 +64,10 @@ test("a transcript with no root line yielding both a valid timestamp and a valid
 test("a transcript whose file name is not a session UUID returns source_unreadable, never an invalid session.id", async () => {
   const result = await deriveClaudeSession({
     transcriptPath: path.join(fixturesDir, `${NON_UUID_FILE_STEM}.jsonl`),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: "clear",
   })
   assert.deepEqual(result, { facts: null, events: null, reason: "source_unreadable" })
-})
-
-test("an invalid contributor is a caller bug and throws a TypeError that does not echo the value", async () => {
-  await assert.rejects(
-    deriveFull({ contributor: `${SENTINEL}-not-hex` }),
-    (error) => error instanceof TypeError && !error.message.includes(SENTINEL),
-  )
 })
 
 // --- Privacy: no raw content reaches facts ----------------------------------
@@ -91,6 +79,13 @@ test("no sentinel from the fixture's messages, prompts, thinking, tool input, to
   // (track/slug/file paths never leave the machine) — confirms the fixture
   // actually planted it somewhere the facts assertion above would have caught.
   assert.equal(JSON.stringify(events).includes(SENTINEL), true)
+})
+
+test("the deriver writes local facts: the local schema value, no contributor, no commit refs", async () => {
+  const { facts } = await deriveFull()
+  assert.equal(facts.schema, "desk.factory.local/1")
+  assert.equal(Object.hasOwn(facts, "contributor"), false)
+  assert.deepEqual(facts.refs.commits, [])
 })
 
 test("the derived facts pass validateFacts and carry no sentinel, for every fixture variant", async () => {
@@ -105,7 +100,7 @@ test("the derived facts pass validateFacts and carry no sentinel, for every fixt
     { transcriptPath: transcriptPath(SESSION_IDS.oddShapes), endReason: "error" },
   ]
   for (const variant of variants) {
-    const { facts } = await deriveClaudeSession({ contributor: CONTRIBUTOR, plugins: PLUGINS, ...variant })
+    const { facts } = await deriveClaudeSession({ plugins: PLUGINS, ...variant })
     const result = validateFacts(facts)
     assert.deepEqual(result.errors, [], variant.transcriptPath)
     assert.equal(result.ok, true, variant.transcriptPath)
@@ -131,7 +126,6 @@ test("string message content, a missing message field, a non-GitHub PR URL and a
 test("odd but parseable shapes (non-object lines, non-numeric usage, missing input/usage/file_path, bad tool_use_id, untimed errors, free-text pr-link, untimed or pathless deltas) never throw or leak, and still validate", async () => {
   const { facts, events } = await deriveClaudeSession({
     transcriptPath: transcriptPath(SESSION_IDS.oddShapes),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: null,
   })
@@ -195,7 +189,6 @@ test("a tool_result with an unparseable timestamp drops the call entirely: no in
 test("a zero-usable-envelope transcript never invents a host version, start time or end time", async () => {
   const result = await deriveClaudeSession({
     transcriptPath: transcriptPath(SESSION_IDS.noEnvelope),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: "clear",
   })
@@ -434,7 +427,7 @@ async function deriveLines(lines, endReason = "prompt_input_exit") {
   try {
     const transcript = path.join(dir, `${GIT_SESSION_ID}.jsonl`)
     writeFileSync(transcript, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`)
-    return await deriveClaudeSession({ transcriptPath: transcript, contributor: CONTRIBUTOR, plugins: PLUGINS, endReason })
+    return await deriveClaudeSession({ transcriptPath: transcript, plugins: PLUGINS, endReason })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -529,7 +522,6 @@ test("session id, host_version and entrypoint come from the transcript; ended_at
 test("entrypoint cli and sdk-* both map correctly", async () => {
   const truncated = await deriveClaudeSession({
     transcriptPath: transcriptPath(SESSION_IDS.truncated),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: "clear",
   })
@@ -537,7 +529,6 @@ test("entrypoint cli and sdk-* both map correctly", async () => {
 
   const unreadable = await deriveClaudeSession({
     transcriptPath: transcriptPath(SESSION_IDS.unreadable),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: null,
   })
@@ -547,7 +538,6 @@ test("entrypoint cli and sdk-* both map correctly", async () => {
 test("an invalid endReason input is treated as null, per ENUMS.endReason", async () => {
   const result = await deriveClaudeSession({
     transcriptPath: transcriptPath(SESSION_IDS.truncated),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: "not-a-real-reason",
   })
@@ -575,7 +565,6 @@ test("unavailable always covers permission_waits, ci_runs and commits", async ()
 test("a truncated last line (ignoring a blank line in between) is reported as turns/log_truncated; a retryable 5xx with no later assistant line counts in api_retries but adds no interval", async () => {
   const { facts } = await deriveClaudeSession({
     transcriptPath: transcriptPath(SESSION_IDS.truncated),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: "clear",
   })
@@ -588,7 +577,6 @@ test("a truncated last line (ignoring a blank line in between) is reported as tu
 test("a tool result stamped before its own tool_use drops that interval with tool_durations/source_unreadable, and started_at is the earliest timestamp", async () => {
   const { facts } = await deriveClaudeSession({
     transcriptPath: transcriptPath(SESSION_IDS.truncated),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: "clear",
   })
@@ -603,7 +591,7 @@ test("a tool result stamped before its own tool_use drops that interval with too
 // --- Caller-supplied plugins ----------------------------------------------------
 
 test("plugin entries that fail the schema are dropped with plugins/source_unreadable; valid ones pass through unchanged", async () => {
-  const derive = (plugins) => deriveClaudeSession({ transcriptPath: transcriptPath(SESSION_IDS.truncated), contributor: CONTRIBUTOR, plugins, endReason: "clear" })
+  const derive = (plugins) => deriveClaudeSession({ transcriptPath: transcriptPath(SESSION_IDS.truncated), plugins, endReason: "clear" })
   const pluginsUnavailable = (facts) => facts.unavailable.filter((entry) => entry.field === "plugins")
 
   const clean = await derive(PLUGINS)
@@ -628,7 +616,12 @@ test("plugin entries that fail the schema are dropped with plugins/source_unread
 
   const tooMany = await derive(Array.from({ length: 65 }, (_, index) => ({ name: `p${index}`, version: "1.0.0" })))
   assert.equal(tooMany.facts.plugins.length, 64)
+  assert.deepEqual(pluginsUnavailable(tooMany.facts), [{ field: "plugins", reason: "capped" }])
   assert.equal(validateFacts(tooMany.facts).ok, true)
+
+  const tooManyAndBad = await derive([null, ...Array.from({ length: 65 }, (_, index) => ({ name: `p${index}`, version: "1.0.0" }))])
+  assert.equal(tooManyAndBad.facts.plugins.length, 64)
+  assert.deepEqual(pluginsUnavailable(tooManyAndBad.facts), [{ field: "plugins", reason: "source_unreadable" }, { field: "plugins", reason: "capped" }])
 })
 
 // --- No assistant lines / unreadable -------------------------------------------
@@ -636,7 +629,6 @@ test("plugin entries that fail the schema are dropped with plugins/source_unread
 test("a non-final malformed line with no assistant lines yields models: [] and models/source_unreadable, not log_truncated", async () => {
   const { facts } = await deriveClaudeSession({
     transcriptPath: transcriptPath(SESSION_IDS.unreadable),
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: null,
   })
@@ -735,10 +727,10 @@ test("applyLimits trims over-cap agents (with their intervals), intervals, model
   assert.deepEqual(result.models, [{ id: "b", requests: 5 }])
   assert.deepEqual(result.prs, [{ repo: "a/a", number: 1 }])
   assert.deepEqual(unavailable, [
-    { field: "turns", reason: "log_truncated" },
-    { field: "tool_durations", reason: "log_truncated" },
-    { field: "api_retries", reason: "log_truncated" },
-    { field: "human_waits", reason: "log_truncated" },
-    { field: "models", reason: "log_truncated" },
+    { field: "turns", reason: "capped" },
+    { field: "tool_durations", reason: "capped" },
+    { field: "api_retries", reason: "capped" },
+    { field: "human_waits", reason: "capped" },
+    { field: "models", reason: "capped" },
   ])
 })

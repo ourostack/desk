@@ -74,7 +74,10 @@ function sessionStart(ev, seconds, sessionId, { copilotVersion = "1.0.88", hostT
     context: {
       cwd: `/tmp/${S}/repo`,
       gitRoot: `/tmp/${S}/repo`,
-      repository: `${S}/repo`,
+      // The deriver reads a GitHub repository name to attribute the
+      // session's own commits, so this one is a plausible public name, not
+      // the sentinel (workspace.yaml keeps the sentinel: it is never read).
+      repository: "ourostack/desk",
       ...(hostType === undefined ? {} : { hostType }),
       branch: `${S}-branch`,
       headCommit: "0123456789abcdef0123456789abcdef01234567",

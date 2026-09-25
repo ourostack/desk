@@ -1,6 +1,7 @@
 // Claude Code deriver: turns one session's native JSONL transcript into a
-// facts object (`jobs: []`, filled in later by M3-4) plus in-memory binding
-// events for M3-4 to match against Desk tool calls, file writes and commits.
+// local facts object (`desk.factory.local/1`; `jobs: []`, filled in by
+// `binding.js`) plus in-memory binding events for M3-4 to match against Desk
+// tool calls, file writes and commits.
 //
 // Nothing here ever copies transcript text, prompt text, tool input or tool
 // output into the returned `facts`: every fact is a count, a duration, an
@@ -8,7 +9,7 @@
 // checked against its schema pattern (or the shared enums) before it is
 // used — a value that fails is dropped, with a matching `unavailable` entry
 // where one exists, rather than ever producing facts that fail
-// `validateFacts`. The richer per-call detail (Desk tool track/slug, file
+// `validateLocalFacts`. The richer per-call detail (Desk tool track/slug, file
 // paths, commit SHAs) only ever reaches `events`, which is kept in memory by
 // the caller and never written to disk.
 //
@@ -53,9 +54,10 @@
 //     interval whose end is before its start (clock skew between lines) is
 //     dropped with `{<field>, source_unreadable}`. Every capped array is
 //     trimmed to its schema limit rather than failing validation: over-cap
-//     intervals, models or agents add `{<field>, log_truncated}`; over-cap
-//     PR refs (no `unavailable` field exists for them) and invalid plugin
-//     entries (`{plugins, source_unreadable}`) are dropped.
+//     intervals, models, agents or plugins add `{<field>, capped}`
+//     (`log_truncated` is kept for a log that ends mid-record); over-cap PR
+//     refs (no `unavailable` field exists for them) are dropped, and invalid
+//     plugin entries are dropped with `{plugins, source_unreadable}`.
 //   - A transcript whose file name is not a session UUID, or with no root
 //     line carrying both a valid timestamp and a valid `version`, yields
 //     `{ facts: null, events: null, reason: "source_unreadable" }`.
@@ -81,8 +83,8 @@
 //     commit refs of its own. `events.commitShas` (40-hex tokens in Bash
 //     output) is kept for reference only; binding never uses it, since a
 //     `git log` would put other sessions' commits there.
-//   - `contributor` is the caller's own value, not transcript content; an
-//     invalid one is a caller bug and throws a TypeError.
+//   - Local facts carry no contributor: the published form has no who, and
+//     nothing local needs one.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -94,7 +96,7 @@ import { createInterface } from "node:readline"
 import * as path from "node:path"
 
 import { toolKind } from "./tool-kinds.js"
-import { ENUMS, LIMITS, PATTERNS } from "./schema.js"
+import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
 import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 
@@ -584,17 +586,18 @@ function addUnavailable(unavailable, field, reason) {
   }
 }
 
-// Keeps only caller-supplied plugin entries that already match the schema.
+// Keeps only caller-supplied plugin entries that already match the schema,
+// up to the cap.
 function sanitizePlugins(plugins, limits, unavailable) {
   const list = Array.isArray(plugins) ? plugins : []
   const valid = list.filter((entry) => typeof entry?.name === "string" && PATTERNS.pluginName.test(entry.name)
     && typeof entry.version === "string" && PATTERNS.semver.test(entry.version))
-  const kept = valid.slice(0, limits.plugins).map(({ name, version }) => ({ name, version }))
-  if (!Array.isArray(plugins) || kept.length !== list.length) addUnavailable(unavailable, "plugins", "source_unreadable")
-  return kept
+  if (!Array.isArray(plugins) || valid.length !== list.length) addUnavailable(unavailable, "plugins", "source_unreadable")
+  if (valid.length > limits.plugins) addUnavailable(unavailable, "plugins", "capped")
+  return valid.slice(0, limits.plugins).map(({ name, version }) => ({ name, version }))
 }
 
-// Trims every derived array to what `validateFacts` accepts: drops
+// Trims every derived array to what `validateLocalFacts` accepts: drops
 // intervals whose end precedes their start, agents past the `n` range (with
 // their intervals), and anything past a schema cap, recording each loss in
 // `unavailable`. Pure, so tests can drive it with small limits.
@@ -605,8 +608,8 @@ function applyLimits({ agents, intervals, models, prs }, unavailable, limits = L
     keptAgents = agents.slice(0, limits.agents)
     const keptNs = new Set(keptAgents.map((agent) => agent.n))
     keptIntervals = keptIntervals.filter((interval) => keptNs.has(interval.agent))
-    addUnavailable(unavailable, "turns", "log_truncated")
-    addUnavailable(unavailable, "tool_durations", "log_truncated")
+    addUnavailable(unavailable, "turns", "capped")
+    addUnavailable(unavailable, "tool_durations", "capped")
   }
 
   const ordered = []
@@ -617,7 +620,7 @@ function applyLimits({ agents, intervals, models, prs }, unavailable, limits = L
   keptIntervals = ordered.sort(compareByStart)
   if (keptIntervals.length > limits.intervals) {
     for (const interval of keptIntervals.slice(limits.intervals)) {
-      addUnavailable(unavailable, INTERVAL_FIELD[interval.kind], "log_truncated")
+      addUnavailable(unavailable, INTERVAL_FIELD[interval.kind], "capped")
     }
     keptIntervals = keptIntervals.slice(0, limits.intervals)
   }
@@ -627,7 +630,7 @@ function applyLimits({ agents, intervals, models, prs }, unavailable, limits = L
     // Keep the most-used models; `models` arrives sorted by id, so ties keep id order.
     const top = new Set([...models].sort((a, b) => b.requests - a.requests).slice(0, limits.models))
     keptModels = models.filter((model) => top.has(model))
-    addUnavailable(unavailable, "models", "log_truncated")
+    addUnavailable(unavailable, "models", "capped")
   }
 
   return { agents: keptAgents, intervals: keptIntervals, models: keptModels, prs: prs.slice(0, limits.prs) }
@@ -643,10 +646,7 @@ export const __internals__ = { compareByStart, comparePrRefs, applyLimits }
 // Entry point.
 // ---------------------------------------------------------------------------
 
-export async function deriveClaudeSession({ transcriptPath, contributor, plugins, endReason }) {
-  if (typeof contributor !== "string" || !PATTERNS.contributor.test(contributor)) {
-    throw new TypeError("deriveClaudeSession: contributor must be 16 lowercase hex characters")
-  }
+export async function deriveClaudeSession({ transcriptPath, plugins, endReason }) {
   if (!existsSync(transcriptPath)) {
     return { facts: null, events: null, reason: "log_missing" }
   }
@@ -748,8 +748,7 @@ export async function deriveClaudeSession({ transcriptPath, contributor, plugins
   }, unavailable)
 
   const facts = {
-    schema: "desk.factory.facts/1",
-    contributor,
+    schema: LOCAL_SCHEMA,
     session: {
       host: HOST,
       id: sessionId,

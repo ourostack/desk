@@ -15,7 +15,7 @@ import vm from "node:vm"
 import { deriveCopilotSession, __internals__ } from "../../src/factory/derive-copilot.js"
 import { normalizeRow, readSessionRefs, readSessionRows, __internals__ as usageInternals } from "../../src/factory/copilot-usage.js"
 import { spawnSync } from "node:child_process"
-import { validateFacts, validateFactsBytes } from "../../src/factory/schema.js"
+import { validateLocalFacts as validateFacts, validateLocalFactsBytes as validateFactsBytes } from "../../src/factory/schema.js"
 import {
   SENTINEL,
   SESSIONS,
@@ -31,7 +31,6 @@ import {
 } from "./fixtures/copilot/make.js"
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "copilot")
-const CONTRIBUTOR = "0f3a9c1d2b4e6f70"
 const PLUGINS = [{ name: "desk", version: "3.2.0-alpha.22" }]
 
 /** A fresh Copilot home holding the named fixture sessions and, unless `store` is null, a synthetic database. */
@@ -56,7 +55,6 @@ function derive(home, sessionId, overrides = {}) {
   return deriveCopilotSession({
     sessionId,
     copilotHome: home,
-    contributor: CONTRIBUTOR,
     plugins: PLUGINS,
     endReason: "complete",
     ...overrides,
@@ -118,8 +116,8 @@ test("the full session derives one valid session across three resumes and four s
       end_reason: "complete",
       derived_through: at(99),
     })
-    assert.equal(facts.schema, "desk.factory.facts/1")
-    assert.equal(facts.contributor, CONTRIBUTOR)
+    assert.equal(facts.schema, "desk.factory.local/1")
+    assert.equal(Object.hasOwn(facts, "contributor"), false, "local facts carry no contributor")
     assert.deepEqual(facts.jobs, [])
     assert.deepEqual(intervalsOf(facts, "turn").map(({ start, end }) => ({ start, end })), [span(3, 43), span(45, 46), span(47, 48), span(61, 74), span(75.4, 75.6), span(91, 92), span(96, 97)])
   } finally {
@@ -306,8 +304,8 @@ test("refs come from this session's session_refs rows, validated", async () => {
         { repo: "ourostack/factory", number: 3 },
       ],
       commits: [
-        { sha: "abcdef0000000000000000000000000000000001" },
-        { sha: "fc6ea8a0000000000000000000000000000000aa" },
+        { repo: "ourostack/desk", sha: "abcdef0000000000000000000000000000000001" },
+        { repo: "ourostack/desk", sha: "fc6ea8a0000000000000000000000000000000aa" },
       ],
     })
     assert.deepEqual(events.commitShas, ["abcdef0000000000000000000000000000000001", "fc6ea8a0000000000000000000000000000000aa"])
@@ -426,7 +424,7 @@ test("a 1,000,000-line events log derives in a single pass with bounded memory",
     const { facts } = result
     assertValid(facts)
     assert.equal(facts.intervals.length, 100000, "intervals are capped at the schema limit")
-    assert.ok(facts.unavailable.some((entry) => entry.field === "tool_durations" && entry.reason === "log_truncated"))
+    assert.ok(facts.unavailable.some((entry) => entry.field === "tool_durations" && entry.reason === "capped"))
     assert.ok(facts.counts.tool_calls.shell >= 399000, "every call is still counted past the interval cap")
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -460,11 +458,6 @@ async function deriveText(events, { store = null, ...overrides } = {}) {
     rmSync(home, { recursive: true, force: true })
   }
 }
-
-test("an invalid contributor is a caller bug and throws", async () => {
-  await assert.rejects(() => deriveCopilotSession({ sessionId: EDGE, copilotHome: "/nonexistent", contributor: "Nope", plugins: [], endReason: null }), TypeError)
-  await assert.rejects(() => deriveCopilotSession({ sessionId: EDGE, copilotHome: "/nonexistent", contributor: 7, plugins: [], endReason: null }), TypeError)
-})
 
 test("a session id that is not a UUID is refused before any path is built", async () => {
   for (const sessionId of ["../../etc", 42, undefined]) {
@@ -632,7 +625,7 @@ test("shutdown metrics of odd shapes: a non-object, a bad model key, missing cou
   assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
 })
 
-test("more than 32 models, 64 plugins or 2000 commits are trimmed with log_truncated", async () => {
+test("more than 32 models, 64 plugins or 2000 commits are trimmed with capped", async () => {
   const ev = eventWriter()
   const metrics = Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`model-${String(index).padStart(2, "0")}`, { requests: { count: index }, usage: {} }]))
   const plugins = Array.from({ length: 65 }, (_, index) => ({ name: `plugin-${index}`, version: "1.0.0" }))
@@ -645,7 +638,8 @@ test("more than 32 models, 64 plugins or 2000 commits are trimmed with log_trunc
   assert.equal(facts.plugins.length, 64)
   assert.equal(facts.refs.commits.length, 2000)
   for (const field of ["models", "plugins", "commits"]) {
-    assert.ok(facts.unavailable.some((entry) => entry.field === field && entry.reason === "log_truncated"), field)
+    assert.ok(facts.unavailable.some((entry) => entry.field === field && entry.reason === "capped"), field)
+    assert.equal(facts.unavailable.some((entry) => entry.field === field && entry.reason === "log_truncated"), false, field)
   }
 })
 
@@ -690,7 +684,7 @@ test("the agent cap: past 9999 subagents, later ones are dropped and their tools
     assertValid(facts)
     assert.equal(facts.agents.length, 10000)
     assert.deepEqual(intervalsOf(facts, "tool").map(({ agent }) => agent), [0])
-    assert.ok(facts.unavailable.some((entry) => entry.field === "turns" && entry.reason === "log_truncated"))
+    assert.ok(facts.unavailable.some((entry) => entry.field === "turns" && entry.reason === "capped"))
     assert.ok(facts.unavailable.some((entry) => entry.field === "tool_durations" && entry.reason === "log_truncated"))
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -955,4 +949,39 @@ test("nativeCommitShas carries this session's session_refs commits, which bind d
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+// ---------------------------------------------------------------------------
+// Commit refs: the session's repository, when there is exactly one.
+// ---------------------------------------------------------------------------
+
+const SHA_ONE = "1".repeat(40)
+
+async function commitRepoOf(contexts) {
+  const ev = eventWriter()
+  const lines = [ev("session.start", 0, { sessionId: EDGE, copilotVersion: "1.0.88", producer: "copilot-agent", context: contexts[0] })]
+  contexts.slice(1).forEach((context, index) => lines.push(ev("session.resume", 10 + index, context === undefined ? {} : { context })))
+  const { facts } = await deriveText(lines, { store: { sessions: [EDGE], usage: [], refs: [[EDGE, "commit", SHA_ONE]] } })
+  assert.equal(facts.refs.commits.length, 1)
+  assert.equal(facts.refs.commits[0].sha, SHA_ONE)
+  return facts.refs.commits[0].repo
+}
+
+test("a session's own commits carry its GitHub repository when the session names exactly one", async () => {
+  const github = (repository) => ({ cwd: `/tmp/${SENTINEL}`, repository, hostType: "github" })
+  assert.equal(await commitRepoOf([github("octo-org/widgets")]), "octo-org/widgets")
+  assert.equal(await commitRepoOf([github("octo-org/widgets"), github("octo-org/widgets"), undefined, { cwd: `/tmp/${SENTINEL}` }]), "octo-org/widgets")
+  assert.equal(await commitRepoOf([{ cwd: `/tmp/${SENTINEL}` }, github("octo-org/widgets")]), "octo-org/widgets")
+})
+
+test("a commit's repository stays null when the session names none, several, a non-GitHub host or an invalid name", async () => {
+  const github = (repository) => ({ cwd: `/tmp/${SENTINEL}`, repository, hostType: "github" })
+  assert.equal(await commitRepoOf([{ cwd: `/tmp/${SENTINEL}` }]), null)
+  assert.equal(await commitRepoOf([github("octo-org/widgets"), github("octo-org/gadgets")]), null)
+  assert.equal(await commitRepoOf([{ cwd: `/tmp/${SENTINEL}`, repository: "octo-org/widgets", hostType: "ado" }]), null)
+  assert.equal(await commitRepoOf([{ cwd: `/tmp/${SENTINEL}`, repository: "octo-org/widgets" }]), null)
+  assert.equal(await commitRepoOf([github(`${SENTINEL} free text/x`)]), null)
+  assert.equal(await commitRepoOf([github(42)]), null)
+  assert.equal(await commitRepoOf([github("octo-org/widgets"), github(`${SENTINEL} free text/x`)]), null)
+  assert.equal(await commitRepoOf([`${SENTINEL} context`]), null)
 })
