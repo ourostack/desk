@@ -620,7 +620,7 @@ default_tools_approval_mode = "prompt"`
 [mcp_servers.desk]
 command = "node"
 args = ${tomlArray([
-    `${input.pluginRoot}/mcp/index.js`,
+    `${input.pluginRoot}/mcp/bootstrap.cjs`,
     "--activation-config",
     modeConfig.activationConfigPath,
     ...(input.person ? ["--person", input.person] : []),

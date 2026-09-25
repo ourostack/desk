@@ -73,6 +73,38 @@ export function nodeMeetsFloor(version, floor) {
   return true
 }
 
+// Admission retries a readiness-controller election or socket failure for about this long before startup gives up and serves diagnostic mode. Before diagnostic mode existed, the host's own retry covered this transient class; A2 replaces it with background re-election after the handshake.
+export const ADMISSION_RETRY_BUDGET_MS = 5000
+const CONTROLLER_FAILURE_MESSAGE = /readiness controller (?:election did not converge|owner record is invalid|protocol handshake rejected)/u
+const CONTROLLER_SOCKET_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ENOENT", "EPIPE", "ETIMEDOUT", "EADDRINUSE", "controller_start_failed"])
+
+// The transient class: the controller election did not settle, or its socket or owner record was briefly unusable. A different semantic contract, a bad policy or an authority failure is not retried.
+export function isTransientControllerFailure(error) {
+  if (error?.code === "controller_semantic_mismatch") return false
+  return CONTROLLER_FAILURE_MESSAGE.test(error?.message ?? "") || CONTROLLER_SOCKET_CODES.has(error?.code)
+}
+
+export async function admitWithRetry({
+  admit,
+  budgetMs = ADMISSION_RETRY_BUDGET_MS,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now = Date.now,
+  stderr = process.stderr,
+}) {
+  const started = now()
+  let delay = 250
+  for (;;) {
+    try {
+      return await admit()
+    } catch (error) {
+      if (!isTransientControllerFailure(error) || now() - started + delay > budgetMs) throw error
+      stderr.write(`[desk-mcp] readiness controller not ready (${error.message}); retrying admission in ${delay} ms\n`)
+      await sleep(delay)
+      delay = Math.min(delay * 2, 2000)
+    }
+  }
+}
+
 export function parseArgs(argv) {
   const args = { root: null, person: null }
   for (let i = 0; i < argv.length; i++) {
@@ -230,6 +262,7 @@ export async function main({
   readinessPolicy: injectedReadinessPolicy,
   authorityProviders = {},
   nodeVersion = process.versions.node,
+  admissionRetry = {},
 } = {}) {
   runtimeInspector = resolveRuntimeInspector({ runtimeImporter, runtimeInspector })
   const serverVersion = resolveMcpServerVersion({ mcpRoot })
@@ -366,13 +399,16 @@ export async function main({
         runtime_cache_path: importedRuntime.runtime_cache_dir ?? runtimeCacheDir,
         support_matrix_path: inspection.runtime?.support_matrix_path ?? inspection.support_matrix_path,
       }
-  const admission = await (runtimeServer.admitControlPlane ?? admitControlPlane)({
-    deskRoot,
-    person: args.person,
-    policy: readinessPolicy,
-    runtime: runtimeStatus,
-    authorityProvider,
-    controllerConnector: runtimeServer.connectOrStartController,
+  const admission = await admitWithRetry({
+    ...admissionRetry,
+    admit: () => (runtimeServer.admitControlPlane ?? admitControlPlane)({
+      deskRoot,
+      person: args.person,
+      policy: readinessPolicy,
+      runtime: runtimeStatus,
+      authorityProvider,
+      controllerConnector: runtimeServer.connectOrStartController,
+    }),
   })
   const person = validateAdmissionAuthority({
     authority: admission?.authority, person: args.person, policy: readinessPolicy,

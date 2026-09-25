@@ -32,6 +32,12 @@ var TOOL_NAMES = [
 ];
 var ANSWERING_TOOLS = ["desk_status", "desk_doctor"];
 var FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
+// All probes of unknown binaries together get about this long, so slow binaries cannot hold up the handshake.
+var PROBE_BUDGET_MS = 3000;
+// The Node.js LTS line when this release was cut: the one winget's OpenJS.NodeJS.LTS package installs.
+var LTS_MAJOR = "24";
+// PATH folders that hold version-manager shims. A shim picks a Node from the working directory and may download one, so it is never run; those managers are read from their install folders instead.
+var SHIM_DIR = /[\\/](?:\.volta[\\/]bin|Volta[\\/]bin|\.asdf[\\/]shims|mise[\\/]shims)[\\/]?$/i;
 
 // ---- small helpers ----
 
@@ -162,8 +168,9 @@ function packAbis(mcpRoot, version, platform, arch) {
   if (!matrix || !Array.isArray(matrix.targets)) return [];
   var abis = [];
   matrix.targets.forEach(function (target) {
+    if (!target || target.platform !== platform || target.arch !== arch) return;
     var abi = String(target.node_abi);
-    if (target.platform === platform && target.arch === arch && abis.indexOf(abi) === -1) abis.push(abi);
+    if (abis.indexOf(abi) === -1) abis.push(abi);
   });
   return abis;
 }
@@ -191,7 +198,11 @@ function candidatePaths(options) {
   }
 
   either(env.PATH, "").split(windows ? ";" : ":").forEach(function (dir) {
-    if (dir) add(path.join(dir, exe));
+    if (!dir || SHIM_DIR.test(dir)) return;
+    var file = path.join(dir, exe);
+    // Volta links its shims to a binary named volta-shim.
+    if (path.basename(realpath(file)).toLowerCase() !== exe) return;
+    add(file);
   });
 
   if (windows) {
@@ -244,8 +255,8 @@ function versionFromPath(file) {
 }
 
 // Ask a binary for its version and module ABI; null when it does not run or answers oddly.
-function probeNode(file, env) {
-  var result = childProcess.spawnSync(file, ["-e", PROBE_SCRIPT], { encoding: "utf8", env: env, timeout: 5000, windowsHide: true });
+function probeNode(file, env, timeoutMs) {
+  var result = childProcess.spawnSync(file, ["-e", PROBE_SCRIPT], { encoding: "utf8", env: env, timeout: timeoutMs, windowsHide: true });
   if (result.status !== 0) return null;
   var match = /^v(\d+\.\d+\.\d+)\S*\s+(\d+)$/.exec(result.stdout.trim());
   return match ? { version: match[1], abi: match[2] } : null;
@@ -254,9 +265,16 @@ function probeNode(file, env) {
 function selectNode(options) {
   var pkg = readPackage(options.mcpRoot);
   var abis = packAbis(options.mcpRoot, pkg.version, options.platform, options.arch);
-  var probe = either(options.probe, function (file) {
-    return probeNode(file, options.env);
+  var now = either(options.now, Date.now);
+  var deadline = now() + PROBE_BUDGET_MS;
+  var runProbe = either(options.probe, function (file, timeoutMs) {
+    return probeNode(file, options.env, timeoutMs);
   });
+  // Probes share one time budget; once it is spent, unknown binaries are skipped.
+  function probe(file) {
+    var remaining = deadline - now();
+    return remaining > 0 ? runProbe(file, remaining) : null;
+  }
   var current = options.current;
   var seen = {};
   var candidates = [{
@@ -298,8 +316,8 @@ function selectNode(options) {
 
   for (var index = 0; index < ordered.length; index += 1) {
     var candidate = ordered[index];
-    // A version read from a folder name is trusted only once the binary actually runs.
-    if (candidate.current || probe(candidate.path) !== null) {
+    // A version read from a folder name is trusted only once the binary actually runs, unless the probe budget is spent; a Node that then fails to start is served as node_spawn_failed.
+    if (candidate.current || deadline - now() <= 0 || probe(candidate.path) !== null) {
       return { node: candidate, range: pkg.range, packAbis: abis };
     }
   }
@@ -315,18 +333,31 @@ function onPosixPath(name, env) {
   });
 }
 
-// The exact command that installs a compatible Node on this machine.
+// The newest Node major whose ABI has a runtime pack for this platform, or null when none is known.
+function packedMajor(abis) {
+  var best = null;
+  Object.keys(KNOWN_ABIS).forEach(function (major) {
+    if (abis.indexOf(KNOWN_ABIS[major]) !== -1 && (best === null || Number(major) > Number(best))) best = major;
+  });
+  return best;
+}
+
+// The exact command that installs a Node Desk ships a runtime pack for. Windows commands are single commands, safe in Windows PowerShell 5.1; the bootstrap finds the new install by itself, so no `nvm use` is needed.
 function installCommand(options) {
   var env = options.env;
+  var major = options.major;
   if (options.platform === "win32") {
-    return env.NVM_HOME ? "nvm install lts && nvm use lts" : "winget install --id OpenJS.NodeJS.LTS --exact";
+    if (env.NVM_HOME) return "nvm install " + either(major, "lts");
+    var winget = major === null || major === LTS_MAJOR ? "OpenJS.NodeJS.LTS" : "OpenJS.NodeJS." + major;
+    return "winget install --id " + winget + " --exact --accept-source-agreements --accept-package-agreements";
   }
-  if (onPosixPath("brew", env)) return "brew install node";
+  var nvmVersion = either(major, "--lts");
   var scripts = [under(env.NVM_DIR, "nvm.sh"), under(options.homeDir, ".nvm", "nvm.sh")];
   for (var index = 0; index < scripts.length; index += 1) {
-    if (scripts[index] && isExecutableFile(scripts[index], true)) return ". \"" + scripts[index] + "\" && nvm install --lts";
+    if (scripts[index] && isExecutableFile(scripts[index], true)) return ". \"" + scripts[index] + "\" && nvm install " + nvmVersion;
   }
-  return "curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && . \"$HOME/.nvm/nvm.sh\" && nvm install --lts";
+  if (onPosixPath("brew", env)) return major === null ? "brew install node" : "brew install node@" + major;
+  return "curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && . \"$HOME/.nvm/nvm.sh\" && nvm install " + nvmVersion;
 }
 
 function reconnectFix(action) {
@@ -435,7 +466,13 @@ function importIndex(indexFile, args) {
 
 function reexec(options) {
   return new Promise(function (resolve) {
-    var child = options.spawn(options.node, [options.indexFile].concat(options.args), { stdio: "inherit", env: options.env, windowsHide: true });
+    var child;
+    try {
+      child = options.spawn(options.node, [options.indexFile].concat(options.args), { stdio: "inherit", env: options.env, windowsHide: true });
+    } catch (error) {
+      resolve(options.onSpawnError(error));
+      return;
+    }
     var handlers = {};
     FORWARDED_SIGNALS.forEach(function (signal) {
       handlers[signal] = function () {
@@ -449,6 +486,11 @@ function reexec(options) {
       });
     }
     child.on("error", function (error) {
+      // A running child can also emit error, for example when kill() fails; only a child that never started is replaced by the responder.
+      if (child.pid !== undefined) {
+        options.stderr.write("[desk-mcp] bootstrap: " + describeError(error) + "\n");
+        return;
+      }
       detach();
       resolve(options.onSpawnError(error));
     });
@@ -461,15 +503,24 @@ function reexec(options) {
   });
 }
 
-function run(options) {
-  var o = either(options, {});
+function bootstrapFailed(serve, stderr, what, error) {
+  var message = describeError(error);
+  stderr.write("[desk-mcp] bootstrap: " + what + ": " + message + "\n");
+  return serve(degraded(
+    "bootstrap_failed",
+    "Desk " + what + ": " + message,
+    reconnectFix("Refresh or reinstall the Desk plugin from its trusted source"),
+    {}
+  ));
+}
+
+function start(o, stderr, serve) {
   var env = either(o.env, process.env);
   var platform = either(o.platform, process.platform);
   var homeDir = o.homeDir !== undefined ? o.homeDir : either(either(env.HOME, env.USERPROFILE), os.homedir());
   var mcpRoot = either(o.mcpRoot, __dirname);
   var indexFile = path.join(mcpRoot, "index.js");
   var args = either(o.args, process.argv.slice(2));
-  var stderr = either(o.stderr, process.stderr);
   var current = either(o.current, { path: process.execPath, version: process.version, abi: process.versions.modules });
   var selection = selectNode({
     env: env,
@@ -479,20 +530,18 @@ function run(options) {
     mcpRoot: mcpRoot,
     current: current,
     systemPrefix: o.systemPrefix !== undefined ? o.systemPrefix : either(env.DESK_NODE_SYSTEM_PREFIX, ""),
-    probe: o.probe
+    probe: o.probe,
+    now: o.now
   });
 
-  function serve(payload) {
-    return serveDegraded({ stdin: either(o.stdin, process.stdin), stdout: either(o.stdout, process.stdout), payload: payload });
-  }
-
   if (selection.node === null) {
+    var major = packedMajor(selection.packAbis);
     stderr.write("[desk-mcp] bootstrap: no Node satisfies " + selection.range + " (this one is " + current.version + "); serving degraded:node_missing\n");
     return serve(degraded(
       "node_missing",
-      "Desk needs Node.js " + selection.range + " and found none on PATH or under the usual version managers, so every Desk tool is unavailable until one is installed.",
-      reconnectFix("Run `" + installCommand({ platform: platform, env: env, homeDir: homeDir }) + "` in a shell"),
-      { required_node: selection.range, running_node: current.version }
+      "Desk needs Node.js " + selection.range + (major === null ? "" : ", ideally Node " + major + ", which Desk ships a runtime pack for on this platform,") + " and found none on PATH or under the usual version managers, so every Desk tool is unavailable until one is installed.",
+      reconnectFix("Run `" + installCommand({ platform: platform, env: env, homeDir: homeDir, major: major }) + "` in a shell"),
+      { required_node: selection.range, recommended_node_major: major, running_node: current.version }
     ));
   }
 
@@ -500,14 +549,7 @@ function run(options) {
     return Promise.resolve().then(function () {
       return either(o.importIndex, importIndex)(indexFile, args);
     }).catch(function (error) {
-      var message = describeError(error);
-      stderr.write("[desk-mcp] bootstrap: could not start index.js: " + message + "\n");
-      return serve(degraded(
-        "bootstrap_failed",
-        "Desk could not start index.js: " + message,
-        reconnectFix("Refresh or reinstall the Desk plugin from its trusted source"),
-        {}
-      ));
+      return bootstrapFailed(serve, stderr, "could not start index.js", error);
     });
   }
 
@@ -516,6 +558,7 @@ function run(options) {
     indexFile: indexFile,
     args: args,
     env: env,
+    stderr: stderr,
     spawn: either(o.spawn, childProcess.spawn),
     signals: either(o.signals, process),
     exit: either(o.exit, process.exit),
@@ -533,11 +576,26 @@ function run(options) {
   });
 }
 
+// Degrade, never die: anything that throws while the bootstrap picks or starts a Node is served as degraded:bootstrap_failed, so the host's handshake still completes.
+function run(options) {
+  var o = either(options, {});
+  var stderr = either(o.stderr, process.stderr);
+  function serve(payload) {
+    return serveDegraded({ stdin: either(o.stdin, process.stdin), stdout: either(o.stdout, process.stdout), payload: payload });
+  }
+  try {
+    return start(o, stderr, serve);
+  } catch (error) {
+    return bootstrapFailed(serve, stderr, "bootstrap failed before it could start Desk", error);
+  }
+}
+
 module.exports = {
   TOOL_NAMES: TOOL_NAMES,
   candidatePaths: candidatePaths,
   importIndex: importIndex,
   installCommand: installCommand,
+  packedMajor: packedMajor,
   packAbis: packAbis,
   probeNode: probeNode,
   readPackage: readPackage,
@@ -550,5 +608,8 @@ module.exports = {
 // Started directly by a host (the Copilot config). The Claude config requires this file and calls run() itself. Spawned tests cover this line; the in-process coverage run cannot be the main module.
 /* istanbul ignore next */
 if (require.main === module) {
-  run();
+  run().catch(function (error) {
+    process.stderr.write("[desk-mcp] bootstrap: " + describeError(error) + "\n");
+    process.exitCode = 1;
+  });
 }

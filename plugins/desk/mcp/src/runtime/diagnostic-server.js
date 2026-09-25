@@ -4,7 +4,7 @@ import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../tool-names.js"
 // Tools that answer in diagnostic mode; every other tool is listed but gated.
 const diagnosticToolNames = ["desk_status", "desk_doctor"]
 
-// The full tool set from the start, in the same order and shape as the healthy server, so a host that caches the first tools/list never loses a tool once Desk recovers.
+// The full tool set from the start, with the same names and order as the healthy server, so a host that caches the first tools/list never loses a tool once Desk recovers. desk_doctor keeps its stricter format schema here.
 const diagnosticTools = TOOL_NAMES.map((name) => ({
   name,
   description: TOOL_DESCRIPTIONS[name],

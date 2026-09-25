@@ -12,14 +12,19 @@ function deepFreeze(value, seen = new WeakSet()) {
   return Object.freeze(value)
 }
 
-// A deep copy of plain data that keeps cycles, used instead of structuredClone: failures are built on Desk's degraded startup path, which must run on any Node, including releases older than 17 that have no structuredClone. Failure payloads are plain objects, arrays and primitives; any other object is copied by its own enumerable properties.
+// A deep copy of plain data that keeps cycles, used instead of structuredClone: failures are built on Desk's degraded startup path, which must run on any Node, including releases older than 17 that have no structuredClone. Failure payloads are plain objects, arrays and primitives. Limits: any other object (Date, Map, Error) is copied as its own enumerable properties, so an Error loses its non-enumerable message, and functions are kept by reference. Keys are defined, not assigned, so an own "__proto__" key stays an ordinary property.
 function clonePlain(value, seen) {
   if (value === null || typeof value !== "object") return value
   if (seen.has(value)) return seen.get(value)
   const copy = Array.isArray(value) ? [] : {}
   seen.set(value, copy)
   for (const key of Object.keys(value)) {
-    copy[key] = clonePlain(value[key], seen)
+    Object.defineProperty(copy, key, {
+      value: clonePlain(value[key], seen),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
   }
   return copy
 }

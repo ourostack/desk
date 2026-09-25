@@ -435,3 +435,107 @@ test("Node 16 with no compatible Node anywhere serves diagnostic mode instead of
   assert.equal(status.state, "degraded:runtime_unsupported")
   assert.doesNotMatch(result.stderr, /structuredClone/u)
 })
+
+// ---- a transient controller election is retried before startup gives up ----
+
+const electionTimeout = () => new Error("readiness controller election did not converge")
+
+test("only the controller election and socket class counts as transient", () => {
+  for (const error of [
+    electionTimeout(),
+    new Error("readiness controller owner record is invalid"),
+    new Error("readiness controller protocol handshake rejected"),
+    Object.assign(new Error("connect ECONNREFUSED /tmp/x.sock"), { code: "ECONNREFUSED" }),
+    Object.assign(new Error("socket gone"), { code: "ENOENT" }),
+    { code: "controller_start_failed" },
+  ]) {
+    assert.equal(entrypoint.isTransientControllerFailure(error), true, String(error?.message ?? error?.code))
+  }
+  for (const error of [
+    Object.assign(new Error("readiness controller election did not converge"), { code: "controller_semantic_mismatch" }),
+    new ActivationFailure({ code: "authority_invalid", summary: "authority" }),
+    new Error("--root path does not exist"),
+    null,
+    undefined,
+  ]) {
+    assert.equal(entrypoint.isTransientControllerFailure(error), false)
+  }
+})
+
+function fakeClock() {
+  const clock = { now: 0, slept: [] }
+  clock.sleep = async (ms) => { clock.slept.push(ms); clock.now += ms }
+  clock.read = () => clock.now
+  return clock
+}
+
+test("a controller that becomes available on the second attempt gives a ready server", async () => {
+  const clock = fakeClock()
+  const writes = []
+  let attempts = 0
+  const started = []
+  await entrypoint.main({
+    argv: [],
+    env: { DESK: mcpRoot },
+    mcpRoot,
+    runtimeInspector: null,
+    readinessPolicy: {},
+    admissionRetry: { sleep: clock.sleep, now: clock.read, stderr: { write: (text) => writes.push(text) } },
+    runtimeImporter: async () => ({
+      admitControlPlane: async () => {
+        attempts += 1
+        if (attempts === 1) throw electionTimeout()
+        return { authority: { mode: "workspace", person: null }, controller: null }
+      },
+      startServer: async ({ deskRoot }) => { started.push(deskRoot) },
+    }),
+  })
+  assert.equal(attempts, 2)
+  assert.deepEqual(started, [mcpRoot])
+  assert.deepEqual(clock.slept, [250])
+  assert.match(writes.join(""), /readiness controller not ready \(readiness controller election did not converge\); retrying admission in 250 ms/u)
+})
+
+test("a controller that never becomes available gives up within about 5 s, so startup degrades", async () => {
+  const clock = fakeClock()
+  let attempts = 0
+  await assert.rejects(entrypoint.admitWithRetry({
+    admit: async () => { attempts += 1; clock.now += 100; throw electionTimeout() },
+    sleep: clock.sleep,
+    now: clock.read,
+    stderr: { write() {} },
+  }), /election did not converge/u)
+  assert.deepEqual(clock.slept, [250, 500, 1000, 2000])
+  assert.ok(clock.now <= entrypoint.ADMISSION_RETRY_BUDGET_MS, `gave up after ${clock.now} ms`)
+  assert.equal(attempts, 5)
+
+  // A failure outside the class is not retried at all.
+  let calls = 0
+  await assert.rejects(entrypoint.admitWithRetry({
+    admit: async () => { calls += 1; throw new Error("--root path does not exist") },
+    sleep: clock.sleep,
+    now: clock.read,
+  }), /--root/u)
+  assert.equal(calls, 1)
+})
+
+test("with real timers, a controller that never answers degrades in about 5 s and no later", async () => {
+  const started = Date.now()
+  const writes = []
+  await assert.rejects(entrypoint.admitWithRetry({
+    admit: async () => { throw electionTimeout() },
+    stderr: { write: (text) => writes.push(text) },
+  }), /election did not converge/u)
+  const elapsed = Date.now() - started
+  assert.ok(elapsed >= 3500 && elapsed < 5500, `gave up after ${elapsed} ms`)
+  assert.equal(writes.length, 4)
+  assert.ok(await entrypoint.admitWithRetry({ admit: async () => "ready" }) === "ready")
+})
+
+test("a failure payload keeps an own __proto__ key as a plain property", () => {
+  const observed = JSON.parse('{"__proto__": {"polluted": true}, "kept": 1}')
+  const failure = terminalFailure({ observed })
+  assert.equal(Object.getPrototypeOf(failure.observed), Object.prototype)
+  assert.deepEqual(Object.keys(failure.observed), ["__proto__", "kept"])
+  assert.equal(failure.observed.polluted, undefined)
+})

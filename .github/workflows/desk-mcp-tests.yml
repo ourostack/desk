@@ -459,3 +459,15 @@ jobs:
         working-directory: plugins/desk/mcp
         run: |
           node --test --test-name-pattern "^native[: ]" __tests__/launch/bootstrap.test.js
+
+      # A host may start the bootstrap with an older Node than the one Desk ships a pack for; Node 20 has no Windows pack, so the bootstrap must find the Node 24 set up above and run index.js in it.
+      - name: Set up an older Node that the bootstrap must re-exec from
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Complete an MCP handshake through the bootstrap's re-exec path on Windows
+        working-directory: plugins/desk/mcp
+        run: |
+          node --version
+          node --test --test-name-pattern "^native[: ]" __tests__/launch/bootstrap.test.js

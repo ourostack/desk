@@ -30,8 +30,8 @@ const bootstrap = require(bootstrapPath)
 const { TOOL_NAMES } = await import(pathToFileURL(path.join(mcpRoot, "src", "tool-names.js")).href)
 const packageJson = JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8"))
 const nodes = installedNodesByMajor()
-// A fresh Windows CI runner restores the runtime pack into an empty cache on first start (about 11 s observed), so Windows gets a budget under the hosts' 30 s MCP startup timeout instead of the 3 s one.
-const HANDSHAKE_BUDGET_MS = process.platform === "win32" ? 30000 : 3000
+// A fresh Windows CI runner restores the runtime pack into an empty cache on first start (7 to 11 s observed), so Windows gets 15 s, half the hosts' 30 s MCP startup timeout, instead of 3 s. A2 moves that restore after the handshake.
+const HANDSHAKE_BUDGET_MS = process.platform === "win32" ? 15000 : 3000
 
 // ---- fixtures ----
 
@@ -151,6 +151,9 @@ test("the bootstrap reads engines.node and the runtime pack ABIs from the same f
   mkdirSync(path.join(root, "artifacts", "runtime-deps", "9.9.9"), { recursive: true })
   writeFileSync(path.join(root, "artifacts", "runtime-deps", "9.9.9", "support-matrix.json"), JSON.stringify({ targets: "none" }))
   assert.deepEqual(bootstrap.packAbis(root, "9.9.9", "darwin", "arm64"), [])
+  // A corrupt matrix with null or foreign entries still yields the good ones.
+  writeFileSync(path.join(root, "artifacts", "runtime-deps", "9.9.9", "support-matrix.json"), JSON.stringify({ targets: [null, 7, { platform: "darwin", arch: "arm64", node_abi: 127 }, { platform: "darwin", arch: "arm64", node_abi: "127" }] }))
+  assert.deepEqual(bootstrap.packAbis(root, "9.9.9", "darwin", "arm64"), ["127"])
 })
 
 // ---- discovery ----
@@ -318,11 +321,11 @@ test("the same binary reached through two paths is considered once, and a probe 
   const probes = []
   const selection = bootstrap.selectNode(machine(root, {
     env: { PATH: [path.join(root, "link-bin"), path.join(root, "odd-bin")].join(":") },
-    probe: (file) => { probes.push(file); return bootstrap.probeNode(file, {}) },
+    probe: (file, timeoutMs) => { probes.push(file); assert.ok(timeoutMs > 0 && timeoutMs <= 3000); return bootstrap.probeNode(file, {}, timeoutMs) },
   }))
   assert.equal(selection.node.path, path.join(root, "link-bin", "node"))
   assert.deepEqual(probes, [path.join(root, "odd-bin", "node"), path.join(root, "link-bin", "node")])
-  assert.equal(bootstrap.probeNode(path.join(root, "missing-node"), {}), null)
+  assert.equal(bootstrap.probeNode(path.join(root, "missing-node"), {}, 1000), null)
 })
 
 test("no compatible Node gives no selection", async () => {
@@ -334,23 +337,43 @@ test("no compatible Node gives no selection", async () => {
 
 // ---- the install command ----
 
-test("the install command fits the machine", async () => {
+test("the install command installs the Node major Desk ships a runtime pack for, per platform", async () => {
   const root = await mkTempRoot("desk-bootstrap-fix-")
   const brewBin = path.join(root, "brew-bin")
   fakeNode(path.join(brewBin, "brew"), "0.0.0", "0")
-  assert.equal(bootstrap.installCommand({ platform: "win32", env: { NVM_HOME: "C:\\nvm" } }), "nvm install lts && nvm use lts")
-  assert.equal(bootstrap.installCommand({ platform: "win32", env: {} }), "winget install --id OpenJS.NodeJS.LTS --exact")
-  assert.equal(bootstrap.installCommand({ platform: "darwin", env: { PATH: brewBin }, homeDir: root }), "brew install node")
+  assert.equal(bootstrap.packedMajor(["127"]), "22")
+  assert.equal(bootstrap.packedMajor(["115", "127", "999"]), "22")
+  assert.equal(bootstrap.packedMajor(["137"]), "24")
+  assert.equal(bootstrap.packedMajor(["999"]), null)
+  assert.equal(bootstrap.packedMajor([]), null)
+
+  // Windows: single commands that Windows PowerShell 5.1 accepts, and no `nvm use`.
+  const windows = [
+    [{ NVM_HOME: "C:\\nvm" }, "24", "nvm install 24"],
+    [{ NVM_HOME: "C:\\nvm" }, null, "nvm install lts"],
+    [{}, "24", "winget install --id OpenJS.NodeJS.LTS --exact --accept-source-agreements --accept-package-agreements"],
+    [{}, null, "winget install --id OpenJS.NodeJS.LTS --exact --accept-source-agreements --accept-package-agreements"],
+    [{}, "22", "winget install --id OpenJS.NodeJS.22 --exact --accept-source-agreements --accept-package-agreements"],
+  ]
+  for (const [env, major, expected] of windows) {
+    const command = bootstrap.installCommand({ platform: "win32", env, homeDir: root, major })
+    assert.equal(command, expected)
+    assert.doesNotMatch(command, /&&|nvm use/u)
+  }
+
+  // macOS and Linux: an existing nvm first, then Homebrew, then a fresh nvm.
   const nvmDir = path.join(root, "nvm dir")
   mkdirSync(nvmDir)
   writeFileSync(path.join(nvmDir, "nvm.sh"), "# nvm\n")
-  assert.equal(bootstrap.installCommand({ platform: "linux", env: { NVM_DIR: nvmDir }, homeDir: root }), `. "${nvmDir}/nvm.sh" && nvm install --lts`)
+  assert.equal(bootstrap.installCommand({ platform: "linux", env: { NVM_DIR: nvmDir, PATH: brewBin }, homeDir: root, major: "22" }), `. "${nvmDir}/nvm.sh" && nvm install 22`)
+  assert.equal(bootstrap.installCommand({ platform: "darwin", env: { PATH: brewBin }, homeDir: root, major: "22" }), "brew install node@22")
+  assert.equal(bootstrap.installCommand({ platform: "darwin", env: { PATH: brewBin }, homeDir: root, major: null }), "brew install node")
   mkdirSync(path.join(root, ".nvm"))
   writeFileSync(path.join(root, ".nvm", "nvm.sh"), "# nvm\n")
-  assert.equal(bootstrap.installCommand({ platform: "linux", env: {}, homeDir: root }), `. "${path.join(root, ".nvm", "nvm.sh")}" && nvm install --lts`)
+  assert.equal(bootstrap.installCommand({ platform: "linux", env: {}, homeDir: root, major: null }), `. "${path.join(root, ".nvm", "nvm.sh")}" && nvm install --lts`)
   assert.match(
-    bootstrap.installCommand({ platform: "linux", env: {}, homeDir: path.join(root, "nobody") }),
-    /^curl -fsSL https:\/\/raw\.githubusercontent\.com\/nvm-sh\/nvm\/v[0-9.]+\/install\.sh \| bash && \. "\$HOME\/\.nvm\/nvm\.sh" && nvm install --lts$/u,
+    bootstrap.installCommand({ platform: "linux", env: {}, homeDir: path.join(root, "nobody"), major: "22" }),
+    /^curl -fsSL https:\/\/raw\.githubusercontent\.com\/nvm-sh\/nvm\/v[0-9.]+\/install\.sh \| bash && \. "\$HOME\/\.nvm\/nvm\.sh" && nvm install 22$/u,
   )
 })
 
@@ -396,6 +419,8 @@ test("with no compatible Node the bootstrap serves the MCP handshake itself and 
   assert.equal(payload.code, "node_missing")
   assert.equal(payload.required_node, packageJson.engines.node)
   assert.equal(payload.running_node, "v16.20.2")
+  assert.equal(payload.recommended_node_major, "22")
+  assert.match(payload.fix, /nvm install 22|brew install node@22/u)
   assert.match(payload.fix, /^Run `.+` in a shell, then reconnect the Desk MCP server/u)
   assert.equal(gated.result.isError, true)
   assert.deepEqual(toolPayload(gated), payload)
@@ -621,9 +646,12 @@ test("the bootstrap passes the chosen Node's exit code through", {
 
 test("native: the bootstrap completes the MCP handshake on this host", async (t) => {
   const fixture = await makeIsolatedHome("desk-bootstrap-native-")
-  const env = isolatedEnv(fixture, process.platform === "win32" ? {} : { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin` })
+  // The host's PATH stays visible so that an older Node started by the host (CI runs this under Node 20 on Windows too) can find the packed one; HOME and the per-user folders are still temporary.
+  const hostPath = process.platform === "win32" ? `${path.dirname(process.execPath)};${process.env.PATH ?? process.env.Path ?? ""}` : `${path.dirname(process.execPath)}:${process.env.PATH ?? ""}`
+  const env = isolatedEnv(fixture, { PATH: hostPath })
   const result = await runHandshake({ command: process.execPath, args: [bootstrapPath], cwd: fixture.root, env, timeoutMs: 60000 })
-  t.diagnostic(`${process.platform} ${process.version}: handshake in ${result.handshakeMs} ms`)
+  const packed = bootstrap.packAbis(mcpRoot, packageJson.version, process.platform, process.arch).includes(process.versions.modules)
+  t.diagnostic(`${process.platform} ${process.version} (${packed ? "packed, in-process" : "no pack, re-exec"}): handshake in ${result.handshakeMs} ms`)
   assert.equal(result.initialize.result.serverInfo.name, "desk-mcp", result.stderr)
   assert.ok(result.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${result.handshakeMs} ms; stderr: ${result.stderr}`)
   assert.deepEqual(result.tools.result.tools.map((tool) => tool.name), TOOL_NAMES)
@@ -689,7 +717,8 @@ for (const major of [16, 22]) {
     assert.equal(init.id, 0)
     assert.equal(init.result.protocolVersion, "2025-03-26")
     assert.deepEqual(ping.result, {})
-    assert.deepEqual(list.result.tools.map((tool) => tool.name), ["desk_status"])
+    assert.deepEqual(list.result.tools.map((tool) => tool.name), TOOL_NAMES)
+    assert.deepEqual(init.result.capabilities, { tools: { listChanged: true } })
     assert.equal(JSON.parse(status.result.content[0].text).state, "degraded:plugin_root_missing")
     assert.equal(status.result.isError, false)
     assert.equal(unknown.error.code, -32601)
@@ -699,4 +728,123 @@ for (const major of [16, 22]) {
 
 test("the bootstrap's tool list matches the server's", () => {
   assert.deepEqual(bootstrap.TOOL_NAMES, TOOL_NAMES)
+})
+
+// ---- degrade, never die: failures inside the bootstrap ----
+
+test("a spawn that throws synchronously is served as node_spawn_failed", async () => {
+  const root = await mkTempRoot("desk-bootstrap-spawn-throw-")
+  fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.9.0", "bin", "node"), "22.9.0", "127")
+  const input = new PassThrough()
+  const output = new PassThrough()
+  const read = collect(output)
+  const running = bootstrap.run({
+    ...machine(root),
+    args: [],
+    spawn: () => { throw Object.assign(new Error("spawn EPERM"), { code: "EPERM" }) },
+    signals: new EventEmitter(),
+    stdin: input,
+    stdout: output,
+    stderr: { write() {} },
+  })
+  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status" } })}\n`)
+  await running
+  assert.equal(toolPayload(read()[0]).state, "degraded:node_spawn_failed")
+})
+
+test("anything that throws while picking a Node is served as bootstrap_failed", async () => {
+  const root = await mkTempRoot("desk-bootstrap-throw-")
+  fakeNode(path.join(root, "path-bin", "node"), "22.9.0", "127")
+  const input = new PassThrough()
+  const output = new PassThrough()
+  const read = collect(output)
+  const errors = []
+  const running = bootstrap.run({
+    ...machine(root, { env: { PATH: path.join(root, "path-bin") } }),
+    args: [],
+    probe: () => { throw new Error("probe exploded") },
+    stdin: input,
+    stdout: output,
+    stderr: { write: (text) => errors.push(text) },
+  })
+  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status" } })}\n`)
+  await running
+  const payload = toolPayload(read()[0])
+  assert.equal(payload.state, "degraded:bootstrap_failed")
+  assert.match(payload.summary, /probe exploded/u)
+  assert.match(errors.join(""), /bootstrap failed before it could start Desk: probe exploded/u)
+})
+
+test("an error event from a child that did start never starts a second responder", async () => {
+  const root = await mkTempRoot("desk-bootstrap-late-error-")
+  fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v22.9.0", "bin", "node"), "22.9.0", "127")
+  const child = fakeChild()
+  child.pid = 4242
+  const errors = []
+  const exits = []
+  const running = bootstrap.run({
+    ...machine(root),
+    args: [],
+    spawn: () => child,
+    signals: new EventEmitter(),
+    stdout: { write: () => { throw new Error("the bootstrap must not write while the child serves") } },
+    stderr: { write: (text) => errors.push(text) },
+    exit: (code) => exits.push(code),
+  })
+  child.emit("error", new Error("kill EPERM"))
+  child.emit("exit", 0, null)
+  await running
+  assert.match(errors.join(""), /kill EPERM/u)
+  assert.deepEqual(exits, [0])
+})
+
+test("probes share a 3 s budget and version-manager shims on PATH are never run", async () => {
+  const root = await mkTempRoot("desk-bootstrap-budget-")
+  // Unversioned PATH binaries have to be probed; the clock jumps 2 s per probe.
+  for (const name of ["a", "b", "c"]) fakeNode(path.join(root, name, "node"), "22.9.0", "127")
+  fakeNode(path.join(root, "home", ".nvm", "versions", "node", "v20.11.1", "bin", "node"), "20.11.1", "115")
+  let clock = 0
+  const probed = []
+  const selection = bootstrap.selectNode(machine(root, {
+    env: { PATH: ["a", "b", "c"].map((name) => path.join(root, name)).join(":") },
+    now: () => clock,
+    probe: (file, timeoutMs) => { probed.push([file, timeoutMs]); clock += 2000; return bootstrap.probeNode(file, {}, timeoutMs) },
+  }))
+  assert.deepEqual(probed.map(([file]) => path.basename(path.dirname(file))), ["a", "b"])
+  assert.deepEqual(probed.map(([, timeoutMs]) => timeoutMs), [3000, 1000])
+  // Once the budget is spent, the choice is not probed again.
+  assert.equal(selection.node.path, path.join(root, "a", "node"))
+
+  const shims = await mkTempRoot("desk-bootstrap-shims-")
+  const home = path.join(shims, "home")
+  const voltaShim = fakeNode(path.join(home, ".volta", "bin", "volta-shim"), "0.0.0", "0")
+  symlinkSync(voltaShim, path.join(home, ".volta", "bin", "node"))
+  fakeNode(path.join(home, ".asdf", "shims", "node"), "22.9.0", "127")
+  fakeNode(path.join(home, ".local", "share", "mise", "shims", "node"), "22.9.0", "127")
+  mkdirSync(path.join(shims, "linked"))
+  symlinkSync(voltaShim, path.join(shims, "linked", "node"))
+  const onPath = [path.join(home, ".volta", "bin"), path.join(home, ".asdf", "shims"), path.join(home, ".local", "share", "mise", "shims"), path.join(shims, "linked")]
+  assert.deepEqual(bootstrap.candidatePaths({ env: { PATH: onPath.join(":") }, platform: "darwin", homeDir: path.join(shims, "nobody"), systemPrefix: path.join(shims, "none") }), [])
+})
+
+test("the Claude inline launcher answers the handshake when bootstrap.cjs itself cannot load", async () => {
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.desk
+  const plugin = await mkTempRoot("desk-bootstrap-broken-plugin-")
+  mkdirSync(path.join(plugin, "mcp"))
+  writeFileSync(path.join(plugin, "mcp", "bootstrap.cjs"), "module.exports = {\n  run: function (\n")
+  const result = spawnSync(process.execPath, claude.args, {
+    cwd: plugin,
+    encoding: "utf8",
+    env: { PATH: "/usr/bin:/bin", DESK_PLUGIN_ROOT: plugin, NODE_OPTIONS: "" },
+    input: [
+      { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "desk_status" } },
+    ].map((message) => JSON.stringify(message)).join("\n") + "\n",
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const [list, status] = result.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
+  assert.deepEqual(list.result.tools.map((tool) => tool.name), TOOL_NAMES)
+  const payload = JSON.parse(status.result.content[0].text)
+  assert.equal(payload.state, "degraded:bootstrap_failed")
+  assert.match(result.stderr, /\[desk-mcp\] launcher: /u)
 })

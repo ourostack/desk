@@ -301,7 +301,7 @@ function rawEntrypointConfigCases(pluginRoot = deskPluginRoot) {
       expectedArgs: (args) => {
         assert.equal(args.length, 2);
         assert.equal(args[0], "-e");
-        assert.ok(args[1].startsWith("var fs=require('fs'),path=require('path'),roots=[process.env.DESK_PLUGIN_ROOT,process.cwd()],root=null;"));
+        assert.ok(args[1].startsWith("var fs=require('fs'),path=require('path'),roots=[process.env.DESK_PLUGIN_ROOT,process.cwd()],root=null,"));
         assert.match(args[1], /require\(path\.join\(root,'mcp','bootstrap\.cjs'\)\)\.run\(\)/u);
       },
       expectedCwd: ".",
