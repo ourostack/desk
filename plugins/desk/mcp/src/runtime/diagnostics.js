@@ -83,8 +83,10 @@ export function createRuntimeDiagnostic({
   Object.assign(diagnostic, {
     activation_status: diagnostic.status,
     status: "degraded",
+    state: `degraded:${details.code}`,
     mode: "diagnostic",
     reason,
+    fix: remediation[0].message,
     lexical: {
       generation: null, event_cursor: null, pending_changes: null,
       certain: false, current_automatic_action: null, serving_path: "blocked",
@@ -102,6 +104,35 @@ export function createRuntimeDiagnostic({
     diagnostic.failure_kind = failureKind
   }
   return diagnostic
+}
+
+// The last-resort catch in index.js: anything that throws before the server starts becomes this diagnostic, so the handshake still completes and desk_status names the cause and the fix instead of the process exiting.
+export function createStartupExceptionDiagnostic({ error } = {}) {
+  const observed = {
+    name: error instanceof Error ? error.name : "unknown",
+    message: error instanceof Error ? error.message : String(error),
+  }
+  if (typeof error?.code === "string") {
+    observed.failure_code = error.code
+  }
+  const fix = "Read observed.message and fix the cause it names (for example a --root path that does not exist, or a malformed activation config), then reconnect the Desk MCP server (in Claude Code run /mcp and reconnect desk; otherwise start a new session)."
+  return {
+    status: "degraded",
+    activation_status: "terminal",
+    state: "degraded:startup_exception",
+    mode: "diagnostic",
+    reason: "startup_exception",
+    code: "startup_exception",
+    phase: typeof error?.phase === "string" ? error.phase : "STARTING",
+    summary: "Desk hit an error before it finished starting, so it is serving diagnostic mode: desk_status and desk_doctor answer, and every other tool is unavailable until the cause is fixed.",
+    observed,
+    fix,
+    lexical: {
+      generation: null, event_cursor: null, pending_changes: null,
+      certain: false, current_automatic_action: null, serving_path: "blocked",
+    },
+    remediation: [{ action: "fix_startup_cause", message: fix }],
+  }
 }
 
 // No desk is bound yet. This is the normal first-run state, so Desk keeps

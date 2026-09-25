@@ -3,7 +3,7 @@
     "desk": {
       "type": "stdio",
       "command": "node",
-      "args": ["${COPILOT_PLUGIN_ROOT}/mcp/index.js"],
+      "args": ["${COPILOT_PLUGIN_ROOT}/mcp/bootstrap.cjs"],
       "env": {}
     }
   }

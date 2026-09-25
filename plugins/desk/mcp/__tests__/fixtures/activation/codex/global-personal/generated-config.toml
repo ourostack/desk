@@ -2,7 +2,7 @@
 model = "gpt-5.4"
 approval_policy = "on-request"
 
-# BEGIN desk activation: desk@3.2.0-alpha.27 mode=global-personal owner=desk-activation
+# BEGIN desk activation: desk@3.2.0-alpha.28 mode=global-personal owner=desk-activation
 [plugins."superpowers@ourostack"]
 enabled = true
 
@@ -18,7 +18,7 @@ default_tools_approval_mode = "prompt"
 
 [mcp_servers.desk]
 command = "node"
-args = ["plugins/desk/mcp/index.js", "--activation-config", "~/.codex/desk.activation.json"]
+args = ["plugins/desk/mcp/bootstrap.cjs", "--activation-config", "~/.codex/desk.activation.json"]
 cwd = "."
 enabled = true
 default_tools_approval_mode = "prompt"

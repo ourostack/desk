@@ -274,7 +274,7 @@ test("global personal activation materializes worker and Desk as the default", a
   assert.match(result.generatedConfig, /\[plugins\."desk@ourostack"\]/)
   assert.match(result.generatedConfig, /\[plugins\."desk@ourostack"\.mcp_servers\.desk\]/)
   assert.match(result.generatedConfig, /\[mcp_servers\.desk\]/)
-  assert.match(result.generatedConfig, /args = \["plugins\/desk\/mcp\/index\.js", "--activation-config", "~\/\.codex\/desk\.activation\.json"\]/)
+  assert.match(result.generatedConfig, /args = \["plugins\/desk\/mcp\/bootstrap\.cjs", "--activation-config", "~\/\.codex\/desk\.activation\.json"\]/)
   assert.match(result.generatedInstructions, /desk worker by default/)
   assert.match(result.generatedInstructions, /Run the `desk:session-start` skill/)
   assertCodexActivationLine(result.generatedInstructions)
@@ -395,12 +395,12 @@ test("Codex activation escapes direct MCP TOML args for host paths", async () =>
     pluginRoot: String.raw`C:\Users\Ari "Desk"\plugins\desk`,
   }))
 
-  assert.ok(result.generatedConfig.includes(String.raw`args = ["C:\\Users\\Ari \"Desk\"\\plugins\\desk/mcp/index.js", "--activation-config", "~/.codex/desk.activation.json"]`))
+  assert.ok(result.generatedConfig.includes(String.raw`args = ["C:\\Users\\Ari \"Desk\"\\plugins\\desk/mcp/bootstrap.cjs", "--activation-config", "~/.codex/desk.activation.json"]`))
 
   const controlPath = materializeCodexActivation(activationInput("global-personal", {
     pluginRoot: `plugins/desk${String.fromCharCode(1)}`,
   }))
-  assert.ok(controlPath.generatedConfig.includes(String.raw`args = ["plugins/desk\u0001/mcp/index.js", "--activation-config", "~/.codex/desk.activation.json"]`))
+  assert.ok(controlPath.generatedConfig.includes(String.raw`args = ["plugins/desk\u0001/mcp/bootstrap.cjs", "--activation-config", "~/.codex/desk.activation.json"]`))
 })
 
 test("Codex activation ignores non-plugin and unknown overlay dependencies in generated plugin config", async () => {
@@ -494,7 +494,7 @@ command = "node"
   assert.doesNotMatch(result.generatedConfig, /old\.js/u)
   assert.doesNotMatch(result.generatedConfig, /DESK = "old"/u)
   assert.match(result.generatedConfig, /^\[mcp_servers\.other\]$/mu)
-  assert.match(result.generatedConfig, /args = \["plugins\/desk\/mcp\/index\.js", "--activation-config", "~\/\.codex\/desk\.activation\.json"\]/u)
+  assert.match(result.generatedConfig, /args = \["plugins\/desk\/mcp\/bootstrap\.cjs", "--activation-config", "~\/\.codex\/desk\.activation\.json"\]/u)
 
   const inlineDeskOnly = materializeCodexActivation(activationInput("global-personal", {
     existingConfig: `${existingConfig}
@@ -531,7 +531,7 @@ test("project-local opt-out materializes project config without mutating global 
   assert.equal(result.generatedInstructions, loadFixture("project-local", "generated-instructions.md"))
   assertNoManualSetup(result.generatedConfig)
   assert.match(result.generatedConfig, /\[mcp_servers\.desk\]/)
-  assert.match(result.generatedConfig, /args = \["plugins\/desk\/mcp\/index\.js", "--activation-config", "\.codex\/desk\.activation\.json"\]/)
+  assert.match(result.generatedConfig, /args = \["plugins\/desk\/mcp\/bootstrap\.cjs", "--activation-config", "\.codex\/desk\.activation\.json"\]/)
   assert.match(result.generatedConfig, /cwd = "."/)
   assertCodexActivationLine(result.generatedInstructions)
 })

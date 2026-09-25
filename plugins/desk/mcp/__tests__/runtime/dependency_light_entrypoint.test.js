@@ -27,6 +27,7 @@ const repoRoot = path.resolve(
 )
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
 const packageJson = loadJson(path.join(mcpRoot, "package.json"))
+const { TOOL_NAMES } = await import(pathToFileURL(path.join(mcpRoot, "src", "tool-names.js")).href)
 const packageLock = loadJson(path.join(mcpRoot, "package-lock.json"))
 const hostTarget = `${process.platform}-${process.arch}-node-${process.versions.modules}`
 const productionLockHash = productionDependencyLockHash({ packageJson, packageLock })
@@ -1051,9 +1052,10 @@ test("MCP entrypoint keeps a diagnostic MCP live when the current runtime pack i
     assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
     assert.equal(result.initialize.result.serverInfo.name, "desk-mcp-diagnostic")
     assert.equal(result.initialize.result.serverInfo.version, packageJson.version)
+    // Diagnostic mode lists the full tool set, so the list a host caches never changes once Desk recovers.
     assert.deepEqual(
       result.tools.result.tools.map((tool) => tool.name),
-      ["desk_status", "desk_doctor"],
+      TOOL_NAMES,
     )
     assert.equal(result.status.result.isError, undefined)
     const status = JSON.parse(result.status.result.content[0].text)

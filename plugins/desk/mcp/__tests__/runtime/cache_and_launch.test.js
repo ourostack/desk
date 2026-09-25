@@ -296,10 +296,14 @@ function rawEntrypointConfigCases(pluginRoot = deskPluginRoot) {
     {
       id: "desk .mcp.json",
       sourcePath: path.join(pluginRoot, ".mcp.json"),
-      expectedArgs: [
-        "-e",
-        "const fs=require('node:fs');const path=require('node:path');const {pathToFileURL}=require('node:url');const configured=process.env.DESK_PLUGIN_ROOT;const root=configured&&fs.existsSync(path.join(configured,'mcp','index.js'))?configured:process.cwd();process.env.DESK_PLUGIN_ROOT=root;import(pathToFileURL(path.join(root,'mcp','index.js')).href).then(({main})=>main()).catch((error)=>{console.error(error);process.exitCode=1});",
-      ],
+      expectedCommand: "node",
+      // An inline ES5 launcher: find the plugin through DESK_PLUGIN_ROOT or the working directory, then run the cross-platform bootstrap.
+      expectedArgs: (args) => {
+        assert.equal(args.length, 2);
+        assert.equal(args[0], "-e");
+        assert.ok(args[1].startsWith("var fs=require('fs'),path=require('path'),roots=[process.env.DESK_PLUGIN_ROOT,process.cwd()],root=null,"));
+        assert.match(args[1], /require\(path\.join\(root,'mcp','bootstrap\.cjs'\)\)\.run\(\)/u);
+      },
       expectedCwd: ".",
       expectedEnv: {
         DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}",
@@ -308,7 +312,8 @@ function rawEntrypointConfigCases(pluginRoot = deskPluginRoot) {
     {
       id: "desk .mcp.copilot.json",
       sourcePath: path.join(pluginRoot, ".mcp.copilot.json"),
-      expectedArgs: ["${COPILOT_PLUGIN_ROOT}/mcp/index.js"],
+      expectedCommand: "node",
+      expectedArgs: ["${COPILOT_PLUGIN_ROOT}/mcp/bootstrap.cjs"],
       expectedCwd: undefined,
       expectedEnv: {},
     },
@@ -399,7 +404,8 @@ function assertPluginScopedLaunchArgs(id, declaration) {
     ...declaration,
     processCwd: makeTempRoot("desk-host-contract-cwd-"),
   });
-  const entrypointArg = launch.args.find((arg) => arg.replaceAll("\\", "/").endsWith("/mcp/index.js"));
+  // Desk plugin declarations start the cross-platform bootstrap, which picks a compatible Node itself; a generic stdio consumer names index.js directly.
+  const entrypointArg = launch.args.find((arg) => /\/mcp\/(?:bootstrap\.cjs|index\.js)$/u.test(arg.replaceAll("\\", "/")));
   if (entrypointArg) {
     assert.equal(path.isAbsolute(entrypointArg), true, `${id} MCP entrypoint arg must materialize to an absolute installed path`);
     assert.equal(existsSync(entrypointArg), true, `${id} materialized MCP entrypoint must exist`);
@@ -407,6 +413,7 @@ function assertPluginScopedLaunchArgs(id, declaration) {
   }
   assert.equal(launch.args[0], "-e", `${id} must use the shared Node bootstrap when it has no direct entrypoint arg`);
   assert.match(launch.args[1], /DESK_PLUGIN_ROOT/u, `${id} shared bootstrap must resolve the installed Desk root`);
+  assert.match(launch.args[1], /'mcp','bootstrap\.cjs'/u, `${id} shared bootstrap must run mcp/bootstrap.cjs`);
   const envRoot = launch.env.DESK_PLUGIN_ROOT;
   assert.equal(
     envRoot === declaration.configBaseDir || launch.cwd === declaration.configBaseDir,
@@ -559,7 +566,9 @@ describe("runtime cache and host launch contract", () => {
     for (const declaration of rawEntrypointConfigCases()) {
       await t.test(declaration.id, () => {
         const server = mcpServerFromConfig(declaration.sourcePath);
-        assert.deepEqual(server.args, declaration.expectedArgs);
+        assert.equal(server.command, declaration.expectedCommand);
+        if (typeof declaration.expectedArgs === "function") declaration.expectedArgs(server.args);
+        else assert.deepEqual(server.args, declaration.expectedArgs);
         assert.equal(server.cwd, declaration.expectedCwd);
         assert.deepEqual(server.env ?? {}, declaration.expectedEnv);
       });
@@ -611,7 +620,8 @@ describe("runtime cache and host launch contract", () => {
           const { homeDir } = makeDeskHome(tempRoot);
           const runtimeCacheDir = ensureDir(path.join(tempRoot, "runtime-cache"));
           const server = declaration.resolveServer();
-          const nodeShim = prependNodeShimToPath(tempRoot, process.env.PATH);
+          // Only the shim and the system tools: the selector must find the shim, not whichever Node this machine has.
+          const nodeShim = prependNodeShimToPath(tempRoot, "/usr/bin:/bin");
           const launch = materializeHostLaunch(server, {
             ...declaration,
             processCwd: tempRoot,
@@ -628,6 +638,14 @@ describe("runtime cache and host launch contract", () => {
               DESK_RUNTIME_CACHE_DIR: runtimeCacheDir,
               HOME: homeDir,
               PATH: nodeShim.path,
+              DESK_NODE_SYSTEM_PREFIX: ensureDir(path.join(tempRoot, "no-system-node")),
+              // Version-manager folders from this machine must not reach the selector either.
+              NVM_DIR: undefined,
+              FNM_DIR: undefined,
+              VOLTA_HOME: undefined,
+              ASDF_DATA_DIR: undefined,
+              MISE_DATA_DIR: undefined,
+              XDG_DATA_HOME: undefined,
             },
           });
           if (process.platform !== "win32") {
