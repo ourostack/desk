@@ -1,0 +1,4 @@
+{"sessionId":"5d2e3f40-ac1b-4e2f-903b-3c4d5e6f7182","timestamp":"2026-09-25T10:00:00.000Z","version":"2.0.5","entrypoint":"sdk-node","type":"user","message":{"role":"user","content":[{"type":"text","text":"q SENTINEL-7f3a"}]}}
+{"type":"user","sessionId":"5d2e3f40-ac1b-4e2f-903b-3c4d5e6f7182", broken
+{"sessionId":"5d2e3f40-ac1b-4e2f-903b-3c4d5e6f7182","timestamp":"2026-09-25T10:00:01.000Z","version":"2.0.5","entrypoint":"sdk-node","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"unknown-tool-use-id","is_error":false}]}}
+{"sessionId":"5d2e3f40-ac1b-4e2f-903b-3c4d5e6f7182","timestamp":"2026-09-25T10:00:02.000Z","version":"2.0.5","entrypoint":"sdk-node","type":"system","subtype":"compact_boundary"}

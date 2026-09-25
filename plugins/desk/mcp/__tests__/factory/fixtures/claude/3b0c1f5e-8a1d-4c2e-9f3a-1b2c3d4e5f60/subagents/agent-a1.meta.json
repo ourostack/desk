@@ -1,0 +1,7 @@
+{
+  "agentType": "general-purpose",
+  "description": "investigate something SENTINEL-7f3a",
+  "toolUseId": "tool-agent-1",
+  "spawnDepth": 1,
+  "model": "claude-sonnet-5"
+}
