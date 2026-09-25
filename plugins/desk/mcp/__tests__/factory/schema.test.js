@@ -344,10 +344,12 @@ test("exactly 64 plugins is accepted", () => {
   assert.equal(validateFacts(value).ok, true)
 })
 
-test("more than 32 models fails with too_many", () => {
+test("more than 32 models fails with too_many (sentinel planted in the unread items, no leak)", () => {
   const value = golden()
-  value.models = new Array(LIMITS.models + 1).fill(value.models[0])
-  assertSingle(validateFacts(value), "too_many", "models")
+  value.models = fillWithSentinel({ id: SENTINEL, requests: 1, tokens: { input: 1, output: 1, cache_read: 1, cache_write: 1, reasoning: null } }, LIMITS.models + 1)
+  const result = validateFacts(value)
+  assertSingle(result, "too_many", "models")
+  assertNoLeak(result)
 })
 
 test("exactly 32 models is accepted", () => {
@@ -356,10 +358,12 @@ test("exactly 32 models is accepted", () => {
   assert.equal(validateFacts(value).ok, true)
 })
 
-test("more than 100000 intervals fails with too_many", () => {
+test("more than 100000 intervals fails with too_many (sentinel planted in the unread items, no leak)", () => {
   const value = golden()
-  value.intervals = new Array(LIMITS.intervals + 1).fill(value.intervals[0])
-  assertSingle(validateFacts(value), "too_many", "intervals")
+  value.intervals = fillWithSentinel({ kind: SENTINEL, agent: 0, start: "2026-01-01T00:00:00.000Z", end: "2026-01-01T00:00:00.000Z" }, LIMITS.intervals + 1)
+  const result = validateFacts(value)
+  assertSingle(result, "too_many", "intervals")
+  assertNoLeak(result)
 })
 
 test("exactly 100000 intervals is accepted", () => {
@@ -368,10 +372,12 @@ test("exactly 100000 intervals is accepted", () => {
   assert.equal(validateFacts(value).ok, true)
 })
 
-test("more than 500 PR refs fails with too_many", () => {
+test("more than 500 PR refs fails with too_many (sentinel planted in the unread items, no leak)", () => {
   const value = golden()
-  value.refs.prs = new Array(LIMITS.prs + 1).fill(value.refs.prs[0])
-  assertSingle(validateFacts(value), "too_many", "refs.prs")
+  value.refs.prs = fillWithSentinel({ repo: SENTINEL, number: 1 }, LIMITS.prs + 1)
+  const result = validateFacts(value)
+  assertSingle(result, "too_many", "refs.prs")
+  assertNoLeak(result)
 })
 
 test("exactly 500 PR refs is accepted", () => {
@@ -380,10 +386,12 @@ test("exactly 500 PR refs is accepted", () => {
   assert.equal(validateFacts(value).ok, true)
 })
 
-test("more than 2000 commit refs fails with too_many", () => {
+test("more than 2000 commit refs fails with too_many (sentinel planted in the unread items, no leak)", () => {
   const value = golden()
-  value.refs.commits = new Array(LIMITS.commits + 1).fill(value.refs.commits[0])
-  assertSingle(validateFacts(value), "too_many", "refs.commits")
+  value.refs.commits = fillWithSentinel({ sha: SENTINEL }, LIMITS.commits + 1)
+  const result = validateFacts(value)
+  assertSingle(result, "too_many", "refs.commits")
+  assertNoLeak(result)
 })
 
 test("exactly 2000 commit refs is accepted", () => {
@@ -392,10 +400,12 @@ test("exactly 2000 commit refs is accepted", () => {
   assert.equal(validateFacts(value).ok, true)
 })
 
-test("more than 10000 agents fails with too_many", () => {
+test("more than 10000 agents fails with too_many (sentinel planted in the unread items, no leak)", () => {
   const value = golden()
-  value.agents = new Array(LIMITS.agents + 1).fill(value.agents[0])
-  assertSingle(validateFacts(value), "too_many", "agents")
+  value.agents = fillWithSentinel({ n: 0, parent: null, model: SENTINEL }, LIMITS.agents + 1)
+  const result = validateFacts(value)
+  assertSingle(result, "too_many", "agents")
+  assertNoLeak(result)
 })
 
 test("exactly 10000 agents (each with a unique n) is accepted", () => {
@@ -404,10 +414,12 @@ test("exactly 10000 agents (each with a unique n) is accepted", () => {
   assert.equal(validateFacts(value).ok, true)
 })
 
-test("more than 1000 jobs fails with too_many", () => {
+test("more than 1000 jobs fails with too_many (sentinel planted in the unread items, no leak)", () => {
   const value = golden()
-  value.jobs = new Array(LIMITS.jobs + 1).fill(value.jobs[0])
-  assertSingle(validateFacts(value), "too_many", "jobs")
+  value.jobs = fillWithSentinel({ job: SENTINEL, basis: ["desk_tool"], transitions: [], observed: null }, LIMITS.jobs + 1)
+  const result = validateFacts(value)
+  assertSingle(result, "too_many", "jobs")
+  assertNoLeak(result)
 })
 
 test("exactly 1000 jobs is accepted", () => {
@@ -416,10 +428,12 @@ test("exactly 1000 jobs is accepted", () => {
   assert.equal(validateFacts(value).ok, true)
 })
 
-test("more than 1000 transitions in one job fails with too_many", () => {
+test("more than 1000 transitions in one job fails with too_many (sentinel planted in the unread items, no leak)", () => {
   const value = golden()
-  value.jobs[0].transitions = new Array(LIMITS.jobTransitions + 1).fill(value.jobs[0].transitions[0])
-  assertSingle(validateFacts(value), "too_many", "jobs.0.transitions")
+  value.jobs[0].transitions = fillWithSentinel({ to: SENTINEL, at: "2026-01-01T00:00:00.000Z" }, LIMITS.jobTransitions + 1)
+  const result = validateFacts(value)
+  assertSingle(result, "too_many", "jobs.0.transitions")
+  assertNoLeak(result)
 })
 
 test("exactly 1000 transitions in one job is accepted", () => {
@@ -428,10 +442,12 @@ test("exactly 1000 transitions in one job is accepted", () => {
   assert.equal(validateFacts(value).ok, true)
 })
 
-test("more than 64 unavailable entries fails with too_many", () => {
+test("more than 64 unavailable entries fails with too_many (sentinel planted in the unread items, no leak)", () => {
   const value = golden()
-  value.unavailable = new Array(LIMITS.unavailable + 1).fill(value.unavailable[0])
-  assertSingle(validateFacts(value), "too_many", "unavailable")
+  value.unavailable = fillWithSentinel({ field: SENTINEL, reason: "host_does_not_record" }, LIMITS.unavailable + 1)
+  const result = validateFacts(value)
+  assertSingle(result, "too_many", "unavailable")
+  assertNoLeak(result)
 })
 
 test("exactly 64 unavailable entries is accepted", () => {
