@@ -57,7 +57,7 @@ before(() => {
   git(["remote", "add", "origin", origin])
   shas = {}
 
-  // The initial commit: a `commit (initial)` entry, which is not listed.
+  // The initial commit: a `commit (initial)` entry.
   write("track/live-task/task.md", card(LIVE_CARD))
   shas.first = commitAt("2026-09-25T08:00:00Z", "first")
 
@@ -218,8 +218,10 @@ test("deskCommitsBetween skips checkouts and git merge entries, and lists a hand
   ])
 })
 
-test("the initial commit's entry is not one of the listed kinds", () => {
-  assert.deepEqual(between("2026-09-25T07:59:59.000Z", "2026-09-25T08:00:05.000Z"), [])
+test("the desk's initial commit is listed too, so a desk's first commit can bind", () => {
+  assert.deepEqual(between("2026-09-25T07:59:59.000Z", "2026-09-25T08:00:05.000Z"), [
+    { sha: shas.first, committed_at: "2026-09-25T08:00:00.000Z", taskPaths: ["track/live-task/task.md"] },
+  ])
 })
 
 test("Git ignores GIT_* variables the caller inherited, so a hook's GIT_DIR cannot point it at another repository", () => {

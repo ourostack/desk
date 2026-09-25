@@ -9,7 +9,9 @@
 //      source `overlay`. Each folder's `plugin.json`,
 //      `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` are
 //      read in that order. A missing manifest, or one with no top-level
-//      `desk` key, is skipped.
+//      `desk` key, is skipped. So is a manifest that exists but can't be
+//      read or parsed as a JSON object, with a warning: one broken,
+//      unrelated plugin must not stop every desk's facts.
 //   3. `ourostack/factory` — source `default`.
 // A declaration that is present but invalid returns `{ store: null, source:
 // "invalid_declaration" }`, and the caller holds the facts. It never falls
@@ -17,12 +19,16 @@
 // a private store must never report to a public one by mistake. Invalid
 // means, for `_meta/factory.json`: unreadable or malformed, a wrong shape or
 // schema version, an extra key, or a store that is not `owner/repo`. For a
-// plugin manifest it means every problem that could hide a declaration: a
-// manifest that exists but can't be read or parsed or is not an object, a
-// flat `"desk.factory.store"` key, a `desk` or `desk.factory` that is not an
+// readable plugin manifest it means a malformed declaration: a flat
+// `"desk.factory.store"` key, a `desk` or `desk.factory` that is not an
 // object, a `desk.factory` with no `store`, or a store (`null` included)
-// that is not `owner/repo`. An unreadable manifest of an unrelated plugin
-// therefore holds the facts too: the declaration can't be ruled out.
+// that is not `owner/repo`. The desk's own `_meta/factory.json` stays the
+// primary declaration; when it decides, no plugin manifest is read.
+//
+// The result carries `warnings`: `{ code, manifest }` for each skipped
+// manifest, `code` being `manifest_unreadable` or `manifest_unparseable`
+// and `manifest` its local path, for `desk_doctor` to surface. Warnings stay
+// on this machine; they are never part of facts.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -46,20 +52,21 @@ function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value)
 }
 
-// `{ found: false }` when the file does not exist, else `{ found: true, json }`
-// with `json` `undefined` when it could not be read or parsed.
+// `{ found: false }` when the file does not exist, else `{ found: true,
+// json, problem }`: `json` is `undefined` and `problem` names why when the
+// file could not be read or parsed.
 function readJson(file) {
   let text
   try {
     text = readFileSync(file, "utf8")
   } catch (error) {
     if (error.code === "ENOENT" || error.code === "ENOTDIR") return { found: false }
-    return { found: true, json: undefined }
+    return { found: true, json: undefined, problem: "manifest_unreadable" }
   }
   try {
     return { found: true, json: JSON.parse(text) }
   } catch {
-    return { found: true, json: undefined }
+    return { found: true, json: undefined, problem: "manifest_unparseable" }
   }
 }
 
@@ -71,11 +78,16 @@ function deskDeclaration(deskRoot) {
   return { store: json.store, source: "desk" }
 }
 
-// `undefined` when the manifest declares nothing, else the declaration.
-function manifestDeclaration(file) {
-  const { found, json } = readJson(file)
+// `undefined` when the manifest declares nothing, else the declaration. A
+// manifest that can't be read as an object adds a warning and declares nothing.
+function manifestDeclaration(file, warnings) {
+  const { found, json, problem } = readJson(file)
   if (!found) return undefined
-  if (!isObject(json) || Object.hasOwn(json, "desk.factory.store")) return invalid()
+  if (!isObject(json)) {
+    warnings.push({ code: problem ?? "manifest_unparseable", manifest: file })
+    return undefined
+  }
+  if (Object.hasOwn(json, "desk.factory.store")) return invalid()
   if (!Object.hasOwn(json, "desk")) return undefined
   const { desk } = json
   if (!isObject(desk)) return invalid()
@@ -85,19 +97,21 @@ function manifestDeclaration(file) {
   return { store: factory.store, source: "overlay" }
 }
 
-function overlayDeclaration(pluginDirs) {
+function overlayDeclaration(pluginDirs, warnings) {
   for (const dir of Array.isArray(pluginDirs) ? pluginDirs : []) {
     if (typeof dir !== "string") continue
     for (const manifest of MANIFESTS) {
-      const declaration = manifestDeclaration(path.join(dir, manifest))
+      const declaration = manifestDeclaration(path.join(dir, manifest), warnings)
       if (declaration !== undefined) return declaration
     }
   }
   return null
 }
 
-/** `resolveStore({ deskRoot, pluginDirs }) -> { store, source }`; see the header for the order. */
+/** `resolveStore({ deskRoot, pluginDirs }) -> { store, source, warnings }`; see the header. */
 export function resolveStore({ deskRoot, pluginDirs = [] }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("resolveStore: deskRoot must be an absolute path")
-  return deskDeclaration(deskRoot) ?? overlayDeclaration(pluginDirs) ?? { store: DEFAULT_STORE, source: "default" }
+  const warnings = []
+  const result = deskDeclaration(deskRoot) ?? overlayDeclaration(pluginDirs, warnings) ?? { store: DEFAULT_STORE, source: "default" }
+  return { ...result, warnings }
 }

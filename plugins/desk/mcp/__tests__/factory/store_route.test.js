@@ -10,6 +10,13 @@ import * as path from "node:path"
 
 import { DEFAULT_STORE, resolveStore } from "../../src/factory/store-route.js"
 
+// The result without its warnings; the warning tests below check those.
+function route(args) {
+  const { warnings, ...result } = resolveStore(args)
+  assert.ok(Array.isArray(warnings))
+  return result
+}
+
 function scratch(run) {
   const root = mkdtempSync(path.join(os.tmpdir(), "desk-store-route-"))
   try {
@@ -50,7 +57,7 @@ test("the desk's own _meta/factory.json wins over an overlay and the default", (
   scratch((root) => {
     const desk = makeDesk(root, { schema_version: 1, store: "example-org/desk-factory" })
     const plugins = [makePlugin(root, "overlay", overlay("other-org/factory"))]
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: plugins }), { store: "example-org/desk-factory", source: "desk" })
+    assert.deepEqual(route({ deskRoot: desk, pluginDirs: plugins }), { store: "example-org/desk-factory", source: "desk" })
   })
 })
 
@@ -64,7 +71,7 @@ test("with no desk declaration, the first plugin manifest that sets desk.factory
       makePlugin(root, "first", overlay("first-org/factory")),
       makePlugin(root, "second", overlay("second-org/factory")),
     ]
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: plugins }), { store: "first-org/factory", source: "overlay" })
+    assert.deepEqual(route({ deskRoot: desk, pluginDirs: plugins }), { store: "first-org/factory", source: "overlay" })
   })
 })
 
@@ -72,20 +79,20 @@ test("an overlay's manifest is found in the Claude and Codex manifest folders to
   scratch((root) => {
     const desk = makeDesk(root)
     const claude = makePlugin(root, "claude-only", overlay("claude-org/factory"), ".claude-plugin/plugin.json")
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [claude] }), { store: "claude-org/factory", source: "overlay" })
+    assert.deepEqual(route({ deskRoot: desk, pluginDirs: [claude] }), { store: "claude-org/factory", source: "overlay" })
     const codex = makePlugin(root, "codex-only", overlay("codex-org/factory"), ".codex-plugin/plugin.json")
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [codex] }), { store: "codex-org/factory", source: "overlay" })
+    assert.deepEqual(route({ deskRoot: desk, pluginDirs: [codex] }), { store: "codex-org/factory", source: "overlay" })
   })
 })
 
 test("with neither a desk declaration nor an overlay, the default store is used", () => {
   scratch((root) => {
     const desk = makeDesk(root)
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [makePlugin(root, "plain", { name: "plain" })] }), { store: "ourostack/factory", source: "default" })
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [] }), { store: "ourostack/factory", source: "default" })
-    assert.deepEqual(resolveStore({ deskRoot: desk }), { store: "ourostack/factory", source: "default" })
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: "not-a-list" }), { store: "ourostack/factory", source: "default" })
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [7, null, path.join(root, "missing")] }), { store: "ourostack/factory", source: "default" })
+    assert.deepEqual(route({ deskRoot: desk, pluginDirs: [makePlugin(root, "plain", { name: "plain" })] }), { store: "ourostack/factory", source: "default" })
+    assert.deepEqual(route({ deskRoot: desk, pluginDirs: [] }), { store: "ourostack/factory", source: "default" })
+    assert.deepEqual(route({ deskRoot: desk }), { store: "ourostack/factory", source: "default" })
+    assert.deepEqual(route({ deskRoot: desk, pluginDirs: "not-a-list" }), { store: "ourostack/factory", source: "default" })
+    assert.deepEqual(route({ deskRoot: desk, pluginDirs: [7, null, path.join(root, "missing")] }), { store: "ourostack/factory", source: "default" })
   })
 })
 
@@ -107,7 +114,7 @@ test("an invalid desk declaration holds the facts: never the overlay, never the 
     scratch((root) => {
       const desk = makeDesk(root, declaration)
       const plugins = [makePlugin(root, "overlay", overlay("other-org/factory"))]
-      assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: plugins }), { store: null, source: "invalid_declaration" }, JSON.stringify(declaration))
+      assert.deepEqual(route({ deskRoot: desk, pluginDirs: plugins }), { store: null, source: "invalid_declaration" }, JSON.stringify(declaration))
     })
   }
 })
@@ -116,7 +123,7 @@ test("an unreadable desk declaration (a folder in its place) holds the facts too
   scratch((root) => {
     const desk = makeDesk(root)
     mkdirSync(path.join(desk, "_meta", "factory.json"), { recursive: true })
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [] }), { store: null, source: "invalid_declaration" })
+    assert.deepEqual(route({ deskRoot: desk, pluginDirs: [] }), { store: null, source: "invalid_declaration" })
   })
 })
 
@@ -125,15 +132,13 @@ test("an invalid overlay declaration holds the facts rather than falling through
     scratch((root) => {
       const desk = makeDesk(root)
       const plugins = [makePlugin(root, "bad", overlay(store)), makePlugin(root, "good", overlay("good-org/factory"))]
-      assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: plugins }), { store: null, source: "invalid_declaration" }, JSON.stringify(store))
+      assert.deepEqual(route({ deskRoot: desk, pluginDirs: plugins }), { store: null, source: "invalid_declaration" }, JSON.stringify(store))
     })
   }
 })
 
-test("every plugin-manifest problem that could hide a declaration holds the facts", () => {
+test("a readable plugin manifest whose desk.factory declaration is malformed holds the facts", () => {
   const problems = {
-    "unparseable": "{ not json",
-    "not an object": "[]",
     "a flat key": { name: "x", "desk.factory.store": "flat-org/factory" },
     "desk not an object": { name: "x", desk: "factory" },
     "factory not an object": { name: "x", desk: { factory: "flat-org/factory" } },
@@ -143,14 +148,43 @@ test("every plugin-manifest problem that could hide a declaration holds the fact
     scratch((root) => {
       const desk = makeDesk(root)
       const plugins = [makePlugin(root, "bad", manifest), makePlugin(root, "good", overlay("good-org/factory"))]
-      assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: plugins }), { store: null, source: "invalid_declaration" }, label)
+      assert.deepEqual(route({ deskRoot: desk, pluginDirs: plugins }), { store: null, source: "invalid_declaration" }, label)
     })
   }
+})
+
+test("an unreadable or unparseable plugin manifest is skipped with a warning, so a broken unrelated plugin never blocks the facts", () => {
   scratch((root) => {
     const desk = makeDesk(root)
     const unreadable = makePlugin(root, "unreadable", undefined)
     mkdirSync(path.join(unreadable, "plugin.json"))
-    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [unreadable] }), { store: null, source: "invalid_declaration" }, "a manifest that can't be read")
+    const unparseable = makePlugin(root, "unparseable", "{ not json", ".claude-plugin/plugin.json")
+    const notObject = makePlugin(root, "not-object", "[]")
+    const good = makePlugin(root, "good", overlay("good-org/factory"))
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [unreadable, unparseable, notObject, good] }), {
+      store: "good-org/factory",
+      source: "overlay",
+      warnings: [
+        { code: "manifest_unreadable", manifest: path.join(unreadable, "plugin.json") },
+        { code: "manifest_unparseable", manifest: path.join(unparseable, ".claude-plugin", "plugin.json") },
+        { code: "manifest_unparseable", manifest: path.join(notObject, "plugin.json") },
+      ],
+    })
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [unreadable] }), {
+      store: "ourostack/factory",
+      source: "default",
+      warnings: [{ code: "manifest_unreadable", manifest: path.join(unreadable, "plugin.json") }],
+    })
+  })
+})
+
+test("a clean resolution has no warnings, and the desk declaration reads no plugin manifest", () => {
+  scratch((root) => {
+    const desk = makeDesk(root, { schema_version: 1, store: "example-org/desk-factory" })
+    const broken = makePlugin(root, "broken", "{ not json")
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [broken] }), { store: "example-org/desk-factory", source: "desk", warnings: [] })
+    const plain = makeDesk(path.join(root, "second"))
+    assert.deepEqual(resolveStore({ deskRoot: plain, pluginDirs: [] }), { store: "ourostack/factory", source: "default", warnings: [] })
   })
 })
 

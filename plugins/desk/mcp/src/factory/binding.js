@@ -12,8 +12,9 @@
 //     `<deskRoot>/[<personPrefix>/]<track>/<task>/…` or
 //     `<track>/_archive/<task>/…`.
 //   - `desk_commit`: a desk commit changed files in T's folder, and either
-//     (a) this clone made the commit (a `commit` reflog entry, from
-//     `deskCommitsBetween`) at a time inside one of the session's own
+//     (a) this clone made the commit (a commit, initial-commit, amend or
+//     merge-commit reflog entry, from `deskCommitsBetween`) at a time
+//     inside one of the session's own
 //     successful `git … commit` shell calls that ran in the desk
 //     (`events.shellGitCommits`), or (b) the commit is one of the session's
 //     native refs (`events.nativeCommitShas`, Copilot's `session_refs`) and

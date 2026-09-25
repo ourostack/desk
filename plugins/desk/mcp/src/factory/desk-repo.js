@@ -12,7 +12,8 @@
 //
 // `deskCommitsBetween(startIso, endIso)` lists the commits this clone made
 // in the window: the reflog entries of `HEAD` and every local branch whose
-// subject starts `commit:`, `commit (amend):` or `commit (merge):`, and
+// subject starts `commit:`, `commit (initial):`, `commit (amend):` or
+// `commit (merge):` (so a desk's first commit can bind too), and
 // whose reflog time (when this clone made the commit, to the second) falls
 // in the window. Git is asked with both `--since` and `--until`. Fetched,
 // pulled, rebased, checked-out and `git merge` entries are not commits this
@@ -129,7 +130,7 @@ function cardFields(text) {
 // Git history.
 // ---------------------------------------------------------------------------
 
-const COMMIT_ENTRY = /^commit(?: \((?:amend|merge)\))?: /u
+const COMMIT_ENTRY = /^commit(?: \((?:initial|amend|merge)\))?: /u
 const REFLOG_TIME = /@\{([^}]+)\}$/u
 
 // `git log -g -z --name-only --format=%x1e<header>`: records split by 0x1e,
