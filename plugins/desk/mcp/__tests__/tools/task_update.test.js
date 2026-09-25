@@ -13,9 +13,9 @@ test("task_update merges frontmatter and refreshes `updated`", async () => {
   const root = await mkTempDeskRoot()
   await task_create({
     deskRoot: root,
-    input: { track: "t", slug: "s", title: "T", body: "Hello" },
+    input: { track: "t", slug: "book-flights", title: "T", body: "Hello" },
   })
-  const filePath = path.join(root, "t", "s", "task.md")
+  const filePath = path.join(root, "t", "book-flights", "task.md")
   const before = await readFront(filePath)
 
   // Force a small wait so `updated` will differ at second-precision.
@@ -25,7 +25,7 @@ test("task_update merges frontmatter and refreshes `updated`", async () => {
     deskRoot: root,
     input: {
       track: "t",
-      slug: "s",
+      slug: "book-flights",
       frontmatter: { status: "in_progress", category: "general" },
     },
   })
@@ -44,16 +44,16 @@ test("task_update preserves schema_version + created even if caller overrides th
   const root = await mkTempDeskRoot()
   await task_create({
     deskRoot: root,
-    input: { track: "t", slug: "s", title: "T" },
+    input: { track: "t", slug: "book-flights", title: "T" },
   })
-  const filePath = path.join(root, "t", "s", "task.md")
+  const filePath = path.join(root, "t", "book-flights", "task.md")
   const before = await readFront(filePath)
 
   await task_update({
     deskRoot: root,
     input: {
       track: "t",
-      slug: "s",
+      slug: "book-flights",
       frontmatter: {
         schema_version: 99,
         created: "1900-01-01T00:00:00Z",
@@ -86,14 +86,14 @@ test("task_update appends to body with a blank-line separator", async () => {
   const root = await mkTempDeskRoot()
   await task_create({
     deskRoot: root,
-    input: { track: "t", slug: "s", title: "T", body: "Original body" },
+    input: { track: "t", slug: "book-flights", title: "T", body: "Original body" },
   })
   await task_update({
     deskRoot: root,
-    input: { track: "t", slug: "s", body_append: "Second paragraph" },
+    input: { track: "t", slug: "book-flights", body_append: "Second paragraph" },
   })
   const { content } = await readFront(
-    path.join(root, "t", "s", "task.md"),
+    path.join(root, "t", "book-flights", "task.md"),
   )
   assert.match(content, /Original body/)
   assert.match(content, /Second paragraph/)
@@ -133,16 +133,16 @@ test("task_update ignores an empty body append", async () => {
   const root = await mkTempDeskRoot()
   await task_create({
     deskRoot: root,
-    input: { track: "t", slug: "s", title: "T", body: "Original" },
+    input: { track: "t", slug: "book-flights", title: "T", body: "Original" },
   })
 
   await task_update({
     deskRoot: root,
-    input: { track: "t", slug: "s", body_append: "" },
+    input: { track: "t", slug: "book-flights", body_append: "" },
   })
 
   assert.match(
-    (await readFront(path.join(root, "t", "s", "task.md"))).content,
+    (await readFront(path.join(root, "t", "book-flights", "task.md"))).content,
     /Original/,
   )
 })

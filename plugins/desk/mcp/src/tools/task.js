@@ -15,6 +15,7 @@ import {
 } from "../util/fm.js"
 import { isPathContained, resolveWriteTarget } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
+import { validateName, describeNameRejection } from "../desk/naming.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 
@@ -108,7 +109,10 @@ async function realpathAfterArchive(candidate, { realSrcDir, realArchiveDir }) {
         continue
       }
       const unavailableAfterMove = ["ENOENT", "ENOTDIR", "ELOOP"].includes(error?.code)
-      /* node:coverage ignore next 3 */
+      /* istanbul ignore next -- defensive: lstat during archive-move symlink
+       * resolution only fails with ENOENT/ENOTDIR/ELOOP in practice; any
+       * other error must still propagate rather than being swallowed, but
+       * that path isn't reachable from a portable test fixture. */
       if (!unavailableAfterMove) {
         throw error
       }
@@ -191,6 +195,16 @@ export async function task_create({ deskRoot, input, person = null, readiness })
     person,
     segments: [track, slug, "task.md"],
   })
+
+  // Path/segment/alias safety (above) is a tool-misuse concern and takes
+  // precedence over naming content rules, which are business rules
+  // evaluated once the target path itself is known-safe.
+  const nameResult = validateName(slug)
+  if (!nameResult.ok) {
+    throw new Error(
+      `task_create: invalid slug: ${describeNameRejection(slug, nameResult)}`,
+    )
+  }
   if (await pathExists(filePath)) {
     throw new Error(
       `task_create: task already exists at ${relPath(deskRoot, filePath)}`,

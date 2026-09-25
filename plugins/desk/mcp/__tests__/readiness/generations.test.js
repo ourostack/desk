@@ -176,7 +176,7 @@ test("support smoke: process restart replays durable mutations and discovers ext
     const controller = await connectOrStartController(options);
     const result = await callTool({
       deskRoot: options.deskRoot, name: 'task_create',
-      input: { track: 'track', slug: 'task', title: 'durable mutation', body: 'kept across restart' },
+      input: { track: 'track', slug: 'durable-task', title: 'durable mutation', body: 'kept across restart' },
       statusContext: { admission: { controller } },
     });
     if (result.isError) throw new Error(JSON.stringify(result));
@@ -194,8 +194,8 @@ test("support smoke: process restart replays durable mutations and discovers ext
   assert.equal(code, 0, stderr)
   const id = stdout.trim()
   assert.equal(JSON.parse(fs.readFileSync(path.join(stateHome, id, "journal", "journal.json"))).clean_shutdown, false)
-  const canonicalBefore = fs.readFileSync(path.join(root, "track", "task", "task.md"), "utf8")
-  fs.writeFileSync(path.join(root, "track", "task", "doing.md"), "# external downtime write\n")
+  const canonicalBefore = fs.readFileSync(path.join(root, "track", "durable-task", "task.md"), "utf8")
+  fs.writeFileSync(path.join(root, "track", "durable-task", "doing.md"), "# external downtime write\n")
   const restarted = await connectOrStartController(options)
   try {
     assert.equal((await restarted.status()).state, "CONTROL_READY")
@@ -204,10 +204,10 @@ test("support smoke: process restart replays durable mutations and discovers ext
     const db = openDb(root)
     try {
       const docs = db.prepare("SELECT path FROM docs ORDER BY path").all().map((row) => row.path)
-      assert.deepEqual(docs, [path.join("track", "task", "doing.md"), path.join("track", "task", "task.md")])
+      assert.deepEqual(docs, [path.join("track", "durable-task", "doing.md"), path.join("track", "durable-task", "task.md")])
       assert.equal(JSON.parse(getMeta(db, "covered_event_cursor")).sequence, 1)
     } finally { closeDb(db) }
-    assert.equal(fs.readFileSync(path.join(root, "track", "task", "task.md"), "utf8"), canonicalBefore)
+    assert.equal(fs.readFileSync(path.join(root, "track", "durable-task", "task.md"), "utf8"), canonicalBefore)
   } finally { await restarted.close() }
 })
 

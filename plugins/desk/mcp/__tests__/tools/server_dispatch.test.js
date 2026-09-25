@@ -82,12 +82,12 @@ test("server.callTool routes task_create to the real implementation", async () =
   const res = await callTool({
     deskRoot: root,
     name: "task_create",
-    input: { track: "t", slug: "s", title: "T" },
+    input: { track: "t", slug: "book-flights", title: "T" },
   })
   assert.ok(!res.isError)
   const body = parseResult(res)
   assert.equal(body.status, "created")
-  assert.equal(body.path, path.join("t", "s", "task.md"))
+  assert.equal(body.path, path.join("t", "book-flights", "task.md"))
 })
 
 test("server.callTool surfaces tool errors as isError with structured body", async () => {
@@ -245,13 +245,13 @@ test("server.callTool routes a person-scoped write end-to-end (path shows desks/
   const res = await callTool({
     deskRoot: root,
     name: "task_create",
-    input: { track: "t", slug: "s", title: "T" },
+    input: { track: "t", slug: "book-flights", title: "T" },
     person: "ari",
   })
   assert.ok(!res.isError)
   const body = JSON.parse(res.content[0].text)
   assert.equal(body.status, "created")
-  assert.equal(body.path, path.join("desks", "ari", "t", "s", "task.md"))
+  assert.equal(body.path, path.join("desks", "ari", "t", "book-flights", "task.md"))
 })
 
 test("server.callTool surfaces an invalid-alias throw as isError", async () => {
@@ -445,10 +445,10 @@ test("person scoping and the private measurement route survive the feedback reti
     const { call } = await liveHandlers({ deskRoot: fixture.deskRoot, person: "rowan" })
 
     const written = await call({
-      params: { name: "task_create", arguments: { track: "t", slug: "s", title: "T" } },
+      params: { name: "task_create", arguments: { track: "t", slug: "book-flights", title: "T" } },
     })
     assert.equal(written.isError, undefined)
-    assert.equal(parseResult(written).path, path.join("desks", "rowan", "t", "s", "task.md"))
+    assert.equal(parseResult(written).path, path.join("desks", "rowan", "t", "book-flights", "task.md"))
 
     const capabilities = await call({
       params: { name: "desk_work_ledger", arguments: { action: "capabilities" } },

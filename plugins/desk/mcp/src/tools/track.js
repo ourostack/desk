@@ -12,6 +12,12 @@ import {
 } from "../util/fm.js"
 import { resolveWriteTarget } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
+import {
+  validateTrackName,
+  validateScope,
+  operatorNames,
+  describeNameRejection,
+} from "../desk/naming.js"
 
 // Optional fields a caller may supply at create time.
 const OPTIONAL_TRACK_FIELDS = [
@@ -57,6 +63,24 @@ export async function track_create({ deskRoot, input, person = null, readiness }
     person,
     segments: [slug, "track.md"],
   })
+
+  // Path/segment/alias safety (above) is a tool-misuse concern and takes
+  // precedence over naming/scope content rules, which are business rules
+  // evaluated once the target path itself is known-safe.
+  const nameResult = validateTrackName(slug, {
+    operatorNames: operatorNames(deskRoot),
+  })
+  if (!nameResult.ok) {
+    throw new Error(
+      `track_create: invalid slug: ${describeNameRejection(slug, nameResult)}`,
+    )
+  }
+
+  const scopeResult = validateScope(values.scope)
+  if (!scopeResult.ok) {
+    throw new Error(`track_create: invalid \`scope\`: ${scopeResult.hint}`)
+  }
+
   if (await pathExists(filePath)) {
     throw new Error(
       `track_create: track already exists at ${relPath(deskRoot, filePath)}`,
@@ -70,6 +94,7 @@ export async function track_create({ deskRoot, input, person = null, readiness }
     status: values.status ?? "active",
     created: ts,
     updated: ts,
+    scope: values.scope,
   }
   for (const k of OPTIONAL_TRACK_FIELDS) {
     if (values[k] !== undefined) data[k] = values[k]
@@ -103,6 +128,13 @@ export async function track_update({ deskRoot, input, person = null, readiness }
   const { slug, frontmatter, body_append } = values
   if (!Object.hasOwn(values, "slug")) {
     throw new Error("track_update: `slug` is required")
+  }
+
+  if (frontmatter && Object.hasOwn(frontmatter, "scope")) {
+    const scopeResult = validateScope(frontmatter.scope)
+    if (!scopeResult.ok) {
+      throw new Error(`track_update: invalid \`scope\`: ${scopeResult.hint}`)
+    }
   }
 
   const filePath = await resolveWriteTarget({
