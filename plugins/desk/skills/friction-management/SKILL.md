@@ -25,6 +25,8 @@ When the operator asks why skill-driven work omitted something, diverged from an
 
 ## 1. Pin a new card
 
+pin whenever the operator teaches me something about how i work, even offhand. over-logging is cheap; making the operator re-teach it next session is not. an explicit no-write instruction for the run still wins.
+
 when the operator hits friction, or when i notice a recurring rough edge:
 
 1. decide the scope. is this operator-wide (`_meta/friction.md`), or does it belong to one drawer (`<track>/_friction/friction.md`)? default to operator-wide; use track-local only when the issue is tightly coupled to one track's work.
@@ -48,24 +50,11 @@ when the operator hits friction, or when i notice a recurring rough edge:
 
 ### Pin the card while it's still warm
 
-pin friction during the activity that surfaced it, not after.
-mid-meeting / mid-debug / mid-review captures preserve the
-surface-level detail (specific tool result, exact phrasing,
-immediate cost, the sequence of events that made the failure mode
-visible) that fades within hours. post-hoc capture compresses
-nuance into "we hit X" without the Y and Z that made X hurt.
+pin friction during the activity that surfaced it, not after. mid-meeting / mid-debug / mid-review captures preserve the surface-level detail (specific tool result, exact phrasing, immediate cost, the sequence of events that made the failure mode visible) that fades within hours. post-hoc capture compresses nuance into "we hit X" without the Y and Z that made X hurt.
 
-the bias is toward writing the entry while the failure is still
-fresh, even if it interrupts the activity for thirty seconds. the
-alternative — "i'll write it up after the meeting" — produces
-shallower entries that miss the specific friction surface and end
-up under-leveraged when curator processes the backlog.
+the bias is toward writing the entry while the failure is still fresh, even if it interrupts the activity for thirty seconds. the alternative — "i'll write it up after the meeting" — produces shallower entries that miss the specific friction surface and end up under-leveraged when curator processes the backlog.
 
-a short live-capture entry is more useful than a long after-the-fact
-one. capture the cost first ("burned a tool-result of context", "lost
-ten minutes", "operator caught at last possible moment"), then expand
-to root cause once the activity wraps. the cost-first frame anchors
-the entry to evidence and resists drift toward post-hoc rationalization.
+a short live-capture entry is more useful than a long after-the-fact one. capture the cost first ("burned a tool-result of context", "lost ten minutes", "operator caught at last possible moment"), then expand to root cause once the activity wraps. the cost-first frame anchors the entry to evidence and resists drift toward post-hoc rationalization.
 
 ## 2. Mark a card landed
 

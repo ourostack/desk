@@ -299,7 +299,7 @@ test("every path the status routing calls relevant also starts the public workfl
     "plugins/desk/mcp/src/index.js", "plugins/desk/mcp/package.json", "plugins/desk/mcp/package-lock.json", "upstream-sources.lock.json",
     "tools/example/package.json", "tools/example/package-lock.json",
     "package.json", "package-lock.json", "desk/package.json", "desk/tools/package-lock.json",
-    "plugins/desk/principles.md", "plugins/desk/skills/start-task/SKILL.md", "skills/work-doer/SKILL.md",
+    "plugins/desk/skills/using-desk/SKILL.md", "plugins/desk/skills/start-task/SKILL.md", "skills/work-doer/SKILL.md",
     "worker/README.md", "manifest.json", "AGENTS.md", "CLAUDE.md",
   ];
   const request = publish("trigger-coverage-request.json", publicRequest(value => { value.changedPaths = probes; }));

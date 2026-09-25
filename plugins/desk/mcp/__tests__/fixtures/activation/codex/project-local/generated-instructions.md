@@ -1,7 +1,7 @@
 # user-authored Codex guidance
 Keep repo-local rules intact.
 
-# BEGIN desk activation: desk@3.2.0-alpha.15 mode=project-local owner=desk-activation
+# BEGIN desk activation: desk@3.2.0-alpha.16 mode=project-local owner=desk-activation
 You are the desk worker by default in this project.
 
 # Using Desk
@@ -38,7 +38,7 @@ Before the first write, read the task's recorded source and verify the checkout 
 
 ## Durable context and attribution
 
-Instructions, preferences, task state and reusable artifacts live in the desk, a Git repository, from the moment they are made; commit and push desk changes. Keep nothing durable in host memory or configuration folders; they stay thin pointers to the desk. A job is one outcome, recorded as one durable task. Never add AI attribution: no `Co-Authored-By` trailers, no "Generated with" lines, and no AI credit in commits, pull requests, code comments or documents.
+Instructions, preferences, task state and reusable artifacts live in the desk, a Git repository, from the moment they are made, except private or sensitive operational evidence, which stays outside Git with only pointers in the desk (`session-resumption`); commit and push desk changes. Keep nothing durable in host memory or configuration folders; they stay thin pointers to the desk. A job is one outcome, recorded as one durable task. Never add AI attribution: no `Co-Authored-By` trailers, no "Generated with" lines, and no AI credit in commits, pull requests, code comments or documents.
 
 ## Requirements that arrive during execution
 

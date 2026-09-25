@@ -5,8 +5,6 @@ description: Invoke when the agent needs Playwright to drive a web UI behind an 
 
 # cdp-headed-browser
 
-This skill inherits all invariants in `../../principles.md`. Read them first if they are not already in context.
-
 > **Overlay users:** consumer overlays provide browser-specific context declarations, launch behavior, and process attestation. This skill stays generic.
 
 A persistent headed browser is useful when authentication depends on durable browser state or human interaction. Direct attachment to an arbitrary debugging endpoint is not safe, however: a port proves transport availability, not the intended profile, identity, posture, or ownership.

@@ -89,9 +89,9 @@ const requiredHostFreshnessPathFilters = [
   "plugins/desk/hooks/**",
   "plugins/desk/output-styles/**",
   "plugins/desk/plugin.json",
-  "plugins/desk/principles.md",
   "plugins/desk/skills/**",
   "plugins/superpowers/**",
+  "plugins/plain-language/**",
 ]
 
 const requiredHostManifestChecks = [
@@ -139,13 +139,13 @@ const hostManifestFixtureFiles = [
   "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md",
   "plugins/desk/output-styles/worker.md",
   "plugins/desk/plugin.json",
-  "plugins/desk/principles.md",
   "plugins/superpowers/.claude-plugin/plugin.json",
   "plugins/superpowers/.codex-plugin/plugin.json",
   "plugins/superpowers/plugin.json",
   "plugins/plain-language/.claude-plugin/plugin.json",
   "plugins/plain-language/.codex-plugin/plugin.json",
   "plugins/plain-language/plugin.json",
+  "plugins/plain-language/skills/plain-language/SKILL.md",
   "scripts/validate-skills.cjs",
 ]
 
@@ -1463,8 +1463,10 @@ test("root host verifier rejects absent worker metadata and each authored invari
   await withHostFreshnessFixture(async (root) => {
     for (const file of [
       "plugins/desk/agents/worker.md", "plugins/desk/agents/worker.toml", "plugins/desk/agents/worker.agent.md",
-      "plugins/desk/output-styles/worker.md", "plugins/desk/principles.md", "plugins/desk/mcp/src/activation/adapters/codex.js",
+      "plugins/desk/output-styles/worker.md", "plugins/plain-language/skills/plain-language/SKILL.md",
+      "plugins/desk/mcp/src/activation/adapters/codex.js",
     ]) writeText(root, file, "fixture without worker metadata\n")
+    writeText(root, "plugins/desk/principles.md", "a revived principles file\n")
     const result = await verifier.verifyDeskHostManifests({
       repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
     })
@@ -1477,7 +1479,7 @@ test("root host verifier rejects absent worker metadata and each authored invari
       assert.ok(result.errors.includes(`worker-sources ${host} no-hard-wrap invariant drift`))
     }
     for (const message of [
-      "claude session-start prompt drift", "principles no-hard-wrap invariant drift",
+      "claude session-start prompt drift", "plain-language no-hard-wrap rule drift", "retired principles file present",
       "codex activation no-hard-wrap invariant drift", "codex activation Plain Language invariant drift",
     ]) assert.ok(result.errors.includes(`worker-sources ${message}`), result.errors.join("\n"))
   })

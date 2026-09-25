@@ -5,9 +5,6 @@ description: Invoke ONLY when the operator hands worker a PR URL or ID and asks 
 
 # peer-pr-review
 
-This skill inherits all invariants in `../../principles.md`. Read
-them first if they are not already in context.
-
 Eleven-phase workflow for reviewing **someone else's** PR — scaffold,
 read, walkthrough, backlog, full-line pass, voice-strip + verify
 pass, confidence check, post, vote, promote, archive. Sibling skills

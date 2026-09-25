@@ -1,6 +1,6 @@
 ---
 name: work-orchestration
-description: Bind authorized engineering work to the selected Superpowers method and preserve Desk state and cross-repository dependency authority.
+description: Align new work before go by gathering every decision that needs the human's judgment into one batch with recommendations, then bind authorized engineering work to the selected Superpowers method and preserve Desk state and cross-repository dependency authority.
 ---
 
 # Work orchestration
@@ -8,6 +8,12 @@ description: Bind authorized engineering work to the selected Superpowers method
 Invoke `desk:superpowers-integration`. This Desk compatibility entrypoint selects no second engineering method: Superpowers owns discovery, planning, execution and verification; Desk owns the work state and approved terminal boundary.
 
 Read the existing task, agreement and plan before choosing the matching Superpowers skill. Consume prior approval without reopening it. Use `superpowers:brainstorming` for missing design agreement, `superpowers:writing-plans` when a plan is needed, and `superpowers:executing-plans` or authorized `superpowers:subagent-driven-development` for implementation. Keep plans and progress on Desk. Invoke `superpowers:requesting-code-review` for the normal review transition.
+
+## Align new work before go
+
+Before new work starts, list every decision in it that needs the human's judgment: voice, relationships, durable naming, irreversible or hard-to-undo choices, and real ambiguity. Resolve each one you can from the request, the code or a sensible default. Put the rest to the human now, not when you reach the fork, and especially any entangled calls, where one answer changes another or changes work done before the fork. Ask them as one batch, each with your recommendation, so execution then runs without blocking on the human. A fork that could not have been foreseen is raised when it appears; one you did not think about beforehand is not unforeseeable.
+
+## Authority and dependencies
 
 Verify repository authority and the approved contribution path before any branch, worktree or source edit. Read-only requests remain read-only. Delegation and worktree creation stay within the recorded mandate.
 
@@ -19,7 +25,7 @@ When the ready set can produce an independently usable artifact, complete that m
 
 Do not optimize for one final reveal. Local branches, completed nodes and review receipts are engineering progress, not delivered value. Replan when a consumer is waiting while unrelated tail work gates a safe usable milestone. If an intermediate artifact cannot be safe or coherent, record the exact coupling that requires atomic delivery.
 
-Only a current, unsatisfied `needs-human-approval` is a hard exception. A producer may use `needs reviewer gate` only when it explicitly permits machine review. Superseded records do not revoke existing go. Mechanical reviews go to the authorized reviewer. A nested worker returns its frozen brief to the parent rather than self-certifying or waiting for the parent's entire task to finish.
+Only a current, unsatisfied `needs-human-approval` is a hard exception. A producer may use `needs reviewer gate` only when it explicitly permits machine review. Superseded records do not revoke existing go. Mechanical reviews go to the authorized reviewer. A nested worker returns its brief and evidence to the parent rather than self-certifying or waiting for the parent's entire task to finish.
 
 Before any fan-out, the root identifies dependencies, write sets, exclusive resources, the integration fold, the evidence each child must return, and the final synthesis it will own. If those stay implicit, the work is not ready to split.
 
@@ -29,7 +35,7 @@ If material resequencing becomes necessary, record the observed waste pattern, t
 
 Desk owns task and iteration state and archive transitions. The agreed endpoint determines whether verification ends at an intentional alpha/PR-only branch or includes authorized merge, release/install, consuming-surface smoke and cleanup. Superpowers finish options cannot silently change that endpoint.
 
-Invoke `superpowers:requesting-code-review` once at the diff boundary with a frozen candidate and the relevant evidence. Record every finding disposition, keep one Superpowers implementation owner, run one bounded correction wave, and request affected re-review rather than opening a second implementation loop or repeating review after every edit.
+Invoke `superpowers:requesting-code-review` once at the diff boundary with the candidate branch and the relevant evidence, and record the head it reviewed as evidence. Record every finding disposition, keep one Superpowers implementation owner, run one bounded correction wave, and request affected re-review rather than opening a second implementation loop or repeating review after every edit.
 
 ## Ready-set scheduling and continuous peer review
 
@@ -50,7 +56,7 @@ Ready is exactly step 2's definition: pending nodes with all dependencies accept
 
 Dispatch every non-conflicting ready node through pristine Superpowers skills in its own worktree: `superpowers:using-git-worktrees` gives each dispatched node its own isolated worktree so no two ready nodes share a writer; `superpowers:dispatching-parallel-agents` fans genuinely independent, non-conflicting nodes out; `superpowers:subagent-driven-development` and `superpowers:executing-plans` carry out one dispatched node's own implement/fix loop; `superpowers:verification-before-completion` runs before any acceptance. One coherent task's implement/fix loop stays sequential; independent non-conflicting nodes may run concurrently in stable table order.
 
-A candidate is accepted only after spec/targeted proof and a completed finding disposition from `superpowers:requesting-code-review` against the frozen candidate. The same Superpowers implementation owner handles one bounded correction wave and the affected re-review; never open a second fix loop beside that owner's loop.
+A candidate is accepted only after spec/targeted proof and a completed finding disposition from `superpowers:requesting-code-review` against the candidate branch, with the head it reviewed recorded as evidence. The same Superpowers implementation owner handles one bounded correction wave and the affected re-review; never open a second fix loop beside that owner's loop.
 
 On failure, failure blocks only descendants: independent ready nodes already dispatched keep running, the failed node's reserved resources are released, and the ready set is recomputed immediately rather than held open. A candidate-changing repair invalidates its affected descendants' prior acceptance and re-enters at the same Superpowers implementation owner, not a new one.
 

@@ -42,7 +42,7 @@ test("resumption binds the explicit provider map and continuous task/ledger iden
     /exact source and unfinished-file hashes/u,
     /step\/attempt.*findings.*active writers.*unresolved.*next expected step/u,
     /new attempt.*preserve.*earlier/u,
-    /private measurement outside Git/u,
+    /private measurement, customer data\) stays outside Git/u,
   ]) assert.match(source, requirement)
   assert.doesNotMatch(source, /same work-item identity, task card and existing doing record|canonical doing record/u)
 })
@@ -170,11 +170,12 @@ test("a matching upstream diff is not independent cleanup authority", () => {
   const source = read("skills/git-hygiene/SKILL.md")
   assert.doesNotMatch(source, /Empty diff →.*safe to delete/u)
   assert.match(source, /Empty diff.*content evidence.*not deletion authority/u)
-  assert.match(source, /explicitly frozen base.*do not rebase/u)
+  assert.match(source, /A commit hash is evidence only/u)
+  assert.doesNotMatch(source, /frozen base|frozen SHA/u)
 })
 
 test("continuation does not require keeping an exhausted runtime alive", () => {
-  const source = read("principles.md")
+  const source = read("skills/session-resumption/SKILL.md")
   assert.match(source, /Verified resource exhaustion is not a phantom limit/u)
   assert.match(source, /process handoff continues.*mandate/u)
   assert.match(source, /not permission to return control/u)

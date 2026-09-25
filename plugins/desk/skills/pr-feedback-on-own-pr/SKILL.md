@@ -5,9 +5,6 @@ description: Process explicitly requested feedback on the operator's PR, retain 
 
 # pr-feedback-on-own-pr
 
-This skill inherits all invariants in `../../principles.md`. Read
-them first if they are not already in context.
-
 Invoke this skill when the operator asks to iterate on a PR's review
 feedback. Worker remains the agent; pr-feedback-on-own-pr is a set of
 instructions worker follows for the PR-feedback task.
@@ -282,9 +279,7 @@ The shape-view surfaces:
   friction for bake-in in phase 5b).
 - **Open questions** needing operator judgment.
 
-Operator reviews, pushes back, redirects, adds context. This is a
-conversation, not a proposal list — per `../../principles.md` Invariant 1
-(collab-flow), do not walk each item one-at-a-time here.
+Operator reviews, pushes back, redirects, adds context. This is a conversation, not a proposal list — do not walk each item one-at-a-time here (`interaction-style` §1 and §6).
 
 **Agent output shape:** analysis only. If you catch yourself drafting
 "for item 5, I propose X" during phase 3, stop and reframe to shape-
@@ -308,10 +303,7 @@ Nits and docs still auto-apply (no operator interaction). Architecture
 and behavior items require operator confirmation per
 `approval_checkpoint: architecture-and-behavior-only`.
 
-Per the batch-refinements sub-invariant in `../../principles.md`
-Invariant 2: do not act once per operator sentence. If operator sends
-a second refinement while the first is being processed, wait and
-consolidate.
+Per `interaction-style` ("Respond before editing"): do not act once per operator sentence. If operator sends a second refinement while the first is being processed, wait and consolidate.
 
 Operator-voice comment discipline (verify load-bearing claims, no
 fabricated specifics or timelines, no sycophantic padding, match
@@ -469,9 +461,8 @@ for that.
      decision, not a clarifying detail).
    - A prereq the plan depends on is missing (unmerged dependency
      PR, an MCP that's down, an `az` token expired, etc.).
-   These are the only valid stop conditions; "I want to be safe and
-   ask" is scaffolding (per `principles.md` Invariant 6) and is not
-   on the list.
+
+   These are the only valid stop conditions; "I want to be safe and ask" is scaffolding (`curator` "Encoding a human gate") and is not on the list.
 
 The self-attestation is a record on the iteration, not a silencer
 for the operator. Operator can read `planning.md` at any time and
@@ -597,13 +588,7 @@ flag the finding after the pin, strengthen or relocate the pin.
 
 All required pipelines green, coverage at or above gate.
 
-**No iteration cap.** 10+ pipeline iterations to green is not unheard
-of on a large repo (one reference implementation took 6 iterations on
-initial-impl just to clear stale-main + flakes). Do NOT hard-cap
-pipeline iterations. Do NOT return control for a cap hit. Return
-control ONLY for blockers that genuinely require operator input (see
-`../../principles.md` Invariant 1 on what counts as a real decision
-point).
+**No iteration cap.** 10+ pipeline iterations to green is not unheard of on a large repo (one reference implementation took 6 iterations on initial-impl just to clear stale-main + flakes). Do NOT hard-cap pipeline iterations. Do NOT return control for a cap hit. Return control ONLY for blockers that genuinely require operator input (see `interaction-style` §6 "Ask only when blocked" on what counts as a real decision point).
 
 **Every pipeline run (success or failure) logs** to the iteration's
 `feedback.md` under `## Phase 8 — pipeline iteration log`, one row in
@@ -1064,7 +1049,7 @@ from this file alone.
 | Comment in a file the PR only touches adjacently | Confirm with operator whether it's in-scope; if not, resolve with "pre-existing, follow-up tracked in `<tracker-id>`" |
 | Architecture change would require reverting a unit the PR already built | Surface the cost tradeoff BEFORE planning; operator may accept or request compromise |
 | Phase 9 verify fails for a thread | Loop back to phase 6a (update plan) or phase 7 (add units). Don't mark Resolved-with-caveats. |
-| Harness / environment blocker (permission denial, unreachable service) | Return control to operator per `../../principles.md` Invariant 1 — that's a real decision point. |
+| Harness / environment blocker (permission denial, unreachable service) | Return control to operator per `interaction-style` §6 — that's a real decision point. |
 
 ---
 

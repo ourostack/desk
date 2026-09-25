@@ -1,6 +1,6 @@
 ---
 name: session-resumption
-description: Checkpoint and resume an authorized non-terminal task, including a fresh-process handover after interruption or runtime pressure. Preserve actual source, unfinished work, work identity and authority; admit a replacement writer only after the prior owner is released.
+description: Checkpoint and resume an authorized non-terminal task, including a fresh-process handover after interruption, verified resource exhaustion or runtime pressure. Preserve actual source, unfinished work, work identity and authority; admit a replacement writer only after the prior owner is released. Also owns where private or sensitive operational evidence (raw transcripts, credentials, private measurement, customer data) is kept.
 ---
 
 # Session resumption
@@ -8,6 +8,10 @@ description: Checkpoint and resume an authorized non-terminal task, including a 
 Desk owns checkpoint and recovery admission here. Reconcile the canonical task, current authority, actual source, writer ownership and uncertain effects before entering `desk:using-superpowers-with-desk` at `reconciled-resume`. Consume the existing approval and explicit artifact map; do not start another lifecycle or repeat go-ahead.
 
 at the desk again. the operator picked an active task to resume — a manilla envelope already part-filled, papers laid out where the last session left them. pick up where things were, don't start over.
+
+## Protected evidence
+
+Operational evidence that is private or sensitive (raw transcripts, credentials, private measurement, customer data) stays outside Git, in an approved private evidence location. The desk and every other repository record only pointers and derived, non-sensitive summaries. This holds for all work, not only checkpoints, and no host memory, plan or task store is a substitute location.
 
 ## Checkpoint before handoff
 
@@ -28,7 +32,7 @@ Determine freshness by reconciling current authority, actual source/publication 
 
 If a torn or incomplete latest checkpoint exists, use the previous complete generation only after preserving current source and reconciling authority: preserve newer committed and uncommitted source bytes, including untracked files, before any recovery action; never reset to a snapshot or silently replay. A readable old generation alone does not establish readiness. If newer bytes or the required payload cannot be preserved and reconciled, admission remains non-ready.
 
-Keep raw transcripts, credentials and private measurement outside Git. A same-host protected copy is not an off-host backup; state which durability boundary was actually achieved. Do not delete the originals merely because an archive exists.
+Protected payloads follow "Protected evidence" above. A same-host protected copy is not an off-host backup; state which durability boundary was actually achieved. Do not delete the originals merely because an archive exists.
 
 ## Fresh-process recovery
 
@@ -41,6 +45,8 @@ Inspect actual committed and unfinished source without overwriting it, then reco
 Process monitoring and restart belong outside the worker process to the owning host. Use its maintained launch/recovery capability without changing authentication, source selection, permissions or default profiles. An in-session reminder, restored terminal label, live MCP server or successful process launch does not prove the worker resumed. If the required host capability is unavailable, report that specific gap and continue independent safe work rather than inventing a scheduler or claiming unattended recovery.
 
 ## Bounded execution and recovery
+
+Verified resource exhaustion is not a phantom limit. A process handoff continues the existing mandate; it is not permission to return control, shrink the outcome or keep an exhausted runtime alive. At a safe integration boundary, or when the host reports persistent memory pressure with failed compaction, preserve source and unfinished work here and use the authorized host's fresh-process recovery path; the project and its work-item identity outlive the process.
 
 Checkpoint at completed integration and delegation boundaries and before an unattended batch. Keep one implementation writer per worktree, close completed assignments, and return bounded findings plus artifact pointers rather than repeatedly copying whole histories or command output. The approved outcome continues across process handovers; no new go or lifecycle is created.
 
@@ -72,35 +78,20 @@ For each `mode: local` repo, inspect `git status`, the current branch, local-onl
 
 If the resumption target's mapped progress record or referenced active iteration doc (an existing `doing.md`, `investigation.md` or per-iteration doc named in the task card's `iterations.active`) declares `required_mcps:` in frontmatter, treat that list as a **hard requirement** for resuming, not a recommendation. Consume all applicable declared requirements; an explicit provider progress path does not erase the iteration's requirements.
 
-`required_mcps:` is a list of MCP keys matching aliased entries in
-the workspace's runtime MCP config — either under
-`[mcps.builtins.<alias>]` (runtime-proxied builtins) or
-`[mcps.servers.<alias>]` (external stdio MCPs). both namespaces are
-valid sources; the key just needs to be loaded at runtime. example
-frontmatter snippet:
+`required_mcps:` is a list of MCP keys matching aliased entries in the workspace's runtime MCP config — either under `[mcps.builtins.<alias>]` (runtime-proxied builtins) or `[mcps.servers.<alias>]` (external stdio MCPs). both namespaces are valid sources; the key just needs to be loaded at runtime. example frontmatter snippet:
 
 ```yaml
 required_mcps:
   - analytics-store
 ```
 
-**check**: for each entry in `required_mcps`, consult the runtime's
-loaded-MCP registry to confirm the key is currently loaded —
-engine-specific. (implementations may probe the harness's own
-loaded-MCP listing, an introspection MCP, or a tool-name-prefix
-scan; encode the principle, not the API.)
+**check**: for each entry in `required_mcps`, consult the runtime's loaded-MCP registry to confirm the key is currently loaded — engine-specific. (implementations may probe the harness's own loaded-MCP listing, an introspection MCP, or a tool-name-prefix scan; encode the principle, not the API.)
 
-**hard-stop**: if any required MCP key isn't loaded, **STOP at the
-resumption prompt before proceeding to Step 3**. don't start the
-phase, don't begin tool work, don't silently continue. print:
+**hard-stop**: if any required MCP key isn't loaded, **STOP at the resumption prompt before proceeding to Step 3**. don't start the phase, don't begin tool work, don't silently continue. print:
 
 1. the list of required MCP keys that are missing.
-2. the likely root cause: the runtime's workspace MCP config link
-   absent, broken, or pointing somewhere else; or the MCP isn't
-   declared in the workspace MCP config. reference session-start
-   Step 4.7's link check.
-3. a note that the agent will not proceed with this resumption
-   until restarted with the required MCPs loaded.
+2. the likely root cause: the runtime's workspace MCP config link absent, broken, or pointing somewhere else; or the MCP isn't declared in the workspace MCP config. reference session-start Step 4.7's link check.
+3. a note that the agent will not proceed with this resumption until restarted with the required MCPs loaded.
 
 example stop message:
 
@@ -115,17 +106,9 @@ the agent.
 Resumption paused until the required MCPs are available.
 ```
 
-**why hard-stop, not recommendation**: when an iteration doc declares
-`required_mcps`, the planning pass already determined the work
-cannot proceed without those tools. letting the agent continue and
-discover the missing tool mid-investigation wastes operator time
-and contaminates the iteration's audit trail with abandoned work.
-session-start's Step 4.7 is the soft self-healing path (creates the
-symlink so MCPs auto-load next time); this gate is the hard
-requirement at the resumption boundary.
+**why hard-stop, not recommendation**: when an iteration doc declares `required_mcps`, the planning pass already determined the work cannot proceed without those tools. letting the agent continue and discover the missing tool mid-investigation wastes operator time and contaminates the iteration's audit trail with abandoned work. session-start's Step 4.7 is the soft self-healing path (creates the symlink so MCPs auto-load next time); this gate is the hard requirement at the resumption boundary.
 
-if the iteration doc has no `required_mcps:` field, this step is a
-no-op — proceed to Step 3.
+if the iteration doc has no `required_mcps:` field, this step is a no-op — proceed to Step 3.
 
 ## Step 3 — Re-enter the right phase
 
