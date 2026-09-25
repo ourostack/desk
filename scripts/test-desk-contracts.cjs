@@ -167,6 +167,17 @@ for (const file of [
   });
 }
 
+// Reviewers and evaluators use the current candidate on the channel; a commit hash is evidence only. The one
+// statement of that rule ("There is no frozen candidate") is the only frozen wording a skill may carry.
+contract("no skill freezes a candidate, brief, source or review input", () => {
+  const skillsDir = path.join(root, "plugins", "desk", "skills");
+  const offenders = fs.readdirSync(skillsDir)
+    .map((name) => `plugins/desk/skills/${name}/SKILL.md`)
+    .filter((file) => fs.existsSync(path.join(root, file)))
+    .filter((file) => /frozen[- ](?:candidate|brief|input|review|source|base|sha|ref|commit)|freeze the review/iu.test(text(file).replace(/there is no frozen candidate/giu, "")));
+  assert.deepEqual(offenders, []);
+});
+
 // Desk CI and configuration.
 contract("CI runs the skill evaluation contracts", () => {
   assert.match(
