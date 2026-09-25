@@ -43,7 +43,7 @@ function subsection(file, heading) {
 requires(
   "plugins/desk/skills/work-orchestration/SKILL.md",
   "Desk alpha delegates engineering without repeating approval",
-  /desk:superpowers-integration[\s\S]+existing task[\s\S]+prior approval without reopening/iu,
+  /desk:using-superpowers-with-desk[\s\S]+existing task[\s\S]+prior approval without reopening/iu,
 );
 contract("Superpowers owns the engineering method", () => {
   assert.match(text("plugins/desk/skills/work-orchestration/SKILL.md"), /Superpowers owns discovery, planning, execution and verification/u);

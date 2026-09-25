@@ -135,7 +135,7 @@ a furnished room, ready to settle into. the layout, the lifecycle, the small cer
 - session start / resumption / archival workflow
 
 ### dispatch
-- `work-orchestration` invokes `desk:superpowers-integration`; Superpowers is the sole engineering method, while Desk preserves state and authority
+- `work-orchestration` invokes `desk:using-superpowers-with-desk`; Superpowers is the sole engineering method, while Desk preserves state and authority
 - non-coding workflow paths supported (execution + completion alternatives for non-code work)
 
 ### engineering posture

@@ -35,7 +35,7 @@ when a card is about a human-intervention point in a skill (a sign-off gate, an 
 2. **read each card end-to-end** before picking a disposition. don't skim. reactive edits without reading the full entry produce churn.
 3. **decide disposition.** name the target file or rationale.
 4. **batch decisions.** present dispositions to operator in one message with a clear table (entry → disposition → target). wait for signoff. don't walk the operator through one card at a time (`interaction-style` §1).
-5. **Encode in a single authorized PR** against the plugin repo, one unit per card with acceptance checks. Invoke `desk:superpowers-integration` for the needed Superpowers planning and implementation skills.
+5. **Encode in a single authorized PR** against the plugin repo, one unit per card with acceptance checks. Invoke `desk:using-superpowers-with-desk` for the needed Superpowers planning and implementation skills.
 6. **take landed cards down** in the same motion they shipped: update the `Status:` line to name the PR and merge SHA, move the entry to `_friction/_archive/`. see the `friction-management` skill.
 
 ## Engine-agnostic constraint
@@ -80,6 +80,6 @@ no-op is appropriate when: the content is structurally incompatible with the plu
 
 after all dispositions are decided and operator has signed off:
 
-- Encoded entries become units of a single authorized PR. Use the existing approval and selected method through `desk:superpowers-integration`.
+- Encoded entries become units of a single authorized PR. Use the existing approval and selected method through `desk:using-superpowers-with-desk`.
 - no-op entries get their `Status:` line updated in-place. they stay pinned because the ask is not resolved, just redirected out of plugin scope — they do not move to `_archive/`.
 - curator is done when the corkboard has zero undecided open cards.

@@ -5,7 +5,7 @@ description: Align new work before go by gathering every decision that needs the
 
 # Work orchestration
 
-Invoke `desk:superpowers-integration`. This Desk compatibility entrypoint selects no second engineering method: Superpowers owns discovery, planning, execution and verification; Desk owns the work state and approved terminal boundary.
+Invoke `desk:using-superpowers-with-desk`. This Desk adapter selects no second engineering method: Superpowers owns discovery, planning, execution and verification; Desk owns the work state and approved terminal boundary.
 
 Read the existing task, agreement and plan before choosing the matching Superpowers skill. Consume prior approval without reopening it. Use `superpowers:brainstorming` for missing design agreement, `superpowers:writing-plans` when a plan is needed, and `superpowers:executing-plans` or authorized `superpowers:subagent-driven-development` for implementation. Keep plans and progress on Desk. Invoke `superpowers:requesting-code-review` for the normal review transition.
 

@@ -68,7 +68,7 @@ pr-feedback-on-own-pr runs in one of two modes, set by the caller:
   - Phase 2 (auto-comment triage) is skipped — self-review findings have no bot-vs-reviewer triage to do.
   - Phases 3–5 (shape conversation, walk-through, synthesize) are skipped. The evaluator's classification already spells out which findings are `resolution_path: auto`; no operator conversation is needed.
   - Phase 6a (plan) runs in a compressed form — findings with `resolution_path: auto` become units directly, one unit per finding, no DAG ceremony.
-  - Phase 7 sends fixes to the single selected Superpowers implementation owner through `desk:superpowers-integration`; strict TDD and recorded publication authority still apply.
+  - Phase 7 sends fixes to the single selected Superpowers implementation owner through `desk:using-superpowers-with-desk`; strict TDD and recorded publication authority still apply.
   - Phase 8 (pipeline-verify) runs normally.
   - Phase 9 (per-thread verify) runs in a narrowed form: for each synthetic self-review thread that was executed, mark the corresponding finding as addressed in the findings file.
   - Return to caller: summary of which synthetic threads were applied, which were skipped (e.g., test regression on fix), and whether any code actually changed (the signal pr-self-review's convergence loop needs to decide whether to iterate again).
@@ -256,7 +256,7 @@ Bake-in is the mechanism that prevents the same feedback from being raised on th
 
 ## Phase 6a — Plan
 
-Use `desk:superpowers-integration`: resolve missing architecture agreement with `superpowers:brainstorming`, then use `superpowers:writing-plans` when a plan is needed. Reuse the existing Desk plan and approval. The cross-repository plan is shaped as a DAG, not a flat list:
+Use `desk:using-superpowers-with-desk`: resolve missing architecture agreement with `superpowers:brainstorming`, then use `superpowers:writing-plans` when a plan is needed. Reuse the existing Desk plan and approval. The cross-repository plan is shaped as a DAG, not a flat list:
 - Nodes = units.
 - Edges = "must finish before."
 - Critical path marked.

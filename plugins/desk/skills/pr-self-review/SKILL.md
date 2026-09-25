@@ -5,7 +5,7 @@ description: Read-only PR evaluation when the operator requests a self-review or
 
 # pr-self-review
 
-Invoke `desk:superpowers-integration` and `superpowers:requesting-code-review`. The evaluation phases below supply the PR-specific rubric. Remediation and affected re-review belong to that one frozen-candidate review cycle; any convergence instructions below are details of that same cycle, not authority to create a second fix owner or loop.
+Invoke `desk:using-superpowers-with-desk` and `superpowers:requesting-code-review`. The evaluation phases below supply the PR-specific rubric. Remediation and affected re-review belong to that one frozen-candidate review cycle; any convergence instructions below are details of that same cycle, not authority to create a second fix owner or loop.
 
 ## Invariants
 
