@@ -15,6 +15,7 @@ import {
 } from "../util/fm.js"
 import { isPathContained, resolveWriteTarget } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
+import { validateName, describeNameRejection } from "../desk/naming.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 
@@ -108,7 +109,10 @@ async function realpathAfterArchive(candidate, { realSrcDir, realArchiveDir }) {
         continue
       }
       const unavailableAfterMove = ["ENOENT", "ENOTDIR", "ELOOP"].includes(error?.code)
-      /* node:coverage ignore next 3 */
+      /* istanbul ignore next -- defensive: lstat during archive-move symlink
+       * resolution only fails with ENOENT/ENOTDIR/ELOOP in practice; any
+       * other error must still propagate rather than being swallowed, but
+       * that path isn't reachable from a portable test fixture. */
       if (!unavailableAfterMove) {
         throw error
       }
@@ -159,8 +163,9 @@ function splitAbsolutePath(candidate) {
  *
  * Input:
  *   {
- *     track: string,            // required
- *     slug: string,             // required
+ *     track: string,            // required — a path segment; not itself
+ *                               // name-validated (that's track_create's job)
+ *     slug: string,             // required — validated, see Errors
  *     title: string,            // required
  *     status?: string,          // default "drafting"
  *     body?: string,            // markdown body (no frontmatter)
@@ -169,7 +174,11 @@ function splitAbsolutePath(candidate) {
  *
  * Side effects: creates `<root>/<track>/<slug>/task.md` (and parent dirs).
  *
- * Errors: refuses if the target task.md already exists.
+ * Errors:
+ *   - refuses if the target task.md already exists.
+ *   - refuses `slug` that isn't a valid outcome name per `validateName` (see
+ *     `desk/naming.js`): wrong shape, too long, prompt-like, or
+ *     credential-like.
  *
  * Returns: { status: "created", path: "<track>/<slug>/task.md" }
  */
@@ -191,6 +200,16 @@ export async function task_create({ deskRoot, input, person = null, readiness })
     person,
     segments: [track, slug, "task.md"],
   })
+
+  // Path/segment/alias safety (above) is a tool-misuse concern and takes
+  // precedence over naming content rules, which are business rules
+  // evaluated once the target path itself is known-safe.
+  const nameResult = validateName(slug)
+  if (!nameResult.ok) {
+    throw new Error(
+      `task_create: invalid slug: ${describeNameRejection(nameResult)}`,
+    )
+  }
   if (await pathExists(filePath)) {
     throw new Error(
       `task_create: task already exists at ${relPath(deskRoot, filePath)}`,

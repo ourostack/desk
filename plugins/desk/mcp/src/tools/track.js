@@ -12,6 +12,12 @@ import {
 } from "../util/fm.js"
 import { resolveWriteTarget } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
+import {
+  validateTrackName,
+  validateScope,
+  operatorNames,
+  describeNameRejection,
+} from "../desk/naming.js"
 
 // Optional fields a caller may supply at create time.
 const OPTIONAL_TRACK_FIELDS = [
@@ -29,8 +35,10 @@ function relPath(deskRoot, absPath) {
  *
  * Input:
  *   {
- *     slug: string,        // required
+ *     slug: string,        // required — validated, see Errors
  *     title: string,       // required
+ *     scope: string,       // required — one line, at most 240 characters,
+ *                          // in the form "<what belongs>; not <what doesn't>"
  *     status?: string,     // default "active"
  *     body?: string,
  *     ...optional fields per track-card schema
@@ -38,7 +46,12 @@ function relPath(deskRoot, absPath) {
  *
  * Side effects: creates `<root>/<slug>/track.md` (and parent dir).
  *
- * Errors: refuses if `<root>/<slug>/track.md` already exists.
+ * Errors:
+ *   - refuses if `<root>/<slug>/track.md` already exists.
+ *   - refuses `slug` that isn't a valid outcome name per `validateTrackName`
+ *     (see `desk/naming.js`): wrong shape, too long, prompt-like,
+ *     credential-like, a catch-all name, or named after the operator.
+ *   - refuses a missing or invalid `scope` per `validateScope`.
  *
  * Returns: { status: "created", path }
  */
@@ -57,6 +70,24 @@ export async function track_create({ deskRoot, input, person = null, readiness }
     person,
     segments: [slug, "track.md"],
   })
+
+  // Path/segment/alias safety (above) is a tool-misuse concern and takes
+  // precedence over naming/scope content rules, which are business rules
+  // evaluated once the target path itself is known-safe.
+  const nameResult = validateTrackName(slug, {
+    operatorNames: operatorNames(deskRoot),
+  })
+  if (!nameResult.ok) {
+    throw new Error(
+      `track_create: invalid slug: ${describeNameRejection(nameResult)}`,
+    )
+  }
+
+  const scopeResult = validateScope(values.scope)
+  if (!scopeResult.ok) {
+    throw new Error(`track_create: invalid \`scope\`: ${scopeResult.hint}`)
+  }
+
   if (await pathExists(filePath)) {
     throw new Error(
       `track_create: track already exists at ${relPath(deskRoot, filePath)}`,
@@ -70,6 +101,7 @@ export async function track_create({ deskRoot, input, person = null, readiness }
     status: values.status ?? "active",
     created: ts,
     updated: ts,
+    scope: values.scope,
   }
   for (const k of OPTIONAL_TRACK_FIELDS) {
     if (values[k] !== undefined) data[k] = values[k]
@@ -86,7 +118,10 @@ export async function track_create({ deskRoot, input, person = null, readiness }
  * Input:
  *   {
  *     slug: string,
- *     frontmatter?: object,
+ *     frontmatter?: object,  // may set `scope` — validated, see Errors;
+ *                            // `slug` itself is never re-validated, so an
+ *                            // update to a track named before these rules
+ *                            // existed still works
  *     body_append?: string,
  *   }
  *
@@ -94,7 +129,10 @@ export async function track_create({ deskRoot, input, person = null, readiness }
  *
  * Preserves: `schema_version`, `created`. Always refreshes `updated`.
  *
- * Errors: refuses if the track doesn't exist.
+ * Errors:
+ *   - refuses if the track doesn't exist.
+ *   - refuses an invalid `frontmatter.scope` per `validateScope`, when the
+ *     caller sets it; an update that doesn't touch `scope` is unaffected.
  *
  * Returns: { status: "updated", path }
  */
@@ -103,6 +141,13 @@ export async function track_update({ deskRoot, input, person = null, readiness }
   const { slug, frontmatter, body_append } = values
   if (!Object.hasOwn(values, "slug")) {
     throw new Error("track_update: `slug` is required")
+  }
+
+  if (frontmatter && Object.hasOwn(frontmatter, "scope")) {
+    const scopeResult = validateScope(frontmatter.scope)
+    if (!scopeResult.ok) {
+      throw new Error(`track_update: invalid \`scope\`: ${scopeResult.hint}`)
+    }
   }
 
   const filePath = await resolveWriteTarget({

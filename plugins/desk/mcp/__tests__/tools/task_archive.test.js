@@ -15,17 +15,17 @@ test("task_archive moves the dir into _archive/ and marks status=done", async ()
   const root = await mkTempDeskRoot()
   await task_create({
     deskRoot: root,
-    input: { track: "t", slug: "s", title: "Some task" },
+    input: { track: "t", slug: "book-flights", title: "Some task" },
   })
   const result = await task_archive({
     deskRoot: root,
-    input: { track: "t", slug: "s" },
+    input: { track: "t", slug: "book-flights" },
   })
   assert.equal(result.status, "archived")
 
-  const srcExists = await exists(path.join(root, "t", "s"))
+  const srcExists = await exists(path.join(root, "t", "book-flights"))
   assert.equal(srcExists, false, "source dir should be gone")
-  const archived = path.join(root, "t", "_archive", "s", "task.md")
+  const archived = path.join(root, "t", "_archive", "book-flights", "task.md")
   assert.ok(await exists(archived), "archived task.md should exist")
 
   const { data } = await readFront(archived)
@@ -38,14 +38,14 @@ test("task_archive preserves an already-terminal status", async () => {
     deskRoot: root,
     input: {
       track: "t",
-      slug: "s",
+      slug: "book-flights",
       title: "Done already",
       status: "cancelled",
     },
   })
-  await task_archive({ deskRoot: root, input: { track: "t", slug: "s" } })
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
   const { data } = await readFront(
-    path.join(root, "t", "_archive", "s", "task.md"),
+    path.join(root, "t", "_archive", "book-flights", "task.md"),
   )
   assert.equal(data.status, "cancelled", "terminal status preserved")
 })
@@ -54,17 +54,17 @@ test("task_archive is idempotent when source already archived", async () => {
   const root = await mkTempDeskRoot()
   await task_create({
     deskRoot: root,
-    input: { track: "t", slug: "s", title: "T" },
+    input: { track: "t", slug: "book-flights", title: "T" },
   })
-  await task_archive({ deskRoot: root, input: { track: "t", slug: "s" } })
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
   const second = await task_archive({
     deskRoot: root,
-    input: { track: "t", slug: "s" },
+    input: { track: "t", slug: "book-flights" },
   })
   assert.equal(second.status, "already_archived")
   assert.equal(
     second.path,
-    path.join("t", "_archive", "s", "task.md"),
+    path.join("t", "_archive", "book-flights", "task.md"),
   )
 })
 
@@ -84,14 +84,14 @@ test("task_archive refuses an existing archive destination while the source exis
   const root = await mkTempDeskRoot()
   await task_create({
     deskRoot: root,
-    input: { track: "t", slug: "s", title: "T" },
+    input: { track: "t", slug: "book-flights", title: "T" },
   })
-  await fs.mkdir(path.join(root, "t", "_archive", "s"), { recursive: true })
+  await fs.mkdir(path.join(root, "t", "_archive", "book-flights"), { recursive: true })
 
   await assert.rejects(
     task_archive({
       deskRoot: root,
-      input: { track: "t", slug: "s" },
+      input: { track: "t", slug: "book-flights" },
     }),
     /archive destination already exists/i,
   )
@@ -104,7 +104,7 @@ test("task_archive requires both task identifiers", async () => {
     /track.*slug.*required/,
   )
   await assert.rejects(
-    task_archive({ deskRoot: root, input: { slug: "s" } }),
+    task_archive({ deskRoot: root, input: { slug: "book-flights" } }),
     /track.*slug.*required/,
   )
   await assert.rejects(
@@ -131,12 +131,12 @@ test("task_archive creates _archive/ dir if missing", async () => {
   const root = await mkTempDeskRoot()
   await task_create({
     deskRoot: root,
-    input: { track: "fresh", slug: "task1", title: "T" },
+    input: { track: "fresh", slug: "task-one", title: "T" },
   })
   // No _archive dir exists yet — the tool must create it.
   await task_archive({
     deskRoot: root,
-    input: { track: "fresh", slug: "task1" },
+    input: { track: "fresh", slug: "task-one" },
   })
   const stat = await fs.stat(path.join(root, "fresh", "_archive"))
   assert.ok(stat.isDirectory())
