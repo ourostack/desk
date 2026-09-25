@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.20 — 2026-09-25
+
+Lays the first foundation of the factory, the privacy-safe work measurement built from native session logs: the facts file v1 schema and its validator, the tool-name-to-kind mapping for Claude Code and Copilot CLI, and shared timestamp/interval helpers. Nothing reads or writes real session data yet; this only adds the shape every later factory piece validates against. `intervalUnion` and `normalizeTimestamp` move into `factory/time.js`; the work ledger's own modules re-export them unchanged so its existing behavior and tests are untouched. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.
+
 ## 3.2.0-alpha.19 — 2026-09-25
 
 Updates the RFC's status: layered foundations load once on both hosts, the RFC path works from any repository, alpha users migrate automatically; notes launchers that do not refresh dependencies. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.

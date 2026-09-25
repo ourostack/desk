@@ -16,6 +16,8 @@ import { existsSync, readFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
+import { normalizeTimestamp } from "../factory/time.js"
+
 const LABEL = "desk_work_ledger"
 
 /**
@@ -243,37 +245,6 @@ function nullableNumber(value) {
   return value === null || value === undefined ? null : value
 }
 
-/**
- * A source or operator timestamp, or nothing.
- *
- * Exactly two shapes are admitted, because `Date.parse` reads a date-time with
- * no offset as *host-local* and a bare date or year as a valid instant. Either
- * would silently displace an observation by the host's UTC offset, or invent an
- * instant from a calendar day, and then report the result as measured.
- *
- * 1. Any date-time carrying its own `Z` or `±HH:MM` offset — unambiguous.
- * 2. `YYYY-MM-DD HH:MM:SS[.sss]` with no offset, read deliberately as UTC.
- *    This is SQLite's own `datetime()` / `CURRENT_TIMESTAMP` output, whose
- *    documented convention is UTC. It is admitted by that convention alone, not
- *    by guessing.
- *
- * Everything else — a date, a year, a `T`-separated form with no offset, a
- * shape that is not a real instant — is refused rather than guessed. A calendar
- * day that is genuinely a day, such as a rate's `effective_date`, is not a
- * timestamp and deliberately does not come through here.
- */
-const INSTANT_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/u
-const SQLITE_UTC_INSTANT = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/u
-
-export function normalizeTimestamp(value) {
-  if (typeof value !== "string") return null
-  const text = value.trim()
-  let candidate = null
-  if (INSTANT_WITH_OFFSET.test(text)) candidate = text.replace(" ", "T")
-  else if (SQLITE_UTC_INSTANT.test(text)) candidate = `${text.replace(" ", "T")}Z`
-  if (candidate === null) return null
-  // The shape can be right while the instant is not: month 13, hour 25.
-  const parsed = Date.parse(candidate)
-  if (Number.isNaN(parsed)) return null
-  return new Date(parsed).toISOString()
-}
+// `normalizeTimestamp` now lives in `factory/time.js` (imported above); this
+// re-export keeps every existing caller of this module working unchanged.
+export { normalizeTimestamp }
