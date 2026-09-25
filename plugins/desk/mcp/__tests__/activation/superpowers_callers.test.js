@@ -189,8 +189,10 @@ for (const mode of ["global-personal", "project-local"]) {
     const rendered = materializeCodexActivation(input).generatedInstructions
     const golden = read(`plugins/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`)
     assert.equal(golden, rendered)
-    assert.match(golden, /Selected engineering lifecycle: Superpowers\./u)
-    assert.match(golden, /desk:using-superpowers-with-desk/u)
+    // Method entry arrives once, through the injected using-desk foundation; the owned line adds no second copy.
+    assert.doesNotMatch(golden, /Selected engineering lifecycle/u)
+    assert.equal(golden.split("desk:using-superpowers-with-desk").length - 1, 1)
+    assert.match(golden, /follow `superpowers:using-superpowers` for when to invoke a skill/u)
     assert.match(golden, /superpowers:requesting-code-review/u)
     assert.doesNotMatch(golden, /desk:independent-review/u)
     assert.doesNotMatch(golden, excludedProviderPattern)

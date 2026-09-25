@@ -336,10 +336,8 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
     if (!body.includes("using-desk")) {
       errors.push(`worker-sources ${surface} using-desk activation drift`);
     }
-    if (body.includes("Never hard-wrap authored prose") || /Core invariants/u.test(body)) {
-      errors.push(`worker-sources ${surface} restates owned rules`);
-    }
   }
+  // Restated rules in the bodies and the Codex block are rejected by scripts/test-desk-contracts.cjs, which names each owner.
   // Plain Language owns the hard-wrap rule; Desk no longer ships a principles file.
   if (!plainLanguage.includes("Never hard-wrap authored prose") || !plainLanguage.includes("changed in the current task")) {
     errors.push("worker-sources plain-language no-hard-wrap rule drift");
@@ -347,11 +345,12 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   if (fs.existsSync(path.join(repoRoot, "plugins/desk/principles.md"))) {
     errors.push("worker-sources retired principles file present");
   }
-  if (!codexAdapter.includes("Never hard-wrap authored prose") || !codexAdapter.includes("authored/changed prose")) {
-    errors.push("worker-sources codex activation no-hard-wrap invariant drift");
+  // No Codex hook loads Plain Language or Superpowers' using-superpowers, so the owned block points at both skills.
+  if (!codexAdapter.includes("apply the \\`plain-language\\` skill to every human-readable response and artifact")) {
+    errors.push("worker-sources codex activation Plain Language pointer drift");
   }
-  if (!codexAdapter.includes("Apply the \\`plain-language\\` skill to every human-readable response and artifact")) {
-    errors.push("worker-sources codex activation Plain Language invariant drift");
+  if (!codexAdapter.includes("follow `superpowers:using-superpowers` for when to invoke a skill")) {
+    errors.push("worker-sources codex activation Superpowers pointer drift");
   }
 }
 

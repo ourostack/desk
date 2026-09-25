@@ -153,8 +153,8 @@ test("Codex provider omits unsupported hooks and retains generated-instructions 
     manifest, mode: "global-personal", pluginRoot: "plugins/desk", deskRoot: "~/desk",
     existingConfig: "", existingInstructions: "",
   })
-  assert.match(result.generatedInstructions, /Selected engineering lifecycle: Superpowers/u)
-  assert.match(result.generatedInstructions, /Invoke `desk:using-superpowers-with-desk` before engineering work/u)
+  assert.match(result.generatedInstructions, /Codex runs no Superpowers startup hook, so follow `superpowers:using-superpowers`/u)
+  assert.match(result.generatedInstructions, /Enter Superpowers through `desk:using-superpowers-with-desk`/u)
 })
 
 test("generated Codex instructions send fresh sessions to the active adapter, not the retired redirect", () => {
@@ -170,13 +170,13 @@ test("generated Codex instructions send fresh sessions to the active adapter, no
     })
     assert.match(
       result.generatedInstructions,
-      /Invoke `desk:using-superpowers-with-desk` before engineering work/u,
-      `${mode} activation must name the active Desk/Superpowers adapter`,
+      /Enter Superpowers through `desk:using-superpowers-with-desk`/u,
+      `${mode} activation must name the active Desk/Superpowers adapter through the injected foundation`,
     )
     assert.doesNotMatch(
       result.generatedInstructions,
-      /Invoke `desk:superpowers-integration`/u,
-      `${mode} activation must not direct a fresh session into the retired compatibility redirect`,
+      /desk:superpowers-integration/u,
+      `${mode} activation must not name the retired compatibility redirect`,
     )
   }
 

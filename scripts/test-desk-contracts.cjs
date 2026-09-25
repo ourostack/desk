@@ -240,6 +240,19 @@ for (const file of workerBodies) {
   });
 }
 
+// The Codex owned block adds activation text around the injected using-desk foundation; it restates no owned rule either.
+for (const mode of ["global-personal", "project-local"]) {
+  contract(`the Codex ${mode} owned block restates no owned rule`, () => {
+    const foundation = text("plugins/desk/skills/using-desk/SKILL.md").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/u, "").trim();
+    const block = text(`plugins/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`).split("# BEGIN desk activation:")[1];
+    assert.ok(block && block.includes(foundation), "the owned block injects the using-desk foundation");
+    const owned = block.replace(foundation, "");
+    for (const [pattern, owner] of ownedRules) {
+      assert.doesNotMatch(owned, pattern, `restates a rule owned by ${owner}`);
+    }
+  });
+}
+
 contract("the three worker bodies share one identity and context text", () => {
   const shared = (body) => body.slice(body.indexOf("I'm **worker**")).split("\n'''", 1)[0].trim();
   const [claude, copilot, codex] = workerBodies.map((file) => shared(text(file)));
