@@ -10,7 +10,7 @@ import {
   resolveActivationConfigPath,
   resolveDeskRootWithSource,
 } from "../src/util/paths.js"
-import { deskStartupDirection } from "../src/util/startup-direction.js"
+import { claudeStartupDirection } from "../src/util/startup-direction.js"
 
 const env = process.env
 const bindingPath = claudeBindingPath(env)
@@ -33,5 +33,5 @@ try {
 }
 let output = `${JSON.stringify(result)}\n`
 if (process.argv.includes("--root-only")) output = result.root ?? ""
-if (process.argv.includes("--startup-line")) output = deskStartupDirection(result)
+if (process.argv.includes("--startup-line")) output = claudeStartupDirection({ env })
 process.stdout.write(output)

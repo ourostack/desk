@@ -39,25 +39,14 @@ function readSessionFolder() {
   });
 }
 
-// Ask the MCP server's own resolver which desk this session binds, with the
-// session folder standing in for the project folder, and let the shared module
-// compose the startup line, so the hook and the server use one rule.
+// Let Desk's shared startup module compare the session folder with the root
+// the plain Desk server binds, so the line never names a root the server will
+// not use.
 async function startupDirection() {
   try {
-    const mcpSource = path.join(pluginRoot, "mcp", "src", "util");
-    const paths = await import(pathToFileURL(path.join(mcpSource, "paths.js")).href);
-    const { deskStartupDirection } = await import(pathToFileURL(path.join(mcpSource, "startup-direction.js")).href);
-    let resolution = null;
-    try {
-      resolution = paths.resolveDeskRootWithSource({
-        activationConfigPath: paths.resolveActivationConfigPath({ env: process.env }),
-        env: process.env,
-        hostProjectRoot: await readSessionFolder(),
-      });
-    } catch {
-      resolution = null;
-    }
-    return deskStartupDirection(resolution);
+    const modulePath = path.join(pluginRoot, "mcp", "src", "util", "startup-direction.js");
+    const { copilotStartupDirection } = await import(pathToFileURL(modulePath).href);
+    return copilotStartupDirection({ env: process.env, sessionFolder: await readSessionFolder() });
   } catch {
     return "Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound.";
   }

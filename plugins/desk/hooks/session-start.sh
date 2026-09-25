@@ -40,8 +40,11 @@ if [ -z "$direction" ]; then
 fi
 
 # The foundation points at the RFC through this line: the installed copy, which
-# the agent can open from any repository.
-rfc="Desk RFC: $PLUGIN_ROOT/docs/agentic-engineering-v2-rfc.md"
+# the agent can open from any repository. A Windows plugin root keeps its
+# backslash separators.
+sep="/"
+case "$PLUGIN_ROOT" in *\\*) sep="\\" ;; esac
+rfc="Desk RFC: ${PLUGIN_ROOT}${sep}docs${sep}agentic-engineering-v2-rfc.md"
 
 emit "${foundation}
 
