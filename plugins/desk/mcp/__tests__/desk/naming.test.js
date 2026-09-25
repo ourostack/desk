@@ -142,8 +142,14 @@ test("validateName does not flag a name that starts with let but isn't the let-s
 })
 
 // ── validateName: credential_like ───────────────────────────────────────
+//
+// Fix round 1 (controller ruling, 2026-09-25): credential_like now means a
+// secret's *value*, not its topic. Only a password-prefix word followed by
+// another word, a 16+ char hex/base64-ish run, or an IPv4-looking run
+// trigger it. Ordinary engineering vocabulary — "api", "key", "token",
+// "secret", "password", "user", "root" — is no longer flagged on its own.
 
-test("validateName rejects setup-user-root-pw-alpine as credential_like", () => {
+test("validateName rejects setup-user-root-pw-alpine as credential_like (pw followed by a word)", () => {
   const result = validateName("setup-user-root-pw-alpine")
   assert.equal(result.ok, false)
   assert.equal(result.code, "credential_like")
@@ -171,59 +177,112 @@ test("validateName rejects a long mixed alnum token word as credential_like", ()
   assert.equal(result.code, "credential_like")
 })
 
-test("validateName never echoes the credential-like word back in the hint", () => {
-  const token = "a1b2c3d4e5f6a7b8c9d0"
-  const result = validateName(`deploy-${token}`)
-  assert.equal(result.hint.includes(token), false)
-})
-
 test("validateName does not flag a long pure-alphabetic word as credential_like", () => {
   const result = validateName("internationalization-effort")
   assert.equal(result.ok, true)
 })
 
-test("validateName rejects each standalone credential word", () => {
-  for (const word of ["pw", "pwd", "pass", "passwd", "password", "token", "secret", "apikey"]) {
-    const result = validateName(`fix-${word}-issue`)
-    assert.equal(result.code, "credential_like", `expected ${word} to be credential_like`)
+test("validateName rejects pw/pwd/passwd only when followed by another word", () => {
+  for (const word of ["pw", "pwd", "passwd"]) {
+    const followed = validateName(`fix-${word}-issue`)
+    assert.equal(followed.code, "credential_like", `expected ${word}-followed to be credential_like`)
   }
 })
 
-test("validateName rejects an api-key word pair", () => {
-  assert.equal(validateName("rotate-api-key").code, "credential_like")
+test("validateName does not flag pw/pwd/passwd as the trailing word", () => {
+  for (const word of ["pw", "pwd", "passwd"]) {
+    const trailing = validateName(`rotate-my-${word}`)
+    assert.equal(trailing.ok, true, `expected trailing ${word} to be accepted`)
+  }
 })
 
-test("validateName rejects a user-root word pair", () => {
-  assert.equal(validateName("setup-user-root-vm").code, "credential_like")
+// The words and pairs the fix-round ruling explicitly removed from
+// credential_like: "pass", "password", "token", "secret", "apikey",
+// "api"+"key", "user"+"root", and bare "key" followed by a word. These are
+// normal engineering vocabulary, not a secret's value.
+test("validateName accepts ordinary names built from formerly-flagged words", () => {
+  const accepted = [
+    "api-key-rotation",
+    "token-budget-report",
+    "user-root-cause-analysis",
+    "password-reset-flow",
+    "secret-management-review",
+    "sha256-migration",
+  ]
+  for (const name of accepted) {
+    assert.deepEqual(validateName(name), { ok: true }, name)
+  }
 })
 
-test("validateName rejects key followed by another word even without api", () => {
-  assert.equal(validateName("store-key-safely").code, "credential_like")
+test("validateName accepts hello-world as an exception to the greeting rule", () => {
+  assert.deepEqual(validateName("hello-world-sample"), { ok: true })
 })
 
-test("validateName does not flag a trailing standalone key", () => {
-  // "key" is only credential-like when it is *followed* by another word
-  // (a qualifier ahead of whatever it's a key for) or paired with "api" —
-  // as the very last word on its own it reads as an ordinary noun.
-  const result = validateName("find-the-key")
-  assert.equal(result.ok, true)
+test("validateName still rejects a greeting that isn't the hello-world exception", () => {
+  assert.equal(validateName("hi-ssh-into-host").code, "prompt_like")
+  assert.equal(validateName("hello-please-do-a-deep-dive").code, "prompt_like")
 })
 
-// ── describeNameRejection ───────────────────────────────────────────────
+// ── describeNameRejection / no-echo guarantee (fix round 1) ─────────────
+//
+// "No rejection message ever quotes the candidate name, whatever the code."
+// Covers every code, including shape and too_long on a credential-shaped
+// candidate — the gap the review found (a candidate that fails shape or
+// too_long before the credential check ever runs still must not be echoed).
 
-test("describeNameRejection quotes the candidate name for a non-credential rejection", () => {
-  const result = validateName("hi-ssh-into-host")
-  const message = describeNameRejection("hi-ssh-into-host", result)
-  assert.match(message, /"hi-ssh-into-host"/)
+function assertNoSubstringLeak(candidate, message) {
+  for (let len = 4; len <= candidate.length; len += 1) {
+    for (let start = 0; start + len <= candidate.length; start += 1) {
+      const fragment = candidate.slice(start, start + len)
+      assert.equal(
+        message.includes(fragment),
+        false,
+        `message must not contain "${fragment}" from candidate "${candidate}": ${message}`,
+      )
+    }
+  }
+}
+
+test("describeNameRejection never echoes the candidate for any rejection code", () => {
+  const cases = [
+    "hi-ssh-into-host", // prompt_like
+    "connect-100-73-66-84", // credential_like (IPv4)
+    "deploy-a1b2c3d4e5f6a7b8c9d0", // credential_like (hex)
+    "DEPLOY-A1B2C3D4E5F6A7B8C9D0-EXTRA", // shape (uppercase, credential-shaped)
+    "aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaaa-aaaaaaa", // too_long
+  ]
+  for (const candidate of cases) {
+    const result = validateName(candidate)
+    assert.equal(result.ok, false, candidate)
+    const message = describeNameRejection(result)
+    assertNoSubstringLeak(candidate, message)
+  }
 })
 
-test("describeNameRejection never echoes a credential-like candidate", () => {
+test("describeNameRejection never echoes a credential-shaped candidate that fails shape (uppercase)", () => {
+  const candidate = "deploy-A1B2C3D4E5F6A7B8C9D0"
+  const result = validateName(candidate)
+  assert.equal(result.code, "shape")
+  const message = describeNameRejection(result)
+  assertNoSubstringLeak(candidate, message)
+})
+
+test("describeNameRejection never echoes a credential-shaped candidate that fails too_long", () => {
   const token = "a1b2c3d4e5f6a7b8c9d0"
-  const name = `deploy-${token}`
-  const result = validateName(name)
-  const message = describeNameRejection(name, result)
-  assert.equal(message.includes(token), false)
-  assert.equal(message.includes(name), false)
+  const candidate = `deploy-${token}-${"a".repeat(30)}`
+  const result = validateName(candidate)
+  assert.equal(result.code, "too_long")
+  const message = describeNameRejection(result)
+  assertNoSubstringLeak(candidate, message)
+})
+
+test("describeNameRejection never echoes a catch-all or person track name", () => {
+  const misc = describeNameRejection(validateTrackName("misc", { operatorNames: [] }))
+  assertNoSubstringLeak("misc", misc)
+  const person = describeNameRejection(
+    validateTrackName("arimendelow", { operatorNames: ["arimendelow"] }),
+  )
+  assertNoSubstringLeak("arimendelow", person)
 })
 
 // ── validateTrackName ───────────────────────────────────────────────────

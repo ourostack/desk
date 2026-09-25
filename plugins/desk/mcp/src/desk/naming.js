@@ -6,7 +6,12 @@
 // these functions.
 //
 // Rules are carried in verbatim from the controller ruling (2026-09-25),
-// milestone-4 plan, task M4-1.
+// milestone-4 plan, task M4-1, as revised by the fix-round-1 ruling
+// (2026-09-25): no rejection message ever quotes the candidate name, and
+// credential_like narrows to a secret's *value* (a password prefix word
+// followed by another word, a 16+ char hex/base64-ish run, or an
+// IPv4-looking run) rather than its topic — ordinary engineering names like
+// "api-key-rotation" or "token-budget-report" are not credential_like.
 
 import { existsSync, readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
@@ -33,17 +38,12 @@ const FIRST_WORD_BLOCKLIST = new Set([
   "we",
 ])
 
-// Single words that, alone, mean "credential-ish" regardless of position.
-const CREDENTIAL_WORDS = new Set([
-  "pw",
-  "pwd",
-  "pass",
-  "passwd",
-  "password",
-  "token",
-  "secret",
-  "apikey",
-])
+// credential_like means a secret's *value*, not its topic — a name that
+// talks about passwords, tokens, keys or users is normal engineering
+// vocabulary. Only "pw"/"pwd"/"passwd" immediately followed by another word
+// (a qualifier ahead of whose password it is, e.g. "setup-user-root-pw-
+// alpine") reads as someone about to paste a value in.
+const PASSWORD_PREFIX_WORDS = new Set(["pw", "pwd", "passwd"])
 
 const CATCH_ALL_NAMES = new Set([
   "misc",
@@ -62,9 +62,12 @@ function words(name) {
 }
 
 // "let-s" is what "let's" becomes once an apostrophe is stripped and turned
-// into a hyphen — it splits into the two words "let" and "s".
+// into a hyphen — it splits into the two words "let" and "s". "hello-world"
+// is the universal starter-example name, not a greeting copied from a
+// prompt, so it's exempted even though "hello" is otherwise blocked.
 function startsWithGreetingOrRequest(nameWords) {
   const [first, second] = nameWords
+  if (first === "hello" && second === "world") return false
   if (FIRST_WORD_BLOCKLIST.has(first)) return true
   if (first === "let" && second === "s") return true
   return false
@@ -93,33 +96,35 @@ function looksLikeHexOrBase64(word) {
 
 function hasCredentialLikeWord(nameWords) {
   for (const word of nameWords) {
-    if (CREDENTIAL_WORDS.has(word)) return true
     if (looksLikeHexOrBase64(word)) return true
   }
   for (let i = 0; i + 1 < nameWords.length; i += 1) {
-    const [a, b] = [nameWords[i], nameWords[i + 1]]
-    if (a === "api" && b === "key") return true
-    if (a === "user" && b === "root") return true
-    // "key" followed by another word — a bare trailing "key" (e.g.
-    // "rotate-api-key") is already covered by the "api"+"key" pair above or
-    // the CREDENTIAL_WORDS check when it stands alone; this covers "key"
-    // used as a qualifier ahead of whatever it's a key *for*.
-    if (a === "key") return true
+    // "pw"/"pwd"/"passwd" *followed by another word* — a bare trailing one
+    // (e.g. "rotate-pw" on its own) reads as an ordinary noun, not a value.
+    if (PASSWORD_PREFIX_WORDS.has(nameWords[i])) return true
   }
   return false
 }
 
-const NAME_HINT =
-  "name the outcome in 2–6 lowercase words, like `oauth-login-fix`"
+// No hint below ever includes the candidate — a rejection message must
+// describe the problem, never quote the name that triggered it, because a
+// rejected name may itself carry a secret's value.
+const NAME_HINT = "name the outcome instead, like `oauth-login-fix`"
 
 function shapeResult() {
-  return { ok: false, code: "shape", hint: NAME_HINT }
+  return {
+    ok: false,
+    code: "shape",
+    hint: "the name must be 2–6 lowercase kebab-case words, like `oauth-login-fix`",
+  }
 }
 
 /**
  * validateName(name) -> { ok, code?, hint? }
  *
  * codes: "shape" | "too_long" | "prompt_like" | "credential_like"
+ *
+ * No returned hint ever quotes or otherwise includes the candidate name.
  */
 export function validateName(name) {
   if (typeof name !== "string" || name.trim() === "") return shapeResult()
@@ -130,7 +135,7 @@ export function validateName(name) {
     return {
       ok: false,
       code: "too_long",
-      hint: `keep the name to at most ${MAX_NAME_LENGTH} characters — ${NAME_HINT}`,
+      hint: `the name must be at most ${MAX_NAME_LENGTH} characters — ${NAME_HINT}`,
     }
   }
 
@@ -140,7 +145,7 @@ export function validateName(name) {
     return {
       ok: false,
       code: "prompt_like",
-      hint: `that reads like prompt text, not an outcome — ${NAME_HINT}`,
+      hint: `the name starts like a prompt, not an outcome — ${NAME_HINT}`,
     }
   }
 
@@ -148,7 +153,7 @@ export function validateName(name) {
     return {
       ok: false,
       code: "credential_like",
-      hint: `that name contains a credential-like word or token — ${NAME_HINT}`,
+      hint: `the name looks like it contains a secret's value — ${NAME_HINT}`,
     }
   }
 
@@ -174,7 +179,7 @@ export function validateTrackName(name, { operatorNames = [] } = {}) {
       return {
         ok: false,
         code: "catch_all",
-        hint: `"${folded}" is a catch-all name — ${NAME_HINT}`,
+        hint: `the name is a catch-all, not an outcome — ${NAME_HINT}`,
       }
     }
 
@@ -225,16 +230,16 @@ export function validateScope(scope) {
 }
 
 /**
- * describeNameRejection(name, result) -> string
+ * describeNameRejection(result) -> string
  *
  * Builds the part of a tool error message that explains a rejected name.
- * Never echoes the candidate back when it was rejected as credential_like —
- * the whole point of that rejection is that the name itself may carry a
- * secret.
+ * Every `hint` a validator returns is already candidate-free by
+ * construction, so this never echoes the rejected name back — whatever the
+ * code, the name that triggered a rejection may itself carry a secret, or
+ * may simply not be something a tool should ever repeat verbatim.
  */
-export function describeNameRejection(name, result) {
-  if (result.code === "credential_like") return result.hint
-  return `"${name}" — ${result.hint}`
+export function describeNameRejection(result) {
+  return result.hint
 }
 
 function kebabCase(value) {

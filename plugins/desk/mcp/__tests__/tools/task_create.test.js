@@ -142,7 +142,7 @@ test("task_create rejects a name with a credential-like token without echoing it
         },
       }),
     (err) => {
-      assert.match(err.message, /credential-like/)
+      assert.match(err.message, /secret's value/)
       assert.equal(err.message.includes("a1b2c3d4e5f6a7b8c9d0"), false)
       return true
     },

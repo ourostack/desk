@@ -163,8 +163,9 @@ function splitAbsolutePath(candidate) {
  *
  * Input:
  *   {
- *     track: string,            // required
- *     slug: string,             // required
+ *     track: string,            // required — a path segment; not itself
+ *                               // name-validated (that's track_create's job)
+ *     slug: string,             // required — validated, see Errors
  *     title: string,            // required
  *     status?: string,          // default "drafting"
  *     body?: string,            // markdown body (no frontmatter)
@@ -173,7 +174,11 @@ function splitAbsolutePath(candidate) {
  *
  * Side effects: creates `<root>/<track>/<slug>/task.md` (and parent dirs).
  *
- * Errors: refuses if the target task.md already exists.
+ * Errors:
+ *   - refuses if the target task.md already exists.
+ *   - refuses `slug` that isn't a valid outcome name per `validateName` (see
+ *     `desk/naming.js`): wrong shape, too long, prompt-like, or
+ *     credential-like.
  *
  * Returns: { status: "created", path: "<track>/<slug>/task.md" }
  */
@@ -202,7 +207,7 @@ export async function task_create({ deskRoot, input, person = null, readiness })
   const nameResult = validateName(slug)
   if (!nameResult.ok) {
     throw new Error(
-      `task_create: invalid slug: ${describeNameRejection(slug, nameResult)}`,
+      `task_create: invalid slug: ${describeNameRejection(nameResult)}`,
     )
   }
   if (await pathExists(filePath)) {

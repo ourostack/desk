@@ -129,7 +129,7 @@ test("track_create rejects a name with a credential-like word without echoing it
         input: { slug: "setup-user-root-pw-alpine", title: "Title", scope: SCOPE },
       }),
     (err) => {
-      assert.match(err.message, /credential-like/)
+      assert.match(err.message, /secret's value/)
       assert.equal(err.message.includes("setup-user-root-pw-alpine"), false)
       return true
     },
