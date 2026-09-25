@@ -13,7 +13,8 @@ import v8 from "node:v8"
 import vm from "node:vm"
 
 import { deriveCopilotSession, __internals__ } from "../../src/factory/derive-copilot.js"
-import { readSessionRefs } from "../../src/factory/copilot-usage.js"
+import { normalizeRow, readSessionRefs, readSessionRows, __internals__ as usageInternals } from "../../src/factory/copilot-usage.js"
+import { spawnSync } from "node:child_process"
 import { validateFacts, validateFactsBytes } from "../../src/factory/schema.js"
 import {
   SENTINEL,
@@ -120,7 +121,7 @@ test("the full session derives one valid session across three resumes and four s
     assert.equal(facts.schema, "desk.factory.facts/1")
     assert.equal(facts.contributor, CONTRIBUTOR)
     assert.deepEqual(facts.jobs, [])
-    assert.deepEqual(intervalsOf(facts, "turn").map(({ start, end }) => ({ start, end })), [span(3, 43), span(61, 74), span(91, 92), span(96, 97)])
+    assert.deepEqual(intervalsOf(facts, "turn").map(({ start, end }) => ({ start, end })), [span(3, 43), span(45, 46), span(47, 48), span(61, 74), span(75.4, 75.6), span(91, 92), span(96, 97)])
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
@@ -204,14 +205,15 @@ test("tool outcomes: exit code 1 is an error, a failure is an error, a denial is
       { agent: 0, tool: "desk", outcome: "ok", ...span(25, 26) },
       { agent: 0, tool: "desk", outcome: "error", ...span(27, 27.5) },
       { agent: 0, tool: "desk", outcome: "ok", ...span(28, 28.5) },
+      { agent: 0, tool: "mcp", outcome: "ok", ...span(28.6, 28.8) },
       { agent: 1, tool: "search", outcome: "ok", ...span(32, 33) },
       { agent: 2, tool: "read", outcome: "ok", ...span(36, 37) },
     ])
     assert.deepEqual(facts.counts, {
-      tool_calls: { shell: 3, edit: 3, read: 2, desk: 3, agent: 2, search: 1 },
+      tool_calls: { shell: 3, edit: 3, read: 2, desk: 3, mcp: 1, agent: 2, search: 1 },
       tool_failures: { shell: 1, edit: 1, read: 1, desk: 1 },
       tool_retries: 3,
-      api_retries: 3,
+      api_retries: 4,
       compactions: 1,
     })
   } finally {
@@ -219,24 +221,29 @@ test("tool outcomes: exit code 1 is an error, a failure is an error, a denial is
   }
 })
 
-test("a permission answered by a human is a wait; an unattended fallback is not", async () => {
+test("a permission answered by a human is a wait on the asking agent; an unattended fallback is not", async () => {
   const home = makeHome()
   try {
     const { facts } = await derive(home, SESSIONS.full)
-    assert.deepEqual(intervalsOf(facts, "permission_wait"), [{ kind: "permission_wait", agent: 0, ...span(16, 20) }])
+    assert.deepEqual(intervalsOf(facts, "permission_wait"), [
+      { kind: "permission_wait", agent: 0, ...span(16, 20) },
+      { kind: "permission_wait", agent: 1, ...span(32.2, 32.6) },
+    ])
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
 })
 
-test("human waits run from a turn end to the next user message, for agent 0 only", async () => {
+test("human waits run from an interaction's end to the next human prompt, never across a resume", async () => {
   const home = makeHome()
   try {
     const { facts } = await derive(home, SESSIONS.full)
+    // Not after the inter-agent (31.2), autopilot (46.5, 48.4), scheduled
+    // (48.2) or skill-injected (48.6) messages, and not across the resumes
+    // at 55, 80 and 94.
     assert.deepEqual(intervalsOf(facts, "human_wait"), [
-      { kind: "human_wait", agent: 0, ...span(43, 60) },
-      { kind: "human_wait", agent: 0, ...span(74, 90) },
-      { kind: "human_wait", agent: 0, ...span(92, 95) },
+      { kind: "human_wait", agent: 0, ...span(43, 44) },
+      { kind: "human_wait", agent: 0, ...span(74, 75.2) },
     ])
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -316,8 +323,8 @@ test("binding events: Desk task tools with track and slug, and only successful f
   try {
     const { events } = await derive(home, SESSIONS.full)
     assert.deepEqual(events.deskToolCalls, [
-      { at: at(25), name: "desk-task_update", track: "eng", slug: "m3-3", person: null, status: "processing", ok: true },
-      { at: at(27), name: "desk-task_create", track: "eng", slug: "other", person: "ari", status: null, ok: false },
+      { at: at(25), name: "desk-task_update", track: `${SENTINEL}-track`, slug: `${SENTINEL}-slug`, person: null, status: `${SENTINEL}-status`, ok: true },
+      { at: at(27), name: "desk-task_create", track: `${SENTINEL}-track`, slug: `${SENTINEL}-other`, person: `${SENTINEL}-person`, status: null, ok: false },
     ])
     assert.deepEqual(events.fileWrites, [
       { at: at(10), path: `/tmp/${SENTINEL}/desk/eng/m3-3/task.md` },
@@ -557,8 +564,9 @@ test("odd turn, tool, permission, subagent and compaction shapes are skipped or 
     ev("session.compaction_complete", 80, { success: true, summaryContent: SENTINEL }),
     ev("session.error", 81, { statusCode: "503", message: SENTINEL }),
     ev("model.turn_retry", 82, { turnId: "x", reason: SENTINEL }),
-    ev("model.call_failure", 83, { errorMessage: SENTINEL }),
-    ev("model.model_call_failure", 84, { errorMessage: SENTINEL }),
+    ev("model.call_failure", 82.5, { statusCode: 400, errorMessage: SENTINEL }),
+    ev("model.call_failure", 83, { failureKind: "transport", errorMessage: SENTINEL }),
+    ev("model.model_call_failure", 84, { statusCode: 502, errorMessage: SENTINEL }),
     ev("model.turn_retry", 85, { turnId: "x" }),
     ev("skill.invoked", 86, { name: SENTINEL, pluginName: `Bad ${SENTINEL}`, pluginVersion: "1.0.0" }),
     ev("skill.invoked", 87, { name: SENTINEL, pluginName: "extra", pluginVersion: "1.0.0" }),
@@ -592,9 +600,9 @@ test("odd turn, tool, permission, subagent and compaction shapes are skipped or 
   assert.deepEqual(events.fileWrites, [{ at: at(34), path: `/tmp/${SENTINEL}/raw.md` }])
   assert.deepEqual(events.deskToolCalls, [])
   assert.deepEqual(facts.unavailable, [
-    { field: "turns", reason: "source_unreadable" },
     { field: "tool_durations", reason: "source_unreadable" },
     { field: "plugins", reason: "source_unreadable" },
+    { field: "turns", reason: "source_unreadable" },
     { field: "tokens", reason: "session_open" },
     { field: "commits", reason: "log_missing" },
     { field: "ci_runs", reason: "not_collected_in_slice_1" },
@@ -711,5 +719,149 @@ test("readSessionRefs reads the ambient COPILOT_HOME when no environment is pass
     if (saved === undefined) delete process.env.COPILOT_HOME
     else process.env.COPILOT_HOME = saved
     rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Fix round 1: resumes, stale shutdowns, attribution and the factory reader.
+// ---------------------------------------------------------------------------
+
+test("a resume drops what the dead lifetime left open, so later waits still count and none spans the resume", async () => {
+  const ev = eventWriter()
+  const lines = [
+    start(ev),
+    ev("user.message", 1, { content: SENTINEL }),
+    ev("assistant.turn_start", 2, { turnId: "5", interactionId: `${SENTINEL}-a` }),
+    ev("tool.execution_start", 3, { toolCallId: "lost", toolName: "bash", arguments: { command: SENTINEL } }),
+    ev("permission.requested", 4, { requestId: "p-lost" }),
+    ev("model.call_failure", 5, { statusCode: 500, errorMessage: SENTINEL }),
+    ev("session.compaction_start", 6, {}),
+    ev("session.resume", 50, { resumeTime: at(50), eventCount: 7 }),
+    ev("permission.completed", 51, { requestId: "p-lost", decisionSource: "human_response" }),
+    ev("model.turn_retry", 51.5, { turnId: "0" }),
+    ev("session.compaction_complete", 51.8, { success: true }),
+    ev("user.message", 52, { content: SENTINEL }),
+    ev("assistant.turn_start", 53, { turnId: "0", interactionId: `${SENTINEL}-b` }),
+    ev("permission.requested", 54, { requestId: "p1" }),
+    ev("permission.completed", 55, { requestId: "p1", decisionSource: "human_response" }),
+    ev("permission.requested", 56, { requestId: "p2" }),
+    ev("permission.completed", 57, { requestId: "p2", toolCallId: "gone", decisionSource: "human_response" }),
+    ev("assistant.turn_end", 60, { turnId: "0" }),
+    ev("user.message", 70, { content: SENTINEL }),
+    ev("assistant.turn_start", 71, { turnId: "1", interactionId: `${SENTINEL}-c` }),
+    ev("assistant.turn_end", 80, { turnId: "1" }),
+    ev("user.message", 90, { content: SENTINEL }),
+    ev("assistant.turn_start", 91, { turnId: "2" }),
+    ev("assistant.turn_end", 95, { turnId: "2" }),
+  ]
+  const { facts } = await deriveText(lines)
+  assert.deepEqual(intervalsOf(facts, "turn").map(({ start: s, end }) => ({ start: s, end })), [span(53, 60), span(71, 80), span(91, 95)])
+  assert.deepEqual(intervalsOf(facts, "human_wait").map(({ start: s, end }) => ({ start: s, end })), [span(60, 70), span(80, 90)])
+  assert.deepEqual(intervalsOf(facts, "permission_wait"), [
+    { kind: "permission_wait", agent: 0, ...span(54, 55) },
+    { kind: "permission_wait", agent: 0, ...span(56, 57) },
+  ])
+  assert.deepEqual(intervalsOf(facts, "api_retry"), [])
+  assert.deepEqual(intervalsOf(facts, "compaction"), [])
+  assert.equal(facts.counts.api_retries, 1)
+  assert.equal(facts.counts.compactions, 1)
+  assert.equal(facts.counts.tool_calls.shell, undefined, "the lost call never completed")
+  for (const field of ["turns", "tool_durations"]) {
+    assert.ok(facts.unavailable.some((entry) => entry.field === field && entry.reason === "log_truncated"), field)
+  }
+})
+
+const STALE_METRICS = { "claude-opus-5-5": { requests: { count: 5 }, usage: { inputTokens: 50, outputTokens: 5, cacheReadTokens: 500, cacheWriteTokens: 55 } } }
+const STALE_MODELS = [{ id: "claude-opus-5-5", requests: 5, tokens: { input: 50, output: 5, cache_read: 500, cache_write: 55, reasoning: null } }]
+
+test("a shutdown followed by a resume is stale: the database rows are used alone when any exist", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([start(ev), ev("session.shutdown", 10, { modelMetrics: STALE_METRICS }), ev("session.resume", 20, {})], {
+    store: { sessions: [EDGE], usage: [usageRow(EDGE, "gpt-5.2"), usageRow(EDGE, "gpt-5.2")], refs: [] },
+  })
+  assert.deepEqual(facts.models, [{ id: "gpt-5.2", requests: 2, tokens: { input: 200, output: 20, cache_read: 2000, cache_write: 100, reasoning: null } }])
+  assert.equal(facts.unavailable.some((entry) => entry.field === "tokens"), false)
+})
+
+test("a stale shutdown with no database rows keeps its totals and says they are incomplete", async () => {
+  const ev = eventWriter()
+  const lines = [start(ev), ev("session.shutdown", 10, { modelMetrics: STALE_METRICS }), ev("assistant.turn_start", 22, { turnId: "0" }), ev("assistant.turn_end", 40, { turnId: "0" })]
+  let { facts } = await deriveText(lines, { endReason: null })
+  assert.deepEqual(facts.models, STALE_MODELS)
+  assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "session_open"))
+  ;({ facts } = await deriveText([start(ev), ev("session.shutdown", 10, { modelMetrics: STALE_METRICS }), ev("session.resume", 20, {})], { endReason: "complete" }))
+  assert.deepEqual(facts.models, STALE_MODELS)
+  assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "log_truncated"))
+})
+
+test("an unreadable subagent interval is flagged under tool_durations, a compaction's under turns", async () => {
+  const ev = eventWriter()
+  const badSubagent = ev("subagent.started", 2, { toolCallId: "s1", model: "gpt-5.2" })
+  badSubagent.timestamp = SENTINEL
+  const badCompaction = ev("session.compaction_start", 4, {})
+  badCompaction.timestamp = SENTINEL
+  const { facts } = await deriveText([start(ev), badSubagent, ev("subagent.completed", 3, { toolCallId: "s1" }), badCompaction, ev("session.compaction_complete", 5, { success: true })])
+  assert.deepEqual(facts.unavailable.slice(0, 2), [
+    { field: "tool_durations", reason: "source_unreadable" },
+    { field: "turns", reason: "source_unreadable" },
+  ])
+})
+
+test("the factory reader reports a missing, an unreadable or a driverless database without throwing", () => {
+  const home = makeHome({ sessions: [] })
+  const env = { COPILOT_HOME: home }
+  try {
+    assert.equal(readSessionRows({ sessionId: OTHER_SESSION, env }).status, "ok")
+    assert.deepEqual(readSessionRows({ sessionId: OTHER_SESSION, env: { COPILOT_HOME: path.join(home, "none") } }), { status: "missing", rows: [] })
+    const noDriver = () => {
+      throw Object.assign(new Error("No such built-in module: node:sqlite"), { code: "ERR_UNKNOWN_BUILTIN_MODULE" })
+    }
+    assert.deepEqual(readSessionRows({ sessionId: OTHER_SESSION, env, load: noDriver }), { status: "unreadable", rows: [] })
+    assert.equal(usageInternals.loadSqlite(noDriver), null)
+    rmSync(path.join(home, "session-store.db"))
+    mkdirSync(path.join(home, "session-store.db"))
+    assert.deepEqual(readSessionRefs({ sessionId: OTHER_SESSION, env }), { status: "unreadable", rows: [] })
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("the factory reader's first load of node:sqlite prints nothing", () => {
+  const home = makeHome({ sessions: [] })
+  try {
+    const moduleUrl = new URL("../../src/factory/copilot-usage.js", import.meta.url).href
+    const script = `const m = await import(${JSON.stringify(moduleUrl)}); const r = m.readSessionRows({ sessionId: ${JSON.stringify(OTHER_SESSION)}, env: { COPILOT_HOME: ${JSON.stringify(home)} } }); await new Promise((resolve) => setTimeout(resolve, 20)); process.stdout.write(r.status + ":" + r.rows.length)`
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" })
+    assert.equal(child.stdout, "ok:1")
+    assert.equal(child.stderr, "")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("normalizeRow keeps a missing counter null and refuses rows that are not data", () => {
+  const good = { id: 1, model: "gpt-5.2", input_tokens: 1, output_tokens: null, cache_read_tokens: 0, cache_write_tokens: 2, created_at: "2026-09-25 08:00:05" }
+  assert.deepEqual(normalizeRow(good), {
+    fact: { model: "gpt-5.2", input_tokens: 1, output_tokens: null, cache_read_tokens: 0, cache_write_tokens: 2, reasoning_tokens: null, created_at: "2026-09-25T08:00:05.000Z" },
+  })
+  assert.deepEqual(normalizeRow({ ...good, id: 2 ** 53 }), { malformed: "unsafe_integer_id" })
+  assert.deepEqual(normalizeRow({ ...good, input_tokens: -1 }), { malformed: "invalid_counter" })
+  assert.deepEqual(normalizeRow({ ...good, input_tokens: 1.5 }), { malformed: "invalid_counter" })
+  assert.deepEqual(normalizeRow({ ...good, created_at: SENTINEL }), { malformed: "invalid_timestamp" })
+})
+
+test("with no COPILOT_HOME the factory reader looks under the user's home directory", () => {
+  const saved = process.env.HOME
+  const fakeHome = mkdtempSync(path.join(os.tmpdir(), "desk-copilot-user-"))
+  try {
+    // `os.homedir()` follows HOME, so this never looks at the real `~/.copilot`.
+    process.env.HOME = fakeHome
+    assert.deepEqual(readSessionRows({ sessionId: OTHER_SESSION, env: {} }), { status: "missing", rows: [] })
+    mkdirSync(path.join(fakeHome, ".copilot"))
+    buildSessionStore(path.join(fakeHome, ".copilot", "session-store.db"))
+    assert.equal(readSessionRows({ sessionId: OTHER_SESSION, env: {} }).status, "ok")
+  } finally {
+    process.env.HOME = saved
+    rmSync(fakeHome, { recursive: true, force: true })
   }
 })

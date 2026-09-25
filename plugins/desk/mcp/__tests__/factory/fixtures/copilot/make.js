@@ -179,21 +179,28 @@ export const APPLY_PATCH = [
 
 /**
  * The full session: four process lifetimes (three `session.resume` events,
- * four `session.shutdown` events with cumulative totals), every tool
- * outcome, a retry, human and unattended permission decisions, a subagent
- * with a nested subagent, Desk tool calls, file writes from `create`,
- * `edit` and `apply_patch`, plugin skills, API retries under both event
- * spellings, a compaction, unknown event types and a blank line.
+ * four `session.shutdown` events with cumulative totals); root turns grouped
+ * by `interactionId`, with subagent turns whose ids collide with the root's;
+ * every `user.message` shape (human, inter-agent, autopilot, scheduled,
+ * skill-injected); every tool outcome and a retry; human and unattended
+ * permission decisions, one from a subagent; a subagent with a nested
+ * subagent; Desk tool calls, an MCP tool, file writes from `create`, `edit`
+ * and `apply_patch`; plugin skills; retryable and non-retryable failures
+ * under both event spellings; a successful and a failed compaction; unknown
+ * event types and a blank line.
  */
 function fullSession() {
   const id = SESSIONS.full
   const ev = eventWriter(1)
+  const sub = { agentId: `${S}-agent-a` }
+  const i1 = { interactionId: `${S}-i1` }
   const lines = [
     sessionStart(ev, 0, id),
     ...hookPair(ev, 0.5, "sessionStart", { cwd: `/tmp/${S}`, initialPrompt: `do ${S}`, sessionId: id, source: "new" }),
     ev("session.info", 1, { infoType: "note", message: S }),
     userMessage(ev, 2),
-    ev("assistant.turn_start", 3, { turnId: "t1", interactionId: "i1" }),
+    // Interaction 1 spans two model iterations (root turns "0" and "1").
+    ev("assistant.turn_start", 3, { turnId: "0", ...i1 }),
     assistantMessage(ev, 4, [["c1", "bash"]]),
     // A shell call that ran but exited 1 is an error, then retried.
     toolStart(ev, 5, "c1", "bash", { command: `echo ${S}`, description: S }),
@@ -207,10 +214,12 @@ function fullSession() {
     toolComplete(ev, 13, "c4", { success: false, errorCode: "failure" }),
     toolStart(ev, 14, "c5", "apply_patch", { input: APPLY_PATCH }),
     toolComplete(ev, 15, "c5"),
+    ev("assistant.turn_end", 15.2, { turnId: "0" }),
+    ev("assistant.turn_start", 15.5, { turnId: "1", ...i1 }),
     // A human answers a permission prompt (denied), so the tool is denied.
     toolStart(ev, 16, "c6", "view", { path: `/tmp/${S}/secret` }),
-    ev("permission.requested", 16, { requestId: "r1", permissionRequest: { kind: "read", path: `/tmp/${S}/secret`, intention: S } }),
-    ev("permission.completed", 20, { requestId: "r1", toolCallId: "c6", decisionSource: "human_response", result: { kind: "denied-interactively-by-user", feedback: S } }),
+    ev("permission.requested", 16, { requestId: `r1-${S}`, permissionRequest: { kind: "read", path: `/tmp/${S}/secret`, intention: S } }),
+    ev("permission.completed", 20, { requestId: `r1-${S}`, toolCallId: "c6", decisionSource: "human_response", result: { kind: "denied-interactively-by-user", feedback: S } }),
     toolComplete(ev, 21, "c6", { success: false, errorCode: "denied" }),
     // An unattended fallback decision is not a human wait.
     toolStart(ev, 22, "c7", "bash", { command: `ls ${S}` }),
@@ -218,20 +227,29 @@ function fullSession() {
     ev("permission.completed", 22.5, { requestId: "r2", decisionSource: "unattended_fallback", result: { kind: "approved" } }),
     toolComplete(ev, 24, "c7", { exitCode: 0 }),
     // Desk task tools: one ok, one failed, one without a slug (not a Desk call).
-    toolStart(ev, 25, "c8", "desk-task_update", { track: "eng", slug: "m3-3", status: "processing", body: S }),
+    toolStart(ev, 25, "c8", "desk-task_update", { track: `${S}-track`, slug: `${S}-slug`, status: `${S}-status`, body: S }),
     toolComplete(ev, 26, "c8"),
-    toolStart(ev, 27, "c9", "desk-task_create", { track: "eng", slug: "other", person: "ari", title: S }),
+    toolStart(ev, 27, "c9", "desk-task_create", { track: `${S}-track`, slug: `${S}-other`, person: `${S}-person`, title: S }),
     toolComplete(ev, 27.5, "c9", { success: false, errorCode: "failure" }),
-    toolStart(ev, 28, "c10", "desk-task_archive", { track: "eng", note: S }),
+    toolStart(ev, 28, "c10", "desk-task_archive", { track: `${S}-track`, note: S }),
     toolComplete(ev, 28.5, "c10"),
+    toolStart(ev, 28.6, `c-${S}`, `${S}-server-tool`, { query: S }),
+    toolComplete(ev, 28.8, `c-${S}`),
     ev("skill.invoked", 29, { name: S, path: `/tmp/${S}/SKILL.md`, content: S, pluginName: "desk", pluginVersion: "3.2.0-alpha.22", description: S }),
     ev("skill.invoked", 29.2, { name: S, path: `/tmp/${S}/other/SKILL.md`, content: S, pluginName: "superpowers", pluginVersion: "5.1.0", description: S }),
     ev("skill.invoked", 29.4, { name: S, path: `/tmp/${S}/local/SKILL.md`, content: S }),
-    // A subagent, whose own tools and nested subagent are attributed to it.
+    // A subagent, whose own turns, tools, permission and nested subagent are its own.
     toolStart(ev, 30, "c11", "task", { prompt: S, description: S, agent_type: "explore" }),
     ev("subagent.started", 31, { toolCallId: "c11", agentName: S, agentDisplayName: S, agentDescription: S, model: "claude-sonnet-5" }),
+    ev("user.message", 31.2, { content: S, source: `agent-${S}`, isAutopilotContinuation: false }, sub),
+    ev("assistant.turn_start", 31.3, { turnId: "0", interactionId: `${S}-sub` }, sub),
+    ev("assistant.turn_end", 31.8, { turnId: "0" }, sub),
+    ev("assistant.turn_start", 31.9, { turnId: "1", interactionId: `${S}-sub` }, sub),
     toolStart(ev, 32, "c12", "grep", { pattern: S }, { parentToolCallId: "c11" }),
+    ev("permission.requested", 32.2, { requestId: "r3", permissionRequest: { kind: "read", path: S } }, sub),
+    ev("permission.completed", 32.6, { requestId: "r3", toolCallId: "c12", decisionSource: "human_response", result: { kind: "approved" } }, sub),
     toolComplete(ev, 33, "c12", { parentToolCallId: "c11" }),
+    ev("assistant.turn_end", 33.5, { turnId: "1" }, sub),
     toolStart(ev, 34, "c13", "task", { prompt: S, description: S }, { parentToolCallId: "c11" }),
     ev("subagent.started", 35, { toolCallId: "c13", agentName: S, agentDisplayName: S, agentDescription: S, model: "gpt-5.2" }),
     toolStart(ev, 36, "c14", "view", { path: `/tmp/${S}/x` }, { parentToolCallId: "c13" }),
@@ -241,37 +259,55 @@ function fullSession() {
     ev("subagent.completed", 40, { toolCallId: "c11", agentName: S, agentDisplayName: S, model: "claude-sonnet-5", totalToolCalls: 2, totalTokens: 20, durationMs: 9000, cancelled: false }),
     toolComplete(ev, 41, "c11"),
     assistantMessage(ev, 42),
-    ev("assistant.turn_end", 43, { turnId: "t1" }),
+    ev("assistant.turn_end", 43, { turnId: "1" }),
+    // A human prompt inside the same lifetime: a human wait.
+    userMessage(ev, 44),
+    ev("assistant.turn_start", 45, { turnId: "2", interactionId: `${S}-i2` }),
+    ev("assistant.turn_end", 46, { turnId: "2" }),
+    // Messages that are not human prompts open no wait.
+    ev("user.message", 46.5, { content: S, isAutopilotContinuation: true }),
+    ev("assistant.turn_start", 47, { turnId: "3", interactionId: `${S}-i3` }),
+    ev("assistant.turn_end", 48, { turnId: "3" }),
+    ev("user.message", 48.2, { content: S, source: "schedule-1", isAutopilotContinuation: false }),
+    ev("user.message", 48.4, { content: S, source: "autopilot", isAutopilotContinuation: true }),
+    ev("user.message", 48.6, { content: S, source: `skill-${S}` }),
     ...hookPair(ev, 49, "sessionEnd", { cwd: `/tmp/${S}`, reason: "complete", sessionId: id }),
     shutdown(ev, 50, { "claude-opus-5-5": metric(3, 3000, 300, 30000, 3300, 30) }),
-    // Lifetime 2.
+    // Lifetime 2. A wait never spans a resume.
     ev("session.resume", 55, { resumeTime: at(55), eventCount: 50, context: { cwd: `/tmp/${S}` } }),
     userMessage(ev, 60),
-    ev("assistant.turn_start", 61, { turnId: "t2" }),
+    ev("assistant.turn_start", 61, { turnId: "0", interactionId: `${S}-i4` }),
     ev("model.model_call_failure", 62, { statusCode: 429, errorMessage: S, source: "top_level" }),
-    ev("model.turn_retry", 63, { turnId: "t2", reason: S }),
-    ev("model.call_failure", 64, { errorMessage: S, source: "top_level" }),
-    ev("assistant.turn_retry", 65, { turnId: "t2", reason: S }),
+    ev("model.turn_retry", 63, { turnId: "0", reason: S }),
+    ev("model.call_failure", 64, { failureKind: "transport", errorMessage: S, source: "top_level" }),
+    ev("assistant.turn_retry", 65, { turnId: "0", reason: S }),
     ev("session.error", 66, { errorType: "service", statusCode: 503, message: S, stack: S }),
-    ev("model.turn_retry", 67, { turnId: "t2" }),
+    ev("model.turn_retry", 67, { turnId: "0" }),
     ev("session.error", 68, { errorType: "request", statusCode: 400, message: S }),
+    ev("model.call_failure", 68.5, { statusCode: 400, failureKind: "api", errorMessage: S, source: "top_level" }),
+    ev("model.turn_retry", 68.7, { turnId: "0" }),
     ev("session.compaction_start", 69, { trigger: "threshold" }),
     ev("session.compaction_complete", 72, { success: true, summaryContent: S, customInstructions: S }),
+    ev("session.compaction_start", 72.2, { trigger: "manual" }),
+    ev("session.compaction_complete", 72.4, { success: false, error: S }),
     ev("abort", 73, { reason: "user_initiated" }),
-    ev("assistant.turn_end", 74, { turnId: "t2" }),
-    ev("session.warning", 75, { warningType: "note", message: S }),
+    ev("assistant.turn_end", 74, { turnId: "0" }),
+    userMessage(ev, 75.2),
+    ev("assistant.turn_start", 75.4, { turnId: "1", interactionId: `${S}-i5` }),
+    ev("assistant.turn_end", 75.6, { turnId: "1" }),
+    ev("session.warning", 75.8, { warningType: "note", message: S }),
     shutdown(ev, 76, { "claude-opus-5-5": metric(5, 5000, 500, 50000, 5500, 50), "claude-sonnet-5": metric(2, 2000, 200, 20000, 2200) }),
     // Lifetime 3.
     ev("session.resume", 80, { resumeTime: at(80), eventCount: 70 }),
     userMessage(ev, 90),
-    ev("assistant.turn_start", 91, { turnId: "t3" }),
-    ev("assistant.turn_end", 92, { turnId: "t3" }),
+    ev("assistant.turn_start", 91, { turnId: "0", interactionId: `${S}-i6` }),
+    ev("assistant.turn_end", 92, { turnId: "0" }),
     shutdown(ev, 93, { "claude-opus-5-5": metric(6, 6000, 600, 60000, 6600, 60), "claude-sonnet-5": metric(2, 2000, 200, 20000, 2200), "gpt-5.2": metric(1, 1000, 100, 10000, 1100, 10) }),
     // Lifetime 4.
     ev("session.resume", 94, { resumeTime: at(94), eventCount: 80 }),
     userMessage(ev, 95),
-    ev("assistant.turn_start", 96, { turnId: "t4" }),
-    ev("assistant.turn_end", 97, { turnId: "t4" }),
+    ev("assistant.turn_start", 96, { turnId: "0", interactionId: `${S}-i7` }),
+    ev("assistant.turn_end", 97, { turnId: "0" }),
     shutdown(ev, 99, FULL_FINAL_METRICS),
   ]
   // A blank line mid-file is skipped, never a parse failure.

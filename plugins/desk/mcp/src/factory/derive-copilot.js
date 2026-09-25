@@ -4,21 +4,27 @@
 // by M3-4) and in-memory binding events for M3-4 to match against Desk tool
 // calls, file writes and commits.
 //
-// What is read. Of each event only `type`, `timestamp` and these `data`
-// fields: `session.start.copilotVersion`; `session.shutdown.modelMetrics`
-// (never `codeChanges`); `assistant.turn_start/turn_end.turnId`;
+// What is read. Of each event only `type`, `timestamp`, the envelope
+// `agentId` (present means a subagent's event; read for classification only)
+// and these `data` fields: `session.start.copilotVersion`;
+// `session.shutdown.modelMetrics` (never `codeChanges`);
+// `assistant.turn_start.{turnId, interactionId}` and `turn_end.turnId`;
+// `user.message.{source, isAutopilotContinuation}` (classification only);
 // `tool.execution_start.{toolCallId, toolName, parentToolCallId}` and, for
 // binding only, the Desk task fields (`track`, `slug`, `person`, `status`)
 // and file-write paths of its `arguments`; `tool.execution_complete.
 // {toolCallId, success, error.code, shellExecution.exitCode}`;
-// `permission.requested/completed.{requestId, decisionSource}`;
-// `subagent.started/completed/failed.{toolCallId, model}`;
-// `session.error.statusCode`; `skill.invoked.{pluginName, pluginVersion}`.
-// Content fields (message and prompt text, other tool arguments, results,
-// `initialPrompt`, summaries, `codeChanges.filesModified`) are never read
-// into facts. From the database: `assistant_usage_events` (through
-// `readSessionRows`/`normalizeRow`) and `session_refs`, filtered by this
-// session's id. Never `turns` (message text) or `session_files`.
+// `permission.requested.requestId`, `permission.completed.{requestId,
+// toolCallId, decisionSource}`; `subagent.started/completed/failed.
+// {toolCallId, model}`; `session.compaction_complete.success`; the status
+// fields of failures (`statusCode`, `failureKind`); and
+// `skill.invoked.{pluginName, pluginVersion}`. Content fields (message and
+// prompt text, other tool arguments, results, `initialPrompt`, summaries,
+// `codeChanges.filesModified`) are never read into facts, and no classifying
+// value (`agentId`, `source`, `interactionId`) is ever copied into them. From
+// the database: `assistant_usage_events` and `session_refs`, filtered by this
+// session's id (`./copilot-usage.js`). Never `turns` (message text) or
+// `session_files`.
 //
 // Every fact is a count, a duration, an enum bucket or a pattern-shaped id,
 // and every copied value is checked against its schema pattern first. A value
@@ -26,11 +32,12 @@
 // always passes `validateFacts`. Track, slug and file paths reach only
 // `events`, which the caller keeps in memory and never writes.
 //
-// True single pass, small state. The log is read once through `readline`
-// and each parsed event is folded into small maps keyed by call, turn,
-// request and subagent id, which are emptied as their pairs complete, then
-// dropped. Memory tracks the number of calls in flight and of intervals
-// (capped at the schema limit), never the size of the log.
+// Single pass, small state. The log is read once through `readline`, and
+// each parsed event is folded into small maps keyed by call, turn, request
+// and subagent id, which empty as their pairs complete, then dropped.
+// Intervals are capped at the schema limit. The one thing that grows with the
+// log is the binding events (`deskToolCalls`, `fileWrites`): one small entry
+// per Desk task call or successful write, which M3-4 needs in full.
 //
 // Rules, matching the Claude deriver's where they overlap (M3-2 rulings):
 //   - `session.start` with a valid timestamp and `copilotVersion` is the
@@ -40,18 +47,33 @@
 //     timestamps; `ended_at` is `derived_through` when `endReason` is set,
 //     else `null` plus `{ended_at, session_open}`. Resumes stay one session.
 //   - `entrypoint` is the caller's (`cli` or `launcher`, default `cli`) and
-//     is never inferred: across real sessions `producer` is always
-//     `copilot-agent` and `context.hostType` names the repository host
-//     (`github`/`ado`), so nothing in the log identifies a launcher. The end
-//     hook (M3-7) knows, because an Agency session copies plugins under
-//     `~/.local/agency/plugins/sessions/`.
-//   - Turns pair `assistant.turn_start`/`turn_end` by `turnId`, all on agent
-//     0 (the log does not attribute turns to subagents). A turn left open
-//     adds `{turns, session_open}` (open session) or `{turns, log_truncated}`.
-//   - `human_wait` (agent 0 only) runs from a turn end to the next
-//     `user.message` when no turn is open in between. `permission_wait` runs
-//     from `permission.requested` to its `permission.completed` only when
-//     `decisionSource` is `human_response`.
+//     is never inferred: `producer` is always `copilot-agent` and
+//     `context.hostType` names the repository host, so nothing in the log
+//     identifies a launcher. The end hook (M3-7) knows, because an Agency
+//     session copies plugins under `~/.local/agency/plugins/sessions/`.
+//   - A `turn` is one root interaction, as in the Claude deriver where a turn
+//     runs from a human prompt to its last activity: from the first root
+//     `assistant.turn_start` of an `interactionId` to the last root
+//     `assistant.turn_end` of that interaction (Copilot starts one turn per
+//     model iteration, tens per prompt, all sharing the prompt's
+//     `interactionId`; a turn with none is its own interaction). Root events
+//     are those with no envelope `agentId`. Subagent turn events never make
+//     agent-0 turns or waits; a subagent's time is its `subagent` interval.
+//     An interaction closed with a turn still open (lost at a crash or at the
+//     end of the log) adds `{turns, session_open}` for an open session, else
+//     `{turns, log_truncated}`.
+//   - A human prompt is a root `user.message` whose `source` is absent and
+//     that is not an autopilot continuation. Inter-agent (`agent-*`),
+//     `autopilot`, scheduled (`schedule-*`) and any other sourced message is
+//     not human. `human_wait` (agent 0 only) runs from the end of the last
+//     interaction to the next human prompt, when no turn is open in between.
+//   - `permission_wait` runs from `permission.requested` to its
+//     `permission.completed` only when `decisionSource` is `human_response`,
+//     on the agent whose tool call (`toolCallId`) asked.
+//   - `session.resume` starts a new process lifetime: every pending turn,
+//     call, subagent and permission is dropped (setting the same open-or-
+//     truncated flags a pending item left at the end sets), and the wait,
+//     retry and compaction starts are reset, so a wait never spans a resume.
 //   - Tools pair start/complete by `toolCallId`. Outcome: `denied` when
 //     `error.code` is `denied`, `error` when `success` is false or a shell
 //     exit code is non-zero (a failing command is an error, as in Claude),
@@ -63,26 +85,38 @@
 //   - A `task` call (or any call a subagent started from) counts in
 //     `tool_calls.agent` but gets no `tool` interval: the subagent's own span,
 //     `subagent.started` to `subagent.completed`/`failed`, is the `subagent`
-//     interval, on the agent that spawned it. Each `subagent.started` gets
-//     the next agent number, its parent is the agent whose call spawned it
-//     (0 at top level), its model is `data.model` (`unknown` when absent or
-//     invalid). Tools with a `parentToolCallId` belong to that subagent.
-//   - Usage: the last `session.shutdown`'s `modelMetrics` when one exists
-//     (its totals are session-wide and cumulative across resumes), otherwise
-//     this session's database rows; the two are never added. Neither gives
-//     `{tokens, session_open}`. The root agent's model is the model with the
-//     most requests.
-//   - API retries: each `model.turn_retry`/`assistant.turn_retry` counts one;
-//     its `api_retry` interval starts at the first unclosed failure before it
-//     (`model.model_call_failure`/`model.call_failure`, or `session.error`
-//     with status 429 or 5xx) in the same turn.
-//   - Compactions count each `session.compaction_complete`, with an interval
-//     from its `compaction_start`.
+//     interval, on the agent that spawned it; an unreadable one is flagged
+//     under `tool_durations`, since it stands in for that call's duration.
+//     Each `subagent.started` gets the next agent number, its parent is the
+//     agent whose call spawned it (0 at top level), its model is
+//     `data.model` (`unknown` when absent or invalid). Tools with a
+//     `parentToolCallId` belong to that subagent.
+//   - Usage: the last `session.shutdown`'s `modelMetrics` (cumulative across
+//     resumes) when nothing follows it. A shutdown followed by a
+//     `session.resume` or any `assistant.turn_start` is stale: then this
+//     session's database rows are used alone when any exist, since they cover
+//     the whole session; otherwise the stale totals are kept with `{tokens,
+//     session_open}` (open session) or `{tokens, log_truncated}`. With no
+//     shutdown, the database rows; with neither, `{tokens, session_open}`.
+//     The two sources are never added. The root agent's model is the model
+//     with the most requests.
+//   - API retries: each `model.turn_retry`/`assistant.turn_retry` counts one.
+//     Its `api_retry` interval starts at the first retryable failure since
+//     the last root turn end (or resume) — `model.model_call_failure`,
+//     `model.call_failure` or `session.error` with status 429 or 5xx, or a
+//     `failureKind` of `transport`. All retries sit on agent 0: the log's
+//     subagent ids cannot be matched to agent numbers without reading more.
+//   - Compactions count each successful `session.compaction_complete`, with
+//     an interval from its `compaction_start` on agent 0. Compaction happens
+//     inside an agent turn, so an unreadable compaction interval is flagged
+//     under `turns` (the schema has no compaction field).
 //   - Plugins: the caller's marker list merged with valid `skill.invoked`
 //     name/version pairs, deduplicated.
 //   - Refs: `session_refs` `pr` rows (`owner/repo#n` or a github.com PR URL)
 //     and `commit` rows (40 hex) for this session. The commit SHAs also go to
-//     `events.commitShas` for M3-4. No database: `{commits, log_missing}`.
+//     `events.commitShas` for M3-4. No database: `{commits, log_missing}`;
+//     an unreadable one (including no `node:sqlite`): `{commits,
+//     source_unreadable}`, and the same for tokens when they were needed.
 //   - Binding events: tool names ending `task_create|task_update|
 //     task_archive` whose arguments carry string `track` and `slug`; file
 //     writes are `create`/`edit` `arguments.path` and the `*** Add/Update/
@@ -103,7 +137,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { createInterface } from "node:readline"
 
-import { localRecordsPath, normalizeRow, readSessionRefs, readSessionRows } from "./copilot-usage.js"
+import { normalizeRow, readSessionRefs, readSessionRows } from "./copilot-usage.js"
 import { ENUMS, LIMITS, PATTERNS } from "./schema.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
@@ -138,6 +172,15 @@ function outcomeOf(data) {
   const exitCode = isObject(data.shellExecution) ? data.shellExecution.exitCode : undefined
   if (Number.isInteger(exitCode) && exitCode !== 0) return "error"
   return "ok"
+}
+
+function isRetryableFailure(data) {
+  const status = data.statusCode
+  return (Number.isInteger(status) && (status === 429 || status >= 500)) || data.failureKind === "transport"
+}
+
+function isHumanPrompt(data, root) {
+  return root && data.isAutopilotContinuation !== true && (data.source === undefined || data.source === null)
 }
 
 function deskCallOf(name, args, at) {
@@ -216,8 +259,12 @@ function createSessionFold() {
     else pushInterval({ ...fields, start, end }, field)
   }
 
-  const pendingTurns = new Map()
+  // The root interaction in progress: `{ id, start, lastEnd, open }`, where
+  // `open` holds the root turn ids started but not yet ended.
+  let interaction = null
   let lastTurnEnd = null
+  let lostTurns = false
+  let lostCalls = false
   const pendingTools = new Map()
   const lastFinished = new Map()
   const pendingPermissions = new Map()
@@ -240,32 +287,71 @@ function createSessionFold() {
 
   const agentOf = (parentCall) => (parentCall === null ? 0 : subagentByCall.get(parentCall) ?? 0)
 
+  function closeInteraction() {
+    if (interaction.open.size > 0) lostTurns = true
+    if (interaction.lastEnd !== null) {
+      addTimed({ kind: "turn", agent: 0 }, interaction.start, interaction.lastEnd, "turns")
+      lastTurnEnd = interaction.lastEnd
+    }
+    interaction = null
+  }
+
+  function endSubagent(data, at) {
+    const toolCallId = stringOrNull(data.toolCallId)
+    const pending = toolCallId === null ? undefined : pendingSubagents.get(toolCallId)
+    if (pending === undefined) return
+    pendingSubagents.delete(toolCallId)
+    addTimed({ kind: "subagent", agent: pending.agent }, pending.start, at, "tool_durations")
+  }
+
+  function openRetry(data, at) {
+    if (retryStart === null && isRetryableFailure(data)) retryStart = at
+  }
+
   const handlers = {
     "session.start"(data, at) {
       if (hostVersion === null && at !== null && typeof data.copilotVersion === "string" && PATTERNS.semver.test(data.copilotVersion)) {
         hostVersion = data.copilotVersion
       }
     },
+    "session.resume"() {
+      if (interaction !== null) closeInteraction()
+      if (pendingTools.size + pendingSubagents.size > 0) lostCalls = true
+      pendingTools.clear()
+      pendingSubagents.clear()
+      pendingPermissions.clear()
+      lastTurnEnd = null
+      retryStart = null
+      compactionStart = undefined
+      if (shutdown !== null) shutdown.stale = true
+    },
     "session.shutdown"(data) {
-      shutdown = isObject(data.modelMetrics) ? parseModelMetrics(data.modelMetrics, flag) : { models: [] }
+      shutdown = { models: isObject(data.modelMetrics) ? parseModelMetrics(data.modelMetrics, flag) : [], stale: false }
       if (!isObject(data.modelMetrics)) flag("tokens", "source_unreadable")
     },
-    "assistant.turn_start"(data, at) {
-      lastTurnEnd = null
+    "assistant.turn_start"(data, at, root) {
+      if (shutdown !== null) shutdown.stale = true
       const turnId = stringOrNull(data.turnId)
-      if (turnId !== null) pendingTurns.set(turnId, at)
+      if (!root || turnId === null) return
+      const id = stringOrNull(data.interactionId) ?? `turn:${turnId}`
+      if (interaction !== null && interaction.id !== id) closeInteraction()
+      if (interaction === null) {
+        interaction = { id, start: at, lastEnd: null, open: new Set() }
+        lastTurnEnd = null
+      }
+      interaction.open.add(turnId)
     },
-    "assistant.turn_end"(data, at) {
+    "assistant.turn_end"(data, at, root) {
+      const turnId = stringOrNull(data.turnId)
+      if (!root || interaction === null || !interaction.open.has(turnId)) return
+      interaction.open.delete(turnId)
+      interaction.lastEnd = at
       retryStart = null
-      const turnId = stringOrNull(data.turnId)
-      if (turnId === null || !pendingTurns.has(turnId)) return
-      const start = pendingTurns.get(turnId)
-      pendingTurns.delete(turnId)
-      addTimed({ kind: "turn", agent: 0 }, start, at, "turns")
-      lastTurnEnd = at
     },
-    "user.message"(data, at) {
-      if (lastTurnEnd !== null && pendingTurns.size === 0) addTimed({ kind: "human_wait", agent: 0 }, lastTurnEnd, at, "human_waits")
+    "user.message"(data, at, root) {
+      if (!isHumanPrompt(data, root)) return
+      if (interaction !== null && interaction.open.size === 0) closeInteraction()
+      if (interaction === null && lastTurnEnd !== null) addTimed({ kind: "human_wait", agent: 0 }, lastTurnEnd, at, "human_waits")
       lastTurnEnd = null
     },
     "tool.execution_start"(data, at) {
@@ -314,7 +400,10 @@ function createSessionFold() {
       if (requestId === null || !pendingPermissions.has(requestId)) return
       const start = pendingPermissions.get(requestId)
       pendingPermissions.delete(requestId)
-      if (data.decisionSource === "human_response") addTimed({ kind: "permission_wait", agent: 0 }, start, at, "permission_waits")
+      if (data.decisionSource !== "human_response") return
+      const toolCallId = stringOrNull(data.toolCallId)
+      const agent = toolCallId === null ? 0 : pendingTools.get(toolCallId)?.agent ?? 0
+      addTimed({ kind: "permission_wait", agent }, start, at, "permission_waits")
     },
     "subagent.started"(data, at) {
       const toolCallId = stringOrNull(data.toolCallId)
@@ -332,22 +421,17 @@ function createSessionFold() {
       subagentByCall.set(toolCallId, n)
       pendingSubagents.set(toolCallId, { start: at, agent: parent })
     },
-    "subagent.completed"(data, at) {
-      endSubagent(data, at)
-    },
-    "subagent.failed"(data, at) {
-      endSubagent(data, at)
-    },
-    "session.error"(data, at) {
-      const status = data.statusCode
-      if (Number.isInteger(status) && (status === 429 || status >= 500)) openRetry(at)
-    },
+    "subagent.completed": endSubagent,
+    "subagent.failed": endSubagent,
+    "session.error": openRetry,
     "session.compaction_start"(data, at) {
       compactionStart = at
     },
     "session.compaction_complete"(data, at) {
-      compactions += 1
-      if (compactionStart !== undefined) addTimed({ kind: "compaction", agent: 0 }, compactionStart, at, "turns")
+      if (data.success !== false) {
+        compactions += 1
+        if (compactionStart !== undefined) addTimed({ kind: "compaction", agent: 0 }, compactionStart, at, "turns")
+      }
       compactionStart = undefined
     },
     "skill.invoked"(data) {
@@ -361,19 +445,7 @@ function createSessionFold() {
     },
   }
 
-  function endSubagent(data, at) {
-    const toolCallId = stringOrNull(data.toolCallId)
-    const pending = toolCallId === null ? undefined : pendingSubagents.get(toolCallId)
-    if (pending === undefined) return
-    pendingSubagents.delete(toolCallId)
-    addTimed({ kind: "subagent", agent: pending.agent }, pending.start, at, "turns")
-  }
-
-  function openRetry(at) {
-    if (retryStart === null) retryStart = at
-  }
-
-  for (const type of CALL_FAILURE) handlers[type] = (data, at) => openRetry(at)
+  for (const type of CALL_FAILURE) handlers[type] = openRetry
   for (const type of TURN_RETRY) {
     handlers[type] = (data, at) => {
       apiRetries += 1
@@ -392,9 +464,13 @@ function createSessionFold() {
         if (latest === null || at > latest) latest = at
       }
       const handler = Object.hasOwn(handlers, event.type) ? handlers[event.type] : undefined
-      if (handler !== undefined) handler(isObject(event.data) ? event.data : {}, at)
+      if (handler !== undefined) {
+        const root = event.agentId === undefined || event.agentId === null
+        handler(isObject(event.data) ? event.data : {}, at, root)
+      }
     },
     finish() {
+      if (interaction !== null) closeInteraction()
       return {
         flags,
         hostVersion,
@@ -411,8 +487,8 @@ function createSessionFold() {
         compactions,
         deskToolCalls,
         fileWrites,
-        unfinishedCalls: pendingTools.size + pendingSubagents.size > 0,
-        openTurns: pendingTurns.size > 0,
+        unfinishedCalls: lostCalls || pendingTools.size + pendingSubagents.size > 0,
+        openTurns: lostTurns,
       }
     },
   }
@@ -439,7 +515,7 @@ function parseModelMetrics(metrics, flag) {
       },
     })
   }
-  return { models }
+  return models
 }
 
 async function streamEvents(file, onEvent) {
@@ -467,16 +543,10 @@ async function streamEvents(file, onEvent) {
 // ---------------------------------------------------------------------------
 
 function usageFromDatabase(sessionId, env, flag) {
-  if (!existsSync(localRecordsPath(env))) return []
-  let rows
-  try {
-    rows = readSessionRows({ sessionId, env }).rows
-  } catch {
-    flag("tokens", "source_unreadable")
-    return []
-  }
+  const result = readSessionRows({ sessionId, env })
+  if (result.status === "unreadable") flag("tokens", "source_unreadable")
   const byModel = new Map()
-  for (const row of rows) {
+  for (const row of result.rows) {
     const normalized = normalizeRow(row)
     if (normalized.malformed !== undefined) {
       flag("tokens", "source_unreadable")
@@ -502,17 +572,9 @@ function usageFromDatabase(sessionId, env, flag) {
 }
 
 function refsFromDatabase(sessionId, env, flag) {
-  let result
-  try {
-    result = readSessionRefs({ sessionId, env })
-  } catch {
-    flag("commits", "source_unreadable")
-    return { prs: [], commits: [] }
-  }
-  if (!result.present) {
-    flag("commits", "log_missing")
-    return { prs: [], commits: [] }
-  }
+  const result = readSessionRefs({ sessionId, env })
+  if (result.status === "missing") flag("commits", "log_missing")
+  if (result.status === "unreadable") flag("commits", "source_unreadable")
   const prs = new Map()
   const commits = new Set()
   for (const { ref_type: type, ref_value: value } of result.rows) {
@@ -564,6 +626,18 @@ function rootModel(models) {
   return best === null ? "unknown" : best.id
 }
 
+function selectUsage({ shutdown, sessionId, env, flags, flag, openOrTruncated }) {
+  if (shutdown !== null && !shutdown.stale) return shutdown.models
+  const fromDatabase = usageFromDatabase(sessionId, env, flag)
+  if (fromDatabase.length > 0) return fromDatabase
+  if (shutdown !== null) {
+    flag("tokens", openOrTruncated)
+    return shutdown.models
+  }
+  if (!flags.has("tokens|source_unreadable")) flag("tokens", "session_open")
+  return []
+}
+
 export async function deriveCopilotSession({ sessionId, copilotHome, contributor, plugins, endReason, entrypoint = "cli" }) {
   if (typeof contributor !== "string" || !PATTERNS.contributor.test(contributor)) {
     throw new TypeError("deriveCopilotSession: contributor must be 16 lowercase hex characters")
@@ -586,18 +660,11 @@ export async function deriveCopilotSession({ sessionId, copilotHome, contributor
   const state = fold.finish()
   if (state.hostVersion === null) return { facts: null, events: null, reason: "source_unreadable" }
 
-  const flags = state.flags
-  const flag = (field, reason) => flags.set(`${field}|${reason}`, { field, reason })
+  const flag = (field, reason) => state.flags.set(`${field}|${reason}`, { field, reason })
   const safeEndReason = ENUMS.endReason.includes(endReason) ? endReason : null
   const openOrTruncated = safeEndReason === null ? "session_open" : "log_truncated"
 
-  let models
-  if (state.shutdown !== null) {
-    models = state.shutdown.models
-  } else {
-    models = usageFromDatabase(sessionId, env, flag)
-    if (models.length === 0 && !flags.has("tokens|source_unreadable")) flag("tokens", "session_open")
-  }
+  let models = selectUsage({ shutdown: state.shutdown, sessionId, env, flags: state.flags, flag, openOrTruncated })
   models.sort(compareModels)
   if (models.length > LIMITS.models) flag("models", "log_truncated")
   models = models.slice(0, LIMITS.models)
@@ -639,7 +706,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, contributor
     },
     refs: { prs: refs.prs, commits: refs.commits.map((sha) => ({ sha })) },
     jobs: [],
-    unavailable: [...flags.values()].slice(0, LIMITS.unavailable),
+    unavailable: [...state.flags.values()].slice(0, LIMITS.unavailable),
   }
 
   const events = {
