@@ -117,11 +117,11 @@ test("diagnostic format handling does not disguise an unexpected validator failu
   })
   try {
     const request = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_doctor", arguments: {} } }
-    assert.throws(
-      () => input.emit("data", Buffer.from(JSON.stringify(request) + "\n")),
-      (error) => error === failure,
-    )
-    assert.equal(chunks.length, 0)
+    input.emit("data", Buffer.from(JSON.stringify(request) + "\n"))
+    // The failure is reported as what it is, never as an unsupported-format input error, and the server keeps running.
+    const response = parse(Buffer.concat(chunks).toString("utf8"))
+    assert.equal(response.result.isError, true)
+    assert.deepEqual(parse(response.result.content[0].text), { status: "error", tool: "desk_doctor", message: "unexpected validator failure" })
   } finally {
     mocked.mock.restore()
     input.emit("end")
