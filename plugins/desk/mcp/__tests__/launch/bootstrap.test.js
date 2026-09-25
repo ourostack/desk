@@ -30,7 +30,8 @@ const bootstrap = require(bootstrapPath)
 const { TOOL_NAMES } = await import(pathToFileURL(path.join(mcpRoot, "src", "tool-names.js")).href)
 const packageJson = JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8"))
 const nodes = installedNodesByMajor()
-const HANDSHAKE_BUDGET_MS = process.platform === "win32" ? 10000 : 3000
+// A fresh Windows CI runner restores the runtime pack into an empty cache on first start (about 11 s observed), so Windows gets a budget under the hosts' 30 s MCP startup timeout instead of the 3 s one.
+const HANDSHAKE_BUDGET_MS = process.platform === "win32" ? 30000 : 3000
 
 // ---- fixtures ----
 
@@ -618,12 +619,13 @@ test("the bootstrap passes the chosen Node's exit code through", {
   assert.equal(result.stdout, `ran nvm-v30 [${path.join(mcp, "index.js")}] [--root] [a b]\n`)
 })
 
-test("native: the bootstrap completes the MCP handshake on this host", async () => {
+test("native: the bootstrap completes the MCP handshake on this host", async (t) => {
   const fixture = await makeIsolatedHome("desk-bootstrap-native-")
   const env = isolatedEnv(fixture, process.platform === "win32" ? {} : { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin` })
   const result = await runHandshake({ command: process.execPath, args: [bootstrapPath], cwd: fixture.root, env, timeoutMs: 60000 })
-  assert.ok(result.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${result.handshakeMs} ms; stderr: ${result.stderr}`)
+  t.diagnostic(`${process.platform} ${process.version}: handshake in ${result.handshakeMs} ms`)
   assert.equal(result.initialize.result.serverInfo.name, "desk-mcp", result.stderr)
+  assert.ok(result.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${result.handshakeMs} ms; stderr: ${result.stderr}`)
   assert.deepEqual(result.tools.result.tools.map((tool) => tool.name), TOOL_NAMES)
   assert.equal(result.status.result.isError, undefined, JSON.stringify(result.status))
 })
