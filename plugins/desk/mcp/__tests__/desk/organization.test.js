@@ -225,6 +225,7 @@ async function buildOneOfEachFixture() {
   // Allowed desk-root loose entries — must never be reported.
   await writeFile(root, "AGENTS.md", "# Agents\n")
   await writeFile(root, "README.md", "# Readme\n")
+  await writeFile(root, "CLAUDE.md", "# Claude\n")
   await writeFile(root, ".gitignore", "*.log\n")
   await fs.mkdir(path.join(root, "_meta"), { recursive: true })
 
@@ -343,6 +344,7 @@ test("loose_file never flags the desk-root allow-list", async () => {
   const loose = findByCode(findings, "loose_file").map((f) => f.path)
   assert.ok(!loose.includes("AGENTS.md"))
   assert.ok(!loose.includes("README.md"))
+  assert.ok(!loose.includes("CLAUDE.md"))
   assert.ok(!loose.includes(".gitignore"))
 })
 
@@ -553,4 +555,553 @@ test("organizationFindings tolerates dangling symlinks, unreadable cards, and em
     assert.equal(typeof finding.path, "string")
     assert.equal(typeof finding.hint, "string")
   }
+})
+
+// ── Fix round 1: redaction holds across every finding (controller ruling) ──
+//
+// The review's confirmed leak: a credential-like directory name was
+// redacted only in the one `name_credential_like` finding that named it
+// directly, and echoed raw by every sibling finding touching the same
+// directory (`stale_task`, `track_missing_scope`, `track_empty`,
+// `loose_file`, `duplicate_job`). This fixture plants a credential-like
+// name at BOTH track level and task level, each wired to trigger every
+// other finding code that can legitimately touch that same path, and
+// asserts — across the *entire* result, not just the name finding — that
+// neither secret token, nor any substring of either longer than 3
+// characters, appears anywhere in any finding's `path` or `hint`.
+
+const TRACK_SECRET = "a1b2c3d4e5f6a7b8c9d0" // 20 hex chars — pure-hex credential_like
+const TASK_SECRET = "x9k2m7q1p4z8r3n6" // 16 mixed alnum chars — credential_like
+
+async function buildCredentialLeakFixture() {
+  const root = await mkTempRoot()
+
+  // TRACK-LEVEL credential-like name: no scope, a stale task, a loose
+  // stray file, and two tasks sharing a PR reference — every one of those
+  // findings' paths passes through the credential-like track segment.
+  const trackName = `rotate-${TRACK_SECRET}`
+  await writeCard(root, `${trackName}/track.md`, {
+    schema_version: 1,
+    title: trackName,
+    status: "active",
+    // no scope — track_missing_scope
+  })
+  await writeCard(root, `${trackName}/stale-cleanup-task/task.md`, {
+    schema_version: 1,
+    title: "stale-cleanup-task",
+    status: "processing",
+    created: STALE,
+    updated: STALE, // stale_task
+    track: trackName,
+  })
+  await writeFile(root, `${trackName}/stray-notes.txt`, "loose\n") // loose_file
+  await writeCard(root, `${trackName}/dup-job-one/task.md`, {
+    schema_version: 1,
+    title: "dup-job-one",
+    status: "validating",
+    created: RECENT,
+    updated: RECENT,
+    track: trackName,
+    artifacts: ["https://github.com/ourostack/desk/pull/999"],
+  })
+  await writeCard(
+    root,
+    `${trackName}/dup-job-two/task.md`,
+    {
+      schema_version: 1,
+      title: "dup-job-two",
+      status: "validating",
+      created: RECENT,
+      updated: RECENT,
+      track: trackName,
+    },
+    "See https://github.com/ourostack/desk/pull/999\n", // duplicate_job (both directions)
+  )
+
+  // TASK-LEVEL credential-like name, inside an otherwise well-formed track:
+  // stale, and sharing a PR reference with a normally-named sibling.
+  await writeCard(root, "normal-track-two/track.md", {
+    schema_version: 1,
+    title: "normal-track-two",
+    status: "active",
+    scope: "holds the task-level credential-like fixture; not anything else",
+  })
+  const taskSlug = `rotate-${TASK_SECRET}`
+  await writeCard(root, `normal-track-two/${taskSlug}/task.md`, {
+    schema_version: 1,
+    title: taskSlug,
+    status: "processing",
+    created: STALE,
+    updated: STALE, // stale_task
+    track: "normal-track-two",
+    artifacts: ["https://github.com/ourostack/desk/pull/888"],
+  })
+  await writeCard(
+    root,
+    "normal-track-two/other-dup-partner/task.md",
+    {
+      schema_version: 1,
+      title: "other-dup-partner",
+      status: "validating",
+      created: RECENT,
+      updated: RECENT,
+      track: "normal-track-two",
+    },
+    "https://github.com/ourostack/desk/pull/888\n", // duplicate_job (both directions)
+  )
+
+  return root
+}
+
+function assertNoSubstringLeak(candidate, haystack) {
+  for (let len = 4; len <= candidate.length; len += 1) {
+    for (let start = 0; start + len <= candidate.length; start += 1) {
+      const fragment = candidate.slice(start, start + len)
+      assert.equal(
+        haystack.includes(fragment),
+        false,
+        `must not contain "${fragment}" (from "${candidate}"): ${haystack}`,
+      )
+    }
+  }
+}
+
+test("redaction holds across every finding a credential-like directory can touch, at track level and task level", async () => {
+  const root = await buildCredentialLeakFixture()
+  const findings = organizationFindings(root, { now: NOW })
+
+  // Sanity: every finding this fixture is designed to trigger actually fired.
+  const codes = new Set(findings.map((f) => f.code))
+  for (const expected of [
+    "name_credential_like",
+    "track_missing_scope",
+    "stale_task",
+    "loose_file",
+    "duplicate_job",
+  ]) {
+    assert.ok(codes.has(expected), `expected a ${expected} finding, got: ${[...codes].join(", ")}`)
+  }
+  assert.equal(findByCode(findings, "name_credential_like").length, 2, "one at track level, one at task level")
+  assert.equal(findByCode(findings, "stale_task").length, 2)
+  assert.equal(findByCode(findings, "duplicate_job").length, 4)
+
+  // Every redacted finding uses the literal placeholder, never the secret.
+  assert.ok(findings.some((f) => f.path === "<redacted segment>"))
+  assert.ok(findings.some((f) => f.path.startsWith("<redacted segment>/")))
+  assert.ok(findings.some((f) => f.path.includes("/<redacted segment>/")))
+  assert.ok(findings.some((f) => f.path.endsWith("/<redacted segment>")))
+
+  // The whole-result check the review asked for: neither secret, nor any
+  // substring of either longer than 3 characters, appears anywhere.
+  const haystack = JSON.stringify(findings)
+  assertNoSubstringLeak(TRACK_SECRET, haystack)
+  assertNoSubstringLeak(TASK_SECRET, haystack)
+})
+
+// ── Fix round 1: bounded card reads (controller ruling) ─────────────────
+
+test("organizationFindings bounds each card read instead of loading the whole file, and still finds what a 64 KiB read covers", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "big-card-track/track.md", {
+    schema_version: 1,
+    title: "big-card-track",
+    status: "active",
+    scope: "exercises the bounded card read; not anything else",
+  })
+
+  const filler = `${"x".repeat(500)}\n`
+  const hugeBody = filler.repeat(3000) // ~1.7 MB — far past 64 KiB and 200 lines
+
+  // A PR reference in the frontmatter of a huge-bodied card must still be
+  // found (frontmatter is always at the very start of the file).
+  await writeCard(
+    root,
+    "big-card-track/huge-task/task.md",
+    {
+      schema_version: 1,
+      title: "huge-task",
+      status: "validating",
+      created: RECENT,
+      updated: RECENT,
+      track: "big-card-track",
+      artifacts: ["https://github.com/ourostack/desk/pull/321"],
+    },
+    hugeBody,
+  )
+  await writeCard(
+    root,
+    "big-card-track/huge-partner/task.md",
+    {
+      schema_version: 1,
+      title: "huge-partner",
+      status: "validating",
+      created: RECENT,
+      updated: RECENT,
+      track: "big-card-track",
+    },
+    "https://github.com/ourostack/desk/pull/321\n",
+  )
+
+  // A PR reference placed well beyond both the 200-line trim AND the 64 KiB
+  // read boundary must never be found — proving the read is genuinely
+  // bounded at the source, not just trimmed to 200 lines after loading
+  // everything.
+  await writeCard(
+    root,
+    "big-card-track/far-reference/task.md",
+    {
+      schema_version: 1,
+      title: "far-reference",
+      status: "validating",
+      created: RECENT,
+      updated: RECENT,
+      track: "big-card-track",
+    },
+    `${hugeBody}https://github.com/ourostack/desk/pull/654\n`,
+  )
+  await writeCard(
+    root,
+    "big-card-track/far-reference-partner/task.md",
+    {
+      schema_version: 1,
+      title: "far-reference-partner",
+      status: "validating",
+      created: RECENT,
+      updated: RECENT,
+      track: "big-card-track",
+    },
+    "https://github.com/ourostack/desk/pull/654\n",
+  )
+
+  const findings = organizationFindings(root, { now: NOW })
+
+  const duplicates = findByCode(findings, "duplicate_job").map((f) => f.path)
+  assert.ok(duplicates.some((p) => p.includes("huge-task")))
+  assert.ok(duplicates.some((p) => p.includes("huge-partner")))
+  assert.ok(!duplicates.some((p) => p.includes("far-reference")))
+})
+
+// ── Fix round 1: dedicated accept test per finding code (controller ruling) ─
+//
+// Each finding code already has reject-side tests above; these are its
+// positive ("this valid input never fires") counterpart, one per code.
+// `loose_file` and `duplicate_job` already have dedicated accept tests
+// ("never flags the desk-root allow-list", "a lonely PR reference is never
+// duplicate_job" via the edge-case fixture) — not repeated here.
+
+test("track_missing_scope accept: a track with a well-formed scope never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes and refund flows; not payroll",
+  })
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "track_missing_scope"), [])
+})
+
+test("track_person_name accept: a track name that matches no operator alias never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes and refund flows; not payroll",
+  })
+  const findings = organizationFindings(root, { now: NOW, operatorNames: ["someone-else"] })
+  assert.deepEqual(findByCode(findings, "track_person_name"), [])
+})
+
+test("track_catch_all accept: an ordinary track name never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes and refund flows; not payroll",
+  })
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "track_catch_all"), [])
+})
+
+test("track_empty accept: a track with a live task never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes and refund flows; not payroll",
+  })
+  await writeCard(root, "billing-disputes/refund-flow-cleanup/task.md", {
+    schema_version: 1,
+    title: "refund-flow-cleanup",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "billing-disputes",
+  })
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "track_empty"), [])
+})
+
+test("name_prompt_like accept: a task name that doesn't start with a blocked word never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes and refund flows; not payroll",
+  })
+  await writeCard(root, "billing-disputes/refund-flow-cleanup/task.md", {
+    schema_version: 1,
+    title: "refund-flow-cleanup",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "billing-disputes",
+  })
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "name_prompt_like"), [])
+})
+
+test("name_credential_like accept: a task name with no secret-shaped word never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes and refund flows; not payroll",
+  })
+  await writeCard(root, "billing-disputes/refund-flow-cleanup/task.md", {
+    schema_version: 1,
+    title: "refund-flow-cleanup",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "billing-disputes",
+  })
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "name_credential_like"), [])
+})
+
+test("name_shape accept: a 2-6 word lowercase kebab-case name never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes and refund flows; not payroll",
+  })
+  await writeCard(root, "billing-disputes/refund-flow-cleanup/task.md", {
+    schema_version: 1,
+    title: "refund-flow-cleanup",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "billing-disputes",
+  })
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "name_shape"), [])
+})
+
+test("stale_task accept: a non-terminal task updated recently never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes and refund flows; not payroll",
+  })
+  await writeCard(root, "billing-disputes/refund-flow-cleanup/task.md", {
+    schema_version: 1,
+    title: "refund-flow-cleanup",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "billing-disputes",
+  })
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "stale_task"), [])
+})
+
+// ── Fix round 1: PR-URL host coverage (controller ruling) ────────────────
+
+test("duplicate_job matches a github.com pull request URL", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "host-coverage/track.md", {
+    schema_version: 1,
+    title: "host-coverage",
+    status: "active",
+    scope: "exercises PR-URL host coverage; not anything else",
+  })
+  await writeCard(root, "host-coverage/gh-one/task.md", {
+    schema_version: 1,
+    title: "gh-one",
+    status: "validating",
+    created: RECENT,
+    updated: RECENT,
+    track: "host-coverage",
+    artifacts: ["https://github.com/ourostack/desk/pull/42"],
+  })
+  await writeCard(
+    root,
+    "host-coverage/gh-two/task.md",
+    { schema_version: 1, title: "gh-two", status: "validating", created: RECENT, updated: RECENT, track: "host-coverage" },
+    "https://github.com/ourostack/desk/pull/42\n",
+  )
+  const findings = organizationFindings(root, { now: NOW })
+  const duplicates = findByCode(findings, "duplicate_job").map((f) => f.path)
+  assert.ok(duplicates.includes("host-coverage/gh-one/task.md"))
+  assert.ok(duplicates.includes("host-coverage/gh-two/task.md"))
+})
+
+test("duplicate_job matches a GitHub Enterprise pull request URL on a custom host", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "host-coverage-ghe/track.md", {
+    schema_version: 1,
+    title: "host-coverage-ghe",
+    status: "active",
+    scope: "exercises GitHub Enterprise PR URLs; not anything else",
+  })
+  await writeCard(root, "host-coverage-ghe/ghe-one/task.md", {
+    schema_version: 1,
+    title: "ghe-one",
+    status: "validating",
+    created: RECENT,
+    updated: RECENT,
+    track: "host-coverage-ghe",
+    artifacts: ["https://github.mycompany.internal/org/repo/pull/17"],
+  })
+  await writeCard(
+    root,
+    "host-coverage-ghe/ghe-two/task.md",
+    {
+      schema_version: 1,
+      title: "ghe-two",
+      status: "validating",
+      created: RECENT,
+      updated: RECENT,
+      track: "host-coverage-ghe",
+    },
+    "https://github.mycompany.internal/org/repo/pull/17\n",
+  )
+  const findings = organizationFindings(root, { now: NOW })
+  const duplicates = findByCode(findings, "duplicate_job").map((f) => f.path)
+  assert.ok(duplicates.includes("host-coverage-ghe/ghe-one/task.md"))
+  assert.ok(duplicates.includes("host-coverage-ghe/ghe-two/task.md"))
+})
+
+test("duplicate_job matches an Azure DevOps pullrequest URL", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "host-coverage-ado/track.md", {
+    schema_version: 1,
+    title: "host-coverage-ado",
+    status: "active",
+    scope: "exercises Azure DevOps PR URLs; not anything else",
+  })
+  const adoUrl = "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest/456"
+  await writeCard(root, "host-coverage-ado/ado-one/task.md", {
+    schema_version: 1,
+    title: "ado-one",
+    status: "validating",
+    created: RECENT,
+    updated: RECENT,
+    track: "host-coverage-ado",
+    artifacts: [adoUrl],
+  })
+  await writeCard(
+    root,
+    "host-coverage-ado/ado-two/task.md",
+    {
+      schema_version: 1,
+      title: "ado-two",
+      status: "validating",
+      created: RECENT,
+      updated: RECENT,
+      track: "host-coverage-ado",
+    },
+    `${adoUrl}\n`,
+  )
+  const findings = organizationFindings(root, { now: NOW })
+  const duplicates = findByCode(findings, "duplicate_job").map((f) => f.path)
+  assert.ok(duplicates.includes("host-coverage-ado/ado-one/task.md"))
+  assert.ok(duplicates.includes("host-coverage-ado/ado-two/task.md"))
+})
+
+// ── Fix round 1: redaction independent of validateName's shape gate ──────
+//
+// `validateName`/`validateTrackName` only reach their own `credential_like`
+// check once a candidate already passes the kebab-case shape gate (2-6
+// "-"-joined words). A pre-existing directory name is never restricted to
+// that shape (M4-1: "existing names are never rejected on read"), so a
+// single hyphen-less word that is itself a 16+ character secret-shaped run
+// fails shape (`name_shape`, not `name_credential_like`) — but must still
+// be redacted, independently of which finding code ends up firing. Covers
+// both branches of `looksLikeSecretRun`: a pure-hex run and a mixed
+// alphanumeric run.
+
+test("a single hyphen-less secret-shaped segment is redacted even though it fails shape, not the credential check", async () => {
+  const root = await mkTempRoot()
+
+  // Task-level: a pure-hex, hyphen-less slug — name_shape, but still redacted.
+  await writeCard(root, "normal-track/track.md", {
+    schema_version: 1,
+    title: "normal-track",
+    status: "active",
+    scope: "holds the hyphen-less secret fixture; not anything else",
+  })
+  await writeCard(root, `normal-track/${TRACK_SECRET}/task.md`, {
+    schema_version: 1,
+    title: TRACK_SECRET,
+    status: "processing",
+    created: STALE,
+    updated: STALE,
+    track: "normal-track",
+  })
+
+  // Track-level: a mixed-alnum, hyphen-less name — name_shape, but still redacted.
+  await writeCard(root, `${TASK_SECRET}/track.md`, {
+    schema_version: 1,
+    title: TASK_SECRET,
+    status: "active",
+    // no scope, so track_missing_scope also touches this same segment
+  })
+
+  const findings = organizationFindings(root, { now: NOW })
+
+  const shapeFindings = findByCode(findings, "name_shape")
+  assert.ok(shapeFindings.some((f) => f.path === "normal-track/<redacted segment>"))
+  assert.ok(shapeFindings.some((f) => f.path === "<redacted segment>"))
+  assert.equal(findByCode(findings, "name_credential_like").length, 0)
+
+  assert.ok(
+    findByCode(findings, "stale_task").some((f) => f.path === "normal-track/<redacted segment>/task.md"),
+  )
+  assert.ok(
+    findByCode(findings, "track_missing_scope").some((f) => f.path === "<redacted segment>/track.md"),
+  )
+
+  const haystack = JSON.stringify(findings)
+  assertNoSubstringLeak(TRACK_SECRET, haystack)
+  assertNoSubstringLeak(TASK_SECRET, haystack)
+})
+
+test("organizationFindings tolerates a card whose bytes open and read fine but whose frontmatter fails to parse", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "malformed-track/track.md", {
+    schema_version: 1,
+    title: "malformed-track",
+    status: "active",
+    scope: "holds the malformed task card; not anything else",
+  })
+  await writeFile(
+    root,
+    "malformed-track/broken-frontmatter/task.md",
+    "---\ntitle: [unclosed\nstatus: processing\n---\nbody\n",
+  )
+  // Must not throw, and the unparseable card contributes no stale_task
+  // (same "skip what can't be read" contract as a missing/unreadable file).
+  const findings = organizationFindings(root, { now: NOW })
+  assert.ok(!findByCode(findings, "stale_task").some((f) => f.path.includes("broken-frontmatter")))
 })
