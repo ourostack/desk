@@ -19,6 +19,7 @@ const pinnedSkills = [
 test("Superpowers provider is pinned, licensed, and byte-bound through the existing source lock", () => {
   const source = readJson("upstream-sources.lock.json").sources.find((entry) => entry.repository === "obra/superpowers")
   assert.ok(source, "the existing lock must include the Superpowers provider")
+  // Provenance of the vendored upstream payload (evidence of where the bytes came from); installs track the channel.
   assert.equal(source.commit, "b36e0829c6d0140e93cfef2ca599b1b07d4a7797")
   assert.equal(source.license, "MIT")
   assert.ok(source.files.some((file) => file.sourcePath === "LICENSE"))

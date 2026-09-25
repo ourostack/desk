@@ -505,6 +505,7 @@ process.stdout.write(JSON.stringify(value));
     ...source(),
     id: "prime-radiant-inc-gauntlet-evaluation-leaves",
     repository: "prime-radiant-inc/gauntlet",
+    // The provenance commit the license exception was approved for (evidence, not a dependency).
     commit: "187a9af979a7cf096c0890d0eeb998cc3008343a",
     license: "Apache-2.0",
   };

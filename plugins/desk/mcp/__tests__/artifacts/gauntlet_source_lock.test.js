@@ -6,6 +6,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = fileURLToPath(new URL("../../../../../", import.meta.url))
+// The lock records where the vendored Gauntlet files came from; the commit is provenance evidence, not a dependency.
 const expected = {
   id: "prime-radiant-inc-gauntlet-evaluation-leaves",
   repository: "prime-radiant-inc/gauntlet",
