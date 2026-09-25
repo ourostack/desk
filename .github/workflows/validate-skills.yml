@@ -43,6 +43,9 @@ jobs:
       - name: Validate Plain Language
         run: node scripts/test-plain-language-plugin.cjs && node scripts/test-plain-language-hook.cjs
 
+      - name: Validate Desk content contracts
+        run: node scripts/test-desk-contracts.cjs
+
       - name: Validate upstream source steward
         run: node scripts/test-upstream-sources.cjs
 

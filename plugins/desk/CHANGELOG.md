@@ -7,7 +7,7 @@ Desk now lives in its own repository, `ourostack/desk`, with its companions Supe
 - **New home and marketplace.** The marketplace is named `ourostack`, so the plugin IDs are `desk@ourostack`, `superpowers@ourostack`, `plain-language@ourostack` and `crew@ourostack`. Install with `claude plugin marketplace add ourostack/desk`. The Claude binding file moves with the marketplace name to `plugins/data/desk-ourostack/desk.activation.json`.
 - **Channel is `main`.** Agency dependencies track `github:ourostack/desk:plugins/<name>@main`, and the dependency checker reports any `ouroboros-skills` coordinate as moved to `ourostack/desk`.
 - **Dependency ranges.** Desk requires Superpowers `^6.3.0` and Plain Language `^0.2.2` instead of exact versions, so a compatible companion release no longer needs a Desk release.
-- **Only the V2 plugins.** Work Suite, Ponytail, the loose skill catalog and their checks stay in `ourostack/ouroboros-skills`. CI now also runs the browser context broker's own tests.
+- **Only the V2 plugins.** Work Suite, Ponytail, the loose skill catalog and their checks stay in `ourostack/ouroboros-skills`. CI now also runs the browser context broker's own tests, and `scripts/test-desk-contracts.cjs` keeps the content contracts for Desk's own skills and worker surfaces that used to live in the Work Suite contract script.
 
 ## 3.2.0-alpha.10 — 2026-09-24
 
