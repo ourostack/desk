@@ -65,6 +65,13 @@ test("main is the only release channel and ouroboros-skills coordinates have mov
   assert.deepEqual(checker.RELEASE_CHANNELS, ["main"])
 })
 
+test("repositories named like built-in object properties are ordinary repositories", () => {
+  for (const repo of ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"]) {
+    assert.equal(checker.dependencyProblem(`github:someone/${repo}:plugins/x@main`), null, repo)
+    assert.match(checker.dependencyProblem(`github:someone/${repo}:plugins/x@v2-alpha`), /tracks v2-alpha, which is not a release channel \(main\)/u, repo)
+  }
+})
+
 test("the checker reports every offending manifest entry", () => {
   withPlugins({
     good: { dependencies: ["github:ourostack/desk:plugins/desk@main"] },

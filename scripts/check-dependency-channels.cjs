@@ -27,11 +27,13 @@ function dependencyProblem(spec) {
   if (typeof spec !== "string" || !spec.startsWith("github:")) return null;
   const dependency = parseGithubDependency(spec);
   if (dependency === null) return "is not a github:<owner>/<repo>[:<path>][@<branch>] dependency";
-  const movedTo = MOVED_REPOSITORIES[dependency.repo];
+  // Own-property lookups only: a repository named like a built-in property
+  // (constructor, toString, __proto__) must not match an inherited member.
+  const movedTo = Object.hasOwn(MOVED_REPOSITORIES, dependency.repo) ? MOVED_REPOSITORIES[dependency.repo] : null;
   if (movedTo) {
     return `moved to ${movedTo}; use github:${movedTo}${dependency.path ? `:${dependency.path}` : ""}@${RELEASE_CHANNELS[0]}`;
   }
-  const canonicalOwner = CANONICAL_OWNERS[dependency.repo];
+  const canonicalOwner = Object.hasOwn(CANONICAL_OWNERS, dependency.repo) ? CANONICAL_OWNERS[dependency.repo] : null;
   if (canonicalOwner && dependency.owner !== canonicalOwner) {
     return `points at a fork (${dependency.owner}); use ${canonicalOwner}/${dependency.repo}`;
   }
