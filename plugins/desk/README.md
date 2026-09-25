@@ -30,7 +30,7 @@ Acquisition is ordinary and single-root: select `desk` and let its own declarati
 
 ### Under Ouroboros
 
-Select `ourostack/desk:plugins/desk@main` through the host's supported opt-in bundle path, not an ambient main-branch installation.
+Select `ourostack/desk:plugins/desk@main` through the host's supported opt-in bundle path. `main` of `ourostack/desk` is the release channel; do not substitute a fork, another branch or an exact commit.
 
 The agent's `bundle.json` gains a `plugins[]` entry; the agent's preamble declares `Your desk: ~/AgentBundles/<agent>.ouro/desk/`.
 
@@ -166,7 +166,7 @@ The agent does textual substitution when interpreting skill instructions or runn
 the substrate stays general. the overlay handles everything situational.
 
 - **org-specific agent identity** — `worker` is the substrate default; consumer overlays (corporate-engineering, autonomous-agent, personal-coding) can ship their own agent with extended skills, invariants, and tooling on top.
-- **engineering implementation mechanics** — those live in the pinned Superpowers provider, not a second Desk lifecycle
+- **engineering implementation mechanics** — those live in the Superpowers provider, not a second Desk lifecycle
 - **organization-specific concerns** — auth systems, work-item trackers, internal portals, etc. live in a consumer overlay (one of several possible overlays — others can be built the same way)
 
 ## versioning

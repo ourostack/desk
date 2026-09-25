@@ -6,7 +6,7 @@
     "url": "https://github.com/ourostack/desk"
   },
   "metadata": {
-    "description": "Opt-in alpha: Desk and Crew retain durable work state and authority; pinned Superpowers is the engineering method, independent review has one remediation owner, and Plain Language governs prose. Host packaging does not imply runtime qualification.",
+    "description": "Opt-in alpha: Desk and Crew retain durable work state and authority; Superpowers is the engineering method, independent review has one remediation owner, and Plain Language governs prose. Host packaging does not imply runtime qualification.",
     "version": "1.0.0"
   },
   "plugins": [
@@ -27,7 +27,7 @@
     {
       "name": "superpowers",
       "source": "./plugins/superpowers",
-      "description": "Pinned Superpowers 6.3.0, selected for the opt-in Desk alpha through its state and authority integration.",
+      "description": "Superpowers 6.3.0, vendored from upstream as V2's engineering method.",
       "version": "6.3.0",
       "category": "workflow",
       "tags": ["engineering", "planning", "test-driven-development"]

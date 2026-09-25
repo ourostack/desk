@@ -13,7 +13,7 @@ The `ourostack` marketplace in this repository ships four plugins:
 | Plugin | ID | What it does |
 |---|---|---|
 | [Desk](plugins/desk/README.md) | `desk@ourostack` | Durable desk state, authority and approved delivery boundaries, with the `desk:worker` agent and the Desk MCP server. |
-| Superpowers | `superpowers@ourostack` | Pinned Superpowers, the engineering method. Installing Desk pulls it in. |
+| Superpowers | `superpowers@ourostack` | Superpowers, the engineering method, vendored from upstream. Installing Desk pulls it in. |
 | Plain Language | `plain-language@ourostack` | The prose policy for human-readable agent output. Installing Desk pulls it in. |
 | [Crew](plugins/crew/README.md) | `crew@ourostack` | The multi-person shared-workspace layer on top of Desk. |
 

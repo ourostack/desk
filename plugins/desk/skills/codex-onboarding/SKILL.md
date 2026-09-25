@@ -35,7 +35,7 @@ Do this before treating `session-start` as healthy:
 
 ## Verify or repair
 
-1. For an authorized alpha repair, use the host's admitted source checkout, not a canonical main checkout or stale plugin snapshot. Keep existing profiles unchanged unless repairing them is in scope. The common Codex implicit marketplace is `~/.agents/plugins/marketplace.json`; local paths are resolved relative to `$HOME`. The source-shape example below must refer to the admitted alpha checkout:
+1. For an authorized alpha repair, use the host's admitted source checkout of `main` of `ourostack/desk`, the release channel, not a fork, another branch or a stale plugin snapshot. Keep existing profiles unchanged unless repairing them is in scope. The common Codex implicit marketplace is `~/.agents/plugins/marketplace.json`; local paths are resolved relative to `$HOME`. The source-shape example below must refer to the admitted alpha checkout:
 
 ```json
 {
@@ -59,7 +59,7 @@ Do this before treating `session-start` as healthy:
 
 Avoid stale copies of Desk, Superpowers and companion plugins. A cache or source label alone does not prove the active artifact; inspect the selected loaded roots and content identity.
 
-2. Ensure the selected source includes `desk`, `superpowers` and `plain-language`. Use its actual marketplace namespace, not a hard-coded label. The selected source must be the admitted alpha artifact, not a canonical main checkout substituted because it is convenient.
+2. Ensure the selected source includes `desk`, `superpowers` and `plain-language`. Use its actual marketplace namespace, not a hard-coded label. The selected source must be the admitted artifact from `main` of `ourostack/desk`, the release channel, not a fork, another branch or a stale copy substituted because it is convenient.
 
 Run the source/cache/implicit-marketplace audit after repairs:
 
