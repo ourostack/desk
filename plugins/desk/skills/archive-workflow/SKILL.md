@@ -35,43 +35,26 @@ when a task is done — merged or set aside — i slide it toward the back of th
 
 ## Archive an iteration
 
-the three archive operations (iteration / task / track) nest cleanly:
-archive individual iterations as they terminate; archive the whole
-task when its final iteration merges and no further iteration is
-planned; archive the track when all tasks are terminal. iteration
-archival is a **new operation layered on top** of task/track archival
-— it does not replace either.
+the three archive operations (iteration / task / track) nest cleanly: archive individual iterations as they terminate; archive the whole task when its final iteration merges and no further iteration is planned; archive the track when all tasks are terminal. iteration archival is a **new operation layered on top** of task/track archival — it does not replace either.
 
 **when to archive an iteration:**
 
-- the iteration's PR has merged (the iteration's `outcome:` in the
-  task card's `iterations.history[]` is `merged` or `shipped-to-pr`
-  with a downstream successor iteration), AND
-- another iteration has started on the same task+repo (e.g., a
-  `review-pass-1` iteration started after an `initial-impl` merged),
-  OR the task is about to be archived as a whole.
+- the iteration's PR has merged (the iteration's `outcome:` in the task card's `iterations.history[]` is `merged` or `shipped-to-pr` with a downstream successor iteration), AND
+- another iteration has started on the same task+repo (e.g., a `review-pass-1` iteration started after an `initial-impl` merged), OR the task is about to be archived as a whole.
 
-iteration archival is not tied to PR merge alone — short-lived tasks
-where the first iteration merges and the task immediately archives
-don't need a separate iteration-archive step (the task archive
-captures the iteration directory as part of the task).
+iteration archival is not tied to PR merge alone — short-lived tasks where the first iteration merges and the task immediately archives don't need a separate iteration-archive step (the task archive captures the iteration directory as part of the task).
 
 **how to archive an iteration:**
 
-1. move the iteration directory into `<repo>/_archive/` as a single
-   unit — `planning.md`, `doing.md`, `feedback.md` (if present), and
-   `artifacts/` all travel together:
+1. move the iteration directory into `<repo>/_archive/` as a single unit — `planning.md`, `doing.md`, `feedback.md` (if present), and `artifacts/` all travel together:
    ```bash
    mv $DESK/<track>/<task>/<repo>/<iteration-slug> \
       $DESK/<track>/<task>/<repo>/_archive/<iteration-slug>
    ```
 
 2. update the task card's `iterations:` block:
-   - move the archived iteration's entry from `active:` (if it was
-     there) or update it in `history[]` so `path:` points at the
-     `_archive/` location.
-   - set `outcome:` to the terminal value (`merged`, `shipped-to-pr`,
-     `reverted`).
+   - move the archived iteration's entry from `active:` (if it was there) or update it in `history[]` so `path:` points at the `_archive/` location.
+   - set `outcome:` to the terminal value (`merged`, `shipped-to-pr`, `reverted`).
 
 3. commit:
    ```bash
@@ -81,11 +64,7 @@ captures the iteration directory as part of the task).
 
 4. push.
 
-do NOT flatten the iteration contents during archival. the iteration
-directory is the atomic unit — a future reader needs `planning.md`,
-`doing.md`, `feedback.md`, and `artifacts/` together to reconstruct
-what happened. breaking them apart loses the layered-doc cross-refs
-(see `skills/pr-feedback-on-own-pr/SKILL.md` three-doc layered design).
+do NOT flatten the iteration contents during archival. the iteration directory is the atomic unit — a future reader needs `planning.md`, `doing.md`, `feedback.md`, and `artifacts/` together to reconstruct what happened. breaking them apart loses the layered-doc cross-refs (see `skills/pr-feedback-on-own-pr/SKILL.md` three-doc layered design).
 
 ## Archive a track
 
@@ -116,14 +95,10 @@ after archiving any task, i check whether the parent track — the whole drawer 
 archived directories travel intact. nothing is flattened, nothing is summarized:
 
 - `track.md` with all metadata
-- `task.md` with final status and timestamps (including the full
-  `iterations.history[]` block)
+- `task.md` with final status and timestamps (including the full `iterations.history[]` block)
 - all repo workspace directories, each containing:
-  - active iteration directories (if any) — typically none once the
-    task is archived
-  - `_archive/` sibling under the repo workspace, holding every
-    archived iteration as a whole directory (`planning.md`,
-    `doing.md`, `feedback.md`, `artifacts/`)
+  - active iteration directories (if any) — typically none once the task is archived
+  - `_archive/` sibling under the repo workspace, holding every archived iteration as a whole directory (`planning.md`, `doing.md`, `feedback.md`, `artifacts/`)
 - full git history (always available via `git log`)
 
 ## Retrieving archived tasks

@@ -53,35 +53,19 @@ $DESK/
 
 a page is what i lay open on the desk for a single work session — one iteration directory per session, named by date.
 
-- **date prefix is `<YYYY-MM-DD>`, not `<YYYY-MM-DD-HHMM>`.** one
-  iteration per day per repo is the default expectation; if two
-  iterations land on the same day, the slug differentiates them
-  (e.g. `2026-04-13-initial-impl` and `2026-04-13-arch-refinement`).
-- **slug trigger values** (kebab-case; operator-confirmed at creation
-  time):
-  - `initial-impl` — first iteration on a repo; starts fresh or from
-    adoption
+- **date prefix is `<YYYY-MM-DD>`, not `<YYYY-MM-DD-HHMM>`.** one iteration per day per repo is the default expectation; if two iterations land on the same day, the slug differentiates them (e.g. `2026-04-13-initial-impl` and `2026-04-13-arch-refinement`).
+- **slug trigger values** (kebab-case; operator-confirmed at creation time):
+  - `initial-impl` — first iteration on a repo; starts fresh or from adoption
   - `review-pass-N` — PR feedback iteration; N increments per round
   - `architecture-review` — larger refactor triggered by review
   - `post-int-smoke-fixes` — integration-environment findings
   - `revert-and-reland` — previous PR reverted; re-PR with fixes
   - `pre-merge-polish` — final pass before merge
-- **no `iterations/` wrapper directory.** every direct child of
-  `<repo-name>/` is either `_archive/` or a date-prefixed iteration
-  directory. (an `iterations/` wrapper was considered and rejected —
-  redundant depth given the `_archive/` sibling already differentiates
-  active from archived.)
-- **`_archive/` is a direct child of `<repo-name>/`.** archived
-  iterations move there as a whole directory — `planning.md`,
-  `doing.md`, `feedback.md`, and `artifacts/` preserved together as
-  a single unit. see `archive-workflow`.
-- **`artifacts/` is per-iteration**, not per-doing-doc. coverage
-  checklists, audit logs, PR-description drafts, compliance logs —
-  every output for that iteration lands here.
+- **no `iterations/` wrapper directory.** every direct child of `<repo-name>/` is either `_archive/` or a date-prefixed iteration directory. (an `iterations/` wrapper was considered and rejected — redundant depth given the `_archive/` sibling already differentiates active from archived.)
+- **`_archive/` is a direct child of `<repo-name>/`.** archived iterations move there as a whole directory — `planning.md`, `doing.md`, `feedback.md`, and `artifacts/` preserved together as a single unit. see `archive-workflow`.
+- **`artifacts/` is per-iteration**, not per-doing-doc. coverage checklists, audit logs, PR-description drafts, compliance logs — every output for that iteration lands here.
 
-iteration frontmatter carries scope identifiers (`track`, `task`,
-`repo`, `iteration`, `pr`, `trigger`) so an agent doesn't need to
-parse the directory path to know which page it's looking at.
+iteration frontmatter carries scope identifiers (`track`, `task`, `repo`, `iteration`, `pr`, `trigger`) so an agent doesn't need to parse the directory path to know which page it's looking at.
 
 ## naming conventions
 
@@ -105,13 +89,9 @@ slugs are permanent — see the `interaction-style` skill for the slug-permanenc
 ## planning doc scope determines location
 
 - **cross-repo plans** → `<track>/_planning/`
-- **single-repo plans** → inside the per-iteration directory:
-  `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/planning.md`
-- **doing docs** → per-iteration, sibling to `planning.md`:
-  `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/doing.md`
-- **feedback docs** (PR-feedback iterations only) → per-iteration,
-  sibling to planning/doing:
-  `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/feedback.md`
+- **single-repo plans** → inside the per-iteration directory: `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/planning.md`
+- **doing docs** → per-iteration, sibling to `planning.md`: `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/doing.md`
+- **feedback docs** (PR-feedback iterations only) → per-iteration, sibling to planning/doing: `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/feedback.md`
 
 `_history/` within `_planning/` holds superseded/historical/binary artifacts with a `README.md` explaining what each was and what replaced it.
 

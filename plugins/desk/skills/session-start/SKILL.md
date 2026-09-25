@@ -198,11 +198,7 @@ for each active task card's locally-cloned repo, run `git fetch origin` and note
 
 ## Step 4.5 — Fan PR lookups across every `repos[]` on every non-terminal task
 
-for every non-terminal task card, iterate every entry in `repos[]` —
-not just the entry whose PR ID is already cached in the task's
-frontmatter. a task that lists `OrderService` + `OrderUI` in
-`repos[]` may have an active PR on either; session-start needs to
-surface both.
+for every non-terminal task card, iterate every entry in `repos[]` — not just the entry whose PR ID is already cached in the task's frontmatter. a task that lists `OrderService` + `OrderUI` in `repos[]` may have an active PR on either; session-start needs to surface both.
 
 for each GitHub repo entry:
 
@@ -213,38 +209,20 @@ gh pr list --repo <org>/<repo> --author @me --state open --json number,title,url
 (overlay users: non-GitHub work-item trackers use their own REST endpoints instead — consumer overlays extend this step.)
 
 for each PR surfaced:
-- if the PR has unresolved (Active) review threads from humans or an
-  AI reviewer → flag for the pr-feedback-on-own-pr routing prompt
-  in step 5.
-- cache PR metadata in the task-scan output so step 5 can render it
-  without a re-fetch.
+- if the PR has unresolved (Active) review threads from humans or an AI reviewer → flag for the pr-feedback-on-own-pr routing prompt in step 5.
+- cache PR metadata in the task-scan output so step 5 can render it without a re-fetch.
 
 ## Step 4.6 — Friction-backlog scan
 
-while scanning active tracks, count the open `_friction/*.md` entries
-(exclude `_friction/_archive/`) — the cards pinned to the corkboard,
-still asking for attention. if the count is non-zero on any active
-track, flag for the curator routing prompt in step 5.
+while scanning active tracks, count the open `_friction/*.md` entries (exclude `_friction/_archive/`) — the cards pinned to the corkboard, still asking for attention. if the count is non-zero on any active track, flag for the curator routing prompt in step 5.
 
 ## Step 4.7 — Workspace MCP link check (consumer-engine-specific)
 
-if the operator's runtime supports a workspace-level MCP config file
-discovered by walk-up from CWD (e.g. an `<runtime>.toml` at the
-workspace root), this step is where to ensure the discovery link
-from `$HOME` to the workspace file exists. the mechanism is engine-
-specific — see the relevant consumer overlay's session-start
-extension for the exact file name, link primitives (symlink /
-hardlink / copy), and platform-aware decision tree.
+if the operator's runtime supports a workspace-level MCP config file discovered by walk-up from CWD (e.g. an `<runtime>.toml` at the workspace root), this step is where to ensure the discovery link from `$HOME` to the workspace file exists. the mechanism is engine-specific — see the relevant consumer overlay's session-start extension for the exact file name, link primitives (symlink / hardlink / copy), and platform-aware decision tree.
 
-the substrate's contribution at this step is just the slot: every
-session, check whether the workspace MCP config is reachable from
-`$HOME`, repair if not, and announce link state if anything changed.
-on a fresh-cloned machine this lands the discovery link once and is
-silent thereafter. on a known-good machine this is a single cheap
-existence check.
+the substrate's contribution at this step is just the slot: every session, check whether the workspace MCP config is reachable from `$HOME`, repair if not, and announce link state if anything changed. on a fresh-cloned machine this lands the discovery link once and is silent thereafter. on a known-good machine this is a single cheap existence check.
 
-if the runtime does not support walked-up workspace MCP discovery,
-this step is a no-op.
+if the runtime does not support walked-up workspace MCP discovery, this step is a no-op.
 
 ## Step 5 — Emit status + ask
 
@@ -268,33 +246,19 @@ crew workspace: P desks (you: <alias> → desks/<alias>) · peers: <a>, <b>
 
 omit this line entirely in single-desk (OFF) mode — no registry, no banner, byte-identical to today's output.
 
-if the operator picks a task to resume → hand off to the `session-resumption` skill.
-if the operator says "start new" → follow the `dual-input` skill.
-if the operator wants the fuller dashboard → invoke the `status` skill.
+if the operator picks a task to resume → hand off to the `session-resumption` skill. if the operator says "start new" → follow the `dual-input` skill. if the operator wants the fuller dashboard → invoke the `status` skill.
 
 ### Skill-routing prompts
 
-after the status block, offer skill routing if the signals from steps
-4.5 and 4.6 fire. both prompts are engine-agnostic prose the agent
-presents; the operator picks. the prompts exist because `curator`
-and `pr-feedback-on-own-pr` are gated by explicit operator phrasing in
-their `description:` frontmatter — they won't auto-fire from ambient
-conversation, so this skill surfaces them when signals warrant.
+after the status block, offer skill routing if the signals from steps 4.5 and 4.6 fire. both prompts are engine-agnostic prose the agent presents; the operator picks. the prompts exist because `curator` and `pr-feedback-on-own-pr` are gated by explicit operator phrasing in their `description:` frontmatter — they won't auto-fire from ambient conversation, so this skill surfaces them when signals warrant.
 
-- **Curator routing** (from step 4.6): if open `_friction/` cards
-  exist on any active track, surface:
-  > "I see N open friction cards across tracks [A, B, C]. Want to
-  > process the backlog? (invokes the `curator` skill)"
+- **Curator routing** (from step 4.6): if open `_friction/` cards exist on any active track, surface:
+  > "I see N open friction cards across tracks [A, B, C]. Want to process the backlog? (invokes the `curator` skill)"
 
-- **pr-feedback-on-own-pr routing** (from step 4.5): if any non-merged PR on
-  any active track has unresolved review threads, surface:
-  > "I see M PRs with unresolved review threads (PR <id> on <repo>
-  > has K threads; PR <id> on <repo> has L threads). Want to iterate
-  > on feedback? (invokes the `pr-feedback-on-own-pr` skill)"
+- **pr-feedback-on-own-pr routing** (from step 4.5): if any non-merged PR on any active track has unresolved review threads, surface:
+  > "I see M PRs with unresolved review threads (PR <id> on <repo> has K threads; PR <id> on <repo> has L threads). Want to iterate on feedback? (invokes the `pr-feedback-on-own-pr` skill)"
 
-these prompts are one decision group each, per `interaction-style`.
-if both fire, offer both in a single message; operator picks one or
-neither.
+these prompts are one decision group each, per `interaction-style`. if both fire, offer both in a single message; operator picks one or neither.
 
 ## Never skip, never route around
 

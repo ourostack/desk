@@ -535,47 +535,48 @@ contract("repo-handling and git-hygiene state the same clone rule word for word"
   }
 });
 
-// Hard-wrapped Markdown prose: these skills are fully unwrapped and must stay that way.
+// Hard-wrapped Markdown prose: every Desk and Crew skill, and Plain Language, keeps each paragraph and list item on
+// one physical line (Plain Language: never hard-wrap authored prose). A new skill is covered without being listed.
+// Blockquote paragraphs count as prose units too. Code fences, YAML frontmatter, headings, tables, HTML and explicit
+// hard breaks (two trailing spaces or a backslash) are not.
 function proseUnits(file) {
   const lines = text(file).split("\n");
   let start = 0;
   if (lines[0] === "---") start = lines.indexOf("---", 1) + 1;
   const units = [];
   let inCode = false;
+  let inQuote = false;
   let unit = [];
   const flush = () => { if (unit.length > 0) units.push(unit); unit = []; };
   for (let index = start; index < lines.length; index += 1) {
     const line = lines[index];
     if (/^\s*```/u.test(line)) { inCode = !inCode; flush(); continue; }
     if (inCode) continue;
-    if (/^\s*$|^\s*(?:#|\||>|<|---\s*$)/u.test(line)) { flush(); continue; }
-    if (/^\s*(?:[-*+] |\d+\. )/u.test(line)) flush();
+    const quote = /^\s*>+ ?(.*)$/u.exec(line);
+    if (quote !== null && !inQuote) flush();
+    if (quote === null && inQuote) flush();
+    inQuote = quote !== null;
+    const body = inQuote ? quote[1] : line;
+    if (/^\s*$|^\s*(?:#|\||<|---\s*$)/u.test(body)) { flush(); continue; }
+    if (/^\s*(?:[-*+] |\d+\. )/u.test(body)) flush();
     unit.push({ number: index + 1, line });
+    if (/(?: {2}|\\)$/u.test(line)) flush();
   }
   flush();
   return units;
 }
-for (const file of [
-  "plugins/desk/skills/cdp-headed-browser/SKILL.md",
-  "plugins/desk/skills/content-routing/SKILL.md",
-  "plugins/desk/skills/curator/SKILL.md",
-  "plugins/desk/skills/evidence-discipline/SKILL.md",
-  "plugins/desk/skills/friction-management/SKILL.md",
-  "plugins/desk/skills/git-hygiene/SKILL.md",
-  "plugins/desk/skills/interaction-style/SKILL.md",
-  "plugins/desk/skills/lesson-capture/SKILL.md",
-  "plugins/desk/skills/operator-voice-comments/SKILL.md",
-  "plugins/desk/skills/peer-pr-review/SKILL.md",
-  "plugins/desk/skills/pr-feedback-on-own-pr/SKILL.md",
-  "plugins/desk/skills/pr-review-interrogation/SKILL.md",
-  "plugins/desk/skills/preflight-actions/SKILL.md",
-  "plugins/desk/skills/repo-handling/SKILL.md",
-  "plugins/desk/skills/runtime-symptom-investigation/SKILL.md",
-  "plugins/desk/skills/session-resumption/SKILL.md",
-  "plugins/desk/skills/using-desk/SKILL.md",
-  "plugins/desk/skills/work-orchestration/SKILL.md",
-  "plugins/plain-language/skills/plain-language/SKILL.md",
-]) {
+function skillFiles(plugin) {
+  const dir = path.join(root, "plugins", plugin, "skills");
+  return fs.readdirSync(dir)
+    .map((name) => `plugins/${plugin}/skills/${name}/SKILL.md`)
+    .filter((file) => fs.existsSync(path.join(root, file)));
+}
+const unwrappedSkills = [...skillFiles("desk"), ...skillFiles("crew"), "plugins/plain-language/skills/plain-language/SKILL.md"];
+contract("the hard-wrap check covers every Desk and Crew skill", () => {
+  assert.ok(skillFiles("desk").length >= 40, "expected the Desk skill set");
+  assert.ok(skillFiles("crew").length >= 3, "expected the Crew skill set");
+});
+for (const file of unwrappedSkills) {
   contract(`${file} prose is not hard-wrapped`, () => {
     const wrapped = proseUnits(file).filter((unit) => unit.length > 1).map((unit) => unit[1].number);
     assert.deepEqual(wrapped, []);

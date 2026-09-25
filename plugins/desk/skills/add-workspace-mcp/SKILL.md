@@ -5,13 +5,7 @@ description: Add a new MCP to the operator's workspace runtime config so it auto
 
 # Add a workspace MCP
 
-> This skill assumes a runtime whose workspace MCP config is a TOML
-> file at the workspace root (named, by convention, after the runtime
-> — e.g. `<runtime>.toml`) and which auto-discovers it via walk-up
-> from CWD with a `$HOME`-linked copy as fallback. Runtimes with
-> different config conventions need a consumer overlay's equivalent
-> skill instead. The examples below use a placeholder filename
-> `<runtime>.toml`; substitute your runtime's actual filename.
+> This skill assumes a runtime whose workspace MCP config is a TOML file at the workspace root (named, by convention, after the runtime — e.g. `<runtime>.toml`) and which auto-discovers it via walk-up from CWD with a `$HOME`-linked copy as fallback. Runtimes with different config conventions need a consumer overlay's equivalent skill instead. The examples below use a placeholder filename `<runtime>.toml`; substitute your runtime's actual filename.
 
 The runtime loads MCPs from: (1) the agent's frontmatter `mcp-servers:` block (plugin defaults), (2) the operator's workspace `<runtime>.toml` (auto-discovered via the `~/<runtime>.toml` link that session-start creates), and (3) optional `--mcp-config` flag overrides (rarely needed).
 
