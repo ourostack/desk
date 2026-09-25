@@ -3,10 +3,8 @@ import assert from "node:assert/strict"
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import { main } from "../../index.js"
-import { createMcpServer, startServer } from "../../src/server.js"
+import { callTool } from "../../src/server.js"
+import { admitInProcess, startInProcess } from "./_in_process_desk.js"
 
 function tempRoot(prefix) {
   return mkdtempSync(path.join(realpathSync(tmpdir()), prefix))
@@ -47,47 +45,37 @@ for (const scenario of [
   test(`common startup dispatches only admitted authority: ${scenario.name}`, async (t) => {
     const root = tempRoot("desk-startup-authority-")
     t.after(() => rmSync(root, { recursive: true, force: true }))
-    const server = createMcpServer()
-    const client = new Client({ name: "authority-smoke", version: "1.0.0" })
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-    let started = false
-    let effectivePerson
     const controllerEvents = []
+    const desk = await startInProcess({
+      argv: ["--root", root, ...(scenario.raw === undefined ? [] : ["--person", scenario.raw])],
+      env: {},
+      readinessPolicy: {
+        write_authority: scenario.policy, semantic: "unsupported",
+        authority_provider: scenario.provider ? "registry" : null,
+      },
+      authorityProviders: { registry: async () => scenario.provider },
+      runtimeImporter: async () => ({
+        callTool,
+        connectOrStartController: async () => admittedController(controllerEvents),
+      }),
+    })
     try {
-      const starting = main({
-        argv: ["--root", root, ...(scenario.raw === undefined ? [] : ["--person", scenario.raw])],
-        env: {},
-        readinessPolicy: {
-          write_authority: scenario.policy, semantic: "unsupported",
-          authority_provider: scenario.provider ? "registry" : null,
-        },
-        authorityProviders: { registry: async () => scenario.provider },
-        runtimeImporter: async () => ({
-          connectOrStartController: async () => admittedController(controllerEvents),
-          async startServer(options) {
-            started = true
-            effectivePerson = options.person
-            await startServer({ ...options, server, transport: serverTransport })
-          },
-        }),
-      })
+      const result = await desk.call("task_create", { track: "ops", slug: "authority-route", title: "Admitted write" })
       if (scenario.refused) {
-        await assert.rejects(starting, (error) => error.code === "authority_invalid" && error.status === "terminal")
-        assert.equal(started, false)
+        // Refused writes, served session: the handshake completed and the refusal names the fix.
+        assert.equal(result.isError, true)
+        assert.equal(result.payload.status, "degraded")
+        assert.equal(result.payload.code, "authority_invalid")
+        assert.equal((await desk.call("desk_status")).payload.state, "degraded:authority_invalid")
         assert.deepEqual(readdirSync(root), [], "refusal must leave every possible write target untouched")
+        assert.deepEqual(controllerEvents, [])
         return
       }
-      await starting
-      await client.connect(clientTransport)
-      const result = await client.callTool({
-        name: "task_create",
-        arguments: { track: "ops", slug: "authority-route", title: "Admitted write" },
-      })
-      assert.equal(result.isError, undefined)
+      assert.equal(result.isError, false, JSON.stringify(result.payload))
       const prefix = scenario.expectedPerson === null ? [] : ["desks", scenario.expectedPerson]
       const expectedPath = path.join(...prefix, "ops", "authority-route", "task.md")
-      assert.equal(JSON.parse(result.content[0].text).path, expectedPath)
-      assert.equal(effectivePerson, scenario.expectedPerson)
+      assert.equal(result.payload.path, expectedPath)
+      assert.equal(desk.handle.session.context.person, scenario.expectedPerson)
       assert.equal(existsSync(path.join(root, expectedPath)), true)
       assert.deepEqual(controllerEvents.map(([method]) => method), ["recordChange"])
       assert.equal(controllerEvents[0][1].path, expectedPath)
@@ -95,8 +83,7 @@ for (const scenario of [
       assert.equal(existsSync(path.join(root, ...wrongPrefix, "ops", "authority-route", "task.md")), false)
       assert.equal(existsSync(path.join(root, "desks", "bob")), false)
     } finally {
-      await client.close()
-      await server.close()
+      await desk.close()
     }
   })
 }
@@ -104,15 +91,14 @@ for (const scenario of [
 test("common startup rejects contradictory authority even from a runtime-provided admission implementation", async (t) => {
   const root = tempRoot("desk-custom-admission-")
   t.after(() => rmSync(root, { recursive: true, force: true }))
-  let started = false
-  await assert.rejects(main({
+  const started = await admitInProcess({
     argv: ["--root", root, "--person", "ari"], env: {},
     runtimeImporter: async () => ({
       admitControlPlane: async () => ({ authority: { mode: "workspace" } }),
-      async startServer() { started = true },
     }),
-  }), (error) => error.code === "authority_invalid")
-  assert.equal(started, false)
+  })
+  assert.equal(started.snapshot.state, "degraded:authority_invalid")
+  assert.equal(started.statusContext.admission, null)
   assert.deepEqual(readdirSync(root), [])
 })
 
@@ -126,7 +112,7 @@ for (const scenario of [
     const root = tempRoot("desk-runtime-authority-")
     t.after(() => rmSync(root, { recursive: true, force: true }))
     const events = []
-    const starting = main({
+    const started = await admitInProcess({
       argv: ["--root", root], env: {},
       readinessPolicy: { write_authority: scenario.policy, semantic: "required" },
       runtimeImporter: async () => ({
@@ -137,16 +123,17 @@ for (const scenario of [
             async barrier() { return { capability: "semantic", current: true } },
           },
         }),
-        async startServer({ person }) { events.push(["start", person]) },
       }),
     })
     if (scenario.refused) {
-      await assert.rejects(starting, (error) => error.code === "authority_invalid" && error.status === "terminal")
-      assert.deepEqual(events, [], "neither convergence nor server exposure is allowed")
+      assert.equal(started.snapshot.state, "degraded:authority_invalid")
+      assert.deepEqual(events, [], "no convergence without admitted authority")
+      assert.equal(started.statusContext.admission, null)
       assert.deepEqual(readdirSync(root), [])
     } else {
-      await starting
-      assert.deepEqual(events, ["converge", ["start", scenario.expected]])
+      assert.equal(started.snapshot.state, "ready")
+      assert.deepEqual(events, ["converge"])
+      assert.equal(started.person, scenario.expected)
     }
   })
 }

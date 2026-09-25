@@ -3,12 +3,12 @@ import assert from "node:assert/strict"
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { main } from "../../index.js"
+import { realRuntimeHarness } from "../runtime/_in_process_desk.js"
 import { closeDb, getMeta, openDb } from "../../src/db/init.js"
 import { rebuildIndex } from "../../src/indexer/index.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
-import { beginBackgroundConvergence, connectOrStartController, ensureIndex } from "../../src/server.js"
+import { ensureIndex } from "../../src/server.js"
 
 function deferred() {
   let resolve
@@ -34,34 +34,7 @@ function readState(root) {
 }
 
 function runtime(root) {
-  const controllers = []
-  let convergence
-  const starts = []
-  return {
-    controllers, starts,
-    converged: () => convergence,
-    async close() {
-      await convergence
-      for (const controller of controllers.reverse()) await controller.close()
-    },
-    start: (semantic) => main({
-      argv: ["--root", root], env: {}, readinessPolicy: { semantic },
-      runtimeImporter: async () => ({
-        async connectOrStartController(options) {
-          const controller = await connectOrStartController({
-            ...options, stateHome: path.join(root, "controller-state"), ephemeral: true,
-          })
-          controllers.push(controller)
-          return controller
-        },
-        beginBackgroundConvergence(admission) {
-          convergence = beginBackgroundConvergence(admission)
-          return convergence
-        },
-        async startServer({ statusContext }) { starts.push(statusContext) },
-      }),
-    }),
-  }
+  return realRuntimeHarness(root)
 }
 
 for (const available of [false, true]) {
@@ -83,9 +56,9 @@ for (const available of [false, true]) {
       })
       const ordinary = runtime(root)
       try {
-        if (available) await ordinary.start("required")
-        else await assert.rejects(ordinary.start("required"), (error) =>
-          error.code === "semantic_unavailable" && error.status === "terminal")
+        const snapshot = await ordinary.start("required")
+        // An unavailable query endpoint is a named degraded state (lexical reads and writes stay available), never a startup exit.
+        assert.equal(snapshot.state, available ? "ready" : "degraded:semantic_unavailable")
         assert.equal(ordinary.starts.length, available ? 1 : 0)
         assert.ok(requests.length > 0, "warm startup must probe, not infer query availability")
         assert.ok(requests.every(({ model, prompt }) =>
@@ -112,7 +85,6 @@ for (const available of [false, true]) {
     const release = deferred()
     const ordinary = runtime(root)
     t.mock.method(globalThis, "fetch", async (_url, request) => {
-      assert.equal(ordinary.starts.length, 1, "MCP starts before background query probing")
       assert.equal(JSON.parse(request.body).model, ACTIVE_EMBEDDING_SPEC.model)
       entered.resolve("probe")
       await release.promise
@@ -120,7 +92,8 @@ for (const available of [false, true]) {
       return new Response(JSON.stringify({ embedding: Array(768).fill(0.1) }))
     })
     try {
-      await ordinary.start("background")
+      // Admission reaches ready while the query probe is still held.
+      assert.equal((await ordinary.start("background")).state, "ready")
       assert.equal(ordinary.starts[0].admission.state, "CONTROL_READY")
       assert.equal(await Promise.race([
         entered.promise, ordinary.converged().then(() => "no probe"),
@@ -180,7 +153,7 @@ test("required admission cannot reuse a legacy coverage-only controller", async 
   t.mock.method(globalThis, "fetch", async () => { throw new Error("offline") })
   const ordinary = runtime(root)
   try {
-    await assert.rejects(ordinary.start("required"), (error) => error.code === "controller_semantic_mismatch")
+    assert.equal((await ordinary.start("required")).state, "degraded:controller_semantic_mismatch")
     assert.equal(legacyCalls, 0)
     assert.equal(ordinary.controllers.length, 0, "a legacy semantic contract cannot create a second lexical owner")
     assert.equal(ordinary.starts.length, 0)

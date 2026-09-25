@@ -4,8 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { Socket } from "node:net"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { main } from "../../index.js"
-import { ActivationFailure } from "../../src/activation/failures.js"
+import { startInProcess, statusContextOf } from "../runtime/_in_process_desk.js"
 import { closeDb, openDb } from "../../src/db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
@@ -51,25 +50,30 @@ function runtime(fixture) {
     controllers,
     starts,
     converged: () => convergence,
-    start: (semantic) => main({
-      argv: ["--root", fixture.root],
-      env: {},
-      readinessPolicy: { semantic },
-      runtimeImporter: async () => ({
-        async connectOrStartController(options) {
-          const controller = await connectOrStartController({
-            ...options, stateHome: fixture.stateHome, ephemeral: true,
-          })
-          controllers.push(controller)
-          return controller
-        },
-        beginBackgroundConvergence(admission) {
-          convergence = beginBackgroundConvergence(admission)
-          return convergence
-        },
-        async startServer({ statusContext }) { starts.push(statusContext) },
-      }),
-    }),
+    start: async (semantic) => {
+      const desk = await startInProcess({
+        argv: ["--root", fixture.root],
+        env: {},
+        readinessPolicy: { semantic },
+        runtimeImporter: async () => ({
+          async connectOrStartController(options) {
+            const controller = await connectOrStartController({
+              ...options, stateHome: fixture.stateHome, ephemeral: true,
+            })
+            controllers.push(controller)
+            return controller
+          },
+          beginBackgroundConvergence(admission) {
+            convergence = beginBackgroundConvergence(admission)
+            return convergence
+          },
+        }),
+      }, { connect: false })
+      fixture.cleanups.push(() => desk.close())
+      const snapshot = await desk.settled()
+      if (snapshot.state === "ready") starts.push(statusContextOf(desk))
+      return snapshot
+    },
   }
 }
 
@@ -101,20 +105,21 @@ for (const semantic of ["background", "required"]) {
         }
         const connections = t.mock.method(Socket.prototype, "connect")
         const ordinary = runtime(context)
-        await assert.rejects(ordinary.start(semantic), (error) => {
-          assert.ok(error instanceof ActivationFailure)
-          assert.equal(error.status, "terminal")
-          assert.equal(error.phase, "VERIFYING")
-          assert.equal(error.code, "embedding_model_mismatch")
-          assert.equal(error.retryable, false)
-          assert.equal(error.expected.model, ACTIVE_EMBEDDING_SPEC.model)
-          assert.equal(error.expected.embedding_spec_id, ACTIVE_EMBEDDING_SPEC.id)
-          assert.equal(error.observed.model, CUSTOM_MODEL)
-          assert.equal(error.observed.semantic, semantic)
-          assert.match(error.message, /DESK_EMBED_MODEL.*OLLAMA_EMBED_MODEL/u)
-          assert.deepEqual(error.automatic_actions, [])
-          return true
-        })
+        const snapshot = await ordinary.start(semantic)
+        // Refused as a named degraded state, never a startup exit.
+        assert.equal(snapshot.state, "degraded:embedding_model_mismatch")
+        const { failure, message, name } = snapshot.diagnostic.observed
+        assert.equal(name, "ActivationFailure")
+        assert.equal(failure.phase, "VERIFYING")
+        assert.equal(failure.code, "embedding_model_mismatch")
+        assert.equal(failure.retryable, false)
+        assert.equal(failure.expected.model, ACTIVE_EMBEDDING_SPEC.model)
+        assert.equal(failure.expected.embedding_spec_id, ACTIVE_EMBEDDING_SPEC.id)
+        assert.equal(failure.observed.model, CUSTOM_MODEL)
+        assert.equal(failure.observed.semantic, semantic)
+        assert.match(message, /DESK_EMBED_MODEL.*OLLAMA_EMBED_MODEL/u)
+        assert.deepEqual(failure.automatic_actions, [])
+        assert.match(snapshot.fix, /DESK_EMBED_MODEL/u)
         assert.equal(ordinary.starts.length, 0)
         assert.equal(ordinary.controllers.length, 0)
         assert.equal(connections.mock.callCount(), 0, "refusal must precede controller lookup/handshake")

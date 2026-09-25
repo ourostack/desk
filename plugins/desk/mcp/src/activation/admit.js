@@ -9,8 +9,10 @@ export async function admitControlPlane({
   runtime,
   authorityProvider,
   controllerConnector,
+  stateHome,
+  onRepair,
   verifyRuntime = async () => runtime ?? { state: "ready" },
-  verifyAuthority = defaultVerifyAuthority,
+  verifyAuthority = verifyAdmissionAuthority,
   connectController = controllerConnector,
 } = {}) {
   policy = normalizeReadinessPolicy(policy)
@@ -30,7 +32,7 @@ export async function admitControlPlane({
     authorityProvider,
   })
   validateAdmissionAuthority({ authority, person, policy })
-  const controller = await connectController({ deskRoot, policy })
+  const controller = await connectController({ deskRoot, policy, stateHome, onRepair })
   if (!controller?.accepted) {
     throw new ActivationFailure({
       phase: "VERIFYING",
@@ -90,7 +92,7 @@ export function resolveAdmittedPerson({ authority, person = null } = {}) {
   })
 }
 
-async function defaultVerifyAuthority({ person, policy, authorityProvider }) {
+export async function verifyAdmissionAuthority({ person, policy, authorityProvider }) {
   if (policy?.authority_provider !== null && typeof authorityProvider !== "function") {
     throw new ActivationFailure({
       phase: "VERIFYING",

@@ -114,13 +114,13 @@ function semanticRuntime({ beginConvergence, barrier, beginBackgroundConvergence
         automatic_actions: [],
       }
     },
-    async startServer() {},
     beginBackgroundConvergence,
   })
 }
 
 async function startWith(root, readinessPolicy, runtimeImporter) {
-  return main({ argv: ["--root", root], env: {}, cwd: root, homeDir: root, readinessPolicy, runtimeImporter })
+  const { admitInProcess } = await import("./_in_process_desk.js")
+  return admitInProcess({ argv: ["--root", root], env: {}, cwd: root, homeDir: root, readinessPolicy, runtimeImporter })
 }
 
 test("required semantic convergence reports non-Error failures and a missing barrier", async () => {
@@ -128,25 +128,23 @@ test("required semantic convergence reports non-Error failures and a missing bar
   const required = { semantic: "required" }
   try {
     for (const thrown of [null, "offline"]) {
-      await assert.rejects(
-        startWith(root, required, semanticRuntime({
-          async beginConvergence() {
-            throw thrown
-          },
-          async barrier() {},
-        })),
-        (error) => error.code === "semantic_unavailable" && error.observed.message === String(thrown),
-      )
-    }
-    await assert.rejects(
-      startWith(root, required, semanticRuntime({
-        async beginConvergence() {},
-        async barrier() {
-          return undefined
+      const { snapshot } = await startWith(root, required, semanticRuntime({
+        async beginConvergence() {
+          throw thrown
         },
-      })),
-      (error) => error.code === "semantic_unavailable" && Object.keys(error.observed).length === 0,
-    )
+        async barrier() {},
+      }))
+      assert.equal(snapshot.state, "degraded:semantic_unavailable")
+      assert.deepEqual(snapshot.diagnostic.observed, { name: "unknown", message: String(thrown) })
+    }
+    const { snapshot } = await startWith(root, required, semanticRuntime({
+      async beginConvergence() {},
+      async barrier() {
+        return undefined
+      },
+    }))
+    assert.equal(snapshot.state, "degraded:semantic_unavailable")
+    assert.deepEqual(snapshot.diagnostic.observed, { barrier: null })
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -154,20 +152,12 @@ test("required semantic convergence reports non-Error failures and a missing bar
 
 test("background convergence failures with non-Error values are logged, not thrown", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "desk-semantic-background-"))
-  const writes = []
-  const originalWrite = process.stderr.write
-  process.stderr.write = (chunk) => {
-    writes.push(String(chunk))
-    return true
-  }
   try {
-    await startWith(root, { semantic: "background" }, semanticRuntime({
+    const { stderr } = await startWith(root, { semantic: "background" }, semanticRuntime({
       beginBackgroundConvergence: () => Promise.reject("index busy"),
     }))
-    await new Promise((resolve) => setImmediate(resolve))
-    assert.match(writes.join(""), /background convergence failed: index busy/u)
+    assert.match(stderr, /background convergence failed: index busy/u)
   } finally {
-    process.stderr.write = originalWrite
     rmSync(root, { recursive: true, force: true })
   }
 })

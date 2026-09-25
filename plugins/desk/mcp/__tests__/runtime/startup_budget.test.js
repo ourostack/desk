@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
-import { main } from "../../index.js"
+import { admitInProcess } from "./_in_process_desk.js"
 
 function makeRoot() {
   return mkdtempSync(path.join(tmpdir(), "desk-startup-control-ready-"))
@@ -14,7 +14,7 @@ test("startup admits and registers before background convergence without indexin
   const root = makeRoot()
   const events = []
   try {
-    await main({
+    const started = await admitInProcess({
       argv: ["--root", root, "--person", "ari"],
       env: {},
       cwd: root,
@@ -38,10 +38,6 @@ test("startup admits and registers before background convergence without indexin
             automatic_actions: [],
           }
         },
-        async startServer({ statusContext }) {
-          events.push("start")
-          assert.equal(statusContext.admission.state, "CONTROL_READY")
-        },
         beginBackgroundConvergence(admission) {
           events.push("converge")
           assert.equal(admission.controller.id, "controller-1")
@@ -49,7 +45,10 @@ test("startup admits and registers before background convergence without indexin
       }),
     })
 
-    assert.deepEqual(events, ["admit", "start", "converge"])
+    // The server was answering before admission began; convergence starts after admission, in the background.
+    assert.equal(started.snapshot.state, "ready")
+    assert.equal(started.statusContext.admission.state, "CONTROL_READY")
+    assert.deepEqual(events, ["admit", "converge"])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -57,9 +56,8 @@ test("startup admits and registers before background convergence without indexin
 
 test("default admission performs no workspace discovery, network, hashing, or indexing", async () => {
   const root = makeRoot()
-  let started
   try {
-    await main({
+    const started = await admitInProcess({
       argv: ["--root", root],
       env: {},
       cwd: root,
@@ -73,9 +71,6 @@ test("default admission performs no workspace discovery, network, hashing, or in
             beginConvergence() {},
           }
         },
-        async startServer(args) {
-          started = args
-        },
       }),
     })
 
@@ -87,34 +82,30 @@ test("default admission performs no workspace discovery, network, hashing, or in
   }
 })
 
-test("startup rejects an unresolved configured authority provider", async () => {
+test("startup refuses writes for an unresolved configured authority provider", async () => {
   const root = makeRoot()
   try {
-    await assert.rejects(
-      main({
-        argv: ["--root", root, "--person", "ari"],
-        env: {},
-        cwd: root,
-        homeDir: root,
-        runtimeImporter: async () => ({
-          _deskRuntime: { state: "ready" },
-          async connectOrStartController() {
-            return { accepted: true, id: "controller-1" }
-          },
-          async startServer() {
-            assert.fail("server must not start")
-          },
-        }),
-        readinessPolicy: {
-          root: "workspace",
-          write_authority: "person",
-          lexical: "required",
-          semantic: "background",
-          authority_provider: "crew-registry",
+    const started = await admitInProcess({
+      argv: ["--root", root, "--person", "ari"],
+      env: {},
+      cwd: root,
+      homeDir: root,
+      runtimeImporter: async () => ({
+        _deskRuntime: { state: "ready" },
+        async connectOrStartController() {
+          assert.fail("no controller before authority is admitted")
         },
       }),
-      (error) => error.code === "authority_invalid",
-    )
+      readinessPolicy: {
+        root: "workspace",
+        write_authority: "person",
+        lexical: "required",
+        semantic: "background",
+        authority_provider: "crew-registry",
+      },
+    })
+    assert.equal(started.snapshot.state, "degraded:authority_invalid")
+    assert.equal(started.statusContext.admission, null)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

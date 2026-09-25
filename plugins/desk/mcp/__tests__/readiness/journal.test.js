@@ -8,10 +8,8 @@ import { task_create, task_update, task_archive } from "../../src/tools/task.js"
 import { track_create, track_update } from "../../src/tools/track.js"
 import { friction_add } from "../../src/tools/friction.js"
 import { lesson_add } from "../../src/tools/lesson.js"
-import { callTool, connectOrStartController, createMcpServer, startServer } from "../../src/server.js"
-import { main } from "../../index.js"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
+import { callTool, connectOrStartController } from "../../src/server.js"
+import { startInProcess } from "../runtime/_in_process_desk.js"
 import { openDb, closeDb } from "../../src/db/init.js"
 import { commitLexicalGeneration } from "../../src/readiness/generations.js"
 
@@ -347,49 +345,37 @@ for (const scenario of [
     const directory = await mkTempRoot("desk-journal-authority-")
     const root = path.join(directory, "workspace")
     fs.mkdirSync(root)
-    const server = createMcpServer()
-    const client = new Client({ name: "task4-authority", version: "1" })
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
     let controller
-    let effectivePerson
-    try {
-      await main({
-        argv: ["--root", root, ...(scenario.raw ? ["--person", scenario.raw] : [])],
-        env: {},
-        readinessPolicy: {
-          write_authority: scenario.policy, semantic: "unsupported",
-          authority_provider: scenario.provider ? "registry" : null,
+    const desk = await startInProcess({
+      argv: ["--root", root, ...(scenario.raw ? ["--person", scenario.raw] : [])],
+      env: {},
+      readinessPolicy: {
+        write_authority: scenario.policy, semantic: "unsupported",
+        authority_provider: scenario.provider ? "registry" : null,
+      },
+      authorityProviders: { registry: async () => scenario.provider },
+      runtimeImporter: async () => ({
+        callTool,
+        async connectOrStartController(options) {
+          controller = await connectOrStartController({
+            ...options, stateHome: path.join(directory, "state"), ephemeral: true,
+          })
+          return controller
         },
-        authorityProviders: { registry: async () => scenario.provider },
-        runtimeImporter: async () => ({
-          async connectOrStartController(options) {
-            controller = await connectOrStartController({
-              ...options, stateHome: path.join(directory, "state"), ephemeral: true,
-            })
-            return controller
-          },
-          async startServer(options) {
-            effectivePerson = options.person
-            await startServer({ ...options, server, transport: serverTransport })
-          },
-        }),
-      })
-      await client.connect(clientTransport)
-      const result = await client.callTool({
-        name: "task_create",
-        arguments: { track: "ops", slug: "task-bound", title: "durable", person: "bob" },
-      })
-      assert.equal(result.isError, undefined)
-      assert.equal(effectivePerson, scenario.expected)
+      }),
+    })
+    try {
+      const result = await desk.call("task_create", { track: "ops", slug: "task-bound", title: "durable", person: "bob" })
+      assert.equal(result.isError, false, JSON.stringify(result.payload))
+      assert.equal(desk.handle.session.context.person, scenario.expected)
       const prefix = scenario.expected ? ["desks", scenario.expected] : []
-      assert.equal(JSON.parse(result.content[0].text).path, path.join(...prefix, "ops", "task-bound", "task.md"))
+      assert.equal(result.payload.path, path.join(...prefix, "ops", "task-bound", "task.md"))
       assert.equal(fs.existsSync(path.join(root, ...prefix, "ops", "task-bound", "task.md")), true)
       assert.equal(fs.existsSync(path.join(root, "desks", "bob")), false)
       await controller.barrier({ capability: "lexical", wait: true })
       assert.equal((await controller.status()).freshness.cursor.sequence, 1)
     } finally {
-      await client.close()
-      await server.close()
+      await desk.close()
       await controller?.close()
     }
   })

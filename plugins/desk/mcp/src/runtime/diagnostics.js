@@ -63,21 +63,21 @@ export function createRuntimeDiagnostic({
   })
   const remediation = [{
     action: "refresh_plugin",
-    message: "Refresh or reinstall Desk from its trusted source to restore the committed runtime support matrix and verified dependency packs, then restart the host.",
+    message: "Refresh or reinstall Desk from its trusted source to restore the committed runtime support matrix and verified dependency packs, then call desk_status: Desk rechecks its runtime pack in place (and on its own after 1, 2, 5, 10 and 30 s, then every 60 s). A refresh that installs Desk into a new folder takes effect when the host reconnects the Desk MCP server.",
   }]
   if (details.code === "runtime_unsupported") {
     const abis = [...new Set(shippedTargets.map((target) => target.node_abi).filter(Boolean))]
     remediation.unshift({
       action: "use_shipped_node",
       message: abis.length > 0
-        ? `Start Desk with a local Node runtime matching a shipped platform, architecture, and module ABI (${abis.join(", ")}), then restart the host.`
-        : "Check Desk's runtime support matrix and start with a supported local Node runtime, then restart the host.",
+        ? `Install a local Node runtime matching a shipped platform, architecture, and module ABI (${abis.join(", ")}), then reconnect the Desk MCP server (in Claude Code run /mcp and reconnect desk): Desk's launcher picks that Node itself.`
+        : "Check Desk's runtime support matrix and install a supported local Node runtime, then reconnect the Desk MCP server (in Claude Code run /mcp and reconnect desk): Desk's launcher picks that Node itself.",
     })
   }
   if (reason === "runtime_restore_failed") {
     remediation.unshift({
       action: "check_runtime_cache",
-      message: `Check write permissions and free disk space for ${runtimeCachePath ?? "Desk's runtime cache"}, then restart the host to retry verified offline restoration.`,
+      message: `Check write permissions and free disk space for ${runtimeCachePath ?? "Desk's runtime cache"}, then call desk_status: Desk retries the verified offline restoration in place.`,
     })
   }
   Object.assign(diagnostic, {
@@ -163,17 +163,22 @@ export function createSetupDiagnostic({
         },
         { action: "bind_desk", message: bindStep },
       ]
-  remediation.push({
-    action: "restart_session",
-    message: overlay
-      ? "Start a new session once onboarding completes so Desk loads the workspace."
-      : "Start a new session so Desk loads the bound desk. Opening the desk folder itself as the project also binds it.",
-  })
+  remediation.push(overlay
+    ? {
+        action: "restart_session",
+        message: "Start a new session once onboarding completes so Desk loads the workspace.",
+      }
+    : {
+        action: "check_binding",
+        message: "Then call desk_status: Desk rechecks the binding in place and loads the bound desk in this session. Opening the desk folder itself as the project also binds it.",
+      })
   return {
     status: "setup_required",
     mode: "setup",
     reason: "no_desk_root",
-    summary: `No desk is bound yet. Desk is running in setup mode: run ${onboardingSkill}, then start a new session.`,
+    summary: overlay
+      ? `No desk is bound yet. Desk is running in setup mode: run ${onboardingSkill}, then start a new session.`
+      : `No desk is bound yet. Desk is running in setup mode: run ${onboardingSkill}, then call desk_status to load the bound desk in this session.`,
     onboarding_skill: onboardingSkill,
     reason_detail: reasonDetail ?? null,
     paths_tried: pathsTried,

@@ -64,8 +64,8 @@ test("an explicit root still wins over an onboarding request", async () => {
   const desk = path.join(root, "desk")
   mkdirSync(desk)
   try {
-    const started = []
-    await main({
+    const { admitInProcess } = await import("./_in_process_desk.js")
+    const started = await admitInProcess({
       argv: ["--root", desk, "--onboarding", "crew:join-crew"],
       env: {},
       cwd: desk,
@@ -76,12 +76,10 @@ test("an explicit root still wins over an onboarding request", async () => {
         async connectOrStartController() {
           return { accepted: true, id: "controller-1", beginConvergence() {} }
         },
-        async startServer({ deskRoot }) {
-          started.push(deskRoot)
-        },
       }),
     })
-    assert.deepEqual(started, [desk])
+    assert.equal(started.snapshot.state, "ready")
+    assert.equal(started.statusContext.root.root, desk)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

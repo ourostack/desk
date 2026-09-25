@@ -1,9 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { main } from "../../index.js"
+import { startInProcess } from "../runtime/_in_process_desk.js"
 import { normalizeReadinessPolicy } from "../../src/activation/readiness-policy.js"
 import { controllerIdentity } from "../../src/readiness/identity.js"
 import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
@@ -14,6 +14,14 @@ function deferred() {
   let resolve
   const promise = new Promise((done) => { resolve = done })
   return { promise, resolve }
+}
+
+// One admission in its own in-process session: resolves with the settled snapshot; the session closes when the test ends.
+async function admit(t, options) {
+  const desk = await startInProcess({ env: {}, ...options }, { connect: false })
+  t.after(() => desk.close())
+  const snapshot = await desk.settled()
+  return { snapshot, desk }
 }
 
 function fixture(t) {
@@ -40,8 +48,8 @@ test("required semantic startup waits for convergence and checks the barrier bef
   const entered = deferred()
   const release = deferred()
   const events = []
-  const startup = main({
-    argv: ["--root", root], env: {}, readinessPolicy: { semantic: "required" },
+  const startup = admit(t, {
+    argv: ["--root", root], readinessPolicy: { semantic: "required" },
     runtimeImporter: async () => ({
       connectOrStartController: async () => ({
         accepted: true,
@@ -58,7 +66,6 @@ test("required semantic startup waits for convergence and checks the barrier bef
         },
       }),
       beginBackgroundConvergence,
-      async startServer() { events.push("start") },
     }),
   })
   try {
@@ -66,15 +73,16 @@ test("required semantic startup waits for convergence and checks the barrier bef
     assert.deepEqual(events, ["converge"])
   } finally {
     release.resolve()
-    await startup
   }
-  assert.deepEqual(events, ["converge", "converged", "barrier", "start"])
+  const { snapshot } = await startup
+  // The handshake was answered before any of this; admission reaches ready only after the barrier proves semantic coverage.
+  assert.deepEqual(events, ["converge", "converged", "barrier"])
+  assert.equal(snapshot.state, "ready")
 })
 
 for (const failure of ["incomplete", "convergence-failed", "barrier-failed", "missing-barrier"]) {
   test(`required semantic startup fails closed: ${failure}`, async (t) => {
     const root = fixture(t)
-    let starts = 0
     const controller = {
       accepted: true,
       async beginConvergence() {
@@ -87,15 +95,16 @@ for (const failure of ["incomplete", "convergence-failed", "barrier-failed", "mi
         },
       }),
     }
-    await assert.rejects(main({
-      argv: ["--root", root], env: {}, readinessPolicy: { semantic: "required" },
+    const { snapshot } = await admit(t, {
+      argv: ["--root", root], readinessPolicy: { semantic: "required" },
       runtimeImporter: async () => ({
         connectOrStartController: async () => controller,
         beginBackgroundConvergence,
-        async startServer() { starts += 1 },
       }),
-    }), (error) => error.code === "semantic_unavailable" && error.status === "terminal")
-    assert.equal(starts, 0)
+    })
+    // Fails closed to a named degraded state: never ready, never a startup exit.
+    assert.equal(snapshot.state, "degraded:semantic_unavailable")
+    assert.match(snapshot.fix, /desk_status/u)
   })
 }
 
@@ -105,8 +114,8 @@ for (const semantic of ["background", "unsupported"]) {
     const release = deferred()
     const events = []
     try {
-      await main({
-        argv: ["--root", root], env: {}, readinessPolicy: { semantic },
+      const { snapshot, desk } = await admit(t, {
+        argv: ["--root", root], readinessPolicy: { semantic },
         runtimeImporter: async () => ({
           connectOrStartController: async () => ({
             accepted: true,
@@ -114,13 +123,12 @@ for (const semantic of ["background", "unsupported"]) {
             barrier() { assert.fail("ordinary boot must not wait on a semantic barrier") },
           }),
           beginBackgroundConvergence,
-          async startServer({ statusContext }) {
-            assert.equal(statusContext.admission.state, "CONTROL_READY")
-            events.push("start")
-          },
         }),
       })
-      assert.deepEqual(events, ["start", "converge"])
+      assert.equal(snapshot.state, "ready")
+      assert.equal(desk.handle.session.context.admission.state, "CONTROL_READY")
+      await new Promise((resolve) => setImmediate(resolve))
+      assert.deepEqual(events, ["converge"], "convergence starts in the background and admission does not wait for it")
     } finally {
       release.resolve()
     }
@@ -187,6 +195,13 @@ test("background convergence helper returns null when no controller start was ad
 
 test("server controller connector works without an explicit state home and still converges", async (t) => {
   const root = fixture(t)
+  // The default state home lives under HOME: point HOME at the fixture so the default path is exercised without touching the real ~/.cache.
+  const previousHome = process.env.HOME
+  process.env.HOME = path.join(root, "home")
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+  })
   writeFileSync(path.join(root, "task.md"), "# Lexical only\n\nNo explicit state home.\n")
   const controller = await connectOrStartController({
     deskRoot: root,
@@ -197,6 +212,7 @@ test("server controller connector works without an explicit state home and still
     const result = await controller.beginConvergence()
     assert.ok(result.summary.lexical_generation >= 1)
     assert.equal((await controller.barrier({ capability: "lexical" })).current, true)
+    assert.equal(existsSync(path.join(root, "home", ".cache", "ouroboros-skills", "desk", "readiness", controller.id)), true)
   } finally {
     await controller.close()
   }
@@ -245,6 +261,10 @@ for (const change of ["modify", "add"]) {
     const controllers = []
     let endpointCalls = 0
     let starts = 0
+    const countReady = async (admitted) => {
+      const { snapshot } = await admitted
+      if (snapshot.state === "ready") starts += 1
+    }
     t.mock.method(globalThis, "fetch", async (_url, request) => {
       endpointCalls += 1
       if (JSON.parse(request.body).prompt.includes("Refreshed")) {
@@ -253,8 +273,8 @@ for (const change of ["modify", "add"]) {
       }
       return new Response(JSON.stringify({ embedding: Array(768).fill(0.1) }))
     })
-    const start = () => main({
-      argv: ["--root", root], env: {}, readinessPolicy: { semantic: "required" },
+    const start = () => countReady(admit(t, {
+      argv: ["--root", root], readinessPolicy: { semantic: "required" },
       runtimeImporter: async () => ({
         async connectOrStartController(options) {
           const controller = await connectOrStartController({
@@ -268,9 +288,8 @@ for (const change of ["modify", "add"]) {
           }
           return controller
         },
-        async startServer() { starts += 1 },
       }),
-    })
+    }))
     let refresh
     let concurrent
     try {

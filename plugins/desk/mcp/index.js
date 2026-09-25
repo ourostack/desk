@@ -16,14 +16,15 @@
 import { readFileSync, realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as path from "node:path"
-import { admitControlPlane, validateAdmissionAuthority } from "./src/activation/admit.js"
-import { ActivationFailure } from "./src/activation/failures.js"
 import { normalizeReadinessPolicy } from "./src/activation/readiness-policy.js"
 import {
   importRuntimeServer,
   inspectRuntimeDependencyPack,
 } from "./src/runtime/bootstrap.js"
 import { startDiagnosticServer } from "./src/runtime/diagnostic-server.js"
+import { createDeskSession } from "./src/runtime/desk-session.js"
+import { startFrontDoor } from "./src/runtime/front-door.js"
+import { resolveDeskStateDir, resolveReadinessStateHome } from "./src/runtime/last-start.js"
 import {
   createRuntimeDiagnostic,
   createSetupDiagnostic,
@@ -37,7 +38,6 @@ import {
 } from "./src/runtime/node-selection.js"
 import {
   claudeBindingPath,
-  DESK_ROOT_NOT_FOUND,
   expandHome,
   loadActivationConfig,
   resolveActivationConfigPath,
@@ -73,38 +73,6 @@ export function nodeMeetsFloor(version, floor) {
   return true
 }
 
-// Admission retries a readiness-controller election or socket failure for about this long before startup gives up and serves diagnostic mode. Before diagnostic mode existed, the host's own retry covered this transient class; A2 replaces it with background re-election after the handshake.
-export const ADMISSION_RETRY_BUDGET_MS = 5000
-const CONTROLLER_FAILURE_MESSAGE = /readiness controller (?:election did not converge|owner record is invalid|protocol handshake rejected)/u
-const CONTROLLER_SOCKET_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ENOENT", "EPIPE", "ETIMEDOUT", "EADDRINUSE", "controller_start_failed"])
-
-// The transient class: the controller election did not settle, or its socket or owner record was briefly unusable. A different semantic contract, a bad policy or an authority failure is not retried.
-export function isTransientControllerFailure(error) {
-  if (error?.code === "controller_semantic_mismatch") return false
-  return CONTROLLER_FAILURE_MESSAGE.test(error?.message ?? "") || CONTROLLER_SOCKET_CODES.has(error?.code)
-}
-
-export async function admitWithRetry({
-  admit,
-  budgetMs = ADMISSION_RETRY_BUDGET_MS,
-  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  now = Date.now,
-  stderr = process.stderr,
-}) {
-  const started = now()
-  let delay = 250
-  for (;;) {
-    try {
-      return await admit()
-    } catch (error) {
-      if (!isTransientControllerFailure(error) || now() - started + delay > budgetMs) throw error
-      stderr.write(`[desk-mcp] readiness controller not ready (${error.message}); retrying admission in ${delay} ms\n`)
-      await sleep(delay)
-      delay = Math.min(delay * 2, 2000)
-    }
-  }
-}
-
 export function parseArgs(argv) {
   const args = { root: null, person: null }
   for (let i = 0; i < argv.length; i++) {
@@ -120,6 +88,8 @@ export function parseArgs(argv) {
       args.person = argv[++i]
     } else if (argv[i] === "--activation-config" && argv[i + 1]) {
       args.activationConfig = argv[++i]
+    } else if (argv[i] === "--state-branch" && argv[i + 1]) {
+      args.stateBranch = argv[++i]
     }
   }
   return args
@@ -247,6 +217,25 @@ export function resolveMcpServerVersion({
   }
 }
 
+// The state branch a host asks Desk to hold the desk checkout on: `--state-branch <name>`, else `desk.state_branch` in the activation config, else none.
+export function resolveStartupStateBranch({
+  args,
+  cwd = process.cwd(),
+  env = process.env,
+  homeDir,
+} = {}) {
+  if (hasText(args?.stateBranch)) return args.stateBranch
+  const activationConfig = resolveStartupActivationConfigPath({ args, env })
+  if (!hasText(activationConfig)) return null
+  const stateBranch = loadActivationConfig({ configPath: activationConfig, cwd, homeDir }).desk.state_branch
+  return hasText(stateBranch) ? stateBranch : null
+}
+
+// Desk answers the MCP handshake before it does anything that can fail or take time.
+//
+// main always receives options (the entrypoint passes onClosed), so there is no default for a missing argument, which would bind to the real stdio and home.
+//
+// Before the handshake, main does only what must happen in this process before stdio is answered: check the Node version, and move to a compatible Node (re-exec) when no shipped runtime pack fits this one. Everything else (root resolution, activation, the runtime-pack restore, authority, the state branch and the readiness controller) runs after the handshake as background admission (src/runtime/desk-session.js), which degrades instead of failing and upgrades itself to ready in the same session.
 export async function main({
   argv = process.argv.slice(2),
   env = process.env,
@@ -262,8 +251,16 @@ export async function main({
   readinessPolicy: injectedReadinessPolicy,
   authorityProviders = {},
   nodeVersion = process.versions.node,
-  admissionRetry = {},
-} = {}) {
+  input = process.stdin,
+  output = process.stdout,
+  stderr = process.stderr,
+  stateHome,
+  admissionKickoffMs = 1000,
+  git,
+  watch,
+  timers,
+  onClosed = () => {},
+}) {
   runtimeInspector = resolveRuntimeInspector({ runtimeImporter, runtimeInspector })
   const serverVersion = resolveMcpServerVersion({ mcpRoot })
   const startRuntimeDiagnostic = (options) => diagnosticServerStarter({
@@ -299,87 +296,128 @@ export async function main({
       }),
     })
   }
-  let rootResolution
-  try {
-    rootResolution = resolveStartupDeskRoot({ args, env, homeDir })
-  } catch (error) {
-    if (error?.code !== DESK_ROOT_NOT_FOUND) throw error
-    // No desk yet is a setup state, not a failure: keep desk_status and
-    // desk_doctor answering so the agent can route into first-run bootstrap.
-    return startRuntimeDiagnostic({
-      diagnostic: createSetupDiagnostic({
-        pathsTried: error.tried,
-        bindingPath: claudeBindingPath(env),
-      }),
+  // Only a Node that no shipped runtime pack supports is handled before the handshake: the fix (running under a compatible Node) needs stdio this process has not answered yet. The pack's checksum and archive are verified later, during admission.
+  const preflight = preflightInspection({ mcpRoot, runtimeInspector })
+  if (preflight !== null && !preflight.ok && (preflight.reason === "unsupported_target" || hasText(env[REEXEC_ATTEMPT_ENV]))) {
+    return handleUnavailableRuntime({
+      argv,
+      diagnosticServerStarter: startRuntimeDiagnostic,
+      env,
+      homeDir,
+      inspection: preflight,
+      mcpRoot,
+      nodeCandidateDiscoverer,
+      nodeReexecutor,
+      nodeSelector,
+      runtimeCacheDir: optional(() => resolveStartupRuntimeCacheDir({ args, cwd, env, homeDir })),
     })
   }
-  const { root: deskRoot } = rootResolution
-  const runtimeCacheDir = resolveStartupRuntimeCacheDir({ args, cwd, env, homeDir })
-  const activationStatus = resolveStartupActivationContext({ args, cwd, env, homeDir })
-  const sourceIdentity = resolveStartupSourceIdentity(activationStatus)
-  const readinessPolicy = normalizeReadinessPolicy(
-    injectedReadinessPolicy
-      ?? resolveStartupReadinessPolicy({ args, cwd, env, homeDir }),
-  )
-  const authorityProvider = readinessPolicy.authority_provider === null
-    ? null
-    : authorityProviders[readinessPolicy.authority_provider]
-  let inspection = null
-  let runtimeServer
-  if (runtimeInspector !== null) {
-    try {
-      inspection = runtimeInspector({ mcpRoot })
-    } catch {
-      inspection = startupFailureInspection({
-        mcpRoot,
-        reason: "runtime_inspection_failed",
-      })
-      return startRuntimeDiagnostic({
-        diagnostic: runtimeDiagnostic({
-          inspection,
-          runtimeCacheDir,
-          env,
-        }),
-      })
+
+  const resolveActivation = () => {
+    const activationStatus = resolveStartupActivationContext({ args, cwd, env, homeDir })
+    return {
+      activationStatus,
+      sourceIdentity: resolveStartupSourceIdentity(activationStatus),
+      runtimeCacheDir: resolveStartupRuntimeCacheDir({ args, cwd, env, homeDir }),
+      readinessPolicy: normalizeReadinessPolicy(
+        injectedReadinessPolicy ?? resolveStartupReadinessPolicy({ args, cwd, env, homeDir }),
+      ),
+      stateBranch: resolveStartupStateBranch({ args, cwd, env, homeDir }),
     }
-    if (!inspection.ok) {
-      return handleUnavailableRuntime({
-        argv,
-        diagnosticServerStarter: startRuntimeDiagnostic,
-        env,
-        homeDir,
-        inspection,
-        mcpRoot,
-        nodeCandidateDiscoverer,
-        nodeReexecutor,
-        nodeSelector,
-        runtimeCacheDir,
-      })
-    }
-    try {
-      runtimeServer = await runtimeImporter({
-        env,
-        mcpRoot,
-        runtimeCacheDir,
-        sourceIdentity,
-      })
-    } catch {
-      return startRuntimeDiagnostic({
-        diagnostic: runtimeDiagnostic({
-          inspection,
-          reason: "runtime_restore_failed",
-          runtimeCacheDir,
-          env,
-        }),
-      })
-    }
-  } else {
-    runtimeServer = await runtimeImporter({
+  }
+  let frontDoor = null
+  const session = createDeskSession({
+    args,
+    authorityProviders,
+    deskStateDir: stateHome ?? resolveDeskStateDir({ env, homeDir }),
+    readinessStateHome: stateHome === undefined ? resolveReadinessStateHome({ env, homeDir }) : path.join(stateHome, "readiness"),
+    git,
+    watch,
+    timers,
+    stderr,
+    notifyToolsChanged: () => frontDoor?.notifyToolsChanged(),
+    resolveRoot: () => resolveStartupDeskRoot({ args, env, homeDir }),
+    setupDiagnostic: (error) => createSetupDiagnostic({ pathsTried: error.tried, bindingPath: claudeBindingPath(env) }),
+    resolveActivation,
+    loadRuntime: (activation) => loadRuntime({
+      activation,
       env,
       mcpRoot,
+      preflight,
+      runtimeImporter,
+      runtimeInspector,
+    }),
+  })
+  let kicked = false
+  const kick = () => {
+    if (kicked) return
+    kicked = true
+    session.start()
+  }
+  frontDoor = startFrontDoor({
+    input,
+    output,
+    serverVersion,
+    callTool: (call) => session.callTool(call),
+    onHandshake: kick,
+  })
+  // A client that never sends notifications/initialized or tools/list still gets admission.
+  const kickoff = setTimeout(kick, admissionKickoffMs)
+  kickoff.unref?.()
+  const closed = frontDoor.closed.then(() => {
+    clearTimeout(kickoff)
+    session.dispose()
+    onClosed()
+  })
+  return { frontDoor, session, admission: session.admission, closed }
+}
+
+// A cheap look at the runtime target before the handshake: the support matrix and the pack files, without hashing or unpacking the archive. Null when inspection itself fails (admission reports that later).
+function preflightInspection({ mcpRoot, runtimeInspector }) {
+  if (runtimeInspector === null) return null
+  try {
+    return runtimeInspector === inspectRuntimeDependencyPack
+      ? inspectRuntimeDependencyPack({ mcpRoot, verifyPack: deferPackVerification })
+      : runtimeInspector({ mcpRoot })
+  } catch {
+    return null
+  }
+}
+
+function deferPackVerification() {
+  return { ok: true, deferred: true, manifest: null, archiveEntries: [] }
+}
+
+// Inspect, restore and import the runtime from the offline pack. Returns { runtimeServer, runtimeStatus }, or { outcome } naming the degraded state.
+async function loadRuntime({ activation, env, mcpRoot, preflight, runtimeImporter, runtimeInspector }) {
+  const { runtimeCacheDir, sourceIdentity } = activation
+  let inspection = null
+  if (runtimeInspector !== null) {
+    try {
+      inspection = runtimeInspector === inspectRuntimeDependencyPack || preflight === null
+        ? runtimeInspector({ mcpRoot })
+        : preflight
+    } catch {
+      return runtimeOutcome(runtimeDiagnostic({
+        inspection: startupFailureInspection({ mcpRoot, reason: "runtime_inspection_failed" }),
+        runtimeCacheDir,
+        env,
+      }))
+    }
+    if (!inspection.ok) {
+      return runtimeOutcome(runtimeDiagnostic({ inspection, runtimeCacheDir, env }))
+    }
+  }
+  let runtimeServer
+  try {
+    runtimeServer = await runtimeImporter({ env, mcpRoot, runtimeCacheDir, sourceIdentity })
+  } catch (error) {
+    return runtimeOutcome(runtimeDiagnostic({
+      inspection: inspection ?? startupFailureInspection({ mcpRoot, reason: "runtime_restore_failed" }),
+      reason: "runtime_restore_failed",
       runtimeCacheDir,
-      sourceIdentity,
-    })
+      env,
+    }), error)
   }
   const importedRuntime = runtimeServer._deskRuntime ?? {
     runtime_cache_dir: runtimeCacheDir,
@@ -399,61 +437,26 @@ export async function main({
         runtime_cache_path: importedRuntime.runtime_cache_dir ?? runtimeCacheDir,
         support_matrix_path: inspection.runtime?.support_matrix_path ?? inspection.support_matrix_path,
       }
-  const admission = await admitWithRetry({
-    ...admissionRetry,
-    admit: () => (runtimeServer.admitControlPlane ?? admitControlPlane)({
-      deskRoot,
-      person: args.person,
-      policy: readinessPolicy,
-      runtime: runtimeStatus,
-      authorityProvider,
-      controllerConnector: runtimeServer.connectOrStartController,
-    }),
-  })
-  const person = validateAdmissionAuthority({
-    authority: admission?.authority, person: args.person, policy: readinessPolicy,
-  })
-  if (readinessPolicy.semantic === "required") {
-    let barrier
-    try {
-      await admission.controller.beginConvergence()
-      barrier = await admission.controller.barrier({ capability: "semantic", wait: true })
-    } catch (error) {
-      throw new ActivationFailure({
-        phase: "SEMANTIC_CONVERGING",
-        code: "semantic_unavailable",
-        expected: { semantic: "required" },
-        observed: { message: error?.message ?? String(error) },
-        summary: "Required Desk semantic convergence failed before server admission.",
-      })
-    }
-    if (barrier?.capability !== "semantic" || barrier.current !== true) {
-      throw new ActivationFailure({
-        phase: "SEMANTIC_CONVERGING",
-        code: "semantic_unavailable",
-        expected: { semantic: "required", current: true },
-        observed: barrier ?? null,
-        summary: "Required Desk semantic coverage is incomplete; server admission refused.",
-      })
-    }
-  }
-  await runtimeServer.startServer({
-    deskRoot,
-    person,
-    statusContext: {
-      root: rootResolution,
-      activation: activationStatus,
-      runtime: runtimeStatus,
-      admission,
+  return { runtimeServer, runtimeStatus }
+}
+
+function runtimeOutcome(diagnostic, error) {
+  return {
+    outcome: {
+      state: "degraded",
+      code: diagnostic.code,
+      summary: diagnostic.summary,
+      fix: diagnostic.fix,
+      diagnostic: error === undefined ? diagnostic : { ...diagnostic, restore_error: error instanceof Error ? error.message : String(error) },
     },
-  })
-  if (readinessPolicy.semantic !== "required") {
-    // Started inside a promise so a synchronous throw is reported like a rejection: once the server is connected, main must never reject, or the entrypoint catch would start a second server on the same stdio.
-    Promise.resolve()
-      .then(() => runtimeServer.beginBackgroundConvergence?.(admission))
-      .catch((error) => {
-        process.stderr.write(`[desk-mcp] background convergence failed: ${error?.message ?? String(error)}\n`)
-      })
+  }
+}
+
+function optional(read) {
+  try {
+    return read()
+  } catch {
+    return null
   }
 }
 
@@ -486,19 +489,7 @@ async function handleUnavailableRuntime({
   nodeSelector,
   runtimeCacheDir,
 }) {
-  const shouldSelectNode = inspection.reason === "unsupported_target"
-    || inspection.reason === "node_below_engines_floor"
-    || hasText(env[REEXEC_ATTEMPT_ENV])
-  if (!shouldSelectNode) {
-    return diagnosticServerStarter({
-      diagnostic: runtimeDiagnostic({
-        inspection,
-        runtimeCacheDir,
-        env,
-      }),
-    })
-  }
-
+  // Only a Node below the engines floor, a target no pack supports, or a re-exec that came back still unsupported reaches this point: each needs a different Node, found before the handshake.
   let selection
   try {
     selection = nodeSelector({
@@ -618,9 +609,9 @@ export function isEntrypoint({
 export function runIfEntrypoint({
   argv = process.argv,
   moduleUrl = import.meta.url,
-  launch = main,
   stderr = process.stderr,
   exit = process.exit,
+  launch = main,
   startDiagnostic = startStartupExceptionDiagnostic,
 } = {}) {
   if (!isEntrypoint({ argv, moduleUrl })) return null
@@ -635,7 +626,8 @@ export function runIfEntrypoint({
       })
   }
   try {
-    return Promise.resolve(launch()).catch(handleStartupException)
+    // The host closing stdin ends the session: exit rather than linger on background admission, a controller socket or a watcher.
+    return Promise.resolve(launch({ onClosed: () => exit(0) })).catch(handleStartupException)
   } catch (err) {
     return handleStartupException(err)
   }
