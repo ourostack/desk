@@ -78,6 +78,20 @@ function main() {
   }
   assert.doesNotMatch(skill, /principles\.md|Invariant \d/u, "git-hygiene must own its rules, not cite principles.md");
 
+  // The prose stays unwrapped: outside code fences, no line continues the prose unit above it.
+  let inCode = false;
+  let previousProse = false;
+  const continuations = [];
+  for (const [index, line] of skill.split("\n").entries()) {
+    if (/^\s*```/u.test(line)) { inCode = !inCode; previousProse = false; continue; }
+    if (inCode) continue;
+    const structural = /^\s*$|^\s*(#|\||>|<|[-*+] |\d+\. |---\s*$)/u.test(line);
+    if (!structural && previousProse && index > 0) continuations.push(index + 1);
+    previousProse = line.trim() !== "" && !/^\s*(#|\||>|<|---\s*$)/u.test(line);
+  }
+  assert.deepEqual(continuations.filter((line) => line > 10), [], "git-hygiene prose must not be hard-wrapped");
+  assert.doesNotMatch(skill, /\b(?:safe|force)- (?:conditions|push)/u, "git-hygiene must not keep hyphen-join artifacts from the unwrap");
+
   for (const phrase of [
     "Never reconcile a dirty checked-out state repository by moving the branch ref in place with `git update-ref` or an equivalent ref move under the existing index/worktree",
     "clean temporary worktree based on the current remote destination",

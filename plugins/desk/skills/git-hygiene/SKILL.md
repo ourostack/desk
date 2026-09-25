@@ -99,11 +99,13 @@ Empty diff is content evidence, not deletion authority. Apply the recorded endpo
 
 The `## Code repos` rules above cover keeping a checkout current across a session. The runtime-investigation companion to that rule: when the agent is reading source to inform a runtime question, the local working tree is not a trustworthy substrate by default — `origin/<branch>` is.
 
+The fetch and pull steps in this skill apply only to checkouts the task owns. A clone you do not own is never mutated (no fetch, pull, checkout or branch): read it with `git show` on refs it already has, through the hosting service's source API, or from your own clone or worktree (`repo-handling` "Other people's repositories and clones").
+
 ### Default to `origin/<branch>`, not the working tree
 
 When reading source to inform a runtime question — any "why does X behave this way?" investigation — default to reading from `origin`, not from the local working tree:
 
-1. Run `git fetch` first (cheap, always safe).
+1. In a checkout the task owns, run `git fetch` first (cheap, always safe). For a clone you do not own, use the alternatives above.
 2. Read via `git show origin/<branch>:<path>` rather than the filesystem. This avoids the stale-checkout failure mode where the local branch is N commits behind and the agent doesn't realize it.
 3. If the agent does read from the filesystem, confirm `git rev-list --count HEAD..origin/<branch>` is `0` first. If non-zero, `git pull` or fall back to step 2.
 
@@ -111,7 +113,7 @@ When reading source to inform a runtime question — any "why does X behave this
 
 Treat it as applying to ALL repos involved in the current investigation, not just one. State repos and code repos (the project repos the agent is reading source from) all need to be current — code repos most of all when their source is being used as evidence for runtime behavior. Code repos are managed manually and may sit on feature branches; they're easy to forget.
 
-If unsure which repos the operator means, ask.
+If unsure which repos the operator means, ask. For a clone the task does not own, the operator's explicit "pull latest" is the authorization to update it.
 
 ### The smell
 
@@ -386,11 +388,11 @@ Applies to every repo the agent writes to — state repos, code repos, and plugi
 
 Force-push is destructive. Most of the time the agent should stop and hand the push to the operator. The procedure below documents when force-push is safe for the agent to run without operator re-approval.
 
-If the trigger for considering force-push is a **parallel-PR conflict on a coordinated file** (e.g., version-file conflicts on a runtime manifest or `plugin.json` after another PR in the same batch merged first), the right shape is usually merge + regular push, not rebase + force-push. See `work-orchestration` → "Parallel-batch dispatch discipline" → "Version-file conflicts on parallel PRs — merge, don't rebase" before applying the safe- conditions procedure below.
+If the trigger for considering force-push is a **parallel-PR conflict on a coordinated file** (e.g., version-file conflicts on a runtime manifest or `plugin.json` after another PR in the same batch merged first), the right shape is usually merge + regular push, not rebase + force-push. See `work-orchestration` → "Parallel-batch dispatch discipline" → "Version-file conflicts on parallel PRs — merge, don't rebase" before applying the safe-conditions procedure below.
 
 ### Safe conditions (ALL must hold)
 
-1. **Personal branch pattern.** The branch name matches `user/<alias>/...` (operator's personal namespace). Never force- push to `main`, `master`, a shared feature branch, or a release branch.
+1. **Personal branch pattern.** The branch name matches `user/<alias>/...` (operator's personal namespace). Never force-push to `main`, `master`, a shared feature branch, or a release branch.
 2. **`--force-with-lease`, not `--force`.** The `--force-with-lease` variant refuses to push if the remote has moved since the last fetch, so someone else's push cannot be silently overwritten.
 3. **`git cherry` clean.** Every remote commit is either present locally (by content, not by SHA — the rewrite is deliberate), or explicitly intended to be dropped. Verify:
    ```bash
@@ -418,7 +420,7 @@ The `<expected-remote-sha>` is the SHA the operator's local branch most recently
 History rewrites to strip AI-attribution trailers from committed history need a force-push. Sequence:
 
 1. Rewrite history locally with `git filter-branch --msg-filter` or `git rebase -i` + trailer-strip.
-2. Verify `git log --format=%B origin/main..HEAD | grep -E "Co-Authored-By: Claude|..."` → zero hits.
+2. Verify `git log --format=%B origin/main..HEAD | grep -niE "Co-Authored-By:|Co-authored with|Generated (with|by) |Built (by|with) |AI-assisted"` → no hit that credits an agent, assistant, model or harness.
 3. Apply safe-conditions check above (especially the **upstream-currency check** below if rewriting on a shared branch).
 4. Force-push. If harness denies, surface the exact command.
 

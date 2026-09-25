@@ -124,9 +124,7 @@ an explicit implementation or rollout mandate. If the operator said
 names the mutation — execute the obvious continuation under that
 scope.
 
-**Cross-link.** This operationalizes `interaction-style` §6 and
-the verb rule in `using-desk` ("Authority") at the exact moment research would
-turn into live action.
+**Cross-link.** This operationalizes `interaction-style` §6 and the verb rule in `using-desk` ("Authority") at the exact moment research would turn into live action.
 
 ## Access is not ownership
 
@@ -146,16 +144,13 @@ unclear.
 - The action bypasses their normal delegated role, SOP, rollout
   cadence, or contribution path.
 
-Standard collaboration is **not** a hold: opening a PR, participating
-in review, commenting on a work item, or posting through an authorized
-channel role already uses an established contribution path.
+Standard collaboration is **not** an ownership hold: opening a PR, participating in review, commenting on a work item, or posting through an authorized channel role already uses an established contribution path. The ownership axis never waives send approval: anything that speaks in the operator's name (a PR comment or description, a work-item comment, a chat message, an email, a calendar invitation) still needs the operator's approval of the exact content under `operator-voice-comments`, and a "go" on the work is not that approval.
 
 **What to do.**
 
 1. Name the owning surface and the action being proposed.
 2. Find the established delegation, SOP, or contribution path.
-3. If one exists and covers the action, execute it without another
-   permission loop.
+3. If one exists and covers the action, execute it without another permission loop when the action is in the agent's own role and does not speak for the operator (for example a bot or channel-role update, or a work-item state change). Content sent in the operator's name still needs their approval of the exact content (`operator-voice-comments`).
 4. If none exists, preflight the ownership transition:
 
    > "[Team/system] operates this live surface. We have access, but no

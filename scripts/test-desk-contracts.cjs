@@ -367,7 +367,7 @@ requires(
 requires(
   "plugins/desk/skills/interaction-style/SKILL.md",
   "interaction-style names phantom limits and the only valid stops",
-  /No phantom limits[\s\S]+context is getting deep[\s\S]+let me summarize progress and hand off[\s\S]+real blocker[\s\S]+all work (?:is )?complete[\s\S]+explicit stop/iu,
+  /No phantom limits[\s\S]+already in the codebase[\s\S]+defer this as a follow-up[\s\S]+ship a WIP PR[\s\S]+context is getting deep[\s\S]+let me summarize progress and hand off[\s\S]+real blocker[\s\S]+all work (?:is )?complete[\s\S]+explicit stop/iu,
 );
 requires(
   "plugins/desk/skills/interaction-style/SKILL.md",
@@ -387,13 +387,20 @@ requires(
 );
 contract("evidence-discipline triggers on any claim that depends on external or mutable facts", () => {
   const frontmatter = text("plugins/desk/skills/evidence-discipline/SKILL.md").split("---", 3)[1];
-  assert.match(frontmatter, /recommendation[\s\S]+external or mutable facts/iu);
+  assert.match(frontmatter, /recommendation or claim[\s\S]+external,\s+mutable\s+or\s+unverified\s+facts/iu);
+  assert.match(frontmatter, /answer you have arrived at is\s+complex/iu);
+  assert.match(frontmatter, /Not needed for a routine\s+status/iu);
   assert.doesNotMatch(frontmatter, /Invoke ONLY/u);
 });
 requires(
   "plugins/desk/skills/evidence-discipline/SKILL.md",
   "evidence-discipline owns primary sources before recommendations",
   /## Primary sources before recommendations[\s\S]+Verified fact[\s\S]+inference[\s\S]+Unknown[\s\S]+Decision[\s\S]+Do not hand back while material evidence remains readable/u,
+);
+requires(
+  "plugins/desk/skills/evidence-discipline/SKILL.md",
+  "evidence-discipline owns fixtures or refusal for estimates",
+  /## Fixtures or refusal[\s\S]+cites them[\s\S]+strips the estimate[\s\S]+Inheritance does NOT excuse the estimate/u,
 );
 requires(
   "plugins/desk/skills/evidence-discipline/SKILL.md",
@@ -416,6 +423,20 @@ contract("operator-voice-comments owns approval of anything sent in the operator
   assert.match(frontmatter, /sent or scheduled in the operator's name/iu);
   assert.match(frontmatter, /email[\s\S]+calendar/iu);
   assert.match(skill, /## Approval before anything is sent[\s\S]+exact audience and content[\s\S]+"go" on the work is not approval to send/iu);
+});
+contract("preflight-actions' ownership axis never waives send approval", () => {
+  const skill = text("plugins/desk/skills/preflight-actions/SKILL.md");
+  assert.match(skill, /ownership axis never waives send approval[\s\S]{0,400}`operator-voice-comments`/iu);
+  assert.match(skill, /without another permission loop when the action is in the agent's own role and does not speak for the operator/iu);
+  assert.match(text("plugins/desk/skills/operator-voice-comments/SKILL.md"), /does not speak for the operator[\s\S]{0,120}follows `preflight-actions`/iu);
+});
+contract("git-hygiene fetches only checkouts the task owns", () => {
+  const skill = text("plugins/desk/skills/git-hygiene/SKILL.md");
+  assert.match(skill, /fetch and pull steps in this skill apply only to checkouts the task owns[\s\S]{0,300}never mutated[\s\S]{0,300}`repo-handling`/iu);
+  assert.match(skill, /1\. In a checkout the task owns, run `git fetch` first/u);
+});
+contract("friction-management keeps its lead-in next to its list", () => {
+  assert.match(text("plugins/desk/skills/friction-management/SKILL.md"), /rough edge:\n\n1\. decide the scope/u);
 });
 requires(
   "plugins/desk/skills/repo-handling/SKILL.md",

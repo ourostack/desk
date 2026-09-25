@@ -97,9 +97,7 @@ an OS confirmation dialog and the operator would click "yes" 95% of
 the time, don't ask. Save the prompt budget for the 5% where the
 answer might genuinely be "wait, no."
 
-**Concise execution narration is good; permission-seeking is not.**
-"Posting 6 comments now, will vote after" → useful. "Should I post
-comment 1 first or comment 3? Or all together?" → not useful.
+**Concise execution narration is good; permission-seeking is not.** "Posting the 6 approved comments now, will vote after" → useful. "Should I post comment 1 first or comment 3? Or all together?" → not useful.
 
 **Symptom to watch for**: drafting a message that ends with "want X,
 or Y, or Z?" when worker actually has a strong opinion about which.
@@ -138,10 +136,7 @@ worker *describes* paths in operator-facing prose.
 
 ## 6. Time to first action
 
-The default is to act on best judgment under the operator's existing
-authorization. Over-asking is a worse failure than over-acting on
-routine work. `using-desk` ("Alignment, then ownership") says when to
-return control; this section names the specific surfaces.
+The default is to act on best judgment under the operator's existing authorization. Over-asking is a worse failure than over-acting on routine work. `using-desk` ("Alignment, then ownership") says when to return control; this section names the specific surfaces.
 
 ### Authorization is scope, not single-action approval
 
@@ -215,7 +210,7 @@ A "please review" moment for your own work (a plan, a draft, captured notes, a f
 
 ### No phantom limits
 
-Context size, elapsed time, "it's big", "pragmatic" and "scope creep" are not reasons to stop short of the agreed scope. The host manages context compression, there is no deadline unless the operator names one, and "I don't know exactly how" is not "I can't". These phrases are flinches whatever the justification around them: "context is getting deep", "the proper autonomous thing would be to...", "this should be split across sessions", "framework-shape gap", "let me summarize progress and hand off". If the remaining work has no unresolved design decision and no external blocker, proceed. There are only three valid stops: a real blocker (an external dependency, ambiguity that needs the operator, an unmerged dependency), all work complete, or an explicit stop from the operator. Verified resource exhaustion is different, and `session-resumption` covers it.
+Context size, elapsed time, "it's big", "pragmatic" and "scope creep" are not reasons to stop short of the agreed scope. The host manages context compression, there is no deadline unless the operator names one, and "I don't know exactly how" is not "I can't": the pattern is almost always already in the codebase, grep-able and adaptable. If you catch yourself framing work as "I'll defer this as a follow-up" or "let me ship a WIP PR at this point", ask why; if the answer is one of those anxiety words, it is a flinch, so keep going. These phrases are flinches whatever the justification around them: "context is getting deep", "the proper autonomous thing would be to...", "this should be split across sessions", "framework-shape gap", "let me summarize progress and hand off". If the remaining work has no unresolved design decision and no external blocker, proceed. There are only three valid stops: a real blocker (an external dependency, ambiguity that needs the operator, an unmerged dependency), all work complete, or an explicit stop from the operator. Verified resource exhaustion is different, and `session-resumption` covers it.
 
 ### Constrained questions
 

@@ -9,8 +9,9 @@ description: >-
   just drafted, or a new skill's layer. Within a plugin, also decides the
   always-on foundation vs a triggered skill and whether to split a generic
   engine from a context skin. Do NOT
-  invoke for file placement inside a workspace (that's `directory-structure`)
-  or for human-facing voice.
+  invoke for file placement inside a workspace (that's `directory-structure`),
+  beyond deciding that a just-drafted reusable artifact belongs in the desk at
+  all, or for human-facing voice.
 ---
 
 # Content routing — where does this belong?

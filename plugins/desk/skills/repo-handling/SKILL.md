@@ -246,11 +246,7 @@ collision.
 
 ### What goes in repo-knowledge
 
-Only content that is truly specific to that repo and that the agent
-would otherwise re-learn on every session — build gotchas, pipeline
-IDs, code-review rules specific to the repo's coding style, engineer-
-specific conventions. Cross-cutting rules go in the
-applicable skill; they do NOT belong in repo-knowledge.
+Only content that is truly specific to that repo and that the agent would otherwise re-learn on every session — build gotchas, pipeline IDs, code-review rules specific to the repo's coding style, engineer-specific conventions. Cross-cutting rules go in the applicable skill; they do NOT belong in repo-knowledge.
 
 Content must be engine-agnostic (REST API names, not harness MCP
 tool names) — repo-knowledge is loaded into every session

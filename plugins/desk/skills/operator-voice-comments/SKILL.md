@@ -5,12 +5,7 @@ description: Invoke before anything is sent or scheduled in the operator's name 
 
 # operator-voice-comments
 
-This is a **leaf skill** consumed by the PR-lifecycle skills
-(`pr-feedback-on-own-pr`, `pr-surface-hygiene`, `pr-self-review`, and the
-forthcoming `peer-pr-review`) at every draft-time touchpoint where
-worker is producing content the operator will post in their own
-name. The rules below govern that content; the consuming skill
-governs everything else (workflow, dispatch, surface choice).
+This skill owns everything sent or scheduled in the operator's name: the approval rule below applies to every such send, and the voice rules apply wherever worker drafts that content. The PR-lifecycle skills (`pr-feedback-on-own-pr`, `pr-surface-hygiene`, `pr-self-review`, `peer-pr-review`) consume it at their drafting steps; the consuming skill governs everything else (workflow, dispatch, surface choice).
 
 The operator's name and reputation ride on every word that lands
 under their account. Worker's default writing posture is the
@@ -21,7 +16,7 @@ for that drift.
 
 ## Approval before anything is sent
 
-Anything sent or scheduled in the operator's name — a chat message, an email, a calendar invitation, a PR comment or description, a work-item comment — needs the operator's approval of the exact audience and content before it goes. A "go" on the work is not approval to send; neither is an earlier approval of different wording or a different audience. Show the final audience and text, wait for a clear yes, and send exactly that. When the operator has seen the final audience and text and says "send it", that is the approval; do not ask again. First-person future phrasing such as "I'll send it" leaves the send with the operator (`interaction-style` §6).
+Anything sent or scheduled in the operator's name — a chat message, an email, a calendar invitation, a PR comment or description, a work-item comment — needs the operator's approval of the exact audience and content before it goes. A "go" on the work is not approval to send; neither is an earlier approval of different wording or a different audience. Show the final audience and text, wait for a clear yes, and send exactly that. When the operator has seen the final audience and text and says "send it", that is the approval; do not ask again. First-person future phrasing such as "I'll send it" leaves the send with the operator (`interaction-style` §6). An action in the agent's own role that does not speak for the operator, such as a work-item state change or a bot or channel-role update, follows `preflight-actions` instead.
 
 ## Surfaces in scope
 

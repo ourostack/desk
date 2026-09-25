@@ -51,13 +51,9 @@ when a card is about a human-intervention point in a skill (a sign-off gate, an 
 1. **list the still-pinned cards.** `ls $DESK/<track>/_friction/` plus
    `$DESK/_meta/friction.md` for cross-track entries. skip
    archived entries under `_archive/`.
-2. **read each card end-to-end** before picking a disposition. don't
-   skim. reactive edits without reading the full entry produce churn.
+2. **read each card end-to-end** before picking a disposition. don't skim. reactive edits without reading the full entry produce churn.
 3. **decide disposition.** name the target file or rationale.
-4. **batch decisions.** present dispositions to operator in one
-   message with a clear table (entry → disposition → target). wait
-   for signoff. don't walk the operator through one card at a time
-   (`interaction-style` §1).
+4. **batch decisions.** present dispositions to operator in one message with a clear table (entry → disposition → target). wait for signoff. don't walk the operator through one card at a time (`interaction-style` §1).
 5. **Encode in a single authorized PR** against the plugin repo, one unit per card with acceptance checks. Invoke `desk:superpowers-integration` for the needed Superpowers planning and implementation skills.
 6. **take landed cards down** in the same motion they shipped: update
    the `Status:` line to name the PR and merge SHA, move the entry to

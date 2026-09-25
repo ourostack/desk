@@ -1,17 +1,18 @@
 ---
 name: evidence-discipline
 description: >-
-  Invoke before giving a recommendation, status or answer that depends on
-  external or mutable facts (a system's current behavior, a product, policy or
-  market, a branch head, a work-item state, a handoff's or another agent's
-  claim), when curated records and current sources disagree, when a question
-  may be answered with an easier adjacent one, before quoting any duration,
-  cost or scope estimate, and before acting on assumed-but-unverified
+  Invoke before giving a recommendation or claim that depends on external,
+  mutable or unverified facts (a system's current behavior, a product, policy
+  or market, an inherited handoff or another agent's claim), when curated
+  records and current sources disagree, when the answer you have arrived at is
+  complex or may answer an easier adjacent question, before quoting any
+  duration, cost or scope estimate, and before acting on assumed-but-unverified
   evidence: supervised wrappers, explicit tool warnings, outcome messages,
   orchestration wrappers, auth transfer, durability claims, process cleanup,
-  precedent claims, or test coverage. Covers primary sources before
-  recommendations, evidence precedence, answering the governing question, and
-  fixtures or refusal.
+  precedent claims, or test coverage. Not needed for a routine status read
+  directly from its source. Covers primary sources before recommendations,
+  evidence precedence, answering the governing question, and fixtures or
+  refusal.
 ---
 
 # Evidence discipline
