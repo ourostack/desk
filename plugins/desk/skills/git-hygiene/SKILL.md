@@ -99,7 +99,7 @@ Empty diff is content evidence, not deletion authority. Apply the recorded endpo
 
 The `## Code repos` rules above cover keeping a checkout current across a session. The runtime-investigation companion to that rule: when the agent is reading source to inform a runtime question, the local working tree is not a trustworthy substrate by default — `origin/<branch>` is.
 
-The fetch and pull steps in this skill apply only to checkouts the task owns. A clone you do not own is never mutated (no fetch, pull, checkout or branch): read it with `git show` on refs it already has, through the hosting service's source API, or from your own clone or worktree (`repo-handling` "Other people's repositories and clones").
+The fetch and pull steps in this skill apply only to checkouts the task owns. A clone the task does not own is never mutated: no fetch, pull, checkout, switch, stash, reset or branch. Read it with `git show` on refs it already has, through the hosting service's source API, or from your own clone or worktree. The single exception: the operator's explicit instruction to update that specific clone authorizes that update, because authority follows the verb (`using-desk` "Authority"). `repo-handling` ("Other people's repositories and clones") states the same rule.
 
 ### Default to `origin/<branch>`, not the working tree
 
@@ -113,7 +113,7 @@ When reading source to inform a runtime question — any "why does X behave this
 
 Treat it as applying to ALL repos involved in the current investigation, not just one. State repos and code repos (the project repos the agent is reading source from) all need to be current — code repos most of all when their source is being used as evidence for runtime behavior. Code repos are managed manually and may sit on feature branches; they're easy to forget.
 
-If unsure which repos the operator means, ask. For a clone the task does not own, the operator's explicit "pull latest" is the authorization to update it.
+If unsure which repos the operator means, ask. For a clone the task does not own, pull only when the operator's instruction names that clone (the exception above); otherwise read its current source without mutating it.
 
 ### The smell
 

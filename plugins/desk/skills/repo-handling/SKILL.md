@@ -21,7 +21,7 @@ When a task references a code repo, the agent needs to know where the code lives
 A clone you only read, or a repository someone else owns, is not yours to rearrange:
 
 - **Find existing clones by remote URL** (`git config remote.origin.url`), not by directory name, before reaching for a remote reader and before any clone. Operators often keep several clones of one repository under different names.
-- **Reading is read-only.** Never checkout, switch, pull, fetch, stash, reset or branch in a clone you do not own; its HEAD is someone's working context, often mid-task. Read a different revision with `git show <ref>:<path>` if it is already present, or ask.
+- **Reading is read-only.** A clone the task does not own is never mutated: no fetch, pull, checkout, switch, stash, reset or branch. Read it with `git show` on refs it already has, through the hosting service's source API, or from your own clone or worktree. The single exception: the operator's explicit instruction to update that specific clone authorizes that update, because authority follows the verb (`using-desk` "Authority"). Its HEAD is someone's working context, often mid-task; `git-hygiene` states the same rule.
 - **Changes go through the established contribution path** (a branch or fork and a pull request), never by editing someone else's checkout in place.
 - **Never create, move or delete a clone without explicit authorization.** If the source is not cloned anywhere, ask first and propose a scratch location outside the operator's project folders.
 - When the operator explains how their machine is laid out, record it (`.machine-local.yml` below, or their rules in the desk) so the next session inherits it.
@@ -192,65 +192,37 @@ Keep a list in `$DESK/_meta/large-repos.md` per operator, so worker can warn on 
 
 ## Fan PR lookups across `repos[]`
 
-Every non-terminal task card declares a `repos[]` array. Session
-probes (`session-start`) and status queries (`status`) need to
-surface PR state across **every** repo the task touches — not just
-the entry whose PR ID is already cached.
+Every non-terminal task card declares a `repos[]` array. Session probes (`session-start`) and status queries (`status`) need to surface PR state across **every** repo the task touches — not just the entry whose PR ID is already cached.
 
-For each active task card, iterate every entry in `repos[]` and run
-the appropriate hosting-platform PR list call scoped to the current
-user. For GitHub repos:
+For each active task card, iterate every entry in `repos[]` and run the appropriate hosting-platform PR list call scoped to the current user. For GitHub repos:
 
 ```bash
 gh pr list --repo <org>/<repo-name> --author @me --state open --json number,title,url,isDraft
 ```
 
-(overlay users: non-GitHub work-item trackers use their own REST
-endpoints instead — consumer overlays extend this fan-out.)
+(overlay users: non-GitHub work-item trackers use their own REST endpoints instead — consumer overlays extend this fan-out.)
 
-Cache the returned PR metadata on the task-scan output for downstream
-consumers (status skill, session-start skill-routing prompts). Do NOT
-update task-card frontmatter on every fan-out — the cached list is
-ephemeral per session; only persist to the card when the operator
-confirms a new PR is the task's PR.
+Cache the returned PR metadata on the task-scan output for downstream consumers (status skill, session-start skill-routing prompts). Do NOT update task-card frontmatter on every fan-out — the cached list is ephemeral per session; only persist to the card when the operator confirms a new PR is the task's PR.
 
 ## Repo-knowledge auto-loader
 
-`<plugin>/repo-knowledge/<repo-name>/*.md` holds repo-specific
-guidance that the agent loads automatically when an active task
-references a repo of that name.
+`<plugin>/repo-knowledge/<repo-name>/*.md` holds repo-specific guidance that the agent loads automatically when an active task references a repo of that name.
 
-**Loader contract** (prose, not a separate script — this is the
-agent's file-read behavior during session-start):
+**Loader contract** (prose, not a separate script — this is the agent's file-read behavior during session-start):
 
-1. For each active task's `repos[].name`, check whether the directory
-   `<plugin>/repo-knowledge/<repo-name>/` exists.
-2. If it exists: load every `.md` file in that directory into
-   context. Common filenames: `code-standards.md`, `pipeline-notes.md`,
-   `conventions.md`, etc. No fixed schema — each repo's knowledge
-   directory is owned by whoever encoded it.
-3. If it doesn't exist: **silently no-op.** Do not warn, do not log
-   an error, do not prompt the operator. An unknown repo is the
-   default state; the agent has guidance for a small number of repos
-   and general instincts for the rest.
+1. For each active task's `repos[].name`, check whether the directory `<plugin>/repo-knowledge/<repo-name>/` exists.
+2. If it exists: load every `.md` file in that directory into context. Common filenames: `code-standards.md`, `pipeline-notes.md`, `conventions.md`, etc. No fixed schema — each repo's knowledge directory is owned by whoever encoded it.
+3. If it doesn't exist: **silently no-op.** Do not warn, do not log an error, do not prompt the operator. An unknown repo is the default state; the agent has guidance for a small number of repos and general instincts for the rest.
 
 ### Namespace is repo-name only
 
-The knowledge directory is keyed by repo `name` (e.g.,
-`repo-knowledge/OrderService/`), not `<org>/<repo>`. Collisions across
-orgs with identically-named repos are not pre-designed around;
-handle at first collision by prepending the org to the directory
-name (e.g., `repo-knowledge/acme-OrderService/`) when the
-collision actually surfaces. Don't over-engineer ahead of first
-collision.
+The knowledge directory is keyed by repo `name` (e.g., `repo-knowledge/OrderService/`), not `<org>/<repo>`. Collisions across orgs with identically-named repos are not pre-designed around; handle at first collision by prepending the org to the directory name (e.g., `repo-knowledge/acme-OrderService/`) when the collision actually surfaces. Don't over-engineer ahead of first collision.
 
 ### What goes in repo-knowledge
 
 Only content that is truly specific to that repo and that the agent would otherwise re-learn on every session — build gotchas, pipeline IDs, code-review rules specific to the repo's coding style, engineer-specific conventions. Cross-cutting rules go in the applicable skill; they do NOT belong in repo-knowledge.
 
-Content must be engine-agnostic (REST API names, not harness MCP
-tool names) — repo-knowledge is loaded into every session
-regardless of the active harness.
+Content must be engine-agnostic (REST API names, not harness MCP tool names) — repo-knowledge is loaded into every session regardless of the active harness.
 
 ## Pre-work hygiene (before work-doer runs)
 

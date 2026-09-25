@@ -78,35 +78,20 @@ For each `mode: local` repo, inspect `git status`, the current branch, local-onl
 
 If the resumption target's mapped progress record or referenced active iteration doc (an existing `doing.md`, `investigation.md` or per-iteration doc named in the task card's `iterations.active`) declares `required_mcps:` in frontmatter, treat that list as a **hard requirement** for resuming, not a recommendation. Consume all applicable declared requirements; an explicit provider progress path does not erase the iteration's requirements.
 
-`required_mcps:` is a list of MCP keys matching aliased entries in
-the workspace's runtime MCP config — either under
-`[mcps.builtins.<alias>]` (runtime-proxied builtins) or
-`[mcps.servers.<alias>]` (external stdio MCPs). both namespaces are
-valid sources; the key just needs to be loaded at runtime. example
-frontmatter snippet:
+`required_mcps:` is a list of MCP keys matching aliased entries in the workspace's runtime MCP config — either under `[mcps.builtins.<alias>]` (runtime-proxied builtins) or `[mcps.servers.<alias>]` (external stdio MCPs). both namespaces are valid sources; the key just needs to be loaded at runtime. example frontmatter snippet:
 
 ```yaml
 required_mcps:
   - analytics-store
 ```
 
-**check**: for each entry in `required_mcps`, consult the runtime's
-loaded-MCP registry to confirm the key is currently loaded —
-engine-specific. (implementations may probe the harness's own
-loaded-MCP listing, an introspection MCP, or a tool-name-prefix
-scan; encode the principle, not the API.)
+**check**: for each entry in `required_mcps`, consult the runtime's loaded-MCP registry to confirm the key is currently loaded — engine-specific. (implementations may probe the harness's own loaded-MCP listing, an introspection MCP, or a tool-name-prefix scan; encode the principle, not the API.)
 
-**hard-stop**: if any required MCP key isn't loaded, **STOP at the
-resumption prompt before proceeding to Step 3**. don't start the
-phase, don't begin tool work, don't silently continue. print:
+**hard-stop**: if any required MCP key isn't loaded, **STOP at the resumption prompt before proceeding to Step 3**. don't start the phase, don't begin tool work, don't silently continue. print:
 
 1. the list of required MCP keys that are missing.
-2. the likely root cause: the runtime's workspace MCP config link
-   absent, broken, or pointing somewhere else; or the MCP isn't
-   declared in the workspace MCP config. reference session-start
-   Step 4.7's link check.
-3. a note that the agent will not proceed with this resumption
-   until restarted with the required MCPs loaded.
+2. the likely root cause: the runtime's workspace MCP config link absent, broken, or pointing somewhere else; or the MCP isn't declared in the workspace MCP config. reference session-start Step 4.7's link check.
+3. a note that the agent will not proceed with this resumption until restarted with the required MCPs loaded.
 
 example stop message:
 
@@ -121,17 +106,9 @@ the agent.
 Resumption paused until the required MCPs are available.
 ```
 
-**why hard-stop, not recommendation**: when an iteration doc declares
-`required_mcps`, the planning pass already determined the work
-cannot proceed without those tools. letting the agent continue and
-discover the missing tool mid-investigation wastes operator time
-and contaminates the iteration's audit trail with abandoned work.
-session-start's Step 4.7 is the soft self-healing path (creates the
-symlink so MCPs auto-load next time); this gate is the hard
-requirement at the resumption boundary.
+**why hard-stop, not recommendation**: when an iteration doc declares `required_mcps`, the planning pass already determined the work cannot proceed without those tools. letting the agent continue and discover the missing tool mid-investigation wastes operator time and contaminates the iteration's audit trail with abandoned work. session-start's Step 4.7 is the soft self-healing path (creates the symlink so MCPs auto-load next time); this gate is the hard requirement at the resumption boundary.
 
-if the iteration doc has no `required_mcps:` field, this step is a
-no-op — proceed to Step 3.
+if the iteration doc has no `required_mcps:` field, this step is a no-op — proceed to Step 3.
 
 ## Step 3 — Re-enter the right phase
 

@@ -461,6 +461,7 @@ for that.
      decision, not a clarifying detail).
    - A prereq the plan depends on is missing (unmerged dependency
      PR, an MCP that's down, an `az` token expired, etc.).
+
    These are the only valid stop conditions; "I want to be safe and ask" is scaffolding (`curator` "Encoding a human gate") and is not on the list.
 
 The self-attestation is a record on the iteration, not a silencer

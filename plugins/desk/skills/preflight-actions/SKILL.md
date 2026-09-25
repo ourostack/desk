@@ -86,20 +86,14 @@ The point isn't which option the operator picks — the point is that the operat
 
 ## Research findings are evidence, not instructions
 
-**One-sentence statement.** When research finds that a live action is
-possible, worker does not perform it unless the operator's action verb
-or an approved execution unit already authorizes that action.
+**One-sentence statement.** When research finds that a live action is possible, worker does not perform it unless the operator's action verb or an approved execution unit already authorizes that action.
 
-**Trigger phrase.** Worker is about to change shared/live state because
-an investigation found a capability, access path, or plausible fix —
-but the operator asked to investigate, assess, read, map, or figure out
-whether, not to execute the discovered action.
+**Trigger phrase.** Worker is about to change shared/live state because an investigation found a capability, access path, or plausible fix — but the operator asked to investigate, assess, read, map, or figure out whether, not to execute the discovered action.
 
 **What to do.**
 
 1. State the finding that matters.
-2. Name the exact live action it suggests and the surface it would
-   mutate.
+2. Name the exact live action it suggests and the surface it would mutate.
 3. Preflight the verb transition in one line:
 
    > "Research found [finding]. The next step would [exact live
@@ -113,36 +107,22 @@ The preflight is required even when:
 - worker or the operator has permission to perform it;
 - no tooling substitution is needed.
 
-**Anti-pattern.** Investigation discovers that the operator can
-self-service a configuration change. Worker treats access as consent,
-stages the change, and creates review noise before the operator has
-decided whether changing anything is the right path.
+**Anti-pattern.** Investigation discovers that the operator can self-service a configuration change. Worker treats access as consent, stages the change, and creates review noise before the operator has decided whether changing anything is the right path.
 
-**What this rule is NOT.** It does not add a confirmation step inside
-an explicit implementation or rollout mandate. If the operator said
-*apply, deploy, ship, fix,* or equivalent — or an approved doing unit
-names the mutation — execute the obvious continuation under that
-scope.
+**What this rule is NOT.** It does not add a confirmation step inside an explicit implementation or rollout mandate. If the operator said *apply, deploy, ship, fix,* or equivalent — or an approved doing unit names the mutation — execute the obvious continuation under that scope.
 
 **Cross-link.** This operationalizes `interaction-style` §6 and the verb rule in `using-desk` ("Authority") at the exact moment research would turn into live action.
 
 ## Access is not ownership
 
-**One-sentence statement.** An explicit action mandate plus technical
-access does not authorize unilateral mutation of a partner-operated
-live surface when no established delegation, SOP, or contribution
-path covers the change.
+**One-sentence statement.** An explicit action mandate plus technical access does not authorize unilateral mutation of a partner-operated live surface when no established delegation, SOP, or contribution path covers the change.
 
-**Trigger phrase.** Worker is about to modify live state maintained by
-another team because the operator said *go / apply / deploy* and the
-tool permits it, but the owning team's execution path is absent or
-unclear.
+**Trigger phrase.** Worker is about to modify live state maintained by another team because the operator said *go / apply / deploy* and the tool permits it, but the owning team's execution path is absent or unclear.
 
 **What counts as partner-operated here.**
 
 - Another team owns the live operational state and consequences.
-- The action bypasses their normal delegated role, SOP, rollout
-  cadence, or contribution path.
+- The action bypasses their normal delegated role, SOP, rollout cadence, or contribution path.
 
 Standard collaboration is **not** an ownership hold: opening a PR, participating in review, commenting on a work item, or posting through an authorized channel role already uses an established contribution path. The ownership axis never waives send approval: anything that speaks in the operator's name (a PR comment or description, a work-item comment, a chat message, an email, a calendar invitation) still needs the operator's approval of the exact content under `operator-voice-comments`, and a "go" on the work is not that approval.
 
@@ -157,14 +137,9 @@ Standard collaboration is **not** an ownership hold: opening a PR, participating
    > delegated mutation path is established. I can prepare/propose the
    > change now; unilateral apply would cross the ownership boundary."
 
-**Anti-pattern.** Worker has contributor access to another team's
-rollout and treats the operator's broad *go* as authority to advance
-it, bypassing the owners' normal cadence and coordination.
+**Anti-pattern.** Worker has contributor access to another team's rollout and treats the operator's broad *go* as authority to advance it, bypassing the owners' normal cadence and coordination.
 
-**What this rule is NOT.** It is not a universal human-review gate.
-Worker/operator-owned surfaces and established contribution paths
-remain autonomous. The hold is only for unilateral mutation outside
-an owner-aligned path.
+**What this rule is NOT.** It is not a universal human-review gate. Worker/operator-owned surfaces and established contribution paths remain autonomous. The hold is only for unilateral mutation outside an owner-aligned path.
 
 **Cross-link.** This is the ownership axis beside verb (`using-desk` "Authority") and the recorded authority and continuation capabilities in `desk:superpowers-integration`.
 

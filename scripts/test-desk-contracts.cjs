@@ -432,9 +432,72 @@ contract("preflight-actions' ownership axis never waives send approval", () => {
 });
 contract("git-hygiene fetches only checkouts the task owns", () => {
   const skill = text("plugins/desk/skills/git-hygiene/SKILL.md");
-  assert.match(skill, /fetch and pull steps in this skill apply only to checkouts the task owns[\s\S]{0,300}never mutated[\s\S]{0,300}`repo-handling`/iu);
+  assert.match(skill, /fetch and pull steps in this skill apply only to checkouts the task owns/iu);
   assert.match(skill, /1\. In a checkout the task owns, run `git fetch` first/u);
+  assert.doesNotMatch(skill, /"pull latest" is the authorization/iu);
 });
+contract("repo-handling and git-hygiene state the same clone rule word for word", () => {
+  const rule = "A clone the task does not own is never mutated: no fetch, pull, checkout, switch, stash, reset or branch. Read it with `git show` on refs it already has, through the hosting service's source API, or from your own clone or worktree. The single exception: the operator's explicit instruction to update that specific clone authorizes that update, because authority follows the verb (`using-desk` \"Authority\").";
+  for (const file of ["plugins/desk/skills/repo-handling/SKILL.md", "plugins/desk/skills/git-hygiene/SKILL.md"]) {
+    assert.equal(text(file).split(rule).length - 1, 1, `${file} must state the clone rule exactly once`);
+  }
+});
+
+// Hard-wrapped Markdown prose in the skills this change touched. Skills that are fully unwrapped
+// must stay that way; skills that still carry older wrapped prose must not mix a long (edited)
+// line into a wrapped paragraph, which is how an edit inside a wrapped paragraph shows up.
+function proseUnits(file) {
+  const lines = text(file).split("\n");
+  let start = 0;
+  if (lines[0] === "---") start = lines.indexOf("---", 1) + 1;
+  const units = [];
+  let inCode = false;
+  let unit = [];
+  const flush = () => { if (unit.length > 0) units.push(unit); unit = []; };
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s*```/u.test(line)) { inCode = !inCode; flush(); continue; }
+    if (inCode) continue;
+    if (/^\s*$|^\s*(?:#|\||>|<|---\s*$)/u.test(line)) { flush(); continue; }
+    if (/^\s*(?:[-*+] |\d+\. )/u.test(line)) flush();
+    unit.push({ number: index + 1, line });
+  }
+  flush();
+  return units;
+}
+for (const file of [
+  "plugins/desk/skills/cdp-headed-browser/SKILL.md",
+  "plugins/desk/skills/content-routing/SKILL.md",
+  "plugins/desk/skills/curator/SKILL.md",
+  "plugins/desk/skills/evidence-discipline/SKILL.md",
+  "plugins/desk/skills/friction-management/SKILL.md",
+  "plugins/desk/skills/git-hygiene/SKILL.md",
+  "plugins/desk/skills/lesson-capture/SKILL.md",
+  "plugins/desk/skills/preflight-actions/SKILL.md",
+  "plugins/desk/skills/repo-handling/SKILL.md",
+  "plugins/desk/skills/session-resumption/SKILL.md",
+  "plugins/desk/skills/using-desk/SKILL.md",
+  "plugins/desk/skills/work-orchestration/SKILL.md",
+  "plugins/plain-language/skills/plain-language/SKILL.md",
+]) {
+  contract(`${file} prose is not hard-wrapped`, () => {
+    const wrapped = proseUnits(file).filter((unit) => unit.length > 1).map((unit) => unit[1].number);
+    assert.deepEqual(wrapped, []);
+  });
+}
+for (const file of [
+  "plugins/desk/skills/interaction-style/SKILL.md",
+  "plugins/desk/skills/operator-voice-comments/SKILL.md",
+  "plugins/desk/skills/peer-pr-review/SKILL.md",
+  "plugins/desk/skills/pr-feedback-on-own-pr/SKILL.md",
+  "plugins/desk/skills/pr-review-interrogation/SKILL.md",
+  "plugins/desk/skills/runtime-symptom-investigation/SKILL.md",
+]) {
+  contract(`${file} has no edited line inside a wrapped paragraph`, () => {
+    const mixed = proseUnits(file).filter((unit) => unit.length > 1 && unit.some(({ line }) => line.length > 100)).map((unit) => unit[0].number);
+    assert.deepEqual(mixed, []);
+  });
+}
 contract("friction-management keeps its lead-in next to its list", () => {
   assert.match(text("plugins/desk/skills/friction-management/SKILL.md"), /rough edge:\n\n1\. decide the scope/u);
 });
