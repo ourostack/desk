@@ -34,9 +34,9 @@ test("this repository's plugin dependencies track release channels", () => {
 
 test("dependencies may name a release channel or no ref at all", () => {
   for (const spec of [
-    "github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha",
-    "github:ourostack/ouroboros-skills:plugins/desk",
-    "github:teams-microsoft/teams-approvals-mcp:.",
+    "github:ourostack/desk:plugins/superpowers@main",
+    "github:ourostack/desk:plugins/desk",
+    "github:example-org/example-mcp:.",
     "github:someone/else",
     "npm:left-pad",
     42,
@@ -46,23 +46,32 @@ test("dependencies may name a release channel or no ref at all", () => {
 })
 
 test("exact commits, forks, other branches and malformed specs are rejected", () => {
-  assert.match(checker.dependencyProblem("github:ourostack/ouroboros-skills:plugins/desk@d89126223a4e08b07b8e4e8d738c15b92a6c597f"), /pins exact commit/u)
-  assert.match(checker.dependencyProblem("github:shared-internal-tools/ms-desk:plugins/ms-desk@4597a49"), /pins exact commit/u)
-  assert.match(checker.dependencyProblem("github:arimendelow/ouroboros-skills:plugins/desk@v2-alpha"), /points at a fork \(arimendelow\)/u)
-  assert.match(checker.dependencyProblem("github:ourostack/ouroboros-skills:plugins/desk@user/ari/feature"), /not a release channel/u)
+  assert.match(checker.dependencyProblem("github:ourostack/desk:plugins/desk@d89126223a4e08b07b8e4e8d738c15b92a6c597f"), /pins exact commit/u)
+  assert.match(checker.dependencyProblem("github:example-org/example-overlay:plugins/example-overlay@4597a49"), /pins exact commit/u)
+  assert.match(checker.dependencyProblem("github:arimendelow/desk:plugins/desk@main"), /points at a fork \(arimendelow\)/u)
+  assert.match(checker.dependencyProblem("github:ourostack/desk:plugins/desk@user/ari/feature"), /not a release channel/u)
   assert.match(checker.dependencyProblem("github:not-a-repo"), /is not a github:/u)
   assert.deepEqual(checker.parseGithubDependency("github:o/r"), { owner: "o", repo: "r", path: "", ref: null })
 })
 
+test("main is the only release channel and ouroboros-skills coordinates have moved", () => {
+  assert.equal(checker.dependencyProblem("github:ourostack/desk:plugins/plain-language@main"), null)
+  assert.match(checker.dependencyProblem("github:ourostack/desk:plugins/plain-language@v2-alpha"), /not a release channel/u)
+  assert.match(checker.dependencyProblem("github:ourostack/ouroboros-skills:plugins/desk@v2-alpha"), /moved to ourostack\/desk/u)
+  assert.match(checker.dependencyProblem("github:ourostack/ouroboros-skills:plugins/desk"), /moved to ourostack\/desk/u)
+  assert.match(checker.dependencyProblem("github:arimendelow/ouroboros-skills:plugins/desk@main"), /moved to ourostack\/desk/u)
+  assert.deepEqual(checker.RELEASE_CHANNELS, ["main"])
+})
+
 test("the checker reports every offending manifest entry", () => {
   withPlugins({
-    good: { dependencies: ["github:ourostack/ouroboros-skills:plugins/desk@v2-alpha"] },
-    pinned: { dependencies: ["github:ourostack/ouroboros-skills:plugins/desk@0123456789abcdef"] },
+    good: { dependencies: ["github:ourostack/desk:plugins/desk@main"] },
+    pinned: { dependencies: ["github:ourostack/desk:plugins/desk@0123456789abcdef"] },
     empty: {},
     nomanifest: null,
   }, (root) => {
     assert.deepEqual(checker.checkDependencyChannels({ repoRoot: root }), [
-      "plugins/pinned/agency.json: github:ourostack/ouroboros-skills:plugins/desk@0123456789abcdef pins exact commit 0123456789abcdef; track a release channel (v2-alpha) instead",
+      "plugins/pinned/agency.json: github:ourostack/desk:plugins/desk@0123456789abcdef pins exact commit 0123456789abcdef; track a release channel (main) instead",
     ])
     const logs = []
     assert.equal(checker.runCli({ repoRoot: root, log: (line) => logs.push(line), error: (line) => logs.push(line) }), 1)
