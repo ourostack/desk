@@ -56,6 +56,20 @@ function gitLog(root) {
   return result.stdout
 }
 
+// Fix round 1, Important: no refusal may quote a candidate. Checking every
+// 4-character substring is equivalent to checking every substring longer
+// than 3 characters — any longer run contains a 4-character run as a prefix.
+function assertNoCandidateLeak(message, candidate) {
+  for (let i = 0; i <= candidate.length - 4; i += 1) {
+    const chunk = candidate.slice(i, i + 4)
+    assert.equal(
+      message.includes(chunk),
+      false,
+      `error message must not leak "${chunk}" from candidate ${JSON.stringify(candidate)}: ${message}`,
+    )
+  }
+}
+
 async function mkTrack(root, slug, { rows = [], title } = {}) {
   await track_create({
     deskRoot: root,
@@ -177,21 +191,94 @@ test("task_move moves and renames simultaneously across tracks", async () => {
   assert.doesNotMatch(await trackBody(root, "track-a"), /`old-name`/)
 })
 
-test("task_move across tracks tolerates a destination track with no track.md yet", async () => {
+// ── task_move: to_track validation (fix round 1, Critical) ──────────────────
+//
+// A moved task never creates a track implicitly: `to_track` goes through the
+// same `validateTrackName` (with the same `operatorNames`) that
+// `track_create`/`track_rename` already enforce, and the destination track's
+// `track.md` must already exist.
+
+test("task_move refuses a destination track that doesn't exist yet, and creates nothing", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "track-a", { rows: ["solo-task"] })
   await task_create({ deskRoot: root, input: { track: "track-a", slug: "solo-task", title: "T" } })
 
+  await assert.rejects(
+    () =>
+      task_move({
+        deskRoot: root,
+        input: { track: "track-a", slug: "solo-task", to_track: "brand-new" },
+      }),
+    /the destination track doesn't exist; create it first with track_create \(a scope line is required\)/,
+  )
+
+  assert.equal(await exists(path.join(root, "brand-new")), false, "no track.md means no implicit track")
+  assert.ok(await exists(path.join(root, "track-a", "solo-task", "task.md")), "source must be untouched")
+  assert.match(await trackBody(root, "track-a"), /`solo-task`/, "source table row must be untouched")
+})
+
+test("task_move refuses a catch-all destination track", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "track-a", { rows: ["solo-task"] })
+  await task_create({ deskRoot: root, input: { track: "track-a", slug: "solo-task", title: "T" } })
+
+  await assert.rejects(
+    () =>
+      task_move({
+        deskRoot: root,
+        input: { track: "track-a", slug: "solo-task", to_track: "misc" },
+      }),
+    (error) => {
+      assert.match(error.message, /invalid to_track/)
+      assertNoCandidateLeak(error.message, "misc")
+      return true
+    },
+  )
+  assert.equal(await exists(path.join(root, "misc")), false)
+  assert.ok(await exists(path.join(root, "track-a", "solo-task", "task.md")))
+})
+
+test("task_move refuses a person-named destination track", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const configured = spawnSync("git", ["-C", root, "config", "user.name", "Ari Mendelow"], {
+    encoding: "utf8",
+  })
+  assert.equal(configured.status, 0, configured.stderr)
+  await mkTrack(root, "track-a", { rows: ["solo-task"] })
+  await task_create({ deskRoot: root, input: { track: "track-a", slug: "solo-task", title: "T" } })
+
+  await assert.rejects(
+    () =>
+      task_move({
+        deskRoot: root,
+        input: { track: "track-a", slug: "solo-task", to_track: "ari-mendelow" },
+      }),
+    (error) => {
+      assert.match(error.message, /invalid to_track/)
+      assertNoCandidateLeak(error.message, "ari-mendelow")
+      return true
+    },
+  )
+  assert.equal(await exists(path.join(root, "ari-mendelow")), false)
+})
+
+test("task_move moves into a valid, already-existing destination track", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "track-a", { rows: ["solo-task"] })
+  await mkTrack(root, "track-b", { rows: [] })
+  await task_create({ deskRoot: root, input: { track: "track-a", slug: "solo-task", title: "T" } })
+
   const result = await task_move({
     deskRoot: root,
-    input: { track: "track-a", slug: "solo-task", to_track: "brand-new" },
+    input: { track: "track-a", slug: "solo-task", to_track: "track-b" },
   })
 
-  assert.ok(await exists(path.join(root, "brand-new", "solo-task", "task.md")))
-  assert.ok(result.updated_files.includes(path.join("track-a", "track.md")))
-  assert.equal(result.updated_files.includes(path.join("brand-new", "track.md")), false)
-  assert.doesNotMatch(await trackBody(root, "track-a"), /`solo-task`/)
+  assert.equal(result.to, path.join("track-b", "solo-task"))
+  assert.ok(await exists(path.join(root, "track-b", "solo-task", "task.md")))
 })
 
 test("task_move across tracks leaves both tables alone when the source table has no row for the slug", async () => {
@@ -210,6 +297,28 @@ test("task_move across tracks leaves both tables alone when the source table has
   assert.equal(result.updated_files.includes(path.join("track-b", "track.md")), false)
   assert.match(await trackBody(root, "track-a"), /`unrelated-row`/)
   assert.doesNotMatch(await trackBody(root, "track-b"), /`untracked-in-table`/)
+})
+
+test("task_move across tracks leaves the destination table alone when it exists but has no Tasks table", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "track-a", { rows: ["moving-task"] })
+  await track_create({
+    deskRoot: root,
+    input: { slug: "track-b", title: "track-b", scope: SCOPE, body: "## Scope\n\nNo tasks table here." },
+  })
+  await task_create({ deskRoot: root, input: { track: "track-a", slug: "moving-task", title: "T" } })
+  const before = await trackBody(root, "track-b")
+
+  const result = await task_move({
+    deskRoot: root,
+    input: { track: "track-a", slug: "moving-task", to_track: "track-b" },
+  })
+
+  assert.ok(await exists(path.join(root, "track-b", "moving-task", "task.md")))
+  assert.ok(result.updated_files.includes(path.join("track-a", "track.md")))
+  assert.equal(result.updated_files.includes(path.join("track-b", "track.md")), false)
+  assert.equal(await trackBody(root, "track-b"), before)
 })
 
 test("task_move within the same track leaves the table alone when it has no row for the slug", async () => {
@@ -387,7 +496,7 @@ test("task_move refuses an invalid to_slug and never echoes the candidate", asyn
       }),
     (error) => {
       assert.match(error.message, /invalid to_slug/)
-      assert.equal(error.message.includes("hi-there-friend"), false)
+      assertNoCandidateLeak(error.message, "hi-there-friend")
       return true
     },
   )
@@ -412,6 +521,103 @@ test("task_move requires track and slug", async () => {
     () => task_move({ deskRoot: root, input: { track: "main-track" } }),
     /`track` and `slug` are required/,
   )
+})
+
+// ── task_move: traversal-shaped input (fix round 1, Important) ─────────────
+//
+// No refusal may ever quote a candidate, including a path-segment error —
+// `track`/`slug` are guarded up front, before any path-resolution code
+// (`resolveWriteTarget`/`validateWriteSegment`, whose message is allowed to
+// quote) ever sees them. Each condition of the shared guard is exercised
+// once via `track`; the remaining tests confirm every field that reaches it
+// is actually wired up.
+
+test("task_move rejects a non-string track without quoting it", async () => {
+  const root = await mkTempDeskRoot()
+  await assert.rejects(
+    () => task_move({ deskRoot: root, input: { track: 42, slug: "old-name" } }),
+    (error) => {
+      assert.match(error.message, /`track` must be a non-empty path segment/)
+      return true
+    },
+  )
+})
+
+test("task_move rejects an empty track without quoting it", async () => {
+  const root = await mkTempDeskRoot()
+  await assert.rejects(
+    () => task_move({ deskRoot: root, input: { track: "   ", slug: "old-name" } }),
+    /`track` must be a non-empty path segment/,
+  )
+})
+
+test("task_move rejects a track containing a forward slash without quoting it", async () => {
+  const root = await mkTempDeskRoot()
+  await assert.rejects(
+    () => task_move({ deskRoot: root, input: { track: "foo/bar", slug: "old-name" } }),
+    (error) => {
+      assert.match(error.message, /`track` must be a non-empty path segment/)
+      assertNoCandidateLeak(error.message, "foo/bar")
+      return true
+    },
+  )
+})
+
+test("task_move rejects a track containing a backslash without quoting it", async () => {
+  const root = await mkTempDeskRoot()
+  await assert.rejects(
+    () => task_move({ deskRoot: root, input: { track: "foo\\bar", slug: "old-name" } }),
+    (error) => {
+      assert.match(error.message, /`track` must be a non-empty path segment/)
+      assertNoCandidateLeak(error.message, "foo\\bar")
+      return true
+    },
+  )
+})
+
+test("task_move rejects a traversal-shaped source track without quoting it", async () => {
+  const root = await mkTempDeskRoot()
+  await assert.rejects(
+    () => task_move({ deskRoot: root, input: { track: "../evil", slug: "old-name" } }),
+    (error) => {
+      assert.match(error.message, /`track` must be a non-empty path segment/)
+      assertNoCandidateLeak(error.message, "../evil")
+      return true
+    },
+  )
+})
+
+test("task_move rejects a traversal-shaped source slug without quoting it", async () => {
+  const root = await mkTempDeskRoot()
+  await assert.rejects(
+    () => task_move({ deskRoot: root, input: { track: "main-track", slug: "../evil" } }),
+    (error) => {
+      assert.match(error.message, /`slug` must be a non-empty path segment/)
+      assertNoCandidateLeak(error.message, "../evil")
+      return true
+    },
+  )
+})
+
+test("task_move rejects a traversal-shaped to_track without quoting it", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "track-a", { rows: ["solo-task"] })
+  await task_create({ deskRoot: root, input: { track: "track-a", slug: "solo-task", title: "T" } })
+
+  await assert.rejects(
+    () =>
+      task_move({
+        deskRoot: root,
+        input: { track: "track-a", slug: "solo-task", to_track: "../evil" },
+      }),
+    (error) => {
+      assert.match(error.message, /invalid to_track/)
+      assertNoCandidateLeak(error.message, "../evil")
+      return true
+    },
+  )
+  assert.ok(await exists(path.join(root, "track-a", "solo-task", "task.md")))
 })
 
 // ── task_move: mentions ─────────────────────────────────────────────────────
@@ -657,7 +863,7 @@ test("track_rename refuses an invalid new name and never echoes the candidate", 
     () => track_rename({ deskRoot: root, input: { track: "old-track", to: "misc" } }),
     (error) => {
       assert.match(error.message, /invalid to/)
-      assert.equal(error.message.includes("misc"), false)
+      assertNoCandidateLeak(error.message, "misc")
       return true
     },
   )
@@ -696,6 +902,18 @@ test("track_rename requires track and to", async () => {
   await assert.rejects(
     () => track_rename({ deskRoot: root, input: { track: "main-track" } }),
     /`track` and `to` are required/,
+  )
+})
+
+test("track_rename rejects a traversal-shaped source track without quoting it", async () => {
+  const root = await mkTempDeskRoot()
+  await assert.rejects(
+    () => track_rename({ deskRoot: root, input: { track: "../evil", to: "somewhere-new" } }),
+    (error) => {
+      assert.match(error.message, /`track` must be a non-empty path segment/)
+      assertNoCandidateLeak(error.message, "../evil")
+      return true
+    },
   )
 })
 

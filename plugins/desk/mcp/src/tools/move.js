@@ -34,6 +34,32 @@ function relPath(root, absPath) {
   return path.relative(root, absPath)
 }
 
+/**
+ * Refuses traversal-shaped input (non-string, empty/whitespace-only, `..`,
+ * `/`, `\`) before any path-resolution code runs, with a message that names
+ * the field but never echoes the candidate. `track`/`slug` may legitimately
+ * name a pre-existing item that predates every naming rule (M4-1: "existing
+ * names are never rejected on read"), so this only screens out shapes that
+ * could never be a real path segment — it is not the fuller name rules
+ * `validateName`/`validateTrackName` enforce for a *new* name, and it exists
+ * so a move tool's own refusals never fall through to
+ * `resolveWriteTarget`'s `validateWriteSegment`, whose message is allowed to
+ * quote the segment for tool-misuse debugging.
+ */
+function rejectTraversalShapedInput(tool, field, value) {
+  if (
+    typeof value !== "string" ||
+    value.trim() === "" ||
+    value.includes("..") ||
+    value.includes("/") ||
+    value.includes("\\")
+  ) {
+    throw new Error(
+      `${tool}: \`${field}\` must be a non-empty path segment with no ".." or path separators`,
+    )
+  }
+}
+
 // ── Git plumbing ─────────────────────────────────────────────────────────
 //
 // `spawnGit` is an injectable seam over `node:child_process`'s `spawnSync`,
@@ -208,11 +234,14 @@ async function findMentions({ root, oldRelPath, exclude }) {
  * Moves `<track>/<slug>/` (or, if the task is archived,
  * `<track>/_archive/<slug>/`) to `<to_track ?? track>/<to_slug ?? slug>/`
  * (staying archived if it started archived). Refuses if the target already
- * exists, or if `to_slug` isn't a valid outcome name (M4-1's `validateName`
- * — only checked when renaming; an unchanged slug is never re-validated).
- * Sets `track:` on the moved card, and best-effort moves its row between
- * the two `track.md` "## Tasks" tables (or renames the row in place, for a
- * same-track rename).
+ * exists, if `to_slug` isn't a valid outcome name (M4-1's `validateName` —
+ * only checked when renaming; an unchanged slug is never re-validated), if
+ * `to_track` isn't a valid track name (M4-1's `validateTrackName` — same
+ * rule, only checked when the destination track differs from the source),
+ * or if that destination track doesn't already exist (its `track.md` must
+ * be present — a move never creates a track implicitly). Sets `track:` on
+ * the moved card, and best-effort moves its row between the two `track.md`
+ * "## Tasks" tables (or renames the row in place, for a same-track rename).
  *
  * Returns: { from, to, updated_files, mentions }
  */
@@ -222,6 +251,9 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
     throw new Error("task_move: `track` and `slug` are required")
   }
   const { track, slug } = values
+  rejectTraversalShapedInput("task_move", "track", track)
+  rejectTraversalShapedInput("task_move", "slug", slug)
+
   const toTrack = values.to_track ?? track
   const toSlug = values.to_slug ?? slug
 
@@ -233,6 +265,20 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   }
 
   const target = (segments) => resolveWriteTarget({ deskRoot, person, segments })
+
+  let destTrackMd = null
+  if (values.to_track !== undefined) {
+    const trackNameResult = validateTrackName(toTrack, { operatorNames: operatorNames(deskRoot) })
+    if (!trackNameResult.ok) {
+      throw new Error(`task_move: invalid to_track: ${describeNameRejection(trackNameResult)}`)
+    }
+    destTrackMd = await target([toTrack, "track.md"])
+    if (!(await pathExists(destTrackMd))) {
+      throw new Error(
+        "task_move: the destination track doesn't exist; create it first with track_create (a scope line is required)",
+      )
+    }
+  }
 
   const liveSrcFile = await target([track, slug, "task.md"])
   const archivedSrcFile = await target([track, "_archive", slug, "task.md"])
@@ -269,7 +315,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   const touched = new Set([destFile])
 
   const srcTrackMd = await target([track, "track.md"])
-  const destTrackMd = await target([toTrack, "track.md"])
+  destTrackMd ??= await target([toTrack, "track.md"])
   touched.add(srcTrackMd)
   touched.add(destTrackMd)
 
@@ -347,6 +393,7 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
     throw new Error("track_rename: `track` and `to` are required")
   }
   const { track, to } = values
+  rejectTraversalShapedInput("track_rename", "track", track)
 
   const nameResult = validateTrackName(to, { operatorNames: operatorNames(deskRoot) })
   if (!nameResult.ok) {
