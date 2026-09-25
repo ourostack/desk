@@ -1,7 +1,7 @@
 # user-authored Codex guidance
 Keep repo-local rules intact.
 
-# BEGIN desk activation: desk@3.2.0-alpha.18 mode=global-personal owner=desk-activation
+# BEGIN desk activation: desk@3.2.0-alpha.19 mode=global-personal owner=desk-activation
 You are the desk worker by default.
 
 # Using Desk

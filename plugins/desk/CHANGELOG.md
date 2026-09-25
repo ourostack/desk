@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.19 — 2026-09-25
+
+Updates the RFC's status: layered foundations load once on both hosts, the RFC path works from any repository, alpha users migrate automatically; notes launchers that do not refresh dependencies. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.
+
 ## 3.2.0-alpha.18 — 2026-09-25
 
 A cleanup release: each rule the Codex block, the skills and the docs still restated now lives only with its owner, the last hard-wrapped skills are unwrapped, and the unused Ponytail dependency is gone. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.

@@ -114,7 +114,7 @@ Upstream providers such as Superpowers are vendored from their own default branc
 
 **On Claude Code,** give your agent the link https://github.com/ourostack/desk/blob/main/SETUP.md and say “set this up.” It installs Desk, Superpowers and Plain Language, sets the host defaults, turns the host's configuration folder into a thin pointer, and finds your existing desk or creates a fresh one.
 
-**On a managed launcher** that installs plugins from repository branches (for example the GitHub Copilot CLI through a company launcher), install the top-most plugin you use; its dependencies bring the rest of the stack from their channels.
+**On a managed launcher** that installs plugins from repository branches (for example the GitHub Copilot CLI through a company launcher), install the top-most plugin you use; its dependencies bring the rest of the stack from their channels. Some launchers refresh only the plugin you name, not its dependencies; if yours does, install the Desk plugins explicitly with the same refresh policy so their updates arrive right away.
 
 **Updates reach everyone.** Claude Code updates a plugin when its version string changes; a launcher that installs from branches updates when the branch's contents change. V2 serves both: every plugin change ships on its channel and bumps its version, and CI enforces the bump.
 
@@ -130,10 +130,10 @@ Public, generic policy lives here and in the layer foundations. Environment-spec
 
 ## 9. Status
 
-**As of 24 September 2026: opt-in alpha.**
+**As of 25 September 2026: opt-in alpha.**
 
-**Works today.** Desk, Crew, Superpowers and Plain Language live in https://github.com/ourostack/desk, and V2 installs from its `main` branch on Claude Code. A company overlay builds on them for a managed launcher. On Claude Code, the Superpowers, Plain Language and Desk foundations each load at startup. Every plugin change bumps its version, and CI enforces it.
+**Works today.** Desk, Crew, Superpowers and Plain Language live in https://github.com/ourostack/desk, and V2 installs from its `main` branch on Claude Code and through a managed launcher with a company overlay. On both kinds of host, each layer's foundation loads exactly once at startup — Superpowers, Plain Language, Desk and the overlay's own — and the agent body carries identity only. The Desk foundation gives the agent this document's installed path, so an agent can open it from any repository. Alpha users who installed from the earlier repository move here automatically. Every plugin change bumps its version, and CI enforces it.
 
-**Being built.** Each layer's foundation injected exactly once on both kinds of host (on the launcher, the Plain Language and overlay foundations are not injected yet); a startup pointer that gives the agent this document's installed path; the agent-facing coaching in the Desk foundation; browser access for fresh installs by default; automatic refresh of vendored Superpowers from upstream; the automatic move for alpha users from the earlier repository; and the factory, starting with session facts, intake by pull request and the four-question report, then independent classification, lesson capture and rollups. No factory data is collected yet.
+**Being built.** Browser access for fresh installs by default; automatic refresh of vendored Superpowers from upstream; and the factory, starting with session facts, intake by pull request and the four-question report, then independent classification, lesson capture and rollups. No factory data is collected yet.
 
 **Next.** An evaluation by an engineer outside the team, then the maintainer's decision on promotion.
