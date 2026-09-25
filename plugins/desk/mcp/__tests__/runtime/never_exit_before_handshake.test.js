@@ -15,7 +15,6 @@ import {
   makeIsolatedHome,
   mcpRoot,
   runHandshake,
-  selectorPath,
   toolPayload,
 } from "../launch/_mcp_handshake.js"
 
@@ -435,20 +434,4 @@ test("Node 16 with no compatible Node anywhere serves diagnostic mode instead of
   assert.equal(status.reason, "no_compatible_node")
   assert.equal(status.state, "degraded:runtime_unsupported")
   assert.doesNotMatch(result.stderr, /structuredClone/u)
-})
-
-test("the selector starts a compatible Node even when the first node on PATH is Node 16", {
-  skip: nodes.has(16) ? false : "no Node 16 is installed here to put first on PATH",
-}, async () => {
-  const fixture = await makeIsolatedHome("desk-selector-old-first-")
-  const result = await runHandshake({
-    command: "sh",
-    args: [selectorPath, "--mcp", indexPath],
-    cwd: fixture.root,
-    env: isolatedEnv(fixture, { PATH: `${path.dirname(nodes.get(16).executable)}:${path.dirname(compatibleNode)}:/usr/bin:/bin` }),
-  })
-  assert.ok(result.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${result.handshakeMs} ms`)
-  assert.equal(result.initialize.result.serverInfo.name, "desk-mcp")
-  assertFullToolList(result.tools)
-  assert.equal(result.status.result.isError, undefined, JSON.stringify(result.status))
 })

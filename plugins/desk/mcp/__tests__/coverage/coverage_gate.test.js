@@ -1167,6 +1167,7 @@ test("coverage required-file discovery includes production targets and excludes 
   try {
     const fixtureRoot = path.join(tmp, "repo")
     const included = [
+      "plugins/desk/mcp/bootstrap.cjs",
       "plugins/desk/mcp/src/activation/schema.js",
       "plugins/desk/mcp/src/activation/validate.js",
       "plugins/desk/mcp/scripts/activation-support-matrix.js",
@@ -1180,6 +1181,8 @@ test("coverage required-file discovery includes production targets and excludes 
       "plugins/desk/mcp/src/activation/validate.test.js",
       "plugins/desk/mcp/scripts/activation-support-matrix.test.js",
       "plugins/desk/mcp/scripts/test-helper.js",
+      "plugins/desk/mcp/test-bootstrap.cjs",
+      "plugins/desk/mcp/__tests__/fixture.cjs",
       "scripts/test-desk-activation.cjs",
       "scripts/test-desk-generated-artifacts.test.cjs",
       "scripts/test-desk-host-manifests.test.cjs",

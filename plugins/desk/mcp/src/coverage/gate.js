@@ -118,6 +118,10 @@ export function collectCoverageRequiredFiles({ repoRoot }) {
     ...collectFiles(path.join(repoRoot, "plugins", "desk", "mcp"), ".js")
       .filter((file) => isDirectChild(file, path.join(repoRoot, "plugins", "desk", "mcp")))
       .filter(isProductionJs),
+    // The CommonJS bootstrap every host launches (bootstrap.cjs) is production code too.
+    ...collectFiles(path.join(repoRoot, "plugins", "desk", "mcp"), ".cjs")
+      .filter((file) => isDirectChild(file, path.join(repoRoot, "plugins", "desk", "mcp")))
+      .filter(isProductionCjs),
     ...collectFiles(path.join(repoRoot, "plugins", "desk", "mcp", "src"), ".js")
       .filter(isProductionJs),
     ...collectFiles(path.join(repoRoot, "plugins", "desk", "mcp", "scripts"), ".js")

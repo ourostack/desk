@@ -395,15 +395,15 @@ test("Claude hook and MCP configuration stay plugin-relative and non-manual", ()
     hooks.hooks.SessionStart[0].hooks[0].command,
     "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh ${CLAUDE_PLUGIN_ROOT}/skills/using-desk/SKILL.md",
   )
-  // Desk starts through its Node selector, found through the host-expanded plugin root or the working directory.
+  // Desk starts through its cross-platform bootstrap, found through the host-expanded plugin root or the working directory.
   const desk = mcp.mcpServers.desk
   assert.deepEqual(Object.keys(desk), ["type", "command", "args", "cwd", "env"])
   assert.equal(desk.type, "stdio")
-  assert.equal(desk.command, "sh")
-  assert.equal(desk.args.length, 3)
-  assert.equal(desk.args[0], "-c")
-  assert.ok(desk.args[1].startsWith('for r in "$DESK_PLUGIN_ROOT" "$PWD"; do if [ -f "$r/launch/desk-node.sh" ]; then DESK_PLUGIN_ROOT=$r; export DESK_PLUGIN_ROOT; exec sh "$r/launch/desk-node.sh" --mcp "$r/mcp/index.js"; fi; done;'))
-  assert.equal(desk.args[2], "desk-mcp")
+  assert.equal(desk.command, "node")
+  assert.equal(desk.args.length, 2)
+  assert.equal(desk.args[0], "-e")
+  assert.ok(desk.args[1].startsWith("var fs=require('fs'),path=require('path'),roots=[process.env.DESK_PLUGIN_ROOT,process.cwd()],root=null;"))
+  assert.match(desk.args[1], /require\(path\.join\(root,'mcp','bootstrap\.cjs'\)\)\.run\(\)/u)
   assert.equal(desk.cwd, ".")
   assert.deepEqual(desk.env, { DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" })
   assert.doesNotMatch(JSON.stringify(mcp), /\$\{pluginRoot\}/u)

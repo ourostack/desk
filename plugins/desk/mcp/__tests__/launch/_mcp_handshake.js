@@ -11,8 +11,8 @@ import { mkTempRoot } from "../_temp_roots.js"
 
 export const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 export const pluginRoot = path.resolve(mcpRoot, "..")
-export const selectorPath = path.join(pluginRoot, "launch", "desk-node.sh")
-export const responderPath = path.join(pluginRoot, "launch", "node-missing-responder.sh")
+export const bootstrapPath = path.join(mcpRoot, "bootstrap.cjs")
+export const indexPath = path.join(mcpRoot, "index.js")
 
 /** A temporary HOME, desk root and cache directories for one spawned process. */
 export async function makeIsolatedHome(prefix = "desk-handshake-") {
@@ -25,8 +25,25 @@ export async function makeIsolatedHome(prefix = "desk-handshake-") {
   return { root, home, desk, cache, runtimeCache }
 }
 
-/** An environment built from scratch: nothing from the test process leaks in except TMPDIR. */
+/**
+ * An environment built from scratch: nothing from the test process leaks in except TMPDIR.
+ * On Windows the system variables a process needs to start are kept, and the per-user folders point into the fixture.
+ */
 export function isolatedEnv({ home, desk, cache, runtimeCache }, overrides = {}) {
+  const windows = process.platform === "win32"
+    ? {
+        SystemRoot: process.env.SystemRoot,
+        windir: process.env.windir,
+        ComSpec: process.env.ComSpec,
+        PATHEXT: process.env.PATHEXT,
+        TEMP: process.env.TEMP,
+        TMP: process.env.TMP,
+        USERPROFILE: home,
+        APPDATA: path.join(home, "AppData", "Roaming"),
+        LOCALAPPDATA: path.join(home, "AppData", "Local"),
+        PATH: [path.dirname(process.execPath), process.env.SystemRoot && path.join(process.env.SystemRoot, "System32")].filter(Boolean).join(";"),
+      }
+    : {}
   const env = {
     HOME: home,
     XDG_CACHE_HOME: cache,
@@ -38,6 +55,7 @@ export function isolatedEnv({ home, desk, cache, runtimeCache }, overrides = {})
     PATH: "/usr/bin:/bin",
     ...(desk === undefined ? {} : { DESK: desk }),
     ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
+    ...windows,
     ...overrides,
   }
   for (const [key, value] of Object.entries(env)) {

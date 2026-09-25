@@ -31,8 +31,10 @@ foundation=$(cat "$FOUNDATION_SKILL" 2>/dev/null) || {
 # compose the startup line, so the hook and the server can never disagree. It
 # honours the Claude project folder when it is a desk, the saved binding, $DESK
 # and the home fallbacks, names where the root came from, and always exits 0.
-# Desk's Node selector picks a compatible Node itself, so an old `node` first on PATH cannot break this line; with no Node at all it exits nonzero and the fallback below applies.
-direction=$(sh "$PLUGIN_ROOT/launch/desk-node.sh" "$PLUGIN_ROOT/mcp/scripts/resolve-desk-root.js" --startup-line 2>/dev/null)
+direction=""
+if command -v node >/dev/null 2>&1; then
+  direction=$(node "$PLUGIN_ROOT/mcp/scripts/resolve-desk-root.js" --startup-line 2>/dev/null)
+fi
 if [ -z "$direction" ]; then
   direction="Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound."
 fi

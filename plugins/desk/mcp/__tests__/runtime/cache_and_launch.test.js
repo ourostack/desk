@@ -296,13 +296,13 @@ function rawEntrypointConfigCases(pluginRoot = deskPluginRoot) {
     {
       id: "desk .mcp.json",
       sourcePath: path.join(pluginRoot, ".mcp.json"),
-      expectedCommand: "sh",
-      // An inline launcher: find the plugin through DESK_PLUGIN_ROOT or the working directory, then hand off to the Node selector.
+      expectedCommand: "node",
+      // An inline ES5 launcher: find the plugin through DESK_PLUGIN_ROOT or the working directory, then run the cross-platform bootstrap.
       expectedArgs: (args) => {
-        assert.equal(args.length, 3);
-        assert.equal(args[0], "-c");
-        assert.match(args[1], /^for r in "\$DESK_PLUGIN_ROOT" "\$PWD"; do if \[ -f "\$r\/launch\/desk-node\.sh" \]; then DESK_PLUGIN_ROOT=\$r; export DESK_PLUGIN_ROOT; exec sh "\$r\/launch\/desk-node\.sh" --mcp "\$r\/mcp\/index\.js"; fi; done;/u);
-        assert.equal(args[2], "desk-mcp");
+        assert.equal(args.length, 2);
+        assert.equal(args[0], "-e");
+        assert.ok(args[1].startsWith("var fs=require('fs'),path=require('path'),roots=[process.env.DESK_PLUGIN_ROOT,process.cwd()],root=null;"));
+        assert.match(args[1], /require\(path\.join\(root,'mcp','bootstrap\.cjs'\)\)\.run\(\)/u);
       },
       expectedCwd: ".",
       expectedEnv: {
@@ -312,8 +312,8 @@ function rawEntrypointConfigCases(pluginRoot = deskPluginRoot) {
     {
       id: "desk .mcp.copilot.json",
       sourcePath: path.join(pluginRoot, ".mcp.copilot.json"),
-      expectedCommand: "sh",
-      expectedArgs: ["${COPILOT_PLUGIN_ROOT}/launch/desk-node.sh", "--mcp", "${COPILOT_PLUGIN_ROOT}/mcp/index.js"],
+      expectedCommand: "node",
+      expectedArgs: ["${COPILOT_PLUGIN_ROOT}/mcp/bootstrap.cjs"],
       expectedCwd: undefined,
       expectedEnv: {},
     },
@@ -398,36 +398,28 @@ function pathLikeLaunchValue(value) {
 
 function assertPluginScopedLaunchArgs(id, declaration) {
   const server = declaration.resolveServer();
+  assert.equal(server.command, "node", `${id} must launch through the host-provided node command`);
   assertNoUnsupportedLaunchPlaceholders(id, server);
   const launch = materializeHostLaunch(server, {
     ...declaration,
     processCwd: makeTempRoot("desk-host-contract-cwd-"),
   });
-  if (server.command === "node") {
-    // A generic stdio consumer names index.js directly.
-    const entrypointArg = launch.args.find((arg) => arg.replaceAll("\\", "/").endsWith("/mcp/index.js"));
-    assert.ok(entrypointArg, `${id} must name the MCP entrypoint`);
+  // Desk plugin declarations start the cross-platform bootstrap, which picks a compatible Node itself; a generic stdio consumer names index.js directly.
+  const entrypointArg = launch.args.find((arg) => /\/mcp\/(?:bootstrap\.cjs|index\.js)$/u.test(arg.replaceAll("\\", "/")));
+  if (entrypointArg) {
     assert.equal(path.isAbsolute(entrypointArg), true, `${id} MCP entrypoint arg must materialize to an absolute installed path`);
     assert.equal(existsSync(entrypointArg), true, `${id} materialized MCP entrypoint must exist`);
     return;
   }
-  // Every Desk plugin declaration starts Node through the selector, so the host's own `node` never decides the version.
-  assert.equal(server.command, "sh", `${id} must launch through the Desk Node selector`);
-  if (launch.args[0] === "-c") {
-    assert.match(launch.args[1], /DESK_PLUGIN_ROOT/u, `${id} inline launcher must resolve the installed Desk root`);
-    assert.match(launch.args[1], /launch\/desk-node\.sh" --mcp/u, `${id} inline launcher must hand off to the selector`);
-    const envRoot = launch.env.DESK_PLUGIN_ROOT;
-    assert.equal(
-      envRoot === declaration.configBaseDir || launch.cwd === declaration.configBaseDir,
-      true,
-      `${id} must provide the installed plugin root through the environment or resolved cwd`,
-    );
-    return;
-  }
-  assert.equal(launch.args[0], path.join(declaration.configBaseDir, "launch", "desk-node.sh"), `${id} must run the installed selector`);
-  assert.equal(existsSync(launch.args[0]), true, `${id} materialized selector must exist`);
-  assert.equal(launch.args[1], "--mcp");
-  assert.equal(existsSync(launch.args[2]), true, `${id} materialized MCP entrypoint must exist`);
+  assert.equal(launch.args[0], "-e", `${id} must use the shared Node bootstrap when it has no direct entrypoint arg`);
+  assert.match(launch.args[1], /DESK_PLUGIN_ROOT/u, `${id} shared bootstrap must resolve the installed Desk root`);
+  assert.match(launch.args[1], /'mcp','bootstrap\.cjs'/u, `${id} shared bootstrap must run mcp/bootstrap.cjs`);
+  const envRoot = launch.env.DESK_PLUGIN_ROOT;
+  assert.equal(
+    envRoot === declaration.configBaseDir || launch.cwd === declaration.configBaseDir,
+    true,
+    `${id} must provide the installed plugin root through the environment or resolved cwd`,
+  );
 }
 
 function makeMcpEnvelope(id, method, params = {}) {
@@ -657,7 +649,7 @@ describe("runtime cache and host launch contract", () => {
             },
           });
           if (process.platform !== "win32") {
-            assert.match(readFileSync(nodeShim.invocationLogPath, "utf8"), /^node .*index\.js/mu, `${declaration.id} must launch Desk through the controlled node PATH shim`);
+            assert.match(readFileSync(nodeShim.invocationLogPath, "utf8"), /^node .+/u, `${declaration.id} must launch through the controlled node PATH shim`);
           }
         });
       }
