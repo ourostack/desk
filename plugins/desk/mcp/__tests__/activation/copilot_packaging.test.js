@@ -39,6 +39,12 @@ function readText(...segments) {
   return readFileSync(path.join(repoRoot, ...segments), "utf8")
 }
 
+// The legacy Work Suite and Ponytail providers ship from ourostack/ouroboros-skills; tests that exercise an
+// explicitly declared legacy configuration read their manifests from fixtures.
+function loadLegacyProvider(...segments) {
+  return JSON.parse(readFileSync(new URL(`../fixtures/legacy-providers/${segments.join("/")}`, import.meta.url), "utf8"))
+}
+
 function loadJson(...segments) {
   return JSON.parse(readText(...segments))
 }
@@ -163,7 +169,7 @@ function currentCopilotPackagingInput() {
     deskPlugin: loadJson("plugins", "desk", "plugin.json"),
     superpowersPlugin: loadJson("plugins", "superpowers", "plugin.json"),
     plainLanguagePlugin: loadJson("plugins", "plain-language", "plugin.json"),
-    ponytailPlugin: loadJson("plugins", "ponytail-upstream", "plugin.json"),
+    ponytailPlugin: loadLegacyProvider("plugins", "ponytail-upstream", "plugin.json"),
   }
 }
 
@@ -269,19 +275,6 @@ test("Copilot root plugin metadata exposes Desk worker and MCP without manual re
   assert.equal(worker["user-invocable"], true)
 })
 
-test("Work Suite root plugin metadata omits inert dependency metadata", () => {
-  assertFileExists("plugins", "work-suite", "plugin.json")
-
-  const workSuitePlugin = loadJson("plugins", "work-suite", "plugin.json")
-
-  assert.equal(workSuitePlugin.name, "work-suite")
-  assert.equal(workSuitePlugin.version, "4.0.0-alpha.2")
-  assert.equal(workSuitePlugin.version, marketplacePlugin("work-suite").version)
-  assert.equal(workSuitePlugin.skills, "./skills/")
-  assert.equal(Object.hasOwn(workSuitePlugin, "dependencies"), false)
-  assert.equal(Object.hasOwn(workSuitePlugin, "activation"), false)
-})
-
 test("Copilot root packaging declares a generated flattened dependency closure", () => {
   assertFileExists(...copilotBundlePath.split("/"))
 
@@ -300,7 +293,7 @@ test("Copilot root packaging declares a generated flattened dependency closure",
   })
   assert.deepEqual(deskPlugin.activation?.copilot?.dependencies?.["plain-language"], {
     path: "../plain-language",
-    version: "0.2.1",
+    version: "0.2.2",
     resolution: "flattened",
     bundleMetadata: copilotBundlePath,
   })
@@ -374,11 +367,9 @@ test("Copilot root evidence and support matrix record flattened packaging as gen
 test("Copilot root package docs avoid healthy-path manual dependency setup", () => {
   const readme = readText("plugins", "desk", "README.md")
   const agentDocs = readText("plugins", "desk", "docs", "agent-files.md")
-  const workSuiteReadme = readText("plugins", "work-suite", "README.md")
 
-  assert.doesNotMatch(readme, /copilot plugin install ourostack\/ouroboros-skills:plugins\/work-suite/u)
+  assert.doesNotMatch(readme, /copilot plugin install \S+:plugins\/work-suite/u)
   assert.doesNotMatch(agentDocs, /Copilot CLI doesn't auto-resolve transitive plugin deps/u)
-  assert.doesNotMatch(workSuiteReadme, /copilot plugin install ourostack\/ouroboros-skills:plugins\/work-suite/u)
 })
 
 test("Copilot sessionStart hook stays lightweight and local-only", () => {
@@ -421,7 +412,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.0-alpha.10"],
+    ["Copilot root Desk version must match activation version 3.2.0-alpha.11"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())
@@ -435,7 +426,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   stalePlainLanguageVersion.plainLanguagePlugin.version = "0.0.9"
   assert.deepEqual(
     validateCopilotPackagingContract(stalePlainLanguageVersion),
-    ["Copilot root Plain Language version must match activation lock 0.2.1"],
+    ["Copilot root Plain Language version must match activation lock 0.2.2"],
   )
 
   const stalePonytailVersion = withPonytailSelected(clone(currentCopilotPackagingInput()))
@@ -623,8 +614,8 @@ test("ordinary Agency declaration (copilot packaging): desk/agency.json declares
   const agency = loadJson("plugins", "desk", "agency.json")
   assert.equal(agency.name, "desk")
   assert.deepEqual(agency.dependencies, [
-    "github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha",
-    "github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha",
+    "github:ourostack/desk:plugins/superpowers@main",
+    "github:ourostack/desk:plugins/plain-language@main",
   ])
   assert.equal(agency.dependencies.some((dependency) => dependency.includes("ponytail")), false)
   assert.equal(agency.dependencies.some((dependency) => dependency.includes("work-suite")), false)

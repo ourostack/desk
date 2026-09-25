@@ -9,6 +9,8 @@ import { materializeCodexActivation } from "../../src/activation/adapters/codex.
 import { validateActivationManifest } from "../../src/activation/validate.js"
 
 const read = (file) => JSON.parse(readFileSync(new URL(`../../../../../${file}`, import.meta.url), "utf8"))
+// The legacy Work Suite provider ships from ourostack/ouroboros-skills; its manifest is kept as a fixture.
+const legacyProvider = (file) => JSON.parse(readFileSync(new URL(`../fixtures/legacy-providers/${file}`, import.meta.url), "utf8"))
 function activation() {
   return read("plugins/desk/activation/desk.activation.json")
 }
@@ -40,7 +42,7 @@ function claude(value = activation()) {
   return {
     activation: value, claudeActivation: value.host_activation.claude, deskPlugin,
     superpowersPlugin: read("plugins/superpowers/.claude-plugin/plugin.json"),
-    workSuitePlugin: read("plugins/work-suite/.claude-plugin/plugin.json"),
+    workSuitePlugin: legacyProvider("plugins/work-suite/.claude-plugin/plugin.json"),
   }
 }
 function ouroboros() {
@@ -101,7 +103,7 @@ test("alpha onboarding selects the existing cache audit's Superpowers plugin set
   const skill = readFileSync(new URL("../../../skills/codex-onboarding/SKILL.md", import.meta.url), "utf8")
   assert.match(skill, /--plugins desk,superpowers,plain-language --strict/u)
 })
-test("existing cache audit CLI accepts the alpha set without changing its legacy default", () => {
+test("cache audit CLI accepts the alpha set and defaults to the plugins this repository ships", () => {
   const observed = []
   const invoke = (argv) => cacheAudit.run({
     argv, auditFn: (options) => { observed.push(options.plugins); return { status: "current" } },
@@ -111,7 +113,7 @@ test("existing cache audit CLI accepts the alpha set without changing its legacy
   assert.equal(invoke([]), 0)
   assert.deepEqual(observed, [
     ["desk", "superpowers", "plain-language"],
-    ["desk", "work-suite", "plain-language", "ponytail-upstream"],
+    ["desk", "superpowers", "plain-language", "crew"],
   ])
 })
 test("Claude validates an explicitly declared legacy configuration, not the shipped alpha", () => {

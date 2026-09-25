@@ -24,13 +24,13 @@ For the on-demand design rationale behind the V2 foundation, layered toolshop, c
 
 ### Under Copilot CLI
 
-The alpha source is `ourostack/ouroboros-skills:plugins/desk@v2-alpha`. Use the host's admitted, explicit alpha composition instead of changing a live default installation.
+The alpha source is `ourostack/desk:plugins/desk@main`. Use the host's admitted, explicit alpha composition instead of changing a live default installation.
 
-Acquisition is ordinary and single-root: select `desk` and let its own declaration pull the rest. `plugins/desk/agency.json` declares exactly two generic dependencies — Superpowers and Plain Language, both tracked at `@v2-alpha` — so the standalone composition is the three roots Desk, Superpowers and Plain Language, with no Ponytail, no Work Suite and no private feedback API. A shared-workspace composition adds Crew and its organization overlay (five roots), and a Platform Workflows consumer adds its own root on top (six roots); those are consumer compositions, not this package's closure. Metadata is not runtime loading proof: the host must load every selected root and prove the actual skill/MCP source identity before admission. Later source corrections arrive through ordinary Agency branch tracking of `@v2-alpha`, not a manual refresh or rollback channel.
+Acquisition is ordinary and single-root: select `desk` and let its own declaration pull the rest. `plugins/desk/agency.json` declares exactly two generic dependencies — Superpowers and Plain Language, both tracked at `ourostack/desk@main` — so the standalone composition is the three roots Desk, Superpowers and Plain Language, with no Ponytail, no Work Suite and no private feedback API. A shared-workspace composition adds Crew and its organization overlay (five roots), and a Platform Workflows consumer adds its own root on top (six roots); those are consumer compositions, not this package's closure. Metadata is not runtime loading proof: the host must load every selected root and prove the actual skill/MCP source identity before admission. Later source corrections arrive through ordinary Agency branch tracking of `@main`, not a manual refresh or rollback channel.
 
 ### Under Ouroboros
 
-Select `ourostack/ouroboros-skills:plugins/desk@v2-alpha` through the host's supported opt-in bundle path, not an ambient main-branch installation.
+Select `ourostack/desk:plugins/desk@main` through the host's supported opt-in bundle path, not an ambient main-branch installation.
 
 The agent's `bundle.json` gains a `plugins[]` entry; the agent's preamble declares `Your desk: ~/AgentBundles/<agent>.ouro/desk/`.
 
@@ -55,7 +55,7 @@ Your desk: ~/AgentBundles/<agent>.ouro/desk/
 
 ### Under Claude Code
 
-Setup is agent-driven: give Claude Code the link to [`SETUP.md`](../../SETUP.md) and say "set this up". It installs Desk from `ourostack/ouroboros-skills#v2-alpha` at user scope (Superpowers and Plain Language come with it as declared dependencies), sets the host defaults (no Claude memory, no AI attribution), turns `~/.claude/CLAUDE.md` into a thin pointer, and finds or creates the desk.
+Setup is agent-driven: give Claude Code the link to [`SETUP.md`](../../SETUP.md) and say "set this up". It installs `desk@ourostack` from the `ourostack/desk` marketplace at user scope (Superpowers and Plain Language come with it as declared dependencies), sets the host defaults (no Claude memory, no AI attribution), turns `~/.claude/CLAUDE.md` into a thin pointer, and finds or creates the desk.
 
 Desk ships `desk:worker` as the default agent for new sessions (`settings.json`); an explicit `--agent` still wins. Desk binds the desk in this order: an explicit root, then the project folder when it is itself a desk, then the saved binding at `$CLAUDE_PLUGIN_DATA/desk.activation.json`, then `$DESK` and the home fallbacks. With no desk bound, the Desk MCP stays up in setup mode and routes to `first-run-bootstrap` instead of being unavailable. A plugin loaded with `--plugin-dir` takes precedence over the installed copy for that session, so overlay launchers do not load Desk twice. Background and Agent View inheritance remain unqualified.
 

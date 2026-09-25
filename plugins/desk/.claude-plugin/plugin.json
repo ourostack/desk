@@ -1,13 +1,13 @@
 {
   "name": "desk",
-  "version": "3.2.0-alpha.10",
+  "version": "3.2.0-alpha.11",
   "description": "Opt-in alpha workspace substrate: durable Desk state, authority and approved delivery boundaries with pinned Superpowers as the sole engineering method. Crew and consumer overlays retain their own workspace authority. Plain Language governs prose.",
   "author": {
     "name": "ourostack",
-    "url": "https://github.com/ourostack/ouroboros-skills"
+    "url": "https://github.com/ourostack/desk"
   },
-  "homepage": "https://github.com/ourostack/ouroboros-skills/tree/main/plugins/desk",
-  "repository": "https://github.com/ourostack/ouroboros-skills",
+  "homepage": "https://github.com/ourostack/desk/tree/main/plugins/desk",
+  "repository": "https://github.com/ourostack/desk",
   "license": "MIT",
   "keywords": [
     "agent-workspace",
@@ -25,11 +25,11 @@
   "dependencies": [
     {
       "name": "superpowers",
-      "version": "6.3.0"
+      "version": "^6.3.0"
     },
     {
       "name": "plain-language",
-      "version": "0.2.1"
+      "version": "^0.2.2"
     }
   ]
 }

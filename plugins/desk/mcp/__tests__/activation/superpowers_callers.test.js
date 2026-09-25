@@ -210,15 +210,13 @@ test("the technical preview guide preflights selected source paths rather than r
   assert.doesNotMatch(read("README.md").split("\n").slice(0, 10).join("\n"), /interactive RFC/iu)
 })
 
-test("catalog metadata selects Superpowers while explicitly retaining Work Suite as legacy", () => {
+test("catalog metadata selects Superpowers and leaves the legacy Work Suite and Ponytail providers out", () => {
   const catalog = json(".claude-plugin/marketplace.json")
   assert.match(catalog.metadata.description, /Superpowers/u)
-  assert.doesNotMatch(catalog.metadata.description, /Work Suite routes work/u)
+  assert.doesNotMatch(catalog.metadata.description, /Work Suite routes work|Ponytail/u)
   assert.equal(catalog.plugins.find((plugin) => plugin.name === "superpowers")?.source, "./plugins/superpowers")
-  const legacy = catalog.plugins.find((plugin) => plugin.name === "work-suite")
-  assert.ok(legacy, "the legacy Work Suite marketplace entry must remain present")
-  assert.equal(legacy.source, "./plugins/work-suite")
-  assert.match(legacy.description, /legacy/iu)
+  // The legacy providers keep shipping from ourostack/ouroboros-skills; this marketplace carries only the V2 plugins.
+  assert.deepEqual(catalog.plugins.map((plugin) => plugin.name).sort(), ["crew", "desk", "plain-language", "superpowers"])
 })
 
 test("the independent-review skill ships with valid named frontmatter", () => {

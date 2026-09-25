@@ -43,15 +43,15 @@ Do this before treating `session-start` as healthy:
   "plugins": [
     {
       "name": "desk",
-      "source": { "source": "local", "path": "./Projects/ouroboros-skills/plugins/desk" }
+      "source": { "source": "local", "path": "./Projects/desk/plugins/desk" }
     },
     {
       "name": "superpowers",
-      "source": { "source": "local", "path": "./Projects/ouroboros-skills/plugins/superpowers" }
+      "source": { "source": "local", "path": "./Projects/desk/plugins/superpowers" }
     },
     {
       "name": "plain-language",
-      "source": { "source": "local", "path": "./Projects/ouroboros-skills/plugins/plain-language" }
+      "source": { "source": "local", "path": "./Projects/desk/plugins/plain-language" }
     }
   ]
 }

@@ -45,8 +45,8 @@ function runRequestStep({ cwd, head, base }) {
     encoding: "utf8",
     env: {
       ...process.env,
-      REVISION_REPOSITORY: "ourostack/ouroboros-skills",
-      REVISION_REF: "refs/heads/v2-alpha",
+      REVISION_REPOSITORY: "ourostack/desk",
+      REVISION_REF: "refs/heads/main",
       REVISION_HEAD: head,
       REVISION_BASE: base,
       REVISION_EVENT_ID: "fixture-1",
@@ -94,7 +94,7 @@ test("the published revision request covers the whole pushed range, including fi
 
     for (const request of [rootRequest, initialPush, ordinary, unknownBase]) {
       assert.equal(request.kind, "relevant_revision_request")
-      assert.equal(request.repository, "ourostack/ouroboros-skills")
+      assert.equal(request.repository, "ourostack/desk")
       assert.deepEqual(request.previousHeads, [])
       assert.equal(request.events.length, 1)
     }
