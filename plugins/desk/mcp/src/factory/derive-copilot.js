@@ -6,7 +6,10 @@
 //
 // What is read. Of each event only `type`, `timestamp`, the envelope
 // `agentId` (present means a subagent's event; read for classification only)
-// and these `data` fields: `session.start.copilotVersion`;
+// and these `data` fields: `session.start.copilotVersion`; for binding only,
+// `session.start`/`session.resume` `context.cwd` and the `command` argument
+// of a `bash` or `powershell` call, matched in memory for `git … commit`
+// and never kept;
 // `session.shutdown.modelMetrics` (never `codeChanges`);
 // `assistant.turn_start.{turnId, interactionId}` and `turn_end.turnId`;
 // `user.message.{source, isAutopilotContinuation}` (classification only);
@@ -122,7 +125,17 @@
 //     writes are `create`/`edit` `arguments.path` and the `*** Add/Update/
 //     Delete File:` headers of an `apply_patch` argument (parsed in memory),
 //     kept only when the paired completion has `success: true`; `at` is the
-//     start time.
+//     start time. `shellGitCommits` holds `{ start, end, cwd }` for each
+//     `bash`/`powershell` call whose command runs `git … commit`
+//     (`./shell-git.js`), whatever its outcome (a failed `git commit && git
+//     push` may still have committed); `cwd` is the latest `session.start`
+//     or `session.resume` `context.cwd` (a resume without a readable one
+//     makes it unknown), moved by a `-C` or an earlier `cd` in the same
+//     command, or `null` when unknown. A `cd` in an earlier call is not
+//     followed. Only the directory is kept, never the command. A call
+//     without both times, or lost at a resume, gives no event.
+//     `nativeCommitShas` is the session's `session_refs` commits (the same
+//     list as `commitShas`), which M3-4 binds directly.
 //   - Capped arrays are trimmed to their schema limits with a
 //     `log_truncated` entry; an interval whose end precedes its start, or
 //     whose timestamp is invalid, is dropped with `source_unreadable`.
@@ -139,6 +152,7 @@ import { createInterface } from "node:readline"
 
 import { normalizeRow, readSessionRefs, readSessionRows } from "./copilot-usage.js"
 import { ENUMS, LIMITS, PATTERNS } from "./schema.js"
+import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
 
@@ -150,6 +164,7 @@ const PR_URL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#].*)?$
 const COMMIT = /^[0-9a-fA-F]{40}$/u
 const TURN_RETRY = new Set(["model.turn_retry", "assistant.turn_retry"])
 const CALL_FAILURE = new Set(["model.model_call_failure", "model.call_failure"])
+const SHELL_DIALECT = Object.freeze({ bash: "posix", powershell: "powershell" })
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 const stringOrNull = (value) => (typeof value === "string" ? value : null)
@@ -206,6 +221,19 @@ function fileWritesOf(name, args, at) {
     for (const match of text.matchAll(PATCH_HEADER)) writes.push({ at, path: match[1] })
   }
   return writes.length > 0 ? writes : null
+}
+
+// The directories of the `git … commit` runs in a shell call, or null. The
+// command is read here and dropped.
+function gitCommitsOf(name, args, cwd) {
+  const dialect = name === null || !Object.hasOwn(SHELL_DIALECT, name) ? undefined : SHELL_DIALECT[name]
+  if (dialect === undefined || !isObject(args) || typeof args.command !== "string") return null
+  const cwds = gitCommitCwds({ command: args.command, cwd, home: os.homedir(), dialect })
+  return cwds.length > 0 ? cwds : null
+}
+
+function contextCwd(data) {
+  return isObject(data.context) ? stringOrNull(data.context.cwd) : null
 }
 
 function prRefOf(value) {
@@ -284,6 +312,8 @@ function createSessionFold() {
 
   const deskToolCalls = []
   const fileWrites = []
+  const shellGitCommits = []
+  let sessionCwd = null
 
   const agentOf = (parentCall) => (parentCall === null ? 0 : subagentByCall.get(parentCall) ?? 0)
 
@@ -310,11 +340,13 @@ function createSessionFold() {
 
   const handlers = {
     "session.start"(data, at) {
+      sessionCwd = contextCwd(data)
       if (hostVersion === null && at !== null && typeof data.copilotVersion === "string" && PATTERNS.semver.test(data.copilotVersion)) {
         hostVersion = data.copilotVersion
       }
     },
-    "session.resume"() {
+    "session.resume"(data) {
+      sessionCwd = contextCwd(data)
       if (interaction !== null) closeInteraction()
       if (pendingTools.size + pendingSubagents.size > 0) lostCalls = true
       pendingTools.clear()
@@ -374,6 +406,7 @@ function createSessionFold() {
         spawns: name === "task",
         desk: deskCallOf(name, data.arguments, at),
         writes: fileWritesOf(name, data.arguments, at),
+        gitCommits: gitCommitsOf(name, data.arguments, sessionCwd),
       })
     },
     "tool.execution_complete"(data, at) {
@@ -390,6 +423,9 @@ function createSessionFold() {
       }
       if (pending.desk !== null) deskToolCalls.push({ ...pending.desk, ok: outcome === "ok" })
       if (pending.writes !== null && data.success === true) fileWrites.push(...pending.writes)
+      if (pending.gitCommits !== null && pending.start !== null && at !== null) {
+        for (const cwd of pending.gitCommits) shellGitCommits.push({ start: pending.start, end: at, cwd })
+      }
     },
     "permission.requested"(data, at) {
       const requestId = stringOrNull(data.requestId)
@@ -487,6 +523,7 @@ function createSessionFold() {
         compactions,
         deskToolCalls,
         fileWrites,
+        shellGitCommits,
         unfinishedCalls: lostCalls || pendingTools.size + pendingSubagents.size > 0,
         openTurns: lostTurns,
       }
@@ -713,6 +750,8 @@ export async function deriveCopilotSession({ sessionId, copilotHome, contributor
     deskToolCalls: state.deskToolCalls,
     fileWrites: state.fileWrites,
     commitShas: refs.commits,
+    shellGitCommits: state.shellGitCommits,
+    nativeCommitShas: [...refs.commits],
   }
 
   return { facts, events }

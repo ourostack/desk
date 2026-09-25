@@ -865,3 +865,83 @@ test("with no COPILOT_HOME the factory reader looks under the user's home direct
     rmSync(fakeHome, { recursive: true, force: true })
   }
 })
+
+// ---------------------------------------------------------------------------
+// Shell git commit calls (binding by committer time).
+// ---------------------------------------------------------------------------
+
+const COMMIT_MESSAGE_SENTINEL = "COMMIT-MESSAGE-SENTINEL-9b1e"
+
+test("a bash or powershell git commit call becomes a shellGitCommits event with its start, end and the session's directory", async () => {
+  const ev = eventWriter()
+  const m = COMMIT_MESSAGE_SENTINEL
+  const call = (id, seconds, toolName, command) => ev("tool.execution_start", seconds, { toolCallId: id, toolName, arguments: { command, description: m } })
+  const done = (id, seconds, data = {}) => ev("tool.execution_complete", seconds, { toolCallId: id, success: true, result: { content: m }, ...data })
+  const lines = [
+    start(ev),
+    call("g1", 1, "bash", `git add -A && git commit -q -m "${m}"`),
+    done("g1", 2),
+    call("g2", 3, "bash", `git -C /tmp/${SENTINEL}/desk commit -m '${m}'`),
+    done("g2", 4, { success: false, shellExecution: { exitCode: 1 } }),
+    call("g3", 5, "powershell", `Set-Location C:\\${SENTINEL}; git commit -m "${m}"`),
+    done("g3", 6),
+    call("g4", 7, "bash", `git status ${m}`),
+    done("g4", 8),
+    call("g5", 9, "read_bash", `git commit -m "${m}"`),
+    done("g5", 10),
+    call("g6", 11, "bash", `git commit -m "${m}"`),
+    // g6 never completes before the resume, which moves the directory.
+    ev("session.resume", 12, { context: { cwd: `/tmp/${SENTINEL}/resumed` } }),
+    done("g6", 13),
+    call("g7", 14, "bash", `git commit -m "${m}"`),
+    done("g7", 15),
+    ev("session.resume", 16, { context: `not an object ${SENTINEL}` }),
+    call("g8", 17, "bash", `git commit -m "${m}"`),
+    done("g8", 18),
+    ev("session.resume", 19, { context: { cwd: 42 } }),
+    call("g9", 20, "bash", { command: `git commit -m "${m}"` }),
+    done("g9", 21),
+    call("g10", 22, "bash", `git commit -m "${m}"`),
+    done("g10", 23),
+    call("g11", 24, "bash", `git commit -m "${m}"`),
+  ]
+  const badTime = call("g12", 25, "bash", `git commit -m "${m}"`)
+  badTime.timestamp = `later ${SENTINEL}`
+  lines.push(badTime, done("g12", 26))
+  const { facts, events } = await deriveText(lines)
+  assert.deepEqual(events.shellGitCommits, [
+    { start: at(1), end: at(2), cwd: `/tmp/${SENTINEL}` },
+    { start: at(3), end: at(4), cwd: `/tmp/${SENTINEL}/desk` },
+    { start: at(5), end: at(6), cwd: `C:\\${SENTINEL}` },
+    { start: at(14), end: at(15), cwd: `/tmp/${SENTINEL}/resumed` },
+    { start: at(17), end: at(18), cwd: null },
+    { start: at(22), end: at(23), cwd: null },
+  ])
+  assert.ok(!JSON.stringify(facts).includes(COMMIT_MESSAGE_SENTINEL))
+  assert.ok(!JSON.stringify(events).includes(COMMIT_MESSAGE_SENTINEL))
+  assert.ok(!JSON.stringify(events).includes("git"), "not even the command name is kept")
+})
+
+test("a session.start with no readable context leaves the directory unknown", async () => {
+  const ev = eventWriter()
+  const lines = [
+    ev("session.start", 0, { sessionId: EDGE, copilotVersion: "1.0.88", producer: "copilot-agent" }),
+    ev("tool.execution_start", 1, { toolCallId: "g1", toolName: "bash", arguments: { command: "git commit -q" } }),
+    ev("tool.execution_complete", 2, { toolCallId: "g1", success: true }),
+    ev("tool.execution_start", 3, { toolCallId: "g2", toolName: "bash", arguments: { command: "git -C /abs commit -q" } }),
+    ev("tool.execution_complete", 4, { toolCallId: "g2", success: true }),
+  ]
+  const { events } = await deriveText(lines)
+  assert.deepEqual(events.shellGitCommits, [{ start: at(1), end: at(2), cwd: null }, { start: at(3), end: at(4), cwd: "/abs" }])
+})
+
+test("nativeCommitShas carries this session's session_refs commits, which bind directly", async () => {
+  const home = makeHome()
+  try {
+    const { events } = await derive(home, SESSIONS.full)
+    assert.deepEqual(events.nativeCommitShas, ["abcdef0000000000000000000000000000000001", "fc6ea8a0000000000000000000000000000000aa"])
+    assert.deepEqual(events.shellGitCommits, [], "the fixture's bash calls hold no git commit")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})

@@ -6,6 +6,8 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -418,6 +420,79 @@ test("Minor 6: only writes whose paired result succeeded become fileWrites; Note
 test("a 40-hex token in a Bash result's stdout becomes a commitShas event, deduplicated", async () => {
   const { events } = await deriveFull()
   assert.deepEqual(events.commitShas, [COMMIT_SHA])
+})
+
+// --- Shell git commit calls (binding by committer time) -----------------------
+
+// The commit message and every other argument carry this; only directories
+// may come back, and never into facts.
+const COMMIT_MESSAGE_SENTINEL = "COMMIT-MESSAGE-SENTINEL-9b1e"
+const GIT_SESSION_ID = "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b"
+
+async function deriveLines(lines, endReason = "prompt_input_exit") {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-shell-git-"))
+  try {
+    const transcript = path.join(dir, `${GIT_SESSION_ID}.jsonl`)
+    writeFileSync(transcript, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`)
+    return await deriveClaudeSession({ transcriptPath: transcript, contributor: CONTRIBUTOR, plugins: PLUGINS, endReason })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function shellGitSession() {
+  let second = 0
+  const line = (extra) => ({ sessionId: GIT_SESSION_ID, version: "2.1.282", cwd: `/tmp/${SENTINEL}-cwd`, timestamp: `2026-09-25T08:00:${String(second++).padStart(2, "0")}.000Z`, ...extra })
+  const bash = (id, command, extra = {}) => line({ type: "assistant", message: { id: `m-${id}`, model: "claude-opus-5-5", content: [{ type: "tool_use", id, name: "Bash", input: { command, description: COMMIT_MESSAGE_SENTINEL } }] }, ...extra })
+  const result = (id, isError = false, extra = {}) => line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content: `[main 1a2b3c4] ${COMMIT_MESSAGE_SENTINEL}` }] }, toolUseResult: { stdout: COMMIT_MESSAGE_SENTINEL, stderr: "" }, ...extra })
+  const m = COMMIT_MESSAGE_SENTINEL
+  return [
+    line({ type: "user", message: { role: "user", content: `commit it ${SENTINEL}` } }),
+    bash("b1", `git add -A && git commit -q -m "${m}"`), // 01
+    result("b1"), // 02
+    bash("b2", `git -C /tmp/${SENTINEL}-desk commit -q -m "${m}"`), // 03
+    result("b2", true), // 04: a failed call may still have committed, so it counts
+    bash("b3", `cd /tmp/${SENTINEL}-other && git -c user.name="${m}" commit -m '${m}'`, { cwd: undefined }), // 05
+    result("b3"), // 06
+    bash("b4", `git status ${m}`), // 07
+    result("b4"), // 08
+    bash("b5", `git commit -m "${m}"`, { cwd: 7 }), // 09
+    result("b5"), // 10
+    line({ type: "assistant", message: { id: "m-b6", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "b6", name: "Bash", input: { command: 42 } }] } }), // 11
+    result("b6"), // 12
+    line({ type: "assistant", message: { id: "m-b7", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "b7", name: "Write", input: { file_path: `/tmp/${SENTINEL}-x`, content: `git commit -m ${m}` } }] } }), // 13
+    result("b7"), // 14
+    bash("b8", `git commit -m "${m}"`, { timestamp: "not a time" }), // 15: no readable start
+    result("b8"), // 16
+    bash("b9", `git commit -m "${m}"`), // 17
+    result("b9", false, { timestamp: "not a time" }), // 18: no readable end
+    bash("b10", `git commit -m "${m}"`), // 19: never answered
+  ]
+}
+
+test("a Bash git commit call becomes a shellGitCommits event with its start, end and directory, whatever its outcome", async () => {
+  const { facts, events } = await deriveLines(shellGitSession())
+  assert.deepEqual(events.shellGitCommits, [
+    { start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:00:02.000Z", cwd: `/tmp/${SENTINEL}-cwd` },
+    { start: "2026-09-25T08:00:03.000Z", end: "2026-09-25T08:00:04.000Z", cwd: `/tmp/${SENTINEL}-desk` },
+    { start: "2026-09-25T08:00:05.000Z", end: "2026-09-25T08:00:06.000Z", cwd: `/tmp/${SENTINEL}-other` },
+    { start: "2026-09-25T08:00:09.000Z", end: "2026-09-25T08:00:10.000Z", cwd: null },
+  ])
+  assert.deepEqual(events.nativeCommitShas, [], "Claude Code records no native commit refs")
+  assert.equal(validateFacts(facts).ok, true)
+})
+
+test("sentinel: a git commit command's text (message, options, other arguments) never reaches facts or events", async () => {
+  const { facts, events } = await deriveLines(shellGitSession())
+  assert.equal(JSON.stringify(facts).includes(COMMIT_MESSAGE_SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(events.shellGitCommits).includes(COMMIT_MESSAGE_SENTINEL), false)
+  assert.equal(JSON.stringify(events).includes("git"), false, "not even the command name is kept")
+})
+
+test("the full fixture's Bash calls hold no git commit, so its shellGitCommits is empty", async () => {
+  const { events } = await deriveFull()
+  assert.deepEqual(events.shellGitCommits, [])
 })
 
 // --- session envelope ---------------------------------------------------------
