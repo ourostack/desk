@@ -20,7 +20,7 @@ claude --agent desk:worker
 
 ### Copilot CLI
 
-The root `plugin.json` names `agents/` as the agent directory. Select `ourostack/ouroboros-skills:plugins/desk@v2-alpha` through the host's admitted opt-in composition; do not change a live default profile:
+The root `plugin.json` names `agents/` as the agent directory. Select `ourostack/desk:plugins/desk@main` through the host's admitted opt-in composition; do not change a live default profile:
 
 ```bash
 copilot --agent desk:worker

@@ -11,9 +11,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 // The branches a dependency may track. No ref means the default branch.
-const RELEASE_CHANNELS = ["v2-alpha"];
+const RELEASE_CHANNELS = ["main"];
 // Repositories whose plugins must come from the canonical owner, not a fork.
-const CANONICAL_OWNERS = { "ouroboros-skills": "ourostack" };
+const CANONICAL_OWNERS = { desk: "ourostack" };
+// Repositories whose plugins now live elsewhere, mapped to their new home.
+const MOVED_REPOSITORIES = { "ouroboros-skills": "ourostack/desk" };
 
 function parseGithubDependency(spec) {
   const match = /^github:([^/:@]+)\/([^/:@]+)(?::([^@]*))?(?:@(.+))?$/u.exec(spec);
@@ -25,7 +27,13 @@ function dependencyProblem(spec) {
   if (typeof spec !== "string" || !spec.startsWith("github:")) return null;
   const dependency = parseGithubDependency(spec);
   if (dependency === null) return "is not a github:<owner>/<repo>[:<path>][@<branch>] dependency";
-  const canonicalOwner = CANONICAL_OWNERS[dependency.repo];
+  // Own-property lookups only: a repository named like a built-in property
+  // (constructor, toString, __proto__) must not match an inherited member.
+  const movedTo = Object.hasOwn(MOVED_REPOSITORIES, dependency.repo) ? MOVED_REPOSITORIES[dependency.repo] : null;
+  if (movedTo) {
+    return `moved to ${movedTo}; use github:${movedTo}${dependency.path ? `:${dependency.path}` : ""}@${RELEASE_CHANNELS[0]}`;
+  }
+  const canonicalOwner = Object.hasOwn(CANONICAL_OWNERS, dependency.repo) ? CANONICAL_OWNERS[dependency.repo] : null;
   if (canonicalOwner && dependency.owner !== canonicalOwner) {
     return `points at a fork (${dependency.owner}); use ${canonicalOwner}/${dependency.repo}`;
   }
@@ -73,4 +81,4 @@ if (require.main === module) {
   process.exitCode = runCli();
 }
 
-module.exports = { checkDependencyChannels, dependencyProblem, parseGithubDependency, RELEASE_CHANNELS, runCli };
+module.exports = { CANONICAL_OWNERS, checkDependencyChannels, dependencyProblem, MOVED_REPOSITORIES, parseGithubDependency, RELEASE_CHANNELS, runCli };

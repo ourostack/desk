@@ -1,8 +1,7 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
-import { spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
-import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -10,40 +9,6 @@ import { fileURLToPath } from "node:url"
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const require = createRequire(import.meta.url)
 const validator = require(path.join(repoRoot, "scripts", "validate-skills.cjs"))
-
-for (const missingGit of [false, true]) {
-  test(`the actual runtime audit test cleans its fixtures after ${missingGit ? "a dependency failure" : "success"}`, t => {
-    const root = mkdtempSync(path.join(tmpdir(), "audit-cleanup-witness-"))
-    t.after(() => rmSync(root, { recursive: true, force: true }))
-    const scratch = path.join(root, "scratch")
-    const emptyBin = path.join(root, "empty-bin")
-    mkdirSync(scratch)
-    mkdirSync(emptyBin)
-    const result = spawnSync(process.execPath, [
-      path.join(repoRoot, "scripts", "test-work-suite-runtime-audit.cjs"),
-    ], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      timeout: 60000,
-      env: {
-        ...process.env,
-        TMPDIR: scratch,
-        TMP: scratch,
-        TEMP: scratch,
-        ...(missingGit ? { PATH: emptyBin } : {}),
-      },
-    })
-    assert.equal(result.error, undefined)
-    if (missingGit) {
-      assert.notEqual(result.status, 0)
-      assert.match(result.stderr, /latestCommit/)
-    } else {
-      assert.equal(result.status, 0, result.stderr)
-      assert.equal(result.stdout, "work-suite runtime audit tests passed.\n")
-    }
-    assert.deepEqual(readdirSync(scratch), [], "the test must reap only its own temporary fixtures")
-  })
-}
 
 const expectedSkillNames = [
   "autopilot",
@@ -184,11 +149,9 @@ test("validate-skills exports a testable CLI contract and validates a healthy re
     "readJson",
     "run",
     "runDeskFreshnessChecks",
-    "runRuntimeAudit",
+    "satisfiesVersion",
     "startCli",
     "validateAll",
-    "validateAppleDistributionKitSkill",
-    "validateCanonicalPluginCopies",
     "validateDeskMcpPackageScripts",
     "validateManifest",
     "validatePluginMetadata",
@@ -201,19 +164,15 @@ test("validate-skills exports a testable CLI contract and validates a healthy re
     validator.validateAll({
       repoRoot: fixtureRoot,
       childStdio: "pipe",
-      spawnSync: spawnSequence([0, 0, 0, 0, 0, 0, 0, 0, 0], calls),
+      spawnSync: spawnSequence([0, 0, 0, 0, 0], calls),
     })
 
     assert.deepEqual(calls.map((call) => call.args.join(" ")), [
-      "scripts/check-apple-distribution-kit-skill.cjs",
       "scripts/test-using-desk-foundation.cjs",
       "scripts/test-git-hygiene-contracts.cjs",
       "scripts/test-desk-host-manifests.cjs",
       "scripts/test-desk-generated-artifacts.cjs",
       "scripts/test-codex-plugin-cache-audit.cjs",
-      "scripts/test-autopilot-state-audit.cjs",
-      "scripts/test-work-suite-runtime-audit.cjs",
-      "scripts/audit-work-suite-runtime.cjs --repo-root .",
     ])
     assert.ok(calls.every((call) => call.options.cwd === fixtureRoot))
     assert.deepEqual(
@@ -227,7 +186,7 @@ test("validate-skills exports a testable CLI contract and validates a healthy re
       validator.run({
         repoRoot: fixtureRoot,
         childStdio: "pipe",
-        spawnSync: spawnSequence([0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        spawnSync: spawnSequence([0, 0, 0, 0, 0]),
         stdout: { write: (text) => stdout.push(text) },
         stderr: { write: (text) => stderr.push(text) },
       }),
@@ -309,33 +268,19 @@ test("validateManifest reports every schema and skill-copy failure mode", async 
   )
 })
 
-test("validateCanonicalPluginCopies catches set, missing file, and drift errors", async () => {
-  assert.deepEqual(validator.canonicalPluginCopies, {
-    "work-suite": expectedSkillNames,
+test("validateManifest treats an absent loose-skill catalog as optional", async () => {
+  await withFixtureRepo((root) => {
+    removePath(root, "manifest.json")
+    const lines = []
+    const original = console.log
+    console.log = (line) => lines.push(line)
+    try {
+      assert.doesNotThrow(() => validator.validateManifest({ repoRoot: root }))
+    } finally {
+      console.log = original
+    }
+    assert.deepEqual(lines, ["No loose-skill manifest.json; skipped the skill catalog."])
   })
-  await assertThrowsWith(
-    (root) => {
-      removePath(root, "plugins/work-suite/skills/autopilot")
-      writeText(root, "plugins/work-suite/skills/extra/SKILL.md", skillBody("extra"))
-    },
-    (root) => validator.validateCanonicalPluginCopies({ repoRoot: root }),
-    /work-suite skill set mismatch/u,
-  )
-  await assertThrowsWith(
-    (root) => removePath(root, "skills/autopilot/SKILL.md"),
-    (root) => validator.validateCanonicalPluginCopies({ repoRoot: root }),
-    /missing canonical/u,
-  )
-  await assertThrowsWith(
-    (root) => removePath(root, "plugins/work-suite/skills/autopilot/SKILL.md"),
-    (root) => validator.validateCanonicalPluginCopies({ repoRoot: root }),
-    /missing plugin copy/u,
-  )
-  await assertThrowsWith(
-    (root) => writeText(root, "plugins/work-suite/skills/autopilot/SKILL.md", skillBody("autopilot").replace("# autopilot", "# changed")),
-    (root) => validator.validateCanonicalPluginCopies({ repoRoot: root }),
-    /out of sync/u,
-  )
 })
 
 test("validatePluginMetadata catches host manifest and marketplace drift", async () => {
@@ -551,7 +496,7 @@ test("validatePluginMetadata catches host manifest and marketplace drift", async
       })
     },
     (root) => validator.validatePluginMetadata({ repoRoot: root }),
-    /desk: .* pins work-suite 1.4.8, but the marketplace ships 1.4.9/u,
+    /desk: .* requires work-suite 1.4.8, but the marketplace ships 1.4.9/u,
   )
   await assertThrowsWith(
     (root) => removePath(root, ".agents/plugins/marketplace.json"),
@@ -675,7 +620,7 @@ test("validateDeskMcpPackageScripts catches missing scripts, command drift, and 
   }
 })
 
-test("freshness and runtime child checks propagate child process failures", async () => {
+test("freshness child checks propagate child process failures", async () => {
   await withFixtureRepo((fixtureRoot) => {
     assert.throws(
       () => validator.runDeskFreshnessChecks({
@@ -742,54 +687,6 @@ test("freshness and runtime child checks propagate child process failures", asyn
       /codex plugin cache audit tests failed/u,
     )
 
-    assert.throws(
-      () => validator.runRuntimeAudit({
-        repoRoot: fixtureRoot,
-        childStdio: "pipe",
-        spawnSync: spawnSequence([1]),
-      }),
-      /autopilot state audit tests failed/u,
-    )
-    assert.throws(
-      () => validator.runRuntimeAudit({
-        repoRoot: fixtureRoot,
-        childStdio: "pipe",
-        spawnSync: spawnSequence([{}]),
-      }),
-      /autopilot state audit tests failed/u,
-    )
-    assert.throws(
-      () => validator.runRuntimeAudit({
-        repoRoot: fixtureRoot,
-        childStdio: "pipe",
-        spawnSync: spawnSequence([0, 1]),
-      }),
-      /work-suite runtime visibility audit tests failed/u,
-    )
-    assert.throws(
-      () => validator.runRuntimeAudit({
-        repoRoot: fixtureRoot,
-        childStdio: "pipe",
-        spawnSync: spawnSequence([0, {}]),
-      }),
-      /work-suite runtime visibility audit tests failed/u,
-    )
-    assert.throws(
-      () => validator.runRuntimeAudit({
-        repoRoot: fixtureRoot,
-        childStdio: "pipe",
-        spawnSync: spawnSequence([0, 0, 1]),
-      }),
-      /work-suite runtime visibility contract audit failed/u,
-    )
-    assert.throws(
-      () => validator.runRuntimeAudit({
-        repoRoot: fixtureRoot,
-        childStdio: "pipe",
-        spawnSync: spawnSequence([0, 0, {}]),
-      }),
-      /work-suite runtime visibility contract audit failed/u,
-    )
   })
 })
 
@@ -805,7 +702,7 @@ test("run and startCli expose success, Error, non-Error, and no-op CLI paths", a
       }),
       1,
     )
-    assert.match(errorStderr.join(""), /apple distribution kit skill guidance check failed/u)
+    assert.match(errorStderr.join(""), /using-desk foundation contract tests failed/u)
 
     const stringStderr = []
     assert.equal(
@@ -856,5 +753,47 @@ test("validatePluginMetadata accepts marketplace dependencies with matching or o
       dependencies: ["work-suite", { name: "work-suite" }, { name: "work-suite", version: "1.4.9" }],
     })
     assert.doesNotThrow(() => validator.validatePluginMetadata({ repoRoot: root }))
+  })
+})
+
+test("validatePluginMetadata admits caret ranges the marketplace version satisfies", async () => {
+  for (const [shipped, required, ok] of [
+    ["6.3.0", "^6.3.0", true],
+    ["6.4.1", "^6.3.0", true],
+    ["7.0.0", "^6.3.0", false],
+    ["6.2.9", "^6.3.0", false],
+    ["0.2.2", "^0.2.2", true],
+    ["0.2.9", "^0.2.2", true],
+    ["0.3.0", "^0.2.2", false],
+    ["0.0.3", "^0.0.3", true],
+    ["0.0.4", "^0.0.3", false],
+    ["1.0.0-alpha.2", "^1.0.0-alpha.2", true],
+    ["1.0.0-alpha.3", "^1.0.0-alpha.2", false],
+    ["1.0.0", "^not-a-version", false],
+  ]) {
+    assert.equal(validator.satisfiesVersion(shipped, required), ok, `${shipped} vs ${required}`)
+  }
+  await withFixtureRepo(async (root) => {
+    writeJson(root, ".claude-plugin/marketplace.json", {
+      plugins: [
+        { name: "desk", version: "1.7.3", source: "plugins/desk" },
+        { name: "work-suite", version: "1.4.9", source: "plugins/work-suite" },
+      ],
+    })
+    writeJson(root, "plugins/desk/.claude-plugin/plugin.json", {
+      name: "desk",
+      version: "1.7.3",
+      dependencies: [{ name: "work-suite", version: "^1.4.0" }],
+    })
+    assert.doesNotThrow(() => validator.validatePluginMetadata({ repoRoot: root }))
+    writeJson(root, "plugins/desk/.claude-plugin/plugin.json", {
+      name: "desk",
+      version: "1.7.3",
+      dependencies: [{ name: "work-suite", version: "^2.0.0" }],
+    })
+    assert.throws(
+      () => validator.validatePluginMetadata({ repoRoot: root }),
+      /desk: .* requires work-suite \^2\.0\.0, but the marketplace ships 1\.4\.9/u,
+    )
   })
 })

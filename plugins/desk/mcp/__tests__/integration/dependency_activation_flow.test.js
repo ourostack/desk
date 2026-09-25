@@ -528,7 +528,7 @@ test("ordinary Agency declaration (integration): desk/agency.json declares only 
   const agency = JSON.parse(readFileSync(path.join(pluginRoot, "agency.json"), "utf8"))
   assert.equal(agency.name, "desk")
   assert.deepEqual(agency.dependencies, [
-    "github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha",
-    "github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha",
+    "github:ourostack/desk:plugins/superpowers@main",
+    "github:ourostack/desk:plugins/plain-language@main",
   ])
 })

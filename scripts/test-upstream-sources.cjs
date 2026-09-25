@@ -36,23 +36,6 @@ for (const lockedSource of checkedInLock.sources) {
   }
 }
 
-const ponytailRoot = path.join(repoRoot, "plugins", "ponytail-upstream");
-const expectedPonytailFiles = checkedInLock.sources
-  .flatMap((lockedSource) => lockedSource.files)
-  .map((file) => file.generatedPath)
-  .filter((file) => file.startsWith("plugins/ponytail-upstream/"))
-  .sort();
-const actualPonytailFiles = fs.readdirSync(ponytailRoot, { recursive: true, withFileTypes: true })
-  .map((entry) => (
-    entry.isFile()
-      ? path.relative(repoRoot, path.join(entry.parentPath, entry.name)).split(path.sep).join("/")
-      : null
-  ))
-  .filter((file) => file && !file.includes("/.claude-plugin/") && !file.includes("/.codex-plugin/"))
-  .filter((file) => file !== "plugins/ponytail-upstream/plugin.json")
-  .sort();
-assert.deepEqual(actualPonytailFiles, expectedPonytailFiles);
-
 function source(content = "locked") {
   return {
     id: "example",

@@ -189,7 +189,7 @@ test("defaults to this repository, the process environment and CLAUDE_BIN", () =
       process.stdout.write = originalWrite
     }
     assert.equal(code, 0)
-    assert.match(stdout.text(), /^Claude Code 9\.9\.9 \(Claude Code\)\nok desk@ouroboros-skills \(loaded desk@ouroboros-skills 1\.0\.0\)\n/u)
+    assert.match(stdout.text(), /^Claude Code 9\.9\.9 \(Claude Code\)\nok desk@ourostack \(loaded desk@ourostack 1\.0\.0\)\n/u)
   } finally {
     if (previous === undefined) delete process.env.CLAUDE_BIN
     else process.env.CLAUDE_BIN = previous

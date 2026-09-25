@@ -5,6 +5,8 @@ import { buildCopilotBundle, validateCopilotPackagingContract } from "../../src/
 import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
 
 const read = (file) => JSON.parse(readFileSync(new URL(`../../../../../${file}`, import.meta.url), "utf8"))
+// The legacy Work Suite and Ponytail providers ship from ourostack/ouroboros-skills; their manifests are kept as fixtures.
+const legacyProvider = (file) => JSON.parse(readFileSync(new URL(`../fixtures/legacy-providers/${file}`, import.meta.url), "utf8"))
 const legacy = { id: "work-suite", kind: "plugin", version_range: "^4.0.0-alpha.2", provenance: { source: "plugins/work-suite/.codex-plugin/plugin.json", package: "ourostack/work-suite" }, lock: { version: "4.0.0-alpha.2", integrity: "sha256-legacy-fixture" } }
 function fixture() {
   const activation = read("plugins/desk/activation/desk.activation.json")
@@ -23,7 +25,7 @@ function fixture() {
     activation, deskPlugin, bundle,
     superpowersPlugin: { version: "6.3.0" },
     plainLanguagePlugin: read("plugins/plain-language/plugin.json"),
-    ponytailPlugin: read("plugins/ponytail-upstream/plugin.json"),
+    ponytailPlugin: legacyProvider("plugins/ponytail-upstream/plugin.json"),
   }
 }
 
@@ -106,7 +108,7 @@ function omittedSelectionLegacyInput() {
   // committed artifact to carry it.
   input.bundle.dependency_closure.push({ id: "ponytail-upstream", version: "4.9.0", plugin: "plugins/ponytail-upstream/plugin.json", skills: "plugins/ponytail-upstream/skills/" })
   input.bundle.generated_from.ponytail_plugin = "plugins/ponytail-upstream/plugin.json"
-  input.workSuitePlugin = read("plugins/work-suite/plugin.json")
+  input.workSuitePlugin = legacyProvider("plugins/work-suite/plugin.json")
   delete input.activation.provides.activation_targets[0].depends_on
   return input
 }
@@ -177,6 +179,6 @@ test("ordinary Agency declaration (selection edges): desk/agency.json declares o
   const agency = read("plugins/desk/agency.json")
   assert.equal(agency.name, "desk")
   assert.equal(agency.dependencies.length, 2)
-  assert.ok(agency.dependencies.includes("github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha"))
-  assert.ok(agency.dependencies.includes("github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha"))
+  assert.ok(agency.dependencies.includes("github:ourostack/desk:plugins/superpowers@main"))
+  assert.ok(agency.dependencies.includes("github:ourostack/desk:plugins/plain-language@main"))
 })

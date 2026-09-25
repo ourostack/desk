@@ -107,10 +107,10 @@ test("markdown parsing preserves headings and fenced command context", () => {
       "healthy prose",
       "```",
       "## fenced heading ignored",
-      "/plugin install desk@ouroboros-skills",
+      "/plugin install desk@ourostack",
       "```",
       "## Troubleshooting",
-      "/plugin install desk@ouroboros-skills",
+      "/plugin install desk@ourostack",
     ].join("\n"),
   })
 
@@ -122,13 +122,13 @@ test("markdown parsing preserves headings and fenced command context", () => {
 
 test("healthy-path command validation covers Codex and Claude manual setup escapes", () => {
   assertFails("Run `codex mcp add desk` after activation.", "codex mcp add")
-  assertFails("/plugin install desk@ouroboros-skills", "manual Desk/Work Suite plugin dependency installation", [], { inFence: true })
-  assertFails("/plugin install work-suite@ouroboros-skills", "manual Desk/Work Suite plugin dependency installation", [], { inFence: true })
+  assertFails("/plugin install desk@ourostack", "manual Desk/Work Suite plugin dependency installation", [], { inFence: true })
+  assertFails("/plugin install work-suite@ourostack", "manual Desk/Work Suite plugin dependency installation", [], { inFence: true })
   assertFails("Claude Code requires you to install `work-suite` explicitly.", "manual Desk/Work Suite plugin dependency installation")
   assertFails("Paste the worker default block into your Codex instructions.", "AGENTS/worker copy or append")
 
   assertPasses("Do not run `codex mcp add` for the healthy path.")
-  assertPasses("/plugin install desk@ouroboros-skills", ["Troubleshooting"], { inFence: true })
+  assertPasses("/plugin install desk@ourostack", ["Troubleshooting"], { inFence: true })
   assertPasses("Copied agent files are not part of the healthy path.")
 })
 

@@ -764,7 +764,7 @@ const DEFAULT_FAILING_FIXTURES = Object.freeze([
     expected: "AGENTS/worker copy or append",
   }),
   Object.freeze({
-    text: "/plugin install desk@ouroboros-skills",
+    text: "/plugin install desk@ourostack",
     expected: "manual Desk/Work Suite plugin dependency installation",
   }),
   Object.freeze({
@@ -784,7 +784,7 @@ const DEFAULT_PASSING_FIXTURES = Object.freeze([
     headingPath: ["Developer notes"],
   }),
   Object.freeze({
-    text: "/plugin install desk@ouroboros-skills",
+    text: "/plugin install desk@ourostack",
     headingPath: ["Troubleshooting"],
   }),
   Object.freeze({ text: "Copied agent files are not part of the healthy path." }),

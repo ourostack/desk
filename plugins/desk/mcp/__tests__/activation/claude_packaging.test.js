@@ -260,23 +260,15 @@ test("Claude plugin metadata declares native Desk surfaces and Superpowers depen
   assert.deepEqual(deskPlugin.dependencies, [
     {
       name: "superpowers",
-      version: "6.3.0",
+      version: "^6.3.0",
     },
     {
       name: "plain-language",
-      version: "0.2.1",
+      version: "^0.2.2",
     },
   ])
   assert.equal(Object.hasOwn(deskPlugin, "activation"), false)
   assert.equal(superpowersPlugin.version, "6.3.0")
-})
-
-test("Work Suite Claude manifest stays a strict-loadable skill provider", () => {
-  const workSuitePlugin = loadJson("plugins", "work-suite", ".claude-plugin", "plugin.json")
-
-  assert.equal(workSuitePlugin.name, "work-suite")
-  assert.equal(workSuitePlugin.skills, "./skills/")
-  assert.equal(Object.hasOwn(workSuitePlugin, "activation"), false)
 })
 
 test("Claude worker agent is exposed without unsupported scoped permission fields", () => {
@@ -496,7 +488,7 @@ test("Claude packaging validation rejects missing Superpowers dependency and sta
   staleDependencyRange.deskPlugin.dependencies[0].version = "^2.0.0"
   assert.deepEqual(
     validateClaudePackagingContract(staleDependencyRange),
-    ["Claude Superpowers dependency range must be 6.3.0"],
+    ["Claude Superpowers dependency range must be ^6.3.0"],
   )
 
   const staleProviderVersion = clone(currentClaudePackagingInput())

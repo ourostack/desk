@@ -2,9 +2,9 @@
 
 **Operator:** give your agent the link to this file and say "set this up". Nothing else is needed.
 
-**Agent:** follow these steps in order on the operator's machine. Run the commands yourself. Stop to ask only where a step says **Ask**. Report each step's result in one line. Use the branch or ref in the link you were given wherever this page says `<ref>`: today that is `v2-alpha`.
+**Agent:** follow these steps in order on the operator's machine. Run the commands yourself. Stop to ask only where a step says **Ask**. Report each step's result in one line.
 
-The setup installs three plugins from this repository: Desk (durable work state and authority), Superpowers (the engineering method) and Plain Language (prose policy). It binds the operator's desk, a Git repository that holds their durable context, and it leaves the host's own config directory as a thin pointer to that desk.
+The setup installs three plugins from the `ourostack` marketplace in this repository, `ourostack/desk`: Desk (durable work state and authority), Superpowers (the engineering method) and Plain Language (prose policy). It binds the operator's desk, a Git repository that holds their durable context, and it leaves the host's own config directory as a thin pointer to that desk.
 
 ## Claude Code
 
@@ -21,14 +21,14 @@ claude --version && node --version && git --version && gh --version
 ### 2. Install the plugins
 
 ```bash
-claude plugin marketplace add ourostack/ouroboros-skills#<ref>
-claude plugin install desk@ouroboros-skills
+claude plugin marketplace add ourostack/desk
+claude plugin install desk@ourostack
 claude plugin list
 ```
 
-Installing Desk pulls in Superpowers and Plain Language. Expect all three enabled. Desk makes `desk:worker` the default agent for new sessions.
+Installing Desk pulls in Superpowers and Plain Language. Expect `desk@ourostack`, `superpowers@ourostack` and `plain-language@ourostack` enabled. Desk makes `desk:worker` the default agent for new sessions.
 
-Turn on automatic updates for this marketplace: in `~/.claude/settings.json`, add `"autoUpdate": true` to `extraKnownMarketplaces.ouroboros-skills` (the install just created that entry). Leave every other key as it is.
+Turn on automatic updates for this marketplace: in `~/.claude/settings.json`, add `"autoUpdate": true` to `extraKnownMarketplaces.ourostack` (the install just created that entry). Leave every other key as it is.
 
 ### 3. Set the host defaults
 
@@ -67,7 +67,7 @@ Never delete Claude's own runtime state: session transcripts under `~/.claude/pr
 
 ### 5. Find or create the desk
 
-Follow `plugins/desk/skills/first-run-bootstrap/SKILL.md`, Entrance A, from this repository at `<ref>`. It looks for an existing local desk, then the operator's desk repository on GitHub, and **asks** once with what it found; with nothing found it offers a fresh desk. If the operator already has a V1 desk, use Entrance B instead.
+Follow `plugins/desk/skills/first-run-bootstrap/SKILL.md`, Entrance A, from this repository. It looks for an existing local desk, then the operator's desk repository on GitHub, and **asks** once with what it found; with nothing found it offers a fresh desk. If the operator already has a V1 desk, use Entrance B instead.
 
 Bind the chosen desk by writing this file, with the absolute desk path:
 
@@ -75,7 +75,7 @@ Bind the chosen desk by writing this file, with the absolute desk path:
 { "schema_version": 1, "desk": { "root": "<absolute desk path>" } }
 ```
 
-to `~/.claude/plugins/data/desk-ouroboros-skills/desk.activation.json`, creating the directory if needed. If the operator uses `CLAUDE_CONFIG_DIR`, the path is relative to that directory instead of `~/.claude`. The binding survives plugin updates.
+to `~/.claude/plugins/data/desk-ourostack/desk.activation.json`, creating the directory if needed. If the operator uses `CLAUDE_CONFIG_DIR`, the path is relative to that directory instead of `~/.claude`. The binding survives plugin updates.
 
 ### 6. Start a new session and verify
 
@@ -92,8 +92,8 @@ If any of these fail, `desk_doctor` explains why. Desk never ends setup by being
 With `autoUpdate` on, Claude Code picks up new versions at startup. To update now:
 
 ```bash
-claude plugin marketplace update ouroboros-skills
-claude plugin update desk@ouroboros-skills
+claude plugin marketplace update ourostack
+claude plugin update desk@ourostack
 ```
 
 Claude Code keys its plugin cache on the version string, so a change reaches installed users only when its plugin version is bumped.

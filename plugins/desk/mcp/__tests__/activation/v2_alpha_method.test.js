@@ -52,7 +52,8 @@ function packagingInput(method) {
     workSuitePlugin: { name: "work-suite", version: "4.0.0-alpha.1" },
     superpowersPlugin: { name: "superpowers", version: "6.3.0" },
     plainLanguagePlugin: readJson("plugins/plain-language/plugin.json"),
-    ponytailPlugin: readJson("plugins/ponytail-upstream/plugin.json"),
+    // The legacy Ponytail provider ships from ourostack/ouroboros-skills; its manifest is kept as a fixture.
+    ponytailPlugin: JSON.parse(readFileSync(new URL("../fixtures/legacy-providers/plugins/ponytail-upstream/plugin.json", import.meta.url), "utf8")),
   }
 }
 
@@ -169,7 +170,7 @@ test("ordinary Agency declaration (method): desk/agency.json declares only the t
   const agency = readJson("plugins/desk/agency.json")
   assert.equal(agency.name, "desk")
   assert.deepEqual(agency.dependencies, [
-    "github:ourostack/ouroboros-skills:plugins/superpowers@v2-alpha",
-    "github:ourostack/ouroboros-skills:plugins/plain-language@v2-alpha",
+    "github:ourostack/desk:plugins/superpowers@main",
+    "github:ourostack/desk:plugins/plain-language@main",
   ])
 })

@@ -92,10 +92,6 @@ const requiredHostFreshnessPathFilters = [
   "plugins/desk/principles.md",
   "plugins/desk/skills/**",
   "plugins/superpowers/**",
-  "plugins/work-suite/.claude-plugin/plugin.json",
-  "plugins/work-suite/.codex-plugin/plugin.json",
-  "plugins/work-suite/plugin.json",
-  "plugins/work-suite/skills/**",
 ]
 
 const requiredHostManifestChecks = [
@@ -111,7 +107,6 @@ const requiredHostManifestChecks = [
 ]
 
 const hostManifestFixtureFiles = [
-  "manifest.json",
   ".github/workflows/desk-mcp-tests.yml",
   ".github/workflows/validate-skills.yml",
   "plugins/desk/activation/host-capability-evidence.md",
@@ -144,18 +139,12 @@ const hostManifestFixtureFiles = [
   "plugins/desk/output-styles/worker.md",
   "plugins/desk/plugin.json",
   "plugins/desk/principles.md",
-  "plugins/work-suite/.claude-plugin/plugin.json",
-  "plugins/work-suite/.codex-plugin/plugin.json",
-  "plugins/work-suite/plugin.json",
   "plugins/superpowers/.claude-plugin/plugin.json",
   "plugins/superpowers/.codex-plugin/plugin.json",
   "plugins/superpowers/plugin.json",
   "plugins/plain-language/.claude-plugin/plugin.json",
   "plugins/plain-language/.codex-plugin/plugin.json",
   "plugins/plain-language/plugin.json",
-  "plugins/ponytail-upstream/.claude-plugin/plugin.json",
-  "plugins/ponytail-upstream/.codex-plugin/plugin.json",
-  "plugins/ponytail-upstream/plugin.json",
   "scripts/validate-skills.cjs",
 ]
 
@@ -175,6 +164,25 @@ function writeText(root, relativePath, content) {
 
 function writeJson(root, relativePath, value) {
   writeText(root, relativePath, `${JSON.stringify(value, null, 2)}\n`)
+}
+
+// The legacy Work Suite and Ponytail providers ship from ourostack/ouroboros-skills; a legacy configuration
+// copies their manifests into a fixture repository from here.
+const legacyProviderFiles = [
+  "plugins/work-suite/.claude-plugin/plugin.json",
+  "plugins/work-suite/.codex-plugin/plugin.json",
+  "plugins/work-suite/plugin.json",
+  "plugins/ponytail-upstream/.claude-plugin/plugin.json",
+  "plugins/ponytail-upstream/.codex-plugin/plugin.json",
+  "plugins/ponytail-upstream/plugin.json",
+]
+
+function copyLegacyProviders(targetRoot) {
+  for (const relativePath of legacyProviderFiles) {
+    const targetPath = path.join(targetRoot, relativePath)
+    mkdirSync(path.dirname(targetPath), { recursive: true })
+    copyFileSync(new URL(`../fixtures/legacy-providers/${relativePath}`, import.meta.url), targetPath)
+  }
 }
 
 function copyRepoFile(relativePath, targetRoot) {
@@ -205,7 +213,6 @@ async function withValidateSkillsFixture({ hostStatus = 0, generatedStatus = 0 }
     copyRepoFile(".github/workflows/desk-mcp-tests.yml", fixtureRoot)
     copyRepoFile(".github/workflows/validate-skills.yml", fixtureRoot)
     copyRepoFile("scripts/validate-skills.cjs", fixtureRoot)
-    copyRepoFile("scripts/check-apple-distribution-kit-skill.cjs", fixtureRoot)
     writeJson(fixtureRoot, "plugins/desk/mcp/package.json", {
       scripts: requiredPackageScripts,
     })
@@ -214,66 +221,17 @@ async function withValidateSkillsFixture({ hostStatus = 0, generatedStatus = 0 }
       writeText(fixtureRoot, relativeScript, "#!/usr/bin/env node\nprocess.exit(0)\n")
     }
 
-    for (const name of [
-      "autopilot",
-      "deep-research",
-      "inch-worm",
-      "stay-in-turn",
-      "visual-qa-dogfood",
-      "watchdog-mode",
-      "work-doer",
-      "work-ideator",
-      "work-merger",
-      "work-planner",
-    ]) {
-      const body = `---\nname: ${name}\ndescription: fixture skill\n---\n# ${name}\n`
-      writeText(fixtureRoot, `skills/${name}/SKILL.md`, body)
-      writeText(fixtureRoot, `plugins/work-suite/skills/${name}/SKILL.md`, body)
-    }
     const plainLanguage = "---\nname: plain-language\ndescription: fixture skill\n---\n# plain-language\n"
-    writeText(fixtureRoot, "skills/plain-language/SKILL.md", plainLanguage)
     writeText(
       fixtureRoot,
       "plugins/plain-language/skills/plain-language/SKILL.md",
       plainLanguage,
     )
-    writeText(
-      fixtureRoot,
-      "skills/sign-apple-apps/SKILL.md",
-      `---
-name: sign-apple-apps
-description: fixture skill
----
-# sign-apple-apps
-
-apple-distribution-kit
-distribution/apple-distribution.json
-scripts/apple-distribution-kit.sh
-bot.ouro.md
-bot.ouro.workbench
-app.spoonjoy
-APP_STORE_CONNECT_API_KEY_ID
-APP_STORE_CONNECT_PROVIDER_PUBLIC_ID
-TestFlight Submission Lane
-testflight plan
-testflight publish
-asc get
-ExportOptions.testflight.plist
-method = app-store-connect
-Stop for the operator for:
-not source files
-non-secret CI/preflight gate
-Use app-neutral names for reusable materials
-For non-Ouro apps, rename these env vars
-`,
-    )
 
     for (const script of [
       "scripts/test-git-hygiene-contracts.cjs",
       "scripts/test-using-desk-foundation.cjs",
-      "scripts/test-autopilot-state-audit.cjs",
-      "scripts/test-work-suite-runtime-audit.cjs",
-      "scripts/audit-work-suite-runtime.cjs",
+      "scripts/test-codex-plugin-cache-audit.cjs",
     ]) {
       writeText(fixtureRoot, script, "#!/usr/bin/env node\nprocess.exit(0)\n")
     }
@@ -932,9 +890,7 @@ test("root host-manifest verifier catches stale generated host-facing files", as
       label: "humanize-skill",
       errorPattern: /humanize[- ]skill/u,
       mutate: (fixtureRoot) => {
-        const manifest = loadJson("manifest.json")
-        manifest.skills.push({ name: "humanize" })
-        writeJson(fixtureRoot, "manifest.json", manifest)
+        writeJson(fixtureRoot, "manifest.json", { skills: [{ name: "humanize" }] })
       },
     },
     {
@@ -995,7 +951,8 @@ test("root host verifier selects an explicit legacy configuration across all thr
     manifest.dependencies = manifest.dependencies.map((entry) => entry.id === "work-suite" ? declaration : entry)
     assert.equal(declaration.provenance.source, "plugins/work-suite/.codex-plugin/plugin.json")
     assert.equal(declaration.provenance.package, "ourostack/work-suite")
-    assert.equal(declaration.lock.version, loadJson("plugins", "work-suite", ".codex-plugin", "plugin.json").version)
+    copyLegacyProviders(root)
+    assert.equal(declaration.lock.version, JSON.parse(readFileSync(path.join(root, "plugins/work-suite/.codex-plugin/plugin.json"), "utf8")).version)
     assert.equal(validateActivationManifest(manifest).ok, true)
     writeJson(root, manifestPath, manifest)
     for (const file of ["plugins/desk/plugin.json", "plugins/desk/.codex-plugin/plugin.json", "plugins/desk/.claude-plugin/plugin.json"]) {
@@ -1267,12 +1224,12 @@ test("CI workflow YAML parses before its commands are inspected", () => {
   }
 })
 
-test("mechanical CI tests exact alpha pushes without changing PR or default-branch triggers", () => {
+test("mechanical CI tests pushes to main and every pull request", () => {
   for (const filename of ["desk-mcp-tests.yml", "validate-skills.yml"]) {
     const source = loadText(".github", "workflows", filename)
     const { data } = matter(`---\n${source}\n---\n`)
     assert.deepEqual(Object.keys(data.on).sort(), ["pull_request", "push"], filename)
-    assert.deepEqual(data.on.push.branches, ["main", "v2-alpha"], filename)
+    assert.deepEqual(data.on.push.branches, ["main"], filename)
     assert.equal(Object.hasOwn(data.on, "pull_request"), true, filename)
     for (const job of Object.values(data.jobs)) {
       for (const step of job.steps.filter(step => step.uses?.startsWith("actions/checkout@"))) {
@@ -1530,9 +1487,8 @@ test("root host verifier detects missing bundled humanize files and a revived st
   await withHostFreshnessFixture(async (root) => {
     for (const file of ["SKILL.md", "LICENSE"]) rmSync(path.join(root, "plugins/desk/skills/humanize", file))
     writeText(root, "skills/humanize/SKILL.md", "fixture standalone copy\n")
-    const manifest = loadJson("manifest.json")
-    manifest.skills.push({ name: "humanize" })
-    writeJson(root, "manifest.json", manifest)
+    // An optional loose-skill catalog that exports humanize again.
+    writeJson(root, "manifest.json", { skills: [{ name: "humanize" }] })
     const result = await verifier.verifyDeskHostManifests({
       repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
     })
@@ -1629,4 +1585,115 @@ test("root host verifier default API and CLI preserve success, refusal and strea
   })
   assert.equal(cli.status, 0, cli.stderr)
   assert.match(cli.stdout, /^Desk host manifests verified for /u)
+})
+
+test("root host verifier reports each startup-composition drift and hook failure", async () => {
+  const verifier = loadHostManifestVerifier()
+  const deskHookManifest = "plugins/desk/hooks/copilot-hooks.json"
+  const withHook = (root, mutate) => {
+    const manifest = loadJson(...deskHookManifest.split("/"))
+    mutate(manifest)
+    writeJson(root, deskHookManifest, manifest)
+  }
+  const cases = [
+    {
+      label: "Copilot hook source that scans, spawns and reads nothing",
+      mutate: (root) => writeText(root, "plugins/desk/hooks/copilot-session-start.cjs", [
+        "// spawnSync readdirSync path.join(pluginRoot, \"skills\", \"session-start\")",
+        "// \"node:child_process\"",
+        "process.stdout.write(\"{}\")",
+        "",
+      ].join("\n")),
+      patterns: [
+        /Copilot hook must read the canonical using-desk skill at runtime/u,
+        /Copilot hook must read only the canonical using-desk skill body/u,
+        /Copilot hook must keep exactly one local file read; found 0/u,
+        /Copilot hook must not execute commands or fetch network resources/u,
+        /Copilot hook must stay local-only and avoid network or process modules/u,
+        /Copilot hook must not scan workspace or task files/u,
+        /Copilot hook must not read onboarding, migration, session-start, or RFC files/u,
+        /startup-composition copilot must include the canonical using-desk body exactly once; found 0/u,
+        /startup-composition copilot must include "The human supplies intent" exactly once; found 0/u,
+      ],
+    },
+    {
+      label: "Claude hook that runs git and returns no context",
+      mutate: (root) => writeText(root, "plugins/desk/hooks/session-start.sh", "git --version >/dev/null 2>&1 || true\necho '{}'\n"),
+      patterns: [
+        /startup-composition Claude hook must not scan tasks or run git, gh, or curl/u,
+        /startup-composition claude must include the canonical using-desk body exactly once; found 0/u,
+      ],
+    },
+    {
+      label: "Claude hook failure",
+      mutate: (root) => writeText(root, "plugins/desk/hooks/session-start.sh", "echo broken >&2\nexit 1\n"),
+      patterns: [/Claude SessionStart hook failed: broken/u],
+    },
+    {
+      label: "Copilot plugin without the Desk hook manifest",
+      mutate: (root) => {
+        const plugin = loadJson("plugins", "desk", "plugin.json")
+        plugin.hooks = "./hooks/other.json"
+        writeJson(root, "plugins/desk/plugin.json", plugin)
+      },
+      patterns: [/copilot hook execution failed: Desk Copilot plugin must register \.\/hooks\/copilot-hooks\.json/u],
+    },
+    {
+      label: "Copilot hook manifest version",
+      mutate: (root) => withHook(root, (manifest) => { manifest.version = 2 }),
+      patterns: [/copilot hook execution failed: Desk Copilot hook manifest must use version 1/u],
+    },
+    {
+      label: "Copilot hook manifest without a sessionStart hook",
+      mutate: (root) => withHook(root, (manifest) => { manifest.hooks.sessionStart = [] }),
+      patterns: [/copilot hook execution failed: Desk Copilot hook manifest must configure exactly one sessionStart hook/u],
+    },
+    {
+      label: "Copilot sessionStart hook without a bash command",
+      mutate: (root) => withHook(root, (manifest) => { manifest.hooks.sessionStart = [{ type: "command" }] }),
+      patterns: [/copilot hook execution failed: Desk Copilot sessionStart hook must configure a bash command/u],
+    },
+    {
+      label: "Copilot sessionStart hook failure",
+      mutate: (root) => withHook(root, (manifest) => { manifest.hooks.sessionStart = [{ type: "command", bash: "echo broken >&2; exit 3" }] }),
+      patterns: [/copilot hook execution failed: Copilot sessionStart hook failed: broken/u],
+    },
+    {
+      label: "desk:worker startup contract",
+      mutate: (root) => {
+        const manifest = loadJson("plugins", "desk", "activation", "desk.activation.json")
+        manifest.provides.activation_targets.find((target) => target.id === "desk:worker").startup = {}
+        writeJson(root, "plugins/desk/activation/desk.activation.json", manifest)
+      },
+      patterns: [/startup-composition desk:worker startup contract drift/u],
+    },
+    {
+      label: "Copilot agent source carrying the foundation inline",
+      mutate: (root) => writeText(root, "plugins/desk/agents/worker.agent.md", [
+        loadText("plugins", "desk", "skills", "using-desk", "SKILL.md"),
+        "Compact working foundation carried once in this Copilot agent source",
+        "",
+      ].join("\n")),
+      patterns: [
+        /startup-composition Copilot agent body must not duplicate the canonical using-desk body/u,
+        /startup-composition Copilot agent source must not claim it carries using-desk inline/u,
+        /startup-composition Copilot agent source must describe runtime injection from the Desk-owned sessionStart hook/u,
+      ],
+    },
+    {
+      label: "session-start without the authoritative scan",
+      mutate: (root) => writeText(root, "plugins/desk/skills/session-start/SKILL.md", "---\nname: session-start\ndescription: fixture\n---\n# session-start\n"),
+      patterns: [/startup-composition desk:session-start must declare the authoritative scan/u],
+    },
+  ]
+  for (const { label, mutate, patterns } of cases) {
+    await withHostFreshnessFixture(async (root) => {
+      mutate(root)
+      const result = await verifier.verifyDeskHostManifests({
+        repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
+      })
+      assert.equal(result.ok, false, label)
+      for (const pattern of patterns) assert.match(result.errors.join("\n"), pattern, label)
+    })
+  }
 })

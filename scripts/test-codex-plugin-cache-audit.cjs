@@ -53,9 +53,9 @@ function makeFixture({ namespace = "ourostack" } = {}) {
   const codexHome = path.join(root, "codex-home");
   mkdirp(repoRoot);
   writePlugin(repoRoot, "desk", "1.7.3");
-  writePlugin(repoRoot, "work-suite", "1.4.9");
+  writePlugin(repoRoot, "superpowers", "1.4.9");
   writePlugin(repoRoot, "plain-language", "0.1.0");
-  writePlugin(repoRoot, "ponytail-upstream", "4.9.0");
+  writePlugin(repoRoot, "crew", "4.9.0");
   writeJson(path.join(repoRoot, ".agents", "plugins", "marketplace.json"), {
     name: namespace,
     plugins: [
@@ -64,23 +64,23 @@ function makeFixture({ namespace = "ourostack" } = {}) {
         source: { source: "local", path: "./plugins/desk" },
       },
       {
-        name: "work-suite",
-        source: { source: "local", path: "./plugins/work-suite" },
+        name: "superpowers",
+        source: { source: "local", path: "./plugins/superpowers" },
       },
       {
         name: "plain-language",
         source: { source: "local", path: "./plugins/plain-language" },
       },
       {
-        name: "ponytail-upstream",
-        source: { source: "local", path: "./plugins/ponytail-upstream" },
+        name: "crew",
+        source: { source: "local", path: "./plugins/crew" },
       },
     ],
   });
   writeCache(codexHome, "desk", "1.7.3", manifest("desk", "1.7.3"), namespace);
-  writeCache(codexHome, "work-suite", "1.4.9", manifest("work-suite", "1.4.9"), namespace);
+  writeCache(codexHome, "superpowers", "1.4.9", manifest("superpowers", "1.4.9"), namespace);
   writeCache(codexHome, "plain-language", "0.1.0", manifest("plain-language", "0.1.0"), namespace);
-  writeCache(codexHome, "ponytail-upstream", "4.9.0", manifest("ponytail-upstream", "4.9.0"), namespace);
+  writeCache(codexHome, "crew", "4.9.0", manifest("crew", "4.9.0"), namespace);
   return { root, repoRoot, codexHome };
 }
 
@@ -131,9 +131,9 @@ function testHostMarketplaceCurrentAndDrift() {
   try {
     writeHostMarketplace(fixture.root, [
       ["desk", "./repo/plugins/desk"],
-      ["work-suite", "./repo/plugins/work-suite"],
+      ["superpowers", "./repo/plugins/superpowers"],
       ["plain-language", "./repo/plugins/plain-language"],
-      ["ponytail-upstream", "./repo/plugins/ponytail-upstream"],
+      ["crew", "./repo/plugins/crew"],
     ]);
     const current = auditCodexPluginCache({
       repoRoot: fixture.repoRoot,
@@ -145,14 +145,14 @@ function testHostMarketplaceCurrentAndDrift() {
     assert.equal(current.host_marketplace.reason, "current");
 
     writePlugin(fixture.root, "desk", "1.7.2");
-    writePlugin(fixture.root, "work-suite", "1.4.8");
+    writePlugin(fixture.root, "superpowers", "1.4.8");
     writePlugin(fixture.root, "plain-language", "0.0.9");
-    writePlugin(fixture.root, "ponytail-upstream", "4.8.0");
+    writePlugin(fixture.root, "crew", "4.8.0");
     writeHostMarketplace(fixture.root, [
       ["desk", "./plugins/desk"],
-      ["work-suite", "./plugins/work-suite"],
+      ["superpowers", "./plugins/superpowers"],
       ["plain-language", "./plugins/plain-language"],
-      ["ponytail-upstream", "./plugins/ponytail-upstream"],
+      ["crew", "./plugins/crew"],
     ]);
     const stale = auditCodexPluginCache({
       repoRoot: fixture.repoRoot,
@@ -186,7 +186,7 @@ function testActiveToolSnapshot() {
     assert.deepEqual(report.active_session.missing, []);
     assert.ok(report.active_session.present.includes("desk_status"));
     assert.equal(report.plugins.find((plugin) => plugin.name === "desk").active_session_visible, true);
-    assert.equal(report.plugins.find((plugin) => plugin.name === "work-suite").active_session_visible, "not_checked");
+    assert.equal(report.plugins.find((plugin) => plugin.name === "superpowers").active_session_visible, "not_checked");
 
     const prefixed = auditCodexPluginCache({
       repoRoot: fixture.repoRoot,
@@ -270,7 +270,7 @@ function testStaleSourceAndCache() {
   const fixture = makeFixture();
   try {
     writePlugin(fixture.repoRoot, "desk", "1.7.3", { description: "new source" });
-    writeCache(fixture.codexHome, "work-suite", "1.4.9", manifest("work-suite", "1.4.9", {
+    writeCache(fixture.codexHome, "superpowers", "1.4.9", manifest("superpowers", "1.4.9", {
       description: "old cache",
     }));
 
@@ -279,15 +279,15 @@ function testStaleSourceAndCache() {
       codexHome: fixture.codexHome,
     });
     const desk = report.plugins.find((plugin) => plugin.name === "desk");
-    const workSuite = report.plugins.find((plugin) => plugin.name === "work-suite");
+    const superpowers = report.plugins.find((plugin) => plugin.name === "superpowers");
 
     assert.equal(report.status, "stale");
     assert.equal(desk.repo_source_current, true);
     assert.equal(desk.installed_cache_current, false);
     assert.equal(desk.installed_cache_reason, "manifest-drift");
-    assert.equal(workSuite.repo_source_current, true);
-    assert.equal(workSuite.installed_cache_current, false);
-    assert.equal(workSuite.installed_cache_reason, "manifest-drift");
+    assert.equal(superpowers.repo_source_current, true);
+    assert.equal(superpowers.installed_cache_current, false);
+    assert.equal(superpowers.installed_cache_reason, "manifest-drift");
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -350,7 +350,7 @@ function testMissingMarketplaceEntryAndSourceObject() {
     const report = auditCodexPluginCache({
       repoRoot: fixture.repoRoot,
       codexHome: fixture.codexHome,
-      plugins: ["desk", "work-suite"],
+      plugins: ["desk", "superpowers"],
     });
     assert.equal(report.status, "stale");
     assert.equal(report.plugins[0].repo_source_reason, "missing-marketplace-source");
