@@ -158,8 +158,8 @@ test("the current unexecuted relevant source of this repository remains pending"
   const request = publish("current-source-request.json", {
     schemaVersion: 1,
     kind: "relevant_revision_request",
-    repository: "shared-internal-tools/ms-desk",
-    ref: "refs/heads/v2-alpha",
+    repository: "ourostack/desk",
+    ref: "refs/heads/main",
     head: head.stdout.trim(),
     previousHeads: [],
     changedPaths: ["evals/offline/fixed-controller.mjs", "scripts/skill-evals.cjs", ".github/workflows/desk-mcp-tests.yml", "desk/tasks/2026-06-14-1335-planning-desk-dependency-activation.md"],

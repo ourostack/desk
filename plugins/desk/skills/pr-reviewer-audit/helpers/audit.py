@@ -277,7 +277,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Audit required-reviewer policies and approver votes on an ADO PR.",
     )
-    parser.add_argument("org", help="ADO organization name (e.g., domoreexp)")
+    parser.add_argument("org", help="ADO organization name (e.g., example-org)")
     parser.add_argument("project", help="ADO project name (e.g., Teamspace)")
     parser.add_argument("repo_id", help="Repository GUID")
     parser.add_argument("pr_id", help="Pull-request numeric ID")
