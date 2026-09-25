@@ -47,7 +47,7 @@ For verification and repair of marketplace/plugin exposure, the activation-owned
 The `worker` agent here is the substrate-default — generic, applicable to any engineering context. If you want corporate-engineering, autonomous-agent, or personal-coding flavored extensions (org-specific auth, work-item trackers, tooling conventions), author a sibling plugin that:
 
 1. Depends on `desk` (so all the substrate skills + MCP are inherited)
-2. Ships its own `agents/<name>.md` with extended skills/invariants/tooling
+2. Ships its own `agents/<name>.md` and foundation with extended skills and tooling
 3. Optionally adds its own context-specific skills
 
 The substrate stays generic so it can serve any overlay; overlays carry the parts that depend on whose desk it is.

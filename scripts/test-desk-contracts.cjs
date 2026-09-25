@@ -178,6 +178,18 @@ contract("no skill freezes a candidate, brief, source or review input", () => {
   assert.deepEqual(offenders, []);
 });
 
+// The worker bodies no longer carry an invariants block, so nothing may describe one; operator rules keep a documented home.
+contract("no doc or skill describes the retired invariants block", () => {
+  for (const file of ["plugins/desk/skills/lesson-capture/SKILL.md", "plugins/desk/docs/agent-files.md", "plugins/desk/README.md"]) {
+    assert.doesNotMatch(text(file), /core invariants|skills\/invariants|skills, invariants/iu, file);
+  }
+});
+contract("directory-structure documents where operator rules live", () => {
+  const skill = text("plugins/desk/skills/directory-structure/SKILL.md");
+  assert.match(skill, /^ {2}AGENTS\.md +# .*operator preferences/mu);
+  assert.match(skill, /^ {4}operator-rules\.md +# /mu);
+});
+
 // Desk CI and configuration.
 contract("CI runs the skill evaluation contracts", () => {
   assert.match(

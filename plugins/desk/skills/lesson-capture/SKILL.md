@@ -69,7 +69,7 @@ both end in the same place: a targeted update to a skill body (or a no-op-with-r
 2. **quote evidence.** each proposed lesson cites the artifact(s) that surfaced it. no inference without source.
 3. **concrete landing place.** "should probably go somewhere" is not actionable. propose the specific skill + section.
 4. **don't over-encode.** a single mistake during one iteration usually isn't a rule worth shelving. wait for the second occurrence — OR explicitly note "first occurrence; flagging in case of recurrence" without yet proposing encoding.
-5. **respect existing rules.** before proposing a new rule, check if an existing skill already covers it. if yes, the proposal is "make the existing rule stickier" (e.g., promote from skill body to core invariants) rather than "add new rule."
+5. **respect existing rules.** before proposing a new rule, check if an existing skill already covers it. if yes, the proposal is "make the existing rule stickier" (e.g., promote it from a triggered skill into the always-on `using-desk` foundation) rather than "add new rule."
 
 ## What this skill does NOT do
 
