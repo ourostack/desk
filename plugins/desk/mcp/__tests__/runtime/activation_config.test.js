@@ -695,8 +695,10 @@ test("entrypoint guard handles direct launch, import, realpath fallback, and fat
   })
   assert.equal(syncLaunches, 1)
 
+  // A launch failure no longer exits: the entrypoint serves diagnostic mode so the handshake still completes.
   const writes = []
   const exits = []
+  const diagnosticStarts = []
   await runIfEntrypoint({
     argv: ["node", modulePath],
     moduleUrl,
@@ -705,9 +707,9 @@ test("entrypoint guard handles direct launch, import, realpath fallback, and fat
     },
     stderr: { write: (text) => writes.push(text) },
     exit: (code) => exits.push(code),
+    startDiagnostic: ({ error }) => diagnosticStarts.push(error.message),
   })
-  assert.match(writes.join(""), /\[desk-mcp\] fatal: bad launch/u)
-  assert.deepEqual(exits, [1])
+  assert.match(writes.join(""), /\[desk-mcp\] startup exception: bad launch; serving diagnostic mode/u)
 
   await runIfEntrypoint({
     argv: ["node", modulePath],
@@ -717,9 +719,11 @@ test("entrypoint guard handles direct launch, import, realpath fallback, and fat
     },
     stderr: { write: (text) => writes.push(text) },
     exit: (code) => exits.push(code),
+    startDiagnostic: ({ error }) => diagnosticStarts.push(error.message),
   })
-  assert.match(writes.join(""), /\[desk-mcp\] fatal: bad sync launch/u)
-  assert.deepEqual(exits, [1, 1])
+  assert.match(writes.join(""), /\[desk-mcp\] startup exception: bad sync launch; serving diagnostic mode/u)
+  assert.deepEqual(diagnosticStarts, ["bad launch", "bad sync launch"])
+  assert.deepEqual(exits, [])
 })
 
 test("entrypoint stdio startup uses activation config root for real MCP tool calls", {

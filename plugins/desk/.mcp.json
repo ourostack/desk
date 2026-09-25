@@ -2,10 +2,11 @@
   "mcpServers": {
     "desk": {
       "type": "stdio",
-      "command": "node",
+      "command": "sh",
       "args": [
-        "-e",
-        "const fs=require('node:fs');const path=require('node:path');const {pathToFileURL}=require('node:url');const configured=process.env.DESK_PLUGIN_ROOT;const root=configured&&fs.existsSync(path.join(configured,'mcp','index.js'))?configured:process.cwd();process.env.DESK_PLUGIN_ROOT=root;import(pathToFileURL(path.join(root,'mcp','index.js')).href).then(({main})=>main()).catch((error)=>{console.error(error);process.exitCode=1});"
+        "-c",
+        "for r in \"$DESK_PLUGIN_ROOT\" \"$PWD\"; do if [ -f \"$r/launch/desk-node.sh\" ]; then DESK_PLUGIN_ROOT=$r; export DESK_PLUGIN_ROOT; exec sh \"$r/launch/desk-node.sh\" --mcp \"$r/mcp/index.js\"; fi; done; t='{\\\"state\\\":\\\"degraded:plugin_root_missing\\\",\\\"fix\\\":\\\"Desk could not find its plugin files from this MCP launch. Refresh or reinstall the Desk plugin, then reconnect the Desk MCP server.\\\"}'; while IFS= read -r l || [ -n \"$l\" ]; do  i=$(printf '%s' \"$l\" | sed -nE 's/.*\"id\"[[:space:]]*:[[:space:]]*(\"[^\"]*\"|-?[0-9]+).*/\\1/p'); [ -n \"$i\" ] || continue;  v=$(printf '%s' \"$l\" | sed -nE 's/.*\"protocolVersion\"[[:space:]]*:[[:space:]]*\"([0-9A-Za-z.-]*)\".*/\\1/p'); [ -n \"$v\" ] || v=2025-06-18;  case $(printf '%s' \"$l\" | sed -nE 's/.*\"method\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\\1/p') in  initialize) x='{\"protocolVersion\":\"'$v'\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"desk-mcp-plugin-root-missing\",\"version\":\"0.0.0\"}}';;  ping) x='{}';;  tools/list) x='{\"tools\":[{\"name\":\"desk_status\",\"description\":\"Report why Desk could not start.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":true}}]}';;  tools/call) x='{\"content\":[{\"type\":\"text\",\"text\":\"'$t'\"}]}';;  *) printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}\\n' \"$i\"; continue;;  esac;  printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}\\n' \"$i\" \"$x\"; done",
+        "desk-mcp"
       ],
       "cwd": ".",
       "env": {

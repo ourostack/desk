@@ -2,8 +2,8 @@
   "mcpServers": {
     "desk": {
       "type": "stdio",
-      "command": "node",
-      "args": ["${COPILOT_PLUGIN_ROOT}/mcp/index.js"],
+      "command": "sh",
+      "args": ["${COPILOT_PLUGIN_ROOT}/launch/desk-node.sh", "--mcp", "${COPILOT_PLUGIN_ROOT}/mcp/index.js"],
       "env": {}
     }
   }

@@ -124,6 +124,8 @@ const hostManifestFixtureFiles = [
   "plugins/desk/hooks/copilot-hooks.json",
   "plugins/desk/hooks/copilot-session-start.cjs",
   "plugins/desk/hooks/session-start.sh",
+  "plugins/desk/launch/desk-node.sh",
+  "plugins/desk/launch/node-missing-responder.sh",
   "plugins/desk/skills/humanize/LICENSE",
   "plugins/desk/skills/humanize/SKILL.md",
   "plugins/desk/skills/session-start/SKILL.md",

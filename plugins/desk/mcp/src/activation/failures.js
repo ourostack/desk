@@ -12,8 +12,20 @@ function deepFreeze(value, seen = new WeakSet()) {
   return Object.freeze(value)
 }
 
+// A deep copy of plain data that keeps cycles, used instead of structuredClone: failures are built on Desk's degraded startup path, which must run on any Node, including releases older than 17 that have no structuredClone. Failure payloads are plain objects, arrays and primitives; any other object is copied by its own enumerable properties.
+function clonePlain(value, seen) {
+  if (value === null || typeof value !== "object") return value
+  if (seen.has(value)) return seen.get(value)
+  const copy = Array.isArray(value) ? [] : {}
+  seen.set(value, copy)
+  for (const key of Object.keys(value)) {
+    copy[key] = clonePlain(value[key], seen)
+  }
+  return copy
+}
+
 function snapshot(value) {
-  return value == null ? value : deepFreeze(structuredClone(value))
+  return value == null ? value : deepFreeze(clonePlain(value, new Map()))
 }
 
 export function terminalFailure({

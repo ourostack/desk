@@ -1,19 +1,20 @@
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
+import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../tool-names.js"
 
+// Tools that answer in diagnostic mode; every other tool is listed but gated.
 const diagnosticToolNames = ["desk_status", "desk_doctor"]
 
-const diagnosticTools = diagnosticToolNames.map((name) => ({
+// The full tool set from the start, in the same order and shape as the healthy server, so a host that caches the first tools/list never loses a tool once Desk recovers.
+const diagnosticTools = TOOL_NAMES.map((name) => ({
   name,
-  description: name === "desk_status"
-    ? "Report why Desk is running in diagnostic or setup mode and what to do next."
-    : "Diagnose Desk runtime startup and return concrete remediation.",
-  inputSchema: {
-    type: "object",
-    properties: name === "desk_doctor"
-      ? { format: { type: "string", enum: ["full", "preview"] } }
-      : {},
-    additionalProperties: false,
-  },
+  description: TOOL_DESCRIPTIONS[name],
+  inputSchema: name === "desk_doctor"
+    ? {
+        type: "object",
+        properties: { format: { type: "string", enum: ["full", "preview"] } },
+        additionalProperties: false,
+      }
+    : { type: "object", properties: {}, additionalProperties: true },
 }))
 
 export function startDiagnosticServer({
@@ -91,7 +92,7 @@ function dispatchRequest({ diagnostic, request, serverVersion }) {
       result: {
         protocolVersion: request.params?.protocolVersion ?? "2025-06-18",
         capabilities: {
-          tools: {},
+          tools: { listChanged: true },
         },
         serverInfo: {
           name: "desk-mcp-diagnostic",
@@ -157,6 +158,12 @@ function toolResult({ diagnostic, toolName, input }) {
   }
   const rejected = {
     ...diagnostic,
+    status: "degraded",
+    code: diagnostic.code ?? diagnostic.reason,
+    fix: diagnostic.fix
+      ?? diagnostic.remediation?.[0]?.message
+      ?? "Call desk_doctor for the startup failure and its remediation.",
+    tool: toolName ?? null,
     summary: `${toolName ?? "This tool"} is unavailable while Desk is in diagnostic mode.`,
   }
   return {

@@ -207,12 +207,14 @@ test("diagnostic MCP completes the core handshake and keeps remediation coherent
   const messages = parseMessages(Buffer.concat(chunks).toString("utf8"))
   assert.deepEqual(messages.map((message) => message.id), [1, 2, 3, 4, 5, 6])
   assert.equal(messages[0].result.protocolVersion, "2025-06-18")
-  assert.deepEqual(messages[0].result.capabilities, { tools: {} })
+  assert.deepEqual(messages[0].result.capabilities, { tools: { listChanged: true } })
   assert.equal(messages[0].result.serverInfo.name, "desk-mcp-diagnostic")
   assert.deepEqual(messages[1].result, {})
+  // The full tool set, so a host that caches this first list never loses a tool once Desk recovers.
+  const { TOOL_NAMES } = await import(pathToFileURL(path.join(mcpRoot, "src", "tool-names.js")).href)
   assert.deepEqual(
     messages[2].result.tools.map((tool) => tool.name),
-    ["desk_status", "desk_doctor"],
+    TOOL_NAMES,
   )
 
   const status = parseToolPayload(messages[3])
@@ -239,6 +241,10 @@ test("diagnostic MCP completes the core handshake and keeps remediation coherent
   assert.deepEqual(doctor.remediation, status.remediation)
   assert.deepEqual(rejectedMutation.remediation, status.remediation)
   assert.match(rejectedMutation.summary, /unavailable while Desk is in diagnostic mode/u)
+  assert.equal(rejectedMutation.status, "degraded")
+  assert.equal(rejectedMutation.code, "no_compatible_node")
+  assert.equal(rejectedMutation.fix, status.remediation[0].message)
+  assert.equal(rejectedMutation.tool, "desk_task_update")
   assert.doesNotMatch(Buffer.concat(chunks).toString("utf8"), /\n\s+at\s+/u)
 })
 

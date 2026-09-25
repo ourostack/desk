@@ -46,26 +46,26 @@ All 16 tools are wired to real implementations. There is no qualitative feedback
 
 ## How consumers wire this up
 
-Desk ships host-specific declarations for hosts with different plugin-root
-contracts. Copilot loads `.mcp.copilot.json`:
+Desk ships host-specific declarations for hosts with different plugin-root contracts. Both start Node through Desk's own selector, `launch/desk-node.sh`, a POSIX `sh` script, so Desk never depends on which `node` a host or shell puts first on `PATH`. The selector lists the Node binaries on `PATH` and under nvm, fnm, Volta, asdf, mise, Homebrew and the system, picks the newest one that satisfies `engines.node` in `package.json`, and execs it. When no compatible Node is installed, it runs `launch/node-missing-responder.sh`, which needs no Node: it completes the MCP handshake, lists every Desk tool, and answers each call with `{"state":"degraded:node_missing","fix":"<install command for this machine>"}`. Desk's session-start hooks run their Node scripts through the same selector.
+
+Copilot loads `.mcp.copilot.json`:
 
 ```json
 {
   "mcpServers": {
     "desk": {
       "type": "stdio",
-      "command": "node",
-      "args": ["${COPILOT_PLUGIN_ROOT}/mcp/index.js"],
+      "command": "sh",
+      "args": ["${COPILOT_PLUGIN_ROOT}/launch/desk-node.sh", "--mcp", "${COPILOT_PLUGIN_ROOT}/mcp/index.js"],
       "env": {}
     }
   }
 }
 ```
 
-Copilot expands `${COPILOT_PLUGIN_ROOT}` to the installed plugin directory before
-launching the server, so startup is independent of the session working directory.
-Claude Code, Codex, and generic Ouroboros consumers continue to use `.mcp.json`,
-whose relative entrypoint is resolved by their host-specific activation path.
+Copilot expands `${COPILOT_PLUGIN_ROOT}` to the installed plugin directory before launching the server, so startup is independent of the session working directory. Claude Code, Codex, and generic Ouroboros consumers use `.mcp.json`, whose inline `sh` launcher finds the plugin through `DESK_PLUGIN_ROOT` (set from `${CLAUDE_PLUGIN_ROOT}`) or the working directory and hands off to the selector. If it finds neither, it still completes the handshake and reports `degraded:plugin_root_missing`.
+
+Once Node is running, `index.js` never exits before the handshake either. On a Node older than the `engines.node` floor it goes straight to finding a compatible Node (or to diagnostic mode), and any exception before the server starts becomes diagnostic mode with `state: "degraded:startup_exception"`. Diagnostic mode lists the full tool set; tools it cannot run return `{"status":"degraded","code","fix"}`.
 
 Codex global activation writes an owned `~/.codex/desk.activation.json` file in the default Codex profile. When that file exists, the MCP entrypoint auto-loads it at startup so `desk_status` can report the selected activation target, overlay chain, desk root, and runtime cache. Project-local Codex activation passes the same config explicitly with `--activation-config .codex/desk.activation.json`.
 
