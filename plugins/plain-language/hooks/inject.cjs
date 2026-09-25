@@ -15,37 +15,36 @@ if (![...claudeEvents, ...copilotEvents].includes(event)) {
 
 const skillPath = path.join(__dirname, "..", "skills", "plain-language", "SKILL.md");
 
+// The one place that reads the skill: its body after the frontmatter, behind the contract tag.
+// A failure returns a one-line diagnostic instead of throwing, and each host decides what to do with it.
 function loadContract() {
-  const body = fs.readFileSync(skillPath, "utf8").replace(/^---[\s\S]*?---\s*/u, "");
-  return `[PLAIN_LANGUAGE_CONTRACT]\n${body}`;
+  try {
+    const body = fs.readFileSync(skillPath, "utf8").replace(/^---[\s\S]*?---\s*/u, "");
+    return { contract: `[PLAIN_LANGUAGE_CONTRACT]\n${body}` };
+  } catch (error) {
+    return { failure: `Plain Language hook could not load ${skillPath}: ${error.message}` };
+  }
 }
+
+const { contract, failure } = loadContract();
 
 if (copilotEvents.includes(event)) {
   // Copilot merges every installed plugin's sessionStart output, so one
   // plugin's failure must never block the rest: any error becomes a
   // one-line diagnostic in `additionalContext`, and the process still
   // exits 0.
-  let additionalContext;
-  try {
-    additionalContext = loadContract();
-  } catch (error) {
-    additionalContext = `Plain Language hook could not load ${skillPath}: ${error.message}`;
-  }
-  process.stdout.write(JSON.stringify({ additionalContext }));
+  process.stdout.write(JSON.stringify({ additionalContext: contract ?? failure }));
   process.exit(0);
 }
 
-let body;
-try {
-  body = fs.readFileSync(skillPath, "utf8").replace(/^---[\s\S]*?---\s*/u, "");
-} catch (error) {
-  console.error(`Plain Language hook could not load ${skillPath}: ${error.message}`);
+if (failure !== undefined) {
+  console.error(failure);
   process.exit(1);
 }
 
 process.stdout.write(JSON.stringify({
   hookSpecificOutput: {
     hookEventName: event,
-    additionalContext: `[PLAIN_LANGUAGE_CONTRACT]\n${body}`,
+    additionalContext: contract,
   },
 }));
