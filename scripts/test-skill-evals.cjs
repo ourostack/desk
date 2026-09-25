@@ -251,7 +251,7 @@ try {
 
     for (const [changed, category] of [
       ["plugins/desk/skills/start-task/SKILL.md", "selected_source"],
-      ["plugins/desk/principles.md", "selected_source"],
+      ["plugins/desk/skills/using-desk/SKILL.md", "selected_source"],
       ["skills/work-doer/SKILL.md", "selected_source"],
       ["AGENTS.md", "selected_source"],
       ["upstream-sources.lock.json", "runtime_source"],

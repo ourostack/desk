@@ -302,7 +302,7 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   const codexWorker = readText(repoRoot, "plugins/desk/agents/worker.toml");
   const copilotWorker = readText(repoRoot, "plugins/desk/agents/worker.agent.md");
   const outputStyleWorker = readText(repoRoot, "plugins/desk/output-styles/worker.md");
-  const principles = readText(repoRoot, "plugins/desk/principles.md");
+  const plainLanguage = readText(repoRoot, "plugins/plain-language/skills/plain-language/SKILL.md");
   const codexAdapter = readText(repoRoot, "plugins/desk/mcp/src/activation/adapters/codex.js");
   const workerFacts = [
     ["claude", parseFrontmatter(claudeWorker).name],
@@ -340,8 +340,12 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
       errors.push(`worker-sources ${surface} no-hard-wrap invariant drift`);
     }
   }
-  if (!principles.includes("## Invariant 10 — Authored prose never hard-wraps") || !principles.includes("Fail-closed authoring check")) {
-    errors.push("worker-sources principles no-hard-wrap invariant drift");
+  // Plain Language owns the hard-wrap rule; Desk no longer ships a principles file.
+  if (!plainLanguage.includes("Never hard-wrap authored prose") || !plainLanguage.includes("changed in the current task")) {
+    errors.push("worker-sources plain-language no-hard-wrap rule drift");
+  }
+  if (fs.existsSync(path.join(repoRoot, "plugins/desk/principles.md"))) {
+    errors.push("worker-sources retired principles file present");
   }
   if (!codexAdapter.includes("Never hard-wrap authored prose") || !codexAdapter.includes("authored/changed prose")) {
     errors.push("worker-sources codex activation no-hard-wrap invariant drift");

@@ -27,6 +27,8 @@ When the operator asks why skill-driven work omitted something, diverged from an
 
 when the operator hits friction, or when i notice a recurring rough edge:
 
+pin whenever the operator teaches me something about how i work (a principle, a tool gotcha, an environmental quirk), even offhand. over-logging is cheap; making the operator re-teach it next session is not. an explicit no-write instruction for the run still wins.
+
 1. decide the scope. is this operator-wide (`_meta/friction.md`), or does it belong to one drawer (`<track>/_friction/friction.md`)? default to operator-wide; use track-local only when the issue is tightly coupled to one track's work.
 2. append a new entry at the END of the file using this format:
 

@@ -294,7 +294,7 @@ test("work-orchestration's source contract names every required ready-set and re
     "exclusive resources",
     "missing conflict data",
     "stable table order",
-    "frozen candidate",
+    "candidate branch",
     "finding disposition",
     "bounded correction",
     "affected re-review",

@@ -1,6 +1,6 @@
 ---
 name: repo-handling
-description: Find or set up local clones for code repos referenced by a task card. Handles the multi-computer workflow where operators create task cards on one machine and resume on another with different directory layouts. Probes the current working directory, its parent, and common conventions before falling back to a two-option clone/provide flow. Also manages machine-local overrides, large-repo fallbacks, and a repo-knowledge auto-loader.
+description: Find or set up local clones for code repos referenced by a task card. Handles the multi-computer workflow where operators create task cards on one machine and resume on another with different directory layouts. Probes the current working directory, its parent, and common conventions before falling back to a two-option clone/provide flow. Also manages machine-local overrides, large-repo fallbacks, a repo-knowledge auto-loader, and the rules for reading other people's repositories and clones (read-only, never rearranged).
 ---
 
 # Repo handling
@@ -15,6 +15,18 @@ When a task references a code repo, the agent needs to know where the code lives
 - A task card's `local_path` exists in YAML but the directory doesn't resolve on this machine (machine-portability case).
 - Operator asks "where's repo X" or "do I have repo Y cloned."
 - Setting up a fresh machine that doesn't have any of the operator's usual clones.
+
+## Other people's repositories and clones
+
+A clone you only read, or a repository someone else owns, is not yours to rearrange:
+
+- **Find existing clones by remote URL** (`git config remote.origin.url`), not by directory name, before reaching for a remote reader and before any clone. Operators often keep several clones of one repository under different names.
+- **Reading is read-only.** Never checkout, switch, pull, fetch, stash, reset or branch in a clone you do not own; its HEAD is someone's working context, often mid-task. Read a different revision with `git show <ref>:<path>` if it is already present, or ask.
+- **Changes go through the established contribution path** (a branch or fork and a pull request), never by editing someone else's checkout in place.
+- **Never create, move or delete a clone without explicit authorization.** If the source is not cloned anywhere, ask first and propose a scratch location outside the operator's project folders.
+- When the operator explains how their machine is laid out, record it (`.machine-local.yml` below, or their rules in the desk) so the next session inherits it.
+
+The resolution flow below applies to the task's own repositories; its clone step still needs the operator's choice in the two-option flow.
 
 ## Resolution order
 
@@ -237,9 +249,8 @@ collision.
 Only content that is truly specific to that repo and that the agent
 would otherwise re-learn on every session — build gotchas, pipeline
 IDs, code-review rules specific to the repo's coding style, engineer-
-specific conventions. Cross-cutting principles go in
-`../principles.md` or the applicable skill; they do NOT belong in
-repo-knowledge.
+specific conventions. Cross-cutting rules go in the
+applicable skill; they do NOT belong in repo-knowledge.
 
 Content must be engine-agnostic (REST API names, not harness MCP
 tool names) — repo-knowledge is loaded into every session

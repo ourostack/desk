@@ -3,11 +3,12 @@
   "id": "investigation-boundaries",
   "description": "Behavior contracts for investigation boundaries without a model executor.",
   "sources": [
-    "plugins/desk/principles.md",
+    "plugins/desk/skills/using-desk/SKILL.md",
+    "plugins/desk/skills/evidence-discipline/SKILL.md",
     "plugins/desk/skills/preflight-actions/SKILL.md",
     "plugins/desk/skills/interaction-style/SKILL.md"
   ],
-  "reviewedSourceFingerprint": "68980a23ac638a52f9ce5552cf2a0849cd975d82f9af76975bb917c75acc79c5",
+  "reviewedSourceFingerprint": "d3b42013c94dd3d50032ae839ac09389c65e82bf5033044b89d8e7663777bc9a",
   "requirements": [
     {
       "id": "governing-question-fidelity",

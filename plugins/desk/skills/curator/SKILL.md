@@ -7,9 +7,6 @@ description: Invoke ONLY when the operator explicitly asks to process the open f
 
 a Sunday-afternoon pass over the corkboard. i sit down, take every still-pinned card off in turn, decide what to do with it, and put the board back together with only what still belongs there. the operator runs this when the cards have built up and the signal is starting to dim.
 
-this skill inherits all invariants in `../../principles.md`. read
-them first if they are not already in context.
-
 invoke this skill when the operator asks to process the friction
 backlog — typically phrased as "let's go through friction," "process
 the friction backlog," or "curate `_friction/`." worker remains the
@@ -27,8 +24,8 @@ one of three dispositions:
    single-purpose skills and longer multi-phase skills (like curator
    itself, or `pr-feedback-on-own-pr`) that worker internalizes for specific
    operator-triggered workflows. use `content-routing` to choose the
-   plugin (generic vs an overlay) and the within-plugin surface (an
-   always-on body / `principles.md` vs a triggered skill).
+   plugin (generic vs an overlay) and the within-plugin surface (the
+   layer's always-on foundation vs a triggered skill).
 2. **encode-in-repo-knowledge** — content is repo-specific (build
    gotchas, pipeline IDs, code-review rules for a particular repo);
    goes under `plugins/<plugin>/repo-knowledge/<repo>/*.md` where the
@@ -43,10 +40,11 @@ Before choosing `encode-in-skill`, find the rule that should already have covere
 
 If existing rules conflict, consolidate them under one owner. If instruction volume buried the rule, cut or simplify before adding prose. Group repeated cards by root cause and fix the governing defect instead of accumulating exceptions.
 
-no deferrals. per `principles.md` Invariant 5, every card gets a
-disposition in the same pass. "wait and see if it keeps happening" is
-a deferral dressed up as a no-op; reject. the whole point of the pass
-is that the board is clearer when it ends than when it began.
+no deferrals. every card gets a disposition in the same pass: encoded, or an explicit no-op with a one-line rationale. "not enough data yet", "wait and see if it keeps happening" and "revisit next session" are deferrals dressed up as no-ops; reject them. the whole point of the pass is that the board is clearer when it ends than when it began.
+
+### Encoding a human gate
+
+when a card is about a human-intervention point in a skill (a sign-off gate, an approval checkpoint, a "steer?" prompt), treat the gate as scaffolding: name the gate and why it exists. if the why is only that the agent might not do the right thing, encode the rule and remove the gate. where the gate is really a safety check, turn it into a self-check the agent runs, with the operator reviewing only failed checks. replace default escalation with named escalation conditions (a new architectural decision, a failed self-check, a missing prerequisite). "you should have just done X" encodes X; "you should have asked" adds the named condition. a gate stays only when it is a genuine human gate from `using-desk`.
 
 ## Process
 
@@ -54,13 +52,12 @@ is that the board is clearer when it ends than when it began.
    `$DESK/_meta/friction.md` for cross-track entries. skip
    archived entries under `_archive/`.
 2. **read each card end-to-end** before picking a disposition. don't
-   skim. per `../../principles.md` Invariant 2, reactive edits without
-   reading the full entry produce churn.
+   skim. reactive edits without reading the full entry produce churn.
 3. **decide disposition.** name the target file or rationale.
 4. **batch decisions.** present dispositions to operator in one
    message with a clear table (entry → disposition → target). wait
-   for signoff. per `../../principles.md` Invariant 1, don't walk the
-   operator through one card at a time.
+   for signoff. don't walk the operator through one card at a time
+   (`interaction-style` §1).
 5. **Encode in a single authorized PR** against the plugin repo, one unit per card with acceptance checks. Invoke `desk:superpowers-integration` for the needed Superpowers planning and implementation skills.
 6. **take landed cards down** in the same motion they shipped: update
    the `Status:` line to name the PR and merge SHA, move the entry to

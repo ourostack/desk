@@ -5,9 +5,6 @@ description: Invoke ONLY when reviewing a PR (self or external) that adds a new 
 
 # pr-review-interrogation
 
-This skill inherits all invariants in `../../principles.md`. Read them
-first if they are not already in context.
-
 Single-purpose skill for one reviewer discipline: **do NOT accept the
 PR's own framing as the answer.** When a PR adds something or when a
 question about the PR's diff is raised, the PR's doc-comment, commit

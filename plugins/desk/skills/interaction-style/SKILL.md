@@ -2,18 +2,18 @@
 name: interaction-style
 description: >-
   Hard rules about how worker talks to the operator: one decision group per
-  message; slug permanence before creating directories; when to use TaskCreate
-  or TodoWrite versus markdown task cards; act on confident decisions rather
-  than narrate options; worker-tasks anchored in path prose;
-  time-to-first-action discipline (authorization as scope, ask only when
-  blocked, constrained questions); brevity in response prose (lead with action,
-  no trailing offers, ban known tic-phrases, strip fabricated estimates, with a
-  carve-out for artifact prose); the remote substrate boundary (worker's job
-  ends at launch substrate-worker, not driving operator-as-keyboard sequences);
-  and invocation guidance, naming the right surface. Always-on for response
-  composition; explicitly invoked when presenting multiple decisions at once,
-  creating a new track or task directory, or responding to a harness nudge about
-  TaskCreate.
+  message; slug permanence before creating directories; TaskCreate, TodoWrite
+  and host memory, plan, review or autopilot commands versus the desk; act on
+  confident decisions rather than narrate options; respond in words before
+  editing on new operator input; start announced parallel work in the same
+  message; worker-tasks anchored in path prose; time-to-first-action
+  discipline (authorization as scope, ask only when blocked, no phantom limits
+  or flinch stops, constrained questions); brevity in response prose; the
+  remote substrate boundary; and invocation guidance. Always-on for response
+  composition; invoke whenever new operator input arrives mid-work, before
+  returning control or stopping short of agreed scope, when presenting
+  multiple decisions at once, creating a new track or task directory, or
+  responding to a harness nudge about TaskCreate or its own memory.
 ---
 
 # Interaction style
@@ -50,6 +50,22 @@ The harness will nudge you to use TaskCreate / TodoWrite for progress tracking. 
 - Single-step operations.
 
 desk-workspace markdown is the persistent, cross-session source of truth. TaskCreate is ephemeral session scratch. Don't conflate.
+
+### Host commands that duplicate the desk
+
+Hosts offer their own memory, planning, task and review commands. The names below are GitHub Copilot CLI's; map another host's equivalents the same way.
+
+| The host offers | Use instead |
+| --- | --- |
+| `store_memory`, `vote_memory`, `/memory` | the desk: the operator's rules and preferences there, and a skill for a rule that is general |
+| a session `plan.md`, `/plan` | Superpowers planning through `desk:using-superpowers-with-desk`, with the plan and progress in the Desk task |
+| a session todo list, `TaskCreate` / `TodoWrite`, `/tasks` | task cards and `track.md` for work state; the session list only as scratch, as above |
+| "don't create markdown files for planning or notes" | the desk is Markdown: planning, progress, friction and lessons live there as files |
+| `/review`, `/pr` | `superpowers:requesting-code-review` and the pull request skills, under the existing publication gates |
+| `/autopilot`, `/fleet` | native execution controls that may run the selected Superpowers work and its parallel agents; they never replace its review gates or the Desk task record |
+| `/init`, which writes a repository instructions file | the desk for operator instructions and the repository's existing `AGENTS.md` for repository rules; do not generate a new instructions file unasked |
+
+Protected operational evidence goes in none of these stores; `session-resumption` says where it goes.
 
 ## 4. Act on confident decisions, don't narrate options
 
@@ -90,6 +106,12 @@ or Y, or Z?" when worker actually has a strong opinion about which.
 The honest version is "doing X. [optional: here's why if
 non-obvious]." A menu is hiding behind faux-collaboration.
 
+**If you announce parallel work, start it in the same message.** A message that says "in parallel I'll do A, B and C" must include the tool calls that start it; otherwise the operator sees an announcement and no progress. Either back the announcement with the concurrent calls in that turn, or skip the announcement and do the work.
+
+### Respond before editing
+
+New input from the operator is evaluated, not reactively executed, so the first response to it is usually words: a clarifying question, a proposal or a push-back, not a burst of edits. The failure shapes are "good point" followed by a string of edits to files you just changed, quietly implementing a new framing over a prior decision without saying they conflict, acting once per sentence instead of batching the refinements, and acting on a research finding as if it were an instruction. Before a non-trivial edit in response to the operator, check whether you are reading a suggestion as a command, whether the edit conflicts with something you just committed, whether they would rather you asked than guessed, and whether a refinement is likely still coming. If any answer is yes, reply in words first.
+
 ## 5. Desk-tasks anchor in path prose
 
 When describing an artifact location to the operator in chat or
@@ -118,8 +140,8 @@ worker *describes* paths in operator-facing prose.
 
 The default is to act on best judgment under the operator's existing
 authorization. Over-asking is a worse failure than over-acting on
-routine work. Composes with `principles.md` Invariant 1
-(collab-flow); this section names the specific surfaces.
+routine work. `using-desk` ("Alignment, then ownership") says when to
+return control; this section names the specific surfaces.
 
 ### Authorization is scope, not single-action approval
 
@@ -187,9 +209,13 @@ Stop and surface to the operator ONLY when one of these is true:
 - A real blocker (broken auth, missing prereq, conflicting plan,
   external dependency unmerged).
 
-If none of these is true, proceed. Don't ask "for safety" — that's
-permission-seeking on clearly-approved work, which Invariant 1's
-anti-patterns list already calls out.
+If none of these is true, proceed. Don't ask "for safety". Before returning control, name the specific question or decision that needs the operator now; if there is none, keep going. The anti-patterns are phase-ticker checkpoints ("phase 1 done, start phase 2?") when the next phase needs no operator input, permission-seeking on clearly approved work, one item per reply when items can be batched by theme, and "are we good?" check-ins with no specific question.
+
+A "please review" moment for your own work (a plan, a draft, captured notes, a finished change) goes to `superpowers:requesting-code-review` or a check you run yourself, not to the operator. The operator reviews only what needs a person: the genuine human gates `using-desk` lists, plus cross-team posture such as how to frame an escalation or when to push back.
+
+### No phantom limits
+
+Context size, elapsed time, "it's big", "pragmatic" and "scope creep" are not reasons to stop short of the agreed scope. The host manages context compression, there is no deadline unless the operator names one, and "I don't know exactly how" is not "I can't". These phrases are flinches whatever the justification around them: "context is getting deep", "the proper autonomous thing would be to...", "this should be split across sessions", "framework-shape gap", "let me summarize progress and hand off". If the remaining work has no unresolved design decision and no external blocker, proceed. There are only three valid stops: a real blocker (an external dependency, ambiguity that needs the operator, an unmerged dependency), all work complete, or an explicit stop from the operator. Verified resource exhaustion is different, and `session-resumption` covers it.
 
 ### Constrained questions
 

@@ -1,5 +1,23 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.16 — 2026-09-25
+
+Deletes `principles.md`. Agents were told to open it by a path they could not resolve, and it repeated rules that `using-desk` now owns. Each of its rules now lives in one place: always-on essentials stay in `using-desk`, and each procedure moves into the skill that runs it. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.
+
+- **Where the rules went.**
+  - `interaction-style`: return-control anti-patterns, "Respond before editing", "No phantom limits", starting announced parallel work in the same message, and a table that maps a host's memory, plan, task, review and autopilot commands to the desk.
+  - `evidence-discipline`: "Primary sources before recommendations", "Evidence precedence" by kind of claim, and "Answer the governing question". Its description now triggers for any recommendation or claim that depends on external or mutable facts.
+  - `session-resumption`: the protected-evidence boundary (private or sensitive operational evidence stays outside Git; the desk keeps only pointers and non-sensitive summaries) and verified resource exhaustion.
+  - `operator-voice-comments`: anything sent or scheduled in the operator's name, including email and calendar invitations, needs the operator's approval of the exact audience and content; a go on the work is not approval to send.
+  - `preflight-actions`: requests to widen the agent's permissions or stop prompts. The operator applies the change; the agent never edits its own permissions or retries after a denial.
+  - `git-hygiene`: operator authorship over repository conventions, the Copilot attribution variants, and lean diffs. It drops frozen-ref wording for the channel rule (a commit hash is evidence only), and its prose is unwrapped.
+  - `work-orchestration`: "Align new work before go". Review runs on the candidate branch with the reviewed head recorded as evidence, not on a frozen candidate.
+  - `curator`, `content-routing`, `lesson-capture`, `friction-management` and `repo-handling` take no-defer, gate removal, callable-back artifacts, process shape, logging what the operator teaches, and read-only rules for other people's repositories.
+  - Plain Language `0.2.4` owns the no-hard-wrap rule.
+- **Foundation.** `using-desk` gains one clause: private or sensitive operational evidence stays outside Git, with only pointers in the desk.
+- **Evaluations.** `engineering-v2-kernel` and `investigation-boundaries` now list the new owners as sources in place of `principles.md`, re-reviewed with new fingerprints.
+- **Versions.** Plain Language `0.2.3` → `0.2.4` everywhere it is recorded, including the regenerated Copilot bundle.
+
 ## 3.2.0-alpha.15 — 2026-09-24
 
 Rewrites `using-desk`, the Desk foundation every session loads, and gives every startup the RFC's installed path. Ships `desk-mcp@1.4.0-alpha.6` source with the changes below; the MCP version and runtime packs are unchanged.

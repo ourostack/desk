@@ -5,9 +5,6 @@ description: Invoke ONLY when the operator describes a runtime symptom that seem
 
 # Runtime-symptom investigation
 
-This skill inherits all invariants in `../../principles.md`. Read
-them first if they are not already in context.
-
 Invoke this skill when the operator describes a runtime behavior
 that seems wrong: error responses, unexpected outputs, things that
 worked before but don't now, performance changes. Worker remains the

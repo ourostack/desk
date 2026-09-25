@@ -35,6 +35,7 @@ what i'm looking for:
 - **anti-patterns surfaced** — pre-existing behavior that proved costly during this iteration
 - **new conventions discovered** — operator-confirmed shapes that aren't yet in skill bodies
 - **cross-skill conflicts** — places where two skills' guidance disagreed and one had to give
+- **a rule that keeps being broken** — the surrounding process shape is pushing against it; propose the process change (reorder a step, add a phase), not a louder restatement of the rule
 
 ## Output: lesson proposals
 
@@ -47,7 +48,7 @@ for each lesson worth shelving, i write a concrete proposal:
 - **anti-pattern** — what the rule prevents
 - **evidence** — quote from the artifact(s) that surfaced the lesson
 
-the **where it should land** call is a `content-routing` decision — operator-specific stays in the workspace; a general lesson extracts to a plugin (generic vs an overlay); within a plugin, an always-on body / `principles.md` vs a triggered skill.
+the **where it should land** call is a `content-routing` decision — operator-specific stays in the workspace; a general lesson extracts to a plugin (generic vs an overlay); within a plugin, the layer's always-on foundation vs a triggered skill.
 
 proposals are **proposals** — they don't auto-apply. each lesson is surfaced for operator confirm (or for my own confirm if i'm self-encoding under my own authority). operator may approve, redirect, or reject. nothing goes on the shelf without that sign-off.
 

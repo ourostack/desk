@@ -36,7 +36,7 @@ if (skillManifest !== null) {
 assert.equal(vendorFiles.length, 0);
 assert.equal(lock.sources.some((source) => source.files.some((file) => file.generatedPath.startsWith("plugins/plain-language/"))), false);
 for (const manifest of manifests) {
-  assert.equal(manifest.version, "0.2.3");
+  assert.equal(manifest.version, "0.2.4");
   assert.match(manifest.description, /first-party output policy/u);
 }
 assert.match(pluginSkill, /## Serve the reader/u);
@@ -50,6 +50,13 @@ assert.match(pluginSkill, /## Report work precisely/u);
 assert.match(pluginSkill, /## Preserve meaning/u);
 assert.match(pluginSkill, /## Check before sending/u);
 assert.match(pluginSkill, /The integration test is still running/u);
+// Plain Language owns the hard-wrap rule for every agent, including subagents.
+const voiceAndFormat = pluginSkill.split("## Keep the right voice and format\n", 2)[1]?.split("\n## ", 1)[0] ?? "";
+assert.match(voiceAndFormat, /Never hard-wrap authored prose/u);
+assert.match(voiceAndFormat, /one physical line/u);
+assert.match(voiceAndFormat, /genuine structure/u);
+assert.match(voiceAndFormat, /changed in the current task/u);
+assert.match(voiceAndFormat, /source-preserved/u);
 assert.doesNotMatch(pluginSkill, /vendor|upstream-sources|conformance/iu);
 
 // Copilot injects the plugin's own hook (root plugin.json points at

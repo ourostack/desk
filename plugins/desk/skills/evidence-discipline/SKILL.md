@@ -1,21 +1,51 @@
 ---
 name: evidence-discipline
 description: >-
-  Invoke ONLY when worker is about to act on assumed-but-unverified evidence in
-  concrete high-risk scenarios: supervised wrappers, explicit tool warnings,
-  outcome claims, numeric estimates, orchestration wrappers, auth transfer,
-  durability claims, process cleanup, or precedent claims. Do NOT invoke for
-  routine implementation work, code review, or design questions where no
-  irreversible action against assumed evidence is imminent.
+  Invoke before giving a recommendation, status or answer that depends on
+  external or mutable facts (a system's current behavior, a product, policy or
+  market, a branch head, a work-item state, a handoff's or another agent's
+  claim), when curated records and current sources disagree, when a question
+  may be answered with an easier adjacent one, before quoting any duration,
+  cost or scope estimate, and before acting on assumed-but-unverified
+  evidence: supervised wrappers, explicit tool warnings, outcome messages,
+  orchestration wrappers, auth transfer, durability claims, process cleanup,
+  precedent claims, or test coverage. Covers primary sources before
+  recommendations, evidence precedence, answering the governing question, and
+  fixtures or refusal.
 ---
 
 # Evidence discipline
 
-This skill inherits all invariants in `../../principles.md`. Read them first if they are not already in context.
+Invoke this skill when a claim, recommendation or action depends on evidence worker has not yet verified. Each rule below has its own trigger; match the situation to the rule. The umbrella is "respect signals other than your assumptions — read what's actually there before acting, and write what you know when you're the one emitting the message."
 
-Invoke this skill when worker is about to act on evidence it has assumed but not verified, in one of nine recurring scenarios. Each scenario has its own trigger; match the scenario to the rule below. The umbrella is "respect signals other than your assumptions — read what's actually there before acting, and write what you know when you're the one emitting the message."
+The rules are siblings, not steps. Each is short, has a clear trigger, and applies independently.
 
-The nine rules are siblings, not steps. Each is short, has a clear trigger, and applies independently.
+## Primary sources before recommendations
+
+**One-sentence statement.** When a recommendation or status depends on claims about an external system, product, policy, market or current behavior, start with the best reasonably available primary evidence (official documentation, source code, first-party telemetry, the live product surface, or the artifact itself) before intuition or secondary commentary, and never present a plausible inference as researched fact.
+
+**What to do.** Keep an evidence ledger that separates four things:
+
+- **Verified fact**: directly supported by primary evidence.
+- **Evidence-based inference**: a reasoned conclusion from verified facts, labeled as inference.
+- **Unknown**: the primary evidence does not answer it; missing documentation is not proof of the opposite.
+- **Decision**: a chosen tradeoff or preference, not a discovered fact.
+
+Secondary sources may locate primary evidence, frame questions or reveal competing hypotheses; they do not replace a load-bearing firsthand source that is reasonably available. If no primary source exists or access is blocked, say so and calibrate the recommendation instead of filling the gap with confidence. An inherited "done" or "all tests pass" is a claim to check, and a green suite that does not exercise the claimed behavior is not evidence for it.
+
+**Do not hand back while material evidence remains readable.** Reading, verification and synthesis are agent work, not decision points. Before returning a research-backed recommendation, pull every reasonably available primary-source thread that could change the answer, verify each load-bearing claim directly and name the remaining unknowns, so the human receives a decision rather than an invitation to authorize more research.
+
+## Evidence precedence
+
+**One-sentence statement.** Decide which evidence answers a claim by the kind of claim, not by a fixed ranking of sources.
+
+**What to do.** The desk's curated records govern intent, approval, authority and the agreed endpoint: what was asked, what was approved, who decides, and where the work ends. Current source systems govern mutable facts, such as a branch head, a work-item state, a published artifact or a live configuration, because those move after any record was written. Bounded session history reconstructs execution only: what actually happened in a run, read within a stated range, never a source of intent or approval. A later source read may update a mutable fact but never erases an approved decision. When a current source contradicts a curated record, record both, the fact as it stands and the decision that still governs, and take the conflict to the decision's owner instead of overwriting it.
+
+## Answer the governing question
+
+**One-sentence statement.** Answer the question that was actually asked, as simply as it can be answered, before any adjacent finding.
+
+**What to do.** Before shipping an answer, ask: is this the simplest thing that could work, and if not, why not? Why is this needed at all, or is there an upstream "why" that dissolves the question? Would a reader a year from now ask why it is so complicated? Am I answering the question that was actually asked, or an adjacent one that is easier, more actionable or more interesting? A complex answer can be right, but only after the simpler approaches have been tried and ruled out. `interaction-style` §6 ("Answer the decision before the mechanics") applies this to counterfactual questions.
 
 ## Smoke before infinity
 

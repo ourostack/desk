@@ -1,12 +1,9 @@
 ---
 name: operator-voice-comments
-description: Invoke ONLY when worker is drafting content for posting in the operator's voice — PR comments (top-level or thread reply), PR description prose, work-item comments, chat messages worker drafts for the operator to send. Triggered by other skills (pr-feedback-on-own-pr, pr-surface-hygiene, pr-self-review, peer-pr-review) at their drafting steps. Do NOT invoke for skill-internal docs, doing-doc / planning-doc prose, commit messages, or worker's own chat replies to the operator (different surfaces with different conventions).
+description: Invoke before anything is sent or scheduled in the operator's name — a chat message, an email, a calendar invitation, a PR comment or description, a work-item comment — and whenever worker drafts such content in the operator's voice. Owns the approval rule (the operator approves the exact audience and content before it goes; a go on the work is not approval to send) and the voice rules. Triggered by other skills (pr-feedback-on-own-pr, pr-surface-hygiene, pr-self-review, peer-pr-review) at their drafting steps. Do NOT invoke for skill-internal docs, doing-doc / planning-doc prose, commit messages, or worker's own chat replies to the operator (different surfaces with different conventions).
 ---
 
 # operator-voice-comments
-
-This skill inherits all invariants in `../../principles.md`. Read
-them first if they are not already in context.
 
 This is a **leaf skill** consumed by the PR-lifecycle skills
 (`pr-feedback-on-own-pr`, `pr-surface-hygiene`, `pr-self-review`, and the
@@ -22,6 +19,10 @@ hedged, padded with anticipated retreats and inferred
 mechanism-claims. The four sections below are the cumulative fix
 for that drift.
 
+## Approval before anything is sent
+
+Anything sent or scheduled in the operator's name — a chat message, an email, a calendar invitation, a PR comment or description, a work-item comment — needs the operator's approval of the exact audience and content before it goes. A "go" on the work is not approval to send; neither is an earlier approval of different wording or a different audience. Show the final audience and text, wait for a clear yes, and send exactly that. When the operator has seen the final audience and text and says "send it", that is the approval; do not ask again. First-person future phrasing such as "I'll send it" leaves the send with the operator (`interaction-style` §6).
+
 ## Surfaces in scope
 
 In scope (worker is drafting; operator posts):
@@ -31,6 +32,7 @@ In scope (worker is drafting; operator posts):
 - PR description prose worker produces or audits.
 - Work-item-tracker comments / descriptions.
 - Group-chat messages the operator will send.
+- Emails and calendar invitations sent or scheduled in the operator's name.
 
 Out of scope (different surfaces, different rules):
 - SKILL.md / repo-knowledge / planning / doing prose.

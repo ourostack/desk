@@ -157,7 +157,11 @@ for (const file of [
   requires(file, "orchestration leaves task lifecycle to Desk", /Desk[\s\S]+task[\s\S]+iteration[\s\S]+state/iu);
   requires(file, "orchestration returns nested review to its parent", /nested[\s\S]+parent/iu);
   requires(file, "orchestration preserves explicit human approval", /needs-human-approval[\s\S]+hard exception/iu);
-  requires(file, "orchestration scopes native review to a frozen diff boundary", /requesting-code-review[\s\S]+diff boundary[\s\S]+frozen candidate/iu);
+  requires(file, "orchestration scopes native review to the diff boundary on the channel", /requesting-code-review[\s\S]+diff boundary[\s\S]+candidate branch[\s\S]+head it reviewed[\s\S]+evidence/iu);
+  contract("orchestration names no frozen candidate or frozen brief", () => {
+    assert.doesNotMatch(text(file), /froz|freez/iu);
+  });
+  requires(file, "orchestration gathers every human judgment before go", /Align new work before go[\s\S]+every decision[\s\S]+entangled[\s\S]+one batch[\s\S]+recommendation/iu);
   contract("orchestration never downgrades explicit human approval", () => {
     assert.doesNotMatch(text(file), /needs-human-approval[\s\S]{0,120}(?:otherwise )?map(?:s)? it to blocking `needs reviewer gate`/iu);
   });
@@ -335,6 +339,127 @@ contract("preview feedback entries are deterministically targetable in plain Mar
   assert.match(select(ids[1], amended)[0], /Withdrawn 2026-09-15 by ari/u);
   assert.doesNotMatch(select(ids[1], amended)[0], /It repeated the same design choice/u);
 });
+
+// The rules that `principles.md` used to hold each live in exactly one owner.
+contract("principles.md is gone and nothing points at it", () => {
+  assert.equal(fs.existsSync(path.join(root, "plugins/desk/principles.md")), false);
+  const skillsRoot = path.join(root, "plugins/desk/skills");
+  const offenders = [];
+  for (const name of fs.readdirSync(skillsRoot)) {
+    const file = path.join(skillsRoot, name, "SKILL.md");
+    if (fs.existsSync(file) && /principles\.md|Invariant \d|Sub-invariant/u.test(fs.readFileSync(file, "utf8"))) offenders.push(name);
+  }
+  for (const file of ["plugins/desk/agents/worker.md", "plugins/desk/agents/worker.agent.md", "plugins/desk/agents/worker.toml", "plugins/desk/output-styles/worker.md"]) {
+    if (/principles\.md/u.test(text(file))) offenders.push(file);
+  }
+  assert.deepEqual(offenders, []);
+});
+requires(
+  "plugins/desk/skills/interaction-style/SKILL.md",
+  "interaction-style lists the return-control anti-patterns",
+  /phase-ticker[\s\S]+permission-seeking[\s\S]+one item per reply[\s\S]+"are we good\?"/iu,
+);
+requires(
+  "plugins/desk/skills/interaction-style/SKILL.md",
+  "interaction-style answers new input in words before editing",
+  /Respond before editing[\s\S]+words[\s\S]+suggestion as a command[\s\S]+conflict[\s\S]+refinement/iu,
+);
+requires(
+  "plugins/desk/skills/interaction-style/SKILL.md",
+  "interaction-style names phantom limits and the only valid stops",
+  /No phantom limits[\s\S]+context is getting deep[\s\S]+let me summarize progress and hand off[\s\S]+real blocker[\s\S]+all work (?:is )?complete[\s\S]+explicit stop/iu,
+);
+requires(
+  "plugins/desk/skills/interaction-style/SKILL.md",
+  "announced parallel work starts in the announcing message",
+  /announce parallel work[\s\S]+same message[\s\S]+tool calls that start it/iu,
+);
+contract("interaction-style maps host commands to their Desk owners", () => {
+  const body = subsection("plugins/desk/skills/interaction-style/SKILL.md", "Host commands that duplicate the desk");
+  for (const row of ["store_memory", "/plan", "/tasks", "/review", "/autopilot", "/init"]) assert.ok(body.includes(row), row);
+  assert.match(body, /desk:using-superpowers-with-desk/u);
+  assert.match(body, /superpowers:requesting-code-review/u);
+});
+requires(
+  "plugins/desk/skills/interaction-style/SKILL.md",
+  "self-review goes to a reviewer, not the operator",
+  /requesting-code-review[\s\S]{0,300}not (?:to )?the operator/iu,
+);
+contract("evidence-discipline triggers on any claim that depends on external or mutable facts", () => {
+  const frontmatter = text("plugins/desk/skills/evidence-discipline/SKILL.md").split("---", 3)[1];
+  assert.match(frontmatter, /recommendation[\s\S]+external or mutable facts/iu);
+  assert.doesNotMatch(frontmatter, /Invoke ONLY/u);
+});
+requires(
+  "plugins/desk/skills/evidence-discipline/SKILL.md",
+  "evidence-discipline owns primary sources before recommendations",
+  /## Primary sources before recommendations[\s\S]+Verified fact[\s\S]+inference[\s\S]+Unknown[\s\S]+Decision[\s\S]+Do not hand back while material evidence remains readable/u,
+);
+requires(
+  "plugins/desk/skills/evidence-discipline/SKILL.md",
+  "evidence-discipline owns evidence precedence by claim kind",
+  /## Evidence precedence[\s\S]+desk[\s\S]+intent, approval[\s\S]+source systems?[\s\S]+mutable facts[\s\S]+session history[\s\S]+execution[\s\S]+never erases an approved decision/iu,
+);
+requires(
+  "plugins/desk/skills/evidence-discipline/SKILL.md",
+  "evidence-discipline owns answering the governing question",
+  /## Answer the governing question[\s\S]+simplest[\s\S]+why[\s\S]+question that was actually asked[\s\S]+adjacent/iu,
+);
+requires(
+  "plugins/desk/skills/session-resumption/SKILL.md",
+  "session-resumption owns the protected-evidence boundary",
+  /## Protected evidence[\s\S]+raw transcripts, credentials, private measurement(?: and|,) customer data[\s\S]+outside Git[\s\S]+approved private evidence location[\s\S]+only pointers and derived, non-sensitive summaries/iu,
+);
+contract("operator-voice-comments owns approval of anything sent in the operator's name", () => {
+  const skill = text("plugins/desk/skills/operator-voice-comments/SKILL.md");
+  const frontmatter = skill.split("---", 3)[1];
+  assert.match(frontmatter, /sent or scheduled in the operator's name/iu);
+  assert.match(frontmatter, /email[\s\S]+calendar/iu);
+  assert.match(skill, /## Approval before anything is sent[\s\S]+exact audience and content[\s\S]+"go" on the work is not approval to send/iu);
+});
+requires(
+  "plugins/desk/skills/repo-handling/SKILL.md",
+  "repo-handling keeps other people's repositories read-only",
+  /## Other people's repositories[\s\S]+remote URL[\s\S]+read-only[\s\S]+checkout[\s\S]+established contribution path[\s\S]+never (?:create|clone)[\s\S]+without explicit/iu,
+);
+requires(
+  "plugins/desk/skills/preflight-actions/SKILL.md",
+  "preflight-actions owns requests to widen the agent's permissions",
+  /## Widening the agent's permissions[\s\S]+guardrail[\s\S]+permissions screen[\s\S]+config snippet[\s\S]+operator (?:to )?apply[\s\S]+wait[\s\S]+never retry[\s\S]+denial[\s\S]+never (?:edit|change|modify) (?:your|its) own permissions/iu,
+);
+contract("preflight-actions triggers on permission-widening requests", () => {
+  assert.match(text("plugins/desk/skills/preflight-actions/SKILL.md").split("---", 3)[1], /widen[\s\S]{0,60}permissions|stop (?:being )?prompt/iu);
+});
+requires(
+  "plugins/desk/skills/curator/SKILL.md",
+  "curator rejects deferrals dressed up as no-ops",
+  /not enough data yet[\s\S]+wait and see[\s\S]+revisit next session/iu,
+);
+requires(
+  "plugins/desk/skills/curator/SKILL.md",
+  "curator encodes human gates as self-checks with named escalation",
+  /### Encoding a human gate[\s\S]+name the gate and why[\s\S]+self-check[\s\S]+named escalation/iu,
+);
+requires(
+  "plugins/desk/skills/content-routing/SKILL.md",
+  "content-routing persists callable-back artifacts when drafted",
+  /## Callable-back artifacts land when drafted[\s\S]+grep[\s\S]+no-write/iu,
+);
+contract("content-routing routes always-on rules to a foundation, not principles or bodies", () => {
+  const skill = text("plugins/desk/skills/content-routing/SKILL.md");
+  assert.match(skill, /always-on foundation/u);
+  assert.match(skill, /`using-desk`/u);
+});
+requires(
+  "plugins/desk/skills/lesson-capture/SKILL.md",
+  "lesson-capture fixes the process shape behind a repeatedly broken rule",
+  /keeps being broken[\s\S]+process/iu,
+);
+requires(
+  "plugins/desk/skills/friction-management/SKILL.md",
+  "friction-management logs what the operator teaches",
+  /operator teaches[\s\S]+even offhand[\s\S]+no-write/iu,
+);
 
 assert.equal(
   contractFailures.length,

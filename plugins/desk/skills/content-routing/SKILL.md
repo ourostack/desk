@@ -5,9 +5,10 @@ description: >-
   workspace, a generic plugin, or a context overlay. Invoke before encoding
   product behavior, interfaces, installation contracts, defaults,
   compatibility promises, release rules, a friction disposition, a captured
-  lesson, an operator preference, a repo-specific gotcha, or a new skill's
-  layer. Within a plugin, also decides always-on body/principles vs a triggered
-  skill and whether to split a generic engine from a context skin. Do NOT
+  lesson, an operator preference, a repo-specific gotcha, a reusable artifact
+  just drafted, or a new skill's layer. Within a plugin, also decides the
+  always-on foundation vs a triggered skill and whether to split a generic
+  engine from a context skin. Do NOT
   invoke for file placement inside a workspace (that's `directory-structure`)
   or for human-facing voice.
 ---
@@ -34,7 +35,7 @@ So content lives in exactly one of four homes: the product repository, a workspa
    - **Generic, no employer/context-specific content** → the **public generic Desk integration**. Do not edit the pinned provider to encode local rules. Strip employer/context-specific terms before publication; an internal tool, repository or account name is not a generic example.
    - **General to a context but employer/context-specific** (names an internal tool, account model, or repo that can't go public) → the matching **overlay plugin**.
    - **Within the chosen plugin**, pick the surface by *when it must apply*:
-     - **Every turn / unconditionally** → the agent **body** (`agents/<name>.md`) or **`principles.md`**.
+     - **Every turn / unconditionally** → the layer's **always-on foundation** skill, injected once at session start (Desk's is `using-desk`). Keep it to the essence; its procedure still goes in the skill that runs it. Agent bodies carry identity and context only.
      - **At one moment** — a specific operation, a decision point, a surface the agent touches → a **skill** (description-gated; fires when its trigger matches).
 
 ## The self-check — run before writing into a workspace or plugin
@@ -44,6 +45,10 @@ First ask: *"Does this define the product being built?"* If yes, route it to the
 Otherwise ask: *"Is the rule BODY universal enough that an operator who isn't this one — or a different agent entirely — would also benefit?"*
 
 If yes, the body belongs in a plugin (route per the decision above) and the rules file keeps only the instance + pointer. **Do not wedge a general-principle body in under an "operator said X" framing.** That semantic mis-tag turns the agent's application gate into *"is this an operator-X context?"* instead of the rule's real trigger — and the rule silently fails to fire when it should. "Obviously generic on first surfacing" is enough to extract; you don't have to wait for a second instance.
+
+## Callable-back artifacts land when drafted
+
+A reusable artifact the operator might ask for in a later session (a command, a query, a config snippet, a paste-ready draft, a decision) goes into the desk when you draft it, not only into the conversation: the relevant task or track, a tips note, the review folder, wherever it will be found. The test: if the operator said tomorrow "get that X we made", could a fresh session with no memory of this one grep it out of the desk? Ephemeral reasoning, one-shot answers and scratch stay in chat. An explicit no-write instruction overrides this.
 
 ## Placing a whole skill: engine, skin, and the canonical library
 
@@ -65,7 +70,7 @@ A skill is a *capability*, not just a rule, so it routes the same way (whose? ge
 
 > ### Short rule title (DATE)
 >
-> See `plugins/<plugin>/.../SKILL.md` (or `principles.md` / `agents/<name>.md`) "Section name" (added/migrated DATE in `<org>/<repo>#N`). Instance: *"verbatim quote"* (DATE) — one-sentence context.
+> See `plugins/<plugin>/.../SKILL.md` (or the layer's foundation skill) "Section name" (added/migrated DATE in `<org>/<repo>#N`). Instance: *"verbatim quote"* (DATE) — one-sentence context.
 
 ## Cross-references
 

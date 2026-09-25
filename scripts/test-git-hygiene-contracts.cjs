@@ -28,22 +28,55 @@ function section(markdown, title) {
   return markdown.slice(contentStart, end).trim();
 }
 
+function subsection(markdown, title) {
+  const heading = `### ${title}\n`;
+  const start = markdown.indexOf(heading);
+  assert.notEqual(start, -1, `git-hygiene must include the ${title} subsection`);
+  const rest = markdown.slice(start + heading.length);
+  const end = rest.search(/\n#{2,3} /u);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
 function main() {
   const skill = read(skillPath);
   const codeRepos = section(skill, "Code repos");
   const neverLeaveStateBehind = section(skill, "Never leave state behind");
 
   for (const phrase of [
-    "Pinned or frozen task refs are the authority for that task",
+    "The task's recorded source is its channel",
     "before the first write or worktree",
-    "verify the exact ref identity",
+    "verify the checkout is on that channel",
     "branch relationship",
     "relevant version surface",
-    "frozen SHA",
-    "do not rebase or move publication refs to follow the normal-main recipe below",
+    "A commit hash is evidence only",
+    "There is no frozen candidate",
   ]) {
     assert.match(codeRepos, new RegExp(escapeRegExp(phrase), "iu"), `Code repos must mention "${phrase}"`);
   }
+  assert.doesNotMatch(codeRepos, /frozen (?:task )?refs?|frozen base|frozen SHA|pinned or frozen/iu, "Code repos must not treat a frozen ref as task authority");
+
+  const attribution = subsection(skill, "AI-attribution strip");
+  for (const phrase of [
+    "Operator authorship overrides repository conventions",
+    "flag it on first encounter",
+    "`Co-Authored-By:` naming any agent",
+    "`Generated with Copilot`",
+    "`Built by Copilot`",
+    "`Generated with Claude Code`",
+  ]) {
+    assert.match(attribution, new RegExp(escapeRegExp(phrase), "iu"), `AI-attribution strip must mention "${phrase}"`);
+  }
+  for (const trailer of ["Co-Authored-By: GitHub Copilot <x>", "Generated with Copilot", "Built by Copilot", "Generated with Claude Code", "Co-authored with Claude"]) {
+    const scan = attribution.match(/grep -[a-zA-Z]*E "([^"]+)"/u);
+    assert.ok(scan, "AI-attribution strip must ship a grep scan");
+    assert.match(trailer, new RegExp(scan[1], "iu"), `the scan must catch "${trailer}"`);
+  }
+
+  const diffScope = subsection(skill, "Diff-scope scan");
+  for (const phrase of ["exactly the lines required", "Polish is a separate, named activity", "slower review"]) {
+    assert.match(diffScope, new RegExp(escapeRegExp(phrase), "iu"), `Diff-scope scan must mention "${phrase}"`);
+  }
+  assert.doesNotMatch(skill, /principles\.md|Invariant \d/u, "git-hygiene must own its rules, not cite principles.md");
 
   for (const phrase of [
     "Never reconcile a dirty checked-out state repository by moving the branch ref in place with `git update-ref` or an equivalent ref move under the existing index/worktree",

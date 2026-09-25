@@ -332,6 +332,8 @@ function main() {
 
   assertSectionPhrases(section(skill, "Durable context and attribution"), "using-desk Durable context and attribution", [
     "live in the desk, a Git repository",
+    "private or sensitive operational evidence, which stays outside Git",
+    "(`session-resumption`)",
     "commit and push",
     "Keep nothing durable in host memory or configuration folders",
     "thin pointers to the desk",

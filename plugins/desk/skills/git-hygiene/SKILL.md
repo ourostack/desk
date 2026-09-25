@@ -13,9 +13,9 @@ The agent's pushes must reach the remote intact and on the right branch. This sk
 
 These are the actual project repos where implementation happens (paths resolved via the `repo-handling` skill).
 
-**Before starting work**: follow the recorded repository policy. Pinned or frozen task refs are the authority for that task: for an explicitly frozen base, before the first write or worktree, verify the exact ref identity, branch relationship, and relevant version surface, keep frozen SHA coverage when the recorded ref is a commit, do not rebase or move publication refs to follow the normal-main recipe below, and do not describe a frozen or unfetched checkout as current with remote main.
+**Before starting work**: follow the recorded repository policy. The task's recorded source is its channel, the branch consumers track: before the first write or worktree, verify the checkout is on that channel or a task branch from it, its branch relationship to the remote channel, and the relevant version surface, and do not describe an unfetched checkout as current with the remote. There is no frozen candidate: reviewers and evaluators use the channel as it stands when they run. A commit hash is evidence only: record the head you saw, and never pin work, a review or a handoff to it.
 
-**Dependency declarations track channels, not commits.** A frozen ref governs what one task evaluates or edits; it never goes into a plugin's dependency declaration. Dependencies between plugins (`agency.json`, plugin manifests, bundle declarations) track their release channel branch, such as `@main`, from the canonical repository, never an exact commit or a fork: a pinned commit silently freezes every consumer downstream and keeps later fixes from reaching them. Record the exact commits that were qualified in the evidence, not in the dependency. Repositories enforce this with a dependency-channel check in CI.
+**Dependency declarations track channels, not commits.** Dependencies between plugins (`agency.json`, plugin manifests, bundle declarations) track their release channel branch, such as `@main`, from the canonical repository, never an exact commit or a fork: a pinned commit silently freezes every consumer downstream and keeps later fixes from reaching them. Record the exact commits that were qualified in the evidence, not in the dependency. Repositories enforce this with a dependency-channel check in CI.
 ```bash
 cd <repo-local-path>
 git fetch origin                          # ALWAYS first — see the stale-status trap below
@@ -282,23 +282,24 @@ Two mandatory scans run before every commit, both procedural (no shipped git hoo
 
 ### AI-attribution strip
 
-Per `../principles.md` Invariant 4 (operator authorship overrides repo conventions), no AI-attribution trailer appears in any commit message or PR description the agent authors.
+No AI-attribution trailer or credit line appears in any commit message or PR description the agent authors, on any repository. Operator authorship overrides repository conventions: a repository's `CLAUDE.md`, `AGENTS.md` or contributing guide is authoritative for coding standards, build commands and layout, not for the authorship of work the operator ships under their name. If a repository's instructions prescribe AI attribution, flag it on first encounter, and once the operator confirms the override, apply it to every later commit in that repository.
 
 **Forbidden trailers — scan for these before every commit:**
 
 ```bash
 # Scan the staged commit message before finalizing the commit:
 git diff --cached --format=%B HEAD 2>/dev/null | \
-  grep -nE "Co-Authored-By: Claude|Co-authored with Claude|Generated with Claude Code|AI-assisted"
+  grep -niE "Co-Authored-By:|Co-authored with|Generated (with|by) |Built (by|with) |AI-assisted"
 ```
 
-- `Co-Authored-By: Claude ...`
+- `Co-Authored-By:` naming any agent, assistant, model or harness (for example `Co-Authored-By: Claude ...` or `Co-Authored-By: GitHub Copilot ...`)
 - `Co-authored with Claude ...`
-- `Generated with Claude Code`
+- `Generated with Claude Code`, `Generated with Copilot`, or any other "Generated with …" credit
+- `Built by Copilot`, or any other "Built by …" credit to a tool
 - `AI-assisted`
 - Any variant naming the agent or harness as a contributor.
 
-If any hit: abort the commit; strip the offending trailer; redo.
+Review every hit: strip each line that credits an agent, assistant, model or harness, then redo the commit. A human co-author, or the same words in an unrelated sentence, stays.
 
 Same pattern applies to PR descriptions — run the scan on the proposed `pr-description.md` before `gh pr create` or `gh pr edit --body-file`.
 
@@ -307,9 +308,9 @@ Same pattern applies to PR descriptions — run the scan on the proposed `pr-des
 ```bash
 #!/usr/bin/env bash
 # ~/.config/git/hooks/commit-msg  (enable via core.hooksPath)
-if grep -qE "Co-Authored-By: Claude|Co-authored with Claude|Generated with Claude Code|AI-assisted" "$1"; then
+if grep -qiE "Co-Authored-By: .*(Claude|Copilot|Codex|GPT|Gemini|AI)|Co-authored with|Generated (with|by) (Claude|Copilot|Codex|AI)|Built (by|with) (Claude|Copilot|Codex|AI)|AI-assisted" "$1"; then
   echo "error: commit message contains a forbidden AI-attribution trailer" >&2
-  grep -nE "Co-Authored-By: Claude|Co-authored with Claude|Generated with Claude Code|AI-assisted" "$1" >&2
+  grep -niE "Co-Authored-By: .*(Claude|Copilot|Codex|GPT|Gemini|AI)|Co-authored with|Generated (with|by) (Claude|Copilot|Codex|AI)|Built (by|with) (Claude|Copilot|Codex|AI)|AI-assisted" "$1" >&2
   exit 1
 fi
 ```
@@ -320,7 +321,7 @@ In a workspace where parallel agents (or other tracks) leave untracked or modifi
 
 ### Diff-scope scan
 
-Per `../principles.md` Invariant 2b (lean diffs), every commit contains exactly the lines required for its stated scope and nothing more. Before every commit, scan the staged diff for prose / xmldoc / comment edits that are not named in the current unit's scope:
+Lean diffs: every commit contains exactly the lines required for its stated scope and nothing more, with no drive-by prose edits and no "while I'm here" improvements. Extra touched lines cost slower review, more nits, more merge conflicts and more doubt about what the change does. Before every commit, scan the staged diff for prose / xmldoc / comment edits that are not named in the current unit's scope:
 
 ```bash
 # Inspect the staged diff; look for changes outside the unit's

@@ -1,17 +1,15 @@
 ---
 name: preflight-actions
-description: Invoke ONLY when worker is about to take a live/shared-state action (send / schedule / post / publish / file / apply / deploy / change shared config) AND one condition holds — (a) more than one judgment substitution from the literal ask; (b) tooling cannot deliver the named shape and worker would substitute; (c) the action comes from research rather than an action mandate; OR (d) it would unilaterally mutate a partner-operated live surface without an established delegation/SOP/contribution path. Triggered by asks like "schedule", "post", "apply", "stage", or "deploy". Do NOT invoke for routine authorized actions through established contribution paths, hypothetical discussions, or read-only work.
+description: Invoke ONLY when worker is about to take a live/shared-state action (send / schedule / post / publish / file / apply / deploy / change shared config) AND one condition holds — (a) more than one judgment substitution from the literal ask; (b) tooling cannot deliver the named shape and worker would substitute; (c) the action comes from research rather than an action mandate; OR (d) it would unilaterally mutate a partner-operated live surface without an established delegation/SOP/contribution path. Also invoke when the operator asks to widen the agent's permissions or to stop being prompted. Triggered by asks like "schedule", "post", "apply", "stage", "deploy", "allow this", or "stop asking me". Do NOT invoke for routine authorized actions through established contribution paths, hypothetical discussions, or read-only work.
 ---
 
 # Preflight actions
-
-This skill inherits all invariants in `../../principles.md`. Read them first if they are not already in context.
 
 Invoke this skill before taking an irreversible-ish or live shared-state action — sending, scheduling, posting, publishing, filing, applying, deploying, or changing shared configuration — when the operator's ask requires worker to make more than one judgment-call substitution, when tooling cannot literally deliver part of what the operator named, when the proposed action came from research rather than an action mandate, OR when it would unilaterally mutate a partner-operated live surface without an established delegation or contribution path.
 
 The umbrella is **don't silently compromise on irreversible actions**. The operator can clean up a delayed action; they can't clean up a wrong one without a "please send a correction" message that itself has cost.
 
-The skill bundles five sibling rules. The first (preflight pattern) is the anchor. The other four cover specific scenarios that sit beside that bar.
+The skill bundles six sibling rules. The first (preflight pattern) is the anchor. The other five cover specific scenarios that sit beside that bar.
 
 ## Preflight pattern — for irreversible actions with judgment calls
 
@@ -82,7 +80,7 @@ The point isn't which option the operator picks — the point is that the operat
 
 **Anti-pattern.** Operator asks for a meeting with a specific channel attachment AND a specific attendee marked as optional. The calendar primitive available to worker doesn't expose channel-attachment, AND doesn't expose required-vs-optional attendee distinction. Worker silently creates a regular meeting with everyone marked required, and only tells the operator AFTER the invites are sent. The operator now has to explain to the optional attendee that they're optional, and decline-and-recreate the meeting to add the channel attachment. Two silent substitutions stacked into operator-cleanup work.
 
-**What this rule is NOT.** This isn't "ask for permission before any action." The agent has authorization-as-scope (see the substrate's core invariants in `principles.md`). This rule fires specifically when the tool *cannot literally produce what the operator named* — that's the trigger. If the tool CAN produce the operator's exact ask, just do it; no flag needed.
+**What this rule is NOT.** This isn't "ask for permission before any action." The agent has authorization-as-scope (`using-desk` "Authority" and `interaction-style` §6). This rule fires specifically when the tool *cannot literally produce what the operator named* — that's the trigger. If the tool CAN produce the operator's exact ask, just do it; no flag needed.
 
 **Cross-link.** Sibling to "preflight pattern" — tooling-can't-deliver is itself a forced judgment-call substitution. If two of these stack on the same action, the preflight bar fires.
 
@@ -127,7 +125,7 @@ names the mutation — execute the obvious continuation under that
 scope.
 
 **Cross-link.** This operationalizes `interaction-style` §6 and
-`principles.md` Sub-invariant 2c at the exact moment research would
+the verb rule in `using-desk` ("Authority") at the exact moment research would
 turn into live action.
 
 ## Access is not ownership
@@ -173,4 +171,19 @@ Worker/operator-owned surfaces and established contribution paths
 remain autonomous. The hold is only for unilateral mutation outside
 an owner-aligned path.
 
-**Cross-link.** This is the ownership axis beside verb (`principles.md` Sub-invariant 2c) and the recorded authority and continuation capabilities in `desk:superpowers-integration`.
+**Cross-link.** This is the ownership axis beside verb (`using-desk` "Authority") and the recorded authority and continuation capabilities in `desk:superpowers-integration`.
+
+## Widening the agent's permissions
+
+**One-sentence statement.** When the operator asks to widen the agent's permissions or to stop being prompted, the operator applies the change; the agent never edits its own permissions.
+
+**Trigger phrase.** "Just allow it", "stop asking me", "give yourself access", "add that to your allow list", or a permission prompt the agent is tempted to route around.
+
+**What to do.**
+
+1. Surface the guardrail the prompt enforces and what widening it would allow, in one or two sentences.
+2. Offer the host's own permissions screen or command, or a config snippet for the operator to apply themselves.
+3. Wait for the operator to apply it. Continue independent work meanwhile.
+4. After a denial, never retry the same action or look for another route to the same effect; a denial is an answer.
+
+Never edit your own permissions: do not write or regenerate your permission, settings or allow-list files, and never ask a child agent or script to do it for you.

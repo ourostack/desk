@@ -1,6 +1,6 @@
 ---
 name: session-resumption
-description: Checkpoint and resume an authorized non-terminal task, including a fresh-process handover after interruption or runtime pressure. Preserve actual source, unfinished work, work identity and authority; admit a replacement writer only after the prior owner is released.
+description: Checkpoint and resume an authorized non-terminal task, including a fresh-process handover after interruption, verified resource exhaustion or runtime pressure. Preserve actual source, unfinished work, work identity and authority; admit a replacement writer only after the prior owner is released. Also owns where private or sensitive operational evidence (raw transcripts, credentials, private measurement, customer data) is kept.
 ---
 
 # Session resumption
@@ -8,6 +8,10 @@ description: Checkpoint and resume an authorized non-terminal task, including a 
 Desk owns checkpoint and recovery admission here. Reconcile the canonical task, current authority, actual source, writer ownership and uncertain effects before entering `desk:using-superpowers-with-desk` at `reconciled-resume`. Consume the existing approval and explicit artifact map; do not start another lifecycle or repeat go-ahead.
 
 at the desk again. the operator picked an active task to resume — a manilla envelope already part-filled, papers laid out where the last session left them. pick up where things were, don't start over.
+
+## Protected evidence
+
+Operational evidence that is private or sensitive (raw transcripts, credentials, private measurement, customer data) stays outside Git, in an approved private evidence location. The desk and every other repository record only pointers and derived, non-sensitive summaries. This holds for all work, not only checkpoints, and no host memory, plan or task store is a substitute location.
 
 ## Checkpoint before handoff
 
@@ -28,7 +32,7 @@ Determine freshness by reconciling current authority, actual source/publication 
 
 If a torn or incomplete latest checkpoint exists, use the previous complete generation only after preserving current source and reconciling authority: preserve newer committed and uncommitted source bytes, including untracked files, before any recovery action; never reset to a snapshot or silently replay. A readable old generation alone does not establish readiness. If newer bytes or the required payload cannot be preserved and reconciled, admission remains non-ready.
 
-Keep raw transcripts, credentials and private measurement outside Git. A same-host protected copy is not an off-host backup; state which durability boundary was actually achieved. Do not delete the originals merely because an archive exists.
+Protected payloads follow "Protected evidence" above. A same-host protected copy is not an off-host backup; state which durability boundary was actually achieved. Do not delete the originals merely because an archive exists.
 
 ## Fresh-process recovery
 
@@ -41,6 +45,8 @@ Inspect actual committed and unfinished source without overwriting it, then reco
 Process monitoring and restart belong outside the worker process to the owning host. Use its maintained launch/recovery capability without changing authentication, source selection, permissions or default profiles. An in-session reminder, restored terminal label, live MCP server or successful process launch does not prove the worker resumed. If the required host capability is unavailable, report that specific gap and continue independent safe work rather than inventing a scheduler or claiming unattended recovery.
 
 ## Bounded execution and recovery
+
+Verified resource exhaustion is not a phantom limit. A process handoff continues the existing mandate; it is not permission to return control, shrink the outcome or keep an exhausted runtime alive. At a safe integration boundary, or when the host reports persistent memory pressure with failed compaction, preserve source and unfinished work here and use the authorized host's fresh-process recovery path; the project and its work-item identity outlive the process.
 
 Checkpoint at completed integration and delegation boundaries and before an unattended batch. Keep one implementation writer per worktree, close completed assignments, and return bounded findings plus artifact pointers rather than repeatedly copying whole histories or command output. The approved outcome continues across process handovers; no new go or lifecycle is created.
 

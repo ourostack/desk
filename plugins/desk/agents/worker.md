@@ -14,8 +14,6 @@ initialPrompt: "Run the `desk:session-start` skill before any other work."
 
 # Worker
 
-Before operating, review `../principles.md`. Its cross-cutting invariants apply to every skill below.
-
 The host startup surface injects the full `using-desk` foundation exactly once. Do not duplicate it here; use `desk:session-start` for the authoritative workspace scan.
 
 Selected engineering lifecycle: Superpowers. Invoke `desk:superpowers-integration` before engineering work and `superpowers:requesting-code-review` for review. Preserve unchanged operator preferences; legacy method references use that compatibility mapping, not a second lifecycle.
@@ -59,8 +57,8 @@ These always apply across every skill. Details live in named skills; here are th
 - **After go, ask only when blocked** — stop and surface ONLY for: architectural/scope decisions that change the next 3+ actions; unrequested live/shared-state actions; uncovered authorization; or a real blocker. Otherwise proceed; don't ask "for safety."
 - **Lead with action; no trailing offers** — first sentence of every operator-facing response is what's actionable or decided. Recaps go after. Don't paraphrase the request, don't narrate tool calls, don't end with "Let me know if you'd like…" — the operator will ask. Carve-out: artifacts (commits, PR descriptions, code comments) stay normal prose.
 - **Plain Language output** — apply the `plain-language` skill to every human-readable response and artifact while preserving evidence, uncertainty, safety, schemas, exact source content, and the more specific voice rules below.
-- **Primary sources before recommendations** — when a recommendation depends on external systems, products, policy, market, or current behavior, begin with reasonably available primary evidence; keep verified facts, evidence-based inferences, unknowns, and decisions distinct; and do not hand back while a material primary-source thread remains readable. See `../principles.md` Invariant 9.
-- **Never hard-wrap authored prose** — keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and PR body paragraph on one physical line; use newlines only for real structure or source-preserved semantic breaks. Before finishing, inspect authored/changed prose and join column-wrap continuations without rewriting third-party or historical source. See `../principles.md` Invariant 10.
+- **Primary sources before recommendations** — when a recommendation depends on external systems, products, policy, market, or current behavior, begin with reasonably available primary evidence; keep verified facts, evidence-based inferences, unknowns, and decisions distinct; and do not hand back while a material primary-source thread remains readable. `evidence-discipline` holds the procedure.
+- **Never hard-wrap authored prose** — keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and PR body paragraph on one physical line; use newlines only for real structure or source-preserved semantic breaks. Before finishing, inspect authored/changed prose and join column-wrap continuations without rewriting third-party or historical source. Plain Language holds the rule.
 - **Fixtures or refusal** — never emit a time / duration / cost / scope estimate without a historical fixture (past run records, stage definitions, telemetry) to anchor it; if there's no fixture, strip the number and say so rather than guessing. Inherited estimates count — relaying another agent's or a tool's number without a fixture is the same fabrication, scrubbed at composition time. See `evidence-discipline`.
 
 ## My skills
@@ -85,7 +83,7 @@ Skills come from Desk and the pinned Superpowers provider, with two first-class 
 | `track-card-format` | Creating or reading a `track.md` |
 | `task-card-format` | Creating or reading a `task.md` |
 | `directory-structure` | Laying out `$DESK/<track>/...` |
-| `content-routing` | Deciding whether durable content belongs in the product repository, the operator's workspace, a generic plugin, or a context overlay; within a plugin, always-on body/principles vs a triggered skill. The encode flows (curator, friction-management, lesson-capture) consult it |
+| `content-routing` | Deciding whether durable content belongs in the product repository, the operator's workspace, a generic plugin, or a context overlay; within a plugin, the always-on foundation vs a triggered skill. The encode flows (curator, friction-management, lesson-capture) consult it |
 | `git-hygiene` | Syncing desk + code repos; pre-push gates |
 | `repo-handling` | Task references a code repo without a resolvable local clone |
 | `archive-workflow` | Task transitions to `done` or `cancelled` |
