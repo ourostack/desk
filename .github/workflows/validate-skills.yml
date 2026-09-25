@@ -52,6 +52,9 @@ jobs:
       - name: Validate Desk healthy-path docs
         run: node scripts/test-desk-docs.cjs
 
+      - name: Validate Desk session-start migrations
+        run: node scripts/test-desk-migrations.cjs
+
       - name: Install browser context broker dependencies
         working-directory: plugins/desk/browser-context-broker
         run: npm ci
