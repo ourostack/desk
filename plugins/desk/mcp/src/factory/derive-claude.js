@@ -65,6 +65,22 @@
 //   - `events.fileWrites` holds `Write`/`Edit`/`MultiEdit` `file_path` and
 //     `NotebookEdit` `notebook_path` only when the paired result was `ok`,
 //     plus every `file-history-delta.trackingPath`.
+//   - `events.shellGitCommits` holds `{ start, end, cwd }` for each
+//     successful `Bash` call whose command runs `git … commit`
+//     (`./shell-git.js`), from the `tool_use` time to its paired
+//     `tool_result` time. Successful means the result is `ok` (not
+//     `is_error`, interrupted or timed out) and does not start with a
+//     non-zero `Exit code`; a failed or no-op commit ("nothing to commit"
+//     exits 1) gives no event. `cwd` is the line's `cwd`, moved by a `-C` or
+//     an earlier `cd` in the same command, or `null` when unknown. The
+//     command and the result text are matched in memory and never kept: only
+//     the directory is. A call with no readable time or no paired result
+//     gives no event. M3-4 matches the desk's own commit reflog entries to
+//     these by time, because `git commit -q` prints no hash.
+//   - `events.nativeCommitShas` is always `[]`: Claude Code records no
+//     commit refs of its own. `events.commitShas` (40-hex tokens in Bash
+//     output) is kept for reference only; binding never uses it, since a
+//     `git log` would put other sessions' commits there.
 //   - `contributor` is the caller's own value, not transcript content; an
 //     invalid one is a caller bug and throws a TypeError.
 //
@@ -73,11 +89,13 @@
 
 import { createReadStream, existsSync } from "node:fs"
 import { readdir, readFile } from "node:fs/promises"
+import * as os from "node:os"
 import { createInterface } from "node:readline"
 import * as path from "node:path"
 
 import { toolKind } from "./tool-kinds.js"
 import { ENUMS, LIMITS, PATTERNS } from "./schema.js"
+import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 
 const HOST = "claude-code"
@@ -116,6 +134,16 @@ function computeOutcome(resultBlock, toolUseResult) {
   if (toolUseResult?.timedOutAfterMs != null) return "timeout"
   if (resultBlock.is_error) return "error"
   return "ok"
+}
+
+// A Bash result whose text starts `Exit code <n>` with n > 0. The text is
+// read here and dropped.
+function exitedNonZero(resultBlock) {
+  const content = resultBlock.content
+  let text = typeof content === "string" ? content : ""
+  if (Array.isArray(content)) text = content.find((block) => block?.type === "text")?.text ?? ""
+  const match = /^Exit code (\d+)/u.exec(typeof text === "string" ? text : "")
+  return match !== null && Number(match[1]) !== 0
 }
 
 function mapEntrypoint(raw) {
@@ -231,6 +259,7 @@ function createAgentProcessor({ agentIndex }) {
   const pendingCalls = new Map() // tool_use id -> { name, kind, start, isSubagentCall }
   const pendingDeskCalls = new Map()
   const pendingFileWrites = new Map()
+  const pendingGitCommits = new Map() // tool_use id -> { start, cwds }
   const lastFinishedByKind = new Map() // kind -> { end, outcome, retried }
   const issuedIds = new Set()
 
@@ -241,6 +270,7 @@ function createAgentProcessor({ agentIndex }) {
   const fileWrites = []
   const commitShas = new Set()
   const deskToolCalls = []
+  const shellGitCommits = []
   let toolRetries = 0
   let apiRetries = 0
   let compactions = 0
@@ -274,8 +304,10 @@ function createAgentProcessor({ agentIndex }) {
     pendingCalls.delete(id)
     const deskCall = pendingDeskCalls.get(id)
     const fileWrite = pendingFileWrites.get(id)
+    const gitCommit = pendingGitCommits.get(id)
     pendingDeskCalls.delete(id)
     pendingFileWrites.delete(id)
+    pendingGitCommits.delete(id)
     if (ts === null) {
       // A result with no readable time: the call can't be measured, so it is
       // dropped like an unresolved one rather than given an invented end.
@@ -306,6 +338,9 @@ function createAgentProcessor({ agentIndex }) {
 
     if (deskCall) deskToolCalls.push({ ...deskCall, ok: outcome === "ok" })
     if (fileWrite && outcome === "ok") fileWrites.push(fileWrite)
+    if (gitCommit && outcome === "ok" && !exitedNonZero(block)) {
+      for (const cwd of gitCommit.cwds) shellGitCommits.push({ start: gitCommit.start, end: ts, cwd })
+    }
   }
 
   function handleAssistantLine(line, ts) {
@@ -381,6 +416,11 @@ function createAgentProcessor({ agentIndex }) {
       if (FILE_WRITE_TOOLS.has(name)) {
         const filePath = name === "NotebookEdit" ? input.notebook_path : input.file_path
         if (typeof filePath === "string") pendingFileWrites.set(block.id, { at: ts, path: filePath })
+      }
+      if (name === "Bash" && typeof input.command === "string") {
+        // The command is matched here and dropped; only directories are kept.
+        const cwds = gitCommitCwds({ command: input.command, cwd: line.cwd, home: os.homedir() })
+        if (cwds.length > 0) pendingGitCommits.set(block.id, { start: ts, cwds })
       }
       if (typeof name === "string" && DESK_CALL_PATTERN.test(name)) {
         pendingDeskCalls.set(block.id, {
@@ -465,6 +505,7 @@ function createAgentProcessor({ agentIndex }) {
         fileWrites,
         commitShas,
         deskToolCalls,
+        shellGitCommits,
         issuedIds,
         hadUnresolvedCall,
         invalidModelSeen,
@@ -739,6 +780,8 @@ export async function deriveClaudeSession({ transcriptPath, contributor, plugins
     deskToolCalls: agentResults.flatMap((result) => result.deskToolCalls),
     fileWrites: agentResults.flatMap((result) => result.fileWrites),
     commitShas: [...new Set(agentResults.flatMap((result) => [...result.commitShas]))],
+    shellGitCommits: agentResults.flatMap((result) => result.shellGitCommits),
+    nativeCommitShas: [],
   }
 
   return { facts, events }
