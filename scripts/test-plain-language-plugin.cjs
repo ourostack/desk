@@ -18,6 +18,10 @@ const manifests = [
   "plugins/plain-language/.claude-plugin/plugin.json",
   "plugins/plain-language/.codex-plugin/plugin.json",
 ].map((file) => JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8")));
+const rootPlugin = manifests[0];
+const claudePlugin = manifests[1];
+const copilotHooksPath = path.join(repoRoot, "plugins", "plain-language", "hooks", "copilot-hooks.json");
+const copilotHooks = JSON.parse(fs.readFileSync(copilotHooksPath, "utf8"));
 const vendorFiles = fs.existsSync(vendorRoot)
   ? fs.readdirSync(vendorRoot, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile())
   : [];
@@ -32,7 +36,7 @@ if (skillManifest !== null) {
 assert.equal(vendorFiles.length, 0);
 assert.equal(lock.sources.some((source) => source.files.some((file) => file.generatedPath.startsWith("plugins/plain-language/"))), false);
 for (const manifest of manifests) {
-  assert.equal(manifest.version, "0.2.2");
+  assert.equal(manifest.version, "0.2.3");
   assert.match(manifest.description, /first-party output policy/u);
 }
 assert.match(pluginSkill, /## Serve the reader/u);
@@ -47,5 +51,21 @@ assert.match(pluginSkill, /## Preserve meaning/u);
 assert.match(pluginSkill, /## Check before sending/u);
 assert.match(pluginSkill, /The integration test is still running/u);
 assert.doesNotMatch(pluginSkill, /vendor|upstream-sources|conformance/iu);
+
+// Copilot injects the plugin's own hook (root plugin.json points at
+// copilot-hooks.json); the Claude manifest carries no `hooks` key so Claude
+// auto-discovers hooks/hooks.json instead, unaffected by this change.
+assert.equal(rootPlugin.hooks, "./hooks/copilot-hooks.json");
+assert.equal(Object.hasOwn(claudePlugin, "hooks"), false);
+assert.equal(copilotHooks.version, 1);
+assert.equal(Array.isArray(copilotHooks.hooks?.sessionStart), true);
+assert.equal(copilotHooks.hooks.sessionStart.length, 1);
+const [sessionStartHook] = copilotHooks.hooks.sessionStart;
+assert.equal(sessionStartHook.type, "command");
+assert.equal(sessionStartHook.bash, "node \"${PLUGIN_ROOT}/hooks/inject.cjs\" sessionStart");
+assert.equal(sessionStartHook.powershell, "node \"${PLUGIN_ROOT}\\hooks\\inject.cjs\" sessionStart");
+assert.equal(typeof sessionStartHook.timeoutSec, "number");
+assert.equal(sessionStartHook.timeoutSec > 0, true);
+assert.equal(sessionStartHook.timeoutSec <= 10, true);
 
 console.log("plain-language first-party plugin verified.");
