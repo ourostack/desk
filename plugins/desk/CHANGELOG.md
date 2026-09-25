@@ -2,7 +2,7 @@
 
 ## 3.2.0-alpha.20 — 2026-09-25
 
-Lays the first foundation of the factory, the privacy-safe work measurement built from native session logs: the facts file v1 schema and its validator, the tool-name-to-kind mapping for Claude Code and Copilot CLI, and shared timestamp/interval helpers. Nothing reads or writes real session data yet; this only adds the shape every later factory piece validates against. `intervalUnion` and `normalizeTimestamp` move into `factory/time.js`; the work ledger's own modules re-export them unchanged so its existing behavior and tests are untouched. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.
+Lays the first foundation of the factory, the privacy-safe work measurement built from native session logs: the facts file v1 schema and its validator, the tool-name-to-kind mapping for Claude Code and Copilot CLI, and shared timestamp/interval helpers. Nothing reads or writes real session data yet; this only adds the shape every later factory piece validates against. `normalizeTimestamp` moves into `factory/time.js` verbatim, and the work ledger's `measurement/copilot-usage.js` re-exports it unchanged. `measurement/work-profile.js` keeps its own private, span-shaped `intervalUnion` (a different signature from the new `factory/time.js` one, which works on `{start, end}` pairs), now rewritten as a thin adapter that filters and remaps onto the shared implementation — its behavior and every existing test are unchanged. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.
 
 ## 3.2.0-alpha.19 — 2026-09-25
 

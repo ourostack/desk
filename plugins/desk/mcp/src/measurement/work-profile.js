@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { normalizeRow, normalizeTimestamp } from "./copilot-usage.js"
 import { MAX_INPUT_BYTES } from "./profile-input.js"
+import { intervalUnion as unionSpanMs } from "../factory/time.js"
 
 const KINDS = new Set([
   "tool.execution_start", "tool.execution_complete", "hook.start", "hook.end",
@@ -259,19 +260,16 @@ function safeSum(left, right) {
   requireFact(Number.isFinite(value) && value <= Number.MAX_SAFE_INTEGER, "Observation sum exceeds safe numeric range")
   return value
 }
+// A thin adapter over `factory/time.js`'s `intervalUnion`: this module's own
+// spans carry `{duration_ms, started_at, ended_at}` rather than `{start,
+// end}`, so a matched span (one with a known duration) is filtered and
+// remapped before delegating the actual merge-and-sum to the shared
+// implementation. The `safeSum` guard is kept on the returned total, exactly
+// as it was on the hand-rolled merge this replaces.
 function intervalUnion(spans) {
-  const intervals = spans.filter((s) => s.duration_ms !== null).map((s) => [Date.parse(s.started_at), Date.parse(s.ended_at)]).sort((a, b) => a[0] - b[0])
-  if (!intervals.length) return null
-  let [start, end] = intervals[0]
-  let total = 0
-  for (const [nextStart, nextEnd] of intervals.slice(1)) {
-    if (nextStart > end) {
-      total = safeSum(total, end - start)
-      start = nextStart
-    }
-    end = Math.max(end, nextEnd)
-  }
-  return safeSum(total, end - start)
+  const matched = spans.filter((s) => s.duration_ms !== null)
+  if (!matched.length) return null
+  return safeSum(0, unionSpanMs(matched.map((s) => ({ start: s.started_at, end: s.ended_at }))))
 }
 function operations(facts) {
   const groups = new Map()

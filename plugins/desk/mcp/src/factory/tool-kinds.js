@@ -55,7 +55,14 @@ const BY_HOST = {
   "copilot-cli": copilotToolKind,
 }
 
-/** `toolKind({ host, name }) -> ENUMS.toolKind value`. */
+/**
+ * `toolKind({ host, name }) -> ENUMS.toolKind value`. An unrecognized `host`
+ * or a non-string `name` resolves to `"other"` rather than throwing: this
+ * runs over host-reported tool names a caller cannot fully pre-validate, and
+ * a bucketing function should never be the reason a caller crashes.
+ */
 export function toolKind({ host, name }) {
-  return BY_HOST[host](name)
+  if (typeof name !== "string") return "other"
+  const resolve = BY_HOST[host]
+  return resolve ? resolve(name) : "other"
 }

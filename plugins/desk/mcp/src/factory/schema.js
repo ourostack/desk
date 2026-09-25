@@ -5,6 +5,16 @@
 // there is no free-text field, so there is nothing here a transcript, a
 // prompt, a file path or a task title could hide inside. `validateFacts`
 // enforces that shape exactly: an unrecognized key is refused, not ignored.
+// `validateFactsBytes` additionally requires the raw bytes to be the
+// canonical serialization of what they parse to, so a duplicate JSON key —
+// which `JSON.parse` silently collapses to its last value — cannot let free
+// text ride along in bytes that otherwise parse clean.
+//
+// The schema is a real declarative spec walker: one field-spec object per
+// level (`SESSION_SPEC`, `MODEL_SPEC`, ...) is the *only* place that names a
+// level's keys, and both the allowed-key check and the per-key validators are
+// derived from that same object by `validateObject`. There is no second,
+// hand-kept list to fall out of sync with it.
 //
 // Error reporting follows the same discipline. `{ code, path }` only, and
 // `path` is built only from fixed schema field names and numeric array
@@ -14,8 +24,8 @@
 // content out through an error report.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
-// files; this module needs no import at all — `validateFactsBytes` only
-// calls methods on the `Buffer` its caller hands it.
+// files; this module needs no import at all — `Buffer` is a Node global, and
+// every other check here is plain object/regex/Date arithmetic.
 
 export const ENUMS = Object.freeze({
   host: Object.freeze(["claude-code", "copilot-cli"]),
@@ -48,7 +58,9 @@ export const PATTERNS = Object.freeze({
   schema: /^desk\.factory\.facts\/1$/u,
   contributor: /^[0-9a-f]{16}$/u,
   sessionId: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
-  semver: /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$/u,
+  // The prerelease part is bounded (controller ruling, M1): unbounded free text there
+  // would let word-shaped strings ride through as a "version".
+  semver: /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]{1,32})?$/u,
   timestamp: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u,
   pluginName: /^[a-z0-9][a-z0-9-]{0,63}$/u,
   modelId: /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/u,
@@ -64,6 +76,10 @@ export const LIMITS = Object.freeze({
   intervals: 100000,
   prs: 500,
   commits: 2000,
+  agents: 10000,
+  jobs: 1000,
+  jobTransitions: 1000,
+  unavailable: 64,
 })
 
 const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
@@ -107,16 +123,6 @@ function checkEnum(value, path, allowed, errors) {
   return true
 }
 
-function checkNullableEnum(value, path, allowed, errors) {
-  if (value === null) return true
-  return checkEnum(value, path, allowed, errors)
-}
-
-function checkNullablePattern(value, path, pattern, errors) {
-  if (value === null) return true
-  return checkPattern(value, path, pattern, errors)
-}
-
 function checkSafeNonNegInt(value, path, errors) {
   if (!isSafeNonNegInt(value)) {
     addError(errors, "integer", path)
@@ -143,22 +149,26 @@ function checkNullableRangeInt(value, path, min, max, errors) {
   return checkRangeInt(value, path, min, max, errors)
 }
 
-/**
- * Run `validate(item, itemPath, errors)` over each entry of an array field,
- * after checking its own type and, if given, its max length. Oversized
- * arrays fail fast: a single `too_many` error, with items left unchecked, so
- * one violation stays one error even at 100000 entries.
- */
-function checkArray(value, path, { max, validate }, errors) {
-  if (!Array.isArray(value)) {
+// A timestamp must both match the strict pattern and be a real instant
+// (controller ruling, M2): `2026-99-99T99:99:99.999Z` matches the pattern's
+// shape but is not a date `Date.parse` can resolve, and reporting anything
+// other than `pattern` for it would let a shape-only check stand in for a
+// real one.
+function checkTimestamp(value, path, errors) {
+  if (typeof value !== "string") {
     addError(errors, "type", path)
-    return
+    return false
   }
-  if (max !== undefined && value.length > max) {
-    addError(errors, "too_many", path)
-    return
+  if (!PATTERNS.timestamp.test(value) || Number.isNaN(Date.parse(value))) {
+    addError(errors, "pattern", path)
+    return false
   }
-  value.forEach((item, index) => validate(item, joinPath(path, index), errors))
+  return true
+}
+
+function checkNullableTimestamp(value, path, errors) {
+  if (value === null) return true
+  return checkTimestamp(value, path, errors)
 }
 
 function requireField(value, path, field, errors) {
@@ -169,326 +179,369 @@ function requireField(value, path, field, errors) {
   return true
 }
 
-function checkTokens(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
+// ---------------------------------------------------------------------------
+// Spec primitives. Each returns `{ check(value, path, errors, ctx) }`. A
+// level's spec is a plain object mapping its field names to one of these —
+// that same object drives both `checkKnownKeys`'s allow-list and the actual
+// per-key validation in `validateObject`, so the two can never disagree.
+// ---------------------------------------------------------------------------
+
+const leaf = (check) => ({ check })
+
+const patternField = (pattern) => leaf((value, path, errors) => checkPattern(value, path, pattern, errors))
+const enumField = (allowed) => leaf((value, path, errors) => checkEnum(value, path, allowed, errors))
+const nullableEnumField = (allowed) => leaf((value, path, errors) => (value === null ? true : checkEnum(value, path, allowed, errors)))
+const nonNegIntField = () => leaf(checkSafeNonNegInt)
+const nullableNonNegIntField = () => leaf(checkNullableSafeNonNegInt)
+const positiveIntField = () => leaf((value, path, errors) => {
+  if (!isSafePositiveInt(value)) {
+    addError(errors, "integer", path)
+    return false
   }
-  checkKnownKeys(value, path, ["input", "output", "cache_read", "cache_write", "reasoning"], errors)
-  for (const field of ["input", "output", "cache_read", "cache_write", "reasoning"]) {
-    if (!requireField(value, path, field, errors)) continue
-    checkNullableSafeNonNegInt(value[field], joinPath(path, field), errors)
-  }
+  return true
+})
+const rangeIntField = (min, max) => leaf((value, path, errors) => checkRangeInt(value, path, min, max, errors))
+const nullableRangeIntField = (min, max) => leaf((value, path, errors) => checkNullableRangeInt(value, path, min, max, errors))
+const timestampField = () => leaf(checkTimestamp)
+const nullableTimestampField = () => leaf(checkNullableTimestamp)
+const customField = (check) => leaf(check)
+
+/** A nested fixed-shape object. `specOrFn` may compute the spec from the raw value (for a shape that depends on a sibling field, e.g. `intervals[].kind`). */
+function objectField(specOrFn, post) {
+  return leaf((value, path, errors, ctx) => {
+    const results = validateObject(value, path, specOrFn, errors, ctx)
+    if (results !== undefined && post) post(value, path, results, errors, ctx)
+    return results
+  })
 }
 
-function checkModel(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  checkKnownKeys(value, path, ["id", "requests", "tokens"], errors)
-  if (requireField(value, path, "id", errors)) checkPattern(value.id, joinPath(path, "id"), PATTERNS.modelId, errors)
-  if (requireField(value, path, "requests", errors)) checkNullableSafeNonNegInt(value.requests, joinPath(path, "requests"), errors)
-  if (requireField(value, path, "tokens", errors)) checkTokens(value.tokens, joinPath(path, "tokens"), errors)
+/** Same shape, but `null` is also accepted. */
+function nullableObjectField(spec) {
+  return leaf((value, path, errors, ctx) => (value === null ? true : validateObject(value, path, spec, errors, ctx)))
 }
 
-function checkPlugin(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  checkKnownKeys(value, path, ["name", "version"], errors)
-  if (requireField(value, path, "name", errors)) checkPattern(value.name, joinPath(path, "name"), PATTERNS.pluginName, errors)
-  if (requireField(value, path, "version", errors)) checkPattern(value.version, joinPath(path, "version"), PATTERNS.semver, errors)
+/** An array of `itemField`-shaped entries, capped at `max` (every array in this schema has one — see `LIMITS`). Over cap fails fast with one `too_many`, items left unchecked. */
+function arrayField(itemField, max) {
+  return leaf((value, path, errors, ctx) => {
+    if (!Array.isArray(value)) {
+      addError(errors, "type", path)
+      return undefined
+    }
+    if (value.length > max) {
+      addError(errors, "too_many", path)
+      return undefined
+    }
+    return value.map((item, index) => itemField.check(item, joinPath(path, index), errors, ctx))
+  })
 }
 
-function checkInterval(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  const isTool = value.kind === "tool"
-  const allowedKeys = isTool
-    ? ["kind", "agent", "start", "end", "tool", "outcome"]
-    : ["kind", "agent", "start", "end"]
-  checkKnownKeys(value, path, allowedKeys, errors)
-
-  let kindOk = false
-  if (requireField(value, path, "kind", errors)) kindOk = checkEnum(value.kind, joinPath(path, "kind"), ENUMS.intervalKind, errors)
-
-  let agentOk = false
-  if (requireField(value, path, "agent", errors)) agentOk = checkRangeInt(value.agent, joinPath(path, "agent"), 0, 9999, errors)
-
-  let startOk = false
-  if (requireField(value, path, "start", errors)) startOk = checkPattern(value.start, joinPath(path, "start"), PATTERNS.timestamp, errors)
-
-  let endOk = false
-  if (requireField(value, path, "end", errors)) endOk = checkPattern(value.end, joinPath(path, "end"), PATTERNS.timestamp, errors)
-
-  if (startOk && endOk && Date.parse(value.end) < Date.parse(value.start)) {
-    addError(errors, "order", joinPath(path, "end"))
-  }
-
-  // When kind isn't "tool", `tool`/`outcome` are simply not in `allowedKeys`
-  // above, so their presence already surfaces as `unknown_key` — a separate
-  // "forbidden" code would only double-report the same violation.
-  if (kindOk && value.kind === "tool") {
-    if (requireField(value, path, "tool", errors)) checkEnum(value.tool, joinPath(path, "tool"), ENUMS.toolKind, errors)
-    if (requireField(value, path, "outcome", errors)) checkEnum(value.outcome, joinPath(path, "outcome"), ENUMS.outcome, errors)
-  }
-
-  return { agentOk, agent: value.agent }
+/** An open map keyed by members of `allowedKeys` (e.g. `counts.tool_calls`), each value shaped by `valueField`. An unrecognized key names the map itself, never the key. */
+function mapOfField(allowedKeys, valueField) {
+  return leaf((value, path, errors) => {
+    if (!isPlainObject(value)) {
+      addError(errors, "type", path)
+      return undefined
+    }
+    let sawUnknownKey = false
+    for (const key of Object.keys(value)) {
+      if (!allowedKeys.includes(key)) sawUnknownKey = true
+    }
+    if (sawUnknownKey) addError(errors, "unknown_key", path)
+    for (const [key, entry] of Object.entries(value)) {
+      if (!allowedKeys.includes(key)) continue
+      valueField.check(entry, joinPath(path, key), errors)
+    }
+    return true
+  })
 }
 
-function checkAgent(value, path, errors) {
+/**
+ * Validate `value` as an object shaped by `specOrFn` (a field-spec object, or
+ * a function of `value` returning one). Checks the key set exactly once
+ * against `Object.keys(spec)`, then runs each present field's own check —
+ * the single source of truth I2 (real declarative spec walker) asks for.
+ * Returns a map of field name -> that field's check result, or `undefined`
+ * when `value` isn't even a plain object.
+ */
+function validateObject(value, path, specOrFn, errors, ctx) {
   if (!isPlainObject(value)) {
     addError(errors, "type", path)
-    return
+    return undefined
   }
-  checkKnownKeys(value, path, ["n", "parent", "model"], errors)
-  if (requireField(value, path, "n", errors)) checkRangeInt(value.n, joinPath(path, "n"), 0, 9999, errors)
-  if (requireField(value, path, "parent", errors)) checkNullableRangeInt(value.parent, joinPath(path, "parent"), 0, 9999, errors)
-  if (requireField(value, path, "model", errors)) checkPattern(value.model, joinPath(path, "model"), PATTERNS.modelId, errors)
+  const spec = typeof specOrFn === "function" ? specOrFn(value) : specOrFn
+  checkKnownKeys(value, path, Object.keys(spec), errors)
+  const results = {}
+  for (const [key, field] of Object.entries(spec)) {
+    if (!requireField(value, path, key, errors)) continue
+    results[key] = field.check(value[key], joinPath(path, key), errors, ctx)
+  }
+  return results
 }
 
-function checkToolCountMap(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  let sawUnknownKey = false
-  for (const key of Object.keys(value)) {
-    if (!ENUMS.toolKind.includes(key)) sawUnknownKey = true
-  }
-  if (sawUnknownKey) addError(errors, "unknown_key", path)
-  for (const [key, entry] of Object.entries(value)) {
-    if (!ENUMS.toolKind.includes(key)) continue
-    checkSafeNonNegInt(entry, joinPath(path, key), errors)
-  }
+// ---------------------------------------------------------------------------
+// Per-level specs.
+// ---------------------------------------------------------------------------
+
+const TOKEN_FIELDS = ["input", "output", "cache_read", "cache_write", "reasoning"]
+const TOKENS_SPEC = Object.fromEntries(TOKEN_FIELDS.map((name) => [name, nullableNonNegIntField()]))
+
+const MODEL_SPEC = {
+  id: patternField(PATTERNS.modelId),
+  requests: nullableNonNegIntField(),
+  tokens: objectField(TOKENS_SPEC),
 }
 
-function checkCounts(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  checkKnownKeys(value, path, ["tool_calls", "tool_failures", "tool_retries", "api_retries", "compactions"], errors)
-  if (requireField(value, path, "tool_calls", errors)) checkToolCountMap(value.tool_calls, joinPath(path, "tool_calls"), errors)
-  if (requireField(value, path, "tool_failures", errors)) checkToolCountMap(value.tool_failures, joinPath(path, "tool_failures"), errors)
-  for (const field of ["tool_retries", "api_retries", "compactions"]) {
-    if (requireField(value, path, field, errors)) checkSafeNonNegInt(value[field], joinPath(path, field), errors)
-  }
+const PLUGIN_SPEC = {
+  name: patternField(PATTERNS.pluginName),
+  version: patternField(PATTERNS.semver),
 }
 
-function checkPr(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  checkKnownKeys(value, path, ["repo", "number"], errors)
-  if (requireField(value, path, "repo", errors)) checkPattern(value.repo, joinPath(path, "repo"), PATTERNS.prRepo, errors)
-  if (requireField(value, path, "number", errors)) {
-    if (!isSafePositiveInt(value.number)) addError(errors, "integer", joinPath(path, "number"))
-  }
+const AGENT_SPEC = {
+  n: rangeIntField(0, 9999),
+  parent: nullableRangeIntField(0, 9999),
+  model: patternField(PATTERNS.modelId),
 }
 
-function checkCommit(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  checkKnownKeys(value, path, ["sha"], errors)
-  if (requireField(value, path, "sha", errors)) checkPattern(value.sha, joinPath(path, "sha"), PATTERNS.commitSha, errors)
+const PR_SPEC = {
+  repo: patternField(PATTERNS.prRepo),
+  number: positiveIntField(),
 }
 
-function checkRefs(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  checkKnownKeys(value, path, ["prs", "commits"], errors)
-  if (requireField(value, path, "prs", errors)) {
-    checkArray(value.prs, joinPath(path, "prs"), { max: LIMITS.prs, validate: checkPr }, errors)
-  }
-  if (requireField(value, path, "commits", errors)) {
-    checkArray(value.commits, joinPath(path, "commits"), { max: LIMITS.commits, validate: checkCommit }, errors)
-  }
+const COMMIT_SPEC = {
+  sha: patternField(PATTERNS.commitSha),
 }
 
-function checkTransition(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  checkKnownKeys(value, path, ["to", "at"], errors)
-  if (requireField(value, path, "to", errors)) checkEnum(value.to, joinPath(path, "to"), ENUMS.jobStatus, errors)
-  if (requireField(value, path, "at", errors)) checkPattern(value.at, joinPath(path, "at"), PATTERNS.timestamp, errors)
+const REFS_SPEC = {
+  prs: arrayField(objectField(PR_SPEC), LIMITS.prs),
+  commits: arrayField(objectField(COMMIT_SPEC), LIMITS.commits),
 }
 
-function checkObserved(value, path, errors) {
-  if (value === null) return
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  checkKnownKeys(value, path, ["status", "at"], errors)
-  if (requireField(value, path, "status", errors)) checkEnum(value.status, joinPath(path, "status"), ENUMS.jobStatus, errors)
-  if (requireField(value, path, "at", errors)) checkPattern(value.at, joinPath(path, "at"), PATTERNS.timestamp, errors)
+const TRANSITION_SPEC = {
+  to: enumField(ENUMS.jobStatus),
+  at: timestampField(),
 }
 
+const OBSERVED_SPEC = {
+  status: enumField(ENUMS.jobStatus),
+  at: timestampField(),
+}
+
+// jobs[].basis: a non-empty, duplicate-free subset of ENUMS.jobBasis
+// (controller ruling, M3: duplicates are their own `duplicate` error, not
+// folded into `enum`).
 function checkBasis(value, path, errors) {
   if (!Array.isArray(value)) {
     addError(errors, "type", path)
-    return
+    return false
   }
   if (value.length === 0) {
     addError(errors, "empty", path)
-    return
+    return false
   }
   let sawInvalid = false
-  value.forEach((entry) => {
+  for (const entry of value) {
     if (typeof entry !== "string" || !ENUMS.jobBasis.includes(entry)) sawInvalid = true
-  })
-  if (sawInvalid) addError(errors, "enum", path)
+  }
+  if (sawInvalid) {
+    addError(errors, "enum", path)
+    return false
+  }
+  const seen = new Set()
+  let sawDuplicate = false
+  for (const entry of value) {
+    if (seen.has(entry)) sawDuplicate = true
+    seen.add(entry)
+  }
+  if (sawDuplicate) {
+    addError(errors, "duplicate", path)
+    return false
+  }
+  return true
 }
 
-function checkJob(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  checkKnownKeys(value, path, ["job", "basis", "transitions", "observed"], errors)
-  if (requireField(value, path, "job", errors)) checkPattern(value.job, joinPath(path, "job"), PATTERNS.jobId, errors)
-  if (requireField(value, path, "basis", errors)) checkBasis(value.basis, joinPath(path, "basis"), errors)
-  if (requireField(value, path, "transitions", errors)) {
-    checkArray(value.transitions, joinPath(path, "transitions"), { validate: checkTransition }, errors)
-  }
-  if (requireField(value, path, "observed", errors)) checkObserved(value.observed, joinPath(path, "observed"), errors)
+const JOB_SPEC = {
+  job: patternField(PATTERNS.jobId),
+  basis: customField(checkBasis),
+  transitions: arrayField(objectField(TRANSITION_SPEC), LIMITS.jobTransitions),
+  observed: nullableObjectField(OBSERVED_SPEC),
 }
 
-function checkUnavailable(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
-  }
-  checkKnownKeys(value, path, ["field", "reason"], errors)
-  if (requireField(value, path, "field", errors)) checkEnum(value.field, joinPath(path, "field"), ENUMS.unavailableField, errors)
-  if (requireField(value, path, "reason", errors)) checkEnum(value.reason, joinPath(path, "reason"), ENUMS.unavailableReason, errors)
+const UNAVAILABLE_SPEC = {
+  field: enumField(ENUMS.unavailableField),
+  reason: enumField(ENUMS.unavailableReason),
 }
 
-function checkSession(value, path, errors) {
-  if (!isPlainObject(value)) {
-    addError(errors, "type", path)
-    return
+function sessionOrderCheck(value, path, results, errors) {
+  if (results.started_at && value.ended_at !== null && results.ended_at) {
+    if (Date.parse(value.ended_at) < Date.parse(value.started_at)) {
+      addError(errors, "order", joinPath(path, "ended_at"))
+    }
   }
-  const keys = ["host", "id", "host_version", "entrypoint", "started_at", "ended_at", "end_reason", "derived_through"]
-  checkKnownKeys(value, path, keys, errors)
-  if (requireField(value, path, "host", errors)) checkEnum(value.host, joinPath(path, "host"), ENUMS.host, errors)
-  if (requireField(value, path, "id", errors)) checkPattern(value.id, joinPath(path, "id"), PATTERNS.sessionId, errors)
-  if (requireField(value, path, "host_version", errors)) checkPattern(value.host_version, joinPath(path, "host_version"), PATTERNS.semver, errors)
-  if (requireField(value, path, "entrypoint", errors)) checkEnum(value.entrypoint, joinPath(path, "entrypoint"), ENUMS.entrypoint, errors)
-
-  let startedOk = false
-  if (requireField(value, path, "started_at", errors)) startedOk = checkPattern(value.started_at, joinPath(path, "started_at"), PATTERNS.timestamp, errors)
-
-  let endedOk = false
-  let endedPresent = false
-  if (requireField(value, path, "ended_at", errors)) {
-    endedPresent = value.ended_at !== null
-    endedOk = checkNullablePattern(value.ended_at, joinPath(path, "ended_at"), PATTERNS.timestamp, errors)
-  }
-
-  if (startedOk && endedPresent && endedOk && Date.parse(value.ended_at) < Date.parse(value.started_at)) {
-    addError(errors, "order", joinPath(path, "ended_at"))
-  }
-
-  if (requireField(value, path, "end_reason", errors)) checkNullableEnum(value.end_reason, joinPath(path, "end_reason"), ENUMS.endReason, errors)
-  if (requireField(value, path, "derived_through", errors)) checkPattern(value.derived_through, joinPath(path, "derived_through"), PATTERNS.timestamp, errors)
 }
 
-const TOP_LEVEL_KEYS = [
-  "schema", "contributor", "session", "plugins", "models", "intervals",
-  "agents", "counts", "refs", "jobs", "unavailable",
-]
+const SESSION_SPEC = {
+  host: enumField(ENUMS.host),
+  id: patternField(PATTERNS.sessionId),
+  host_version: patternField(PATTERNS.semver),
+  entrypoint: enumField(ENUMS.entrypoint),
+  started_at: timestampField(),
+  ended_at: nullableTimestampField(),
+  end_reason: nullableEnumField(ENUMS.endReason),
+  derived_through: timestampField(),
+}
+
+// intervals[].tool / outcome are required exactly when kind is "tool", and
+// forbidden otherwise. Because the object walker derives its allow-list from
+// the very same spec it validates against, "forbidden" is not a separate
+// error path: when kind isn't "tool" those two keys are simply absent from
+// the computed spec, so their presence is already an `unknown_key`.
+function intervalFields(value) {
+  const fields = {
+    kind: enumField(ENUMS.intervalKind),
+    agent: rangeIntField(0, 9999),
+    start: timestampField(),
+    end: timestampField(),
+  }
+  // `validateObject` only ever calls this after confirming `value` is a
+  // plain object, so no further type guard is needed here.
+  if (value.kind === "tool") {
+    fields.tool = enumField(ENUMS.toolKind)
+    fields.outcome = enumField(ENUMS.outcome)
+  }
+  return fields
+}
+
+function intervalOrderCheck(value, path, results, errors) {
+  if (results.start && results.end && Date.parse(value.end) < Date.parse(value.start)) {
+    addError(errors, "order", joinPath(path, "end"))
+  }
+}
+
+const INTERVAL_FIELD = objectField(intervalFields, intervalOrderCheck)
+
+const COUNTS_SPEC = {
+  tool_calls: mapOfField(ENUMS.toolKind, nonNegIntField()),
+  tool_failures: mapOfField(ENUMS.toolKind, nonNegIntField()),
+  tool_retries: nonNegIntField(),
+  api_retries: nonNegIntField(),
+  compactions: nonNegIntField(),
+}
+
+const TOP_SPEC = {
+  schema: patternField(PATTERNS.schema),
+  contributor: patternField(PATTERNS.contributor),
+  session: objectField(SESSION_SPEC, sessionOrderCheck),
+  plugins: arrayField(objectField(PLUGIN_SPEC), LIMITS.plugins),
+  models: arrayField(objectField(MODEL_SPEC), LIMITS.models),
+  agents: arrayField(objectField(AGENT_SPEC), LIMITS.agents),
+  intervals: arrayField(INTERVAL_FIELD, LIMITS.intervals),
+  counts: objectField(COUNTS_SPEC),
+  refs: objectField(REFS_SPEC),
+  jobs: arrayField(objectField(JOB_SPEC), LIMITS.jobs),
+  unavailable: arrayField(objectField(UNAVAILABLE_SPEC), LIMITS.unavailable),
+}
+
+// Every spec object above, keyed for the structural regression test that
+// walks each one and asserts every allowed key carries a real validator
+// (I2): with this architecture that's true by construction, but the test
+// still guards against a future edit that adds a bare value instead of a
+// spec primitive.
+export const __SPECS__ = Object.freeze({
+  top: TOP_SPEC,
+  session: SESSION_SPEC,
+  model: MODEL_SPEC,
+  tokens: TOKENS_SPEC,
+  plugin: PLUGIN_SPEC,
+  agent: AGENT_SPEC,
+  pr: PR_SPEC,
+  commit: COMMIT_SPEC,
+  refs: REFS_SPEC,
+  transition: TRANSITION_SPEC,
+  observed: OBSERVED_SPEC,
+  job: JOB_SPEC,
+  unavailable: UNAVAILABLE_SPEC,
+  counts: COUNTS_SPEC,
+  intervalTool: intervalFields({ kind: "tool" }),
+  intervalOther: intervalFields({ kind: "turn" }),
+})
 
 /**
  * `validateFacts(value) -> { ok, errors }`. Accepts an already-parsed value
  * (use `validateFactsBytes` for a raw buffer, which also enforces the byte
- * cap). Collects every violation rather than stopping at the first, but a
- * single-violation input surfaces exactly one error.
+ * cap and canonical-bytes check). Collects every violation rather than
+ * stopping at the first, but a single-violation input surfaces exactly one
+ * error.
  */
 export function validateFacts(value) {
   const errors = []
-  if (!isPlainObject(value)) {
-    addError(errors, "type", "")
-    return { ok: false, errors }
-  }
+  const results = validateObject(value, "", TOP_SPEC, errors)
+  if (results === undefined) return { ok: false, errors }
 
-  checkKnownKeys(value, "", TOP_LEVEL_KEYS, errors)
-
-  if (requireField(value, "", "schema", errors)) checkPattern(value.schema, "schema", PATTERNS.schema, errors)
-  if (requireField(value, "", "contributor", errors)) checkPattern(value.contributor, "contributor", PATTERNS.contributor, errors)
-  if (requireField(value, "", "session", errors)) checkSession(value.session, "session", errors)
-
-  if (requireField(value, "", "plugins", errors)) {
-    checkArray(value.plugins, "plugins", { max: LIMITS.plugins, validate: checkPlugin }, errors)
-  }
-  if (requireField(value, "", "models", errors)) {
-    checkArray(value.models, "models", { max: LIMITS.models, validate: checkModel }, errors)
-  }
-
+  // Cross-field checks that no single field's own spec can express: an
+  // interval's agent must name a real entry in `agents`, an agent's own `n`
+  // must be unique, and an agent's `parent` must name a real agent (M3).
+  // Both gate on `results.agents` (not merely `Array.isArray(value.agents)`):
+  // when `agents` is over its cap the array's items are left unchecked, same
+  // as every other capped array, so nothing here can trust it enough to
+  // cross-reference against it either — that would cascade one `too_many`
+  // into a `ref`/`reference`/`duplicate` error per sibling item.
+  const agentsChecked = Boolean(results.agents)
   const agentIds = new Set()
-  let agentsOk = false
-  if (requireField(value, "", "agents", errors)) {
-    agentsOk = Array.isArray(value.agents)
-    checkArray(value.agents, "agents", { validate: checkAgent }, errors)
-    if (agentsOk) {
-      for (const agent of value.agents) {
-        if (isPlainObject(agent) && Number.isSafeInteger(agent.n)) agentIds.add(agent.n)
-      }
+  if (agentsChecked) {
+    const validAgents = value.agents
+      .map((item, index) => ({ item, index, ok: results.agents[index]?.n === true }))
+      .filter((entry) => entry.ok)
+    const seenNs = new Set()
+    for (const { item, index } of validAgents) {
+      if (seenNs.has(item.n)) addError(errors, "duplicate", `agents.${index}.n`)
+      else seenNs.add(item.n)
+      agentIds.add(item.n)
     }
+    value.agents.forEach((item, index) => {
+      if (!isPlainObject(item)) return
+      if (results.agents[index]?.parent === true && item.parent !== null && !agentIds.has(item.parent)) {
+        addError(errors, "reference", `agents.${index}.parent`)
+      }
+    })
   }
 
-  if (requireField(value, "", "intervals", errors)) {
-    const results = []
-    checkArray(value.intervals, "intervals", {
-      max: LIMITS.intervals,
-      validate: (item, itemPath, itemErrors) => {
-        results.push({ result: checkInterval(item, itemPath, itemErrors), path: itemPath })
-      },
-    }, errors)
-    if (agentsOk) {
-      for (const { result, path } of results) {
-        if (result && result.agentOk && !agentIds.has(result.agent)) {
-          addError(errors, "ref", joinPath(path, "agent"))
-        }
+  if (agentsChecked && results.intervals) {
+    value.intervals.forEach((item, index) => {
+      const itemResult = results.intervals[index]
+      if (itemResult && itemResult.agent === true && !agentIds.has(item.agent)) {
+        addError(errors, "ref", `intervals.${index}.agent`)
       }
-    }
-  }
-
-  if (requireField(value, "", "counts", errors)) checkCounts(value.counts, "counts", errors)
-  if (requireField(value, "", "refs", errors)) checkRefs(value.refs, "refs", errors)
-  if (requireField(value, "", "jobs", errors)) checkArray(value.jobs, "jobs", { validate: checkJob }, errors)
-  if (requireField(value, "", "unavailable", errors)) {
-    checkArray(value.unavailable, "unavailable", { validate: checkUnavailable }, errors)
+    })
   }
 
   return { ok: errors.length === 0, errors }
 }
 
 /**
- * Parse and validate raw bytes, enforcing the 16 MiB cap first so an
- * oversized file is never even handed to `JSON.parse`.
+ * Parse and validate raw bytes (or a string). Enforces the 16 MiB cap first,
+ * measured with `Buffer.byteLength` so a multi-byte string can't undercount
+ * itself past the cap the way `.length` (UTF-16 code units) would. Then
+ * requires the text to be the exact canonical `JSON.stringify` of what it
+ * parses to (one trailing `\n` allowed) — `JSON.parse` silently keeps only
+ * the last of any duplicate key, so without this a file carrying
+ * `"contributor": "<free text>", "contributor": "<valid id>"` would validate
+ * clean while its raw bytes, which are what a store actually receives and
+ * commits, still carry the free text.
  */
 export function validateFactsBytes(buffer) {
-  if (buffer.length > LIMITS.maxBytes) {
+  if (Buffer.byteLength(buffer) > LIMITS.maxBytes) {
     return { ok: false, errors: [{ code: "too_large", path: "" }] }
   }
+  const text = typeof buffer === "string" ? buffer : buffer.toString("utf8")
   let parsed
   try {
-    parsed = JSON.parse(buffer.toString("utf8"))
+    parsed = JSON.parse(text)
   } catch {
     return { ok: false, errors: [{ code: "json", path: "" }] }
+  }
+  const canonical = JSON.stringify(parsed)
+  if (text !== canonical && text !== `${canonical}\n`) {
+    return { ok: false, errors: [{ code: "canonical", path: "" }] }
   }
   return validateFacts(parsed)
 }

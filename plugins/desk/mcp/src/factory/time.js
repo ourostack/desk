@@ -1,8 +1,10 @@
 // Timestamp and interval helpers shared by the factory.
 //
-// This module holds no dependency but `node:`-nothing at all: every check
-// here is plain regex/Date arithmetic. `src/factory/**` may only import
-// `node:` built-ins and other `src/factory/` files, so this stays a leaf.
+// `src/factory/**` may only import `node:` built-ins and other
+// `src/factory/` files; this module imports the shared patterns from
+// `./schema.js`, itself a factory file, and nothing else.
+
+import { PATTERNS } from "./schema.js"
 
 /**
  * A source or operator timestamp, or nothing.
@@ -37,18 +39,30 @@ export function normalizeTimestamp(value) {
   return new Date(parsed).toISOString()
 }
 
+// A strict, unambiguous instant only: `PATTERNS.timestamp` (the same shape a
+// facts file requires) or nothing. `Date.parse` alone would also accept a
+// host-local form with no offset, silently displacing the instant by the
+// host's UTC offset — exactly the ambiguity `normalizeTimestamp` above
+// refuses. A non-string (including `null`, from a malformed or absent
+// entry) simply doesn't match rather than throwing.
+function parseStrictTimestamp(value) {
+  if (typeof value !== "string" || !PATTERNS.timestamp.test(value)) return NaN
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? NaN : parsed
+}
+
 /**
  * Merge `{start, end}` intervals (ISO strings) into sorted, non-overlapping
- * spans. An entry whose times don't parse, or whose `end` is before its
- * `start`, is dropped and counted in `invalid` rather than distorting the
- * union.
+ * spans. An entry whose times don't match `PATTERNS.timestamp`, or whose
+ * `end` is before its `start`, is dropped and counted in `invalid` rather
+ * than distorting the union.
  */
 function mergeNumeric(intervals) {
   const valid = []
   let invalid = 0
   for (const entry of intervals) {
-    const start = Date.parse(entry.start)
-    const end = Date.parse(entry.end)
+    const start = parseStrictTimestamp(entry?.start)
+    const end = parseStrictTimestamp(entry?.end)
     if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
       invalid += 1
       continue

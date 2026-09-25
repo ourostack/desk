@@ -86,6 +86,29 @@ test("unionIntervals drops and counts an entry with unparsable times", () => {
   assert.deepEqual(result, { intervals: [], invalid: 1 })
 })
 
+// Minor ruling M5: a null (or otherwise non-object) entry must not crash the
+// merge, and only the strict PATTERNS.timestamp shape is accepted — a
+// host-local form with no offset is a real ambiguity (the same one
+// normalizeTimestamp refuses above), not something the union should
+// silently resolve via Date.parse's own host-local reading.
+test("unionIntervals does not crash on a null or undefined entry, and counts it invalid", () => {
+  const result = unionIntervals([null, undefined, { start: "2026-09-25T08:00:00.000Z", end: "2026-09-25T08:05:00.000Z" }])
+  assert.deepEqual(result, {
+    intervals: [{ start: "2026-09-25T08:00:00.000Z", end: "2026-09-25T08:05:00.000Z" }],
+    invalid: 2,
+  })
+})
+
+test("unionIntervals rejects a host-local timestamp with no offset rather than guessing", () => {
+  const result = unionIntervals([{ start: "2026-09-25T08:00:00", end: "2026-09-25T08:05:00" }])
+  assert.deepEqual(result, { intervals: [], invalid: 1 })
+})
+
+test("unionIntervals rejects a timestamp that matches the pattern's shape but is not a real instant", () => {
+  const result = unionIntervals([{ start: "2026-13-40T25:61:61.999Z", end: "2026-13-40T25:61:61.999Z" }])
+  assert.deepEqual(result, { intervals: [], invalid: 1 })
+})
+
 test("unionIntervals on an empty input returns an empty union with no invalid entries", () => {
   assert.deepEqual(unionIntervals([]), { intervals: [], invalid: 0 })
 })
