@@ -6,6 +6,8 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -418,6 +420,97 @@ test("Minor 6: only writes whose paired result succeeded become fileWrites; Note
 test("a 40-hex token in a Bash result's stdout becomes a commitShas event, deduplicated", async () => {
   const { events } = await deriveFull()
   assert.deepEqual(events.commitShas, [COMMIT_SHA])
+})
+
+// --- Shell git commit calls (matched to the desk's own commits by time) ------
+
+// The commit message and every other argument carry this; only directories
+// may come back, and never into facts.
+const COMMIT_MESSAGE_SENTINEL = "COMMIT-MESSAGE-SENTINEL-9b1e"
+const GIT_SESSION_ID = "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b"
+
+async function deriveLines(lines, endReason = "prompt_input_exit") {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-shell-git-"))
+  try {
+    const transcript = path.join(dir, `${GIT_SESSION_ID}.jsonl`)
+    writeFileSync(transcript, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`)
+    return await deriveClaudeSession({ transcriptPath: transcript, contributor: CONTRIBUTOR, plugins: PLUGINS, endReason })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function shellGitSession() {
+  let second = 0
+  const line = (extra) => ({ sessionId: GIT_SESSION_ID, version: "2.1.282", cwd: `/tmp/${SENTINEL}-cwd`, timestamp: `2026-09-25T08:00:${String(second++).padStart(2, "0")}.000Z`, ...extra })
+  const bash = (id, command, extra = {}) => line({ type: "assistant", message: { id: `m-${id}`, model: "claude-opus-5-5", content: [{ type: "tool_use", id, name: "Bash", input: { command, description: COMMIT_MESSAGE_SENTINEL } }] }, ...extra })
+  const result = (id, isError = false, extra = {}) => line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content: `[main 1a2b3c4] ${COMMIT_MESSAGE_SENTINEL}` }] }, toolUseResult: { stdout: COMMIT_MESSAGE_SENTINEL, stderr: "" }, ...extra })
+  const m = COMMIT_MESSAGE_SENTINEL
+  const answered = (id, content, extra = {}) => line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: false, content }] }, ...extra })
+  return [
+    line({ type: "user", message: { role: "user", content: `commit it ${SENTINEL}` } }),
+    bash("b1", `git add -A && git commit -q -m "${m}"`), // 01
+    result("b1"), // 02
+    bash("b2", `git -C /tmp/${SENTINEL}-desk commit -q -m "${m}"`), // 03
+    result("b2"), // 04
+    bash("b3", `cd /tmp/${SENTINEL}-other && git -c user.name="${m}" commit -m '${m}'`, { cwd: undefined }), // 05
+    result("b3"), // 06
+    bash("b4", `git status ${m}`), // 07
+    result("b4"), // 08
+    bash("b5", `git commit -m "${m}"`, { cwd: 7 }), // 09
+    result("b5"), // 10
+    line({ type: "assistant", message: { id: "m-b6", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "b6", name: "Bash", input: { command: 42 } }] } }), // 11
+    result("b6"), // 12
+    line({ type: "assistant", message: { id: "m-b7", model: "claude-opus-5-5", content: [{ type: "tool_use", id: "b7", name: "Write", input: { file_path: `/tmp/${SENTINEL}-x`, content: `git commit -m ${m}` } }] } }), // 13
+    result("b7"), // 14
+    bash("b8", `git commit -m "${m}"`, { timestamp: "not a time" }), // 15: no readable start
+    result("b8"), // 16
+    bash("b9", `git commit -m "${m}"`), // 17
+    result("b9", false, { timestamp: "not a time" }), // 18: no readable end
+    bash("b11", `git commit -m "${m}"`), // 19
+    result("b11", true), // 20: a failed call
+    bash("b12", `git commit -m "${m}"`), // 21
+    answered("b12", `Exit code 1\nnothing to commit, working tree clean ${m}`), // 22: a no-op commit
+    bash("b13", `git commit -m "${m}"`), // 23
+    answered("b13", [{ type: "text", text: `Exit code 0 ${m}` }]), // 24
+    bash("b14", `git commit -m "${m}"`), // 25
+    answered("b14", [{ type: "image" }]), // 26
+    bash("b15", `git commit -m "${m}"`), // 27
+    answered("b15", [{ type: "text", text: 5 }]), // 28
+    bash("b16", `git commit -m "${m}"`), // 29
+    answered("b16", m, { toolUseResult: { interrupted: true } }), // 30: interrupted
+    bash("b10", `git commit -m "${m}"`), // 31: never answered
+  ]
+}
+
+test("only a successful Bash git commit call becomes a shellGitCommits event, with its start, end and directory", async () => {
+  const { facts, events } = await deriveLines(shellGitSession())
+  const base = `/tmp/${SENTINEL}-cwd`
+  const span = (from, to, cwd) => ({ start: `2026-09-25T08:00:${from}.000Z`, end: `2026-09-25T08:00:${to}.000Z`, cwd })
+  assert.deepEqual(events.shellGitCommits, [
+    span("01", "02", base),
+    span("03", "04", `/tmp/${SENTINEL}-desk`),
+    span("05", "06", `/tmp/${SENTINEL}-other`),
+    span("09", "10", null),
+    span("23", "24", base),
+    span("25", "26", base),
+    span("27", "28", base),
+  ], "a failed, no-op or interrupted call gives none")
+  assert.deepEqual(events.nativeCommitShas, [], "Claude Code records no native commit refs")
+  assert.equal(validateFacts(facts).ok, true)
+})
+
+test("sentinel: a git commit command's text (message, options, other arguments) never reaches facts or events", async () => {
+  const { facts, events } = await deriveLines(shellGitSession())
+  assert.equal(JSON.stringify(facts).includes(COMMIT_MESSAGE_SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(events.shellGitCommits).includes(COMMIT_MESSAGE_SENTINEL), false)
+  assert.equal(JSON.stringify(events).includes("git"), false, "not even the command name is kept")
+})
+
+test("the full fixture's Bash calls hold no git commit, so its shellGitCommits is empty", async () => {
+  const { events } = await deriveFull()
+  assert.deepEqual(events.shellGitCommits, [])
 })
 
 // --- session envelope ---------------------------------------------------------
