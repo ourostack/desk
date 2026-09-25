@@ -53,9 +53,9 @@ function makeFixture({ namespace = "ourostack" } = {}) {
   const codexHome = path.join(root, "codex-home");
   mkdirp(repoRoot);
   writePlugin(repoRoot, "desk", "1.7.3");
-  writePlugin(repoRoot, "superpowers", "1.4.9");
+  writePlugin(repoRoot, "superpowers", "6.3.0");
   writePlugin(repoRoot, "plain-language", "0.1.0");
-  writePlugin(repoRoot, "crew", "4.9.0");
+  writePlugin(repoRoot, "crew", "0.2.1");
   writeJson(path.join(repoRoot, ".agents", "plugins", "marketplace.json"), {
     name: namespace,
     plugins: [
@@ -78,9 +78,9 @@ function makeFixture({ namespace = "ourostack" } = {}) {
     ],
   });
   writeCache(codexHome, "desk", "1.7.3", manifest("desk", "1.7.3"), namespace);
-  writeCache(codexHome, "superpowers", "1.4.9", manifest("superpowers", "1.4.9"), namespace);
+  writeCache(codexHome, "superpowers", "6.3.0", manifest("superpowers", "6.3.0"), namespace);
   writeCache(codexHome, "plain-language", "0.1.0", manifest("plain-language", "0.1.0"), namespace);
-  writeCache(codexHome, "crew", "4.9.0", manifest("crew", "4.9.0"), namespace);
+  writeCache(codexHome, "crew", "0.2.1", manifest("crew", "0.2.1"), namespace);
   return { root, repoRoot, codexHome };
 }
 
@@ -145,9 +145,9 @@ function testHostMarketplaceCurrentAndDrift() {
     assert.equal(current.host_marketplace.reason, "current");
 
     writePlugin(fixture.root, "desk", "1.7.2");
-    writePlugin(fixture.root, "superpowers", "1.4.8");
+    writePlugin(fixture.root, "superpowers", "6.2.0");
     writePlugin(fixture.root, "plain-language", "0.0.9");
-    writePlugin(fixture.root, "crew", "4.8.0");
+    writePlugin(fixture.root, "crew", "0.2.0");
     writeHostMarketplace(fixture.root, [
       ["desk", "./plugins/desk"],
       ["superpowers", "./plugins/superpowers"],
@@ -270,7 +270,7 @@ function testStaleSourceAndCache() {
   const fixture = makeFixture();
   try {
     writePlugin(fixture.repoRoot, "desk", "1.7.3", { description: "new source" });
-    writeCache(fixture.codexHome, "superpowers", "1.4.9", manifest("superpowers", "1.4.9", {
+    writeCache(fixture.codexHome, "superpowers", "6.3.0", manifest("superpowers", "6.3.0", {
       description: "old cache",
     }));
 

@@ -75,9 +75,9 @@ function makeFixture({ namespace = "ourostack" } = {}) {
   const codexHome = path.join(root, "codex-home")
   mkdirp(fixtureRepo)
   writePlugin(fixtureRepo, "desk", "1.7.3")
-  writePlugin(fixtureRepo, "superpowers", "1.4.9")
+  writePlugin(fixtureRepo, "superpowers", "6.3.0")
   writePlugin(fixtureRepo, "plain-language", "0.1.0")
-  writePlugin(fixtureRepo, "crew", "4.9.0")
+  writePlugin(fixtureRepo, "crew", "0.2.1")
   writeJson(path.join(fixtureRepo, ".agents", "plugins", "marketplace.json"), {
     name: namespace,
     plugins: [
@@ -100,9 +100,9 @@ function makeFixture({ namespace = "ourostack" } = {}) {
     ],
   })
   writeCache(codexHome, namespace, "desk", "1.7.3", manifest("desk", "1.7.3"))
-  writeCache(codexHome, namespace, "superpowers", "1.4.9", manifest("superpowers", "1.4.9"))
+  writeCache(codexHome, namespace, "superpowers", "6.3.0", manifest("superpowers", "6.3.0"))
   writeCache(codexHome, namespace, "plain-language", "0.1.0", manifest("plain-language", "0.1.0"))
-  writeCache(codexHome, namespace, "crew", "4.9.0", manifest("crew", "4.9.0"))
+  writeCache(codexHome, namespace, "crew", "0.2.1", manifest("crew", "0.2.1"))
   return { root, repoRoot: fixtureRepo, codexHome }
 }
 
@@ -150,9 +150,9 @@ test("Codex plugin cache audit checks host implicit marketplace source drift", (
     assert.ok(current.host_marketplace.plugins.every((plugin) => plugin.current))
 
     writePlugin(fixture.root, "desk", "1.7.2")
-    writePlugin(fixture.root, "superpowers", "1.4.8")
+    writePlugin(fixture.root, "superpowers", "6.2.0")
     writePlugin(fixture.root, "plain-language", "0.0.9")
-    writePlugin(fixture.root, "crew", "4.8.0")
+    writePlugin(fixture.root, "crew", "0.2.0")
     writeHostMarketplace(fixture.root, {
       plugins: [
         ["desk", "./plugins/desk"],
@@ -355,7 +355,7 @@ test("Codex plugin cache audit reports source, cache, entry, and namespace evide
   const fixture = makeFixture()
   try {
     writePlugin(fixture.repoRoot, "desk", "1.7.3", { description: "new source" })
-    writeCache(fixture.codexHome, "ourostack", "superpowers", "1.4.9", manifest("superpowers", "1.4.9", {
+    writeCache(fixture.codexHome, "ourostack", "superpowers", "6.3.0", manifest("superpowers", "6.3.0", {
       description: "old cache",
     }))
     writeJson(path.join(fixture.repoRoot, ".agents", "plugins", "marketplace.json"), {

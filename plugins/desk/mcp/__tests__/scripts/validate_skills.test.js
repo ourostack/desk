@@ -767,9 +767,30 @@ test("validatePluginMetadata admits caret ranges the marketplace version satisfi
     ["0.3.0", "^0.2.2", false],
     ["0.0.3", "^0.0.3", true],
     ["0.0.4", "^0.0.3", false],
+    // Prereleases follow npm semver: a prerelease floor admits later prereleases of the same version and every
+    // release in range; any other prerelease is admitted only when the floor names that same version.
     ["1.0.0-alpha.2", "^1.0.0-alpha.2", true],
-    ["1.0.0-alpha.3", "^1.0.0-alpha.2", false],
+    ["1.0.0-alpha.3", "^1.0.0-alpha.2", true],
+    ["1.0.0-alpha.10", "^1.0.0-alpha.9", true],
+    ["1.0.0-beta", "^1.0.0-alpha.2", true],
+    ["1.0.0-alpha.1", "^1.0.0-alpha.2", false],
+    ["1.0.0-alpha", "^1.0.0-alpha.2", false],
+    ["1.0.0-alpha.2.1", "^1.0.0-alpha.2", true],
+    ["1.0.0-alpha.2", "^1.0.0-beta", false],
+    ["1.0.0", "^1.0.0-alpha.2", true],
+    ["1.4.0", "^1.0.0-alpha.2", true],
+    ["1.1.0-alpha.1", "^1.0.0-alpha.2", false],
+    ["2.0.0-alpha.1", "^1.0.0-alpha.2", false],
+    ["2.0.0", "^1.0.0-alpha.2", false],
+    ["6.4.0-alpha.1", "^6.3.0", false],
+    ["0.2.3-rc.1", "^0.2.2", false],
+    ["0.2.2", "^0.2.2-alpha.1", true],
+    ["0.2.9", "^0.2.2-alpha.1", true],
+    ["0.3.0", "^0.2.2-alpha.1", false],
+    ["0.0.3", "^0.0.3-alpha.1", true],
+    ["0.0.4", "^0.0.3-alpha.1", false],
     ["1.0.0", "^not-a-version", false],
+    ["not-a-version", "^1.0.0", false],
   ]) {
     assert.equal(validator.satisfiesVersion(shipped, required), ok, `${shipped} vs ${required}`)
   }

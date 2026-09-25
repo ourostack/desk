@@ -143,7 +143,7 @@ function validateManifest(options = {}) {
 function parseSemver(version) {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/u.exec(String(version));
   if (!match) return null;
-  return { core: match.slice(1, 4).map(Number), prerelease: match[4] ?? null };
+  return { core: match.slice(1, 4).map(Number), prerelease: match[4] ? match[4].split(".") : [] };
 }
 
 function compareCore(left, right) {
@@ -153,16 +153,37 @@ function compareCore(left, right) {
   return 0;
 }
 
-// A dependency names an exact version or a caret range. A caret range admits
-// versions at or above its floor that keep the left-most non-zero component
-// (^6.3.0 admits 6.x, ^0.2.2 admits 0.2.x); prereleases match exactly only.
+// Semantic-version precedence: a release outranks its prereleases, and numeric
+// prerelease identifiers compare numerically (alpha.10 > alpha.9).
+function compareSemver(left, right) {
+  const core = compareCore(left, right);
+  if (core !== 0) return core;
+  if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+    return right.prerelease.length - left.prerelease.length;
+  }
+  for (let index = 0; index < Math.max(left.prerelease.length, right.prerelease.length); index += 1) {
+    const x = left.prerelease[index];
+    const y = right.prerelease[index];
+    if (x === undefined || y === undefined) return x === undefined ? -1 : 1;
+    if (x === y) continue;
+    const numeric = /^\d+$/u.test(x) && /^\d+$/u.test(y);
+    return numeric ? Number(x) - Number(y) : x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+// A dependency names an exact version or a caret range, with npm semver
+// semantics. A caret range admits versions at or above its floor that keep the
+// left-most non-zero component (^6.3.0 admits 6.x, ^0.2.2 admits 0.2.x). A
+// prerelease is admitted only when the floor is a prerelease of the same
+// major.minor.patch (^1.0.0-alpha.2 admits 1.0.0-alpha.3 and 1.0.0, not 1.1.0-beta).
 function satisfiesVersion(version, requirement) {
   if (!String(requirement).startsWith("^")) return version === requirement;
   const floor = parseSemver(String(requirement).slice(1));
   const actual = parseSemver(version);
   if (floor === null || actual === null) return false;
-  if (actual.prerelease !== null || floor.prerelease !== null) return version === String(requirement).slice(1);
-  if (compareCore(actual, floor) < 0) return false;
+  if (compareSemver(actual, floor) < 0) return false;
+  if (actual.prerelease.length > 0 && (floor.prerelease.length === 0 || compareCore(actual, floor) !== 0)) return false;
   const pinned = floor.core[0] !== 0 ? 1 : floor.core[1] !== 0 ? 2 : 3;
   return floor.core.slice(0, pinned).every((part, index) => actual.core[index] === part);
 }
