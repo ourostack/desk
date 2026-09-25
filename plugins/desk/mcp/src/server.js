@@ -52,7 +52,8 @@ import {
   getSemanticCoverage,
   resolveEnsureIndexOptions,
 } from "./server-helpers.js"
-import { openDb, closeDb } from "./db/init.js"
+import { existsSync, renameSync } from "node:fs"
+import { indexDbPath, openDb, closeDb } from "./db/init.js"
 import { rebuildIndex } from "./indexer/index.js"
 import { stableStringify } from "./readiness/identity.js"
 import { CanonicalWriteRecordingError } from "./readiness/journal.js"
@@ -84,7 +85,22 @@ function verifyEmbeddingModel(semantic) {
   }
 }
 
-export async function connectOrStartController({ deskRoot, policy, stateHome, ephemeral }) {
+// The contracts a readiness controller is identified by. Sessions on one root elect one controller only when these match.
+export function readinessContracts(policy) {
+  return {
+    protocolVersion: 1,
+    lexicalContract: {
+      schema: 1,
+      chunker: "markdown-v1",
+      normalization: "unicode-v1",
+      policy: {
+        lexical: policy.lexical,
+      },
+    },
+  }
+}
+
+export async function connectOrStartController({ deskRoot, policy, stateHome, ephemeral, onRepair }) {
   if (policy.semantic !== "unsupported") {
     verifyEmbeddingModel(policy.semantic)
   }
@@ -94,17 +110,10 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
   })
   const options = {
     root: deskRoot,
-    protocolVersion: 1,
+    ...readinessContracts(policy),
     stateHome,
     ephemeral,
-    lexicalContract: {
-      schema: 1,
-      chunker: "markdown-v1",
-      normalization: "unicode-v1",
-      policy: {
-        lexical: policy.lexical,
-      },
-    },
+    onRepair,
     semanticContract: {
       mode: policy.semantic,
       embedding_spec: policy.semantic === "unsupported" ? null : ACTIVE_EMBEDDING_SPEC,
@@ -121,7 +130,7 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
         }, { deskRoot })
         // Keep the opt-out at ensureIndex's normalization boundary; resolved
         // undefined would otherwise re-enable legacy snapshot auto-discovery.
-        const result = await ensureIndex(deskRoot, { ...indexOptions, snapshots: false })
+        const result = await ensureIndexOrQuarantine(deskRoot, { ...indexOptions, snapshots: false })
         const db = openDb(deskRoot)
         try {
           // A timestamp/snapshot fast path is not proof of journal coverage.
@@ -150,6 +159,28 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
   const controller = await connectReadinessController(options)
   controller.generationPolicyIdentity = stableStringify(policy)
   return controller
+}
+
+// The index database is derived from the desk's files, so an unreadable one (truncated, or not a database at all) is moved aside and rebuilt instead of failing every convergence.
+export async function ensureIndexOrQuarantine(deskRoot, options, { ensure = ensureIndex, now = Date.now } = {}) {
+  try {
+    return await ensure(deskRoot, options)
+  } catch (error) {
+    if (error?.code !== "SQLITE_NOTADB" && error?.code !== "SQLITE_CORRUPT") throw error
+    const quarantined = quarantineIndexDb(deskRoot, now())
+    process.stderr.write(`[desk-mcp] repaired: unreadable index database moved to ${quarantined} and rebuilt (${error.code})\n`)
+    const result = await ensure(deskRoot, options)
+    return { ...result, quarantined_index: quarantined }
+  }
+}
+
+function quarantineIndexDb(deskRoot, stamp) {
+  const dbPath = indexDbPath(deskRoot)
+  const target = `${dbPath}.corrupt-${stamp}`
+  for (const suffix of ["", "-wal", "-shm"]) {
+    if (existsSync(`${dbPath}${suffix}`)) renameSync(`${dbPath}${suffix}`, `${target}${suffix}`)
+  }
+  return target
 }
 
 export async function beginBackgroundConvergence(admission) {

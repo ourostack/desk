@@ -116,6 +116,13 @@ function inspectLocalDb(deskRoot) {
   const db = new Database(dbPath, { readonly: true, fileMustExist: true })
   try {
     sqliteVec.load(db)
+    tableExists(db, "chunks")
+  } catch {
+    // An unreadable index is reported, never thrown: the readiness controller moves it aside and rebuilds it.
+    db.close()
+    return unavailableLocalDb(dbPath, "corrupt")
+  }
+  try {
     const chunksTableExists = tableExists(db, "chunks")
     const vectorsTableExists = tableExists(db, "chunk_vecs")
     const embeddingFailuresTableExists = tableExists(db, "chunk_embedding_failures")

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs"
 import * as net from "node:net"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -18,6 +18,12 @@ const privateDirectoryValidators = {
   darwin: validatePrivateDirectory,
   linux: validatePrivateDirectory,
 }
+// Named pipes on Windows have no directory mode to tighten.
+const privateDirectoryTighteners = {
+  win32: Object,
+  darwin: tightenPrivateDirectory,
+  linux: tightenPrivateDirectory,
+}
 
 export async function connectOrStartController({
   root,
@@ -29,10 +35,12 @@ export async function connectOrStartController({
   watcher,
   watcherFactory,
   ephemeral = false,
+  onRepair = () => {},
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  privateDirectoryTighteners[process.platform](stateDir, onRepair)
   privateDirectoryValidators[process.platform](stateDir)
   const endpoint = deriveControllerEndpoint({ identity })
 
@@ -86,9 +94,9 @@ async function startOrReuseController({
     requireCompatibleHandshake(existing, identity)
     return
   }
-  if (process.platform !== "win32" && endpointIsReclaimable({ endpoint, identity, stateDir })) {
-    unlinkSync(endpoint)
-  }
+  const stale = process.platform !== "win32" &&
+    (endpointIsReclaimable({ endpoint, identity, stateDir }) ?? await endpointIsAbandoned(endpoint))
+  if (stale) unlinkIfUnchanged(endpoint, stale)
   let ownedWatcher = watcher
   try {
     ownedWatcher ??= await watcherFactory?.({ root: identity.root })
@@ -211,28 +219,75 @@ function readControllerToken({ identity, stateDir }) {
   return record.owner.token
 }
 
+// A socket whose recorded owner is dead. Returns the socket's stat when it may be removed, otherwise null.
 function endpointIsReclaimable({ endpoint, identity, stateDir }) {
   try {
     validatePrivateDirectory(stateDir)
     validatePrivateDirectory(path.dirname(endpoint))
     const stat = lstatSync(endpoint)
     const reclaimableSocket = Number(stat.isSocket()) * Number(stat.uid === process.getuid()) === 1
-    if (!reclaimableSocket) return false
+    if (!reclaimableSocket) return null
     const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
     if (stableStringify(lexicalControllerIdentity(record.identity)) !== stableStringify(lexicalControllerIdentity(identity))
       || record.endpoint !== endpoint || record.socket?.dev !== stat.dev || record.socket?.ino !== stat.ino
       || !Number.isInteger(record.owner?.pid) || record.owner.pid <= 0) {
-      return false
+      return null
     }
     try {
       process.kill(record.owner.pid, 0)
-      return false
+      return null
     } catch (error) {
-      return error?.code === "ESRCH"
+      return error?.code === "ESRCH" ? stat : null
     }
   } catch {
-    return false
+    return null
   }
+}
+
+// A socket file of ours that nobody listens on (connecting is refused), whatever its owner record says: a crashed controller whose owner.json is missing or corrupt. Returns the socket's stat when it may be removed, otherwise null.
+export async function endpointIsAbandoned(endpoint, probe = probeEndpoint) {
+  let stat
+  try {
+    validatePrivateDirectory(path.dirname(endpoint))
+    stat = lstatSync(endpoint)
+  } catch {
+    return null
+  }
+  if (!stat.isSocket() || stat.uid !== process.getuid()) return null
+  return await probe(endpoint) === "refused" ? stat : null
+}
+
+export function probeEndpoint(endpoint, { timeoutMs = 250, connect = net.createConnection } = {}) {
+  return new Promise((resolve) => {
+    const socket = connect(endpoint)
+    const finish = (result) => {
+      clearTimeout(timer)
+      socket.destroy()
+      resolve(result)
+    }
+    const timer = setTimeout(() => finish("unknown"), timeoutMs)
+    socket.once("connect", () => finish("accepting"))
+    socket.once("error", (error) => finish(error?.code === "ECONNREFUSED" ? "refused" : "unknown"))
+  })
+}
+
+// Remove the endpoint only if it is still the file that was judged stale, so a controller that just replaced it keeps its socket.
+export function unlinkIfUnchanged(endpoint, stale) {
+  try {
+    const now = lstatSync(endpoint)
+    if (now.dev === stale.dev && now.ino === stale.ino) unlinkSync(endpoint)
+  } catch {
+    // Already gone: nothing to reclaim.
+  }
+}
+
+// A state directory of ours with a looser mode (for example 755 from a umask) is tightened to 700. A symlink, a directory owned by someone else or anything that is not a directory is left for validation to refuse.
+function tightenPrivateDirectory(directory, onRepair) {
+  const stat = lstatSync(directory)
+  const mode = stat.mode & 0o777
+  if (!stat.isDirectory() || stat.uid !== process.getuid() || mode === 0o700) return
+  chmodSync(directory, 0o700)
+  onRepair({ action: "chmod_700", path: directory, from: mode.toString(8) })
 }
 
 export function createControllerResponseAccumulator(onLine) {

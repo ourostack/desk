@@ -200,8 +200,9 @@ test("real POSIX listener refuses a caller-supplied overlong endpoint before met
   assert.equal(existsSync(path.join(root, "state", "owner.json")), false)
 })
 
+// A socket in the private endpoint folder is reclaimed when its recorded owner is dead, or when nobody listens on it at all (a crashed controller whose owner record no longer matches). A regular file is never removed, and a socket someone still listens on is never removed (see the hung-controller case in admission_conditions.test.js).
 for (const kind of ["file", "unidentified socket", "owned socket"]) {
-  test(`POSIX election reclaims only a positively identified dead-owner socket: ${kind}`, {
+  test(`POSIX election reclaims only a dead socket of ours: ${kind}`, {
     skip: process.platform === "win32",
   }, async (t) => {
     const root = mkdtempSync(path.join(tmpdir(), "desk-reclaim-"))
@@ -227,7 +228,7 @@ for (const kind of ["file", "unidentified socket", "owned socket"]) {
       owner: { pid: child.pid, token: "old-token" },
     }))
     const connecting = connectOrStartController({ root, stateHome, ephemeral: true })
-    if (kind === "owned socket") {
+    if (kind !== "file") {
       const client = await connecting
       try {
         assert.equal((await client.status()).state, "CONTROL_READY")
@@ -240,7 +241,7 @@ for (const kind of ["file", "unidentified socket", "owned socket"]) {
       try {
         await assert.rejects(async () => { unexpectedClient = await connecting }, /election|EADDRINUSE/u)
         assert.equal(lstatSync(endpoint).ino, stat.ino)
-        if (kind === "file") assert.equal(readFileSync(endpoint, "utf8"), "not a socket")
+        assert.equal(readFileSync(endpoint, "utf8"), "not a socket")
       } finally {
         await unexpectedClient?.close()
       }
