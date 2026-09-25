@@ -69,9 +69,9 @@ test("task_create omitted person behaves exactly like person:null", async () => 
   const root = await mkTempDeskRoot()
   const res = await task_create({
     deskRoot: root,
-    input: { track: "t", slug: "s", title: "T" },
+    input: { track: "t", slug: "book-flights", title: "T" },
   })
-  assert.equal(res.path, path.join("t", "s", "task.md"))
+  assert.equal(res.path, path.join("t", "book-flights", "task.md"))
 })
 
 // ── task_update (same builder → must resolve to the person path) ──────────────
@@ -81,16 +81,16 @@ test("task_update under person:ari finds + rewrites the person-scoped task", asy
   await task_create({
     deskRoot: root,
     person: "ari",
-    input: { track: "t", slug: "s", title: "T" },
+    input: { track: "t", slug: "book-flights", title: "T" },
   })
   const res = await task_update({
     deskRoot: root,
     person: "ari",
-    input: { track: "t", slug: "s", frontmatter: { status: "doing" } },
+    input: { track: "t", slug: "book-flights", frontmatter: { status: "doing" } },
   })
   assert.equal(res.status, "updated")
-  assert.equal(res.path, path.join("desks", "ari", "t", "s", "task.md"))
-  const { data } = await readFront(path.join(root, "desks", "ari", "t", "s", "task.md"))
+  assert.equal(res.path, path.join("desks", "ari", "t", "book-flights", "task.md"))
+  const { data } = await readFront(path.join(root, "desks", "ari", "t", "book-flights", "task.md"))
   assert.equal(data.status, "doing")
 })
 
@@ -101,31 +101,33 @@ test("task_archive person:ari → desks/ari/<track>/_archive/<slug>/", async () 
   await task_create({
     deskRoot: root,
     person: "ari",
-    input: { track: "t", slug: "s", title: "T" },
+    input: { track: "t", slug: "book-flights", title: "T" },
   })
   const res = await task_archive({
     deskRoot: root,
     person: "ari",
-    input: { track: "t", slug: "s" },
+    input: { track: "t", slug: "book-flights" },
   })
   assert.equal(res.status, "archived")
   assert.equal(
     res.path,
-    path.join("desks", "ari", "t", "_archive", "s", "task.md"),
+    path.join("desks", "ari", "t", "_archive", "book-flights", "task.md"),
   )
   assert.ok(
-    await exists(path.join(root, "desks", "ari", "t", "_archive", "s", "task.md")),
+    await exists(path.join(root, "desks", "ari", "t", "_archive", "book-flights", "task.md")),
   )
 })
 
 // ── track_create + track_update ───────────────────────────────────────────────
+
+const TRACK_SCOPE = "europe trip planning and bookings; not day-to-day expenses"
 
 test("track_create person:ari → desks/ari/<slug>/track.md", async () => {
   const root = await mkTempDeskRoot()
   const res = await track_create({
     deskRoot: root,
     person: "ari",
-    input: { slug: "europe-trip", title: "Europe" },
+    input: { slug: "europe-trip", title: "Europe", scope: TRACK_SCOPE },
   })
   assert.equal(res.path, path.join("desks", "ari", "europe-trip", "track.md"))
   assert.ok(await exists(path.join(root, "desks", "ari", "europe-trip", "track.md")))
@@ -135,7 +137,7 @@ test("track_create person:null → byte-identical top-level (OFF)", async () => 
   const root = await mkTempDeskRoot()
   const res = await track_create({
     deskRoot: root,
-    input: { slug: "europe-trip", title: "Europe" },
+    input: { slug: "europe-trip", title: "Europe", scope: TRACK_SCOPE },
   })
   assert.equal(res.path, path.join("europe-trip", "track.md"))
 })
@@ -145,7 +147,7 @@ test("track_update under person:ari rewrites the person-scoped track", async () 
   await track_create({
     deskRoot: root,
     person: "ari",
-    input: { slug: "europe-trip", title: "Europe" },
+    input: { slug: "europe-trip", title: "Europe", scope: TRACK_SCOPE },
   })
   const res = await track_update({
     deskRoot: root,
@@ -236,9 +238,9 @@ test("empty-string person is OFF (top-level path)", async () => {
   const res = await task_create({
     deskRoot: root,
     person: "",
-    input: { track: "t", slug: "s", title: "T" },
+    input: { track: "t", slug: "book-flights", title: "T" },
   })
-  assert.equal(res.path, path.join("t", "s", "task.md"))
+  assert.equal(res.path, path.join("t", "book-flights", "task.md"))
 })
 
 test("whitespace-only person is OFF (top-level path)", async () => {
@@ -246,9 +248,9 @@ test("whitespace-only person is OFF (top-level path)", async () => {
   const res = await task_create({
     deskRoot: root,
     person: "   ",
-    input: { track: "t", slug: "s", title: "T" },
+    input: { track: "t", slug: "book-flights", title: "T" },
   })
-  assert.equal(res.path, path.join("t", "s", "task.md"))
+  assert.equal(res.path, path.join("t", "book-flights", "task.md"))
 })
 
 // ── alias safety: path-traversal rejected across every write op ───────────────
@@ -259,7 +261,7 @@ test("task_create rejects a path-traversal alias", async () => {
     task_create({
       deskRoot: root,
       person: "../evil",
-      input: { track: "t", slug: "s", title: "T" },
+      input: { track: "t", slug: "book-flights", title: "T" },
     }),
     /alias/i,
   )
@@ -268,7 +270,7 @@ test("task_create rejects a path-traversal alias", async () => {
 test("track_create rejects a slash in the alias", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
-    track_create({ deskRoot: root, person: "a/b", input: { slug: "s", title: "T" } }),
+    track_create({ deskRoot: root, person: "a/b", input: { slug: "europe-trip", title: "T" } }),
     /alias/i,
   )
 })
@@ -612,7 +614,7 @@ test("task_archive rejects an _archive parent symlink before rename", async () =
   await task_create({
     deskRoot: root,
     person: "ari",
-    input: { track: "t", slug: "s", title: "T" },
+    input: { track: "t", slug: "book-flights", title: "T" },
   })
   const trackDir = path.join(root, "desks", "ari", "t")
   await fs.symlink(outside, path.join(trackDir, "_archive"))
@@ -621,11 +623,11 @@ test("task_archive rejects an _archive parent symlink before rename", async () =
     task_archive({
       deskRoot: root,
       person: "ari",
-      input: { track: "t", slug: "s" },
+      input: { track: "t", slug: "book-flights" },
     }),
     containmentError(),
   )
-  assert.equal(await exists(path.join(outside, "s")), false)
+  assert.equal(await exists(path.join(outside, "book-flights")), false)
 })
 
 test("task_archive rejects a relocation-sensitive task.md symlink before rename", async () => {

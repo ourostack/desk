@@ -181,14 +181,14 @@ test("canonical mutation cannot return success while durable recording is pendin
   let recorded = false
   let settled = false
   const readiness = { async recordChange(change) {
-    assert.equal(change.path, "track/task/task.md")
+    assert.equal(change.path, "track/durable-task/task.md")
     assert.match(fs.readFileSync(path.join(root, change.path), "utf8"), /Canonical title/)
     recorded = true
     entered.resolve()
     await release.promise
     return { recorded: true }
   } }
-  const pending = task_create({ deskRoot: root, readiness, input: { track: "track", slug: "task", title: "Canonical title" } })
+  const pending = task_create({ deskRoot: root, readiness, input: { track: "track", slug: "durable-task", title: "Canonical title" } })
     .then((value) => { settled = true; return value })
   try {
     // The old implementation finishes without ever entering recordChange.
@@ -201,11 +201,11 @@ test("canonical mutation cannot return success while durable recording is pendin
 })
 
 const mutations = [
-  ["task_create", task_create, { track: "track", slug: "task", title: "new" }, "track/task/task.md"],
-  ["task_update", task_update, { track: "track", slug: "task", body_append: "updated" }, "track/task/task.md"],
-  ["task_archive", task_archive, { track: "track", slug: "task" }, "track/_archive/task/task.md"],
-  ["track_create", track_create, { slug: "track", title: "new" }, "track/track.md"],
-  ["track_update", track_update, { slug: "track", body_append: "updated" }, "track/track.md"],
+  ["task_create", task_create, { track: "track", slug: "durable-task", title: "new" }, "track/durable-task/task.md"],
+  ["task_update", task_update, { track: "track", slug: "durable-task", body_append: "updated" }, "track/durable-task/task.md"],
+  ["task_archive", task_archive, { track: "track", slug: "durable-task" }, "track/_archive/durable-task/task.md"],
+  ["track_create", track_create, { slug: "track-name", title: "new", scope: "journal mutation coverage; not anything else" }, "track-name/track.md"],
+  ["track_update", track_update, { slug: "track-name", body_append: "updated" }, "track-name/track.md"],
   ["friction_add", friction_add, { body: "new friction" }, "_meta/friction.md"],
   ["lesson_add", lesson_add, { topic: "Journal", body: "new lesson" }, "_meta/tips/journal.md"],
 ]
@@ -214,9 +214,9 @@ for (const [name, tool, input, changedPath] of mutations) {
   test(`${name} preserves canonical work and reports a typed partial operation on recording failure`, async () => {
     const root = await mkTempRoot("desk-mutation-journal-")
     if (name === "task_update" || name === "task_archive") {
-      await task_create({ deskRoot: root, input: { track: "track", slug: "task", title: "before" } })
+      await task_create({ deskRoot: root, input: { track: "track", slug: "durable-task", title: "before" } })
     }
-    if (name === "track_update") await track_create({ deskRoot: root, input: { slug: "track", title: "before" } })
+    if (name === "track_update") await track_create({ deskRoot: root, input: { slug: "track-name", title: "before", scope: "journal mutation coverage; not anything else" } })
     const invalidations = []
     const readiness = {
       async recordChange() { throw new Error("injected journal unavailable") },
@@ -239,7 +239,7 @@ for (const [name, tool, input, changedPath] of mutations) {
 test("normal MCP dispatch preserves partial-write fields and invalidation failure diagnostics", async () => {
   const root = await mkTempRoot("desk-mutation-dispatch-")
   const result = await callTool({
-    deskRoot: root, name: "task_create", input: { track: "track", slug: "task", title: "kept" },
+    deskRoot: root, name: "task_create", input: { track: "track", slug: "durable-task", title: "kept" },
     statusContext: { admission: { controller: {
       async recordChange() { throw new Error("offline journal") },
       async markUncertain() { throw new Error("controller unreachable") },
@@ -252,21 +252,21 @@ test("normal MCP dispatch preserves partial-write fields and invalidation failur
   assert.equal(body.canonical_written, true)
   assert.equal(body.journal_recorded, false)
   assert.equal(body.retryable, false)
-  assert.deepEqual(body.paths, ["track/task/task.md"])
+  assert.deepEqual(body.paths, ["track/durable-task/task.md"])
   assert.match(body.invalidation_error, /controller unreachable/)
-  assert.equal(fs.existsSync(path.join(root, "track", "task", "task.md")), true)
+  assert.equal(fs.existsSync(path.join(root, "track", "durable-task", "task.md")), true)
 })
 
 test("archive and legacy lesson rename record both removed and new paths", async () => {
   const root = await mkTempRoot("desk-mutation-moves-")
   const changes = []
   const readiness = { async recordChange(change) { changes.push(change); return { recorded: true } } }
-  await task_create({ deskRoot: root, input: { track: "track", slug: "task", title: "before" } })
-  await task_archive({ deskRoot: root, input: { track: "track", slug: "task" }, readiness })
+  await task_create({ deskRoot: root, input: { track: "track", slug: "durable-task", title: "before" } })
+  await task_archive({ deskRoot: root, input: { track: "track", slug: "durable-task" }, readiness })
   assert.deepEqual(changes.map(({ path, operation }) => ({ path, operation })), [
-    { path: "track/task", operation: "delete" },
-    { path: "track/_archive/task", operation: "write" },
-    { path: "track/_archive/task/task.md", operation: "write" },
+    { path: "track/durable-task", operation: "delete" },
+    { path: "track/_archive/durable-task", operation: "write" },
+    { path: "track/_archive/durable-task/task.md", operation: "write" },
   ])
   changes.length = 0
   fs.mkdirSync(path.join(root, "_meta", "tips"), { recursive: true })
@@ -377,13 +377,13 @@ for (const scenario of [
       await client.connect(clientTransport)
       const result = await client.callTool({
         name: "task_create",
-        arguments: { track: "ops", slug: "bound", title: "durable", person: "bob" },
+        arguments: { track: "ops", slug: "task-bound", title: "durable", person: "bob" },
       })
       assert.equal(result.isError, undefined)
       assert.equal(effectivePerson, scenario.expected)
       const prefix = scenario.expected ? ["desks", scenario.expected] : []
-      assert.equal(JSON.parse(result.content[0].text).path, path.join(...prefix, "ops", "bound", "task.md"))
-      assert.equal(fs.existsSync(path.join(root, ...prefix, "ops", "bound", "task.md")), true)
+      assert.equal(JSON.parse(result.content[0].text).path, path.join(...prefix, "ops", "task-bound", "task.md"))
+      assert.equal(fs.existsSync(path.join(root, ...prefix, "ops", "task-bound", "task.md")), true)
       assert.equal(fs.existsSync(path.join(root, "desks", "bob")), false)
       await controller.barrier({ capability: "lexical", wait: true })
       assert.equal((await controller.status()).freshness.cursor.sequence, 1)

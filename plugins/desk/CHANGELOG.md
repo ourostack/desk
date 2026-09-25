@@ -1,8 +1,12 @@
 # desk plugin — changelog
 
-## 3.2.0-alpha.22 — 2026-09-25
+## 3.2.0-alpha.23 — 2026-09-25
 
 Adds the factory's Copilot CLI deriver (`factory/derive-copilot.js`): it streams one session's `events.jsonl` in a single pass with small state and turns it, with that session's rows in the host's `session-store.db`, into privacy-safe local facts (turns, tool calls and outcomes, human and permission waits, subagents, API retries, compactions, usage, plugins, PR and commit references) plus in-memory binding events for Desk task tools and successful file writes. A turn is one root interaction (a prompt's model iterations), subagent events never count as the root's, and only a root message with no source that is not an autopilot continuation counts as a human prompt. Usage comes from the last `session.shutdown` when nothing follows it and otherwise from the database rows, never both, and a stale shutdown is marked unavailable; no content field is read into facts, and every copied value is validated, so the output always passes `validateFacts`. The factory reads the session database through its own `factory/copilot-usage.js`, which loads `node:sqlite` lazily and silently and reports the data as unavailable on a runtime without it; the work ledger keeps its `better-sqlite3` reader in `measurement/copilot-usage.js`, unchanged. Nothing calls the deriver yet. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.
+
+## 3.2.0-alpha.22 — 2026-09-25
+
+Milestone 4, task M4-1: naming and scope rules enforced by the Desk MCP tools. `track_create`, `track_update` and `task_create` now validate every name and, for tracks, the new `scope:` frontmatter line, so no client can create or rename into a prompt-copied name, a credential-like token, a person-named or catch-all track, or a track with no scope. Adds `desk/naming.js`: `validateName` and `validateTrackName` reject a first word drawn from a greeting or request list, an IPv4-looking run, a credential-like word or token, a name outside 2–6 lowercase kebab-case words, or (for tracks) a catch-all or person name; `validateScope` requires a single line of at most 240 characters; `operatorNames` reads `_meta/desks.md`'s alias/identity columns plus the desk's own `git config user.name`. Errors always say how to fix the name and never echo a credential-like candidate back. Existing names are never rejected on read — only creation and renaming validate. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.
 
 ## 3.2.0-alpha.21 — 2026-09-25
 
