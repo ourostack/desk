@@ -1231,11 +1231,11 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
   })
   await t.test("canonical MCP mutation is visible to the other process immediately", async () => {
     const written = await first.call("task_create", {
-      track: "track", slug: "canonical", title: "Mutation", body: "mutationquartz",
+      track: "track", slug: "canonical-mutation", title: "Mutation", body: "mutationquartz",
     })
     assert.equal(written.status, "created")
     const result = await second.call("desk_search", { query: "mutationquartz" })
-    assert.ok(result.results.some((r) => r.path === path.join("track", "canonical", "task.md")))
+    assert.ok(result.results.some((r) => r.path === path.join("track", "canonical-mutation", "task.md")))
   })
   await t.test("same-mtime external write is visible to the next query", async () => {
     const file = path.join(deskRoot, "track", "work", "task.md")

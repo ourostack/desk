@@ -30,15 +30,15 @@ export const TOOL_NAMES = [
 
 export const TOOL_DESCRIPTIONS = {
   task_create:
-    "Create a new task.md under <root>/<track>/<slug>/ with schema_version:1 frontmatter.",
+    "Create a new task.md under <root>/<track>/<slug>/ with schema_version:1 frontmatter. `slug` must be an outcome name — 2-6 lowercase kebab-case words, not prompt-like or credential-like; rejected names explain what to fix without echoing the rejected name back.",
   task_update:
     "Merge frontmatter or append to the body of an existing task.md; preserves schema_version + created.",
   task_archive:
     "Move <root>/<track>/<slug>/ to <root>/<track>/_archive/<slug>/, marking status=done if non-terminal. Idempotent.",
   track_create:
-    "Create a new track.md under <root>/<slug>/ with schema_version:1 frontmatter.",
+    "Create a new track.md under <root>/<slug>/ with schema_version:1 frontmatter. `slug` must be an outcome name (2-6 lowercase kebab-case words; not prompt-like, credential-like, a catch-all name, or named after the operator), and `scope` is required — one line, at most 240 characters, in the form \"<what belongs>; not <what doesn't>\". Rejections explain what to fix without echoing the rejected name back.",
   track_update:
-    "Merge frontmatter or append to the body of an existing track.md; preserves schema_version + created.",
+    "Merge frontmatter or append to the body of an existing track.md; preserves schema_version + created. `frontmatter.scope`, if set, is validated the same way track_create validates it.",
   friction_add:
     "Append a friction entry — cross-cutting to <root>/_meta/friction.md, or track-local to <root>/<track>/_friction/<date>-<theme>.md.",
   lesson_add:
