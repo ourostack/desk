@@ -45,7 +45,8 @@ test("content routing sends product contracts to the product repository", () => 
     productRule < pluginRule,
     "product-defining content must be routed before general plugin placement is considered",
   )
+  // The host lists skills and their descriptions; the worker bodies carry no skills table to drift.
   for (const workerPath of workerPaths) {
-    assert.match(readFileSync(workerPath, "utf8"), /content-routing.*product repository/u)
+    assert.doesNotMatch(readFileSync(workerPath, "utf8"), /content-routing/u)
   }
 })

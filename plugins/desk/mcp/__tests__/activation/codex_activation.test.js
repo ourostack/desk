@@ -205,13 +205,14 @@ test("Codex worker source no longer documents healthy-path copy registration", (
   const workerToml = readFileSync(path.join(repoRoot, "plugins", "desk", "agents", "worker.toml"), "utf8")
   const workerMarkdown = readFileSync(path.join(repoRoot, "plugins", "desk", "agents", "worker.md"), "utf8")
   const workerAgent = readFileSync(path.join(repoRoot, "plugins", "desk", "agents", "worker.agent.md"), "utf8")
-  const workerOutputStyle = readFileSync(path.join(repoRoot, "plugins", "desk", "output-styles", "worker.md"), "utf8")
 
   assert.doesNotMatch(workerToml, /copy\s+to\s+~\/\.codex\/agents/i)
   assert.doesNotMatch(workerToml, /Invoke via `\/agent worker` once registered/i)
   assert.match(workerToml, /host-native activation/i)
-  for (const workerSource of [workerToml, workerMarkdown, workerAgent, workerOutputStyle]) {
-    assertDeskMcpHealthGuard(workerSource)
+  // session-start owns the Desk MCP health guard; the worker bodies carry identity and context only.
+  for (const workerSource of [workerToml, workerMarkdown, workerAgent]) {
+    assert.doesNotMatch(workerSource, /Desk MCP health guard/u)
+    assert.doesNotMatch(workerSource, /do not silently continue in local-only mode/u)
   }
 })
 
@@ -219,6 +220,8 @@ test("session-start owns the Desk MCP absence prompt inherited by worker overlay
   const sessionStart = readFileSync(path.join(repoRoot, "plugins", "desk", "skills", "session-start", "SKILL.md"), "utf8")
 
   assert.match(sessionStart, /Desk MCP availability checkpoint/u)
+  assert.match(sessionStart, /this is a first run, not an outage/u)
+  assert.match(sessionStart, /`crew:join-crew`/u)
   assert.match(sessionStart, /every agent built on `desk:worker`/u)
   assert.match(sessionStart, /including downstream overlays like `ms-desk`/u)
   assert.match(sessionStart, /Desk MCP is not available in this session/u)

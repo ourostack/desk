@@ -14,14 +14,20 @@ const normalWorkerSurfaces = [
   "plugins/desk/agents/worker.md",
   "plugins/desk/agents/worker.agent.md",
   "plugins/desk/agents/worker.toml",
-  "plugins/desk/output-styles/worker.md",
 ]
 
+test("using-desk alone selects the sole method through the Desk adapter and native Superpowers review", () => {
+  const foundation = read("plugins/desk/skills/using-desk/SKILL.md")
+  assert.match(foundation, /desk:using-superpowers-with-desk/u)
+  assert.match(foundation, /superpowers:requesting-code-review/u)
+  assert.doesNotMatch(foundation, /desk:superpowers-integration/u)
+})
+
 for (const file of normalWorkerSurfaces) {
-  test(`${file} selects the sole method and native Superpowers review`, () => {
+  test(`${file} leaves method selection to using-desk and names no retired or excluded provider`, () => {
     const text = read(file)
-    assert.match(text, /desk:superpowers-integration/u)
-    assert.match(text, /superpowers:requesting-code-review/u)
+    assert.doesNotMatch(text, /desk:superpowers-integration/u)
+    assert.doesNotMatch(text, /Selected engineering lifecycle/u)
     assert.doesNotMatch(text, /desk:independent-review/u)
     assert.doesNotMatch(text, excludedProviderPattern)
   })
@@ -57,9 +63,6 @@ const retiredWorkerDirectives = [
   ["plugins/desk/agents/worker.agent.md", /^\| `(?:work-ideator|work-planner|work-doer|work-merger|autopilot|stay-in-turn|inch-worm)` \|/mu],
   ["plugins/desk/agents/worker.toml", /The work-suite plugin registers risk-scaled workflow skills/u],
   ["plugins/desk/agents/worker.toml", /^- `work-ideator`, `work-planner`, `work-doer`, `work-merger`/mu],
-  ["plugins/desk/output-styles/worker.md", /dispatches to desk \+ work-suite skills/u],
-  ["plugins/desk/output-styles/worker.md", /risk-scaled workflow skills come from \*\*work-suite\*\*/u],
-  ["plugins/desk/output-styles/worker.md", /Clear work can go directly to `work-doer` and `work-merger`/u],
 ]
 for (const [file, directive] of retiredWorkerDirectives) {
   test(`${file} removes its specific retired directive ${directive.source}`, () => {

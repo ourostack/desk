@@ -186,13 +186,69 @@ contract("coverage exclusion list has no campaign additions", () => {
   );
 });
 
-// Worker surfaces select Desk + Superpowers + Plain Language only.
-for (const file of [
+// The three worker bodies carry identity and context only; every rule has one owner elsewhere.
+const workerBodies = [
   "plugins/desk/agents/worker.md",
   "plugins/desk/agents/worker.agent.md",
   "plugins/desk/agents/worker.toml",
-  "plugins/desk/output-styles/worker.md",
-]) {
+];
+
+// Each rule the bodies used to restate, and the owner that now holds it alone.
+const ownedRules = [
+  [/Core invariants|Operating invariants/u, "using-desk and the skills"],
+  [/^## (?:My )?[Ss]kills$/mu, "the host's skill listing"],
+  [/Selected engineering lifecycle|desk:superpowers-integration/u, "using-desk \"Engineering work\""],
+  [/Prereqs first/u, "session-start"],
+  [/Desk MCP health guard/u, "session-start"],
+  [/One decision group per message/u, "using-desk \"Alignment, then ownership\""],
+  [/Slugs are permanent/u, "interaction-style"],
+  [/Commit \+ push/u, "using-desk \"Durable context and attribution\""],
+  [/Long-lived work, bounded processes/u, "session-resumption"],
+  [/Delivery has an owner|cleanup_pending/u, "task-lifecycle"],
+  [/Friction is about how worker operated|Mark friction items landed/u, "friction-management"],
+  [/harness-local memory/u, "using-desk \"Durable context and attribution\""],
+  [/announce parallel work/u, "interaction-style"],
+  [/self-modify agent permissions/u, "using-desk \"Authority\" and preflight-actions"],
+  [/Authorization follows verb/u, "using-desk \"Authority\""],
+  [/Honor approved work/u, "using-superpowers-with-desk"],
+  [/Ask only when blocked/iu, "using-desk and interaction-style"],
+  [/Lead with action|no trailing offers/iu, "Plain Language and interaction-style"],
+  [/Plain Language output/u, "Plain Language"],
+  [/Primary sources before recommendations/u, "evidence-discipline"],
+  [/Never hard-wrap/u, "Plain Language"],
+  [/Fixtures or refusal/u, "evidence-discipline"],
+  [/frozen/iu, "nothing: there is no frozen candidate"],
+];
+
+for (const file of workerBodies) {
+  contract(`${file} carries identity and context only`, () => {
+    const body = text(file);
+    for (const [pattern, owner] of ownedRules) {
+      assert.doesNotMatch(body, pattern, `restates a rule owned by ${owner}`);
+    }
+    for (const required of [
+      "I'm **worker**",
+      "the full `using-desk` foundation exactly once",
+      "Do not duplicate it here; use `desk:session-start` for the authoritative workspace scan.",
+      "`desk_status` reports",
+      "## Operator preferences",
+      "`$DESK/AGENTS.md`",
+      "## Tell me what you want to work on",
+      "## Overlays",
+    ]) assert.ok(body.includes(required), `missing identity or context: ${required}`);
+    assert.ok(Buffer.byteLength(body) <= 4096, `body is ${Buffer.byteLength(body)} bytes; identity and context fit in 4 KB`);
+  });
+}
+
+contract("the three worker bodies share one identity and context text", () => {
+  const shared = (body) => body.slice(body.indexOf("I'm **worker**")).split("\n'''", 1)[0].trim();
+  const [claude, copilot, codex] = workerBodies.map((file) => shared(text(file)));
+  assert.equal(copilot, claude, "worker.agent.md drifted from worker.md");
+  assert.equal(codex, claude, "worker.toml drifted from worker.md");
+});
+
+// Worker surfaces select Desk + Superpowers + Plain Language only.
+for (const file of workerBodies) {
   contract(`${file} carries no Ponytail or retired Work Suite instruction`, () => {
     const body = text(file);
     // Standalone Desk selects Desk + Superpowers + Plain Language only, so no worker
@@ -349,7 +405,7 @@ contract("principles.md is gone and nothing points at it", () => {
     const file = path.join(skillsRoot, name, "SKILL.md");
     if (fs.existsSync(file) && /principles\.md|Invariant \d|Sub-invariant/u.test(fs.readFileSync(file, "utf8"))) offenders.push(name);
   }
-  for (const file of ["plugins/desk/agents/worker.md", "plugins/desk/agents/worker.agent.md", "plugins/desk/agents/worker.toml", "plugins/desk/output-styles/worker.md"]) {
+  for (const file of workerBodies) {
     if (/principles\.md/u.test(text(file))) offenders.push(file);
   }
   assert.deepEqual(offenders, []);

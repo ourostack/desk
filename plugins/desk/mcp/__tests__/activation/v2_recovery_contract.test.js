@@ -5,16 +5,23 @@ import { readFileSync } from "node:fs"
 const pluginRoot = new URL("../../../", import.meta.url)
 const read = (relativePath) => readFileSync(new URL(relativePath, pluginRoot), "utf8")
 
+test("session-resumption and task-lifecycle own bounded process continuity and delivery", () => {
+  const resumption = read("skills/session-resumption/SKILL.md")
+  assert.match(resumption, /## Bounded execution and recovery/u)
+  assert.match(resumption, /mapped `progressPath` and `rulingsPath`/u)
+  assert.match(resumption, /entire writer tree is released/u)
+  const lifecycle = read("skills/task-lifecycle/SKILL.md")
+  assert.match(lifecycle, /`cleanup_pending` is a Markdown delivery state while the canonical task status stays `validating`/u)
+  assert.match(lifecycle, /A process exit, merged PR or successful build is not completion/u)
+  assert.match(lifecycle, /cleanup through `desk:git-hygiene`/u)
+})
+
 for (const agent of ["agents/worker.md", "agents/worker.agent.md"]) {
-  test(`${agent} binds long-running work to bounded process continuity`, () => {
+  test(`${agent} leaves process continuity and delivery to their owning skills`, () => {
     const source = read(agent)
-    assert.match(source, /Long-lived work, bounded processes/u)
-    assert.match(source, /session-resumption.*checkpoint|checkpoint.*session-resumption/u)
-    assert.match(source, /process exit is not task completion/u)
-    assert.match(source, /mapped.*progress.*rulings/u)
-    assert.match(source, /entire writer tree.*released/u)
-    assert.match(source, /delivery.*git-hygiene/u)
-    assert.match(source, /cleanup_pending.*validating/u)
+    assert.doesNotMatch(source, /Long-lived work, bounded processes/u)
+    assert.doesNotMatch(source, /Delivery has an owner/u)
+    assert.doesNotMatch(source, /cleanup_pending/u)
   })
 }
 

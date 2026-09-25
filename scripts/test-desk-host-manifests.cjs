@@ -253,8 +253,9 @@ function checkClaudePlugin({ repoRoot, methodId, errors, checked }) {
   if (deskPlugin.skills !== "./skills/" || deskPlugin.mcpServers !== "./.mcp.json") {
     errors.push("claude-plugin Desk surfaces drift");
   }
-  if (deskPlugin.outputStyles !== "./output-styles/") {
-    errors.push("claude-plugin output style surface drift");
+  // The worker agent body carries identity; a forced output style would load a second copy on the main thread.
+  if (Object.hasOwn(deskPlugin, "outputStyles") || fs.existsSync(path.join(repoRoot, "plugins/desk/output-styles"))) {
+    errors.push("claude-plugin retired output style present");
   }
   if (deskPlugin.dependencies?.[0]?.name !== methodId || deskPlugin.dependencies?.[0]?.version !== findActivationDependency(activation, methodId)?.version_range) {
     errors.push(`claude-plugin ${methodLabel} dependency drift`);
@@ -301,7 +302,6 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   const claudeWorker = readText(repoRoot, "plugins/desk/agents/worker.md");
   const codexWorker = readText(repoRoot, "plugins/desk/agents/worker.toml");
   const copilotWorker = readText(repoRoot, "plugins/desk/agents/worker.agent.md");
-  const outputStyleWorker = readText(repoRoot, "plugins/desk/output-styles/worker.md");
   const plainLanguage = readText(repoRoot, "plugins/plain-language/skills/plain-language/SKILL.md");
   const codexAdapter = readText(repoRoot, "plugins/desk/mcp/src/activation/adapters/codex.js");
   const workerFacts = [
@@ -327,17 +327,17 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   if (!claudeWorker.includes("desk:session-start")) {
     errors.push("worker-sources claude session-start prompt drift");
   }
+  // The bodies carry identity and context only; each rule lives in its owning foundation or skill.
   for (const [surface, body] of [
     ["claude", claudeWorker],
     ["codex-subagent", codexWorker],
     ["copilot", copilotWorker],
-    ["claude-output-style", outputStyleWorker],
   ]) {
     if (!body.includes("using-desk")) {
       errors.push(`worker-sources ${surface} using-desk activation drift`);
     }
-    if (!body.includes("Never hard-wrap authored prose") || !body.includes("authored/changed prose")) {
-      errors.push(`worker-sources ${surface} no-hard-wrap invariant drift`);
+    if (body.includes("Never hard-wrap authored prose") || /Core invariants/u.test(body)) {
+      errors.push(`worker-sources ${surface} restates owned rules`);
     }
   }
   // Plain Language owns the hard-wrap rule; Desk no longer ships a principles file.
