@@ -1,0 +1,7 @@
+{
+  "agentType": "general-purpose-SENTINEL-7f3a",
+  "description": "nested investigation SENTINEL-7f3a",
+  "toolUseId": "tool-agent-2",
+  "spawnDepth": 2,
+  "model": "claude-opus-4-1"
+}

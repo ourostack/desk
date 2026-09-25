@@ -1,5 +1,5 @@
 {
-  "agentType": "general-purpose",
+  "agentType": "general-purpose-SENTINEL-7f3a",
   "description": "investigate something SENTINEL-7f3a",
   "toolUseId": "tool-agent-1",
   "spawnDepth": 1,
