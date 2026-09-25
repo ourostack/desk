@@ -20,12 +20,16 @@ Or via environment:
 DESK=~/<your-workspace> node ./index.js
 ```
 
-## Tools exposed (16)
+## Tools exposed (18)
 
 **Runtime CRUD:**
 - `task_create`, `task_update`, `task_archive`
 - `track_create`, `track_update`
 - `friction_add`, `lesson_add`
+
+**Cheap moves:**
+- `task_move` — move a task to another track and/or rename it (live or archived); refuses a taken target or an invalid new name, and best-effort keeps both `track.md` "## Tasks" tables in sync
+- `track_rename` — rename a track, rewriting `track:` on every task card under it, live and archived
 
 **Status:**
 - `desk_status` — session-start-safe MCP health, root, activation, index, snapshot, and vector-pack status
@@ -42,7 +46,7 @@ DESK=~/<your-workspace> node ./index.js
 - `desk_thread` — provenance walk via refs_graph
 - `desk_reindex` — rebuild or repair the local search index
 
-All 16 tools are wired to real implementations. There is no qualitative feedback tool: preview feedback a participant chooses to offer is written as Markdown in their own desk at `_meta/preview-feedback.md`, and the protected store that already holds private records is retained as a [storage primitive](docs/private-feedback.md) with no route from this server. The optional `desk_doctor` input `{"format":"preview"}` returns a [minimal local diagnostic snapshot](../docs/preview-diagnostics.md), not feedback collection or a network report.
+All 18 tools are wired to real implementations. There is no qualitative feedback tool: preview feedback a participant chooses to offer is written as Markdown in their own desk at `_meta/preview-feedback.md`, and the protected store that already holds private records is retained as a [storage primitive](docs/private-feedback.md) with no route from this server. The optional `desk_doctor` input `{"format":"preview"}` returns a [minimal local diagnostic snapshot](../docs/preview-diagnostics.md), not feedback collection or a network report.
 
 ## How consumers wire this up
 
