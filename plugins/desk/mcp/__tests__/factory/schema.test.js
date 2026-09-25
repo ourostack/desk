@@ -704,7 +704,7 @@ test("ENUMS matches the brief's table exactly, and every array (and ENUMS itself
     ],
     unavailableReason: [
       "host_does_not_record", "log_missing", "log_truncated", "session_open",
-      "not_collected_in_slice_1", "source_unreadable", "capped",
+      "not_collected_in_slice_1", "source_unreadable", "capped", "desk_public",
     ],
   }
   assert.deepEqual(Object.keys(ENUMS).sort(), Object.keys(table).sort())

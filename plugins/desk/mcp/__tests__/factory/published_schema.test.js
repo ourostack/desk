@@ -17,6 +17,8 @@ import {
   PUBLISHED_SCHEMA,
   PUBLISHED_LIMITS,
   DATE_SHAPE,
+  TIME_SHAPE,
+  SESSION_ID_V4,
   __PUBLISHED_SPECS__,
 } from "../../src/factory/published-schema.js"
 import { LIMITS } from "../../src/factory/schema.js"
@@ -136,12 +138,12 @@ test("every string field in the golden file refuses a date-shaped value, naming 
   const leaves = stringLeaves(golden())
   assert.ok(leaves.length > 20)
   for (const keys of leaves) {
-    for (const bad of ["2026-09-25", "2026-09-25T08:00:00.000Z", `${SENTINEL}-2026-09-25`]) {
+    for (const bad of ["2026-09-25", "2026-09-25T08:00:00.000Z", `${SENTINEL}-2026-09-25`, "08:30", `${SENTINEL}-08:30`]) {
       const result = validatePublished(setPath(golden(), keys, bad))
       assert.equal(result.ok, false, `${ps(keys)} accepted ${bad}`)
       // A basis entry is checked as part of its array.
       const expected = keys.includes("basis") ? ps(keys.slice(0, keys.indexOf("basis") + 1)) : ps(keys)
-      assert.ok(result.errors.some((error) => error.path === expected && ["date", "pattern", "enum"].includes(error.code)), `${ps(keys)}: ${JSON.stringify(result.errors)}`)
+      assert.ok(result.errors.some((error) => error.path === expected && ["date", "time", "pattern", "enum"].includes(error.code)), `${ps(keys)}: ${JSON.stringify(result.errors)}`)
       assertNoLeak(result)
     }
   }
@@ -155,6 +157,71 @@ const PATTERN_DATES = [
   { keys: ["refs", "prs", 0, "repo"], value: "acme/log-2026-09-25" },
   { keys: ["refs", "commits", 0, "repo"], value: "acme/2026-09-25" },
 ]
+
+test("TIME_SHAPE matches a time of day; compact release stamps are not one", () => {
+  assert.ok(TIME_SHAPE.test("m:08:30:00"))
+  assert.equal(TIME_SHAPE.test("gpt-4o-20240806"), false)
+  assert.equal(TIME_SHAPE.test("1.0.0-20260925.083000"), false)
+})
+
+for (const { keys, value } of [{ keys: ["models", 0, "id"], value: "m:08:30:00" }, { keys: ["agents", 1, "model"], value: `${SENTINEL}:08:30` }]) {
+  test(`a time of day inside an otherwise valid ${ps(keys)} fails with time`, () => {
+    const result = validatePublished(setPath(golden(), keys, value))
+    assertSingle(result, "time", ps(keys))
+    assertNoLeak(result)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Session ID and span (fix round 2: review I1 and Critical).
+// ---------------------------------------------------------------------------
+
+test("session.id must be a version-4 UUID: v1 and v7 carry a time, v1 a machine", () => {
+  assert.ok(SESSION_ID_V4.test(GOLDEN.session.id))
+  for (const id of ["c232ab00-9414-11ec-b3c8-9f6bdeced846", "01927a3b-8c00-7abc-8def-0123456789ab", "3b0c1f5e-8a1d-4c2e-7f3a-1b2c3d4e5f60"]) {
+    assertSingle(validatePublished(setPath(golden(), ["session", "id"], id)), "pattern", "session.id")
+  }
+})
+
+test("session.duration_ms may not exceed the offset cap, so no interval offset can be an epoch value", () => {
+  const value = golden()
+  value.session.duration_ms = PUBLISHED_LIMITS.maxOffsetMs
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+  value.session.duration_ms = PUBLISHED_LIMITS.maxOffsetMs + 1
+  assertSingle(validatePublished(value), "range", "session.duration_ms")
+  // A 1970 anchor: the interval offset would be the interval's epoch time.
+  value.session.duration_ms = Date.parse("2026-09-25T09:30:00.000Z")
+  value.intervals[0].start_ms = Date.parse("2026-09-25T08:00:01.000Z")
+  value.intervals[0].end_ms = value.intervals[0].start_ms
+  assertSingle(validatePublished(value), "range", "session.duration_ms")
+})
+
+// ---------------------------------------------------------------------------
+// Duplicates (fix round 2: review M3).
+// ---------------------------------------------------------------------------
+
+test("a repeated unavailable entry, PR or commit fails with duplicate naming the later one", () => {
+  let value = golden()
+  value.unavailable.push({ ...value.unavailable[0] })
+  assertSingle(validatePublished(value), "duplicate", `unavailable.${value.unavailable.length - 1}`)
+  value = golden()
+  value.refs.prs.push({ ...value.refs.prs[0] })
+  assertSingle(validatePublished(value), "duplicate", "refs.prs.1")
+  value = golden()
+  value.refs.commits.push({ repo: "ourostack/factory", sha: value.refs.commits[0].sha })
+  assertSingle(validatePublished(value), "duplicate", "refs.commits.1")
+  value = golden()
+  value.refs.prs.push({ repo: "ourostack/desk", number: 10 }, { repo: "ourostack/factory", number: 9 })
+  assert.equal(validatePublished(value).ok, true, "another number or repository is not a duplicate")
+})
+
+test("an item with a bad field is left out of the duplicate check", () => {
+  const value = golden()
+  value.refs.prs.push({ repo: "ourostack/desk", number: 0 })
+  value.refs.prs.push({ repo: "ourostack/desk", number: 0 })
+  const result = validatePublished(value)
+  assert.deepEqual(result.errors, [{ code: "integer", path: "refs.prs.1.number" }, { code: "integer", path: "refs.prs.2.number" }])
+})
 
 for (const { keys, value } of PATTERN_DATES) {
   test(`a date inside an otherwise valid ${ps(keys)} fails with date`, () => {

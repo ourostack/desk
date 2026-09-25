@@ -124,15 +124,19 @@
 //     when it matches the repository pattern, else none. A `pr` row is a
 //     bare number, which takes the session's repository, or `owner/repo#n`
 //     or a github.com PR URL, which name their own; a bare number with no
-//     session repository is counted in `refs.unresolved.prs`. A `commit` row
-//     of 40 hex is kept as is; a shorter hex one (4–39) is resolved to its
-//     full SHA by the injected `resolveCommit(gitRoot, short)`
-//     (`./commit-resolve.js`) in the session's repository — the
-//     `session.start` `context.gitRoot`, else `sessions.cwd` — and one that
-//     does not resolve is counted in `refs.unresolved.commits`. Every commit
-//     carries the session's repository, or `null`, which the publishing
-//     transform drops and counts as private. `issue` rows and malformed
-//     values are ignored. The full SHAs also go to `events.commitShas` and
+//     session repository is counted in `refs.unresolved.prs`. Every hex
+//     `commit` row (4–40 characters) is looked up, in one batch, by the
+//     injected `resolveCommits({ gitRoot, cwd, shas })` (`./commit-resolve.js`)
+//     in the session's own repository: the `session.start` `context.gitRoot`,
+//     else the repository holding `sessions.cwd`. A short SHA it finds
+//     becomes its full SHA; one it does not find is counted in
+//     `refs.unresolved.commits`; a 40-hex row is kept either way. A commit
+//     carries `sessions.repository` only when that repository has it and
+//     the repository's `origin` normalizes to
+//     `https://github.com/<sessions.repository>` (review I2, fix round 2);
+//     otherwise its repository is `null`, which the publishing transform
+//     drops and counts as private. `issue` rows and malformed values are
+//     ignored. The full SHAs also go to `events.commitShas` and
 //     `events.nativeCommitShas` for M3-4. No database: `{commits,
 //     log_missing}`; an unreadable one (including no `node:sqlite`):
 //     `{commits, source_unreadable}`, and the same for tokens when they were
@@ -647,15 +651,14 @@ function usageFromDatabase(sessionId, env, flag) {
   return [...byModel.values()]
 }
 
-function refsFromDatabase({ sessionId, env, flag, gitRoot, resolveCommit }) {
+function refsFromDatabase({ sessionId, env, flag, gitRoot, resolveCommits }) {
   const result = readSessionRefs({ sessionId, env })
   if (result.status === "missing") flag("commits", "log_missing")
   if (result.status === "unreadable") flag("commits", "source_unreadable")
   const record = result.status === "ok" ? readSessionRecord({ sessionId, env }) : { repository: null, cwd: null }
   const repository = record.repository !== null && PATTERNS.prRepo.test(record.repository) ? record.repository : null
-  const root = gitRoot ?? record.cwd
   const prs = new Map()
-  const commits = new Set()
+  const commitValues = []
   const unresolved = { prs: 0, commits: 0 }
   for (const { ref_type: type, ref_value: value } of result.rows) {
     if (type === "pr") {
@@ -663,17 +666,24 @@ function refsFromDatabase({ sessionId, env, flag, gitRoot, resolveCommit }) {
       if (ref === undefined) unresolved.prs += 1
       else if (ref !== null) prs.set(`${ref.repo}#${ref.number}`, ref)
     } else if (type === "commit" && typeof value === "string" && SHORT_SHA.test(value)) {
-      const full = COMMIT.test(value) ? value.toLowerCase() : resolveCommit(root, value)
-      if (typeof full === "string" && COMMIT.test(full)) commits.add(full.toLowerCase())
-      else unresolved.commits += 1
+      commitValues.push(value)
     }
   }
-  const sortedCommits = [...commits].sort()
+
+  const lookup = commitValues.length === 0 ? { origin: null, fulls: [] } : resolveCommits({ gitRoot, cwd: record.cwd, shas: commitValues })
+  const labeled = repository !== null && lookup.origin === `https://github.com/${repository.toLowerCase()}`
+  const commits = new Map() // full SHA -> repository or null
+  commitValues.forEach((value, index) => {
+    const found = lookup.fulls[index]
+    if (typeof found === "string" && COMMIT.test(found)) commits.set(found.toLowerCase(), labeled ? repository : null)
+    else if (!COMMIT.test(value)) unresolved.commits += 1
+    else if (!commits.has(value.toLowerCase())) commits.set(value.toLowerCase(), null)
+  })
+  const sortedCommits = [...commits.keys()].sort()
   if (sortedCommits.length > LIMITS.commits) flag("commits", "capped")
   return {
-    repository,
     prs: [...prs.values()].sort(comparePrs).slice(0, LIMITS.prs),
-    commits: sortedCommits.slice(0, LIMITS.commits),
+    commits: sortedCommits.slice(0, LIMITS.commits).map((sha) => ({ repo: commits.get(sha), sha })),
     unresolved,
   }
 }
@@ -725,10 +735,11 @@ function selectUsage({ shutdown, sessionId, env, flags, flag, openOrTruncated })
 
 /**
  * `deriveCopilotSession({ sessionId, copilotHome, plugins, endReason,
- * entrypoint, resolveCommit })`. `resolveCommit(gitRoot, shortSha) -> fullSha
- * | null` defaults to `createCommitResolver()`; tests inject a fake.
+ * entrypoint, resolveCommits })`. `resolveCommits({ gitRoot, cwd, shas }) ->
+ * { origin, fulls }` defaults to `createCommitResolver()`; tests inject a
+ * fake.
  */
-export async function deriveCopilotSession({ sessionId, copilotHome, plugins, endReason, entrypoint = "cli", resolveCommit = createCommitResolver() }) {
+export async function deriveCopilotSession({ sessionId, copilotHome, plugins, endReason, entrypoint = "cli", resolveCommits = createCommitResolver() }) {
   if (typeof sessionId !== "string" || !PATTERNS.sessionId.test(sessionId)) {
     return { facts: null, events: null, reason: "source_unreadable" }
   }
@@ -763,7 +774,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
   if (state.unfinishedCalls) flag("tool_durations", openOrTruncated)
   if (state.openTurns) flag("turns", openOrTruncated)
 
-  const refs = refsFromDatabase({ sessionId, env, flag, gitRoot: state.gitRoot, resolveCommit })
+  const refs = refsFromDatabase({ sessionId, env, flag, gitRoot: state.gitRoot, resolveCommits })
   const mergedPlugins = mergePlugins(plugins, state.skillPlugins, flag)
   flag("ci_runs", "not_collected_in_slice_1")
 
@@ -790,7 +801,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
       api_retries: state.apiRetries,
       compactions: state.compactions,
     },
-    refs: { prs: refs.prs, commits: refs.commits.map((sha) => ({ repo: refs.repository, sha })), unresolved: refs.unresolved },
+    refs: { prs: refs.prs, commits: refs.commits, unresolved: refs.unresolved },
     jobs: [],
     unavailable: [...state.flags.values()].slice(0, LIMITS.unavailable),
   }
@@ -798,9 +809,9 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
   const events = {
     deskToolCalls: state.deskToolCalls,
     fileWrites: state.fileWrites,
-    commitShas: refs.commits,
+    commitShas: refs.commits.map((commit) => commit.sha),
     shellGitCommits: state.shellGitCommits,
-    nativeCommitShas: [...refs.commits],
+    nativeCommitShas: refs.commits.map((commit) => commit.sha),
   }
 
   return { facts, events }

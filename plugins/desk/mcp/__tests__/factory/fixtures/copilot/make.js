@@ -455,11 +455,27 @@ export function usageRow(sessionId, model, overrides = {}) {
 }
 
 /** The database rows every fixture session gets, plus rows of another session that must never leak in. */
-/** What the fake commit resolver knows: short SHA -> full SHA, in the full session's repository only. */
-export const RESOLVABLE = Object.freeze({
-  fc6ea8a: "fc6ea8a0000000000000000000000000000000aa",
-  abcdef012: "abcdef0120000000000000000000000000000001",
-})
+/** The commits in the fixture sessions' repository, which the fake resolver finds by prefix. */
+export const FIXTURE_COMMITS = Object.freeze([
+  "abcdef0000000000000000000000000000000001",
+  "abcdef0120000000000000000000000000000001",
+  "fc6ea8a0000000000000000000000000000000aa",
+])
+
+/**
+ * A fake `resolveCommits` for the deriver: in `root` it finds
+ * `FIXTURE_COMMITS` by prefix and reports `origin`; anywhere else it finds
+ * nothing. `calls` records every call.
+ */
+export function fakeCommitResolver({ root = `/tmp/${S}/repo`, origin = "https://github.com/ourostack/desk" } = {}) {
+  const calls = []
+  const resolveCommits = ({ gitRoot, cwd, shas }) => {
+    calls.push({ gitRoot, cwd, shas: [...shas] })
+    if (gitRoot !== root) return { origin: null, fulls: shas.map(() => null) }
+    return { origin, fulls: shas.map((sha) => FIXTURE_COMMITS.find((full) => full.startsWith(sha.toLowerCase())) ?? null) }
+  }
+  return Object.assign(resolveCommits, { calls })
+}
 
 export const OTHER_SESSION = "9d425161-7f8e-4091-a2a3-1e2f30415263"
 

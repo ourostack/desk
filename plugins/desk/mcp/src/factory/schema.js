@@ -63,10 +63,11 @@ export const ENUMS = Object.freeze({
     "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at", "job_offsets",
   ]),
   // `log_truncated` is a log that ends mid-record; `capped` is data a deriver
-  // trimmed to a schema limit.
+  // trimmed to a schema limit; `desk_public` is job timing the transform
+  // withholds because the desk's own remote is (or may be) public.
   unavailableReason: Object.freeze([
     "host_does_not_record", "log_missing", "log_truncated", "session_open",
-    "not_collected_in_slice_1", "source_unreadable", "capped",
+    "not_collected_in_slice_1", "source_unreadable", "capped", "desk_public",
   ]),
 })
 

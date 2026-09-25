@@ -13,14 +13,16 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { toPublished, serializePublished, publishedFileName } from "../../src/factory/publish.js"
+import { createHmac } from "node:crypto"
+
+import { toPublished, serializePublished, publishedFileName, REFUSALS } from "../../src/factory/publish.js"
 import { validatePublished, validatePublishedBytes, PUBLISHED_LIMITS, DATE_SHAPE } from "../../src/factory/published-schema.js"
 import { validateLocalFacts, LIMITS, ENUMS } from "../../src/factory/schema.js"
 import { deriveClaudeSession } from "../../src/factory/derive-claude.js"
 import { deriveCopilotSession } from "../../src/factory/derive-copilot.js"
 import { bindSession } from "../../src/factory/binding.js"
 import { SESSION_IDS } from "./fixtures/claude/make.js"
-import { RESOLVABLE, SESSIONS, buildSessionStore, defaultStoreRows } from "./fixtures/copilot/make.js"
+import { SESSIONS, buildSessionStore, defaultStoreRows, fakeCommitResolver } from "./fixtures/copilot/make.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, "fixtures")
@@ -28,6 +30,7 @@ const LOCAL_GOLDEN = JSON.parse(readFileSync(path.join(FIXTURES, "local-golden.j
 const PUBLISHED_GOLDEN_TEXT = readFileSync(path.join(FIXTURES, "published-golden.json"), "utf8")
 const SENTINEL = "SENTINEL-7f3a"
 
+const SECRET = Buffer.alloc(32, 7)
 const VISIBILITY = Object.freeze({ "ourostack/desk": "public", "ourostack/factory": "public", "private-org/private-repo": "private" })
 const visibility = (repo) => VISIBILITY[repo] ?? "unknown"
 
@@ -35,8 +38,8 @@ function local() {
   return structuredClone(LOCAL_GOLDEN)
 }
 
-function publish(value, options = { visibility }) {
-  return toPublished(value, options)
+function publish(value, options = {}) {
+  return toPublished(value, { visibility, deskVisibility: "private", ...options })
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +275,8 @@ test("unavailable keeps the local entries, adds each new one once, and stays wit
   value.unavailable = combos.slice(0, LIMITS.unavailable)
   const full = publish(value).published
   assert.equal(full.unavailable.length, LIMITS.unavailable)
+  assert.deepEqual(full.unavailable.at(-1), { field: "job_offsets", reason: "source_unreadable" }, "the transform's own entry displaces the last local one")
+  assert.deepEqual(full.unavailable.slice(0, -1), combos.slice(0, LIMITS.unavailable - 1))
   assert.equal(validatePublished(full).ok, true)
 
   const few = local()
@@ -296,6 +301,122 @@ test("a missing visibility function is a caller bug", () => {
   assert.throws(() => toPublished(local()), TypeError)
   assert.throws(() => toPublished(local(), {}), TypeError)
   assert.throws(() => toPublished(local(), { visibility: "public" }), TypeError)
+})
+
+test("a desk that is not surely private needs a machine secret of at least 32 bytes", () => {
+  for (const deskVisibility of ["public", "unknown", undefined, "PRIVATE"]) {
+    assert.throws(() => toPublished(local(), { visibility, deskVisibility }), TypeError, String(deskVisibility))
+    assert.throws(() => toPublished(local(), { visibility, deskVisibility, machineSecret: Buffer.alloc(31) }), TypeError)
+    assert.throws(() => toPublished(local(), { visibility, deskVisibility, machineSecret: "x".repeat(64) }), TypeError)
+    assert.ok(toPublished(local(), { visibility, deskVisibility, machineSecret: SECRET }).published)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Fix round 2: refusals (review Critical and I1).
+// ---------------------------------------------------------------------------
+
+test("REFUSALS names every reason the transform can give", () => {
+  assert.deepEqual(REFUSALS, ["implausible_session_span", "session_id_not_v4"])
+})
+
+test("a session starting at a 1970 or 2000 anchor is refused, never published with epoch offsets", () => {
+  for (const anchor of ["1970-01-01T00:00:00.000Z", "2000-01-01T00:00:00.000Z"]) {
+    const value = local()
+    value.session.started_at = anchor
+    assert.equal(validateLocalFacts(value).ok, true)
+    assert.deepEqual(publish(value), { published: null, dropped: null, reason: "implausible_session_span" }, anchor)
+  }
+})
+
+test("a session exactly at the ten-year cap is published; one millisecond more is refused", () => {
+  const value = local()
+  value.session.started_at = new Date(Date.parse(value.session.derived_through) - PUBLISHED_LIMITS.maxOffsetMs).toISOString()
+  value.jobs = []
+  const { published } = publish(value)
+  assert.equal(published.session.duration_ms, PUBLISHED_LIMITS.maxOffsetMs)
+  assert.equal(validatePublished(published).ok, true)
+  value.session.started_at = new Date(Date.parse(value.session.started_at) - 1).toISOString()
+  assert.equal(publish(value).reason, "implausible_session_span")
+})
+
+test("a session ID that is not version 4 is refused; a v4 one is published", () => {
+  for (const id of ["c232ab00-9414-11ec-b3c8-9f6bdeced846", "01927a3b-8c00-7abc-8def-0123456789ab"]) {
+    const value = local()
+    value.session.id = id
+    assert.equal(validateLocalFacts(value).ok, true, "the local schema keeps every version")
+    assert.deepEqual(publish(value), { published: null, dropped: null, reason: "session_id_not_v4" }, id)
+  }
+  const value = local()
+  value.session.id = "0b1c2d3e-4f50-4617-a829-3a4b5c6d7e8f"
+  assert.equal(publish(value).published.session.id, "0b1c2d3e-4f50-4617-a829-3a4b5c6d7e8f")
+})
+
+// ---------------------------------------------------------------------------
+// Fix round 2: a public desk keeps its job timing (review I3).
+// ---------------------------------------------------------------------------
+
+const keyed = (job) => createHmac("sha256", SECRET).update(job).digest("hex").slice(0, 32)
+
+test("a public or unknown desk publishes keyed job IDs, no job timing and desk_public", () => {
+  for (const deskVisibility of ["public", "unknown"]) {
+    const { published } = publish(local(), { deskVisibility, machineSecret: SECRET })
+    assert.deepEqual(published.jobs, LOCAL_GOLDEN.jobs.map((job) => ({
+      job: keyed(job.job),
+      basis: job.basis,
+      session_offset_ms: null,
+      transitions: [],
+      observed: job.observed === null ? null : { status: job.observed.status, offset_ms: null },
+    })), deskVisibility)
+    assert.equal(published.jobs.some((job, index) => job.job === LOCAL_GOLDEN.jobs[index].job), false)
+    assert.deepEqual(published.unavailable, [
+      { field: "permission_waits", reason: "host_does_not_record" },
+      { field: "tool_durations", reason: "capped" },
+      { field: "job_offsets", reason: "desk_public" },
+    ], "timing withheld on purpose, so no source_unreadable")
+    assert.equal(validatePublished(published).ok, true)
+  }
+  const other = publish(local(), { deskVisibility: "public", machineSecret: Buffer.alloc(32, 8) }).published
+  assert.notEqual(other.jobs[0].job, keyed(LOCAL_GOLDEN.jobs[0].job), "another machine's secret gives other IDs")
+})
+
+test("a public desk with no jobs adds no desk_public entry", () => {
+  const value = local()
+  value.jobs = []
+  const { published } = publish(value, { deskVisibility: "public", machineSecret: SECRET })
+  assert.equal(published.unavailable.some((entry) => entry.reason === "desk_public"), false)
+})
+
+test("private and internal desks keep plain job IDs and their offsets", () => {
+  for (const deskVisibility of ["private", "internal"]) {
+    const { published } = publish(local(), { deskVisibility })
+    assert.equal(serializePublished(published), PUBLISHED_GOLDEN_TEXT, deskVisibility)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Fix round 2: times of day and repeated references (review M1, M3).
+// ---------------------------------------------------------------------------
+
+test("a time of day inside a model ID loses its colons", () => {
+  const value = local()
+  value.models[0].id = "m:08:30:00"
+  value.agents[0].model = "m-2024-08-06:08:30"
+  const { published } = publish(value)
+  assert.equal(published.models[0].id, "m:083000")
+  assert.equal(published.agents[0].model, "m-202408060830")
+  assert.equal(validatePublished(published).ok, true)
+})
+
+test("a reference repeated in the local file is published once and not counted as dropped", () => {
+  const value = local()
+  value.refs.prs.push({ repo: "ourostack/desk", number: 9 })
+  value.refs.commits.push({ repo: "ourostack/desk", sha: "fc6ea8a0000000000000000000000000000000aa" })
+  const { published, dropped } = publish(value)
+  assert.deepEqual(published.refs.prs, [{ repo: "ourostack/desk", number: 9 }])
+  assert.equal(published.refs.commits.length, 1)
+  assert.deepEqual(dropped, { prs: 3, commits: 3 })
+  assert.equal(validatePublished(published).ok, true)
 })
 
 test("publishedFileName refuses a value that is not valid published facts", () => {
@@ -385,8 +506,7 @@ async function derivedFixtures() {
     buildSessionStore(path.join(home, "session-store.db"), defaultStoreRows())
     for (const [name, id] of Object.entries(SESSIONS)) {
       for (const endReason of [null, "complete"]) {
-        const resolveCommit = (root, short) => RESOLVABLE[short] ?? null
-        const result = await deriveCopilotSession({ sessionId: id, copilotHome: home, plugins: [], endReason, resolveCommit })
+        const result = await deriveCopilotSession({ sessionId: id, copilotHome: home, plugins: [], endReason, resolveCommits: fakeCommitResolver() })
         if (result.facts !== null) out.push({ label: `copilot ${name} ${endReason}`, facts: bindFixture(result.facts, result.events) })
       }
     }
@@ -425,8 +545,14 @@ function randomLocal(random) {
   const int = (max) => Math.floor(random() * max)
   const pick = (list) => list[int(list.length)]
   const iso = (ms) => new Date(ms).toISOString()
-  const start = Date.parse("2001-01-01T00:00:00.000Z") + int(98 * 365) * 86400000 + int(86400000)
-  const duration = int(3 * 86400000)
+  // Most sessions start between 2001 and 2099; some start near 1970 or
+  // 2000, the anchors a bogus first log line would give, and some run for
+  // years, so the transform's refusal is exercised too.
+  const anchorKind = random()
+  let start = Date.parse("2001-01-01T00:00:00.000Z") + int(98 * 365) * 86400000 + int(86400000)
+  if (anchorKind < 0.15) start = int(30 * 86400000)
+  else if (anchorKind < 0.3) start = Date.parse("2000-01-01T00:00:00.000Z") + int(30 * 86400000) - 15 * 86400000
+  const duration = random() < 0.2 ? int(40 * 365 * 86400000) : int(3 * 86400000)
   const hex = (length) => Array.from({ length }, () => "0123456789abcdef"[int(16)]).join("")
   const within = () => start + int(duration + 1)
   const intervals = Array.from({ length: int(40) }, () => {
@@ -456,7 +582,7 @@ function randomLocal(random) {
     agents: [{ n: 0, parent: null, model: pick(["claude-opus-5-5", "gpt-4o-2024-08-06"]) }],
     counts: { tool_calls: { shell: int(500) }, tool_failures: {}, tool_retries: int(10), api_retries: int(10), compactions: int(3) },
     refs: {
-      prs: Array.from({ length: int(5) }, () => ({ repo: pick(repos.slice(0, 4)), number: 1 + int(9999) })),
+      prs: Array.from({ length: int(5) }, (_, index) => ({ repo: pick(repos.slice(0, 4)), number: 1 + index })),
       commits: Array.from({ length: int(5) }, () => ({ repo: pick(repos), sha: hex(40) })),
       unresolved: { prs: int(3), commits: int(3) },
     },
@@ -478,15 +604,35 @@ function randomLocal(random) {
 test("property: 300 seeded random local files publish nothing that identifies a when, a who, a path or planted content", () => {
   const random = rng(0x5eed)
   const visible = (repo) => (repo === "ourostack/desk" || repo === "acme/notes-2031-01-01" ? "public" : repo.startsWith(SENTINEL) ? "private" : "unknown")
+  const seen = { refused: 0, published: 0, publicDesk: 0 }
   for (let index = 0; index < 300; index += 1) {
     const value = randomLocal(random)
     assert.deepEqual(validateLocalFacts(value).errors, [], `sample ${index}`)
-    const { published, dropped } = toPublished(value, { visibility: visible })
+    const deskVisibility = ["private", "internal", "public", "unknown"][index % 4]
+    const result = toPublished(value, { visibility: visible, deskVisibility, machineSecret: SECRET })
+    const span = Date.parse(value.session.derived_through) - Date.parse(value.session.started_at)
+    if (span > PUBLISHED_LIMITS.maxOffsetMs) {
+      assert.deepEqual(result, { published: null, dropped: null, reason: "implausible_session_span" }, `sample ${index}`)
+      seen.refused += 1
+      continue
+    }
+    const { published, dropped } = result
+    seen.published += 1
     assertNothingLeaves(published, `sample ${index}`)
+    if (deskVisibility === "public" || deskVisibility === "unknown") {
+      seen.publicDesk += 1
+      for (const [jobIndex, job] of published.jobs.entries()) {
+        assert.equal(job.session_offset_ms, null)
+        assert.deepEqual(job.transitions, [])
+        assert.ok(job.observed === null || job.observed.offset_ms === null)
+        assert.equal(job.job, keyed(value.jobs[jobIndex].job))
+      }
+    }
     assert.equal(published.session.duration_ms, Date.parse(value.session.derived_through) - Date.parse(value.session.started_at))
     assert.equal(published.intervals.length, value.intervals.length, "in-span intervals are all kept")
     assert.equal(published.refs.prs.length + dropped.prs, value.refs.prs.length + value.refs.unresolved.prs)
     assert.equal(published.refs.commits.length + dropped.commits, value.refs.commits.length + value.refs.unresolved.commits)
     assert.deepEqual(published.refs.private, dropped)
   }
+  assert.ok(seen.refused > 10 && seen.published > 150 && seen.publicDesk > 50, JSON.stringify(seen))
 })

@@ -21,7 +21,7 @@ import {
   SESSIONS,
   FULL_FINAL_METRICS,
   OTHER_SESSION,
-  RESOLVABLE,
+  fakeCommitResolver,
   at,
   buildSessionStore,
   defaultStoreRows,
@@ -52,20 +52,16 @@ function makeHome({ sessions = Object.values(SESSIONS), store = defaultStoreRows
   return home
 }
 
-// The fixtures' repository (`context.gitRoot`); the fake resolver knows
-// `RESOLVABLE` there and nothing anywhere else.
+// The fixtures' repository (`context.gitRoot`), where the fake resolver
+// finds `FIXTURE_COMMITS`; its origin is `ourostack/desk`.
 const GIT_ROOT = `/tmp/${SENTINEL}/repo`
-const resolverCalls = []
-function fakeResolveCommit(root, short) {
-  resolverCalls.push([root, short])
-  return root === GIT_ROOT ? RESOLVABLE[short] ?? null : null
-}
+let fixtureResolver = fakeCommitResolver()
 
 function derive(home, sessionId, overrides = {}) {
   return deriveCopilotSession({
     sessionId,
     copilotHome: home,
-    resolveCommit: fakeResolveCommit,
+    resolveCommits: fixtureResolver,
     plugins: PLUGINS,
     endReason: "complete",
     ...overrides,
@@ -308,7 +304,7 @@ test("plugins merge the marker's list with skill.invoked plugin versions", async
 test("refs come from this session's session_refs rows, validated", async () => {
   const home = makeHome()
   try {
-    resolverCalls.length = 0
+    fixtureResolver = fakeCommitResolver()
     const { facts, events } = await derive(home, SESSIONS.full)
     assert.deepEqual(facts.refs, {
       prs: [
@@ -323,7 +319,11 @@ test("refs come from this session's session_refs rows, validated", async () => {
       ],
       unresolved: { prs: 0, commits: 1 },
     })
-    assert.deepEqual(resolverCalls, [[GIT_ROOT, "fc6ea8a"], [GIT_ROOT, "abcdef012"], [GIT_ROOT, "0badc0de"]], "only short SHAs are resolved, in the session's gitRoot")
+    assert.deepEqual(fixtureResolver.calls, [{
+      gitRoot: GIT_ROOT,
+      cwd: `/tmp/${SENTINEL}/cwd`,
+      shas: ["fc6ea8a", "abcdef012", "0badc0de", "fc6ea8a0000000000000000000000000000000aa", "ABCDEF0000000000000000000000000000000001"],
+    }], "every commit row is looked up in one batch, in the session's gitRoot")
     assert.deepEqual(events.commitShas, ["abcdef0000000000000000000000000000000001", "abcdef0120000000000000000000000000000001", "fc6ea8a0000000000000000000000000000000aa"])
     assert.ok(!JSON.stringify(facts).includes(OTHER_SESSION))
     assert.ok(!JSON.stringify(facts).includes("ourostack/secret"))
@@ -972,12 +972,12 @@ test("nativeCommitShas carries this session's session_refs commits, which bind d
 // Fix round 1 (M3-5): the real store's reference shapes.
 // ---------------------------------------------------------------------------
 
-async function refsOf({ repository = "octo-org/widgets", cwd = null, context = { cwd: `/tmp/${SENTINEL}` }, refs, resolveCommit = fakeResolveCommit }) {
+async function refsOf({ repository = "octo-org/widgets", cwd = null, context = { cwd: `/tmp/${SENTINEL}` }, refs, resolveCommits = null }) {
   const ev = eventWriter()
   const lines = [ev("session.start", 0, { sessionId: EDGE, copilotVersion: "1.0.88", producer: "copilot-agent", context })]
   const store = { sessions: [{ id: EDGE, repository, cwd }], usage: [], refs: refs.map(([type, value]) => [EDGE, type, value]) }
-  // `resolveCommit: null` asks for the deriver's own default resolver.
-  const { facts, events } = await deriveText(lines, { store, resolveCommit: resolveCommit ?? undefined })
+  // `resolveCommits: null` asks for the deriver's own default resolver.
+  const { facts, events } = await deriveText(lines, { store, resolveCommits: resolveCommits ?? undefined })
   return { refs: facts.refs, native: events.nativeCommitShas }
 }
 
@@ -992,31 +992,50 @@ test("a bare PR number takes the session's repository; without a valid one it is
   }
 })
 
-test("a short SHA resolves in context.gitRoot, else in sessions.cwd; one that does not resolve is counted", async () => {
+const FULL_A = "abc1234000000000000000000000000000000000"
+const FULL_B = "b".repeat(40)
+
+// A fake that answers from `answers` (sha -> full) with `origin`.
+function answering(answers, origin) {
   const calls = []
-  const resolveCommit = (root, short) => {
-    calls.push([root, short])
-    return short === "abc1234" ? "ABC1234000000000000000000000000000000000" : short === "bad0bad" ? `${SENTINEL} not a sha` : null
+  const resolveCommits = ({ gitRoot, cwd, shas }) => {
+    calls.push({ gitRoot, cwd, shas: [...shas] })
+    return { origin, fulls: shas.map((sha) => answers[sha] ?? null) }
   }
-  let result = await refsOf({ context: { cwd: "/x", gitRoot: "/repo/root" }, cwd: "/fallback", refs: [["commit", "abc1234"], ["commit", "bad0bad"], ["commit", "0000000"], ["commit", "abc"], ["commit", `${SENTINEL}`]], resolveCommit })
-  assert.deepEqual(calls, [["/repo/root", "abc1234"], ["/repo/root", "bad0bad"], ["/repo/root", "0000000"]], "too short or non-hex values are never resolved")
-  assert.deepEqual(result.refs.commits, [{ repo: "octo-org/widgets", sha: "abc1234000000000000000000000000000000000" }])
+  return Object.assign(resolveCommits, { calls })
+}
+
+test("a commit carries sessions.repository only when the resolving repository's origin is that repository", async () => {
+  const answers = { abc1234: FULL_A.toUpperCase(), [FULL_B]: FULL_B, bad0bad: `${SENTINEL} not a sha` }
+  const rows = [["commit", "abc1234"], ["commit", "bad0bad"], ["commit", "0000000"], ["commit", "abc"], ["commit", SENTINEL], ["commit", FULL_B], ["commit", "c".repeat(40)], ["commit", "C".repeat(40)]]
+  const matching = answering(answers, "https://github.com/octo-org/widgets")
+  let result = await refsOf({ repository: "Octo-Org/Widgets", context: { cwd: "/x", gitRoot: "/repo/root" }, cwd: "/fallback", refs: rows, resolveCommits: matching })
+  assert.deepEqual(matching.calls, [{ gitRoot: "/repo/root", cwd: "/fallback", shas: ["abc1234", "bad0bad", "0000000", FULL_B, "c".repeat(40), "C".repeat(40)] }], "too short or non-hex values are never asked")
+  assert.deepEqual(result.refs.commits, [
+    { repo: "Octo-Org/Widgets", sha: FULL_A },
+    { repo: "Octo-Org/Widgets", sha: FULL_B },
+    { repo: null, sha: "c".repeat(40) },
+  ], "a 40-hex row the repository lacks is kept, unlabeled, once")
   assert.deepEqual(result.refs.unresolved, { prs: 0, commits: 2 })
-  assert.deepEqual(result.native, ["abc1234000000000000000000000000000000000"])
+  assert.deepEqual(result.native, [FULL_A, FULL_B, "c".repeat(40)])
 
-  calls.length = 0
-  result = await refsOf({ context: { cwd: "/x" }, cwd: "/fallback", repository: null, refs: [["commit", "abc1234"]], resolveCommit })
-  assert.deepEqual(calls, [["/fallback", "abc1234"]])
-  assert.deepEqual(result.refs.commits, [{ repo: null, sha: "abc1234000000000000000000000000000000000" }])
+  for (const origin of ["https://github.com/octo-org/fork", "https://gitlab.com/octo-org/widgets", null]) {
+    result = await refsOf({ context: { cwd: "/x", gitRoot: "/repo/root" }, refs: [["commit", "abc1234"], ["commit", FULL_B]], resolveCommits: answering(answers, origin) })
+    assert.deepEqual(result.refs.commits, [{ repo: null, sha: FULL_A }, { repo: null, sha: FULL_B }], String(origin))
+  }
+  result = await refsOf({ repository: null, context: { cwd: "/x" }, refs: [["commit", "abc1234"]], resolveCommits: answering(answers, "https://github.com/octo-org/widgets") })
+  assert.deepEqual(result.refs.commits, [{ repo: null, sha: FULL_A }])
+})
 
-  calls.length = 0
-  result = await refsOf({ context: { cwd: "/x" }, cwd: null, refs: [["commit", "abc1234"]], resolveCommit })
-  assert.deepEqual(calls, [[null, "abc1234"]], "with no root the resolver is still asked and refuses")
+test("with no commit rows the resolver is never asked", async () => {
+  const resolver = answering({}, null)
+  await refsOf({ refs: [["pr", "5"]], resolveCommits: resolver })
+  assert.deepEqual(resolver.calls, [])
 })
 
 test("the default resolver is the real one: with no repository on disk nothing resolves", async () => {
-  const { refs } = await refsOf({ context: { cwd: "/x", gitRoot: `/tmp/${SENTINEL}/no-such-repo` }, refs: [["commit", "abc1234"]], resolveCommit: null })
-  assert.deepEqual(refs.commits, [])
+  const { refs } = await refsOf({ context: { cwd: "/x", gitRoot: `/tmp/${SENTINEL}/no-such-repo` }, refs: [["commit", "abc1234"], ["commit", FULL_B]], resolveCommits: null })
+  assert.deepEqual(refs.commits, [{ repo: null, sha: FULL_B }])
   assert.deepEqual(refs.unresolved, { prs: 0, commits: 1 })
 })
 

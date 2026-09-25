@@ -16,10 +16,20 @@
 // no-echo errors (`{ code, path }`, the path built only from schema field
 // names and array indices). On top of the local rules:
 //   - Every pattern-checked string is also refused, with code `date`, when it
-//     contains a date shape (`DATE_SHAPE`). Model IDs, plugin names and
+//     contains a date shape (`DATE_SHAPE`), and with code `time` when it
+//     contains a time of day (`TIME_SHAPE`). Model IDs, plugin names and
 //     repository names are the patterns loose enough to hold one.
-//   - `session.duration_ms`, `intervals[].start_ms` and `end_ms` are safe
-//     non-negative integers with `start_ms <= end_ms <= duration_ms`.
+//   - `session.id` is a version-4 (random) UUID. Other versions can carry a
+//     timestamp (v1, v6, v7) or a machine identifier (v1), and the ID is
+//     also the file name (review I1, fix round 2).
+//   - `session.duration_ms` is a safe non-negative integer of at most
+//     `PUBLISHED_LIMITS.maxOffsetMs`, and `intervals[].start_ms` and `end_ms`
+//     are safe non-negative integers with `start_ms <= end_ms <=
+//     duration_ms`. The cap means a bogus early session start (one log line
+//     dated 1970, say) can never publish interval offsets that are epoch
+//     values (review Critical, fix round 2).
+//   - `unavailable` holds no entry twice, and `refs` no PR (repository and
+//     number) or commit (SHA) twice.
 //   - `jobs[].session_offset_ms` and every `offset_ms` are safe integers
 //     (signed: a session may begin before its task card exists) or `null`,
 //     and at most `PUBLISHED_LIMITS.maxOffsetMs` (ten years) either way. The
@@ -62,13 +72,19 @@ export const PUBLISHED_SCHEMA = "desk.factory.published/1"
 /** An ISO calendar date anywhere in a string. */
 export const DATE_SHAPE = /\d{4}-\d{2}-\d{2}/u
 
+/** A time of day (`08:30`) anywhere in a string. */
+export const TIME_SHAPE = /\d{2}:\d{2}/u
+
+/** A version-4 UUID: the only session ID a published file may carry. */
+export const SESSION_ID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+
 export const PUBLISHED_LIMITS = Object.freeze({
   maxOffsetMs: 3650 * 24 * 60 * 60 * 1000,
 })
 
 const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/1$/u
 
-// A pattern-checked string that must also carry no date.
+// A pattern-checked string that must also carry no date and no time of day.
 function publicPatternField(pattern) {
   const base = patternField(pattern)
   return leaf((value, path, errors) => {
@@ -77,9 +93,26 @@ function publicPatternField(pattern) {
       addError(errors, "date", path)
       return false
     }
+    if (TIME_SHAPE.test(value)) {
+      addError(errors, "time", path)
+      return false
+    }
     return true
   })
 }
+
+// A duration in milliseconds, at most the offset cap.
+const durationField = () => leaf((value, path, errors) => {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    addError(errors, "integer", path)
+    return false
+  }
+  if (value > PUBLISHED_LIMITS.maxOffsetMs) {
+    addError(errors, "range", path)
+    return false
+  }
+  return true
+})
 
 // A signed offset in milliseconds, or `null`.
 const offsetField = () => leaf((value, path, errors) => {
@@ -161,10 +194,10 @@ const UNAVAILABLE = {
 
 const SESSION = {
   host: enumField(ENUMS.host),
-  id: publicPatternField(PATTERNS.sessionId),
+  id: publicPatternField(SESSION_ID_V4),
   host_version: publicPatternField(PATTERNS.semver),
   entrypoint: enumField(ENUMS.entrypoint),
-  duration_ms: nonNegIntField(),
+  duration_ms: durationField(),
   ended: booleanField(),
   end_reason: nullableEnumField(ENUMS.endReason),
 }
@@ -230,6 +263,22 @@ export function validatePublished(value) {
   const results = validateObject(value, "", TOP, errors)
   if (results === undefined) return { ok: false, errors }
   checkAgentReferences(value, results, errors)
+
+  // No entry or reference twice. Only items whose own fields are sound are
+  // compared, and the later one is named.
+  const noDuplicates = (list, itemResults, fields, keyOf, listPath) => {
+    const seen = new Set()
+    list.forEach((item, index) => {
+      if (!fields.every((field) => itemResults[index]?.[field] === true)) return
+      const key = keyOf(item)
+      if (seen.has(key)) addError(errors, "duplicate", `${listPath}.${index}`)
+      seen.add(key)
+    })
+  }
+  if (results.unavailable) noDuplicates(value.unavailable, results.unavailable, ["field", "reason"], (item) => `${item.field}|${item.reason}`, "unavailable")
+  const refs = results.refs
+  if (refs?.prs) noDuplicates(value.refs.prs, refs.prs, ["repo", "number"], (item) => `${item.repo}#${item.number}`, "refs.prs")
+  if (refs?.commits) noDuplicates(value.refs.commits, refs.commits, ["sha"], (item) => item.sha, "refs.commits")
 
   // No interval may run past the session's end. Checked only when the
   // duration itself is sound, so one bad duration is one error.
