@@ -1,5 +1,12 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.10 — 2026-09-24
+
+Brings the claims-based browser context broker and bounded validation artifacts from main. The Desk MCP stays at `desk-mcp@1.4.0-alpha.6`; its source and runtime packs are unchanged.
+
+- **Browser context broker.** The `browser-context-broker` package (from main's Desk 3.2.0, #226 and #227) ships under `plugins/desk/browser-context-broker/`. It hands each caller a lease on a matching headed browser context, exposes only the lease's own targets through an authenticated CDP proxy, and recovers or cleans up stale leases without touching other callers' targets. `cdp-headed-browser` now routes acquisition, proxying, status, doctor and release through the broker, and the docs validator enforces that routing.
+- **Bounded validation artifacts.** `git-hygiene` treats coverage and fully instrumented builds as exact-SHA final-candidate gates, and `work-doer` bounds disposable validation artifacts: copy proved outputs to a commit-addressed path, then delete test-owned build roots, containers and images (from main, #215).
+
 ## 3.2.0-alpha.9 — 2026-09-24
 
 Overlays get the same friction-free first run. Ships `desk-mcp@1.4.0-alpha.6` source with the change below; the MCP version and runtime packs are unchanged.

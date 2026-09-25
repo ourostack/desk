@@ -275,7 +275,7 @@ test("Work Suite root plugin metadata omits inert dependency metadata", () => {
   const workSuitePlugin = loadJson("plugins", "work-suite", "plugin.json")
 
   assert.equal(workSuitePlugin.name, "work-suite")
-  assert.equal(workSuitePlugin.version, "4.0.0-alpha.1")
+  assert.equal(workSuitePlugin.version, "4.0.0-alpha.2")
   assert.equal(workSuitePlugin.version, marketplacePlugin("work-suite").version)
   assert.equal(workSuitePlugin.skills, "./skills/")
   assert.equal(Object.hasOwn(workSuitePlugin, "dependencies"), false)
@@ -421,7 +421,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.0-alpha.9"],
+    ["Copilot root Desk version must match activation version 3.2.0-alpha.10"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())
