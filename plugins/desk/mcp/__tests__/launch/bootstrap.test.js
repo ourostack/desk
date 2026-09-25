@@ -849,6 +849,34 @@ test("the Claude inline launcher answers the handshake when bootstrap.cjs itself
   assert.match(result.stderr, /\[desk-mcp\] launcher: /u)
 })
 
+test("the Claude inline launcher answers the handshake when bootstrap.cjs run() rejects", async () => {
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.desk
+  const plugin = await mkTempRoot("desk-bootstrap-rejecting-plugin-")
+  mkdirSync(path.join(plugin, "mcp"))
+  writeFileSync(path.join(plugin, "mcp", "bootstrap.cjs"), "module.exports = { run: function () { return Promise.reject(new Error('run rejected late')) } }\n")
+  const result = spawnSync(process.execPath, claude.args, {
+    cwd: plugin,
+    encoding: "utf8",
+    env: { PATH: "/usr/bin:/bin", DESK_PLUGIN_ROOT: plugin, NODE_OPTIONS: "" },
+    input: [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } },
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "desk_status" } },
+      { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "task_create" } },
+    ].map((message) => JSON.stringify(message)).join("\n") + "\n",
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const [init, list, status, gated] = result.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
+  assert.equal(init.result.serverInfo.name, "desk-mcp-launcher")
+  assert.deepEqual(list.result.tools.map((tool) => tool.name), TOOL_NAMES)
+  const payload = JSON.parse(status.result.content[0].text)
+  assert.equal(payload.state, "degraded:bootstrap_failed")
+  assert.match(payload.fix, /run rejected late/u)
+  assert.equal(status.result.isError, false)
+  assert.equal(gated.result.isError, true)
+  assert.match(result.stderr, /\[desk-mcp\] launcher: run rejected late/u)
+})
+
 test("with no pack for this platform the node_missing fix still names a command", async () => {
   const root = await mkTempRoot("desk-bootstrap-nopack-")
   const input = new PassThrough()
