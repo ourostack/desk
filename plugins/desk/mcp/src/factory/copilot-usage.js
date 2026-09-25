@@ -1,9 +1,10 @@
 // The factory's read of Copilot CLI's machine-wide `session-store.db`.
 //
 // A read of a native local source, never a write to it, and never a copy of
-// what was said: only `assistant_usage_events` (model, counters, timestamp)
-// and `session_refs` (reference type and value) are queried, always filtered
-// to one session. `turns` holds message text and is never touched.
+// what was said: only `assistant_usage_events` (model, counters, timestamp),
+// `session_refs` (reference type and value) and the `repository` and `cwd`
+// columns of `sessions` are queried, always filtered to one session. `turns`
+// holds message text and is never touched.
 //
 // Derived from the work ledger's `measurement/copilot-usage.js`, which keeps
 // its own `better-sqlite3` reader unchanged until the ledger retires (M3-12).
@@ -97,6 +98,22 @@ export function readSessionRows(options) {
 /** One session's references as raw `{ ref_type, ref_value }` rows, same statuses. */
 export function readSessionRefs(options) {
   return read("SELECT ref_type, ref_value FROM session_refs WHERE session_id = ? ORDER BY id", options)
+}
+
+/**
+ * One session's `repository` and `cwd` from `sessions`, each a string or
+ * `null` (absent, not text, or unreadable). Each column is its own query, so
+ * a store without one of them still yields the other.
+ */
+export function readSessionRecord(options) {
+  const column = (sql) => {
+    const value = read(sql, options).rows[0]?.value
+    return typeof value === "string" ? value : null
+  }
+  return {
+    repository: column("SELECT repository AS value FROM sessions WHERE id = ?"),
+    cwd: column("SELECT cwd AS value FROM sessions WHERE id = ?"),
+  }
 }
 
 const COUNTER_FIELDS = ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens"]

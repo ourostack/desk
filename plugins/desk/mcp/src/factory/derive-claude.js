@@ -770,7 +770,7 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
       api_retries: apiRetries,
       compactions,
     },
-    refs: { prs: limited.prs, commits: [] },
+    refs: { prs: limited.prs, commits: [], unresolved: { prs: 0, commits: 0 } },
     jobs: [],
     unavailable,
   }

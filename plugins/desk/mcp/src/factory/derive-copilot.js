@@ -8,9 +8,8 @@
 // What is read. Of each event only `type`, `timestamp`, the envelope
 // `agentId` (present means a subagent's event; read for classification only)
 // and these `data` fields: `session.start.copilotVersion`;
-// `session.start`/`session.resume` `context.repository` and
-// `context.hostType`, to name the repository of the session's own commits;
-// for binding only, `session.start`/`session.resume` `context.cwd` and the
+// `session.start.context.gitRoot`, where the session's short commit SHAs are
+// resolved (never kept); for binding only, `session.start`/`session.resume` `context.cwd` and the
 // `command` argument of a `bash` or `powershell` call, matched in memory for
 // `git … commit` and never kept;
 // `session.shutdown.modelMetrics` (never `codeChanges`);
@@ -28,8 +27,9 @@
 // prompt text, other tool arguments, results, `initialPrompt`, summaries,
 // `codeChanges.filesModified`) are never read into facts, and no classifying
 // value (`agentId`, `source`, `interactionId`) is ever copied into them. From
-// the database: `assistant_usage_events` and `session_refs`, filtered by this
-// session's id (`./copilot-usage.js`). Never `turns` (message text) or
+// the database: `assistant_usage_events`, `session_refs` and the `repository`
+// and `cwd` columns of `sessions`, filtered by this session's id
+// (`./copilot-usage.js`). Never `turns` (message text) or
 // `session_files`.
 //
 // Every fact is a count, a duration, an enum bucket or a pattern-shaped id,
@@ -118,18 +118,25 @@
 //     under `turns` (the schema has no compaction field).
 //   - Plugins: the caller's marker list merged with valid `skill.invoked`
 //     name/version pairs, deduplicated.
-//   - Refs: `session_refs` `pr` rows (`owner/repo#n` or a github.com PR URL)
-//     and `commit` rows (40 hex) for this session. These commits are the
-//     session's own (M3-4 binds them directly), so each carries the
-//     session's repository: the `context.repository` of its
-//     `session.start`/`session.resume` events when every context that names
-//     one names the same valid `owner/repo` with `hostType: "github"`. A
-//     context naming none (a directory outside a repository) says nothing;
-//     two repositories, another host or an invalid name leave it `null`,
-//     which the publishing transform drops and counts as private. The commit SHAs also go to
-//     `events.commitShas` for M3-4. No database: `{commits, log_missing}`;
-//     an unreadable one (including no `node:sqlite`): `{commits,
-//     source_unreadable}`, and the same for tokens when they were needed.
+//   - Refs (controller ruling, M3-5 fix round 1, from a structure-only probe
+//     of real stores: `pr` values are bare numbers and `commit` values are
+//     7–9 hex short SHAs). The session's repository is `sessions.repository`
+//     when it matches the repository pattern, else none. A `pr` row is a
+//     bare number, which takes the session's repository, or `owner/repo#n`
+//     or a github.com PR URL, which name their own; a bare number with no
+//     session repository is counted in `refs.unresolved.prs`. A `commit` row
+//     of 40 hex is kept as is; a shorter hex one (4–39) is resolved to its
+//     full SHA by the injected `resolveCommit(gitRoot, short)`
+//     (`./commit-resolve.js`) in the session's repository — the
+//     `session.start` `context.gitRoot`, else `sessions.cwd` — and one that
+//     does not resolve is counted in `refs.unresolved.commits`. Every commit
+//     carries the session's repository, or `null`, which the publishing
+//     transform drops and counts as private. `issue` rows and malformed
+//     values are ignored. The full SHAs also go to `events.commitShas` and
+//     `events.nativeCommitShas` for M3-4. No database: `{commits,
+//     log_missing}`; an unreadable one (including no `node:sqlite`):
+//     `{commits, source_unreadable}`, and the same for tokens when they were
+//     needed.
 //   - Binding events: tool names ending `task_create|task_update|
 //     task_archive` whose arguments carry string `track` and `slug`; file
 //     writes are `create`/`edit` `arguments.path` and the `*** Add/Update/
@@ -164,7 +171,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { createInterface } from "node:readline"
 
-import { normalizeRow, readSessionRefs, readSessionRows } from "./copilot-usage.js"
+import { SHORT_SHA, createCommitResolver } from "./commit-resolve.js"
+import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows } from "./copilot-usage.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
 import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
@@ -175,6 +183,7 @@ const DESK_TOOL = /(?:task_create|task_update|task_archive)$/u
 const PATCH_HEADER = /^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$/gmu
 const PR_SHORT = /^([^/#\s]+\/[^/#\s]+)#(\d+)$/u
 const PR_URL = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#].*)?$/u
+const PR_BARE = /^\d+$/u
 const COMMIT = /^[0-9a-fA-F]{40}$/u
 const TURN_RETRY = new Set(["model.turn_retry", "assistant.turn_retry"])
 const CALL_FAILURE = new Set(["model.model_call_failure", "model.call_failure"])
@@ -250,16 +259,19 @@ function contextCwd(data) {
   return isObject(data.context) ? stringOrNull(data.context.cwd) : null
 }
 
-// The GitHub repository a start or resume context names: `undefined` when it
-// names none, `null` when what it names cannot be used.
-function contextRepository(data) {
-  if (!isObject(data.context) || data.context.repository === undefined) return undefined
-  const { repository, hostType } = data.context
-  return hostType === "github" && typeof repository === "string" && PATTERNS.prRepo.test(repository) ? repository : null
+function contextGitRoot(data) {
+  return isObject(data.context) ? stringOrNull(data.context.gitRoot) : null
 }
 
-function prRefOf(value) {
+// A `pr` row as `{ repo, number }`; `undefined` for a bare number with no
+// session repository (counted as unresolved); `null` for anything else.
+function prRefOf(value, repository) {
   if (typeof value !== "string") return null
+  if (PR_BARE.test(value)) {
+    const number = Number(value)
+    if (!Number.isSafeInteger(number) || number < 1) return null
+    return repository === null ? undefined : { repo: repository, number }
+  }
   const match = PR_SHORT.exec(value) ?? PR_URL.exec(value)
   if (match === null) return null
   const number = Number(match[2])
@@ -360,25 +372,19 @@ function createSessionFold() {
     if (retryStart === null && isRetryableFailure(data)) retryStart = at
   }
 
-  // Every repository the start and resume contexts name; `null` stands for
-  // one that cannot be used.
-  const repositories = new Set()
-  const noteRepository = (data) => {
-    const repository = contextRepository(data)
-    if (repository !== undefined) repositories.add(repository)
-  }
+  // Where the session's short commit SHAs are resolved.
+  let gitRoot = null
 
   const handlers = {
     "session.start"(data, at) {
       sessionCwd = contextCwd(data)
-      noteRepository(data)
+      gitRoot = contextGitRoot(data)
       if (hostVersion === null && at !== null && typeof data.copilotVersion === "string" && PATTERNS.semver.test(data.copilotVersion)) {
         hostVersion = data.copilotVersion
       }
     },
     "session.resume"(data) {
       sessionCwd = contextCwd(data)
-      noteRepository(data)
       if (interaction !== null) closeInteraction()
       if (pendingTools.size + pendingSubagents.size > 0) lostCalls = true
       pendingTools.clear()
@@ -539,10 +545,9 @@ function createSessionFold() {
     },
     finish() {
       if (interaction !== null) closeInteraction()
-      const [onlyRepository] = repositories
       return {
         flags,
-        repository: repositories.size === 1 ? onlyRepository : null,
+        gitRoot,
         hostVersion,
         earliest,
         latest,
@@ -642,25 +647,34 @@ function usageFromDatabase(sessionId, env, flag) {
   return [...byModel.values()]
 }
 
-function refsFromDatabase(sessionId, env, flag) {
+function refsFromDatabase({ sessionId, env, flag, gitRoot, resolveCommit }) {
   const result = readSessionRefs({ sessionId, env })
   if (result.status === "missing") flag("commits", "log_missing")
   if (result.status === "unreadable") flag("commits", "source_unreadable")
+  const record = result.status === "ok" ? readSessionRecord({ sessionId, env }) : { repository: null, cwd: null }
+  const repository = record.repository !== null && PATTERNS.prRepo.test(record.repository) ? record.repository : null
+  const root = gitRoot ?? record.cwd
   const prs = new Map()
   const commits = new Set()
+  const unresolved = { prs: 0, commits: 0 }
   for (const { ref_type: type, ref_value: value } of result.rows) {
     if (type === "pr") {
-      const ref = prRefOf(value)
-      if (ref !== null) prs.set(`${ref.repo}#${ref.number}`, ref)
-    } else if (type === "commit" && typeof value === "string" && COMMIT.test(value)) {
-      commits.add(value.toLowerCase())
+      const ref = prRefOf(value, repository)
+      if (ref === undefined) unresolved.prs += 1
+      else if (ref !== null) prs.set(`${ref.repo}#${ref.number}`, ref)
+    } else if (type === "commit" && typeof value === "string" && SHORT_SHA.test(value)) {
+      const full = COMMIT.test(value) ? value.toLowerCase() : resolveCommit(root, value)
+      if (typeof full === "string" && COMMIT.test(full)) commits.add(full.toLowerCase())
+      else unresolved.commits += 1
     }
   }
   const sortedCommits = [...commits].sort()
   if (sortedCommits.length > LIMITS.commits) flag("commits", "capped")
   return {
+    repository,
     prs: [...prs.values()].sort(comparePrs).slice(0, LIMITS.prs),
     commits: sortedCommits.slice(0, LIMITS.commits),
+    unresolved,
   }
 }
 
@@ -709,7 +723,12 @@ function selectUsage({ shutdown, sessionId, env, flags, flag, openOrTruncated })
   return []
 }
 
-export async function deriveCopilotSession({ sessionId, copilotHome, plugins, endReason, entrypoint = "cli" }) {
+/**
+ * `deriveCopilotSession({ sessionId, copilotHome, plugins, endReason,
+ * entrypoint, resolveCommit })`. `resolveCommit(gitRoot, shortSha) -> fullSha
+ * | null` defaults to `createCommitResolver()`; tests inject a fake.
+ */
+export async function deriveCopilotSession({ sessionId, copilotHome, plugins, endReason, entrypoint = "cli", resolveCommit = createCommitResolver() }) {
   if (typeof sessionId !== "string" || !PATTERNS.sessionId.test(sessionId)) {
     return { facts: null, events: null, reason: "source_unreadable" }
   }
@@ -744,7 +763,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
   if (state.unfinishedCalls) flag("tool_durations", openOrTruncated)
   if (state.openTurns) flag("turns", openOrTruncated)
 
-  const refs = refsFromDatabase(sessionId, env, flag)
+  const refs = refsFromDatabase({ sessionId, env, flag, gitRoot: state.gitRoot, resolveCommit })
   const mergedPlugins = mergePlugins(plugins, state.skillPlugins, flag)
   flag("ci_runs", "not_collected_in_slice_1")
 
@@ -771,7 +790,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
       api_retries: state.apiRetries,
       compactions: state.compactions,
     },
-    refs: { prs: refs.prs, commits: refs.commits.map((sha) => ({ repo: state.repository, sha })) },
+    refs: { prs: refs.prs, commits: refs.commits.map((sha) => ({ repo: refs.repository, sha })), unresolved: refs.unresolved },
     jobs: [],
     unavailable: [...state.flags.values()].slice(0, LIMITS.unavailable),
   }

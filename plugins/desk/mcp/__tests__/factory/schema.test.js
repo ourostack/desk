@@ -119,6 +119,8 @@ const SIMPLE_VIOLATIONS = [
   { name: "refs.prs[].repo must match owner/repo", keys: ["refs", "prs", 0, "repo"], value: SENTINEL, code: "pattern", path: "refs.prs.0.repo" },
   { name: "refs.prs[].number must be a positive integer", keys: ["refs", "prs", 0, "number"], value: 0, code: "integer", path: "refs.prs.0.number" },
   { name: "refs.commits[].sha must be 40 lowercase hex", keys: ["refs", "commits", 0, "sha"], value: SENTINEL, code: "pattern", path: "refs.commits.0.sha" },
+  { name: "refs.unresolved.prs must be a safe non-negative integer", keys: ["refs", "unresolved", "prs"], value: -1, code: "integer", path: "refs.unresolved.prs" },
+  { name: "refs.unresolved.commits must be a safe non-negative integer", keys: ["refs", "unresolved", "commits"], value: SENTINEL, code: "integer", path: "refs.unresolved.commits" },
   { name: "refs.commits[].repo must match owner/repo when non-null", keys: ["refs", "commits", 0, "repo"], value: SENTINEL, code: "pattern", path: "refs.commits.0.repo" },
   { name: "jobs[].task_created_at must match the timestamp pattern when non-null", keys: ["jobs", 0, "task_created_at"], value: SENTINEL, code: "pattern", path: "jobs.0.task_created_at" },
   { name: "jobs[].job must be 32 lowercase hex", keys: ["jobs", 0, "job"], value: SENTINEL, code: "pattern", path: "jobs.0.job" },
@@ -533,6 +535,7 @@ const UNKNOWN_KEY_LEVELS = [
   { label: "refs", keys: ["refs"], path: "refs" },
   { label: "refs.prs[]", keys: ["refs", "prs", 0], path: "refs.prs.0" },
   { label: "refs.commits[]", keys: ["refs", "commits", 0], path: "refs.commits.0" },
+  { label: "refs.unresolved", keys: ["refs", "unresolved"], path: "refs.unresolved" },
   { label: "jobs[]", keys: ["jobs", 0], path: "jobs.0" },
   { label: "jobs[].transitions[]", keys: ["jobs", 0, "transitions", 0], path: "jobs.0.transitions.0" },
   { label: "jobs[].observed", keys: ["jobs", 0, "observed"], path: "jobs.0.observed" },
@@ -565,6 +568,7 @@ const MISSING_CASES = [
   [["counts", "tool_calls"]], [["counts", "tool_failures"]], [["counts", "tool_retries"]],
   [["refs", "prs"]], [["refs", "commits"]],
   [["refs", "prs", 0, "repo"]], [["refs", "prs", 0, "number"]], [["refs", "commits", 0, "sha"]], [["refs", "commits", 0, "repo"]],
+  [["refs", "unresolved"]], [["refs", "unresolved", "prs"]], [["refs", "unresolved", "commits"]],
   [["jobs", 0, "job"]], [["jobs", 0, "basis"]], [["jobs", 0, "task_created_at"]], [["jobs", 0, "transitions"]], [["jobs", 0, "observed"]],
   [["jobs", 0, "transitions", 0, "to"]], [["jobs", 0, "transitions", 0, "at"]],
   [["jobs", 0, "observed", "status"]], [["jobs", 0, "observed", "at"]],
@@ -585,7 +589,7 @@ const badScalar = `${SENTINEL} is not an object`
 const OBJECT_TYPE_CASES = [
   ["session"], ["plugins", 0], ["models", 0], ["models", 0, "tokens"],
   ["intervals", 0], ["agents", 1], ["counts"], ["counts", "tool_calls"], ["counts", "tool_failures"],
-  ["refs"], ["refs", "prs", 0], ["refs", "commits", 0],
+  ["refs"], ["refs", "prs", 0], ["refs", "commits", 0], ["refs", "unresolved"],
   ["jobs", 0], ["jobs", 0, "transitions", 0], ["jobs", 0, "observed"], ["unavailable", 0],
 ]
 

@@ -344,9 +344,18 @@ const COMMIT_SPEC = {
   sha: patternField(PATTERNS.commitSha),
 }
 
+// `unresolved` counts references the deriver saw but could not publish
+// exactly: a bare PR number with no session repository, a short commit SHA
+// that does not resolve locally. The transform adds them to `refs.private`.
+const UNRESOLVED_SPEC = {
+  prs: nonNegIntField(),
+  commits: nonNegIntField(),
+}
+
 const REFS_SPEC = {
   prs: arrayField(objectField(PR_SPEC), LIMITS.prs),
   commits: arrayField(objectField(COMMIT_SPEC), LIMITS.commits),
+  unresolved: objectField(UNRESOLVED_SPEC),
 }
 
 const TRANSITION_SPEC = {
@@ -496,6 +505,7 @@ export const __SPECS__ = Object.freeze({
   pr: PR_SPEC,
   commit: COMMIT_SPEC,
   refs: REFS_SPEC,
+  unresolved: UNRESOLVED_SPEC,
   transition: TRANSITION_SPEC,
   observed: OBSERVED_SPEC,
   job: JOB_SPEC,

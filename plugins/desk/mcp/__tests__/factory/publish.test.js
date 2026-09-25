@@ -20,7 +20,7 @@ import { deriveClaudeSession } from "../../src/factory/derive-claude.js"
 import { deriveCopilotSession } from "../../src/factory/derive-copilot.js"
 import { bindSession } from "../../src/factory/binding.js"
 import { SESSION_IDS } from "./fixtures/claude/make.js"
-import { SESSIONS, buildSessionStore, defaultStoreRows } from "./fixtures/copilot/make.js"
+import { RESOLVABLE, SESSIONS, buildSessionStore, defaultStoreRows } from "./fixtures/copilot/make.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, "fixtures")
@@ -50,7 +50,7 @@ test("the golden local fixture is valid local facts", () => {
 test("the golden local fixture transforms to the golden published fixture byte for byte", () => {
   const { published, dropped } = publish(local())
   assert.equal(serializePublished(published), PUBLISHED_GOLDEN_TEXT)
-  assert.deepEqual(dropped, { prs: 2, commits: 2 })
+  assert.deepEqual(dropped, { prs: 3, commits: 3 })
   assert.deepEqual(validatePublishedBytes(serializePublished(published)), { ok: true, errors: [] })
 })
 
@@ -202,14 +202,14 @@ test("an offset exactly at the cap is kept", () => {
 // Public references only.
 // ---------------------------------------------------------------------------
 
-test("private, unknown and repo-less references are dropped and counted; public ones are kept", () => {
+test("private, unknown, repo-less and unresolved references are dropped and counted; public ones are kept", () => {
   const { published, dropped } = publish(local())
   assert.deepEqual(published.refs, {
     prs: [{ repo: "ourostack/desk", number: 9 }],
     commits: [{ repo: "ourostack/desk", sha: "fc6ea8a0000000000000000000000000000000aa" }],
-    private: { prs: 2, commits: 2 },
+    private: { prs: 3, commits: 3 },
   })
-  assert.deepEqual(dropped, { prs: 2, commits: 2 })
+  assert.deepEqual(dropped, { prs: 3, commits: 3 }, "two dropped here and one the deriver could not resolve, of each kind")
 })
 
 test("only an exact \"public\" keeps a reference; the visibility check sees each repository once and never a null", () => {
@@ -221,13 +221,14 @@ test("only an exact \"public\" keeps a reference; the visibility check sees each
   assert.deepEqual(seen, ["ourostack/desk", "private-org/private-repo", "someone/unknown-repo"])
   assert.deepEqual(published.refs.prs, [{ repo: "private-org/private-repo", number: 3 }])
   assert.deepEqual(published.refs.commits, [{ repo: "private-org/private-repo", sha: "fc6ea8a0000000000000000000000000000000bb" }])
-  assert.deepEqual(dropped, { prs: 3, commits: 2 })
+  assert.deepEqual(dropped, { prs: 4, commits: 3 })
 })
 
 test("a public reference whose repository name is date-shaped is withheld and counted with the dropped ones", () => {
   const value = local()
   value.refs.prs = [{ repo: "acme/notes-2026-09-25", number: 1 }]
   value.refs.commits = [{ repo: "acme/notes-2026-09-25", sha: "a".repeat(40) }]
+  value.refs.unresolved = { prs: 0, commits: 0 }
   const seen = []
   const { published, dropped } = publish(value, { visibility: (repo) => { seen.push(repo); return "public" } })
   assert.deepEqual(seen, [])
@@ -384,7 +385,8 @@ async function derivedFixtures() {
     buildSessionStore(path.join(home, "session-store.db"), defaultStoreRows())
     for (const [name, id] of Object.entries(SESSIONS)) {
       for (const endReason of [null, "complete"]) {
-        const result = await deriveCopilotSession({ sessionId: id, copilotHome: home, plugins: [], endReason })
+        const resolveCommit = (root, short) => RESOLVABLE[short] ?? null
+        const result = await deriveCopilotSession({ sessionId: id, copilotHome: home, plugins: [], endReason, resolveCommit })
         if (result.facts !== null) out.push({ label: `copilot ${name} ${endReason}`, facts: bindFixture(result.facts, result.events) })
       }
     }
@@ -456,6 +458,7 @@ function randomLocal(random) {
     refs: {
       prs: Array.from({ length: int(5) }, () => ({ repo: pick(repos.slice(0, 4)), number: 1 + int(9999) })),
       commits: Array.from({ length: int(5) }, () => ({ repo: pick(repos), sha: hex(40) })),
+      unresolved: { prs: int(3), commits: int(3) },
     },
     jobs: Array.from({ length: int(4) }, () => {
       const created = random() < 0.2 ? null : iso(start - int(400 * 86400000) + int(2 * 86400000))
@@ -482,8 +485,8 @@ test("property: 300 seeded random local files publish nothing that identifies a 
     assertNothingLeaves(published, `sample ${index}`)
     assert.equal(published.session.duration_ms, Date.parse(value.session.derived_through) - Date.parse(value.session.started_at))
     assert.equal(published.intervals.length, value.intervals.length, "in-span intervals are all kept")
-    assert.equal(published.refs.prs.length + dropped.prs, value.refs.prs.length)
-    assert.equal(published.refs.commits.length + dropped.commits, value.refs.commits.length)
+    assert.equal(published.refs.prs.length + dropped.prs, value.refs.prs.length + value.refs.unresolved.prs)
+    assert.equal(published.refs.commits.length + dropped.commits, value.refs.commits.length + value.refs.unresolved.commits)
     assert.deepEqual(published.refs.private, dropped)
   }
 })

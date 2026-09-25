@@ -30,12 +30,19 @@
 //   - Public references only. A PR or commit is kept only when
 //     `visibility(repo)` returns exactly `"public"`. Private and unknown
 //     repositories, commits without a repository, and a repository whose
-//     name holds a date shape are dropped and counted in `refs.private`
-//     (also returned as `dropped`). `visibility` is asked once per
-//     repository and never for a date-shaped one.
+//     name holds a date shape are dropped and counted in `refs.private`,
+//     together with the references the deriver could not resolve
+//     (`refs.unresolved`); the same totals are returned as `dropped`.
+//     `visibility` is asked once per repository and never for a date-shaped
+//     one.
 //   - No date shapes. A model ID or plugin name holding an ISO date (such as
 //     `gpt-4o-2024-08-06`) loses that date's hyphens (`gpt-4o-20240806`), so
 //     the file passes the public gate's date check without losing the model.
+//     That date is the model's or plugin's release, not when the work
+//     happened, so keeping its digits says nothing about the session.
+//   - Offsets are capped at `PUBLISHED_LIMITS.maxOffsetMs`, ten years either
+//     way (controller ruling, M3-5 fix round 1). Ten years is less than the
+//     time since 1970, so no offset can be an epoch value in disguise.
 //
 // `unavailable` keeps the local entries and adds each new one once, capped
 // at the schema limit. The transform is pure and deterministic: it never
@@ -113,7 +120,10 @@ function publishRefs(refs, visibility) {
   return {
     prs,
     commits,
-    dropped: { prs: refs.prs.length - prs.length, commits: refs.commits.length - commits.length },
+    dropped: {
+      prs: refs.prs.length - prs.length + refs.unresolved.prs,
+      commits: refs.commits.length - commits.length + refs.unresolved.commits,
+    },
   }
 }
 

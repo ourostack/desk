@@ -33,7 +33,8 @@
       { "repo": "ourostack/desk", "sha": "fc6ea8a0000000000000000000000000000000aa" },
       { "repo": "private-org/private-repo", "sha": "fc6ea8a0000000000000000000000000000000bb" },
       { "repo": null, "sha": "fc6ea8a0000000000000000000000000000000cc" }
-    ]
+    ],
+    "unresolved": { "prs": 1, "commits": 1 }
   },
   "jobs": [
     {
