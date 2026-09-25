@@ -9,8 +9,10 @@ export const TOOL_NAMES = [
   "task_create",
   "task_update",
   "task_archive",
+  "task_move",
   "track_create",
   "track_update",
+  "track_rename",
   "friction_add",
   "lesson_add",
   // Private, non-Git work measurement the owner keeps about their own work
@@ -35,10 +37,14 @@ export const TOOL_DESCRIPTIONS = {
     "Merge frontmatter or append to the body of an existing task.md; preserves schema_version + created.",
   task_archive:
     "Move <root>/<track>/<slug>/ to <root>/<track>/_archive/<slug>/, marking status=done if non-terminal. Idempotent.",
+  task_move:
+    "Move a task to another track and/or rename it (live or archived — archived stays archived). `to_slug`, if set, must be an outcome name per `validateName`, the same rule `task_create` enforces; an unchanged slug is never re-validated. Refuses if the target already exists. Sets `track:` on the moved task.md and best-effort moves its row between the source and destination `track.md` \"## Tasks\" tables (or renames the row in place for a same-track move) — a track.md that doesn't follow the recommended table template is left untouched, never corrupted. Stages the move with `git mv` on a Git desk, a plain rename otherwise; never commits. Returns `mentions`: other .md files under the desk that still reference the old path in free text — reported, never rewritten.",
   track_create:
     "Create a new track.md under <root>/<slug>/ with schema_version:1 frontmatter. `slug` must be an outcome name (2-6 lowercase kebab-case words; not prompt-like, credential-like, a catch-all name, or named after the operator), and `scope` is required — one line, at most 240 characters, in the form \"<what belongs>; not <what doesn't>\". Rejections explain what to fix without echoing the rejected name back.",
   track_update:
     "Merge frontmatter or append to the body of an existing track.md; preserves schema_version + created. `frontmatter.scope`, if set, is validated the same way track_create validates it.",
+  track_rename:
+    "Rename a track — `to` must be a valid track name per `validateTrackName`, the same rule `track_create` enforces (rejects a prompt-copied, credential-like, catch-all, or person name). Refuses if the target already exists. Rewrites `track:` in every task.md under the moved tree, live and archived. Stages the move with `git mv` on a Git desk, a plain rename otherwise; never commits. Returns `mentions`: other .md files under the desk that still reference the old track path in free text — reported, never rewritten.",
   friction_add:
     "Append a friction entry — cross-cutting to <root>/_meta/friction.md, or track-local to <root>/<track>/_friction/<date>-<theme>.md.",
   lesson_add:

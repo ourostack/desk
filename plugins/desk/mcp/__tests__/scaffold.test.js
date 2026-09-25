@@ -19,8 +19,10 @@ const EXPECTED_TOOLS = [
   "task_create",
   "task_update",
   "task_archive",
+  "task_move",
   "track_create",
   "track_update",
+  "track_rename",
   "friction_add",
   "lesson_add",
   // Private, non-Git work measurement the owner keeps about their own work
@@ -38,7 +40,7 @@ const EXPECTED_TOOLS = [
   "desk_doctor",
 ]
 
-test("server scaffolds all 16 expected tool names", () => {
+test("server scaffolds all 18 expected tool names", () => {
   for (const name of EXPECTED_TOOLS) {
     assert.ok(
       TOOL_NAMES.includes(name),
