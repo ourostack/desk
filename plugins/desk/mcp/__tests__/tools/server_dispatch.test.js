@@ -20,8 +20,10 @@ const SURFACE_BEFORE_FEEDBACK_RETIREMENT = [
   "task_create",
   "task_update",
   "task_archive",
+  "task_move",
   "track_create",
   "track_update",
+  "track_rename",
   "friction_add",
   "lesson_add",
   "desk_feedback",
@@ -88,6 +90,40 @@ test("server.callTool routes task_create to the real implementation", async () =
   const body = parseResult(res)
   assert.equal(body.status, "created")
   assert.equal(body.path, path.join("t", "book-flights", "task.md"))
+})
+
+test("server.callTool routes task_move to the real implementation", async () => {
+  const root = await mkTempDeskRoot()
+  await callTool({
+    deskRoot: root,
+    name: "task_create",
+    input: { track: "some-track", slug: "book-flights", title: "T" },
+  })
+  const res = await callTool({
+    deskRoot: root,
+    name: "task_move",
+    input: { track: "some-track", slug: "book-flights", to_slug: "book-flights-now" },
+  })
+  assert.ok(!res.isError)
+  const body = parseResult(res)
+  assert.equal(body.to, path.join("some-track", "book-flights-now"))
+})
+
+test("server.callTool routes track_rename to the real implementation", async () => {
+  const root = await mkTempDeskRoot()
+  await callTool({
+    deskRoot: root,
+    name: "track_create",
+    input: { slug: "old-track", title: "T", scope: "fixture scope; not anything else" },
+  })
+  const res = await callTool({
+    deskRoot: root,
+    name: "track_rename",
+    input: { track: "old-track", to: "new-track" },
+  })
+  assert.ok(!res.isError)
+  const body = parseResult(res)
+  assert.equal(body.to, "new-track")
 })
 
 test("server.callTool surfaces tool errors as isError with structured body", async () => {
