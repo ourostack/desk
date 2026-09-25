@@ -9,7 +9,9 @@ const rootArg = process.argv.indexOf("--repo-root");
 const repoRoot = rootArg >= 0 ? path.resolve(process.argv[rootArg + 1]) : path.resolve(__dirname, "..");
 const vendorRoot = path.join(repoRoot, "plugins", "plain-language", "vendor");
 const lock = JSON.parse(fs.readFileSync(path.join(repoRoot, "upstream-sources.lock.json"), "utf8"));
-const skillManifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "manifest.json"), "utf8"));
+// The loose-skill catalog is optional; when present it must point at the plugin's skill.
+const skillManifestPath = path.join(repoRoot, "manifest.json");
+const skillManifest = fs.existsSync(skillManifestPath) ? JSON.parse(fs.readFileSync(skillManifestPath, "utf8")) : null;
 const pluginSkill = fs.readFileSync(path.join(repoRoot, "plugins", "plain-language", "skills", "plain-language", "SKILL.md"), "utf8");
 const manifests = [
   "plugins/plain-language/plugin.json",
@@ -21,15 +23,16 @@ const vendorFiles = fs.existsSync(vendorRoot)
   : [];
 
 assert.equal(fs.existsSync(path.join(repoRoot, "skills", "plain-language", "SKILL.md")), false);
-assert.equal(
-  skillManifest.skills.find((skill) => skill.name === "plain-language")?.path,
-  "plugins/plain-language/skills/plain-language/SKILL.md",
-);
+if (skillManifest !== null) {
+  assert.equal(
+    skillManifest.skills.find((skill) => skill.name === "plain-language")?.path,
+    "plugins/plain-language/skills/plain-language/SKILL.md",
+  );
+}
 assert.equal(vendorFiles.length, 0);
 assert.equal(lock.sources.some((source) => source.files.some((file) => file.generatedPath.startsWith("plugins/plain-language/"))), false);
-assert.equal(lock.sources.some((source) => source.id === "dietrichgebert-ponytail"), true);
 for (const manifest of manifests) {
-  assert.equal(manifest.version, "0.2.1");
+  assert.equal(manifest.version, "0.2.2");
   assert.match(manifest.description, /first-party output policy/u);
 }
 assert.match(pluginSkill, /## Serve the reader/u);

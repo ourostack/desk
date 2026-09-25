@@ -3,17 +3,11 @@
   "id": "engineering-v2-kernel",
   "description": "External method-slice contracts for alignment, approved local delivery, and primary-source status. These do not certify full worker startup, feedback privacy, or real-world productivity.",
   "sources": [
-    "skills/autopilot/SKILL.md",
-    "skills/work-ideator/SKILL.md",
-    "skills/work-planner/SKILL.md",
-    "skills/work-doer/SKILL.md",
-    "skills/work-merger/SKILL.md",
     "plugins/desk/skills/work-orchestration/SKILL.md",
     "plugins/desk/skills/start-task/SKILL.md",
     "plugins/desk/skills/session-resumption/SKILL.md",
     "plugins/desk/skills/task-lifecycle/SKILL.md",
     "plugins/desk/principles.md",
-    "plugins/ponytail-upstream/skills/ponytail/SKILL.md",
     "evals/fixtures/unicode-slug/.gitignore",
     "evals/fixtures/unicode-slug/package.json",
     "evals/fixtures/unicode-slug/package-lock.json",
@@ -26,7 +20,7 @@
     "evals/fixtures/unicode-slug/__tests__/tools/lesson_add.test.js",
     "evals/fixtures/unicode-slug/__tests__/tools/friction_add.test.js"
   ],
-  "reviewedSourceFingerprint": "26e57758b218d9a9c9cec4110f64b02781b3b8aefd58f77e3bf55924ceb51f2d",
+  "reviewedSourceFingerprint": "35b9b527f2f7287c6d80469089d97ad0617e412f2639aa78f16ccc304e18c958",
   "requirements": [
     {"id": "v2-substantive-alignment", "description": "Ground the first conversation in current behavior and material choices rather than silently choosing the outcome."},
     {"id": "v2-explicit-go", "description": "New engineering work needs explicit agreement and go before implementation; contribution permission is not enough."},

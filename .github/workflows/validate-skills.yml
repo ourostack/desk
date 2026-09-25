@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - v2-alpha
 
 jobs:
   validate:
@@ -44,14 +43,19 @@ jobs:
       - name: Validate Plain Language
         run: node scripts/test-plain-language-plugin.cjs && node scripts/test-plain-language-hook.cjs
 
-      - name: Validate Work Suite
-        run: node scripts/test-work-suite-contracts.cjs && node scripts/test-autopilot-state-audit.cjs
-
       - name: Validate upstream source steward
         run: node scripts/test-upstream-sources.cjs
 
       - name: Validate Desk healthy-path docs
         run: node scripts/test-desk-docs.cjs
+
+      - name: Install browser context broker dependencies
+        working-directory: plugins/desk/browser-context-broker
+        run: npm ci
+
+      - name: Test browser context broker
+        working-directory: plugins/desk/browser-context-broker
+        run: npm test
 
   claude-code-load:
     name: Claude Code plugin load

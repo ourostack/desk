@@ -1,0 +1,46 @@
+{
+  "name": "work-suite",
+  "version": "4.0.0-alpha.2",
+  "description": "An opt-in engineering preview with explicit alignment/go, test-first native execution, repository quality policy, semantic outcome evidence, and scoped terminal delivery.",
+  "skills": "./skills/",
+  "activation": {
+    "codex": {
+      "dependencyProvider": {
+        "id": "work-suite",
+        "version": "4.0.0-alpha.2",
+        "resolution": "flattened"
+      },
+      "dependencies": {
+        "plain-language": {
+          "path": "../plain-language",
+          "version": "0.2.0",
+          "resolution": "flattened"
+        },
+        "ponytail-upstream": {
+          "path": "../ponytail-upstream",
+          "version": "4.9.0",
+          "resolution": "flattened"
+        }
+      }
+    }
+  },
+  "interface": {
+    "displayName": "Work Suite",
+    "shortDescription": "Ideation, planning, doing, merging, and autonomous execution skills.",
+    "longDescription": "Work Suite packages ten canonical Ourostack workflow skills for Codex and other agent runtimes. This Work Suite 4 preview aligns new work before explicit go, resumes approved work without ceremony, preserves repository quality policy, requires primary outcome evidence, and delivers to the agreed terminal boundary.",
+    "developerName": "ourostack",
+    "category": "Engineering",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Continue the already-approved task through its agreed terminal state.",
+      "Plan and execute this work.",
+      "Merge this finished branch."
+    ],
+    "brandColor": "#0F766E",
+    "screenshots": []
+  }
+}

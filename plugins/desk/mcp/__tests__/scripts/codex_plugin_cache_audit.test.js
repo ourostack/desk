@@ -75,9 +75,9 @@ function makeFixture({ namespace = "ourostack" } = {}) {
   const codexHome = path.join(root, "codex-home")
   mkdirp(fixtureRepo)
   writePlugin(fixtureRepo, "desk", "1.7.3")
-  writePlugin(fixtureRepo, "work-suite", "1.4.9")
+  writePlugin(fixtureRepo, "superpowers", "1.4.9")
   writePlugin(fixtureRepo, "plain-language", "0.1.0")
-  writePlugin(fixtureRepo, "ponytail-upstream", "4.9.0")
+  writePlugin(fixtureRepo, "crew", "4.9.0")
   writeJson(path.join(fixtureRepo, ".agents", "plugins", "marketplace.json"), {
     name: namespace,
     plugins: [
@@ -86,23 +86,23 @@ function makeFixture({ namespace = "ourostack" } = {}) {
         source: { source: "local", path: "./plugins/desk" },
       },
       {
-        name: "work-suite",
-        source: { source: "local", path: "./plugins/work-suite" },
+        name: "superpowers",
+        source: { source: "local", path: "./plugins/superpowers" },
       },
       {
         name: "plain-language",
         source: { source: "local", path: "./plugins/plain-language" },
       },
       {
-        name: "ponytail-upstream",
-        source: { source: "local", path: "./plugins/ponytail-upstream" },
+        name: "crew",
+        source: { source: "local", path: "./plugins/crew" },
       },
     ],
   })
   writeCache(codexHome, namespace, "desk", "1.7.3", manifest("desk", "1.7.3"))
-  writeCache(codexHome, namespace, "work-suite", "1.4.9", manifest("work-suite", "1.4.9"))
+  writeCache(codexHome, namespace, "superpowers", "1.4.9", manifest("superpowers", "1.4.9"))
   writeCache(codexHome, namespace, "plain-language", "0.1.0", manifest("plain-language", "0.1.0"))
-  writeCache(codexHome, namespace, "ponytail-upstream", "4.9.0", manifest("ponytail-upstream", "4.9.0"))
+  writeCache(codexHome, namespace, "crew", "4.9.0", manifest("crew", "4.9.0"))
   return { root, repoRoot: fixtureRepo, codexHome }
 }
 
@@ -133,9 +133,9 @@ test("Codex plugin cache audit checks host implicit marketplace source drift", (
     writeHostMarketplace(fixture.root, {
       plugins: [
         ["desk", "./repo/plugins/desk"],
-        ["work-suite", "./repo/plugins/work-suite"],
+        ["superpowers", "./repo/plugins/superpowers"],
         ["plain-language", "./repo/plugins/plain-language"],
-        ["ponytail-upstream", "./repo/plugins/ponytail-upstream"],
+        ["crew", "./repo/plugins/crew"],
       ],
     })
     const current = auditCodexPluginCache({
@@ -150,15 +150,15 @@ test("Codex plugin cache audit checks host implicit marketplace source drift", (
     assert.ok(current.host_marketplace.plugins.every((plugin) => plugin.current))
 
     writePlugin(fixture.root, "desk", "1.7.2")
-    writePlugin(fixture.root, "work-suite", "1.4.8")
+    writePlugin(fixture.root, "superpowers", "1.4.8")
     writePlugin(fixture.root, "plain-language", "0.0.9")
-    writePlugin(fixture.root, "ponytail-upstream", "4.8.0")
+    writePlugin(fixture.root, "crew", "4.8.0")
     writeHostMarketplace(fixture.root, {
       plugins: [
         ["desk", "./plugins/desk"],
-        ["work-suite", "./plugins/work-suite"],
+        ["superpowers", "./plugins/superpowers"],
         ["plain-language", "./plugins/plain-language"],
-        ["ponytail-upstream", "./plugins/ponytail-upstream"],
+        ["crew", "./plugins/crew"],
       ],
     })
     const stale = auditCodexPluginCache({
@@ -176,7 +176,7 @@ test("Codex plugin cache audit checks host implicit marketplace source drift", (
       namespace: "contoso",
       plugins: [
         ["desk", "./repo/plugins/desk"],
-        ["work-suite", "./repo/plugins/work-suite"],
+        ["superpowers", "./repo/plugins/superpowers"],
         ["plain-language", "./repo/plugins/plain-language"],
       ],
     })
@@ -228,7 +228,7 @@ test("Codex plugin cache audit reports malformed host marketplace entries", () =
     const report = auditCodexPluginCache({
       repoRoot: fixture.repoRoot,
       codexHome: fixture.codexHome,
-      plugins: ["desk", "work-suite"],
+      plugins: ["desk", "superpowers"],
     })
     assert.equal(report.status, "stale")
     assert.equal(report.host_marketplace.current, false)
@@ -260,7 +260,7 @@ test("Codex plugin cache audit checks optional active Desk MCP tool snapshots", 
     assert.deepEqual(full.active_session.missing, [])
     assert.ok(full.active_session.present.includes("desk_status"))
     assert.equal(full.plugins.find((plugin) => plugin.name === "desk").active_session_visible, true)
-    assert.equal(full.plugins.find((plugin) => plugin.name === "work-suite").active_session_visible, "not_checked")
+    assert.equal(full.plugins.find((plugin) => plugin.name === "superpowers").active_session_visible, "not_checked")
 
     const prefixed = auditCodexPluginCache({
       repoRoot: fixture.repoRoot,
@@ -355,7 +355,7 @@ test("Codex plugin cache audit reports source, cache, entry, and namespace evide
   const fixture = makeFixture()
   try {
     writePlugin(fixture.repoRoot, "desk", "1.7.3", { description: "new source" })
-    writeCache(fixture.codexHome, "ourostack", "work-suite", "1.4.9", manifest("work-suite", "1.4.9", {
+    writeCache(fixture.codexHome, "ourostack", "superpowers", "1.4.9", manifest("superpowers", "1.4.9", {
       description: "old cache",
     }))
     writeJson(path.join(fixture.repoRoot, ".agents", "plugins", "marketplace.json"), {
@@ -370,7 +370,7 @@ test("Codex plugin cache audit reports source, cache, entry, and namespace evide
     const report = auditCodexPluginCache({
       repoRoot: fixture.repoRoot,
       codexHome: fixture.codexHome,
-      plugins: ["desk", "work-suite"],
+      plugins: ["desk", "superpowers"],
     })
     assert.equal(report.status, "stale")
     assert.equal(report.marketplace_namespace, "unknown")
@@ -451,7 +451,7 @@ test("Codex plugin cache audit CLI covers strict and error paths", () => {
           "--codex-home", fixture.codexHome,
           "--cache-root", path.join(fixture.codexHome, "plugins", "cache"),
           "--marketplace", path.join(fixture.repoRoot, ".agents", "plugins", "marketplace.json"),
-          "--plugins", "desk,work-suite",
+          "--plugins", "desk,superpowers",
           "--strict",
         ],
         stdout: { write: (text) => stdout.push(text) },

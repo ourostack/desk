@@ -31,6 +31,11 @@ function readJson(repoRoot, relativePath) {
   return JSON.parse(readText(repoRoot, relativePath));
 }
 
+// Legacy providers (Ponytail) and the loose-skill catalog ship elsewhere; a repository may omit them.
+function readJsonIfPresent(repoRoot, relativePath) {
+  return fs.existsSync(path.join(repoRoot, relativePath)) ? readJson(repoRoot, relativePath) : undefined;
+}
+
 function splitMarkdownRow(row) {
   return row.trim().replace(/^\|/u, "").replace(/\|$/u, "")
     .split("|")
@@ -172,7 +177,7 @@ async function checkCopilotBundle({ repoRoot, mcpRoot, methodId, errors, checked
     deskPlugin: readJson(repoRoot, "plugins/desk/plugin.json"),
     [methodId === "superpowers" ? "superpowersPlugin" : "workSuitePlugin"]: readJson(repoRoot, `plugins/${methodId}/plugin.json`),
     plainLanguagePlugin: readJson(repoRoot, "plugins/plain-language/plugin.json"),
-    ponytailPlugin: readJson(repoRoot, "plugins/ponytail-upstream/plugin.json"),
+    ponytailPlugin: readJsonIfPresent(repoRoot, "plugins/ponytail-upstream/plugin.json"),
   });
   if (contractErrors.length > 0) {
     errors.push(`copilot-plugin-metadata drift: ${contractErrors.join("; ")}`);
@@ -262,7 +267,7 @@ function checkClaudePlugin({ repoRoot, methodId, errors, checked }) {
   }
   if (
     deskPlugin.dependencies?.[1]?.name !== "plain-language" ||
-    deskPlugin.dependencies?.[1]?.version !== plainLanguagePlugin.version
+    deskPlugin.dependencies?.[1]?.version !== findActivationDependency(activation, "plain-language")?.version_range
   ) {
     errors.push("claude-plugin Plain Language dependency drift");
   }
@@ -350,7 +355,7 @@ function checkHumanizePackaging({ repoRoot, errors, checked }) {
   checked.push("humanize-skill");
   const deskSkillRoot = path.join(repoRoot, "plugins", "desk", "skills", "humanize");
   const standaloneSkillRoot = path.join(repoRoot, "skills", "humanize");
-  const manifest = readJson(repoRoot, "manifest.json");
+  const manifest = readJsonIfPresent(repoRoot, "manifest.json") ?? { skills: [] };
 
   for (const file of ["SKILL.md", "LICENSE"]) {
     if (!fs.existsSync(path.join(deskSkillRoot, file))) {

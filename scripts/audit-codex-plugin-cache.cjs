@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const defaultPlugins = Object.freeze(["desk", "work-suite", "plain-language", "ponytail-upstream"]);
+const defaultPlugins = Object.freeze(["desk", "superpowers", "plain-language", "crew"]);
 const fallbackDeskMcpTools = Object.freeze([
   "task_create",
   "task_update",

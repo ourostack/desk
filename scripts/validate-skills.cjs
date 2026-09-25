@@ -18,22 +18,6 @@ const requiredDeskMcpPackageScripts = {
   "artifact:snapshot:verify": "node scripts/verify-snapshot.js",
   "artifact:validate": "node scripts/validate-artifacts.js",
 };
-const workSuiteSkillNames = [
-  "autopilot",
-  "deep-research",
-  "inch-worm",
-  "stay-in-turn",
-  "visual-qa-dogfood",
-  "watchdog-mode",
-  "work-doer",
-  "work-ideator",
-  "work-merger",
-  "work-planner",
-];
-const canonicalPluginCopies = {
-  "work-suite": workSuiteSkillNames,
-};
-
 function repoPath(filePath, { repoRoot = process.cwd() } = {}) {
   return path.isAbsolute(filePath) ? filePath : path.join(repoRoot, filePath);
 }
@@ -104,7 +88,13 @@ function isQuotedYamlScalar(value) {
   return /^(['"]).*\1$/u.test(value);
 }
 
+// The loose-skill catalog (manifest.json plus skills/) is optional: this
+// repository ships plugins only, so an absent catalog has nothing to validate.
 function validateManifest(options = {}) {
+  if (!exists("manifest.json", options)) {
+    console.log("No loose-skill manifest.json; skipped the skill catalog.");
+    return;
+  }
   const manifest = readJson("manifest.json", options);
   if (!Array.isArray(manifest.skills)) {
     throw new Error("manifest.skills must be an array");
@@ -150,41 +140,31 @@ function validateManifest(options = {}) {
   console.log(`Validated ${manifest.skills.length} skills.`);
 }
 
-function validateCanonicalPluginCopies(options = {}) {
-  const copyMap = options.copyMap ?? canonicalPluginCopies;
-  let validatedCopies = 0;
+function parseSemver(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/u.exec(String(version));
+  if (!match) return null;
+  return { core: match.slice(1, 4).map(Number), prerelease: match[4] ?? null };
+}
 
-  for (const [plugin, skills] of Object.entries(copyMap)) {
-    const pluginRoot = path.join("plugins", plugin, "skills");
-    const pluginEntries = readDir(pluginRoot, options)
-      .filter((name) => stat(path.join(pluginRoot, name), options).isDirectory())
-      .sort();
-    const expectedEntries = [...skills].sort();
-    const missing = expectedEntries.filter((name) => !pluginEntries.includes(name));
-    const extra = pluginEntries.filter((name) => !expectedEntries.includes(name));
-    if (missing.length > 0 || extra.length > 0) {
-      throw new Error(`${plugin} skill set mismatch: missing=[${missing.join(", ")}] extra=[${extra.join(", ")}]`);
-    }
-
-    for (const skill of skills) {
-      const canonicalPath = path.join("skills", skill, "SKILL.md");
-      const pluginPath = path.join(pluginRoot, skill, "SKILL.md");
-      if (!exists(canonicalPath, options)) {
-        throw new Error(`${plugin} skill ${skill}: missing canonical ${canonicalPath}`);
-      }
-      if (!exists(pluginPath, options)) {
-        throw new Error(`${plugin} skill ${skill}: missing plugin copy ${pluginPath}`);
-      }
-      const canonical = readText(canonicalPath, options);
-      const pluginCopy = readText(pluginPath, options);
-      if (canonical !== pluginCopy) {
-        throw new Error(`${plugin} skill ${skill}: ${pluginPath} is out of sync with ${canonicalPath}`);
-      }
-      validatedCopies += 1;
-    }
+function compareCore(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left.core[index] !== right.core[index]) return left.core[index] - right.core[index];
   }
+  return 0;
+}
 
-  console.log(`Validated ${validatedCopies} canonical plugin copies across ${Object.keys(copyMap).length} plugin(s).`);
+// A dependency names an exact version or a caret range. A caret range admits
+// versions at or above its floor that keep the left-most non-zero component
+// (^6.3.0 admits 6.x, ^0.2.2 admits 0.2.x); prereleases match exactly only.
+function satisfiesVersion(version, requirement) {
+  if (!String(requirement).startsWith("^")) return version === requirement;
+  const floor = parseSemver(String(requirement).slice(1));
+  const actual = parseSemver(version);
+  if (floor === null || actual === null) return false;
+  if (actual.prerelease !== null || floor.prerelease !== null) return version === String(requirement).slice(1);
+  if (compareCore(actual, floor) < 0) return false;
+  const pinned = floor.core[0] !== 0 ? 1 : floor.core[1] !== 0 ? 2 : 3;
+  return floor.core.slice(0, pinned).every((part, index) => actual.core[index] === part);
 }
 
 function validatePluginMetadata(options = {}) {
@@ -283,8 +263,8 @@ function validatePluginMetadata(options = {}) {
       if (!marketplaceVersions.has(name)) {
         throw new Error(`${plugin.name}: ${pluginPath} depends on ${name}, which is not in the marketplace`);
       }
-      if (version !== undefined && version !== marketplaceVersions.get(name)) {
-        throw new Error(`${plugin.name}: ${pluginPath} pins ${name} ${version}, but the marketplace ships ${marketplaceVersions.get(name)}`);
+      if (version !== undefined && !satisfiesVersion(marketplaceVersions.get(name), version)) {
+        throw new Error(`${plugin.name}: ${pluginPath} requires ${name} ${version}, but the marketplace ships ${marketplaceVersions.get(name)}`);
       }
     }
   }
@@ -405,37 +385,6 @@ function runDeskFreshnessChecks(options = {}) {
   }
 }
 
-function runRuntimeAudit(options = {}) {
-  const {
-    childStdio = "inherit",
-    repoRoot = process.cwd(),
-    spawnSync = defaultSpawnSync,
-  } = options;
-  const autopilotStateResult = spawnSync(process.execPath, ["scripts/test-autopilot-state-audit.cjs"], {
-    cwd: repoRoot,
-    stdio: childStdio,
-  });
-  if ((autopilotStateResult.status ?? 1) !== 0) {
-    throw new Error("autopilot state audit tests failed");
-  }
-
-  const testResult = spawnSync(process.execPath, ["scripts/test-work-suite-runtime-audit.cjs"], {
-    cwd: repoRoot,
-    stdio: childStdio,
-  });
-  if ((testResult.status ?? 1) !== 0) {
-    throw new Error("work-suite runtime visibility audit tests failed");
-  }
-
-  const result = spawnSync(process.execPath, ["scripts/audit-work-suite-runtime.cjs", "--repo-root", "."], {
-    cwd: repoRoot,
-    stdio: childStdio,
-  });
-  if ((result.status ?? 1) !== 0) {
-    throw new Error("work-suite runtime visibility contract audit failed");
-  }
-}
-
 function listSkillFiles(dir, options, out) {
   let entries;
   try {
@@ -501,26 +450,8 @@ function validateSkillDescriptionLimits(options = {}) {
 function validateAll(options = {}) {
   validateSkillDescriptionLimits(options);
   validateManifest(options);
-  validateCanonicalPluginCopies(options);
   validatePluginMetadata(options);
-  validateAppleDistributionKitSkill(options);
   runDeskFreshnessChecks(options);
-  runRuntimeAudit(options);
-}
-
-function validateAppleDistributionKitSkill(options = {}) {
-  const {
-    childStdio = "inherit",
-    repoRoot = process.cwd(),
-    spawnSync = defaultSpawnSync,
-  } = options;
-  const result = spawnSync(process.execPath, ["scripts/check-apple-distribution-kit-skill.cjs"], {
-    cwd: repoRoot,
-    stdio: childStdio,
-  });
-  if ((result.status ?? 1) !== 0) {
-    throw new Error("apple distribution kit skill guidance check failed");
-  }
 }
 
 function run({
@@ -552,15 +483,12 @@ function startCli({
 }
 
 module.exports = {
-  canonicalPluginCopies,
   readJson,
   run,
   runDeskFreshnessChecks,
-  runRuntimeAudit,
+  satisfiesVersion,
   startCli,
   validateAll,
-  validateAppleDistributionKitSkill,
-  validateCanonicalPluginCopies,
   validateDeskMcpPackageScripts,
   validateManifest,
   validatePluginMetadata,
