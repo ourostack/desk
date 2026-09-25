@@ -1,0 +1,3 @@
+{"type":"user.message","data":{"content":"please SENTINEL-7f3a","transformedContent":"<context>SENTINEL-7f3a</context>","attachments":[{"type":"file","path":"/tmp/SENTINEL-7f3a/notes.md","displayName":"SENTINEL-7f3a"}],"interactionId":"interaction-1"},"id":"00000000-0000-4000-8000-000000000bb8","timestamp":"2026-09-25T08:00:01.000Z","parentId":null}
+{"type":"assistant.turn_start","data":{"turnId":"t1"},"id":"00000000-0000-4000-8000-000000000bb9","timestamp":"2026-09-25T08:00:02.000Z","parentId":"00000000-0000-4000-8000-000000000bb8"}
+{"type":"assistant.turn_end","data":{"turnId":"t1"},"id":"00000000-0000-4000-8000-000000000bba","timestamp":"2026-09-25T08:00:03.000Z","parentId":"00000000-0000-4000-8000-000000000bb9"}
