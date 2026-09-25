@@ -155,6 +155,21 @@ test("deskCommitsBetween matches a rebased commit by its author time, and skips 
   assert.equal(late.includes(shas.merge), false)
 })
 
+test("Git ignores GIT_* variables the caller inherited, so a hook's GIT_DIR cannot point it at another repository", () => {
+  const saved = { GIT_DIR: process.env.GIT_DIR, GIT_WORK_TREE: process.env.GIT_WORK_TREE }
+  process.env.GIT_DIR = path.join(os.tmpdir(), "desk-repo-not-a-repository")
+  process.env.GIT_WORK_TREE = os.tmpdir()
+  try {
+    const { deskCommitsBetween } = createDeskReaders({ deskRoot: desk })
+    assert.deepEqual(deskCommitsBetween("2026-09-25T08:20:01.000Z", "2026-09-25T08:20:02.500Z").map(({ sha }) => sha), [shas.second])
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
 test("deskCommitsBetween returns nothing for an invalid window, outside a repository, or when Git is missing", () => {
   const { deskCommitsBetween } = createDeskReaders({ deskRoot: desk })
   assert.deepEqual(deskCommitsBetween("yesterday", "2026-09-25T08:20:02.000Z"), [])
