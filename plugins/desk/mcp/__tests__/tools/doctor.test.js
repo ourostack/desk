@@ -1,8 +1,9 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
+import matter from "gray-matter"
 
 import { callTool, TOOL_IMPLS } from "../../src/server.js"
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../src/tool-names.js"
@@ -10,6 +11,12 @@ import { doctorRuntime } from "../../src/tools/doctor.js"
 
 function makeRoot() {
   return mkdtempSync(path.join(tmpdir(), "desk-doctor-"))
+}
+
+function writeCard(root, relPath, data, body = "") {
+  const filePath = path.join(root, relPath)
+  mkdirSync(path.dirname(filePath), { recursive: true })
+  writeFileSync(filePath, matter.stringify(body, data), "utf8")
 }
 
 function parseToolResult(response) {
@@ -56,6 +63,7 @@ test("healthy desk_doctor uses the same dependency-free diagnostic vocabulary", 
 
     assert.deepEqual(Object.keys(body).sort(), [
       "mode",
+      "organization",
       "reason",
       "remediation",
       "runtime",
@@ -66,6 +74,8 @@ test("healthy desk_doctor uses the same dependency-free diagnostic vocabulary", 
     assert.equal(body.mode, "healthy")
     assert.equal(body.reason, "ready")
     assert.match(body.summary, /ready|healthy/iu)
+    assert.match(body.summary, /Organization/u)
+    assert.deepEqual(body.organization, [])
     assert.deepEqual(body.runtime, {
       state: "ready",
       current_target: statusContext.runtime.target,
@@ -154,4 +164,122 @@ test("doctor rejects a misspelled preview format instead of falling back to iden
     assert.doesNotMatch(response.content[0].text, /private/u)
   }
   assert.equal(doctorRuntime({ input: { format: "full" } }).mode, "healthy")
+})
+
+// ── Organization section (M4-3) ─────────────────────────────────────────
+
+test("desk_doctor reports organization findings for the caller's own desk", async () => {
+  const root = makeRoot()
+  try {
+    writeCard(root, "inbox/track.md", { schema_version: 1, title: "inbox", status: "active" })
+    writeCard(root, "inbox/some-real-outcome/task.md", {
+      schema_version: 1,
+      title: "some-real-outcome",
+      status: "processing",
+      created: "2026-09-20T00:00:00Z",
+      updated: "2026-09-20T00:00:00Z",
+      track: "inbox",
+    })
+
+    const body = parseToolResult(await callTool({ deskRoot: root, name: "desk_doctor", input: {} }))
+
+    assert.ok(Array.isArray(body.organization))
+    const codes = body.organization.map((f) => f.code)
+    assert.ok(codes.includes("track_catch_all"))
+    assert.ok(codes.includes("track_missing_scope"))
+    for (const finding of body.organization) {
+      assert.equal(typeof finding.code, "string")
+      assert.equal(typeof finding.path, "string")
+      assert.equal(typeof finding.hint, "string")
+    }
+    assert.match(body.summary, /Organization/u)
+    assert.match(body.summary, /track_catch_all/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("desk_doctor's organization section reports clean when there is nothing to tidy", async () => {
+  const root = makeRoot()
+  try {
+    const body = parseToolResult(await callTool({ deskRoot: root, name: "desk_doctor", input: {} }))
+    assert.deepEqual(body.organization, [])
+    assert.match(body.summary, /Organization/u)
+    assert.match(body.summary, /clean/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("desk_doctor scopes organization findings to the caller's own crew subtree", async () => {
+  const root = makeRoot()
+  try {
+    // A peer's messy desk — must never surface in another caller's report.
+    writeCard(root, "desks/alice/inbox/track.md", { schema_version: 1, title: "inbox", status: "active" })
+
+    // The caller's own (clean) desk.
+    writeCard(root, "desks/bob/billing-disputes/track.md", {
+      schema_version: 1,
+      title: "billing-disputes",
+      status: "active",
+      scope: "billing disputes and refund flows; not payroll",
+    })
+    writeCard(root, "desks/bob/billing-disputes/refund-flow-cleanup/task.md", {
+      schema_version: 1,
+      title: "refund-flow-cleanup",
+      status: "processing",
+      created: "2026-09-20T00:00:00Z",
+      updated: "2026-09-20T00:00:00Z",
+      track: "billing-disputes",
+    })
+
+    const body = parseToolResult(
+      await callTool({ deskRoot: root, name: "desk_doctor", input: {}, person: "bob" }),
+    )
+    assert.deepEqual(body.organization, [])
+    assert.doesNotMatch(JSON.stringify(body), /alice/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("desk_doctor's organization section truncates a code past the first five paths", async () => {
+  const root = makeRoot()
+  try {
+    for (let i = 0; i < 6; i += 1) {
+      writeFileSync(path.join(root, `stray-${i}.txt`), "loose\n", "utf8")
+    }
+    const body = parseToolResult(await callTool({ deskRoot: root, name: "desk_doctor", input: {} }))
+    assert.equal(findByCode(body.organization, "loose_file").length, 6)
+    assert.match(body.summary, /loose_file: 6/u)
+    assert.match(body.summary, /\.\.\. and 1 more/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+function findByCode(findings, code) {
+  return findings.filter((f) => f.code === code)
+}
+
+test("desk_doctor treats a blank deskRoot the same as no deskRoot at all", async () => {
+  const body = doctorRuntime({ input: {}, deskRoot: "   " })
+  assert.deepEqual(body.organization, [])
+  assert.equal(body.summary, "Desk MCP runtime dependencies are ready.")
+})
+
+test("preview desk_doctor never runs organization checks or leaks workspace data", async () => {
+  const root = makeRoot()
+  try {
+    writeCard(root, "inbox/track.md", { schema_version: 1, title: "inbox", status: "active" })
+    const body = parseToolResult(await callTool({
+      deskRoot: root,
+      name: "desk_doctor",
+      input: { format: "preview" },
+    }))
+    assert.equal(body.organization, undefined)
+    assert.doesNotMatch(JSON.stringify(body), /inbox/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
