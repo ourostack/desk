@@ -153,7 +153,8 @@ test("a rival controller with a different semantic contract: lexical reads, degr
     handlers: {},
   })
   t.after(() => rival.close())
-  await withDesk(t, fixture, { args: ["--activation-config", configPath] }, async (session) => {
+  // The rival derived its socket from this process's XDG_RUNTIME_DIR (set on Linux CI); Desk must see the same one to meet it.
+  await withDesk(t, fixture, { args: ["--activation-config", configPath], env: { XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR } }, async (session) => {
     const status = await session.statusUntil(settled)
     assert.equal(status.state, "degraded:controller_semantic_mismatch")
     await assertReadsServeDirectly(session)
