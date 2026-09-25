@@ -512,9 +512,7 @@ contract("repo-handling and git-hygiene state the same clone rule word for word"
   }
 });
 
-// Hard-wrapped Markdown prose in the skills this change touched. Skills that are fully unwrapped
-// must stay that way; skills that still carry older wrapped prose must not mix a long (edited)
-// line into a wrapped paragraph, which is how an edit inside a wrapped paragraph shows up.
+// Hard-wrapped Markdown prose: these skills are fully unwrapped and must stay that way.
 function proseUnits(file) {
   const lines = text(file).split("\n");
   let start = 0;
@@ -541,9 +539,15 @@ for (const file of [
   "plugins/desk/skills/evidence-discipline/SKILL.md",
   "plugins/desk/skills/friction-management/SKILL.md",
   "plugins/desk/skills/git-hygiene/SKILL.md",
+  "plugins/desk/skills/interaction-style/SKILL.md",
   "plugins/desk/skills/lesson-capture/SKILL.md",
+  "plugins/desk/skills/operator-voice-comments/SKILL.md",
+  "plugins/desk/skills/peer-pr-review/SKILL.md",
+  "plugins/desk/skills/pr-feedback-on-own-pr/SKILL.md",
+  "plugins/desk/skills/pr-review-interrogation/SKILL.md",
   "plugins/desk/skills/preflight-actions/SKILL.md",
   "plugins/desk/skills/repo-handling/SKILL.md",
+  "plugins/desk/skills/runtime-symptom-investigation/SKILL.md",
   "plugins/desk/skills/session-resumption/SKILL.md",
   "plugins/desk/skills/using-desk/SKILL.md",
   "plugins/desk/skills/work-orchestration/SKILL.md",
@@ -552,19 +556,6 @@ for (const file of [
   contract(`${file} prose is not hard-wrapped`, () => {
     const wrapped = proseUnits(file).filter((unit) => unit.length > 1).map((unit) => unit[1].number);
     assert.deepEqual(wrapped, []);
-  });
-}
-for (const file of [
-  "plugins/desk/skills/interaction-style/SKILL.md",
-  "plugins/desk/skills/operator-voice-comments/SKILL.md",
-  "plugins/desk/skills/peer-pr-review/SKILL.md",
-  "plugins/desk/skills/pr-feedback-on-own-pr/SKILL.md",
-  "plugins/desk/skills/pr-review-interrogation/SKILL.md",
-  "plugins/desk/skills/runtime-symptom-investigation/SKILL.md",
-]) {
-  contract(`${file} has no edited line inside a wrapped paragraph`, () => {
-    const mixed = proseUnits(file).filter((unit) => unit.length > 1 && unit.some(({ line }) => line.length > 100)).map((unit) => unit[0].number);
-    assert.deepEqual(mixed, []);
   });
 }
 contract("friction-management keeps its lead-in next to its list", () => {
