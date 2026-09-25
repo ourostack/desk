@@ -256,7 +256,8 @@ test("Claude plugin metadata declares native Desk surfaces and Superpowers depen
   assert.equal(deskPlugin.mcpServers, "./.mcp.json")
   // Claude Code loads hooks/hooks.json automatically and rejects a manifest that declares it again.
   assert.equal(Object.hasOwn(deskPlugin, "hooks"), false)
-  assert.equal(deskPlugin.outputStyles, "./output-styles/")
+  // The worker agent body is the main-thread identity; a forced output style would load a second copy.
+  assert.equal(Object.hasOwn(deskPlugin, "outputStyles"), false)
   assert.deepEqual(deskPlugin.dependencies, [
     {
       name: "superpowers",
@@ -298,7 +299,6 @@ test("Claude activation metadata records Agent View and background-session dispo
     "agents",
     "hooks",
     "mcpServers",
-    "outputStyles",
     "dependencies",
   ])
   assertDocumentedDisposition("Agent View", claudeActivation?.agentView)

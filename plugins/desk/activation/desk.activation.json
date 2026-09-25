@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "id": "desk",
-  "version": "3.2.0-alpha.16",
+  "version": "3.2.0-alpha.17",
   "dependencies": [
     {
       "id": "desk",
       "kind": "substrate",
-      "version": "3.2.0-alpha.16",
+      "version": "3.2.0-alpha.17",
       "provenance": {
         "source": "plugins/desk/.codex-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
-        "version": "3.2.0-alpha.16",
+        "version": "3.2.0-alpha.17",
         "integrity": "sha256-desk-activation-manifest-v1"
       }
     },
@@ -194,7 +194,6 @@
         "agents",
         "hooks",
         "mcpServers",
-        "outputStyles",
         "dependencies"
       ],
       "mcpServers": {

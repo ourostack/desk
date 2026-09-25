@@ -1,5 +1,14 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.17 — 2026-09-25
+
+The three worker bodies now carry only identity and context, and the Claude output style is deleted. Every rule the bodies restated already has one owner, so each rule now loads once. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.
+
+- **Worker bodies.** `agents/worker.md` (Claude), `agents/worker.agent.md` (Copilot) and `agents/worker.toml` (Codex) keep their frontmatter, the line that says the host injects `using-desk` once, the identity and desk paragraphs, the `$DESK` binding (`desk_status` reports the bound root), operator preferences, "Tell me what you want to work on" and the overlays paragraph. The three share that text word for word. Each is now about 3 KB, down from 10 to 16 KB.
+- **What left the bodies.** The invariants block, the skills tables and the lifecycle line. Each rule stays with its owner: `using-desk` (method entry, one decision group, authority and permissions, durable context, commit and push, asking only when blocked), `session-start` (prerequisites and the Desk MCP health guard), `interaction-style` (slugs, announced parallel work), `session-resumption` and `task-lifecycle` (bounded processes and delivery), `friction-management`, `using-superpowers-with-desk` (prior approval), `evidence-discipline` (primary sources, fixtures or refusal) and Plain Language (plain output, leading with the answer, no hard wraps). The bodies no longer name the retired `desk:superpowers-integration` or a frozen candidate.
+- **Output style deleted.** `output-styles/worker.md` duplicated the body and the startup hook, and on Claude it loaded on top of the worker agent. A headless Claude session with and without it showed the same main-thread prompt: the worker body as identity, with no Claude Code coding-instruction sections either way, so nothing was lost. `outputStyles` leaves `.claude-plugin/plugin.json` and the Claude `nativeSurfaces` list.
+- **Tests.** A contract test keeps the bodies identity-only and identical across hosts. The recovery, health-guard, content-routing and method-selection tests now read the owning skills and assert the bodies do not restate them. The host-manifest check fails if the output style returns.
+
 ## 3.2.0-alpha.16 — 2026-09-25
 
 Deletes `principles.md`. Agents were told to open it by a path they could not resolve, and it repeated rules that `using-desk` now owns. Each of its rules now lives in one place: always-on essentials stay in `using-desk`, and each procedure moves into the skill that runs it. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.

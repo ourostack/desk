@@ -87,7 +87,6 @@ const requiredHostFreshnessPathFilters = [
   "plugins/desk/.mcp.json",
   "plugins/desk/agents/**",
   "plugins/desk/hooks/**",
-  "plugins/desk/output-styles/**",
   "plugins/desk/plugin.json",
   "plugins/desk/skills/**",
   "plugins/superpowers/**",
@@ -137,7 +136,6 @@ const hostManifestFixtureFiles = [
   "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-activation-config.json",
   "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-config.toml",
   "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md",
-  "plugins/desk/output-styles/worker.md",
   "plugins/desk/plugin.json",
   "plugins/superpowers/.claude-plugin/plugin.json",
   "plugins/superpowers/.codex-plugin/plugin.json",
@@ -1451,7 +1449,7 @@ test("root host verifier reports Claude surface and activation-worker drift", as
     })
     assert.equal(result.ok, false)
     for (const message of [
-      "Desk version drift", "worker exposure drift", "Desk surfaces drift", "output style surface drift",
+      "Desk version drift", "worker exposure drift", "Desk surfaces drift", "retired output style present",
       "Superpowers dependency drift", "Plain Language dependency drift",
       "activation worker source drift",
     ]) assert.ok(result.errors.includes(`claude-plugin ${message}`), result.errors.join("\n"))
@@ -1463,7 +1461,7 @@ test("root host verifier rejects absent worker metadata and each authored invari
   await withHostFreshnessFixture(async (root) => {
     for (const file of [
       "plugins/desk/agents/worker.md", "plugins/desk/agents/worker.toml", "plugins/desk/agents/worker.agent.md",
-      "plugins/desk/output-styles/worker.md", "plugins/plain-language/skills/plain-language/SKILL.md",
+      "plugins/plain-language/skills/plain-language/SKILL.md",
       "plugins/desk/mcp/src/activation/adapters/codex.js",
     ]) writeText(root, file, "fixture without worker metadata\n")
     writeText(root, "plugins/desk/principles.md", "a revived principles file\n")
@@ -1475,13 +1473,31 @@ test("root host verifier rejects absent worker metadata and each authored invari
       assert.ok(result.errors.includes(`worker-sources ${host} worker name drift`))
       assert.ok(result.errors.includes(`worker-sources ${host} body drift`))
     }
-    for (const host of ["claude", "codex-subagent", "copilot", "claude-output-style"]) {
-      assert.ok(result.errors.includes(`worker-sources ${host} no-hard-wrap invariant drift`))
+    for (const host of ["claude", "codex-subagent", "copilot"]) {
+      assert.ok(result.errors.includes(`worker-sources ${host} using-desk activation drift`))
     }
     for (const message of [
       "claude session-start prompt drift", "plain-language no-hard-wrap rule drift", "retired principles file present",
       "codex activation no-hard-wrap invariant drift", "codex activation Plain Language invariant drift",
     ]) assert.ok(result.errors.includes(`worker-sources ${message}`), result.errors.join("\n"))
+  })
+})
+
+test("root host verifier rejects worker bodies that restate owned rules and a revived output style", async () => {
+  const verifier = loadHostManifestVerifier()
+  await withHostFreshnessFixture(async (root) => {
+    for (const file of ["plugins/desk/agents/worker.md", "plugins/desk/agents/worker.toml", "plugins/desk/agents/worker.agent.md"]) {
+      writeText(root, file, `${loadText(...file.split("/"))}\n## Core invariants\n\n- **Never hard-wrap authored prose**\n`)
+    }
+    writeText(root, "plugins/desk/output-styles/worker.md", "---\nname: Worker\nforce-for-plugin: true\n---\n")
+    const result = await verifier.verifyDeskHostManifests({
+      repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
+    })
+    assert.equal(result.ok, false)
+    for (const host of ["claude", "codex-subagent", "copilot"]) {
+      assert.ok(result.errors.includes(`worker-sources ${host} restates owned rules`), result.errors.join("\n"))
+    }
+    assert.ok(result.errors.includes("claude-plugin retired output style present"), result.errors.join("\n"))
   })
 })
 
