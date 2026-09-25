@@ -165,15 +165,12 @@ function writeJson(root, relativePath, value) {
   writeText(root, relativePath, `${JSON.stringify(value, null, 2)}\n`)
 }
 
-// The legacy Work Suite and Ponytail providers ship from ourostack/ouroboros-skills; a legacy configuration
-// copies their manifests into a fixture repository from here.
+// The legacy Work Suite provider ships from ourostack/ouroboros-skills; a legacy configuration
+// copies its manifests into a fixture repository from here.
 const legacyProviderFiles = [
   "plugins/work-suite/.claude-plugin/plugin.json",
   "plugins/work-suite/.codex-plugin/plugin.json",
   "plugins/work-suite/plugin.json",
-  "plugins/ponytail-upstream/.claude-plugin/plugin.json",
-  "plugins/ponytail-upstream/.codex-plugin/plugin.json",
-  "plugins/ponytail-upstream/plugin.json",
 ]
 
 function copyLegacyProviders(targetRoot) {
@@ -1337,7 +1334,7 @@ test("root host verifier surfaces missing selected declarations from actual alph
       const manifest = loadJson("plugins", "desk", "activation", "desk.activation.json")
       assert.equal(manifest.dependencies.some((entry) => entry.id === "work-suite"), false)
       manifest.dependencies = manifest.dependencies.filter((entry) => entry.id !== method)
-      manifest.provides.activation_targets[0].depends_on = ["desk", method, "plain-language", "ponytail-upstream"]
+      manifest.provides.activation_targets[0].depends_on = ["desk", method, "plain-language"]
       writeJson(root, "plugins/desk/activation/desk.activation.json", manifest)
       const result = await verifier.verifyDeskHostManifests({
         repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },

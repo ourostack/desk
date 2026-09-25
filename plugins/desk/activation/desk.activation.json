@@ -41,19 +41,6 @@
         "version": "0.2.4",
         "integrity": "sha256-plain-language-activation-manifest-v1"
       }
-    },
-    {
-      "id": "ponytail-upstream",
-      "kind": "plugin",
-      "version_range": "4.9.0",
-      "provenance": {
-        "source": "plugins/ponytail-upstream/.codex-plugin/plugin.json",
-        "package": "ourostack/ponytail-upstream"
-      },
-      "lock": {
-        "version": "4.9.0",
-        "integrity": "sha256-ponytail-upstream-activation-manifest-v1"
-      }
     }
   ],
   "provides": {

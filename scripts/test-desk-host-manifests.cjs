@@ -31,7 +31,7 @@ function readJson(repoRoot, relativePath) {
   return JSON.parse(readText(repoRoot, relativePath));
 }
 
-// Legacy providers (Ponytail) and the loose-skill catalog ship elsewhere; a repository may omit them.
+// The loose-skill catalog ships elsewhere; a repository may omit it.
 function readJsonIfPresent(repoRoot, relativePath) {
   return fs.existsSync(path.join(repoRoot, relativePath)) ? readJson(repoRoot, relativePath) : undefined;
 }
@@ -177,7 +177,6 @@ async function checkCopilotBundle({ repoRoot, mcpRoot, methodId, errors, checked
     deskPlugin: readJson(repoRoot, "plugins/desk/plugin.json"),
     [methodId === "superpowers" ? "superpowersPlugin" : "workSuitePlugin"]: readJson(repoRoot, `plugins/${methodId}/plugin.json`),
     plainLanguagePlugin: readJson(repoRoot, "plugins/plain-language/plugin.json"),
-    ponytailPlugin: readJsonIfPresent(repoRoot, "plugins/ponytail-upstream/plugin.json"),
   });
   if (contractErrors.length > 0) {
     errors.push(`copilot-plugin-metadata drift: ${contractErrors.join("; ")}`);
