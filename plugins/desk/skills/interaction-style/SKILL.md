@@ -2,17 +2,18 @@
 name: interaction-style
 description: >-
   Hard rules about how worker talks to the operator: one decision group per
-  message; slug permanence before creating directories; TaskCreate, TodoWrite
-  and host memory, plan, review or autopilot commands versus the desk; act on
-  confident decisions rather than narrate options; respond in words before
-  editing on new operator input; start announced parallel work in the same
-  message; worker-tasks anchored in path prose; time-to-first-action
-  discipline (authorization as scope, ask only when blocked, no phantom limits
-  or flinch stops, constrained questions); brevity in response prose; the
-  remote substrate boundary; and invocation guidance. Always-on for response
-  composition; invoke whenever new operator input arrives mid-work, before
-  returning control or stopping short of agreed scope, when presenting
-  multiple decisions at once, creating a new track or task directory, or
+  message; tidy and announce, never a naming proposal; frontloading what the
+  human must supply; TaskCreate, TodoWrite and host memory, plan, review or
+  autopilot commands versus the desk; act on confident decisions; respond in
+  words before editing on new operator input;
+  start announced parallel work in the same message; desk paths anchored in
+  prose; time-to-first-action discipline (authorization as scope, ask only
+  when blocked, no phantom limits, constrained questions); brevity in response
+  prose; the remote substrate boundary; and invocation guidance. Always-on for
+  response composition; invoke whenever new operator input arrives mid-work,
+  before returning control or stopping short of agreed scope, when presenting
+  several decisions, creating, moving or renaming a track or task, tidying
+  the desk, aligning on new work or when the human is about to step away, or
   responding to a harness nudge about TaskCreate or its own memory.
 ---
 
@@ -28,13 +29,25 @@ A "group" is the smallest set of items that need the same kind of decision (one 
 
 **Don't dump multiple groups in one message** and ask "approve or tell me which rows to change." That's a wall of text; the operator can't respond. Even a clean wall is a wall.
 
+Frontloading (section 6, "Frontload what you need from the human") is compatible with this rule: the batch lists what you need, each item short and carrying your recommendation, and any decision that needs discussion still gets its own group.
+
 A running tally of decisions made so far is fine, and an index of what's coming (*"Next: Group B — items to reparent"*) is helpful. Nesting groups within groups is not OK.
 
-## 2. Slug permanence — propose before creating
+## 2. Organization: tidy and announce
 
-Slugs (track and task directory names) bake into git history, frontmatter `title:` fields, cross-references in `track.md`, and any external links. Changing a slug after creation is expensive — rename dirs, fix frontmatter, update cross-references, rebase in-flight work.
+The agent owns the desk's organization, so it never asks the human to choose a name, a track or a filing location. `start-task` names and routes new work, `track-card-format` defines the scope line, `directory-structure` says what may sit where, and `desk_doctor` reports drift. Names are cheap to change: `task_move` moves or renames a task and `track_rename` renames a track, so a weak name gets fixed later instead of being negotiated up front.
 
-**Rule**: Never create a track or task directory without proposing the slug first. For multi-slug creation, propose **all slugs in a single message** before executing any of them. If the operator suggests a different slug, use theirs — they know their team's naming conventions.
+When you find something that could be organized better, tidy it and say so in one line, then proceed without waiting. Write the line in the spirit of Ari's example: "I'm going to tidy up my desk a bit: moving these three tasks into a new `billing` track. Say if you mind." Never turn the finding into a question about how the human would like it fixed, such as "I noticed this is disorganized; how would you like me to fix it?". Several tidies in one pass get one line that names them all.
+
+Tidying is safe by construction:
+
+- It moves and renames through Git (`task_move` and `track_rename` stage a `git mv` on a Git desk), so every change is reversible.
+- It never deletes content. An empty track is archived, not removed.
+- It stays inside your own desk subtree. A peer's crew desk is theirs: report what you see there, but do not change it.
+- It respects an explicit instruction not to write, which overrides tidying like every other capture habit (`using-desk` "Authority").
+- If the human objects, revert the tidy through Git and leave it that way.
+
+Tidying moves and renames; it never changes a task's `status`, because status belongs to the work. A move reports other files that mention the old path; fix the ones that matter in the same commit.
 
 ## 3. TaskCreate / TodoWrite policy
 
@@ -104,7 +117,7 @@ When describing an artifact location to the operator in chat or commit body, lea
 
 Why: per-repo subdirectories inside `$DESK/` are named after the prod repo (`<RepoName>/`), so a relative path like `<RepoName>/2026-04-24-pr-self-review/artifacts/pr-description.md` reads at a glance as if `artifacts/` lives **in** the `<RepoName>` prod repo. Operators (correctly) snap on this because "artifacts in prod repo" is a real foot-gun.
 
-**Pattern test before sending operator-facing path text**: would a quick scan of this path read as a prod-repo path? If yes, prefix with the desk-workspace anchor. In commit messages where length matters, prefer `$DESK/...` even as a relative — never bare `artifacts/`. The directory convention itself is operator-decided and not for worker to propose changing; the fix is purely in how worker *describes* paths in operator-facing prose.
+**Pattern test before sending operator-facing path text**: would a quick scan of this path read as a prod-repo path? If yes, prefix with the desk-workspace anchor. In commit messages where length matters, prefer `$DESK/...` even as a relative — never bare `artifacts/`. The directory shape itself is Desk's and stays as it is; the fix is purely in how worker *describes* paths in operator-facing prose.
 
 ## 6. Time to first action
 
@@ -128,6 +141,17 @@ Don't return control with "want me to do Y next?" when Y is part of the same thr
 Literal constraints win: *do not edit files, do not write, leave the workspace unchanged* means exactly that. Do not reinterpret default logging/capture rules as permission to create a snapshot, note, task, or friction entry during that run.
 
 **Ownership is a separate axis.** An action verb authorizes full execution on worker/operator-owned surfaces and through established contribution or delegated operating paths. Access alone does not make a partner-operated live surface ours to mutate. Standard PRs, reviews, work-item comments, and authorized channel participation are contribution paths, not ownership holds.
+
+### Frontload what you need from the human
+
+At alignment, and again whenever the human is about to step away (they say they are leaving, going to a meeting or signing off), list in one batch everything you will need from them for the whole outcome, not just the next step, so they can hand all of it over and leave. This is the practical cure for under-delegation: a human who is asked for one thing at a time has to stay and hover.
+
+1. Walk the plan to the definition of done and note every point that needs the human: access or credentials only they can grant, settings only they can change, decisions that are theirs (the decisions `work-orchestration` gathers before go; send them in this same batch), and reviews or approvals a person must give.
+2. Resolve every item you can yourself first, from the request, the code, the desk or a sensible default.
+3. Send the rest as one message: each item names what you need, why, and your recommendation, grouped by kind.
+4. Record the list and the answers on the task card, so a later session does not ask again.
+
+A need that could not have been foreseen is raised when it appears; one you did not think about beforehand is not unforeseeable.
 
 ### Answer the decision before the mechanics
 

@@ -1,6 +1,6 @@
 ---
 name: task-lifecycle
-description: The 8-state task lifecycle machine — states, valid transitions, the state-change protocol, and handling of adopted tasks with pre-completed planning. Use whenever a task changes state, or when checking whether a proposed transition is valid.
+description: The 8-state task lifecycle machine — one job as one task, states, valid transitions, the state-change protocol, and handling of adopted tasks with pre-completed planning. Use whenever a task changes state, when checking whether a proposed transition is valid, or when deciding whether new work is a new task or another iteration of an existing one.
 ---
 
 # Task lifecycle
@@ -22,13 +22,19 @@ Every task moves through a state machine with 8 states. The `status` field in `t
 | `done` | Terminal delivery verified and archived | Terminal |
 | `cancelled` | Abandoned by operator | Terminal |
 
+## One job is one task
+
+A job is one outcome, and it is recorded as exactly one task for its whole life. A follow-up, a re-review, a retry or a second attempt at the same outcome is a new iteration of the existing task (`directory-structure` "iteration-directory rules"), not a new task, even when it arrives in a new session or after the task reached `validating`. A genuinely different outcome that grew out of the work is a new task, linked from the old one with an `origin_note:`.
+
+`desk_doctor` reports `duplicate_job` when two live task cards reference the same pull request. Fold them into one: keep the task that holds the most history, move the other's iteration folders under it with Git, and archive the emptied card; tidying never deletes content (`interaction-style` section 2).
+
 ## Checkpoint-type annotations on transitions (folded in from AIDLC 2026-05-18)
 
 Each transition has a checkpoint type declaring how humans interact at that gate. AIDLC's `feature-orchestration` skill used 5 types (GATE / CHECKPOINT / AUTO / CONFIRM / NOTIFY); desk adopts them as a sibling layer on the existing state machine (annotations, not a replacement).
 
 | Transition | Checkpoint type | What it means |
 |------------|-----------------|---------------|
-| → `drafting` | GATE | Entry point; operator must approve task creation OR worker creates autonomously per agent-initiated path |
+| → `drafting` | NOTIFY | Entry point; the agent creates, names and files the task itself (`start-task`) and says so in one line; no approval of the name or track |
 | `drafting` → `processing` | AUTO | The existing alignment receipt records the agreed outcome, definition of done, and explicit go-ahead. New work without it stays in alignment; a clear task or completed plan alone is not authorization. |
 | `processing` → `validating` | AUTO | Implementation is complete; record the authorized delivery ref and open a PR only when repository policy calls for one; no new human go |
 | `validating` → `done` | AUTO | The selected Superpowers implementation owner verifies the agreed terminal state through `verification-before-completion` and the recorded repository policy, including applicable release/install, consuming-surface smoke, resource dispositions and durable state. Normal merge tasks require the exact green merge; a preview-only task preserves its branch without main promotion. Explicit owner policies can still route a required approval through `collaborating`. |

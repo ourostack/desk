@@ -246,6 +246,8 @@ function main() {
     "Coaching the collaboration",
     "Authority",
     "Waste judgment",
+    "Cite every factual claim",
+    "Own the stack",
     "Engineering work",
     "Source and channels",
     "Durable context and attribution",
@@ -256,7 +258,7 @@ function main() {
     "The RFC",
   ];
   const headings = [...skill.matchAll(/^## (.+)$/gmu)].map((match) => match[1]);
-  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the thirteen foundation sections, in order");
+  assert.deepEqual(headings, expectedSections, "using-desk must carry exactly the fifteen foundation sections, in order");
   for (const title of expectedSections) {
     assertSinglePhysicalLine(section(skill, title), `using-desk ${title}`);
   }
@@ -275,7 +277,15 @@ function main() {
     /proportionate/iu,
     /own the sequence to done/iu,
     /keep producing while (?:a|any) question is pending/iu,
-    /genuine human gate \(voice, meaning anything sent as the human; durable naming;/u,
+    /genuine human gate \(voice, meaning anything sent as the human; a decision that is theirs;/u,
+    /frontload in one batch everything you will need from (?:them|the human) for the whole outcome/iu,
+    /whenever (?:they are|the human is) about to step away/iu,
+    /access, settings only they can change, decisions(?: and|,) reviews/iu,
+    /`interaction-style` holds the procedure/u,
+    /When the human opens a conversation, stay in it/u,
+    /design talk goes through `superpowers:brainstorming`/u,
+    /already-authorized background work may continue/iu,
+    /nothing new starts on (?:that|the) topic until they close it or say go/iu,
     /context size.*not (?:a )?reasons? to stop/iu,
     /one decision group at a time.*recommendation/iu,
   ]);
@@ -338,8 +348,27 @@ function main() {
     "Keep nothing durable in host memory or configuration folders",
     "thin pointers to the desk",
     "one durable task",
+    "You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking.",
     "Never add AI attribution",
     "`Co-Authored-By` trailers",
+  ]);
+
+  assertSectionPhrases(section(skill, "Cite every factual claim"), "using-desk Cite every factual claim", [
+    "Every factual claim you make to a human or an agent",
+    "inline link to its primary source",
+    "labeled as inference or unverified",
+    "your own actions link to their artifact",
+    "before it has happened",
+    "cites the historical data behind it or carries no number",
+    "`evidence-discipline` holds the procedure",
+  ]);
+
+  assertSectionPhrases(section(skill, "Own the stack"), "using-desk Own the stack", [
+    "rule, tool or plugin we own",
+    "fix it rather than work around it or stop",
+    "creative and scrappy before declaring yourself stuck",
+    "`friction-management`",
+    "kaizen card",
   ]);
 
   assertSectionPhrases(
@@ -416,6 +445,7 @@ function main() {
 
   assert.doesNotMatch(section(skill, "Source and channels"), /Work on the channel/u, "the foundation must not read as permission to commit straight to the channel");
   assert.doesNotMatch(skill, /froz|freez/iu, "using-desk must not describe frozen candidates or freezing: work tracks channels");
+  assert.doesNotMatch(skill, /durable naming/iu, "the agent owns naming; it is not a human gate");
 
   // Rules owned elsewhere: send approval (operator-voice-comments), the form-tool ban (operator preference),
   // human pull request approval (repository policy) and the hard-wrap rule (Plain Language).
@@ -424,8 +454,10 @@ function main() {
   assert.doesNotMatch(skill, /human (?:PR|pull request) approval|approve the pull request/iu, "human PR approval is repository policy");
   assert.doesNotMatch(skill, /approv\w* (?:of )?(?:that |the )?content|in the (?:human's|operator's) (?:name|voice)/iu, "send approval belongs to operator-voice-comments");
 
+  // Injected at every startup, so it stays compact: each rule is a sentence or two and procedure lives in the owning
+  // skill. The ceiling rose from 6500 to 8000 bytes for the four collaboration rules Ari approved on 2026-09-25.
   const skillBytes = Buffer.byteLength(skill, "utf8");
-  assert.ok(skillBytes >= 4500 && skillBytes <= 6500, `using-desk should stay about 5-6 KB; found ${skillBytes} bytes`);
+  assert.ok(skillBytes >= 4500 && skillBytes <= 8000, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
 
   assert.doesNotMatch(
     skill,

@@ -106,7 +106,7 @@ the `repo-handling` skill handles auto-discovery and machine-local overrides whe
 - `iterations.history[]` → one entry per past or current iteration. each entry carries:
   - `slug` — iteration slug (`YYYY-MM-DD-<trigger>`)
   - `repo` — which repo the iteration targets (matches `repos[].name`)
-  - `trigger` — one of `initial-impl`, `pr-feedback`, `architecture-review`, `post-int-smoke-fixes`, `revert-and-reland`, `pre-merge-polish`, or a new slug the operator confirms
+  - `trigger` — one of `initial-impl`, `pr-feedback`, `architecture-review`, `post-int-smoke-fixes`, `revert-and-reland`, `pre-merge-polish`, or a new trigger the agent names from what the iteration does
   - `pr` — PR number this iteration drives, or `null` for task-level refactor iterations with no PR yet
   - `path` — relative path from task root to the iteration directory (active entries point at the live dir; archived entries point at `_archive/`)
   - `outcome` — `shipped-to-pr` | `merged` | `reverted` | `in-progress`
