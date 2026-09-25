@@ -52,8 +52,6 @@ function packagingInput(method) {
     workSuitePlugin: { name: "work-suite", version: "4.0.0-alpha.1" },
     superpowersPlugin: { name: "superpowers", version: "6.3.0" },
     plainLanguagePlugin: readJson("plugins/plain-language/plugin.json"),
-    // The legacy Ponytail provider ships from ourostack/ouroboros-skills; its manifest is kept as a fixture.
-    ponytailPlugin: JSON.parse(readFileSync(new URL("../fixtures/legacy-providers/plugins/ponytail-upstream/plugin.json", import.meta.url), "utf8")),
   }
 }
 
@@ -124,7 +122,7 @@ test("alpha Codex activation routes the real owned instruction block to Superpow
   assert.ok(owned)
   assert.match(result.generatedConfig, /\[plugins\."superpowers@/u)
   assert.doesNotMatch(result.generatedConfig, /\[plugins\."work-suite@/u)
-  assert.match(owned, /Selected engineering lifecycle: Superpowers\./u)
+  assert.match(owned, /follow `superpowers:using-superpowers` for when to invoke a skill/u)
   assert.match(owned, /desk:using-superpowers-with-desk/u)
   assert.doesNotMatch(owned, /Use Work Suite skills \(`work-ideator`/u)
   assert.match(result.generatedConfig, /^model = "operator-choice"\n/u)

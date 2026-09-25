@@ -36,7 +36,7 @@ if (skillManifest !== null) {
 assert.equal(vendorFiles.length, 0);
 assert.equal(lock.sources.some((source) => source.files.some((file) => file.generatedPath.startsWith("plugins/plain-language/"))), false);
 for (const manifest of manifests) {
-  assert.equal(manifest.version, "0.2.4");
+  assert.equal(manifest.version, "0.2.5");
   assert.match(manifest.description, /first-party output policy/u);
 }
 assert.match(pluginSkill, /## Serve the reader/u);

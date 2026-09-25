@@ -46,6 +46,7 @@ test("dependencies may name a release channel or no ref at all", () => {
 })
 
 test("exact commits, forks, other branches and malformed specs are rejected", () => {
+  // Sample pinned references: the checker must reject them, so they appear here only as negative cases.
   assert.match(checker.dependencyProblem("github:ourostack/desk:plugins/desk@d89126223a4e08b07b8e4e8d738c15b92a6c597f"), /pins exact commit/u)
   assert.match(checker.dependencyProblem("github:example-org/example-overlay:plugins/example-overlay@4597a49"), /pins exact commit/u)
   assert.match(checker.dependencyProblem("github:arimendelow/desk:plugins/desk@main"), /points at a fork \(arimendelow\)/u)

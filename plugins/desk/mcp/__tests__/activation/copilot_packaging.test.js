@@ -39,12 +39,6 @@ function readText(...segments) {
   return readFileSync(path.join(repoRoot, ...segments), "utf8")
 }
 
-// The legacy Work Suite and Ponytail providers ship from ourostack/ouroboros-skills; tests that exercise an
-// explicitly declared legacy configuration read their manifests from fixtures.
-function loadLegacyProvider(...segments) {
-  return JSON.parse(readFileSync(new URL(`../fixtures/legacy-providers/${segments.join("/")}`, import.meta.url), "utf8"))
-}
-
 function loadJson(...segments) {
   return JSON.parse(readText(...segments))
 }
@@ -169,31 +163,7 @@ function currentCopilotPackagingInput() {
     deskPlugin: loadJson("plugins", "desk", "plugin.json"),
     superpowersPlugin: loadJson("plugins", "superpowers", "plugin.json"),
     plainLanguagePlugin: loadJson("plugins", "plain-language", "plugin.json"),
-    ponytailPlugin: loadLegacyProvider("plugins", "ponytail-upstream", "plugin.json"),
   }
-}
-
-// The authored three-root closure no longer selects Ponytail (T03), so the current packaging
-// input carries no Ponytail requirement. These tests still need to prove the legacy route
-// where a manifest explicitly selects Ponytail is preserved: this helper builds that selection
-// in memory only, mirroring how the real bundle metadata looked before T03's removal.
-function withPonytailSelected(input) {
-  const target = input.activation.provides.activation_targets.find((entry) => entry.id === "desk:worker")
-  target.depends_on = [...target.depends_on, "ponytail-upstream"]
-  input.deskPlugin.activation.copilot.dependencies["ponytail-upstream"] = {
-    path: "../ponytail-upstream",
-    version: "4.9.0",
-    resolution: "flattened",
-    bundleMetadata: copilotBundlePath,
-  }
-  input.bundle.dependency_closure.push({
-    id: "ponytail-upstream",
-    version: "4.9.0",
-    plugin: "plugins/ponytail-upstream/plugin.json",
-    skills: "plugins/ponytail-upstream/skills/",
-  })
-  input.bundle.generated_from.ponytail_plugin = "plugins/ponytail-upstream/plugin.json"
-  return input
 }
 
 function expectedCopilotBundle() {
@@ -293,14 +263,14 @@ test("Copilot root packaging declares a generated flattened dependency closure",
   })
   assert.deepEqual(deskPlugin.activation?.copilot?.dependencies?.["plain-language"], {
     path: "../plain-language",
-    version: "0.2.4",
+    version: "0.2.5",
     resolution: "flattened",
     bundleMetadata: copilotBundlePath,
   })
   assert.equal(
     Object.hasOwn(deskPlugin.activation?.copilot?.dependencies ?? {}, "ponytail-upstream"),
     false,
-    "the authored Copilot root manifest no longer selects Ponytail; only the committed flattened bundle artifact (T19) still carries it",
+    "the authored Copilot root manifest does not select Ponytail",
   )
   assert.deepEqual(bundle, expectedCopilotBundle())
 })
@@ -412,7 +382,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.0-alpha.17"],
+    ["Copilot root Desk version must match activation version 3.2.0-alpha.18"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())
@@ -426,21 +396,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   stalePlainLanguageVersion.plainLanguagePlugin.version = "0.0.9"
   assert.deepEqual(
     validateCopilotPackagingContract(stalePlainLanguageVersion),
-    ["Copilot root Plain Language version must match activation lock 0.2.4"],
-  )
-
-  const stalePonytailVersion = withPonytailSelected(clone(currentCopilotPackagingInput()))
-  stalePonytailVersion.ponytailPlugin.version = "4.8.0"
-  assert.deepEqual(
-    validateCopilotPackagingContract(stalePonytailVersion),
-    ["Copilot root Ponytail version must match activation lock 4.9.0"],
-  )
-
-  const legacyPonytailSelected = withPonytailSelected(clone(currentCopilotPackagingInput()))
-  assert.deepEqual(
-    validateCopilotPackagingContract(legacyPonytailSelected),
-    [],
-    "an explicit legacy manifest that still selects Ponytail must validate cleanly end to end",
+    ["Copilot root Plain Language version must match activation lock 0.2.5"],
   )
 })
 
@@ -455,33 +411,12 @@ test("Copilot packaging validation rejects incomplete flattened dependency closu
     ],
   )
 
-  const missingActivationDependenciesPonytailSelected =
-    withPonytailSelected(clone(currentCopilotPackagingInput()))
-  delete missingActivationDependenciesPonytailSelected.activation.dependencies
-  assert.deepEqual(
-    validateCopilotPackagingContract(missingActivationDependenciesPonytailSelected),
-    [
-      "Copilot activation must lock Superpowers dependency",
-      "Copilot activation must lock Plain Language dependency",
-      "Copilot activation must lock Ponytail dependency",
-    ],
-    "an explicit legacy manifest that still selects Ponytail must still require its lock",
-  )
-
   const missingActivationLock = clone(currentCopilotPackagingInput())
   missingActivationLock.activation.dependencies =
     missingActivationLock.activation.dependencies.filter((entry) => entry.id !== "superpowers")
   assert.deepEqual(
     validateCopilotPackagingContract(missingActivationLock),
     ["Copilot activation must lock Superpowers dependency"],
-  )
-
-  const missingPonytailActivationLock = withPonytailSelected(clone(currentCopilotPackagingInput()))
-  missingPonytailActivationLock.activation.dependencies =
-    missingPonytailActivationLock.activation.dependencies.filter((entry) => entry.id !== "ponytail-upstream")
-  assert.deepEqual(
-    validateCopilotPackagingContract(missingPonytailActivationLock),
-    ["Copilot activation must lock Ponytail dependency"],
   )
 
   const missingWorkSuitePlugin = clone(currentCopilotPackagingInput())
@@ -501,32 +436,12 @@ test("Copilot packaging validation rejects incomplete flattened dependency closu
     ],
   )
 
-  const missingBundlePonytailSelected = withPonytailSelected(clone(currentCopilotPackagingInput()))
-  delete missingBundlePonytailSelected.bundle
-  assert.deepEqual(
-    validateCopilotPackagingContract(missingBundlePonytailSelected),
-    [
-      "Copilot flattened bundle must include superpowers dependency closure",
-      "Copilot flattened bundle must include plain-language dependency closure",
-      "Copilot flattened bundle must include ponytail-upstream dependency closure",
-    ],
-    "an explicit legacy manifest that still selects Ponytail must still require its bundle closure entry",
-  )
-
   const missingBundleDependency = clone(currentCopilotPackagingInput())
   missingBundleDependency.bundle.dependency_closure =
     missingBundleDependency.bundle.dependency_closure.filter((entry) => entry.id !== "superpowers")
   assert.deepEqual(
     validateCopilotPackagingContract(missingBundleDependency),
     ["Copilot flattened bundle must include superpowers dependency closure"],
-  )
-
-  const missingPonytailBundleDependency = withPonytailSelected(clone(currentCopilotPackagingInput()))
-  missingPonytailBundleDependency.bundle.dependency_closure =
-    missingPonytailBundleDependency.bundle.dependency_closure.filter((entry) => entry.id !== "ponytail-upstream")
-  assert.deepEqual(
-    validateCopilotPackagingContract(missingPonytailBundleDependency),
-    ["Copilot flattened bundle must include ponytail-upstream dependency closure"],
   )
 
   const missingBundleClosure = clone(currentCopilotPackagingInput())
@@ -569,13 +484,6 @@ test("Copilot packaging validation rejects incomplete flattened dependency closu
   assert.deepEqual(
     validateCopilotPackagingContract(missingPlainLanguageBundleMetadata),
     ["Copilot Plain Language dependency must point to generated flattened bundle metadata"],
-  )
-
-  const missingPonytailBundleMetadata = withPonytailSelected(clone(currentCopilotPackagingInput()))
-  delete missingPonytailBundleMetadata.deskPlugin.activation.copilot.dependencies["ponytail-upstream"]
-  assert.deepEqual(
-    validateCopilotPackagingContract(missingPonytailBundleMetadata),
-    ["Copilot Ponytail dependency must point to generated flattened bundle metadata"],
   )
 
   const missingWorker = clone(currentCopilotPackagingInput())

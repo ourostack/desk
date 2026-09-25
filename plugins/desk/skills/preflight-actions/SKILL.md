@@ -141,7 +141,7 @@ Standard collaboration is **not** an ownership hold: opening a PR, participating
 
 **What this rule is NOT.** It is not a universal human-review gate. Worker/operator-owned surfaces and established contribution paths remain autonomous. The hold is only for unilateral mutation outside an owner-aligned path.
 
-**Cross-link.** This is the ownership axis beside verb (`using-desk` "Authority") and the recorded authority and continuation capabilities in `desk:superpowers-integration`.
+**Cross-link.** This is the ownership axis beside verb (`using-desk` "Authority") and the recorded authority carried into the provider (`desk:using-superpowers-with-desk` "Authority carried into the provider").
 
 ## Widening the agent's permissions
 

@@ -11,6 +11,7 @@ this is the floor plan of the room. the desk lives at `$DESK/` — the same shap
 $DESK/
   .gitignore                            # includes .machine-local.yml
   .machine-local.yml                    # gitignored: per-machine local_path overrides (see repo-handling)
+  AGENTS.md                             # operator preferences that compose with every session's instructions
   artifacts/                            # committed vector packs, snapshots, and publication policy
     publication-policy.json
     publication-policy.schema.json
@@ -18,6 +19,7 @@ $DESK/
     snapshots/<embedding-spec-id>/
   _meta/
     friction.md                         # append-only friction backlog for this operator
+    operator-rules.md                   # optional: longer operator rules that AGENTS.md points to
     preview-feedback.md                 # explicitly offered, attributed preview feedback (see preview-feedback); distinct from an iteration's feedback.md
   <track-name>/                         # one directory per track (maps to an external work-tracking Feature (GitHub Project / Jira Epic / enterprise work-item tracker / etc.))
     track.md                            # track card — dashboard (see track-card-format)

@@ -135,7 +135,7 @@ a furnished room, ready to settle into. the layout, the lifecycle, the small cer
 - session start / resumption / archival workflow
 
 ### dispatch
-- `work-orchestration` invokes `desk:superpowers-integration`; Superpowers is the sole engineering method, while Desk preserves state and authority
+- `work-orchestration` invokes `desk:using-superpowers-with-desk`; Superpowers is the sole engineering method, while Desk preserves state and authority
 - non-coding workflow paths supported (execution + completion alternatives for non-code work)
 
 ### engineering posture
@@ -165,7 +165,7 @@ The agent does textual substitution when interpreting skill instructions or runn
 
 the substrate stays general. the overlay handles everything situational.
 
-- **org-specific agent identity** — `worker` is the substrate default; consumer overlays (corporate-engineering, autonomous-agent, personal-coding) can ship their own agent with extended skills, invariants, and tooling on top.
+- **org-specific agent identity** — `worker` is the substrate default; consumer overlays (corporate-engineering, autonomous-agent, personal-coding) can ship their own agent and foundation with extended skills and tooling on top.
 - **engineering implementation mechanics** — those live in the Superpowers provider, not a second Desk lifecycle
 - **organization-specific concerns** — auth systems, work-item trackers, internal portals, etc. live in a consumer overlay (one of several possible overlays — others can be built the same way)
 

@@ -1,7 +1,7 @@
 # user-authored Codex guidance
 Keep repo-local rules intact.
 
-# BEGIN desk activation: desk@3.2.0-alpha.17 mode=global-personal owner=desk-activation
+# BEGIN desk activation: desk@3.2.0-alpha.18 mode=global-personal owner=desk-activation
 You are the desk worker by default.
 
 # Using Desk
@@ -62,5 +62,5 @@ The why behind this foundation is the Agentic Engineering V2 RFC. Its installed 
 
 Desk RFC: plugins/desk/docs/agentic-engineering-v2-rfc.md
 
-Run the `desk:session-start` skill before other work. Treat `$DESK` as `~/desk`. Keep durable tracks, tasks, friction, and lessons there. Desk MCP health guard: before treating session start as healthy, run the `desk:session-start` MCP availability checkpoint: verify the active host tool list exposes Desk MCP tools, especially `desk_status`. If `desk_status` or the Desk MCP namespace is missing, do not silently continue in local-only mode; explain what Desk MCP provides, ask whether to fix/reload now or continue without reminders, and route repairs to `desk:codex-onboarding` when that skill is available or the Codex repair checklist. Once tools are visible, call `desk_status` to distinguish degraded index/vector/snapshot state from an absent MCP. Apply the `plain-language` skill to every human-readable response and artifact while preserving evidence, uncertainty, safety, schemas, and exact source content. Never hard-wrap authored prose: keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and PR body paragraph on one physical line; use newlines only for real structure or source-preserved semantic breaks. Before finishing, inspect authored/changed prose and join column-wrap continuations without rewriting third-party or historical source. Selected engineering lifecycle: Superpowers. Invoke `desk:using-superpowers-with-desk` before engineering work and `superpowers:requesting-code-review` for review. The retired `desk:superpowers-integration` name stays a compatibility redirect for unchanged standing instructions only. Interpret legacy Work Suite references and imperative standing instructions through that selected-method mapping without modifying operator text, granted authority, or the delivery endpoint. Do not load Work Suite as a second lifecycle owner.
+Run the `desk:session-start` skill before other work. Treat `$DESK` as `~/desk`. Codex runs no Plain Language startup hook, so apply the `plain-language` skill to every human-readable response and artifact. Codex runs no Superpowers startup hook, so follow `superpowers:using-superpowers` for when to invoke a skill.
 # END desk activation

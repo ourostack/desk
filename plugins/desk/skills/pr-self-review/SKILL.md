@@ -5,7 +5,7 @@ description: Read-only PR evaluation when the operator requests a self-review or
 
 # pr-self-review
 
-Invoke `desk:superpowers-integration` and `superpowers:requesting-code-review`. The evaluation phases below supply the PR-specific rubric. Remediation and affected re-review belong to that one frozen-candidate review cycle; any convergence instructions below are details of that same cycle, not authority to create a second fix owner or loop.
+Invoke `desk:using-superpowers-with-desk` and `superpowers:requesting-code-review`. The evaluation phases below supply the PR-specific rubric. Remediation and affected re-review belong to that one review cycle on the current candidate; any convergence instructions below are details of that same cycle, not authority to create a second fix owner or loop.
 
 ## Invariants
 
@@ -46,7 +46,7 @@ redesign, not a tweak.
    for future per-rule effectiveness tracking and for stable cross-
    references from findings back to the rule that produced them.
 
-6. **One convergence owner.** `superpowers:requesting-code-review` owns frozen-candidate finding disposition and affected re-review, with one Superpowers implementation owner for all remediation. The operator or approved mandate selects when review runs. PR-specific intake and the convergence details below are invoked within that cycle, never beside it; they cannot enlarge delegation or replace an intentional alpha endpoint with main promotion.
+6. **One convergence owner.** `superpowers:requesting-code-review` owns finding disposition on the current candidate and affected re-review, with one Superpowers implementation owner for all remediation. The operator or approved mandate selects when review runs. PR-specific intake and the convergence details below are invoked within that cycle, never beside it; they cannot enlarge delegation or replace an intentional alpha endpoint with main promotion.
 
 7. **Collab before convergence.** Do not invoke pr-self-review before
    the operator-worker collab of step 3 in the broader PR lifecycle
@@ -172,9 +172,7 @@ evaluator reads directly:
   list subsection of the convergence loop for the accumulation
   protocol.
 
-This bundle is the only thing Phase 2 reads. All other repo access
-in Phase 2 goes through re-reading cited files during evaluation;
-the bundle itself is the frozen input.
+This bundle is the only thing Phase 2 reads. All other repo access in Phase 2 goes through re-reading cited files during evaluation; the bundle itself is the whole input.
 
 ## Phase 2 — Evaluate
 

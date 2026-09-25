@@ -43,7 +43,7 @@ function subsection(file, heading) {
 requires(
   "plugins/desk/skills/work-orchestration/SKILL.md",
   "Desk alpha delegates engineering without repeating approval",
-  /desk:superpowers-integration[\s\S]+existing task[\s\S]+prior approval without reopening/iu,
+  /desk:using-superpowers-with-desk[\s\S]+existing task[\s\S]+prior approval without reopening/iu,
 );
 contract("Superpowers owns the engineering method", () => {
   assert.match(text("plugins/desk/skills/work-orchestration/SKILL.md"), /Superpowers owns discovery, planning, execution and verification/u);
@@ -167,6 +167,29 @@ for (const file of [
   });
 }
 
+// Reviewers and evaluators use the current candidate on the channel; a commit hash is evidence only. The one
+// statement of that rule ("There is no frozen candidate") is the only frozen wording a skill may carry.
+contract("no skill freezes a candidate, brief, source or review input", () => {
+  const skillsDir = path.join(root, "plugins", "desk", "skills");
+  const offenders = fs.readdirSync(skillsDir)
+    .map((name) => `plugins/desk/skills/${name}/SKILL.md`)
+    .filter((file) => fs.existsSync(path.join(root, file)))
+    .filter((file) => /frozen[- ](?:candidate|brief|input|review|source|base|sha|ref|commit)|freeze the review/iu.test(text(file).replace(/there is no frozen candidate/giu, "")));
+  assert.deepEqual(offenders, []);
+});
+
+// The worker bodies no longer carry an invariants block, so nothing may describe one; operator rules keep a documented home.
+contract("no doc or skill describes the retired invariants block", () => {
+  for (const file of ["plugins/desk/skills/lesson-capture/SKILL.md", "plugins/desk/docs/agent-files.md", "plugins/desk/README.md"]) {
+    assert.doesNotMatch(text(file), /core invariants|skills\/invariants|skills, invariants/iu, file);
+  }
+});
+contract("directory-structure documents where operator rules live", () => {
+  const skill = text("plugins/desk/skills/directory-structure/SKILL.md");
+  assert.match(skill, /^ {2}AGENTS\.md +# .*operator preferences/mu);
+  assert.match(skill, /^ {4}operator-rules\.md +# /mu);
+});
+
 // Desk CI and configuration.
 contract("CI runs the skill evaluation contracts", () => {
   assert.match(
@@ -237,6 +260,19 @@ for (const file of workerBodies) {
       "## Overlays",
     ]) assert.ok(body.includes(required), `missing identity or context: ${required}`);
     assert.ok(Buffer.byteLength(body) <= 4096, `body is ${Buffer.byteLength(body)} bytes; identity and context fit in 4 KB`);
+  });
+}
+
+// The Codex owned block adds activation text around the injected using-desk foundation; it restates no owned rule either.
+for (const mode of ["global-personal", "project-local"]) {
+  contract(`the Codex ${mode} owned block restates no owned rule`, () => {
+    const foundation = text("plugins/desk/skills/using-desk/SKILL.md").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/u, "").trim();
+    const block = text(`plugins/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`).split("# BEGIN desk activation:")[1];
+    assert.ok(block && block.includes(foundation), "the owned block injects the using-desk foundation");
+    const owned = block.replace(foundation, "");
+    for (const [pattern, owner] of ownedRules) {
+      assert.doesNotMatch(owned, pattern, `restates a rule owned by ${owner}`);
+    }
   });
 }
 
@@ -499,9 +535,7 @@ contract("repo-handling and git-hygiene state the same clone rule word for word"
   }
 });
 
-// Hard-wrapped Markdown prose in the skills this change touched. Skills that are fully unwrapped
-// must stay that way; skills that still carry older wrapped prose must not mix a long (edited)
-// line into a wrapped paragraph, which is how an edit inside a wrapped paragraph shows up.
+// Hard-wrapped Markdown prose: these skills are fully unwrapped and must stay that way.
 function proseUnits(file) {
   const lines = text(file).split("\n");
   let start = 0;
@@ -528,9 +562,15 @@ for (const file of [
   "plugins/desk/skills/evidence-discipline/SKILL.md",
   "plugins/desk/skills/friction-management/SKILL.md",
   "plugins/desk/skills/git-hygiene/SKILL.md",
+  "plugins/desk/skills/interaction-style/SKILL.md",
   "plugins/desk/skills/lesson-capture/SKILL.md",
+  "plugins/desk/skills/operator-voice-comments/SKILL.md",
+  "plugins/desk/skills/peer-pr-review/SKILL.md",
+  "plugins/desk/skills/pr-feedback-on-own-pr/SKILL.md",
+  "plugins/desk/skills/pr-review-interrogation/SKILL.md",
   "plugins/desk/skills/preflight-actions/SKILL.md",
   "plugins/desk/skills/repo-handling/SKILL.md",
+  "plugins/desk/skills/runtime-symptom-investigation/SKILL.md",
   "plugins/desk/skills/session-resumption/SKILL.md",
   "plugins/desk/skills/using-desk/SKILL.md",
   "plugins/desk/skills/work-orchestration/SKILL.md",
@@ -540,18 +580,10 @@ for (const file of [
     const wrapped = proseUnits(file).filter((unit) => unit.length > 1).map((unit) => unit[1].number);
     assert.deepEqual(wrapped, []);
   });
-}
-for (const file of [
-  "plugins/desk/skills/interaction-style/SKILL.md",
-  "plugins/desk/skills/operator-voice-comments/SKILL.md",
-  "plugins/desk/skills/peer-pr-review/SKILL.md",
-  "plugins/desk/skills/pr-feedback-on-own-pr/SKILL.md",
-  "plugins/desk/skills/pr-review-interrogation/SKILL.md",
-  "plugins/desk/skills/runtime-symptom-investigation/SKILL.md",
-]) {
-  contract(`${file} has no edited line inside a wrapped paragraph`, () => {
-    const mixed = proseUnits(file).filter((unit) => unit.length > 1 && unit.some(({ line }) => line.length > 100)).map((unit) => unit[0].number);
-    assert.deepEqual(mixed, []);
+  // Joining a line that ended in a hyphenated word leaves "worker- driven"; a suspended hyphen ("file- or project-") is fine.
+  contract(`${file} has no hyphen left over from unwrapping`, () => {
+    const split = proseUnits(file).flat().filter(({ line }) => /[A-Za-z]- (?!and |or |to )[A-Za-z]/u.test(line)).map(({ number }) => number);
+    assert.deepEqual(split, []);
   });
 }
 contract("friction-management keeps its lead-in next to its list", () => {

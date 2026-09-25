@@ -23,7 +23,7 @@ function legacyActivation() {
     provenance: { source: "plugins/work-suite/.codex-plugin/plugin.json", package: "ourostack/work-suite" },
     lock: { version: "4.0.0-alpha.2", integrity: "sha256-work-suite-activation-manifest-v1" },
   })
-  value.provides.activation_targets[0].depends_on = ["desk", "work-suite", "plain-language", "ponytail-upstream"]
+  value.provides.activation_targets[0].depends_on = ["desk", "work-suite", "plain-language"]
   for (const host of Object.values(value.host_activation)) {
     if (host.dependencies?.superpowers) {
       host.dependencies["work-suite"] = { ...host.dependencies.superpowers, path: "../work-suite", version: "4.0.0-alpha.2" }
@@ -53,7 +53,7 @@ function ouroboros() {
       source_paths: row.source_paths.map((file) => file.replace("plugins/work-suite/", "plugins/superpowers/")),
       fallback_behavior: "bundle Desk + Superpowers + companions and bind $DESK",
     } : row),
-    ouroborosReadmeSection: 'bundle.json\n```json\n{"plugins":["desk","superpowers","plain-language","ponytail-upstream"]}\n```\n$DESK = ~/AgentBundles/<agent>.ouro/desk/',
+    ouroborosReadmeSection: 'bundle.json\n```json\n{"plugins":["desk","superpowers","plain-language"]}\n```\n$DESK = ~/AgentBundles/<agent>.ouro/desk/',
     genericStdioReadmeSection: 'DESK=~/desk\nnode "./mcp/index.js" --root "$DESK"\nMCP-only; no worker activation.',
     genericStdioActivationSection: "MCP-only; no worker activation.",
   }
@@ -153,8 +153,8 @@ test("Codex provider omits unsupported hooks and retains generated-instructions 
     manifest, mode: "global-personal", pluginRoot: "plugins/desk", deskRoot: "~/desk",
     existingConfig: "", existingInstructions: "",
   })
-  assert.match(result.generatedInstructions, /Selected engineering lifecycle: Superpowers/u)
-  assert.match(result.generatedInstructions, /Invoke `desk:using-superpowers-with-desk` before engineering work/u)
+  assert.match(result.generatedInstructions, /Codex runs no Superpowers startup hook, so follow `superpowers:using-superpowers`/u)
+  assert.match(result.generatedInstructions, /Enter Superpowers through `desk:using-superpowers-with-desk`/u)
 })
 
 test("generated Codex instructions send fresh sessions to the active adapter, not the retired redirect", () => {
@@ -170,13 +170,13 @@ test("generated Codex instructions send fresh sessions to the active adapter, no
     })
     assert.match(
       result.generatedInstructions,
-      /Invoke `desk:using-superpowers-with-desk` before engineering work/u,
-      `${mode} activation must name the active Desk/Superpowers adapter`,
+      /Enter Superpowers through `desk:using-superpowers-with-desk`/u,
+      `${mode} activation must name the active Desk/Superpowers adapter through the injected foundation`,
     )
     assert.doesNotMatch(
       result.generatedInstructions,
-      /Invoke `desk:superpowers-integration`/u,
-      `${mode} activation must not direct a fresh session into the retired compatibility redirect`,
+      /desk:superpowers-integration/u,
+      `${mode} activation must not name the retired compatibility redirect`,
     )
   }
 
@@ -197,7 +197,7 @@ for (const [method, label] of [["superpowers", "Superpowers"], ["work-suite", "W
     const value = activation()
     assert.equal(value.dependencies.some((entry) => entry.id === "work-suite"), false)
     value.dependencies = value.dependencies.filter((entry) => entry.id !== method)
-    value.provides.activation_targets[0].depends_on = ["desk", method, "plain-language", "ponytail-upstream"]
+    value.provides.activation_targets[0].depends_on = ["desk", method, "plain-language"]
     return value
   }
   test(`Claude reports absent selected ${method} declaration in the real alpha without TypeError`, () => {

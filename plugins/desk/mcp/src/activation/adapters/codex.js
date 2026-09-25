@@ -17,8 +17,6 @@ const CODEX_CAPABILITIES = new Set(["Read", "Write", "Interactive"])
 const CODEX_ACTIVATION_LEDGER_PATH = ".codex/desk-activation-ledger.json"
 const OWNED_BLOCK_BEGIN_PATTERN = /^# BEGIN desk activation: [^\r\n]* owner=desk-activation\r?$/gm
 const OWNED_BLOCK_END_PATTERN = /^# END desk activation\r?$/gm
-const DESK_MCP_HEALTH_GUARD = "Desk MCP health guard: before treating session start as healthy, run the `desk:session-start` MCP availability checkpoint: verify the active host tool list exposes Desk MCP tools, especially `desk_status`. If `desk_status` or the Desk MCP namespace is missing, do not silently continue in local-only mode; explain what Desk MCP provides, ask whether to fix/reload now or continue without reminders, and route repairs to `desk:codex-onboarding` when that skill is available or the Codex repair checklist. Once tools are visible, call `desk_status` to distinguish degraded index/vector/snapshot state from an absent MCP."
-
 const MODE_CONFIG = {
   "global-personal": {
     scope: "global",
@@ -695,9 +693,10 @@ Active Desk activation: ${activationChain}.
 ${overlayAddenda.join("\n")}
 `
     : ""
+  // Method entry belongs to the injected `using-desk` foundation; this line only covers the missing Superpowers hook.
   const methodInstruction = selectEngineeringMethod(selectedDependencyIds(selectedActivation)) === "superpowers"
-    ? "Selected engineering lifecycle: Superpowers. Invoke `desk:using-superpowers-with-desk` before engineering work and `superpowers:requesting-code-review` for review. The retired `desk:superpowers-integration` name stays a compatibility redirect for unchanged standing instructions only. Interpret legacy Work Suite references and imperative standing instructions through that selected-method mapping without modifying operator text, granted authority, or the delivery endpoint. Do not load Work Suite as a second lifecycle owner."
-    : "Use Work Suite skills (`work-ideator`, `work-planner`, `work-doer`, `work-merger`) for substantial engineering work."
+    ? " Codex runs no Superpowers startup hook, so follow `superpowers:using-superpowers` for when to invoke a skill."
+    : " Use Work Suite skills (`work-ideator`, `work-planner`, `work-doer`, `work-merger`) for substantial engineering work."
 
   return `# BEGIN desk activation: ${input.manifest.id}@${input.manifest.version} mode=${input.mode} owner=desk-activation
 You are the ${identity} ${modeConfig.workerContext}.
@@ -706,7 +705,7 @@ ${deskFoundation}
 
 Desk RFC: ${input.pluginRoot}/docs/agentic-engineering-v2-rfc.md
 
-Run the \`desk:session-start\` skill before other work. Treat \`$DESK\` as \`${input.deskRoot}\`. Keep durable tracks, tasks, friction, and lessons there. ${DESK_MCP_HEALTH_GUARD} Apply the \`plain-language\` skill to every human-readable response and artifact while preserving evidence, uncertainty, safety, schemas, and exact source content. Never hard-wrap authored prose: keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and PR body paragraph on one physical line; use newlines only for real structure or source-preserved semantic breaks. Before finishing, inspect authored/changed prose and join column-wrap continuations without rewriting third-party or historical source. ${methodInstruction}${overlaySection}
+Run the \`desk:session-start\` skill before other work. Treat \`$DESK\` as \`${input.deskRoot}\`. Codex runs no Plain Language startup hook, so apply the \`plain-language\` skill to every human-readable response and artifact.${methodInstruction}${overlaySection}
 # END desk activation
 `
 }

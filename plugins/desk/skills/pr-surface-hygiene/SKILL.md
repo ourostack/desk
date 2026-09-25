@@ -388,7 +388,7 @@ the line.
 
 ## Applying after something else wrote it (audit mode)
 
-When the selected Superpowers owner drafts `artifacts/pr-description.md`, audit it against the actual repository pipelines before authorized publication through `desk:superpowers-integration`. A generic implementation method does not establish which checks are required.
+When the selected Superpowers owner drafts `artifacts/pr-description.md`, audit it against the actual repository pipelines before authorized publication through `desk:using-superpowers-with-desk`. A generic implementation method does not establish which checks are required.
 
 Read the draft top-to-bottom and run the four-question checklist
 against every line. Edit the draft in place; this is the cheap

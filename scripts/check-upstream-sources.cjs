@@ -105,6 +105,8 @@ function inspectSource(source, github) {
   if (!Array.isArray(source.files) || source.files.length === 0) {
     throw new Error(`source ${source.id} has no selected files`);
   }
+  // Provenance evidence, not a dependency: the Apache-2.0 exception was approved for the Gauntlet files vendored
+  // from this one reviewed commit, so a lock that moves to another commit needs a new license review.
   const approvedGauntlet = source.id === "prime-radiant-inc-gauntlet-evaluation-leaves"
     && source.repository === "prime-radiant-inc/gauntlet"
     && source.commit === "187a9af979a7cf096c0890d0eeb998cc3008343a";

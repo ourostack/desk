@@ -164,12 +164,16 @@ function assertNoManualSetup(content) {
   assert.doesNotMatch(content, /mcp_auto_start/i)
 }
 
-function assertDeskMcpHealthGuard(content) {
-  assert.match(content, /Desk MCP health guard/u)
-  assert.match(content, /desk_status/u)
-  assert.match(content, /do not silently continue in local-only mode/u)
-  assert.match(content, /fix\/reload now or continue without reminders/u)
-  assert.match(content, /codex-onboarding/u)
+// The owned block adds only Codex activation text: the session-start pointer and the skills that no Codex hook
+// loads. The health guard (session-start), the hard-wrap rule (Plain Language) and method entry (using-desk) stay
+// with their owners.
+function assertCodexActivationLine(content) {
+  assert.match(content, /Run the `desk:session-start` skill before other work\./u)
+  assert.match(content, /Codex runs no Plain Language startup hook, so apply the `plain-language` skill to every human-readable response and artifact\./u)
+  assert.match(content, /Codex runs no Superpowers startup hook, so follow `superpowers:using-superpowers` for when to invoke a skill\./u)
+  assert.doesNotMatch(content, /Desk MCP health guard|do not silently continue in local-only mode/u)
+  assert.doesNotMatch(content, /Never hard-wrap|authored\/changed prose/u)
+  assert.doesNotMatch(content, /Selected engineering lifecycle|Keep durable tracks, tasks, friction, and lessons there/u)
 }
 
 test("Codex plugin metadata declares host-native Desk activation surfaces", () => {
@@ -209,6 +213,8 @@ test("Codex worker source no longer documents healthy-path copy registration", (
   assert.doesNotMatch(workerToml, /copy\s+to\s+~\/\.codex\/agents/i)
   assert.doesNotMatch(workerToml, /Invoke via `\/agent worker` once registered/i)
   assert.match(workerToml, /host-native activation/i)
+  // manual-only writes no owned instruction block, so the subagent body names the foundation it would otherwise miss.
+  assert.match(workerToml, /In `manual-only` mode nothing injects it, so invoke `desk:using-desk` before other work\./u)
   // session-start owns the Desk MCP health guard; the worker bodies carry identity and context only.
   for (const workerSource of [workerToml, workerMarkdown, workerAgent]) {
     assert.doesNotMatch(workerSource, /Desk MCP health guard/u)
@@ -271,7 +277,7 @@ test("global personal activation materializes worker and Desk as the default", a
   assert.match(result.generatedConfig, /args = \["plugins\/desk\/mcp\/index\.js", "--activation-config", "~\/\.codex\/desk\.activation\.json"\]/)
   assert.match(result.generatedInstructions, /desk worker by default/)
   assert.match(result.generatedInstructions, /Run the `desk:session-start` skill/)
-  assertDeskMcpHealthGuard(result.generatedInstructions)
+  assertCodexActivationLine(result.generatedInstructions)
 })
 
 test("Codex activation injects the full Desk foundation once in automatic modes", async () => {
@@ -345,7 +351,7 @@ test("global personal activation can select a downstream Desk overlay worker", a
   assert.match(result.generatedInstructions, /Run the `desk:session-start` skill/)
   assert.match(result.generatedActivationConfig, /"selected_id": "ms-area:worker"/)
   assert.match(result.generatedActivationConfig, /"chain": \[\n      "desk:worker",\n      "ms-desk:worker",\n      "ms-area:worker"\n    \]/)
-  assertDeskMcpHealthGuard(result.generatedInstructions)
+  assertCodexActivationLine(result.generatedInstructions)
   assertNoManualSetup(result.generatedInstructions)
 })
 
@@ -527,7 +533,7 @@ test("project-local opt-out materializes project config without mutating global 
   assert.match(result.generatedConfig, /\[mcp_servers\.desk\]/)
   assert.match(result.generatedConfig, /args = \["plugins\/desk\/mcp\/index\.js", "--activation-config", "\.codex\/desk\.activation\.json"\]/)
   assert.match(result.generatedConfig, /cwd = "."/)
-  assertDeskMcpHealthGuard(result.generatedInstructions)
+  assertCodexActivationLine(result.generatedInstructions)
 })
 
 test("manual-only opt-out keeps Desk available without default worker or MCP autostart", async () => {
@@ -561,7 +567,7 @@ test("Codex activation preserves user-authored config and instructions with owne
   assert.equal(result.generatedConfig.match(/# END desk activation/g).length, 1)
   assert.equal(result.generatedInstructions.startsWith(existingInstructions), true)
   assert.match(result.generatedInstructions, expectedGlobalMarker)
-  assert.match(result.generatedInstructions, /Apply the `plain-language` skill to every human-readable response and artifact/u)
+  assert.match(result.generatedInstructions, /apply the `plain-language` skill to every human-readable response and artifact/u)
   assert.match(result.generatedInstructions, /# END desk activation/)
   assert.equal(result.generatedInstructions.match(/# BEGIN desk activation/g).length, 1)
   assert.equal(result.generatedInstructions.match(/# END desk activation/g).length, 1)

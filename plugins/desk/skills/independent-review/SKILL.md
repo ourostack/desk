@@ -1,19 +1,19 @@
 ---
 name: independent-review
-description: Coordinate an independent reviewer, frozen review inputs, finding disposition and re-review while leaving all implementation with the selected Superpowers owner.
+description: Coordinate an independent reviewer of the current candidate, finding disposition and re-review while leaving all implementation with the selected Superpowers owner.
 ---
 
 # Independent review
 
 Independent review is a required engineering input, not a second implementation method. The selected Superpowers implementation owner remains responsible for fixes and delivery. The reviewer observes and reports; it does not mutate the implementation tree.
 
-## Freeze the review input
+## Prepare the review input
 
-Record the exact source commit, uncommitted diff/content fingerprints, requested outcome, approval and terminal boundaries, prior findings, test selection, dependency/configuration fingerprints and available validation evidence. Give the reviewer enough primary source to evaluate the change, with precise exclusions and known unknowns. Distinguish the current reviewed source from historical runs.
+The reviewer uses the current candidate on its channel, the task branch as it stands when the review runs; there is no frozen candidate. Record the head it reviewed, uncommitted diff/content fingerprints and dependency/configuration fingerprints as evidence only, together with the requested outcome, approval and terminal boundaries, prior findings, test selection and available validation evidence. Give the reviewer enough primary source to evaluate the change, with precise exclusions and known unknowns. Distinguish the current reviewed source from historical runs.
 
 Use an admitted independent reviewer. RoboRev is a first-class reviewer where the host overlay supplies its supported launcher; invoke that overlay's published skill rather than constructing another generic launcher. Verify the actual backend and effective instructions/plugins, not merely a command name or absent `--agent` flag. A failed, timed-out, cancelled, partial, stale or unavailable review is not an approval.
 
-If the host cannot launch the required independent reviewer, return the frozen brief to the authorized parent for review. Do not self-certify and do not invent a fallback reviewer or weaker standard. Reviewer availability does not authorize extra delegation.
+If the host cannot launch the required independent reviewer, return the review brief to the authorized parent for review. Do not self-certify and do not invent a fallback reviewer or weaker standard. Reviewer availability does not authorize extra delegation.
 
 ## Disposition and re-review
 

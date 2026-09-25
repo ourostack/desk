@@ -9,7 +9,7 @@ The manifest is intentionally declarative. Host adapters flatten it into native 
 - `schema_version`: Activation contract version. Unknown versions are unsupported until the host adapter is upgraded.
 - `id` and `version`: The activation package identity and exact plugin version.
 - `dependencies`: Ordered substrate/plugin inputs. Each entry declares a stable `id`, `kind`, exact `version` or `version_range`, `provenance`, and resolved `lock` data. Exact versions must match their lock; ranges must be satisfied by their lock.
-- `provides.activation_targets`: Launchable targets. The opt-in alpha selects `desk:worker` with the three roots Desk, Superpowers and Plain Language plus its host entrypoints. Ponytail stays in `dependencies` only for the characterized legacy manifest that declares no selection at all.
+- `provides.activation_targets`: Launchable targets. The opt-in alpha selects `desk:worker` with the three roots Desk, Superpowers and Plain Language plus its host entrypoints.
 - `provides.overlay_agents`: Optional agent overlays that inherit Desk behavior without launching as `desk:worker`.
 - `mcp_servers`: Required MCP servers. Desk declares its MCP launch as host-native rather than as a manual `mcp add` step.
 - `desk_root`: Root binding policy, precedence, and opt-out modes. The default policy is global activation first, then `DESK`, then safe defaults, with project-local and manual-only opt-outs.
@@ -81,7 +81,7 @@ Zero-setup support has three different evidence states:
 
 The read-only `scripts/audit-codex-plugin-cache.cjs` checks the first two states. It reports `active-session-visible` as not checked until the caller supplies active host MCP tool evidence with `--active-tools` or `--active-tools-file`; `--strict-active` fails when no active snapshot is supplied or required Desk tools are missing. This keeps file/cache freshness, MCP launchability, and active-session visibility separate.
 
-Desk workers also carry a startup health guard: if `desk_status` or the Desk MCP namespace is missing from the active tool surface, the agent treats Desk MCP as absent, explains what MCP-backed desk access provides, and asks whether to fix/reload now or continue without generic reminders. Choosing repair routes to `desk:codex-onboarding` or the host repair checklist; choosing no reminders is an explicit operator preference, not silent local-only fallback. Once `desk_status` is callable, degraded index/vector/snapshot states are runtime repair problems rather than activation absence.
+`desk:session-start` carries the startup health guard for every Desk worker: if `desk_status` or the Desk MCP namespace is missing from the active tool surface, the agent treats Desk MCP as absent, explains what MCP-backed desk access provides, and asks whether to fix/reload now or continue without generic reminders. Choosing repair routes to `desk:codex-onboarding` or the host repair checklist; choosing no reminders is an explicit operator preference, not silent local-only fallback. Once `desk_status` is callable, degraded index/vector/snapshot states are runtime repair problems rather than activation absence.
 
 ## Artifact Privacy
 

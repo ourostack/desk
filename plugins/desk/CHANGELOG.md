@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.18 — 2026-09-25
+
+A cleanup release: each rule the Codex block, the skills and the docs still restated now lives only with its owner, the last hard-wrapped skills are unwrapped, and the unused Ponytail dependency is gone. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.
+
+- **Codex owned block.** It injects the `using-desk` foundation and adds only Codex activation text: run `desk:session-start`, bind `$DESK`, and apply `plain-language` and `superpowers:using-superpowers`, because no Codex hook loads them. The Desk MCP health guard (`session-start`), the hard-wrap rule (Plain Language), method entry (`using-desk`) and the legacy Work Suite mapping (the retired-name redirect) are no longer restated. The Codex worker body tells a worker started in `manual-only` mode, where nothing injects `using-desk`, to invoke it.
+- **Retired name.** Every skill and doc that sent work through `desk:superpowers-integration` now names `desk:using-superpowers-with-desk`. The redirect skill stays for unchanged standing instructions.
+- **Channel rule.** `independent-review`, `pr-self-review`, `pr-feedback-on-own-pr`, `session-resumption` and `task-lifecycle` drop frozen-candidate wording: reviewers use the current candidate on the channel, and a recorded head is evidence only.
+- **Unwrapped prose.** `interaction-style`, `operator-voice-comments`, `peer-pr-review`, `pr-feedback-on-own-pr`, `pr-review-interrogation` and `runtime-symptom-investigation` are unwrapped (whitespace only), then their wrapped blockquotes are joined and 26 compounds that the old wrapping split at a hyphen are repaired. The strict hard-wrap contract and a new split-hyphen check cover every unwrapped skill.
+- **Docs.** `lesson-capture`, `docs/agent-files.md` and the README stop describing an invariants block. `directory-structure` shows `$DESK/AGENTS.md` and the optional `$DESK/_meta/operator-rules.md`.
+- **Ponytail.** `desk.activation.json` no longer declares `ponytail-upstream`, and the Copilot bundle producer has no Ponytail branch; a manifest with no explicit selection builds the three-root closure.
+- **Checks.** `validate-skills` treats caret prerelease ranges like npm semver (`^1.0.0-alpha.2` admits `1.0.0`). The Codex cache-audit fixtures use real Superpowers and Crew versions. The restated-rule check lives once, in `test-desk-contracts`, and now also covers the Codex golden block. Commit constants that stay in code are labelled as provenance evidence.
+- **Evaluations.** `engineering-v2-kernel` and `investigation-boundaries` are re-recorded with new fingerprints; only whitespace, spelling, the adapter's name and the frozen wording changed in their sources.
+- **Versions.** Plain Language `0.2.4` → `0.2.5` (its hook shares one contract loader between Claude and Copilot, with byte-identical output) everywhere it is recorded, including the regenerated Copilot bundle.
+
 ## 3.2.0-alpha.17 — 2026-09-25
 
 The three worker bodies now carry only identity and context, and the Claude output style is deleted. Every rule the bodies restated already has one owner, so each rule now loads once. Ships `desk-mcp@1.4.0-alpha.6` source; the MCP version and runtime packs are unchanged.

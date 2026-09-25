@@ -341,7 +341,7 @@ No ship-ready script for this one — the scan is a review of the staged diff ag
 
 ### Pre-PR diff-scope check
 
-The same diff-scope discipline applies at the authorized PR boundary. Through `desk:superpowers-integration`, inspect the full branch diff against the base before opening or syncing a PR:
+The same diff-scope discipline applies at the authorized PR boundary. Through `desk:using-superpowers-with-desk`, inspect the full branch diff against the base before opening or syncing a PR:
 
 ```bash
 git diff --stat origin/<base>...HEAD

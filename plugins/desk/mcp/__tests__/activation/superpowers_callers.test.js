@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
 
@@ -74,12 +74,25 @@ for (const [file, retiredDirective] of [
   ["plugins/desk/skills/work-orchestration/SKILL.md", /New engineering work enters `work-ideator`|`work-doer` → `work-merger`/u],
   ["plugins/desk/skills/codex-onboarding/SKILL.md", /`work-suite@<marketplace-name>` enabled|Desk and Work Suite are installed/u],
 ]) {
-  test(`${file} routes active choreography through the alpha integration contract`, () => {
+  test(`${file} routes active choreography through the Desk adapter`, () => {
     const text = read(file)
-    assert.match(text, /desk:superpowers-integration/u)
+    assert.match(text, /desk:using-superpowers-with-desk/u)
     assert.doesNotMatch(text, retiredDirective)
   })
 }
+
+// Only the redirect itself and the adapter's retired-names row may name the retired entry; every caller names the adapter.
+test("no skill or agent doc directs work into the retired desk:superpowers-integration name", () => {
+  const skillsRoot = new URL("plugins/desk/skills/", repoRoot)
+  const callers = readdirSync(skillsRoot)
+    .filter((name) => !["superpowers-integration", "using-superpowers-with-desk"].includes(name))
+    .map((name) => `plugins/desk/skills/${name}/SKILL.md`)
+    .filter((file) => existsSync(new URL(file, repoRoot)))
+  for (const file of [...callers, "plugins/desk/docs/agent-files.md"]) {
+    assert.doesNotMatch(read(file), /desk:superpowers-integration/u, `${file} names the retired entry`)
+  }
+  assert.match(read(adapter), /\| Retired Work Suite call names \| `desk:superpowers-integration`, the retired compatibility redirect \|/u)
+})
 
 const adapterCallers = [
   ["plugins/desk/skills/start-task/SKILL.md", "start", /explicit go-ahead through `work-ideator`/u],
@@ -189,8 +202,10 @@ for (const mode of ["global-personal", "project-local"]) {
     const rendered = materializeCodexActivation(input).generatedInstructions
     const golden = read(`plugins/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`)
     assert.equal(golden, rendered)
-    assert.match(golden, /Selected engineering lifecycle: Superpowers\./u)
-    assert.match(golden, /desk:using-superpowers-with-desk/u)
+    // Method entry arrives once, through the injected using-desk foundation; the owned line adds no second copy.
+    assert.doesNotMatch(golden, /Selected engineering lifecycle/u)
+    assert.equal(golden.split("desk:using-superpowers-with-desk").length - 1, 1)
+    assert.match(golden, /follow `superpowers:using-superpowers` for when to invoke a skill/u)
     assert.match(golden, /superpowers:requesting-code-review/u)
     assert.doesNotMatch(golden, /desk:independent-review/u)
     assert.doesNotMatch(golden, excludedProviderPattern)

@@ -165,15 +165,12 @@ function writeJson(root, relativePath, value) {
   writeText(root, relativePath, `${JSON.stringify(value, null, 2)}\n`)
 }
 
-// The legacy Work Suite and Ponytail providers ship from ourostack/ouroboros-skills; a legacy configuration
-// copies their manifests into a fixture repository from here.
+// The legacy Work Suite provider ships from ourostack/ouroboros-skills; a legacy configuration
+// copies its manifests into a fixture repository from here.
 const legacyProviderFiles = [
   "plugins/work-suite/.claude-plugin/plugin.json",
   "plugins/work-suite/.codex-plugin/plugin.json",
   "plugins/work-suite/plugin.json",
-  "plugins/ponytail-upstream/.claude-plugin/plugin.json",
-  "plugins/ponytail-upstream/.codex-plugin/plugin.json",
-  "plugins/ponytail-upstream/plugin.json",
 ]
 
 function copyLegacyProviders(targetRoot) {
@@ -1337,7 +1334,7 @@ test("root host verifier surfaces missing selected declarations from actual alph
       const manifest = loadJson("plugins", "desk", "activation", "desk.activation.json")
       assert.equal(manifest.dependencies.some((entry) => entry.id === "work-suite"), false)
       manifest.dependencies = manifest.dependencies.filter((entry) => entry.id !== method)
-      manifest.provides.activation_targets[0].depends_on = ["desk", method, "plain-language", "ponytail-upstream"]
+      manifest.provides.activation_targets[0].depends_on = ["desk", method, "plain-language"]
       writeJson(root, "plugins/desk/activation/desk.activation.json", manifest)
       const result = await verifier.verifyDeskHostManifests({
         repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
@@ -1478,26 +1475,23 @@ test("root host verifier rejects absent worker metadata and each authored invari
     }
     for (const message of [
       "claude session-start prompt drift", "plain-language no-hard-wrap rule drift", "retired principles file present",
-      "codex activation no-hard-wrap invariant drift", "codex activation Plain Language invariant drift",
+      "codex activation Plain Language pointer drift", "codex activation Superpowers pointer drift",
     ]) assert.ok(result.errors.includes(`worker-sources ${message}`), result.errors.join("\n"))
   })
 })
 
-test("root host verifier rejects worker bodies that restate owned rules and a revived output style", async () => {
+// Restated rules in the worker bodies are the Desk content contracts' job (scripts/test-desk-contracts.cjs), so the
+// host verifier checks only its own surfaces here.
+test("root host verifier rejects a revived output style", async () => {
   const verifier = loadHostManifestVerifier()
   await withHostFreshnessFixture(async (root) => {
-    for (const file of ["plugins/desk/agents/worker.md", "plugins/desk/agents/worker.toml", "plugins/desk/agents/worker.agent.md"]) {
-      writeText(root, file, `${loadText(...file.split("/"))}\n## Core invariants\n\n- **Never hard-wrap authored prose**\n`)
-    }
     writeText(root, "plugins/desk/output-styles/worker.md", "---\nname: Worker\nforce-for-plugin: true\n---\n")
     const result = await verifier.verifyDeskHostManifests({
       repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
     })
     assert.equal(result.ok, false)
-    for (const host of ["claude", "codex-subagent", "copilot"]) {
-      assert.ok(result.errors.includes(`worker-sources ${host} restates owned rules`), result.errors.join("\n"))
-    }
     assert.ok(result.errors.includes("claude-plugin retired output style present"), result.errors.join("\n"))
+    assert.equal(result.errors.some((error) => error.endsWith("restates owned rules")), false)
   })
 })
 

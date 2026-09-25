@@ -5,7 +5,7 @@ description: Verify Codex Desk alpha activation, including the selected Superpow
 
 # Codex onboarding
 
-Invoke `desk:superpowers-integration` for the selected method and compatibility boundary. Preserve operator-owned instructions; reject an enabled competing lifecycle instead of rewriting the operator's configuration. Manual-only remains an intentional opt-out.
+Invoke `desk:using-superpowers-with-desk` for the selected method and compatibility boundary. Preserve operator-owned instructions; reject an enabled competing lifecycle instead of rewriting the operator's configuration. Manual-only remains an intentional opt-out.
 
 Use this when a Codex agent needs to verify or repair Desk activation on a machine.
 

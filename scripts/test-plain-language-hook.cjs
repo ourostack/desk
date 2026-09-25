@@ -35,6 +35,27 @@ for (const event of ["SessionStart", "SubagentStart"]) {
   assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /vendor|upstream-sources|conformance/iu);
 }
 
+// Byte-for-byte output: the skill body after its frontmatter, behind the contract tag, in each host's envelope.
+{
+  const skill = fs.readFileSync(path.join(repoRoot, "plugins", "plain-language", "skills", "plain-language", "SKILL.md"), "utf8");
+  const contract = `[PLAIN_LANGUAGE_CONTRACT]\n${skill.replace(/^---[\s\S]*?---\s*/u, "")}`;
+  for (const event of ["SessionStart", "SubagentStart"]) {
+    const result = run(hook, event);
+    assert.equal(result.stdout, JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: contract } }));
+    assert.equal(result.stderr, "");
+  }
+  const copilot = run(hook, "sessionStart");
+  assert.equal(copilot.stdout, JSON.stringify({ additionalContext: contract }));
+  assert.equal(copilot.stderr, "");
+}
+
+// One function reads the skill, strips its frontmatter and adds the tag; both host paths call it.
+{
+  const source = fs.readFileSync(hook, "utf8");
+  assert.equal(source.split("readFileSync(").length - 1, 1, "the hook reads the skill in one place");
+  assert.equal(source.split("[PLAIN_LANGUAGE_CONTRACT]").length - 1, 1, "the hook adds the contract tag in one place");
+}
+
 const missingEvent = run(hook, "");
 assert.notEqual(missingEvent.status, 0);
 assert.match(missingEvent.stderr, /unsupported Plain Language hook event/u);
@@ -64,7 +85,8 @@ fs.mkdirSync(path.join(flattened, "hooks"), { recursive: true });
 fs.copyFileSync(hook, path.join(flattened, "hooks", "inject.cjs"));
 const missingSkill = run(path.join(flattened, "hooks", "inject.cjs"), "SessionStart");
 assert.notEqual(missingSkill.status, 0);
-assert.match(missingSkill.stderr, /could not load/u);
+assert.match(missingSkill.stderr, /^Plain Language hook could not load \S+SKILL\.md: ENOENT[^\n]*\n$/u);
+assert.equal(missingSkill.stdout, "");
 
 // Copilot's sessionStart fails open: a one-line diagnostic as
 // `additionalContext`, exit 0, so one broken plugin never blocks the merged
