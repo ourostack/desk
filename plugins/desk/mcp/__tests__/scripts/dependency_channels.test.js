@@ -60,6 +60,8 @@ test("main is the only release channel and ouroboros-skills coordinates have mov
   assert.match(checker.dependencyProblem("github:ourostack/ouroboros-skills:plugins/desk@v2-alpha"), /moved to ourostack\/desk/u)
   assert.match(checker.dependencyProblem("github:ourostack/ouroboros-skills:plugins/desk"), /moved to ourostack\/desk/u)
   assert.match(checker.dependencyProblem("github:arimendelow/ouroboros-skills:plugins/desk@main"), /moved to ourostack\/desk/u)
+  assert.equal(checker.dependencyProblem("github:ourostack/ouroboros-skills:plugins/crew@v2-alpha"), "moved to ourostack/desk; use github:ourostack/desk:plugins/crew@main")
+  assert.equal(checker.dependencyProblem("github:ourostack/ouroboros-skills@v2-alpha"), "moved to ourostack/desk; use github:ourostack/desk@main")
   assert.deepEqual(checker.RELEASE_CHANNELS, ["main"])
 })
 

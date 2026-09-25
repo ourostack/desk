@@ -1586,3 +1586,114 @@ test("root host verifier default API and CLI preserve success, refusal and strea
   assert.equal(cli.status, 0, cli.stderr)
   assert.match(cli.stdout, /^Desk host manifests verified for /u)
 })
+
+test("root host verifier reports each startup-composition drift and hook failure", async () => {
+  const verifier = loadHostManifestVerifier()
+  const deskHookManifest = "plugins/desk/hooks/copilot-hooks.json"
+  const withHook = (root, mutate) => {
+    const manifest = loadJson(...deskHookManifest.split("/"))
+    mutate(manifest)
+    writeJson(root, deskHookManifest, manifest)
+  }
+  const cases = [
+    {
+      label: "Copilot hook source that scans, spawns and reads nothing",
+      mutate: (root) => writeText(root, "plugins/desk/hooks/copilot-session-start.cjs", [
+        "// spawnSync readdirSync path.join(pluginRoot, \"skills\", \"session-start\")",
+        "// \"node:child_process\"",
+        "process.stdout.write(\"{}\")",
+        "",
+      ].join("\n")),
+      patterns: [
+        /Copilot hook must read the canonical using-desk skill at runtime/u,
+        /Copilot hook must read only the canonical using-desk skill body/u,
+        /Copilot hook must keep exactly one local file read; found 0/u,
+        /Copilot hook must not execute commands or fetch network resources/u,
+        /Copilot hook must stay local-only and avoid network or process modules/u,
+        /Copilot hook must not scan workspace or task files/u,
+        /Copilot hook must not read onboarding, migration, session-start, or RFC files/u,
+        /startup-composition copilot must include the canonical using-desk body exactly once; found 0/u,
+        /startup-composition copilot must include "The human supplies intent" exactly once; found 0/u,
+      ],
+    },
+    {
+      label: "Claude hook that runs git and returns no context",
+      mutate: (root) => writeText(root, "plugins/desk/hooks/session-start.sh", "git --version >/dev/null 2>&1 || true\necho '{}'\n"),
+      patterns: [
+        /startup-composition Claude hook must not scan tasks or run git, gh, or curl/u,
+        /startup-composition claude must include the canonical using-desk body exactly once; found 0/u,
+      ],
+    },
+    {
+      label: "Claude hook failure",
+      mutate: (root) => writeText(root, "plugins/desk/hooks/session-start.sh", "echo broken >&2\nexit 1\n"),
+      patterns: [/Claude SessionStart hook failed: broken/u],
+    },
+    {
+      label: "Copilot plugin without the Desk hook manifest",
+      mutate: (root) => {
+        const plugin = loadJson("plugins", "desk", "plugin.json")
+        plugin.hooks = "./hooks/other.json"
+        writeJson(root, "plugins/desk/plugin.json", plugin)
+      },
+      patterns: [/copilot hook execution failed: Desk Copilot plugin must register \.\/hooks\/copilot-hooks\.json/u],
+    },
+    {
+      label: "Copilot hook manifest version",
+      mutate: (root) => withHook(root, (manifest) => { manifest.version = 2 }),
+      patterns: [/copilot hook execution failed: Desk Copilot hook manifest must use version 1/u],
+    },
+    {
+      label: "Copilot hook manifest without a sessionStart hook",
+      mutate: (root) => withHook(root, (manifest) => { manifest.hooks.sessionStart = [] }),
+      patterns: [/copilot hook execution failed: Desk Copilot hook manifest must configure exactly one sessionStart hook/u],
+    },
+    {
+      label: "Copilot sessionStart hook without a bash command",
+      mutate: (root) => withHook(root, (manifest) => { manifest.hooks.sessionStart = [{ type: "command" }] }),
+      patterns: [/copilot hook execution failed: Desk Copilot sessionStart hook must configure a bash command/u],
+    },
+    {
+      label: "Copilot sessionStart hook failure",
+      mutate: (root) => withHook(root, (manifest) => { manifest.hooks.sessionStart = [{ type: "command", bash: "echo broken >&2; exit 3" }] }),
+      patterns: [/copilot hook execution failed: Copilot sessionStart hook failed: broken/u],
+    },
+    {
+      label: "desk:worker startup contract",
+      mutate: (root) => {
+        const manifest = loadJson("plugins", "desk", "activation", "desk.activation.json")
+        manifest.provides.activation_targets.find((target) => target.id === "desk:worker").startup = {}
+        writeJson(root, "plugins/desk/activation/desk.activation.json", manifest)
+      },
+      patterns: [/startup-composition desk:worker startup contract drift/u],
+    },
+    {
+      label: "Copilot agent source carrying the foundation inline",
+      mutate: (root) => writeText(root, "plugins/desk/agents/worker.agent.md", [
+        loadText("plugins", "desk", "skills", "using-desk", "SKILL.md"),
+        "Compact working foundation carried once in this Copilot agent source",
+        "",
+      ].join("\n")),
+      patterns: [
+        /startup-composition Copilot agent body must not duplicate the canonical using-desk body/u,
+        /startup-composition Copilot agent source must not claim it carries using-desk inline/u,
+        /startup-composition Copilot agent source must describe runtime injection from the Desk-owned sessionStart hook/u,
+      ],
+    },
+    {
+      label: "session-start without the authoritative scan",
+      mutate: (root) => writeText(root, "plugins/desk/skills/session-start/SKILL.md", "---\nname: session-start\ndescription: fixture\n---\n# session-start\n"),
+      patterns: [/startup-composition desk:session-start must declare the authoritative scan/u],
+    },
+  ]
+  for (const { label, mutate, patterns } of cases) {
+    await withHostFreshnessFixture(async (root) => {
+      mutate(root)
+      const result = await verifier.verifyDeskHostManifests({
+        repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
+      })
+      assert.equal(result.ok, false, label)
+      for (const pattern of patterns) assert.match(result.errors.join("\n"), pattern, label)
+    })
+  }
+})
