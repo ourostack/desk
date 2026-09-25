@@ -44,17 +44,9 @@ The rule:
 
 ### Folder trust is path trust, not revision trust
 
-A host may use path-level folder trust to load repository-owned
-executable configuration. After every ref change, inspect that
-repository-owned executable configuration before the host can load
-or run it. A trusted path does not make a new revision trusted. For
-read-only inspection of untrusted source, use the remote source API
-instead of trusting the checkout only to read it.
+A host may use path-level folder trust to load repository-owned executable configuration. After every ref change, inspect that repository-owned executable configuration before the host can load or run it. A trusted path does not make a new revision trusted. For read-only inspection of untrusted source, use the remote source API instead of trusting the checkout only to read it.
 
-When a checked-out branch modifies a command-bearing file, such as a
-hook, pipeline, task runner, package script, or policy, diff it against
-the protected base and verify explicit approval before executing the
-changed command. Reading a branch is not running it.
+When a checked-out branch modifies a command-bearing file, such as a hook, pipeline, task runner, package script, or policy, diff it against the protected base and verify explicit approval before executing the changed command. Reading a branch is not running it.
 
 **During work**: the selected Superpowers implementation owner commits and pushes only within the recorded publication authority.
 
@@ -105,126 +97,55 @@ Empty diff is content evidence, not deletion authority. Apply the recorded endpo
 
 ## Reading source as evidence
 
-The `## Code repos` rules above cover keeping a checkout current
-across a session. The runtime-investigation companion to that
-rule: when the agent is reading source to inform a runtime question,
-the local working tree is not a trustworthy substrate by default —
-`origin/<branch>` is.
+The `## Code repos` rules above cover keeping a checkout current across a session. The runtime-investigation companion to that rule: when the agent is reading source to inform a runtime question, the local working tree is not a trustworthy substrate by default — `origin/<branch>` is.
 
 ### Default to `origin/<branch>`, not the working tree
 
-When reading source to inform a runtime question — any "why does
-X behave this way?" investigation — default to reading from
-`origin`, not from the local working tree:
+When reading source to inform a runtime question — any "why does X behave this way?" investigation — default to reading from `origin`, not from the local working tree:
 
 1. Run `git fetch` first (cheap, always safe).
-2. Read via `git show origin/<branch>:<path>` rather than the
-   filesystem. This avoids the stale-checkout failure mode where
-   the local branch is N commits behind and the agent doesn't
-   realize it.
-3. If the agent does read from the filesystem, confirm
-   `git rev-list --count HEAD..origin/<branch>` is `0` first. If
-   non-zero, `git pull` or fall back to step 2.
+2. Read via `git show origin/<branch>:<path>` rather than the filesystem. This avoids the stale-checkout failure mode where the local branch is N commits behind and the agent doesn't realize it.
+3. If the agent does read from the filesystem, confirm `git rev-list --count HEAD..origin/<branch>` is `0` first. If non-zero, `git pull` or fall back to step 2.
 
 ### When the operator says "pull latest"
 
-Treat it as applying to ALL repos involved in the current
-investigation, not just one. State repos and code repos (the
-project repos the agent is reading source from) all need to be
-current — code repos most of all when their source is being used
-as evidence for runtime behavior. Code repos are managed manually
-and may sit on feature branches; they're easy to forget.
+Treat it as applying to ALL repos involved in the current investigation, not just one. State repos and code repos (the project repos the agent is reading source from) all need to be current — code repos most of all when their source is being used as evidence for runtime behavior. Code repos are managed manually and may sit on feature branches; they're easy to forget.
 
 If unsure which repos the operator means, ask.
 
 ### The smell
 
-Any time the agent finds itself thinking **"the source says X but
-the runtime behavior is Y, so there must be a non-source
-mechanism"** — stop. The most common explanation for that gap is
-"I'm reading stale source," not "there's hidden runtime
-machinery."
+Any time the agent finds itself thinking **"the source says X but the runtime behavior is Y, so there must be a non-source mechanism"** — stop. The most common explanation for that gap is "I'm reading stale source," not "there's hidden runtime machinery."
 
-Verify with `git log origin/<branch>..` or
-`git show origin/<branch>:<path>` before theorizing about
-non-source mechanisms.
+Verify with `git log origin/<branch>..` or `git show origin/<branch>:<path>` before theorizing about non-source mechanisms.
 
 ### Why it matters
 
-Theories built on stale source are very expensive to retract. By
-the time the operator catches them, the agent has burned operator
-trust ("the agent doesn't know what's in main"), drafted code or
-PRs based on bad assumptions, sometimes opened those PRs, and
-built a wrong mental model that propagates to the iteration doc
-and friction log. The corrective work is much more expensive than
-`git fetch` would have been at the start. Cheap gate; expensive
-failure mode if skipped.
+Theories built on stale source are very expensive to retract. By the time the operator catches them, the agent has burned operator trust ("the agent doesn't know what's in main"), drafted code or PRs based on bad assumptions, sometimes opened those PRs, and built a wrong mental model that propagates to the iteration doc and friction log. The corrective work is much more expensive than `git fetch` would have been at the start. Cheap gate; expensive failure mode if skipped.
 
 ### Cross-link
 
-This is the source-currency variant of the broader
-hypothesis-narrowing principle in
-`../runtime-symptom-investigation/SKILL.md`. The diagnostic skill
-captures the meta-rule ("debugging is hypothesis-narrowing, not
-system-understanding"); this section is one concrete recurring
-trap that surfaces under that rule.
+This is the source-currency variant of the broader hypothesis-narrowing principle in `../runtime-symptom-investigation/SKILL.md`. The diagnostic skill captures the meta-rule ("debugging is hypothesis-narrowing, not system-understanding"); this section is one concrete recurring trap that surfaces under that rule.
 
 ## Pre-push gate
 
-Every `git push` that carries code changes is a CI-parity boundary.
-The agent reproduces every routine gate the CI pipelines will run,
-locally, **before** the push — not after, not in parallel, not
-optimistically. Explicit final-candidate expensive gates use the
-exact-SHA exception below.
+Every `git push` that carries code changes is a CI-parity boundary. The agent reproduces every routine gate the CI pipelines will run, locally, **before** the push — not after, not in parallel, not optimistically. Explicit final-candidate expensive gates use the exact-SHA exception below.
 
 Three layers, all mandatory, all green:
 
-1. **Build.** Compile the affected project(s) in the same
-   configuration CI uses. For .NET, that's `--configuration Release`,
-   which enables `TreatWarningsAsErrors` /
-   `CodeAnalysisTreatWarningsAsErrors` + analyzer + formatter
-   MSBuild targets. Debug config skips several gates; it is not a
-   substitute. Language-equivalent rules for other stacks —
-   whatever posture the CI pipeline uses, the local build matches
-   it.
-2. **Test.** Run the test projects that cover the touched code. The
-   scope is set by the diff, not by the closest test project (see
-   `## Test scope — cover consumers` below). If the full suite is
-   too slow, filter — but filter across every test project touched
-   by the change, not one.
-3. **Formatter.** Run the style gate the CI pipeline enforces
-   (`dotnet csharpier --check`, `prettier --check`, `gofmt -l`,
-   `rustfmt --check`, etc.). A Release .NET build that invokes
-   csharpier-as-MSBuild-target covers this inside layer 1;
-   standalone formatter runs are the fallback when the build config
-   doesn't.
+1. **Build.** Compile the affected project(s) in the same configuration CI uses. For .NET, that's `--configuration Release`, which enables `TreatWarningsAsErrors` / `CodeAnalysisTreatWarningsAsErrors` + analyzer + formatter MSBuild targets. Debug config skips several gates; it is not a substitute. Language-equivalent rules for other stacks — whatever posture the CI pipeline uses, the local build matches it.
+2. **Test.** Run the test projects that cover the touched code. The scope is set by the diff, not by the closest test project (see `## Test scope — cover consumers` below). If the full suite is too slow, filter — but filter across every test project touched by the change, not one.
+3. **Formatter.** Run the style gate the CI pipeline enforces (`dotnet csharpier --check`, `prettier --check`, `gofmt -l`, `rustfmt --check`, etc.). A Release .NET build that invokes csharpier-as-MSBuild-target covers this inside layer 1; standalone formatter runs are the fallback when the build config doesn't.
 
-All three green → push. Any red → fix locally, re-run all three,
-then push. **Never push red.** The pipelines will reject the push,
-you'll wait 20–40 minutes for CI to report what you could have
-learned in 60 seconds, and every reviewer-visible red pipeline on
-the PR erodes the signal that green ones are meaningful.
+All three green → push. Any red → fix locally, re-run all three, then push. **Never push red.** The pipelines will reject the push, you'll wait 20–40 minutes for CI to report what you could have learned in 60 seconds, and every reviewer-visible red pipeline on the PR erodes the signal that green ones are meaningful.
 
 ### Pre-push gate is not an iteration gate
 
-The pre-push gate runs before every `git push`. It does **not**
-run between every edit in a local iteration loop — drafting,
-exploring, and mid-iteration fix-ups are exempt. The distinction is
-the push boundary: inside the loop, the agent iterates freely; at
-the push, CI-parity is the only correct posture.
+The pre-push gate runs before every `git push`. It does **not** run between every edit in a local iteration loop — drafting, exploring, and mid-iteration fix-ups are exempt. The distinction is the push boundary: inside the loop, the agent iterates freely; at the push, CI-parity is the only correct posture.
 
-A corollary: **do not wait for CI pipelines to finalize before
-starting the next iteration.** Local gates have already established
-that the push won't red the pipeline. Trust that and keep moving.
-Waiting on CI between iterations multiplies queue time by iteration
-count — a 5-iteration loop with one 20-minute CI wait per iteration
-becomes a two-hour human-facing latency for what could have been
-~10 minutes of contiguous agent work plus one end-of-loop CI wait.
+A corollary: **do not wait for CI pipelines to finalize before starting the next iteration.** Local gates have already established that the push won't red the pipeline. Trust that and keep moving. Waiting on CI between iterations multiplies queue time by iteration count — a 5-iteration loop with one 20-minute CI wait per iteration becomes a two-hour human-facing latency for what could have been ~10 minutes of contiguous agent work plus one end-of-loop CI wait.
 
-At end-of-loop (convergence reached, findings drained, or operator
-interrupt), wait for the most recent push's pipelines to finalize.
-If any pipeline goes red, treat it as a new finding — fix, push,
-wait again. Only when all pipelines are green does the loop exit.
+At end-of-loop (convergence reached, findings drained, or operator interrupt), wait for the most recent push's pipelines to finalize. If any pipeline goes red, treat it as a new finding — fix, push, wait again. Only when all pipelines are green does the loop exit.
 
 ### Final-candidate expensive gates
 
@@ -236,46 +157,27 @@ This defers redundant local execution; it is not waived validation. CI may still
 
 ### Attribute failures after they happen
 
-Do not establish a separate baseline preemptively. When a required
-build, test, or formatter check fails and the failure may be
-pre-existing, preserve the current tree and classify it in this
-order:
+Do not establish a separate baseline preemptively. When a required build, test, or formatter check fails and the failure may be pre-existing, preserve the current tree and classify it in this order:
 
 1. Current target CI at the exact target SHA.
 2. The same command in a clean merge-base worktree.
 3. A previously recorded, reproducible baseline tied to a commit.
 
-Unknown remains failed evidence. Do not fix an unrelated baseline
-failure unless the task scope requires it.
+Unknown remains failed evidence. Do not fix an unrelated baseline failure unless the task scope requires it.
 
 ### Reuse proof only while inputs match
 
-Reuse a previous validation result only while its source/diff
-fingerprint, exact command and selection, dependency and
-configuration fingerprint, and environment all match the current
-run. Record the reused run or artifact. If any relevant input
-changed, rerun the affected proof.
+Reuse a previous validation result only while its source/diff fingerprint, exact command and selection, dependency and configuration fingerprint, and environment all match the current run. Record the reused run or artifact. If any relevant input changed, rerun the affected proof.
 
 ### Commands are repo-specific
 
-Exact build / test / formatter commands live under
-`../repo-knowledge/<repo>/` (see `repo-handling` for the
-auto-loader). Each repo's `pre-push-gates.md` (or equivalent)
-captures the safe-default build line, test-project cut-lines, and
-formatter fallback. For repos without `repo-knowledge` content,
-consult the repo's own build / test docs before the first push.
+Exact build / test / formatter commands live under `../repo-knowledge/<repo>/` (see `repo-handling` for the auto-loader). Each repo's `pre-push-gates.md` (or equivalent) captures the safe-default build line, test-project cut-lines, and formatter fallback. For repos without `repo-knowledge` content, consult the repo's own build / test docs before the first push.
 
 ## Test scope — cover consumers, not just the unit under change
 
-A filtered test run only discovers tests in the csproj / test
-project you point it at. That's a silent coverage gap when the
-change touches an interface, signature, or public surface that
-other projects consume: the consumer projects' tests never get run,
-and locally-green pushes go red on CI.
+A filtered test run only discovers tests in the csproj / test project you point it at. That's a silent coverage gap when the change touches an interface, signature, or public surface that other projects consume: the consumer projects' tests never get run, and locally-green pushes go red on CI.
 
-The rule: when the change touches a public surface, the pre-push
-test scope must cover **every** consumer project's tests — not just
-the co-located test project.
+The rule: when the change touches a public surface, the pre-push test scope must cover **every** consumer project's tests — not just the co-located test project.
 
 ### Detection heuristic
 
@@ -284,92 +186,49 @@ the co-located test project.
 git diff --name-only origin/<base>...HEAD
 ```
 
-Map each touched production file to its paired test project, using
-the conventions the repo documents in `repo-knowledge/<repo>/`:
-- Sibling-directory convention:
-  `Src/Foo/Foo/Bar.cs` → tests under `Src/Foo/FooTests/`.
-- Same-library convention:
-  `Src/Common/Common/X.cs` → tests under `Src/Common/CommonTests/`.
-- Package-prefix convention:
-  `Src/.../Partners/SMB/Models/Y.cs` →
-  `Src/.../PartnersTests/SMBTests/ModelsTests/`.
+Map each touched production file to its paired test project, using the conventions the repo documents in `repo-knowledge/<repo>/`:
+- Sibling-directory convention: `Src/Foo/Foo/Bar.cs` → tests under `Src/Foo/FooTests/`.
+- Same-library convention: `Src/Common/Common/X.cs` → tests under `Src/Common/CommonTests/`.
+- Package-prefix convention: `Src/.../Partners/SMB/Models/Y.cs` → `Src/.../PartnersTests/SMBTests/ModelsTests/`.
 
-Collect the distinct test csproj files across all mapped test
-paths. Run the test command once per csproj, filtering
-appropriately.
+Collect the distinct test csproj files across all mapped test paths. Run the test command once per csproj, filtering appropriately.
 
 ### Public-surface changes widen the default
 
-When the diff touches a signature / interface / abstract type / DTO
-shape, widen the scope further: the safe default becomes the full
-solution (or equivalent monorepo-spanning test scope). A
-service-only solution does not include sibling tests, and sibling
-tests are exactly where interface-drift surfaces.
+When the diff touches a signature / interface / abstract type / DTO shape, widen the scope further: the safe default becomes the full solution (or equivalent monorepo-spanning test scope). A service-only solution does not include sibling tests, and sibling tests are exactly where interface-drift surfaces.
 
-Repo-specific cut-lines live in `../repo-knowledge/<repo>/`. When
-a repo defines a "broad" test target for public-surface changes,
-default to it for any diff that touches signatures / interfaces /
-DTOs; fall back to per-service solutions only when the change is
-provably internal (no public-API touch, no shared DTO edit).
+Repo-specific cut-lines live in `../repo-knowledge/<repo>/`. When a repo defines a "broad" test target for public-surface changes, default to it for any diff that touches signatures / interfaces / DTOs; fall back to per-service solutions only when the change is provably internal (no public-API touch, no shared DTO edit).
 
 ## Test-count sanity check
 
-"All tests pass" on a stale DLL is not a successful gate — it's a
-silent failure. Before trusting a pre-push test-count, verify the
-passed-count matches the expected delta.
+"All tests pass" on a stale DLL is not a successful gate — it's a silent failure. Before trusting a pre-push test-count, verify the passed-count matches the expected delta.
 
 Lightweight mechanism:
 
-1. Track the expected count through the iteration:
-   `expected = previous_count + tests_added − tests_removed`.
-2. After the pre-push test layer runs, diff reported-count vs.
-   expected.
+1. Track the expected count through the iteration: `expected = previous_count + tests_added − tests_removed`.
+2. After the pre-push test layer runs, diff reported-count vs. expected.
 3. If they match: proceed to push.
-4. If they don't: the gate silently failed to rebuild or to
-   discover the new test. Do **not** push.
+4. If they don't: the gate silently failed to rebuild or to discover the new test. Do **not** push.
 
 Recovery when the counts disagree:
 
-1. Force-rebuild the test project explicitly — drop `--no-build`
-   on the test run; run `dotnet build <tests>.csproj --configuration
-   Release` (or the equivalent for the stack) first so the compiled
-   binary reflects the current source.
+1. Force-rebuild the test project explicitly — drop `--no-build` on the test run; run `dotnet build <tests>.csproj --configuration Release` (or the equivalent for the stack) first so the compiled binary reflects the current source.
 2. Re-run the gate.
-3. If the count still doesn't match, diagnose the discovery issue
-   before pushing.
+3. If the count still doesn't match, diagnose the discovery issue before pushing.
 
 Typical culprits for a stale or missing-test gate:
 - `--no-build` flag + stale binary left over from a prior iteration.
-- Build incremental-cache confusion after heavy file operations
-  (large rename, tree move, reverted merges).
-- Discovery filter pattern doesn't match the new test's
-  fully-qualified name (test landed in a namespace the filter
-  doesn't cover).
-- Test method not annotated with `[Fact]` / `[Theory]` / the
-  runner's equivalent — it's a plain method and no runner picks it
-  up.
+- Build incremental-cache confusion after heavy file operations (large rename, tree move, reverted merges).
+- Discovery filter pattern doesn't match the new test's fully-qualified name (test landed in a namespace the filter doesn't cover).
+- Test method not annotated with `[Fact]` / `[Theory]` / the runner's equivalent — it's a plain method and no runner picks it up.
 
-A silently-skipped test is a latent regression: the push succeeds,
-the pipeline stays green (same stale DLL on CI in the worst case),
-but the code path the test was supposed to cover is uncovered. The
-next iteration's change can break it with no alarm and no reviewer
-signal.
+A silently-skipped test is a latent regression: the push succeeds, the pipeline stays green (same stale DLL on CI in the worst case), but the code path the test was supposed to cover is uncovered. The next iteration's change can break it with no alarm and no reviewer signal.
 
 ## Merge-conflict resolution — EOL / BOM artifacts
 
-On Windows clones of repos with `text eol=*` attributes, a
-merge-from-main can produce conflicts on files whose only
-"difference" is BOM / CRLF vs. no-BOM / LF. The working-tree bytes
-disagree with origin's stored blob because `git add` runs the
-check-in filter, producing an index entry that looks changed even
-though the underlying content is identical.
+On Windows clones of repos with `text eol=*` attributes, a merge-from-main can produce conflicts on files whose only "difference" is BOM / CRLF vs. no-BOM / LF. The working-tree bytes disagree with origin's stored blob because `git add` runs the check-in filter, producing an index entry that looks changed even though the underlying content is identical.
 
-Committing that normalized version **"resolves" the conflict but
-pollutes the PR diff**: origin's blob is unchanged, so every line
-of the file shows up as insertion+deletion. CODEOWNERS for the path
-gets added to the PR's reviewer list even though the change was
-pure filter noise, and reviewers get pulled into a diff that has
-no semantic content.
+Committing that normalized version **"resolves" the conflict but pollutes the PR diff**: origin's blob is unchanged, so every line of the file shows up as insertion+deletion. CODEOWNERS for the path gets added to the PR's reviewer list even though the change was pure filter noise, and reviewers get pulled into a diff that has no semantic content.
 
 ### Detection
 
@@ -380,9 +239,7 @@ no semantic content.
 git diff --stat origin/<base>...HEAD
 ```
 
-If a file outside the task's stated scope shows up with insertions
-equal to deletions, suspect EOL / BOM artifact before suspecting a
-real change.
+If a file outside the task's stated scope shows up with insertions equal to deletions, suspect EOL / BOM artifact before suspecting a real change.
 
 ### Wrong fix
 
@@ -392,18 +249,11 @@ git add <path>
 git commit -m "normalize EOL"
 ```
 
-`git add` runs the check-in filter and writes a new blob — shipping
-the artifact straight into the PR diff. `git stash`,
-`git checkout origin/<base> -- <path>`, and
-`git update-index --skip-worktree` all round-trip through the same
-filter and fail the same way: they "work" in the sense that the
-merge completes, but the index disagrees with origin and the
-reviewer-visible diff is 100% noise.
+`git add` runs the check-in filter and writes a new blob — shipping the artifact straight into the PR diff. `git stash`, `git checkout origin/<base> -- <path>`, and `git update-index --skip-worktree` all round-trip through the same filter and fail the same way: they "work" in the sense that the merge completes, but the index disagrees with origin and the reviewer-visible diff is 100% noise.
 
 ### Right fix
 
-Rewrite the index entry directly to origin's blob hash, bypassing
-the check-in filter:
+Rewrite the index entry directly to origin's blob hash, bypassing the check-in filter:
 
 ```bash
 # Preserve origin/<base>'s exact bytes in the index regardless of
@@ -412,13 +262,9 @@ BLOB=$(git rev-parse origin/<base>:<path>)
 git update-index --cacheinfo 100644,$BLOB,<path>
 ```
 
-The working tree still shows "M" because checkout-time conversion
-runs — that's cosmetic and PR-invisible. The index now matches
-origin exactly; the file shows zero diff on the PR, and CODEOWNERS
-for that path is not pulled in.
+The working tree still shows "M" because checkout-time conversion runs — that's cosmetic and PR-invisible. The index now matches origin exactly; the file shows zero diff on the PR, and CODEOWNERS for that path is not pulled in.
 
-Apply this per conflicted file that is a filter artifact. Files
-with real semantic conflicts get resolved normally.
+Apply this per conflicted file that is a filter artifact. Files with real semantic conflicts get resolved normally.
 
 ## Never leave state behind
 
@@ -428,24 +274,15 @@ At session start, if git status in any repo shows unexpected uncommitted changes
 
 Never reconcile a dirty checked-out state repository by moving the branch ref in place with `git update-ref` or an equivalent ref move under the existing index/worktree. Start from a clean temporary worktree based on the current remote destination, replay only the exact task-owned change, stage only an explicit staged-path allowlist, inspect `git diff --cached --name-status` against that allowlist, then inspect the full staged diff before commit.
 
-(overlay users: consumer overlays often ship a state-repo-specific
-anti-pattern note — never branch/PR on a state repo even when
-push-to-main is denied; the denial is a permission config problem,
-not a workflow problem.)
+(overlay users: consumer overlays often ship a state-repo-specific anti-pattern note — never branch/PR on a state repo even when push-to-main is denied; the denial is a permission config problem, not a workflow problem.)
 
 ## Pre-commit scans (authorship, diff-scope)
 
-Two mandatory scans run before every commit, both procedural (no
-shipped git hook — the plugin is engine-agnostic and does not ship
-engine-specific `.git/hooks/` content). Operators who want structural
-enforcement can install a local hook using the recipes below as a
-starting point.
+Two mandatory scans run before every commit, both procedural (no shipped git hook — the plugin is engine-agnostic and does not ship engine-specific `.git/hooks/` content). Operators who want structural enforcement can install a local hook using the recipes below as a starting point.
 
 ### AI-attribution strip
 
-Per `../principles.md` Invariant 4 (operator authorship overrides
-repo conventions), no AI-attribution trailer appears in any commit
-message or PR description the agent authors.
+Per `../principles.md` Invariant 4 (operator authorship overrides repo conventions), no AI-attribution trailer appears in any commit message or PR description the agent authors.
 
 **Forbidden trailers — scan for these before every commit:**
 
@@ -463,14 +300,9 @@ git diff --cached --format=%B HEAD 2>/dev/null | \
 
 If any hit: abort the commit; strip the offending trailer; redo.
 
-Same pattern applies to PR descriptions — run the scan on the
-proposed `pr-description.md` before `gh pr create` or
-`gh pr edit --body-file`.
+Same pattern applies to PR descriptions — run the scan on the proposed `pr-description.md` before `gh pr create` or `gh pr edit --body-file`.
 
-**Why a procedure, not a hook:** the plugin ships engine-agnostic
-content. A `.git/hooks/commit-msg` file is machine-local and
-per-repo; operators choose whether to install it. Optional local
-hook recipe (operator-installable, not shipped):
+**Why a procedure, not a hook:** the plugin ships engine-agnostic content. A `.git/hooks/commit-msg` file is machine-local and per-repo; operators choose whether to install it. Optional local hook recipe (operator-installable, not shipped):
 
 ```bash
 #!/usr/bin/env bash
@@ -484,25 +316,11 @@ fi
 
 ### Targeted staging — never `git add -A` in a shared or multi-track workspace
 
-In a workspace where parallel agents (or other tracks) leave
-untracked or modified state across multiple directories, **stage the
-explicit list of files your unit wrote** — `git add <path> <path>`,
-never `git add -A` or `git add .` from a workspace root. `-A` sweeps
-in another track's or another agent's in-flight untracked file and
-bundles it into your commit: the commit message then lies by omission
-(`git show` reveals content the message never mentions), and if that
-file was being kept untracked intentionally, you've frozen it
-mid-thought. `git add -A` is convenient for a solo-track repo and
-dangerous for a shared one. When in doubt, `git status` first and
-stage by name. (This is the prevention; the diff-scope scan below is
-the detection.)
+In a workspace where parallel agents (or other tracks) leave untracked or modified state across multiple directories, **stage the explicit list of files your unit wrote** — `git add <path> <path>`, never `git add -A` or `git add .` from a workspace root. `-A` sweeps in another track's or another agent's in-flight untracked file and bundles it into your commit: the commit message then lies by omission (`git show` reveals content the message never mentions), and if that file was being kept untracked intentionally, you've frozen it mid-thought. `git add -A` is convenient for a solo-track repo and dangerous for a shared one. When in doubt, `git status` first and stage by name. (This is the prevention; the diff-scope scan below is the detection.)
 
 ### Diff-scope scan
 
-Per `../principles.md` Invariant 2b (lean diffs), every commit
-contains exactly the lines required for its stated scope and nothing
-more. Before every commit, scan the staged diff for prose / xmldoc /
-comment edits that are not named in the current unit's scope:
+Per `../principles.md` Invariant 2b (lean diffs), every commit contains exactly the lines required for its stated scope and nothing more. Before every commit, scan the staged diff for prose / xmldoc / comment edits that are not named in the current unit's scope:
 
 ```bash
 # Inspect the staged diff; look for changes outside the unit's
@@ -513,17 +331,10 @@ git diff --cached
 
 Decision rule:
 
-- If the diff contains edits NOT required by the stated scope
-  (adjacent xmldoc rewrite, "while I'm here" prose polish, comment
-  restructuring unrelated to the unit's goal) → **revert those hunks**
-  before committing. They are drive-by churn and violate lean-diffs.
-- Polish is a separate, named activity. If a prose edit is genuinely
-  worth doing, it earns its own unit and its own commit; it does not
-  ride along on a scoped edit.
+- If the diff contains edits NOT required by the stated scope (adjacent xmldoc rewrite, "while I'm here" prose polish, comment restructuring unrelated to the unit's goal) → **revert those hunks** before committing. They are drive-by churn and violate lean-diffs.
+- Polish is a separate, named activity. If a prose edit is genuinely worth doing, it earns its own unit and its own commit; it does not ride along on a scoped edit.
 
-No ship-ready script for this one — the scan is a review of the
-staged diff against the unit's stated scope by the agent itself,
-informed by the unit's `What` and `Output` fields in the doing doc.
+No ship-ready script for this one — the scan is a review of the staged diff against the unit's stated scope by the agent itself, informed by the unit's `What` and `Output` fields in the doing doc.
 
 ### Pre-PR diff-scope check
 
@@ -535,102 +346,56 @@ git diff --stat origin/<base>...HEAD
 
 Every file in the output should be either:
 - Named in the task card's `repos[].paths`, or
-- A direct consequence of one of those paths (regenerated
-  lockfile, adjacent test touched because the change required it,
-  etc.).
+- A direct consequence of one of those paths (regenerated lockfile, adjacent test touched because the change required it, etc.).
 
-Files outside that expected set are a stop signal. Investigate
-before the PR opens. Common culprits:
+Files outside that expected set are a stop signal. Investigate before the PR opens. Common culprits:
 
-- EOL / BOM filter artifacts from a merge-from-main (see
-  `## Merge-conflict resolution — EOL / BOM artifacts` above for
-  the detection + fix). A file with equal insertions and
-  deletions that is not in the semantic change set is almost
-  always this.
-- Accidental cross-area commits (a `git add -A` that scooped up
-  an orphaned edit from a different concern).
-- Drive-by churn (formatting, xmldoc polish) that should have
-  been caught by the per-commit `### Diff-scope scan` but wasn't.
+- EOL / BOM filter artifacts from a merge-from-main (see `## Merge-conflict resolution — EOL / BOM artifacts` above for the detection + fix). A file with equal insertions and deletions that is not in the semantic change set is almost always this.
+- Accidental cross-area commits (a `git add -A` that scooped up an orphaned edit from a different concern).
+- Drive-by churn (formatting, xmldoc polish) that should have been caught by the per-commit `### Diff-scope scan` but wasn't.
 
-Cost: one `git diff --stat` invocation. Value: catches an entire
-class of PR-surface bugs before human reviewers see the diff —
-unrelated CODEOWNERS get pulled in, reviewer trust erodes, the PR
-description ends up describing something the diff doesn't match.
+Cost: one `git diff --stat` invocation. Value: catches an entire class of PR-surface bugs before human reviewers see the diff — unrelated CODEOWNERS get pulled in, reviewer trust erodes, the PR description ends up describing something the diff doesn't match.
 
 ## Post-commit verify gate
 
-After every `git commit`, before claiming the work is shipped or
-running `git push`, verify the commit's actual contents match the
-commit message's claims. The minimum gate:
+After every `git commit`, before claiming the work is shipped or running `git push`, verify the commit's actual contents match the commit message's claims. The minimum gate:
 
 ```bash
 git show --stat HEAD
 ```
 
-Or equivalently `git log -1 --stat`. Audit each named bucket in the
-commit message against the file list:
+Or equivalently `git log -1 --stat`. Audit each named bucket in the commit message against the file list:
 
-- "feedback.md updates" → does the file list include
-  `.../feedback.md`?
-- "new friction entry" → does the file list include
-  `.../_friction/<entry>.md`?
+- "feedback.md updates" → does the file list include `.../feedback.md`?
+- "new friction entry" → does the file list include `.../_friction/<entry>.md`?
 - "regenerated artifacts" → do the artifact paths appear?
 
-Mismatch on any → the commit was incomplete. Stage the missing
-items, create a NEW commit (do not amend, especially if the prior
-commit was already pushed), and re-verify. Only after the file list
-matches the message do `git push` and declare the work landed.
+Mismatch on any → the commit was incomplete. Stage the missing items, create a NEW commit (do not amend, especially if the prior commit was already pushed), and re-verify. Only after the file list matches the message do `git push` and declare the work landed.
 
-This gate is more rigorous than `git status` immediately after the
-commit because:
+This gate is more rigorous than `git status` immediately after the commit because:
 
-- `git status` shows the *next* state (unstaged, untracked) — useful,
-  but doesn't directly answer "did the commit I just made carry what
-  I claimed?"
-- `git show --stat HEAD` shows the *commit's contents* directly. The
-  staged-vs-committed distinction collapses there.
+- `git status` shows the *next* state (unstaged, untracked) — useful, but doesn't directly answer "did the commit I just made carry what I claimed?"
+- `git show --stat HEAD` shows the *commit's contents* directly. The staged-vs-committed distinction collapses there.
 
-Applies to every repo the agent writes to — state repos, code
-repos, and plugin repos. The cost of one `git show --stat` per
-commit is tiny; the cost of an operator catching a partial commit on
-the next session (trust hit + extra cycle) is high.
+Applies to every repo the agent writes to — state repos, code repos, and plugin repos. The cost of one `git show --stat` per commit is tiny; the cost of an operator catching a partial commit on the next session (trust hit + extra cycle) is high.
 
 ---
 
 ## Force-push — safe-conditions procedure
 
-Force-push is destructive. Most of the time the agent should stop
-and hand the push to the operator. The procedure below documents
-when force-push is safe for the agent to run without operator
-re-approval.
+Force-push is destructive. Most of the time the agent should stop and hand the push to the operator. The procedure below documents when force-push is safe for the agent to run without operator re-approval.
 
-If the trigger for considering force-push is a **parallel-PR
-conflict on a coordinated file** (e.g., version-file conflicts on
-a runtime manifest or `plugin.json` after another PR in the same
-batch merged first), the right shape is usually merge + regular push, not
-rebase + force-push. See `work-orchestration` →
-"Parallel-batch dispatch discipline" → "Version-file conflicts on
-parallel PRs — merge, don't rebase" before applying the safe-
-conditions procedure below.
+If the trigger for considering force-push is a **parallel-PR conflict on a coordinated file** (e.g., version-file conflicts on a runtime manifest or `plugin.json` after another PR in the same batch merged first), the right shape is usually merge + regular push, not rebase + force-push. See `work-orchestration` → "Parallel-batch dispatch discipline" → "Version-file conflicts on parallel PRs — merge, don't rebase" before applying the safe- conditions procedure below.
 
 ### Safe conditions (ALL must hold)
 
-1. **Personal branch pattern.** The branch name matches
-   `user/<alias>/...` (operator's personal namespace). Never force-
-   push to `main`, `master`, a shared feature branch, or a release
-   branch.
-2. **`--force-with-lease`, not `--force`.** The `--force-with-lease`
-   variant refuses to push if the remote has moved since the last
-   fetch, so someone else's push cannot be silently overwritten.
-3. **`git cherry` clean.** Every remote commit is either present
-   locally (by content, not by SHA — the rewrite is deliberate), or
-   explicitly intended to be dropped. Verify:
+1. **Personal branch pattern.** The branch name matches `user/<alias>/...` (operator's personal namespace). Never force- push to `main`, `master`, a shared feature branch, or a release branch.
+2. **`--force-with-lease`, not `--force`.** The `--force-with-lease` variant refuses to push if the remote has moved since the last fetch, so someone else's push cannot be silently overwritten.
+3. **`git cherry` clean.** Every remote commit is either present locally (by content, not by SHA — the rewrite is deliberate), or explicitly intended to be dropped. Verify:
    ```bash
    git cherry origin/<branch>
    ```
-   Lines beginning with `-` (patch already upstream) are fine. Lines
-   beginning with `+` that you did NOT intentionally drop are a stop
-   signal — investigate before pushing.
+   Lines beginning with `-` (patch already upstream) are fine. Lines beginning with `+` that you did NOT intentionally drop are a stop signal — investigate before pushing.
 
 ### Exact command
 
@@ -638,73 +403,48 @@ conditions procedure below.
 git push --force-with-lease=<branch>:<expected-remote-sha> origin <branch>
 ```
 
-The `<expected-remote-sha>` is the SHA the operator's local branch
-most recently saw at the remote. Including it is stricter than plain
-`--force-with-lease` (which uses the local ref-cache) and is the
-safest form.
+The `<expected-remote-sha>` is the SHA the operator's local branch most recently saw at the remote. Including it is stricter than plain `--force-with-lease` (which uses the local ref-cache) and is the safest form.
 
 ### Stop and hand to operator when
 
 - Any safe-condition above fails.
 - Branch is `main`, `master`, or any shared/protected branch.
 - Force-push would drop a commit that landed via someone else's push.
-- The harness permission layer denies the push (signal: push returns
-  non-zero with a permission / authorization error) — the denial is
-  correct by design; reversing it without authorization is
-  destructive. Do not retry; surface the blocker to the operator
-  with the exact command they'd paste to complete it themselves.
+- The harness permission layer denies the push (signal: push returns non-zero with a permission / authorization error) — the denial is correct by design; reversing it without authorization is destructive. Do not retry; surface the blocker to the operator with the exact command they'd paste to complete it themselves.
 
 ### Common use case — AI-attribution cleanup
 
-History rewrites to strip AI-attribution trailers from committed
-history need a force-push. Sequence:
+History rewrites to strip AI-attribution trailers from committed history need a force-push. Sequence:
 
-1. Rewrite history locally with `git filter-branch --msg-filter` or
-   `git rebase -i` + trailer-strip.
+1. Rewrite history locally with `git filter-branch --msg-filter` or `git rebase -i` + trailer-strip.
 2. Verify `git log --format=%B origin/main..HEAD | grep -E "Co-Authored-By: Claude|..."` → zero hits.
 3. Apply safe-conditions check above (especially the **upstream-currency check** below if rewriting on a shared branch).
 4. Force-push. If harness denies, surface the exact command.
 
 ### Mass history rewrites — upstream-currency check is load-bearing
 
-A history rewrite that replaces a swath of commit SHAs (mailmap
-author rename, `git filter-repo`, BFG, `git filter-branch`, etc.)
-followed by a force-push to a shared branch will **silently drop**
-any commits that landed on origin since the local clone last synced.
+A history rewrite that replaces a swath of commit SHAs (mailmap author rename, `git filter-repo`, BFG, `git filter-branch`, etc.) followed by a force-push to a shared branch will **silently drop** any commits that landed on origin since the local clone last synced.
 
-The trap: the rewrite runs cleanly, the force-push succeeds, every
-SHA matches what the operator expected — and any commits the
-upstream advanced past the local snapshot are now orphaned. The
-"git cherry" safe-condition above catches this only if the local
-branch knew about those commits; if origin advanced after the last
-local fetch, `git cherry` has nothing to compare against.
+The trap: the rewrite runs cleanly, the force-push succeeds, every SHA matches what the operator expected — and any commits the upstream advanced past the local snapshot are now orphaned. The "git cherry" safe-condition above catches this only if the local branch knew about those commits; if origin advanced after the last local fetch, `git cherry` has nothing to compare against.
 
-**Standing rule.** Before force-pushing rewritten history to a
-shared branch (including the rare authorized force-push to `main`):
+**Standing rule.** Before force-pushing rewritten history to a shared branch (including the rare authorized force-push to `main`):
 
 1. **Upstream-currency check** — must return empty:
    ```bash
    git fetch origin && git log HEAD..origin/<branch>
    ```
-   If non-empty, origin has commits the local clone hasn't seen.
-   Stop. Sync (or recover, below) before pushing.
+   If non-empty, origin has commits the local clone hasn't seen. Stop. Sync (or recover, below) before pushing.
 
-2. **Even better: start from a fresh mirror clone.** For
-   `git filter-repo` runs in particular:
+2. **Even better: start from a fresh mirror clone.** For `git filter-repo` runs in particular:
    ```bash
    git clone --mirror https://github.com/<owner>/<repo>.git /tmp/<repo>-rewrite.git
    cd /tmp/<repo>-rewrite.git
    git filter-repo --mailmap /path/to/mailmap.txt --force
    # …verify, re-add origin, push…
    ```
-   The mirror IS origin's current state at clone time — no
-   stale-checkout window. Still re-run the upstream-currency check
-   right before pushing (origin may have advanced again during the
-   rewrite).
+   The mirror IS origin's current state at clone time — no stale-checkout window. Still re-run the upstream-currency check right before pushing (origin may have advanced again during the rewrite).
 
-3. **Recovery if commits did get dropped.** GitHub keeps orphaned
-   objects for ~90 days, fetchable by SHA. Rebase the orphan chain
-   onto the rewritten base; force-push again:
+3. **Recovery if commits did get dropped.** GitHub keeps orphaned objects for ~90 days, fetchable by SHA. Rebase the orphan chain onto the rewritten base; force-push again:
    ```bash
    git fetch origin <orphaned-sha>:refs/recovered/old-tip
    git checkout refs/recovered/old-tip
@@ -712,10 +452,7 @@ shared branch (including the rare authorized force-push to `main`):
    git branch -f <branch> HEAD
    # then re-apply force-push (after upstream-currency check)
    ```
-   The rebase is clean when the rewrite only changed metadata
-   (mailmap, AI-attribution strip, etc.) — each commit's tree is
-   identical to its rewritten counterpart, so diffs apply on the
-   rewritten base without conflicts.
+   The rebase is clean when the rewrite only changed metadata (mailmap, AI-attribution strip, etc.) — each commit's tree is identical to its rewritten counterpart, so diffs apply on the rewritten base without conflicts.
 
 ---
 
