@@ -848,3 +848,17 @@ test("the Claude inline launcher answers the handshake when bootstrap.cjs itself
   assert.equal(payload.state, "degraded:bootstrap_failed")
   assert.match(result.stderr, /\[desk-mcp\] launcher: /u)
 })
+
+test("with no pack for this platform the node_missing fix still names a command", async () => {
+  const root = await mkTempRoot("desk-bootstrap-nopack-")
+  const input = new PassThrough()
+  const output = new PassThrough()
+  const read = collect(output)
+  const running = bootstrap.run({ ...machine(root, { platform: "sunos", arch: "sparc" }), args: [], stdin: input, stdout: output, stderr: { write() {} } })
+  input.end(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "desk_status" } })}\n`)
+  await running
+  const payload = toolPayload(read()[0])
+  assert.equal(payload.recommended_node_major, null)
+  assert.doesNotMatch(payload.summary, /ideally/u)
+  assert.match(payload.fix, /nvm install --lts|brew install node`/u)
+})

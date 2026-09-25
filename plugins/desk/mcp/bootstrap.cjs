@@ -26,7 +26,7 @@ var PROBE_SCRIPT = "process.stdout.write(process.version + \" \" + process.versi
 var KNOWN_ABIS = { "16": "93", "17": "102", "18": "108", "19": "111", "20": "115", "21": "120", "22": "127", "23": "131", "24": "137" };
 // Keep in step with src/tool-names.js; a test checks it.
 var TOOL_NAMES = [
-  "task_create", "task_update", "task_archive", "track_create", "track_update", "friction_add", "lesson_add",
+  "task_create", "task_update", "task_archive", "task_move", "track_create", "track_update", "track_rename", "friction_add", "lesson_add",
   "desk_work_ledger", "desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread", "desk_reindex",
   "desk_status", "desk_doctor"
 ];
