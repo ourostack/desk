@@ -12,6 +12,7 @@
 // CLI, ouroboros daemon per agent). Each consumer supplies or discovers its
 // own root/activation context without needing a bespoke Desk CLI.
 
+// Every module imported below must stay loadable on Node releases older than the engines floor (the Node 16 matrix test in __tests__/runtime/never_exit_before_handshake.test.js proves it), because ES module imports load before any code here runs. The version check itself is the first thing main() does.
 import { readFileSync, realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as path from "node:path"
@@ -23,7 +24,11 @@ import {
   inspectRuntimeDependencyPack,
 } from "./src/runtime/bootstrap.js"
 import { startDiagnosticServer } from "./src/runtime/diagnostic-server.js"
-import { createRuntimeDiagnostic, createSetupDiagnostic } from "./src/runtime/diagnostics.js"
+import {
+  createRuntimeDiagnostic,
+  createSetupDiagnostic,
+  createStartupExceptionDiagnostic,
+} from "./src/runtime/diagnostics.js"
 import {
   discoverNodeCandidates,
   REEXEC_ATTEMPT_ENV,
@@ -40,6 +45,65 @@ import {
 } from "./src/util/paths.js"
 
 const MCP_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$/u
+// Used only when package.json's engines.node cannot be read as a plain ">=" floor.
+const DEFAULT_NODE_FLOOR = [20, 0, 0]
+
+// The lowest Node that Desk supports, from engines.node in package.json (">=X[.Y[.Z]]").
+export function resolveNodeFloor({ mcpRoot, readFile = readFileSync } = {}) {
+  try {
+    const range = JSON.parse(readFile(path.join(mcpRoot, "package.json"), "utf8")).engines.node
+    const match = /^>=\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?$/u.exec(range.trim())
+    if (match !== null) {
+      return [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)]
+    }
+  } catch {
+    // Fall through to the default floor.
+  }
+  return DEFAULT_NODE_FLOOR
+}
+
+// Compare a Node version ("16.20.2") with a floor using only syntax and APIs every Node release has, because this check runs before Desk trusts the Node it was started on.
+export function nodeMeetsFloor(version, floor) {
+  const parts = String(version).split(".")
+  for (let index = 0; index < 3; index += 1) {
+    const part = parseInt(parts[index], 10)
+    if (isNaN(part)) return false
+    if (part !== floor[index]) return part > floor[index]
+  }
+  return true
+}
+
+// Admission retries a readiness-controller election or socket failure for about this long before startup gives up and serves diagnostic mode. Before diagnostic mode existed, the host's own retry covered this transient class; A2 replaces it with background re-election after the handshake.
+export const ADMISSION_RETRY_BUDGET_MS = 5000
+const CONTROLLER_FAILURE_MESSAGE = /readiness controller (?:election did not converge|owner record is invalid|protocol handshake rejected)/u
+const CONTROLLER_SOCKET_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ENOENT", "EPIPE", "ETIMEDOUT", "EADDRINUSE", "controller_start_failed"])
+
+// The transient class: the controller election did not settle, or its socket or owner record was briefly unusable. A different semantic contract, a bad policy or an authority failure is not retried.
+export function isTransientControllerFailure(error) {
+  if (error?.code === "controller_semantic_mismatch") return false
+  return CONTROLLER_FAILURE_MESSAGE.test(error?.message ?? "") || CONTROLLER_SOCKET_CODES.has(error?.code)
+}
+
+export async function admitWithRetry({
+  admit,
+  budgetMs = ADMISSION_RETRY_BUDGET_MS,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now = Date.now,
+  stderr = process.stderr,
+}) {
+  const started = now()
+  let delay = 250
+  for (;;) {
+    try {
+      return await admit()
+    } catch (error) {
+      if (!isTransientControllerFailure(error) || now() - started + delay > budgetMs) throw error
+      stderr.write(`[desk-mcp] readiness controller not ready (${error.message}); retrying admission in ${delay} ms\n`)
+      await sleep(delay)
+      delay = Math.min(delay * 2, 2000)
+    }
+  }
+}
 
 export function parseArgs(argv) {
   const args = { root: null, person: null }
@@ -197,6 +261,8 @@ export async function main({
   nodeReexecutor = reexecuteWithCompatibleNode,
   readinessPolicy: injectedReadinessPolicy,
   authorityProviders = {},
+  nodeVersion = process.versions.node,
+  admissionRetry = {},
 } = {}) {
   runtimeInspector = resolveRuntimeInspector({ runtimeImporter, runtimeInspector })
   const serverVersion = resolveMcpServerVersion({ mcpRoot })
@@ -204,6 +270,21 @@ export async function main({
     ...options,
     serverVersion,
   })
+  // The Node check comes first, before any root, activation or runtime work: on a Node older than the engines floor, Desk goes straight to finding a compatible Node (or to diagnostic mode) and never runs code that may need newer APIs.
+  if (!nodeMeetsFloor(nodeVersion, resolveNodeFloor({ mcpRoot }))) {
+    return handleUnavailableRuntime({
+      argv,
+      diagnosticServerStarter: startRuntimeDiagnostic,
+      env,
+      homeDir,
+      inspection: outdatedNodeInspection({ mcpRoot, runtimeInspector }),
+      mcpRoot,
+      nodeCandidateDiscoverer,
+      nodeReexecutor,
+      nodeSelector,
+      runtimeCacheDir: null,
+    })
+  }
   const args = parseArgs(argv)
   // An overlay that owns root resolution (for example a crew launcher that
   // maps identity to a shared workspace) passes --onboarding when it could not
@@ -318,13 +399,16 @@ export async function main({
         runtime_cache_path: importedRuntime.runtime_cache_dir ?? runtimeCacheDir,
         support_matrix_path: inspection.runtime?.support_matrix_path ?? inspection.support_matrix_path,
       }
-  const admission = await (runtimeServer.admitControlPlane ?? admitControlPlane)({
-    deskRoot,
-    person: args.person,
-    policy: readinessPolicy,
-    runtime: runtimeStatus,
-    authorityProvider,
-    controllerConnector: runtimeServer.connectOrStartController,
+  const admission = await admitWithRetry({
+    ...admissionRetry,
+    admit: () => (runtimeServer.admitControlPlane ?? admitControlPlane)({
+      deskRoot,
+      person: args.person,
+      policy: readinessPolicy,
+      runtime: runtimeStatus,
+      authorityProvider,
+      controllerConnector: runtimeServer.connectOrStartController,
+    }),
   })
   const person = validateAdmissionAuthority({
     authority: admission?.authority, person: args.person, policy: readinessPolicy,
@@ -364,10 +448,29 @@ export async function main({
     },
   })
   if (readinessPolicy.semantic !== "required") {
-    const convergence = runtimeServer.beginBackgroundConvergence?.(admission)
-    Promise.resolve(convergence).catch((error) => {
-      process.stderr.write(`[desk-mcp] background convergence failed: ${error?.message ?? String(error)}\n`)
-    })
+    // Started inside a promise so a synchronous throw is reported like a rejection: once the server is connected, main must never reject, or the entrypoint catch would start a second server on the same stdio.
+    Promise.resolve()
+      .then(() => runtimeServer.beginBackgroundConvergence?.(admission))
+      .catch((error) => {
+        process.stderr.write(`[desk-mcp] background convergence failed: ${error?.message ?? String(error)}\n`)
+      })
+  }
+}
+
+// On a Node below the engines floor, inspect the shipped runtime packs so node selection can find a Node that matches one; if inspection is unavailable, selection still runs and falls back to diagnostic mode.
+function outdatedNodeInspection({ mcpRoot, runtimeInspector }) {
+  let inspection = null
+  if (runtimeInspector !== null) {
+    try {
+      inspection = runtimeInspector({ mcpRoot })
+    } catch {
+      inspection = null
+    }
+  }
+  return {
+    ...(inspection ?? startupFailureInspection({ mcpRoot, reason: "node_below_engines_floor" })),
+    ok: false,
+    reason: "node_below_engines_floor",
   }
 }
 
@@ -384,6 +487,7 @@ async function handleUnavailableRuntime({
   runtimeCacheDir,
 }) {
   const shouldSelectNode = inspection.reason === "unsupported_target"
+    || inspection.reason === "node_below_engines_floor"
     || hasText(env[REEXEC_ATTEMPT_ENV])
   if (!shouldSelectNode) {
     return diagnosticServerStarter({
@@ -517,18 +621,43 @@ export function runIfEntrypoint({
   launch = main,
   stderr = process.stderr,
   exit = process.exit,
+  startDiagnostic = startStartupExceptionDiagnostic,
 } = {}) {
   if (!isEntrypoint({ argv, moduleUrl })) return null
-  const handleFatalError = (err) => {
-    stderr.write(`[desk-mcp] fatal: ${err.message}\n`)
-    exit(1)
+  // Degrade, never die: anything that throws before the server starts is served as diagnostic mode, so the host's handshake still completes and desk_status names the cause. Only a diagnostic server that cannot run at all (stdio gone) exits.
+  const handleStartupException = (err) => {
+    stderr.write(`[desk-mcp] startup exception: ${describeError(err)}; serving diagnostic mode\n`)
+    return Promise.resolve()
+      .then(() => startDiagnostic({ error: err }))
+      .catch((diagnosticError) => {
+        stderr.write(`[desk-mcp] fatal: ${describeError(diagnosticError)}\n`)
+        exit(1)
+      })
   }
   try {
-    return Promise.resolve(launch()).catch(handleFatalError)
+    return Promise.resolve(launch()).catch(handleStartupException)
   } catch (err) {
-    handleFatalError(err)
-    return Promise.resolve()
+    return handleStartupException(err)
   }
+}
+
+// Serve the startup-exception diagnostic on stdio (tests pass their own streams).
+export function startStartupExceptionDiagnostic({
+  error,
+  mcpRoot = path.dirname(fileURLToPath(import.meta.url)),
+  input,
+  output,
+}) {
+  return startDiagnosticServer({
+    diagnostic: createStartupExceptionDiagnostic({ error }),
+    serverVersion: resolveMcpServerVersion({ mcpRoot }),
+    input,
+    output,
+  })
+}
+
+function describeError(error) {
+  return error instanceof Error ? error.message : String(error)
 }
 
 // Only launch the server when run as the entry point, not when imported

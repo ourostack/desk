@@ -453,3 +453,21 @@ jobs:
         working-directory: plugins/desk/mcp
         run: |
           node --test --test-name-pattern "^native[: ]" __tests__/feedback/windows_acl.test.js __tests__/feedback/windows_store.test.js __tests__/feedback/source_mirror.test.js
+
+      # Both host MCP configs start Desk through mcp/bootstrap.cjs with whatever node the host has, so native Windows must complete a real MCP handshake through it.
+      - name: Complete an MCP handshake through the Desk bootstrap on Windows
+        working-directory: plugins/desk/mcp
+        run: |
+          node --test --test-name-pattern "^native[: ]" __tests__/launch/bootstrap.test.js
+
+      # A host may start the bootstrap with an older Node than the one Desk ships a pack for; Node 20 has no Windows pack, so the bootstrap must find the Node 24 set up above and run index.js in it.
+      - name: Set up an older Node that the bootstrap must re-exec from
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Complete an MCP handshake through the bootstrap's re-exec path on Windows
+        working-directory: plugins/desk/mcp
+        run: |
+          node --version
+          node --test --test-name-pattern "^native[: ]" __tests__/launch/bootstrap.test.js
