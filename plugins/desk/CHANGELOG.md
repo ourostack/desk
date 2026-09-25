@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.14 — 2026-09-24
+
+Bumps the pinned Plain Language dependency to `0.2.3` everywhere it is recorded (both `plugin.json` variants, the Codex manifest, `activation/desk.activation.json`, and the regenerated `activation/copilot-root.flattened-bundle.json`), so a Copilot session picks up Plain Language's new Copilot `sessionStart` hook. The Desk MCP stays at `desk-mcp@1.4.0-alpha.6`; its source and runtime packs are unchanged.
+
 ## 3.2.0-alpha.13 — 2026-09-24
 
 Carries the move migration from the final `ouroboros-skills` release, so a session on either side knows about the move. The Desk MCP stays at `desk-mcp@1.4.0-alpha.6`; its source and runtime packs are unchanged.
