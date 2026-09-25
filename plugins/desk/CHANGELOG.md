@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.15 — 2026-09-24
+
+Rewrites `using-desk`, the Desk foundation every session loads, and gives every startup the RFC's installed path. Ships `desk-mcp@1.4.0-alpha.6` source with the changes below; the MCP version and runtime packs are unchanged.
+
+- **New foundation.** `using-desk` now has thirteen one-line sections that say only how the human and the agent work together: the agent never hands the human a step it could do itself; alignment, then ownership, with work continuing while a question is pending; agent-facing coaching of the collaboration; verb-scoped authority, where access is not ownership and an explicit no-write instruction wins; waste judgment that never drops proof; channels, never commits; durable context in the desk; child agents; and the RFC. It matches the RFC's terms (job, task, outcome, channel) and no longer mentions frozen candidates.
+- **RFC line.** The Claude and Copilot startup hooks and the Codex activation instructions add `Desk RFC: <installed path>` after the foundation, so the agent can open the RFC from any repository. The Copilot hook computes the path; it still reads only the foundation.
+- **Startup line names the bound desk.** Both hooks build the `Desk startup:` line from one shared module and say where the root came from (the project folder, the saved binding, `$DESK` or a home-folder fallback). The Copilot hook now passes the session's folder as the project folder, the way the Claude hook passes `CLAUDE_PROJECT_DIR`, so a session opened in an overlay's desk-shaped workspace names that workspace instead of a home-folder fallback. The line still says that `desk_status` reports the root Desk actually bound.
+
 ## 3.2.0-alpha.14 — 2026-09-24
 
 Bumps the pinned Plain Language dependency to `0.2.3` everywhere it is recorded (both `plugin.json` variants, the Codex manifest, `activation/desk.activation.json`, and the regenerated `activation/copilot-root.flattened-bundle.json`), so a Copilot session picks up Plain Language's new Copilot `sessionStart` hook. The Desk MCP stays at `desk-mcp@1.4.0-alpha.6`; its source and runtime packs are unchanged.

@@ -704,6 +704,8 @@ You are the ${identity} ${modeConfig.workerContext}.
 
 ${deskFoundation}
 
+Desk RFC: ${input.pluginRoot}/docs/agentic-engineering-v2-rfc.md
+
 Run the \`desk:session-start\` skill before other work. Treat \`$DESK\` as \`${input.deskRoot}\`. Keep durable tracks, tasks, friction, and lessons there. ${DESK_MCP_HEALTH_GUARD} Apply the \`plain-language\` skill to every human-readable response and artifact while preserving evidence, uncertainty, safety, schemas, and exact source content. Never hard-wrap authored prose: keep each paragraph, list item, blockquote, message, task card paragraph, commit body paragraph, and PR body paragraph on one physical line; use newlines only for real structure or source-preserved semantic breaks. Before finishing, inspect authored/changed prose and join column-wrap continuations without rewriting third-party or historical source. ${methodInstruction}${overlaySection}
 # END desk activation
 `
