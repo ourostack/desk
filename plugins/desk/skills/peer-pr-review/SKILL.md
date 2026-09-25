@@ -86,7 +86,7 @@ What to fetch:
 
 Some repos are too large to clone on demand for a one-off review (4GB+ monorepos, multi-binary repos that don't matter beyond the slice this PR touches). For those, the local-`git diff` path is not available. Worker reaches for a diff-via-API path instead of pausing to ask the operator how to proceed:
 
-1. **Fork a `gather-diff` sub-agent** that fetches each non-test changed file's base + head content via the platform's file- content API (engine-agnostic; GitHub has `GET /repos/{owner}/{repo}/contents/{path}?ref=...`; other PR hosts have equivalents).
+1. **Fork a `gather-diff` sub-agent** that fetches each non-test changed file's base + head content via the platform's file-content API (engine-agnostic; GitHub has `GET /repos/{owner}/{repo}/contents/{path}?ref=...`; other PR hosts have equivalents).
 2. **For each file, pick the right shape:**
    - Added file → head-only.
    - Edited file → fetch base + head, run `diff -u` locally on the saved files.
@@ -186,7 +186,7 @@ A 1900-line engine can be reviewed responsibly with ~150 lines ever in context i
 
 ### Cross-file consistency: new constants adjacent to existing ones
 
-When the diff INTRODUCES a new constant, type alias, helper, or config key adjacent to an existing one with overlapping purpose, trace every consumer of BOTH names and confirm they're using the right one. The bug pattern: a wizard or callsite that imported the existing name continues to import it after the new name is introduced — but the new name is the one that should be used post- diff. Lowercase vs uppercase, singular vs plural, and tighter-vs- looser-typing pairs are the most common shapes.
+When the diff INTRODUCES a new constant, type alias, helper, or config key adjacent to an existing one with overlapping purpose, trace every consumer of BOTH names and confirm they're using the right one. The bug pattern: a wizard or callsite that imported the existing name continues to import it after the new name is introduced — but the new name is the one that should be used post-diff. Lowercase vs uppercase, singular vs plural, and tighter-vs-looser-typing pairs are the most common shapes.
 
 Concrete shape:
 
@@ -194,7 +194,7 @@ Concrete shape:
 2. For each importer, read the surrounding code and confirm the intended choice (case-normalized? exact match? superset?).
 3. A consumer importing the wrong one is a bug — typically a high-severity finding, because the bug only surfaces at runtime and is invisible per-file.
 
-This is a cross-file consistency pass that complements the per- file walkthrough. Per-file analysis cannot see the relationship between files; cross-file analysis cannot see the per-file detail. Both passes together catch what either alone misses.
+This is a cross-file consistency pass that complements the per-file walkthrough. Per-file analysis cannot see the relationship between files; cross-file analysis cannot see the per-file detail. Both passes together catch what either alone misses.
 
 ## Phase 6 — Voice-strip + verify pass
 
@@ -213,9 +213,7 @@ Phase 6 exits when every draft has passed both the voice test (read aloud as the
 
 Assign honest confidence per comment. The bar to clear before posting:
 
-> Worker can articulate "this is right because [evidence], and the
-> recipient pushing back would be answered by [verification
-> source]."
+> Worker can articulate "this is right because [evidence], and the recipient pushing back would be answered by [verification source]."
 
 If worker can articulate that for a comment, confidence is high enough. If worker cannot, the comment is below the bar.
 
@@ -234,7 +232,7 @@ Hedging language pasted onto an unverified claim ("I think," "probably," "if I'm
 Confidence answers "is this right?" These two filters answer "even if right, is it worth surfacing?" — run both before a comment ships:
 
 1. **Validator-parrot.** Will an automated validator on either side (a coverage check, a build, a policy gate, CI) already flag this? If yes, cut it. The author reads the same report; echoing it adds nothing and dilutes the signal of any real finding. (This filter also applies to reviewing one's own PR — see `pr-self-review`.)
-2. **Landscape-gap-as-finding.** Is this only a concern because worker is missing the deployment / access-model / who-can-reach- this-flow context? If maybe, verify the landscape BEFORE drafting (the entry points, which flags gate it, who actually reaches this path). If it checks out, the disposition is **"no finding"** — not "ask the author." A risk that's only a risk because worker doesn't understand the system advertises that gap and wastes the author's time on a question worker should have answered itself.
+2. **Landscape-gap-as-finding.** Is this only a concern because worker is missing the deployment / access-model / who-can-reach-this-flow context? If maybe, verify the landscape BEFORE drafting (the entry points, which flags gate it, who actually reaches this path). If it checks out, the disposition is **"no finding"** — not "ask the author." A risk that's only a risk because worker doesn't understand the system advertises that gap and wastes the author's time on a question worker should have answered itself.
 
 A review that surfaces nothing beyond what the validators already catch is a **legitimate, valuable outcome** — sign off. The instinct to "find something to say" after the one real finding lands is exactly what pushes toward both failure modes.
 

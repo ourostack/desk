@@ -161,7 +161,7 @@ Before posting `status=Closed` on any bot thread, read the first 100–200 chars
 
 ### Harness-denied reopen is correct-by-design
 
-If you mis-classify and close a PR-Assistant thread, the PR host's API will sometimes accept a reopen request and sometimes reject it. A correctly- configured operating environment may deny the reopen ("reversing a resolution without authorization is destructive"). That denial is correct: the right fix is to not close the thread in the first place, not to layer reopens on top of mis-classification. If a reopen is denied, proceed with the thread in the walk-through queue at its current (closed) status and let the operator decide whether to reopen from the UI.
+If you mis-classify and close a PR-Assistant thread, the PR host's API will sometimes accept a reopen request and sometimes reject it. A correctly-configured operating environment may deny the reopen ("reversing a resolution without authorization is destructive"). That denial is correct: the right fix is to not close the thread in the first place, not to layer reopens on top of mis-classification. If a reopen is denied, proceed with the thread in the walk-through queue at its current (closed) status and let the operator decide whether to reopen from the UI.
 
 **Exit criteria:** every `auto-comment` thread has a disposition line in `feedback.md`. No `auto-comment` threads remain unhandled before phase 3 begins.
 
@@ -182,7 +182,7 @@ The shape-view surfaces:
 
 Operator reviews, pushes back, redirects, adds context. This is a conversation, not a proposal list — do not walk each item one-at-a-time here (`interaction-style` §1 and §6).
 
-**Agent output shape:** analysis only. If you catch yourself drafting "for item 5, I propose X" during phase 3, stop and reframe to shape- level. Per-item proposals are phase 4 output.
+**Agent output shape:** analysis only. If you catch yourself drafting "for item 5, I propose X" during phase 3, stop and reframe to shape-level. Per-item proposals are phase 4 output.
 
 **Exit criteria:** shared shape-view in `feedback.md § Shape view`; operator has acknowledged agreement (not a separate signoff — a continuation message is sufficient).
 
@@ -387,7 +387,7 @@ Once the final unit is pushed and the walk-through dispositions are signed off, 
 - Pipeline churn during Phase 8 therefore rarely invalidates Phase 9 work.
 - Exception: if a pipeline failure forces a **code** fix that changes a unit's landed shape, update the affected thread replies post-hoc. Cheap — threads are small, the relevant SHAs are one grep away.
 
-The agent should not block Phase 9 behind Phase 8 green. Human- facing latency on `pr-feedback-on-own-pr` iterations compresses significantly when the pipeline wait runs in parallel with the thread-verify walk.
+The agent should not block Phase 9 behind Phase 8 green. Human-facing latency on `pr-feedback-on-own-pr` iterations compresses significantly when the pipeline wait runs in parallel with the thread-verify walk.
 
 ### Long-running pipeline waits
 
@@ -402,7 +402,7 @@ Pipeline-verify on a large repo can mean waiting 30-60 minutes (or more) for req
 
 **Tool selection — pick by behavior signature, not by tool name.**
 
-- "Notify me **once** when X is true" → single backgrounded poll loop with a completion signal. The right shape for pipeline- verify waits and similar one-shot async-state checks.
+- "Notify me **once** when X is true" → single backgrounded poll loop with a completion signal. The right shape for pipeline-verify waits and similar one-shot async-state checks.
 - "Notify me on **every** occurrence of Y, indefinitely" → continuous monitor. Different shape; not what's wanted here.
 - "**Synthesize** a structured result from async data" → synchronous helper that produces the result. Different shape again; the helper returns the work, not a signal.
 
@@ -410,7 +410,7 @@ The first shape is the one to reach for when waiting on pipelines. The other two
 
 **Counter-pattern to avoid: dispatching multiple watchers in succession because the previous returned early.** Each new dispatch spawns its own context and burns its own quota; none of them actually wait on the underlying state. The fix is the tool choice, not the dispatch — switch to the single-fire backgrounded poll loop and stop dispatching helpers that won't wait.
 
-**Annotated example** (illustrative; the principle is engine- agnostic, the example uses a generic shell shape):
+**Annotated example** (illustrative; the principle is engine-agnostic, the example uses a generic shell shape):
 
 ```bash
 # Example shape — single backgrounded poll loop with token
@@ -460,10 +460,7 @@ Not every red pipeline needs a code fix. A meaningful share of CI failures are i
 
 **Retrigger flow.** Use whatever your platform provides to re-run a required policy or check without pushing a new commit (GitHub: re-run a failed check via `gh run rerun`; GitLab: retry a CI job; other platforms: their equivalent). The mechanics are platform-specific; the discipline is universal — retrigger on infra failure, code-fix on code failure.
 
-> **Overlay users:** platform-specific retrigger recipes (e.g.
-> non-GitHub PR hosts requiring an auth-token refresh + a state-PATCH
-> against a policy-evaluation endpoint) typically live in a consumer
-> overlay's PR-toolbox skill.
+> **Overlay users:** platform-specific retrigger recipes (e.g. non-GitHub PR hosts requiring an auth-token refresh + a state-PATCH against a policy-evaluation endpoint) typically live in a consumer overlay's PR-toolbox skill.
 
 **Guard rails on retriggers:**
 
@@ -484,9 +481,7 @@ Tactical wisdom for any code that polls CI state via shell loops (whether in thi
 - **Pipe CLI commands through `2>/dev/null || echo '[]'`** for graceful handling of transient errors. The poll loop should treat a single-tick failure as "try again next tick," not as a hard stop.
 - **Token refresh per tick is mandatory** for any loop whose run duration approaches the auth token TTL.
 
-> **Overlay users:** platform-specific variants of these patterns
-> (token-refresh recipes, vendor-CLI `--query` quirks) typically live
-> in a consumer overlay's PR-toolbox skill.
+> **Overlay users:** platform-specific variants of these patterns (token-refresh recipes, vendor-CLI `--query` quirks) typically live in a consumer overlay's PR-toolbox skill.
 
 ---
 
@@ -571,7 +566,7 @@ The before/after count check is the cheap defense against an over-broad pattern 
 - **Phase 9 is a loop, not a walk.** Re-read, verify, loop back if not landed; don't mark Resolved on intention.
 - **Resolution-timing tag is load-bearing.** A `post-and-stay-active-until-{unit}` thread closes only when the unit's commit lands and the follow-up reply names it. Resolving on the promissory "Addressing by doing X" reply lies about the state and breaks reviewer-side filtering.
 - **Thread replies describe behavioral change, not commit SHA.** SHA optional if reviewer needs a specific hunk; usually not.
-- **PERT framing** on the plan DAG when clusters branch. Trivially- linear chains are prose — don't force a DAG on 3 units.
+- **PERT framing** on the plan DAG when clusters branch. Trivially-linear chains are prose — don't force a DAG on 3 units.
 
 ## Run-file schema
 
@@ -684,7 +679,7 @@ Clarifications surfaced during the first live run (review-pass-1 on the pilot PR
 
 Pattern piloted during the first review-pass-1. Re-evaluate at archive time (what worked, what didn't, what to adjust before second use).
 
-The three-doc structure, cross-doc reference convention, and exit- sync discipline are documented in the "Three-doc layered design" section at the top of this skill.
+The three-doc structure, cross-doc reference convention, and exit-sync discipline are documented in the "Three-doc layered design" section at the top of this skill.
 
 **Validation TODO** (revisit at archive time):
 - Did the reference pattern scale for doing.md? Or did per-unit pointers at feedback.md get cumbersome?

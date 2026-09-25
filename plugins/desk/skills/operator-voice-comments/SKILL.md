@@ -65,7 +65,7 @@ Architectural / scoping / contract-shape concerns are NOT in this list. They alm
 
 ## Chat-share register vs. cold-read-surface register
 
-The skill's tone rules below (No fabrication, No sycophantic padding, Match operator's voice, Verify before posting) are written predominantly in their **PR-comment register**: rationale- first, formal, no double punctuation, no informal contractions. That register is right for surfaces a third party reads cold, possibly months later — PR descriptions, work-item comments and thread replies. The reader is approaching the surface without context; rationale-first prose does the work.
+The skill's tone rules below (No fabrication, No sycophantic padding, Match operator's voice, Verify before posting) are written predominantly in their **PR-comment register**: rationale-first, formal, no double punctuation, no informal contractions. That register is right for surfaces a third party reads cold, possibly months later — PR descriptions, work-item comments and thread replies. The reader is approaching the surface without context; rationale-first prose does the work.
 
 **Live chat surfaces are a different register.** Group chats, DMs, replies in channel threads — these read live, in-context, between peers who are already collaborating. The right register is warm/loose, with a few specific positive shapes that distinguish operator-voice from worker-default flat-by-rules prose.
 
@@ -88,7 +88,7 @@ Pair "more thoughts there *or* if we can resolve" — invites both substantive e
 
 ### Invite more at close
 
-End with "also let me know if you have additional feedback" or equivalent — keeps the channel open beyond the current set of threads. Don't close the door with "otherwise just whenever you've got cycles" or "no rush" — those read as worker pre- empting a follow-up the operator might actually want.
+End with "also let me know if you have additional feedback" or equivalent — keeps the channel open beyond the current set of threads. Don't close the door with "otherwise just whenever you've got cycles" or "no rush" — those read as worker pre-empting a follow-up the operator might actually want.
 
 ### Surface markers
 
@@ -160,7 +160,7 @@ Worker-suggested timelines that get baked into long-lived artifacts (PR descript
 
 1. When proposing a follow-up review cadence, frame it on the underlying data signal — "once telemetry lands" / "after usage data accumulates" / "at the next rollout review" — never "in N days/weeks/months" unless the operator named the number.
 2. If the operator DOES name a calendar ("let's revisit before EOM Q3"), it's fine to bake into surfaces — that's an operator-authored timeline, not worker-fabricated.
-3. **Pre-existing surfaces that have inherited a worker- fabricated timeline**: surface to operator before reusing the framing. "Work-item X title says '60-day follow-up' — was that your call or worker's? Worth retitling?"
+3. **Pre-existing surfaces that have inherited a worker-fabricated timeline**: surface to operator before reusing the framing. "Work-item X title says '60-day follow-up' — was that your call or worker's? Worth retitling?"
 
 **Cost asymmetry**: data-driven framings are slightly less crisp ("once telemetry lands" is vaguer than "in 60 days") but always defensible. Calendar framings sound crisper but bind the team to a number nobody actually committed to. Crispness on a fiction is not worth the cleanup cost.
 
@@ -225,7 +225,7 @@ Review-bot SLA-breach badges, queue-wait age, "PR has been Active for N days," "
 
 ### Business-model coherence
 
-When a draft critiques a charging, pricing, quota, or budget-flow decision, the no-fabrication rule extends to **business-model coherence**. The failure mode: worker reasons about charging in isolation ("if X charges, the spam attack succeeds at Y's expense") without asking the business-model question ("who *should* pay when the system incurs cost on a real-traffic-shaped attack?"). The owner of the abuse vector usually owns the cost; the spam-protection layer (rate limits, budget caps, ADAP) is the lever that bounds drain — not the unit-cost setting on a per- intent line item.
+When a draft critiques a charging, pricing, quota, or budget-flow decision, the no-fabrication rule extends to **business-model coherence**. The failure mode: worker reasons about charging in isolation ("if X charges, the spam attack succeeds at Y's expense") without asking the business-model question ("who *should* pay when the system incurs cost on a real-traffic-shaped attack?"). The owner of the abuse vector usually owns the cost; the spam-protection layer (rate limits, budget caps, ADAP) is the lever that bounds drain — not the unit-cost setting on a per-intent line item.
 
 Three checks before posting:
 
@@ -370,13 +370,13 @@ When the operator approves draft text for a chat / channel / PR / work-item surf
 
 The failure mode: the operator approves a casual chat-style message ("hi all!! quick heads up..."). Worker passes it to a posting tool that exposes a separate `subject` / `title` / `header` field, and worker fills that field with a worker-generated header ("Project X kickoff — Tue 9am PT"). The result renders as a formal-looking announcement (bold subject sitting above the casual body) — turning a friendly note into something that reads like an official broadcast. Off-tone, and the operator can't even see what went wrong from the draft they approved.
 
-**Rule.** Mechanics that change visual presentation are part of the voice. Subject lines, header fields, formatting metadata, content- type overrides (when they affect rendering) — all live under the same approval bar as body prose. If the operator's approved draft doesn't include a subject, the post doesn't get a subject. If the operator wrote `hi all!!`, the post sends `hi all!!` — not `Hi All!!`, not `# Project X` above it, not bullet-formatted "for clarity."
+**Rule.** Mechanics that change visual presentation are part of the voice. Subject lines, header fields, formatting metadata, content-type overrides (when they affect rendering) — all live under the same approval bar as body prose. If the operator's approved draft doesn't include a subject, the post doesn't get a subject. If the operator wrote `hi all!!`, the post sends `hi all!!` — not `Hi All!!`, not `# Project X` above it, not bullet-formatted "for clarity."
 
 **Surface-mechanic exception.** Engine-level rendering choices that don't change presented content — e.g., setting `contentType: "html"` to make multi-line content render with visible line breaks (per "Surface mechanics" above) — are still worker's call, because the alternative is a wall of unreadable text. The line is between *rendering choices that preserve approved content* (worker's call) and *added content / metadata that changes how it reads* (operator's call only).
 
 ## Match operator's voice
 
-The shapes that read as operator-voice rather than as worker- drafted:
+The shapes that read as operator-voice rather than as worker-drafted:
 
 ### Direct question + supporting reason in one sentence
 
@@ -434,9 +434,7 @@ The dial test is the single check that ties the four no-fabrication rules and th
 
 Read the comment as the recipient will read it — in their inbox, on the PR, with no session context, no insight into what worker considered before settling on this shape. For each factual claim in the draft, ask:
 
-> "If they push back saying this isn't quite how the code works
-> (or this isn't quite the history they remember, or this
-> timeline isn't real), do I have evidence?"
+> "If they push back saying this isn't quite how the code works (or this isn't quite the history they remember, or this timeline isn't real), do I have evidence?"
 
 If the answer is no — the claim is unverified. The comment as drafted will lose to a real conversation. Two acceptable fixes:
 
@@ -464,7 +462,7 @@ Treat each match as a hard stop on the draft until the claim is verified, soften
 
 ### Tool-verify static-analysis claims
 
-The dial test handles "did worker actually read the line." A sibling failure mode shows up specifically when a draft makes a **static-analysis claim** — dead code, unreachable, impossible-to- throw, can't-be-null, this-can-never-fire. For those, reading the lines isn't enough. Compilers see reachability subtleties human control-flow tracing misses; defer to the analyzer.
+The dial test handles "did worker actually read the line." A sibling failure mode shows up specifically when a draft makes a **static-analysis claim** — dead code, unreachable, impossible-to-throw, can't-be-null, this-can-never-fire. For those, reading the lines isn't enough. Compilers see reachability subtleties human control-flow tracing misses; defer to the analyzer.
 
 **Why the C# case is sneaky.** `catch (Exception ex) when (...)` filter clauses make static reachability genuinely hard to prove — the compiler can't always determine that the `when` filter MUST match (or fail) for given exception types, so paths after the catch can be reachable even when traced control flow says they aren't. Async state machines, generated methods, and method tails satisfying return-type contracts all add similar non-obvious reachability. Sibling cases exist in TypeScript / Go / Rust, but C# is where this trap most often fires.
 
@@ -488,16 +486,16 @@ The dial test handles "did worker actually read the line." A sibling failure mod
 
 A draft that passes the no-fabrication rules but reads as sycophantic-padded still fails — and vice versa. The four sections of this skill are cumulative, not alternatives. The voice test (Section 2) and the dial test (this section) are the two final reads before posting:
 
-- **Voice test**: read aloud as the operator. Anything that sounds apologetic, deferential beyond posture, or pre- retreating gets cut.
+- **Voice test**: read aloud as the operator. Anything that sounds apologetic, deferential beyond posture, or pre-retreating gets cut.
 - **Dial test**: read as the recipient. Anything claiming a fact worker can't back gets verified, softened, or cut.
 
 If both passes are clean, the comment is ready. If either fails, the comment is not ready — go back to the relevant section and fix the specific failure rather than tweaking around it.
 
 ### Validator-first gate (default for all operator-voice artifacts)
 
-Worker's previous default was "ask operator at draft time" for any operator-voice public-surface artifact (PR replies, work-item comments, chat-share drafts, status updates). That default is overcautious — most of these can be auto-validated by a zero- context sub-agent and only need human attention when something residual remains.
+Worker's previous default was "ask operator at draft time" for any operator-voice public-surface artifact (PR replies, work-item comments, chat-share drafts, status updates). That default is overcautious — most of these can be auto-validated by a zero-context sub-agent and only need human attention when something residual remains.
 
-**The sequence — author, validate, residual-check, gate-or- waive:**
+**The sequence — author, validate, residual-check, gate-or-waive:**
 
 1. **Author** the artifact. Worker drafts the prose with all prior subsections (No fabrication, No sycophantic padding, Match operator's voice, Verify before posting) applied.
 2. **Run a zero-context sub-agent review** with the same rigor used for doing-doc validation. The sub-agent reads only the draft + this skill's rules + the operator's relevant memory files, with no session context. Audit prompts:
@@ -516,4 +514,4 @@ Worker's previous default was "ask operator at draft time" for any operator-voic
 
 **When the validator's verdict is too thin to waive on alone.** For first-time-touched surfaces (a new chat venue, a new reviewer's first PR, an unfamiliar work-item type), waive only after the validator returns clean AND worker has high confidence the surface mechanics match prior shipped artifacts. "Validator passed" plus "I've never posted to this surface before" is not yet a waive condition — surface to operator the first time.
 
-**Compose with `peer-pr-review` / `pr-feedback-on-own-pr` / `pr-self-review` / `pr-surface-hygiene`.** Those skills already cite this one at every draft-time touchpoint. The validator- first gate is the agent's default behavior at those touchpoints — not an opt-in extension. Skills that previously said "surface to operator before posting" should be read as "surface only when the residual-check returns non-empty."
+**Compose with `peer-pr-review` / `pr-feedback-on-own-pr` / `pr-self-review` / `pr-surface-hygiene`.** Those skills already cite this one at every draft-time touchpoint. The validator-first gate is the agent's default behavior at those touchpoints — not an opt-in extension. Skills that previously said "surface to operator before posting" should be read as "surface only when the residual-check returns non-empty."

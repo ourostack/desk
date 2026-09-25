@@ -557,6 +557,11 @@ for (const file of [
     const wrapped = proseUnits(file).filter((unit) => unit.length > 1).map((unit) => unit[1].number);
     assert.deepEqual(wrapped, []);
   });
+  // Joining a line that ended in a hyphenated word leaves "worker- driven"; a suspended hyphen ("file- or project-") is fine.
+  contract(`${file} has no hyphen left over from unwrapping`, () => {
+    const split = proseUnits(file).flat().filter(({ line }) => /[A-Za-z]- (?!and |or |to )[A-Za-z]/u.test(line)).map(({ number }) => number);
+    assert.deepEqual(split, []);
+  });
 }
 contract("friction-management keeps its lead-in next to its list", () => {
   assert.match(text("plugins/desk/skills/friction-management/SKILL.md"), /rough edge:\n\n1\. decide the scope/u);

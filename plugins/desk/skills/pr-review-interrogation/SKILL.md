@@ -58,18 +58,11 @@ Picking by path-convenience ("the one at `.../Partners/<P>/Models/` looks right"
 
 Good:
 
-> `git diff origin/main..user/alice/feature -- <file>` shows one net
-> new field (`TicketsListWebUrl`), two dropped
-> (`LiveChatAgentSiteId`, `LiveChatAgentSiteUrl`), and the
-> `[Required]` attribute removed on every existing field. Commit `abc123`
-> adds the new field; commit `def456` removes the two and relaxes
-> `[Required]`.
+> `git diff origin/main..user/alice/feature -- <file>` shows one net new field (`TicketsListWebUrl`), two dropped (`LiveChatAgentSiteId`, `LiveChatAgentSiteUrl`), and the `[Required]` attribute removed on every existing field. Commit `abc123` adds the new field; commit `def456` removes the two and relaxes `[Required]`.
 
 Bad:
 
-> Based on the consumer code in `<partner>/Models/X.cs`, the PR adds
-> two new fields and drops three. [reasoned backward; wrong on both
-> counts.]
+> Based on the consumer code in `<partner>/Models/X.cs`, the PR adds two new fields and drops three. [reasoned backward; wrong on both counts.]
 
 The good answer leads with the diff and cites commits as supporting narrative. The bad answer leads with narrative and never runs the diff.
 
@@ -103,21 +96,11 @@ The burden of proof is on the new helper, not on the existing callers. A PR addi
 
 Good:
 
-> `GraphServiceAdapter` has ~20 existing callers. Five of them
-> (`ChannelsService`, `MembersService`, `TeamsService`,
-> `MessagesService`, `FilesService`) handle fine-grained HTTP-status
-> → domain-error mapping via `try { ... } catch
-> (InternalServiceException ex) { switch (ex.InnerHttpStatus) ... }`.
-> This PR's SMB caller needs the same category of mapping. The new
-> `CallGraphAPIReturningPayload<T>` helper duplicates that surface
-> with a non-throwing return shape — no novelty proven. Recommend
-> aligning with the `catch InternalServiceException` pattern instead.
+> `GraphServiceAdapter` has ~20 existing callers. Five of them (`ChannelsService`, `MembersService`, `TeamsService`, `MessagesService`, `FilesService`) handle fine-grained HTTP-status → domain-error mapping via `try { ... } catch (InternalServiceException ex) { switch (ex.InnerHttpStatus) ... }`. This PR's SMB caller needs the same category of mapping. The new `CallGraphAPIReturningPayload<T>` helper duplicates that surface with a non-throwing return shape — no novelty proven. Recommend aligning with the `catch InternalServiceException` pattern instead.
 
 Bad:
 
-> The helper's doc-comment explains it returns a payload non-throwingly
-> so callers can inspect HTTP status without a catch block. That
-> matches this PR's needs.
+> The helper's doc-comment explains it returns a payload non-throwingly so callers can inspect HTTP status without a catch block. That matches this PR's needs.
 
 The good answer names the existing callers, reads how they handle the category, names the new helper as a sibling-pattern, and recommends alignment. The bad answer restates the doc-comment and calls that a review.
 

@@ -232,7 +232,7 @@ Brevity is a voice rule for the live-conversation surface, not a content style f
 
 ## 8. Remote substrate boundary
 
-When the operator is on a remote substrate (RDP'd VM, SSH session, container shell, dev box, sandbox) and worker is about to dictate a sequence of per-user setup commands — `gh auth login`, `git clone`, `npm install`, package installs, plugin bootstraps, cd-and-run-this-then-that — **stop**. That's worker- as-keyboard-driver, the inverse of worker's job (which is to *reduce* operator cognitive load).
+When the operator is on a remote substrate (RDP'd VM, SSH session, container shell, dev box, sandbox) and worker is about to dictate a sequence of per-user setup commands — `gh auth login`, `git clone`, `npm install`, package installs, plugin bootstraps, cd-and-run-this-then-that — **stop**. That's worker-as-keyboard-driver, the inverse of worker's job (which is to *reduce* operator cognitive load).
 
 The right move: get a worker-shaped agent running inside the substrate, and let it drive autonomously.
 
@@ -248,14 +248,14 @@ If all three are true, the next instruction worker writes should be "launch the 
 
 ### Why the boundary matters
 
-Outside-the-substrate worker doesn't have the per-user PATH, gh keyring, MSAL cache, or live shell context inside the remote substrate. Driving via `run-command invoke` works for SYSTEM- context operations but breaks down for per-user state (auth caches, plugin install paths, env-var inheritance). Hand-walking via the operator's keyboard works mechanically but inverts the worker-reduces-cognitive-load contract.
+Outside-the-substrate worker doesn't have the per-user PATH, gh keyring, MSAL cache, or live shell context inside the remote substrate. Driving via `run-command invoke` works for SYSTEM-context operations but breaks down for per-user state (auth caches, plugin install paths, env-var inheritance). Hand-walking via the operator's keyboard works mechanically but inverts the worker-reduces-cognitive-load contract.
 
 A substrate-side worker has all the context for free: it IS the user, in the right shell, with the right env. Any setup chore worker would dictate fits naturally inside that worker's first-run-bootstrap or session-start invocation.
 
 ### When the boundary doesn't apply
 
 - The substrate doesn't support an agent runtime (no install path, no plugin runtime). Then keyboard-driving is the only option — but flag the limitation explicitly so the operator knows what's happening and can decide whether to reach for a different substrate.
-- The chore is genuinely a single command, not a sequence (one cd, one cat, one curl). A single instruction isn't worker- driving-a-sequence.
+- The chore is genuinely a single command, not a sequence (one cd, one cat, one curl). A single instruction isn't worker-driving-a-sequence.
 - The operator has explicitly asked worker to walk them through the steps for educational reasons. Honor that.
 
 ### Detection signal in worker's draft
