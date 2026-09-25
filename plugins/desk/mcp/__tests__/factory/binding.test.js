@@ -39,7 +39,8 @@ function fakes({ cards = {}, commitsBetween = [], nativeCommits = {} } = {}) {
     },
     deskCommitsBetween(start, end) {
       calls.between.push([start, end])
-      return commitsBetween.filter((commit) => commit.committed_at >= start && commit.committed_at <= end)
+      // Everything, in or out of the span: binding itself matches each commit to a call.
+      return commitsBetween
     },
     gitCommitTaskPaths(sha) {
       calls.native.push(sha)
@@ -78,6 +79,9 @@ test("normalizeRemote: scp-style, credentials, case, .git and trailing slashes a
   assert.equal(normalizeRemote("local:/Users/Some/Desk"), "local:/Users/Some/Desk")
   assert.equal(normalizeRemote("/srv/git/Desk.git/"), "/srv/git/Desk")
   assert.equal(normalizeRemote("https://Example.COM"), "https://example.com")
+  assert.equal(normalizeRemote("git@GitHub.com:/Owner/Repo.git"), "https://github.com/owner/repo", "an scp path with a leading slash")
+  assert.equal(normalizeRemote("C:\\Users\\Me\\Desk.git\\"), "C:\\Users\\Me\\Desk", "a Windows path is a path, not an scp host")
+  assert.equal(normalizeRemote("D:/repos/Desk"), "D:/repos/Desk")
 })
 
 test("jobId is the first 32 hex of sha256(remote, person prefix, track/slug), with the remote normalized", () => {
@@ -119,13 +123,25 @@ test("a successful file write alone binds the task folder it lands in", () => {
 })
 
 test("a desk commit matched to the session's own git commit call alone binds the tasks it changed", () => {
-  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", authored_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`, "_meta/log.md"] }
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`, "_meta/log.md"] }
   const { jobs, calls } = bind(
     { shellGitCommits: [{ start: "2026-09-25T08:20:01.400Z", end: "2026-09-25T08:20:02.100Z", cwd: DESK }] },
     { commitsBetween: [commit] },
   )
   assert.deepEqual(calls.between, [["2026-09-25T08:20:01.000Z", "2026-09-25T08:20:02.100Z"]], "the window starts at the call's second, since Git keeps whole seconds")
   assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["desk_commit"] }])
+})
+
+test("desk history is read once per session over the span of its calls, and a commit binds only inside a call", () => {
+  const at = (time, slug) => ({ sha: SHA_A, committed_at: time, taskPaths: [`${TRACK}/${slug}/task.md`] })
+  const { jobs, calls } = bind({ shellGitCommits: [
+    { start: "2026-09-25T08:45:00.000Z", end: "2026-09-25T08:45:01.000Z", cwd: DESK },
+    { start: "2026-09-25T09:00:00.700Z", end: "2026-09-25T09:00:02.000Z", cwd: DESK },
+    { start: "2026-09-25T08:00:00.200Z", end: "2026-09-25T08:00:01.000Z", cwd: DESK },
+    { start: "2026-09-25T08:30:00.000Z", end: "2026-09-25T08:30:04.000Z", cwd: "/elsewhere" },
+  ] }, { commitsBetween: [at("2026-09-25T08:00:00.000Z", SLUG), at("2026-09-25T08:30:02.000Z", OTHER), at("2026-09-25T09:00:02.000Z", `third-${SENTINEL}`), { sha: SHA_B, committed_at: "bad", taskPaths: [`${TRACK}/${SLUG}/x`] }, null] })
+  assert.deepEqual(calls.between, [["2026-09-25T08:00:00.000Z", "2026-09-25T09:00:02.000Z"]])
+  assert.deepEqual(jobs.map(({ job }) => job).sort(), [expectedId(NORMALIZED, "", TRACK, SLUG), expectedId(NORMALIZED, "", TRACK, `third-${SENTINEL}`)].sort())
 })
 
 test("a commit from the session's native refs alone binds the tasks it changed; one missing from the desk binds nothing", () => {
@@ -146,7 +162,7 @@ test("hashes scraped from tool output (events.commitShas) never bind: only nativ
 // --- Where the git commit ran -----------------------------------------------
 
 test("a git commit call binds only when it ran in the desk: inside it, below it or at $DESK, never elsewhere or unknown", () => {
-  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", authored_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`] }
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`] }
   const window = { start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z" }
   for (const cwd of [DESK, `${DESK}/${TRACK}`, DESK_MARKER, `${DESK_MARKER}/${TRACK}`]) {
     const { jobs } = bind({ shellGitCommits: [{ ...window, cwd }] }, { commitsBetween: [commit] })
@@ -160,7 +176,7 @@ test("a git commit call binds only when it ran in the desk: inside it, below it 
 })
 
 test("a git commit call with an unreadable window binds nothing", () => {
-  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", authored_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`] }
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`] }
   for (const window of [{ start: "nope", end: "2026-09-25T08:20:05.000Z" }, { start: "2026-09-25T08:20:05.000Z", end: null }, { start: "2026-09-25T08:20:05.000Z", end: "2026-09-25T08:20:00.000Z" }]) {
     const { jobs } = bind({ shellGitCommits: [{ ...window, cwd: DESK }] }, { commitsBetween: [commit] })
     assert.deepEqual(jobs, [])
@@ -200,11 +216,10 @@ test("a person prefix changes the job ID and scopes which paths and Desk calls b
   assert.deepEqual(bind({ fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/desks/bo/${TRACK}/${SLUG}/x.md` }] }, { personPrefix: "desks/ari" }).jobs, [])
   // Without a prefix, person desks are not tracks.
   assert.deepEqual(bind({ fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/desks/ari/${TRACK}/${SLUG}/x.md` }] }).jobs, [])
-  // A Desk call naming a different person binds nothing; naming this one, or none, binds.
-  assert.deepEqual(bind({ deskToolCalls: [deskCall({ person: "bo" })] }, { personPrefix: "desks/ari" }).jobs, [])
-  assert.equal(bind({ deskToolCalls: [deskCall({ person: "ari" })] }, { personPrefix: "desks/ari" }).jobs.length, 1)
-  assert.equal(bind({ deskToolCalls: [deskCall({ person: " " })] }, { personPrefix: "desks/ari" }).jobs.length, 1)
-  assert.deepEqual(bind({ deskToolCalls: [deskCall({ person: "ari" })] }).jobs, [])
+  // The person comes only from the caller's prefix; a call's own person field is ignored.
+  const prefixedCall = bind({ deskToolCalls: [deskCall({ person: "bo" })] }, { personPrefix: "desks/ari" }).jobs
+  assert.deepEqual(prefixedCall.map(({ job }) => job), [expectedId(NORMALIZED, "desks/ari", TRACK, SLUG)])
+  assert.deepEqual(bind({ deskToolCalls: [deskCall({ person: "ari" })] }).jobs.map(({ job }) => job), [expectedId(NORMALIZED, "", TRACK, SLUG)])
 })
 
 test("paths outside the desk, under _meta, _friction, _planning, the top-level _archive, dot folders, or not inside a task folder bind nothing", () => {
@@ -234,12 +249,39 @@ test("paths outside the desk, under _meta, _friction, _planning, the top-level _
 })
 
 test("commit paths are read the same way, and a commit's changes outside task folders bind nothing", () => {
-  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", authored_at: "2026-09-25T08:20:01.000Z", taskPaths: ["_meta/x", `${TRACK}/track.md`, "README.md", `_archive/${TRACK}/${SLUG}/task.md`, 7] }
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: ["_meta/x", `${TRACK}/track.md`, "README.md", `_archive/${TRACK}/${SLUG}/task.md`, 7] }
   const { jobs } = bind({ shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] }, { commitsBetween: [commit] })
   assert.deepEqual(jobs, [])
 })
 
 // --- What never binds ---------------------------------------------------------
+
+test("end to end: a derived session that only reads the desk binds nothing", async () => {
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "desk-binding-reads-"))
+  try {
+    const sessionId = "2e3f4a5b-6c7d-4e8f-9a0b-1c2d3e4f5a6b"
+    let second = 0
+    const line = (extra) => ({ sessionId, version: "2.1.282", cwd: DESK, timestamp: `2026-09-25T08:00:${String(second++).padStart(2, "0")}.000Z`, ...extra })
+    const use = (id, name, input) => line({ type: "assistant", message: { id: `m-${id}`, model: "claude-opus-5-5", content: [{ type: "tool_use", id, name, input }] } })
+    const result = (id) => line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: false, content: SENTINEL }] } })
+    const lines = [
+      line({ type: "user", message: { role: "user", content: `look ${SENTINEL}` } }),
+      use("r1", "Read", { file_path: `${DESK}/${TRACK}/${SLUG}/task.md` }), result("r1"),
+      use("r2", "Grep", { pattern: SENTINEL, path: `${DESK}/${TRACK}/${SLUG}` }), result("r2"),
+      use("r3", "Bash", { command: `cat ${DESK}/${TRACK}/${SLUG}/task.md && git -C ${DESK} log -1` }), result("r3"),
+      use("r4", "mcp__plugin_desk_desk__desk_status", {}), result("r4"),
+    ]
+    const transcriptPath = path.join(scratch, `${sessionId}.jsonl`)
+    writeFileSync(transcriptPath, `${lines.map((entry) => JSON.stringify(entry)).join("\n")}\n`)
+    const { events } = await deriveClaudeSession({ transcriptPath, contributor: "0f3a9c1d2b4e6f70", plugins: [], endReason: null })
+    const { jobs, calls } = bind(events)
+    assert.deepEqual(jobs, [])
+    assert.deepEqual(calls.readTask, [])
+    assert.deepEqual(calls.between, [])
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
+})
 
 test("a Read-only session binds nothing and reads no card", () => {
   for (const events of [{}, { deskToolCalls: [], fileWrites: [], shellGitCommits: [], nativeCommitShas: [] }, null]) {
@@ -264,7 +306,7 @@ test("a task with no card, live or archived, is not a job", () => {
 // --- Several tasks, transitions, observations --------------------------------
 
 test("two tasks bound by one session both appear, each with its own bases, and bases merge per task", () => {
-  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", authored_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`] }
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`] }
   const { jobs, calls } = bind({
     deskToolCalls: [deskCall()],
     fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/${OTHER}/x.md` }, { at: "2026-09-25T08:00:01.000Z", path: `${DESK}/${TRACK}/${SLUG}/y.md` }],
@@ -321,6 +363,19 @@ test("remote normalization reaches the job: scp-style and credentialed https giv
   assert.equal(scp, https)
   for (const deskRemote of [null, ""]) {
     assert.equal(bind(events, { deskRemote }).jobs[0].job, expectedId(`local:${DESK}`, "", TRACK, SLUG))
+  }
+  // Through a symlink or its real path, an unpublished desk has one job ID: the real path's.
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "desk-binding-local-"))
+  try {
+    const real = path.join(scratch, "real-desk")
+    mkdirSync(real)
+    const link = path.join(scratch, "linked-desk")
+    symlinkSync(real, link)
+    const viaLink = bind(events, { deskRemote: null, deskRoot: link }).jobs[0].job
+    assert.equal(viaLink, bind(events, { deskRemote: null, deskRoot: real }).jobs[0].job)
+    assert.equal(viaLink, expectedId(`local:${realpathSync(real)}`, "", TRACK, SLUG))
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
   }
 })
 

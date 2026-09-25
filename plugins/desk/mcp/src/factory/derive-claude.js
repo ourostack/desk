@@ -65,15 +65,18 @@
 //   - `events.fileWrites` holds `Write`/`Edit`/`MultiEdit` `file_path` and
 //     `NotebookEdit` `notebook_path` only when the paired result was `ok`,
 //     plus every `file-history-delta.trackingPath`.
-//   - `events.shellGitCommits` holds `{ start, end, cwd }` for each `Bash`
-//     call whose command runs `git … commit` (`./shell-git.js`), from the
-//     `tool_use` time to its paired `tool_result` time, whatever the
-//     outcome (a failed `git commit && git push` may still have committed).
-//     `cwd` is the line's `cwd`, moved by a `-C` or an earlier `cd` in the
-//     same command, or `null` when unknown. The command is matched in memory
-//     and never kept: only the directory is. A call with no readable time or
-//     no paired result gives no event. M3-4 matches desk commits to these by
-//     committer time, because `git commit -q` prints no hash.
+//   - `events.shellGitCommits` holds `{ start, end, cwd }` for each
+//     successful `Bash` call whose command runs `git … commit`
+//     (`./shell-git.js`), from the `tool_use` time to its paired
+//     `tool_result` time. Successful means the result is `ok` (not
+//     `is_error`, interrupted or timed out) and does not start with a
+//     non-zero `Exit code`; a failed or no-op commit ("nothing to commit"
+//     exits 1) gives no event. `cwd` is the line's `cwd`, moved by a `-C` or
+//     an earlier `cd` in the same command, or `null` when unknown. The
+//     command and the result text are matched in memory and never kept: only
+//     the directory is. A call with no readable time or no paired result
+//     gives no event. M3-4 matches the desk's own commit reflog entries to
+//     these by time, because `git commit -q` prints no hash.
 //   - `events.nativeCommitShas` is always `[]`: Claude Code records no
 //     commit refs of its own. `events.commitShas` (40-hex tokens in Bash
 //     output) is kept for reference only; binding never uses it, since a
@@ -131,6 +134,16 @@ function computeOutcome(resultBlock, toolUseResult) {
   if (toolUseResult?.timedOutAfterMs != null) return "timeout"
   if (resultBlock.is_error) return "error"
   return "ok"
+}
+
+// A Bash result whose text starts `Exit code <n>` with n > 0. The text is
+// read here and dropped.
+function exitedNonZero(resultBlock) {
+  const content = resultBlock.content
+  let text = typeof content === "string" ? content : ""
+  if (Array.isArray(content)) text = content.find((block) => block?.type === "text")?.text ?? ""
+  const match = /^Exit code (\d+)/u.exec(typeof text === "string" ? text : "")
+  return match !== null && Number(match[1]) !== 0
 }
 
 function mapEntrypoint(raw) {
@@ -325,7 +338,7 @@ function createAgentProcessor({ agentIndex }) {
 
     if (deskCall) deskToolCalls.push({ ...deskCall, ok: outcome === "ok" })
     if (fileWrite && outcome === "ok") fileWrites.push(fileWrite)
-    if (gitCommit) {
+    if (gitCommit && outcome === "ok" && !exitedNonZero(block)) {
       for (const cwd of gitCommit.cwds) shellGitCommits.push({ start: gitCommit.start, end: ts, cwd })
     }
   }

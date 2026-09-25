@@ -422,7 +422,7 @@ test("a 40-hex token in a Bash result's stdout becomes a commitShas event, dedup
   assert.deepEqual(events.commitShas, [COMMIT_SHA])
 })
 
-// --- Shell git commit calls (binding by committer time) -----------------------
+// --- Shell git commit calls (matched to the desk's own commits by time) ------
 
 // The commit message and every other argument carry this; only directories
 // may come back, and never into facts.
@@ -446,12 +446,13 @@ function shellGitSession() {
   const bash = (id, command, extra = {}) => line({ type: "assistant", message: { id: `m-${id}`, model: "claude-opus-5-5", content: [{ type: "tool_use", id, name: "Bash", input: { command, description: COMMIT_MESSAGE_SENTINEL } }] }, ...extra })
   const result = (id, isError = false, extra = {}) => line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content: `[main 1a2b3c4] ${COMMIT_MESSAGE_SENTINEL}` }] }, toolUseResult: { stdout: COMMIT_MESSAGE_SENTINEL, stderr: "" }, ...extra })
   const m = COMMIT_MESSAGE_SENTINEL
+  const answered = (id, content, extra = {}) => line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: false, content }] }, ...extra })
   return [
     line({ type: "user", message: { role: "user", content: `commit it ${SENTINEL}` } }),
     bash("b1", `git add -A && git commit -q -m "${m}"`), // 01
     result("b1"), // 02
     bash("b2", `git -C /tmp/${SENTINEL}-desk commit -q -m "${m}"`), // 03
-    result("b2", true), // 04: a failed call may still have committed, so it counts
+    result("b2"), // 04
     bash("b3", `cd /tmp/${SENTINEL}-other && git -c user.name="${m}" commit -m '${m}'`, { cwd: undefined }), // 05
     result("b3"), // 06
     bash("b4", `git status ${m}`), // 07
@@ -466,18 +467,35 @@ function shellGitSession() {
     result("b8"), // 16
     bash("b9", `git commit -m "${m}"`), // 17
     result("b9", false, { timestamp: "not a time" }), // 18: no readable end
-    bash("b10", `git commit -m "${m}"`), // 19: never answered
+    bash("b11", `git commit -m "${m}"`), // 19
+    result("b11", true), // 20: a failed call
+    bash("b12", `git commit -m "${m}"`), // 21
+    answered("b12", `Exit code 1\nnothing to commit, working tree clean ${m}`), // 22: a no-op commit
+    bash("b13", `git commit -m "${m}"`), // 23
+    answered("b13", [{ type: "text", text: `Exit code 0 ${m}` }]), // 24
+    bash("b14", `git commit -m "${m}"`), // 25
+    answered("b14", [{ type: "image" }]), // 26
+    bash("b15", `git commit -m "${m}"`), // 27
+    answered("b15", [{ type: "text", text: 5 }]), // 28
+    bash("b16", `git commit -m "${m}"`), // 29
+    answered("b16", m, { toolUseResult: { interrupted: true } }), // 30: interrupted
+    bash("b10", `git commit -m "${m}"`), // 31: never answered
   ]
 }
 
-test("a Bash git commit call becomes a shellGitCommits event with its start, end and directory, whatever its outcome", async () => {
+test("only a successful Bash git commit call becomes a shellGitCommits event, with its start, end and directory", async () => {
   const { facts, events } = await deriveLines(shellGitSession())
+  const base = `/tmp/${SENTINEL}-cwd`
+  const span = (from, to, cwd) => ({ start: `2026-09-25T08:00:${from}.000Z`, end: `2026-09-25T08:00:${to}.000Z`, cwd })
   assert.deepEqual(events.shellGitCommits, [
-    { start: "2026-09-25T08:00:01.000Z", end: "2026-09-25T08:00:02.000Z", cwd: `/tmp/${SENTINEL}-cwd` },
-    { start: "2026-09-25T08:00:03.000Z", end: "2026-09-25T08:00:04.000Z", cwd: `/tmp/${SENTINEL}-desk` },
-    { start: "2026-09-25T08:00:05.000Z", end: "2026-09-25T08:00:06.000Z", cwd: `/tmp/${SENTINEL}-other` },
-    { start: "2026-09-25T08:00:09.000Z", end: "2026-09-25T08:00:10.000Z", cwd: null },
-  ])
+    span("01", "02", base),
+    span("03", "04", `/tmp/${SENTINEL}-desk`),
+    span("05", "06", `/tmp/${SENTINEL}-other`),
+    span("09", "10", null),
+    span("23", "24", base),
+    span("25", "26", base),
+    span("27", "28", base),
+  ], "a failed, no-op or interrupted call gives none")
   assert.deepEqual(events.nativeCommitShas, [], "Claude Code records no native commit refs")
   assert.equal(validateFacts(facts).ok, true)
 })

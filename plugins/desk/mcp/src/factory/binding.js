@@ -6,19 +6,31 @@
 //   - `desk_tool`: a successful Desk task tool call (`task_create`,
 //     `task_update`, `task_archive`) names T. Its valid `status` values
 //     become T's `transitions`, `at` being the call time, in time order.
+//     The person desk is the caller's `personPrefix`: Desk's task tools take
+//     it from the server's `--person` flag, never from the call.
 //   - `file_write`: a successful file write lands in T's folder,
 //     `<deskRoot>/[<personPrefix>/]<track>/<task>/…` or
 //     `<track>/_archive/<task>/…`.
 //   - `desk_commit`: a desk commit changed files in T's folder, and either
-//     (a) the session itself ran `git … commit` in the desk (a shell call in
-//     `events.shellGitCommits` whose directory is in the desk) and the
-//     commit's committer or author time falls within that call, or (b) the
-//     commit is one of the session's native refs (`events.nativeCommitShas`,
-//     Copilot's `session_refs`) and exists in the desk. Agents rarely use the
-//     Desk task tools and commit with `git commit -q`, which prints no hash,
-//     so the commit basis never depends on hashes in tool output: the Claude
-//     deriver's `events.commitShas`, scraped from output, never binds, since
-//     `git log` output alone would bind other sessions' commits.
+//     (a) this clone made the commit (a `commit` reflog entry, from
+//     `deskCommitsBetween`) at a time inside one of the session's own
+//     successful `git … commit` shell calls that ran in the desk
+//     (`events.shellGitCommits`), or (b) the commit is one of the session's
+//     native refs (`events.nativeCommitShas`, Copilot's `session_refs`) and
+//     exists in the desk. Agents rarely use the Desk task tools and commit
+//     with `git commit -q`, which prints no hash, so the commit basis never
+//     depends on hashes in tool output: the Claude deriver's
+//     `events.commitShas`, scraped from output, never binds, since `git log`
+//     output alone would bind other sessions' commits. Desk history is read
+//     once per session, over the span from the first call's start to the
+//     last call's end, and each commit is then matched to the calls.
+//     Commits fetched or pulled from another clone or machine have no
+//     `commit` entry here, so they never bind; a commit later rebased keeps
+//     its original entry and time.
+//     One ambiguity remains: two sessions on the same clone whose successful
+//     `git commit` calls overlap in time both bind a commit made in the
+//     overlap. It is rare, and it only adds that session's time to the job,
+//     so both are bound rather than guessing which one made it.
 // Reads never bind (no deriver emits them). Paths outside the desk, relative
 // paths, and paths under `_meta/`, `_friction/`, `_planning/`, the top-level
 // `_archive/`, a dot folder, or directly in a track (such as `track.md`) bind
@@ -52,7 +64,8 @@ import { DESK_MARKER } from "./shell-git.js"
 
 const TERMINAL = new Set(["done", "cancelled"])
 const PERSON_PREFIX = /^(?:desks\/([^/\\]+))?$/u
-const SCP_REMOTE = /^([^@/\s]+@)?([^:/\s]+):(?!\/)(.+)$/u
+const SCP_REMOTE = /^([^@/\s]+@)?([^:/\s]{2,}):\/?([^/].*)$/u
+const WINDOWS_PATH = /^[A-Za-z]:[\\/]/u
 const URL_REMOTE = /^([a-z][a-z0-9+.-]*):\/\/(?:[^@/]*@)?([^/:]+)(?::\d+)?(\/.*)?$/iu
 const HTTPS_SCHEMES = new Set(["ssh", "git", "git+ssh", "ssh+git"])
 
@@ -61,23 +74,25 @@ const HTTPS_SCHEMES = new Set(["ssh", "git", "git+ssh", "ssh+git"])
 // ---------------------------------------------------------------------------
 
 function stripSuffixes(text) {
-  let result = text.replace(/\/+$/u, "")
+  let result = text.replace(/[/\\]+$/u, "")
   if (result.toLowerCase().endsWith(".git")) result = result.slice(0, -4)
-  return result.replace(/\/+$/u, "")
+  return result.replace(/[/\\]+$/u, "")
 }
 
 /**
  * Normalizes a desk remote so every spelling of one repository hashes the
  * same: lowercases the host and owner/repo, strips credentials, a port, a
- * `.git` suffix and trailing slashes, and maps `git@host:owner/repo` and
- * `ssh://`/`git://` URLs to `https://host/owner/repo`. `local:<root>` (a
- * desk with no remote) is kept as is; any other string only loses its
- * `.git` suffix and trailing slashes.
+ * `.git` suffix and trailing slashes, and maps `git@host:owner/repo` (also
+ * `git@host:/owner/repo`) and `ssh://`/`git://` URLs to
+ * `https://host/owner/repo`. `local:<root>` (a desk with no remote) is kept
+ * as is; any other string, a Windows path such as `C:\\repos\\desk` included,
+ * only loses its `.git` suffix and trailing slashes.
  */
 export function normalizeRemote(remote) {
   if (typeof remote !== "string" || remote.trim() === "") throw new TypeError("normalizeRemote: remote must be a non-empty string")
   const text = remote.trim()
   if (text.startsWith("local:")) return text
+  if (WINDOWS_PATH.test(text)) return stripSuffixes(text)
   const url = URL_REMOTE.exec(text)
   if (url) {
     const scheme = url[1].toLowerCase()
@@ -146,15 +161,17 @@ function segmentsInDesk(filePath, roots) {
   return null
 }
 
-function deskRootsOf(deskRoot) {
-  const roots = [path.resolve(deskRoot)]
+// The desk root's real path, or the root as given when it can't be resolved.
+function realOrResolved(deskRoot) {
   try {
-    const real = realpathSync(deskRoot)
-    if (!roots.includes(real)) roots.push(real)
+    return realpathSync(deskRoot)
   } catch {
-    // A desk root that can't be resolved is compared as given.
+    return path.resolve(deskRoot)
   }
-  return roots
+}
+
+function deskRootsOf(deskRoot) {
+  return [...new Set([path.resolve(deskRoot), realOrResolved(deskRoot)])]
 }
 
 // A shell commit's directory with `$DESK` replaced by the desk root.
@@ -200,7 +217,8 @@ export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTa
   requireFunction(deskCommitsBetween, "deskCommitsBetween")
   requireFunction(gitCommitTaskPaths, "gitCommitTaskPaths")
   if (deskRemote !== undefined && deskRemote !== null && typeof deskRemote !== "string") throw new TypeError("bindSession: deskRemote must be a string or empty")
-  const remote = typeof deskRemote === "string" && deskRemote.trim() !== "" ? deskRemote : `local:${path.resolve(deskRoot)}`
+  // One unpublished desk reached through a symlink and through its real path is one desk.
+  const remote = typeof deskRemote === "string" && deskRemote.trim() !== "" ? deskRemote : `local:${realOrResolved(deskRoot)}`
   const roots = deskRootsOf(deskRoot)
   const source = events ?? {}
 
@@ -222,8 +240,6 @@ export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTa
 
   for (const call of asArray(source.deskToolCalls)) {
     if (call?.ok !== true || !isTaskSegment(call.track) || !isTaskSegment(call.slug)) continue
-    const person = typeof call.person === "string" && call.person.trim() !== "" ? call.person.trim() : null
-    if (person !== null && person !== alias) continue
     const entry = touch({ track: call.track, slug: call.slug }, "desk_tool")
     if (ENUMS.jobStatus.includes(call.status) && isTime(call.at)) entry.transitions.push({ to: call.status, at: call.at })
   }
@@ -234,10 +250,19 @@ export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTa
     if (task !== null) touch(task, "file_write")
   }
 
+  const windows = []
   for (const call of asArray(source.shellGitCommits)) {
     if (!isTime(call?.start) || !isTime(call.end) || call.end < call.start) continue
     if (segmentsInDesk(expandDeskMarker(call.cwd, roots[0]), roots) === null) continue
-    for (const commit of asArray(deskCommitsBetween(floorToSecond(call.start), call.end))) bindCommitPaths(commit?.taskPaths)
+    windows.push({ start: floorToSecond(call.start), end: call.end })
+  }
+  if (windows.length > 0) {
+    const first = windows.reduce((earliest, window) => (window.start < earliest ? window.start : earliest), windows[0].start)
+    const last = windows.reduce((latest, window) => (window.end > latest ? window.end : latest), windows[0].end)
+    for (const commit of asArray(deskCommitsBetween(first, last))) {
+      const at = commit?.committed_at
+      if (isTime(at) && windows.some((window) => at >= window.start && at <= window.end)) bindCommitPaths(commit.taskPaths)
+    }
   }
 
   for (const sha of asArray(source.nativeCommitShas)) {

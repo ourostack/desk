@@ -60,9 +60,7 @@ test("with no desk declaration, the first plugin manifest that sets desk.factory
     const plugins = [
       makePlugin(root, "desk-itself", { name: "desk", version: "3.2.0" }),
       makePlugin(root, "no-manifest", undefined),
-      makePlugin(root, "broken", "{ not json"),
       makePlugin(root, "other-key", { name: "x", desk: { other: true } }),
-      makePlugin(root, "null-store", { name: "x", desk: { factory: { store: null } } }),
       makePlugin(root, "first", overlay("first-org/factory")),
       makePlugin(root, "second", overlay("second-org/factory")),
     ]
@@ -123,13 +121,37 @@ test("an unreadable desk declaration (a folder in its place) holds the facts too
 })
 
 test("an invalid overlay declaration holds the facts rather than falling through to a later overlay or the default", () => {
-  for (const store of ["", "not a repo", 42, { owner: "a" }, "a/b/c"]) {
+  for (const store of ["", "not a repo", 42, { owner: "a" }, "a/b/c", null]) {
     scratch((root) => {
       const desk = makeDesk(root)
       const plugins = [makePlugin(root, "bad", overlay(store)), makePlugin(root, "good", overlay("good-org/factory"))]
       assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: plugins }), { store: null, source: "invalid_declaration" }, JSON.stringify(store))
     })
   }
+})
+
+test("every plugin-manifest problem that could hide a declaration holds the facts", () => {
+  const problems = {
+    "unparseable": "{ not json",
+    "not an object": "[]",
+    "a flat key": { name: "x", "desk.factory.store": "flat-org/factory" },
+    "desk not an object": { name: "x", desk: "factory" },
+    "factory not an object": { name: "x", desk: { factory: "flat-org/factory" } },
+    "factory without a store": { name: "x", desk: { factory: {} } },
+  }
+  for (const [label, manifest] of Object.entries(problems)) {
+    scratch((root) => {
+      const desk = makeDesk(root)
+      const plugins = [makePlugin(root, "bad", manifest), makePlugin(root, "good", overlay("good-org/factory"))]
+      assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: plugins }), { store: null, source: "invalid_declaration" }, label)
+    })
+  }
+  scratch((root) => {
+    const desk = makeDesk(root)
+    const unreadable = makePlugin(root, "unreadable", undefined)
+    mkdirSync(path.join(unreadable, "plugin.json"))
+    assert.deepEqual(resolveStore({ deskRoot: desk, pluginDirs: [unreadable] }), { store: null, source: "invalid_declaration" }, "a manifest that can't be read")
+  })
 })
 
 test("a relative or missing desk root is a caller bug", () => {

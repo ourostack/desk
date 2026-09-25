@@ -4,69 +4,117 @@
 import { test, before, after } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
 import { createDeskReaders, readDeskRemote } from "../../src/factory/desk-repo.js"
 import { bindSession, jobId } from "../../src/factory/binding.js"
 
+let scratch
 let desk
+let other
+let origin
 let shas
 
-const card = (fields) => `---\n${fields.join("\n")}\n---\n\n# A task\n`
+const card = (fields, body = "# A task") => `---\n${fields.join("\n")}\n---\n\n${body}\n`
+const LIVE_CARD = ["title: A live task", "status: processing", "created: \"2026-09-20T10:00:00Z\"", "updated: '2026-09-25T09:00:00Z'"]
 
-function git(args, env = {}) {
-  const result = spawnSync("git", ["-C", desk, ...args], {
+// Runs Git in `repo`; `at` stamps the commit and every reflog entry it makes.
+function gitIn(repo, args, at) {
+  const dates = at === undefined ? {} : { GIT_COMMITTER_DATE: at, GIT_AUTHOR_DATE: at }
+  const result = spawnSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
     encoding: "utf8",
-    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", ...env },
+    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", ...dates },
   })
   assert.equal(result.status, 0, result.stderr)
   return result.stdout.trim()
 }
+const git = (args, at) => gitIn(desk, args, at)
 
-function write(relative, text) {
-  const target = path.join(desk, relative)
+function writeIn(repo, relative, text) {
+  const target = path.join(repo, relative)
   mkdirSync(path.dirname(target), { recursive: true })
   writeFileSync(target, text)
 }
+const write = (relative, text) => writeIn(desk, relative, text)
 
-function commitAt({ committed, authored = committed, message }) {
-  git(["add", "-A"])
-  git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", message], {
-    GIT_COMMITTER_DATE: committed,
-    GIT_AUTHOR_DATE: authored,
-  })
-  return git(["rev-parse", "HEAD"])
+function commitIn(repo, at, message, extra = []) {
+  gitIn(repo, ["add", "-A"])
+  gitIn(repo, ["commit", "-q", "-m", message, ...extra], at)
+  return gitIn(repo, ["rev-parse", "HEAD"])
 }
+const commitAt = (at, message, extra) => commitIn(desk, at, message, extra)
 
 before(() => {
-  desk = mkdtempSync(path.join(os.tmpdir(), "desk-repo-"))
+  scratch = mkdtempSync(path.join(os.tmpdir(), "desk-repo-"))
+  origin = path.join(scratch, "origin.git")
+  desk = path.join(scratch, "desk")
+  other = path.join(scratch, "other")
+  mkdirSync(desk)
+  spawnSync("git", ["init", "-q", "--bare", "-b", "main", origin])
   git(["init", "-q", "-b", "main"])
+  git(["remote", "add", "origin", origin])
   shas = {}
-  write("track/live-task/task.md", card(["title: A live task", "status: processing", "created: \"2026-09-20T10:00:00Z\"", "updated: '2026-09-25T09:00:00Z'"]))
-  shas.first = commitAt({ committed: "2026-09-25T08:00:00Z", message: "first" })
+
+  // The initial commit: a `commit (initial)` entry, which is not listed.
+  write("track/live-task/task.md", card(LIVE_CARD))
+  shas.first = commitAt("2026-09-25T08:00:00Z", "first")
 
   write("track/_archive/old-task/task.md", card(["status: done # finished", "created: 2026-09-01T00:00:00Z", "updated: 2026-09-02T12:30:00+02:00"]))
   write("track/live-task/notes with space.md", "notes\n")
-  shas.second = commitAt({ committed: "2026-09-25T08:20:01Z", message: "second" })
+  shas.second = commitAt("2026-09-25T08:20:01Z", "second")
+  git(["push", "-q", "origin", "main"], "2026-09-25T08:20:02Z")
 
-  // A rebased commit: authored inside the window, re-committed long after.
+  // Another clone commits and pushes; this clone fetches and fast-forwards.
+  gitIn(scratch, ["clone", "-q", origin, other], "2026-09-25T08:25:00Z")
+  writeIn(other, "track/fetched-task/task.md", card(["status: blocked"]))
+  shas.fetched = commitIn(other, "2026-09-25T08:40:00Z", "fetched")
+  gitIn(other, ["push", "-q", "origin", "main"], "2026-09-25T08:40:01Z")
+  git(["pull", "-q", "--ff-only", "origin", "main"], "2026-09-25T08:45:00Z")
+
+  // A commit, then its amend: both are this clone's.
+  write("track/amended-task/task.md", card(["status: drafting"]))
+  shas.beforeAmend = commitAt("2026-09-25T09:00:00Z", "draft")
+  write("track/amended-task/notes.md", "more\n")
+  shas.amended = commitAt("2026-09-25T09:05:00Z", "drafted", ["--amend"])
+
+  // A commit later rebased onto another clone's work keeps its own entry.
   write("track/other-task/task.md", card(["status: blocked"]))
-  shas.rebased = commitAt({ authored: "2026-09-25T08:30:00Z", committed: "2026-09-25T11:00:00Z", message: "rebased" })
+  shas.preRebase = commitAt("2026-09-25T09:30:00Z", "before rebase")
+  gitIn(other, ["pull", "-q", "--ff-only", "origin", "main"], "2026-09-25T09:50:00Z")
+  writeIn(other, "_meta/log.md", "log\n")
+  commitIn(other, "2026-09-25T10:00:00Z", "upstream")
+  gitIn(other, ["push", "-q", "origin", "main"], "2026-09-25T10:00:01Z")
+  git(["pull", "-q", "--rebase", "origin", "main"], "2026-09-25T11:00:00Z")
 
-  // A side branch merged back: the merge commit itself is skipped.
-  git(["checkout", "-q", "-b", "side"])
+  // A side branch merged with `git merge`: the merge entry is not listed.
+  git(["checkout", "-q", "-b", "side"], "2026-09-25T11:59:00Z")
   write("track/side-task/task.md", card(["status: drafting"]))
-  shas.side = commitAt({ committed: "2026-09-25T12:00:00Z", message: "side" })
-  git(["checkout", "-q", "main"])
-  write("_meta/log.md", "log\n")
-  shas.main = commitAt({ committed: "2026-09-25T12:00:10Z", message: "main" })
-  git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "merge", "-q", "--no-ff", "-m", "merge", "side"], {
-    GIT_COMMITTER_DATE: "2026-09-25T12:00:20Z",
-    GIT_AUTHOR_DATE: "2026-09-25T12:00:20Z",
+  shas.side = commitAt("2026-09-25T12:00:00Z", "side")
+  git(["checkout", "-q", "main"], "2026-09-25T12:00:05Z")
+  write("_meta/other.md", "main\n")
+  shas.main = commitAt("2026-09-25T12:00:10Z", "main")
+  git(["merge", "-q", "--no-ff", "-m", "merge", "side"], "2026-09-25T12:00:20Z")
+
+  // A conflicted merge committed by hand: a `commit (merge)` entry, whose
+  // paths are only the file resolved by hand.
+  git(["checkout", "-q", "-b", "conflict"], "2026-09-25T12:29:00Z")
+  write("track/live-task/task.md", card(LIVE_CARD, "# One side"))
+  write("track/c1-only/task.md", card(["status: drafting"]))
+  commitAt("2026-09-25T12:30:00Z", "one side")
+  git(["checkout", "-q", "main"], "2026-09-25T12:30:05Z")
+  write("track/live-task/task.md", card(LIVE_CARD, "# Other side"))
+  commitAt("2026-09-25T12:30:10Z", "other side")
+  // The merge stops on the conflict (exit 1), leaving MERGE_HEAD for the commit.
+  const merge = spawnSync("git", ["-C", desk, "-c", "user.name=Test", "-c", "user.email=test@example.com", "merge", "-q", "conflict"], {
+    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_COMMITTER_DATE: "2026-09-25T12:30:20Z" },
   })
-  shas.merge = git(["rev-parse", "HEAD"])
+  assert.equal(merge.status, 1)
+  write("track/live-task/task.md", card(LIVE_CARD, "# Resolved"))
+  git(["add", "-A"])
+  git(["commit", "-q", "-m", "resolved"], "2026-09-25T12:30:30Z")
+  shas.conflictMerge = git(["rev-parse", "HEAD"])
 
   // Cards that are not committed, for the reader's edge cases.
   write("track/no-frontmatter/task.md", "# Just a heading\nstatus: done\n")
@@ -79,7 +127,7 @@ before(() => {
 })
 
 after(() => {
-  rmSync(desk, { recursive: true, force: true })
+  rmSync(scratch, { recursive: true, force: true })
 })
 
 // --- readTask --------------------------------------------------------------------
@@ -134,25 +182,44 @@ test("readTask reads under the person prefix when one is given", () => {
   assert.throws(() => createDeskReaders({ deskRoot: "relative" }), TypeError)
 })
 
-// --- deskCommitsBetween --------------------------------------------------------------
+// --- deskCommitsBetween: the commits this clone made -------------------------------------
 
-test("deskCommitsBetween finds the commit made in the window, with every path it changed", () => {
-  const { deskCommitsBetween } = createDeskReaders({ deskRoot: desk })
-  assert.deepEqual(deskCommitsBetween("2026-09-25T08:20:01.000Z", "2026-09-25T08:20:02.500Z"), [{
+const between = (start, end, root = desk) => createDeskReaders({ deskRoot: root }).deskCommitsBetween(start, end)
+
+test("deskCommitsBetween lists this clone's commit made in the window, once, with every path it changed", () => {
+  assert.deepEqual(between("2026-09-25T08:20:01.000Z", "2026-09-25T08:20:02.500Z"), [{
     sha: shas.second,
     committed_at: "2026-09-25T08:20:01.000Z",
-    authored_at: "2026-09-25T08:20:01.000Z",
     taskPaths: ["track/_archive/old-task/task.md", "track/live-task/notes with space.md"],
   }])
-  assert.deepEqual(deskCommitsBetween("2026-09-25T08:20:02.000Z", "2026-09-25T08:25:00.000Z"), [])
+  assert.deepEqual(between("2026-09-25T08:20:02.000Z", "2026-09-25T08:25:00.000Z"), [], "the window's end bounds it")
 })
 
-test("deskCommitsBetween matches a rebased commit by its author time, and skips merge commits", () => {
-  const { deskCommitsBetween } = createDeskReaders({ deskRoot: desk })
-  assert.deepEqual(deskCommitsBetween("2026-09-25T08:29:59.000Z", "2026-09-25T08:30:05.000Z").map(({ sha }) => sha), [shas.rebased])
-  const late = deskCommitsBetween("2026-09-25T12:00:00.000Z", "2026-09-25T12:00:30.000Z").map(({ sha }) => sha)
-  assert.deepEqual(late.sort(), [shas.main, shas.side].sort())
-  assert.equal(late.includes(shas.merge), false)
+test("deskCommitsBetween never lists a commit fetched or pulled from another clone, nor the pull itself", () => {
+  assert.deepEqual(between("2026-09-25T08:39:59.000Z", "2026-09-25T08:45:05.000Z"), [])
+  assert.deepEqual(between("2026-09-25T09:59:59.000Z", "2026-09-25T10:00:05.000Z"), [])
+})
+
+test("deskCommitsBetween lists a commit and its amend, and a commit later rebased keeps its original entry", () => {
+  assert.deepEqual(between("2026-09-25T09:00:00.000Z", "2026-09-25T09:05:00.000Z").map(({ sha, taskPaths }) => ({ sha, taskPaths })), [
+    { sha: shas.amended, taskPaths: ["track/amended-task/notes.md", "track/amended-task/task.md"] },
+    { sha: shas.beforeAmend, taskPaths: ["track/amended-task/task.md"] },
+  ])
+  assert.deepEqual(between("2026-09-25T09:29:59.000Z", "2026-09-25T09:30:05.000Z"), [
+    { sha: shas.preRebase, committed_at: "2026-09-25T09:30:00.000Z", taskPaths: ["track/other-task/task.md"] },
+  ])
+  assert.deepEqual(between("2026-09-25T10:59:59.000Z", "2026-09-25T11:00:05.000Z"), [], "the rebase's own entries are not commits")
+})
+
+test("deskCommitsBetween skips checkouts and git merge entries, and lists a hand-committed merge with only the files resolved", () => {
+  assert.deepEqual(between("2026-09-25T11:58:00.000Z", "2026-09-25T12:00:25.000Z").map(({ sha }) => sha).sort(), [shas.main, shas.side].sort())
+  assert.deepEqual(between("2026-09-25T12:30:25.000Z", "2026-09-25T12:30:35.000Z"), [
+    { sha: shas.conflictMerge, committed_at: "2026-09-25T12:30:30.000Z", taskPaths: ["track/live-task/task.md"] },
+  ])
+})
+
+test("the initial commit's entry is not one of the listed kinds", () => {
+  assert.deepEqual(between("2026-09-25T07:59:59.000Z", "2026-09-25T08:00:05.000Z"), [])
 })
 
 test("Git ignores GIT_* variables the caller inherited, so a hook's GIT_DIR cannot point it at another repository", () => {
@@ -160,8 +227,7 @@ test("Git ignores GIT_* variables the caller inherited, so a hook's GIT_DIR cann
   process.env.GIT_DIR = path.join(os.tmpdir(), "desk-repo-not-a-repository")
   process.env.GIT_WORK_TREE = os.tmpdir()
   try {
-    const { deskCommitsBetween } = createDeskReaders({ deskRoot: desk })
-    assert.deepEqual(deskCommitsBetween("2026-09-25T08:20:01.000Z", "2026-09-25T08:20:02.500Z").map(({ sha }) => sha), [shas.second])
+    assert.deepEqual(between("2026-09-25T08:20:01.000Z", "2026-09-25T08:20:02.500Z").map(({ sha }) => sha), [shas.second])
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]
@@ -171,13 +237,12 @@ test("Git ignores GIT_* variables the caller inherited, so a hook's GIT_DIR cann
 })
 
 test("deskCommitsBetween returns nothing for an invalid window, outside a repository, or when Git is missing", () => {
-  const { deskCommitsBetween } = createDeskReaders({ deskRoot: desk })
-  assert.deepEqual(deskCommitsBetween("yesterday", "2026-09-25T08:20:02.000Z"), [])
-  assert.deepEqual(deskCommitsBetween("2026-09-25T08:20:02.000Z", "2026-09-25T08:20:01.000Z"), [])
-  assert.deepEqual(deskCommitsBetween("2026-09-25T08:20:01.000Z", 5), [])
+  assert.deepEqual(between("yesterday", "2026-09-25T08:20:02.000Z"), [])
+  assert.deepEqual(between("2026-09-25T08:20:02.000Z", "2026-09-25T08:20:01.000Z"), [])
+  assert.deepEqual(between("2026-09-25T08:20:01.000Z", 5), [])
   const outside = mkdtempSync(path.join(os.tmpdir(), "desk-repo-none-"))
   try {
-    assert.deepEqual(createDeskReaders({ deskRoot: outside }).deskCommitsBetween("2026-09-25T08:00:00.000Z", "2026-09-25T13:00:00.000Z"), [])
+    assert.deepEqual(between("2026-09-25T08:00:00.000Z", "2026-09-25T13:00:00.000Z", outside), [])
   } finally {
     rmSync(outside, { recursive: true, force: true })
   }
@@ -185,18 +250,46 @@ test("deskCommitsBetween returns nothing for an invalid window, outside a reposi
   assert.deepEqual(noGit.deskCommitsBetween("2026-09-25T08:00:00.000Z", "2026-09-25T13:00:00.000Z"), [])
 })
 
+test("a desk root that is not its repository's top level reads no history and no remote: Git never walks up", () => {
+  const inner = path.join(desk, "track")
+  assert.deepEqual(between("2026-09-25T08:20:01.000Z", "2026-09-25T08:20:02.500Z", inner), [])
+  assert.deepEqual(createDeskReaders({ deskRoot: inner }).gitCommitTaskPaths(shas.second), { exists: false, taskPaths: [] })
+  assert.equal(readDeskRemote({ deskRoot: inner }), null)
+  assert.equal(readDeskRemote({ deskRoot: desk }), origin)
+})
+
+test("a repository with no commits yet lists nothing", () => {
+  const empty = path.join(scratch, "empty")
+  mkdirSync(empty)
+  gitIn(empty, ["init", "-q", "-b", "main"])
+  assert.deepEqual(between("2026-09-25T08:00:00.000Z", "2026-09-25T13:00:00.000Z", empty), [])
+})
+
+test("a stand-in Git whose branch listing fails lists nothing", () => {
+  const fakeGit = path.join(scratch, "fake-git-no-refs.sh")
+  writeFileSync(fakeGit, `#!/bin/sh\nfor arg in "$@"; do [ "$arg" = for-each-ref ] && exit 1; done\nexec git "$@"\n`, { mode: 0o755 })
+  assert.deepEqual(createDeskReaders({ deskRoot: desk, git: fakeGit }).deskCommitsBetween("2026-09-25T08:20:01.000Z", "2026-09-25T08:20:02.500Z"), [])
+})
+
+test("reflog lines with an unreadable time are skipped", () => {
+  const fakeGit = path.join(scratch, "fake-git-bad-time.sh")
+  const record = `\x1e${"a".repeat(40)}\x1fHEAD@{not a time}\x1fcommit: x\x00\ntrack/t/task.md\x00\x1e${"b".repeat(40)}\x1fHEAD\x1fcommit: y\x00`
+  writeFileSync(fakeGit, `#!/bin/sh\nfor arg in "$@"; do [ "$arg" = --walk-reflogs ] && { printf '${record.replaceAll("\x1e", "\\036").replaceAll("\x1f", "\\037").replaceAll("\x00", "\\000").replaceAll("\n", "\\n")}'; exit 0; }; done\nexec git "$@"\n`, { mode: 0o755 })
+  assert.deepEqual(createDeskReaders({ deskRoot: desk, git: fakeGit }).deskCommitsBetween("2026-09-25T08:00:00.000Z", "2026-09-25T13:00:00.000Z"), [])
+})
+
 // --- gitCommitTaskPaths ------------------------------------------------------------------
 
 test("gitCommitTaskPaths confirms a desk commit and lists what it changed, the root commit included", () => {
   const { gitCommitTaskPaths } = createDeskReaders({ deskRoot: desk })
   assert.deepEqual(gitCommitTaskPaths(shas.first), { exists: true, taskPaths: ["track/live-task/task.md"] })
-  assert.deepEqual(gitCommitTaskPaths(shas.rebased), { exists: true, taskPaths: ["track/other-task/task.md"] })
+  assert.deepEqual(gitCommitTaskPaths(shas.fetched), { exists: true, taskPaths: ["track/fetched-task/task.md"] }, "a native ref needs only to exist in the desk")
 })
 
 test("gitCommitTaskPaths reports a commit Git confirms but cannot list as changing nothing", () => {
-  // A stand-in Git that confirms every commit and fails every other command.
+  // A stand-in Git that confirms every commit, finds the desk, and fails every other command.
   const fakeGit = path.join(desk, "..", `${path.basename(desk)}-fake-git.sh`)
-  writeFileSync(fakeGit, "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = cat-file ] && exit 0; done\nexit 1\n", { mode: 0o755 })
+  writeFileSync(fakeGit, "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = cat-file ] && exit 0; [ \"$arg\" = rev-parse ] && exec git \"$@\"; done\nexit 1\n", { mode: 0o755 })
   try {
     const { gitCommitTaskPaths } = createDeskReaders({ deskRoot: desk, git: fakeGit })
     assert.deepEqual(gitCommitTaskPaths(shas.first), { exists: true, taskPaths: [] })
@@ -215,31 +308,49 @@ test("gitCommitTaskPaths says a commit that is not in the desk, or is not a SHA,
 // --- readDeskRemote ---------------------------------------------------------------------
 
 test("readDeskRemote reads origin's URL, and is null with no origin or no repository", () => {
-  assert.equal(readDeskRemote({ deskRoot: desk }), null)
-  git(["remote", "add", "origin", "git@github.com:Owner/Desk.git"])
+  git(["remote", "set-url", "origin", "git@github.com:Owner/Desk.git"])
   try {
     assert.equal(readDeskRemote({ deskRoot: desk }), "git@github.com:Owner/Desk.git")
-  } finally {
     git(["remote", "remove", "origin"])
+    assert.equal(readDeskRemote({ deskRoot: desk }), null)
+  } finally {
+    spawnSync("git", ["-C", desk, "remote", "remove", "origin"])
+    git(["remote", "add", "origin", origin])
   }
-  assert.equal(readDeskRemote({ deskRoot: path.join(desk, "track") }), null, "a folder inside the desk reads the desk's remote, which is none here")
   assert.equal(readDeskRemote({ deskRoot: path.join(os.tmpdir(), "desk-repo-missing-folder") }), null)
 })
 
 // --- The real readers drive binding end to end ---------------------------------------------
 
-test("end to end: a session's git commit call in the desk binds the tasks its commit changed", () => {
-  const readers = createDeskReaders({ deskRoot: desk })
-  const { jobs } = bindSession({
-    events: { shellGitCommits: [{ start: "2026-09-25T08:20:01.300Z", end: "2026-09-25T08:20:01.900Z", cwd: desk }] },
+function bindWith(windows) {
+  return bindSession({
+    events: { shellGitCommits: windows.map(([start, end]) => ({ start, end, cwd: desk })) },
     deskRoot: desk,
     deskRemote: null,
     personPrefix: "",
-    ...readers,
-  })
-  const id = (slug) => jobId({ deskRemote: `local:${desk}`, personPrefix: "", track: "track", slug })
-  assert.deepEqual(jobs.map(({ job, basis, observed }) => ({ job, basis, observed })).sort((a, b) => (a.job < b.job ? -1 : 1)), [
+    ...createDeskReaders({ deskRoot: desk }),
+  }).jobs
+}
+const id = (slug) => jobId({ deskRemote: `local:${realpathSync(desk)}`, personPrefix: "", track: "track", slug })
+const byJob = (a, b) => (a.job < b.job ? -1 : 1)
+
+test("end to end: a session's git commit call in the desk binds the tasks its own commit changed", () => {
+  const jobs = bindWith([["2026-09-25T08:20:01.300Z", "2026-09-25T08:20:01.900Z"]])
+  assert.deepEqual(jobs.map(({ job, basis, observed }) => ({ job, basis, observed })).sort(byJob), [
     { job: id("live-task"), basis: ["desk_commit"], observed: { status: "processing", at: null } },
     { job: id("old-task"), basis: ["desk_commit"], observed: { status: "done", at: "2026-09-02T10:30:00.000Z" } },
-  ].sort((a, b) => (a.job < b.job ? -1 : 1)))
+  ].sort(byJob))
+})
+
+test("end to end, two clones: a session in this clone never binds the other clone's commit, fetched here during its call", () => {
+  // The other clone committed track/fetched-task at 08:40:00 and this clone
+  // fetched it at 08:45; a session here had a git commit call spanning both.
+  assert.deepEqual(bindWith([["2026-09-25T08:39:59.000Z", "2026-09-25T08:45:05.000Z"]]), [])
+})
+
+test("end to end, same clone: two sessions whose git commit calls overlap one commit both bind it (the documented ambiguity)", () => {
+  const first = bindWith([["2026-09-25T09:29:58.000Z", "2026-09-25T09:30:01.000Z"]])
+  const second = bindWith([["2026-09-25T09:29:59.500Z", "2026-09-25T09:30:03.000Z"]])
+  assert.deepEqual(first.map(({ job }) => job), [id("other-task")])
+  assert.deepEqual(second.map(({ job }) => job), [id("other-task")])
 })

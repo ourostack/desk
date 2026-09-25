@@ -27,7 +27,7 @@ test("-C sets the directory, relative -C resolves against the cwd, and several -
 
 test("global options before the subcommand are skipped, with or without a value", () => {
   assert.deepEqual(find("git -c user.name=\"Ari Mendelow\" -c user.email=a@b.c commit -q -m done"), [BASE])
-  assert.deepEqual(find("git --no-pager --git-dir=.git --work-tree . commit"), [BASE])
+  assert.deepEqual(find("git --no-pager -p commit"), [BASE])
   assert.deepEqual(find("git --namespace ns --config-env a=B --super-prefix p commit"), [BASE])
 })
 
@@ -51,10 +51,47 @@ test("other subcommands, git words in arguments, lookalike subcommands and comme
 test("cd earlier in the same command moves later commits; separators inside quotes do not split", () => {
   assert.deepEqual(find("cd /d && git add x && git commit -q -m \"a && b; c | d\""), ["/d"])
   assert.deepEqual(find("cd /d; git commit -m 'one; two'"), ["/d"])
-  assert.deepEqual(find("pushd /p >/dev/null || exit 1\ngit commit"), ["/p"])
+  assert.deepEqual(find("cd /p >/dev/null || exit 1\ngit commit"), ["/p"])
   assert.deepEqual(find("cd sub && git -C inner commit"), ["/base/repo/sub/inner"])
   assert.deepEqual(find("(cd /s && git commit) & wait"), ["/s"])
   assert.deepEqual(find("cd -P /q && git commit"), ["/q"])
+})
+
+test("--git-dir, --work-tree, GIT_DIR and GIT_WORK_TREE point Git elsewhere, so the directory is unknown", () => {
+  for (const command of [
+    "git --git-dir=/other/.git commit",
+    "git --git-dir /other/.git commit",
+    "git --work-tree /other commit",
+    "git --work-tree=/other commit",
+    "GIT_DIR=/other/.git git commit",
+    "GIT_WORK_TREE=/other git commit",
+    "env GIT_DIR=/other/.git git commit",
+    "export GIT_DIR=/other/.git; git commit",
+    "GIT_WORK_TREE=/other; git commit",
+    "git --git-dir=/other/.git -c a=b --no-pager commit",
+    "git --work-tree /other -C sub commit",
+  ]) {
+    assert.deepEqual(find(command), [null], command)
+  }
+  assert.deepEqual(find("git --git-dir=/other/.git status && git --work-tree /o log --grep commit"), [])
+  assert.deepEqual(find("git --work-tree"), [])
+  // A word that only looks like one, inside a message, changes nothing.
+  assert.deepEqual(find("git commit -m \"GIT_DIR=x\" && echo GIT_WORK_TREE=y && git commit"), [BASE])
+  assert.deepEqual(find("A=1 git commit"), [BASE])
+  const ps = (command) => gitCommitCwds({ command, cwd: "C:\\base", home: "C:\\Users\\me", dialect: "powershell" })
+  assert.deepEqual(ps("$env:GIT_DIR = \"C:\\other\\.git\"; git commit"), [null])
+  assert.deepEqual(ps("$env:git_work_tree='C:\\o'; git commit"), [null])
+})
+
+test("pushd, popd and subshells are not modeled: the directory becomes unknown until an absolute cd", () => {
+  assert.deepEqual(find("cd /other && pushd $DESK && popd && git commit"), [null])
+  assert.deepEqual(find("pushd /other && popd && git commit"), [null])
+  assert.deepEqual(find("pushd /p >/dev/null || exit 1\ngit commit"), [null])
+  assert.deepEqual(find("(cd /other && git commit); git commit"), ["/other", null])
+  assert.deepEqual(find("cd /d && (git commit)"), [null])
+  assert.deepEqual(find("(true); cd /again && git commit"), ["/again"])
+  const ps = (command) => gitCommitCwds({ command, cwd: "C:\\base", home: "C:\\Users\\me", dialect: "powershell" })
+  assert.deepEqual(ps("Push-Location D:\\x; Pop-Location; git commit"), [null])
 })
 
 test("two commits in one command are both found, and the same directory is reported once", () => {
@@ -158,7 +195,7 @@ test("PowerShell: backslashes are literal, backtick escapes, Windows paths and $
   assert.deepEqual(ps("git -C sub commit"), ["C:\\base\\sub"])
   assert.deepEqual(ps("Set-Location -Path D:\\d; git commit -m 'it''s'"), ["D:\\d"])
   assert.deepEqual(ps("sl $env:DESK; git commit"), [DESK_MARKER])
-  assert.deepEqual(ps("Push-Location \"$env:DESK\\track\"; git commit"), [`${DESK_MARKER}/track`])
+  assert.deepEqual(ps("Set-Location \"$env:DESK\\track\"; git commit"), [`${DESK_MARKER}/track`])
   assert.deepEqual(ps("git -C $env:USERPROFILE\\desk commit"), ["C:\\Users\\me\\desk"])
   assert.deepEqual(ps("git -C $HOME commit"), ["C:\\Users\\me"])
   assert.deepEqual(ps("git -C ~\\desk commit"), ["C:\\Users\\me\\desk"])

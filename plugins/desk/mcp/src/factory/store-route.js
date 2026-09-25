@@ -8,15 +8,21 @@
 //      that is `{ "desk": { "factory": { "store": "owner/repo" } } }` —
 //      source `overlay`. Each folder's `plugin.json`,
 //      `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` are
-//      read in that order; a missing or unparseable manifest, or one that
-//      does not set the key (`null` counts as not set), is skipped.
+//      read in that order. A missing manifest, or one with no top-level
+//      `desk` key, is skipped.
 //   3. `ourostack/factory` — source `default`.
-// A declaration that is present but invalid — an unreadable or malformed
-// `_meta/factory.json`, a wrong shape or schema version, an extra key, or a
-// store that is not `owner/repo` — returns `{ store: null, source:
+// A declaration that is present but invalid returns `{ store: null, source:
 // "invalid_declaration" }`, and the caller holds the facts. It never falls
 // through to a later overlay or the default: a desk that meant to report to
-// a private store must never report to a public one by mistake.
+// a private store must never report to a public one by mistake. Invalid
+// means, for `_meta/factory.json`: unreadable or malformed, a wrong shape or
+// schema version, an extra key, or a store that is not `owner/repo`. For a
+// plugin manifest it means every problem that could hide a declaration: a
+// manifest that exists but can't be read or parsed or is not an object, a
+// flat `"desk.factory.store"` key, a `desk` or `desk.factory` that is not an
+// object, a `desk.factory` with no `store`, or a store (`null` included)
+// that is not `owner/repo`. An unreadable manifest of an unrelated plugin
+// therefore holds the facts too: the declaration can't be ruled out.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -65,14 +71,26 @@ function deskDeclaration(deskRoot) {
   return { store: json.store, source: "desk" }
 }
 
+// `undefined` when the manifest declares nothing, else the declaration.
+function manifestDeclaration(file) {
+  const { found, json } = readJson(file)
+  if (!found) return undefined
+  if (!isObject(json) || Object.hasOwn(json, "desk.factory.store")) return invalid()
+  if (!Object.hasOwn(json, "desk")) return undefined
+  const { desk } = json
+  if (!isObject(desk)) return invalid()
+  if (!Object.hasOwn(desk, "factory")) return undefined
+  const { factory } = desk
+  if (!isObject(factory) || !isStore(factory.store)) return invalid()
+  return { store: factory.store, source: "overlay" }
+}
+
 function overlayDeclaration(pluginDirs) {
   for (const dir of Array.isArray(pluginDirs) ? pluginDirs : []) {
     if (typeof dir !== "string") continue
     for (const manifest of MANIFESTS) {
-      const { json } = readJson(path.join(dir, manifest))
-      const store = isObject(json) && isObject(json.desk) && isObject(json.desk.factory) ? json.desk.factory.store : undefined
-      if (store === undefined || store === null) continue
-      return isStore(store) ? { store, source: "overlay" } : invalid()
+      const declaration = manifestDeclaration(path.join(dir, manifest))
+      if (declaration !== undefined) return declaration
     }
   }
   return null

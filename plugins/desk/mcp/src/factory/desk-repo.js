@@ -10,16 +10,29 @@
 // time `normalizeTimestamp` refuses (a bare date, say), is `null`, never a
 // guess; an unreadable card gives all three `null`.
 //
-// `deskCommitsBetween(startIso, endIso)` lists the desk's non-merge commits
-// on local and remote-tracking branches whose committer or author time falls
-// in the window (Git keeps whole seconds). Author time is kept through a
-// rebase, which re-stamps the committer time when a session pulls before it
-// pushes. Each is `{ sha, committed_at, authored_at, taskPaths }`, where
-// `taskPaths` are the desk-relative paths the commit changed (renames as a
-// delete and an add); `bindSession` decides which of them are task folders.
-// `gitCommitTaskPaths(sha)` answers the same for one commit, with `exists:
-// false` for a SHA not in the desk. `readDeskRemote` returns `origin`'s URL,
-// or `null`.
+// `deskCommitsBetween(startIso, endIso)` lists the commits this clone made
+// in the window: the reflog entries of `HEAD` and every local branch whose
+// subject starts `commit:`, `commit (amend):` or `commit (merge):`, and
+// whose reflog time (when this clone made the commit, to the second) falls
+// in the window. Git is asked with both `--since` and `--until`. Fetched,
+// pulled, rebased, checked-out and `git merge` entries are not commits this
+// clone made, so another clone's or machine's commit never appears, and a
+// commit later rebased keeps its original entry, SHA and time. Each is `{
+// sha, committed_at, taskPaths }`, `committed_at` being the reflog time and
+// `taskPaths` the desk-relative paths the commit changed (renames as a
+// delete and an add; for a merge, only the files that differ from every
+// parent, which is what the merge's author resolved). The reflog subject
+// holds the commit message; it is matched in memory and never returned.
+// `bindSession` decides which paths are task folders. `gitCommitTaskPaths(
+// sha)` lists one commit's paths, with `exists: false` for a SHA not in the
+// desk. `readDeskRemote` returns `origin`'s URL, or `null`.
+//
+// The desk must be a repository of its own: Git's top level for the desk
+// root must be the desk root's real path (checked as an empty
+// `rev-parse --show-prefix`). Otherwise (a desk inside a
+// dotfiles repository at `$HOME`, say) Git would walk up and read another
+// repository's history and remote, so the commit readers find nothing and
+// `readDeskRemote` returns `null`.
 //
 // Git runs with `GIT_*` variables removed (a hook's `GIT_DIR` must not point
 // it elsewhere), no prompts, and a timeout. Any failure reads as "nothing
@@ -116,22 +129,35 @@ function cardFields(text) {
 // Git history.
 // ---------------------------------------------------------------------------
 
-function isoFromSeconds(seconds) {
-  return new Date(Number(seconds) * 1000).toISOString()
-}
+const COMMIT_ENTRY = /^commit(?: \((?:amend|merge)\))?: /u
+const REFLOG_TIME = /@\{([^}]+)\}$/u
 
-// `git log -z --name-only --format=%x1e<header>`: records split by 0x1e, a
-// NUL after the header, then a newline and NUL-separated paths.
-function parseLog(output) {
-  const commits = []
+// `git log -g -z --name-only --format=%x1e<header>`: records split by 0x1e,
+// a NUL after the header, then a newline (a NUL for a merge) and
+// NUL-separated paths. The header is `sha 0x1f ref@{time} 0x1f subject`.
+function parseReflog(output) {
+  const entries = []
   for (const record of output.split("\x1e")) {
     const headerEnd = record.indexOf("\0")
     if (headerEnd === -1) continue
-    const [sha, committed, authored] = record.slice(0, headerEnd).split("\x1f")
-    const taskPaths = record.slice(headerEnd + 1).replace(/^\n/u, "").split("\0").filter((entry) => entry !== "")
-    commits.push({ sha, committed: Number(committed), authored: Number(authored), taskPaths })
+    const [sha, selector, subject] = record.slice(0, headerEnd).split("\x1f")
+    const time = REFLOG_TIME.exec(selector)
+    const at = time === null ? null : normalizeTimestamp(time[1])
+    if (at === null || !COMMIT_ENTRY.test(subject)) continue
+    const taskPaths = record.slice(headerEnd + 1).split("\0").map((entry) => entry.replace(/^\n/u, "")).filter((entry) => entry !== "")
+    entries.push({ sha, committed_at: at, taskPaths })
   }
-  return commits
+  return entries
+}
+
+// True when Git's top level for `deskRoot` is the desk root itself. Git's
+// `--show-prefix` is the desk root's path below its top level, so it is
+// empty exactly when the top level is the desk root's real path (it
+// resolves symlinks, and letter case on a case-insensitive disk, as Git
+// does).
+function isOwnRepository(options) {
+  const prefix = runGit(options, ["rev-parse", "--show-prefix"])
+  return prefix !== null && prefix.trim() === ""
 }
 
 function isWindow(startIso, endIso) {
@@ -157,29 +183,35 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
     return null
   }
 
+  let ownRepository
+  const deskIsOwnRepository = () => {
+    if (ownRepository === undefined) ownRepository = isOwnRepository(options)
+    return ownRepository
+  }
+
   function deskCommitsBetween(startIso, endIso) {
-    if (!isWindow(startIso, endIso)) return []
+    if (!isWindow(startIso, endIso) || !deskIsOwnRepository()) return []
+    const branches = runGit(options, ["for-each-ref", "--format=%(refname)", "refs/heads"])
+    if (branches === null) return []
     const output = runGit(options, [
-      "log", "--branches", "--remotes", "--no-merges", "--no-renames", `--since=${startIso}`,
-      "--format=%x1e%H%x1f%ct%x1f%at", "--name-only", "-z",
+      "log", "--walk-reflogs", "--date=iso-strict", `--since=${startIso}`, `--until=${endIso}`,
+      "--no-renames", "--cc", "--name-only", "-z", "--format=%x1e%H%x1f%gd%x1f%gs",
+      "HEAD", ...branches.split("\n").filter((ref) => ref.startsWith("refs/heads/")),
     ])
     if (output === null) return []
-    const start = Date.parse(startIso)
-    const end = Date.parse(endIso)
-    const within = (seconds) => seconds * 1000 >= start && seconds * 1000 <= end
-    return parseLog(output)
-      .filter((commit) => within(commit.committed) || within(commit.authored))
-      .map((commit) => ({
-        sha: commit.sha,
-        committed_at: isoFromSeconds(commit.committed),
-        authored_at: isoFromSeconds(commit.authored),
-        taskPaths: commit.taskPaths,
-      }))
+    // Git bounds the entries by reflog time; binding matches each to a call.
+    // HEAD's reflog and the branch's both record one commit: keep it once.
+    const seen = new Map()
+    for (const entry of parseReflog(output)) {
+      const key = `${entry.sha}@${entry.committed_at}`
+      if (!seen.has(key)) seen.set(key, entry)
+    }
+    return [...seen.values()]
   }
 
   function gitCommitTaskPaths(sha) {
     const missing = { exists: false, taskPaths: [] }
-    if (typeof sha !== "string" || !PATTERNS.commitSha.test(sha)) return missing
+    if (typeof sha !== "string" || !PATTERNS.commitSha.test(sha) || !deskIsOwnRepository()) return missing
     if (runGit(options, ["cat-file", "-e", `${sha}^{commit}`]) === null) return missing
     const output = runGit(options, ["diff-tree", "--root", "--no-commit-id", "--no-renames", "-r", "-z", "--name-only", sha])
     return { exists: true, taskPaths: (output ?? "").split("\0").filter((entry) => entry !== "") }
@@ -190,7 +222,9 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
 
 /** `readDeskRemote({ deskRoot, git })`: the desk's `origin` URL, or `null`. */
 export function readDeskRemote({ deskRoot, git = "git", timeoutMs = DEFAULT_TIMEOUT_MS }) {
-  const output = runGit({ git, deskRoot, timeoutMs }, ["config", "--get", "remote.origin.url"])
+  const options = { git, deskRoot, timeoutMs }
+  if (!isOwnRepository(options)) return null
+  const output = runGit(options, ["config", "--get", "remote.origin.url"])
   const remote = output === null ? "" : output.trim()
   return remote === "" ? null : remote
 }

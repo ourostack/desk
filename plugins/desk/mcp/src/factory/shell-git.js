@@ -15,16 +15,24 @@
 // and skips comments and heredoc bodies. In each simple command it skips
 // `NAME=value` assignments and the wrappers `env`, `command`, `builtin`,
 // `time`, `nohup` and `exec`, then:
-//   - `cd`/`pushd` (PowerShell also `Set-Location`, `sl`, `chdir`,
-//     `Push-Location`) moves the directory for the rest of the command;
+//   - `cd` (PowerShell also `Set-Location`, `sl`, `chdir`) moves the
+//     directory for the rest of the command;
 //   - `git` with its global options (`-C <dir>` applied in order, and the
-//     value-taking `-c`, `--git-dir`, `--work-tree`, `--namespace`,
-//     `--super-prefix`, `--config-env` skipped) followed by the subcommand
-//     `commit` is a commit in the resulting directory.
+//     value-taking `-c`, `--namespace`, `--super-prefix`, `--config-env`
+//     skipped) followed by the subcommand `commit` is a commit in the
+//     resulting directory.
+// Some things are not modeled, and make the directory unknown instead:
+//   - `pushd` and `popd` (PowerShell `Push-Location`, `Pop-Location`), and a
+//     subshell's `(` or `)`: from there on the directory is unknown until an
+//     absolute `cd`;
+//   - `--git-dir` or `--work-tree` on the commit, or `GIT_DIR` or
+//     `GIT_WORK_TREE` set for it (a `NAME=value` prefix, `env`), set bare or
+//     exported earlier in the command (PowerShell `$env:GIT_DIR`): Git then
+//     commits somewhere the directory does not say, so that commit and every
+//     later one in the command are unknown.
 // A command run through another program (`bash -c "…"`, an alias, a script)
-// or inside a command substitution (`$(…)`, backticks) is not seen.
-// Background (`&`) and subshell scoping are not modeled: a `cd` holds for
-// the rest of the command.
+// or inside a command substitution (`$(…)`, backticks) is not seen, and a
+// background `&` is read as a plain separator.
 //
 // Directories. A directory word resolves against the current one. `~` and
 // `$HOME` (PowerShell also `$env:HOME`, `$env:USERPROFILE`) expand to `home`.
@@ -44,17 +52,23 @@ import * as path from "node:path"
 export const DESK_MARKER = "$DESK"
 
 const WRAPPERS = new Set(["env", "command", "builtin", "time", "nohup", "exec"])
-const POSIX_CD = new Set(["cd", "pushd"])
-const POWERSHELL_CD = new Set(["cd", "sl", "chdir", "set-location", "pushd", "push-location"])
-const GIT_OPTIONS_WITH_VALUE = new Set(["-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"])
+const POSIX_CD = new Set(["cd"])
+const POWERSHELL_CD = new Set(["cd", "sl", "chdir", "set-location"])
+const POSIX_STACK = new Set(["pushd", "popd"])
+const POWERSHELL_STACK = new Set(["pushd", "popd", "push-location", "pop-location"])
+const GIT_OPTIONS_WITH_VALUE = new Set(["-c", "--namespace", "--super-prefix", "--config-env"])
+const GIT_ELSEWHERE_OPTION = /^--(?:git-dir|work-tree)(?:=|$)/u
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/u
+const EXPORTS = new Set(["export", "declare", "typeset", "readonly"])
 
 const DIALECTS = {
   posix: {
     path: path,
     escape: "\\",
-    separators: new Set([";", "|", "&", "(", ")", "\n"]),
+    separators: new Set([";", "|", "&", "\n"]),
     cd: POSIX_CD,
+    stack: POSIX_STACK,
+    gitEnv: /^GIT_(?:DIR|WORK_TREE)=/u,
     desk: /^\$(?:DESK|\{DESK\})(?=[/\\]|$)/u,
     home: /^(?:~|\$HOME|\$\{HOME\})(?=[/\\]|$)/u,
     bareCdGoesHome: true,
@@ -62,8 +76,10 @@ const DIALECTS = {
   powershell: {
     path: path.win32,
     escape: "`",
-    separators: new Set([";", "|", "&", "(", ")", "\n"]),
+    separators: new Set([";", "|", "&", "\n"]),
     cd: POWERSHELL_CD,
+    stack: POWERSHELL_STACK,
+    gitEnv: /^\$env:GIT_(?:DIR|WORK_TREE)(?:=|$)/iu,
     desk: /^\$env:DESK(?=[/\\]|$)/iu,
     home: /^(?:~|\$HOME|\$env:HOME|\$env:USERPROFILE)(?=[/\\]|$)/iu,
     bareCdGoesHome: false,
@@ -186,6 +202,14 @@ function tokenize(command, dialect) {
       commands[commands.length - 1].push({ text: op, dynamic: false, op: true })
       continue
     }
+    if (char === "(" || char === ")") {
+      // A subshell boundary: its own marker command.
+      endCommand()
+      commands[commands.length - 1].push({ text: char, dynamic: false, op: false, scope: true })
+      endCommand()
+      index += 1
+      continue
+    }
     if (separators.has(char)) {
       endCommand()
       index += 1
@@ -291,6 +315,15 @@ function commandStart(words) {
   return index
 }
 
+// After a `--git-dir`/`--work-tree` option: `null` if this is still a commit
+// (its directory is unknown), `undefined` if not.
+function scanToCommit(words, index) {
+  let next = index + 1
+  if (!words[index].text.includes("=")) next += 1
+  while (next < words.length && words[next].text.startsWith("-")) next += words[next].text === "-C" || GIT_OPTIONS_WITH_VALUE.has(words[next].text) ? 2 : 1
+  return next < words.length && words[next].text === "commit" ? null : undefined
+}
+
 // The directory a `git … commit` in `words` (starting after `git`) runs in,
 // `undefined` when it is not a commit.
 function gitCommitDirectory(words, start, current, options) {
@@ -301,6 +334,8 @@ function gitCommitDirectory(words, start, current, options) {
     if (text === "-C") {
       steps.push(words[index + 1])
       index += 2
+    } else if (GIT_ELSEWHERE_OPTION.test(text)) {
+      return scanToCommit(words, index)
     } else if (GIT_OPTIONS_WITH_VALUE.has(text)) {
       index += 2
     } else if (text.startsWith("-")) {
@@ -335,17 +370,33 @@ export function gitCommitCwds({ command, cwd, home, dialect = "posix" }) {
   // Most shell calls never mention a commit; they are not tokenized at all.
   if (typeof command !== "string" || !command.includes("commit")) return []
   const options = { dialect: DIALECTS[dialect] ?? DIALECTS.posix, home }
+  const { dialect: shell } = options
   let current = typeof cwd === "string" ? cwd : null
+  // Once GIT_DIR or GIT_WORK_TREE is set for the rest of the command.
+  let elsewhere = false
   const found = []
-  for (const raw of tokenize(command, options.dialect)) {
+  for (const raw of tokenize(command, shell)) {
+    if (raw[0].scope) {
+      current = null
+      continue
+    }
     const words = withoutRedirections(raw)
     const start = commandStart(words)
-    if (start >= words.length) continue
-    const name = commandName(words[start].text, options.dialect)
-    if (options.dialect.cd.has(name)) {
+    const prefixSetsGitEnv = words.slice(0, start).some((word) => shell.gitEnv.test(word.text))
+    if (start >= words.length) {
+      if (prefixSetsGitEnv) elsewhere = true
+      continue
+    }
+    const name = commandName(words[start].text, shell)
+    if (shell === DIALECTS.powershell && words.some((word) => shell.gitEnv.test(word.text))) elsewhere = true
+    if (EXPORTS.has(name) && words.slice(start + 1).some((word) => shell.gitEnv.test(word.text))) elsewhere = true
+    if (shell.cd.has(name)) {
       current = changeDirectory(words.slice(start + 1), current, options)
+    } else if (shell.stack.has(name)) {
+      current = null
     } else if (name === "git") {
-      const directory = gitCommitDirectory(words, start + 1, current, options)
+      let directory = gitCommitDirectory(words, start + 1, current, options)
+      if (directory !== undefined && (elsewhere || prefixSetsGitEnv)) directory = null
       if (directory !== undefined && !found.includes(directory)) found.push(directory)
     }
   }

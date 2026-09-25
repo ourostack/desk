@@ -126,9 +126,12 @@
 //     Delete File:` headers of an `apply_patch` argument (parsed in memory),
 //     kept only when the paired completion has `success: true`; `at` is the
 //     start time. `shellGitCommits` holds `{ start, end, cwd }` for each
-//     `bash`/`powershell` call whose command runs `git … commit`
-//     (`./shell-git.js`), whatever its outcome (a failed `git commit && git
-//     push` may still have committed); `cwd` is the latest `session.start`
+//     successful `bash`/`powershell` call whose command runs `git … commit`
+//     (`./shell-git.js`): `success: true` and no non-zero
+//     `shellExecution.exitCode` (a completion without an exit code counts
+//     when `success` is true), so a failed or no-op commit gives no event.
+//     M3-4 matches the desk's own commit reflog entries to these by time.
+//     `cwd` is the latest `session.start`
 //     or `session.resume` `context.cwd` (a resume without a readable one
 //     makes it unknown), moved by a `-C` or an earlier `cd` in the same
 //     command, or `null` when unknown. A `cd` in an earlier call is not
@@ -423,7 +426,7 @@ function createSessionFold() {
       }
       if (pending.desk !== null) deskToolCalls.push({ ...pending.desk, ok: outcome === "ok" })
       if (pending.writes !== null && data.success === true) fileWrites.push(...pending.writes)
-      if (pending.gitCommits !== null && pending.start !== null && at !== null) {
+      if (pending.gitCommits !== null && pending.start !== null && at !== null && data.success === true && outcome === "ok") {
         for (const cwd of pending.gitCommits) shellGitCommits.push({ start: pending.start, end: at, cwd })
       }
     },

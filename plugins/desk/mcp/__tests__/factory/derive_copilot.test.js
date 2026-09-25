@@ -867,12 +867,12 @@ test("with no COPILOT_HOME the factory reader looks under the user's home direct
 })
 
 // ---------------------------------------------------------------------------
-// Shell git commit calls (binding by committer time).
+// Shell git commit calls (matched to the desk's own commits by time).
 // ---------------------------------------------------------------------------
 
 const COMMIT_MESSAGE_SENTINEL = "COMMIT-MESSAGE-SENTINEL-9b1e"
 
-test("a bash or powershell git commit call becomes a shellGitCommits event with its start, end and the session's directory", async () => {
+test("only a successful bash or powershell git commit call becomes a shellGitCommits event, with its start, end and the session's directory", async () => {
   const ev = eventWriter()
   const m = COMMIT_MESSAGE_SENTINEL
   const call = (id, seconds, toolName, command) => ev("tool.execution_start", seconds, { toolCallId: id, toolName, arguments: { command, description: m } })
@@ -882,7 +882,7 @@ test("a bash or powershell git commit call becomes a shellGitCommits event with 
     call("g1", 1, "bash", `git add -A && git commit -q -m "${m}"`),
     done("g1", 2),
     call("g2", 3, "bash", `git -C /tmp/${SENTINEL}/desk commit -m '${m}'`),
-    done("g2", 4, { success: false, shellExecution: { exitCode: 1 } }),
+    done("g2", 4, { shellExecution: { exitCode: 0 } }),
     call("g3", 5, "powershell", `Set-Location C:\\${SENTINEL}; git commit -m "${m}"`),
     done("g3", 6),
     call("g4", 7, "bash", `git status ${m}`),
@@ -907,7 +907,17 @@ test("a bash or powershell git commit call becomes a shellGitCommits event with 
   ]
   const badTime = call("g12", 25, "bash", `git commit -m "${m}"`)
   badTime.timestamp = `later ${SENTINEL}`
-  lines.push(badTime, done("g12", 26))
+  lines.push(
+    badTime,
+    done("g12", 26),
+    // A failed call, a no-op commit (exit code 1), and a completion with no success flag give none.
+    call("g13", 27, "bash", `git commit -m "${m}"`),
+    done("g13", 28, { success: false, shellExecution: { exitCode: 1 } }),
+    call("g14", 29, "bash", `git commit -m "${m}"`),
+    done("g14", 30, { success: true, shellExecution: { exitCode: 1 } }),
+    call("g15", 31, "bash", `git commit -m "${m}"`),
+    done("g15", 32, { success: undefined }),
+  )
   const { facts, events } = await deriveText(lines)
   assert.deepEqual(events.shellGitCommits, [
     { start: at(1), end: at(2), cwd: `/tmp/${SENTINEL}` },
@@ -918,6 +928,7 @@ test("a bash or powershell git commit call becomes a shellGitCommits event with 
     { start: at(22), end: at(23), cwd: null },
   ])
   assert.ok(!JSON.stringify(facts).includes(COMMIT_MESSAGE_SENTINEL))
+  assert.ok(!JSON.stringify(facts).includes(SENTINEL), "the planted directories never reach facts")
   assert.ok(!JSON.stringify(events).includes(COMMIT_MESSAGE_SENTINEL))
   assert.ok(!JSON.stringify(events).includes("git"), "not even the command name is kept")
 })
