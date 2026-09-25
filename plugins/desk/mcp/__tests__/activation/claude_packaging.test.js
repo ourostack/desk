@@ -424,6 +424,10 @@ test("Claude SessionStart injects the full Desk foundation once without scanning
     assert.equal(countOccurrences(startup, phrase), 1)
   }
   assert.match(startup, /desk:session-start.*authoritative workspace scan/isu)
+  assert.deepEqual(
+    startup.split("\n").filter((line) => line.startsWith("Desk RFC:")),
+    [`Desk RFC: ${path.join(repoRoot, "plugins", "desk", "docs", "agentic-engineering-v2-rfc.md")}`],
+  )
   // A hook-side partial scan duplicates desk:session-start, adds boot work, and can disagree with synchronized workspace state.
   assert.doesNotMatch(
     hook,

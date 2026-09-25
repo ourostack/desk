@@ -284,6 +284,16 @@ test("Codex activation injects the full Desk foundation once in automatic modes"
     ]) {
       assert.equal(countOccurrences(startup, phrase), 1, `${mode}: ${phrase}`)
     }
+    // The foundation points at the RFC through this line; it names the materialized plugin's copy.
+    assert.deepEqual(
+      startup.split("\n").filter((line) => line.startsWith("Desk RFC:")),
+      ["Desk RFC: plugins/desk/docs/agentic-engineering-v2-rfc.md"],
+      `${mode}: Desk RFC line`,
+    )
+    assert.ok(
+      startup.indexOf("\nDesk RFC: ") >= startup.indexOf(deskFoundationBody()) + deskFoundationBody().length,
+      `${mode}: the Desk RFC line follows the foundation`,
+    )
   }
 
   assert.equal(

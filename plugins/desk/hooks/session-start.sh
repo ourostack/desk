@@ -27,23 +27,28 @@ foundation=$(cat "$FOUNDATION_SKILL" 2>/dev/null) || {
   exit 0
 }
 
-# Ask the MCP server's own resolver which desk this session binds, so the hook
-# and the server can never disagree. It honours the Claude project, the saved
-# binding, $DESK and the home fallbacks, and always exits 0.
-root=""
+# Ask the MCP server's own resolver which desk this session binds and let it
+# compose the startup line, so the hook and the server can never disagree. It
+# honours the Claude project folder when it is a desk, the saved binding, $DESK
+# and the home fallbacks, names where the root came from, and always exits 0.
+direction=""
 if command -v node >/dev/null 2>&1; then
-  root=$(node "$PLUGIN_ROOT/mcp/scripts/resolve-desk-root.js" --root-only 2>/dev/null)
-elif [ -n "${DESK:-}" ] && [ -d "$DESK" ]; then
-  root="$DESK"
+  direction=$(node "$PLUGIN_ROOT/mcp/scripts/resolve-desk-root.js" --startup-line 2>/dev/null)
+fi
+if [ -z "$direction" ]; then
+  direction="Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound."
 fi
 
-if [ -n "$root" ]; then
-  direction="Desk startup: \$DESK is $root. Invoke desk:session-start now for the authoritative workspace scan before other work; if an overlay launches Desk with its own root, desk_status reports the root Desk actually bound."
-else
-  direction="Desk startup: no desk is bound yet, so Desk is in setup mode. Run the onboarding path desk_status names now — desk:first-run-bootstrap by default, which looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one; an overlay that owns its workspace names its own, such as crew:join-crew. Do not offer to continue without Desk. After setup, desk:session-start remains the authoritative workspace scan."
-fi
+# The foundation points at the RFC through this line: the installed copy, which
+# the agent can open from any repository. A Windows plugin root keeps its
+# backslash separators.
+sep="/"
+case "$PLUGIN_ROOT" in *\\*) sep="\\" ;; esac
+rfc="Desk RFC: ${PLUGIN_ROOT}${sep}docs${sep}agentic-engineering-v2-rfc.md"
 
 emit "${foundation}
+
+${rfc}
 
 ${direction}"
 exit 0

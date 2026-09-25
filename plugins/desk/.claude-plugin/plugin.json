@@ -1,6 +1,6 @@
 {
   "name": "desk",
-  "version": "3.2.0-alpha.14",
+  "version": "3.2.0-alpha.15",
   "description": "Opt-in alpha workspace substrate: durable Desk state, authority and approved delivery boundaries with Superpowers as the sole engineering method. Crew and consumer overlays retain their own workspace authority. Plain Language governs prose.",
   "author": {
     "name": "ourostack",

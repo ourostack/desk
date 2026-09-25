@@ -120,6 +120,7 @@ const hostManifestFixtureFiles = [
   "plugins/desk/agents/worker.agent.md",
   "plugins/desk/agents/worker.md",
   "plugins/desk/agents/worker.toml",
+  "plugins/desk/docs/agentic-engineering-v2-rfc.md",
   "plugins/desk/hooks/hooks.json",
   "plugins/desk/hooks/copilot-hooks.json",
   "plugins/desk/hooks/copilot-session-start.cjs",
@@ -1614,6 +1615,7 @@ test("root host verifier reports each startup-composition drift and hook failure
         /Copilot hook must not read onboarding, migration, session-start, or RFC files/u,
         /startup-composition copilot must include the canonical using-desk body exactly once; found 0/u,
         /startup-composition copilot must include "The human supplies intent" exactly once; found 0/u,
+        /startup-composition copilot must carry one Desk RFC line naming the installed RFC that exists; found \[\]/u,
       ],
     },
     {
@@ -1622,6 +1624,7 @@ test("root host verifier reports each startup-composition drift and hook failure
       patterns: [
         /startup-composition Claude hook must not scan tasks or run git, gh, or curl/u,
         /startup-composition claude must include the canonical using-desk body exactly once; found 0/u,
+        /startup-composition claude must carry one Desk RFC line naming the installed RFC that exists; found \[\]/u,
       ],
     },
     {

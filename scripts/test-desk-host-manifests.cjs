@@ -495,10 +495,21 @@ async function checkStartupComposition({ repoRoot, mcpRoot, errors, checked }) {
     repoRoot,
     "plugins/desk/skills/using-desk/SKILL.md",
   ));
+  const installedRfc = {
+    claude: path.join(repoRoot, "plugins", "desk", "docs", "agentic-engineering-v2-rfc.md"),
+    copilot: path.join(repoRoot, "plugins", "desk", "docs", "agentic-engineering-v2-rfc.md"),
+    // The Codex fixtures materialize from the relative plugin root "plugins/desk".
+    codex: "plugins/desk/docs/agentic-engineering-v2-rfc.md",
+  };
   for (const [host, startup] of startups) {
     const foundationCount = countOccurrences(startup, foundation);
     if (foundationCount !== 1) {
       errors.push(`startup-composition ${host} must include the canonical using-desk body exactly once; found ${foundationCount}`);
+    }
+    // The foundation names the RFC only through this line, so the path must be the installed one and must exist.
+    const rfcLines = startup.split("\n").filter((line) => line.startsWith("Desk RFC:"));
+    if (rfcLines.length !== 1 || rfcLines[0] !== `Desk RFC: ${installedRfc[host]}` || !fs.existsSync(path.resolve(repoRoot, installedRfc[host]))) {
+      errors.push(`startup-composition ${host} must carry one Desk RFC line naming the installed RFC that exists; found ${JSON.stringify(rfcLines)}`);
     }
     for (const phrase of [
       "The human supplies intent",
