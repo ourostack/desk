@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.12 — 2026-09-24
+
+Rewrites the Agentic Engineering V2 RFC as the evergreen north star: the three acts and Agent Experience, the human and agent working relationship with agent-led coaching, layered foundations, the factory (measuring and designing the work), channels never commits, and a status section that separates what works today from what is being built. The Desk MCP stays at `desk-mcp@1.4.0-alpha.6`; its source and runtime packs are unchanged.
+
 ## 3.2.0-alpha.11 — 2026-09-24
 
 Desk now lives in its own repository, `ourostack/desk`, with its companions Superpowers, Plain Language and Crew. The Desk MCP stays at `desk-mcp@1.4.0-alpha.6`; its source and runtime packs are unchanged.
