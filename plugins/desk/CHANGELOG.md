@@ -1,5 +1,16 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.13 — 2026-09-24
+
+Carries the move migration from the final `ouroboros-skills` release, so a session on either side knows about the move. The Desk MCP stays at `desk-mcp@1.4.0-alpha.6`; its source and runtime packs are unchanged.
+
+- **Move migration.** `migrations/01-move-to-ourostack-desk.md` is the same file that `ouroboros-skills` Desk `3.2.0-alpha.10.1` ships.
+  - When it fires: only for a V2 install on the old channel, meaning `desk@ouroboros-skills` from a marketplace that tracks `v2-alpha` (even when `desk@ourostack` is already installed), or an `agency.toml` entry `github:ourostack/ouroboros-skills:plugins/<desk|superpowers|plain-language|crew>@v2-alpha`. It stays silent for installs from this repository and for V1 installs.
+  - What it moves: it reinstalls Desk, its companions and Crew from `@ourostack` with automatic updates on, and carries the desk binding over. It rewrites only the `@v2-alpha` Agency coordinates and keeps a one-time backup.
+  - What it keeps: it never removes an old companion that a remaining V1 plugin, such as Work Suite, depends on, and it tells the operator how to remove those later. It always removes the old Desk.
+- **Migration format.** `session-start-migrations` now states the format consistently: Detect, Safety check and Migrate each hold one fenced bash block, and Announce is plain text. The driver shows Migrate's report of what it changed on this machine before Announce.
+- **Migration harness.** `scripts/test-desk-migrations.cjs` runs every Desk migration against a fake `claude` on `PATH` that models installed manifests and marketplace-scoped dependency errors and can fail chosen commands, with temporary `HOME`, `CLAUDE_CONFIG_DIR` and `AGENCY_TOML`, across first runs, reruns, failures, Work Suite users and V1 installs. It also checks that the startup hooks here never tell users to move. CI runs it in Validate skills.
+
 ## 3.2.0-alpha.12 — 2026-09-24
 
 Rewrites the Agentic Engineering V2 RFC as the evergreen north star: the three acts and Agent Experience, the human and agent working relationship with agent-led coaching, layered foundations, the factory (measuring and designing the work), channels never commits, and a status section that separates what works today from what is being built. The Desk MCP stays at `desk-mcp@1.4.0-alpha.6`; its source and runtime packs are unchanged.
