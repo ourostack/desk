@@ -1,7 +1,7 @@
 // Global test setup: every test process runs with HOME, XDG_STATE_HOME, XDG_CACHE_HOME, XDG_CONFIG_HOME, XDG_DATA_HOME and XDG_RUNTIME_DIR pointing into one temporary folder per test run, and a write under the real home fails loudly.
 //
 // Loaded three ways, so no test can reach the real ~/.cache or ~/.local/state:
-// - `npm test` and the coverage runner preload it with `--import`, and the test runner passes that to every test file's process;
+// - the coverage runner (and the native Windows CI steps) preload it with `--import`, and the test runner passes that to every test file's process;
 // - `_temp_roots.js` imports it, so a test file run on its own with `node --test <file>` is isolated too;
 // - a process that inherits DESK_TEST_RUN_DIR from its parent reuses the parent's folder, so one run shares one folder.
 //
@@ -52,19 +52,24 @@ for (const [name, dir] of Object.entries(locations)) {
 // os.homedir() reads USERPROFILE on Windows.
 if (process.platform === "win32") process.env.USERPROFILE = home
 
-const allowedRoots = [...new Set([os.tmpdir(), safeRealpath(os.tmpdir()), repoRoot, safeRealpath(repoRoot), runDir])]
-const homeRoots = [...new Set([realHome, safeRealpath(realHome)])]
+// Every spelling of each folder: as given, resolved, and (on Windows) with 8.3 short names such as RUNNER~1 expanded, which only the native resolver does.
+const spellings = (target) => [...new Set([target, safeRealpath(target, fs.realpathSync), safeRealpath(target, fs.realpathSync.native)])]
+const allowedRoots = [...new Set([...spellings(os.tmpdir()), ...spellings(repoRoot), ...spellings(runDir)])]
+const homeRoots = spellings(realHome)
 
-function safeRealpath(target) {
+function safeRealpath(target, resolve) {
   try {
-    return fs.realpathSync(target)
+    return resolve(target)
   } catch {
     return target
   }
 }
 
+// Windows paths compare without regard to case.
+const fold = process.platform === "win32" ? (value) => value.toLowerCase() : (value) => value
+
 function inside(child, parent) {
-  const relative = path.relative(parent, child)
+  const relative = path.relative(fold(parent), fold(child))
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
 }
 
