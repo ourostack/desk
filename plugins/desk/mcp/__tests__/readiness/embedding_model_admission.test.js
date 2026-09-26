@@ -8,7 +8,7 @@ import { startInProcess, statusContextOf } from "../runtime/_in_process_desk.js"
 import { closeDb, openDb } from "../../src/db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
-import { beginBackgroundConvergence, callTool, connectOrStartController } from "../../src/server.js"
+import { beginBackgroundConvergence, callTool, connectOrStartController, startControllerRuntime } from "../../src/server.js"
 
 const CUSTOM_MODEL = "other-768-dimensional-model"
 
@@ -58,7 +58,7 @@ function runtime(fixture) {
         runtimeImporter: async () => ({
           async connectOrStartController(options) {
             const controller = await connectOrStartController({
-              ...options, stateHome: fixture.stateHome, ephemeral: true,
+              ...options, stateHome: fixture.stateHome, ephemeral: true, controllerLauncher: startControllerRuntime,
             })
             controllers.push(controller)
             return controller

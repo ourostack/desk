@@ -1,8 +1,8 @@
-// A readiness controller whose owner runs but that does not answer: detect it and report it. Never stop it, and never take it over.
+// Detect a readiness controller whose owner runs but does not answer. Probing never signals it or authorizes takeover.
 //
 // A session that cannot elect a controller probes the root's controller socket with a handshake. A probe the socket accepts but does not answer within the probe time is a miss, and so is a probe the socket refuses (or finds no socket for) while the owner record names a running process: a stopped owner, or one whose accept queue is full. After 3 consecutive misses (the session's admission retries space them out on its backoff) the session is `degraded:controller_hung` and stays controller-free: search reads the files directly and writes go straight to the files.
 //
-// Desk never signals the controller's owner (fix round 2 ruling): the controller runs inside another session's Desk MCP server, and stopping that process would cost that session its Desk connection. Desk never takes a running owner's controller over either (fix round 3 ruling): see owner-record.js. The session recovers when the controller answers again or its owner ends.
+// Explicit repair goes through controller-process.js: only the owning supervisor may stop its retained, live-verified child. Legacy session-owned controllers remain report-only.
 //
 // Dependency-free, so the session can run it before and without the runtime pack.
 
@@ -29,7 +29,7 @@ export async function probeController({ root, policy, stateHome, timeoutMs = HUN
   const endpoint = typeof record?.endpoint === "string" ? record.endpoint : deriveControllerEndpoint({ identity })
   const answer = await handshakeProbe({ endpoint, record, identity, timeoutMs, connect })
   const state = owner.state === "live" && answer !== "answering" && answer !== "silent" ? "unreachable" : answer
-  return { state, endpoint, stateDir, record, identity }
+  return { state, endpoint, stateDir, record, identity, ownerVerified: owner.verified }
 }
 
 /** Whether a probe counts as a missed check: a controller that accepts but does not answer, or whose running owner cannot be reached. */
@@ -66,7 +66,7 @@ function handshakeProbe({ endpoint, record, identity, timeoutMs, connect }) {
 
 /**
  * What desk_status and desk_doctor say about a hung controller: its owner (from the owner record) and where it listens.
- * `owner_verified` is true when the record carries the owner's start time, so the running process with that PID was checked to be the owner itself; a record from an older Desk names a PID only, which another process may have reused.
+ * `owner_verified` requires a successful live process-start match during this probe, not just a stored field.
  */
 export function hungControllerReport(probe) {
   const pid = probe.record?.owner?.pid
@@ -75,6 +75,7 @@ export function hungControllerReport(probe) {
     endpoint: probe.endpoint,
     owner_pid: Number.isInteger(pid) ? pid : null,
     owner_started_at: typeof probe.record?.owner?.started_at === "string" ? probe.record.owner.started_at : null,
-    owner_verified: typeof probe.record?.owner?.process_start === "string",
+    owner_verified: probe.ownerVerified === true,
+    ...(probe.record?.owner?.kind === "controller_child" ? { owner_kind: "controller_child" } : {}),
   }
 }

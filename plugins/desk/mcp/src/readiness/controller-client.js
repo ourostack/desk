@@ -46,6 +46,7 @@ export async function connectOrStartController({
   watcherFactory,
   ephemeral = false,
   onRepair = () => {},
+  startController = startReadinessController,
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)
@@ -66,6 +67,7 @@ export async function connectOrStartController({
         watcherFactory,
         identity,
         stateDir,
+        startController,
       })
       controllerStarts.set(identity.id, start)
     }
@@ -98,6 +100,7 @@ async function startOrReuseController({
   watcherFactory,
   identity,
   stateDir,
+  startController,
 }) {
   const existing = await tryHandshake({ endpoint, identity, stateDir })
   if (existing) {
@@ -108,7 +111,7 @@ async function startOrReuseController({
   let ownedWatcher = watcher
   try {
     ownedWatcher ??= await watcherFactory?.({ root: identity.root })
-    const controller = await startReadinessController({
+    const controller = await startController({
       identity,
       endpoint,
       stateDir,
@@ -116,7 +119,11 @@ async function startOrReuseController({
       watcher: ownedWatcher,
       ephemeral,
     })
-    localControllers.set(identity.id, { controller, clients: 0 })
+    const local = { controller, clients: 0 }
+    localControllers.set(identity.id, local)
+    controller.onExit?.(() => {
+      if (localControllers.get(identity.id) === local) localControllers.delete(identity.id)
+    })
   } catch (error) {
     ownedWatcher?.close?.()
     if (!isControllerElectionCollision(error)) {
@@ -160,6 +167,7 @@ function createClient({ endpoint, ephemeral, identity, local, token }) {
     accepted: true,
     id: identity.id,
     identity,
+    ...(local?.controller.onExit ? { onExit: (listener) => local.controller.onExit(listener) } : {}),
     status: (timeoutMs = 2_000) => call("status", {}, timeoutMs),
     beginConvergence: () => call("beginConvergence", {}, null),
     barrier: (params) => call("barrier", params, params?.wait ? null : 2_000),
@@ -180,7 +188,7 @@ function createClient({ endpoint, ephemeral, identity, local, token }) {
       if (!local) return
       local.clients -= 1
       if (ephemeral && local.clients === 0) {
-        localControllers.delete(identity.id)
+        if (localControllers.get(identity.id) === local) localControllers.delete(identity.id)
         await local.controller.close()
       }
     },
@@ -338,7 +346,7 @@ export function createControllerResponseAccumulator(onLine) {
   }
 }
 
-function request({
+export function request({
   endpoint,
   identity,
   method,

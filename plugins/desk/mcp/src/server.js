@@ -53,6 +53,7 @@ import {
   resolveEnsureIndexOptions,
 } from "./server-helpers.js"
 import { existsSync, renameSync } from "node:fs"
+import * as path from "node:path"
 import { indexDbPath, openDb, closeDb } from "./db/init.js"
 import { rebuildIndex } from "./indexer/index.js"
 import { stableStringify } from "./readiness/identity.js"
@@ -83,12 +84,14 @@ export function embeddingOverride(semantic) {
   })
 }
 
-export async function connectOrStartController({ deskRoot, policy, stateHome, ephemeral, onRepair }) {
+export async function connectOrStartController({ deskRoot, policy, stateHome, ephemeral, onRepair, controllerLauncher }) {
   const embed = policy.semantic === "unsupported" ? null : Object.freeze({
     model: ACTIVE_EMBEDDING_SPEC.model,
     endpoints: Object.freeze(resolveEmbeddingEndpoints()),
   })
-  const options = {
+  const { connectOrStartController: connectReadinessController } = await loadReadinessController()
+  const launch = controllerLauncher ?? (await import("./readiness/controller-process.js")).startControllerProcess
+  const controller = await connectReadinessController({
     root: deskRoot,
     ...readinessContracts(policy),
     stateHome,
@@ -99,50 +102,66 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
       embedding_spec: policy.semantic === "unsupported" ? null : ACTIVE_EMBEDDING_SPEC,
       ...(embed === null ? {} : { query_embedding_probe: true, endpoints: embed.endpoints }),
     },
-    handlers: {
-      async beginConvergence({ eventCursor, journal }) {
-        // Each synchronous stretch below (the first index check, then the reconcile) starts on its own turn of the event loop, so a session's answers to its host wait for one stretch at most, never for the chain.
-        await yieldTurn()
-        const indexOptions = resolveEnsureIndexOptions({
-          startup: false,
-          skipEmbed: policy.semantic === "unsupported",
-          ...(embed === null ? {} : { embed }),
-          eventCursor,
-          identities: { policy_identity: stableStringify(policy) },
-        }, { deskRoot })
-        // Keep the opt-out at ensureIndex's normalization boundary; resolved
-        // undefined would otherwise re-enable legacy snapshot auto-discovery.
-        const result = await ensureIndexOrQuarantine(deskRoot, { ...indexOptions, snapshots: false })
-        await yieldTurn()
-        const db = openDb(deskRoot)
-        try {
-          // A timestamp/snapshot fast path is not proof of journal coverage.
-          if (!result.summary?.lexical_generation) {
-            result.summary = await rebuildIndex(deskRoot, { ...indexOptions, db, reembedMissing: true })
-            result.semantic = { ...result.semantic, ...getSemanticCoverage(db) }
-            result.built = true
-            result.reason = "journal_reconciled"
-          }
-          await journal.compact({ db, generationId: result.summary.lexical_generation })
-        } finally {
-          closeDb(db)
-        }
-        if (policy.semantic !== "unsupported") {
-          result.semantic.query_embedding = await probeEmbeddingService(embed)
-        }
-        return result
-      },
-    },
-    watcherFactory: ({ root }) => createWorkspaceWatcher({
-      root,
-      ignoredPaths: stateHome ? [stateHome] : [],
+    startController: (options) => launch({
+      ...options, policy, embed,
+      artifactPluginRoot: resolveEnsureIndexOptions({}, { deskRoot }).tombstones.pluginRoot,
     }),
-  }
-  const { connectOrStartController: connectReadinessController } = await loadReadinessController()
-  const controller = await connectReadinessController(options)
+  })
   controller.generationPolicyIdentity = stableStringify(policy)
   controller.embeddingOverride = embeddingOverride(policy.semantic)
   return controller
+}
+
+export async function startControllerRuntime({ policy, embed, artifactPluginRoot, ...options }) {
+  const { startReadinessController } = await import("./readiness/controller-server.js")
+  const deskRoot = options.identity.root
+  configureRuntimeArtifacts({ pluginRoot: artifactPluginRoot })
+  const watcher = await createWorkspaceWatcher({
+    root: deskRoot,
+    ignoredPaths: [path.dirname(options.stateDir)],
+  })
+  try {
+    return await startReadinessController({
+      ...options,
+      watcher,
+      handlers: {
+        async beginConvergence({ eventCursor, journal }) {
+          // Leave turns for controller messages between phases; the owning MCP session runs on a different event loop.
+          await yieldTurn()
+          const indexOptions = resolveEnsureIndexOptions({
+            startup: false,
+            skipEmbed: policy.semantic === "unsupported",
+            ...(embed === null ? {} : { embed }),
+            eventCursor,
+            identities: { policy_identity: stableStringify(policy) },
+          }, { deskRoot })
+          // Keep the opt-out at ensureIndex's normalization boundary; resolved undefined would re-enable legacy snapshot auto-discovery.
+          const result = await ensureIndexOrQuarantine(deskRoot, { ...indexOptions, snapshots: false })
+          await yieldTurn()
+          const db = openDb(deskRoot)
+          try {
+            // A timestamp/snapshot fast path is not proof of journal coverage.
+            if (!result.summary?.lexical_generation) {
+              result.summary = await rebuildIndex(deskRoot, { ...indexOptions, db, reembedMissing: true })
+              result.semantic = { ...result.semantic, ...getSemanticCoverage(db) }
+              result.built = true
+              result.reason = "journal_reconciled"
+            }
+            await journal.compact({ db, generationId: result.summary.lexical_generation })
+          } finally {
+            closeDb(db)
+          }
+          if (policy.semantic !== "unsupported") {
+            result.semantic.query_embedding = await probeEmbeddingService(embed)
+          }
+          return result
+        },
+      },
+    })
+  } catch (error) {
+    watcher.close()
+    throw error
+  }
 }
 
 function yieldTurn() {
