@@ -78,9 +78,9 @@ export function validatePrivateDirectory(directory, {
   }
 }
 
+// The rendezvous every session on a root must agree on: the per-user folder /tmp/desk-readiness-<uid>, keyed by the controller identity (real root path, user and lexical contract). It deliberately ignores XDG_RUNTIME_DIR and TMPDIR: sessions started with different values (a desktop host and a terminal, for example) would otherwise derive different sockets for one root, share one owner record and journal, and elect two controllers.
 export function deriveControllerEndpoint({
-  identity, platform = process.platform, uid = process.getuid?.(),
-  env = process.env, fs = filesystem,
+  identity, platform = process.platform, uid = process.getuid?.(), fs = filesystem,
 } = {}) {
   if (platform === "win32") {
     return `\\\\.\\pipe\\desk-readiness-${identity.user.username}-${identity.id}`
@@ -89,21 +89,6 @@ export function deriveControllerEndpoint({
     throw new Error("readiness controller identity has unsafe OS-user ownership")
   }
   const basename = `${digest(stableStringify(lexicalControllerIdentity(identity))).slice(0, 32)}.sock`
-  const runtimeDir = env.XDG_RUNTIME_DIR
-  if (typeof runtimeDir === "string" && path.posix.isAbsolute(runtimeDir)) {
-    try {
-      validatePrivateDirectory(runtimeDir, { uid, fs })
-      const canonicalRuntimeDir = fs.realpathSync(runtimeDir)
-      validatePrivateDirectory(canonicalRuntimeDir, { uid, fs })
-      validateRuntimeAncestors(path.posix.dirname(canonicalRuntimeDir), { uid, fs })
-      const endpoint = path.posix.join(canonicalRuntimeDir, basename)
-      validateControllerEndpoint(endpoint, platform)
-      return endpoint
-    } catch {
-      // An optional, unusable XDG directory never weakens the private fallback.
-    }
-  }
-  // Do not inherit TMPDIR: it can be long, shared, or caller-controlled.
   const tempRoot = fs.realpathSync("/tmp")
   validateRuntimeAncestors(tempRoot, { uid, fs })
   const directory = path.posix.join(tempRoot, `desk-readiness-${uid}`)

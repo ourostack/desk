@@ -12,6 +12,7 @@ import { requestMessage } from "./protocol.js"
 import { startReadinessController } from "./controller-server.js"
 
 const localControllers = new Map()
+const ABANDONED_RECHECK_MS = 50
 const controllerStarts = new Map()
 const privateDirectoryValidators = {
   win32: Object,
@@ -42,7 +43,7 @@ export async function connectOrStartController({
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   privateDirectoryTighteners[process.platform](stateDir, onRepair)
   privateDirectoryValidators[process.platform](stateDir)
-  const endpoint = deriveControllerEndpoint({ identity })
+  const endpoint = await rendezvousEndpoint({ derived: deriveControllerEndpoint({ identity }), identity, stateDir })
 
   let local = localControllers.get(identity.id)
   if (!local) {
@@ -124,7 +125,7 @@ function isControllerElectionCollision(error) {
 
 function createClient({ endpoint, ephemeral, identity, local, token }) {
   let closed = false
-  const call = (method, params = {}, timeoutMs = 2_000, signal) => request({
+  const call = (method, params, timeoutMs = 2_000, signal) => request({
     endpoint,
     identity,
     method,
@@ -136,7 +137,7 @@ function createClient({ endpoint, ephemeral, identity, local, token }) {
     accepted: true,
     id: identity.id,
     identity,
-    status: () => call("status"),
+    status: (timeoutMs = 2_000) => call("status", {}, timeoutMs),
     beginConvergence: () => call("beginConvergence", {}, null),
     barrier: (params) => call("barrier", params, params?.wait ? null : 2_000),
     async recordChange(change) {
@@ -254,7 +255,28 @@ export async function endpointIsAbandoned(endpoint, probe = probeEndpoint) {
     return null
   }
   if (!stat.isSocket() || stat.uid !== process.getuid()) return null
-  return await probe(endpoint) === "refused" ? stat : null
+  // A controller that has bound its socket but not yet called listen() also refuses, so one refusal is not proof: it must refuse twice, a little apart, with the socket file unchanged.
+  if (await probe(endpoint) !== "refused") return null
+  await new Promise((resolve) => setTimeout(resolve, ABANDONED_RECHECK_MS))
+  if (await probe(endpoint) !== "refused") return null
+  try {
+    const again = lstatSync(endpoint)
+    return again.dev === stat.dev && again.ino === stat.ino ? stat : null
+  } catch {
+    return null
+  }
+}
+
+// Where to meet the root's controller: the derived endpoint, unless the owner record names a different one that answers (a controller started by an older Desk that derived its socket from XDG_RUNTIME_DIR). Every session then joins the same controller.
+async function rendezvousEndpoint({ derived, identity, stateDir }) {
+  let recorded
+  try {
+    recorded = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8")).endpoint
+  } catch {
+    return derived
+  }
+  if (typeof recorded !== "string" || recorded === derived) return derived
+  return await tryHandshake({ endpoint: recorded, identity, stateDir }) === null ? derived : recorded
 }
 
 export function probeEndpoint(endpoint, { timeoutMs = 250, connect = net.createConnection } = {}) {

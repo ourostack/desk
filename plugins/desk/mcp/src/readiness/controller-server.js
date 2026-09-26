@@ -258,6 +258,10 @@ export async function startReadinessController({
   }
 
   await listen(server, endpoint)
+  // listen() drops its one-shot error listener once bound; without a lasting one, a later server error would be an unhandled 'error' event that ends the whole Desk process.
+  server.on("error", (error) => {
+    process.stderr.write(`[desk-mcp] readiness controller server error: ${error?.message ?? String(error)}\n`)
+  })
   try {
     const socketStat = process.platform === "win32" ? null : lstatSync(endpoint)
     const socket = socketStat === null ? null : { dev: socketStat.dev, ino: socketStat.ino }

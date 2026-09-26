@@ -129,3 +129,83 @@ test("unlinkIfUnchanged removes only the exact file judged stale", async () => {
   assert.throws(() => lstatSync(file), /ENOENT/u)
   unlinkIfUnchanged(file, stat)
 })
+
+test("a socket must refuse twice, and stay the same file, before it counts as abandoned", { skip: posixOnly }, async () => {
+  const root = await mkTempRoot("desk-reclaim-twice-")
+  const privateDir = path.join(root, "private")
+  mkdirSync(privateDir, { mode: 0o700 })
+  const dead = path.join(privateDir, "dead.sock")
+  await deadSocket(dead)
+  const answers = ["refused", "accepting"]
+  assert.equal(await endpointIsAbandoned(dead, async () => answers.shift()), null, "a controller that started listening in between is kept")
+  let replaced = false
+  const replacing = async (endpoint) => {
+    if (!replaced) {
+      replaced = true
+      rmSync(endpoint)
+      await deadSocket(endpoint)
+    }
+    return "refused"
+  }
+  assert.equal(await endpointIsAbandoned(dead, replacing), null, "a socket replaced in between is kept")
+  let removed = false
+  const removing = async (endpoint) => {
+    if (removed) rmSync(endpoint, { force: true })
+    removed = true
+    return "refused"
+  }
+  assert.equal(await endpointIsAbandoned(dead, removing), null, "a socket that disappears in between is not reclaimed")
+})
+
+test("a session meets the controller at the endpoint its owner record names, when that one answers", { skip: posixOnly }, async (t) => {
+  const { startReadinessController } = await import("../../src/readiness/controller-server.js")
+  const root = await mkTempRoot("desk-rendezvous-")
+  const stateHome = path.join(root, "state")
+  const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
+  const stateDir = path.join(stateHome, identity.id)
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  // An older Desk put its socket elsewhere (it followed XDG_RUNTIME_DIR).
+  const elsewhereDir = path.join("/tmp", `drv-${process.pid}-${Date.now() % 100000}`)
+  mkdirSync(elsewhereDir, { mode: 0o700 })
+  t.after(() => rmSync(elsewhereDir, { recursive: true, force: true }))
+  const elsewhere = path.join(elsewhereDir, "c.sock")
+  const older = await startReadinessController({ identity, endpoint: elsewhere, stateDir, ephemeral: true })
+  t.after(() => older.close())
+  const client = await connectOrStartController({ root, stateHome, ephemeral: true })
+  t.after(() => client.close())
+  assert.equal((await client.status()).owner.token, older.owner.token, "the session joined the older controller instead of starting a second one")
+  assert.equal((await client.status(500)).state, "CONTROL_READY", "status takes a timeout")
+})
+
+test("a recorded endpoint that does not answer is ignored", { skip: posixOnly }, async (t) => {
+  const root = await mkTempRoot("desk-rendezvous-dead-")
+  const stateHome = path.join(root, "state")
+  const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
+  mkdirSync(path.join(stateHome, identity.id), { recursive: true, mode: 0o700 })
+  writeFileSync(path.join(stateHome, identity.id, "owner.json"), JSON.stringify({ identity, endpoint: "/tmp/desk-no-such-dir/x.sock", owner: { pid: 1, token: "t" } }))
+  const client = await connectOrStartController({ root, stateHome, ephemeral: true })
+  t.after(() => client.close())
+  assert.equal((await client.status()).owner.pid, process.pid)
+  const recordedSame = await mkTempRoot("desk-rendezvous-same-")
+  const sameIdentity = controllerIdentity({ root: recordedSame, protocolVersion: 1, lexicalContract: {} })
+  mkdirSync(path.join(recordedSame, "state", sameIdentity.id), { recursive: true, mode: 0o700 })
+  writeFileSync(path.join(recordedSame, "state", sameIdentity.id, "owner.json"), JSON.stringify({ identity: sameIdentity, endpoint: 7 }))
+  const other = await connectOrStartController({ root: recordedSame, stateHome: path.join(recordedSame, "state"), ephemeral: true })
+  t.after(() => other.close())
+  assert.equal((await other.status()).owner.pid, process.pid)
+})
+
+test("a controller server error after it started is logged, never unhandled", { skip: posixOnly }, async (t) => {
+  const { startReadinessController } = await import("../../src/readiness/controller-server.js")
+  const root = await mkTempRoot("desk-server-error-")
+  const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
+  const endpoint = deriveControllerEndpoint({ identity })
+  const controller = await startReadinessController({ identity, endpoint, stateDir: path.join(root, "state", identity.id), ephemeral: true })
+  t.after(() => controller.close())
+  const writes = []
+  t.mock.method(process.stderr, "write", (text) => { writes.push(String(text)); return true })
+  controller.server.emit("error", new Error("late listen failure"))
+  controller.server.emit("error", "not an error")
+  assert.match(writes.join(""), /readiness controller server error: late listen failure/u)
+  assert.match(writes.join(""), /readiness controller server error: not an error/u)
+})
