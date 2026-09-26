@@ -11,7 +11,7 @@ import { probeController } from "../../src/readiness/hung-controller.js"
 import { request } from "../../src/readiness/controller-client.js"
 import { readProcessStart } from "../../src/readiness/process-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
-import { connectOrStartController } from "../../src/server.js"
+import { connectOrStartController, startControllerRuntime } from "../../src/server.js"
 import { controllerSocketIdentity } from "../../src/readiness/controller-server.js"
 
 const policy = { lexical: "required", semantic: "unsupported" }
@@ -275,6 +275,13 @@ test("a competing child that loses the bind closes its watcher without altering 
   const context = await fixture(t)
   await assert.rejects(startControllerProcess(context.options), { code: "EADDRINUSE" })
   assert.equal((await probeController({ root: context.root, policy, stateHome: context.stateHome })).record.owner.token, context.record.owner.token)
+})
+
+test("the runtime propagates a listener failure without changing the existing controller's ownership", { skip: posixOnly }, async (t) => {
+  const context = await fixture(t)
+  await assert.rejects(startControllerRuntime(context.options), { code: "EADDRINUSE" })
+  assert.deepEqual(JSON.parse(readFileSync(context.ownerFile, "utf8")), context.record)
+  assert.equal((await probeController({ root: context.root, policy, stateHome: context.stateHome })).state, "answering")
 })
 
 test("supervisor framing rejects oversized, malformed and idle clients while preserving the controller", { skip: posixOnly }, async (t) => {
