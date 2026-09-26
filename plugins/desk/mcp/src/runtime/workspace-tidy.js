@@ -4,6 +4,9 @@ import path from "node:path"
 import { parseFrontmatterLite } from "../desk/frontmatter-lite.js"
 import { readInspectionGit } from "./git-inspection.js"
 import { readProcessStart } from "../readiness/process-start.js"
+import { withWorkspaceClaim } from "./workspace-claim.js"
+import { fileURLToPath, pathToFileURL } from "node:url"
+import { dispositionRecord } from "./workspace-evidence.js"
 
 const RECENT_MS = 30 * 24 * 60 * 60 * 1000
 const MAX_BYTES = 64 * 1024
@@ -12,7 +15,7 @@ const REF = /^refs\/(?:heads|remotes)\/[^\s~^:?*[\\]+$/u
 const text = (value) => typeof value === "string" && value.length > 0
 const inside = (root, target) => target === root || target.startsWith(`${root}${path.sep}`)
 const cleanLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ")
-const gitDefault = (cwd, args) => readInspectionGit(cwd, ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], {})
+const gitDefault = (cwd, args, options) => readInspectionGit(cwd, ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], {}, options)
 
 async function smallFile(file) {
   const info = await fs.lstat(file)
@@ -38,10 +41,19 @@ function cardRepositories(matter) {
     if (/^repos:\s*\[\s*\]\s*$/mu.test(matter)) return []
     throw new Error("repos must be a block list or []")
   }
-  const items = block[1].split(/^\s+- /mu).filter((item) => item.trim())
+  const lines = block[1].split("\n")
+  const indent = /^([ \t]+)- /u.exec(lines.find((line) => /^[ \t]+- /u.test(line)) ?? "")?.[1]
+  if (!indent) throw new Error("repos must contain repository-level list items")
+  const items = []
+  for (const line of lines) {
+    if (line.startsWith(`${indent}- `)) items.push([line.slice(indent.length + 2)])
+    else if (line.trim()) {
+      if (!items.length || !line.startsWith(`${indent}  `)) throw new Error("unsupported repository indentation")
+      items.at(-1).push(line.slice(indent.length + 2))
+    }
+  }
   return items.map((item) => {
-    const lines = item.trimEnd().split("\n")
-    const body = [lines[0], ...lines.slice(1).map((line) => line.trimStart())].join("\n")
+    const body = item.join("\n")
     const { data } = parseFrontmatterLite(`---\n${body}\n---`)
     if (!["local", "remote"].includes(data.mode)) throw new Error("repo mode missing")
     if (data.mode === "remote") return null
@@ -67,12 +79,14 @@ export function parseWorktrees(output, repository) {
 
 export async function inspectWorkspace({
   deskRoot, homeDir = os.homedir(), now = Date.now(), budgetMs = 200,
-  maxCards = 128, maxDirectories = 512, maxEntries = 4096, maxRepositories = 16, maxWorktrees = 128, git = gitDefault,
+  maxCards = 128, maxDirectories = 512, maxEntries = 4096, maxRepositories = 16, maxWorktrees = 128, git = gitDefault, signal,
 } = {}) {
   const result = { repositories: [], cards: [], cardRecords: {}, worktrees: [], issues: [], complete: true }
   let expired = false
+  const cancellation = new AbortController()
+  const stopSignal = signal ? AbortSignal.any([signal, cancellation.signal]) : cancellation.signal
   let timer
-  const stop = () => { if (expired) throw new Error("workspace-tidy budget exceeded") }
+  const stop = () => { if (expired || stopSignal.aborted) throw new Error("workspace-tidy budget exceeded") }
   const inventory = async () => {
     const root = await fs.realpath(deskRoot)
     stop()
@@ -92,7 +106,7 @@ export async function inspectWorkspace({
         entries.push(entry)
       }
       stop()
-      if (entries.some((entry) => entry.name === "task.md" && entry.isFile())) {
+      if (entries.some((entry) => entry.name === "task.md")) {
         if (result.cards.length >= maxCards) throw new Error("workspace-tidy card budget exceeded")
         const file = path.join(dir, "task.md")
         const body = await smallFile(file)
@@ -128,13 +142,13 @@ export async function inspectWorkspace({
     const commonDirs = new Set()
     for (const repo of repositories) {
       stop()
-      const common = await git(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"])
+      const common = await git(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"], { signal: stopSignal })
       stop()
       if (!common.ok) throw new Error(`cannot inspect repository: ${repo}`)
       if (repo === root) result.commonDirectory = common.stdout
       if (commonDirs.has(common.stdout)) continue
       commonDirs.add(common.stdout)
-      const listing = await git(repo, ["worktree", "list", "--porcelain", "-z"])
+      const listing = await git(repo, ["worktree", "list", "--porcelain", "-z"], { signal: stopSignal })
       stop()
       if (!listing.ok) throw new Error(`cannot list worktrees: ${repo}`)
       const worktrees = parseWorktrees(listing.stdout, repo)
@@ -147,6 +161,7 @@ export async function inspectWorkspace({
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => {
       expired = true
+      cancellation.abort()
       resolve({ ...result, complete: false, issues: [...result.issues, "workspace-tidy budget exceeded; inspection deferred"] })
     }, budgetMs)
   })
@@ -187,6 +202,20 @@ async function releasedWriters(release, { processStart, signal }) {
   }
 }
 
+export async function normalizeDeliveryEndpoint(value, cwd) {
+  if (!text(value) || /[\x00-\x20\x7f]/u.test(value) && !path.isAbsolute(value)) throw new Error("invalid delivery endpoint")
+  if (path.isAbsolute(value) || value.startsWith("./") || value.startsWith("../")) {
+    return pathToFileURL(await fs.realpath(path.resolve(cwd, value))).href
+  }
+  const scp = /^(?:([^/@:]+)@)?([^/:]+):(.+)$/u.exec(value)
+  const url = new URL(!value.includes("://") && scp ? `ssh://${scp[1] ? `${scp[1]}@` : ""}${scp[2]}/${scp[3]}` : value)
+  if (url.protocol === "file:") return pathToFileURL(await fs.realpath(fileURLToPath(url))).href
+  if (!["https:", "ssh:"].includes(url.protocol) || url.password || url.search || url.hash ||
+      (url.protocol === "https:" && url.username)) throw new Error("unsupported or credential-bearing delivery endpoint")
+  url.hostname = url.hostname.toLowerCase()
+  return url.href.replace(/\/$/u, "")
+}
+
 async function candidate(item, inventory, options) {
   const { git, processStart, signal } = options
   const cwd = item.path
@@ -208,7 +237,7 @@ async function candidate(item, inventory, options) {
   try { raw = await smallFile(receiptPath); record = JSON.parse(raw) } catch { throw new Error("exact ownership receipt missing or unreadable") }
   const info = await fs.stat(cwd)
   const card = path.resolve(options.deskRoot, record.task ?? "")
-  if (record.version !== 1 || !text(record.owner) || record.worktree !== cwd || record.repository !== common || record.branch !== item.branch ||
+  if (record.version !== 2 || !text(record.owner) || record.worktree !== cwd || record.repository !== common || record.branch !== item.branch ||
       !inventory.cardRecords[card]?.repositories.includes(item.repository)) throw new Error("exact ownership mismatch")
   if (await smallFile(card) !== inventory.cardRecords[card].body) throw new Error("task ownership changed")
   if (record.disposition !== "remove") throw new Error("intentionally retained worktree")
@@ -216,6 +245,8 @@ async function candidate(item, inventory, options) {
   if (!SHA.test(record.head) || item.head !== record.head) throw new Error("local commits or HEAD changed since release")
   if (!REF.test(record.base) || !SHA.test(record.delivered)) throw new Error("delivery reference unverified")
   await releasedWriters(record.release, { processStart, signal })
+  const flags = await mustGit(git, cwd, ["ls-files", "-v", "-z"])
+  if (flags.split("\0").some((entry) => entry && !entry.startsWith("H "))) throw new Error("index flags prevent reliable tracked-content inspection")
   const status = await mustGit(git, cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored"])
   if (status) {
     if (status.startsWith("??")) throw new Error("untracked files")
@@ -232,13 +263,32 @@ async function candidate(item, inventory, options) {
     if (!remote || !text(remote.name) || !/^refs\/heads\/[^\s~^:?*[\\]+$/u.test(remote.branch)) throw new Error("unmerged branch; remote deletion unverified")
     const names = (await mustGit(git, cwd, ["remote"])).split("\n")
     if (!names.includes(remote.name) || remote.name.startsWith("-")) throw new Error("remote ownership unverified")
-    const remoteState = await git(cwd, ["ls-remote", "--exit-code", "--refs", remote.name, remote.branch])
+    const urls = (await mustGit(git, cwd, ["remote", "get-url", "--push", "--all", remote.name])).split("\n")
+    if (urls.length !== 1) throw new Error("ambiguous delivery push endpoints")
+    const endpoint = await normalizeDeliveryEndpoint(urls[0], cwd)
+    if (endpoint !== remote.endpoint) throw new Error("delivery endpoint missing or changed since release")
+    const remoteState = await git(cwd, ["ls-remote", "--exit-code", "--refs", "--", endpoint, remote.branch])
     if (remoteState.ok || remoteState.code !== 2) throw new Error("remote branch exists or is unobservable")
   }
   return { record, raw, receiptPath, merged }
 }
 
-export async function repairWorkspace({ deskRoot, git = gitDefault, processStart = readProcessStart, signal = process.kill, ...inspection } = {}) {
+export async function revokeWorkspaceRelease(resource) {
+  return withWorkspaceClaim(resource, async (assertHeld) => {
+    const admin = await mustGit(gitDefault, resource.worktree, ["rev-parse", "--absolute-git-dir"])
+    const file = path.join(admin, "desk-closeout.json")
+    const record = JSON.parse(await smallFile(file))
+    for (const key of ["repository", "worktree", "branch", "owner"]) {
+      if (record[key] !== resource[key]) throw new Error("release revocation ownership mismatch")
+    }
+    await assertHeld()
+    await fs.unlink(file)
+    if (!await absent(file)) throw new Error("release revocation absence unverified")
+    return { revoked: true, ...resource }
+  })
+}
+
+export async function repairWorkspace({ deskRoot, git = gitDefault, processStart = readProcessStart, signal = process.kill, onDisposition = async () => {}, ...inspection } = {}) {
   const inventory = await inspectWorkspace({ ...inspection, deskRoot, git, budgetMs: 30_000 })
   const result = { removed: [], left: [], issues: inventory.issues }
   if (!inventory.complete) {
@@ -250,31 +300,43 @@ export async function repairWorkspace({ deskRoot, git = gitDefault, processStart
     try {
       const options = { deskRoot, git, processStart, signal }
       const first = await candidate(item, inventory, options)
-      // Re-read registration, receipt, identity, status and writer evidence at
-      // the deletion boundary. No force, reset, prune or process termination.
-      const fresh = parseWorktrees(await mustGit(git, item.repository, ["worktree", "list", "--porcelain", "-z"]), item.repository)
-      const current = fresh.find((entry) => entry.path === item.path)
-      if (!current) throw new Error("worktree registration changed")
-      const checked = await candidate(current, inventory, options)
-      if (first.raw !== checked.raw) throw new Error("ownership changed during repair")
-      const removed = await git(item.repository, ["worktree", "remove", "--", item.path])
-      if (!removed.ok) throw new Error("worktree removal refused")
-      const listing = await mustGit(git, item.repository, ["worktree", "list", "--porcelain", "-z"])
-      if (!await absent(item.path) || parseWorktrees(listing, item.repository).some((entry) => entry.path === item.path)) throw new Error("worktree absence unverified")
-      const entry = { path: item.path, branch: checked.record.branch, owner: checked.record.owner, branchRemoved: false }
-      result.removed.push(entry)
-      resource = `${item.repository}:${entry.branch}`
-      // Git's non-forced branch deletion also refuses a newly attached writer.
-      // A squash branch remains named; never force-delete it by inference.
-      const head = await git(item.repository, ["rev-parse", "--verify", "--quiet", checked.record.branch])
-      if (head.code === 1) {
-        entry.branchRemoved = true
-      } else if (checked.merged && head.ok && head.stdout === checked.record.head) {
-        await git(item.repository, ["branch", "-d", "--", checked.record.branch.slice("refs/heads/".length)])
-        const exists = await git(item.repository, ["show-ref", "--verify", "--quiet", checked.record.branch])
-        entry.branchRemoved = exists.code === 1
-      }
-      if (!entry.branchRemoved) result.left.push({ path: resource, reason: "branch retained; owner must reconcile" })
+      await withWorkspaceClaim(first.record, async (assertHeld) => {
+        // Re-read registration, receipt, identity, status and writer evidence at
+        // the deletion boundary. No force, reset, prune or writer termination.
+        const fresh = parseWorktrees(await mustGit(git, item.repository, ["worktree", "list", "--porcelain", "-z"]), item.repository)
+        const current = fresh.find((entry) => entry.path === item.path)
+        if (!current) throw new Error("worktree registration changed")
+        const checked = await candidate(current, inventory, options)
+        if (first.raw !== checked.raw) throw new Error("ownership changed during repair")
+        await assertHeld()
+        if (await smallFile(checked.receiptPath) !== checked.raw) throw new Error("release revoked or changed during repair")
+        await onDisposition(dispositionRecord(checked.record, "cleanup_pending"))
+        const removed = await git(item.repository, ["worktree", "remove", "--", item.path])
+        if (!removed.ok) throw new Error("worktree removal refused")
+        const listing = await mustGit(git, item.repository, ["worktree", "list", "--porcelain", "-z"])
+        if (!await absent(item.path) || parseWorktrees(listing, item.repository).some((entry) => entry.path === item.path)) throw new Error("worktree absence unverified")
+        await assertHeld()
+        const entry = { path: item.path, branch: checked.record.branch, owner: checked.record.owner, branchRemoved: false }
+        result.removed.push(entry)
+        resource = `${checked.record.repository}:${entry.branch}`
+        // The claim coordinates reacquisition; Git's expected-old-value delete
+        // also rejects an uncoordinated ref update atomically. No unmerged refs.
+        const head = await git(item.repository, ["rev-parse", "--verify", "--quiet", checked.record.branch])
+        if (head.code === 1) {
+          entry.branchRemoved = true
+        } else if (checked.merged && head.ok && head.stdout === checked.record.head) {
+          const registrations = parseWorktrees(await mustGit(git, item.repository, ["worktree", "list", "--porcelain", "-z"]), item.repository)
+          if (!registrations.some((entry) => entry.branch === checked.record.branch)) {
+            await assertHeld()
+            await git(item.repository, ["update-ref", "--no-deref", "-d", checked.record.branch, checked.record.head])
+          }
+          const exists = await git(item.repository, ["show-ref", "--verify", "--quiet", checked.record.branch])
+          entry.branchRemoved = exists.code === 1
+        }
+        if (!entry.branchRemoved) result.left.push({ path: resource, reason: "branch retained; owner must reconcile" })
+        await onDisposition(dispositionRecord(checked.record, "removed", entry.branchRemoved))
+        await assertHeld()
+      })
     } catch (error) {
       result.left.push({ path: resource, reason: cleanLine(error.message) })
     }

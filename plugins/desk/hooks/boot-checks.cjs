@@ -38,7 +38,7 @@ async function launchRepair(root, env) {
   });
 }
 
-async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair }, expired) {
+async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair }, expired, signal) {
   try {
     const [{ resolveStartupRoot }, { resolveActivationConfigPath, isDeskWorkspace }] = await Promise.all([
       runtime("util/startup-direction.js"), runtime("util/paths.js"),
@@ -53,7 +53,7 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     }
     if (!bound.root) return "Desk boot: workspace-tidy skipped; no bound desk.";
     const { inspectWorkspace, tidyLine } = await runtime("runtime/workspace-tidy.js");
-    const inventory = await inspectWorkspace({ deskRoot: bound.root });
+    const inventory = await inspectWorkspace({ deskRoot: bound.root, signal });
     if (expired()) return "";
     let previous = "";
     if (inventory.commonDirectory) {
@@ -85,12 +85,14 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
 async function runBootChecks(options = {}) {
   let expired = false;
   let timer;
+  const cancellation = new AbortController();
   try {
     return await Promise.race([
-      checkWorkspace(options, () => expired),
+      checkWorkspace(options, () => expired, cancellation.signal),
       new Promise((resolve) => {
         timer = setTimeout(() => {
           expired = true;
+          cancellation.abort();
           resolve("Desk boot: workspace-tidy budget exceeded; deferred; run the repair with the desk_status root.");
         }, options.budgetMs ?? 500);
       }),
@@ -100,7 +102,7 @@ async function runBootChecks(options = {}) {
   }
 }
 
-async function runRepair(root) {
+async function updateReport(root, operation) {
   const file = await location(root);
   const lock = `${file}.lock`;
   const token = randomUUID();
@@ -114,28 +116,59 @@ async function runRepair(root) {
     const ownership = JSON.stringify({ token, pid: process.pid, start: await readProcessStart(process.pid) });
     await handle.writeFile(ownership);
     await handle.close();
-    const { repairWorkspace, tidyLine } = await runtime("runtime/workspace-tidy.js");
-    const result = await repairWorkspace({ deskRoot: root });
-    result.line = tidyLine(result);
-    result.root = root;
-    result.updated = new Date().toISOString();
-    // Exclusive temporary file plus rename never follows a pre-existing leaf.
-    const temporary = `${file}.${token}.tmp`;
-    await fs.writeFile(temporary, `${JSON.stringify(result)}\n`, { flag: "wx", mode: 0o600 });
-    await fs.rename(temporary, file);
-    return result;
+    const { tidyLine } = await runtime("runtime/workspace-tidy.js");
+    let previous = {};
+    try { previous = await readReport(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    const persist = async (result) => {
+      result.line = tidyLine(result);
+      result.root = root;
+      result.updated = new Date().toISOString();
+      const temporary = `${file}.${token}.tmp`;
+      const output = await fs.open(temporary, "wx", 0o600);
+      try { await output.writeFile(`${JSON.stringify(result)}\n`); await output.sync(); } finally { await output.close(); }
+      await fs.rename(temporary, file);
+      return result;
+    };
+    return await operation(previous, persist);
   } finally {
     await handle.close();
     if (JSON.parse(await fs.readFile(lock, "utf8")).token === token) await fs.unlink(lock);
   }
 }
 
-module.exports = { runBootChecks, runRepair, reportPath, readReport };
+async function runRepair(root) {
+  return updateReport(root, async (previous, persist) => {
+    const { repairWorkspace } = await runtime("runtime/workspace-tidy.js");
+    const { mergeTidyEvidence } = await runtime("runtime/workspace-evidence.js");
+    let evidence = previous;
+    const result = await repairWorkspace({ deskRoot: root, onDisposition: async (entry) => {
+      evidence = mergeTidyEvidence(evidence, {}, entry);
+      await persist(evidence);
+    } });
+    return persist(mergeTidyEvidence(evidence, result));
+  });
+}
+
+async function acknowledgeRepair(root, acknowledgement) {
+  return updateReport(root, async (previous, persist) => {
+    const { acknowledgeTidyEvidence } = await runtime("runtime/workspace-evidence.js");
+    return persist(acknowledgeTidyEvidence(previous, acknowledgement));
+  });
+}
+
+module.exports = { runBootChecks, runRepair, acknowledgeRepair, reportPath, readReport };
 
 if (require.main === module) {
-  const run = process.argv[2] === "--repair" && process.argv[3]
-    ? runRepair(process.argv[3])
-    : Promise.reject(new Error("usage: boot-checks.cjs --repair <bound-desk-root>"));
+  const [command, root, id, digest, canonicalEvidence] = process.argv.slice(2);
+  const run = command === "--repair" && root
+    ? runRepair(root)
+    : command === "--ack" && root && id && digest && canonicalEvidence
+      ? acknowledgeRepair(root, { id, digest, canonicalEvidence })
+      : command === "--revoke" && root && id && digest && canonicalEvidence
+        ? runtime("runtime/workspace-tidy.js").then(({ revokeWorkspaceRelease }) => revokeWorkspaceRelease({
+          repository: root, worktree: id, branch: digest, owner: canonicalEvidence,
+        }))
+        : Promise.reject(new Error("usage: boot-checks.cjs --repair <desk> | --ack <desk> <id> <digest> <canonical-evidence> | --revoke <common-git-dir> <worktree> <branch-ref> <owner>"));
   run.then((result) => process.stdout.write(`${JSON.stringify(result)}\n`)).catch((error) => {
     process.stderr.write(`workspace-tidy: ${oneLine(error.message)}\n`);
     process.exitCode = 1;

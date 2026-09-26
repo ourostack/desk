@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.44 — 2026-09-26
+
+A4 review correction: [workspace cleanup](mcp/src/runtime/workspace-tidy.js) refuses `assume-unchanged` and `skip-worktree` index states that can hide uncommitted bytes. [Exact-resource claims](mcp/src/runtime/workspace-claim.js) coordinate version-2 receipt creation, revocation and reacquisition with cleanup through absence readback; ancestry-merged branch deletion compares the released HEAD atomically. [Per-resource evidence](mcp/src/runtime/workspace-evidence.js) is flushed before deletion and retained across scans until explicit canonical-accounting acknowledgement, including squash-retained branches and earlier report evidence.
+
+Any task-card entry now stops traversal into code/evidence, and canonical serializer output retains repository-level nesting and folded long paths. Remote-deletion proof binds the normalized delivery push endpoint and exact ref, refusing changed or multiple push mappings. [Inspection cancellation](mcp/src/runtime/git-inspection.js) closes the exact owned child and its pipes within the hook's deadline instead of returning while the process still holds startup open. [Review probes](mcp/__tests__/runtime/workspace_tidy.test.js) and [actual-hook process tests](mcp/__tests__/runtime/workspace_tidy_boot.test.js) exercise these corrections. [Documentation](docs/workspace-tidy.md) specifies coordinated revocation and per-resource acknowledgement. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
 ## 3.2.0-alpha.43 — 2026-09-26
 
 Task A4: [close-out ownership](skills/task-lifecycle/SKILL.md#close-out-at-every-ownership-boundary) now applies when every task, iteration or delegated assignment ends. Child returns enumerate every created worktree and branch with its exact identity, state, owner and disposition. The [Desk-to-Superpowers adapter](skills/using-superpowers-with-desk/SKILL.md#mapped-controller-close-out) maps per-task controller cleanup without modifying vendored Superpowers. [Git hygiene](skills/git-hygiene/SKILL.md#exact-owned-cleanup) keeps exact-owner, live-writer, state-branch and intentionally retained alpha boundaries.

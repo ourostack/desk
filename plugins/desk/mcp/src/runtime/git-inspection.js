@@ -33,11 +33,18 @@ export function inspectionEnvironment(modeled) {
   return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }
 }
 
-export function readInspectionGit(cwd, args, modeled) {
+export function readInspectionGit(cwd, args, modeled, { signal } = {}) {
   trustedGit ??= resolveInspectionGit()
   const env = inspectionEnvironment(modeled)
   return new Promise((resolve, reject) => {
-    execFile(trustedGit, args, { cwd, env, encoding: "utf8", timeout: 2000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+    let outcome
+    // Abort can call the callback before the process and pipes are closed.
+    // Settle only after close; this exact child never runs repository hooks.
+    const child = execFile(trustedGit, args, { cwd, env, signal, killSignal: "SIGKILL", encoding: "utf8", timeout: 2000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+      outcome = { error, stdout, stderr }
+    })
+    child.once("close", () => {
+      const { error, stdout, stderr } = outcome
       if (error && (error.killed || typeof error.code !== "number")) { reject(error); return }
       resolve({ ok: !error, stdout: stdout.trim(), stderr: stderr.trim(), code: error?.code })
     })

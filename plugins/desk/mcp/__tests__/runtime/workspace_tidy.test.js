@@ -8,6 +8,10 @@ import { once } from "node:events"
 import { mkTempRoot } from "../_temp_roots.js"
 import { readProcessStart } from "../../src/readiness/process-start.js"
 import { readInspectionGit } from "../../src/runtime/git-inspection.js"
+import { serializeMarkdown } from "../../src/util/fm.js"
+import { pathToFileURL } from "node:url"
+import { createRequire } from "node:module"
+const boot = createRequire(import.meta.url)("../../../hooks/boot-checks.cjs")
 
 const moduleUrl = new URL("../../src/runtime/workspace-tidy.js", import.meta.url)
 const tidy = await import(moduleUrl).catch((error) => {
@@ -50,7 +54,7 @@ async function worktree(f, branch = "topic") {
   child.kill()
   await once(child, "exit")
   const record = {
-    version: 1, task: path.relative(f.desk, f.card), owner: "task/attempt-1", disposition: "remove",
+    version: 2, task: path.relative(f.desk, f.card), owner: "task/attempt-1", disposition: "remove",
     repository: git(f.repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
     worktree: directory, branch: `refs/heads/${branch}`, head: git(directory, "rev-parse", "HEAD"),
     base: "refs/heads/main", delivered: git(f.repo, "rev-parse", "main"),
@@ -126,7 +130,7 @@ test("a deleted remote branch never authorizes loss of unmerged or local-only co
   git(w.directory, "push", "origin", "topic")
   git(w.directory, "push", "origin", "--delete", "topic")
   w.record.head = git(w.directory, "rev-parse", "HEAD")
-  w.record.remote = { name: "origin", branch: "refs/heads/topic" }
+  w.record.remote = { name: "origin", branch: "refs/heads/topic", endpoint: pathToFileURL(f.remote).href }
   await w.save()
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
   assert.equal(result.removed.length, 0)
@@ -145,7 +149,7 @@ test("remote-deleted squash delivery removes the worktree but conservatively ret
   git(f.repo, "push", "origin", "--delete", "topic")
   w.record.head = git(w.directory, "rev-parse", "HEAD")
   w.record.delivered = git(f.repo, "rev-parse", "main")
-  w.record.remote = { name: "origin", branch: "refs/heads/topic" }
+  w.record.remote = { name: "origin", branch: "refs/heads/topic", endpoint: pathToFileURL(f.remote).href }
   await w.save()
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
   assert.equal(result.removed.length, 1)
@@ -391,7 +395,7 @@ test("remote-deleted squash cleanup refuses missing, wrong, present and unreacha
   git(f.repo, "commit", "-m", "squash")
   w.record.head = git(w.directory, "rev-parse", "HEAD")
   w.record.delivered = git(f.repo, "rev-parse", "main")
-  for (const remote of [undefined, { name: "missing", branch: "refs/heads/topic" }, { name: "origin", branch: "--all" }, { name: "origin", branch: "refs/heads/topic" }]) {
+  for (const remote of [undefined, { name: "missing", branch: "refs/heads/topic" }, { name: "origin", branch: "--all" }, { name: "origin", branch: "refs/heads/topic", endpoint: pathToFileURL(f.remote).href }]) {
     w.record.remote = remote
     await w.save()
     const result = await tidy.repairWorkspace({ deskRoot: f.desk })
@@ -400,7 +404,7 @@ test("remote-deleted squash cleanup refuses missing, wrong, present and unreacha
   }
   git(f.repo, "remote", "set-url", "origin", path.join(f.root, "absent"))
   const result = await tidy.repairWorkspace({ deskRoot: f.desk })
-  assert.match(result.left[0].reason, /unobservable/)
+  assert.match(result.left[0].reason, /ENOENT|endpoint/)
 })
 
 test("Git refusals and state changes at each deletion boundary remain visible", async () => {
@@ -492,4 +496,276 @@ test("a late read cannot continue inventory after the boot deadline", async () =
   await new Promise((resolve) => setTimeout(resolve, 10))
   assert.equal(calls, 1)
   assert.equal(result.worktrees.length, 0)
+})
+
+for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+  test(`R1 preserves tracked bytes hidden by ${flag}`, async () => {
+    const f = await fixture()
+    const w = await worktree(f)
+    git(w.directory, "update-index", flag, "tracked")
+    await fs.writeFile(path.join(w.directory, "tracked"), "uncommitted irreplaceable bytes\n")
+    assert.equal(git(w.directory, "status", "--porcelain=v1"), "")
+    const result = await tidy.repairWorkspace({ deskRoot: f.desk })
+    assert.equal(result.removed.length, 0)
+    assert.match(result.left[0].reason, /index.*flags/)
+    assert.equal(await fs.readFile(path.join(w.directory, "tracked"), "utf8"), "uncommitted irreplaceable bytes\n")
+    assert.equal(git(w.directory, "rev-parse", "HEAD"), w.record.head)
+  })
+}
+
+test("R4 symlinked task card stops traversal into code and evidence", async () => {
+  const f = await fixture()
+  const other = await fixture()
+  const original = await fs.readFile(f.card, "utf8")
+  const target = path.join(f.root, "outside-card.md")
+  await fs.writeFile(target, original)
+  await fs.unlink(f.card)
+  await fs.symlink(target, f.card)
+  const nested = path.join(path.dirname(f.card), "repo", "cache", "task.md")
+  await fs.mkdir(path.dirname(nested), { recursive: true })
+  await fs.writeFile(nested, await fs.readFile(other.card, "utf8"))
+  const result = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
+  assert.equal(result.complete, false)
+  assert.match(result.issues[0], /unsafe/)
+  assert.ok(!result.cards.includes(nested))
+  assert.ok(!result.repositories.includes(other.repo))
+})
+
+test("R6 real canonical serializer supports nested paths and long folded tilde paths", async () => {
+  const f = await fixture()
+  const long = path.join(f.root, "long portable workspace ".repeat(5), "repo")
+  await fs.mkdir(path.dirname(long), { recursive: true })
+  await fs.rename(f.repo, long)
+  for (const value of [
+    { name: "repo", local_path: `~/${path.relative(f.root, long)}`, mode: "local" },
+    { name: "repo", local_path: `~/${path.relative(f.root, long)}`, mode: "local", paths: ["src/**", "test/**"], metadata: { branches: ["one", "two"] } },
+  ]) {
+    const body = serializeMarkdown({ status: "processing", repos: [value, { name: "remote", mode: "remote", local_path: "", paths: ["a"] }] }, "")
+    assert.match(body, /local_path: >-/)
+    await fs.writeFile(f.card, body)
+    const result = await tidy.inspectWorkspace({ deskRoot: f.desk, homeDir: f.root, budgetMs: 5000 })
+    assert.equal(result.complete, true, result.issues.join("; "))
+    assert.deepEqual(result.repositories, [f.desk, long])
+  }
+})
+
+test("R2 exclusive cleanup claim refuses compliant revocation and consumer reacquisition", async () => {
+  assert.equal(typeof tidy.revokeWorkspaceRelease, "function")
+  const f = await fixture()
+  const w = await worktree(f)
+  let statusCount = 0
+  let revoked = false
+  const run = async (cwd, args) => {
+    const result = await readInspectionGit(cwd, args, {})
+    if (args[0] === "status" && ++statusCount === 2) {
+      await assert.rejects(tidy.revokeWorkspaceRelease({
+        repository: w.record.repository, worktree: w.directory, branch: w.record.branch, owner: w.record.owner,
+      }), /claimed/)
+      revoked = true
+    }
+    return result
+  }
+  const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
+  assert.equal(revoked, true)
+  assert.equal(result.removed.length, 1)
+})
+
+test("R2 revoked release before cleanup preserves a live reacquired consumer", async () => {
+  const f = await fixture()
+  const w = await worktree(f)
+  await tidy.revokeWorkspaceRelease({
+    repository: w.record.repository, worktree: w.directory, branch: w.record.branch, owner: w.record.owner,
+  })
+  const consumer = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { cwd: w.directory, stdio: "ignore" })
+  await once(consumer, "spawn")
+  try {
+    const result = await tidy.repairWorkspace({ deskRoot: f.desk })
+    assert.equal(result.removed.length, 0)
+    assert.match(result.left[0].reason, /ownership/)
+    assert.ok((await fs.stat(w.directory)).isDirectory())
+    assert.equal(consumer.exitCode, null)
+  } finally { consumer.kill(); await once(consumer, "exit") }
+})
+
+test("R2 raw receipt revocation after final status is observed before removal", async () => {
+  const f = await fixture()
+  const w = await worktree(f)
+  let count = 0
+  let consumer
+  const run = async (cwd, args) => {
+    const result = await readInspectionGit(cwd, args, {})
+    if (args[0] === "status" && ++count === 2) {
+      await fs.unlink(w.receipt)
+      consumer = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { cwd: w.directory, stdio: "ignore" })
+      await once(consumer, "spawn")
+    }
+    return result
+  }
+  try {
+    const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
+    assert.equal(result.removed.length, 0)
+    assert.ok((await fs.stat(w.directory)).isDirectory())
+    assert.equal(consumer.exitCode, null)
+  } finally { if (consumer) { consumer.kill(); await once(consumer, "exit") } }
+})
+
+test("R2 atomic expected-head deletion preserves a reacquired ref already merged on main", async () => {
+  const f = await fixture()
+  const w = await worktree(f)
+  await fs.writeFile(path.join(f.repo, "tracked"), "new base")
+  git(f.repo, "commit", "-am", "new base")
+  const newHead = git(f.repo, "rev-parse", "HEAD")
+  let changed = false
+  const run = async (cwd, args) => {
+    const result = await readInspectionGit(cwd, args, {})
+    if (args[0] === "rev-parse" && args.includes("--quiet") && args.includes(w.record.branch)) {
+      git(f.repo, "update-ref", w.record.branch, newHead)
+      changed = true
+    }
+    return result
+  }
+  const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
+  assert.equal(changed, true)
+  assert.equal(result.removed.length, 1)
+  assert.equal(result.removed[0].branchRemoved, false)
+  assert.equal(git(f.repo, "rev-parse", "topic"), newHead)
+})
+
+async function squashFixture() {
+  const f = await fixture()
+  const w = await worktree(f)
+  await fs.writeFile(path.join(w.directory, "tracked"), "squash delivery\n")
+  git(w.directory, "commit", "-am", "topic")
+  git(w.directory, "push", "origin", "topic")
+  git(f.repo, "merge", "--squash", "topic")
+  git(f.repo, "commit", "-m", "squash")
+  git(f.repo, "push", "origin", "main")
+  w.record.head = git(w.directory, "rev-parse", "HEAD")
+  w.record.delivered = git(f.repo, "rev-parse", "main")
+  w.record.base = "refs/remotes/origin/main"
+  w.record.remote = { name: "origin", branch: "refs/heads/topic", endpoint: pathToFileURL(f.remote).href }
+  await w.save()
+  return { f, w }
+}
+
+test("R7 push repository, not fetch URL, decides remote deletion", async () => {
+  const { f, w } = await squashFixture()
+  const fork = path.join(f.root, "fork.git")
+  git(f.root, "init", "--bare", fork)
+  git(f.repo, "remote", "set-url", "--push", "origin", fork)
+  git(w.directory, "push", "origin", "topic")
+  // The upstream delivery exists but its topic is absent; the actual push
+  // repository still owns topic and must veto cleanup.
+  git(f.root, "--git-dir", f.remote, "update-ref", "-d", "refs/heads/topic")
+  w.record.remote.endpoint = pathToFileURL(fork).href
+  await w.save()
+  const result = await tidy.repairWorkspace({ deskRoot: f.desk })
+  assert.equal(result.removed.length, 0)
+  assert.match(result.left[0].reason, /remote branch exists/)
+  assert.ok(git(f.root, "--git-dir", fork, "rev-parse", "topic"))
+})
+
+test("R7 changed and multiple push endpoints cannot reuse a release receipt", async () => {
+  const { f, w } = await squashFixture()
+  const unrelated = path.join(f.root, "unrelated.git")
+  git(f.root, "init", "--bare", unrelated)
+  git(f.repo, "remote", "set-url", "origin", unrelated)
+  const changed = await tidy.repairWorkspace({ deskRoot: f.desk })
+  assert.equal(changed.removed.length, 0)
+  assert.match(changed.left[0].reason, /endpoint.*changed/)
+  git(f.repo, "remote", "set-url", "origin", f.remote)
+  git(f.repo, "remote", "set-url", "--add", "--push", "origin", unrelated)
+  git(f.repo, "remote", "set-url", "--add", "--push", "origin", f.remote)
+  const multiple = await tidy.repairWorkspace({ deskRoot: f.desk })
+  assert.equal(multiple.removed.length, 0)
+  assert.match(multiple.left[0].reason, /ambiguous.*push/)
+  assert.ok((await fs.stat(w.directory)).isDirectory())
+})
+
+test("R3 two repairs preserve squash branch and removed-resource evidence until canonical acknowledgement", async () => {
+  const { f, w } = await squashFixture()
+  git(f.repo, "push", "origin", "--delete", "topic")
+  const first = await boot.runRepair(f.desk)
+  assert.equal(first.removed.length, 1)
+  assert.match(first.left[0].reason, /branch retained/)
+  const second = await boot.runRepair(f.desk)
+  assert.equal(second.removed.length, 1)
+  assert.match(second.left[0].reason, /branch retained/)
+  assert.equal(git(f.repo, "rev-parse", "topic"), w.record.head)
+  const file = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
+  const persisted = await boot.readReport(file)
+  assert.equal(persisted.removed.length, 1)
+  assert.equal(persisted.resources[0].receipt.release.evidence, w.record.release.evidence)
+  const resource = persisted.resources[0]
+  await assert.rejects(boot.acknowledgeRepair(f.desk, { id: resource.id, digest: "stale", canonicalEvidence: "task.md#resources" }), /changed/)
+  const acknowledged = await boot.acknowledgeRepair(f.desk, { id: resource.id, digest: resource.digest, canonicalEvidence: "task.md#resources" })
+  assert.equal(acknowledged.resources.length, 0)
+  const third = await boot.runRepair(f.desk)
+  assert.deepEqual(third.left, [])
+  assert.deepEqual(third.removed, [])
+  assert.equal(git(f.repo, "rev-parse", "topic"), w.record.head)
+})
+
+test("R3 cleanup requires persisted pending evidence before destructive removal", async () => {
+  const f = await fixture()
+  const w = await worktree(f)
+  const states = []
+  const result = await tidy.repairWorkspace({
+    deskRoot: f.desk,
+    onDisposition: async (entry) => { states.push(entry.state); throw new Error("evidence store unavailable") },
+  })
+  assert.deepEqual(states, ["cleanup_pending"])
+  assert.equal(result.removed.length, 0)
+  assert.match(result.left[0].reason, /evidence store/)
+  assert.ok((await fs.stat(w.directory)).isDirectory())
+})
+
+test("R2 legacy receipts and mismatched revocation owners remain report-only", async () => {
+  const f = await fixture()
+  const w = await worktree(f)
+  await assert.rejects(tidy.revokeWorkspaceRelease({ ...w.record, owner: "different" }), /ownership mismatch/)
+  w.record.version = 1
+  await w.save()
+  const result = await tidy.repairWorkspace({ deskRoot: f.desk })
+  assert.equal(result.removed.length, 0)
+  assert.match(result.left[0].reason, /ownership/)
+})
+
+test("R2 late changed receipt and failed revocation absence are explicit refusals", async (t) => {
+  const f = await fixture()
+  const w = await worktree(f)
+  let count = 0
+  const run = async (cwd, args) => {
+    const result = await readInspectionGit(cwd, args, {})
+    if (args[0] === "status" && ++count === 2) {
+      w.record.owner = "new owner"
+      await w.save()
+    }
+    return result
+  }
+  const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
+  assert.equal(result.removed.length, 0)
+  assert.match(result.left[0].reason, /release.*changed/)
+  const unlink = fs.unlink.bind(fs)
+  const mock = t.mock.method(fs, "unlink", (file) => file === w.receipt ? Promise.resolve() : unlink(file))
+  await assert.rejects(tidy.revokeWorkspaceRelease(w.record), /absence unverified/)
+  mock.mock.restore()
+})
+
+test("R6 canonical nested paths alone work and malformed repository indentation refuses", async () => {
+  const f = await fixture()
+  await fs.writeFile(f.card, serializeMarkdown({
+    status: "processing", repos: [{ name: "repo", local_path: "~/repo", mode: "local", paths: ["src/**"] }],
+  }, ""))
+  assert.equal((await tidy.inspectWorkspace({ deskRoot: f.desk, homeDir: f.root, budgetMs: 5000 })).complete, true)
+  for (const body of [
+    "---\nstatus: processing\nrepos:\n  invalid: map\n---",
+    "---\nstatus: processing\nrepos:\n  invalid: map\n  - mode: remote\n---",
+    "---\nstatus: processing\nrepos:\n  - mode: remote\n bad-indent: x\n---",
+  ]) {
+    await fs.writeFile(f.card, body)
+    assert.equal((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).complete, false)
+  }
+  await fs.writeFile(f.card, "---\nstatus: processing\nrepos:\n  - mode: remote\n\n\n---")
+  assert.equal((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).complete, true)
 })
