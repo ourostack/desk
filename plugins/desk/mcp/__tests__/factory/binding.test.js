@@ -273,7 +273,7 @@ test("end to end: a derived session that only reads the desk binds nothing", asy
     ]
     const transcriptPath = path.join(scratch, `${sessionId}.jsonl`)
     writeFileSync(transcriptPath, `${lines.map((entry) => JSON.stringify(entry)).join("\n")}\n`)
-    const { events } = await deriveClaudeSession({ transcriptPath, contributor: "0f3a9c1d2b4e6f70", plugins: [], endReason: null })
+    const { events } = await deriveClaudeSession({ transcriptPath, plugins: [], endReason: null })
     const { jobs, calls } = bind(events)
     assert.deepEqual(jobs, [])
     assert.deepEqual(calls.readTask, [])
@@ -417,7 +417,7 @@ test("end to end: a failed Write under the desk binds nothing; the successful on
     ]
     const transcriptPath = path.join(scratch, `${sessionId}.jsonl`)
     writeFileSync(transcriptPath, `${lines.map((entry) => JSON.stringify(entry)).join("\n")}\n`)
-    const { events } = await deriveClaudeSession({ transcriptPath, contributor: "0f3a9c1d2b4e6f70", plugins: [], endReason: null })
+    const { events } = await deriveClaudeSession({ transcriptPath, plugins: [], endReason: null })
     const { jobs } = bind(events)
     assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["file_write"] }])
   } finally {

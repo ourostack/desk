@@ -1,14 +1,22 @@
-// Facts file v1: schema, privacy gate and validator.
+// Local facts v1 (`desk.factory.local/1`): schema, privacy gate and
+// validator, plus the spec walker the published schema reuses.
 //
-// A facts file is the only thing that ever leaves this machine for the
-// factory stores. Every string in it matches an enum or a strict pattern —
+// Local facts are what the derivers and binding write to the local outbox,
+// one file per session per store. They keep exact times and never leave the
+// machine as they are: `publish.js`'s `toPublished` is the only transform
+// that produces what leaves it, and `published-schema.js` is the public gate
+// for that form. Local facts carry no contributor.
+//
+// Every string in a local facts file matches an enum or a strict pattern —
 // there is no free-text field, so there is nothing here a transcript, a
-// prompt, a file path or a task title could hide inside. `validateFacts`
-// enforces that shape exactly: an unrecognized key is refused, not ignored.
-// `validateFactsBytes` additionally requires the raw bytes to be the
-// canonical serialization of what they parse to, so a duplicate JSON key —
-// which `JSON.parse` silently collapses to its last value — cannot let free
-// text ride along in bytes that otherwise parse clean.
+// prompt, a file path or a task title could hide inside.
+// `validateLocalFacts` enforces that shape exactly: an unrecognized key is
+// refused, not ignored. `validateLocalFactsBytes` additionally requires the
+// raw bytes to be the canonical serialization of what they parse to, so a
+// duplicate JSON key — which `JSON.parse` silently collapses to its last
+// value — cannot let free text ride along in bytes that otherwise parse
+// clean. The M3-1 names `validateFacts` and `validateFactsBytes` remain as
+// aliases until M3-12 retires them.
 //
 // The schema is a real declarative spec walker: one field-spec object per
 // level (`SESSION_SPEC`, `MODEL_SPEC`, ...) is the *only* place that names a
@@ -48,15 +56,25 @@ export const ENUMS = Object.freeze({
     "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
     "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
   ]),
+  // The published form adds `job_offsets`: a job whose offsets could not be
+  // measured (no readable task-card creation time).
+  publishedUnavailableField: Object.freeze([
+    "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
+    "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at", "job_offsets",
+  ]),
+  // `log_truncated` is a log that ends mid-record; `capped` is data a deriver
+  // trimmed to a schema limit; `desk_public` is job timing the transform
+  // withholds because the desk's own remote is (or may be) public.
   unavailableReason: Object.freeze([
     "host_does_not_record", "log_missing", "log_truncated", "session_open",
-    "not_collected_in_slice_1", "source_unreadable",
+    "not_collected_in_slice_1", "source_unreadable", "capped", "desk_public",
   ]),
 })
 
+export const LOCAL_SCHEMA = "desk.factory.local/1"
+
 export const PATTERNS = Object.freeze({
-  schema: /^desk\.factory\.facts\/1$/u,
-  contributor: /^[0-9a-f]{16}$/u,
+  schema: /^desk\.factory\.local\/1$/u,
   sessionId: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u,
   // The prerelease part is bounded (controller ruling, M1): unbounded free text there
   // would let word-shaped strings ride through as a "version".
@@ -82,12 +100,12 @@ export const LIMITS = Object.freeze({
   unavailable: 64,
 })
 
-const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
+export const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 const isSafeNonNegInt = (value) => Number.isSafeInteger(value) && value >= 0
 const isSafePositiveInt = (value) => Number.isSafeInteger(value) && value > 0
-const joinPath = (parent, segment) => (parent === "" ? String(segment) : `${parent}.${segment}`)
+export const joinPath = (parent, segment) => (parent === "" ? String(segment) : `${parent}.${segment}`)
 
-function addError(errors, code, path) {
+export function addError(errors, code, path) {
   errors.push({ code, path })
 }
 
@@ -184,15 +202,25 @@ function requireField(value, path, field, errors) {
 // level's spec is a plain object mapping its field names to one of these —
 // that same object drives both `checkKnownKeys`'s allow-list and the actual
 // per-key validation in `validateObject`, so the two can never disagree.
+// They are exported for `published-schema.js`, which builds its own level
+// specs from them and walks them with this same `validateObject`: there is
+// one validator engine, not two.
 // ---------------------------------------------------------------------------
 
-const leaf = (check) => ({ check })
+export const leaf = (check) => ({ check })
 
-const patternField = (pattern) => leaf((value, path, errors) => checkPattern(value, path, pattern, errors))
-const enumField = (allowed) => leaf((value, path, errors) => checkEnum(value, path, allowed, errors))
-const nullableEnumField = (allowed) => leaf((value, path, errors) => (value === null ? true : checkEnum(value, path, allowed, errors)))
-const nonNegIntField = () => leaf(checkSafeNonNegInt)
+export const patternField = (pattern) => leaf((value, path, errors) => checkPattern(value, path, pattern, errors))
+export const enumField = (allowed) => leaf((value, path, errors) => checkEnum(value, path, allowed, errors))
+export const nullableEnumField = (allowed) => leaf((value, path, errors) => (value === null ? true : checkEnum(value, path, allowed, errors)))
+export const nonNegIntField = () => leaf(checkSafeNonNegInt)
 const nullableNonNegIntField = () => leaf(checkNullableSafeNonNegInt)
+export const booleanField = () => leaf((value, path, errors) => {
+  if (typeof value !== "boolean") {
+    addError(errors, "type", path)
+    return false
+  }
+  return true
+})
 const positiveIntField = () => leaf((value, path, errors) => {
   if (!isSafePositiveInt(value)) {
     addError(errors, "integer", path)
@@ -200,14 +228,14 @@ const positiveIntField = () => leaf((value, path, errors) => {
   }
   return true
 })
-const rangeIntField = (min, max) => leaf((value, path, errors) => checkRangeInt(value, path, min, max, errors))
+export const rangeIntField = (min, max) => leaf((value, path, errors) => checkRangeInt(value, path, min, max, errors))
 const nullableRangeIntField = (min, max) => leaf((value, path, errors) => checkNullableRangeInt(value, path, min, max, errors))
 const timestampField = () => leaf(checkTimestamp)
 const nullableTimestampField = () => leaf(checkNullableTimestamp)
-const customField = (check) => leaf(check)
+export const customField = (check) => leaf(check)
 
 /** A nested fixed-shape object. `specOrFn` may compute the spec from the raw value (for a shape that depends on a sibling field, e.g. `intervals[].kind`). */
-function objectField(specOrFn, post) {
+export function objectField(specOrFn, post) {
   return leaf((value, path, errors, ctx) => {
     const results = validateObject(value, path, specOrFn, errors, ctx)
     if (results !== undefined && post) post(value, path, results, errors, ctx)
@@ -216,12 +244,12 @@ function objectField(specOrFn, post) {
 }
 
 /** Same shape, but `null` is also accepted. */
-function nullableObjectField(spec) {
+export function nullableObjectField(spec) {
   return leaf((value, path, errors, ctx) => (value === null ? true : validateObject(value, path, spec, errors, ctx)))
 }
 
 /** An array of `itemField`-shaped entries, capped at `max` (every array in this schema has one — see `LIMITS`). Over cap fails fast with one `too_many`, items left unchecked. */
-function arrayField(itemField, max) {
+export function arrayField(itemField, max) {
   return leaf((value, path, errors, ctx) => {
     if (!Array.isArray(value)) {
       addError(errors, "type", path)
@@ -263,7 +291,7 @@ function mapOfField(allowedKeys, valueField) {
  * Returns a map of field name -> that field's check result, or `undefined`
  * when `value` isn't even a plain object.
  */
-function validateObject(value, path, specOrFn, errors, ctx) {
+export function validateObject(value, path, specOrFn, errors, ctx) {
   if (!isPlainObject(value)) {
     addError(errors, "type", path)
     return undefined
@@ -282,38 +310,53 @@ function validateObject(value, path, specOrFn, errors, ctx) {
 // Per-level specs.
 // ---------------------------------------------------------------------------
 
+// The levels whose shape is the same in the local and published forms are
+// exported for `published-schema.js`.
+
 const TOKEN_FIELDS = ["input", "output", "cache_read", "cache_write", "reasoning"]
 const TOKENS_SPEC = Object.fromEntries(TOKEN_FIELDS.map((name) => [name, nullableNonNegIntField()]))
 
-const MODEL_SPEC = {
+export const MODEL_SPEC = {
   id: patternField(PATTERNS.modelId),
   requests: nullableNonNegIntField(),
   tokens: objectField(TOKENS_SPEC),
 }
 
-const PLUGIN_SPEC = {
+export const PLUGIN_SPEC = {
   name: patternField(PATTERNS.pluginName),
   version: patternField(PATTERNS.semver),
 }
 
-const AGENT_SPEC = {
+export const AGENT_SPEC = {
   n: rangeIntField(0, 9999),
   parent: nullableRangeIntField(0, 9999),
   model: patternField(PATTERNS.modelId),
 }
 
-const PR_SPEC = {
+export const PR_SPEC = {
   repo: patternField(PATTERNS.prRepo),
   number: positiveIntField(),
 }
 
+// A commit's repository, when the deriver can attribute one; `null` when it
+// cannot (the transform drops and counts those).
 const COMMIT_SPEC = {
+  repo: leaf((value, path, errors) => (value === null ? true : checkPattern(value, path, PATTERNS.prRepo, errors))),
   sha: patternField(PATTERNS.commitSha),
+}
+
+// `unresolved` counts references the deriver saw but could not publish
+// exactly: a bare PR number with no session repository, a short commit SHA
+// that does not resolve locally. The transform adds them to `refs.private`.
+const UNRESOLVED_SPEC = {
+  prs: nonNegIntField(),
+  commits: nonNegIntField(),
 }
 
 const REFS_SPEC = {
   prs: arrayField(objectField(PR_SPEC), LIMITS.prs),
   commits: arrayField(objectField(COMMIT_SPEC), LIMITS.commits),
+  unresolved: objectField(UNRESOLVED_SPEC),
 }
 
 const TRANSITION_SPEC = {
@@ -321,15 +364,16 @@ const TRANSITION_SPEC = {
   at: timestampField(),
 }
 
+// `at` is the card's `updated` for a terminal status, else `null` (M3-4).
 const OBSERVED_SPEC = {
   status: enumField(ENUMS.jobStatus),
-  at: timestampField(),
+  at: nullableTimestampField(),
 }
 
 // jobs[].basis: a non-empty, duplicate-free subset of ENUMS.jobBasis
 // (controller ruling, M3: duplicates are their own `duplicate` error, not
 // folded into `enum`).
-function checkBasis(value, path, errors) {
+export function checkBasis(value, path, errors) {
   if (!Array.isArray(value)) {
     addError(errors, "type", path)
     return false
@@ -359,9 +403,11 @@ function checkBasis(value, path, errors) {
   return true
 }
 
+// M3-4's `LocalJob`.
 const JOB_SPEC = {
   job: patternField(PATTERNS.jobId),
   basis: customField(checkBasis),
+  task_created_at: nullableTimestampField(),
   transitions: arrayField(objectField(TRANSITION_SPEC), LIMITS.jobTransitions),
   observed: nullableObjectField(OBSERVED_SPEC),
 }
@@ -371,11 +417,16 @@ const UNAVAILABLE_SPEC = {
   reason: enumField(ENUMS.unavailableReason),
 }
 
+// `ended_at` and `derived_through` never precede `started_at`: the published
+// duration is `derived_through - started_at` and must not be negative.
 function sessionOrderCheck(value, path, results, errors) {
-  if (results.started_at && value.ended_at !== null && results.ended_at) {
-    if (Date.parse(value.ended_at) < Date.parse(value.started_at)) {
-      addError(errors, "order", joinPath(path, "ended_at"))
-    }
+  if (!results.started_at) return
+  const started = Date.parse(value.started_at)
+  if (value.ended_at !== null && results.ended_at && Date.parse(value.ended_at) < started) {
+    addError(errors, "order", joinPath(path, "ended_at"))
+  }
+  if (results.derived_through && Date.parse(value.derived_through) < started) {
+    addError(errors, "order", joinPath(path, "derived_through"))
   }
 }
 
@@ -419,7 +470,7 @@ function intervalOrderCheck(value, path, results, errors) {
 
 const INTERVAL_FIELD = objectField(intervalFields, intervalOrderCheck)
 
-const COUNTS_SPEC = {
+export const COUNTS_SPEC = {
   tool_calls: mapOfField(ENUMS.toolKind, nonNegIntField()),
   tool_failures: mapOfField(ENUMS.toolKind, nonNegIntField()),
   tool_retries: nonNegIntField(),
@@ -429,7 +480,6 @@ const COUNTS_SPEC = {
 
 const TOP_SPEC = {
   schema: patternField(PATTERNS.schema),
-  contributor: patternField(PATTERNS.contributor),
   session: objectField(SESSION_SPEC, sessionOrderCheck),
   plugins: arrayField(objectField(PLUGIN_SPEC), LIMITS.plugins),
   models: arrayField(objectField(MODEL_SPEC), LIMITS.models),
@@ -456,6 +506,7 @@ export const __SPECS__ = Object.freeze({
   pr: PR_SPEC,
   commit: COMMIT_SPEC,
   refs: REFS_SPEC,
+  unresolved: UNRESOLVED_SPEC,
   transition: TRANSITION_SPEC,
   observed: OBSERVED_SPEC,
   job: JOB_SPEC,
@@ -466,46 +517,36 @@ export const __SPECS__ = Object.freeze({
 })
 
 /**
- * `validateFacts(value) -> { ok, errors }`. Accepts an already-parsed value
- * (use `validateFactsBytes` for a raw buffer, which also enforces the byte
- * cap and canonical-bytes check). Collects every violation rather than
- * stopping at the first, but a single-violation input surfaces exactly one
- * error.
+ * Cross-field checks that no single field's own spec can express, shared by
+ * the local and published validators: an interval's agent must name a real
+ * entry in `agents`, an agent's own `n` must be unique, and an agent's
+ * `parent` must name a real agent (M3). Both gate on `results.agents` (not
+ * merely `Array.isArray(value.agents)`): when `agents` is over its cap the
+ * array's items are left unchecked, same as every other capped array, so
+ * nothing here can trust it enough to cross-reference against it either —
+ * that would cascade one `too_many` into a `ref`/`reference`/`duplicate`
+ * error per sibling item.
  */
-export function validateFacts(value) {
-  const errors = []
-  const results = validateObject(value, "", TOP_SPEC, errors)
-  if (results === undefined) return { ok: false, errors }
-
-  // Cross-field checks that no single field's own spec can express: an
-  // interval's agent must name a real entry in `agents`, an agent's own `n`
-  // must be unique, and an agent's `parent` must name a real agent (M3).
-  // Both gate on `results.agents` (not merely `Array.isArray(value.agents)`):
-  // when `agents` is over its cap the array's items are left unchecked, same
-  // as every other capped array, so nothing here can trust it enough to
-  // cross-reference against it either — that would cascade one `too_many`
-  // into a `ref`/`reference`/`duplicate` error per sibling item.
-  const agentsChecked = Boolean(results.agents)
+export function checkAgentReferences(value, results, errors) {
+  if (!results.agents) return
   const agentIds = new Set()
-  if (agentsChecked) {
-    const validAgents = value.agents
-      .map((item, index) => ({ item, index, ok: results.agents[index]?.n === true }))
-      .filter((entry) => entry.ok)
-    const seenNs = new Set()
-    for (const { item, index } of validAgents) {
-      if (seenNs.has(item.n)) addError(errors, "duplicate", `agents.${index}.n`)
-      else seenNs.add(item.n)
-      agentIds.add(item.n)
-    }
-    value.agents.forEach((item, index) => {
-      if (!isPlainObject(item)) return
-      if (results.agents[index]?.parent === true && item.parent !== null && !agentIds.has(item.parent)) {
-        addError(errors, "reference", `agents.${index}.parent`)
-      }
-    })
+  const validAgents = value.agents
+    .map((item, index) => ({ item, index, ok: results.agents[index]?.n === true }))
+    .filter((entry) => entry.ok)
+  const seenNs = new Set()
+  for (const { item, index } of validAgents) {
+    if (seenNs.has(item.n)) addError(errors, "duplicate", `agents.${index}.n`)
+    else seenNs.add(item.n)
+    agentIds.add(item.n)
   }
+  value.agents.forEach((item, index) => {
+    if (!isPlainObject(item)) return
+    if (results.agents[index]?.parent === true && item.parent !== null && !agentIds.has(item.parent)) {
+      addError(errors, "reference", `agents.${index}.parent`)
+    }
+  })
 
-  if (agentsChecked && results.intervals) {
+  if (results.intervals) {
     value.intervals.forEach((item, index) => {
       const itemResult = results.intervals[index]
       if (itemResult && itemResult.agent === true && !agentIds.has(item.agent)) {
@@ -513,22 +554,35 @@ export function validateFacts(value) {
       }
     })
   }
+}
 
+/**
+ * `validateLocalFacts(value) -> { ok, errors }`. Accepts an already-parsed
+ * value (use `validateLocalFactsBytes` for a raw buffer, which also enforces
+ * the byte cap and canonical-bytes check). Collects every violation rather
+ * than stopping at the first, but a single-violation input surfaces exactly
+ * one error.
+ */
+export function validateLocalFacts(value) {
+  const errors = []
+  const results = validateObject(value, "", TOP_SPEC, errors)
+  if (results === undefined) return { ok: false, errors }
+  checkAgentReferences(value, results, errors)
   return { ok: errors.length === 0, errors }
 }
 
 /**
- * Parse and validate raw bytes (or a string). Enforces the 16 MiB cap first,
- * measured with `Buffer.byteLength` so a multi-byte string can't undercount
- * itself past the cap the way `.length` (UTF-16 code units) would. Then
- * requires the text to be the exact canonical `JSON.stringify` of what it
- * parses to (one trailing `\n` allowed) — `JSON.parse` silently keeps only
- * the last of any duplicate key, so without this a file carrying
- * `"contributor": "<free text>", "contributor": "<valid id>"` would validate
- * clean while its raw bytes, which are what a store actually receives and
- * commits, still carry the free text.
+ * Parse and validate raw bytes (or a string) with `validate`. Enforces the
+ * 16 MiB cap first, measured with `Buffer.byteLength` so a multi-byte string
+ * can't undercount itself past the cap the way `.length` (UTF-16 code units)
+ * would. Then requires the text to be the exact canonical `JSON.stringify`
+ * of what it parses to (one trailing `\n` allowed) — `JSON.parse` silently
+ * keeps only the last of any duplicate key, so without this a file carrying
+ * `"schema": "<free text>", "schema": "<valid value>"` would validate clean
+ * while its raw bytes, which are what a store actually receives and commits,
+ * still carry the free text. Shared by the local and published gates.
  */
-export function validateFactsBytes(buffer) {
+export function validateCanonicalBytes(buffer, validate) {
   if (Buffer.byteLength(buffer) > LIMITS.maxBytes) {
     return { ok: false, errors: [{ code: "too_large", path: "" }] }
   }
@@ -543,5 +597,14 @@ export function validateFactsBytes(buffer) {
   if (text !== canonical && text !== `${canonical}\n`) {
     return { ok: false, errors: [{ code: "canonical", path: "" }] }
   }
-  return validateFacts(parsed)
+  return validate(parsed)
 }
+
+/** `validateLocalFactsBytes(buffer) -> { ok, errors }`: the canonical-bytes gate over `validateLocalFacts`. */
+export function validateLocalFactsBytes(buffer) {
+  return validateCanonicalBytes(buffer, validateLocalFacts)
+}
+
+// The M3-1 names, kept as aliases of the local validators until M3-12.
+export const validateFacts = validateLocalFacts
+export const validateFactsBytes = validateLocalFactsBytes

@@ -39,7 +39,6 @@ async function main() {
 
     const { facts } = await deriveClaudeSession({
       transcriptPath: filePath,
-      contributor: "0f3a9c1d2b4e6f70",
       plugins: [],
       endReason: "clear",
     })

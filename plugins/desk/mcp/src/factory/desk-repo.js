@@ -54,7 +54,7 @@ const FRONTMATTER_LINES = 40
 const READ_BYTES = 16 * 1024
 const DEFAULT_TIMEOUT_MS = 20_000
 
-function gitEnv() {
+export function gitEnv() {
   const env = {}
   for (const [key, value] of Object.entries(process.env)) {
     if (!key.startsWith("GIT_")) env[key] = value
