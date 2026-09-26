@@ -47,6 +47,8 @@ why here, not later: most later steps assume `$DESK/` already points at the righ
 
 on a machine with no pending migrations (the common case) this step is a few cheap Detect bash exits and returns immediately.
 
+a migration marked `agent_work: true` (such as `02-tidy-desk`, the one-time desk tidy) is the exception: it writes to the desk, so it runs after Step 2.6 instead, once the workspace is synced and this session's own desk is known.
+
 ## Step 0.75 — Desk MCP availability checkpoint
 
 **no desk yet comes first.** if the startup hook said no desk is bound yet, or `desk_status` reports `mode: setup` (`status: setup_required`), this is a first run, not an outage: go straight to the onboarding path `desk_status` names in `onboarding_skill` — `desk:first-run-bootstrap` Entrance A by default, or an overlay's own path such as `crew:join-crew` — and skip the rest of this step and Steps 1–2. do not present the fix/continue decision below — a missing desk is fixed by finding or creating the desk, and Desk keeps running in setup mode until then.
@@ -187,6 +189,10 @@ a workspace with a single OFF-mode desk simply has **no `_meta/desks.md`** — i
 ### remap-tolerance note
 
 `desks/<alias>/**/task.md` globs already match nested paths, so Step 3's active-task scan picks up person-scoped task cards without change — this step only adds the *awareness* layer (the desk-set + which-desk-am-I framing). the scan itself is remap-transparent.
+
+### agent-work migrations
+
+now that the workspace is synced and this session's own desk is known, run the `agent_work: true` migrations that Step 0.5 deferred, through `session-start-migrations`, with `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to the `root.path` and `write_scope.person` that `desk_status` reports. `02-tidy-desk` is the one today: when its Detect fires, tidy your own desk as its steps say, announce it in one line and carry on without waiting.
 
 ## Step 3 — Scan for active tasks
 

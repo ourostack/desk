@@ -44,6 +44,7 @@ Tidying is safe by construction:
 - It moves and renames through Git (`task_move` and `track_rename` stage a `git mv` on a Git desk), so every change is reversible.
 - It never deletes content. An empty track is archived, not removed.
 - It stays inside your own desk subtree. A peer's crew desk is theirs: report what you see there, but do not change it.
+- It leaves work in progress alone: `task_move` and `track_rename` refuse a folder with uncommitted changes that are not staged, or with untracked files, because another session may be working there, and a tidy never overrides that with `allow_dirty`. The Desk tools stage everything they write, so a staged change is the tidy's own work in progress.
 - It respects an explicit instruction not to write, which overrides tidying like every other capture habit (`using-desk` "Authority").
 - If the human objects, revert the tidy through Git and leave it that way.
 
