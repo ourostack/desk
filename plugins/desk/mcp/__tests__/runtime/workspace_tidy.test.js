@@ -682,6 +682,18 @@ test("R7 changed and multiple push endpoints cannot reuse a release receipt", as
   assert.ok((await fs.stat(w.directory)).isDirectory())
 })
 
+test("R7 an exact delivery endpoint cannot be rewritten to another repository for inspection", async () => {
+  const { f } = await squashFixture()
+  const unrelated = path.join(f.root, "unrelated.git")
+  git(f.root, "init", "--bare", unrelated)
+  git(f.repo, "config", `url.${unrelated}.insteadOf`, pathToFileURL(f.remote).href)
+  assert.equal(git(f.repo, "remote", "get-url", "--push", "origin"), f.remote)
+  const result = await tidy.repairWorkspace({ deskRoot: f.desk })
+  assert.equal(result.removed.length, 0)
+  assert.match(result.left[0].reason, /query endpoint.*changed/)
+  assert.ok(git(f.root, "--git-dir", f.remote, "rev-parse", "topic"))
+})
+
 test("R3 two repairs preserve squash branch and removed-resource evidence until canonical acknowledgement", async () => {
   const { f, w } = await squashFixture()
   git(f.repo, "push", "origin", "--delete", "topic")

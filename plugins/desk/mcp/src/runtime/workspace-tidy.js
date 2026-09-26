@@ -267,6 +267,8 @@ async function candidate(item, inventory, options) {
     if (urls.length !== 1) throw new Error("ambiguous delivery push endpoints")
     const endpoint = await normalizeDeliveryEndpoint(urls[0], cwd)
     if (endpoint !== remote.endpoint) throw new Error("delivery endpoint missing or changed since release")
+    const queryUrl = await mustGit(git, cwd, ["ls-remote", "--get-url", "--", endpoint])
+    if (await normalizeDeliveryEndpoint(queryUrl, cwd) !== endpoint) throw new Error("delivery query endpoint changed by URL rewriting")
     const remoteState = await git(cwd, ["ls-remote", "--exit-code", "--refs", "--", endpoint, remote.branch])
     if (remoteState.ok || remoteState.code !== 2) throw new Error("remote branch exists or is unobservable")
   }
