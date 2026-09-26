@@ -19,7 +19,10 @@ const isWindows = process.platform === "win32"
 
 async function mkFactoryEnv() {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "desk-outbox-win-"))
-  return { base, env: { HOME: base, XDG_STATE_HOME: path.join(base, "state") } }
+  // Real `process.env` underneath (this test uses no injected runner, so it
+  // needs the real %SystemRoot% to find the real PowerShell provider), with
+  // only the state location redirected into the temp folder.
+  return { base, env: { ...process.env, HOME: base, XDG_STATE_HOME: path.join(base, "state") } }
 }
 
 function readAcl(target) {
