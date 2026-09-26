@@ -81,13 +81,22 @@ export function runHandshake({ command, args = [], env, cwd, timeoutMs = 20000 }
     let stderr = ""
     let handshakeMs = null
     let settled = false
+    // Close stdin first, the way a host ends a session: Desk and any Node it re-executed exit on their own and release the fixture folder (Windows refuses to remove a folder a running process uses). SIGTERM only if they have not exited within 5 s.
     const finish = (error, value) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      child.kill("SIGTERM")
-      if (error) reject(error)
-      else resolve(value)
+      const done = () => (error ? reject(error) : resolve(value))
+      if (child.exitCode !== null || child.signalCode !== null) {
+        done()
+        return
+      }
+      const killTimer = setTimeout(() => child.kill("SIGTERM"), 5000)
+      child.once("exit", () => {
+        clearTimeout(killTimer)
+        done()
+      })
+      child.stdin.end()
     }
     const timer = setTimeout(() => {
       finish(new Error(`no complete handshake within ${timeoutMs} ms; stdout:\n${stdout}\nstderr:\n${stderr}`))

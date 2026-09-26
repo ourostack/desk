@@ -2,7 +2,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { chmodSync, lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import * as net from "node:net"
 import * as path from "node:path"
 import { spawn } from "node:child_process"
@@ -139,11 +139,13 @@ test("a socket must refuse twice, and stay the same file, before it counts as ab
   const answers = ["refused", "accepting"]
   assert.equal(await endpointIsAbandoned(dead, async () => answers.shift()), null, "a controller that started listening in between is kept")
   let replaced = false
+  // The replacement is created beside the old socket and renamed over it, so it always has a different inode (a filesystem may reuse a removed file's inode at once).
   const replacing = async (endpoint) => {
     if (!replaced) {
       replaced = true
-      rmSync(endpoint)
-      await deadSocket(endpoint)
+      const beside = `${endpoint}.new`
+      await deadSocket(beside)
+      renameSync(beside, endpoint)
     }
     return "refused"
   }
