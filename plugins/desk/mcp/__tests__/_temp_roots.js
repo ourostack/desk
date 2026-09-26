@@ -8,6 +8,8 @@
 // is matched by prefix, name pattern, or age, so a same-prefix directory this
 // file did not create is never touched.
 
+// Imported first so a test file run on its own also gets the temporary HOME and XDG folders and the real-home write guard.
+import "./_isolated_env.mjs"
 import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"

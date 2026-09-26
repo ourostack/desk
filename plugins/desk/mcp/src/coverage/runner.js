@@ -193,6 +193,8 @@ function runInstrumentedTests({
     "--nycrc-path", configPath,
     process.execPath,
     "--import", registrationUrl,
+    // The global test setup: a temporary HOME and XDG folders for every test process, and a guard against writes under the real home.
+    "--import", pathToFileURL(path.join(defaultMcpRoot, "__tests__", "_isolated_env.mjs")).href,
     "--test",
     // Instrumented fixture children must not compete with other test files for their unchanged startup deadlines.
     "--test-concurrency=1",
