@@ -16,13 +16,13 @@ import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { execFileSync, spawnSync } from "node:child_process"
+import { spawnSync } from "node:child_process"
 
 import {
   assertWindowsAclAvailable,
   protectWindowsPaths,
 } from "../../src/feedback/windows-acl.js"
-import { writePosixNodeProvider } from "./_helpers.js"
+import { nativeProbe, writePosixNodeProvider } from "./_helpers.js"
 
 const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"]
 const isWindows = process.platform === "win32"
@@ -484,19 +484,6 @@ test(
     assert.equal(parsed.status, 0, `PowerShell reported a parse error:\n${parsed.stdout}`)
   },
 )
-
-function nativeProbe(program, input) {
-  const prefix = "$ErrorActionPreference='Stop';" +
-    "$env:PSModulePath=Join-Path $PSHOME 'Modules';" +
-    "[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false);" +
-    "[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false);" +
-    "$request=[Console]::In.ReadToEnd()|ConvertFrom-Json;"
-  return JSON.parse(execFileSync(
-    assertWindowsAclAvailable(),
-    ["-NoProfile", "-NonInteractive", "-Command", prefix + program],
-    { input: JSON.stringify(input), encoding: "utf8", windowsHide: true, timeout: 20000 },
-  ))
-}
 
 test("native: Windows ACL protection refuses junctions without changing their targets", {
   skip: isWindows ? false : "requires a native Windows host",

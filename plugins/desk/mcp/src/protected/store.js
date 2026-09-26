@@ -15,7 +15,6 @@
 // compromised *feedback* database.
 
 import { createHash } from "node:crypto"
-import childProcess from "node:child_process"
 import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -24,6 +23,17 @@ import Database from "better-sqlite3"
 
 import { expandHome, isPathContained, personPrefix } from "../util/paths.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "../feedback/windows-acl.js"
+// The directory-chain guards (Git-checkout refusal, symlink refusal, mode
+// repair, macOS extended-ACL clearing) live in one place and are shared with
+// the factory outbox (`factory/outbox.js`), which cannot import this module
+// (`src/factory/**` imports only `node:` built-ins and its own files) but can
+// import the same primitives from `src/factory/os-protect.js`.
+import {
+  assertNotGitCheckout,
+  clearExtendedAcl,
+  ensureOwnerOnlyDirectory,
+  lstatIfPresent,
+} from "../factory/os-protect.js"
 
 const OWNER_ONLY_DIR_MODE = 0o700
 const OWNER_ONLY_FILE_MODE = 0o600
@@ -175,6 +185,10 @@ function resolveStateHome(env) {
   return path.join(home, ".local", "state")
 }
 
+// The generic ancestor walk (any `.git` between here and the filesystem
+// root) delegates to the shared `assertNotGitCheckout`; the desk-workspace
+// containment check is specific to a private store binding, so it stays
+// here.
 async function assertOutsideGitWorkspace({ realStateHome, storeDir, realDeskRoot, naming }) {
   const { label, subject } = naming
   if (isPathContained(realDeskRoot, storeDir)) {
@@ -192,74 +206,10 @@ async function assertOutsideGitWorkspace({ realStateHome, storeDir, realDeskRoot
   }
 }
 
-async function assertNotGitCheckout(dir, naming) {
-  const { label, subject } = naming
-  if ((await lstatIfPresent(path.join(dir, ".git"), naming)) !== null) {
-    throw new Error(
-      `${label}: refusing to write private ${subject} inside the Git checkout at ${dir}. ` +
-        "Point XDG_STATE_HOME at a directory that is not under version control.",
-    )
-  }
-}
-
-async function ensureOwnerOnlyDirectory(dir, platform, naming) {
-  const { label, subject } = naming
-  let existing = await lstatIfPresent(dir, naming)
-  let created = false
-  if (existing === null) {
-    try {
-      await fs.mkdir(dir, { mode: OWNER_ONLY_DIR_MODE })
-      created = true
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error
-    }
-    existing = await fs.lstat(dir)
-  }
-  if (existing.isSymbolicLink()) {
-    throw new Error(
-      `${label}: private ${subject} path component is a symlink and will not be used: ${dir}`,
-    )
-  }
-  if (!existing.isDirectory()) {
-    throw new Error(`${label}: private ${subject} path component is not a directory: ${dir}`)
-  }
-  if (platform !== "win32") {
-    clearExtendedAcl(dir, platform, naming)
-    if ((existing.mode & 0o777) !== OWNER_ONLY_DIR_MODE) {
-      await fs.chmod(dir, OWNER_ONLY_DIR_MODE)
-    }
-  }
-  return created
-}
-
-function clearExtendedAcl(target, platform, naming) {
-  if (platform !== "darwin") return
-  const { label, subject } = naming
-  const options = { encoding: "utf8", timeout: 5000, maxBuffer: 65536 }
-  // macOS ACL grants can survive chmod 0700/0600. Restrict only our own paths.
-  childProcess.execFileSync("/bin/chmod", ["-N", target], options)
-  const listing = childProcess.execFileSync("/bin/ls", ["-ldeq", target], options)
-  if (/^\s*\d+:/mu.test(listing)) {
-    throw new Error(`${label}: private ${subject} path retains an extended ACL: ${target}`)
-  }
-}
-
 async function realPathOrThrow(candidate, reason, naming) {
   try {
     return await fs.realpath(candidate)
   } catch (error) {
     throw new Error(`${naming.label}: ${reason}: ${candidate} (${error.code})`)
-  }
-}
-
-async function lstatIfPresent(candidate, naming) {
-  const { label, subject } = naming
-  try {
-    return await fs.lstat(candidate)
-  } catch (error) {
-    if (error.code === "ENOENT") return null
-    throw new Error(
-      `${label}: private ${subject} path ${candidate} could not be inspected (${error.code})`,
-    )
   }
 }
