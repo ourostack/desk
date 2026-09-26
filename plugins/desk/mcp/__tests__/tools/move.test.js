@@ -1135,6 +1135,54 @@ test("task_move treats a failing git status as uncommitted work", async () => {
   await assert.rejects(task_move({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "moved-task" }, spawnGit }), DIRTY)
 })
 
+test("task_move refuses to edit a track.md that holds another session's uncommitted changes, unless allow_dirty", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "track-a", { rows: ["clean-task"] })
+  await mkTrack(root, "track-b", { rows: [] })
+  await task_create({ deskRoot: root, input: { track: "track-a", slug: "clean-task", title: "T" } })
+  commitAll(root)
+  await fs.appendFile(path.join(root, "track-b", "track.md"), "\nA line another session is writing.\n")
+
+  const error = await task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b" } }).catch((e) => e)
+  assert.equal(
+    error.message,
+    "task_move: a track.md this move would edit has uncommitted changes, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway",
+  )
+  assert.ok(await exists(path.join(root, "track-a", "clean-task", "task.md")), "nothing moved")
+
+  // The source track's table counts too.
+  await fs.appendFile(path.join(root, "track-a", "track.md"), "\nAnother edit.\n")
+  await assert.rejects(task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_slug: "renamed-task" } }), /a track\.md this move would edit has uncommitted changes/)
+
+  const result = await task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b", allow_dirty: true } })
+  assert.equal(result.to, path.join("track-b", "clean-task"))
+})
+
+test("task_move into_task refuses to hide a live task inside a done one, and merges a done one into a live one", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "main-track", { rows: [] })
+  for (const slug of ["done-task", "live-task", "other-live-task"]) {
+    await task_create({ deskRoot: root, input: { track: "main-track", slug, title: "T" } })
+  }
+  const done = path.join(root, "main-track", "done-task", "task.md")
+  await fs.writeFile(done, (await fs.readFile(done, "utf8")).replace(/^status: .*$/m, "status: done"))
+  commitAll(root)
+
+  await assert.rejects(
+    task_move({ deskRoot: root, input: { track: "main-track", slug: "live-task", into_task: "done-task" } }),
+    /^Error: task_move: this task is still live but the task to merge into is done or cancelled; keep the live task \(merge the finished one into it instead\) or skip the merge$/,
+  )
+  assert.ok(await exists(path.join(root, "main-track", "live-task", "task.md")), "the live task stays where it is")
+
+  const kept = await task_move({ deskRoot: root, input: { track: "main-track", slug: "done-task", into_task: "live-task" } })
+  assert.match(kept.to, /^main-track\/live-task\/_iterations\/\d{4}-\d{2}-\d{2}-done-task$/)
+  commitAll(root)
+  const both = await task_move({ deskRoot: root, input: { track: "main-track", slug: "other-live-task", into_task: "live-task" } })
+  assert.match(both.to, /other-live-task$/, "two live tasks for one job can still be merged")
+})
+
 test("track_rename refuses a track with uncommitted work unless allow_dirty is true", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)

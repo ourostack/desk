@@ -30,6 +30,9 @@ import {
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".state"])
 
+// Mirrors tools/task.js's TERMINAL_STATUSES.
+const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+
 function relPath(root, absPath) {
   return path.relative(root, absPath)
 }
@@ -79,19 +82,20 @@ function isGitRepository(root, spawnGit) {
 }
 
 /**
- * Refuse to move a folder another session may be working in (M4-5 fix
- * round 2): on a Git desk, a source with uncommitted tracked changes or
- * untracked, non-ignored files is left alone unless the caller passes
+ * Refuse to touch a path another session may be working in (M4-5 fix rounds
+ * 2 and 3): on a Git desk, the moved folder, or a `track.md` whose tasks
+ * table the move would edit, with uncommitted tracked changes or untracked,
+ * non-ignored files is left alone unless the caller passes
  * `allow_dirty: true`. The message never quotes the path's names.
  */
-function assertSourceClean({ tool, root, from, allowDirty, spawnGit }) {
+function assertClean({ tool, root, paths, what, allowDirty, spawnGit }) {
   if (allowDirty || !isGitRepository(root, spawnGit)) return
-  const result = spawnGit("git", ["-C", root, "status", "--porcelain", "--", relPath(root, from)], {
+  const result = spawnGit("git", ["-C", root, "status", "--porcelain", "--", ...paths.map((p) => relPath(root, p))], {
     encoding: "utf8",
   })
   if (result.status !== 0 || result.stdout.trim() !== "") {
     throw new Error(
-      `${tool}: the source has uncommitted changes, so another session may be working there; ` +
+      `${tool}: ${what} has uncommitted changes, so another session may be working there; ` +
         "commit or finish that work first, or pass allow_dirty: true to move it anyway",
     )
   }
@@ -292,8 +296,10 @@ function trueOrAbsent(tool, field, value) {
  * source row moved or renamed when there is one, a new row (slug and the
  * card's status) otherwise. It never changes the card's status.
  *
- * On a Git desk it refuses a source with uncommitted changes (another
- * session may be working there) unless `allow_dirty: true` (M4-5).
+ * On a Git desk it refuses a source folder, or a `track.md` whose tasks
+ * table it would edit, with uncommitted changes (another session may be
+ * working there) unless `allow_dirty: true` (M4-5). `into_task` refuses to
+ * merge a live task into a done or cancelled one.
  *
  * `into_task: "<keeper>"` (M4-5) merges a duplicate task into the task that
  * keeps the job: it moves the task folder to
@@ -385,6 +391,14 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
         `task_move: the task to merge into doesn't exist at ${relPath(deskRoot, await target([toTrack, intoTask]))}`,
       )
     }
+    // Never hide a live task behind a finished one (M4-5 fix round 3).
+    const keeper = await readMarkdown(await target([toTrack, intoTask, "task.md"]))
+    if (!TERMINAL_STATUSES.has(srcCard.data.status) && TERMINAL_STATUSES.has(keeper.data.status)) {
+      throw new Error(
+        "task_move: this task is still live but the task to merge into is done or cancelled; " +
+          "keep the live task (merge the finished one into it instead) or skip the merge",
+      )
+    }
     destSegments = [toTrack, intoTask, "_iterations", `${iterationDate(srcCard.data.created)}-${slug}`]
   } else {
     destSegments = archived && !unarchive ? [toTrack, "_archive", toSlug] : [toTrack, toSlug]
@@ -397,8 +411,18 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
     throw new Error(`task_move: target already exists at ${relPath(deskRoot, destDir)}`)
   }
 
+  const srcTrackMd = await target([track, "track.md"])
+  destTrackMd ??= await target([toTrack, "track.md"])
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
-  assertSourceClean({ tool: "task_move", root: effectiveRoot, from: srcDir, allowDirty, spawnGit })
+  assertClean({ tool: "task_move", root: effectiveRoot, paths: [srcDir], what: "the source", allowDirty, spawnGit })
+  assertClean({
+    tool: "task_move",
+    root: effectiveRoot,
+    paths: [srcTrackMd, destTrackMd],
+    what: "a track.md this move would edit",
+    allowDirty,
+    spawnGit,
+  })
   await movePath({ root: effectiveRoot, from: srcDir, to: destDir, spawnGit })
   if (intoTask !== undefined) {
     await movePath({ root: effectiveRoot, from: path.join(destDir, "task.md"), to: destFile, spawnGit })
@@ -411,8 +435,6 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   const updatedFiles = [relPath(deskRoot, destFile)]
   const touched = new Set([destFile])
 
-  const srcTrackMd = await target([track, "track.md"])
-  destTrackMd ??= await target([toTrack, "track.md"])
   touched.add(srcTrackMd)
   touched.add(destTrackMd)
 
@@ -528,7 +550,7 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
   }
 
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
-  assertSourceClean({ tool: "track_rename", root: effectiveRoot, from: srcDir, allowDirty, spawnGit })
+  assertClean({ tool: "track_rename", root: effectiveRoot, paths: [srcDir], what: "the source", allowDirty, spawnGit })
   await movePath({ root: effectiveRoot, from: srcDir, to: destDir, spawnGit })
 
   const taskFiles = await findTaskCards(destDir)

@@ -193,6 +193,15 @@ export function redactedRelPath(deskRoot, absPath) {
     .join("/")
 }
 
+// A loose entry whose own name carries a secret's value is also flagged for
+// renaming (M4-5 fix round 3): moving it keeps its name otherwise.
+function looseFinding(deskRoot, entryAbs, hint) {
+  const rename = isCredentialLike(path.basename(entryAbs))
+    ? " — its name looks like it contains a secret's value; give it an outcome name when it moves"
+    : ""
+  return { code: "loose_file", path: redactedRelPath(deskRoot, entryAbs), hint: `${hint}${rename}` }
+}
+
 // Maps an M4-1 validator rejection code to a doctor finding code.
 // `shape`/`too_long` are both shape problems from the doctor's point of
 // view; `catch_all`/`person` only ever come back from `validateTrackName`
@@ -267,11 +276,7 @@ function walkTrackRoot({ trackDirAbs, deskRoot, findings, liveTaskCards, now }) 
 
     if (entry.isFile()) {
       if (entry.name === "track.md" || isDotfile(entry.name)) continue
-      findings.push({
-        code: "loose_file",
-        path: redactedRelPath(deskRoot, entryAbs),
-        hint: "loose at a track root — file it under a task folder or an underscore folder",
-      })
+      findings.push(looseFinding(deskRoot, entryAbs, "loose at a track root — file it under a task folder or an underscore folder"))
       continue
     }
 
@@ -300,11 +305,7 @@ function walkTrackRoot({ trackDirAbs, deskRoot, findings, liveTaskCards, now }) 
 
     const hasTaskMd = safeReaddir(entryAbs).some((e) => e.isFile() && e.name === "task.md")
     if (!hasTaskMd) {
-      findings.push({
-        code: "loose_file",
-        path: redactedRelPath(deskRoot, entryAbs),
-        hint: "loose at a track root — this directory has no task.md; file it under a task folder or an underscore folder",
-      })
+      findings.push(looseFinding(deskRoot, entryAbs, "loose at a track root — this directory has no task.md; file it under a task folder or an underscore folder"))
       continue
     }
 
@@ -374,11 +375,7 @@ function walkDeskLevel({ scanRoot, deskRoot, operatorNames, findings, liveTaskCa
 
     if (entry.isFile()) {
       if (DESK_ROOT_ALLOWED_FILES.has(entry.name) || isDotfile(entry.name)) continue
-      findings.push({
-        code: "loose_file",
-        path: redactedRelPath(deskRoot, entryAbs),
-        hint: "loose at the desk root — file it under a track or an underscore folder",
-      })
+      findings.push(looseFinding(deskRoot, entryAbs, "loose at the desk root — file it under a track or an underscore folder"))
       continue
     }
 
@@ -393,11 +390,7 @@ function walkDeskLevel({ scanRoot, deskRoot, operatorNames, findings, liveTaskCa
 
     const hasTrackMd = safeReaddir(entryAbs).some((e) => e.isFile() && e.name === "track.md")
     if (!hasTrackMd) {
-      findings.push({
-        code: "loose_file",
-        path: redactedRelPath(deskRoot, entryAbs),
-        hint: "loose at the desk root — this directory has no track.md; file it under a track or an underscore folder",
-      })
+      findings.push(looseFinding(deskRoot, entryAbs, "loose at the desk root — this directory has no track.md; file it under a track or an underscore folder"))
       continue
     }
 

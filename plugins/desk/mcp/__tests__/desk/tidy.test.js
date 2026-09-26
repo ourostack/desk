@@ -216,16 +216,16 @@ test("with the tools' own root and person, the tidy works on that desk and notes
 
   const elsewhere = soloDesk({ messy: false })
   const disagree = tidyStatus({ root, env: { DESK: elsewhere }, homeDir: tempDir(), cwd: tempDir(), now: NOW })
-  assert.equal(disagree.mismatch, true)
+  assert.equal(disagree.mismatch, "root")
   assert.equal(disagree.root, root, "the tools' desk is the one described")
   assert.deepEqual(disagree.resolved, { root: elsewhere, person: null })
   assert.equal(disagree.needed, true)
 
   const unresolved = tidyStatus({ root, env: {}, homeDir: tempDir(), cwd: tempDir(), now: NOW })
-  assert.equal(unresolved.mismatch, true, "a desk the script cannot find at all is a mismatch too")
+  assert.equal(unresolved.mismatch, "root", "a desk the script cannot find at all is a mismatch too")
 
   const missing = tidyStatus({ root: path.join(root, "gone"), env: { DESK: root }, homeDir: tempDir(), cwd: tempDir(), now: NOW })
-  assert.equal(missing.mismatch, true, "a tools' root that no longer exists never matches")
+  assert.equal(missing.mismatch, "root", "a tools' root that no longer exists never matches")
   assert.equal(missing.needed, false)
 })
 
@@ -242,6 +242,14 @@ test("--report stops with one line when the tools' desk or person differs from w
 
   const lost = cli(["--report", "--root", root, "--person", "bob"], { env: { DESK_PERSON: "bob" } })
   assert.equal(lost.stdout, `I left my desk untidied: the Desk tools use ${root} as bob, but the tidy found no desk.\n`)
+
+  const noIdentity = cli(["--report", "--root", root, "--person", "alice"], { env: { DESK: root }, spawnGh: () => ({ status: 1, stdout: "" }) })
+  assert.deepEqual(noIdentity, {
+    code: 1,
+    stdout: "I left my desk untidied: the Desk tools name alice as this session's person, but I couldn't resolve this session's identity to a person in the crew registry.\n",
+    stderr: "",
+  })
+  assert.equal(tidyStatus({ root, person: "alice", env: { DESK: root, DESK_IDENTITY: "nobody" }, homeDir: tempDir(), cwd: tempDir() }).mismatch, "person")
 
   const none = cli(["--write-record", "--root", root], { env: {}, spawnGh: noGh })
   assert.equal(none.code, 1)

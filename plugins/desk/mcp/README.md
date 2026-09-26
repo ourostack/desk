@@ -28,7 +28,7 @@ DESK=~/<your-workspace> node ./index.js
 - `friction_add`, `lesson_add`
 
 **Cheap moves:**
-- `task_move` — move a task to another track and/or rename it (live or archived); refuses a taken target or an invalid new name, and best-effort keeps both `track.md` "## Tasks" tables in sync; `unarchive: true` reopens an archived task into a live folder and restores its row, and `into_task: "<kept task>"` merges a duplicate task into the task that keeps the job as an iteration folder; on a Git desk it refuses a task with uncommitted changes (another session may be working there) unless `allow_dirty: true`
+- `task_move` — move a task to another track and/or rename it (live or archived); refuses a taken target or an invalid new name, and best-effort keeps both `track.md` "## Tasks" tables in sync; `unarchive: true` reopens an archived task into a live folder and restores its row, and `into_task: "<kept task>"` merges a duplicate task into the task that keeps the job as an iteration folder; on a Git desk it refuses a task, or a `track.md` it would edit, with uncommitted changes (another session may be working there) unless `allow_dirty: true`; merging with `into_task: "<kept task>"` never hides a live task inside a done one
 - `track_rename` — rename a track, rewriting `track:` on every task card under it, live and archived; on a Git desk it refuses a track with uncommitted changes unless `allow_dirty: true`
 
 **Status:**

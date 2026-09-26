@@ -213,7 +213,7 @@ function base(fields, reason) {
 
 /**
  * tidyStatus({ root?, person?, env, cwd?, homeDir?, now?, spawnGit?, spawnGh? }) ->
- *   { root, person, subtree, resolved, mismatch, applicable, reason, needed,
+ *   { root, person, subtree, resolved, mismatch: false|"root"|"person", applicable, reason, needed,
  *     unresolved_person, tidy_version, findings }
  *
  * Read-only. `root`/`person` are the Desk tools' own (from `desk_status`);
@@ -236,7 +236,11 @@ export function tidyStatus({
   const resolvedPerson = resolvePerson(deskRoot, { env, spawnGh, homeDir, now: now ?? Date.now() })
   const alias = bound ? (hasText(person) ? person.trim() : null) : resolvedPerson
   const resolved = { root: resolvedRoot, person: resolvedPerson }
-  const mismatch = bound && (resolvedRoot === null || !samePath(resolvedRoot, deskRoot) || resolvedPerson !== alias)
+  // "root" when the script finds another desk (or none), "person" when it
+  // resolves another person (or none) for the same desk, false otherwise.
+  let mismatch = false
+  if (bound && (resolvedRoot === null || !samePath(resolvedRoot, deskRoot))) mismatch = "root"
+  else if (bound && resolvedPerson !== alias) mismatch = "person"
   const fields = { root: deskRoot, person: alias, subtree: null, resolved, mismatch }
 
   if (deskRoot === null) return base(fields, "no desk is bound")
@@ -334,6 +338,9 @@ function describe(root, person) {
 function stopLine(status, spawnGit) {
   if (status.unresolved_person) {
     return "I couldn't tell which desk in this crew workspace is mine, so I left every desk as it is."
+  }
+  if (status.mismatch === "person" && status.resolved.person === null) {
+    return `I left my desk untidied: the Desk tools name ${status.person} as this session's person, but I couldn't resolve this session's identity to a person in the crew registry.`
   }
   if (status.mismatch) {
     return `I left my desk untidied: the Desk tools use ${describe(status.root, status.person)}, but the tidy found ${describe(status.resolved.root, status.resolved.person)}.`

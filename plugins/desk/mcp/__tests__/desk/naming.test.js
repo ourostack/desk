@@ -586,3 +586,14 @@ test("validateName and validateTrackName report credential_like first and never 
   assert.equal(track.code, "credential_like")
   assertNoSubstringLeak("hunter2", describeNameRejection(track))
 })
+
+test("a password value written after a dot is still credential-like: the name is checked with and without its extension", () => {
+  for (const name of ["set-pw.hunter2", "deploy-pw.hunter2", "deploy-pw.Summer2024"]) {
+    assert.equal(isCredentialLike(name), true, name)
+    const result = validateName(name)
+    assert.equal(result.code, "credential_like", name)
+    assertNoSubstringLeak("hunter2", describeNameRejection(result))
+  }
+  assert.equal(isCredentialLike("rotate-pw.md"), true, "over-flagging a name that already fails the shape check is accepted")
+  assert.equal(isCredentialLike("release-notes.md"), false)
+})

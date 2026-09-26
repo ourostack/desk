@@ -874,7 +874,8 @@ test("the tidy migration tidies and announces: announce-and-proceed wording and 
   // Fix round 1: other sessions' work, loose files, judgment on merges, names in commits, the revert.
   assert.match(blocks.Migrate, /Leave alone every task and track that holds uncommitted changes[\s\S]{0,200}left alone in the announcement/u);
   assert.match(blocks.Migrate, /untracked loose file that is not ignored gets git add first, then git mv\. Leave ignored files where they are\./u);
-  assert.match(blocks.Migrate, /git diff --cached --name-status: it must hold only the tidy's moves[\s\S]{0,200}unstage it[\s\S]{0,80}stop with one line/u);
+  assert.match(blocks.Migrate, /git diff --cached --name-status -- <tidy paths>[\s\S]{0,300}stop with one line[\s\S]{0,100}commit with git commit -- <tidy paths> and nothing else, so any other staged work stays staged exactly as it was; never unstage anyone else's work\./u);
+  assert.doesNotMatch(blocks.Migrate, /unstage it/u);
   assert.match(blocks.Migrate, /never write an old name that failed the credential or prompt check[\s\S]{0,200}Describe such a move by its new name only\./u);
   assert.match(blocks.Migrate, /Merge a group only when you judge that both cards describe the same outcome; leave the others and mention them\./u);
   assert.match(blocks.Migrate, /Never hide a live task: when the duplicate is not done or cancelled and the kept task is, keep the live one instead, or skip the merge\./u);

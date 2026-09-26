@@ -113,8 +113,8 @@ const EXTENSION_RE = /\.[A-Za-z0-9]{1,10}$/
  * isCredentialLike(name) -> boolean
  *
  * Whether a name carries a secret's value, judged on its own terms (M4-5
- * fix-round ruling): the name is split on every non-alphanumeric character
- * after its extension is stripped, case-folded, and checked against the
+ * fix-round ruling): the name is split on every non-alphanumeric character,
+ * both as it is and with its extension stripped, case-folded, and checked against the
  * password-prefix rule ("pw"/"pwd"/"passwd" followed by another word), the
  * secret-run rule (a 16+ character hex or letter-and-digit run) and the IPv4
  * rule — whatever other rule the name also fails, and whatever its shape.
@@ -124,12 +124,15 @@ const EXTENSION_RE = /\.[A-Za-z0-9]{1,10}$/
  */
 export function isCredentialLike(name) {
   if (typeof name !== "string") return false
-  const nameWords = name
-    .replace(EXTENSION_RE, "")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((word) => word !== "")
-  return hasIpv4LookingRun(nameWords) || hasCredentialLikeWord(nameWords)
+  // Checked with and without the extension (fix round 3): what looks like an
+  // extension can be the value itself, as in `set-pw.hunter2`.
+  return [name, name.replace(EXTENSION_RE, "")].some((candidate) => {
+    const nameWords = candidate
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((word) => word !== "")
+    return hasIpv4LookingRun(nameWords) || hasCredentialLikeWord(nameWords)
+  })
 }
 
 // No hint below ever includes the candidate — a rejection message must

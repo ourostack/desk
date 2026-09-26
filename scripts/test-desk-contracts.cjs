@@ -706,8 +706,10 @@ contract("task_move and track_rename document refusing uncommitted work unless a
     const description = new RegExp(`\\n  ${tool}:\\n    "([^\\n]+)",`, "u").exec(names)[1];
     assert.match(description, /refuses a (task folder|track) with uncommitted changes or untracked, non-ignored files, because another session may be working there, unless `allow_dirty: true`; the refusal never quotes names/u, tool);
   }
+  assert.match(names, /The same rule covers each `track\.md` whose tasks table the move would edit\./u);
+  assert.match(names, /It refuses to merge a live task into a done or cancelled one: keep the live task instead\./u);
   const readme = text("plugins/desk/mcp/README.md");
-  assert.match(readme, /- `task_move` —[^\n]+refuses a task with uncommitted changes[^\n]+`allow_dirty: true`/u);
+  assert.match(readme, /- `task_move` —[^\n]+refuses a task, or a `track\.md` it would edit, with uncommitted changes[^\n]+`allow_dirty: true`/u);
   assert.match(readme, /- `track_rename` —[^\n]+refuses a track with uncommitted changes[^\n]+`allow_dirty: true`/u);
   assert.match(text("plugins/desk/skills/interaction-style/SKILL.md"), /refuse a folder with uncommitted changes[^\n]+never overrides that with `allow_dirty`/u);
   assert.match(text("plugins/desk/migrations/02-tidy-desk.md"), /never pass allow_dirty/u);

@@ -1252,3 +1252,31 @@ test("a password value in a prompt-like, over-long, extension-bearing or track n
   assertNoSubstringLeak(VALUE, JSON.stringify(findings))
   assertNoSubstringLeak("pw-hunter", JSON.stringify(findings))
 })
+
+test("a password after a dot in a loose file name is redacted and flagged for renaming", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes; not payroll",
+  })
+  await writeCard(root, "billing-disputes/refund-flow-cleanup/task.md", {
+    schema_version: 1,
+    title: "refund-flow-cleanup",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "billing-disputes",
+  })
+  await writeFile(root, "set-pw.hunter2", "loose\n")
+  await writeFile(root, "billing-disputes/deploy-pw.hunter2", "loose\n")
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findings.map((f) => `${f.code} ${f.path}`).sort(), [
+    "loose_file <redacted segment>",
+    "loose_file billing-disputes/<redacted segment>",
+  ])
+  for (const finding of findings) assert.match(finding.hint, /its name looks like it contains a secret's value; give it an outcome name when it moves$/)
+  assertNoSubstringLeak("hunter2", JSON.stringify(findings))
+  assertNoSubstringLeak("pw.hunter", JSON.stringify(findings))
+})
