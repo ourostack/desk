@@ -15,7 +15,8 @@ import { after } from "node:test"
 
 const ownedRoots = new Set()
 
-after(() => Promise.all([...ownedRoots].map((root) => fs.rm(root, { recursive: true, force: true }))))
+// Retries cover Windows, where a just-exited child can keep a fixture file busy (EBUSY) for a moment.
+after(() => Promise.all([...ownedRoots].map((root) => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))))
 
 /** Create a fixture root under the OS temp dir and own it until the test file ends. */
 export async function mkTempRoot(prefix) {
