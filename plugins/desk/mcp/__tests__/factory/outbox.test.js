@@ -227,51 +227,116 @@ test("factoryStateRoot clears an inherited macOS ACL grant on its own segments",
 }))
 
 // ---------------------------------------------------------------------------
-// Windows protection: injected platform: "win32" and a fake icacls runner,
-// so this exercises the real call path on every CI platform, not only
-// native Windows.
+// Windows protection: the same shared `protectWindowsPaths` routine
+// `store.js` uses, with an injected platform and a stand-in provider (the
+// `windows_store.test.js` pattern), so this exercises the real call path,
+// batched once per operation, on every CI platform, not only native Windows.
 // ---------------------------------------------------------------------------
 
-test("factoryStateRoot protects its own three segments on Windows via icacls, and never touches the shared state home", () => scratch(async (env) => {
-  const calls = []
-  const runner = (command, args) => calls.push([command, args])
-  const root = await factoryStateRoot({ ...env, USERNAME: "ari" }, { platform: "win32", runner })
-  assert.equal(calls.length, 3)
-  for (const [command, args] of calls) {
-    assert.equal(command, "icacls.exe")
-    assert.deepEqual(args.slice(1, 3), ["/inheritance:r", "/grant:r"])
-    assert.match(args.at(-1), /:\(OI\)\(CI\)\(F\)$/u)
+function fakeWindowsEnv(env, base) {
+  const systemRoot = path.join(base, "fake-system-root")
+  mkdirSync(path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0"), { recursive: true })
+  writeFileSync(path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), "stand-in; the runner is injected")
+  return { ...env, SystemRoot: systemRoot }
+}
+
+function fakeWindowsRunner(calls) {
+  return async ({ payload }) => {
+    const request = JSON.parse(payload)
+    calls.push(request.paths)
+    return {
+      code: 0,
+      stdout: JSON.stringify({
+        status: "ok",
+        results: request.paths.map((entry) => ({
+          ...entry, owner_sid: "S-1-5-21-1-2-3-1001", owner_reassigned: false, protected: true, rule_count: 1,
+        })),
+      }),
+      stderr: "",
+    }
   }
-  assert.equal(calls.at(-1)[1][0], root)
-  assert.equal(calls[0][1][0], path.join(env.XDG_STATE_HOME, "ouroboros-skills"))
-}))
+}
 
-test("writeLocalFacts protects the outbox directory chain and the written file on Windows", () => scratch(async (env) => {
-  const winEnv = { ...env, USERNAME: "ari" }
-  await setConsent(winEnv, { store: STORE, contribute: true }, { platform: "win32", runner: () => {} })
+test("factoryStateRoot protects its own three segments with one batched Windows call, and never touches the shared state home", () => scratch(async (env, base) => {
+  const winEnv = fakeWindowsEnv(env, base)
   const calls = []
-  const runner = (command, args) => calls.push(args)
-  const result = await writeLocalFacts(winEnv, STORE, validLocalFacts(), { platform: "win32", runner })
-  assert.equal(result.written, true)
-  const fileCalls = calls.filter((args) => args.at(-1).endsWith("(F)") && !args.at(-1).includes("(OI)(CI)"))
-  assert.ok(fileCalls.some((args) => args[0].endsWith(result.name)))
+  const root = await factoryStateRoot(winEnv, { platform: "win32", runner: fakeWindowsRunner(calls) })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].length, 3)
+  assert.deepEqual(calls[0].map((entry) => entry.kind), ["directory", "directory", "directory"])
+  assert.equal(calls[0].at(-1).path, root)
+  assert.equal(calls[0][0].path, path.join(env.XDG_STATE_HOME, "ouroboros-skills"))
 }))
 
-test("readMachineSecret protects the secret file on Windows, both on creation and on a later read", () => scratch(async (env) => {
-  const winEnv = { ...env, USERNAME: "ari" }
-  const createCalls = []
-  await readMachineSecret(winEnv, { platform: "win32", runner: (command, args) => createCalls.push(args) })
-  assert.ok(createCalls.some((args) => args.at(-1).endsWith(":(F)") && path.basename(args[0]) === "machine-secret"))
-
-  const readCalls = []
-  await readMachineSecret(winEnv, { platform: "win32", runner: (command, args) => readCalls.push(args) })
-  assert.ok(readCalls.some((args) => path.basename(args[0]) === "machine-secret"))
-}))
-
-test("the Windows ACL step refuses when neither USERNAME nor USER identifies the owner", () => scratch(async (env) => {
+test("factoryStateRoot refuses on win32 before creating anything when the Windows ACL provider is unavailable", () => scratch(async (env) => {
   await assert.rejects(
-    () => factoryStateRoot(env, { platform: "win32", runner: () => {} }),
-    /desk_factory: Windows ACL protection needs USERNAME/u,
+    () => factoryStateRoot(env, { platform: "win32", runner: () => assert.fail("must not run without an available provider") }),
+    /desk_factory: Windows ACL protection needs %SystemRoot%/u,
+  )
+  assert.equal(readdirSync(env.HOME).includes("state"), false)
+}))
+
+test("writeLocalFacts protects the outbox subfolder and the written file with one batched Windows call, separate from factoryStateRoot's own", () => scratch(async (env, base) => {
+  const winEnv = fakeWindowsEnv(env, base)
+  await setConsent(winEnv, { store: STORE, contribute: true }, { platform: "win32", runner: fakeWindowsRunner([]) })
+  const calls = []
+  const result = await writeLocalFacts(winEnv, STORE, validLocalFacts(), { platform: "win32", runner: fakeWindowsRunner(calls) })
+  assert.equal(result.written, true)
+  // One call for factoryStateRoot's three root segments, one for the new
+  // outbox/<slug> subfolder plus the written file together.
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls[0].map((entry) => entry.kind), ["directory", "directory", "directory"])
+  const second = calls[1]
+  assert.equal(second.at(-1).kind, "file")
+  assert.equal(path.basename(second.at(-1).path), result.name)
+  assert.equal(second.at(-1).created, true)
+  assert.ok(second.slice(0, -1).every((entry) => entry.kind === "directory"))
+}))
+
+test("readMachineSecret protects the secret file with one batched Windows call on creation, and does not repeat it on an ordinary successful read", () => scratch(async (env, base) => {
+  const winEnv = fakeWindowsEnv(env, base)
+  const createCalls = []
+  await readMachineSecret(winEnv, { platform: "win32", runner: fakeWindowsRunner(createCalls) })
+  // factoryStateRoot's own batch, then one batch for the secret file itself.
+  assert.equal(createCalls.length, 2)
+  const createdEntry = createCalls[1][0]
+  assert.equal(createdEntry.kind, "file")
+  assert.equal(path.basename(createdEntry.path), "machine-secret")
+  assert.equal(createdEntry.created, true)
+
+  // A later, ordinary read finds a valid secret on its first (unlocked) try
+  // and returns it without re-running the Windows ACL step — it was already
+  // applied at creation and inherits from the already-protected parent
+  // directory, so re-verifying it on every read would mean one PowerShell
+  // invocation per read.
+  const readCalls = []
+  await readMachineSecret(winEnv, { platform: "win32", runner: fakeWindowsRunner(readCalls) })
+  assert.equal(readCalls.length, 1)
+}))
+
+test("readMachineSecret re-protects the secret file on Windows when a rotation actually happens", () => scratch(async (env, base) => {
+  const winEnv = fakeWindowsEnv(env, base)
+  await readMachineSecret(winEnv, { platform: "win32", runner: fakeWindowsRunner([]) })
+  const root = await factoryStateRoot(winEnv, { platform: "win32", runner: fakeWindowsRunner([]) })
+  await fs.writeFile(path.join(root, "machine-secret"), Buffer.alloc(3), { mode: 0o600 })
+  const rotateCalls = []
+  await readMachineSecret(winEnv, { platform: "win32", runner: fakeWindowsRunner(rotateCalls) })
+  const fileEntries = rotateCalls.flat().filter((entry) => entry.kind === "file")
+  assert.ok(fileEntries.some((entry) => path.basename(entry.path) === "machine-secret" && entry.created === true))
+}))
+
+test("a failing Windows ACL batch never reaches the callback: writeLocalFacts rejects and nothing is left readable as delivered", () => scratch(async (env, base) => {
+  const winEnv = fakeWindowsEnv(env, base)
+  await setConsent(winEnv, { store: STORE, contribute: true }, { platform: "win32", runner: fakeWindowsRunner([]) })
+  const failure = new Error("native protection refused")
+  await assert.rejects(
+    () => writeLocalFacts(winEnv, STORE, validLocalFacts(), {
+      platform: "win32",
+      runner: async () => {
+        throw failure
+      },
+    }),
+    (error) => error === failure,
   )
 }))
 
@@ -371,6 +436,58 @@ test("a second corrupt consent.json in the same session picks the next free corr
   await readConsent(env)
   const siblings = readdirSync(root).filter((name) => name.startsWith("consent.json.corrupt-json")).sort()
   assert.deepEqual(siblings, ["consent.json.corrupt-json-1", "consent.json.corrupt-json-2"])
+}))
+
+test("valid JSON of the wrong shape is moved aside exactly like a parse failure, not thrown", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "consent.json")
+  for (const badShape of ["null", "[]", '"a string"', '{"schema_version":1}']) {
+    writeFileSync(file, badShape, { mode: 0o600 })
+    assert.deepEqual(await readConsent(env), { schema_version: 1, stores: {} })
+    const siblings = readdirSync(root).filter((name) => name.startsWith("consent.json.corrupt-json"))
+    assert.equal(siblings.length, 1)
+    for (const sibling of siblings) await fs.unlink(path.join(root, sibling))
+  }
+}))
+
+test("setConsent still works after a wrong-shape consent.json is moved aside", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  writeFileSync(path.join(root, "consent.json"), "[]", { mode: 0o600 })
+  const result = await setConsent(env, { store: STORE, contribute: true })
+  assert.equal(result.stores[STORE].contribute, true)
+}))
+
+test("a hard-linked consent.json is refused on read, not silently used", () => scratch(async (env, base) => {
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "consent.json")
+  writeFileSync(file, JSON.stringify({ schema_version: 1, stores: {} }), { mode: 0o600 })
+  const decoy = path.join(base, "linked-consent.json")
+  await fs.link(file, decoy)
+  await assert.rejects(() => readConsent(env), /is hard-linked/u)
+}))
+
+test("readVisibilityCache skips an entry that isn't shaped like one (such as null) instead of throwing", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  writeFileSync(path.join(root, "visibility.json"), JSON.stringify({
+    good: { visibility: "public", checked_at: "2026-01-01T00:00:00.000Z" },
+    bad: null,
+  }), { mode: 0o600 })
+  const cache = await readVisibilityCache(env, { now: () => "2026-01-02T00:00:00.000Z" })
+  assert.deepEqual(Object.keys(cache), ["good"])
+}))
+
+test("a jobs-index.json holding an array is moved aside and read as empty, rather than merged into", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  writeFileSync(path.join(root, "jobs-index.json"), "[]", { mode: 0o600 })
+  assert.deepEqual(await readJobsIndex(env), {})
+  const next = await updateJobsIndex(env, JOB, "claude-code-a.json")
+  assert.deepEqual(next, { [JOB]: ["claude-code-a.json"] })
+}))
+
+test("a status.json holding the wrong shape is moved aside and read as empty", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  writeFileSync(path.join(root, "status.json"), JSON.stringify({ not: "the right shape" }), { mode: 0o600 })
+  assert.deepEqual(await readStatus(env), { last_flush: {} })
 }))
 
 // ---------------------------------------------------------------------------
@@ -502,6 +619,19 @@ test("pendingFiles never follows a symlink planted in the outbox directory", () 
   assert.equal(pending.some((entry) => entry.name === evilName), false)
 }))
 
+test("pendingFiles never returns a hard link to a file outside the state root", () => scratch(async (env, base) => {
+  await setConsent(env, { store: STORE, contribute: true })
+  const root = await factoryStateRoot(env)
+  const outboxDir = path.join(root, "outbox", "ourostack__factory")
+  await fs.mkdir(outboxDir, { recursive: true })
+  const outsideName = "claude-code-6e3f4071-bd40-7f51-c16d-4e5f60718293.json"
+  const outsideFile = path.join(base, "outside.json")
+  writeFileSync(outsideFile, JSON.stringify(validLocalFacts({ session: { ...validLocalFacts().session, id: "6e3f4071-bd40-7f51-c16d-4e5f60718293" } })))
+  await fs.link(outsideFile, path.join(outboxDir, outsideName))
+  const pending = await pendingFiles(env, STORE, { publishedBytesFor: () => published("x") })
+  assert.equal(pending.some((entry) => entry.name === outsideName), false)
+}))
+
 test("markDelivered rejects a bad name or a malformed blob sha", () => scratch(async (env) => {
   await assert.rejects(() => markDelivered(env, STORE, { name: "", publishedBlobSha: "a".repeat(40) }), TypeError)
   await assert.rejects(() => markDelivered(env, STORE, { name: "x.json", publishedBlobSha: "not-a-sha" }), TypeError)
@@ -536,6 +666,13 @@ test("quarantine writes { reason, at } under the outbox file's own name", () => 
 // ---------------------------------------------------------------------------
 // Markers.
 // ---------------------------------------------------------------------------
+
+test("a .git inside an owned subfolder (not just the three root segments) is refused", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  await fs.mkdir(path.join(root, "markers"), { recursive: true })
+  await fs.mkdir(path.join(root, "markers", ".git"), { recursive: true })
+  await assert.rejects(() => writeMarker(env, validMarker()), /Git checkout/u)
+}))
 
 test("writeMarker writes markers/<host>-<session_id>.json and listMarkers reads it back", () => scratch(async (env) => {
   const marker = validMarker()
@@ -720,6 +857,100 @@ test("a truncated machine-secret is rotated: moved aside, replaced, and status.j
   assert.equal(status.machine_secret.status, "secret_rotated")
 }))
 
+test("16 concurrent reads of a corrupt secret all succeed and produce exactly one rotation", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "machine-secret")
+  await fs.writeFile(file, Buffer.alloc(5), { mode: 0o600 })
+  const results = await Promise.all(Array.from({ length: 16 }, () => readMachineSecret(env)))
+  for (const result of results) {
+    assert.equal(result.length, 32)
+    assert.deepEqual(result, results[0])
+  }
+  const siblings = readdirSync(root).filter((name) => name.startsWith("machine-secret.corrupt-"))
+  assert.equal(siblings.length, 1, "exactly one rotation, not one per racing reader")
+}))
+
+test("a crash-leftover .tmp-machine-secret-* still linked to the real secret (nlink 2) is cleaned up and the secret is still read, not refused", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "machine-secret")
+  const secret = await readMachineSecret(env)
+  const leftover = path.join(root, ".tmp-machine-secret-99999-leftover0")
+  await fs.link(file, leftover)
+  assert.equal((await fs.stat(file)).nlink, 2)
+  const readBack = await readMachineSecret(env)
+  assert.deepEqual(readBack, secret)
+  assert.equal(readdirSync(root).includes(path.basename(leftover)), false)
+  assert.equal((await fs.stat(file)).nlink, 1)
+}))
+
+test("cleaning up an orphaned secret link tolerates the unlink itself failing (already gone, or a transient error)", (t) => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "machine-secret")
+  await readMachineSecret(env)
+  const leftover = path.join(root, ".tmp-machine-secret-88888-leftover1")
+  await fs.link(file, leftover)
+  const original = fs.unlink.bind(fs)
+  const mocked = t.mock.method(fs, "unlink", async (target, ...rest) => {
+    if (target === leftover) throw Object.assign(new Error("denied"), { code: "EACCES" })
+    return original(target, ...rest)
+  })
+  try {
+    // The cleanup attempt fails, so the leftover link is still there and the
+    // secret is still, correctly, refused as hard-linked — the tolerance is
+    // that this throws the ordinary refusal, not the unlink's own error.
+    await assert.rejects(() => readMachineSecret(env), /is hard-linked/u)
+  } finally {
+    mocked.mock.restore()
+  }
+}))
+
+test("the locked secret resolver recreates the secret if it vanished entirely by the time the lock was acquired", (t) => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "machine-secret")
+  await fs.writeFile(file, Buffer.alloc(5), { mode: 0o600 })
+  const original = fs.lstat.bind(fs)
+  let armed = false
+  const mocked = t.mock.method(fs, "lstat", async (target, ...rest) => {
+    // Let the fast (unlocked) path run its course on the real, corrupt file
+    // so it falls through to the locked slow path as usual; only the first
+    // lstat taken *inside* `withLock`'s body (armed just before acquiring
+    // it) reports the file as gone — and actually removes it first, so the
+    // state `createMachineSecret`'s own `link` sees afterward is consistent
+    // with that answer, rather than racing its own recreation against a
+    // file this same call claimed didn't exist.
+    if (target === file && armed) {
+      armed = false
+      await fs.unlink(file).catch(() => {})
+      throw Object.assign(new Error("gone"), { code: "ENOENT" })
+    }
+    return original(target, ...rest)
+  })
+  const originalOpen = fs.open.bind(fs)
+  const armMocked = t.mock.method(fs, "open", async (target, ...rest) => {
+    if (target === `${file}.lock`) armed = true
+    return originalOpen(target, ...rest)
+  })
+  try {
+    const secret = await readMachineSecret(env)
+    assert.equal(secret.length, 32)
+  } finally {
+    mocked.mock.restore()
+    armMocked.mock.restore()
+  }
+}))
+
+test("cleaning up an orphaned secret link never removes an unrelated .tmp-machine-secret-* (a different in-flight creation)", (t) => scratch(async (env, base) => {
+  await readMachineSecret(env)
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "machine-secret")
+  const decoy = path.join(base, "decoy-link-3")
+  await fs.link(file, decoy)
+  const unrelated = path.join(root, ".tmp-machine-secret-77777-unrelated0")
+  await fs.writeFile(unrelated, "someone else's in-flight creation", { mode: 0o600 })
+  await assert.rejects(() => readMachineSecret(env), /is hard-linked/u)
+  assert.equal(readdirSync(root).includes(path.basename(unrelated)), true)
+}))
+
 test("readMachineSecret is never printed by this module", () => scratch(async (env) => {
   const logs = []
   const originalLog = console.log
@@ -756,6 +987,24 @@ test("readMachineSecret refuses a persistently hard-linked machine-secret (not j
   const decoy = path.join(base, "decoy-link")
   await fs.link(file, decoy)
   await assert.rejects(() => readMachineSecret(env), /is hard-linked/u)
+}))
+
+test("the orphaned-secret-link cleanup tolerates a failure listing the root directory, rather than crashing", (t) => scratch(async (env, base) => {
+  await readMachineSecret(env)
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "machine-secret")
+  const decoy = path.join(base, "decoy-link-2")
+  await fs.link(file, decoy)
+  const failure = Object.assign(new Error("denied"), { code: "EACCES" })
+  const mocked = t.mock.method(fs, "readdir", async (target) => {
+    if (target === root) throw failure
+    throw new Error("unexpected readdir")
+  })
+  try {
+    await assert.rejects(() => readMachineSecret(env), /is hard-linked/u)
+  } finally {
+    mocked.mock.restore()
+  }
 }))
 
 test("readMachineSecret refuses a symlinked machine-secret", () => scratch(async (env) => {

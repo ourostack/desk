@@ -6,6 +6,9 @@
 import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { execFileSync } from "node:child_process"
+
+import { assertWindowsAclAvailable } from "../../src/factory/windows-acl.js"
 
 export async function mkFeedbackFixture() {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "desk-feedback-"))
@@ -44,4 +47,23 @@ export function useHome(home) {
 
 export async function cleanup(base) {
   await fs.rm(base, { recursive: true, force: true })
+}
+
+/**
+ * Reads a real path's NTFS security descriptor back through the real
+ * Windows PowerShell provider `protectWindowsPaths` itself uses (native
+ * Windows only). `program` is PowerShell reading `$request` (parsed from
+ * `input`); its result is round-tripped through `ConvertTo-Json`.
+ */
+export function nativeProbe(program, input) {
+  const prefix = "$ErrorActionPreference='Stop';" +
+    "$env:PSModulePath=Join-Path $PSHOME 'Modules';" +
+    "[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false);" +
+    "[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false);" +
+    "$request=[Console]::In.ReadToEnd()|ConvertFrom-Json;"
+  return JSON.parse(execFileSync(
+    assertWindowsAclAvailable(),
+    ["-NoProfile", "-NonInteractive", "-Command", prefix + program],
+    { input: JSON.stringify(input), encoding: "utf8", windowsHide: true, timeout: 20000 },
+  ))
 }
