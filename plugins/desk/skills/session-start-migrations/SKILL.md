@@ -47,7 +47,7 @@ Field semantics:
 - `description` — one line, surfaces in announcement output when something fails.
 - `safety` — see the **Safety semantics** section below.
 - `needs_restart` — if `true`, after a successful migration the session hard-stops with a "please restart" message. If `false`, the session continues into the next migration / normal session-start flow.
-- `agent_work` — optional, `false` by default. `true` marks a migration whose work needs the agent's judgment, such as `02-tidy-desk`: its Migrate block changes nothing and prints the steps, the agent performs them in this session with the Desk tools, and the agent then sends the Announce text with its placeholders filled in (the counts, the commit link) instead of printing it verbatim. Such a migration never needs a restart and never asks the human anything; it announces what it did in one line and the session carries on.
+- `agent_work` — optional, `false` by default. `true` marks a migration whose work needs the agent's judgment, such as `02-tidy-desk`: its Migrate block changes nothing and prints the steps, the agent performs them in this session with the Desk tools, and the agent then sends the Announce text with its placeholders filled in (the counts, the commit link) instead of printing it verbatim. Such a migration never needs a restart and never asks the human anything; it announces what it did in one line and the session carries on. When its Migrate prints a single line and no steps (the work cannot run this session), say that line instead of the Announce text. Its blocks also read `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON`, which the driver sets to the `root.path` and `write_scope.person` that `desk_status` reports, so the work lands on the desk the Desk tools use.
 
 ### Body: three fenced bash code blocks and a plain-text Announce
 
@@ -96,7 +96,7 @@ splitting these out means the driver can run Detect cheaply against every migrat
 
 2. **for each migration in id-order across all plugins:**
    - parse the frontmatter and the four body code blocks.
-   - run every block with `DESK_PLUGIN_ROOT` set to the root of the plugin that holds the migration file (the parent of its `migrations/` dir), and, on a crew desk, `DESK_PERSON` set to this session's own alias (the desk MCP's `--person`).
+   - run every block with `DESK_PLUGIN_ROOT` set to the root of the plugin that holds the migration file (the parent of its `migrations/` dir), and, once `desk_status` is callable, `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to the `root.path` and `write_scope.person` it reports (the desk MCP's own `--root` and `--person`; leave `DESK_TOOLS_PERSON` empty when it reports none).
    - an `agent_work: true` migration writes to the desk, so it waits until the desk is synced and bound: `desk:session-start` runs it after Step 2.6, when this session's own desk is known, rather than at Step 0.5.
    - run **Detect**. exit 0 = migration is needed; non-zero = skip silently.
    - run **Safety check**. exit 0 = safe. non-zero = surface the printed reason to the operator and **hard-stop** (do NOT run Migrate; do NOT continue to subsequent migrations — the operator needs to resolve the safety issue first).

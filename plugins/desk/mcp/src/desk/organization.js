@@ -25,8 +25,9 @@
 //     shared `artifacts/` folder `directory-structure` defines (M4-5),
 //     `AGENTS.md`, `README.md`, `CLAUDE.md`, dotfiles.
 //   - track root: `track.md`, task folders, underscore folders.
-// Dotfiles include dot-folders such as `.git/` (M4-5): a Git desk always has
-// one, and the tidy's Detect must not fire on every Git desk because of it.
+// At the desk root, dotfiles include dot-folders such as `.git/` (M4-5): a
+// Git desk always has one, and the tidy's Detect must not fire on every Git
+// desk because of it. A dot-folder at a track root is still loose.
 // A "track folder" is a directory whose immediate root has a `track.md`; a
 // "task folder" is a directory whose immediate root has a `task.md`.
 // Anything else is loose.
@@ -43,11 +44,10 @@
 // `loose_file` for the very same directory is just as much a leak. Every
 // finding path/hint in this module is built through `redactedRelPath` (or
 // composed only from other findings' already-redacted paths, as
-// `duplicate_job`'s hint is), which independently redacts each path segment:
-// via M4-1's `validateName` returning `credential_like`, or — because a
-// segment that fails `validateName`'s kebab-case *shape* gate never reaches
-// its own credential check — via a direct scan for a 16+ character hex or
-// hex-plus-letter run inside the segment, regardless of its overall shape.
+// `duplicate_job`'s hint is), which independently redacts each path segment
+// that `isCredentialLike` flags. Since the M4-5 fix round that check runs on
+// the segment's own terms, whatever other rule the segment fails, so a
+// prompt-like, over-long or extension-bearing name is redacted too.
 //
 // `duplicate_job` scans every *non-archived* task card's frontmatter (raw
 // text) and the first 200 lines of its body for a pull
@@ -73,7 +73,7 @@ import { closeSync, openSync, readSync, readdirSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { parseFrontmatterLite } from "./frontmatter-lite.js"
-import { validateName, validateTrackName, validateScope } from "./naming.js"
+import { isCredentialLike, validateName, validateTrackName, validateScope } from "./naming.js"
 
 const requireFromHere = createRequire(import.meta.url)
 
@@ -176,31 +176,6 @@ function extractPrUrls(parsed) {
   return [...urls]
 }
 
-// A "word" is 16+ hex characters, or 16+ alphanumeric characters mixing at
-// least one digit and one letter — the same shape M4-1's `validateName`
-// treats as a secret's value, checked case-insensitively here since a
-// pre-existing directory name (never validated at creation) isn't
-// guaranteed to be lowercase the way a newly-created one is.
-function looksLikeSecretRun(word) {
-  const candidate = word.toLowerCase()
-  if (candidate.length < 16) return false
-  if (/^[0-9a-f]+$/.test(candidate)) return true
-  return /[0-9]/.test(candidate) && /[a-z]/.test(candidate)
-}
-
-// A path segment is credential-like when M4-1's `validateName` says so
-// (a password-prefix word followed by another word, or an IPv4-looking
-// run — only checked when the segment is otherwise shape-valid kebab-case),
-// OR — independently, because a segment that fails that shape gate never
-// reaches `validateName`'s own credential check — when any alphanumeric run
-// within it (split on every non-alphanumeric character, so this catches
-// hyphenated, underscored, or unseparated legacy names alike) looks like a
-// secret's value on its own.
-function isCredentialLikeSegment(segment) {
-  if (validateName(segment).code === "credential_like") return true
-  return segment.split(/[^0-9a-zA-Z]+/).some(looksLikeSecretRun)
-}
-
 // The one function every finding's `path` is built through: a POSIX-
 // separated path relative to `deskRoot`, with each credential-like segment
 // replaced by the literal `<redacted segment>` — never the parent-plus-leaf
@@ -210,11 +185,11 @@ function isCredentialLikeSegment(segment) {
 // directory name from leaking through a *different* finding for the exact
 // same directory (`stale_task`, `track_missing_scope`, `track_empty`,
 // `loose_file`, `duplicate_job` all build paths this way too).
-function redactedRelPath(deskRoot, absPath) {
+export function redactedRelPath(deskRoot, absPath) {
   return path
     .relative(deskRoot, absPath)
     .split(path.sep)
-    .map((segment) => (isCredentialLikeSegment(segment) ? REDACTED_SEGMENT : segment))
+    .map((segment) => (isCredentialLike(segment) ? REDACTED_SEGMENT : segment))
     .join("/")
 }
 
@@ -301,7 +276,6 @@ function walkTrackRoot({ trackDirAbs, deskRoot, findings, liveTaskCards, now }) 
     }
 
     if (!entry.isDirectory()) continue
-    if (isDotfile(entry.name)) continue
 
     if (entry.name === "_archive") {
       for (const archivedEntry of safeReaddir(entryAbs)) {

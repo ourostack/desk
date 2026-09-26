@@ -1042,7 +1042,7 @@ test("duplicate_job matches an Azure DevOps pullrequest URL", async () => {
 // both branches of `looksLikeSecretRun`: a pure-hex run and a mixed
 // alphanumeric run.
 
-test("a single hyphen-less secret-shaped segment is redacted even though it fails shape, not the credential check", async () => {
+test("a single hyphen-less secret-shaped segment is reported and redacted as credential-like even though it also fails shape", async () => {
   const root = await mkTempRoot()
 
   // Task-level: a pure-hex, hyphen-less slug — name_shape, but still redacted.
@@ -1071,10 +1071,12 @@ test("a single hyphen-less secret-shaped segment is redacted even though it fail
 
   const findings = organizationFindings(root, { now: NOW })
 
-  const shapeFindings = findByCode(findings, "name_shape")
-  assert.ok(shapeFindings.some((f) => f.path === "normal-track/<redacted segment>"))
-  assert.ok(shapeFindings.some((f) => f.path === "<redacted segment>"))
-  assert.equal(findByCode(findings, "name_credential_like").length, 0)
+  // M4-5 fix round: the credential check runs whatever else fails, so these
+  // report as credential-like, not as badly shaped.
+  const credentialFindings = findByCode(findings, "name_credential_like")
+  assert.ok(credentialFindings.some((f) => f.path === "normal-track/<redacted segment>"))
+  assert.ok(credentialFindings.some((f) => f.path === "<redacted segment>"))
+  assert.equal(findByCode(findings, "name_shape").length, 0)
 
   assert.ok(
     findByCode(findings, "stale_task").some((f) => f.path === "normal-track/<redacted segment>/task.md"),
@@ -1138,7 +1140,7 @@ test("artifacts/ is allowed only at the desk root; inside a track it is still lo
   assert.deepEqual(findings.map((f) => `${f.code} ${f.path}`), ["loose_file billing-disputes/artifacts"])
 })
 
-test("dot-folders such as .git/ and .state/ are never loose, at the desk root or a track root", async () => {
+test("dot-folders such as .git/ and .state/ are never loose at the desk root, but are at a track root", async () => {
   const root = await mkTempRoot()
   await writeFile(root, ".git/HEAD", "ref: refs/heads/main\n")
   await writeFile(root, ".state/index.sqlite", "")
@@ -1157,7 +1159,10 @@ test("dot-folders such as .git/ and .state/ are never loose, at the desk root or
     track: "billing-disputes",
   })
   await writeFile(root, "billing-disputes/.cache/entry", "")
-  assert.deepEqual(organizationFindings(root, { now: NOW }), [])
+  assert.deepEqual(
+    organizationFindings(root, { now: NOW }).map((f) => `${f.code} ${f.path}`),
+    ["loose_file billing-disputes/.cache"],
+  )
 })
 
 test("track_empty on a credential-like track name redacts the segment and leaks no part of it", async () => {
@@ -1214,4 +1219,36 @@ test("the dependency-free reader reads the fields the checks use exactly as gray
       assert.deepEqual(actual[field], expected[field], `${card} ${field}`)
     }
   }
+})
+
+test("a password value in a prompt-like, over-long, extension-bearing or track name is redacted in every finding", async () => {
+  const root = await mkTempRoot()
+  const VALUE = "hunter2"
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes; not payroll",
+  })
+  for (const slug of ["please-use-pw-hunter2", "hi-please-set-pw-hunter2-on-box", `deploy-pw-hunter2-${"a".repeat(40)}`]) {
+    await writeCard(root, `billing-disputes/${slug}/task.md`, {
+      schema_version: 1,
+      title: slug,
+      status: "processing",
+      created: STALE,
+      updated: STALE,
+      track: "billing-disputes",
+    })
+  }
+  await writeFile(root, "login-pw-hunter2-notes.txt", "loose\n")
+  await writeCard(root, "hi-set-pw-hunter2/track.md", { schema_version: 1, title: "t", status: "active" })
+
+  const findings = organizationFindings(root, { now: NOW })
+  assert.equal(findByCode(findings, "name_credential_like").length, 4, "three tasks and one track")
+  assert.equal(findByCode(findings, "name_prompt_like").length, 0)
+  assert.ok(findByCode(findings, "loose_file").some((f) => f.path === "<redacted segment>"))
+  assert.ok(findByCode(findings, "stale_task").every((f) => f.path.startsWith("billing-disputes/<redacted segment>/")))
+  assert.ok(findByCode(findings, "track_empty").some((f) => f.path === "<redacted segment>"))
+  assertNoSubstringLeak(VALUE, JSON.stringify(findings))
+  assertNoSubstringLeak("pw-hunter", JSON.stringify(findings))
 })

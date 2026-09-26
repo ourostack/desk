@@ -16,10 +16,13 @@ import {
   ORGANIZATION_RECORD,
   TIDY_VERSION,
   organizationRecord,
+  parseDeskRegistry,
   readOrganizationRecord,
+  resolvePerson,
   runTidyStatusCli,
   tidySafetyProblem,
   tidyStatus,
+  uncommittedPaths,
   writeOrganizationRecord,
 } from "../../src/desk/tidy.js"
 
@@ -84,15 +87,16 @@ function soloDesk({ messy = true, git: withGit = true } = {}) {
 
 function crewDesk() {
   const root = tempDir()
-  write(root, "_meta/desks.md", "| alias | identity |\n|---|---|\n| alice | alice |\n| bob | bob |\n")
+  write(root, "_meta/desks.md", "# Desks\n\n| alias | identity | path |\n|---|---|---|\n| alice | alice-login | desks/alice |\n| bob | Bob-Login | desks/bob |\n| | orphan | x |\n")
   cleanTrack(root, "desks/alice/")
   messyTrack(root, "desks/bob/")
   initGit(root)
   return root
 }
 
+// The script's own view of a desk: $DESK names it, as the Desk MCP would find it.
 function status(root, extra = {}) {
-  return tidyStatus({ root, env: {}, homeDir: tempDir(), now: NOW, ...extra })
+  return tidyStatus({ env: { DESK: root }, homeDir: tempDir(), cwd: tempDir(), now: NOW, ...extra })
 }
 
 function io() {
@@ -108,8 +112,12 @@ function io() {
 
 function cli(argv, extra = {}) {
   const captured = io()
-  const code = runTidyStatusCli({ argv, env: {}, io: captured.io, homeDir: tempDir(), now: NOW, ...extra })
+  const code = runTidyStatusCli({ argv, env: {}, io: captured.io, homeDir: tempDir(), cwd: tempDir(), now: NOW, ...extra })
   return { code, ...captured.out }
+}
+
+const noGh = () => {
+  throw new Error("gh must not be called")
 }
 
 // ── The Detect predicate ─────────────────────────────────────────────────
@@ -121,7 +129,9 @@ test("tidy is needed on a messy Git desk with no organization record", () => {
   assert.equal(result.needed, true)
   assert.equal(result.reason, "tidy needed")
   assert.equal(result.root, root)
+  assert.equal(result.person, null)
   assert.equal(result.subtree, root)
+  assert.equal(result.mismatch, false)
   assert.equal(result.tidy_version, null)
   assert.deepEqual(
     [...new Set(result.findings.map((f) => f.code))].sort(),
@@ -137,15 +147,28 @@ test("tidy is not needed on a clean desk", () => {
   assert.deepEqual(result.findings, [])
 })
 
-test("tidy is not needed once the organization record says tidy_version 1, or later", () => {
+test("stale tasks alone never make the tidy needed, but the report still lists them", () => {
+  const root = soloDesk({ messy: false })
+  write(root, "billing-disputes/old-refund-audit/task.md", "---\ntitle: old-refund-audit\nstatus: processing\nupdated: '2026-07-01T00:00:00Z'\n---\n")
+  const result = status(root)
+  assert.deepEqual(result.findings.map((f) => f.code), ["stale_task"])
+  assert.equal(result.needed, false)
+  assert.equal(result.reason, "nothing to tidy")
+  const report = cli(["--report"], { env: { DESK: root } })
+  assert.equal(report.code, 0)
+  assert.match(report.stdout, /^ {2}stale_task: billing-disputes\/old-refund-audit\/task\.md — .*\(reported only; the tidy leaves it alone\)$/m)
+})
+
+test("once the organization record says tidy_version 1 or later, the desk is not even walked", () => {
   for (const version of [TIDY_VERSION, TIDY_VERSION + 1]) {
     const root = soloDesk()
     write(root, ORGANIZATION_RECORD, JSON.stringify({ schema_version: 1, tidy_version: version, tidied_at: RECENT }))
     const result = status(root)
     assert.equal(result.needed, false)
+    assert.equal(result.applicable, true)
     assert.equal(result.reason, "already tidied")
     assert.equal(result.tidy_version, version)
-    assert.ok(result.findings.length > 0, "the doctor still reports; the tidy just doesn't run again")
+    assert.deepEqual(result.findings, [], "the record is read before the walk")
   }
 })
 
@@ -182,51 +205,132 @@ test("no bound desk means nothing to tidy", () => {
   )
 })
 
-test("the desk is found the way the Desk MCP finds it, including $DESK", () => {
+// ── The same desk the Desk tools use ────────────────────────────────────────
+
+test("with the tools' own root and person, the tidy works on that desk and notes whether it resolves the same one", () => {
   const root = soloDesk()
-  const result = tidyStatus({ env: { DESK: root }, homeDir: tempDir(), cwd: tempDir(), now: NOW })
-  assert.equal(result.root, root)
-  assert.equal(result.needed, true)
+  const agree = tidyStatus({ root, env: { DESK: root }, homeDir: tempDir(), cwd: tempDir(), now: NOW })
+  assert.equal(agree.mismatch, false)
+  assert.equal(agree.needed, true)
+
+  const elsewhere = soloDesk({ messy: false })
+  const disagree = tidyStatus({ root, env: { DESK: elsewhere }, homeDir: tempDir(), cwd: tempDir(), now: NOW })
+  assert.equal(disagree.mismatch, true)
+  assert.equal(disagree.root, root, "the tools' desk is the one described")
+  assert.deepEqual(disagree.resolved, { root: elsewhere, person: null })
+  assert.equal(disagree.needed, true)
+
+  const unresolved = tidyStatus({ root, env: {}, homeDir: tempDir(), cwd: tempDir(), now: NOW })
+  assert.equal(unresolved.mismatch, true, "a desk the script cannot find at all is a mismatch too")
+
+  const missing = tidyStatus({ root: path.join(root, "gone"), env: { DESK: root }, homeDir: tempDir(), cwd: tempDir(), now: NOW })
+  assert.equal(missing.mismatch, true, "a tools' root that no longer exists never matches")
+  assert.equal(missing.needed, false)
+})
+
+test("--report stops with one line when the tools' desk or person differs from what the script resolves", () => {
+  const root = crewDesk()
+  const elsewhere = soloDesk()
+  const otherRoot = cli(["--report", "--root", root, "--person", "bob"], { env: { DESK: elsewhere, DESK_PERSON: "bob" } })
+  assert.equal(otherRoot.code, 1)
+  assert.equal(otherRoot.stdout, `I left my desk untidied: the Desk tools use ${root} as bob, but the tidy found ${elsewhere} as bob.\n`)
+
+  const person = cli(["--report", "--root", root, "--person", "bob"], { env: { DESK: root, DESK_PERSON: "alice" } })
+  assert.equal(person.code, 1)
+  assert.match(person.stdout, /^I left my desk untidied: the Desk tools use .* as bob, but the tidy found .* as alice\.\n$/)
+
+  const lost = cli(["--report", "--root", root, "--person", "bob"], { env: { DESK_PERSON: "bob" } })
+  assert.equal(lost.stdout, `I left my desk untidied: the Desk tools use ${root} as bob, but the tidy found no desk.\n`)
+
+  const none = cli(["--write-record", "--root", root], { env: {}, spawnGh: noGh })
+  assert.equal(none.code, 1)
+  assert.match(none.stdout, /^I couldn't tell which desk in this crew workspace is mine/)
+
+  const agree = cli(["--report", "--root", root, "--person", "bob"], { env: { DESK: root, DESK_PERSON: "bob" } })
+  assert.equal(agree.code, 0)
+  assert.match(agree.stdout, new RegExp(`^Desk tools: ${root} as bob\\nThis script: ${root} as bob\\nThis session's own desk: ${path.join(root, "desks", "bob")}\\n`))
 })
 
 // ── Crew desks: only this session's own subtree ─────────────────────────────
 
-test("on a crew desk only this session's own subtree counts: a peer's mess never fires", () => {
+test("on a crew desk the person comes from the identity column, with DESK_PERSON as an override", () => {
   const root = crewDesk()
-  const alice = status(root, { person: "alice" })
-  assert.equal(alice.subtree, path.join(root, "desks", "alice"))
-  assert.equal(alice.needed, false)
+  const viaIdentity = status(root, { env: { DESK: root, DESK_IDENTITY: "bob-login" }, spawnGh: noGh })
+  assert.equal(viaIdentity.person, "bob")
+  assert.equal(viaIdentity.subtree, path.join(root, "desks", "bob"))
+  assert.equal(viaIdentity.needed, true)
+  assert.ok(viaIdentity.findings.every((f) => f.path.startsWith("desks/bob/")))
 
-  const bob = status(root, { env: { DESK_PERSON: "bob" } })
-  assert.equal(bob.subtree, path.join(root, "desks", "bob"))
-  assert.equal(bob.needed, true)
-  assert.ok(bob.findings.every((f) => f.path.startsWith("desks/bob/")))
+  const gh = []
+  const viaGh = status(root, {
+    spawnGh: (command, args) => {
+      gh.push([command, ...args].join(" "))
+      return { status: 0, stdout: "alice-login\n" }
+    },
+  })
+  assert.deepEqual(gh, ["gh api user --jq .login"])
+  assert.equal(viaGh.person, "alice")
+  assert.equal(viaGh.needed, false, "alice's own desk is clean; bob's mess is bob's")
+
+  const override = status(root, { env: { DESK: root, DESK_PERSON: "bob", DESK_IDENTITY: "alice-login" }, spawnGh: noGh })
+  assert.equal(override.person, "bob")
+})
+
+test("on a crew desk where no person resolves, Detect fires so the tidy says so in one line", () => {
+  const root = crewDesk()
+  for (const spawnGh of [
+    () => ({ status: 1, stdout: "" }),
+    () => ({ status: 0, stdout: "  \n" }),
+    () => ({ status: 0, stdout: "someone-else\n" }),
+    () => {
+      throw new Error("gh ENOENT")
+    },
+  ]) {
+    const result = status(root, { spawnGh })
+    assert.equal(result.needed, true)
+    assert.equal(result.unresolved_person, true)
+    assert.equal(result.applicable, false)
+    assert.equal(result.subtree, null)
+  }
+  assert.equal(cli(["--detect"], { env: { DESK: root }, spawnGh: () => ({ status: 1, stdout: "" }) }).code, 0)
+  const line = cli(["--report"], { env: { DESK: root }, spawnGh: () => ({ status: 1, stdout: "" }) })
+  assert.deepEqual(line, { code: 1, stdout: "I couldn't tell which desk in this crew workspace is mine, so I left every desk as it is.\n", stderr: "" })
+})
+
+test("an invalid person is treated as no person, never silently", () => {
+  const root = crewDesk()
+  const result = status(root, { env: { DESK: root, DESK_PERSON: "../bob" } })
+  assert.equal(result.needed, true)
+  assert.equal(result.unresolved_person, true)
+  assert.match(result.reason, /not a valid desk name/)
 })
 
 test("the organization record lives in this session's own subtree", () => {
   const root = crewDesk()
   write(root, "_meta/organization.json", JSON.stringify(organizationRecord()))
-  assert.equal(status(root, { person: "bob" }).needed, true, "a record at the crew root is not bob's")
+  assert.equal(status(root, { env: { DESK: root, DESK_PERSON: "bob" } }).needed, true, "a record at the crew root is not bob's")
   write(root, `desks/bob/${ORGANIZATION_RECORD}`, JSON.stringify(organizationRecord()))
-  assert.equal(status(root, { person: "bob" }).needed, false)
+  assert.equal(status(root, { env: { DESK: root, DESK_PERSON: "bob" } }).needed, false)
 })
 
-test("a crew desk with no alias is never tidied", () => {
-  const result = status(crewDesk())
-  assert.equal(result.applicable, false)
-  assert.match(result.reason, /crew desk/)
-})
-
-test("an alias whose desk does not exist yet, or an invalid alias, is never tidied", () => {
+test("a person whose desk does not exist yet is never tidied", () => {
   const root = crewDesk()
-  assert.match(status(root, { person: "carol" }).reason, /does not exist yet/)
-  const invalid = status(root, { person: "../bob" })
-  assert.equal(invalid.applicable, false)
-  assert.equal(invalid.subtree, null)
-  assert.match(invalid.reason, /not a valid desk name/)
+  const result = status(root, { env: { DESK: root, DESK_PERSON: "carol" } })
+  assert.equal(result.needed, false)
+  assert.match(result.reason, /does not exist yet/)
 })
 
-// ── Safety check ────────────────────────────────────────────────────────
+test("the registry parser reads alias and identity from the table and skips rows without an alias", () => {
+  assert.deepEqual(parseDeskRegistry("# Desks\n\n| alias | identity |\n|:--|--:|\n| alex | agarcia |\n| | nobody |\n| sam |\nnot a row\n"), [
+    { alias: "alex", identity: "agarcia" },
+    { alias: "sam", identity: "" },
+  ])
+  assert.deepEqual(parseDeskRegistry("| name | login |\n|---|---|\n| a | b |\n"), [])
+  assert.equal(resolvePerson(null, { env: {} }), null)
+  assert.equal(resolvePerson(soloDesk(), { env: {} }), null, "a solo desk has no person and asks no one")
+})
+
+// ── Safety: in-progress Git operations and other sessions' work ─────────────────
 
 test("tidying is safe on a quiet Git desk and waits during a merge, rebase, cherry-pick or revert", () => {
   const root = soloDesk()
@@ -240,10 +344,48 @@ test("tidying is safe on a quiet Git desk and waits during a merge, rebase, cher
     ["REVERT_HEAD", "a revert"],
   ]) {
     write(gitDir, marker, "")
-    assert.match(tidySafetyProblem(root), new RegExp(`in the middle of ${what}`))
+    assert.equal(tidySafetyProblem(root), `the desk repository is in the middle of ${what}`)
     rmSync(path.join(gitDir, marker), { force: true })
   }
   assert.match(tidySafetyProblem(tempDir()), /not a Git repository/)
+})
+
+test("--report skips the tidy for this session with one line during a merge", () => {
+  const root = soloDesk()
+  write(path.join(root, ".git"), "MERGE_HEAD", "")
+  assert.deepEqual(cli(["--report"], { env: { DESK: root } }), {
+    code: 1,
+    stdout: "I left my desk untidied for now because the desk repository is in the middle of a merge; I'll tidy it in a later session.\n",
+    stderr: "",
+  })
+})
+
+test("--report lists uncommitted paths, redacted, so the agent leaves those tasks alone", () => {
+  const root = soloDesk()
+  write(root, "billing-disputes/refund-flow-cleanup/doing.md", "in progress\n")
+  write(root, ".gitignore", "ignored.log\n")
+  write(root, "ignored.log", "never listed\n")
+  git(root, "add", ".gitignore", "billing-disputes/track.md")
+  git(root, "commit", "-q", "-m", "fixture")
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: changed; not payroll\n---\n")
+  git(root, "mv", "billing-disputes/track.md", "billing-disputes/track-renamed.md")
+  write(root, "pw-hunter2-notes.txt", "loose\n")
+
+  const dirty = uncommittedPaths(root, root)
+  assert.ok(dirty.includes("billing-disputes/track-renamed.md"), dirty.join(","))
+  assert.ok(dirty.includes("billing-disputes/refund-flow-cleanup"))
+  assert.ok(dirty.includes("<redacted segment>"))
+  assert.ok(!dirty.some((entry) => entry.includes("ignored.log")))
+  assert.ok(!dirty.some((entry) => entry.includes("track.md")), "a rename's source path is not listed twice")
+  assert.ok(!JSON.stringify(dirty).includes("hunter"))
+
+  const report = cli(["--report"], { env: { DESK: root } })
+  assert.equal(report.code, 0)
+  assert.match(report.stdout, new RegExp(`\\nUncommitted changes in it: ${dirty.length}\\n`))
+  assert.match(report.stdout, /^ {2}billing-disputes\/refund-flow-cleanup$/m)
+  assert.ok(!report.stdout.includes("hunter"))
+
+  assert.deepEqual(uncommittedPaths(tempDir(), tempDir()), [], "outside Git there is nothing to list")
 })
 
 // ── The record ──────────────────────────────────────────────────────────
@@ -268,52 +410,45 @@ test("--detect exits 0 only when the tidy is needed, and prints nothing", () => 
   assert.deepEqual(cli(["--detect", "--root", messy]), { code: 0, stdout: "", stderr: "" })
   assert.equal(cli(["--detect", "--root", soloDesk({ messy: false })]).code, 1)
   assert.equal(cli(["--detect"], { env: { DESK: messy } }).code, 0)
-  assert.equal(cli(["--detect", "--root", crewDesk(), "--person", "bob"]).code, 0)
+  assert.equal(cli(["--detect", "--root", crewDesk(), "--person", "bob"], { spawnGh: () => ({ status: 1, stdout: "" }) }).code, 0)
   assert.equal(cli(["--detect", "--root", path.join(messy, "missing")]).code, 1)
 })
 
 test("with no mode the status is printed as JSON", () => {
   const root = soloDesk()
-  const result = cli(["--root", root])
+  const result = cli([], { env: { DESK: root } })
   assert.equal(result.code, 0)
   const parsed = JSON.parse(result.stdout)
   assert.equal(parsed.needed, true)
   assert.equal(parsed.subtree, root)
 })
 
-test("--report lists this session's own findings, and refuses a desk that can't be tidied", () => {
+test("--report lists this session's own findings, and gives one line for a desk that can't be tidied", () => {
   const root = soloDesk()
-  const result = cli(["--report", "--root", root])
+  const result = cli(["--report", "--root", root], { env: { DESK: root } })
   assert.equal(result.code, 0)
-  assert.match(result.stdout, new RegExp(`^Desk: ${root}\\nThis session's own desk: ${root}\\nOrganization findings in it: \\d+\\n`))
+  assert.match(result.stdout, new RegExp(`^Desk tools: ${root}\\nThis script: ${root}\\nThis session's own desk: ${root}\\nOrganization findings in it: \\d+\\n`))
   assert.match(result.stdout, /^ {2}track_catch_all: inbox — /m)
 
-  const refused = cli(["--report", "--root", soloDesk({ git: false })])
-  assert.equal(refused.code, 1)
-  assert.match(refused.stdout, /^The desk cannot be tidied: the desk is not a Git repository/)
-})
-
-test("--safety exits 0 on a quiet desk and prints why it waits otherwise", () => {
-  const root = soloDesk()
-  assert.deepEqual(cli(["--safety", "--root", root]), { code: 0, stdout: "", stderr: "" })
-  write(path.join(root, ".git"), "MERGE_HEAD", "")
-  const waiting = cli(["--safety", "--root", root])
-  assert.equal(waiting.code, 1)
-  assert.match(waiting.stdout, /^The tidy waits: the desk repository is in the middle of a merge/)
+  const plain = soloDesk({ git: false })
+  const refused = cli(["--report"], { env: { DESK: plain } })
+  assert.deepEqual(refused, { code: 1, stdout: "I left my desk untidied: the desk is not a Git repository, so a tidy could not be undone.\n", stderr: "" })
+  assert.match(cli(["--report"]).stdout, /^I left my desk untidied: no desk is bound\.\n$/)
 })
 
 test("--write-record writes the record in this session's own subtree and turns Detect off", () => {
   const root = crewDesk()
-  const written = cli(["--write-record", "--root", root, "--person", "bob"])
+  const env = { DESK: root, DESK_PERSON: "bob" }
+  const written = cli(["--write-record", "--root", root, "--person", "bob"], { env })
   assert.equal(written.code, 0)
   assert.equal(written.stdout, `${path.join("desks", "bob", "_meta", "organization.json")}\n`)
   const record = JSON.parse(readFileSync(path.join(root, "desks", "bob", ORGANIZATION_RECORD), "utf8"))
   assert.deepEqual(record, { schema_version: 1, tidy_version: 1, tidied_at: new Date(NOW).toISOString() })
-  assert.equal(cli(["--detect", "--root", root, "--person", "bob"]).code, 1)
+  assert.equal(cli(["--detect", "--root", root, "--person", "bob"], { env }).code, 1)
 
   const now = Date.now()
   const solo = soloDesk()
-  assert.equal(runTidyStatusCli({ argv: ["--write-record", "--root", solo], env: {}, io: io().io, homeDir: tempDir() }), 0)
+  assert.equal(runTidyStatusCli({ argv: ["--write-record"], env: { DESK: solo }, io: io().io, homeDir: tempDir(), cwd: tempDir() }), 0)
   assert.ok(Date.parse(readOrganizationRecord(solo).tidied_at) >= now - 1000)
 })
 
@@ -329,7 +464,7 @@ test("scripts/tidy-status.js runs the command line", () => {
   // Keep the parent's environment (the coverage runner instruments child
   // processes through it), minus every variable that could bind a real desk.
   const env = { ...process.env, HOME: home, DESK: root }
-  for (const key of ["DESK_ACTIVATION_CONFIG", "CODEX_HOME", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "DESK_PERSON"]) delete env[key]
+  for (const key of ["DESK_ACTIVATION_CONFIG", "CODEX_HOME", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "DESK_PERSON", "DESK_IDENTITY"]) delete env[key]
   const report = execFileSync(process.execPath, [SCRIPT, "--report"], { encoding: "utf8", env, cwd: home })
   assert.match(report, /Organization findings in it: \d+/)
   const detect = spawnSync(process.execPath, [SCRIPT, "--detect", "--root", soloDesk({ messy: false })], { env, cwd: home })

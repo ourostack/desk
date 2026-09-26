@@ -1021,6 +1021,19 @@ test("task_move into_task refuses a task to merge into that doesn't exist", asyn
   assert.ok(await exists(path.join(root, "main-track", "dup-task", "task.md")))
 })
 
+test("task_move into_task refuses to merge a task into itself, before touching anything", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "main-track")
+  await task_create({ deskRoot: root, input: { track: "main-track", slug: "dup-task", title: "T" } })
+  await assert.rejects(
+    task_move({ deskRoot: root, input: { track: "main-track", slug: "dup-task", into_task: "dup-task" } }),
+    /cannot be merged into itself/,
+  )
+  assert.equal(await exists(path.join(root, "main-track", "dup-task", "_iterations")), false)
+  assert.ok(await exists(path.join(root, "main-track", "dup-task", "task.md")))
+})
+
 test("task_move into_task refuses to_slug, unarchive and a traversal-shaped keeper", async () => {
   const root = await mkTempDeskRoot()
   await mkTrack(root, "main-track")

@@ -14,6 +14,7 @@ import * as path from "node:path"
 import { execFileSync } from "node:child_process"
 import { after } from "node:test"
 import {
+  isCredentialLike,
   validateName,
   validateTrackName,
   validateScope,
@@ -259,19 +260,21 @@ test("describeNameRejection never echoes the candidate for any rejection code", 
   }
 })
 
-test("describeNameRejection never echoes a credential-shaped candidate that fails shape (uppercase)", () => {
+// M4-5 fix round: a secret's value decides the code whatever else the name
+// gets wrong, so these report credential_like rather than shape or too_long.
+test("describeNameRejection never echoes a credential-shaped candidate that also fails shape (uppercase)", () => {
   const candidate = "deploy-A1B2C3D4E5F6A7B8C9D0"
   const result = validateName(candidate)
-  assert.equal(result.code, "shape")
+  assert.equal(result.code, "credential_like")
   const message = describeNameRejection(result)
   assertNoSubstringLeak(candidate, message)
 })
 
-test("describeNameRejection never echoes a credential-shaped candidate that fails too_long", () => {
+test("describeNameRejection never echoes a credential-shaped candidate that is also too long", () => {
   const token = "a1b2c3d4e5f6a7b8c9d0"
   const candidate = `deploy-${token}-${"a".repeat(30)}`
   const result = validateName(candidate)
-  assert.equal(result.code, "too_long")
+  assert.equal(result.code, "credential_like")
   const message = describeNameRejection(result)
   assertNoSubstringLeak(candidate, message)
 })
@@ -550,4 +553,36 @@ test("operatorNames uses an injected spawn for the happy path too", async () => 
     spawnGitConfig: () => ({ status: 0, stdout: "Injected Name\n" }),
   })
   assert.deepEqual(names, ["injected-name"])
+})
+
+// ── M4-5 fix round: credential detection on its own terms ──────────────
+
+test("isCredentialLike finds a password value whatever other rule the name fails", () => {
+  for (const name of [
+    "please-use-pw-hunter2", // prompt-like first
+    "hi-please-set-pw-hunter2-on-box", // seven words
+    `deploy-pw-hunter2-${"a".repeat(40)}`, // too long
+    "login-pw-hunter2-notes.txt", // extension-bearing loose file
+    "Login_PWD_Hunter2", // wrong case and separators
+    "hi-set-pw-hunter2", // a track name
+    "rotate-a1b2c3d4e5f6a7b8c9d0.md",
+    "box-10-0-0-1",
+  ]) {
+    assert.equal(isCredentialLike(name), true, name)
+  }
+  for (const name of ["api-key-rotation", "rotate-pw", "notes.txt", ".git", "token-budget-report", "", "hello-world"]) {
+    assert.equal(isCredentialLike(name), false, name)
+  }
+  assert.equal(isCredentialLike(undefined), false)
+})
+
+test("validateName and validateTrackName report credential_like first and never echo any part of it", () => {
+  for (const candidate of ["please-use-pw-hunter2", "hi-please-set-pw-hunter2-on-box", `deploy-pw-hunter2-${"a".repeat(40)}`, "login-pw-hunter2-notes.txt"]) {
+    const result = validateName(candidate)
+    assert.equal(result.code, "credential_like", candidate)
+    assertNoSubstringLeak("hunter2", describeNameRejection(result))
+  }
+  const track = validateTrackName("hi-set-pw-hunter2", { operatorNames: [] })
+  assert.equal(track.code, "credential_like")
+  assertNoSubstringLeak("hunter2", describeNameRejection(track))
 })

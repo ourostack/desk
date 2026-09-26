@@ -106,6 +106,32 @@ function hasCredentialLikeWord(nameWords) {
   return false
 }
 
+// A trailing file extension (`.txt`, `.md`) is not part of the name's words.
+const EXTENSION_RE = /\.[A-Za-z0-9]{1,10}$/
+
+/**
+ * isCredentialLike(name) -> boolean
+ *
+ * Whether a name carries a secret's value, judged on its own terms (M4-5
+ * fix-round ruling): the name is split on every non-alphanumeric character
+ * after its extension is stripped, case-folded, and checked against the
+ * password-prefix rule ("pw"/"pwd"/"passwd" followed by another word), the
+ * secret-run rule (a 16+ character hex or letter-and-digit run) and the IPv4
+ * rule — whatever other rule the name also fails, and whatever its shape.
+ * `validateName` and the doctor's path redaction both use it, so a
+ * prompt-like, over-long or extension-bearing name that carries a password
+ * is still treated as credential-like.
+ */
+export function isCredentialLike(name) {
+  if (typeof name !== "string") return false
+  const nameWords = name
+    .replace(EXTENSION_RE, "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word !== "")
+  return hasIpv4LookingRun(nameWords) || hasCredentialLikeWord(nameWords)
+}
+
 // No hint below ever includes the candidate — a rejection message must
 // describe the problem, never quote the name that triggered it, because a
 // rejected name may itself carry a secret's value.
@@ -130,6 +156,16 @@ export function validateName(name) {
   if (typeof name !== "string" || name.trim() === "") return shapeResult()
   const candidate = name.trim()
 
+  // Checked first: a secret's value decides the finding, whatever else the
+  // name also gets wrong, so every caller treats it as a secret.
+  if (isCredentialLike(candidate)) {
+    return {
+      ok: false,
+      code: "credential_like",
+      hint: `the name looks like it contains a secret's value — ${NAME_HINT}`,
+    }
+  }
+
   if (!SHAPE_RE.test(candidate)) return shapeResult()
   if (candidate.length > MAX_NAME_LENGTH) {
     return {
@@ -146,14 +182,6 @@ export function validateName(name) {
       ok: false,
       code: "prompt_like",
       hint: `the name starts like a prompt, not an outcome — ${NAME_HINT}`,
-    }
-  }
-
-  if (hasIpv4LookingRun(nameWords) || hasCredentialLikeWord(nameWords)) {
-    return {
-      ok: false,
-      code: "credential_like",
-      hint: `the name looks like it contains a secret's value — ${NAME_HINT}`,
     }
   }
 

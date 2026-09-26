@@ -192,7 +192,7 @@ a workspace with a single OFF-mode desk simply has **no `_meta/desks.md`** — i
 
 ### agent-work migrations
 
-now that the workspace is synced and this session's own desk is known, run the `agent_work: true` migrations that Step 0.5 deferred, through `session-start-migrations`, with `DESK_PERSON` set to this session's alias on a crew desk. `02-tidy-desk` is the one today: when its Detect fires, tidy your own desk as its steps say, announce it in one line and carry on without waiting.
+now that the workspace is synced and this session's own desk is known, run the `agent_work: true` migrations that Step 0.5 deferred, through `session-start-migrations`, with `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to the `root.path` and `write_scope.person` that `desk_status` reports. `02-tidy-desk` is the one today: when its Detect fires, tidy your own desk as its steps say, announce it in one line and carry on without waiting.
 
 ## Step 3 — Scan for active tasks
 

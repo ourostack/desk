@@ -3,28 +3,34 @@
 //
 // Ruling (2026-09-25): the migration's Detect fires when the doctor reports
 // organization findings in this session's own desk subtree and that
-// subtree's `_meta/organization.json` does not record `tidy_version: 1`. The
+// subtree's `_meta/organization.json` does not record `tidy_version: 1`.
+// `stale_task` findings do not count (fix-round ruling): the tidy never
+// changes a task's status, so a stale task alone gives it nothing to do. The
 // tidy itself is agent work done with the Desk tools; this module only
-// reports what the doctor sees, checks that tidying can be undone, and
+// reports what the doctor sees, checks that tidying is safe right now, and
 // writes the record once the tidy is committed.
 //
 // It runs from `scripts/tidy-status.js`, straight from the installed plugin,
 // where no npm dependency is installed. Everything it imports is
 // dependency-free: `organization.js` falls back to its own card reader.
 //
-// Own subtree: `desks/<alias>/` for a person-scoped session (the alias comes
-// from `--person` or `DESK_PERSON`), the desk root otherwise. A crew desk
-// (one with a `_meta/desks.md` registry) with no alias is never tidied,
-// because the session's own desk is unknown and a peer's desk is theirs.
+// The same desk the tools use (fix-round ruling): the driver passes the
+// Desk MCP's own root and person from `desk_status` (`--root`, `--person`).
+// The script also resolves the desk on its own — the root the way the Desk
+// MCP finds one, and on a crew desk the person from `_meta/desks.md`'s
+// identity column, with `DESK_PERSON` as an override — and the report stops
+// with one line when the two disagree. On a crew desk where no person
+// resolves, Detect still fires so the tidy can say so in one line: it is
+// never silent there.
 //
-// A desk that is not a Git work tree is never tidied either: tidying is safe
-// only because every move goes through Git and can be undone.
+// A desk that is not a Git work tree is never tidied: tidying is safe only
+// because every move goes through Git and can be undone.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import * as os from "node:os"
 import * as path from "node:path"
-import { organizationFindings } from "./organization.js"
+import { organizationFindings, redactedRelPath } from "./organization.js"
 import { operatorNames } from "./naming.js"
 import {
   personPrefix,
@@ -35,6 +41,9 @@ import {
 export const TIDY_VERSION = 1
 export const ORGANIZATION_RECORD = path.join("_meta", "organization.json")
 
+// Findings the tidy acts on. `stale_task` is reported, never acted on.
+const REPORT_ONLY_CODES = new Set(["stale_task"])
+
 const IN_PROGRESS_MARKERS = [
   ["MERGE_HEAD", "a merge"],
   ["rebase-merge", "a rebase"],
@@ -42,6 +51,8 @@ const IN_PROGRESS_MARKERS = [
   ["CHERRY_PICK_HEAD", "a cherry-pick"],
   ["REVERT_HEAD", "a revert"],
 ]
+
+const IDENTITY_TIMEOUT_MS = 10_000
 
 /** `{ schema_version: 1, tidy_version: 1, tidied_at: <iso> }` */
 export function organizationRecord(now = new Date()) {
@@ -62,23 +73,34 @@ function tidied(record) {
   return typeof record?.tidy_version === "number" && record.tidy_version >= TIDY_VERSION
 }
 
-function git(root, args, spawnGit) {
+function run(spawn, command, args) {
   try {
-    return spawnGit("git", ["-C", root, ...args], { encoding: "utf8" })
+    return spawn(command, args, { encoding: "utf8", timeout: IDENTITY_TIMEOUT_MS })
   } catch {
     return { status: 1, stdout: "" }
   }
 }
 
 function isGitWorkTree(root, spawnGit) {
-  const result = git(root, ["rev-parse", "--is-inside-work-tree"], spawnGit)
+  const result = run(spawnGit, "git", ["-C", root, "rev-parse", "--is-inside-work-tree"])
   return result.status === 0 && result.stdout.trim() === "true"
 }
 
-function resolveRoot({ root, env, cwd, homeDir }) {
+function real(p) {
+  try {
+    return realpathSync(p)
+  } catch {
+    return path.resolve(p)
+  }
+}
+
+function samePath(a, b) {
+  return real(a) === real(b)
+}
+
+function resolveRoot({ env, cwd, homeDir }) {
   try {
     return resolveDeskRootWithSource({
-      explicitRoot: root,
       activationConfigPath: resolveActivationConfigPath({ env }),
       env,
       cwd,
@@ -90,16 +112,69 @@ function resolveRoot({ root, env, cwd, homeDir }) {
   }
 }
 
-function notApplicable(fields, reason) {
-  return { ...fields, applicable: false, reason, needed: false, tidy_version: null, findings: [] }
+function hasText(value) {
+  return typeof value === "string" && value.trim() !== ""
+}
+
+/** `[{ alias, identity }]` rows of a `_meta/desks.md` registry table. */
+export function parseDeskRegistry(raw) {
+  const rows = []
+  let header = null
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith("|")) continue
+    const cells = trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim())
+    if (header === null) {
+      header = cells.map((cell) => cell.toLowerCase())
+      continue
+    }
+    if (cells.every((cell) => /^:?-+:?$/.test(cell))) continue
+    const alias = cells[header.indexOf("alias")] ?? ""
+    const identity = cells[header.indexOf("identity")] ?? ""
+    if (alias !== "") rows.push({ alias, identity })
+  }
+  return rows
+}
+
+function registryPath(root) {
+  return path.join(root, "_meta", "desks.md")
+}
+
+// This session's identity: `DESK_IDENTITY`, else the GitHub login `gh`
+// reports. Only asked on a crew desk with no `DESK_PERSON` override.
+function sessionIdentity(env, spawnGh) {
+  if (hasText(env.DESK_IDENTITY)) return env.DESK_IDENTITY.trim()
+  const result = run(spawnGh, "gh", ["api", "user", "--jq", ".login"])
+  return result.status === 0 && hasText(result.stdout) ? result.stdout.trim() : null
 }
 
 /**
- * tidyStatus({ root?, person?, env, cwd?, homeDir?, now?, spawnGit? }) ->
- *   { root, subtree, applicable, reason, needed, tidy_version, findings }
+ * The person this script resolves for `root`: `DESK_PERSON` when set, else,
+ * on a crew desk, the alias whose `identity` matches this session's
+ * identity, else null.
+ */
+export function resolvePerson(root, { env, spawnGh = spawnSync }) {
+  if (hasText(env.DESK_PERSON)) return env.DESK_PERSON.trim()
+  if (root === null || !existsSync(registryPath(root))) return null
+  const identity = sessionIdentity(env, spawnGh)
+  if (identity === null) return null
+  const rows = parseDeskRegistry(readFileSync(registryPath(root), "utf8"))
+  const row = rows.find((candidate) => candidate.identity.toLowerCase() === identity.toLowerCase())
+  return row === undefined ? null : row.alias
+}
+
+function base(fields, reason) {
+  return { ...fields, applicable: false, reason, needed: false, unresolved_person: false, tidy_version: null, findings: [] }
+}
+
+/**
+ * tidyStatus({ root?, person?, env, cwd?, homeDir?, now?, spawnGit?, spawnGh? }) ->
+ *   { root, person, subtree, resolved, mismatch, applicable, reason, needed,
+ *     unresolved_person, tidy_version, findings }
  *
- * Read-only. `root` defaults to the desk the Desk MCP would bind; `person`
- * defaults to `env.DESK_PERSON`. `needed` is the Detect predicate.
+ * Read-only. `root`/`person` are the Desk tools' own (from `desk_status`);
+ * without `root` the script's own resolution is used. `needed` is the
+ * Detect predicate.
  */
 export function tidyStatus({
   root,
@@ -109,24 +184,38 @@ export function tidyStatus({
   homeDir = os.homedir(),
   now,
   spawnGit = spawnSync,
+  spawnGh = spawnSync,
 }) {
-  const alias = person ?? env.DESK_PERSON ?? null
-  const deskRoot = resolveRoot({ root, env, cwd, homeDir })
-  if (deskRoot === null) return notApplicable({ root: null, subtree: null }, "no desk is bound")
+  const resolvedRoot = resolveRoot({ env, cwd, homeDir })
+  const bound = hasText(root)
+  const deskRoot = bound ? path.resolve(root) : resolvedRoot
+  const resolvedPerson = resolvePerson(deskRoot, { env, spawnGh })
+  const alias = bound ? (hasText(person) ? person.trim() : null) : resolvedPerson
+  const resolved = { root: resolvedRoot, person: resolvedPerson }
+  const mismatch = bound && (resolvedRoot === null || !samePath(resolvedRoot, deskRoot) || resolvedPerson !== alias)
+  const fields = { root: deskRoot, person: alias, subtree: null, resolved, mismatch }
+
+  if (deskRoot === null) return base(fields, "no desk is bound")
+  const crew = existsSync(registryPath(deskRoot))
+  if (crew && alias === null) {
+    return { ...base(fields, "this is a crew desk and no person names this session's own desk"), needed: true, unresolved_person: true }
+  }
 
   let subtree
   try {
     subtree = path.resolve(personPrefix(deskRoot, alias))
   } catch {
-    return notApplicable({ root: deskRoot, subtree: null }, "the crew alias is not a valid desk name")
+    return { ...base(fields, "the person is not a valid desk name"), needed: true, unresolved_person: true }
   }
-  const fields = { root: deskRoot, subtree }
-  if (subtree === path.resolve(deskRoot) && existsSync(path.join(deskRoot, "_meta", "desks.md"))) {
-    return notApplicable(fields, "this is a crew desk and no alias names this session's own desk")
-  }
-  if (!existsSync(subtree)) return notApplicable(fields, "this session's own desk does not exist yet")
+  fields.subtree = subtree
+  if (!existsSync(subtree)) return base(fields, "this session's own desk does not exist yet")
   if (!isGitWorkTree(deskRoot, spawnGit)) {
-    return notApplicable(fields, "the desk is not a Git repository, so a tidy could not be undone")
+    return base(fields, "the desk is not a Git repository, so a tidy could not be undone")
+  }
+
+  const record = readOrganizationRecord(subtree)
+  if (tidied(record)) {
+    return { ...base(fields, "already tidied"), applicable: true, tidy_version: record.tidy_version }
   }
 
   const findings = organizationFindings(deskRoot, {
@@ -134,32 +223,53 @@ export function tidyStatus({
     operatorNames: operatorNames(deskRoot),
     now,
   })
-  const record = readOrganizationRecord(subtree)
-  const done = tidied(record)
+  const actionable = findings.filter((finding) => !REPORT_ONLY_CODES.has(finding.code))
   return {
     ...fields,
     applicable: true,
-    reason: done ? "already tidied" : findings.length === 0 ? "nothing to tidy" : "tidy needed",
-    needed: !done && findings.length > 0,
-    tidy_version: done ? record.tidy_version : null,
+    reason: actionable.length === 0 ? "nothing to tidy" : "tidy needed",
+    needed: actionable.length > 0,
+    unresolved_person: false,
+    tidy_version: null,
     findings,
   }
 }
 
 /**
- * Why tidying is unsafe right now, or null when it is safe: Git is in the
- * middle of a merge, rebase, cherry-pick or revert in the desk repository.
+ * Why tidying must wait, or null when it is safe now: Git is in the middle
+ * of a merge, rebase, cherry-pick or revert in the desk repository.
  */
 export function tidySafetyProblem(root, { spawnGit = spawnSync } = {}) {
-  const result = git(root, ["rev-parse", "--absolute-git-dir"], spawnGit)
+  const result = run(spawnGit, "git", ["-C", root, "rev-parse", "--absolute-git-dir"])
   if (result.status !== 0) return "the desk is not a Git repository, so a tidy could not be undone"
   const gitDir = result.stdout.trim()
   for (const [marker, what] of IN_PROGRESS_MARKERS) {
-    if (existsSync(path.join(gitDir, marker))) {
-      return `the desk repository is in the middle of ${what}; finish it, then start a new session`
-    }
+    if (existsSync(path.join(gitDir, marker))) return `the desk repository is in the middle of ${what}`
   }
   return null
+}
+
+/**
+ * Paths under `subtree` with uncommitted changes (staged, unstaged or
+ * untracked; ignored files are left out), relative to `root` and redacted
+ * like every doctor finding. Another session may be working there.
+ */
+export function uncommittedPaths(root, subtree, { spawnGit = spawnSync } = {}) {
+  const top = run(spawnGit, "git", ["-C", root, "rev-parse", "--show-toplevel"])
+  const status = run(spawnGit, "git", ["-C", root, "status", "--porcelain=v1", "-z", "--", subtree])
+  if (top.status !== 0 || status.status !== 0) return []
+  const toplevel = top.stdout.trim()
+  const realRoot = real(root)
+  const entries = status.stdout.split("\0")
+  const paths = []
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]
+    if (entry.length < 4) continue
+    paths.push(redactedRelPath(realRoot, path.join(toplevel, entry.slice(3))))
+    // A rename or copy carries its source path as the next entry.
+    if (entry[0] === "R" || entry[0] === "C") index += 1
+  }
+  return [...new Set(paths)].sort()
 }
 
 /** Writes the record under `subtree` and returns its path. */
@@ -170,12 +280,39 @@ export function writeOrganizationRecord(subtree, now = new Date()) {
   return file
 }
 
-function reportText(status) {
-  const lines = [`Desk: ${status.root}`, `This session's own desk: ${status.subtree}`]
-  lines.push(`Organization findings in it: ${status.findings.length}`)
-  for (const finding of status.findings) {
-    lines.push(`  ${finding.code}: ${finding.path} — ${finding.hint}`)
+function describe(root, person) {
+  if (root === null) return "no desk"
+  return `${root}${person === null ? "" : ` as ${person}`}`
+}
+
+// The one line the agent says instead of the Announce line when the tidy
+// cannot run this session, or null when it can.
+function stopLine(status, spawnGit) {
+  if (status.unresolved_person) {
+    return "I couldn't tell which desk in this crew workspace is mine, so I left every desk as it is."
   }
+  if (status.mismatch) {
+    return `I left my desk untidied: the Desk tools use ${describe(status.root, status.person)}, but the tidy found ${describe(status.resolved.root, status.resolved.person)}.`
+  }
+  if (!status.applicable) return `I left my desk untidied: ${status.reason}.`
+  const problem = tidySafetyProblem(status.root, { spawnGit })
+  if (problem !== null) return `I left my desk untidied for now because ${problem}; I'll tidy it in a later session.`
+  return null
+}
+
+function reportText(status, dirty) {
+  const lines = [
+    `Desk tools: ${describe(status.root, status.person)}`,
+    `This script: ${describe(status.resolved.root, status.resolved.person)}`,
+    `This session's own desk: ${status.subtree}`,
+    `Organization findings in it: ${status.findings.length}`,
+  ]
+  for (const finding of status.findings) {
+    const note = REPORT_ONLY_CODES.has(finding.code) ? " (reported only; the tidy leaves it alone)" : ""
+    lines.push(`  ${finding.code}: ${finding.path} — ${finding.hint}${note}`)
+  }
+  lines.push(`Uncommitted changes in it: ${dirty.length}`)
+  for (const entry of dirty) lines.push(`  ${entry}`)
   return `${lines.join("\n")}\n`
 }
 
@@ -186,7 +323,7 @@ function parseArgs(argv) {
     if (arg === "--root" || arg === "--person") {
       args[arg.slice(2)] = argv[index + 1]
       index += 1
-    } else if (["--detect", "--safety", "--report", "--write-record"].includes(arg)) {
+    } else if (["--detect", "--report", "--write-record"].includes(arg)) {
       args.mode = arg.slice(2)
     } else {
       throw new Error(`tidy-status: unknown argument ${JSON.stringify(arg)}`)
@@ -199,11 +336,11 @@ function parseArgs(argv) {
  * The `scripts/tidy-status.js` command line. Modes:
  *   (none)          print tidyStatus as JSON; exit 0
  *   --detect        exit 0 when the tidy is needed, 1 otherwise; print nothing
- *   --safety        exit 0 when tidying is safe now, else print why and exit 1
- *   --report        print the findings in this session's own desk; exit 0
+ *   --report        print the report and exit 0 when the tidy can run now;
+ *                   otherwise print the one line to say instead and exit 1
  *   --write-record  write _meta/organization.json in this session's own desk
- * `--root <path>` and `--person <alias>` override the bound desk and
- * `DESK_PERSON`.
+ * `--root <path>` and `--person <alias>` are the Desk tools' own root and
+ * person, from `desk_status`.
  */
 export function runTidyStatusCli({
   argv = process.argv.slice(2),
@@ -213,6 +350,7 @@ export function runTidyStatusCli({
   homeDir,
   now,
   spawnGit = spawnSync,
+  spawnGh = spawnSync,
 } = {}) {
   let args
   try {
@@ -221,7 +359,7 @@ export function runTidyStatusCli({
     io.stderr.write(`${error.message}\n`)
     return 2
   }
-  const status = tidyStatus({ root: args.root, person: args.person, env, cwd, homeDir, now, spawnGit })
+  const status = tidyStatus({ root: args.root, person: args.person, env, cwd, homeDir, now, spawnGit, spawnGh })
 
   if (args.mode === "detect") return status.needed ? 0 : 1
 
@@ -230,20 +368,14 @@ export function runTidyStatusCli({
     return 0
   }
 
-  if (!status.applicable) {
-    io.stdout.write(`The desk cannot be tidied: ${status.reason}.\n`)
-    return 1
-  }
-
-  if (args.mode === "safety") {
-    const problem = tidySafetyProblem(status.root, { spawnGit })
-    if (problem === null) return 0
-    io.stdout.write(`The tidy waits: ${problem}.\n`)
+  const stop = stopLine(status, spawnGit)
+  if (stop !== null) {
+    io.stdout.write(`${stop}\n`)
     return 1
   }
 
   if (args.mode === "report") {
-    io.stdout.write(reportText(status))
+    io.stdout.write(reportText(status, uncommittedPaths(status.root, status.subtree, { spawnGit })))
     return 0
   }
 

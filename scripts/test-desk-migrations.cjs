@@ -796,7 +796,7 @@ function gitIn(root, ...args) {
   return result.stdout;
 }
 
-const HOST_BINDING_VARS = ["CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "DESK", "DESK_PERSON", "DESK_PLUGIN_ROOT"];
+const HOST_BINDING_VARS = ["CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "DESK", "DESK_PERSON", "DESK_IDENTITY", "DESK_TOOLS_ROOT", "DESK_TOOLS_PERSON", "DESK_PLUGIN_ROOT"];
 
 function withTidyDesk({ build = messyDesk, crew = false, git = true, record = null, pluginRoot = "installed" } = {}, body) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "desk-tidy-migration-")));
@@ -822,6 +822,8 @@ function withTidyDesk({ build = messyDesk, crew = false, git = true, record = nu
     }
     const env = { ...process.env, HOME: home, DESK: desk, DESK_PLUGIN_ROOT: pluginRoot === "installed" ? installedPluginCopy(root) : deskRoot };
     for (const key of HOST_BINDING_VARS) if (!["DESK", "DESK_PLUGIN_ROOT"].includes(key)) delete env[key];
+    // The session's identity is set so `gh` is never asked; on a crew desk bob is this session.
+    env.DESK_IDENTITY = "nobody-in-the-registry";
     if (crew) env.DESK_PERSON = "bob";
     const tidy = { root, desk, own, env, run: (script, extraEnv = {}) => spawnSync(BASH, ["-c", script], { cwd: home, env: { ...env, ...extraEnv }, encoding: "utf8" }) };
     body(tidy);
@@ -859,7 +861,7 @@ test("the tidy migration tidies and announces: announce-and-proceed wording and 
   const text = read(TIDY_FILE);
   const { blocks } = tidyMigration();
   assert.doesNotMatch(text, /\?/u, "the tidy never asks the human anything");
-  assert.match(blocks.Announce, /^I tidied up my desk a bit: <[^>]+>\. Say if you mind and I'll put anything back\. <commit link>$/u);
+  assert.match(blocks.Announce, /^I tidied up my desk a bit: <[^>]+>\. <What I left alone, if anything[^>]+> Say if you mind and I'll put anything back\. <commit link>$/u);
   assert.match(blocks.Migrate, /Do not ask first and do not wait for an answer: tidy, announce it in one line, and carry on\./u);
   assert.doesNotMatch(text, /how would you like|would you like|shall I|should I|do you want/iu);
   // The ordered Migrate steps from the brief, each with its safety rule.
@@ -867,9 +869,19 @@ test("the tidy migration tidies and announces: announce-and-proceed wording and 
   assert.deepEqual(steps, ["1 Scope lines", "2 Names", "3 Duplicates", "4 Loose files", "5 Person-named and catch-all tracks (track_person_name, track_catch_all)", "6 Empty tracks (track_empty)", "7 Record and commit"]);
   assert.match(blocks.Migrate, /only inside this session's own desk/u);
   assert.match(blocks.Migrate, /told you not to write in this session, skip the tidy/u);
-  assert.match(blocks.Migrate, /only through Git[\s\S]+Never delete content/u);
+  assert.match(blocks.Migrate, /Never delete content/u);
   assert.match(blocks.Migrate, /Never change a task's status/u);
-  assert.match(blocks.Migrate, /If the human objects, revert the tidy through Git/u);
+  // Fix round 1: other sessions' work, loose files, judgment on merges, names in commits, the revert.
+  assert.match(blocks.Migrate, /Leave alone every task and track that holds uncommitted changes[\s\S]{0,200}left alone in the announcement/u);
+  assert.match(blocks.Migrate, /untracked loose file that is not ignored gets git add first, then git mv\. Leave ignored files where they are\./u);
+  assert.match(blocks.Migrate, /git diff --cached --name-status: it must hold only the tidy's moves[\s\S]{0,200}unstage it[\s\S]{0,80}stop with one line/u);
+  assert.match(blocks.Migrate, /never write an old name that failed the credential or prompt check[\s\S]{0,200}Describe such a move by its new name only\./u);
+  assert.match(blocks.Migrate, /Merge a group only when you judge that both cards describe the same outcome; leave the others and mention them\./u);
+  assert.match(blocks.Migrate, /Never hide a live task: when the duplicate is not done or cancelled and the kept task is, keep the live one instead, or skip the merge\./u);
+  assert.match(blocks.Migrate, /to_track when the kept task is in another track[\s\S]{0,300}re-file that track's tasks first/u);
+  assert.match(blocks.Migrate, /into _meta\/ when it concerns the whole desk\. Never create a task just to hold files\. A loose folder that is clearly a task gets a card with task_create instead of a move\. A loose entry whose name fails the name rules gets an outcome name/u);
+  assert.match(blocks.Migrate, /git revert --no-commit <tidy commit>, restore the record with git checkout <tidy commit> -- [^,]+organization\.json, and commit both together/u);
+  assert.doesNotMatch(blocks["Safety check"], /--safety|tidy-status/u, "anything that only has to wait never fails the Safety check");
 });
 
 test("tidy Detect fires on the M4-3 messy fixture, from an installed plugin with no npm dependencies and from this checkout", () => {
@@ -905,7 +917,7 @@ test("tidy Detect never fires for a non-Git desk, without the plugin root, or on
   // Crew: alice's desk is messy, bob's (this session's own) is clean.
   withTidyDesk({ crew: true, build: cleanDesk }, (tidy) => {
     assert.equal(tidy.run(blocks.Detect).status, 1, "a peer's mess is theirs");
-    assert.equal(tidy.run(blocks.Detect, { DESK_PERSON: "" }).status, 1, "with no alias the own desk is unknown");
+    assert.equal(tidy.run(blocks.Detect, { DESK_PERSON: "" }).status, 0, "with no person the tidy still fires, to say so in one line");
     assert.equal(tidy.run(blocks.Detect, { DESK_PERSON: "alice" }).status, 0, "alice's own session tidies alice's desk");
   });
 });
@@ -919,7 +931,8 @@ test("tidy Migrate prints the findings and the steps, changes nothing, and never
     assert.equal(safety.status, 0, safety.stdout + safety.stderr);
     const migrate = tidy.run(blocks.Migrate);
     assert.equal(migrate.status, 0, migrate.stderr);
-    assert.match(migrate.stdout, new RegExp(`^Desk: ${tidy.desk}\\nThis session's own desk: ${tidy.desk}\\nOrganization findings in it: \\d+\\n`, "u"));
+    assert.match(migrate.stdout, new RegExp(`^Desk tools: ${tidy.desk}\\nThis script: ${tidy.desk}\\nThis session's own desk: ${tidy.desk}\\nOrganization findings in it: \\d+\\n`, "u"));
+    assert.match(migrate.stdout, /\nUncommitted changes in it: 0\n/u);
     assert.match(migrate.stdout, /^ {2}track_catch_all: inbox — /mu);
     assert.match(migrate.stdout, /^ {2}name_credential_like: normal-track\/<redacted segment> — /mu);
     assert.ok(!migrate.stdout.includes(CARD_SECRET.slice(0, 6)), "no part of a credential-like name is printed");
@@ -941,17 +954,74 @@ test("tidy Migrate prints the findings and the steps, changes nothing, and never
     assert.equal(migrate.status, 0, migrate.stderr);
     assert.match(migrate.stdout, new RegExp(`^This session's own desk: ${path.join(tidy.desk, "desks", "bob")}$`, "mu"));
     assert.ok(!/desks\/alice/u.test(migrate.stdout), "a peer's desk never appears in the tidy");
-    assert.match(migrate.stdout, /--write-record --person bob\n/u);
+    // Run in the same environment, the printed command records bob's own desk.
+    const recordCommand = /with: (node '[^']+' --write-record)\n/u.exec(migrate.stdout)[1];
+    assert.equal(tidy.run(recordCommand).status, 0);
+    assert.ok(fs.existsSync(path.join(tidy.desk, "desks", "bob", "_meta", "organization.json")));
+    assert.equal(fs.existsSync(path.join(tidy.desk, "desks", "alice", "_meta", "organization.json")), false);
   });
 });
 
-test("tidy Safety check waits while the desk repository is mid-merge", () => {
+test("tidy Migrate works on the desk_status desk, and says one line instead when the script resolves another", () => {
+  const { blocks } = tidyMigration();
+  withTidyDesk({}, (tidy) => {
+    const agree = tidy.run(blocks.Migrate, { DESK_TOOLS_ROOT: tidy.desk });
+    assert.equal(agree.status, 0, agree.stderr);
+    assert.match(agree.stdout, new RegExp(`^Desk tools: ${tidy.desk}\\nThis script: ${tidy.desk}\\n`, "u"));
+    assert.match(agree.stdout, new RegExp(`with: node '[^']+' --write-record --root '${tidy.desk}'\\n`, "u"));
+
+    const other = path.join(tidy.root, "other-desk");
+    fs.mkdirSync(other);
+    const disagree = tidy.run(blocks.Migrate, { DESK_TOOLS_ROOT: other });
+    assert.equal(disagree.status, 0, "a mismatch skips the tidy; it never fails the session");
+    assert.equal(disagree.stdout, `I left my desk untidied: the Desk tools use ${other}, but the tidy found ${tidy.desk}.\n`);
+  });
+  withTidyDesk({ crew: true }, (tidy) => {
+    const person = tidy.run(blocks.Migrate, { DESK_TOOLS_ROOT: tidy.desk, DESK_TOOLS_PERSON: "alice" });
+    assert.equal(person.stdout, `I left my desk untidied: the Desk tools use ${tidy.desk} as alice, but the tidy found ${tidy.desk} as bob.\n`);
+    const nobody = tidy.run(blocks.Migrate, { DESK_PERSON: "" });
+    assert.equal(nobody.stdout, "I couldn't tell which desk in this crew workspace is mine, so I left every desk as it is.\n");
+  });
+});
+
+test("tidy Detect stays silent on a desk whose only findings are stale tasks", () => {
+  const { blocks } = tidyMigration();
+  const staleOnly = (root) => {
+    cleanDesk(root);
+    put(root, "billing-disputes/old-refund-audit/task.md", task("billing-disputes", "old-refund-audit", { created: STALE, updated: STALE }));
+  };
+  withTidyDesk({ build: staleOnly }, (tidy) => {
+    assert.equal(tidy.run(blocks.Detect).status, 1);
+    const report = tidy.run(blocks.Migrate);
+    assert.match(report.stdout, /stale_task: billing-disputes\/old-refund-audit\/task\.md — .*reported only/u);
+  });
+});
+
+test("mid-merge, the Safety check passes and Migrate skips the tidy for this session with one line", () => {
   const { blocks } = tidyMigration();
   withTidyDesk({}, (tidy) => {
     fs.writeFileSync(path.join(tidy.desk, ".git", "MERGE_HEAD"), "");
-    const safety = tidy.run(blocks["Safety check"]);
-    assert.equal(safety.status, 1);
-    assert.match(safety.stdout, /The tidy waits: the desk repository is in the middle of a merge/u);
+    assert.equal(tidy.run(blocks["Safety check"]).status, 0, "waiting never stops the session");
+    const migrate = tidy.run(blocks.Migrate);
+    assert.equal(migrate.status, 0);
+    assert.equal(migrate.stdout, "I left my desk untidied for now because the desk repository is in the middle of a merge; I'll tidy it in a later session.\n");
+  });
+});
+
+test("tidy Migrate lists another session's uncommitted work and never prints a password from a prompt-like name", () => {
+  const { blocks } = tidyMigration();
+  const withSecrets = (root) => {
+    messyDesk(root);
+    put(root, "normal-track/please-use-pw-hunter2/task.md", task("normal-track", "please-use-pw-hunter2"));
+    put(root, "login-pw-hunter2-notes.txt", "loose\n");
+  };
+  withTidyDesk({ build: withSecrets }, (tidy) => {
+    put(tidy.desk, "normal-track/ship-the-refactor/doing.md", "another session is writing this\n");
+    const migrate = tidy.run(blocks.Migrate);
+    assert.equal(migrate.status, 0, migrate.stderr);
+    assert.match(migrate.stdout, /^Uncommitted changes in it: 1\n {2}normal-track\/ship-the-refactor\/doing\.md$/mu);
+    assert.ok(!migrate.stdout.includes("hunter"), "no part of a password value is printed");
+    assert.match(migrate.stdout, /^ {2}name_credential_like: normal-track\/<redacted segment> — /mu);
   });
 });
 

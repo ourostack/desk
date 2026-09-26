@@ -303,6 +303,10 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   const toTrack = values.to_track ?? track
   const toSlug = values.to_slug ?? slug
 
+  if (intoTask === slug && toTrack === track) {
+    throw new Error("task_move: a task cannot be merged into itself")
+  }
+
   if (values.to_slug !== undefined) {
     const nameResult = validateName(toSlug)
     if (!nameResult.ok) {
