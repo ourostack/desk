@@ -177,10 +177,7 @@ adopted_at: 2026-04-16T14:30:00Z
 
 ### Adopted iteration placement
 
-Per the iteration-centric layout (`directory-structure` skill),
-adopted planning/doing docs land inside a per-iteration directory
-under `<repo>/`, not loose at `<repo>/` root. The first iteration of
-an adopted task is typically:
+Per the iteration-centric layout (`directory-structure` skill), adopted planning/doing docs land inside a per-iteration directory under `<repo>/`, not loose at `<repo>/` root. The first iteration of an adopted task is typically:
 
 ```
 <track>/<task-slug>/<repo-name>/<YYYY-MM-DD>-initial-impl/
@@ -189,23 +186,11 @@ an adopted task is typically:
   artifacts/           # whatever outputs the source bundle had
 ```
 
-Where `<YYYY-MM-DD>` is the adoption date (or the date the source
-bundle was created, if preserving the original timeline matters to
-the operator). Do NOT wrap the iteration directories under an
-`iterations/` subdir — every direct child of `<repo-name>/` is either
-`_archive/` or a date-prefixed iteration directory.
+Where `<YYYY-MM-DD>` is the adoption date (or the date the source bundle was created, if preserving the original timeline matters to the operator). Do NOT wrap the iteration directories under an `iterations/` subdir — every direct child of `<repo-name>/` is either `_archive/` or a date-prefixed iteration directory.
 
-If the source bundle already used the iteration-centric layout, copy
-the iteration directory whole into `<repo>/` — do not flatten or
-re-layer. Add `adopted_at:` and `adopted_from:` to the doing-doc
-frontmatter to disambiguate "when was this written" (iteration-
-directory date) from "when did this enter the desk workspace" (frontmatter).
+If the source bundle already used the iteration-centric layout, copy the iteration directory whole into `<repo>/` — do not flatten or re-layer. Add `adopted_at:` and `adopted_from:` to the doing-doc frontmatter to disambiguate "when was this written" (iteration-directory date) from "when did this enter the desk workspace" (frontmatter).
 
-If the source bundle used a legacy flat layout (`YYYY-MM-DD-HHMM-doing-*.md`
-loose at `<repo>/` root), repackage into an iteration directory during
-step 1: create `<repo>/<YYYY-MM-DD>-adopted/`, move the planning and
-doing docs into it, rename to `planning.md` / `doing.md`, and move
-any sibling artifacts directory into `<YYYY-MM-DD>-adopted/artifacts/`.
+If the source bundle used a legacy flat layout (`YYYY-MM-DD-HHMM-doing-*.md` loose at `<repo>/` root), repackage into an iteration directory during step 1: create `<repo>/<YYYY-MM-DD>-adopted/`, move the planning and doing docs into it, rename to `planning.md` / `doing.md`, and move any sibling artifacts directory into `<YYYY-MM-DD>-adopted/artifacts/`.
 
 ## What's preserved, what's derived
 

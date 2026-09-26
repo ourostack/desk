@@ -46,9 +46,7 @@ Operator hands worker a PR URL or ID. Phase 1 produces the review directory and 
 
 1. **Fetch identifying metadata.** Title, author, repo, source branch, current vote state, size label, linked work item. Use the available PR-fetch tool — engine-specific. The skill references the action category, not a specific tool identifier; the underlying call shape is a thin wrapper over the platform's PR-read REST API.
 
-2. **Propose a slug, default-accept framing.** Content-first — the theme of the PR, not the PR number, not the author's name. Phrase the proposal as "going with `<slug>` unless you object" rather than "what should the slug be?", then proceed to scaffold immediately. The operator can override before the first `git commit + push` of the scaffolded directory; renames before that point are cheap. After the first push, slug permanence binds per the same rule `../interaction-style/SKILL.md` applies to track and task slugs.
-
-   Why this isn't a forced round-trip: a content-first slug for a peer review is mostly mechanical (title → slugify, light judgment on which words to keep). Worker proposing and proceeding cuts a per-review wait without giving up the override. Slug permanence is a real cost — but it lives at the first-commit boundary, not at the proposal moment.
+2. **Name the review from the PR's theme.** Pick the directory name yourself, with no proposal and no wait: an outcome name of 2 to 6 lowercase kebab-case words built from what the PR changes, never the PR number, the author's name or the PR title copied word for word. Before creating it, check `_reviews/` for a live review of the same PR: a re-review or a second pass on the same PR continues that review (`task-lifecycle` "One job is one task"). A weak name is cheap to fix later by moving the directory with Git.
 
 3. **Decide connection lenses.** Walk the operator through which lenses fit and at what depth. Hard rule: at least one non-`direct-work` lens must be real. An honest "career" or "cross-team" framing is more trustworthy than an overclaimed `direct-work` lens that the review can't actually carry.
 
