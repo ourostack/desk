@@ -24,12 +24,12 @@ DESK=~/<your-workspace> node ./index.js
 
 **Runtime CRUD:**
 - `task_create`, `task_update`, `task_archive`
-- `track_create`, `track_update`
+- `track_create`, `track_update` (on a Git desk, each stages the `track.md` it writes; `track_update` skips that when the file already held unstaged changes)
 - `friction_add`, `lesson_add`
 
 **Cheap moves:**
-- `task_move` — move a task to another track and/or rename it (live or archived); refuses a taken target or an invalid new name, and best-effort keeps both `track.md` "## Tasks" tables in sync
-- `track_rename` — rename a track, rewriting `track:` on every task card under it, live and archived
+- `task_move` — move a task to another track and/or rename it (live or archived); refuses a taken target or an invalid new name, and best-effort keeps both `track.md` "## Tasks" tables in sync; `unarchive: true` reopens an archived task into a live folder and restores its row, and `into_task: "<kept task>"` merges a duplicate task into the task that keeps the job as an iteration folder; on a Git desk it refuses a task, or a `track.md` it would edit, with unstaged changes or untracked files (another session may be working there), unless `allow_dirty: true`, and it stages every file it writes, so staged changes read as the current tidy's own work; merging with `into_task: "<kept task>"` never hides a live task inside a done one
+- `track_rename` — rename a track, rewriting `track:` on every task card under it, live and archived; on a Git desk it refuses a track with unstaged changes or untracked files unless `allow_dirty: true`, and stages the task cards it rewrites
 
 **Status:**
 - `desk_status` — session-start-safe MCP health, root, activation, index, snapshot, and vector-pack status

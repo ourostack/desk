@@ -4,6 +4,7 @@
 // `plugins/desk/skills/track-card-format/SKILL.md` (schema_version 1).
 
 import * as path from "node:path"
+import { spawnSync } from "node:child_process"
 import {
   nowIso,
   readMarkdown,
@@ -12,6 +13,7 @@ import {
 } from "../util/fm.js"
 import { resolveWriteTarget } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
+import { isGitRepository, hasUnstagedWork, stagePaths } from "../util/git-stage.js"
 import {
   validateTrackName,
   validateScope,
@@ -30,6 +32,22 @@ function relPath(deskRoot, absPath) {
   return path.relative(deskRoot, absPath)
 }
 
+// On a Git desk, a track tool stages the track.md it writes (M4-5 fix round
+// 4), so the move tools treat that write as the current tidy's work in
+// progress rather than another session's. It stages only a file that held
+// no unstaged changes before the write, so it never adopts another
+// session's edit. Staging is best-effort: if `git add` fails the write still
+// stands, and a later move refuses that track.md, which is the safe side.
+// `spawnGit` is a test-only seam over `spawnSync`.
+function stagingAllowed(filePath, spawnGit) {
+  const dir = path.dirname(filePath)
+  return isGitRepository(dir, spawnGit) && !hasUnstagedWork(dir, [path.basename(filePath)], spawnGit)
+}
+
+function stageTrackCard(filePath, spawnGit) {
+  stagePaths(path.dirname(filePath), [path.basename(filePath)], spawnGit)
+}
+
 /**
  * track_create
  *
@@ -44,7 +62,8 @@ function relPath(deskRoot, absPath) {
  *     ...optional fields per track-card schema
  *   }
  *
- * Side effects: creates `<root>/<slug>/track.md` (and parent dir).
+ * Side effects: creates `<root>/<slug>/track.md` (and parent dir), and
+ * stages it on a Git desk.
  *
  * Errors:
  *   - refuses if `<root>/<slug>/track.md` already exists.
@@ -55,7 +74,7 @@ function relPath(deskRoot, absPath) {
  *
  * Returns: { status: "created", path }
  */
-export async function track_create({ deskRoot, input, person = null, readiness }) {
+export async function track_create({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
   const values = input ?? {}
   const { slug, title } = values
   if (!Object.hasOwn(values, "slug")) {
@@ -108,6 +127,7 @@ export async function track_create({ deskRoot, input, person = null, readiness }
   }
 
   await writeMarkdown(filePath, data, values.body ?? "")
+  if (isGitRepository(path.dirname(filePath), spawnGit)) stageTrackCard(filePath, spawnGit)
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   return { status: "created", path: relPath(deskRoot, filePath) }
 }
@@ -125,7 +145,8 @@ export async function track_create({ deskRoot, input, person = null, readiness }
  *     body_append?: string,
  *   }
  *
- * Side effects: rewrites `<root>/<slug>/track.md` in place.
+ * Side effects: rewrites `<root>/<slug>/track.md` in place, and on a Git
+ * desk stages it when it held no unstaged changes before the write.
  *
  * Preserves: `schema_version`, `created`. Always refreshes `updated`.
  *
@@ -136,7 +157,7 @@ export async function track_create({ deskRoot, input, person = null, readiness }
  *
  * Returns: { status: "updated", path }
  */
-export async function track_update({ deskRoot, input, person = null, readiness }) {
+export async function track_update({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
   const values = input ?? {}
   const { slug, frontmatter, body_append } = values
   if (!Object.hasOwn(values, "slug")) {
@@ -180,7 +201,9 @@ export async function track_update({ deskRoot, input, person = null, readiness }
     newBody = `${newBody}${sep}${body_append}`
   }
 
+  const stage = stagingAllowed(filePath, spawnGit)
   await writeMarkdown(filePath, merged, newBody)
+  if (stage) stageTrackCard(filePath, spawnGit)
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   return { status: "updated", path: relPath(deskRoot, filePath) }
 }

@@ -10,7 +10,8 @@ import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import matter from "gray-matter"
-import { organizationFindings } from "../../src/desk/organization.js"
+import { loadFrontmatterParser, organizationFindings } from "../../src/desk/organization.js"
+import { parseFrontmatterLite } from "../../src/desk/frontmatter-lite.js"
 
 const tempRoots = new Set()
 after(() => Promise.all([...tempRoots].map((root) => fs.rm(root, { recursive: true, force: true }))))
@@ -1041,7 +1042,7 @@ test("duplicate_job matches an Azure DevOps pullrequest URL", async () => {
 // both branches of `looksLikeSecretRun`: a pure-hex run and a mixed
 // alphanumeric run.
 
-test("a single hyphen-less secret-shaped segment is redacted even though it fails shape, not the credential check", async () => {
+test("a single hyphen-less secret-shaped segment is reported and redacted as credential-like even though it also fails shape", async () => {
   const root = await mkTempRoot()
 
   // Task-level: a pure-hex, hyphen-less slug — name_shape, but still redacted.
@@ -1070,10 +1071,12 @@ test("a single hyphen-less secret-shaped segment is redacted even though it fail
 
   const findings = organizationFindings(root, { now: NOW })
 
-  const shapeFindings = findByCode(findings, "name_shape")
-  assert.ok(shapeFindings.some((f) => f.path === "normal-track/<redacted segment>"))
-  assert.ok(shapeFindings.some((f) => f.path === "<redacted segment>"))
-  assert.equal(findByCode(findings, "name_credential_like").length, 0)
+  // M4-5 fix round: the credential check runs whatever else fails, so these
+  // report as credential-like, not as badly shaped.
+  const credentialFindings = findByCode(findings, "name_credential_like")
+  assert.ok(credentialFindings.some((f) => f.path === "normal-track/<redacted segment>"))
+  assert.ok(credentialFindings.some((f) => f.path === "<redacted segment>"))
+  assert.equal(findByCode(findings, "name_shape").length, 0)
 
   assert.ok(
     findByCode(findings, "stale_task").some((f) => f.path === "normal-track/<redacted segment>/task.md"),
@@ -1104,4 +1107,176 @@ test("organizationFindings tolerates a card whose bytes open and read fine but w
   // (same "skip what can't be read" contract as a missing/unreadable file).
   const findings = organizationFindings(root, { now: NOW })
   assert.ok(!findByCode(findings, "stale_task").some((f) => f.path.includes("broken-frontmatter")))
+})
+
+// ── M4-5 carried fixes ──────────────────────────────────────────────────
+
+test("loose_file never flags the shared artifacts/ folder at the desk root", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, "artifacts/publication-policy.json", "{}\n")
+  await writeFile(root, "artifacts/vector-packs/spec/pack.bin", "")
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findings, [])
+})
+
+test("artifacts/ is allowed only at the desk root; inside a track it is still loose", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes; not payroll",
+  })
+  await writeCard(root, "billing-disputes/refund-flow-cleanup/task.md", {
+    schema_version: 1,
+    title: "refund-flow-cleanup",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "billing-disputes",
+  })
+  await writeFile(root, "billing-disputes/artifacts/report.md", "loose\n")
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findings.map((f) => `${f.code} ${f.path}`), ["loose_file billing-disputes/artifacts"])
+})
+
+test("dot-folders such as .git/ and .state/ are never loose at the desk root, but are at a track root", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, ".git/HEAD", "ref: refs/heads/main\n")
+  await writeFile(root, ".state/index.sqlite", "")
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes; not payroll",
+  })
+  await writeCard(root, "billing-disputes/refund-flow-cleanup/task.md", {
+    schema_version: 1,
+    title: "refund-flow-cleanup",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "billing-disputes",
+  })
+  await writeFile(root, "billing-disputes/.cache/entry", "")
+  assert.deepEqual(
+    organizationFindings(root, { now: NOW }).map((f) => `${f.code} ${f.path}`),
+    ["loose_file billing-disputes/.cache"],
+  )
+})
+
+test("track_empty on a credential-like track name redacts the segment and leaks no part of it", async () => {
+  const root = await mkTempRoot()
+  const trackName = `rotate-${TRACK_SECRET}`
+  await writeCard(root, `${trackName}/track.md`, {
+    schema_version: 1,
+    title: trackName,
+    status: "active",
+    scope: "an empty track with a credential-like name; not anything else",
+  })
+  const findings = organizationFindings(root, { now: NOW })
+  const [empty] = findByCode(findings, "track_empty")
+  assert.equal(empty.path, "<redacted segment>")
+  assert.deepEqual(findByCode(findings, "name_credential_like").map((f) => f.path), ["<redacted segment>"])
+  assertNoSubstringLeak(TRACK_SECRET, JSON.stringify(findings))
+})
+
+test("an empty task card is read as a card with no fields", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes; not payroll",
+  })
+  await writeFile(root, "billing-disputes/refund-flow-cleanup/task.md", "")
+  assert.deepEqual(organizationFindings(root, { now: NOW }), [])
+})
+
+test("loadFrontmatterParser uses gray-matter when it loads and the dependency-free reader when it doesn't", () => {
+  assert.equal(loadFrontmatterParser(), matter)
+  assert.equal(loadFrontmatterParser(() => matter), matter)
+  const fallback = loadFrontmatterParser(() => {
+    throw new Error("Cannot find module 'gray-matter'")
+  })
+  assert.equal(fallback, parseFrontmatterLite)
+})
+
+// The migrations suite runs the checks with no npm dependency installed end
+// to end; here the reader is compared field by field with gray-matter.
+test("the dependency-free reader reads the fields the checks use exactly as gray-matter does", async () => {
+  const root = await buildOneOfEachFixture()
+  for (const card of [
+    "normal-track/aging-cleanup-effort/task.md",
+    "normal-track/ship-the-refactor/task.md",
+    "no-scope-track/track.md",
+    "inbox/track.md",
+  ]) {
+    const text = await fs.readFile(path.join(root, card), "utf8")
+    const expected = matter(text).data
+    const actual = parseFrontmatterLite(text).data
+    for (const field of ["status", "updated", "scope", "title"]) {
+      assert.deepEqual(actual[field], expected[field], `${card} ${field}`)
+    }
+  }
+})
+
+test("a password value in a prompt-like, over-long, extension-bearing or track name is redacted in every finding", async () => {
+  const root = await mkTempRoot()
+  const VALUE = "hunter2"
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes; not payroll",
+  })
+  for (const slug of ["please-use-pw-hunter2", "hi-please-set-pw-hunter2-on-box", `deploy-pw-hunter2-${"a".repeat(40)}`]) {
+    await writeCard(root, `billing-disputes/${slug}/task.md`, {
+      schema_version: 1,
+      title: slug,
+      status: "processing",
+      created: STALE,
+      updated: STALE,
+      track: "billing-disputes",
+    })
+  }
+  await writeFile(root, "login-pw-hunter2-notes.txt", "loose\n")
+  await writeCard(root, "hi-set-pw-hunter2/track.md", { schema_version: 1, title: "t", status: "active" })
+
+  const findings = organizationFindings(root, { now: NOW })
+  assert.equal(findByCode(findings, "name_credential_like").length, 4, "three tasks and one track")
+  assert.equal(findByCode(findings, "name_prompt_like").length, 0)
+  assert.ok(findByCode(findings, "loose_file").some((f) => f.path === "<redacted segment>"))
+  assert.ok(findByCode(findings, "stale_task").every((f) => f.path.startsWith("billing-disputes/<redacted segment>/")))
+  assert.ok(findByCode(findings, "track_empty").some((f) => f.path === "<redacted segment>"))
+  assertNoSubstringLeak(VALUE, JSON.stringify(findings))
+  assertNoSubstringLeak("pw-hunter", JSON.stringify(findings))
+})
+
+test("a password after a dot in a loose file name is redacted and flagged for renaming", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes; not payroll",
+  })
+  await writeCard(root, "billing-disputes/refund-flow-cleanup/task.md", {
+    schema_version: 1,
+    title: "refund-flow-cleanup",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "billing-disputes",
+  })
+  await writeFile(root, "set-pw.hunter2", "loose\n")
+  await writeFile(root, "billing-disputes/deploy-pw.hunter2", "loose\n")
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findings.map((f) => `${f.code} ${f.path}`).sort(), [
+    "loose_file <redacted segment>",
+    "loose_file billing-disputes/<redacted segment>",
+  ])
+  for (const finding of findings) assert.match(finding.hint, /its name looks like it contains a secret's value; give it an outcome name when it moves$/)
+  assertNoSubstringLeak("hunter2", JSON.stringify(findings))
+  assertNoSubstringLeak("pw.hunter", JSON.stringify(findings))
 })

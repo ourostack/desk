@@ -694,6 +694,39 @@ contract("start-task reopens a finished task for another round of the same job",
   assert.match(skill, /`<task>\/_iterations\/<YYYY-MM-DD>-<slug>\/`/u);
   assert.match(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /^\| `done` → `processing` \| NOTIFY \|[^\n]*reopen/imu);
 });
+contract("start-task reopens an archived task with task_move unarchive, not a hand-run git mv", () => {
+  const skill = text("plugins/desk/skills/start-task/SKILL.md");
+  const reopen = skill.split("- **`done` or archived task:**", 2)[1].split("\n", 1)[0];
+  assert.match(reopen, /`task_move` and `unarchive: true`[\s\S]*restores its row in the track's `## Tasks` table/u);
+  assert.doesNotMatch(reopen, /git mv <track>\/_archive/u);
+});
+contract("task_move and track_rename document refusing another session's unstaged work unless allow_dirty", () => {
+  const names = text("plugins/desk/mcp/src/tool-names.js");
+  const description = (tool) => new RegExp(`\\n  ${tool}:\\n    "([^\\n]+)",`, "u").exec(names)[1];
+  for (const tool of ["task_move", "track_rename"]) {
+    assert.match(description(tool), /refuses a (task folder|track) with unstaged changes or untracked, non-ignored files, because another session may be working there, unless `allow_dirty: true`; the refusal never quotes names/u, tool);
+  }
+  assert.match(names, /The same rule covers each `track\.md` whose tasks table the move would edit\. Staged changes don't count: it stages every file it writes, as do `track_rename`, `track_create` and `track_update`, so a staged change is the current tidy's own work in progress\./u);
+  assert.match(description("track_rename"), /It stages the task cards it rewrites\./u);
+  assert.match(description("track_create"), /On a Git desk it stages the new track\.md; never commits\./u);
+  assert.match(description("track_update"), /On a Git desk it stages the track\.md when that file held no unstaged changes before the write, so it never adopts another session's edit; never commits\./u);
+  assert.match(names, /It refuses to merge a live task into a done or cancelled one: keep the live task instead\./u);
+  const readme = text("plugins/desk/mcp/README.md");
+  assert.match(readme, /- `task_move` —[^\n]+refuses a task, or a `track\.md` it would edit, with unstaged changes or untracked files[^\n]+`allow_dirty: true`, and it stages every file it writes/u);
+  assert.match(readme, /- `track_rename` —[^\n]+refuses a track with unstaged changes or untracked files unless `allow_dirty: true`, and stages the task cards it rewrites/u);
+  assert.match(readme, /- `track_create`, `track_update` \(on a Git desk, each stages the `track\.md` it writes/u);
+  assert.match(text("plugins/desk/skills/interaction-style/SKILL.md"), /refuse a folder with uncommitted changes that are not staged, or with untracked files,[^\n]+never overrides that with `allow_dirty`\. The Desk tools stage everything they write, so a staged change is the tidy's own work in progress\./u);
+  assert.match(text("plugins/desk/migrations/02-tidy-desk.md"), /never pass allow_dirty/u);
+});
+contract("directory-structure documents the one-time tidy's _meta/organization.json", () => {
+  const skill = text("plugins/desk/skills/directory-structure/SKILL.md");
+  assert.match(skill, /^ {4}organization\.json {2,}# /mu);
+  assert.match(skill, /`02-tidy-desk`[\s\S]{0,400}`desks\/<alias>\/_meta\/organization\.json`/u);
+  const schema = JSON.parse(/```json\n(\{[^\n]*"tidy_version"[^\n]*\})\n```/u.exec(skill)[1]);
+  assert.deepEqual(Object.keys(schema), ["schema_version", "tidy_version", "tidied_at"]);
+  assert.equal(schema.schema_version, 1);
+  assert.equal(schema.tidy_version, 1);
+});
 contract("interaction-style and operator-voice-comments point at the one estimate rule", () => {
   for (const file of ["plugins/desk/skills/interaction-style/SKILL.md", "plugins/desk/skills/operator-voice-comments/SKILL.md"]) {
     assert.match(text(file), /`evidence-discipline` "Fixtures or refusal"/u, file);

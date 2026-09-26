@@ -21,6 +21,7 @@ $DESK/
     friction.md                         # append-only friction backlog for this operator
     operator-rules.md                   # optional: longer operator rules that AGENTS.md points to
     preview-feedback.md                 # explicitly offered, attributed preview feedback (see preview-feedback); distinct from an iteration's feedback.md
+    organization.json                   # written by the one-time tidy (see "What may sit where")
   <track-name>/                         # one directory per track (maps to an external work-tracking Feature (GitHub Project / Jira Epic / enterprise work-item tracker / etc.))
     track.md                            # track card — dashboard (see track-card-format)
     _friction/                          # per-track friction entries; archived siblings in _friction/_archive/
@@ -91,10 +92,18 @@ The agent chooses every track and task name itself, from the outcome, without as
 
 Only these entries belong at each root; everything else is loose.
 
-- **At the desk root:** track folders (each with a `track.md`), underscore folders such as `_meta/` and `_archive/`, `desks/` in a crew workspace, the shared `artifacts/` folder this layout defines, `AGENTS.md`, `README.md`, `CLAUDE.md`, and dotfiles such as `.gitignore`.
+- **At the desk root:** track folders (each with a `track.md`), underscore folders such as `_meta/` and `_archive/`, `desks/` in a crew workspace, the shared `artifacts/` folder this layout defines, `AGENTS.md`, `README.md`, `CLAUDE.md`, and dotfiles and dot-folders such as `.gitignore` and `.git/`.
 - **At a track root:** `track.md`, task folders (each with a `task.md`) and underscore folders such as `_planning/`, `_friction/` and `_archive/`.
 
-Reports, status notes and handoffs belong in a task or iteration folder, and cross-repo plans in `<track>/_planning/`. `desk_doctor` reports loose entries as `loose_file` in its Organization section, together with missing scope lines, person or catch-all track names, weak names, empty tracks, several tasks for one job and stale tasks. Fix what it reports by moving files into the task, iteration or underscore folder they belong to, and announce the tidy in one line under the safety rules in `interaction-style` section 2.
+Reports, status notes and handoffs belong in a task or iteration folder, cross-repo plans in `<track>/_planning/`, and material about the whole desk in `_meta/`. `desk_doctor` reports loose entries as `loose_file` in its Organization section, together with missing scope lines, person or catch-all track names, weak names, empty tracks, several tasks for one job and stale tasks. Fix what it reports by moving files into the task, iteration or underscore folder they belong to, and announce the tidy in one line under the safety rules in `interaction-style` section 2.
+
+The one-time tidy (the `02-tidy-desk` Desk migration) brings an existing desk into this shape once, in the agent's first session after the upgrade, and records that it ran in `_meta/organization.json` at the root of the agent's own desk (`desks/<alias>/_meta/organization.json` in a crew desk):
+
+```json
+{ "schema_version": 1, "tidy_version": 1, "tidied_at": "2026-09-25T12:00:00.000Z" }
+```
+
+`schema_version` is the file's format, `tidy_version` is the version of the tidy that ran, and `tidied_at` is when it was recorded (ISO 8601). The migration runs only when `desk_doctor` reports findings other than stale tasks and the file does not record `tidy_version: 1` or later. After that, keep the desk tidy as you go.
 
 ## planning doc scope determines location
 

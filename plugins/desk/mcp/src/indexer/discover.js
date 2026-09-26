@@ -30,12 +30,19 @@ import {
   loadExclusionRules,
 } from "./exclusions.js"
 
-/** Filenames we always pick up regardless of where they sit in the tree. */
+/**
+ * Filenames we always pick up regardless of where they sit in the tree.
+ * `merged-task.md` is the card of a duplicate task merged into the task that
+ * keeps the job (`task_move` with `into_task`, M4-5). It is indexed with the
+ * kind `merged-task`, never `task`, so its content stays searchable without
+ * counting as a live task.
+ */
 const TASK_DOC_BASENAMES = new Set([
   "task.md",
   "planning.md",
   "doing.md",
   "feedback.md",
+  "merged-task.md",
 ])
 
 /** Directory names that short-circuit recursion (we never descend in). */
