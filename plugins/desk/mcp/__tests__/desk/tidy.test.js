@@ -326,7 +326,10 @@ test("an unknown argument is refused with exit code 2", () => {
 test("scripts/tidy-status.js runs the command line", () => {
   const root = soloDesk()
   const home = tempDir()
-  const env = { PATH: process.env.PATH, HOME: home, DESK: root }
+  // Keep the parent's environment (the coverage runner instruments child
+  // processes through it), minus every variable that could bind a real desk.
+  const env = { ...process.env, HOME: home, DESK: root }
+  for (const key of ["DESK_ACTIVATION_CONFIG", "CODEX_HOME", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "DESK_PERSON"]) delete env[key]
   const report = execFileSync(process.execPath, [SCRIPT, "--report"], { encoding: "utf8", env, cwd: home })
   assert.match(report, /Organization findings in it: \d+/)
   const detect = spawnSync(process.execPath, [SCRIPT, "--detect", "--root", soloDesk({ messy: false })], { env, cwd: home })

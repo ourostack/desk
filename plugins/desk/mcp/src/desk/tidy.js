@@ -95,7 +95,7 @@ function notApplicable(fields, reason) {
 }
 
 /**
- * tidyStatus({ root?, person?, env?, cwd?, homeDir?, now?, spawnGit? }) ->
+ * tidyStatus({ root?, person?, env, cwd?, homeDir?, now?, spawnGit? }) ->
  *   { root, subtree, applicable, reason, needed, tidy_version, findings }
  *
  * Read-only. `root` defaults to the desk the Desk MCP would bind; `person`
@@ -104,7 +104,7 @@ function notApplicable(fields, reason) {
 export function tidyStatus({
   root,
   person,
-  env = process.env,
+  env,
   cwd = process.cwd(),
   homeDir = os.homedir(),
   now,
