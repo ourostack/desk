@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import {
-  beginBackgroundConvergence, callTool, connectOrStartController, ensureIndex,
+  beginBackgroundConvergence, callTool, connectOrStartController, ensureIndex, startControllerRuntime,
 } from "../../src/server.js"
 import { startInProcess, statusContextOf } from "./_in_process_desk.js"
 import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
@@ -59,7 +59,7 @@ async function session(t, { semantic = "background", handler } = {}) {
                   handlers: { beginConvergence: handler },
                 })
               : await connectOrStartController({
-                  ...options, stateHome: path.join(root, "controller-state"), ephemeral: true,
+                  ...options, stateHome: path.join(root, "controller-state"), ephemeral: true, controllerLauncher: startControllerRuntime,
                 })
             return state.controller
           },

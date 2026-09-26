@@ -35,6 +35,10 @@ test("owner.json is missing, corrupt (unreadable, malformed, incomplete or anoth
   assert.equal(readOwnerRecord(stateDir, identity).status, "valid")
   assert.equal(readOwnerRecord(stateDir).status, "valid", "without an identity to match, any identity will do")
   assert.equal(readOwnerRecord(stateDir, other).status, "corrupt", "a record for another controller")
+  for (const missingIdentity of [undefined, null, 42]) {
+    writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify(record(missingIdentity, owner)))
+    assert.equal(readOwnerRecord(stateDir, identity).status, "corrupt", "a missing or malformed identity is a corrupt record, never an exception")
+  }
   const unreadable = path.join(root, "unreadable")
   mkdirSync(path.join(unreadable, "owner.json"), { recursive: true })
   assert.deepEqual(readOwnerRecord(unreadable), { status: "corrupt", record: null }, "a folder where owner.json should be")

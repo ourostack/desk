@@ -120,6 +120,21 @@ test("a socket that refuses, or is gone, while its owner runs is unreachable, no
 test("a report reads what the owner record says, and nothing when it says nothing", () => {
   assert.deepEqual(hungControllerReport({ state: "silent", endpoint: "/e", record: { owner: { pid: 12, started_at: "2026-09-26T00:00:00.000Z" } } }), { state: "silent", endpoint: "/e", owner_pid: 12, owner_started_at: "2026-09-26T00:00:00.000Z", owner_verified: false })
   assert.deepEqual(hungControllerReport({ state: "silent", endpoint: "/e", record: null }), { state: "silent", endpoint: "/e", owner_pid: null, owner_started_at: null, owner_verified: false })
-  assert.equal(hungControllerReport({ state: "silent", endpoint: "/e", record: { owner: { pid: 12, process_start: "darwin:2026-09-26T00:00:00.000Z" } } }).owner_verified, true, "a record with the owner's start time names the owner itself")
+  assert.equal(hungControllerReport({ state: "silent", endpoint: "/e", record: { owner: { pid: 12, process_start: "darwin:2026-09-26T00:00:00.000Z" } } }).owner_verified, false, "a stored start time is not a live identity match")
   assert.deepEqual(hungControllerReport({ state: "silent", endpoint: "/e", record: { owner: { pid: "12" } } }).owner_pid, null)
+})
+
+test("owner_verified requires a successful live start match, including when identity lookup fails", { skip: posixOnly }, async (t) => {
+  const context = await fixture(t, "desk-owner-verified-")
+  const child = await silentChild(context.endpoint)
+  t.after(() => child.kill("SIGKILL"))
+  const socket = lstatSync(context.endpoint)
+  writeFileSync(path.join(context.stateDir, "owner.json"), JSON.stringify({
+    schema_version: 1, identity: context.identity, endpoint: context.endpoint, socket: { dev: socket.dev, ino: socket.ino },
+    owner: { pid: child.pid, token: "t", started_at: STARTED_AT, process_start: "recorded-start" },
+  }))
+  for (const [current, expected] of [[null, false], ["different-start", false], ["recorded-start", true]]) {
+    const probe = await probeController({ root: context.root, policy, stateHome: context.stateHome, timeoutMs: 30, liveness: { processStart: async () => current } })
+    assert.equal(hungControllerReport(probe).owner_verified, expected, `live lookup returned ${current}`)
+  }
 })

@@ -35,7 +35,8 @@ export function readOwnerRecord(stateDir, identity = null) {
   const owner = record?.owner
   const valid = Number.isInteger(owner?.pid) && owner.pid > 0 && typeof owner.token === "string" &&
     typeof owner.started_at === "string" && Number.isFinite(Date.parse(owner.started_at)) &&
-    (identity === null || stableStringify(lexicalControllerIdentity(record.identity)) === stableStringify(lexicalControllerIdentity(identity)))
+    (identity === null || (record.identity !== null && typeof record.identity === "object" &&
+      stableStringify(lexicalControllerIdentity(record.identity)) === stableStringify(lexicalControllerIdentity(identity))))
   return { status: valid ? "valid" : "corrupt", record }
 }
 
@@ -43,19 +44,26 @@ export function readOwnerRecord(stateDir, identity = null) {
  * Whether a valid record's owner runs: "self" (this process), "dead" (no such process, the owner started before this boot, or the PID now names a process that started at another time) or "alive".
  * A PID that exists but belongs to another user (EPERM) is alive unless its start time differs: Desk cannot tell it apart from its owner otherwise, so it never takes it over. A start time that cannot be read keeps the owner alive too.
  */
-export async function ownerLiveness(record, { kill = process.kill, uptimeSeconds = os.uptime, now = Date.now, selfPid = process.pid, processStart = readProcessStart } = {}) {
+async function inspectOwner(record, { kill = process.kill, uptimeSeconds = os.uptime, now = Date.now, selfPid = process.pid, processStart = readProcessStart } = {}) {
   const pid = record.owner.pid
-  if (pid === selfPid) return "self"
-  if (Date.parse(record.owner.started_at) < now() - uptimeSeconds() * 1000 - BOOT_SLACK_MS) return "dead"
-  try {
-    kill(pid, 0)
-  } catch (error) {
-    if (error?.code === "ESRCH") return "dead"
+  const state = pid === selfPid ? "self" : "alive"
+  if (state !== "self") {
+    if (Date.parse(record.owner.started_at) < now() - uptimeSeconds() * 1000 - BOOT_SLACK_MS) return { state: "dead", verified: false }
+    try {
+      kill(pid, 0)
+    } catch (error) {
+      if (error?.code === "ESRCH") return { state: "dead", verified: false }
+    }
   }
   const recorded = record.owner.process_start
-  if (typeof recorded !== "string") return "alive"
+  if (typeof recorded !== "string" || recorded.length === 0) return { state, verified: false }
   const current = await processStart(pid)
-  return current !== null && current !== recorded ? "dead" : "alive"
+  if (current === null) return { state, verified: false }
+  return current === recorded ? { state, verified: true } : { state: "dead", verified: false }
+}
+
+export async function ownerLiveness(record, options) {
+  return (await inspectOwner(record, options)).state
 }
 
 /**
@@ -64,7 +72,7 @@ export async function ownerLiveness(record, { kill = process.kill, uptimeSeconds
  */
 export async function ownerState({ stateDir, identity = null, ...liveness }) {
   const { status, record } = readOwnerRecord(stateDir, identity)
-  if (status !== "valid") return { state: status, record }
-  const state = await ownerLiveness(record, liveness)
-  return { state: state === "alive" ? "live" : state, record }
+  if (status !== "valid") return { state: status, record, verified: false }
+  const { state, verified } = await inspectOwner(record, liveness)
+  return { state: state === "alive" ? "live" : state, record, verified }
 }

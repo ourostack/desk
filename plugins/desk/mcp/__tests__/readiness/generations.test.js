@@ -181,7 +181,10 @@ test("support smoke: process restart replays durable mutations and discovers ext
     });
     if (result.isError) throw new Error(JSON.stringify(result));
     console.log(controller.id);
-    process.exit(0); // Deliberately omit controller.close(): simulate an unclean owner exit.
+    const owner = (await controller.status()).owner;
+    if (owner.pid === process.pid) throw new Error("controller must be a child");
+    process.kill(owner.pid, "SIGKILL");
+    process.exit(0);
   `], { stdio: ["ignore", "pipe", "pipe"] })
   let stdout = ""
   let stderr = ""

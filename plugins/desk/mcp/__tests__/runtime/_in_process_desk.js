@@ -142,7 +142,7 @@ export function statusContextOf(desk) {
 }
 
 /**
- * A runtime whose controllers are real (server.js connectOrStartController with an ephemeral state home) and whose tools are the real callTool, for admission tests that used to capture startServer.
+ * The real controller runtime on this test's event loop, so injected embedding transports stay local; process isolation is exercised by spawned-session tests.
  * `start(semantic)` runs one admission and resolves with its snapshot; `starts` holds the status context of each ready start.
  */
 export function realRuntimeHarness(root, { stateHome = path.join(root, "controller-state"), argv = ["--root", root] } = {}) {
@@ -163,7 +163,7 @@ export function realRuntimeHarness(root, { stateHome = path.join(root, "controll
         runtimeImporter: async () => ({
           callTool: server.callTool,
           async connectOrStartController(options) {
-            const controller = await server.connectOrStartController({ ...options, stateHome, ephemeral: true })
+            const controller = await server.connectOrStartController({ ...options, stateHome, ephemeral: true, controllerLauncher: server.startControllerRuntime })
             controllers.push(controller)
             return controller
           },

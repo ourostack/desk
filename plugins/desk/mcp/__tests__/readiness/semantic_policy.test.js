@@ -7,7 +7,7 @@ import { startInProcess } from "../runtime/_in_process_desk.js"
 import { normalizeReadinessPolicy } from "../../src/activation/readiness-policy.js"
 import { controllerIdentity } from "../../src/readiness/identity.js"
 import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
-import { connectOrStartController, beginBackgroundConvergence } from "../../src/server.js"
+import { connectOrStartController, beginBackgroundConvergence, startControllerRuntime } from "../../src/server.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 
 function deferred() {
@@ -173,7 +173,7 @@ for (const semantic of ["background", "required"]) {
     })
     const controller = await connectOrStartController({
       deskRoot: root, policy: normalizeReadinessPolicy({ semantic }),
-      stateHome: path.join(root, "state"), ephemeral: true,
+      stateHome: path.join(root, "state"), ephemeral: true, controllerLauncher: startControllerRuntime,
     })
     try {
       await controller.beginConvergence()
@@ -278,7 +278,7 @@ for (const change of ["modify", "add"]) {
       runtimeImporter: async () => ({
         async connectOrStartController(options) {
           const controller = await connectOrStartController({
-            ...options, stateHome: path.join(root, "state"), ephemeral: true,
+            ...options, stateHome: path.join(root, "state"), ephemeral: true, controllerLauncher: startControllerRuntime,
           })
           controllers.push(controller)
           const barrier = controller.barrier

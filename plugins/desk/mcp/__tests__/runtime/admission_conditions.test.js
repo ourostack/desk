@@ -57,6 +57,14 @@ function controllerFixture(fixture, semanticContract = { mode: "unsupported", em
   return { identity, endpoint, stateDir, protocolVersion, lexicalContract }
 }
 
+async function waitForRelease(ownerFile, endpoint) {
+  const deadline = Date.now() + 10000
+  while (existsSync(ownerFile) || existsSync(endpoint)) {
+    assert.ok(Date.now() < deadline, "the session's child must release its rendezvous after the parent ends")
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
 // A socket file that nobody listens on: a child process binds it and is killed before it can clean up.
 async function leaveStaleSocket(endpoint) {
   mkdirSync(path.dirname(endpoint), { recursive: true, mode: 0o700 })
@@ -150,7 +158,7 @@ test("a hung controller is detected after 3 missed checks and never stopped; rea
     assert.equal(write.isError, false, JSON.stringify(write.payload))
     const detected = await session.statusUntil((payload) => payload.state === "degraded:controller_hung", { deadlineMs: 60000 })
     assert.equal(detected.admission.hung_controller.owner_pid, hung.pid)
-    assert.match(detected.fix, /^Nothing to do: search uses plain text .* writes work .* recovers when it answers again or when process \d+, which its owner record names, ends \(the record has no start time/u)
+    assert.match(detected.fix, /^Nothing to do: search uses plain text .* writes work .* recovers when it answers again or when process \d+, which its owner record names, ends \(no live process-start match was established/u)
     assert.doesNotMatch(detected.fix, /owning session|Desk process that owns it/u, "a record without a start time never calls its PID the owner")
     assert.doesNotMatch(detected.fix, /task|A2b/u)
     const report = await session.call("desk_doctor", { repair: "reclaim_controller" })
@@ -185,21 +193,25 @@ test("a stopped owner is never taken over: the other session reports controller_
   const configPath = writeActivation(fixture)
   const { stateDir } = controllerFixture(fixture)
   const owner = await startDesk(fixture, { args: ["--activation-config", configPath] })
-  t.after(() => { owner.child.kill("SIGCONT"); return owner.close() })
+  t.after(() => owner.close())
   assert.equal((await owner.statusUntil(settled)).state, "ready")
   const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
-  assert.equal(record.owner.pid, owner.child.pid)
+  assert.equal(record.owner.parent_pid, owner.child.pid)
+  assert.notEqual(record.owner.pid, owner.child.pid)
   const inode = statSync(record.endpoint).ino
-  owner.child.kill("SIGSTOP")
+  process.kill(record.owner.pid, "SIGSTOP")
+  t.after(() => {
+    try { process.kill(record.owner.pid, "SIGCONT") } catch (error) { if (error.code !== "ESRCH") throw error }
+  })
   const filler = await fillAcceptQueue(record.endpoint)
   t.after(() => filler.sockets.forEach((socket) => socket.destroy()))
   t.diagnostic(`the stopped owner's socket stopped taking connections after ${filler.sockets.length - 1} (${filler.full ?? "never"})`)
   const other = await startDesk(fixture, { args: ["--activation-config", configPath], env: { DESK_READINESS_PROBE_MS: "500" } })
   t.after(() => other.close())
   const hung = await other.statusUntil((payload) => payload.state === "degraded:controller_hung", { deadlineMs: 90000, intervalMs: 500 })
-  assert.equal(hung.admission.hung_controller.owner_pid, owner.child.pid)
+  assert.equal(hung.admission.hung_controller.owner_pid, record.owner.pid)
   assert.equal(hung.admission.controller, "absent")
-  assert.match(hung.fix, /^Nothing to do/u)
+  assert.match(hung.fix, /reclaim_controller/u)
   // Keep the other session retrying: every attempt must leave the stopped owner's controller in place.
   for (let round = 0; round < 10; round += 1) {
     const status = (await other.call("desk_status")).payload
@@ -213,7 +225,7 @@ test("a stopped owner is never taken over: the other session reports controller_
   assert.equal(statSync(record.endpoint).ino, inode, "the stopped owner's socket was never unlinked")
   assert.doesNotMatch(other.stderr(), /readiness controller server error|EADDRINUSE/u)
   assert.deepEqual(readdirSync(fixture.readinessHome), [path.basename(stateDir)], "one controller folder for the root")
-  owner.child.kill("SIGCONT")
+  process.kill(record.owner.pid, "SIGCONT")
   filler.sockets.forEach((socket) => socket.destroy())
   const recovered = await other.statusUntil((payload) => payload.state === "ready", { deadlineMs: 60000, intervalMs: 500 })
   assert.equal(recovered.admission.controller, "connected")
@@ -327,7 +339,8 @@ test("a legacy owner pointing at a vanished XDG socket recovers a refused fallba
       assert.equal(status.admission.hung_controller, null)
       const elected = JSON.parse(readFileSync(ownerFile, "utf8"))
       assert.equal(elected.endpoint, endpoint)
-      assert.equal(elected.owner.pid, session.child.pid)
+      assert.equal(elected.owner.parent_pid, session.child.pid)
+      assert.notEqual(elected.owner.pid, session.child.pid)
       assert.equal(typeof elected.owner.process_start, "string")
       assert.equal(await probeEndpoint(endpoint), "accepting")
       assert.deepEqual((await session.request("tools/list")).result.tools, session.tools.result.tools)
@@ -335,6 +348,7 @@ test("a legacy owner pointing at a vanished XDG socket recovers a refused fallba
       const write = await session.call("task_create", { track: "ops", slug: `legacy-recovery-${cycle}`, title: "Recovered" })
       assert.equal(write.isError, false, JSON.stringify(write.payload))
       await session.close()
+      await waitForRelease(ownerFile, endpoint)
       assert.equal(existsSync(ownerFile), false)
       assert.equal(existsSync(endpoint), false)
     })
@@ -351,13 +365,15 @@ test("a Desk session releases its controller on every normal end: stdin closed, 
     t.after(() => session.close())
     assert.equal((await session.statusUntil(settled)).state, "ready", end)
     const record = JSON.parse(readFileSync(ownerFile, "utf8"))
-    assert.equal(record.owner.pid, session.child.pid)
+    assert.equal(record.owner.parent_pid, session.child.pid)
+    assert.notEqual(record.owner.pid, session.child.pid)
     assert.equal(typeof record.owner.process_start, "string", "the owner record names the process by its start time too")
     assert.ok(statSync(record.endpoint).isSocket())
     const ended = new Promise((resolve) => session.child.once("exit", (code, signal) => resolve({ code, signal })))
     if (end === "stdin") session.child.stdin.end()
     else session.child.kill(end)
     assert.deepEqual(await ended, end === "stdin" ? { code: 0, signal: null } : { code: null, signal: end }, end)
+    await waitForRelease(ownerFile, record.endpoint)
     assert.equal(existsSync(ownerFile), false, `${end}: owner.json was removed`)
     assert.equal(existsSync(record.endpoint), false, `${end}: the socket file was removed`)
   }
@@ -385,7 +401,8 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
     assertHandshake(owner)
     assert.equal((await owner.statusUntil(settled)).state, "ready")
     const record = JSON.parse(readFileSync(ownerFile, "utf8"))
-    assert.equal(record.owner.pid, owner.child.pid)
+    assert.equal(record.owner.parent_pid, owner.child.pid)
+    assert.notEqual(record.owner.pid, owner.child.pid)
     // Connect before either signal: even an unlinked controller can still answer through an accepted socket.
     for (let cycle = 0; cycle < 2; cycle += 1) {
       const socket = net.createConnection(record.endpoint)
@@ -419,23 +436,24 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
       await reply
       const handshake = JSON.parse(response).result
       assert.equal(handshake.accepted, true)
-      assert.equal(handshake.owner.pid, owner.child.pid, "the original controller is still serving")
+      assert.equal(handshake.owner.pid, record.owner.pid, "the original controller child is still serving")
       await assertReadsServeDirectly(other)
       const write = await other.call("task_create", { track: "ops", slug: `retained-${signal.toLowerCase()}-${cycle}`, title: "Retained controller" })
       assert.equal(write.isError, false, JSON.stringify(write.payload))
       outcomes.push({
         cycle: cycle + 1,
         ownershipKept,
-        sameOwner: elected.owner.pid === owner.child.pid && elected.owner.token === record.owner.token,
+        sameOwner: elected.owner.pid === record.owner.pid && elected.owner.token === record.owner.token,
         sameSocket: elected.socket.dev === record.socket.dev && elected.socket.ino === record.socket.ino,
       })
-      t.diagnostic(JSON.stringify({ signal, ...outcomes[cycle], originalPid: owner.child.pid, electedPid: elected.owner.pid }))
+      t.diagnostic(JSON.stringify({ signal, ...outcomes[cycle], sessionPid: owner.child.pid, originalPid: record.owner.pid, electedPid: elected.owner.pid }))
       assert.deepEqual(await other.close(), { code: 0, signal: null })
     }
     assert.deepEqual(outcomes, [1, 2].map((cycle) => ({ cycle, ownershipKept: true, sameOwner: true, sameSocket: true })))
     assert.deepEqual(JSON.parse(readFileSync(ownerFile, "utf8")), record, "the retained controller keeps its exact ownership record")
     assert.deepEqual((await owner.request("tools/list")).result.tools, owner.tools.result.tools)
     assert.deepEqual(await owner.close(), { code: 0, signal: null })
+    await waitForRelease(ownerFile, record.endpoint)
     assert.equal(existsSync(ownerFile), false)
     assert.equal(existsSync(record.endpoint), false)
   })
@@ -450,9 +468,14 @@ test("a stale owner record whose PID now belongs to an unrelated process: other 
   t.after(() => owner.close())
   assert.equal((await owner.statusUntil(settled)).state, "ready")
   const record = JSON.parse(readFileSync(ownerFile, "utf8"))
-  // The owner dies without cleaning up, which leaves its owner record and socket file; then an unrelated process takes its PID. The test cannot make the OS reuse a PID, so it points the record at a sleep it starts, as the review's probe did.
-  owner.child.kill("SIGKILL")
-  await new Promise((resolve) => owner.child.once("exit", resolve))
+  // Preserve the equivalent crash state after the parent and child have ended; the OS cannot be asked to recycle a specific PID.
+  await owner.close()
+  await waitForRelease(ownerFile, record.endpoint)
+  await leaveStaleSocket(record.endpoint)
+  const stale = statSync(record.endpoint)
+  record.socket = { dev: stale.dev, ino: stale.ino }
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  writeFileSync(ownerFile, JSON.stringify(record))
   assert.ok(existsSync(ownerFile))
   assert.ok(statSync(record.endpoint).isSocket())
   await new Promise((resolve) => setTimeout(resolve, 1100))
@@ -468,7 +491,8 @@ test("a stale owner record whose PID now belongs to an unrelated process: other 
     assert.equal(status.admission.hung_controller, null)
   }
   const elected = JSON.parse(readFileSync(ownerFile, "utf8"))
-  assert.ok(sessions.some((session) => session.child.pid === elected.owner.pid), "one of the new sessions owns the controller")
+  assert.ok(sessions.some((session) => session.child.pid === elected.owner.parent_pid), "one of the new sessions owns the controller child")
+  assert.ok(sessions.every((session) => session.child.pid !== elected.owner.pid))
   assert.notEqual(elected.owner.token, record.owner.token)
   assert.deepEqual(readdirSync(fixture.readinessHome), [path.basename(stateDir)], "one controller folder for the root")
   const recall = await sessions[0].call("desk_search", { query: "lighthouse" })
@@ -630,7 +654,8 @@ test("two servers with different XDG_RUNTIME_DIR values elect one controller", {
   }
   const { stateDir } = controllerFixture(fixture)
   const owner = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
-  assert.ok([first.child.pid, second.child.pid].includes(owner.owner.pid))
+  assert.ok([first.child.pid, second.child.pid].includes(owner.owner.parent_pid))
+  assert.ok(![first.child.pid, second.child.pid].includes(owner.owner.pid))
   assert.match(owner.endpoint, /desk-readiness-\d+\/[0-9a-f]{32}\.sock$/u)
   for (const dir of runtimeDirs) assert.deepEqual(readdirSync(dir), [], "no controller socket was derived from XDG_RUNTIME_DIR")
 })

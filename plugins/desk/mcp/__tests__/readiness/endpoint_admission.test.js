@@ -6,7 +6,7 @@ import { createServer } from "node:http"
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { connectOrStartController } from "../../src/server.js"
+import { connectOrStartController, startControllerRuntime } from "../../src/server.js"
 
 function fixture(t) {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-endpoints-"))
@@ -104,7 +104,7 @@ test("document convergence and query probe use captured endpoints after environm
   })
   const controller = await connectOrStartController({
     deskRoot: root, policy: { lexical: "required", semantic: "required" },
-    stateHome: path.join(root, "state"), ephemeral: true,
+    stateHome: path.join(root, "state"), ephemeral: true, controllerLauncher: startControllerRuntime,
   })
   try {
     process.env.DESK_EMBED_ENDPOINT = "http://changed.test:11434"

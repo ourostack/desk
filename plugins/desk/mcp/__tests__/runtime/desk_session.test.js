@@ -244,7 +244,7 @@ test("a hung controller is counted across attempts and marked controller_hung af
   const first = await session.admission.refresh()
   assert.equal(first.state, "degraded:controller_unavailable")
   assert.match(first.summary, /owner pid 4242, \/tmp\/x\.sock.*1 of 3 checks missed/u)
-  assert.equal(first.fix, "Nothing to do: search uses plain text (lexical search and timeline read the files directly) and writes work (they go straight to the files). The controller recovers when it answers again or when process 4242, which its owner record names, ends (the record has no start time, so Desk cannot tell whether that process is still the owner or another process that reused its PID); Desk keeps checking in the background.")
+  assert.equal(first.fix, "Nothing to do: search uses plain text (lexical search and timeline read the files directly) and writes work (they go straight to the files). The controller recovers when it answers again or when process 4242, which its owner record names, ends (no live process-start match was established, so Desk cannot tell whether that process is still the owner or another process that reused its PID); Desk keeps checking in the background.")
   assert.equal(requirementMet("write", session.context), true)
   await session.admission.refresh({ force: true })
   const hung = await session.admission.refresh({ force: true })
@@ -285,7 +285,8 @@ test("a running owner that refuses connections counts as a miss, and a controlle
 test("desk_doctor reclaim_controller reports the owner and reclaims nothing", async (t) => {
   const answers = []
   const records = []
-  const probe = async () => ({ state: answers.shift() ?? "silent", endpoint: "/tmp/x.sock", record: records.shift() ?? { owner: { pid: 7 } } })
+  let ownerVerified = false
+  const probe = async () => ({ state: answers.shift() ?? "silent", endpoint: "/tmp/x.sock", ownerVerified, record: records.shift() ?? { owner: { pid: 7 } } })
   const noRoot = await makeSession(t, { resolveInputs: async () => ({ rootError: { name: "Error", message: "gone", code: "DESK_ROOT_UNAVAILABLE" } }) })
   await noRoot.session.admission.refresh()
   const refused = await noRoot.session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } })
@@ -300,13 +301,14 @@ test("desk_doctor reclaim_controller reports the owner and reclaims nothing", as
   assert.equal(report.status, "report")
   assert.equal(report.reclaimed, false)
   assert.equal(report.controller.owner_pid, 7)
-  assert.match(report.summary, /accepts connections but does not answer\. Desk does not stop it or replace it/u)
+  assert.match(report.summary, /accepts connections but does not answer\. Reclaim requires 3 missed checks and a live-verified controller child/u)
   assert.match(report.fix, /^Nothing to do: search uses plain text/u)
   assert.doesNotMatch(report.fix, /task|A2b/u)
   answers.push("unreachable")
   const unreachable = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
-  assert.match(unreachable.summary, /does not accept connections while the process recorded as its owner runs\. Desk does not stop it or replace it while that process runs/u)
+  assert.match(unreachable.summary, /does not accept connections while the process recorded as its owner runs\. Reclaim requires/u)
   records.push({ owner: { pid: 7, process_start: "darwin:2026-09-26T00:00:00.000Z" } })
+  ownerVerified = true
   const verified = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
   assert.equal(verified.controller.owner_verified, true)
   assert.match(verified.fix, /recovers when it answers again or when the Desk process that owns it \(pid 7\) ends; Desk keeps checking/u, "a start-time-checked owner is named as the Desk process")
@@ -317,6 +319,28 @@ test("desk_doctor reclaim_controller reports the owner and reclaims nothing", as
   assert.equal(healthy.fix, "Call desk_status.")
 })
 
+test("hung misses and reclaim authorization belong to one exact controller generation", async (t) => {
+  let token = "first-child"
+  let reclaimed = 0
+  const { session } = await makeSession(t, {
+    runtime: fakeRuntime({ connectOrStartController: async () => { throw new Error("readiness controller did not answer") } }),
+    hung: {
+      probe: async () => ({
+        state: "silent", endpoint: "/tmp/x.sock", ownerVerified: true,
+        record: { owner: { kind: "controller_child", pid: 7, process_start: "start", token } },
+      }),
+      reclaim: async () => { reclaimed += 1; return { reclaimed: true } },
+    },
+  })
+  for (let count = 0; count < 3; count += 1) await session.admission.refresh({ force: true })
+  assert.equal(session.context.hung.misses, 3)
+  token = "replacement-child"
+  const report = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
+  assert.equal(report.reclaimed, false, "the previous child's misses cannot authorize stopping its replacement")
+  assert.equal(reclaimed, 0)
+  await session.admission.refresh({ force: true })
+  assert.equal(session.context.hung.misses, 1, "a new owner begins its own consecutive-miss count")
+})
 test("an embedding override degrades semantic search only: lexical reads, writes and ready stay available", async (t) => {
   const override = { code: "embedding_override", model: "other", pinned_model: "nomic-embed-text", fix: "remove the override and reconnect" }
   const controller = { accepted: true, embeddingOverride: override, identity: { id: "c", semantic_contract: { mode: "background" } }, async status() {} }
@@ -798,4 +822,80 @@ test("a required-semantic session that lost its controller reconnects without st
   assert.equal((await session.admission.refresh({ force: true })).state, "ready")
   assert.equal(connections, 2)
   assert.equal(background, 0)
+})
+
+test("a local child exit triggers re-election without a status call and stale exit callbacks cannot evict its replacement", async (t) => {
+  const callbacks = []
+  let disconnected = 0
+  let connections = 0
+  const runtime = fakeRuntime({
+    connectOrStartController: async () => {
+      connections += 1
+      return {
+        accepted: true,
+        onExit(callback) { callbacks.push(callback); return () => { disconnected += 1 } },
+        async close() {},
+      }
+    },
+  })
+  const { session } = await makeSession(t, { runtime })
+  await session.admission.refresh()
+  callbacks[0]()
+  await waitUntil(() => connections === 2 && session.admission.snapshot().state === "ready")
+  const replacement = session.context.admission.controller
+  callbacks[0]()
+  assert.equal(session.context.admission.controller, replacement)
+  assert.equal(connections, 2)
+  session.dispose()
+  callbacks[1]()
+  assert.equal(connections, 2)
+  assert.equal(disconnected, 2)
+})
+
+test("desk_doctor uses the real supervisor to stop only a verified hung child and records the repair", { skip: process.platform === "win32" ? "POSIX stop signal" : false }, async (t) => {
+  const { connectOrStartController } = await import("../../src/server.js")
+  const { probeController } = await import("../../src/readiness/hung-controller.js")
+  const runtime = fakeRuntime({ connectOrStartController: async () => { throw new Error("readiness controller did not answer") } })
+  const { session, root, base, log } = await makeSession(t, { runtime, hung: { probe: probeController, probeMs: 20 } })
+  const holder = await connectOrStartController({ deskRoot: root, policy: unsupported, stateHome: path.join(base, "readiness"), ephemeral: true })
+  t.after(() => holder.close())
+  const owner = (await holder.status()).owner
+  process.kill(owner.pid, "SIGSTOP")
+  for (let count = 0; count < 3; count += 1) await session.admission.refresh({ force: true })
+  assert.equal(session.context.hung.misses, 3)
+  runtime.connectOrStartController = async () => ({ accepted: true })
+  const result = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
+  assert.equal(result.status, "ok")
+  assert.equal(result.reclaimed, true)
+  assert.equal(result.controller.owner_pid, owner.pid)
+  assert.equal(result.controller.owner_verified, true)
+  assert.equal(result.state, "ready")
+  assert.equal(session.context.hung.misses, 0)
+  assert.match(log(), /repaired: stopped hung readiness controller child/u)
+})
+
+test("desk_doctor requires repeated misses and reports a supervisor's refusal without claiming a repair", async (t) => {
+  let requests = 0
+  const { session } = await makeSession(t, {
+    runtime: fakeRuntime({ connectOrStartController: async () => { throw new Error("readiness controller did not answer") } }),
+    hung: {
+      probe: async () => ({
+        state: "silent", endpoint: "/tmp/x.sock", ownerVerified: true,
+        record: { owner: { kind: "controller_child", pid: 7, process_start: "start", token: "one-child" } },
+      }),
+      reclaim: async () => { requests += 1; return { reclaimed: false, reason: "owner_changed" } },
+    },
+  })
+  await session.admission.refresh({ force: true })
+  assert.equal(payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } })).reclaimed, false)
+  assert.equal(requests, 0)
+  await session.admission.refresh({ force: true })
+  await session.admission.refresh({ force: true })
+  const result = await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } })
+  assert.equal(result.isError, true)
+  assert.equal(payload(result).status, "refused")
+  assert.equal(payload(result).reclaimed, false)
+  assert.equal(payload(result).reason, "owner_changed")
+  assert.equal(requests, 1)
+  assert.equal(session.admission.snapshot().repair, null)
 })

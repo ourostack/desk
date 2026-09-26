@@ -20,6 +20,7 @@ export async function startReadinessController({
   ephemeral = false,
   exitRelease = defaultExitRelease,
   ownProcessStart = readOwnProcessStart,
+  supervisor,
 } = {}) {
   validateControllerEndpoint(endpoint)
   if (process.platform !== "win32") validatePrivateDirectory(path.dirname(endpoint))
@@ -29,6 +30,7 @@ export async function startReadinessController({
     pid: process.pid,
     started_at: new Date(Date.now() - Math.floor(process.uptime() * 1000)).toISOString(),
     token: randomUUID(),
+    ...(supervisor ? { kind: "controller_child", parent_pid: process.ppid } : {}),
   }
   // The owner's start time makes the record name this process, not just its PID, which a later process may reuse (owner-record.js).
   const processStart = await ownProcessStart()
@@ -272,11 +274,10 @@ export async function startReadinessController({
   })
   let socket = null
   try {
-    const socketStat = process.platform === "win32" ? null : lstatSync(endpoint)
-    socket = socketStat === null ? null : { dev: socketStat.dev, ino: socketStat.ino }
+    socket = controllerSocketIdentity(endpoint)
     writeFileSync(
       path.join(stateDir, "owner.json"),
-      `${JSON.stringify({ schema_version: 1, identity, owner, endpoint, socket }, null, 2)}\n`,
+      `${JSON.stringify({ schema_version: 1, identity, owner, endpoint, socket, ...(supervisor ? { supervisor } : {}) }, null, 2)}\n`,
       { encoding: "utf8", mode: 0o600 },
     )
   } catch (error) {
@@ -298,6 +299,7 @@ export async function startReadinessController({
   return {
     identity,
     owner,
+    socket,
     server,
     async close() {
       closing = true
@@ -314,6 +316,12 @@ export async function startReadinessController({
       }
     },
   }
+}
+
+export function controllerSocketIdentity(endpoint, platform = process.platform) {
+  if (platform === "win32") return null
+  const { dev, ino } = lstatSync(endpoint)
+  return { dev, ino }
 }
 
 /**

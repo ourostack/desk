@@ -1,6 +1,6 @@
 // Concurrency: five Desk servers started on one root within 200 ms, twenty times. Every handshake completes, every server reaches ready, and exactly one readiness controller serves each root.
 //
-// The second test measures the readiness controller's event-loop lag during a full reindex: evidence for Ari's ruling 6 (measure before building a detached controller). It records the numbers as test diagnostics, and in DESK_EVENT_LOOP_REPORT when that is set.
+// The second test measures the client event loop during the child's reindex. It records diagnostics and DESK_EVENT_LOOP_REPORT when set; the spawned-session test separately enforces the tools/list bound.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -44,7 +44,8 @@ test(`${SERVERS} servers on one root within ${WINDOW_MS} ms, ${ROUNDS} times: ev
       for (const status of statuses) assert.equal(status.state, "ready")
       const owners = ownerRecords(fixture.readinessHome)
       assert.equal(owners.length, 1, `round ${round}: ${owners.length} controllers`)
-      assert.ok(sessions.some((session) => session.child.pid === owners[0].owner.pid), `round ${round}: the controller is one of the five servers`)
+      assert.ok(sessions.some((session) => session.child.pid === owners[0].owner.parent_pid), `round ${round}: one of the five servers owns the child`)
+      assert.ok(sessions.every((session) => session.child.pid !== owners[0].owner.pid), "no session is the index writer")
     } finally {
       await Promise.all(sessions.map((session) => session.close()))
     }
@@ -53,7 +54,7 @@ test(`${SERVERS} servers on one root within ${WINDOW_MS} ms, ${ROUNDS} times: ev
   t.diagnostic(`${handshakes} handshakes; slowest handshake per round (ms): ${slowest.join(", ")}`)
 })
 
-test("the controller's event-loop lag during a full reindex is measured and recorded", { timeout: 300000 }, async (t) => {
+test("the client's event-loop lag during a child controller's full reindex is measured and recorded", { timeout: 300000 }, async (t) => {
   const root = await mkTempRoot("desk-event-loop-lag-")
   const desk = path.join(root, "desk")
   const documents = Number(process.env.DESK_LAG_DOCUMENTS ?? 2000)
@@ -75,7 +76,7 @@ test("the controller's event-loop lag during a full reindex is measured and reco
   })
   t.after(() => controller.close())
   const histogram = monitorEventLoopDelay({ resolution: 10 })
-  // A 20 ms ticker: any gap past 100 ms is a window in which the controller could not have answered an election handshake (each try waits 100 ms).
+  // A 20 ms ticker measures this client's loop, not the child doing the indexing.
   const stalls = []
   let last = performance.now()
   const ticker = setInterval(() => {
@@ -91,6 +92,7 @@ test("the controller's event-loop lag during a full reindex is measured and reco
   clearInterval(ticker)
   const ms = (nanoseconds) => Math.round(nanoseconds / 1e4) / 100
   const report = {
+    measured_process: "client",
     documents,
     reindex_ms: Math.round(reindexMs),
     event_loop_delay_ms: { mean: ms(histogram.mean), p50: ms(histogram.percentile(50)), p99: ms(histogram.percentile(99)), max: ms(histogram.max) },
