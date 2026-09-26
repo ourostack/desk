@@ -81,7 +81,10 @@ test("Superpowers context prints exact paths without introducing a second progre
     implementationReportPath: path.join(artifactDirectory, "implementation-report.md"),
     reviewPackagePath: path.join(artifactDirectory, "review.patch"),
     reviewReportPath: path.join(artifactDirectory, "review-report.md"),
-    briefRules: ["verify or validate in your own worktree; never in a checkout your task does not own"],
+    briefRules: [
+      "verify or validate in your own worktree; never in a checkout your task does not own",
+      "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
+    ],
     cleanupPaths: [],
   })
   assert.equal(JSON.stringify(output).includes(".superpowers"), false)
@@ -96,6 +99,23 @@ test("optional plan maps task-card-only work without creating provider files", a
   assert.equal(output.progressPath, path.join(input.taskPath, "task.md"))
   assert.equal(output.rulingsPath, path.join(input.taskPath, "task.md"))
   assert.deepEqual(output.cleanupPaths, [])
+})
+
+test("empty optional artifact paths are refused rather than silently rebound", async () => {
+  for (const key of ["planPath", "progressPath"]) {
+    for (const value of ["", 42]) {
+      await assert.rejects(resolve({ ...context(), [key]: value }), /must be a non-empty path/)
+    }
+  }
+})
+
+test("CLI refuses an option without its value before producing a context", () => {
+  const result = spawnSync(process.execPath, [
+    fileURLToPath(new URL("../../src/activation/superpowers-context.js", import.meta.url)), "--desk-root",
+  ], { encoding: "utf8" })
+  assert.equal(result.status, 1)
+  assert.equal(result.stdout, "")
+  assert.match(result.stderr, /value required for --desk-root/)
 })
 
 test("explicit provider progress wins without renaming legacy doing", async () => {

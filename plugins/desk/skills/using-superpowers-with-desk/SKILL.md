@@ -60,6 +60,8 @@ Include the mapper's `briefRules` in **both the implementer brief and every revi
 
 > verify or validate in your own worktree; never in a checkout your task does not own
 
+Also pass the mapper's close-out rule in both brief types: every child returns every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record. `task-lifecycle` owns that return inventory and `git-hygiene` owns its safety gates; the mapper does not infer cleanup paths.
+
 This rule is passed through the adapter, not patched into the vendored Superpowers templates. A [protected-checkout denial](../../docs/protected-checkouts.md) applies to parent agents and subagents alike; it does not grant ownership of a different checkout.
 
 Do not create a competing `.superpowers/sdd` tree. Keep canonical Git-backed Desk/Crew state on main through its established write protocol; an intentional alpha applies to the approved code artifact, not a competing workspace-state branch. An explicitly absent file fails; never replace that failure with an inferred plan, a mock receipt or a fallback workspace. The mapper returns `cleanupPaths: []`, which is no deletion authority, and a printed evidence path is neither proof of protection nor permission.
@@ -67,6 +69,12 @@ Do not create a competing `.superpowers/sdd` tree. Keep canonical Git-backed Des
 On interruption, read the canonical progress record, not an upstream shadow ledger. Reuse the recorded step and attempt for reading; allocate an explicit new attempt for new output and preserve earlier evidence. Full task, repository and iteration qualification prevents same-basename plan and progress collisions.
 
 The evidence root must be an explicitly approved private artifact location outside Git-backed Desk. It must never be the reserved `<state home>/ouroboros-skills/desk/work-measurement/` ledger partition. File contents remain subject to the repository's write authority and the selected private-storage policy. The mapper does not create, discover or protect an evidence store.
+
+## Mapped controller close-out
+
+At pristine `superpowers:subagent-driven-development`'s per-task completion step, the controller reads the child's Resources inventory and the mapped `progressPath`, reconciles every exact writer and consumer, and removes that completed task's worktree through `superpowers:using-git-worktrees` and the recorded `desk:git-hygiene` cleanup policy. Record absence readback and any merged-branch deletion or safe state-branch restoration through `desk:task-lifecycle` before marking the unit complete and releasing its reservation. This is the provider's controller duty with Desk's existing authority and storage map, not a second scheduler or a change to the vendored provider.
+
+An intentionally retained alpha/PR-only worktree or an acknowledged transfer stays named with its owner and trigger. Missing inventory, a live or unobservable writer, local-only work, failed cleanup or an unacknowledged transfer keeps cleanup pending; neither a child's success status nor a plan-complete flag grants deletion authority. The sequential `executing-plans` fallback has the same ownership boundary.
 
 ## Everything else has an owner
 

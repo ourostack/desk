@@ -29,6 +29,8 @@ Only a current, unsatisfied `needs-human-approval` is a hard exception. A produc
 
 Before any fan-out, the root identifies dependencies, write sets, exclusive resources, the integration fold, the evidence each child must return, and the final synthesis it will own. If those stay implicit, the work is not ready to split.
 
+Include `task-lifecycle`'s **Resources** inventory in every child return contract, including reviewers: every created worktree and local/remote branch, exact repository/path/ref, current state, owner and verified disposition, or `none created`. Record ownership and disposition at creation, not from branch-name patterns at cleanup time. At each task, iteration or delegated-assignment boundary, its owner closes out through `git-hygiene`; the Superpowers controller removes completed task worktrees through `using-superpowers-with-desk`'s mapped controller duty before releasing their reservations. A return or root exit alone does not prove that delegated, remote, MCP or command writers are absent.
+
 Each repository retains its own branch and merge cycle. The isolation and shared-surface rules above apply at that repository boundary.
 
 If material resequencing becomes necessary, record the observed waste pattern, the recommendation, and the consequence of not resequencing before changing the plan.

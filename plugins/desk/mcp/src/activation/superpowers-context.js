@@ -104,7 +104,10 @@ export async function resolveSuperpowersContext(input) {
     implementationReportPath: path.join(artifactDirectory, "implementation-report.md"),
     reviewPackagePath: path.join(artifactDirectory, "review.patch"),
     reviewReportPath: path.join(artifactDirectory, "review-report.md"),
-    briefRules: ["verify or validate in your own worktree; never in a checkout your task does not own"],
+    briefRules: [
+      "verify or validate in your own worktree; never in a checkout your task does not own",
+      "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
+    ],
     cleanupPaths: [],
   }
 }

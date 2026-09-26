@@ -46,7 +46,10 @@ async function startupDirection() {
   try {
     const modulePath = path.join(pluginRoot, "mcp", "src", "util", "startup-direction.js");
     const { copilotStartupDirection } = await import(pathToFileURL(modulePath).href);
-    return copilotStartupDirection({ env: process.env, sessionFolder: await readSessionFolder() });
+    const sessionFolder = await readSessionFolder();
+    const direction = copilotStartupDirection({ env: process.env, sessionFolder });
+    const { runBootChecks } = require("./boot-checks.cjs");
+    return `${direction}\n\n${await runBootChecks({ host: "copilot", env: process.env, sessionFolder })}`;
   } catch {
     return "Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound.";
   }

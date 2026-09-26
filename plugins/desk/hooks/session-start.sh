@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # desk worker — SessionStart hook.
 #
-# Fast, non-blocking foundation injected as additionalContext, followed by a pointer to the authoritative `desk:session-start` scan. Deliberately does no workspace, network, or Git work. MUST always exit 0 because a nonzero SessionStart hook blocks the session from starting.
+# Foundation plus bounded local boot checks; repairs run detached. MUST always exit 0 because a nonzero SessionStart hook blocks the session from starting.
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 FOUNDATION_SKILL="${1:-$PLUGIN_ROOT/skills/using-desk/SKILL.md}"
@@ -33,7 +33,7 @@ foundation=$(cat "$FOUNDATION_SKILL" 2>/dev/null) || {
 # and the home fallbacks, names where the root came from, and always exits 0.
 direction=""
 if command -v node >/dev/null 2>&1; then
-  direction=$(node "$PLUGIN_ROOT/mcp/scripts/resolve-desk-root.js" --startup-line 2>/dev/null)
+  direction=$(node "$PLUGIN_ROOT/mcp/scripts/resolve-desk-root.js" --startup-line --boot-checks 2>/dev/null)
 fi
 if [ -z "$direction" ]; then
   direction="Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound."
