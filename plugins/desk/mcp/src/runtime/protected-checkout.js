@@ -93,7 +93,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     if (!invocation || !existsSync(invocation.cwd)) return
     const { location, aliases } = invocation
     const operation = invocation.name, operands = invocation.args
-    const key = JSON.stringify([invocation, variables])
+    const key = JSON.stringify([invocation, [...aliases], variables])
     if (inspected.has(key)) return
     inspected.add(key)
     if (operation && !OPERATIONS.has(operation) && !["restore", "branch", "worktree"].includes(operation)) {

@@ -11,7 +11,7 @@ export function tokenizeShell(text, powershell = false) {
   let parts = [], value = "", active = false, quote = "", pendingHere = null, quoted = false
   const heredocs = []
   const part = (expand) => {
-    parts.push({ text: value, expand })
+    parts.push({ text: value, expand, quoted: Boolean(quote) })
     value = ""
   }
   const word = () => {
@@ -219,9 +219,10 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
   }
   async function expand(word, state) {
     let result = ""
-    for (const part of word.parts) {
+    for (const [index, part] of word.parts.entries()) {
       if (!part.expand) { result += part.text; continue }
       let text = part.text, out = ""
+      if (index === 0 && !part.quoted) text = text.replace(/^~(?=$|\/)/u, state.vars.HOME ?? "~")
       for (let i = 0; i < text.length; i++) {
         if (text[i] === "$" && text[i + 1] === "(") {
           const sub = substitution(text, i + 2)
@@ -332,7 +333,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     if (["cd", "chdir", "set-location"].includes(name)) {
       const operand = args.slice(1).find((arg) => !["--", "-L", "-P", "-LiteralPath", "-Path"].includes(arg))
       const target = operand === "-" ? local.vars.OLDPWD : operand ?? local.vars.HOME
-      let dir = target?.replace(/^~(?=$|[/\\])/u, local.vars.HOME ?? "")
+      let dir = target
       if (dir?.includes("\0")) return [{ ...state, status: false }]
       if (dir) dir = path.resolve(local.cwd, dir)
       try {

@@ -133,3 +133,15 @@ test("shell wrappers and positional arguments preserve Git's target", async (t) 
   ]) assert.equal((await guard(command)).deny, true, command)
   await assert.rejects(guard("again() { again; }; again"), /inspection budget/u)
 })
+
+test("home expansion respects quoting and inline alias cache keys include alias definitions", async (t) => {
+  const { root, guard } = fixture(t)
+  const env = { ...process.env, HOME: root }
+  for (const command of ["git -C ~ checkout HEAD", "git -C ~/ checkout HEAD", 'git -C ~/"." checkout HEAD']) {
+    assert.equal((await guard(command, { env })).deny, true, command)
+  }
+  for (const command of ["git -C '~' checkout HEAD", 'git -C "~" checkout HEAD', "cd '~' && git checkout HEAD"]) {
+    assert.equal((await guard(command, { env })).deny, false, command)
+  }
+  assert.equal((await guard("git -c alias.act=status act; git -c alias.act=checkout act")).deny, true)
+})
