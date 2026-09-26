@@ -13,11 +13,27 @@ import {
   writeMarkdown,
   pathExists,
 } from "../util/fm.js"
-import { isPathContained, resolveWriteTarget } from "../util/paths.js"
+import { isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
+import { factoryStateRoot, requestFinalize } from "../factory/outbox.js"
+import { jobId } from "../factory/binding.js"
+import { readDeskRemote } from "../factory/desk-repo.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+
+async function requestTaskFinalize({ deskRoot, person, track, slug, env }) {
+  try {
+    if (await factoryStateRoot(env, { create: false }) === null) return
+    const root = await fs.realpath(deskRoot)
+    const prefix = path.relative(deskRoot, personPrefix(deskRoot, person)).split(path.sep).join("/")
+    const deskRemote = readDeskRemote({ deskRoot: root }) || `local:${root}`
+    const job = jobId({ deskRemote, personPrefix: prefix, track, slug })
+    await requestFinalize(env, { job, deskRoot: root })
+  } catch {
+    console.error("desk_factory: finalize_request_deferred")
+  }
+}
 
 // Optional runtime fields the operator (or harness) may pass at create time.
 // Kept explicit so we don't silently accept arbitrary keys.
@@ -253,7 +269,7 @@ export async function task_create({ deskRoot, input, person = null, readiness })
  *
  * Returns: { status: "updated", path }
  */
-export async function task_update({ deskRoot, input, person = null, readiness }) {
+export async function task_update({ deskRoot, input, person = null, readiness, env = process.env }) {
   const values = input ?? {}
   const { track, slug, frontmatter, body_append } = values
   if (
@@ -296,6 +312,7 @@ export async function task_update({ deskRoot, input, person = null, readiness })
 
   await writeMarkdown(filePath, merged, newBody)
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+  if (TERMINAL_STATUSES.has(merged.status)) await requestTaskFinalize({ deskRoot, person, track, slug, env })
   return { status: "updated", path: relPath(deskRoot, filePath) }
 }
 
@@ -312,7 +329,7 @@ export async function task_update({ deskRoot, input, person = null, readiness })
  *
  * Returns: { status: "archived" | "already_archived", path }
  */
-export async function task_archive({ deskRoot, input, person = null, readiness }) {
+export async function task_archive({ deskRoot, input, person = null, readiness, env = process.env }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -333,6 +350,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness }
   const dstExists = await pathExists(archiveDir)
 
   if (!srcExists && dstExists) {
+    await requestTaskFinalize({ deskRoot, person, track, slug, env })
     return {
       status: "already_archived",
       path: relPath(deskRoot, archivedFile),
@@ -384,5 +402,6 @@ export async function task_archive({ deskRoot, input, person = null, readiness }
     }
   }
 
+  await requestTaskFinalize({ deskRoot, person, track, slug, env })
   return { status: "archived", path: relPath(deskRoot, filePath) }
 }

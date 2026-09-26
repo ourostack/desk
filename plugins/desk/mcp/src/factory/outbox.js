@@ -61,6 +61,7 @@ import {
 } from "./os-protect.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js"
 import { ENUMS, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
+import { MAX_MARKER_BYTES, readSmallText, validMarker } from "./marker.js"
 
 const OWNER_FILE_MODE = 0o600
 const ROOT_SEGMENTS = ["ouroboros-skills", "desk", "factory"]
@@ -76,10 +77,6 @@ const VISIBILITY_VALUES = ["public", "private", "unknown"]
 const SESSION_ID_SRC = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 const OUTBOX_NAME_PATTERN = new RegExp(`^(?:${ENUMS.host.join("|")})-${SESSION_ID_SRC}\\.json$`, "u")
 const FINALIZE_NAME_PATTERN = /^[0-9a-f]{32}\.json$/u
-const MARKER_KEYS = [
-  "schema_version", "host", "session_id", "log_path", "cwd", "desk_root",
-  "end_reason", "ended_at", "plugins", "updated_at",
-].sort().join(",")
 
 // `store.js` uses one `naming` per caller (`desk_feedback`, `desk_work_ledger`);
 // this is the factory outbox's, also passed as `protectWindowsPaths`'s `label`.
@@ -149,9 +146,10 @@ function resolveStateHome(env) {
  * availability is checked before anything is created, and the three
  * segments are protected with one batched call.
  */
-export async function factoryStateRoot(env = process.env, { platform = process.platform, runner = undefined } = {}) {
+export async function factoryStateRoot(env = process.env, { platform = process.platform, runner = undefined, create = true } = {}) {
   if (platform === "win32") assertWindowsAclAvailable({ env, label: NAMING.label })
   const stateHome = resolveStateHome(env)
+  if (!create && (await lstatIfPresent(path.join(stateHome, ...ROOT_SEGMENTS), NAMING)) === null) return null
   const { real: realPrefix } = await realpathExistingPrefix(stateHome)
   await assertOutsideGitWorkspace(realPrefix, NAMING)
   await fsp.mkdir(stateHome, { recursive: true })
@@ -424,12 +422,8 @@ export async function setConsent(env, { store, contribute, account = null } = {}
 // ---------------------------------------------------------------------------
 
 function assertMarkerShape(marker) {
-  requirePlainObject(marker, "marker")
-  if (Object.keys(marker).sort().join(",") !== MARKER_KEYS) fail("marker", "must have exactly the marker fields")
-  if (marker.schema_version !== 1) fail("marker.schema_version", "must be 1")
-  if (!ENUMS.host.includes(marker.host)) fail("marker.host", "must be a known host")
-  requirePattern(marker.session_id, PATTERNS.sessionId, "marker.session_id")
-  requirePattern(marker.updated_at, PATTERNS.timestamp, "marker.updated_at")
+  if (!validMarker(marker)) fail("marker", "invalid marker fields")
+  if (Buffer.byteLength(JSON.stringify(marker)) > MAX_MARKER_BYTES) fail("marker", "too large")
 }
 
 /** Writes `markers/<host>-<session_id>.json`. Markers are local bookkeeping only; they never leave the machine. */
@@ -439,6 +433,24 @@ export async function writeMarker(env, marker, { platform = process.platform, ru
   const name = `${marker.host}-${marker.session_id}.json`
   await writeJsonAtomic(root, path.join(root, "markers", name), marker, { platform, env, runner })
   return marker
+}
+
+/** Reads only a protected marker in this state's own markers directory. */
+export async function readMarker(env, file) {
+  const root = await factoryStateRoot(env)
+  const dir = path.join(root, "markers")
+  if (typeof file !== "string" || path.dirname(file) !== dir || !OUTBOX_NAME_PATTERN.test(path.basename(file))) return null
+  await ensureDirChain(dir, root, process.platform)
+  await protectLeafFile(file, process.platform, NAMING)
+  const marker = JSON.parse(readSmallText(file))
+  return validMarker(marker) && path.basename(file) === `${marker.host}-${marker.session_id}.json` ? marker : null
+}
+
+/** Serialize the source read, facts replacement and receipt for one session. */
+export async function withDerivationLock(env, name, body) {
+  requirePattern(name, OUTBOX_NAME_PATTERN, "name")
+  const root = await factoryStateRoot(env)
+  return withLock(root, path.join(root, "deriving", name), process.platform, body)
 }
 
 /**
@@ -570,6 +582,7 @@ export async function writeStatus(env, patch, { platform = process.platform, run
   return updateJsonLocked(root, file, { last_flush: {} }, (current) => {
     const next = { ...current, ...patch }
     if (Object.hasOwn(patch, "last_flush")) next.last_flush = { ...current.last_flush, ...patch.last_flush }
+    if (Object.hasOwn(patch, "derivations")) next.derivations = { ...current.derivations, ...patch.derivations }
     return next
   }, { platform, env, runner }, isStatusShape)
 }
@@ -765,6 +778,23 @@ export async function listFinalizeRequests(env, { platform = process.platform, r
     }
   }
   return results
+}
+
+/** Bounded names-only lookup for end-of-turn hooks; never reads request content. */
+export async function listFinalizeJobs(env) {
+  const root = await factoryStateRoot(env)
+  const dir = path.join(root, "finalize")
+  await ensureDirChain(dir, root, process.platform)
+  const jobs = []
+  let scanned = 0
+  for await (const entry of await fsp.opendir(dir)) {
+    if (entry.isFile() && FINALIZE_NAME_PATTERN.test(entry.name)) {
+      const stat = await lstatIfPresent(path.join(dir, entry.name), NAMING)
+      if (stat !== null && stat.isFile() && stat.nlink === 1) jobs.push(entry.name.slice(0, -5))
+    }
+    if (++scanned === 128 || jobs.length === 8) break
+  }
+  return jobs
 }
 
 /** Removes `finalize/<job>.json` once delivered; a no-op when it is already gone. */

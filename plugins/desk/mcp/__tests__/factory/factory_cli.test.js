@@ -11,7 +11,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { isMainModule, main, parseOptions, runConsentCommand } from "../../scripts/factory.js"
+import { isMainModule, main, parseOptions, runConsentCommand, runDeriveCommand, runStatusCommand } from "../../scripts/factory.js"
 import { readConsent } from "../../src/factory/outbox.js"
 
 const SCRIPT = fileURLToPath(new URL("../../scripts/factory.js", import.meta.url))
@@ -40,7 +40,34 @@ test("parseOptions rejects a non-string flag, a flag with no leading --, a bare 
   assert.equal(parseOptions(["store", "x"]), null)
   assert.equal(parseOptions(["--", "x"]), null)
   assert.equal(parseOptions(["--store"]), null)
+  assert.equal(parseOptions(["--store", "a/b", "--store", "c/d"]), null)
 })
+
+test("status returns local factory health without exposing marker paths or secrets", () => scratch(async (env) => {
+  let output = ""
+  assert.equal(await main({ argv: ["status"], env, write: (text) => { output += text }, logError: () => assert.fail("status must succeed") }), 0)
+  const result = JSON.parse(output)
+  assert.equal(result.markers, 0)
+  assert.equal(result.finalize, 0)
+  assert.equal(output.includes(env.HOME), false)
+}))
+
+test("derive refuses an arbitrary marker path without echoing it", () => scratch(async (env) => {
+  let output = ""
+  assert.equal(await main({ argv: ["derive", "--marker", "/private/sentinel.json"], env, write: (text) => { output += text }, logError: () => assert.fail("invalid marker is a structured outcome") }), 0)
+  assert.deepEqual(JSON.parse(output), { result: "invalid", store: null })
+}))
+
+test("derive and status reject malformed options and out-of-budget quiet waits", () => scratch(async (env) => {
+  for (const argv of [[], ["--marker"], ["--other", "x"], ["--marker", "x", "--other", "y"]]) {
+    await assert.rejects(runDeriveCommand({ argv, env }), /Usage:/u)
+  }
+  for (const wait of ["-1", "NaN", "30001", "9999999"]) {
+    await assert.rejects(runDeriveCommand({ argv: ["--marker", "x", "--wait-quiet", wait], env }), /wait-quiet must/u)
+  }
+  assert.deepEqual(await runDeriveCommand({ argv: ["--marker", "x", "--wait-quiet", "0"], env }), { result: "invalid", store: null })
+  await assert.rejects(runStatusCommand({ argv: ["extra"], env }), /Usage:/u)
+}))
 
 // ---------------------------------------------------------------------------
 // runConsentCommand.
