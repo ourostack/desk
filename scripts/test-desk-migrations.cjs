@@ -876,6 +876,11 @@ test("the tidy migration tidies and announces: announce-and-proceed wording and 
   assert.match(blocks.Migrate, /untracked loose file that is not ignored gets git add first, then git mv\. Leave ignored files where they are\./u);
   assert.match(blocks.Migrate, /git diff --cached --name-status -- <tidy paths>[\s\S]{0,300}stop with one line[\s\S]{0,100}commit with git commit -- <tidy paths> and nothing else, so any other staged work stays staged exactly as it was; never unstage anyone else's work\./u);
   assert.doesNotMatch(blocks.Migrate, /unstage it/u);
+  // Fix round 4: the tidy stages as it goes, so its own earlier steps never read as another session's work.
+  assert.match(blocks.Migrate, /Stage as you go[\s\S]{0,120}task_move, track_rename, track_create and track_update stage what they write\. Right after any other change the tidy makes[\s\S]{0,120}git add exactly that path\./u);
+  assert.match(blocks.Migrate, /let staged changes through as this tidy's own work and refuse unstaged changes or untracked files, which belong to another session; never pass allow_dirty/u);
+  assert.match(blocks.Migrate, /Then git add the record\.[\s\S]{0,400}git diff --name-only -- <tidy paths> and git ls-files --others --exclude-standard -- <tidy paths> print nothing/u);
+  assert.doesNotMatch(blocks.Migrate, /git status --porcelain -- <path>/u, "mid-tidy, git status also lists the tidy's own staged work");
   assert.match(blocks.Migrate, /never write an old name that failed the credential or prompt check[\s\S]{0,200}Describe such a move by its new name only\./u);
   assert.match(blocks.Migrate, /Merge a group only when you judge that both cards describe the same outcome; leave the others and mention them\./u);
   assert.match(blocks.Migrate, /Never hide a live task: when the duplicate is not done or cancelled and the kept task is, keep the live one instead, or skip the merge\./u);

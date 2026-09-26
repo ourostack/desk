@@ -8,7 +8,8 @@
 // other text files under the desk that still mention the old relative path,
 // so the agent (or the operator) can fix them if they matter. Neither
 // commits; staging (or a plain rename on a non-Git desk) is as far as this
-// goes, matching M4-1's "channels never commits" carry-in.
+// goes, matching M4-1's "channels never commits" carry-in. On a Git desk
+// they stage every file they write, too (M4-5 fix round 4).
 
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
@@ -21,6 +22,7 @@ import {
 } from "../util/fm.js"
 import { resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
+import { isGitRepository, hasUnstagedWork, stagePaths } from "../util/git-stage.js"
 import {
   validateName,
   validateTrackName,
@@ -67,37 +69,38 @@ function rejectTraversalShapedInput(tool, field, value) {
 //
 // `spawnGit` is an injectable seam over `node:child_process`'s `spawnSync`,
 // for tests only — real callers never pass it (mirrors `desk/naming.js`'s
-// `spawnGitConfig`).
-
-function isGitRepository(root, spawnGit) {
-  let result
-  try {
-    result = spawnGit("git", ["-C", root, "rev-parse", "--is-inside-work-tree"], {
-      encoding: "utf8",
-    })
-  } catch {
-    return false
-  }
-  return result.status === 0 && result.stdout.trim() === "true"
-}
+// `spawnGitConfig`). The shared helpers live in `util/git-stage.js`.
 
 /**
  * Refuse to touch a path another session may be working in (M4-5 fix rounds
- * 2 and 3): on a Git desk, the moved folder, or a `track.md` whose tasks
- * table the move would edit, with uncommitted tracked changes or untracked,
+ * 2-4): on a Git desk, the moved folder, or a `track.md` whose tasks table
+ * the move would edit, with unstaged changes to tracked files or untracked,
  * non-ignored files is left alone unless the caller passes
- * `allow_dirty: true`. The message never quotes the path's names.
+ * `allow_dirty: true`. Staged changes don't count: the move tools and the
+ * track tools stage everything they write, so a staged change is the
+ * current tidy's own work in progress (fix round 4). The message never
+ * quotes the path's names.
  */
 function assertClean({ tool, root, paths, what, allowDirty, spawnGit }) {
   if (allowDirty || !isGitRepository(root, spawnGit)) return
-  const result = spawnGit("git", ["-C", root, "status", "--porcelain", "--", ...paths.map((p) => relPath(root, p))], {
-    encoding: "utf8",
-  })
-  if (result.status !== 0 || result.stdout.trim() !== "") {
+  if (hasUnstagedWork(root, paths.map((p) => relPath(root, p)), spawnGit)) {
     throw new Error(
-      `${tool}: ${what} has uncommitted changes, so another session may be working there; ` +
+      `${tool}: ${what} has unstaged changes or untracked files, so another session may be working there; ` +
         "commit or finish that work first, or pass allow_dirty: true to move it anyway",
     )
+  }
+}
+
+/**
+ * Stage every file a move wrote after its `git mv` (the moved card, the
+ * edited `track.md` tables), so a later move in the same tidy sees them as
+ * this tidy's work, not another session's. A no-op on a non-Git desk.
+ */
+function stageWrites({ root, files, spawnGit }) {
+  if (files.length === 0 || !isGitRepository(root, spawnGit)) return
+  const result = stagePaths(root, files.map((p) => relPath(root, p)), spawnGit)
+  if (!result.ok) {
+    throw new Error(`desk-mcp: git add failed staging the move's edits: ${result.stderr}`)
   }
 }
 
@@ -297,9 +300,11 @@ function trueOrAbsent(tool, field, value) {
  * card's status) otherwise. It never changes the card's status.
  *
  * On a Git desk it refuses a source folder, or a `track.md` whose tasks
- * table it would edit, with uncommitted changes (another session may be
- * working there) unless `allow_dirty: true` (M4-5). `into_task` refuses to
- * merge a live task into a done or cancelled one.
+ * table it would edit, with unstaged changes or untracked, non-ignored files
+ * (another session may be working there) unless `allow_dirty: true` (M4-5),
+ * and it stages every file it writes, so its own earlier edits never block
+ * a later move in the same tidy. `into_task` refuses to merge a live task
+ * into a done or cancelled one.
  *
  * `into_task: "<keeper>"` (M4-5) merges a duplicate task into the task that
  * keeps the job: it moves the task folder to
@@ -486,6 +491,12 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
     }
   }
 
+  stageWrites({
+    root: effectiveRoot,
+    files: updatedFiles.map((p) => path.join(deskRoot, p)),
+    spawnGit,
+  })
+
   const mentions = await findMentions({
     root: effectiveRoot,
     oldRelPath: relPath(effectiveRoot, srcDir),
@@ -518,8 +529,9 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
  *
  * Moves `<track>/` to `<to>/`. Refuses if the target already exists, or if
  * `to` isn't a valid track name (M4-1's `validateTrackName`), or, on a Git
- * desk, if the track has uncommitted changes, unless `allow_dirty: true`. Rewrites
- * `track:` in every `task.md` under the moved tree, live and archived.
+ * desk, if the track has unstaged changes or untracked, non-ignored files,
+ * unless `allow_dirty: true`. Rewrites `track:` in every `task.md` under the
+ * moved tree, live and archived, and stages those edits on a Git desk.
  *
  * Returns: { from, to, updated_files, mentions }
  */
@@ -561,6 +573,7 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
     await writeMarkdown(file, merged, existing.content)
     updatedFiles.push(relPath(deskRoot, file))
   }
+  stageWrites({ root: effectiveRoot, files: taskFiles, spawnGit })
 
   const mentions = await findMentions({
     root: effectiveRoot,

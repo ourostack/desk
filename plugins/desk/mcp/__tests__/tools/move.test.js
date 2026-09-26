@@ -45,8 +45,9 @@ function initGit(root) {
   run(["config", "user.name", "Test"])
 }
 
-// The tools refuse to move a folder with uncommitted changes (another
-// session may be working there), so Git tests commit their fixture first.
+// The tools refuse to move a folder with unstaged changes or untracked files
+// (another session may be working there), so Git tests commit their fixture
+// first.
 function commitAll(root) {
   for (const args of [["add", "-A"], ["commit", "-q", "--allow-empty", "-m", "fixture"]]) {
     const result = spawnSync("git", args, { cwd: root, encoding: "utf8" })
@@ -1081,7 +1082,7 @@ test("task_move into_task refuses to_slug, unarchive and a traversal-shaped keep
 
 // ── Leave other sessions' work alone (M4-5 fix round 2) ────────────────────
 
-const DIRTY = /the source has uncommitted changes, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway/
+const DIRTY = /the source has unstaged changes or untracked files, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway/
 
 test("task_move refuses a task with uncommitted or untracked files, without quoting its name", async () => {
   const root = await mkTempDeskRoot()
@@ -1125,14 +1126,16 @@ test("task_move ignores ignored files, and moves a dirty task when allow_dirty i
   )
 })
 
-test("task_move treats a failing git status as uncommitted work", async () => {
+test("task_move treats a failing git diff or git ls-files as unstaged work", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await mkTrack(root, "main-track", { rows: [] })
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "clean-task", title: "T" } })
   commitAll(root)
-  const spawnGit = (cmd, args, opts) => (args.includes("status") ? { status: 128, stdout: "", stderr: "boom" } : spawnSync(cmd, args, opts))
-  await assert.rejects(task_move({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "moved-task" }, spawnGit }), DIRTY)
+  for (const failing of ["diff", "ls-files"]) {
+    const spawnGit = (cmd, args, opts) => (args.includes(failing) ? { status: 128, stdout: "", stderr: "boom" } : spawnSync(cmd, args, opts))
+    await assert.rejects(task_move({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "moved-task" }, spawnGit }), DIRTY)
+  }
 })
 
 test("task_move refuses to edit a track.md that holds another session's uncommitted changes, unless allow_dirty", async () => {
@@ -1147,13 +1150,13 @@ test("task_move refuses to edit a track.md that holds another session's uncommit
   const error = await task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b" } }).catch((e) => e)
   assert.equal(
     error.message,
-    "task_move: a track.md this move would edit has uncommitted changes, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway",
+    "task_move: a track.md this move would edit has unstaged changes or untracked files, so another session may be working there; commit or finish that work first, or pass allow_dirty: true to move it anyway",
   )
   assert.ok(await exists(path.join(root, "track-a", "clean-task", "task.md")), "nothing moved")
 
   // The source track's table counts too.
   await fs.appendFile(path.join(root, "track-a", "track.md"), "\nAnother edit.\n")
-  await assert.rejects(task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_slug: "renamed-task" } }), /a track\.md this move would edit has uncommitted changes/)
+  await assert.rejects(task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_slug: "renamed-task" } }), /a track\.md this move would edit has unstaged changes or untracked files/)
 
   const result = await task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b", allow_dirty: true } })
   assert.equal(result.to, path.join("track-b", "clean-task"))
@@ -1192,7 +1195,7 @@ test("track_rename refuses a track with uncommitted work unless allow_dirty is t
   await fs.writeFile(path.join(root, "old-track", "task-one", "doing.md"), "in progress\n")
 
   const error = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } }).catch((e) => e)
-  assert.match(error.message, /^track_rename: the source has uncommitted changes, so another session may be working there/)
+  assert.match(error.message, /^track_rename: the source has unstaged changes or untracked files, so another session may be working there/)
   assert.doesNotMatch(error.message, /old-track|task-one/)
   assert.ok(await exists(path.join(root, "old-track", "track.md")))
 
