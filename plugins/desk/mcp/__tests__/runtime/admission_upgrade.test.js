@@ -72,7 +72,9 @@ test("a detached HEAD with a local-only commit recovers once the commit is pushe
   const doctored = (await session.call("desk_doctor", { repair: "switch_state_branch" })).payload
   assert.equal(doctored.repair, `repaired: detached HEAD → main (was ${sha.slice(0, 12)})`)
   const ready = await session.statusUntil((payload) => payload.state === "ready")
+  // The doctor's forced refresh runs a fresh attempt even when the .git/HEAD watch started one first, so desk_status reports the repair, and the repair log keeps it.
   assert.equal(ready.repair, doctored.repair)
+  assert.match(readFileSync(path.join(fixture.stateDir, "repairs.log"), "utf8"), new RegExp(`repaired: detached HEAD → main \\(was ${sha.slice(0, 12)}\\)`, "u"))
   assert.equal(git(fixture.desk, "symbolic-ref", "--short", "HEAD"), "main")
   assert.deepEqual((await session.request("tools/list")).result.tools, before)
 })

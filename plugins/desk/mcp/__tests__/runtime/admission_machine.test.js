@@ -109,6 +109,23 @@ test("refresh joins a running attempt, waits at most waitMs, and a ready machine
   assert.equal((await idleWhileRunning).state, "ready")
 })
 
+test("a forced refresh during an attempt runs a fresh attempt after it, so a change made meanwhile is seen", async () => {
+  const timers = fakeTimers()
+  const releases = []
+  const machine = createAdmission({ timers, now: timers.now, attempt: () => new Promise((resolve) => releases.push(resolve)) })
+  machine.start()
+  const forced = machine.refresh({ force: true, waitMs: 1000 })
+  const joined = machine.refresh({ force: true, waitMs: 1000 })
+  await flush()
+  assert.equal(releases.length, 1, "the forced attempt waits for the running one")
+  releases[0]({ state: "ready" })
+  await flush()
+  assert.equal(releases.length, 2, "then one fresh attempt runs, shared by both forced callers")
+  releases[1]({ state: "ready", repair: "repaired: something" })
+  assert.equal((await forced).repair, "repaired: something")
+  assert.equal((await joined).repair, "repaired: something")
+})
+
 test("refresh with joinMs joins an attempt that was already running without waiting, and still waits for one it starts", async () => {
   const timers = fakeTimers()
   const releases = []
