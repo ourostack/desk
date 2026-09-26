@@ -62,7 +62,8 @@ async function session(t, { semantic = "background", handler } = {}) {
           },
         }),
       })
-      state.initial = await read()
+      // The first status can still be admitting; capture controller detail only once it is available.
+      state.initial = await state.desk.statusUntil((payload) => payload.readiness?.state !== undefined)
       state.context = statusContextOf(state.desk)
     },
   }
