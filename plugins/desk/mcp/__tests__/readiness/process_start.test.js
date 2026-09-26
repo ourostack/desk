@@ -5,7 +5,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
 import {
-  readOwnProcessStart, readProcessStart, resetOwnProcessStart, runForText,
+  processStartReaders, readOwnProcessStart, readProcessStart, resetOwnProcessStart, runForText,
 } from "../../src/readiness/process-start.js"
 
 const nativeRead = process.platform === "linux" || process.platform === "darwin" ? false : "reads /proc or ps"
@@ -31,6 +31,13 @@ test("a PID that is not a positive integer, or a platform with no reader, has no
   for (const pid of [0, -1, 1.5, "7", null]) assert.equal(await readProcessStart(pid), null)
   assert.equal(await readProcessStart(7, { platform: "aix" }), null)
   assert.equal(await readProcessStart(7, { platform: "toString" }), null, "only the platform's own reader")
+})
+
+test("platform readers without injected dependencies report an absent process as unknown", async () => {
+  for (const read of Object.values(processStartReaders)) {
+    assert.equal(await read(2147483647), null)
+  }
+  assert.equal(await processStartReaders.linux(2147483647, {}), null)
 })
 
 test("Linux: field 22 of /proc/<pid>/stat, counted after the command name, with the boot id", async () => {

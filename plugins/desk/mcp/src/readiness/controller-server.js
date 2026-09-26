@@ -44,7 +44,7 @@ export async function startReadinessController({
   let freshnessReason = "initial_scan"
   let reconcileScheduled = null
   let closing = false
-  let unregisterRelease = () => {}
+  let unregisterRelease
   const semanticMode = identity.semantic_contract?.mode
   const semanticEnabled = semanticMode === "required" || semanticMode === "background"
   const server = net.createServer((socket) => {

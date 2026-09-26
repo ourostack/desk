@@ -67,7 +67,7 @@ test("runtime: a publication-lock timeout names the lock and the process holding
   assert.equal(prepareRuntimeInputs({ ...input, prepare: () => { throw "a string" } }).restoreError.message, "a string")
 })
 
-test("warmNativeModules loads better-sqlite3 and sqlite-vec from the source mirror and opens an in-memory database; any failure is harmless", () => {
+test("warmNativeModules loads better-sqlite3 and sqlite-vec from the source mirror and opens an in-memory database; any failure is harmless", async () => {
   const events = []
   const fakeRequire = (from) => {
     events.push(["from", from])
@@ -86,7 +86,11 @@ test("warmNativeModules loads better-sqlite3 and sqlite-vec from the source mirr
   }
   assert.equal(warmNativeModules("/mirror", { requireFrom: failingVec }), false)
   assert.deepEqual(events, [["close"]], "the database is closed even when the extension fails")
-  assert.equal(warmNativeModules(path.join(os.tmpdir(), "desk-no-such-mirror")), false, "a mirror without the modules")
+  const mirror = await mkTempRoot("desk-worker-missing-native-")
+  const moduleRoot = path.join(mirror, "node_modules", "better-sqlite3")
+  mkdirSync(moduleRoot, { recursive: true })
+  writeFileSync(path.join(moduleRoot, "package.json"), JSON.stringify({ exports: "./missing.cjs" }))
+  assert.equal(warmNativeModules(mirror), false, "a missing mirror module fails even when NODE_PATH supplies checkout dependencies")
   assert.equal(warmNativeModules(path.join(mcpRoot)), true, "this checkout's own modules load")
 })
 
