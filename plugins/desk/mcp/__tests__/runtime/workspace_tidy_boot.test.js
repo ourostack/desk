@@ -26,6 +26,15 @@ async function fixture() {
   return { root, desk, env: { ...process.env, HOME: root, DESK: desk, DESK_ACTIVATION_CONFIG: "" } }
 }
 
+async function readBootDetails(options) {
+  let line
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    line = await boot.runBootChecks(options)
+    if (!line.includes("budget exceeded")) break
+  }
+  return line
+}
+
 test("boot check queues a detached repair, returns without waiting, and records complete leftovers", async () => {
   assert.equal(typeof boot.runBootChecks, "function")
   const f = await fixture()
@@ -48,11 +57,7 @@ test("boot check queues a detached repair, returns without waiting, and records 
   assert.equal(report.left[0].path, w)
   assert.match(report.left[0].reason, /ownership/)
   assert.ok((await fs.stat(w)).isDirectory())
-  let next
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    next = await boot.runBootChecks({ host: "copilot", env: f.env, sessionFolder: f.desk, launch: async () => {} })
-    if (!next.includes("budget exceeded")) break
-  }
+  const next = await readBootDetails({ host: "copilot", env: f.env, sessionFolder: f.desk, launch: async () => {} })
   assert.match(next, /1 left/)
   assert.match(next, /ownership/)
 })
@@ -109,7 +114,7 @@ test("existing repair locks expose the exact pending resource without stealing i
   const result = await boot.runRepair(f.desk)
   assert.equal(result.busy, true)
   assert.equal(await fs.readFile(`${file}.lock`, "utf8"), "another-owner")
-  const line = await boot.runBootChecks({ host: "copilot", env: f.env, sessionFolder: f.desk, launch: async () => {} })
+  const line = await readBootDetails({ host: "copilot", env: f.env, sessionFolder: f.desk, launch: async () => {} })
   assert.match(line, /repair lock/)
 })
 
@@ -175,11 +180,11 @@ test("boot reports absent bindings, malformed reports and repair launch failures
   const file = boot.reportPath(f.desk, common)
   await fs.writeFile(file, "{")
   await assert.rejects(boot.runRepair(f.desk), /JSON/)
-  const bad = await boot.runBootChecks({ host: "claude", env: f.env, launch: async () => {} })
+  const bad = await readBootDetails({ host: "claude", env: f.env, launch: async () => {} })
   assert.match(bad, /report unreadable/)
   await fs.writeFile(file, JSON.stringify({ root: "different", removed: [], left: [], issues: [] }))
-  assert.doesNotMatch(await boot.runBootChecks({ host: "claude", env: f.env, launch: async () => {} }), /Last repair/)
-  assert.match(await boot.runBootChecks({ host: "claude", env: f.env, launch: async () => { throw new Error("launch failed") } }), /launch failed/)
+  assert.doesNotMatch(await readBootDetails({ host: "claude", env: f.env, launch: async () => {} }), /Last repair/)
+  assert.match(await readBootDetails({ host: "claude", env: f.env, launch: async () => { throw new Error("launch failed") } }), /launch failed/)
   const nonGit = path.join(f.root, "nonGit")
   await fs.mkdir(nonGit)
   await assert.rejects(boot.runRepair(nonGit), /not an inspectable/)
@@ -195,7 +200,7 @@ test("boot lock I/O failures and a slow report read do not authorize late launch
   const lstat = fs.lstat.bind(fs)
   const mock = t.mock.method(fs, "lstat", (candidate) => candidate === `${file}.lock`
     ? Promise.reject(Object.assign(new Error("lock denied"), { code: "EACCES" })) : lstat(candidate))
-  assert.match(await boot.runBootChecks({ host: "claude", env: f.env, launch: async () => {} }), /lock unreadable/)
+  assert.match(await readBootDetails({ host: "claude", env: f.env, launch: async () => {} }), /lock unreadable/)
   mock.mock.restore()
   const open = fs.open.bind(fs)
   const denied = t.mock.method(fs, "open", (candidate, ...args) => candidate === `${file}.lock`
