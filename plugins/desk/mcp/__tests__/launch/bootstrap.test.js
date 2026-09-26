@@ -467,13 +467,14 @@ test("importIndex loads index.js as an ES module and starts it through its entry
   writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }))
   writeFileSync(fixture, [
     "export const calls = []",
-    "export async function main(options) { calls.push(['main', options.argv]) }",
-    "export function runIfEntrypoint(options) { calls.push(['guard', options.argv[1]]); return options.launch() }",
+    "export async function main(options) { calls.push(['main', options.argv, options.crashHandlers, typeof options.onClosed]) }",
+    "export function runIfEntrypoint(options) { calls.push(['guard', options.argv[1]]); return options.launch({ onClosed: () => {}, crashHandlers: true }) }",
     "",
   ].join("\n"))
   await bootstrap.importIndex(fixture, ["--x"])
   const loaded = await import(pathToFileURL(fixture).href)
-  assert.deepEqual(loaded.calls, [["guard", fixture], ["main", ["--x"]]])
+  // The guard's options reach main: Desk in bootstrap's own process installs the crash handlers and exits when the host closes stdin, like index.js run directly.
+  assert.deepEqual(loaded.calls, [["guard", fixture], ["main", ["--x"], true, "function"]])
 })
 
 test("an index.js that cannot load is served as a degraded state, never a crash", async () => {

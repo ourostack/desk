@@ -457,8 +457,9 @@ function importIndex(indexFile, args) {
   return load(require("url").pathToFileURL(indexFile).href).then(function (index) {
     return index.runIfEntrypoint({
       argv: [process.execPath, indexFile],
-      launch: function () {
-        return index.main({ argv: args });
+      // Keep the entrypoint guard's options (crash handlers, exit on stdin close): Desk runs in this process exactly as if index.js were the entry point.
+      launch: function (options) {
+        return index.main(Object.assign({}, options, { argv: args }));
       }
     });
   });

@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process"
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { isolatedEnv, makeIsolatedHome, indexPath } from "../launch/_mcp_handshake.js"
+import { bootstrapPath, isolatedEnv, makeIsolatedHome, indexPath, pluginRoot } from "../launch/_mcp_handshake.js"
 import { openSession } from "../launch/_mcp_session.js"
 
 export const HANDSHAKE_BUDGET_MS = 3000
@@ -68,13 +68,30 @@ export function writeActivation(fixture, deskRuntime = { semantic: "unsupported"
   return configPath
 }
 
-/** Start index.js over stdio the way a host does, with the fixture's isolated environment. */
-export function startDesk(fixture, { args = [], env = {}, nodeArgs = [] } = {}) {
+/** The Claude `.mcp.json` inline launcher: `node -e <script>`, which finds mcp/bootstrap.cjs from DESK_PLUGIN_ROOT and runs it in its own process. */
+export function inlineLauncherScript() {
+  const config = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8"))
+  const server = config.mcpServers.desk
+  return server.args[server.args.indexOf("-e") + 1]
+}
+
+/**
+ * Start Desk over stdio the way a host does, with the fixture's isolated environment.
+ * `entry` picks the launch path: "index" (node index.js), "bootstrap" (node bootstrap.cjs, which runs index.js in its own process when this Node fits a shipped pack, or re-runs it under a Node that does) or "launcher" (the `.mcp.json` inline launcher). `node` is the Node that starts it.
+ */
+export function startDesk(fixture, { args = [], env = {}, nodeArgs = [], entry = "index", node = process.execPath } = {}) {
+  // `node -e` leaves its first extra argument out of process.argv.slice(2), so the launcher gets a placeholder first, as a host's empty argument list would.
+  const entryArgs = { index: [indexPath], bootstrap: [bootstrapPath], launcher: ["-e", inlineLauncherScript(), "desk-launcher"] }[entry]
   return openSession({
-    command: process.execPath,
-    args: [...nodeArgs, indexPath, ...args],
+    command: node,
+    args: [...nodeArgs, ...entryArgs, ...args],
     cwd: fixture.root,
-    env: isolatedEnv(fixture, { DESK: undefined, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, ...env }),
+    env: isolatedEnv(fixture, {
+      DESK: undefined,
+      PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      ...(entry === "launcher" ? { DESK_PLUGIN_ROOT: pluginRoot } : {}),
+      ...env,
+    }),
   })
 }
 

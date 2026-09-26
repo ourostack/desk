@@ -2,8 +2,10 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
+import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import * as path from "node:path"
+import { installedNodesByMajor, mcpRoot } from "../launch/_mcp_handshake.js"
 import { git, makeGitDesk, readLastStart, settled, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
 
 async function waitFor(predicate, { deadlineMs = 10000, intervalMs = 50 } = {}) {
@@ -129,23 +131,53 @@ test("a deliberate git switch mid-session stays put: writes go read-only with th
   assert.equal((await session.statusUntil((payload) => payload.state === "ready")).state, "ready")
 })
 
-test("a crash after ready never ends the process: it degrades to runtime_exception, keeps answering and re-admits", { skip: process.platform === "win32" ? "POSIX signals" : false }, async (t) => {
-  const fixture = await makeGitDesk()
-  const configPath = writeActivation(fixture)
-  const preload = new URL("./fixtures/crash-after-ready-preload.mjs", import.meta.url).href
-  const session = await startDesk(fixture, { args: ["--activation-config", configPath], nodeArgs: ["--import", preload] })
-  t.after(() => session.close())
-  assert.equal((await session.statusUntil(settled)).state, "ready")
-  session.child.kill("SIGUSR2")
-  await waitFor(() => /caught unhandled_rejection/u.test(session.stderr()))
-  const status = (await session.call("desk_status")).payload
-  assert.deepEqual(status.admission.exceptions.map((entry) => [entry.kind, entry.message]), [
-    ["uncaught_exception", "injected unhandled error event"],
-    ["unhandled_rejection", "injected unhandled rejection"],
-  ])
-  assert.match(session.stderr(), /state: degraded:runtime_exception/u)
-  assert.equal((await session.statusUntil((payload) => payload.state === "ready")).state, "ready")
-  const write = await session.call("task_create", { track: "ops", slug: "after-crash-write", title: "Still serving" })
-  assert.equal(write.isError, false, JSON.stringify(write.payload))
-  assert.equal(session.child.exitCode, null, "the process is still running")
-})
+// A Node that bootstrap.cjs does not run Desk in (no shipped pack for its ABI here), so it re-runs index.js as a child under this Node. It must understand --import in NODE_OPTIONS (Node 20 and later).
+function reexecNode() {
+  const shipped = JSON.parse(readFileSync(path.join(mcpRoot, "artifacts", "runtime-deps", `${JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8")).version}`, "support-matrix.json"), "utf8"))
+  const abis = new Set(shipped.targets.filter((target) => target.platform === process.platform && target.arch === process.arch).map((target) => String(target.node_abi)))
+  const candidates = [...installedNodesByMajor().values()].map((entry) => entry.executable)
+  for (const executable of ["/usr/local/bin/node", "/usr/bin/node", "/opt/homebrew/bin/node"]) if (existsSync(executable)) candidates.push(executable)
+  for (const executable of candidates) {
+    const probe = spawnSync(executable, ["-p", "process.versions.modules + ' ' + process.versions.node"], { encoding: "utf8" })
+    const [abi, version] = (probe.stdout ?? "").trim().split(" ")
+    if (probe.status === 0 && Number(version?.split(".")[0]) >= 20 && !abis.has(abi)) return executable
+  }
+  return null
+}
+
+const crashPaths = [
+  { name: "index.js as the entry point", entry: "index" },
+  { name: "bootstrap.cjs running index.js in its own process", entry: "bootstrap" },
+  { name: "the .mcp.json inline launcher running bootstrap.cjs in its own process", entry: "launcher" },
+  { name: "bootstrap.cjs re-running index.js as a child under a Node with a shipped pack", entry: "bootstrap", reexec: true },
+]
+
+for (const launch of crashPaths) {
+  const node = launch.reexec ? reexecNode() : process.execPath
+  const skip = process.platform === "win32" ? "POSIX signals" : node === null ? "no installed Node 20+ without a shipped pack to start bootstrap.cjs under" : false
+  test(`a crash after ready never ends the process (${launch.name}): it degrades to runtime_exception, keeps answering and re-admits`, { skip }, async (t) => {
+    const fixture = await makeGitDesk()
+    const configPath = writeActivation(fixture)
+    const preload = new URL("./fixtures/crash-after-ready-preload.mjs", import.meta.url).href
+    // NODE_OPTIONS reaches a re-exec child too; the crash is injected into whichever process runs Desk.
+    const session = await startDesk(fixture, { args: ["--activation-config", configPath], entry: launch.entry, node, env: { NODE_OPTIONS: `--import=${preload}` } })
+    t.after(() => session.close())
+    assert.equal((await session.statusUntil(settled)).state, "ready")
+    // Worker threads load the preload too, so a process can say it more than once.
+    const armed = [...new Set([...session.stderr().matchAll(/\[crash-preload\] armed pid (\d+)/gu)].map((match) => Number(match[1])))]
+    const deskPid = launch.reexec ? armed.find((pid) => pid !== session.child.pid) : session.child.pid
+    assert.deepEqual(armed.sort(), (launch.reexec ? [session.child.pid, deskPid] : [deskPid]).sort(), session.stderr())
+    process.kill(deskPid, "SIGUSR2")
+    await waitFor(() => /caught unhandled_rejection/u.test(session.stderr()))
+    const status = (await session.call("desk_status")).payload
+    assert.deepEqual(status.admission.exceptions.map((entry) => [entry.kind, entry.message]), [
+      ["uncaught_exception", "injected unhandled error event"],
+      ["unhandled_rejection", "injected unhandled rejection"],
+    ])
+    assert.match(session.stderr(), /state: degraded:runtime_exception/u)
+    assert.equal((await session.statusUntil((payload) => payload.state === "ready")).state, "ready")
+    const write = await session.call("task_create", { track: "ops", slug: "after-crash-write", title: "Still serving" })
+    assert.equal(write.isError, false, JSON.stringify(write.payload))
+    assert.equal(session.child.exitCode, null, "the process is still running")
+  })
+}
