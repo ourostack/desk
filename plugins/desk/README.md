@@ -22,6 +22,8 @@ For the on-demand design rationale behind the V2 foundation, layered toolshop, c
 
 ## Activation
 
+Desk-bound Git checkouts receive a local protection marker. Claude and Copilot shell hooks redirect the named destructive or ref-changing Git operations to an owned worktree, for parent agents and subagents alike; direct human terminal commands remain unaffected. See [Protected checkouts](docs/protected-checkouts.md) for the command list, target resolution, marker scope and shell boundary.
+
 ### Under Copilot CLI
 
 The alpha source is `ourostack/desk:plugins/desk@main`. Use the host's admitted, explicit alpha composition instead of changing a live default installation.

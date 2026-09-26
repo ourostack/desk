@@ -81,6 +81,7 @@ test("Superpowers context prints exact paths without introducing a second progre
     implementationReportPath: path.join(artifactDirectory, "implementation-report.md"),
     reviewPackagePath: path.join(artifactDirectory, "review.patch"),
     reviewReportPath: path.join(artifactDirectory, "review-report.md"),
+    briefRules: ["verify or validate in your own worktree; never in a checkout your task does not own"],
     cleanupPaths: [],
   })
   assert.equal(JSON.stringify(output).includes(".superpowers"), false)

@@ -104,6 +104,7 @@ export async function resolveSuperpowersContext(input) {
     implementationReportPath: path.join(artifactDirectory, "implementation-report.md"),
     reviewPackagePath: path.join(artifactDirectory, "review.patch"),
     reviewReportPath: path.join(artifactDirectory, "review-report.md"),
+    briefRules: ["verify or validate in your own worktree; never in a checkout your task does not own"],
     cleanupPaths: [],
   }
 }

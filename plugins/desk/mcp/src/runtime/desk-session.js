@@ -23,6 +23,7 @@ import { inspectStateBranch, repairStateBranch, runGit, stateBranchProblem, STAT
 import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../readiness/hung-controller.js"
 import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
+import { protectCheckout } from "./protected-checkout.js"
 
 const READ_TOOLS = new Set(["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"])
 const SEMANTIC_TOOLS = new Set(["desk_recall", "desk_similar"])
@@ -74,6 +75,7 @@ export function createDeskSession(deps) {
     readinessStateHome,
     deskStateDir,
     git = runGit,
+    protect = protectCheckout,
     watch = watchFileSystem,
     timers,
     stderr = process.stderr,
@@ -197,6 +199,7 @@ export function createDeskSession(deps) {
     // The root's own start record begins with the state it is in now (admitting, on the first attempt), not only with the next change.
     if (newRoot) recordLastStart(admission.snapshot())
     const deskRoot = inputs.root.root
+    await protect({ root: deskRoot })
     if (inputs.activationError) return activationOutcome(inputs.activationError)
     const activation = inputs.activation
     const policyKey = JSON.stringify(activation.readinessPolicy)

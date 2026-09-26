@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.40 — 2026-09-26
+
+Milestone 3a, task A3: [protected-checkout shell hooks](docs/protected-checkouts.md) for Claude `PreToolUse` and Copilot `preToolUse`, registered at plugin scope with no parent/subagent exemption. The [shared guard](mcp/src/runtime/protected-checkout.js) denies only the listed Git operations on a locally marked target and returns the exact worktree guidance. The [shell inspector](mcp/src/runtime/shell-commands.js) resolves quoted paths, chained directories, Git directory options, wrappers, aliases, substitutions and control flow without executing the proposed command; the documentation states the boundary for arbitrary computed code. Human Git commands bypass no new Git hook because none is installed.
+
+[Common Desk admission](mcp/src/runtime/desk-session.js) marks launcher-bound roots using a checkout-specific conditional include, so new task worktrees do not inherit automatic protection. [Command-table regressions](mcp/__tests__/runtime/protected_checkout.test.js) exercise parent and child hook payloads, unchanged HEAD and reflog on denial, human terminal access and new worktree isolation. The [Desk-to-Superpowers adapter](skills/using-superpowers-with-desk/SKILL.md) supplies the one-line owned-worktree rule to implementer and reviewer briefs without changing vendored Superpowers. Ships the existing `desk-mcp@1.4.0-alpha.6` dependency payload; native dependency packs and snapshot source scope are unchanged.
+
 ## 3.2.0-alpha.39 — 2026-09-26
 
 Milestone 3a, task A2b: the readiness controller, watcher, journal and index writer now run in a child process owned by the electing MCP session. Reindexing no longer shares that session's event loop. The [real-process regression](mcp/__tests__/runtime/controller_process.test.js) rebuilds an absent index from exactly 6,000 documents and enforces a 200 ms maximum for the owning session's `tools/list`; this is a measured normal-operation bound, not a guarantee against OS starvation. The root rendezvous, election, semantic contracts, health pings and controller-free reads and writes remain unchanged.
