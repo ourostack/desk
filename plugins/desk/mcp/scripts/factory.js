@@ -27,7 +27,7 @@ export function parseOptions(argv) {
 }
 
 /** Runs the `consent` subcommand: validates `argv`, calls `setConsent`, and returns the JSON-ready result. */
-export function runConsentCommand({ argv, env }) {
+export async function runConsentCommand({ argv, env }) {
   const options = parseOptions(argv)
   const store = options?.get("store")
   const contribute = options?.get("contribute")
@@ -38,18 +38,18 @@ export function runConsentCommand({ argv, env }) {
     if (!CONSENT_OPTIONS.has(key)) throw new Error(`factory.js consent: unknown option --${key}`)
   }
   const account = options.has("account") ? options.get("account") : null
-  const consent = setConsent(env, { store, contribute: contribute === "yes", account })
+  const consent = await setConsent(env, { store, contribute: contribute === "yes", account })
   return { store, ...consent.stores[store] }
 }
 
 /** Dispatches `argv[0]` to its subcommand and writes the JSON result with `write`. Returns the process exit code. */
-export function main({ argv = process.argv.slice(2), env = process.env, write = (text) => process.stdout.write(text), logError = (text) => process.stderr.write(text) } = {}) {
+export async function main({ argv = process.argv.slice(2), env = process.env, write = (text) => process.stdout.write(text), logError = (text) => process.stderr.write(text) } = {}) {
   const [subcommand, ...rest] = argv
   try {
     if (subcommand !== "consent") {
       throw new Error(`factory.js: unknown subcommand ${JSON.stringify(subcommand ?? "")} (supported: consent)`)
     }
-    const result = runConsentCommand({ argv: rest, env })
+    const result = await runConsentCommand({ argv: rest, env })
     write(`${JSON.stringify(result)}\n`)
     return 0
   } catch (error) {
@@ -65,5 +65,6 @@ export function isMainModule(importMetaUrl, argv1) {
 }
 
 if (isMainModule(import.meta.url, process.argv[1])) {
-  process.exitCode = main()
+  const code = await main()
+  process.exitCode = code
 }
