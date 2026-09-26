@@ -17,6 +17,7 @@ function deferred() {
 
 async function session(t, { semantic = "background", handler } = {}) {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-live-status-"))
+  const firstStatus = deferred()
   const probeEntered = deferred()
   const probeRelease = deferred()
   const state = { controller: null, convergence: null, initial: null, context: null, desk: null }
@@ -43,8 +44,14 @@ async function session(t, { semantic = "background", handler } = {}) {
       state.desk = await startInProcess({
         argv: ["--root", root], env: {}, readinessPolicy: { semantic },
         runtimeImporter: async () => ({
-          callTool,
+          async callTool(request) {
+            const result = await callTool(request)
+            if (request.name === "desk_status") firstStatus.resolve()
+            return result
+          },
           async connectOrStartController(options) {
+            // Exercise the controller-free status response before allowing election to finish.
+            await firstStatus.promise
             state.controller = handler
               ? await connectController({
                   root, stateHome: path.join(root, "controller-state"), ephemeral: true,
@@ -62,8 +69,8 @@ async function session(t, { semantic = "background", handler } = {}) {
           },
         }),
       })
-      // The first status can still be admitting; capture controller detail only once it is available.
-      state.initial = await state.desk.statusUntil((payload) => payload.readiness?.state !== undefined)
+      // The runtime can report not_checked before a controller exists; wait for its actual state.
+      state.initial = await state.desk.statusUntil((payload) => payload.readiness?.state !== undefined && payload.readiness.state !== "not_checked")
       state.context = statusContextOf(state.desk)
     },
   }
