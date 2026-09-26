@@ -11,22 +11,15 @@ description: >
 
 # Humanize Text Skill
 
-> **Source / attribution.** Vendored from [harshaneel/humanize](https://github.com/harshaneel/humanize)
-> (MIT — © 2026 Harshaneel Gokhale; see [`LICENSE`](./LICENSE)). The upstream repo ships a companion
-> `ai-check` grading skill that is **not** bundled here; references to it have been neutralized to the
-> stylometric signals (A–I) this skill already describes inline.
+> **Source / attribution.** Vendored from [harshaneel/humanize](https://github.com/harshaneel/humanize) (MIT — © 2026 Harshaneel Gokhale; see [`LICENSE`](./LICENSE)). The upstream repo ships a companion `ai-check` grading skill that is **not** bundled here; references to it have been neutralized to the stylometric signals (A–I) this skill already describes inline.
 
-Transforms AI-generated or flat text into output that mirrors the statistical and stylistic
-fingerprint of human writing. Grounded in the published detection literature (Wu et al. 2025,
-Kujur 2025, Mitchell et al. 2023, and the AAAI 2025 shared task corpus).
+Transforms AI-generated or flat text into output that mirrors the statistical and stylistic fingerprint of human writing. Grounded in the published detection literature (Wu et al. 2025, Kujur 2025, Mitchell et al. 2023, and the AAAI 2025 shared task corpus).
 
 ---
 
 ## Mental model: what detectors actually measure
 
-Before rewriting, internalize the nine signals detectors use (the eight stylometric signals plus
-the RLHF / instruction-tuning fingerprint). Your output must move in the human direction on ALL
-of them, not just one or two.
+Before rewriting, internalize the nine signals detectors use (the eight stylometric signals plus the RLHF / instruction-tuning fingerprint). Your output must move in the human direction on ALL of them, not just one or two.
 
 | Signal | AI direction (avoid) | Human direction (target) |
 |---|---|---|
@@ -174,12 +167,9 @@ Convert AI prose patterns to human prose patterns:
 
 Every abstract claim needs a grounding anchor:
 
-- Generic: "Many companies have adopted this approach."
-  Human: "Three companies I've seen pull this off — Stripe, Datadog, and PlanetScale — all did it the same way."
-- Generic: "Performance improved significantly."
-  Human: "Latency dropped from 340ms to 80ms under the same load profile."
-- Generic: "This is a common problem."
-  Human: "Every team I've talked to hits this around the 50-engineer mark."
+- Generic: "Many companies have adopted this approach." Human: "Three companies I've seen pull this off — Stripe, Datadog, and PlanetScale — all did it the same way."
+- Generic: "Performance improved significantly." Human: "Latency dropped from 340ms to 80ms under the same load profile."
+- Generic: "This is a common problem." Human: "Every team I've talked to hits this around the 50-engineer mark."
 
 If specific details aren't available, use plausible specificity frames: "when you're running at X scale...", "in the cases I've seen...", "the one time this bit us..."
 
@@ -261,12 +251,7 @@ Rules:
 
 ### Lever 9: Strip RLHF / instruction-tuning voice
 
-The most consequential 2025-2026 finding in the detection literature: current detectors mostly
-fire on **RLHF and instruction-tuning artifacts**, not "AI-ness" per se. arXiv 2605.19516
-("Base Models Look Human") and corroborating Pangram analysis show that raw, non-instruction-tuned
-base-model output reads as human to SOTA detectors. What gets flagged is the "helpful assistant"
-voice that emerges from RLHF: polite hedging, balanced tradeoffs, structured enumeration, perfect
-local coherence, and a particular flavor of explainer-tone.
+The most consequential 2025-2026 finding in the detection literature: current detectors mostly fire on **RLHF and instruction-tuning artifacts**, not "AI-ness" per se. arXiv 2605.19516 ("Base Models Look Human") and corroborating Pangram analysis show that raw, non-instruction-tuned base-model output reads as human to SOTA detectors. What gets flagged is the "helpful assistant" voice that emerges from RLHF: polite hedging, balanced tradeoffs, structured enumeration, perfect local coherence, and a particular flavor of explainer-tone.
 
 Strip these specifically:
 
@@ -286,69 +271,43 @@ Strip these specifically:
 | Collaborative chat artifacts pasted into content: "Here is an overview of X", "I hope this helps!", "Let me know if you'd like me to expand", "Of course!", "Certainly!" | Strip on sight. These are conversational scaffolding that got pasted in when content was lifted from a chat session. Real published prose never carries them. |
 | Sycophantic / servile prefixes: "Great question!", "That's an excellent point!", "You're absolutely right!" | Cut entirely. Real engagement names the specific thing that was good ("the point about X is interesting because Y"), not the act of asking. |
 
-This lever overlaps with Lever 3 (hedge surgery) and Lever 4 (structural flattening) but is the
-single most valuable addition because it targets what detectors actually detect, not what the
-1990s-era stylometric literature thought they detected.
+This lever overlaps with Lever 3 (hedge surgery) and Lever 4 (structural flattening) but is the single most valuable addition because it targets what detectors actually detect, not what the 1990s-era stylometric literature thought they detected.
 
 ---
 
 ## Advanced techniques (optional, when stakes are high)
 
-The nine core levers above are pure-rule. 2024-2026 benchmarks (CEOWORLD, HasteWire,
-Pangram) consistently show that hybrid (rule + model-in-the-loop) approaches outperform pure-rule.
-When the stakes warrant the extra cost, layer one or more of these on top:
+The nine core levers above are pure-rule. 2024-2026 benchmarks (CEOWORLD, HasteWire, Pangram) consistently show that hybrid (rule + model-in-the-loop) approaches outperform pure-rule. When the stakes warrant the extra cost, layer one or more of these on top:
 
 ### Advanced 1: Detector-scored best-of-N
 
-Generate 3 to 5 variants of the humanized output. Score each against either (a) a real detector
-(GPTZero, Pangram, Binoculars), (b) a banned-word count, or (c) a perplexity probe. Pick the
-lowest-scoring variant. Source: arXiv 2506.07001 (detector-guided adversarial paraphrasing, 87.88%
-average TPR reduction across 8 detectors).
+Generate 3 to 5 variants of the humanized output. Score each against either (a) a real detector (GPTZero, Pangram, Binoculars), (b) a banned-word count, or (c) a perplexity probe. Pick the lowest-scoring variant. Source: arXiv 2506.07001 (detector-guided adversarial paraphrasing, 87.88% average TPR reduction across 8 detectors).
 
 ### Advanced 2: Iterative paraphrase pass
 
-After applying Levers 1 through 9, run the output through a second LLM with "paraphrase this while
-keeping the meaning." Iterative paraphrase creates a "laundering region" that defeats most surface
-detectors (PADBen, arXiv 2511.00416). Diminishing returns past 2 passes.
-Cost: subtle meaning drift accumulates per pass; verify the substance still holds.
+After applying Levers 1 through 9, run the output through a second LLM with "paraphrase this while keeping the meaning." Iterative paraphrase creates a "laundering region" that defeats most surface detectors (PADBen, arXiv 2511.00416). Diminishing returns past 2 passes. Cost: subtle meaning drift accumulates per pass; verify the substance still holds.
 
 ### Advanced 3: Writer-profile distillation pre-step
 
-When the user supplies prior writing samples, distill style hypotheses from them first ("this
-writer uses fragments aggressively, opens with concrete scenes, never starts a paragraph with
-a thesis sentence"), then humanize the new text against those hypotheses. Source: HyPerAlign
-(arXiv 2505.00038). More effective than raw few-shot.
+When the user supplies prior writing samples, distill style hypotheses from them first ("this writer uses fragments aggressively, opens with concrete scenes, never starts a paragraph with a thesis sentence"), then humanize the new text against those hypotheses. Source: HyPerAlign (arXiv 2505.00038). More effective than raw few-shot.
 
 ### Advanced 4: Self-rewrite distance sanity check
 
-After humanizing, give the output to a different LLM with "rewrite this in different words." If
-the new version is nearly identical to the input, the text still sits at a local maximum of model
-probability (the Raidar inversion signal, arXiv 2401.12970) and reads as AI. If the rewrite
-diverges meaningfully, the humanized output has genuine idiosyncrasy.
+After humanizing, give the output to a different LLM with "rewrite this in different words." If the new version is nearly identical to the input, the text still sits at a local maximum of model probability (the Raidar inversion signal, arXiv 2401.12970) and reads as AI. If the rewrite diverges meaningfully, the humanized output has genuine idiosyncrasy.
 
 ### Advanced 5: Embedding-guided synonym swap (when implementable)
 
-Lever 1's word-list approach is a proxy for the real target: lowering perplexity at specific
-high-confidence tokens. Embedding-guided substitution (arXiv 2501.18998) picks synonyms that
-explicitly lower Fast-DetectGPT scores. When tooling is available, prefer it over the static
-word-list.
+Lever 1's word-list approach is a proxy for the real target: lowering perplexity at specific high-confidence tokens. Embedding-guided substitution (arXiv 2501.18998) picks synonyms that explicitly lower Fast-DetectGPT scores. When tooling is available, prefer it over the static word-list.
 
 ### Advanced 6: Disfluency injection (casual register only)
 
-For casual / Slack / chat registers, light disfluencies (controlled hesitations, mid-thought
-restarts, "wait actually" course-corrections) raise perceived spontaneity. Source: arXiv 2412.12710.
-Off by default for formal, technical, or professional writing — disfluencies in a board memo are
-their own AI tell.
+For casual / Slack / chat registers, light disfluencies (controlled hesitations, mid-thought restarts, "wait actually" course-corrections) raise perceived spontaneity. Source: arXiv 2412.12710. Off by default for formal, technical, or professional writing — disfluencies in a board memo are their own AI tell.
 
 ### What NOT to do (documented dead ends)
 
-- **Homoglyph injection (SilverSpeak, arXiv 2406.11239):** Cyrillic / Latin lookalikes drop
-  detector MCC to near zero, but it's defeated by Unicode normalization and is ethically a clear
-  tampering signal. Skip.
-- **Single cross-model rewrite as silver bullet:** DAMAGE benchmark (arXiv 2501.03437) shows that
-  having Model A rewrite Model B's output does NOT defeat modern trained detectors on its own.
-- **Watermark stripping:** Out of scope for stylistic humanization. Tools exist (RLCracker
-  arXiv 2509.20924, De-mark arXiv 2410.13808) but live in a separate problem space.
+- **Homoglyph injection (SilverSpeak, arXiv 2406.11239):** Cyrillic / Latin lookalikes drop detector MCC to near zero, but it's defeated by Unicode normalization and is ethically a clear tampering signal. Skip.
+- **Single cross-model rewrite as silver bullet:** DAMAGE benchmark (arXiv 2501.03437) shows that having Model A rewrite Model B's output does NOT defeat modern trained detectors on its own.
+- **Watermark stripping:** Out of scope for stylistic humanization. Tools exist (RLCracker arXiv 2509.20924, De-mark arXiv 2410.13808) but live in a separate problem space.
 
 ---
 
@@ -356,9 +315,7 @@ their own AI tell.
 
 When given text to humanize:
 
-0. **(Optional) Writer-profile distillation.** If the user has provided prior writing samples
-   (a blog, past emails, an essay corpus), extract style hypotheses across these six dimensions
-   before touching the new text:
+0. **(Optional) Writer-profile distillation.** If the user has provided prior writing samples (a blog, past emails, an essay corpus), extract style hypotheses across these six dimensions before touching the new text:
 
    1. **Sentence length pattern.** Mostly short? Mostly long? What's the variance? Any signature short-sentence fragments?
    2. **Word choice level.** Casual? Academic? Domain-specific jargon density? Do they use "stuff" and "thing" or "elements" and "components"?
@@ -367,15 +324,9 @@ When given text to humanize:
    5. **Recurring phrases / verbal tics.** Any specific phrases that repeat across the sample? Filler words ("honestly", "basically", "look,")?
    6. **Transition style.** Explicit connectors ("However", "So")? Or do they just start the next thought without bridging?
 
-   Distill 5 to 10 specific style hypotheses from these dimensions. Examples: "this writer never opens
-   with a thesis", "this writer uses fragments aggressively in conclusions", "this writer never uses
-   'I think'", "this writer's sentence variance is roughly 6 to 28 words".
+   Distill 5 to 10 specific style hypotheses from these dimensions. Examples: "this writer never opens with a thesis", "this writer uses fragments aggressively in conclusions", "this writer never uses 'I think'", "this writer's sentence variance is roughly 6 to 28 words".
 
-   **Critical rule when matching voice:** don't just remove AI patterns. Replace them with patterns
-   from the sample. If the sample uses short sentences, don't produce long ones. If the sample uses
-   casual vocabulary ("stuff", "thing"), don't upgrade to "elements", "components". The skill's
-   default biases (toward terse, specific, direct prose) should yield to the sample's actual register
-   when they conflict.
+   **Critical rule when matching voice:** don't just remove AI patterns. Replace them with patterns from the sample. If the sample uses short sentences, don't produce long ones. If the sample uses casual vocabulary ("stuff", "thing"), don't upgrade to "elements", "components". The skill's default biases (toward terse, specific, direct prose) should yield to the sample's actual register when they conflict.
 
    Then apply the levers in service of those hypotheses. Source: HyPerAlign (arXiv 2505.00038).
 
@@ -394,8 +345,7 @@ When given text to humanize:
 
 3. **Rewrite in a single pass** applying all nine core levers. Do not do "light editing"; the statistical fingerprint requires actual structural change.
 
-4. **Pre-output gate (run BEFORE the full self-check; these five fail most often).**
-   Scan the draft for each item and fix any hit before moving on:
+4. **Pre-output gate (run BEFORE the full self-check; these five fail most often).** Scan the draft for each item and fix any hit before moving on:
    - [ ] **Em dash count.** Search for "—". More than (word_count / 300) instances? Cut or replace with periods.
    - [ ] **Semicolons.** Search for ";". Any present? Replace with a period or "and"/"but"/"so" unless it's a comma-containing list.
    - [ ] **Banned vocabulary.** Search the draft for any term in the master list (§ Reference: banned word/phrase list, end of this skill). Highest-frequency offenders to eyeball first: delve, leverage (verb), utilize, robust, comprehensive, furthermore, moreover, "it is important to note". Any hits? Rewrite.
@@ -471,12 +421,7 @@ When writing new content (not rewriting):
 - End without a summary paragraph unless the piece is genuinely long enough that readers need a re-anchor
 - Let the voice calibrate to the domain: an engineer's Slack post sounds different from a founder's board memo
 
-**Decoding-strategy note (when controlling generation):** the RAID benchmark (arXiv 2405.07940)
-found that varying sampling parameters (top-p, temperature, repetition penalty) of the source
-model is more destructive to detectors than paraphrase-based attacks. If you control the model
-that generates the text, set temperature high (0.9 to 1.1), set top-p loose (0.95 to 0.99), and
-increase repetition penalty (1.1 to 1.2). This widens the token distribution and breaks the
-"sits at a local maximum" property that detectors like DetectGPT rely on.
+**Decoding-strategy note (when controlling generation):** the RAID benchmark (arXiv 2405.07940) found that varying sampling parameters (top-p, temperature, repetition penalty) of the source model is more destructive to detectors than paraphrase-based attacks. If you control the model that generates the text, set temperature high (0.9 to 1.1), set top-p loose (0.95 to 0.99), and increase repetition penalty (1.1 to 1.2). This widens the token distribution and breaks the "sits at a local maximum" property that detectors like DetectGPT rely on.
 
 ---
 
@@ -530,58 +475,28 @@ Register collapse is the primary tell for Slack writing. AI writes Slack message
 
 Remove every instance of these before outputting:
 
-**Core AI vocabulary:**
-delve, leverage (verb), utilize, robust, comprehensive, streamline, foster, facilitate,
-pivotal, nuanced, multifaceted, crucial (overused), enduring, garner, valuable, vibrant, tapestry (figurative),
-testament (figurative), interplay, intricate, intricacies, landscape (as abstract noun),
-showcase (verb), highlight (as standalone verb), underscore (as standalone verb),
-align with, actually (as filler), additionally (as opener)
+**Core AI vocabulary:** delve, leverage (verb), utilize, robust, comprehensive, streamline, foster, facilitate, pivotal, nuanced, multifaceted, crucial (overused), enduring, garner, valuable, vibrant, tapestry (figurative), testament (figurative), interplay, intricate, intricacies, landscape (as abstract noun), showcase (verb), highlight (as standalone verb), underscore (as standalone verb), align with, actually (as filler), additionally (as opener)
 
-**Hedge / softener clusters:**
-it is important to note, it is worth mentioning, notably, it's worth noting,
-in many cases, generally speaking, it can be argued
+**Hedge / softener clusters:** it is important to note, it is worth mentioning, notably, it's worth noting, in many cases, generally speaking, it can be argued
 
-**Filler / formula openers and closers:**
-in today's fast-paced world, in conclusion, in summary, to summarize,
-it goes without saying, needless to say, at the end of the day, at its core,
-under the hood, the standard fix, the common approach, simple enough on paper
+**Filler / formula openers and closers:** in today's fast-paced world, in conclusion, in summary, to summarize, it goes without saying, needless to say, at the end of the day, at its core, under the hood, the standard fix, the common approach, simple enough on paper
 
-**AI transition fingerprint:**
-furthermore, moreover, it is clear that, this highlights, this underscores,
-as previously mentioned, turns out (as a pivot), it turns out that
+**AI transition fingerprint:** furthermore, moreover, it is clear that, this highlights, this underscores, as previously mentioned, turns out (as a pivot), it turns out that
 
-**Significance inflation:**
-stands as a testament to, marks a pivotal moment in, indelible mark, evolving landscape,
-setting the stage for, deeply rooted in, plays a vital role, a key turning point,
-represents a shift in
+**Significance inflation:** stands as a testament to, marks a pivotal moment in, indelible mark, evolving landscape, setting the stage for, deeply rooted in, plays a vital role, a key turning point, represents a shift in
 
-**Promotional / marketing register:**
-nestled in the heart of, in the heart of, breathtaking, must-visit, stunning,
-boasts a rich heritage, renowned for, groundbreaking (figurative), vibrant (cultural copy)
+**Promotional / marketing register:** nestled in the heart of, in the heart of, breathtaking, must-visit, stunning, boasts a rich heritage, renowned for, groundbreaking (figurative), vibrant (cultural copy)
 
-**Quantifier inflation:**
-a myriad of, a plethora of, in the realm of, the landscape of (abstract)
+**Quantifier inflation:** a myriad of, a plethora of, in the realm of, the landscape of (abstract)
 
-**Persuasive authority tropes:**
-the real question is, what really matters, fundamentally, the deeper issue,
-the heart of the matter, in reality
+**Persuasive authority tropes:** the real question is, what really matters, fundamentally, the deeper issue, the heart of the matter, in reality
 
-**Signposting / tutorial scaffolding:**
-let's dive in, let's explore, let's break this down, here's what you need to know,
-now let's look at, without further ado
+**Signposting / tutorial scaffolding:** let's dive in, let's explore, let's break this down, here's what you need to know, now let's look at, without further ado
 
-**Knowledge-cutoff disclaimers:**
-as of my training cutoff, up to my last training update,
-while specific details are limited based on available information,
-based on what I know up to
+**Knowledge-cutoff disclaimers:** as of my training cutoff, up to my last training update, while specific details are limited based on available information, based on what I know up to
 
-**Sycophantic prefixes:**
-great question, you're absolutely right, that's an excellent point,
-of course!, certainly!
+**Sycophantic prefixes:** great question, you're absolutely right, that's an excellent point, of course!, certainly!
 
-**Templated email / Slack closers:**
-happy to jump on a call, let me know if you have any questions, feel free to reach out,
-i hope this helps, looking forward to connecting soon
+**Templated email / Slack closers:** happy to jump on a call, let me know if you have any questions, feel free to reach out, i hope this helps, looking forward to connecting soon
 
-**Binary framing:**
-whether X or Y (as a clean binary framing opener)
+**Binary framing:** whether X or Y (as a clean binary framing opener)

@@ -96,9 +96,7 @@ The point isn't which option the operator picks — the point is that the operat
 2. Name the exact live action it suggests and the surface it would mutate.
 3. Preflight the verb transition in one line:
 
-   > "Research found [finding]. The next step would [exact live
-   > mutation] on [surface]. That action was not part of the research
-   > ask. Proceed?"
+   > "Research found [finding]. The next step would [exact live mutation] on [surface]. That action was not part of the research ask. Proceed?"
 
 The preflight is required even when:
 
@@ -133,9 +131,7 @@ Standard collaboration is **not** an ownership hold: opening a PR, participating
 3. If one exists and covers the action, execute it without another permission loop when the action is in the agent's own role and does not speak for the operator (for example a bot or channel-role update, or a work-item state change). Content sent in the operator's name still needs their approval of the exact content (`operator-voice-comments`).
 4. If none exists, preflight the ownership transition:
 
-   > "[Team/system] operates this live surface. We have access, but no
-   > delegated mutation path is established. I can prepare/propose the
-   > change now; unilateral apply would cross the ownership boundary."
+   > "[Team/system] operates this live surface. We have access, but no delegated mutation path is established. I can prepare/propose the change now; unilateral apply would cross the ownership boundary."
 
 **Anti-pattern.** Worker has contributor access to another team's rollout and treats the operator's broad *go* as authority to advance it, bypassing the owners' normal cadence and coordination.
 

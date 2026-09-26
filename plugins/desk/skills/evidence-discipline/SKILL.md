@@ -9,8 +9,10 @@ description: >-
   duration, cost or scope estimate, and before acting on assumed-but-unverified
   evidence: supervised wrappers, explicit tool warnings, outcome messages,
   orchestration wrappers, auth transfer, durability claims, process cleanup,
-  precedent claims, or test coverage. Not needed for a routine status read
-  directly from its source. Covers primary sources before recommendations,
+  precedent claims, or test coverage. Also invoke when writing factual claims
+  into a pull request, task card, handoff or subagent brief, for the citation
+  procedure. Not needed for a routine status read directly from its source.
+  Covers citing every factual claim, primary sources before recommendations,
   evidence precedence, answering the governing question, and fixtures or
   refusal.
 ---
@@ -20,6 +22,21 @@ description: >-
 Invoke this skill when a claim, recommendation or action depends on evidence worker has not yet verified. Each rule below has its own trigger; match the situation to the rule. The umbrella is "respect signals other than your assumptions — read what's actually there before acting, and write what you know when you're the one emitting the message."
 
 The rules are siblings, not steps. Each is short, has a clear trigger, and applies independently.
+
+## Cite every factual claim
+
+**One-sentence statement.** Every factual claim to a human or an agent, in chat, pull request text, task cards, handoffs or subagent briefs, carries an inline link to its primary source, and a claim with no source is labeled as inference or unverified, never stated as fact.
+
+**What to do.**
+
+- **Link the source inline, next to the claim.** A source is a `file:line`, a pull request, commit, CI run or issue URL, a documentation URL, or a command with its output. Anything written to a Markdown file MUST have its inline links, because the reader of a file cannot ask where a claim came from.
+- **Share a link across consecutive claims from one source**, and give a table a source column instead of a link per cell.
+- **Label what you cannot source.** Write "inference:" or "unverified:" in front of it; a plausible claim with no source is not a fact.
+- **Your own actions link to the artifact.** "Merged", "tests pass" and "PR opened" link to the merge, the CI run or test output, and the pull request. Because the link must exist, no action is announced before it has happened.
+- **Numbers too.** An estimate cites the historical data behind it or carries no number; "Fixtures or refusal" below has the procedure.
+- **Private evidence stays private.** Cite it by a pointer to its protected location (`session-resumption` "Protected evidence"), never by copying it into a public place.
+
+**Anti-patterns.** A handoff that says "all tests pass" with no run linked; a pull request description that states current behavior with no `file:line`; a status line that says "merged" before the merge exists; a task card that copies a private transcript excerpt instead of pointing at it.
 
 ## Primary sources before recommendations
 
@@ -110,7 +127,7 @@ If any check fails, debug at the one-shot level before going infinite.
 - Quoting "10-30 min per iteration" when fixtures showed 2.5 hr per iteration, because the fixtures weren't checked. Distorts every downstream plan that depends on the estimate; only surfaces hours later when the supervised runtime fails to match the imagined cadence.
 - Relaying another agent's plan to the operator with the estimates intact ("~10 min", "~45 min", "~2 hr total") because they came from upstream and worker treated them as data rather than as fabrication. Inherited estimates are still fabrication if no one had a fixture; worker is responsible for stripping them at composition time.
 
-**Cross-link.** Pairs with the `preflight-actions` skill — estimating-without-fixtures is itself a judgment-call substitution that should preflight if the estimate drives an irreversible-ish decision. Reinforced at draft-time by `operator-voice-comments` (No fabrication → Numeric duration / cost / scope estimates) and at response-composition-time by `interaction-style` §7 (Strip fabricated estimates from response prose).
+**Cross-link.** Pairs with the `preflight-actions` skill — estimating-without-fixtures is itself a judgment-call substitution that should preflight if the estimate drives an irreversible-ish decision. This section is the one statement of the rule: `operator-voice-comments` (No fabrication → Numeric duration / cost / scope estimates) and `interaction-style` §7 (Strip fabricated estimates from response prose) point here for operator-voice drafts and response prose.
 
 ## Discover before invent
 

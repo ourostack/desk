@@ -90,10 +90,7 @@ these fields are read by the harness, not the agent. set them when the task repr
 
 agents creating tasks via `desk` skills don't typically set runtime fields directly — they're added by `ouro reminder create`, by bridge promotion, or by the operator. but agents reading task cards should understand what these fields mean so they don't strip them on edits.
 
-consumer agents extending this with their own work-tracker schema
-(e.g. enterprise overlays with Feature / Epic hierarchies) add their
-own frontmatter block — typically the overlay ships a card-fields
-skill defining the tracker-specific `tracker:` + `repos[].org` shape.
+consumer agents extending this with their own work-tracker schema (e.g. enterprise overlays with Feature / Epic hierarchies) add their own frontmatter block — typically the overlay ships a card-fields skill defining the tracker-specific `tracker:` + `repos[].org` shape.
 
 ## Local path portability
 
@@ -105,60 +102,29 @@ the `repo-handling` skill handles auto-discovery and machine-local overrides whe
 
 `iterations:` is the canonical per-task record of iteration shape — every page that's ever been laid open on the desk for this folder. it supersedes the older `doing_docs:` field (now deprecated — see `directory-structure` for the iteration-centric layout).
 
-- `iterations.active` → relative path to the currently-running
-  iteration directory (`./<repo>/<YYYY-MM-DD>-<slug>/`), or `null`
-  when the task is between iterations.
-- `iterations.history[]` → one entry per past or current iteration.
-  each entry carries:
+- `iterations.active` → relative path to the currently-running iteration directory (`./<repo>/<YYYY-MM-DD>-<slug>/`), or `null` when the task is between iterations.
+- `iterations.history[]` → one entry per past or current iteration. each entry carries:
   - `slug` — iteration slug (`YYYY-MM-DD-<trigger>`)
   - `repo` — which repo the iteration targets (matches `repos[].name`)
-  - `trigger` — one of `initial-impl`, `pr-feedback`,
-    `architecture-review`, `post-int-smoke-fixes`,
-    `revert-and-reland`, `pre-merge-polish`, or a new slug the
-    operator confirms
-  - `pr` — PR number this iteration drives, or `null` for
-    task-level refactor iterations with no PR yet
-  - `path` — relative path from task root to the iteration
-    directory (active entries point at the live dir; archived
-    entries point at `_archive/`)
-  - `outcome` — `shipped-to-pr` | `merged` | `reverted` |
-    `in-progress`
+  - `trigger` — one of `initial-impl`, `pr-feedback`, `architecture-review`, `post-int-smoke-fixes`, `revert-and-reland`, `pre-merge-polish`, or a new trigger the agent names from what the iteration does
+  - `pr` — PR number this iteration drives, or `null` for task-level refactor iterations with no PR yet
+  - `path` — relative path from task root to the iteration directory (active entries point at the live dir; archived entries point at `_archive/`)
+  - `outcome` — `shipped-to-pr` | `merged` | `reverted` | `in-progress`
 
-linking out from the task card to per-iteration `doing.md`,
-`planning.md`, and `feedback.md` is how the agent navigates the
-layered-doc model documented in `skills/pr-feedback-on-own-pr/SKILL.md`.
+linking out from the task card to per-iteration `doing.md`, `planning.md`, and `feedback.md` is how the agent navigates the layered-doc model documented in `skills/pr-feedback-on-own-pr/SKILL.md`.
 
 ## Iteration-doc `required_mcps:` field
 
-a per-iteration doc (`doing.md`, `investigation.md`, etc.) MAY declare
-`required_mcps:` in its frontmatter — a list of MCP keys matching
-aliased entries in the runtime's workspace MCP config under either
-`[mcps.builtins.<alias>]` (runtime-proxied builtins) or
-`[mcps.servers.<alias>]` (external stdio MCPs). the field signals a
-HARD requirement: when the operator picks the task to resume,
-`session-resumption` stops at the resumption prompt if any required
-MCP isn't loaded. see the `session-resumption` skill for enforcement
-details and the consumer overlay's "Workspace MCPs" docs for the
-runtime-specific workspace MCP config convention.
+a per-iteration doc (`doing.md`, `investigation.md`, etc.) MAY declare `required_mcps:` in its frontmatter — a list of MCP keys matching aliased entries in the runtime's workspace MCP config under either `[mcps.builtins.<alias>]` (runtime-proxied builtins) or `[mcps.servers.<alias>]` (external stdio MCPs). the field signals a HARD requirement: when the operator picks the task to resume, `session-resumption` stops at the resumption prompt if any required MCP isn't loaded. see the `session-resumption` skill for enforcement details and the consumer overlay's "Workspace MCPs" docs for the runtime-specific workspace MCP config convention.
 
 ## Filename timestamp convention for adopted docs
 
-per-iteration docs (`planning.md`, `doing.md`, `feedback.md`) live
-inside an iteration directory named `<YYYY-MM-DD>-<slug>/`. the
-iteration directory's date prefix carries the "when was this
-originally written" signal; the files inside use canonical names
-without embedded timestamps.
+per-iteration docs (`planning.md`, `doing.md`, `feedback.md`) live inside an iteration directory named `<YYYY-MM-DD>-<slug>/`. the iteration directory's date prefix carries the "when was this originally written" signal; the files inside use canonical names without embedded timestamps.
 
 for **adopted** planning/doing docs pulled from legacy bundles:
-- preserve the adoption date in the iteration directory name
-  (typically `<YYYY-MM-DD>-adopted` or the original iteration slug
-  if it was already in the source layout).
-- add `adopted_at:` to the doing-doc frontmatter to record when the
-  doc entered `$DESK/` (distinct from the iteration date).
+- preserve the adoption date in the iteration directory name (typically `<YYYY-MM-DD>-adopted` or the original iteration slug if it was already in the source layout).
+- add `adopted_at:` to the doing-doc frontmatter to record when the doc entered `$DESK/` (distinct from the iteration date).
 
 ## Cross-org / multi-platform routing
 
-when a task spans repos hosted across different orgs or platforms,
-the routing is encoded in consumer-specific frontmatter fields
-(e.g. `repos[].org` selecting an org-specific MCP server). consumer
-overlays ship the routing schema specific to their tracker(s).
+when a task spans repos hosted across different orgs or platforms, the routing is encoded in consumer-specific frontmatter fields (e.g. `repos[].org` selecting an org-specific MCP server). consumer overlays ship the routing schema specific to their tracker(s).

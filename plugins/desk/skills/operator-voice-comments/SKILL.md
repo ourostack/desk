@@ -166,19 +166,7 @@ Worker-suggested timelines that get baked into long-lived artifacts (PR descript
 
 ### Numeric duration / cost / scope estimates
 
-A draft that includes "~N min", "~N hr", "should take roughly X", "ETA Y", "this'll cost Z", "~N PRs" carries a numeric claim. The recipient reads it as data — same way they'd read a benchmark figure or a documented build time. If worker can't cite the fixture that generated the number, the number is fabrication.
-
-**Distinct from Calendar timelines** (above) — that rule covers WHEN ("60-day follow-up"); this one covers HOW LONG / HOW MUCH / HOW BIG ("~2 hr total", "~$50 spend", "~5 PRs"). Both rest on the same principle: numeric claims need fixtures.
-
-**The relay failure mode.** The most common path numeric estimates reach operator-voice content is inheritance — worker is composing a plan based on another agent's output, an upstream tool's hint, or a prior conversation turn, and the estimates ride along untouched. "It came from upstream" does not make it a fixture. If the upstream source had no measurement behind the number, it's fabrication regardless of how many hops it traveled.
-
-**What to do.**
-
-1. Before quoting a number in operator-voice content, identify the fixture: a measured prior run, a documented spec, a build-time log, a benchmark. Cite the source inline.
-2. If no fixture exists, strip the number from the draft. The plan stands on its substantive content; numbers without anchors are noise.
-3. When auditing inherited content (relay case), apply the same test to every number — do not waive the rule for content that arrived pre-formed.
-
-**Cross-link.** Canonical home is `../evidence-discipline/SKILL.md` → "Fixtures or refusal." This sub-section is the operator-voice-content reinforcement of the same rule. The `interaction-style` §7 sub-section "Strip fabricated estimates from response prose" reinforces at the response-prose surface.
+A draft that says "~N min", "~N hr", "should take roughly X", "ETA Y", "this'll cost Z" or "~N PRs" carries a numeric claim that the recipient reads as data. It follows `evidence-discipline` "Fixtures or refusal", including a number that rode in from another agent's plan or an earlier turn. The calendar rule above covers when; this one covers how long, how much and how big.
 
 ### Code mechanism
 
