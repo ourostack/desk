@@ -24,9 +24,9 @@ Every task moves through a state machine with 8 states. The `status` field in `t
 
 ## One job is one task
 
-A job is one outcome, and it is recorded as exactly one task for its whole life. A follow-up, a re-review, a retry or a second attempt at the same outcome is a new iteration of the existing task (`directory-structure` "iteration-directory rules"), not a new task, even when it arrives in a new session or after the task reached `validating`. A genuinely different outcome that grew out of the work is a new task, linked from the old one with an `origin_note:`.
+A job is one outcome, and it is recorded as exactly one task for its whole life. A follow-up, a re-review, a retry or a second attempt at the same outcome is a new iteration of the existing task (`directory-structure` "iteration-directory rules"), not a new task, even when it arrives in a new session or after the task is `done` and archived; `start-task` says how to reopen it. A genuinely different outcome that grew out of the work is a new task, linked from the old one with an `origin_note:`.
 
-`desk_doctor` reports `duplicate_job` when two live task cards reference the same pull request. Fold them into one: keep the task that holds the most history, move the other's iteration folders under it with Git, and archive the emptied card; tidying never deletes content (`interaction-style` section 2).
+`desk_doctor` reports `duplicate_job` when two live task cards reference the same pull request. Fold them into one: keep the task that holds the most history, move the other's iteration folders under it with Git, and archive the emptied card, under the tidying rules in `interaction-style` section 2.
 
 ## Checkpoint-type annotations on transitions (folded in from AIDLC 2026-05-18)
 
@@ -42,7 +42,8 @@ Each transition has a checkpoint type declaring how humans interact at that gate
 | Any → `paused` | NOTIFY | Operator-requested pause; worker emits a clean handoff state |
 | Any → `blocked` | NOTIFY | External blocker; worker emits the blocker reason + escalation path |
 | Any → `cancelled` | CONFIRM | Operator confirms abandonment; rare; worker doesn't auto-cancel |
-| `done` / `cancelled` → (terminal) | (n/a) | Terminal states; no further transitions |
+| `done` → `processing` | NOTIFY | Reopen: another round of the same job (a follow-up, re-review or retry) continues the existing task; the agent records why in the card and says so in one line (`start-task`) |
+| `cancelled` → (terminal) | (n/a) | Terminal; no further transitions. `done` is terminal too unless the same job is reopened |
 
 **Why annotate:** the checkpoint type makes human interaction explicit. AUTO transitions proceed under the task's authorization; NOTIFY transitions explain a real pause. Do not manufacture a checkpoint because a planning document exists.
 
@@ -63,6 +64,7 @@ Each transition has a checkpoint type declaring how humans interact at that gate
   Any non-terminal state --> paused --> (return to previous state)
   Any non-terminal state --> blocked --> (return to previous state when resolved)
   Any non-terminal state --> cancelled
+  done --> processing   (reopen for another round of the same job)
 ```
 
 ## State-change protocol

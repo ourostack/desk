@@ -540,34 +540,94 @@ contract("repo-handling and git-hygiene state the same clone rule word for word"
 
 // Hard-wrapped Markdown prose: every Desk and Crew skill, and Plain Language, keeps each paragraph and list item on
 // one physical line (Plain Language: never hard-wrap authored prose). A new skill is covered without being listed.
-// Blockquote paragraphs count as prose units too. Code fences, YAML frontmatter, headings, tables, HTML and explicit
-// hard breaks (two trailing spaces or a backslash) are not.
+// Blockquote paragraphs count as prose units too. These are not prose: YAML frontmatter, ``` and ~~~ fences, indented
+// code (four columns past the enclosing list item's content, after a blank line), headings, tables (with or without
+// a leading pipe), HTML blocks and comments, thematic breaks and explicit hard breaks (two trailing spaces or a
+// backslash).
+// Known false negatives, accepted because they are rare in skills: a wrapped line whose continuation starts with `#`,
+// `<`, `|` or `N. ` ends the unit early; a blockquote's lazy continuation line (no `>`) starts a new unit; a setext
+// heading's text line counts as prose. Indented code inside a list is recognized only relative to the most recent
+// list item's content column, not a full CommonMark container model.
 function proseUnits(file) {
-  const lines = text(file).split("\n");
+  return proseUnitsOf(text(file));
+}
+function proseUnitsOf(markdown) {
+  const lines = markdown.split("\n");
   let start = 0;
   if (lines[0] === "---") start = lines.indexOf("---", 1) + 1;
   const units = [];
-  let inCode = false;
+  let fence = null;
+  let block = null; // "code", "table", "html" or "comment" until the block ends
   let inQuote = false;
+  let listIndent = 0; // content column of the most recent list item; 0 outside a list
+  let previousBlank = true;
   let unit = [];
   const flush = () => { if (unit.length > 0) units.push(unit); unit = []; };
+  const indentOf = (value) => value.match(/^ */u)[0].length;
+  const delimiterRow = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)+\|?\s*$/u;
   for (let index = start; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^\s*```/u.test(line)) { inCode = !inCode; flush(); continue; }
-    if (inCode) continue;
+    const line = lines[index].replace(/\t/gu, "    ");
+    const blank = /^\s*$/u.test(line);
+    const fenceMatch = /^\s*(`{3,}|~{3,})/u.exec(line);
+    if (fence !== null) {
+      if (fenceMatch && fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length) fence = null;
+      previousBlank = false;
+      continue;
+    }
+    if (fenceMatch) { flush(); fence = fenceMatch[1]; previousBlank = false; continue; }
+    if (block === "comment") {
+      if (line.includes("-->")) block = null;
+      previousBlank = false;
+      continue;
+    }
+    if (block !== null) {
+      if (blank) block = null;
+      else if (block === "code" && indentOf(line) < listIndent + 4) block = null;
+      else { previousBlank = false; continue; }
+    }
+    if (blank) { flush(); previousBlank = true; continue; }
+    if (listIndent > 0 && previousBlank && indentOf(line) < listIndent && !/^\s*(?:[-*+] |\d+\. )/u.test(line)) listIndent = 0;
+    if (previousBlank && indentOf(line) >= listIndent + 4) { flush(); block = "code"; previousBlank = false; continue; }
     const quote = /^\s*>+ ?(.*)$/u.exec(line);
     if (quote !== null && !inQuote) flush();
     if (quote === null && inQuote) flush();
     inQuote = quote !== null;
     const body = inQuote ? quote[1] : line;
-    if (/^\s*$|^\s*(?:#|\||<|---\s*$)/u.test(body)) { flush(); continue; }
-    if (/^\s*(?:[-*+] |\d+\. )/u.test(body)) flush();
-    unit.push({ number: index + 1, line });
-    if (/(?: {2}|\\)$/u.test(line)) flush();
+    if (/^\s*$/u.test(body)) { flush(); previousBlank = true; continue; }
+    previousBlank = false;
+    if (/^\s{0,3}<!--/u.test(body)) { flush(); if (!body.includes("-->")) block = "comment"; continue; }
+    if (/^\s{0,3}<\/?[A-Za-z]/u.test(body)) { flush(); block = "html"; continue; }
+    if (index + 1 < lines.length && body.includes("|") && delimiterRow.test(lines[index + 1])) { flush(); block = "table"; continue; }
+    if (/^\s*(?:#|\|)|^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,}|=+\s*)$/u.test(body)) { flush(); continue; }
+    const listItem = /^(\s*(?:[-*+]|\d+\.) +)/u.exec(body);
+    if (listItem) { flush(); listIndent = listItem[1].length; }
+    unit.push({ number: index + 1, line: lines[index] });
+    if (/(?: {2}|\\)$/u.test(lines[index])) flush();
   }
   flush();
   return units;
 }
+contract("the hard-wrap detector skips code, tables and HTML, and still catches a wrap", () => {
+  const wrapped = (markdown) => proseUnitsOf(markdown).filter((unit) => unit.length > 1).map((unit) => unit[0].number);
+  const notProse = {
+    "tilde fence": "Intro.\n\n~~~\nfirst code line\nsecond code line\n~~~\n",
+    "indented code": "Intro.\n\n    first code line\n    second code line\n",
+    "indented code in a list item": "- item\n\n      first code line\n      second code line\n",
+    "table without a leading pipe": "Name | Value\n--- | ---\nalpha | one\nbeta | two\n",
+    "HTML block": "<details>\n<summary>More</summary>\nfirst html line\nsecond html line\n</details>\n",
+    "HTML comment": "<!--\nfirst comment line\nsecond comment line\n-->\n",
+    "thematic break under a paragraph": "One paragraph.\n***\nAnother paragraph.\n",
+  };
+  for (const [label, markdown] of Object.entries(notProse)) assert.deepEqual(wrapped(markdown), [], label);
+  const prose = {
+    "wrapped paragraph": "A paragraph that was\nwrapped at a column.\n",
+    "wrapped list item": "- a list item that was\n  wrapped at a column\n",
+    "wrapped blockquote": "> a quote that was\n> wrapped at a column\n",
+    "wrapped paragraph after indented code": "Intro.\n\n    code\n\nA paragraph that was\nwrapped at a column.\n",
+    "wrapped paragraph after a list": "- item\n\nA paragraph that was\nwrapped at a column.\n",
+  };
+  for (const [label, markdown] of Object.entries(prose)) assert.equal(wrapped(markdown).length, 1, label);
+});
 function skillFiles(plugin) {
   const dir = path.join(root, "plugins", plugin, "skills");
   return fs.readdirSync(dir)
@@ -628,9 +688,27 @@ contract("start-task names from the outcome and routes by scope lines", () => {
   assert.match(skill, /never (?:file work under|create) a track named after a person[\s\S]{0,80}catch-all/iu);
   assert.match(skill, /## Path B[\s\S]+announce[\s\S]+one line/iu);
 });
+contract("start-task reopens a finished task for another round of the same job", () => {
+  const skill = text("plugins/desk/skills/start-task/SKILL.md");
+  assert.match(skill, /`done` or archived[\s\S]{0,400}reopen[\s\S]{0,400}`processing`[\s\S]{0,200}why/iu);
+  assert.match(skill, /`<task>\/_iterations\/<YYYY-MM-DD>-<slug>\/`/u);
+  assert.match(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /^\| `done` → `processing` \| NOTIFY \|[^\n]*reopen/imu);
+});
+contract("interaction-style and operator-voice-comments point at the one estimate rule", () => {
+  for (const file of ["plugins/desk/skills/interaction-style/SKILL.md", "plugins/desk/skills/operator-voice-comments/SKILL.md"]) {
+    assert.match(text(file), /`evidence-discipline` "Fixtures or refusal"/u, file);
+  }
+});
 contract("directory-structure says what may sit where", () => {
   const skill = text("plugins/desk/skills/directory-structure/SKILL.md");
-  assert.match(skill, /## What may sit where[\s\S]+desk root[\s\S]+`desks\/`[\s\S]+`AGENTS\.md`, `README\.md`, `CLAUDE\.md`[\s\S]+dotfiles[\s\S]+track root[\s\S]+`track\.md`[\s\S]+Everything else is loose/u);
+  const where = skill.split("## What may sit where\n", 2)[1].split("\n## ", 1)[0];
+  assert.match(where, /everything else is loose/u);
+  assert.match(where, /desk root[\s\S]+`desks\/`[\s\S]+`AGENTS\.md`, `README\.md`, `CLAUDE\.md`[\s\S]+dotfiles[\s\S]+track root[\s\S]+`track\.md`/u);
+  assert.equal(skill.match(/everything else is loose/giu).length, 1, "state the loose rule once");
+  assert.doesNotMatch(skill, /Nothing is loose/u, "\"Nothing is loose\" contradicts the allow-list it introduces");
+  assert.doesNotMatch(skill, /confirm the destination/iu, "the agent decides where a file goes; it never asks");
+  assert.match(skill, /decides the destination[\s\S]{0,300}one line/iu);
+  assert.match(skill, /^ {6}_iterations\/ +# /mu, "the layout names where a task with no repositories keeps its iterations");
   assert.match(skill, /reports, status notes and handoffs belong in a task or iteration folder/iu);
   assert.match(skill, /`task_move`[\s\S]+`track_rename`/u);
   assert.match(skill, /`desk_doctor`[\s\S]{0,200}`loose_file`/u);
@@ -683,7 +761,9 @@ contract("each organization and citation rule has one owner", () => {
   const owners = [
     [/tidy up my desk a bit/iu, ["plugins/desk/skills/interaction-style/SKILL.md"]],
     [/<what belongs>; not <what doesn't>/u, ["plugins/desk/skills/track-card-format/SKILL.md"]],
-    [/Everything else is loose/u, ["plugins/desk/skills/directory-structure/SKILL.md"]],
+    [/everything else is loose/iu, ["plugins/desk/skills/directory-structure/SKILL.md"]],
+    [/never deletes? content|never changes a task's `?status/iu, ["plugins/desk/skills/interaction-style/SKILL.md"]],
+    [/strip (?:it|them) at composition time|strip the number|strips the estimate|drop the number|Inheritance does not excuse/iu, ["plugins/desk/skills/evidence-discipline/SKILL.md"]],
     [/^## One job is one task$/mu, ["plugins/desk/skills/task-lifecycle/SKILL.md"]],
     [/source column/iu, ["plugins/desk/skills/evidence-discipline/SKILL.md"]],
     [/^### Frontload what you need from the human$/mu, ["plugins/desk/skills/interaction-style/SKILL.md"]],

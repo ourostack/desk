@@ -271,7 +271,6 @@ function main() {
 
   assertSectionConcepts(section(skill, "Alignment, then ownership"), [
     /states? (?:its|your) assumptions/iu,
-    /question.*human judgment.*forward/iu,
     /definition of done/iu,
     /explicit go/iu,
     /proportionate/iu,
@@ -279,15 +278,14 @@ function main() {
     /keep producing while (?:a|any) question is pending/iu,
     /genuine human gate \(voice, meaning anything sent as the human; a decision that is theirs;/u,
     /frontload in one batch everything you will need from (?:them|the human) for the whole outcome/iu,
-    /whenever (?:they are|the human is) about to step away/iu,
-    /access, settings only they can change, decisions(?: and|,) reviews/iu,
+    /Frontload again whenever (?:they are|the human is) about to step away/iu,
     /`interaction-style` holds the procedure/u,
-    /When the human opens a conversation, stay in it/u,
+    /When the human opens a conversation \(a question, an idea, "let's talk"\), stay in it/u,
     /design talk goes through `superpowers:brainstorming`/u,
     /already-authorized background work may continue/iu,
     /nothing new starts on (?:that|the) topic until they close it or say go/iu,
     /context size.*not (?:a )?reasons? to stop/iu,
-    /one decision group at a time.*recommendation/iu,
+    /frontload in one batch[^.]*present(?:ing)? (?:its|the) decisions as one group with your recommendations[\s\S]*later decisions come one group at a time/iu,
   ]);
 
   assertSectionConcepts(section(skill, "Coaching the collaboration"), [
@@ -357,9 +355,6 @@ function main() {
     "Every factual claim you make to a human or an agent",
     "inline link to its primary source",
     "labeled as inference or unverified",
-    "your own actions link to their artifact",
-    "before it has happened",
-    "cites the historical data behind it or carries no number",
     "`evidence-discipline` holds the procedure",
   ]);
 
@@ -446,6 +441,11 @@ function main() {
   assert.doesNotMatch(section(skill, "Source and channels"), /Work on the channel/u, "the foundation must not read as permission to commit straight to the channel");
   assert.doesNotMatch(skill, /froz|freez/iu, "using-desk must not describe frozen candidates or freezing: work tracks channels");
   assert.doesNotMatch(skill, /durable naming/iu, "the agent owns naming; it is not a human gate");
+  // Procedure lives in the owning skill: the frontloading checklist in interaction-style, the estimate and own-action
+  // citation rules in evidence-discipline.
+  assert.doesNotMatch(skill, /settings only they can change/iu, "the frontloading checklist belongs to interaction-style");
+  assert.doesNotMatch(skill, /historical data|carries no number|estimate/iu, "the estimate rule belongs to evidence-discipline");
+  assert.doesNotMatch(skill, /own actions link/iu, "the own-action citation rule belongs to evidence-discipline");
 
   // Rules owned elsewhere: send approval (operator-voice-comments), the form-tool ban (operator preference),
   // human pull request approval (repository policy) and the hard-wrap rule (Plain Language).
@@ -455,9 +455,10 @@ function main() {
   assert.doesNotMatch(skill, /approv\w* (?:of )?(?:that |the )?content|in the (?:human's|operator's) (?:name|voice)/iu, "send approval belongs to operator-voice-comments");
 
   // Injected at every startup, so it stays compact: each rule is a sentence or two and procedure lives in the owning
-  // skill. The ceiling rose from 6500 to 8000 bytes for the four collaboration rules Ari approved on 2026-09-25.
+  // skill. The ceiling rose from 6500 to 7500 bytes for the four collaboration rules Ari approved on 2026-09-25; a
+  // further addition has to justify its size.
   const skillBytes = Buffer.byteLength(skill, "utf8");
-  assert.ok(skillBytes >= 4500 && skillBytes <= 8000, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
+  assert.ok(skillBytes >= 4500 && skillBytes <= 7500, `using-desk should stay about 5-7.5 KB; found ${skillBytes} bytes`);
 
   assert.doesNotMatch(
     skill,

@@ -234,11 +234,7 @@ Targeted phrase-bans work better than abstract "be terse" rules (which strip con
 
 ### Strip fabricated estimates from response prose
 
-Numeric duration / cost / scope estimates ("~10 min", "~2 hours total", "should take ~N seconds", "~3.25 hr") that aren't anchored to a fixture are fabrication, not data. They read as padding even when they look concrete — the recipient parses them as measurements; you've written them as guesses. Strip them at composition time, including ones inherited from upstream agent output or prior conversation turns. Inheritance does not excuse the missing fixture.
-
-If worker has a real fixture (prior measured run, build-time log, documented benchmark, etc.), cite it inline. If not, drop the number; the plan stands on its substantive content. The operator can ask for a measurement if they want one.
-
-The canonical rule is `../evidence-discipline/SKILL.md` → "Fixtures or refusal"; this sub-section is the response-prose reinforcement, and `../operator-voice-comments/SKILL.md` (No fabrication → Numeric duration / cost / scope estimates) covers the operator-voice-content surface.
+A duration, cost or scope number in response prose follows `evidence-discipline` "Fixtures or refusal", including a number inherited from another agent or an earlier turn.
 
 ### Brevity carve-out: artifacts stay normal prose
 

@@ -127,7 +127,7 @@ If any check fails, debug at the one-shot level before going infinite.
 - Quoting "10-30 min per iteration" when fixtures showed 2.5 hr per iteration, because the fixtures weren't checked. Distorts every downstream plan that depends on the estimate; only surfaces hours later when the supervised runtime fails to match the imagined cadence.
 - Relaying another agent's plan to the operator with the estimates intact ("~10 min", "~45 min", "~2 hr total") because they came from upstream and worker treated them as data rather than as fabrication. Inherited estimates are still fabrication if no one had a fixture; worker is responsible for stripping them at composition time.
 
-**Cross-link.** Pairs with the `preflight-actions` skill — estimating-without-fixtures is itself a judgment-call substitution that should preflight if the estimate drives an irreversible-ish decision. Reinforced at draft-time by `operator-voice-comments` (No fabrication → Numeric duration / cost / scope estimates) and at response-composition-time by `interaction-style` §7 (Strip fabricated estimates from response prose).
+**Cross-link.** Pairs with the `preflight-actions` skill — estimating-without-fixtures is itself a judgment-call substitution that should preflight if the estimate drives an irreversible-ish decision. This section is the one statement of the rule: `operator-voice-comments` (No fabrication → Numeric duration / cost / scope estimates) and `interaction-style` §7 (Strip fabricated estimates from response prose) point here for operator-voice drafts and response prose.
 
 ## Discover before invent
 

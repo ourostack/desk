@@ -33,6 +33,7 @@ $DESK/
         <older-doc>.md
     <task-name>/                        # one directory per task within the track
       task.md                           # task card (see task-card-format)
+      _iterations/                      # iterations of a task with no repositories (repos: []), same <YYYY-MM-DD>-<slug>/ shape as below
       <repo-name>/                      # workspace per repo the task touches (matches task.md repos[].name)
         <YYYY-MM-DD>-<slug>/            # one iteration directory (e.g. 2026-04-13-initial-impl)
           planning.md                   # per-iteration planning doc
@@ -84,16 +85,16 @@ The agent chooses every track and task name itself, from the outcome, without as
 - **track root stays readable.** never dump planning artifacts, design docs, flow diagrams, or binaries directly at track root — use `_planning/`. "What may sit where" below lists what belongs.
 - **repo-shared embedding artifacts live at `$DESK/artifacts/`, never `.state/`.** `.state/` is local and ignored; `artifacts/vector-packs/` and `artifacts/snapshots/` are committed only when the repo's publication policy explicitly approves them.
 - **PR-surface artifacts live at `<task>/<repo>/`, not inside an iteration's `artifacts/`.** the PR description, draft top-level PR comments, and other PR-surface artifacts span every iteration of the same PR (initial-impl → review-pass-N → pre-merge-polish → pr-feedback → pr-self-review) and are rewritten in place over time. they belong alongside other task-level surfaces like `integration-smoke.md`. the `<iteration>/artifacts/` directory is for iteration-bounded outputs only (diff snapshots, raw findings, evaluator logs). test: "is this artifact rewritten across multiple iterations of the same PR?" — yes → task-level (`<task>/<repo>/pr-description.md`); no → iteration-level (`<task>/<repo>/<iteration>/artifacts/`).
-- **ad-hoc operator-facing tooling lives in the desk, not the product repo.** smoke scripts, repro harnesses, exploration notebooks, quick-check utilities — these live in `$DESK/<track>/<task>/<RepoName>/...`, NOT in the product repo. the product repo is only for artifacts that go through production review and ship. heuristic: if reviewers on the product PR wouldn't want to see this file, it belongs on the desk. when a brief says "commit to repo," confirm the destination explicitly OR surface the desk as the default and require operator override.
+- **ad-hoc operator-facing tooling lives in the desk, not the product repo.** smoke scripts, repro harnesses, exploration notebooks, quick-check utilities — these live in `$DESK/<track>/<task>/<RepoName>/...`, NOT in the product repo. the product repo is only for artifacts that go through production review and ship. heuristic: if reviewers on the product PR wouldn't want to see this file, it belongs on the desk. when a brief leaves the destination open, the agent decides the destination itself (the desk by default for desk-owned content such as these tools), says where it put the file in one line, and never asks.
 
 ## What may sit where
 
-Nothing is loose. These are the only entries allowed at each root; everything else is loose.
+Only these entries belong at each root; everything else is loose.
 
 - **At the desk root:** track folders (each with a `track.md`), underscore folders such as `_meta/` and `_archive/`, `desks/` in a crew workspace, the shared `artifacts/` folder this layout defines, `AGENTS.md`, `README.md`, `CLAUDE.md`, and dotfiles such as `.gitignore`.
 - **At a track root:** `track.md`, task folders (each with a `task.md`) and underscore folders such as `_planning/`, `_friction/` and `_archive/`.
 
-Everything else is loose. Reports, status notes and handoffs belong in a task or iteration folder, and cross-repo plans in `<track>/_planning/`. `desk_doctor` reports loose entries as `loose_file` in its Organization section, together with missing scope lines, person or catch-all track names, weak names, empty tracks, several tasks for one job and stale tasks. Fix what it reports by moving files into the task, iteration or underscore folder they belong to, and announce the tidy in one line (`interaction-style` section 2). Tidying never changes a task's status and never deletes content.
+Reports, status notes and handoffs belong in a task or iteration folder, and cross-repo plans in `<track>/_planning/`. `desk_doctor` reports loose entries as `loose_file` in its Organization section, together with missing scope lines, person or catch-all track names, weak names, empty tracks, several tasks for one job and stale tasks. Fix what it reports by moving files into the task, iteration or underscore folder they belong to, and announce the tidy in one line under the safety rules in `interaction-style` section 2.
 
 ## planning doc scope determines location
 
