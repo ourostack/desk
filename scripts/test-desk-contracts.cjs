@@ -694,6 +694,21 @@ contract("start-task reopens a finished task for another round of the same job",
   assert.match(skill, /`<task>\/_iterations\/<YYYY-MM-DD>-<slug>\/`/u);
   assert.match(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /^\| `done` → `processing` \| NOTIFY \|[^\n]*reopen/imu);
 });
+contract("start-task reopens an archived task with task_move unarchive, not a hand-run git mv", () => {
+  const skill = text("plugins/desk/skills/start-task/SKILL.md");
+  const reopen = skill.split("- **`done` or archived task:**", 2)[1].split("\n", 1)[0];
+  assert.match(reopen, /`task_move` and `unarchive: true`[\s\S]*restores its row in the track's `## Tasks` table/u);
+  assert.doesNotMatch(reopen, /git mv <track>\/_archive/u);
+});
+contract("directory-structure documents the one-time tidy's _meta/organization.json", () => {
+  const skill = text("plugins/desk/skills/directory-structure/SKILL.md");
+  assert.match(skill, /^ {4}organization\.json {2,}# /mu);
+  assert.match(skill, /`02-tidy-desk`[\s\S]{0,400}`desks\/<alias>\/_meta\/organization\.json`/u);
+  const schema = JSON.parse(/```json\n(\{[^\n]*"tidy_version"[^\n]*\})\n```/u.exec(skill)[1]);
+  assert.deepEqual(Object.keys(schema), ["schema_version", "tidy_version", "tidied_at"]);
+  assert.equal(schema.schema_version, 1);
+  assert.equal(schema.tidy_version, 1);
+});
 contract("interaction-style and operator-voice-comments point at the one estimate rule", () => {
   for (const file of ["plugins/desk/skills/interaction-style/SKILL.md", "plugins/desk/skills/operator-voice-comments/SKILL.md"]) {
     assert.match(text(file), /`evidence-discipline` "Fixtures or refusal"/u, file);

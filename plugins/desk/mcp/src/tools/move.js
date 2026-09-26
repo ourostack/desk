@@ -227,9 +227,33 @@ async function findMentions({ root, oldRelPath, exclude }) {
 // ── task_move ────────────────────────────────────────────────────────────
 
 /**
+ * A new "## Tasks" row for `slug`, shaped by the table's header row: the
+ * slug in backticks, `state` in the second column when there is one, and
+ * every other cell empty.
+ */
+function buildRow(headerLine, slug, state) {
+  const columns = headerLine.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").length
+  const cells = [`\`${slug}\``, state, ...Array(Math.max(columns - 2, 0)).fill("")].slice(0, columns)
+  return `| ${cells.join(" | ")} |`
+}
+
+/** The date an iteration folder is named after: the card's `created` day, or today. */
+function iterationDate(created) {
+  const parsed = created instanceof Date ? created : new Date(String(created))
+  return Number.isNaN(parsed.getTime()) ? nowIso().slice(0, 10) : parsed.toISOString().slice(0, 10)
+}
+
+function trueOrAbsent(tool, field, value) {
+  if (value !== undefined && typeof value !== "boolean") {
+    throw new Error(`${tool}: \`${field}\` must be true or false`)
+  }
+  return value === true
+}
+
+/**
  * task_move
  *
- * Input: { track, slug, to_track?, to_slug? }
+ * Input: { track, slug, to_track?, to_slug?, unarchive?, into_task? }
  *
  * Moves `<track>/<slug>/` (or, if the task is archived,
  * `<track>/_archive/<slug>/`) to `<to_track ?? track>/<to_slug ?? slug>/`
@@ -243,6 +267,20 @@ async function findMentions({ root, oldRelPath, exclude }) {
  * the moved card, and best-effort moves its row between the two `track.md`
  * "## Tasks" tables (or renames the row in place, for a same-track rename).
  *
+ * `unarchive: true` (M4-5) reopens an archived task: it moves
+ * `<track>/_archive/<slug>/` back to a live `<to_track ?? track>/<to_slug ??
+ * slug>/` and makes sure the destination table has a row for it — the
+ * source row moved or renamed when there is one, a new row (slug and the
+ * card's status) otherwise. It never changes the card's status.
+ *
+ * `into_task: "<keeper>"` (M4-5) merges a duplicate task into the task that
+ * keeps the job: it moves the task folder to
+ * `<to_track ?? track>/<keeper>/_iterations/<created-date>-<slug>/`, renames
+ * its card to `merged-task.md` there (so it is history, not a second task
+ * card), records `merged_into:` on it, and drops its row from the source
+ * table. Nothing is deleted. It cannot be combined with `to_slug` or
+ * `unarchive`.
+ *
  * Returns: { from, to, updated_files, mentions }
  */
 export async function task_move({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
@@ -253,6 +291,14 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   const { track, slug } = values
   rejectTraversalShapedInput("task_move", "track", track)
   rejectTraversalShapedInput("task_move", "slug", slug)
+  const unarchive = trueOrAbsent("task_move", "unarchive", values.unarchive)
+  const intoTask = values.into_task
+  if (intoTask !== undefined) {
+    rejectTraversalShapedInput("task_move", "into_task", intoTask)
+    if (values.to_slug !== undefined || unarchive) {
+      throw new Error("task_move: `into_task` cannot be combined with `to_slug` or `unarchive`")
+    }
+  }
 
   const toTrack = values.to_track ?? track
   const toSlug = values.to_slug ?? slug
@@ -284,7 +330,14 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   const archivedSrcFile = await target([track, "_archive", slug, "task.md"])
 
   let archived
-  if (await pathExists(liveSrcFile)) {
+  if (unarchive) {
+    if (!(await pathExists(archivedSrcFile))) {
+      throw new Error(
+        `task_move: no archived task to unarchive at ${relPath(deskRoot, path.dirname(archivedSrcFile))}`,
+      )
+    }
+    archived = true
+  } else if (await pathExists(liveSrcFile)) {
     archived = false
   } else if (await pathExists(archivedSrcFile)) {
     archived = true
@@ -295,10 +348,23 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   }
 
   const srcSegments = archived ? [track, "_archive", slug] : [track, slug]
-  const destSegments = archived ? [toTrack, "_archive", toSlug] : [toTrack, toSlug]
   const srcDir = await target(srcSegments)
+  const srcCard = await readMarkdown(path.join(srcDir, "task.md"))
+
+  let destSegments
+  if (intoTask !== undefined) {
+    if (!(await pathExists(await target([toTrack, intoTask, "task.md"])))) {
+      throw new Error(
+        `task_move: the task to merge into doesn't exist at ${relPath(deskRoot, await target([toTrack, intoTask]))}`,
+      )
+    }
+    destSegments = [toTrack, intoTask, "_iterations", `${iterationDate(srcCard.data.created)}-${slug}`]
+  } else {
+    destSegments = archived && !unarchive ? [toTrack, "_archive", toSlug] : [toTrack, toSlug]
+  }
   const destDir = await target(destSegments)
-  const destFile = await target([...destSegments, "task.md"])
+  const cardName = intoTask === undefined ? "task.md" : "merged-task.md"
+  const destFile = await target([...destSegments, cardName])
 
   if (await pathExists(destDir)) {
     throw new Error(`task_move: target already exists at ${relPath(deskRoot, destDir)}`)
@@ -306,10 +372,13 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
 
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
   await movePath({ root: effectiveRoot, from: srcDir, to: destDir, spawnGit })
+  if (intoTask !== undefined) {
+    await movePath({ root: effectiveRoot, from: path.join(destDir, "task.md"), to: destFile, spawnGit })
+  }
 
-  const existingCard = await readMarkdown(destFile)
-  const mergedCard = { ...existingCard.data, track: toTrack, updated: nowIso() }
-  await writeMarkdown(destFile, mergedCard, existingCard.content)
+  const mergedCard = { ...srcCard.data, track: toTrack, updated: nowIso() }
+  if (intoTask !== undefined) mergedCard.merged_into = intoTask
+  await writeMarkdown(destFile, mergedCard, srcCard.content)
 
   const updatedFiles = [relPath(deskRoot, destFile)]
   const touched = new Set([destFile])
@@ -319,14 +388,27 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   touched.add(srcTrackMd)
   touched.add(destTrackMd)
 
-  if (track === toTrack) {
-    // Reaching here with `toSlug === slug` would mean destDir === srcDir,
-    // which the target-exists check above already refused — so a rename is
-    // the only way to get this far on a same-track move.
-    const result = await editTasksTable(srcTrackMd, (lines, bounds) => {
+  if (intoTask !== undefined) {
+    const removed = await editTasksTable(srcTrackMd, (lines, bounds) => {
       const idx = findRowIndex(lines, bounds, slug)
       if (idx === -1) return { changed: false }
-      lines[idx] = renameRowSlug(lines[idx], toSlug)
+      lines.splice(idx, 1)
+      return { changed: true }
+    })
+    if (removed.changed) updatedFiles.push(relPath(deskRoot, srcTrackMd))
+  } else if (track === toTrack) {
+    // A same-track move that isn't an unarchive is a rename: reaching here
+    // with `toSlug === slug` would mean destDir === srcDir, which the
+    // target-exists check above already refused.
+    const result = await editTasksTable(srcTrackMd, (lines, bounds) => {
+      const idx = findRowIndex(lines, bounds, slug)
+      if (idx !== -1) {
+        if (toSlug === slug) return { changed: false }
+        lines[idx] = renameRowSlug(lines[idx], toSlug)
+        return { changed: true }
+      }
+      if (!unarchive) return { changed: false }
+      lines.splice(bounds.rowEnd, 0, buildRow(lines[bounds.rowStart - 2], toSlug, mergedCard.status))
       return { changed: true }
     })
     if (result.changed) updatedFiles.push(relPath(deskRoot, srcTrackMd))
@@ -342,9 +424,12 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
       row = removed.row
       updatedFiles.push(relPath(deskRoot, srcTrackMd))
     }
-    if (row !== null) {
+    if (row !== null || unarchive) {
       const inserted = await editTasksTable(destTrackMd, (lines, bounds) => {
-        lines.splice(bounds.rowEnd, 0, renameRowSlug(row, toSlug))
+        const newRow = row === null
+          ? buildRow(lines[bounds.rowStart - 2], toSlug, mergedCard.status)
+          : renameRowSlug(row, toSlug)
+        lines.splice(bounds.rowEnd, 0, newRow)
         return { changed: true }
       })
       if (inserted.changed) updatedFiles.push(relPath(deskRoot, destTrackMd))

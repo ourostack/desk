@@ -10,7 +10,8 @@ import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import matter from "gray-matter"
-import { organizationFindings } from "../../src/desk/organization.js"
+import { loadFrontmatterParser, organizationFindings } from "../../src/desk/organization.js"
+import { parseFrontmatterLite } from "../../src/desk/frontmatter-lite.js"
 
 const tempRoots = new Set()
 after(() => Promise.all([...tempRoots].map((root) => fs.rm(root, { recursive: true, force: true }))))
@@ -1104,4 +1105,113 @@ test("organizationFindings tolerates a card whose bytes open and read fine but w
   // (same "skip what can't be read" contract as a missing/unreadable file).
   const findings = organizationFindings(root, { now: NOW })
   assert.ok(!findByCode(findings, "stale_task").some((f) => f.path.includes("broken-frontmatter")))
+})
+
+// ── M4-5 carried fixes ──────────────────────────────────────────────────
+
+test("loose_file never flags the shared artifacts/ folder at the desk root", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, "artifacts/publication-policy.json", "{}\n")
+  await writeFile(root, "artifacts/vector-packs/spec/pack.bin", "")
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findings, [])
+})
+
+test("artifacts/ is allowed only at the desk root; inside a track it is still loose", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes; not payroll",
+  })
+  await writeCard(root, "billing-disputes/refund-flow-cleanup/task.md", {
+    schema_version: 1,
+    title: "refund-flow-cleanup",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "billing-disputes",
+  })
+  await writeFile(root, "billing-disputes/artifacts/report.md", "loose\n")
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findings.map((f) => `${f.code} ${f.path}`), ["loose_file billing-disputes/artifacts"])
+})
+
+test("dot-folders such as .git/ and .state/ are never loose, at the desk root or a track root", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, ".git/HEAD", "ref: refs/heads/main\n")
+  await writeFile(root, ".state/index.sqlite", "")
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes; not payroll",
+  })
+  await writeCard(root, "billing-disputes/refund-flow-cleanup/task.md", {
+    schema_version: 1,
+    title: "refund-flow-cleanup",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "billing-disputes",
+  })
+  await writeFile(root, "billing-disputes/.cache/entry", "")
+  assert.deepEqual(organizationFindings(root, { now: NOW }), [])
+})
+
+test("track_empty on a credential-like track name redacts the segment and leaks no part of it", async () => {
+  const root = await mkTempRoot()
+  const trackName = `rotate-${TRACK_SECRET}`
+  await writeCard(root, `${trackName}/track.md`, {
+    schema_version: 1,
+    title: trackName,
+    status: "active",
+    scope: "an empty track with a credential-like name; not anything else",
+  })
+  const findings = organizationFindings(root, { now: NOW })
+  const [empty] = findByCode(findings, "track_empty")
+  assert.equal(empty.path, "<redacted segment>")
+  assert.deepEqual(findByCode(findings, "name_credential_like").map((f) => f.path), ["<redacted segment>"])
+  assertNoSubstringLeak(TRACK_SECRET, JSON.stringify(findings))
+})
+
+test("an empty task card is read as a card with no fields", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "billing-disputes/track.md", {
+    schema_version: 1,
+    title: "billing-disputes",
+    status: "active",
+    scope: "billing disputes; not payroll",
+  })
+  await writeFile(root, "billing-disputes/refund-flow-cleanup/task.md", "")
+  assert.deepEqual(organizationFindings(root, { now: NOW }), [])
+})
+
+test("loadFrontmatterParser uses gray-matter when it loads and the dependency-free reader when it doesn't", () => {
+  assert.equal(loadFrontmatterParser(), matter)
+  assert.equal(loadFrontmatterParser(() => matter), matter)
+  const fallback = loadFrontmatterParser(() => {
+    throw new Error("Cannot find module 'gray-matter'")
+  })
+  assert.equal(fallback, parseFrontmatterLite)
+})
+
+// The migrations suite runs the checks with no npm dependency installed end
+// to end; here the reader is compared field by field with gray-matter.
+test("the dependency-free reader reads the fields the checks use exactly as gray-matter does", async () => {
+  const root = await buildOneOfEachFixture()
+  for (const card of [
+    "normal-track/aging-cleanup-effort/task.md",
+    "normal-track/ship-the-refactor/task.md",
+    "no-scope-track/track.md",
+    "inbox/track.md",
+  ]) {
+    const text = await fs.readFile(path.join(root, card), "utf8")
+    const expected = matter(text).data
+    const actual = parseFrontmatterLite(text).data
+    for (const field of ["status", "updated", "scope", "title"]) {
+      assert.deepEqual(actual[field], expected[field], `${card} ${field}`)
+    }
+  }
 })

@@ -1,6 +1,6 @@
 ---
 name: session-start-migrations
-description: Auto-heal a machine's local state when it's stale relative to canonical names (workspace dir renamed, plugin moved, symlink target changed, etc.). Walks every enabled plugin's `migrations/` dir at session start; for each migration whose Detect block fires, runs Safety check + Migrate + Announce, then halts the session for restart. Self-evidencing predicates (no marker file). Used by `desk:session-start` early in its flow, before any path-dependent work.
+description: Auto-heal a machine's local state when it's stale relative to canonical names (workspace dir renamed, plugin moved, symlink target changed, etc.). Walks every enabled plugin's `migrations/` dir at session start; for each migration whose Detect block fires, runs Safety check + Migrate + Announce, then halts the session for restart when the migration needs one. Self-evidencing predicates (no marker file). Used by `desk:session-start` early in its flow, before any path-dependent work.
 ---
 
 # Session-start migrations
@@ -37,6 +37,7 @@ id: 01-rename-workspace-dir
 description: one-liner of what this migration does + when it was added
 safety: safe              # only "safe" is implemented today; future values: confirm, manual
 needs_restart: true       # after running, halt the session and ask operator to restart
+agent_work: false         # optional; true when Migrate prints work the agent then does in this session
 ---
 ```
 
@@ -46,6 +47,7 @@ Field semantics:
 - `description` — one line, surfaces in announcement output when something fails.
 - `safety` — see the **Safety semantics** section below.
 - `needs_restart` — if `true`, after a successful migration the session hard-stops with a "please restart" message. If `false`, the session continues into the next migration / normal session-start flow.
+- `agent_work` — optional, `false` by default. `true` marks a migration whose work needs the agent's judgment, such as `02-tidy-desk`: its Migrate block changes nothing and prints the steps, the agent performs them in this session with the Desk tools, and the agent then sends the Announce text with its placeholders filled in (the counts, the commit link) instead of printing it verbatim. Such a migration never needs a restart and never asks the human anything; it announces what it did in one line and the session carries on.
 
 ### Body: three fenced bash code blocks and a plain-text Announce
 
@@ -94,10 +96,12 @@ splitting these out means the driver can run Detect cheaply against every migrat
 
 2. **for each migration in id-order across all plugins:**
    - parse the frontmatter and the four body code blocks.
+   - run every block with `DESK_PLUGIN_ROOT` set to the root of the plugin that holds the migration file (the parent of its `migrations/` dir), and, on a crew desk, `DESK_PERSON` set to this session's own alias (the desk MCP's `--person`).
+   - an `agent_work: true` migration writes to the desk, so it waits until the desk is synced and bound: `desk:session-start` runs it after Step 2.6, when this session's own desk is known, rather than at Step 0.5.
    - run **Detect**. exit 0 = migration is needed; non-zero = skip silently.
    - run **Safety check**. exit 0 = safe. non-zero = surface the printed reason to the operator and **hard-stop** (do NOT run Migrate; do NOT continue to subsequent migrations — the operator needs to resolve the safety issue first).
    - run **Migrate**. if it exits non-zero, surface the stdout+stderr and **hard-stop** with a clear "Migration `<id>` failed mid-run; manual intervention needed" message.
-   - on Migrate success, show Migrate's stdout (the migration's report of what it changed on this machine, if any), then print the **Announce** text verbatim.
+   - on Migrate success, show Migrate's stdout (the migration's report of what it changed on this machine, if any), then print the **Announce** text verbatim. for an `agent_work: true` migration, Migrate's stdout is the work: do it, then send the Announce text with its placeholders filled in.
    - if frontmatter `needs_restart: true`, **hard-stop the session** with a clean "please restart this session" message after the announcement.
 
 3. **after all applicable migrations applied (or none needed)**, continue with normal `desk:session-start` flow.

@@ -21,9 +21,12 @@
 // there.
 //
 // Loose-file allow-lists (rulings, 2026-09-25):
-//   - desk root: track folders, underscore folders, `desks/` (crew),
+//   - desk root: track folders, underscore folders, `desks/` (crew), the
+//     shared `artifacts/` folder `directory-structure` defines (M4-5),
 //     `AGENTS.md`, `README.md`, `CLAUDE.md`, dotfiles.
 //   - track root: `track.md`, task folders, underscore folders.
+// Dotfiles include dot-folders such as `.git/` (M4-5): a Git desk always has
+// one, and the tidy's Detect must not fire on every Git desk because of it.
 // A "track folder" is a directory whose immediate root has a `track.md`; a
 // "task folder" is a directory whose immediate root has a `task.md`.
 // Anything else is loose.
@@ -46,8 +49,8 @@
 // its own credential check — via a direct scan for a 16+ character hex or
 // hex-plus-letter run inside the segment, regardless of its overall shape.
 //
-// `duplicate_job` scans every *non-archived* task card's frontmatter (whole
-// object, stringified) and the first 200 lines of its body for a pull
+// `duplicate_job` scans every *non-archived* task card's frontmatter (raw
+// text) and the first 200 lines of its body for a pull
 // request URL (GitHub/GitHub-Enterprise `/pull/<n>` and Azure DevOps
 // `/pullrequest/<n>` shapes, on any host); two or more cards sharing one URL
 // are each flagged. Each card is read through a single bounded
@@ -58,11 +61,35 @@
 //
 // `stale_task` flags a non-terminal task (`status` not `done`/`cancelled`)
 // whose `updated` is more than 30 days before `now`.
+//
+// Card parsing (M4-5): the Desk MCP parses cards with gray-matter. The
+// one-time tidy migration's Detect runs these same checks straight from the
+// installed plugin, where no npm dependency is installed, so gray-matter is
+// loaded lazily and `frontmatter-lite.js` stands in when it can't be found.
+// Pull request URLs are read from the raw frontmatter text, which the
+// dependency-free reader extracts on both paths, so they find the same URLs.
 
 import { closeSync, openSync, readSync, readdirSync } from "node:fs"
+import { createRequire } from "node:module"
 import * as path from "node:path"
-import matter from "gray-matter"
+import { parseFrontmatterLite } from "./frontmatter-lite.js"
 import { validateName, validateTrackName, validateScope } from "./naming.js"
+
+const requireFromHere = createRequire(import.meta.url)
+
+/**
+ * gray-matter when it can be loaded, the dependency-free reader otherwise.
+ * `load` is a test seam; real callers never pass it.
+ */
+export function loadFrontmatterParser(load = () => requireFromHere("gray-matter")) {
+  try {
+    return load()
+  } catch {
+    return parseFrontmatterLite
+  }
+}
+
+const parseFrontmatter = loadFrontmatterParser()
 
 // Mirrors tools/task.js's TERMINAL_STATUSES — duplicated rather than
 // imported to keep this read-only reporting module independent of the CRUD
@@ -72,6 +99,10 @@ const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const STALE_MS = 30 * 24 * 60 * 60 * 1000
 
 const DESK_ROOT_ALLOWED_FILES = new Set(["AGENTS.md", "README.md", "CLAUDE.md"])
+
+// Plain (non-underscore) folders a desk root may hold besides tracks: the
+// shared `artifacts/` folder (vector packs, snapshots, publication policy).
+const DESK_ROOT_ALLOWED_DIRS = new Set(["artifacts"])
 
 // A bounded read never costs more than this many bytes per card, whatever
 // the file's real size — see the module header.
@@ -119,7 +150,11 @@ function readCard(filePath) {
   try {
     const buffer = Buffer.alloc(MAX_CARD_BYTES)
     const bytesRead = readSync(fd, buffer, 0, MAX_CARD_BYTES, 0)
-    return matter(buffer.toString("utf8", 0, bytesRead))
+    const text = buffer.toString("utf8", 0, bytesRead)
+    const parsed = parseFrontmatter(text)
+    // gray-matter does not reliably keep the raw frontmatter text (a cached
+    // parse drops it), so it is always taken from the dependency-free reader.
+    return { data: parsed.data, content: parsed.content, matter: parseFrontmatterLite(text).matter }
   } catch {
     return null
   } finally {
@@ -131,13 +166,12 @@ function firstLines(text, n) {
   return text.split("\n").slice(0, n).join("\n")
 }
 
-// gray-matter always hands back a `data` object and a `content` string
-// (empty ones for a body-less/frontmatter-less file), so neither is ever
-// null/undefined here.
+// `readCard` always hands back a `matter` string (the raw frontmatter) and a
+// `content` string (empty ones for a body-less/frontmatter-less file), so
+// neither is ever null/undefined here.
 function extractPrUrls(parsed) {
   const urls = new Set()
-  const frontmatterText = JSON.stringify(parsed.data)
-  for (const match of frontmatterText.matchAll(PR_URL_RE)) urls.add(match[0])
+  for (const match of parsed.matter.matchAll(PR_URL_RE)) urls.add(match[0])
   for (const match of firstLines(parsed.content, 200).matchAll(PR_URL_RE)) urls.add(match[0])
   return [...urls]
 }
@@ -267,6 +301,7 @@ function walkTrackRoot({ trackDirAbs, deskRoot, findings, liveTaskCards, now }) 
     }
 
     if (!entry.isDirectory()) continue
+    if (isDotfile(entry.name)) continue
 
     if (entry.name === "_archive") {
       for (const archivedEntry of safeReaddir(entryAbs)) {
@@ -375,9 +410,12 @@ function walkDeskLevel({ scanRoot, deskRoot, operatorNames, findings, liveTaskCa
 
     if (!entry.isDirectory()) continue
 
+    // Dot-folders (`.git/`, `.state/`, `.github/`) are allowed like dotfiles.
+    if (isDotfile(entry.name)) continue
     if (isUnderscoreDir(entry.name)) continue
     // Never walk into a crew container — a peer's own desk is theirs.
     if (entry.name === "desks") continue
+    if (DESK_ROOT_ALLOWED_DIRS.has(entry.name)) continue
 
     const hasTrackMd = safeReaddir(entryAbs).some((e) => e.isFile() && e.name === "track.md")
     if (!hasTrackMd) {

@@ -19,6 +19,8 @@ const deskRoot = path.join(repoRoot, "plugins", "desk");
 const migrationsDir = path.join(deskRoot, "migrations");
 const MOVE_ID = "01-move-to-ourostack-desk";
 const MOVE_FILE = path.join(migrationsDir, `${MOVE_ID}.md`);
+const TIDY_ID = "02-tidy-desk";
+const TIDY_FILE = path.join(migrationsDir, `${TIDY_ID}.md`);
 const MOVE_LINE = `Desk has moved to ourostack/desk. Run the move-to-ourostack-desk migration now (desk:session-start-migrations): ${MOVE_FILE}`;
 const SECTIONS = ["Detect", "Safety check", "Migrate", "Announce"];
 const BASH_SECTIONS = new Set(["Detect", "Safety check", "Migrate"]);
@@ -176,6 +178,9 @@ function parseMigration(file) {
   assert.ok(frontmatter.description, `${stem}: frontmatter needs a description`);
   assert.equal(frontmatter.safety, "safe", `${stem}: only safety: safe is implemented`);
   assert.match(frontmatter.needs_restart, /^(true|false)$/u, `${stem}: needs_restart must be true or false`);
+  if (frontmatter.agent_work !== undefined) {
+    assert.match(frontmatter.agent_work, /^(true|false)$/u, `${stem}: agent_work must be true or false`);
+  }
 
   const parts = match[2].split(/^## (.+)$/mu);
   assert.equal(parts[0].trim(), "", `${stem}: no text may precede the first section`);
@@ -707,6 +712,246 @@ test("a machine already on ourostack/desk, or with no Desk, never runs the migra
   });
   withSandbox({}, (sandbox) => {
     assert.equal(run(sandbox, blocks.Detect).status, 1);
+  });
+});
+
+// ── 02-tidy-desk: the one-time tidy ───────────────────────────────────────
+//
+// Detect runs Desk's own organization checks (the doctor's findings) against
+// fixture desks in temporary folders; nothing here touches a real desk. The
+// blocks run from a copy of the plugin with no node_modules, exactly as an
+// installed plugin has none, and also from this checkout.
+
+const TIDY_NOW = new Date();
+const RECENT = new Date(TIDY_NOW.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString();
+const STALE = new Date(TIDY_NOW.getTime() - 55 * 24 * 60 * 60 * 1000).toISOString();
+const CARD_SECRET = "a1b2c3d4e5f6a7b8c9d0";
+
+function card(fields, body = "") {
+  const lines = Object.entries(fields).map(([key, value]) => {
+    if (Array.isArray(value)) return `${key}:\n${value.map((item) => `  - '${item}'`).join("\n")}`;
+    return `${key}: ${typeof value === "string" ? `'${value.replaceAll("'", "''")}'` : value}`;
+  });
+  return `---\n${lines.join("\n")}\n---\n${body}`;
+}
+
+function put(root, rel, content) {
+  const file = path.join(root, rel);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+}
+
+function task(track, slug, extra = {}) {
+  return card({ schema_version: 1, title: slug, status: "processing", created: RECENT, updated: RECENT, track, ...extra });
+}
+
+// M4-3's clean fixture: one scoped track holding one well-named, current task.
+function cleanDesk(root) {
+  put(root, "billing-disputes/track.md", card({ schema_version: 1, title: "billing-disputes", status: "active", scope: "billing disputes; not payroll" }));
+  put(root, "billing-disputes/refund-flow-cleanup/task.md", task("billing-disputes", "refund-flow-cleanup"));
+  fs.mkdirSync(path.join(root, "_meta"), { recursive: true });
+  fs.mkdirSync(path.join(root, "_archive"), { recursive: true });
+  put(root, "AGENTS.md", "# Agents\n");
+  put(root, "artifacts/publication-policy.json", "{}\n");
+}
+
+// M4-3's messy fixture: one of each organization finding. The person-named track is named after the fixture repository's git user.
+function messyDesk(root) {
+  put(root, "no-scope-track/track.md", card({ schema_version: 1, title: "no-scope-track", status: "active" }));
+  put(root, "no-scope-track/keep-things-tidy/task.md", task("no-scope-track", "keep-things-tidy"));
+  put(root, "fixture-owner/track.md", card({ schema_version: 1, title: "fixture-owner", status: "active", scope: "a track named after a person; not anything else" }));
+  put(root, "fixture-owner/some-real-outcome/task.md", task("fixture-owner", "some-real-outcome"));
+  put(root, "inbox/track.md", card({ schema_version: 1, title: "inbox", status: "active", scope: "a catch-all track; not a real outcome" }));
+  put(root, "inbox/some-real-outcome/task.md", task("inbox", "some-real-outcome"));
+  put(root, "no-tasks-yet/track.md", card({ schema_version: 1, title: "no-tasks-yet", status: "active", scope: "an outcome with no tasks yet; not anything else" }));
+  put(root, "normal-track/track.md", card({ schema_version: 1, title: "normal-track", status: "active", scope: "holds the task-level findings; not anything else" }));
+  put(root, "normal-track/hi-please-fix-this/task.md", task("normal-track", "hi-please-fix-this"));
+  put(root, `normal-track/rotate-${CARD_SECRET}/task.md`, task("normal-track", `rotate-${CARD_SECRET}`));
+  put(root, "normal-track/oneword/task.md", task("normal-track", "oneword"));
+  put(root, "normal-track/aging-cleanup-effort/task.md", task("normal-track", "aging-cleanup-effort", { created: STALE, updated: STALE }));
+  put(root, "normal-track/finished-long-ago/task.md", task("normal-track", "finished-long-ago", { status: "done", created: STALE, updated: STALE }));
+  put(root, "normal-track/ship-the-refactor/task.md", task("normal-track", "ship-the-refactor", { status: "validating", artifacts: ["https://github.com/ourostack/desk/pull/4242"] }));
+  put(root, "normal-track/land-the-same-refactor/task.md", task("normal-track", "land-the-same-refactor", { status: "validating" }) + "Delivery ref: https://github.com/ourostack/desk/pull/4242\n");
+  put(root, "scratch-notes.txt", "stray notes\n");
+  put(root, "normal-track/stray-draft.md", "not a task card\n");
+  for (const name of ["AGENTS.md", "README.md", "CLAUDE.md", ".gitignore"]) put(root, name, "\n");
+  fs.mkdirSync(path.join(root, "_meta"), { recursive: true });
+}
+
+// An installed plugin: the migration, the MCP's own source and the script, and no node_modules.
+function installedPluginCopy(root) {
+  const plugin = path.join(root, "installed-desk");
+  fs.mkdirSync(path.join(plugin, "migrations"), { recursive: true });
+  fs.copyFileSync(TIDY_FILE, path.join(plugin, "migrations", `${TIDY_ID}.md`));
+  fs.cpSync(path.join(deskRoot, "mcp", "src"), path.join(plugin, "mcp", "src"), { recursive: true });
+  fs.mkdirSync(path.join(plugin, "mcp", "scripts"), { recursive: true });
+  fs.copyFileSync(path.join(deskRoot, "mcp", "scripts", "tidy-status.js"), path.join(plugin, "mcp", "scripts", "tidy-status.js"));
+  fs.copyFileSync(path.join(deskRoot, "mcp", "package.json"), path.join(plugin, "mcp", "package.json"));
+  return plugin;
+}
+
+function gitIn(root, ...args) {
+  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout;
+}
+
+const HOST_BINDING_VARS = ["CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "DESK", "DESK_PERSON", "DESK_PLUGIN_ROOT"];
+
+function withTidyDesk({ build = messyDesk, crew = false, git = true, record = null, pluginRoot = "installed" } = {}, body) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "desk-tidy-migration-")));
+  try {
+    const desk = path.join(root, "desk");
+    const home = path.join(root, "home");
+    fs.mkdirSync(home);
+    fs.mkdirSync(desk);
+    const own = crew ? path.join(desk, "desks", "bob") : desk;
+    if (crew) {
+      put(desk, "_meta/desks.md", "| alias | identity |\n|---|---|\n| alice | alice |\n| bob | bob |\n");
+      messyDesk(path.join(desk, "desks", "alice"));
+      fs.mkdirSync(own, { recursive: true });
+    }
+    build(own);
+    if (record !== null) put(own, "_meta/organization.json", `${JSON.stringify(record)}\n`);
+    if (git) {
+      gitIn(desk, "init", "-q");
+      gitIn(desk, "config", "user.name", "Fixture Owner");
+      gitIn(desk, "config", "user.email", "fixture@example.com");
+      gitIn(desk, "add", "-A");
+      gitIn(desk, "commit", "-q", "-m", "fixture");
+    }
+    const env = { ...process.env, HOME: home, DESK: desk, DESK_PLUGIN_ROOT: pluginRoot === "installed" ? installedPluginCopy(root) : deskRoot };
+    for (const key of HOST_BINDING_VARS) if (!["DESK", "DESK_PLUGIN_ROOT"].includes(key)) delete env[key];
+    if (crew) env.DESK_PERSON = "bob";
+    const tidy = { root, desk, own, env, run: (script, extraEnv = {}) => spawnSync(BASH, ["-c", script], { cwd: home, env: { ...env, ...extraEnv }, encoding: "utf8" }) };
+    body(tidy);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function tidyMigration() {
+  return parseMigration(TIDY_FILE);
+}
+
+function snapshot(dir) {
+  const entries = [];
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.name === ".git") continue;
+      const abs = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(abs);
+      else entries.push(`${path.relative(dir, abs)}\n${fs.readFileSync(abs, "utf8")}`);
+    }
+  };
+  walk(dir);
+  return entries.join("\n\0\n");
+}
+
+test("Desk ships the tidy-desk migration: in-session agent work, no restart", () => {
+  assert.ok(migrationFiles.includes(`${TIDY_ID}.md`), `plugins/desk/migrations/${TIDY_ID}.md is missing`);
+  const { frontmatter } = tidyMigration();
+  assert.equal(frontmatter.needs_restart, "false");
+  assert.equal(frontmatter.agent_work, "true");
+});
+
+test("the tidy migration tidies and announces: announce-and-proceed wording and no question anywhere", () => {
+  const text = read(TIDY_FILE);
+  const { blocks } = tidyMigration();
+  assert.doesNotMatch(text, /\?/u, "the tidy never asks the human anything");
+  assert.match(blocks.Announce, /^I tidied up my desk a bit: <[^>]+>\. Say if you mind and I'll put anything back\. <commit link>$/u);
+  assert.match(blocks.Migrate, /Do not ask first and do not wait for an answer: tidy, announce it in one line, and carry on\./u);
+  assert.doesNotMatch(text, /how would you like|would you like|shall I|should I|do you want/iu);
+  // The ordered Migrate steps from the brief, each with its safety rule.
+  const steps = [...blocks.Migrate.matchAll(/^(\d)\. ([^.]+)\./gmu)].map((match) => `${match[1]} ${match[2]}`);
+  assert.deepEqual(steps, ["1 Scope lines", "2 Names", "3 Duplicates", "4 Loose files", "5 Person-named and catch-all tracks (track_person_name, track_catch_all)", "6 Empty tracks (track_empty)", "7 Record and commit"]);
+  assert.match(blocks.Migrate, /only inside this session's own desk/u);
+  assert.match(blocks.Migrate, /told you not to write in this session, skip the tidy/u);
+  assert.match(blocks.Migrate, /only through Git[\s\S]+Never delete content/u);
+  assert.match(blocks.Migrate, /Never change a task's status/u);
+  assert.match(blocks.Migrate, /If the human objects, revert the tidy through Git/u);
+});
+
+test("tidy Detect fires on the M4-3 messy fixture, from an installed plugin with no npm dependencies and from this checkout", () => {
+  const { blocks } = tidyMigration();
+  for (const pluginRoot of ["installed", "checkout"]) {
+    withTidyDesk({ pluginRoot }, (tidy) => {
+      const detect = tidy.run(blocks.Detect);
+      assert.equal(detect.status, 0, `${pluginRoot}: ${detect.stdout}${detect.stderr}`);
+      assert.equal(detect.stdout, "", "Detect is silent");
+    });
+  }
+  withTidyDesk({}, (tidy) => {
+    assert.equal(fs.existsSync(path.join(tidy.env.DESK_PLUGIN_ROOT, "mcp", "node_modules")), false);
+    const status = spawnSync(process.execPath, [path.join(tidy.env.DESK_PLUGIN_ROOT, "mcp", "scripts", "tidy-status.js")], { env: tidy.env, encoding: "utf8" });
+    const codes = new Set(JSON.parse(status.stdout).findings.map((finding) => finding.code));
+    for (const code of ["track_missing_scope", "track_person_name", "track_catch_all", "track_empty", "name_prompt_like", "name_credential_like", "name_shape", "loose_file", "duplicate_job", "stale_task"]) {
+      assert.ok(codes.has(code), `the dependency-free checks must still report ${code}`);
+    }
+  });
+});
+
+test("tidy Detect does not fire on the clean fixture, or once tidy_version 1 is recorded", () => {
+  const { blocks } = tidyMigration();
+  withTidyDesk({ build: cleanDesk }, (tidy) => assert.equal(tidy.run(blocks.Detect).status, 1));
+  withTidyDesk({ record: { schema_version: 1, tidy_version: 1, tidied_at: RECENT } }, (tidy) => assert.equal(tidy.run(blocks.Detect).status, 1));
+  withTidyDesk({ record: { schema_version: 1, tidy_version: 0 } }, (tidy) => assert.equal(tidy.run(blocks.Detect).status, 0));
+});
+
+test("tidy Detect never fires for a non-Git desk, without the plugin root, or on a crew desk for a peer", () => {
+  const { blocks } = tidyMigration();
+  withTidyDesk({ git: false }, (tidy) => assert.equal(tidy.run(blocks.Detect).status, 1));
+  withTidyDesk({}, (tidy) => assert.equal(tidy.run(blocks.Detect, { DESK_PLUGIN_ROOT: "" }).status, 1));
+  // Crew: alice's desk is messy, bob's (this session's own) is clean.
+  withTidyDesk({ crew: true, build: cleanDesk }, (tidy) => {
+    assert.equal(tidy.run(blocks.Detect).status, 1, "a peer's mess is theirs");
+    assert.equal(tidy.run(blocks.Detect, { DESK_PERSON: "" }).status, 1, "with no alias the own desk is unknown");
+    assert.equal(tidy.run(blocks.Detect, { DESK_PERSON: "alice" }).status, 0, "alice's own session tidies alice's desk");
+  });
+});
+
+test("tidy Migrate prints the findings and the steps, changes nothing, and never echoes a credential-like name", () => {
+  const { blocks } = tidyMigration();
+  withTidyDesk({}, (tidy) => {
+    const before = snapshot(tidy.desk);
+    assert.equal(tidy.run(blocks.Detect).status, 0);
+    const safety = tidy.run(blocks["Safety check"]);
+    assert.equal(safety.status, 0, safety.stdout + safety.stderr);
+    const migrate = tidy.run(blocks.Migrate);
+    assert.equal(migrate.status, 0, migrate.stderr);
+    assert.match(migrate.stdout, new RegExp(`^Desk: ${tidy.desk}\\nThis session's own desk: ${tidy.desk}\\nOrganization findings in it: \\d+\\n`, "u"));
+    assert.match(migrate.stdout, /^ {2}track_catch_all: inbox — /mu);
+    assert.match(migrate.stdout, /^ {2}name_credential_like: normal-track\/<redacted segment> — /mu);
+    assert.ok(!migrate.stdout.includes(CARD_SECRET.slice(0, 6)), "no part of a credential-like name is printed");
+    assert.match(migrate.stdout, new RegExp(`with: node '${tidy.env.DESK_PLUGIN_ROOT}/mcp/scripts/tidy-status\\.js' --write-record\\n`, "u"));
+    assert.equal(snapshot(tidy.desk), before, "Migrate itself changes nothing; the agent does the tidy");
+    assert.equal(gitIn(tidy.desk, "status", "--porcelain"), "");
+
+    // Step 7 records the tidy; Detect then stays quiet even though findings remain.
+    const recordCommand = /with: (node '[^']+' --write-record)\n/u.exec(migrate.stdout)[1];
+    const record = tidy.run(recordCommand);
+    assert.equal(record.status, 0, record.stderr);
+    const written = json(path.join(tidy.desk, "_meta", "organization.json"));
+    assert.deepEqual(Object.keys(written), ["schema_version", "tidy_version", "tidied_at"]);
+    assert.equal(written.tidy_version, 1);
+    assert.equal(tidy.run(blocks.Detect).status, 1);
+  });
+  withTidyDesk({ crew: true }, (tidy) => {
+    const migrate = tidy.run(blocks.Migrate);
+    assert.equal(migrate.status, 0, migrate.stderr);
+    assert.match(migrate.stdout, new RegExp(`^This session's own desk: ${path.join(tidy.desk, "desks", "bob")}$`, "mu"));
+    assert.ok(!/desks\/alice/u.test(migrate.stdout), "a peer's desk never appears in the tidy");
+    assert.match(migrate.stdout, /--write-record --person bob\n/u);
+  });
+});
+
+test("tidy Safety check waits while the desk repository is mid-merge", () => {
+  const { blocks } = tidyMigration();
+  withTidyDesk({}, (tidy) => {
+    fs.writeFileSync(path.join(tidy.desk, ".git", "MERGE_HEAD"), "");
+    const safety = tidy.run(blocks["Safety check"]);
+    assert.equal(safety.status, 1);
+    assert.match(safety.stdout, /The tidy waits: the desk repository is in the middle of a merge/u);
   });
 });
 
