@@ -115,6 +115,14 @@ Auth and push convention is consumer-specific: corporate-worker overlays push un
 
 Commit messages are not a handoff format. A new session reading the task card must see current state, active branch/artifact, open PRs, blockers, and terminal evidence without shell archaeology. Keep the track card aligned and use the explicit progress/rulings map without creating another state tree.
 
+## Close-out at every ownership boundary
+
+The owner closes out a task, iteration or delegated assignment when that unit ends, even while its parent continues. Through `desk:git-hygiene`, reconcile all created worktrees and branches, remove only exact-owned safe worktrees and merged branches authorized by the endpoint, and restore touched surviving checkouts to their recorded state branch when safe. Record checkout readbacks and resource dispositions in the tables below. Unmerged alpha or PR-only delivery resources are retained-with-trigger, not deleted or switched away from their delivery branch.
+
+Every child return includes a **Resources** inventory: every created worktree's exact repository, path, branch/ref and current HEAD; every created local or remote branch and its current state; its owner, writer/consumer release evidence, intended disposition and verified result. List retained and transferred resources too, and explicitly say `none created` when empty. A parent must not infer a missing inventory from a successful implementation result. Unknown ownership, unsafe checkout restoration or incomplete cleanup remains `cleanup_pending` while canonical status is `validating`.
+
+The selected Superpowers controller consumes the inventory through the [Desk adapter](../using-superpowers-with-desk/SKILL.md#mapped-controller-close-out). It removes each completed task's worktree after acceptance and writer release, before dropping that task's reservation; it does not wait for the whole plan to finish or remove resources held for an authorized PR-only endpoint.
+
 ## Delivery and resource accounting
 
 The mapped progress record (`progressPath`) is the single canonical home for delivery and resource accounting. If `progressPath` resolves to `task.md`, keep the tables there, not in a second record. Record resources at creation, including their exact repository/worktree path or host resource/operation identity, owning task/attempt and process generation, active writers or consumers, intended cleanup or transfer owner, and evidence pointer. Keep detailed host/private evidence in approved protected storage, not the task card. No delivery daemon or schema is introduced.

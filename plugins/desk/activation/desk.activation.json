@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "desk",
-  "version": "3.2.0-alpha.42",
+  "version": "3.2.0-alpha.43",
   "dependencies": [
     {
       "id": "desk",

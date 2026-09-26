@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.43 — 2026-09-26
+
+Task A4: [close-out ownership](skills/task-lifecycle/SKILL.md#close-out-at-every-ownership-boundary) now applies when every task, iteration or delegated assignment ends. Child returns enumerate every created worktree and branch with its exact identity, state, owner and disposition. The [Desk-to-Superpowers adapter](skills/using-superpowers-with-desk/SKILL.md#mapped-controller-close-out) maps per-task controller cleanup without modifying vendored Superpowers. [Git hygiene](skills/git-hygiene/SKILL.md#exact-owned-cleanup) keeps exact-owner, live-writer, state-branch and intentionally retained alpha boundaries.
+
+The [workspace-tidy boot check](docs/workspace-tidy.md) runs from both startup hooks: bounded local task-card discovery and Git worktree listings, followed by detached safety inspection and repair. Only repositories named in active/recent task cards plus the bound desk are inventoried. Cleanup needs an exact-owner release receipt, verified generation/consumer release, unchanged identity/HEAD, preserved delivery and a clean checkout with no untracked or ignored files. Unknown ownership and every unsafe leftover remain in a machine-local report, summarized in one bounded agent-facing line; ambiguous Copilot overlay binding never selects a guessed desk. [Fixture tests](mcp/__tests__/runtime/workspace_tidy.test.js) and [actual startup-hook tests](mcp/__tests__/runtime/workspace_tidy_boot.test.js) cover safe cleanup, refusals, races, budgets and aggregation. The MCP dependency version and native payload remain unchanged.
+
 ## 3.2.0-alpha.42 — 2026-09-26
 
 Task A3, second review correction: the [Bash inspector](mcp/src/runtime/shell-commands.js) recognizes multiline and empty `case` forms after whitespace, gives an unmatched or empty case its own successful status, and treats every leading assignment word as scalar before splitting command arguments. The [PowerShell inspector](mcp/src/runtime/powershell-commands.js) inspects executable interpolation before treating a quoted result as data and retains both reachable directory, variable, environment and status states when an unknown external result controls `&&` or `||`.

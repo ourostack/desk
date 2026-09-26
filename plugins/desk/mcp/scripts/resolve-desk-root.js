@@ -34,4 +34,8 @@ try {
 let output = `${JSON.stringify(result)}\n`
 if (process.argv.includes("--root-only")) output = result.root ?? ""
 if (process.argv.includes("--startup-line")) output = claudeStartupDirection({ env })
+if (process.argv.includes("--boot-checks")) {
+  const { default: boot } = await import("../../hooks/boot-checks.cjs")
+  output += `\n\n${await boot.runBootChecks({ host: "claude", env })}`
+}
 process.stdout.write(output)
