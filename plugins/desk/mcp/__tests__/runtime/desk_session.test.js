@@ -221,11 +221,10 @@ test("a lost controller is reconnected on the next attempt, and a reconnect that
   assert.equal(connections, 4)
 })
 
-test("a hung controller is counted across attempts and reclaimed after 3 misses; a refused reclaim keeps the doctor fix", async (t) => {
+test("a hung controller is counted across attempts and marked controller_hung after 3 misses; nothing is stopped and writes keep working", async (t) => {
   const probes = []
-  let reclaimable = true
   const runtime = fakeRuntime({ connectOrStartController: async () => { throw new Error("readiness controller election did not converge") } })
-  const { session, log } = await makeSession(t, {
+  const { session } = await makeSession(t, {
     runtime,
     hung: {
       probeMs: 7,
@@ -233,27 +232,28 @@ test("a hung controller is counted across attempts and reclaimed after 3 misses;
         probes.push(options.timeoutMs)
         return { state: "silent", endpoint: "/tmp/x.sock", record: { owner: { pid: 4242 } } }
       },
-      reclaim: async () => (reclaimable
-        ? { reclaimed: true, pid: 4242, line: "repaired: reclaimed a hung readiness controller (pid 4242)" }
-        : { reclaimed: false, reason: "owner_not_ours" }),
     },
   })
   const first = await session.admission.refresh()
-  assert.equal(first.code, "controller_unavailable")
-  assert.match(first.summary, /1 of 3 checks missed/u)
-  assert.match(first.fix, /desk_doctor with \{"repair":"reclaim_controller"\}/u)
-  assert.equal(requirementMet("write", session.context), true, "writes keep working while the controller is hung")
+  assert.equal(first.state, "degraded:controller_unavailable")
+  assert.match(first.summary, /owner pid 4242, \/tmp\/x\.sock.*1 of 3 checks missed/u)
+  assert.match(first.fix, /never stops the controller's owner/u)
+  assert.equal(requirementMet("write", session.context), true)
   await session.admission.refresh({ force: true })
-  const third = await session.admission.refresh({ force: true })
-  assert.match(third.repair, /reclaimed a hung readiness controller/u)
-  assert.match(log(), /reclaimed a hung readiness controller/u)
+  const hung = await session.admission.refresh({ force: true })
+  assert.equal(hung.state, "degraded:controller_hung")
+  assert.match(hung.summary, /3 of 3 checks missed; hung/u)
+  assert.match(hung.fix, /task A2b/u)
+  assert.equal(hung.repair, null, "nothing was reclaimed")
   assert.deepEqual(probes, [7, 7, 7])
-  reclaimable = false
-  for (let index = 0; index < 3; index += 1) await session.admission.refresh({ force: true })
-  const refused = session.admission.snapshot()
-  assert.match(refused.summary, /could not reclaim it automatically \(owner_not_ours\)/u)
-  // Each later miss tries the reclaim again.
-  assert.equal(payload(await session.callTool({ name: "desk_status" })).admission.hung_controller.misses, 4)
+  assert.equal(requirementMet("write", session.context), true, "writes keep working while the controller is hung")
+  assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
+  assert.equal(runtime.calls.at(-1).admission, undefined, "the write went straight to the file")
+  await session.admission.refresh({ force: true })
+  const status = payload(await session.callTool({ name: "desk_status" }))
+  assert.equal(status.admission.hung_controller.owner_pid, 4242)
+  assert.ok(status.admission.hung_controller.misses >= 4)
+  assert.match(status.summary ?? status.admission.summary, /3 of 3 checks missed; hung/u)
 })
 
 test("a controller that answers the probe resets the miss count", async (t) => {
@@ -269,29 +269,30 @@ test("a controller that answers the probe resets the miss count", async (t) => {
   assert.equal(session.context.hung.misses, 0)
 })
 
-test("desk_doctor reclaim_controller runs 3 fresh probes and the same ownership checks", async (t) => {
+test("desk_doctor reclaim_controller reports the owner and reclaims nothing", async (t) => {
   const answers = []
   const probe = async () => ({ state: answers.shift() ?? "silent", endpoint: "/tmp/x.sock", record: { owner: { pid: 7 } } })
-  let reclaimResult = { reclaimed: true, pid: 7, line: "repaired: reclaimed a hung readiness controller (pid 7)" }
   const noRoot = await makeSession(t, { resolveInputs: async () => ({ rootError: { name: "Error", message: "gone", code: "DESK_ROOT_UNAVAILABLE" } }) })
   await noRoot.session.admission.refresh()
-  assert.equal(payload(await noRoot.session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } })).reason, "not_admitted")
+  const refused = await noRoot.session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } })
+  assert.equal(refused.isError, true)
+  assert.equal(payload(refused).reason, "not_admitted")
 
-  const { session } = await makeSession(t, { hung: { probe, reclaim: async () => reclaimResult } })
+  const { session } = await makeSession(t, { hung: { probe } })
   await session.admission.refresh()
-  answers.push("silent", "answering")
-  const answered = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
-  assert.equal(answered.reason, "controller_answering")
-  const reclaimed = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
-  assert.equal(reclaimed.status, "ok")
-  assert.match(reclaimed.repair, /pid 7/u)
-  for (const reason of ["owner_not_ours", "owner_gone", "endpoint_not_ours", "owner_record_not_ours", "owner_pid_invalid", "owner_survived", "unsupported_platform", "something_new"]) {
-    reclaimResult = { reclaimed: false, reason }
-    const refused = await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } })
-    assert.equal(refused.isError, true)
-    assert.equal(payload(refused).reason, reason)
-    assert.equal(typeof payload(refused).fix, "string")
-  }
+  const hung = await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } })
+  assert.equal(hung.isError, undefined)
+  const report = payload(hung)
+  assert.equal(report.status, "report")
+  assert.equal(report.reclaimed, false)
+  assert.equal(report.controller.owner_pid, 7)
+  assert.match(report.summary, /Desk does not stop it/u)
+  assert.match(report.fix, /once it runs in its own process \(task A2b\)/u)
+  answers.push("answering")
+  const healthy = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
+  assert.equal(healthy.reclaimed, false)
+  assert.match(healthy.summary, /not hung \(probe: answering\)/u)
+  assert.equal(healthy.fix, "Call desk_status.")
 })
 
 test("an embedding override degrades semantic search only: lexical reads, writes and ready stay available", async (t) => {

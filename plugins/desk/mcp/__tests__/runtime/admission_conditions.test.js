@@ -118,23 +118,21 @@ test("invalid write authority: reads serve, writes refuse with degraded:authorit
 
 // ---- readiness controller faults: controller-free reads, background re-election ----
 
-// A controller process that accepts connections and never answers, and ignores SIGTERM, the way a wedged Desk does.
+// A controller process that accepts connections and never answers, the way a wedged Desk does. It stands in for another session's Desk MCP server.
 async function startHungController(endpoint) {
   mkdirSync(path.dirname(endpoint), { recursive: true, mode: 0o700 })
-  const child = spawn(process.execPath, ["-e", [
-    "process.on('SIGTERM', () => {})",
+  const child = spawn(process.execPath, ["-e",
     `require("net").createServer(() => {}).listen(${JSON.stringify(endpoint)}, () => process.stdout.write("up"))`,
-  ].join(";")], { stdio: ["ignore", "pipe", "inherit"] })
+  ], { stdio: ["ignore", "pipe", "inherit"] })
   await new Promise((resolve) => child.stdout.once("data", resolve))
   return child
 }
 
-test("a hung controller that is alive is reclaimed after 3 missed checks, and reads and writes work throughout", { skip: posixOnly, timeout: 90000 }, async (t) => {
+test("a hung controller is detected after 3 missed checks and never stopped; reads and writes work throughout", { skip: posixOnly, timeout: 90000 }, async (t) => {
   const fixture = await makeGitDesk()
   const configPath = writeActivation(fixture)
   const { endpoint, stateDir, identity } = controllerFixture(fixture)
   const hung = await startHungController(endpoint)
-  const exited = new Promise((resolve) => hung.once("exit", (code, signal) => resolve(signal)))
   t.after(() => hung.kill("SIGKILL"))
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const stat = statSync(endpoint)
@@ -143,17 +141,22 @@ test("a hung controller that is alive is reclaimed after 3 missed checks, and re
     owner: { pid: hung.pid, started_at: new Date().toISOString(), token: "hung-token" },
   }))
   await withDesk(t, fixture, { args: ["--activation-config", configPath], env: { DESK_READINESS_PROBE_MS: "300" } }, async (session) => {
-    const status = await session.statusUntil(settled)
-    assert.equal(status.state, "degraded:controller_unavailable")
-    assert.match(status.fix, /desk_doctor with \{"repair":"reclaim_controller"\}/u)
+    const first = await session.statusUntil(settled)
+    assert.equal(first.state, "degraded:controller_unavailable")
     await assertReadsServeDirectly(session)
     const write = await session.call("task_create", { track: "ops", slug: "while-controller-hung", title: "Hung" })
     assert.equal(write.isError, false, JSON.stringify(write.payload))
-    const ready = await session.statusUntil((payload) => payload.state === "ready", { deadlineMs: 60000 })
-    assert.match(ready.repair, /reclaimed a hung readiness controller \(pid \d+/u)
-    assert.equal(await exited, "SIGKILL", "the owner ignored SIGTERM and was killed")
-    const after = await session.call("task_create", { track: "ops", slug: "after-controller-reclaim", title: "Reclaimed" })
+    const detected = await session.statusUntil((payload) => payload.state === "degraded:controller_hung", { deadlineMs: 60000 })
+    assert.equal(detected.admission.hung_controller.owner_pid, hung.pid)
+    assert.match(detected.fix, /task A2b/u)
+    const report = await session.call("desk_doctor", { repair: "reclaim_controller" })
+    assert.equal(report.payload.status, "report")
+    assert.equal(report.payload.controller.owner_pid, hung.pid)
+    await assertReadsServeDirectly(session)
+    const after = await session.call("task_create", { track: "ops", slug: "after-controller-hung", title: "Still writing" })
     assert.equal(after.isError, false, JSON.stringify(after.payload))
+    assert.equal(hung.exitCode, null, "the owner process was never stopped")
+    assert.equal(hung.signalCode, null)
   })
 })
 

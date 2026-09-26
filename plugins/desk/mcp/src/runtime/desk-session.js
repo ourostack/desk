@@ -20,7 +20,7 @@ import { DOCTOR_REPAIRS } from "./front-door.js"
 import { appendRepairLog, writeLastStart } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { inspectStateBranch, repairStateBranch, runGit, stateBranchProblem, STATE_BRANCH_REPAIR } from "./state-branch.js"
-import { HUNG_MISSES, HUNG_PROBE_MS, probeController, reclaimHungController } from "../readiness/hung-controller.js"
+import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController } from "../readiness/hung-controller.js"
 import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
 
@@ -32,7 +32,6 @@ const STATUS_DETAIL_MS = 120
 const GATE_WAIT_MS = 10000
 const HEAD_DEBOUNCE_MS = 100
 const WRITE_PING_MS = 1000
-const DOCTOR_PROBE_GAP_MS = 1000
 const CONTROLLER_FAILURE = /readiness controller|ECONNREFUSED|ECONNRESET|ENOENT|EPIPE|ETIMEDOUT|EADDRINUSE/u
 
 // Launcher codes (--degraded) that still allow reads: write identity or the checkout state is unproven. Every other code is an integrity failure: the running code or its authority data cannot be trusted, so every data tool refuses.
@@ -84,7 +83,6 @@ export function createDeskSession(deps) {
     misses: HUNG_MISSES,
     probeMs: HUNG_PROBE_MS,
     probe: probeController,
-    reclaim: reclaimHungController,
     ...hungOptions,
   }
   const context = { pendingRepairs: [], exceptions: [], hung: { misses: 0 }, launcher }
@@ -210,7 +208,7 @@ export function createDeskSession(deps) {
       controllerProblem = await reconnectController({ deskRoot, policy, onRepair })
     }
     if (controllerProblem !== null) {
-      controllerProblem = await noticeHungController({ controllerProblem, deskRoot, policy, onRepair, repairs })
+      controllerProblem = await noticeHungController({ controllerProblem, deskRoot, policy })
     }
 
     let semanticProblem = null
@@ -300,22 +298,16 @@ export function createDeskSession(deps) {
     }
   }
 
-  // A controller that accepts connections but never answers: count misses across attempts, and reclaim it after enough of them when it is provably ours.
-  async function noticeHungController({ controllerProblem, deskRoot, policy, onRepair, repairs }) {
+  // A controller that accepts connections but never answers: count misses across attempts; after enough of them the session is controller_hung. It is never stopped: its owner is another session's Desk MCP server.
+  async function noticeHungController({ controllerProblem, deskRoot, policy }) {
     if (controllerProblem.code !== "controller_unavailable") return controllerProblem
     const probe = await hungPolicy.probe({ root: deskRoot, policy, stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
     if (probe.state !== "silent") {
       context.hung = { misses: 0 }
       return controllerProblem
     }
-    const misses = context.hung.misses + 1
-    context.hung = { misses, pid: probe.record?.owner?.pid ?? null, endpoint: probe.endpoint }
-    if (misses < hungPolicy.misses) return hungOutcome(controllerProblem, context.hung, hungPolicy.misses)
-    const reclaimed = await hungPolicy.reclaim(probe)
-    if (!reclaimed.reclaimed) return hungOutcome(controllerProblem, { ...context.hung, refused: reclaimed.reason }, hungPolicy.misses)
-    context.hung = { misses: 0 }
-    repairs.push(recordRepair(reclaimed.line))
-    return reconnectController({ deskRoot, policy, onRepair })
+    context.hung = { misses: context.hung.misses + 1, ...hungControllerReport(probe) }
+    return hungOutcome(controllerProblem, context.hung, hungPolicy.misses)
   }
 
   async function semanticBarrier(controller) {
@@ -598,29 +590,27 @@ export function createDeskSession(deps) {
     return jsonResult({ status: "ok", repair: repaired.line, state: snapshot.state, code: snapshot.code, fix: snapshot.fix })
   }
 
-  // The same preconditions as the automatic reclaim: the controller misses 3 probes in a row, and it is provably ours to stop.
+  // A report, not a repair, until the controller runs in its own process (task A2b): Desk never stops another session's Desk MCP server, which is where the controller runs today.
   async function reclaimController() {
     if (!context.root || !context.policyKey) {
       return jsonResult({ status: "refused", repair: RECLAIM_REPAIR, reason: "not_admitted", fix: "Desk has not resolved a desk root and policy yet; call desk_status, then retry." }, true)
     }
-    const policy = JSON.parse(context.policyKey)
-    let probe
-    for (let miss = 0; miss < hungPolicy.misses; miss += 1) {
-      if (miss > 0) await new Promise((resolve) => setTimeout(resolve, DOCTOR_PROBE_GAP_MS))
-      probe = await hungPolicy.probe({ root: context.root.root, policy, stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
-      if (probe.state !== "silent") {
-        return jsonResult({ status: "refused", repair: RECLAIM_REPAIR, reason: `controller_${probe.state}`, fix: "The readiness controller is not hung (it answered, or nothing is listening), so there is nothing to reclaim; call desk_status." }, true)
-      }
-    }
-    const reclaimed = await hungPolicy.reclaim(probe)
-    if (!reclaimed.reclaimed) {
-      return jsonResult({ status: "refused", repair: RECLAIM_REPAIR, reason: reclaimed.reason, fix: RECLAIM_REFUSED_FIX[reclaimed.reason] ?? RECLAIM_REFUSED_FIX.default }, true)
-    }
-    context.hung = { misses: 0 }
-    forgetController()
-    context.pendingRepairs.push(recordRepair(reclaimed.line))
-    const snapshot = await admission.refresh({ force: true, waitMs: GATE_WAIT_MS })
-    return jsonResult({ status: "ok", repair: reclaimed.line, state: snapshot.state, code: snapshot.code, fix: snapshot.fix })
+    const probe = await hungPolicy.probe({ root: context.root.root, policy: JSON.parse(context.policyKey), stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
+    const report = hungControllerReport(probe)
+    const hung = probe.state === "silent"
+    return jsonResult({
+      status: "report",
+      repair: RECLAIM_REPAIR,
+      reclaimed: false,
+      controller: report,
+      missed_checks: context.hung.misses,
+      summary: hung
+        ? `The readiness controller for this root accepts connections but did not answer (owner pid ${report.owner_pid}, ${report.endpoint}). Desk does not stop it: it runs inside that session's Desk MCP server, and stopping it would cost that session its Desk connection.`
+        : `The readiness controller for this root is not hung (probe: ${probe.state}); there is nothing to reclaim.`,
+      fix: hung
+        ? `Reads and writes keep working without it, and Desk keeps retrying in the background. The controller will be reclaimed automatically once it runs in its own process (task A2b). Until then it recovers when the session with pid ${report.owner_pid} answers again or ends.`
+        : "Call desk_status.",
+    })
   }
 
   // After the handshake, an exception nothing else caught (index.js's process handlers report it here): record it, keep serving, and re-admit on the backoff.
@@ -697,17 +687,6 @@ const REQUIREMENT_TEXT = {
   write: "admitted write authority and the checkout on its state branch",
 }
 const CONTROLLER_FIX = "Desk serves reads and writes without the shared readiness controller (lexical search and timeline read the files directly; writes go straight to the files) and re-elects it in the background after 1, 2, 5, 10 and 30 s, then every 60 s. Call desk_status to retry now; only desk_reindex and semantic search wait for a controller."
-const RECLAIM_REFUSED_FIX = {
-  owner_not_ours: "The hung controller's process belongs to another user, so Desk will not stop it. Ask its owner to stop it; Desk keeps serving reads and writes meanwhile.",
-  owner_gone: "The controller's process has already exited; call desk_status and Desk reclaims its socket on the next election.",
-  endpoint_not_ours: "The controller socket or its owner record is not the private one Desk published for this root, so Desk will not touch it. Remove the stray socket only if no Desk process owns it, then call desk_status.",
-  owner_record_not_ours: "The owner record does not describe this root's controller, so Desk will not stop the process it names. Call desk_status; Desk keeps serving reads and writes.",
-  owner_pid_invalid: "The owner record names no other process to stop. Call desk_status; the next election replaces the record.",
-  owner_survived: "The hung controller's process did not exit after SIGTERM and SIGKILL. Check the process named in admission.hung_controller, then call desk_status.",
-  unsupported_platform: "Reclaiming a hung controller is not supported on Windows. End the Desk process that owns the named pipe, then call desk_status.",
-  default: "Desk could not reclaim the controller safely. Call desk_status; reads and writes keep working without it.",
-}
-
 function degradedResult(name, fields, needs) {
   return {
     content: [{
@@ -847,12 +826,14 @@ function controllerLostOutcome(error) {
   }
 }
 
+// Before enough misses: still controller_unavailable, with the count. After: controller_hung, controller-free, and the owner named.
 function hungOutcome(controllerProblem, hung, needed) {
-  const refused = hung.refused ? ` Desk could not reclaim it automatically (${hung.refused}).` : ""
+  const detected = hung.misses >= needed
   return {
     ...controllerProblem,
-    summary: `The readiness controller for this root (pid ${hung.pid}, ${hung.endpoint}) accepts connections but does not answer (${hung.misses} of ${needed} checks missed).${refused}`,
-    fix: `Reads and writes keep working without it. Desk reclaims a hung controller on its own after ${needed} missed checks in a row, when its process is provably ours to stop; to reclaim it now, call desk_doctor with {"repair":"${RECLAIM_REPAIR}"}, which runs the same checks.`,
+    code: detected ? "controller_hung" : controllerProblem.code,
+    summary: `The readiness controller for this root (owner pid ${hung.owner_pid}, ${hung.endpoint}) accepts connections but does not answer (${Math.min(hung.misses, needed)} of ${needed} checks missed${detected ? "; hung" : ""}).`,
+    fix: `Reads and writes keep working without it: lexical search and timeline read the files directly, and writes go straight to the files. Desk never stops the controller's owner, which is another session's Desk MCP server; the controller will be reclaimed automatically once it runs in its own process (task A2b), and until then Desk keeps retrying and recovers when that session answers again or ends. desk_doctor with {"repair":"${RECLAIM_REPAIR}"} reports the owner.`,
     diagnostic: { ...controllerProblem.diagnostic, hung_controller: hung },
   }
 }
