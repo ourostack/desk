@@ -44,11 +44,11 @@ function addWorktree(root, destination) {
   execFileSync("git", ["-C", root, "worktree", "add", "--detach", destination, "HEAD"], { stdio: "ignore" })
 }
 
-test("invalid saved policy and missing Git produce explicit errors, never a fabricated allow", async (t) => {
+test("invalid saved policy and marker failures produce explicit errors independent of candidate PATH", async (t) => {
   const { guard, git, root } = fixture(t)
   git("config", "desk.protected", "not-a-boolean")
   await assert.rejects(guard("git checkout HEAD"), /cannot read checkout protection/u)
-  await assert.rejects(guard("git checkout HEAD", { env: { PATH: "" } }), /ENOENT/u)
+  await assert.rejects(guard("git checkout HEAD", { env: { PATH: "" } }), /cannot read checkout protection/u)
   await assert.rejects(protectCheckout({ root, git: async ({ args }) => args[0] === "rev-parse"
     ? { ok: true, stdout: path.join(root, ".git") }
     : { ok: false, stderr: "configuration is read-only" } }), /could not protect checkout.*configuration is read-only/u)
@@ -85,11 +85,12 @@ test("literal shell forms exercise expansion without running any interpolated pr
   const allow = [
     "echo $ABSENT", "env", "bash", "bash -c", "echo \\",
     "cd /definitely-missing && git checkout HEAD", "cd .git/config && git checkout HEAD",
-    'cd "$(echo not-executed)" && git checkout HEAD', 'cd "$(date)" && git checkout HEAD', "echo >",
+    'cd "$(echo not-executed)" && git checkout HEAD', "echo >",
     "cat <<'END'\nliteral text\nEND", "echo \"\\q\"", "printf '$HOME'",
     "for ref in; do git checkout HEAD; done", "false && git checkout HEAD",
   ]
   for (const command of allow) assert.equal((await guard(command, { env })).deny, false, command)
+  await assert.rejects(guard('cd "$(date)" && git checkout HEAD', { env }), /unresolved shell directory/u)
   assert.equal((await guard("cd && git checkout HEAD", { env: {} })).deny, false)
   assert.equal((await guard("cd - && git checkout HEAD", { env: { OLDPWD: "" } })).deny, false)
   await assert.rejects(guard(`cd ${"a".repeat(1000)} && git checkout HEAD`), /ENAMETOOLONG/u)

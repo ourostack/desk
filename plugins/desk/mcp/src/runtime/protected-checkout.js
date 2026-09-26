@@ -1,8 +1,10 @@
-import { execFile } from "node:child_process"
 import { existsSync, realpathSync } from "node:fs"
 import * as path from "node:path"
 import { inspectShell } from "./shell-commands.js"
 import { runGit } from "./state-branch.js"
+import { readInspectionGit as readGit } from "./git-inspection.js"
+import { physicalDirectory } from "./shell-paths.js"
+import { inspectGitOptions } from "./git-guard-options.js"
 
 export const WORKTREE_GUIDANCE = 'shared checkout: use git worktree add --detach "$(mktemp -d)" <ref>'
 const OPERATIONS = new Set(["checkout", "switch", "reset", "rebase", "pull", "merge", "stash", "clean"])
@@ -24,24 +26,6 @@ export async function protectCheckout({ root, git = runGit }) {
   return { protected: true }
 }
 
-function configEnvironment(env) {
-  const clean = { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" }
-  // A command-line override is not the saved checkout policy.
-  for (const key of Object.keys(clean)) {
-    if (/^GIT_CONFIG(?:_|$)/u.test(key)) delete clean[key]
-  }
-  return clean
-}
-
-function readGit(cwd, args, env) {
-  return new Promise((resolve, reject) => {
-    execFile("git", args, { cwd, env: configEnvironment(env), encoding: "utf8", timeout: 2000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
-      if (error && (error.killed || typeof error.code !== "number")) { reject(error); return }
-      resolve({ ok: !error, stdout: stdout.trim(), stderr: stderr.trim(), code: error?.code })
-    })
-  })
-}
-
 async function protectedTarget(cwd, options, env) {
   const location = await readGit(cwd, [...options, "rev-parse", "--absolute-git-dir"], env)
   if (!location.ok) return false
@@ -59,8 +43,11 @@ function gitInvocation(args, cwd) {
     if (!arg.startsWith("-")) break
     if (arg === "-C" || arg.startsWith("-C")) {
       const dir = arg === "-C" ? args[++i] : arg.slice(2)
-      if (dir === undefined || dir.includes("\0")) return null
-      if (dir) cwd = path.resolve(cwd, dir)
+      if (dir === undefined) return null
+      if (dir) {
+        cwd = physicalDirectory(cwd, dir)
+        if (cwd === null) return null
+      }
     } else if (arg === "--git-dir" || arg === "--work-tree" || arg === "--namespace") {
       if (args[i + 1] === undefined) return null
       location.push(arg, args[++i])
@@ -78,10 +65,8 @@ function gitInvocation(args, cwd) {
 
 function destructive(name, args) {
   if (OPERATIONS.has(name)) return true
-  const beforePaths = args.slice(0, args.includes("--") ? args.indexOf("--") : args.length)
-  if (name === "restore") return beforePaths.some((arg) => arg === "--source" || arg.startsWith("--source=") || /^-[^-]*s/u.test(arg))
-  if (name === "branch") return beforePaths.some((arg) => arg === "--force" || /^-[^-]*f/u.test(arg))
-  return name === "worktree" && args[0] === "remove" && beforePaths.some((arg) => arg === "--force" || /^-f+$/u.test(arg))
+  if (name === "restore" || name === "branch") return inspectGitOptions(name, args).enabled
+  return name === "worktree" && args[0] === "remove" && inspectGitOptions("remove", args.slice(1)).enabled
 }
 
 export async function guardShellCommand({ command, cwd, env = process.env, powershell = false }) {
@@ -111,14 +96,14 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     }
     if (!destructive(operation, operands)) return
     if (operation === "worktree") {
-      const target = operands.slice(1).find((arg) => !arg.startsWith("-"))
+      const [target] = inspectGitOptions("remove", operands.slice(1)).operands
       if (target) {
         const worktrees = await readGit(invocation.cwd, [...location, "worktree", "list", "--porcelain"], variables)
         const paths = worktrees.stdout.split(/\r?\n/u).filter((line) => line.startsWith("worktree ")).map((line) => line.slice(9))
         let resolved = path.resolve(invocation.cwd, target)
         try { resolved = realpathSync(resolved) } catch (error) { if (error.code !== "ENOENT") throw error }
         const found = paths.find((p) => p === resolved) ?? paths.find((p) => path.basename(p) === target)
-        if (found && await protectedTarget(found, [], variables)) deny = true
+        if (found && await protectedTarget(found, [], {})) deny = true
       }
       return
     }
@@ -129,8 +114,8 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
 }
 
 export async function protectedCheckoutHook(input, host) {
-  const name = input.tool_name ?? input.toolName
-  if (!["Bash", "bash", "powershell", "shell", "run_shell_command"].includes(name)) return {}
+  const name = String(input.tool_name ?? input.toolName).toLowerCase()
+  if (!["bash", "powershell", "shell", "run_shell_command"].includes(name)) return {}
   let args = input.tool_input ?? input.toolArgs
   if (typeof args === "string") args = JSON.parse(args)
   if (typeof args?.command !== "string") return {}

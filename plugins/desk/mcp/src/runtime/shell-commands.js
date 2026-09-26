@@ -2,7 +2,8 @@
 // literal shell/eval wrappers are walked as commands. Unknown program exit statuses
 // fork the &&/|| paths, and subshells/pipelines cannot change their parent's cwd.
 import * as path from "node:path"
-import { statSync } from "node:fs"
+import { physicalDirectory } from "./shell-paths.js"
+import { inspectPowerShell } from "./powershell-commands.js"
 
 const separators = new Set([";", "\n", "&", "&&", "||", "|", "(", ")", "{", "}"])
 
@@ -50,7 +51,12 @@ export function tokenizeShell(text, powershell = false) {
       } else value += c
       continue
     }
-    if (c === "'" || c === '"') {
+    if (!powershell && c === "$" && next === "'") {
+      active = true; quoted = true; part(true)
+      const ansi = ansiQuoted(text, i + 2)
+      parts.push({ text: ansi.text, expand: false, quoted: true })
+      i = ansi.end
+    } else if (c === "'" || c === '"') {
       active = true; quoted = true; part(true); quote = c
     } else if (c === "$" && next === "(") {
       active = true
@@ -90,7 +96,11 @@ export function tokenizeShell(text, powershell = false) {
         if (end >= 0) { value += text.slice(i, end + 1); i = end; continue }
       }
       word()
-      const op = (c === "&" || c === "|") && next === c ? c + text[++i] : c
+      let op = (c === "&" || c === "|") && next === c ? c + text[++i] : c
+      if (c === ";" && (next === ";" || next === "&")) {
+        op += text[++i]
+        if (op === ";;" && text[i + 1] === "&") op += text[++i]
+      }
       tokens.push(op)
     } else {
       active = true; value += c
@@ -99,6 +109,31 @@ export function tokenizeShell(text, powershell = false) {
   if (quote) throw new Error("unterminated shell quote")
   word()
   return tokens
+}
+
+function ansiQuoted(text, start) {
+  let value = ""
+  const escapes = { a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v", "\\": "\\", "'": "'", '"': '"' }
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === "'") return { text: value, end: i }
+    if (text[i] !== "\\") { value += text[i]; continue }
+    const c = text[++i]
+    if (c in escapes) { value += escapes[c]; continue }
+    const pattern = c === "x" ? /^[0-9a-fA-F]{1,2}/u : c === "u" ? /^[0-9a-fA-F]{1,4}/u : c === "U" ? /^[0-9a-fA-F]{1,8}/u : null
+    if (pattern) {
+      const match = pattern.exec(text.slice(i + 1))
+      if (!match) throw new Error("unresolved ANSI-C escape")
+      value += String.fromCodePoint(parseInt(match[0], 16)); i += match[0].length
+    } else if (/[0-7]/u.test(c)) {
+      const match = /^[0-7]{1,3}/u.exec(text.slice(i))
+      value += String.fromCharCode(parseInt(match[0], 8)); i += match[0].length - 1
+    } else if (c === "c") {
+      const control = text[++i]
+      if (control === undefined) throw new Error("unresolved ANSI-C control escape")
+      value += String.fromCharCode(control.toUpperCase().charCodeAt(0) & 31)
+    } else value += `\\${c}`
+  }
+  throw new Error("unterminated ANSI-C quote")
 }
 
 function substitution(text, start) {
@@ -114,7 +149,7 @@ function substitution(text, start) {
   throw new Error("unterminated command substitution")
 }
 
-function parse(tokens, powershell) {
+function parse(tokens) {
   let i = 0
   const keyword = (token) => typeof token === "string" ? token : token?.quoted ? null : token?.parts?.map((p) => p.text).join("")
   function list(ends = []) {
@@ -157,9 +192,30 @@ function parse(tokens, powershell) {
     return nodes.length === 1 ? nodes[0] : { kind: "pipe", nodes }
   }
   function command() {
-    if (powershell && tokens[i] === "&") i++
     if (keyword(tokens[i]) === "!") { i++; return { kind: "not", body: command() } }
     if (keyword(tokens[i]) === "if") return conditional()
+    if (keyword(tokens[i]) === "case") {
+      i++
+      const value = tokens[i++]
+      expect("in")
+      const arms = []
+      while (keyword(tokens[i]) !== "esac") {
+        while (tokens[i] === "\n") i++
+        if (tokens[i] === "(") i++
+        const patterns = []
+        while (tokens[i]?.parts || tokens[i] === "|") {
+          if (tokens[i] !== "|") patterns.push(tokens[i])
+          i++
+        }
+        expect(")")
+        const body = list([";;", ";&", ";;&", "esac"])
+        const terminator = tokens[i]
+        arms.push({ patterns, body, terminator })
+        if (keyword(tokens[i]) !== "esac") i++
+      }
+      expect("esac")
+      return { kind: "case", value, arms }
+    }
     if (["while", "until"].includes(keyword(tokens[i]))) {
       const until = keyword(tokens[i++]) === "until"
       const condition = list(["do"])
@@ -210,33 +266,66 @@ function unique(states) {
   return [...new Map(states.map((s) => [JSON.stringify(s), s])).values()]
 }
 
-export async function inspectShell({ command, cwd, env, powershell = false, visit, depth = 0 }) {
-  if (depth > 16) throw new Error("shell wrapper nesting exceeds 16")
-  const tree = parse(tokenizeShell(command, powershell), powershell)
-  let steps = 0
-  async function nested(text, state) {
-    return inspectShell({ command: text, cwd: state.cwd, env: state.vars, powershell, visit, depth: depth + 1 })
+function literalPattern(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+}
+
+function globPattern(text) {
+  let result = ""
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "*") result += ".*"
+    else if (text[i] === "?") result += "."
+    else if (text[i] === "[" && text.indexOf("]", i + 1) >= 0) {
+      const end = text.indexOf("]", i + 1)
+      const characters = text.slice(i + 1, end)
+      result += `[${characters.replace(/^!/u, "^")}]`
+      i = end
+    } else result += literalPattern(text[i])
   }
-  async function expand(word, state) {
-    let result = ""
+  return result
+}
+
+export async function inspectShell({ command, cwd, env, powershell = false, visit, depth = 0 }) {
+  if (powershell) return inspectPowerShell({ command, cwd, env, visit, depth })
+  if (depth > 16) throw new Error("shell wrapper nesting exceeds 16")
+  const tree = parse(tokenizeShell(command))
+  let steps = 0
+  async function nested(text, state, shell = "bash") {
+    return inspectShell({ command: text, cwd: state.cwd, env: state.vars, powershell: shell === "powershell", visit, depth: depth + 1 })
+  }
+  async function expand(word, state, split = false) {
+    const fields = [""]
+    const emit = (text, canSplit = false) => {
+      const ifs = state.vars.IFS ?? " \t\n"
+      for (const c of text) {
+        if (split && canSplit && ifs.includes(c)) {
+          if (fields.at(-1) !== "") fields.push("")
+        } else fields[fields.length - 1] += c
+      }
+    }
     for (const [index, part] of word.parts.entries()) {
-      if (!part.expand) { result += part.text; continue }
-      let text = part.text, out = ""
+      if (!part.expand) { emit(part.text); continue }
+      let text = part.text
       if (index === 0 && !part.quoted) text = text.replace(/^~(?=$|\/)/u, state.vars.HOME ?? "~")
       for (let i = 0; i < text.length; i++) {
         if (text[i] === "$" && text[i + 1] === "(") {
           const sub = substitution(text, i + 2)
           await nested(sub.text, state)
-          out += await literalOutput(sub.text, state)
+          emit(await literalOutput(sub.text, state), !part.quoted)
           i = sub.end
-        } else out += text[i]
+        } else if (text[i] === "$") {
+          const match = /^\$(?:\{([A-Za-z_]\w*|\d+)\}|(?:env:)?([A-Za-z_]\w*|\d))/u.exec(text.slice(i))
+          if (match) {
+            emit(state.vars[match[1] ?? match[2]] ?? "", !part.quoted)
+            i += match[0].length - 1
+          } else emit(text[i])
+        } else emit(text[i])
       }
-      result += out.replace(/\$(?:\{([A-Za-z_]\w*|\d+)\}|(?:env:)?([A-Za-z_]\w*|\d))/gu, (_, braced, plain) => state.vars[braced ?? plain] ?? "")
     }
-    return result
+    return split ? fields.filter((field) => field !== "" || word.quoted) : fields.join("")
   }
   async function literalOutput(text, state) {
-    const tokens = tokenizeShell(text, powershell)
+    const tokens = tokenizeShell(text)
     if (!tokens.every((token) => token.parts)) return "\0"
     const words = []
     for (const token of tokens) words.push(await expand(token, state))
@@ -252,6 +341,28 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
   }
   async function run(node, state) {
     if (++steps > 1000) throw new Error("shell inspection budget exceeded")
+    if (state.terminated) return [state]
+    if (node.kind === "case") {
+      const value = await expand(node.value, state)
+      let states = [state], fallthrough = false
+      for (const arm of node.arms) {
+        let matched = fallthrough || value.includes("\0")
+        for (const pattern of arm.patterns) {
+          let expression = ""
+          for (const part of pattern.parts) {
+            const text = await expand({ parts: [part] }, state)
+            if (text.includes("\0")) matched = true
+            expression += part.quoted || !part.expand ? literalPattern(text) : globPattern(text)
+          }
+          if (new RegExp(`^${expression}$`, "u").test(value)) matched = true
+        }
+        if (!matched) continue
+        states = (await Promise.all(states.map((s) => run(arm.body, s)))).flat()
+        if (arm.terminator === ";;" && !value.includes("\0")) return states
+        fallthrough = arm.terminator === ";&"
+      }
+      return states
+    }
     if (node.kind === "define") return [{ ...state, functions: { ...state.functions, [node.name]: node.body }, status: true }]
     if (node.kind === "while") {
       const states = await run(node.condition, state), out = []
@@ -298,7 +409,11 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     }
     for (const redirect of node.redirects) await expand(redirect, state)
     let args = []
-    for (const word of node.words) args.push(await expand(word, state))
+    for (const word of node.words) {
+      const assignment = /^[A-Za-z_]\w*=/u.test(word.parts[0].text)
+      const split = !(assignment && (args.length === 0 || args[0] === "export"))
+      args.push(...(split ? await expand(word, state, true) : [await expand(word, state)]))
+    }
     const local = { ...state, vars: { ...state.vars } }
     while (args.length && /^[A-Za-z_]\w*=/u.test(args[0])) {
       const at = args[0].indexOf("=")
@@ -306,6 +421,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       args.shift()
     }
     if (!args.length) return [{ ...local, status: true }]
+    if (args[0].includes("\0")) throw new Error("unresolved shell command")
     let name = path.basename(args[0]).replace(/\.exe$/iu, "").toLowerCase()
     while (["command", "exec", "env", "builtin", "nohup", "time", "timeout", "nice", "sudo"].includes(name)) {
       const wrapper = name
@@ -313,7 +429,12 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       while (args[0]?.startsWith("-")) {
         const flag = args.shift()
         if (flag === "-u" || flag === "--unset") delete local.vars[args.shift()]
-        if (flag === "-C" || flag === "--chdir") local.cwd = path.resolve(local.cwd, args.shift())
+        if (flag === "-C" || flag === "--chdir") {
+          const dir = physicalDirectory(local.cwd, args.shift())
+          if (!dir) return [{ ...state, status: false }]
+          local.cwd = dir
+          local.logicalCwd = dir
+        }
         if (wrapper === "nice" && flag === "-n") args.shift()
       }
       if (wrapper === "timeout") args.shift()
@@ -330,28 +451,39 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       }
       return [{ ...local, status: true }]
     }
-    if (["cd", "chdir", "set-location"].includes(name)) {
-      const operand = args.slice(1).find((arg) => !["--", "-L", "-P", "-LiteralPath", "-Path"].includes(arg))
+    if (name === "exit") return [{ ...state, terminated: true, status: args[1] === undefined || args[1] === "0" }]
+    if (name === "cd") {
+      let physical = false, operand
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === "--") { operand = args[i + 1]; break }
+        if (/^-[LP]+$/u.test(args[i])) { physical = args[i].endsWith("P"); continue }
+        operand = args[i]; break
+      }
       const target = operand === "-" ? local.vars.OLDPWD : operand ?? local.vars.HOME
-      let dir = target
-      if (dir?.includes("\0")) return [{ ...state, status: false }]
-      if (dir) dir = path.resolve(local.cwd, dir)
-      try {
-        if (dir && statSync(dir).isDirectory()) return [{ ...local, cwd: dir, vars: { ...local.vars, OLDPWD: state.cwd, PWD: dir }, status: true }]
-      } catch (error) {
-        if (!["ENOENT", "ENOTDIR", "EACCES"].includes(error.code)) throw error
+      if (target?.includes("\0")) throw new Error("unresolved shell directory")
+      const prefixes = target && !path.isAbsolute(target) && !/^\.{1,2}(?:\/|$)/u.test(target) && local.vars.CDPATH
+        ? [...local.vars.CDPATH.split(":"), ""] : [""]
+      for (const prefix of prefixes) {
+        const candidate = prefix ? `${prefix}/${target}` : target
+        const logical = candidate ? path.resolve(local.logicalCwd, candidate) : null
+        const dir = candidate ? physicalDirectory(local.cwd, physical ? candidate : logical) : null
+        if (dir) {
+          const logicalCwd = physical ? dir : logical
+          return [{ ...local, cwd: dir, logicalCwd, vars: { ...local.vars, OLDPWD: state.logicalCwd, PWD: logicalCwd }, status: true }]
+        }
       }
       return [{ ...state, status: false }]
     }
     if (local.functions[name]) return run(local.functions[name], positional(local, args.slice(1), 1))
     if (["sh", "bash", "zsh", "dash", "ksh", "pwsh", "powershell"].includes(name)) {
       const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/u.test(arg) || /^-command$/iu.test(arg))
-      if (flag > 0 && args[flag + 1] !== undefined) await nested(args[flag + 1], positional(local, args.slice(flag + 2), 0))
+      if (flag > 0 && args[flag + 1] !== undefined) await nested(args[flag + 1], positional(local, args.slice(flag + 2), 0), ["pwsh", "powershell"].includes(name) ? "powershell" : "bash")
     } else if (name === "eval") await nested(args.slice(1).join(" "), local)
     else await visit({ name, args: args.slice(1), cwd: local.cwd, env: local.vars })
     if (["true", ":", "echo", "printf"].includes(name)) return [{ ...state, status: true }]
     if (name === "false") return [{ ...state, status: false }]
     return [{ ...state, status: true }, { ...state, status: false }]
   }
-  await run(tree, { cwd, vars: { ...env, PWD: cwd }, functions: {}, status: true })
+  const physicalCwd = physicalDirectory(cwd, ".") ?? cwd
+  await run(tree, { cwd: physicalCwd, logicalCwd: cwd, vars: { ...env, PWD: cwd }, functions: {}, status: true })
 }
