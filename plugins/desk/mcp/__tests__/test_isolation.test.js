@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import { existsSync, mkdirSync, promises as fsPromises, writeFile, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { REAL_HOME_WRITE, isRealHomeWrite, testRun } from "./_isolated_env.mjs"
 import { mkTempRoot } from "./_temp_roots.js"
 import { resolveDeskStateDir, resolveReadinessStateHome } from "../src/runtime/last-start.js"
@@ -47,4 +47,11 @@ test("writes under the temporary folders and reads anywhere still work", async (
   assert.equal(isRealHomeWrite(pathToFileURL(path.join(root, "ok.txt"))), false)
   assert.equal(isRealHomeWrite(Buffer.from(path.join(testRun.realHome, "x"))), true)
   assert.equal(isRealHomeWrite(3), false, "a file descriptor is not a path")
+})
+
+test("npm test and the coverage runner both preload the setup, so a test file that never imports it is isolated too", async () => {
+  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+  const pkg = JSON.parse(await fsPromises.readFile(path.join(mcpRoot, "package.json"), "utf8"))
+  assert.match(pkg.scripts.test, /^node --import \.\/__tests__\/_isolated_env\.mjs --test /u)
+  assert.match(await fsPromises.readFile(path.join(mcpRoot, "src", "coverage", "runner.js"), "utf8"), /"__tests__", "_isolated_env\.mjs"/u)
 })

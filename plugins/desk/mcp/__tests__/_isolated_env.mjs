@@ -1,7 +1,7 @@
 // Global test setup: every test process runs with HOME, XDG_STATE_HOME, XDG_CACHE_HOME, XDG_CONFIG_HOME, XDG_DATA_HOME and XDG_RUNTIME_DIR pointing into one temporary folder per test run, and a write under the real home fails loudly.
 //
 // Loaded three ways, so no test can reach the real ~/.cache or ~/.local/state:
-// - the coverage runner (and the native Windows CI steps) preload it with `--import`, and the test runner passes that to every test file's process;
+// - `npm test`, the coverage runner and the native Windows CI steps preload it with `--import`, and the test runner passes that to every test file's process;
 // - `_temp_roots.js` imports it, so a test file run on its own with `node --test <file>` is isolated too;
 // - a process that inherits DESK_TEST_RUN_DIR from its parent reuses the parent's folder, so one run shares one folder.
 //
