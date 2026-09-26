@@ -52,6 +52,7 @@ async function makeSession(t, overrides = {}) {
     loadRuntime: async () => ({ runtimeServer: runtime, runtimeStatus: { state: "ready" } }),
     setupDiagnostic: (error) => ({ status: "setup_required", mode: "setup", summary: "no desk", remediation: [{ action: "run_first_run_bootstrap", message: "bootstrap" }], paths_tried: error.tried }),
     hung: { probe: async () => ({ state: "refused" }) },
+    protect: async () => ({ protected: false }), // These session-state fixtures are not Git checkouts.
     ...overrides,
   })
   t.after(() => session.dispose())

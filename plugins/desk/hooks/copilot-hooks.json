@@ -1,6 +1,14 @@
 {
   "version": 1,
   "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/protected-checkout.cjs\" copilot",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/protected-checkout.cjs\" copilot",
+        "timeoutSec": 10
+      }
+    ],
     "sessionStart": [
       {
         "type": "command",

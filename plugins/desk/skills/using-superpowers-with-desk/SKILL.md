@@ -56,6 +56,12 @@ Omit `--person` for a single-person Desk. Use the actually loaded, admitted Desk
 
 Apply the outputs in place of upstream SDD's path-producing helpers: `planPath` is the plan input or `null`; `progressPath` is the existing progress record and `rulingsPath` is derived from it, so a provider progress file never becomes a second ruling store and a legacy `doing.md` is never renamed; `briefPath`, `implementationReportPath`, `reviewPackagePath` and `reviewReportPath` are the explicit artifact destinations under the approved private evidence root. Produce the normal Superpowers brief and review contents at those paths with native file and diff tools. This changes storage binding, not the engineering method.
 
+Include the mapper's `briefRules` in **both the implementer brief and every reviewer brief**, including re-reviews. The Desk-owned addition to each brief template is:
+
+> verify or validate in your own worktree; never in a checkout your task does not own
+
+This rule is passed through the adapter, not patched into the vendored Superpowers templates. A [protected-checkout denial](../../docs/protected-checkouts.md) applies to parent agents and subagents alike; it does not grant ownership of a different checkout.
+
 Do not create a competing `.superpowers/sdd` tree. Keep canonical Git-backed Desk/Crew state on main through its established write protocol; an intentional alpha applies to the approved code artifact, not a competing workspace-state branch. An explicitly absent file fails; never replace that failure with an inferred plan, a mock receipt or a fallback workspace. The mapper returns `cleanupPaths: []`, which is no deletion authority, and a printed evidence path is neither proof of protection nor permission.
 
 On interruption, read the canonical progress record, not an upstream shadow ledger. Reuse the recorded step and attempt for reading; allocate an explicit new attempt for new output and preserve earlier evidence. Full task, repository and iteration qualification prevents same-basename plan and progress collisions.
