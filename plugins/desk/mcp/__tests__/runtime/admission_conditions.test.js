@@ -5,6 +5,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
+import * as net from "node:net"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { TOOL_NAMES } from "../../src/tool-names.js"
@@ -148,7 +149,8 @@ test("a hung controller is detected after 3 missed checks and never stopped; rea
     assert.equal(write.isError, false, JSON.stringify(write.payload))
     const detected = await session.statusUntil((payload) => payload.state === "degraded:controller_hung", { deadlineMs: 60000 })
     assert.equal(detected.admission.hung_controller.owner_pid, hung.pid)
-    assert.match(detected.fix, /task A2b/u)
+    assert.match(detected.fix, /^Nothing to do: search uses plain text .* writes work .* recovers when it answers again or when its owning session \(pid \d+\) ends/u)
+    assert.doesNotMatch(detected.fix, /task|A2b/u)
     const report = await session.call("desk_doctor", { repair: "reclaim_controller" })
     assert.equal(report.payload.status, "report")
     assert.equal(report.payload.controller.owner_pid, hung.pid)
@@ -158,6 +160,67 @@ test("a hung controller is detected after 3 missed checks and never stopped; rea
     assert.equal(hung.exitCode, null, "the owner process was never stopped")
     assert.equal(hung.signalCode, null)
   })
+})
+
+// Connections to a stopped owner's socket until the socket stops taking them: its accept queue is full, the state the other sessions' elections used to mistake for an abandoned socket. Returns the open connections.
+async function fillAcceptQueue(endpoint, limit = 1000) {
+  const sockets = []
+  for (let count = 0; count < limit; count += 1) {
+    const socket = net.createConnection(endpoint)
+    const outcome = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve("pending"), 200)
+      socket.once("connect", () => { clearTimeout(timer); resolve("queued") })
+      socket.once("error", (error) => { clearTimeout(timer); resolve(error.code ?? "error") })
+    })
+    sockets.push(socket)
+    if (outcome !== "queued") return { sockets, full: outcome }
+  }
+  return { sockets, full: null }
+}
+
+test("a stopped owner is never taken over: the other session reports controller_hung and never binds a second controller, and after SIGCONT one controller recovers", { skip: posixOnly, timeout: 180000 }, async (t) => {
+  const fixture = await makeGitDesk()
+  const configPath = writeActivation(fixture)
+  const { stateDir } = controllerFixture(fixture)
+  const owner = await startDesk(fixture, { args: ["--activation-config", configPath] })
+  t.after(() => { owner.child.kill("SIGCONT"); return owner.close() })
+  assert.equal((await owner.statusUntil(settled)).state, "ready")
+  const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
+  assert.equal(record.owner.pid, owner.child.pid)
+  const inode = statSync(record.endpoint).ino
+  owner.child.kill("SIGSTOP")
+  const filler = await fillAcceptQueue(record.endpoint)
+  t.after(() => filler.sockets.forEach((socket) => socket.destroy()))
+  t.diagnostic(`the stopped owner's socket stopped taking connections after ${filler.sockets.length - 1} (${filler.full ?? "never"})`)
+  const other = await startDesk(fixture, { args: ["--activation-config", configPath], env: { DESK_READINESS_PROBE_MS: "500" } })
+  t.after(() => other.close())
+  const hung = await other.statusUntil((payload) => payload.state === "degraded:controller_hung", { deadlineMs: 90000, intervalMs: 500 })
+  assert.equal(hung.admission.hung_controller.owner_pid, owner.child.pid)
+  assert.equal(hung.admission.controller, "absent")
+  assert.match(hung.fix, /^Nothing to do/u)
+  // Keep the other session retrying: every attempt must leave the stopped owner's controller in place.
+  for (let round = 0; round < 10; round += 1) {
+    const status = (await other.call("desk_status")).payload
+    assert.equal(status.state, "degraded:controller_hung")
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
+  await assertReadsServeDirectly(other)
+  const write = await other.call("task_create", { track: "ops", slug: "while-owner-stopped", title: "Stopped owner" })
+  assert.equal(write.isError, false, JSON.stringify(write.payload))
+  assert.deepEqual(JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8")), record, "the owner record is unchanged")
+  assert.equal(statSync(record.endpoint).ino, inode, "the stopped owner's socket was never unlinked")
+  assert.doesNotMatch(other.stderr(), /readiness controller server error|EADDRINUSE/u)
+  assert.deepEqual(readdirSync(fixture.readinessHome), [path.basename(stateDir)], "one controller folder for the root")
+  owner.child.kill("SIGCONT")
+  filler.sockets.forEach((socket) => socket.destroy())
+  const recovered = await other.statusUntil((payload) => payload.state === "ready", { deadlineMs: 60000, intervalMs: 500 })
+  assert.equal(recovered.admission.controller, "connected")
+  assert.equal(recovered.admission.hung_controller, null)
+  assert.deepEqual(JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8")), record, "still the one controller the owner started")
+  assert.equal(statSync(record.endpoint).ino, inode)
+  assert.equal((await owner.statusUntil(settled)).state, "ready", "the owner answers again")
+  const journaled = await other.call("task_create", { track: "ops", slug: "after-owner-resumed", title: "Resumed owner" })
+  assert.equal(journaled.isError, false, JSON.stringify(journaled.payload))
 })
 
 test("a rival controller with a different semantic contract: lexical reads, degraded:controller_semantic_mismatch", { skip: posixOnly }, async (t) => {

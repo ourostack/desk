@@ -9,7 +9,7 @@
 // - `refs/heads/<state branch>` exists.
 // The repair is `git switch --no-guess <state branch>`, which keeps untracked files and refuses rather than overwrite one; HEAD is read again right before it, and a HEAD that moved since the check aborts it. Desk never fetches or resets.
 //
-// When the switch happens (fix round 1 ruling): automatically only during the session's startup admission, before it first reaches ready, and then only for a detached HEAD or a branch equal to its upstream. Mid-session, a HEAD that leaves the state branch makes writes read-only and is never switched back automatically; the agent asks for the switch with desk_doctor's switch_state_branch repair, which runs the same preconditions.
+// When the switch happens (fix round 1 ruling): automatically only during the session's first admission attempt, whatever that attempt ends in (fix round 3 ruling), and then only for a detached HEAD or a branch equal to its upstream. Mid-session, a HEAD that leaves the state branch makes writes read-only and is never switched back automatically; the agent asks for the switch with desk_doctor's switch_state_branch repair, which runs the same preconditions.
 //
 // Git runs asynchronously, never blocking the thread that answers the host.
 
@@ -120,7 +120,7 @@ export async function repairStateBranch({ inspection, git = runGit }) {
 
 /**
  * The degraded state for an inspection that is not ok, with a fix the agent can act on in the session.
- * `automatic` says whether Desk still switches back on its own once the blockers are gone (only during startup admission).
+ * `automatic` says the problem was found by the first admission attempt, the only one that switches on its own. The agent reads the fix after that attempt, so every fix ends with desk_doctor's switch_state_branch repair: once the blockers are gone, Desk never switches back by itself.
  */
 export function stateBranchProblem(inspection, { failedRepair = null, automatic = false } = {}) {
   const code = inspection.kind === "detached" ? "state_branch_detached" : "state_branch_mismatch"
@@ -129,7 +129,7 @@ export function stateBranchProblem(inspection, { failedRepair = null, automatic 
     ? `HEAD in ${where} is detached at ${shortSha(inspection.head.sha)}`
     : `${where} is on branch ${inspection.head.branch}`
   const doctor = `call desk_doctor with {"repair":"${STATE_BRANCH_REPAIR}"} to switch back to ${inspection.branch}`
-  const then = automatic ? `then call desk_status and Desk switches back to ${inspection.branch}` : `then ${doctor}`
+  const then = `then ${doctor}`
   const steps = inspection.blockers.map((blocker) => blockerFix(blocker, inspection, then))
   if (failedRepair?.reason === "switch_failed" || failedRepair?.reason === "head_moved") {
     steps.push(`git switch ${inspection.branch} did not run cleanly (${failedRepair.message}); resolve what it names, then ${doctor}.`)

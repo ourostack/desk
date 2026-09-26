@@ -1,41 +1,40 @@
-// A readiness controller that accepts connections but never answers: detect it and report it. Never stop it.
+// A readiness controller whose owner runs but that does not answer: detect it and report it. Never stop it, and never take it over.
 //
-// A session that cannot elect a controller probes the root's controller socket with a handshake. A probe the socket accepts but does not answer within the probe time is a miss; after 3 consecutive misses (the session's admission retries space them out on its backoff) the session is `degraded:controller_hung` and stays controller-free: reads and writes work, and search reads the files directly.
+// A session that cannot elect a controller probes the root's controller socket with a handshake. A probe the socket accepts but does not answer within the probe time is a miss, and so is a probe the socket refuses (or finds no socket for) while the owner record names a running process: a stopped owner, or one whose accept queue is full. After 3 consecutive misses (the session's admission retries space them out on its backoff) the session is `degraded:controller_hung` and stays controller-free: search reads the files directly and writes go straight to the files.
 //
-// Desk never signals the controller's owner (controller ruling, fix round 2): today the controller runs inside another session's Desk MCP server, and stopping that process would cost that session its Desk connection. Once the controller runs in a child process of its own (task A2b), reclaiming it can stop that child without touching any session's server.
+// Desk never signals the controller's owner (fix round 2 ruling): the controller runs inside another session's Desk MCP server, and stopping that process would cost that session its Desk connection. Desk never takes a running owner's controller over either (fix round 3 ruling): see owner-record.js. The session recovers when the controller answers again or its owner ends.
 //
 // Dependency-free, so the session can run it before and without the runtime pack.
 
 import { randomUUID } from "node:crypto"
-import { readFileSync } from "node:fs"
 import * as net from "node:net"
 import * as path from "node:path"
 
 import { readinessContracts } from "./contracts.js"
 import { controllerIdentity, deriveControllerEndpoint } from "./identity.js"
+import { ownerState } from "./owner-record.js"
 
 export const HUNG_MISSES = 3
 export const HUNG_PROBE_MS = 5000
 
 /**
  * Where the root's controller is and whether it answers. `state` is one of:
- * "missing" (no socket), "refused" (a socket nobody listens on), "answering", "silent" (accepts, no answer within `timeoutMs`) or "unknown".
+ * "missing" (no socket), "refused" (a socket nobody listens on), "answering", "silent" (accepts, no answer within `timeoutMs`), "unreachable" (refused, no socket or no answer while the owner record names a running process) or "unknown".
  */
-export async function probeController({ root, policy, stateHome, timeoutMs = HUNG_PROBE_MS, connect = net.createConnection }) {
+export async function probeController({ root, policy, stateHome, timeoutMs = HUNG_PROBE_MS, connect = net.createConnection, liveness = {} }) {
   const identity = controllerIdentity({ root, ...readinessContracts(policy) })
   const stateDir = path.join(stateHome, identity.id)
-  const record = readOwnerRecord(stateDir)
+  const owner = ownerState({ stateDir, identity, ...liveness })
+  const record = owner.record
   const endpoint = typeof record?.endpoint === "string" ? record.endpoint : deriveControllerEndpoint({ identity })
-  const state = await handshakeProbe({ endpoint, record, identity, timeoutMs, connect })
+  const answer = await handshakeProbe({ endpoint, record, identity, timeoutMs, connect })
+  const state = owner.state === "live" && answer !== "answering" && answer !== "silent" ? "unreachable" : answer
   return { state, endpoint, stateDir, record, identity }
 }
 
-function readOwnerRecord(stateDir) {
-  try {
-    return JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
-  } catch {
-    return null
-  }
+/** Whether a probe counts as a missed check: a controller that accepts but does not answer, or whose running owner cannot be reached. */
+export function probeMissed(probe) {
+  return probe.state === "silent" || probe.state === "unreachable"
 }
 
 function handshakeProbe({ endpoint, record, identity, timeoutMs, connect }) {

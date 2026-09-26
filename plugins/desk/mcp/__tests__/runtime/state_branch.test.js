@@ -56,7 +56,8 @@ test("every blocker is detected and named with a fix", async () => {
   assert.equal(problem.code, "state_branch_detached")
   assert.match(problem.summary, /HEAD in .* is detached at [0-9a-f]{12}, not on the state branch main/u)
   assert.match(problem.fix, /then call desk_doctor with \{"repair":"switch_state_branch"\}/u, "mid-session, every fix ends at the doctor repair")
-  assert.match(stateBranchProblem(inspection, { automatic: true }).fix, /then call desk_status and Desk switches back to main/u)
+  // Found by the first admission attempt too: the agent reads it after that attempt, when only the doctor switches.
+  assert.equal(stateBranchProblem(inspection, { automatic: true }).fix, problem.fix)
   for (const text of ["branch --track main origin/main", "git -C", "status", "index.lock", "push origin HEAD:refs/heads/<name>"]) {
     assert.ok(problem.fix.includes(text), text)
   }

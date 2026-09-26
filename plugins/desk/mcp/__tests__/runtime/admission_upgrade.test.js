@@ -51,7 +51,7 @@ test("a malformed activation config recovers in place once it is fixed", async (
   assert.equal((await session.statusUntil((payload) => payload.state === "ready")).state, "ready")
 })
 
-test("a detached HEAD with a local-only commit recovers once the commit is pushed: repaired, then ready", async (t) => {
+test("a detached HEAD with a local-only commit recovers once the commit is pushed and desk_doctor switches back: repaired, then ready", async (t) => {
   const fixture = await makeGitDesk()
   const configPath = writeActivation(fixture)
   git(fixture.desk, "checkout", "--detach")
@@ -65,9 +65,14 @@ test("a detached HEAD with a local-only commit recovers once the commit is pushe
   const degraded = await session.statusUntil(settled)
   assert.equal(degraded.state, "degraded:state_branch_detached")
   // What the fix tells the agent to do: keep the commit on a pushed branch.
+  assert.match(degraded.fix, /then call desk_doctor with \{"repair":"switch_state_branch"\}/u)
   git(fixture.desk, "push", "origin", "HEAD:refs/heads/rescue-work")
+  // Only the first admission attempt switches on its own; after it, the doctor repair does.
+  assert.equal((await session.call("desk_status")).payload.state, "degraded:state_branch_detached")
+  const doctored = (await session.call("desk_doctor", { repair: "switch_state_branch" })).payload
+  assert.equal(doctored.repair, `repaired: detached HEAD → main (was ${sha.slice(0, 12)})`)
   const ready = await session.statusUntil((payload) => payload.state === "ready")
-  assert.equal(ready.repair, `repaired: detached HEAD → main (was ${sha.slice(0, 12)})`)
+  assert.equal(ready.repair, doctored.repair)
   assert.equal(git(fixture.desk, "symbolic-ref", "--short", "HEAD"), "main")
   assert.deepEqual((await session.request("tools/list")).result.tools, before)
 })
@@ -129,6 +134,29 @@ test("a deliberate git switch mid-session stays put: writes go read-only with th
   assert.equal(git(fixture.desk, "symbolic-ref", "--short", "HEAD"), "feature")
   git(fixture.desk, "switch", "main")
   assert.equal((await session.statusUntil((payload) => payload.state === "ready")).state, "ready")
+})
+
+test("a session that never reaches ready never switches a deliberate git switch back: only the first admission attempt may", async (t) => {
+  const fixture = await makeGitDesk()
+  const configPath = writeActivation(fixture)
+  git(fixture.desk, "branch", "--track", "feature", "origin/feature")
+  // A launcher read-only code keeps the session degraded for its whole life.
+  const session = await startDesk(fixture, { args: ["--activation-config", configPath, "--state-branch", "main", "--degraded", "identity_unavailable"] })
+  t.after(() => session.close())
+  const first = await session.statusUntil(settled)
+  assert.equal(first.state, "degraded:identity_unavailable")
+  // Clean and equal to its upstream: the first attempt would have switched this back; every later one must not.
+  git(fixture.desk, "switch", "feature")
+  const later = await session.statusUntil((payload) => payload.admission.attempts >= first.admission.attempts + 3, { deadlineMs: 30000, intervalMs: 500 })
+  assert.equal(later.state, "degraded:identity_unavailable")
+  assert.equal(later.admission.state_branch.ok, false)
+  assert.equal((await session.call("desk_status")).payload.admission.state_branch.kind, later.admission.state_branch.kind)
+  assert.equal(git(fixture.desk, "symbolic-ref", "--short", "HEAD"), "feature", "Desk never switched the checkout back")
+  assert.doesNotMatch(session.stderr(), /repaired: branch feature/u)
+  const write = await session.call("task_create", { track: "ops", slug: "never-ready-switch", title: "Blocked" })
+  assert.equal(write.isError, true)
+  assert.equal(write.payload.code, "state_branch_mismatch")
+  assert.match(write.payload.fix, /desk_doctor with \{"repair":"switch_state_branch"\}/u)
 })
 
 // A Node that bootstrap.cjs does not run Desk in (no shipped pack for its ABI here), so it re-runs index.js as a child under this Node. It must understand --import in NODE_OPTIONS (Node 20 and later).

@@ -1,12 +1,12 @@
-// Readiness-controller repairs: a loose state-directory mode is tightened, and a socket nobody listens on is reclaimed even when its owner record is corrupt.
+// Readiness-controller repairs: a loose state-directory mode is tightened, and a socket nobody listens on is reclaimed when its owner record is missing or corrupt or its owner is gone. A socket whose owner runs is never taken over.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { chmodSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import * as net from "node:net"
 import * as path from "node:path"
 import { spawn } from "node:child_process"
-import { connectOrStartController, endpointIsAbandoned, probeEndpoint, unlinkIfUnchanged } from "../../src/readiness/controller-client.js"
+import { connectOrStartController, endpointIsAbandoned, endpointIsReclaimable, probeEndpoint, unlinkIfUnchanged } from "../../src/readiness/controller-client.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
@@ -55,26 +55,26 @@ test("endpointIsAbandoned only reclaims a refused socket of ours", { skip: posix
   const privateDir = path.join(root, "private")
   mkdirSync(privateDir, { mode: 0o700 })
   // Missing endpoint, or a folder that is not private.
-  assert.equal(await endpointIsAbandoned(path.join(privateDir, "missing.sock")), null)
+  assert.equal(await endpointIsAbandoned(path.join(privateDir, "missing.sock"), { stateDir: privateDir }), null)
   const loose = path.join(root, "loose")
   mkdirSync(loose, { mode: 0o755 })
   chmodSync(loose, 0o755)
-  assert.equal(await endpointIsAbandoned(path.join(loose, "x.sock")), null)
+  assert.equal(await endpointIsAbandoned(path.join(loose, "x.sock"), { stateDir: loose }), null)
   // A regular file is not a socket.
   writeFileSync(path.join(privateDir, "file.sock"), "")
-  assert.equal(await endpointIsAbandoned(path.join(privateDir, "file.sock")), null)
+  assert.equal(await endpointIsAbandoned(path.join(privateDir, "file.sock"), { stateDir: privateDir }), null)
   // A live listener is accepting, never abandoned.
   const live = path.join(privateDir, "live.sock")
   const server = net.createServer((socket) => socket.destroy())
   await new Promise((resolve) => server.listen(live, resolve))
   t.after(() => server.close())
-  assert.equal(await endpointIsAbandoned(live), null)
+  assert.equal(await endpointIsAbandoned(live, { stateDir: privateDir }), null)
   assert.equal(await probeEndpoint(live), "accepting")
   // A dead socket is refused and reclaimable; an injected probe decides the rest.
   const dead = path.join(privateDir, "dead.sock")
   await deadSocket(dead)
-  assert.equal((await endpointIsAbandoned(dead)).isSocket(), true)
-  assert.equal(await endpointIsAbandoned(dead, async () => "unknown"), null)
+  assert.equal((await endpointIsAbandoned(dead, { stateDir: privateDir })).isSocket(), true)
+  assert.equal(await endpointIsAbandoned(dead, { stateDir: privateDir, probe: async () => "unknown" }), null)
   assert.equal(await probeEndpoint(path.join(privateDir, "missing.sock")), "unknown")
   // A probe that never hears back gives up as unknown.
   const { EventEmitter } = await import("node:events")
@@ -95,26 +95,102 @@ test("a socket owned by another user is never reclaimed", { skip: posixOnly }, a
   // The first call is the private-folder check (ours); the socket check then sees a different user.
   process.getuid = () => (calls++ === 0 ? originalGetuid() : originalGetuid() + 1)
   try {
-    assert.equal(await endpointIsAbandoned(dead), null)
+    assert.equal(await endpointIsAbandoned(dead, { stateDir: privateDir }), null)
   } finally {
     process.getuid = originalGetuid
   }
 })
 
-test("a dead socket whose recorded owner PID belongs to someone else is still reclaimed once nobody answers it", { skip: posixOnly }, async (t) => {
-  const root = await mkTempRoot("desk-reclaim-eperm-")
+test("a socket whose recorded owner runs is never taken over, even when it refuses; one from an earlier boot is reclaimed", { skip: posixOnly }, async (t) => {
+  const root = await mkTempRoot("desk-reclaim-live-owner-")
   const stateHome = path.join(root, "state")
   const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
   const endpoint = deriveControllerEndpoint({ identity })
+  const stateDir = path.join(stateHome, identity.id)
   t.after(() => rmSync(endpoint, { force: true }))
   await deadSocket(endpoint)
   const { dev, ino } = lstatSync(endpoint)
-  mkdirSync(path.join(stateHome, identity.id), { recursive: true, mode: 0o700 })
-  // PID 1 exists but belongs to root, so signalling it fails with EPERM rather than ESRCH.
-  writeFileSync(path.join(stateHome, identity.id, "owner.json"), JSON.stringify({ identity, endpoint, socket: { dev, ino }, owner: { pid: 1, token: "t" } }))
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  // PID 1 always runs (it belongs to root, so signalling it fails with EPERM): to Desk it is a running owner whose socket refuses, like a stopped one or one whose accept queue is full.
+  const owner = (startedAt) => writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({ identity, endpoint, socket: { dev, ino }, owner: { pid: 1, token: "t", started_at: startedAt } }))
+  owner(new Date().toISOString())
+  assert.equal(await endpointIsAbandoned(endpoint, { stateDir, identity }), null, "a refused socket alone is not enough")
+  await assert.rejects(connectOrStartController({ root, stateHome, ephemeral: true }), (error) => {
+    assert.equal(error.code, "controller_owner_unresponsive")
+    assert.equal(error.owner_pid, 1)
+    assert.match(error.message, /readiness controller for this root belongs to a running process \(pid 1\)/u)
+    return true
+  })
+  assert.equal(lstatSync(endpoint).ino, ino, "the socket was kept")
+  // The same record from before this boot: PID 1 is some other process now, so the socket is reclaimed.
+  owner("2000-01-01T00:00:00.000Z")
   const client = await connectOrStartController({ root, stateHome, ephemeral: true })
   t.after(() => client.close())
   assert.equal((await client.status()).owner.pid, process.pid)
+})
+
+test("a socket is reclaimable at once only when its recorded owner is gone or is this process, and it is still the file that owner published", { skip: posixOnly }, async () => {
+  const root = await mkTempRoot("desk-rc-dead-")
+  const privateDir = path.join(root, "private")
+  mkdirSync(privateDir, { mode: 0o700 })
+  const endpoint = path.join(privateDir, "c.sock")
+  await deadSocket(endpoint)
+  const { dev, ino } = lstatSync(endpoint)
+  const record = { endpoint, socket: { dev, ino }, owner: { pid: 7 } }
+  assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "live", record } }), null)
+  assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "corrupt", record: null } }), null, "a corrupt record goes through the refused-twice check instead")
+  assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "dead", record } }).ino, ino)
+  assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "self", record } }).ino, ino)
+  assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "dead", record: { ...record, socket: { dev, ino: ino + 1 } } } }), null, "another file than the one the owner published")
+  assert.equal(endpointIsReclaimable({ endpoint, owner: { state: "dead", record: { endpoint, owner: { pid: 7 } } } }), null, "a record that names no socket")
+  assert.equal(endpointIsReclaimable({ endpoint: path.join(privateDir, "gone.sock"), owner: { state: "dead", record } }), null, "no socket at all")
+  writeFileSync(path.join(privateDir, "file.sock"), "")
+  assert.equal(endpointIsReclaimable({ endpoint: path.join(privateDir, "file.sock"), owner: { state: "dead", record: { ...record, endpoint: path.join(privateDir, "file.sock") } } }), null, "not a socket")
+})
+
+test("an owner that starts running between the two refused probes keeps its socket", { skip: posixOnly }, async () => {
+  const root = await mkTempRoot("desk-rc-arrive-")
+  const privateDir = path.join(root, "private")
+  mkdirSync(privateDir, { mode: 0o700 })
+  const endpoint = path.join(privateDir, "c.sock")
+  await deadSocket(endpoint)
+  let probes = 0
+  const arriving = async () => {
+    probes += 1
+    // A controller elected by another session publishes its owner record (PID 1 always runs).
+    if (probes === 2) writeFileSync(path.join(privateDir, "owner.json"), JSON.stringify({ endpoint, owner: { pid: 1, token: "t", started_at: new Date().toISOString() } }))
+    return "refused"
+  }
+  assert.equal(await endpointIsAbandoned(endpoint, { stateDir: privateDir, probe: arriving }), null)
+  assert.equal(probes, 2)
+})
+
+test("a running owner that is only busy gets one longer handshake and is joined, never replaced", { skip: posixOnly }, async (t) => {
+  const { startReadinessController } = await import("../../src/readiness/controller-server.js")
+  const root = await mkTempRoot("desk-reclaim-busy-owner-")
+  const stateHome = path.join(root, "state")
+  const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
+  const endpoint = deriveControllerEndpoint({ identity })
+  const stateDir = path.join(stateHome, identity.id)
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  const running = await startReadinessController({ identity, endpoint, stateDir, ephemeral: true })
+  t.after(() => running.close())
+  const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
+  // Name a running process other than this one as the owner, and answer the first handshake too late.
+  const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+  t.after(() => sleeper.kill("SIGKILL"))
+  writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({ ...record, owner: { ...record.owner, pid: sleeper.pid } }))
+  const listeners = running.server.listeners("connection")
+  let delayed = false
+  running.server.removeAllListeners("connection")
+  running.server.on("connection", (socket) => {
+    if (delayed) return listeners.forEach((listener) => listener(socket))
+    delayed = true
+    setTimeout(() => listeners.forEach((listener) => listener(socket)), 300)
+  })
+  const client = await connectOrStartController({ root, stateHome, ephemeral: true })
+  t.after(() => client.close())
+  assert.equal((await client.status()).owner.token, record.owner.token, "joined the running owner's controller")
 })
 
 test("unlinkIfUnchanged removes only the exact file judged stale", async () => {
@@ -137,7 +213,7 @@ test("a socket must refuse twice, and stay the same file, before it counts as ab
   const dead = path.join(privateDir, "dead.sock")
   await deadSocket(dead)
   const answers = ["refused", "accepting"]
-  assert.equal(await endpointIsAbandoned(dead, async () => answers.shift()), null, "a controller that started listening in between is kept")
+  assert.equal(await endpointIsAbandoned(dead, { stateDir: privateDir, probe: async () => answers.shift() }), null, "a controller that started listening in between is kept")
   let replaced = false
   // The replacement is created beside the old socket and renamed over it, so it always has a different inode (a filesystem may reuse a removed file's inode at once).
   const replacing = async (endpoint) => {
@@ -149,14 +225,14 @@ test("a socket must refuse twice, and stay the same file, before it counts as ab
     }
     return "refused"
   }
-  assert.equal(await endpointIsAbandoned(dead, replacing), null, "a socket replaced in between is kept")
+  assert.equal(await endpointIsAbandoned(dead, { stateDir: privateDir, probe: replacing }), null, "a socket replaced in between is kept")
   let removed = false
   const removing = async (endpoint) => {
     if (removed) rmSync(endpoint, { force: true })
     removed = true
     return "refused"
   }
-  assert.equal(await endpointIsAbandoned(dead, removing), null, "a socket that disappears in between is not reclaimed")
+  assert.equal(await endpointIsAbandoned(dead, { stateDir: privateDir, probe: removing }), null, "a socket that disappears in between is not reclaimed")
 })
 
 test("a session meets the controller at the endpoint its owner record names, when that one answers", { skip: posixOnly }, async (t) => {

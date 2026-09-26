@@ -1,6 +1,6 @@
 // Desk's small local record of how its latest start went, for boot checks and agents that did not see the session's tool calls.
 //
-// `last-start.json` in Desk's state directory holds the latest admission state of any session, its code and the latest repair; `last-start/<root key>.json` holds the same for each desk root, so a boot check reads the record of its own root. Both are rewritten on every state change, starting with `admitting`. `repairs.log` gets one line per repair Desk makes on its own.
+// `last-start.json` in Desk's state directory holds the latest admission state of any session, its code and the latest repair; `last-start/<root key>.json` holds the same for each desk root, so a boot check reads the record of its own root. Both are rewritten on every state change, starting with `admitting`: the root's own record gets that first `admitting` state as soon as the session resolves the root. `repairs.log` gets one line per repair Desk makes on its own.
 
 import { createHash } from "node:crypto"
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs"
@@ -29,6 +29,11 @@ export function resolveReadinessStateHome({ env = process.env, homeDir } = {}) {
   return path.join(home, ".cache", "ouroboros-skills", "desk", "readiness")
 }
 
+/** The record a reader should use: the root's own record once the root is known, else the shared last-start.json. */
+export function lastStartPath({ stateDir, root = null }) {
+  return root === null ? path.join(stateDir, LAST_START_FILE) : path.join(stateDir, LAST_START_ROOTS_DIR, `${lastStartRootKey(root)}.json`)
+}
+
 /** Replace last-start.json, and the root's own record when the root is known, atomically. Returns the path of last-start.json. */
 export function writeLastStart({ stateDir, snapshot, root = null, pid = process.pid, now = () => new Date() }) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
@@ -47,7 +52,7 @@ export function writeLastStart({ stateDir, snapshot, root = null, pid = process.
   if (root !== null) {
     const rootsDir = path.join(stateDir, LAST_START_ROOTS_DIR)
     mkdirSync(rootsDir, { recursive: true, mode: 0o700 })
-    replaceFile(path.join(rootsDir, `${lastStartRootKey(root)}.json`), record, pid)
+    replaceFile(lastStartPath({ stateDir, root }), record, pid)
   }
   return file
 }

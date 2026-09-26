@@ -8,11 +8,14 @@ import {
   controllerIdentity, deriveControllerEndpoint, lexicalControllerIdentity,
   semanticContractDiagnostic, stableStringify, validatePrivateDirectory,
 } from "./identity.js"
+import { ownerState } from "./owner-record.js"
 import { requestMessage } from "./protocol.js"
 import { startReadinessController } from "./controller-server.js"
 
 const localControllers = new Map()
 const ABANDONED_RECHECK_MS = 50
+// A running owner that is only busy gets one longer handshake before the session gives up on it for this attempt.
+const LIVE_OWNER_HANDSHAKE_MS = 1000
 const controllerStarts = new Map()
 const privateDirectoryValidators = {
   win32: Object,
@@ -95,9 +98,20 @@ async function startOrReuseController({
     requireCompatibleHandshake(existing, identity)
     return
   }
-  const stale = process.platform !== "win32" &&
-    (endpointIsReclaimable({ endpoint, identity, stateDir }) ?? await endpointIsAbandoned(endpoint))
-  if (stale) unlinkIfUnchanged(endpoint, stale)
+  if (process.platform !== "win32") {
+    // A controller whose owner runs is never taken over, even when it does not answer: no unlink, no second controller. The session stays controller-free, and its hung-controller checks report it.
+    const owner = ownerState({ stateDir, identity })
+    if (owner.state === "live") {
+      const answered = await tryHandshake({ endpoint, identity, stateDir, timeoutMs: LIVE_OWNER_HANDSHAKE_MS })
+      if (answered) {
+        requireCompatibleHandshake(answered, identity)
+        return
+      }
+      throw Object.assign(new Error(`The readiness controller for this root belongs to a running process (pid ${owner.record.owner.pid}) that does not answer; Desk never starts a second controller while it runs.`), { code: "controller_owner_unresponsive", owner_pid: owner.record.owner.pid })
+    }
+    const stale = endpointIsReclaimable({ endpoint, owner }) ?? await endpointIsAbandoned(endpoint, { stateDir, identity })
+    if (stale) unlinkIfUnchanged(endpoint, stale)
+  }
   let ownedWatcher = watcher
   try {
     ownedWatcher ??= await watcherFactory?.({ root: identity.root })
@@ -164,7 +178,7 @@ function createClient({ endpoint, ephemeral, identity, local, token }) {
   }
 }
 
-async function tryHandshake({ endpoint, identity, stateDir }) {
+async function tryHandshake({ endpoint, identity, stateDir, timeoutMs = 100 }) {
   try {
     const token = readControllerToken({ identity, stateDir })
     return await request({
@@ -172,7 +186,7 @@ async function tryHandshake({ endpoint, identity, stateDir }) {
       identity,
       method: "handshake",
       params: { token },
-      timeoutMs: 100,
+      timeoutMs,
     })
   } catch (error) {
     if (error.code === "controller_semantic_mismatch") throw error
@@ -220,33 +234,23 @@ function readControllerToken({ identity, stateDir }) {
   return record.owner.token
 }
 
-// A socket whose recorded owner is dead. Returns the socket's stat when it may be removed, otherwise null.
-function endpointIsReclaimable({ endpoint, identity, stateDir }) {
+// A socket whose recorded owner is gone (or is this process, which has no controller for the root) and that is still the exact file the owner published. Returns the socket's stat when it may be removed, otherwise null.
+export function endpointIsReclaimable({ endpoint, owner }) {
+  if (owner.state !== "dead" && owner.state !== "self") return null
+  const record = owner.record
   try {
-    validatePrivateDirectory(stateDir)
     validatePrivateDirectory(path.dirname(endpoint))
     const stat = lstatSync(endpoint)
-    const reclaimableSocket = Number(stat.isSocket()) * Number(stat.uid === process.getuid()) === 1
-    if (!reclaimableSocket) return null
-    const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
-    if (stableStringify(lexicalControllerIdentity(record.identity)) !== stableStringify(lexicalControllerIdentity(identity))
-      || record.endpoint !== endpoint || record.socket?.dev !== stat.dev || record.socket?.ino !== stat.ino
-      || !Number.isInteger(record.owner?.pid) || record.owner.pid <= 0) {
-      return null
-    }
-    try {
-      process.kill(record.owner.pid, 0)
-      return null
-    } catch (error) {
-      return error?.code === "ESRCH" ? stat : null
-    }
+    if (!stat.isSocket() || stat.uid !== process.getuid()) return null
+    return record.endpoint === endpoint && record.socket?.dev === stat.dev && record.socket?.ino === stat.ino ? stat : null
   } catch {
     return null
   }
 }
 
-// A socket file of ours that nobody listens on (connecting is refused), whatever its owner record says: a crashed controller whose owner.json is missing or corrupt. Returns the socket's stat when it may be removed, otherwise null.
-export async function endpointIsAbandoned(endpoint, probe = probeEndpoint) {
+// A socket file of ours that nobody listens on (connecting is refused), when no running process owns it: the owner record is missing or corrupt (a crashed controller that never wrote one, or wrote it badly), or names an owner that is gone. A refused connection alone never counts: a running owner that is stopped, or whose accept queue is full, refuses too. Returns the socket's stat when it may be removed, otherwise null.
+export async function endpointIsAbandoned(endpoint, { stateDir, identity = null, probe = probeEndpoint }) {
+  if (ownerState({ stateDir, identity }).state === "live") return null
   let stat
   try {
     validatePrivateDirectory(path.dirname(endpoint))
@@ -255,10 +259,11 @@ export async function endpointIsAbandoned(endpoint, probe = probeEndpoint) {
     return null
   }
   if (!stat.isSocket() || stat.uid !== process.getuid()) return null
-  // A controller that has bound its socket but not yet called listen() also refuses, so one refusal is not proof: it must refuse twice, a little apart, with the socket file unchanged.
+  // A controller that has bound its socket but not yet called listen() also refuses, so one refusal is not proof: it must refuse twice, a little apart, with the socket file unchanged and still no running owner.
   if (await probe(endpoint) !== "refused") return null
   await new Promise((resolve) => setTimeout(resolve, ABANDONED_RECHECK_MS))
   if (await probe(endpoint) !== "refused") return null
+  if (ownerState({ stateDir, identity }).state === "live") return null
   try {
     const again = lstatSync(endpoint)
     return again.dev === stat.dev && again.ino === stat.ino ? stat : null

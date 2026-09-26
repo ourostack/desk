@@ -17,10 +17,10 @@ import * as path from "node:path"
 import { admitControlPlane, validateAdmissionAuthority, verifyAdmissionAuthority } from "../activation/admit.js"
 import { createAdmission, exceptionOutcome } from "./admission.js"
 import { DOCTOR_REPAIRS } from "./front-door.js"
-import { appendRepairLog, writeLastStart } from "./last-start.js"
+import { appendRepairLog, lastStartPath, writeLastStart } from "./last-start.js"
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
 import { inspectStateBranch, repairStateBranch, runGit, stateBranchProblem, STATE_BRANCH_REPAIR } from "./state-branch.js"
-import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController } from "../readiness/hung-controller.js"
+import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../readiness/hung-controller.js"
 import { pruneReadinessLeftovers } from "../readiness/leftovers.js"
 import { TOOL_NAMES } from "../tool-names.js"
 
@@ -151,7 +151,16 @@ export function createDeskSession(deps) {
     context.hung = { misses: 0 }
   }
 
+  // The automatic state-branch switch belongs to the session's first admission attempt only, whatever that attempt ends in (ready, any degraded state, or a throw). After it, only desk_doctor's switch_state_branch repair switches.
   async function admitOnce() {
+    try {
+      return await admitAttempt()
+    } finally {
+      context.startupDone = true
+    }
+  }
+
+  async function admitAttempt() {
     const repairs = context.pendingRepairs.splice(0)
     const headTriggered = context.headTriggered === true
     context.headTriggered = false
@@ -162,8 +171,11 @@ export function createDeskSession(deps) {
       forgetDesk()
       return rootOutcome(inputs.rootError, deps)
     }
-    if (context.root?.root !== inputs.root.root) forgetDesk()
+    const newRoot = context.root?.root !== inputs.root.root
+    if (newRoot) forgetDesk()
     context.root = inputs.root
+    // The root's own start record begins with the state it is in now (admitting, on the first attempt), not only with the next change.
+    if (newRoot) recordLastStart(admission.snapshot())
     const deskRoot = inputs.root.root
     if (inputs.activationError) return activationOutcome(inputs.activationError)
     const activation = inputs.activation
@@ -181,7 +193,7 @@ export function createDeskSession(deps) {
       context.runtime = loaded.runtimeStatus
     }
 
-    // The automatic switch runs only during startup admission (before the session first reaches ready), and never for a HEAD change the watch saw.
+    // The automatic switch runs only during the first admission attempt, and never for a HEAD change the watch saw.
     const startup = !context.startupDone && !headTriggered
     let branchProblem = null
     let inspection = await inspectStateBranch({ root: deskRoot, branch: activation.stateBranch, git })
@@ -209,6 +221,9 @@ export function createDeskSession(deps) {
     }
     if (controllerProblem !== null) {
       controllerProblem = await noticeHungController({ controllerProblem, deskRoot, policy })
+    } else if (context.admission?.controller) {
+      // Connected: a hung controller that answers again is no longer counted or reported.
+      context.hung = { misses: 0 }
     }
 
     let semanticProblem = null
@@ -224,7 +239,6 @@ export function createDeskSession(deps) {
     if (branchProblem !== null) return { state: "degraded", ...branchProblem, repair }
     if (controllerProblem !== null) return { ...controllerProblem, repair }
     if (semanticProblem !== null) return { ...semanticProblem, repair }
-    context.startupDone = true
     return { state: "ready", repair }
   }
 
@@ -298,11 +312,11 @@ export function createDeskSession(deps) {
     }
   }
 
-  // A controller that accepts connections but never answers: count misses across attempts; after enough of them the session is controller_hung. It is never stopped: its owner is another session's Desk MCP server.
+  // A controller whose owner runs but that does not answer (it accepts and stays silent, or refuses while its owner runs): count misses across attempts; after enough of them the session is controller_hung. It is never stopped and never taken over: its owner is another session's Desk MCP server.
   async function noticeHungController({ controllerProblem, deskRoot, policy }) {
     if (controllerProblem.code !== "controller_unavailable") return controllerProblem
     const probe = await hungPolicy.probe({ root: deskRoot, policy, stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
-    if (probe.state !== "silent") {
+    if (!probeMissed(probe)) {
       context.hung = { misses: 0 }
       return controllerProblem
     }
@@ -590,14 +604,14 @@ export function createDeskSession(deps) {
     return jsonResult({ status: "ok", repair: repaired.line, state: snapshot.state, code: snapshot.code, fix: snapshot.fix })
   }
 
-  // A report, not a repair, until the controller runs in its own process (task A2b): Desk never stops another session's Desk MCP server, which is where the controller runs today.
+  // A report, not a repair: Desk never stops another session's Desk MCP server, which is where the controller runs, and never takes a running owner's controller over.
   async function reclaimController() {
     if (!context.root || !context.policyKey) {
       return jsonResult({ status: "refused", repair: RECLAIM_REPAIR, reason: "not_admitted", fix: "Desk has not resolved a desk root and policy yet; call desk_status, then retry." }, true)
     }
     const probe = await hungPolicy.probe({ root: context.root.root, policy: JSON.parse(context.policyKey), stateHome: readinessStateHome, timeoutMs: hungPolicy.probeMs })
     const report = hungControllerReport(probe)
-    const hung = probe.state === "silent"
+    const hung = probeMissed(probe)
     return jsonResult({
       status: "report",
       repair: RECLAIM_REPAIR,
@@ -605,11 +619,9 @@ export function createDeskSession(deps) {
       controller: report,
       missed_checks: context.hung.misses,
       summary: hung
-        ? `The readiness controller for this root accepts connections but did not answer (owner pid ${report.owner_pid}, ${report.endpoint}). Desk does not stop it: it runs inside that session's Desk MCP server, and stopping it would cost that session its Desk connection.`
+        ? `${notAnswering(report)}. Desk does not stop it or replace it: it runs inside that session's Desk MCP server, and stopping it would cost that session its Desk connection.`
         : `The readiness controller for this root is not hung (probe: ${probe.state}); there is nothing to reclaim.`,
-      fix: hung
-        ? `Reads and writes keep working without it, and Desk keeps retrying in the background. The controller will be reclaimed automatically once it runs in its own process (task A2b). Until then it recovers when the session with pid ${report.owner_pid} answers again or ends.`
-        : "Call desk_status.",
+      fix: hung ? hungFix(report) : "Call desk_status.",
     })
   }
 
@@ -656,7 +668,7 @@ export function createDeskSession(deps) {
         writes: requirementMet("write", context) ? "available" : "refused",
         exceptions: context.exceptions,
         launcher: launcher === null ? null : { code: launcher.code, reason: launcher.reason, mode: launcher.mode },
-        last_start: path.join(deskStateDir, "last-start.json"),
+        last_start: lastStartPath({ stateDir: deskStateDir, root: context.root?.root ?? null }),
       },
     }
   }
@@ -832,10 +844,20 @@ function hungOutcome(controllerProblem, hung, needed) {
   return {
     ...controllerProblem,
     code: detected ? "controller_hung" : controllerProblem.code,
-    summary: `The readiness controller for this root (owner pid ${hung.owner_pid}, ${hung.endpoint}) accepts connections but does not answer (${Math.min(hung.misses, needed)} of ${needed} checks missed${detected ? "; hung" : ""}).`,
-    fix: `Reads and writes keep working without it: lexical search and timeline read the files directly, and writes go straight to the files. Desk never stops the controller's owner, which is another session's Desk MCP server; the controller will be reclaimed automatically once it runs in its own process (task A2b), and until then Desk keeps retrying and recovers when that session answers again or ends. desk_doctor with {"repair":"${RECLAIM_REPAIR}"} reports the owner.`,
+    summary: `${notAnswering(hung)} (${Math.min(hung.misses, needed)} of ${needed} checks missed${detected ? "; hung" : ""}).`,
+    fix: hungFix(hung),
     diagnostic: { ...controllerProblem.diagnostic, hung_controller: hung },
   }
+}
+
+function notAnswering(report) {
+  const how = report.state === "silent" ? "accepts connections but does not answer" : "does not accept connections while its owner runs"
+  return `The readiness controller for this root (owner pid ${report.owner_pid}, ${report.endpoint}) ${how}`
+}
+
+// What the agent can do now: nothing. Every clause is true in this session as it runs.
+function hungFix(report) {
+  return `Nothing to do: search uses plain text (lexical search and timeline read the files directly) and writes work (they go straight to the files). The controller recovers when it answers again or when its owning session (pid ${report.owner_pid}) ends; Desk keeps checking in the background.`
 }
 
 function overrideOutcome(override) {

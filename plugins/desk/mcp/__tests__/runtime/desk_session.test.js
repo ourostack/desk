@@ -3,13 +3,20 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { ActivationFailure } from "../../src/activation/failures.js"
 import { createDeskSession, requirementMet, toolRequirement } from "../../src/runtime/desk-session.js"
+import { lastStartRootKey } from "../../src/runtime/last-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const flush = () => new Promise((resolve) => setImmediate(resolve))
+async function waitUntil(predicate) {
+  for (let tries = 0; !predicate(); tries += 1) {
+    if (tries > 500) throw new Error("condition not reached")
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
 const payload = (result) => JSON.parse(result.content[0].text)
 const unsupported = { lexical: "required", semantic: "unsupported", write_authority: "workspace", authority_provider: null, root: "workspace" }
 
@@ -44,7 +51,7 @@ async function makeSession(t, overrides = {}) {
     resolveInputs: async () => inputs({ root, ...(overrides.inputs ?? {}) }),
     loadRuntime: async () => ({ runtimeServer: runtime, runtimeStatus: { state: "ready" } }),
     setupDiagnostic: (error) => ({ status: "setup_required", mode: "setup", summary: "no desk", remediation: [{ action: "run_first_run_bootstrap", message: "bootstrap" }], paths_tried: error.tried }),
-    hung: { probe: async () => ({ state: "refused" }), reclaim: async () => ({ reclaimed: false, reason: "controller_refused" }) },
+    hung: { probe: async () => ({ state: "refused" }) },
     ...overrides,
   })
   t.after(() => session.dispose())
@@ -237,13 +244,14 @@ test("a hung controller is counted across attempts and marked controller_hung af
   const first = await session.admission.refresh()
   assert.equal(first.state, "degraded:controller_unavailable")
   assert.match(first.summary, /owner pid 4242, \/tmp\/x\.sock.*1 of 3 checks missed/u)
-  assert.match(first.fix, /never stops the controller's owner/u)
+  assert.equal(first.fix, "Nothing to do: search uses plain text (lexical search and timeline read the files directly) and writes work (they go straight to the files). The controller recovers when it answers again or when its owning session (pid 4242) ends; Desk keeps checking in the background.")
   assert.equal(requirementMet("write", session.context), true)
   await session.admission.refresh({ force: true })
   const hung = await session.admission.refresh({ force: true })
   assert.equal(hung.state, "degraded:controller_hung")
   assert.match(hung.summary, /3 of 3 checks missed; hung/u)
-  assert.match(hung.fix, /task A2b/u)
+  assert.equal(hung.fix, first.fix)
+  assert.doesNotMatch(hung.fix, /task|A2b/u, "no internal task names in text the agent reads")
   assert.equal(hung.repair, null, "nothing was reclaimed")
   assert.deepEqual(probes, [7, 7, 7])
   assert.equal(requirementMet("write", session.context), true, "writes keep working while the controller is hung")
@@ -256,17 +264,22 @@ test("a hung controller is counted across attempts and marked controller_hung af
   assert.match(status.summary ?? status.admission.summary, /3 of 3 checks missed; hung/u)
 })
 
-test("a controller that answers the probe resets the miss count", async (t) => {
-  const states = ["silent", "answering"]
+test("a running owner that refuses connections counts as a miss, and a controller that answers the probe resets the count", async (t) => {
+  const states = ["unreachable", "silent", "answering", "refused"]
   const { session } = await makeSession(t, {
     runtime: fakeRuntime({ connectOrStartController: async () => { throw new Error("readiness controller election did not converge") } }),
     hung: { probe: async () => ({ state: states.shift() ?? "missing", endpoint: "/tmp/x", record: null }) },
   })
   await session.admission.refresh()
   assert.equal(session.context.hung.misses, 1)
-  assert.match(session.admission.snapshot().summary, /pid null/u)
+  assert.match(session.admission.snapshot().summary, /pid null, \/tmp\/x\) does not accept connections while its owner runs \(1 of 3/u)
+  await session.admission.refresh({ force: true })
+  assert.equal(session.context.hung.misses, 2)
+  assert.match(session.admission.snapshot().summary, /accepts connections but does not answer \(2 of 3/u)
   await session.admission.refresh({ force: true })
   assert.equal(session.context.hung.misses, 0)
+  await session.admission.refresh({ force: true })
+  assert.equal(session.context.hung.misses, 0, "a refused socket whose owner is gone is not a miss")
 })
 
 test("desk_doctor reclaim_controller reports the owner and reclaims nothing", async (t) => {
@@ -286,8 +299,12 @@ test("desk_doctor reclaim_controller reports the owner and reclaims nothing", as
   assert.equal(report.status, "report")
   assert.equal(report.reclaimed, false)
   assert.equal(report.controller.owner_pid, 7)
-  assert.match(report.summary, /Desk does not stop it/u)
-  assert.match(report.fix, /once it runs in its own process \(task A2b\)/u)
+  assert.match(report.summary, /accepts connections but does not answer\. Desk does not stop it or replace it/u)
+  assert.match(report.fix, /^Nothing to do: search uses plain text/u)
+  assert.doesNotMatch(report.fix, /task|A2b/u)
+  answers.push("unreachable")
+  const unreachable = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
+  assert.match(unreachable.summary, /does not accept connections while its owner runs\. Desk does not stop it/u)
   answers.push("answering")
   const healthy = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
   assert.equal(healthy.reclaimed, false)
@@ -453,12 +470,15 @@ test("state branch at startup: automatic repair, a failed switch, a local-only c
   const local = await makeSession(t, { git: scriptedGit(localState), inputs: { stateBranch: "main" }, watch: quietWatch })
   const localOnly = await local.session.admission.refresh()
   assert.deepEqual(localOnly.blockers, ["local_only_commits"])
-  assert.match(localOnly.fix, /then call desk_status and Desk switches back/u, "during startup Desk still switches once unblocked")
+  assert.match(localOnly.fix, /then call desk_doctor with \{"repair":"switch_state_branch"\}/u, "only the first attempt switches on its own, so the fix names the doctor repair")
   const refused = payload(await local.session.callTool({ name: "task_create" }))
   assert.equal(refused.code, "state_branch_detached")
   assert.deepEqual(refused.blockers, ["local_only_commits"])
   localState.onRemote = true
-  assert.equal((await local.session.admission.refresh({ force: true })).state, "ready", "still in startup: the pushed commit is switched back automatically")
+  assert.equal((await local.session.admission.refresh({ force: true })).state, "degraded:state_branch_detached", "after the first attempt, a pushed commit is not switched back on its own")
+  assert.equal(localState.switches, undefined)
+  const rescued = payload(await local.session.callTool({ name: "desk_doctor", input: { repair: "switch_state_branch" } }))
+  assert.equal(rescued.state, "ready")
 
   const reviewState = { branch: "review", onRemote: true }
   const review = await makeSession(t, { git: scriptedGit(reviewState), inputs: { stateBranch: "main" }, watch: quietWatch })
@@ -692,6 +712,26 @@ test("state-directory repairs and last-start records, and an unwritable state di
   assert.equal((await unwritable.session.admission.refresh()).state, "ready")
   assert.match(unwritable.log(), /could not append to the repair log/u)
   assert.match(unwritable.log(), /could not record last-start\.json/u)
+})
+
+test("the root's own start record begins with admitting, and desk_status points at it once the root is known", async (t) => {
+  let release
+  const loading = new Promise((resolve) => { release = resolve })
+  const runtime = fakeRuntime()
+  const { session, base } = await makeSession(t, { loadRuntime: async () => { await loading; return { runtimeServer: runtime, runtimeStatus: { state: "ready" } } } })
+  const noRoot = await makeSession(t, { resolveInputs: async () => ({ rootError: { name: "Error", message: "gone", code: "DESK_ROOT_UNAVAILABLE" } }) })
+  await noRoot.session.admission.refresh()
+  assert.equal(payload(await noRoot.session.callTool({ name: "desk_status" })).admission.last_start, path.join(noRoot.base, "state", "last-start.json"), "no root: the shared record")
+  const root = path.join(base, "desk")
+  const perRoot = path.join(base, "state", "last-start", `${lastStartRootKey(root)}.json`)
+  const attempt = session.admission.refresh()
+  await waitUntil(() => existsSync(perRoot))
+  assert.equal(JSON.parse(readFileSync(perRoot, "utf8")).state, "admitting", "the first state of the root's own record")
+  assert.equal(JSON.parse(readFileSync(perRoot, "utf8")).root, root)
+  release()
+  assert.equal((await attempt).state, "ready")
+  assert.equal(JSON.parse(readFileSync(perRoot, "utf8")).state, "ready")
+  assert.equal(payload(await session.callTool({ name: "desk_status" })).admission.last_start, perRoot)
 })
 
 test("a controller whose close fails is still forgotten, and dispose closes the controller", async (t) => {

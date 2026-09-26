@@ -1,4 +1,4 @@
-// Detecting a readiness controller that accepts connections but never answers, and reclaiming it only when it is provably ours to stop.
+// Detecting a readiness controller whose owner runs but that does not answer, and reporting it: Desk never stops it and never takes it over.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -8,7 +8,7 @@ import { lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import * as net from "node:net"
 import * as path from "node:path"
 import { readinessContracts } from "../../src/readiness/contracts.js"
-import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController } from "../../src/readiness/hung-controller.js"
+import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../../src/readiness/hung-controller.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
@@ -26,9 +26,11 @@ async function fixture(t, prefix) {
   return { root, stateHome, identity, endpoint, stateDir }
 }
 
+const STARTED_AT = new Date().toISOString()
+
 function writeOwner({ stateDir, identity, endpoint }, pid, socket = lstatSync(endpoint)) {
   writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({
-    schema_version: 1, identity, endpoint, socket: { dev: socket.dev, ino: socket.ino }, owner: { pid, token: "t" },
+    schema_version: 1, identity, endpoint, socket: { dev: socket.dev, ino: socket.ino }, owner: { pid, token: "t", started_at: STARTED_AT },
   }))
 }
 
@@ -87,9 +89,32 @@ test("a hung controller is reported with its owner and endpoint, never signalled
   const probe = await probeController({ root: context.root, policy, stateHome: context.stateHome, timeoutMs: 200 })
   assert.equal(probe.state, "silent")
   const report = hungControllerReport(probe)
-  assert.deepEqual(report, { state: "silent", endpoint: context.endpoint, owner_pid: child.pid, owner_started_at: null })
+  assert.deepEqual(report, { state: "silent", endpoint: context.endpoint, owner_pid: child.pid, owner_started_at: STARTED_AT })
   assert.equal(child.exitCode, null, "the owner is still running")
   assert.equal(child.signalCode, null)
+})
+
+test("a socket that refuses, or is gone, while its owner runs is unreachable, not refused or missing", { skip: posixOnly }, async (t) => {
+  const context = await fixture(t, "desk-hung-unreachable-")
+  const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
+  t.after(() => owner.kill("SIGKILL"))
+  const dead = await silentChild(context.endpoint)
+  dead.kill("SIGKILL")
+  await new Promise((resolve) => dead.once("exit", resolve))
+  writeOwner(context, owner.pid)
+  const probe = () => probeController({ root: context.root, policy, stateHome: context.stateHome, timeoutMs: 200 })
+  const refusing = await probe()
+  assert.equal(refusing.state, "unreachable")
+  assert.equal(probeMissed(refusing), true)
+  rmSync(context.endpoint, { force: true })
+  assert.equal((await probe()).state, "unreachable", "a running owner whose socket file is gone")
+  owner.kill("SIGKILL")
+  await new Promise((resolve) => owner.once("exit", resolve))
+  const gone = await probe()
+  assert.equal(gone.state, "missing", "once the owner is gone, a missing socket is just missing")
+  assert.equal(probeMissed(gone), false)
+  assert.equal(probeMissed({ state: "silent" }), true)
+  assert.equal(probeMissed({ state: "answering" }), false)
 })
 
 test("a report reads what the owner record says, and nothing when it says nothing", () => {
