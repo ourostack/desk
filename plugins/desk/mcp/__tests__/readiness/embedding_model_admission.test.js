@@ -4,8 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { Socket } from "node:net"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { main } from "../../index.js"
-import { ActivationFailure } from "../../src/activation/failures.js"
+import { startInProcess, statusContextOf } from "../runtime/_in_process_desk.js"
 import { closeDb, openDb } from "../../src/db/init.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
 import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
@@ -51,36 +50,41 @@ function runtime(fixture) {
     controllers,
     starts,
     converged: () => convergence,
-    start: (semantic) => main({
-      argv: ["--root", fixture.root],
-      env: {},
-      readinessPolicy: { semantic },
-      runtimeImporter: async () => ({
-        async connectOrStartController(options) {
-          const controller = await connectOrStartController({
-            ...options, stateHome: fixture.stateHome, ephemeral: true,
-          })
-          controllers.push(controller)
-          return controller
-        },
-        beginBackgroundConvergence(admission) {
-          convergence = beginBackgroundConvergence(admission)
-          return convergence
-        },
-        async startServer({ statusContext }) { starts.push(statusContext) },
-      }),
-    }),
+    start: async (semantic) => {
+      const desk = await startInProcess({
+        argv: ["--root", fixture.root],
+        env: {},
+        readinessPolicy: { semantic },
+        runtimeImporter: async () => ({
+          async connectOrStartController(options) {
+            const controller = await connectOrStartController({
+              ...options, stateHome: fixture.stateHome, ephemeral: true,
+            })
+            controllers.push(controller)
+            return controller
+          },
+          beginBackgroundConvergence(admission) {
+            convergence = beginBackgroundConvergence(admission)
+            return convergence
+          },
+        }),
+      }, { connect: false })
+      fixture.cleanups.push(() => desk.close())
+      const snapshot = await desk.settled()
+      if (snapshot.state === "ready") starts.push(statusContextOf(desk))
+      return snapshot
+    },
   }
 }
 
 for (const semantic of ["background", "required"]) {
   for (const variable of ["DESK_EMBED_MODEL", "OLLAMA_EMBED_MODEL"]) {
     for (const existing of [false, true]) {
-      test(`${semantic} refuses ${variable} mismatch before ${existing ? "controller reuse" : "controller creation"}`, async (t) => {
+      test(`${semantic} ${variable} override degrades semantic search only (${existing ? "an older custom-model controller" : "no controller yet"})`, async (t) => {
         const context = fixture(t, { [variable]: CUSTOM_MODEL })
         let convergenceCalls = 0
         if (existing) {
-          // Reproduce the previously accepted controller identity without using the runtime guard.
+          // A controller an older Desk admitted with the custom model in its contract.
           const controller = await connectController({
             root: context.root, stateHome: context.stateHome, ephemeral: true,
             lexicalContract: {
@@ -99,29 +103,24 @@ for (const semantic of ["background", "required"]) {
           })
           context.cleanups.push(() => controller.close())
         }
-        const connections = t.mock.method(Socket.prototype, "connect")
         const ordinary = runtime(context)
-        await assert.rejects(ordinary.start(semantic), (error) => {
-          assert.ok(error instanceof ActivationFailure)
-          assert.equal(error.status, "terminal")
-          assert.equal(error.phase, "VERIFYING")
-          assert.equal(error.code, "embedding_model_mismatch")
-          assert.equal(error.retryable, false)
-          assert.equal(error.expected.model, ACTIVE_EMBEDDING_SPEC.model)
-          assert.equal(error.expected.embedding_spec_id, ACTIVE_EMBEDDING_SPEC.id)
-          assert.equal(error.observed.model, CUSTOM_MODEL)
-          assert.equal(error.observed.semantic, semantic)
-          assert.match(error.message, /DESK_EMBED_MODEL.*OLLAMA_EMBED_MODEL/u)
-          assert.deepEqual(error.automatic_actions, [])
-          return true
-        })
-        assert.equal(ordinary.starts.length, 0)
-        assert.equal(ordinary.controllers.length, 0)
-        assert.equal(connections.mock.callCount(), 0, "refusal must precede controller lookup/handshake")
+        const snapshot = await ordinary.start(semantic)
+        await ordinary.converged()
         assert.equal(convergenceCalls, 0)
-        assert.equal(context.requests.length, 0)
-        assert.equal(existsSync(path.join(context.root, ".state")), false)
-        if (!existing) assert.equal(existsSync(context.stateHome), false)
+        assert.ok(context.requests.every(({ model }) => model === ACTIVE_EMBEDDING_SPEC.model), "the override is never used to embed")
+        if (existing) {
+          // This session's pinned contract cannot share the custom-model controller: lexical reads and writes stay, semantic waits.
+          assert.equal(snapshot.state, "degraded:controller_semantic_mismatch")
+          assert.equal(ordinary.controllers.length, 0)
+          return
+        }
+        assert.equal(snapshot.state, semantic === "required" ? "degraded:embedding_override" : "ready")
+        const controller = ordinary.controllers[0]
+        assert.deepEqual(controller.identity.semantic_contract.embedding_spec, ACTIVE_EMBEDDING_SPEC, "the controller keeps the pinned contract")
+        assert.equal(controller.embeddingOverride.code, "embedding_override")
+        assert.equal(controller.embeddingOverride.model, CUSTOM_MODEL)
+        assert.match(controller.embeddingOverride.fix, /DESK_EMBED_MODEL.*OLLAMA_EMBED_MODEL/u)
+        if (semantic === "background") assert.ok(existsSync(path.join(context.root, ".state")), "convergence indexed with the pinned model")
       })
     }
   }

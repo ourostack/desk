@@ -8,7 +8,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { PassThrough } from "node:stream"
@@ -30,8 +30,18 @@ const bootstrap = require(bootstrapPath)
 const { TOOL_NAMES } = await import(pathToFileURL(path.join(mcpRoot, "src", "tool-names.js")).href)
 const packageJson = JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8"))
 const nodes = installedNodesByMajor()
-// A fresh Windows CI runner restores the runtime pack into an empty cache on first start (7 to 11 s observed), so Windows gets 15 s, half the hosts' 30 s MCP startup timeout, instead of 3 s. A2 moves that restore after the handshake.
-const HANDSHAKE_BUDGET_MS = process.platform === "win32" ? 15000 : 3000
+// The target is 3 s, and every spawned handshake records its measured time in the test output against it. The assertion allows more where the machine is not ours to control: a fresh Windows CI runner (15 s, half the hosts' 30 s MCP startup timeout) and shared POSIX CI runners (10 s), where a loaded runner has pushed a sub-second handshake past 3 s.
+const HANDSHAKE_TARGET_MS = 3000
+const HANDSHAKE_BUDGET_MS = process.platform === "win32" ? 15000 : process.env.CI ? 10000 : HANDSHAKE_TARGET_MS
+
+function recordHandshake(t, result, label) {
+  t.diagnostic(`${label}: handshake in ${result.handshakeMs} ms (target ${HANDSHAKE_TARGET_MS} ms, asserted budget ${HANDSHAKE_BUDGET_MS} ms)`)
+}
+
+// Windows can keep a just-exited child's files busy for a moment (EBUSY): remove a spawned test's fixture with retries.
+function removeFixture(t, root) {
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))
+}
 
 // ---- fixtures ----
 
@@ -457,13 +467,14 @@ test("importIndex loads index.js as an ES module and starts it through its entry
   writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }))
   writeFileSync(fixture, [
     "export const calls = []",
-    "export async function main(options) { calls.push(['main', options.argv]) }",
-    "export function runIfEntrypoint(options) { calls.push(['guard', options.argv[1]]); return options.launch() }",
+    "export async function main(options) { calls.push(['main', options.argv, options.crashHandlers, typeof options.onClosed]) }",
+    "export function runIfEntrypoint(options) { calls.push(['guard', options.argv[1]]); return options.launch({ onClosed: () => {}, crashHandlers: true }) }",
     "",
   ].join("\n"))
   await bootstrap.importIndex(fixture, ["--x"])
   const loaded = await import(pathToFileURL(fixture).href)
-  assert.deepEqual(loaded.calls, [["guard", fixture], ["main", ["--x"]]])
+  // The guard's options reach main: Desk in bootstrap's own process installs the crash handlers and exits when the host closes stdin, like index.js run directly.
+  assert.deepEqual(loaded.calls, [["guard", fixture], ["main", ["--x"], true, "function"]])
 })
 
 test("an index.js that cannot load is served as a degraded state, never a crash", async () => {
@@ -594,9 +605,11 @@ async function spawnBootstrap(node, fixture, pathDirs) {
 
 test("Node 16 running the bootstrap starts Desk on a packed Node found on PATH", {
   skip: nodes.has(16) ? false : "no Node 16 is installed here",
-}, async () => {
+}, async (t) => {
   const fixture = await makeIsolatedHome("desk-bootstrap-16-")
+  removeFixture(t, fixture.root)
   const result = await spawnBootstrap(nodes.get(16).executable, fixture, [path.dirname(nodes.get(16).executable), path.dirname(process.execPath)])
+  recordHandshake(t, result, "Node 16 via a packed Node on PATH")
   assert.ok(result.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${result.handshakeMs} ms; stderr: ${result.stderr}`)
   assert.equal(result.initialize.result.serverInfo.name, "desk-mcp")
   assert.deepEqual(result.tools.result.tools.map((tool) => tool.name), TOOL_NAMES)
@@ -605,9 +618,11 @@ test("Node 16 running the bootstrap starts Desk on a packed Node found on PATH",
 
 test("Node 16 alone gets the bootstrap's own degraded:node_missing handshake", {
   skip: nodes.has(16) ? false : "no Node 16 is installed here",
-}, async () => {
+}, async (t) => {
   const fixture = await makeIsolatedHome("desk-bootstrap-16-alone-")
+  removeFixture(t, fixture.root)
   const result = await spawnBootstrap(nodes.get(16).executable, fixture, [path.dirname(nodes.get(16).executable)])
+  recordHandshake(t, result, "Node 16 alone")
   assert.ok(result.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${result.handshakeMs} ms; stderr: ${result.stderr}`)
   assert.equal(result.initialize.result.serverInfo.name, "desk-mcp-bootstrap")
   assert.deepEqual(result.tools.result.tools.map((tool) => tool.name), TOOL_NAMES)
@@ -618,9 +633,11 @@ test("Node 16 alone gets the bootstrap's own degraded:node_missing handshake", {
 for (const major of [20, 24]) {
   test(`Node ${major} running the bootstrap starts Desk in one hop`, {
     skip: nodes.has(major) ? false : `no Node ${major} is installed here`,
-  }, async () => {
+  }, async (t) => {
     const fixture = await makeIsolatedHome(`desk-bootstrap-${major}-`)
+    removeFixture(t, fixture.root)
     const result = await spawnBootstrap(nodes.get(major).executable, fixture, [path.dirname(nodes.get(major).executable), path.dirname(process.execPath)])
+    recordHandshake(t, result, `Node ${major} in one hop`)
     assert.ok(result.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${result.handshakeMs} ms; stderr: ${result.stderr}`)
     assert.equal(result.initialize.result.serverInfo.name, "desk-mcp")
     assert.equal(result.status.result.isError, undefined, JSON.stringify(result.status))
@@ -646,12 +663,13 @@ test("the bootstrap passes the chosen Node's exit code through", {
 
 test("native: the bootstrap completes the MCP handshake on this host", async (t) => {
   const fixture = await makeIsolatedHome("desk-bootstrap-native-")
+  removeFixture(t, fixture.root)
   // The host's PATH stays visible so that an older Node started by the host (CI runs this under Node 20 on Windows too) can find the packed one; HOME and the per-user folders are still temporary.
   const hostPath = process.platform === "win32" ? `${path.dirname(process.execPath)};${process.env.PATH ?? process.env.Path ?? ""}` : `${path.dirname(process.execPath)}:${process.env.PATH ?? ""}`
   const env = isolatedEnv(fixture, { PATH: hostPath })
   const result = await runHandshake({ command: process.execPath, args: [bootstrapPath], cwd: fixture.root, env, timeoutMs: 60000 })
   const packed = bootstrap.packAbis(mcpRoot, packageJson.version, process.platform, process.arch).includes(process.versions.modules)
-  t.diagnostic(`${process.platform} ${process.version} (${packed ? "packed, in-process" : "no pack, re-exec"}): handshake in ${result.handshakeMs} ms`)
+  recordHandshake(t, result, `${process.platform} ${process.version} (${packed ? "packed, in-process" : "no pack, re-exec"})`)
   assert.equal(result.initialize.result.serverInfo.name, "desk-mcp", result.stderr)
   assert.ok(result.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${result.handshakeMs} ms; stderr: ${result.stderr}`)
   assert.deepEqual(result.tools.result.tools.map((tool) => tool.name), TOOL_NAMES)
@@ -847,6 +865,34 @@ test("the Claude inline launcher answers the handshake when bootstrap.cjs itself
   const payload = JSON.parse(status.result.content[0].text)
   assert.equal(payload.state, "degraded:bootstrap_failed")
   assert.match(result.stderr, /\[desk-mcp\] launcher: /u)
+})
+
+test("the Claude inline launcher answers the handshake when bootstrap.cjs run() rejects", async () => {
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.desk
+  const plugin = await mkTempRoot("desk-bootstrap-rejecting-plugin-")
+  mkdirSync(path.join(plugin, "mcp"))
+  writeFileSync(path.join(plugin, "mcp", "bootstrap.cjs"), "module.exports = { run: function () { return Promise.reject(new Error('run rejected late')) } }\n")
+  const result = spawnSync(process.execPath, claude.args, {
+    cwd: plugin,
+    encoding: "utf8",
+    env: { PATH: "/usr/bin:/bin", DESK_PLUGIN_ROOT: plugin, NODE_OPTIONS: "" },
+    input: [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } },
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "desk_status" } },
+      { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "task_create" } },
+    ].map((message) => JSON.stringify(message)).join("\n") + "\n",
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const [init, list, status, gated] = result.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
+  assert.equal(init.result.serverInfo.name, "desk-mcp-launcher")
+  assert.deepEqual(list.result.tools.map((tool) => tool.name), TOOL_NAMES)
+  const payload = JSON.parse(status.result.content[0].text)
+  assert.equal(payload.state, "degraded:bootstrap_failed")
+  assert.match(payload.fix, /run rejected late/u)
+  assert.equal(status.result.isError, false)
+  assert.equal(gated.result.isError, true)
+  assert.match(result.stderr, /\[desk-mcp\] launcher: run rejected late/u)
 })
 
 test("with no pack for this platform the node_missing fix still names a command", async () => {

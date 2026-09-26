@@ -1,139 +1,36 @@
 import { diagnosticFormat, previewRuntimeSnapshot } from "./preview-snapshot.js"
-import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../tool-names.js"
+import { FRONT_DOOR_TOOLS, startFrontDoor } from "./front-door.js"
 
 // Tools that answer in diagnostic mode; every other tool is listed but gated.
 const diagnosticToolNames = ["desk_status", "desk_doctor"]
 
-// The full tool set from the start, with the same names and order as the healthy server, so a host that caches the first tools/list never loses a tool once Desk recovers. desk_doctor keeps its stricter format schema here.
-const diagnosticTools = TOOL_NAMES.map((name) => ({
-  name,
-  description: TOOL_DESCRIPTIONS[name],
-  inputSchema: name === "desk_doctor"
-    ? {
-        type: "object",
-        properties: { format: { type: "string", enum: ["full", "preview"] } },
-        additionalProperties: false,
-      }
-    : { type: "object", properties: {}, additionalProperties: true },
-}))
+// Kept for callers that read the diagnostic tool list: it is the front door's list, the same in every mode.
+export const diagnosticTools = FRONT_DOOR_TOOLS
 
+// Diagnostic mode serves a fixed diagnostic: the paths that end here run before the handshake and cannot admit Desk in this process (no compatible Node, a failed re-exec, a startup exception, an overlay that owns onboarding).
 export function startDiagnosticServer({
   diagnostic,
   input = process.stdin,
   output = process.stdout,
   serverVersion = "0.0.0",
 } = {}) {
-  return new Promise((resolve, reject) => {
-    let buffered = ""
-    const onData = (chunk) => {
-      buffered += chunk.toString("utf8")
-      let newline
-      while ((newline = buffered.indexOf("\n")) !== -1) {
-        const line = buffered.slice(0, newline).trim()
-        buffered = buffered.slice(newline + 1)
-        if (line.length > 0) {
-          handleLine({ diagnostic, line, output, serverVersion })
-        }
-      }
-    }
-    const onEnd = () => {
-      const line = buffered.trim()
-      if (line.length > 0) {
-        handleLine({ diagnostic, line, output, serverVersion })
-      }
-      cleanup()
-      resolve()
-    }
-    const onError = (error) => {
-      cleanup()
-      reject(error)
-    }
-    const cleanup = () => {
-      input.off("data", onData)
-      input.off("end", onEnd)
-      input.off("error", onError)
-    }
-    input.on("data", onData)
-    input.on("end", onEnd)
-    input.on("error", onError)
-    input.resume?.()
-  })
+  return startFrontDoor({
+    input,
+    output,
+    serverName: "desk-mcp-diagnostic",
+    serverVersion,
+    callTool: ({ name, input: toolInput }) => diagnosticToolResult({ diagnostic, toolName: name, input: toolInput }),
+  }).closed
 }
 
-function handleLine({ diagnostic, line, output, serverVersion }) {
-  let request
-  try {
-    request = JSON.parse(line)
-  } catch {
-    writeResponse(output, {
-      jsonrpc: "2.0",
-      id: null,
-      error: {
-        code: -32700,
-        message: "Parse error",
-      },
-    })
-    return
-  }
-  if (request.id === undefined) {
-    return
-  }
-  const response = dispatchRequest({ diagnostic, request, serverVersion })
-  writeResponse(output, {
-    jsonrpc: "2.0",
-    id: request.id,
-    ...response,
-  })
-}
-
-function dispatchRequest({ diagnostic, request, serverVersion }) {
-  if (request.method === "initialize") {
-    return {
-      result: {
-        protocolVersion: request.params?.protocolVersion ?? "2025-06-18",
-        capabilities: {
-          tools: { listChanged: true },
-        },
-        serverInfo: {
-          name: "desk-mcp-diagnostic",
-          version: serverVersion,
-        },
-      },
-    }
-  }
-  if (request.method === "ping") {
-    return { result: {} }
-  }
-  if (request.method === "tools/list") {
-    return {
-      result: {
-        tools: diagnosticTools,
-      },
-    }
-  }
-  if (request.method === "tools/call") {
-    return {
-      result: toolResult({
-        diagnostic,
-        toolName: request.params?.name,
-        input: request.params?.arguments,
-      }),
-    }
-  }
-  return {
-    error: {
-      code: -32601,
-      message: `Method not found: ${request.method}`,
-    },
-  }
-}
-
-function toolResult({ diagnostic, toolName, input }) {
+/** The tool result a fixed diagnostic gives: desk_status and desk_doctor answer with it, every other tool is refused with its code and fix. */
+export function diagnosticToolResult({ diagnostic, toolName, input }) {
   if (toolName === "desk_doctor") {
     let format
     try {
       format = diagnosticFormat(input)
     } catch (error) {
+      // Only the validator's own input error is an input error; anything else is a real failure for the front door to report.
       if (!(error instanceof TypeError)) throw error
       return {
         content: [{ type: "text", text: error.message }],
@@ -175,8 +72,4 @@ function toolResult({ diagnostic, toolName, input }) {
     ],
     isError: true,
   }
-}
-
-function writeResponse(output, response) {
-  output.write(`${JSON.stringify(response)}\n`)
 }

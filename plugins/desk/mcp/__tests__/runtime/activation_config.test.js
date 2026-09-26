@@ -605,7 +605,7 @@ test("entrypoint startup root resolution lets host/session root override activat
 })
 
 test("entrypoint main resolves startup root before launching injected runtime server", async () => {
-  const main = requireFunction(entrypoint, "main")
+  const { admitInProcess } = await import("./_in_process_desk.js")
   const fixture = makeFixture()
   try {
     writeActivationConfig(fixture.configPath, fixture.activationRoot, {
@@ -613,7 +613,7 @@ test("entrypoint main resolves startup root before launching injected runtime se
       desk_runtime: { write_authority: "person" },
     })
     const calls = []
-    await main({
+    const started = await admitInProcess({
       argv: [
         "--host-session-root",
         fixture.hostSessionRoot,
@@ -637,16 +637,13 @@ test("entrypoint main resolves startup root before launching injected runtime se
             id: "controller-1",
             beginConvergence() {},
           }),
-          startServer: async ({ deskRoot, person }) => {
-            calls.push(["startServer", deskRoot, person])
-          },
         }
       },
     })
-    assert.deepEqual(calls, [
-      ["runtimeImporter", "/fixture/mcp", fixture.runtimeCache],
-      ["startServer", fixture.hostSessionRoot, "ari"],
-    ])
+    assert.deepEqual(calls, [["runtimeImporter", "/fixture/mcp", fixture.runtimeCache]])
+    assert.equal(started.snapshot.state, "ready")
+    assert.equal(started.statusContext.root.root, fixture.hostSessionRoot)
+    assert.equal(started.person, "ari")
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }

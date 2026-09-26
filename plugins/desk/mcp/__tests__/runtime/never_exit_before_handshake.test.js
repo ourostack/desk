@@ -17,6 +17,7 @@ import {
   runHandshake,
   toolPayload,
 } from "../launch/_mcp_handshake.js"
+import { openSession } from "../launch/_mcp_session.js"
 
 const entrypoint = await import(pathToFileURL(path.join(mcpRoot, "index.js")).href)
 const { TOOL_NAMES } = await import(pathToFileURL(path.join(mcpRoot, "src", "tool-names.js")).href)
@@ -302,27 +303,21 @@ test("an old Node with no compatible Node serves diagnostic mode, even when runt
 })
 
 test("background convergence that throws synchronously is reported, never turned into a second server", async () => {
-  const writes = []
-  const originalWrite = process.stderr.write
-  process.stderr.write = (text) => { writes.push(String(text)); return true }
-  try {
-    await entrypoint.main({
-      argv: [],
-      env: { DESK: mcpRoot },
-      mcpRoot,
-      runtimeInspector: null,
-      readinessPolicy: {},
-      runtimeImporter: async () => ({
-        admitControlPlane: async () => ({ authority: { mode: "workspace", person: null }, controller: null }),
-        startServer: async () => {},
-        beginBackgroundConvergence: () => { throw new Error("sync convergence failure") },
-      }),
-    })
-    await new Promise((resolve) => setImmediate(resolve))
-  } finally {
-    process.stderr.write = originalWrite
-  }
-  assert.match(writes.join(""), /background convergence failed: sync convergence failure/u)
+  const { admitInProcess } = await import("./_in_process_desk.js")
+  const started = await admitInProcess({
+    argv: [],
+    env: { DESK: mcpRoot },
+    mcpRoot,
+    runtimeInspector: null,
+    readinessPolicy: {},
+    runtimeImporter: async () => ({
+      admitControlPlane: async () => ({ authority: { mode: "workspace", person: null }, controller: null }),
+      beginBackgroundConvergence: () => { throw new Error("sync convergence failure") },
+    }),
+  })
+  assert.equal(started.snapshot.state, "ready")
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.match(started.stderr, /background convergence failed: sync convergence failure/u)
 })
 
 // ---- spawned: real startup exceptions over stdio ----
@@ -337,11 +332,13 @@ const startupExceptions = [
     id: "--root names a missing path",
     args: (fixture) => ["--root", path.join(fixture.root, "missing-desk")],
     message: /--root path does not exist/u,
+    state: "degraded:root_unavailable",
   },
   {
     id: "--host-session-root names a missing path",
     args: (fixture) => ["--host-session-root", path.join(fixture.root, "missing-session")],
     message: /host\/session root path does not exist/u,
+    state: "degraded:root_unavailable",
   },
   {
     id: "the activation config is not JSON",
@@ -351,6 +348,7 @@ const startupExceptions = [
       return ["--activation-config", configPath]
     },
     message: /must be valid JSON/u,
+    state: "degraded:activation_config_invalid",
   },
   {
     id: "the activation config has the wrong schema",
@@ -360,6 +358,7 @@ const startupExceptions = [
       return ["--activation-config", configPath]
     },
     message: /schema_version must be 1/u,
+    state: "degraded:activation_config_invalid",
   },
   {
     id: "the readiness policy is invalid",
@@ -370,27 +369,34 @@ const startupExceptions = [
     },
     message: /readiness policy/iu,
     failureCode: "activation_policy_invalid",
+    state: "degraded:activation_policy_invalid",
   },
 ]
 
 for (const scenario of startupExceptions) {
-  test(`startup exception (${scenario.id}): the handshake completes within 3 s with the full tool list`, async () => {
+  test(`a bad start (${scenario.id}): the handshake completes within 3 s with the full tool list, then a named degraded state`, async () => {
     const fixture = await makeIsolatedHome("desk-startup-exception-")
     const args = await scenario.args(fixture)
-    const result = await runHandshake({
+    const session = await openSession({
       command: compatibleNode,
       args: [indexPath, ...args],
       cwd: fixture.root,
       env: isolatedEnv(fixture, { DESK: undefined, PATH: `${path.dirname(compatibleNode)}:/usr/bin:/bin` }),
     })
-    assert.ok(result.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${result.handshakeMs} ms`)
-    assert.equal(result.initialize.result.serverInfo.name, "desk-mcp-diagnostic")
-    assertFullToolList(result.tools)
-    const status = toolPayload(result.status)
-    assert.equal(status.state, "degraded:startup_exception")
-    assert.match(status.observed.message, scenario.message)
-    if (scenario.failureCode) assert.equal(status.observed.failure_code, scenario.failureCode)
-    assert.match(result.stderr, /\[desk-mcp\] startup exception: /u)
+    try {
+      assert.ok(session.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${session.handshakeMs} ms`)
+      assert.equal(session.initialize.result.serverInfo.name, "desk-mcp")
+      assertFullToolList(session.tools)
+      // desk_status answers at once, so it can still say admitting before the first attempt settles.
+      const status = await session.statusUntil((payload) => payload.state !== "admitting")
+      assert.equal(status.state, scenario.state)
+      assert.match(status.observed.message, scenario.message)
+      assert.match(status.fix, /desk_status/u)
+      if (scenario.failureCode) assert.equal(status.observed.failure_code, scenario.failureCode)
+      assert.doesNotMatch(session.stderr(), /startup exception/u)
+    } finally {
+      await session.close()
+    }
   })
 }
 
@@ -436,100 +442,65 @@ test("Node 16 with no compatible Node anywhere serves diagnostic mode instead of
   assert.doesNotMatch(result.stderr, /structuredClone/u)
 })
 
-// ---- a transient controller election is retried before startup gives up ----
+// ---- a transient controller election is retried in the background, after the handshake ----
 
 const electionTimeout = () => new Error("readiness controller election did not converge")
 
-test("only the controller election and socket class counts as transient", () => {
-  for (const error of [
-    electionTimeout(),
-    new Error("readiness controller owner record is invalid"),
-    new Error("readiness controller protocol handshake rejected"),
-    Object.assign(new Error("connect ECONNREFUSED /tmp/x.sock"), { code: "ECONNREFUSED" }),
-    Object.assign(new Error("socket gone"), { code: "ENOENT" }),
-    { code: "controller_start_failed" },
-  ]) {
-    assert.equal(entrypoint.isTransientControllerFailure(error), true, String(error?.message ?? error?.code))
-  }
-  for (const error of [
-    Object.assign(new Error("readiness controller election did not converge"), { code: "controller_semantic_mismatch" }),
-    new ActivationFailure({ code: "authority_invalid", summary: "authority" }),
-    new Error("--root path does not exist"),
-    null,
-    undefined,
-  ]) {
-    assert.equal(entrypoint.isTransientControllerFailure(error), false)
-  }
-})
-
-function fakeClock() {
-  const clock = { now: 0, slept: [] }
-  clock.sleep = async (ms) => { clock.slept.push(ms); clock.now += ms }
-  clock.read = () => clock.now
-  return clock
-}
-
-test("a controller that becomes available on the second attempt gives a ready server", async () => {
-  const clock = fakeClock()
-  const writes = []
+test("a controller election that times out is retried in the background: degraded first, then ready in the same session", async () => {
+  const { startInProcess } = await import("./_in_process_desk.js")
   let attempts = 0
-  const started = []
-  await entrypoint.main({
+  const desk = await startInProcess({
     argv: [],
     env: { DESK: mcpRoot },
     mcpRoot,
     runtimeInspector: null,
     readinessPolicy: {},
-    admissionRetry: { sleep: clock.sleep, now: clock.read, stderr: { write: (text) => writes.push(text) } },
     runtimeImporter: async () => ({
       admitControlPlane: async () => {
         attempts += 1
         if (attempts === 1) throw electionTimeout()
         return { authority: { mode: "workspace", person: null }, controller: null }
       },
-      startServer: async ({ deskRoot }) => { started.push(deskRoot) },
     }),
   })
-  assert.equal(attempts, 2)
-  assert.deepEqual(started, [mcpRoot])
-  assert.deepEqual(clock.slept, [250])
-  assert.match(writes.join(""), /readiness controller not ready \(readiness controller election did not converge\); retrying admission in 250 ms/u)
+  try {
+    const degraded = await desk.settled()
+    assert.equal(degraded.state, "degraded:controller_unavailable")
+    assert.match(degraded.fix, /re-elects it in the background after 1, 2, 5, 10 and 30 s/u)
+    // desk_status retries at once instead of waiting for the backoff.
+    const ready = await desk.statusUntil((payload) => payload.state === "ready")
+    assert.equal(ready.admission.attempts, 2)
+    assert.equal(attempts, 2)
+  } finally {
+    await desk.close()
+  }
 })
 
-test("a controller that never becomes available gives up within about 5 s, so startup degrades", async () => {
-  const clock = fakeClock()
+test("an unexpected error thrown inside admission becomes degraded:admission_exception and recovers in place", async () => {
+  const { startInProcess } = await import("./_in_process_desk.js")
   let attempts = 0
-  await assert.rejects(entrypoint.admitWithRetry({
-    admit: async () => { attempts += 1; clock.now += 100; throw electionTimeout() },
-    sleep: clock.sleep,
-    now: clock.read,
-    stderr: { write() {} },
-  }), /election did not converge/u)
-  assert.deepEqual(clock.slept, [250, 500, 1000, 2000])
-  assert.ok(clock.now <= entrypoint.ADMISSION_RETRY_BUDGET_MS, `gave up after ${clock.now} ms`)
-  assert.equal(attempts, 5)
-
-  // A failure outside the class is not retried at all.
-  let calls = 0
-  await assert.rejects(entrypoint.admitWithRetry({
-    admit: async () => { calls += 1; throw new Error("--root path does not exist") },
-    sleep: clock.sleep,
-    now: clock.read,
-  }), /--root/u)
-  assert.equal(calls, 1)
-})
-
-test("with real timers, a controller that never answers degrades in about 5 s and no later", async () => {
-  const started = Date.now()
-  const writes = []
-  await assert.rejects(entrypoint.admitWithRetry({
-    admit: async () => { throw electionTimeout() },
-    stderr: { write: (text) => writes.push(text) },
-  }), /election did not converge/u)
-  const elapsed = Date.now() - started
-  assert.ok(elapsed >= 3500 && elapsed < 5500, `gave up after ${elapsed} ms`)
-  assert.equal(writes.length, 4)
-  assert.ok(await entrypoint.admitWithRetry({ admit: async () => "ready" }) === "ready")
+  const desk = await startInProcess({
+    argv: [],
+    env: { DESK: mcpRoot },
+    mcpRoot,
+    runtimeInspector: null,
+    readinessPolicy: {},
+    runtimeImporter: async () => ({
+      admitControlPlane: async () => {
+        attempts += 1
+        if (attempts === 1) throw new TypeError("injected admission failure")
+        return { authority: { mode: "workspace", person: null }, controller: null }
+      },
+    }),
+  })
+  try {
+    const failed = await desk.settled()
+    assert.equal(failed.state, "degraded:admission_exception")
+    assert.deepEqual(failed.diagnostic.observed, { name: "TypeError", message: "injected admission failure" })
+    assert.equal((await desk.statusUntil((payload) => payload.state === "ready")).state, "ready")
+  } finally {
+    await desk.close()
+  }
 })
 
 test("a failure payload keeps an own __proto__ key as a plain property", () => {

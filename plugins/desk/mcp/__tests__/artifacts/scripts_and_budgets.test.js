@@ -18,7 +18,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { main as startMcpServer } from "../../index.js"
+import { admitInProcess } from "../runtime/_in_process_desk.js"
 import {
   __artifactScriptInternalsForTests,
   buildSnapshotFromLocalDb,
@@ -523,7 +523,8 @@ function runtimeServerWithStartupAdmission(controller = { accepted: true, id: "c
       ensureCalls.push({ deskRoot, opts })
       return { built: false, reason: "fresh" }
     },
-    async connectOrStartController({ deskRoot, policy }) {
+    async connectOrStartController({ deskRoot, policy, stateHome }) {
+      assert.equal(typeof stateHome, "string", "admission passes the session's readiness state home")
       controllerCalls.push({ deskRoot, policy })
       return controller
     },
@@ -922,7 +923,7 @@ test("MCP startup admits the control plane and begins convergence after start ev
     })
     const runtimeServer = runtimeServerWithStartupAdmission()
 
-    await startMcpServer({
+    const started = await admitInProcess({
       argv: ["--root", deskRoot],
       cwd: deskRoot,
       env: {},
@@ -930,6 +931,8 @@ test("MCP startup admits the control plane and begins convergence after start ev
       mcpRoot: pluginRoot,
       runtimeImporter: async () => runtimeServer,
     })
+    await new Promise((resolve) => setImmediate(resolve))
+    runtimeServer.startCalls.push(started)
 
     assert.deepEqual(runtimeServer.controllerCalls, [{
       deskRoot,

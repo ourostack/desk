@@ -29,6 +29,10 @@ import { existsSync, readFileSync, statSync, promises as fs } from "node:fs"
 // Raised only when no source names a desk at all, as opposed to an explicit
 // root that is wrong. Hosts may treat it as "no desk yet" and start setup.
 export const DESK_ROOT_NOT_FOUND = "DESK_ROOT_NOT_FOUND"
+// An explicit or host/session root that names a path that does not exist.
+export const DESK_ROOT_UNAVAILABLE = "DESK_ROOT_UNAVAILABLE"
+// An activation config that cannot be read, is not JSON, or has the wrong schema.
+export const ACTIVATION_CONFIG_INVALID = "ACTIVATION_CONFIG_INVALID"
 
 export function resolveDeskRoot(explicit, options = {}) {
   return resolveDeskRootWithSource({
@@ -53,9 +57,11 @@ export function resolveDeskRootWithSource({
     const resolved = resolveRootPath(explicitRoot, { cwd, homeDir })
     tried.push({ source: "explicit-root", path: resolved })
     if (existsSync(resolved)) return { root: resolved, source: "explicit-root", tried }
-    throw new Error(
+    throw codedError(
       `desk-mcp: --root path does not exist: ${resolved}. ` +
         `Pass --root <path> pointing at an existing desk workspace, or set $DESK.`,
+      DESK_ROOT_UNAVAILABLE,
+      { path: resolved },
     )
   }
 
@@ -63,7 +69,7 @@ export function resolveDeskRootWithSource({
     const resolved = resolveRootPath(hostSessionRoot, { cwd, homeDir })
     tried.push({ source: "host-session-root", path: resolved })
     if (existsSync(resolved)) return { root: resolved, source: "host-session-root", tried }
-    throw new Error(`desk-mcp: host/session root path does not exist: ${resolved}.`)
+    throw codedError(`desk-mcp: host/session root path does not exist: ${resolved}.`, DESK_ROOT_UNAVAILABLE, { path: resolved })
   }
 
   // A host project that is itself a desk wins over machine-wide defaults: the
@@ -156,19 +162,19 @@ export function loadActivationConfig({ configPath, cwd = process.cwd(), homeDir 
   try {
     raw = readFileSync(resolvedPath, "utf8")
   } catch {
-    throw new Error(`desk-mcp: activation config ${resolvedPath} could not be read`)
+    throw codedError(`desk-mcp: activation config ${resolvedPath} could not be read`, ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
   }
   let parsed
   try {
     parsed = JSON.parse(raw)
   } catch {
-    throw new Error(`desk-mcp: activation config ${resolvedPath} must be valid JSON`)
+    throw codedError(`desk-mcp: activation config ${resolvedPath} must be valid JSON`, ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
   }
   if (parsed?.schema_version !== 1) {
-    throw new Error("desk-mcp: activation config schema_version must be 1")
+    throw codedError("desk-mcp: activation config schema_version must be 1", ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
   }
   if (!hasText(parsed?.desk?.root)) {
-    throw new Error("desk-mcp: activation config desk.root must be a non-empty string")
+    throw codedError("desk-mcp: activation config desk.root must be a non-empty string", ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
   }
   return parsed
 }
@@ -181,6 +187,10 @@ export function expandHome(p, homeDir = os.homedir()) {
 
 function hasText(value) {
   return typeof value === "string" && value.trim().length > 0
+}
+
+function codedError(message, code, detail) {
+  return Object.assign(new Error(message), { code, ...detail })
 }
 
 function resolveRootPath(value, { cwd, homeDir }) {

@@ -216,7 +216,9 @@ test("the actual producer invocation binds the maintained loader, dependency cwd
   assert.equal(registration, `import { register } from "node:module"; register(${JSON.stringify(loader)});`)
   assert.equal(options.env.NODE_OPTIONS, `--import=${args[importIndex + 1]}`)
   assert.equal(options.env.NODE_PATH, path.join(mcpRoot, "node_modules"))
-  assert.deepEqual(args.slice(importIndex + 2), [
+  // The second preload is the global test setup: a temporary HOME and XDG folders for every test process.
+  assert.deepEqual(args.slice(importIndex + 2, importIndex + 4), ["--import", pathToFileURL(path.join(mcpRoot, "__tests__", "_isolated_env.mjs")).href])
+  assert.deepEqual(args.slice(importIndex + 4), [
     "--test",
     "--test-concurrency=1",
     path.join(run.canonicalRepoRoot, "plugins/desk/mcp/__tests__/**/*.test.js"),

@@ -9,6 +9,7 @@ import {
   resolveMcpServerVersion,
   resolveRuntimeInspector,
 } from "../../index.js"
+import { admitInProcess } from "./_in_process_desk.js"
 import {
   importRuntimeServer,
   inspectRuntimeDependencyPack,
@@ -50,12 +51,9 @@ test("startup assembles inspected runtime status and falls back to diagnostics w
     async connectOrStartController() {
       return { accepted: true, id: "controller-1" }
     },
-    async startServer(args) {
-      startCalls.push(args)
-    },
   }
   try {
-    await main({
+    startCalls.push(await admitInProcess({
       argv: ["--root", root],
       env: {},
       cwd: root,
@@ -66,7 +64,7 @@ test("startup assembles inspected runtime status and falls back to diagnostics w
         current_target: "darwin-arm64-node-127",
         support_matrix_path: "/plugin/support-matrix.json",
       }),
-    })
+    }))
 
     assert.equal(startCalls.length, 1)
     assert.deepEqual(startCalls[0].statusContext.runtime, {
@@ -90,8 +88,8 @@ test("startup assembles inspected runtime status and falls back to diagnostics w
       automatic_actions: [],
     })
 
-    let diagnostic
-    await main({
+    let calls = 0
+    const failedRestore = await admitInProcess({
       argv: ["--root", root],
       env: { DESK_RUNTIME_CACHE_DIR: "/env-cache" },
       cwd: root,
@@ -99,22 +97,37 @@ test("startup assembles inspected runtime status and falls back to diagnostics w
       runtimeImporter: async () => {
         throw new Error("restore failed")
       },
-      runtimeInspector: () => ({
-        ok: true,
-        runtime: {
-          current_target: "darwin-arm64-node-127",
-          shipped_targets: ["darwin-arm64-node-127"],
-          paths_checked: ["/pack"],
-          support_matrix_path: "/matrix",
-        },
-      }),
-      diagnosticServerStarter: (options) => {
-        diagnostic = options.diagnostic
-        return "diagnostic-started"
+      runtimeInspector: () => {
+        calls += 1
+        return {
+          ok: true,
+          runtime: {
+            current_target: "darwin-arm64-node-127",
+            shipped_targets: ["darwin-arm64-node-127"],
+            paths_checked: ["/pack"],
+            support_matrix_path: "/matrix",
+          },
+        }
       },
+      diagnosticServerStarter: () => assert.fail("a failed restore is a degraded admission state, served by the front door"),
     })
+    const diagnostic = failedRestore.snapshot.diagnostic
+    assert.equal(failedRestore.snapshot.state, "degraded:artifact_integrity_invalid")
     assert.equal(diagnostic.reason, "runtime_restore_failed")
+    assert.equal(diagnostic.restore_error, "restore failed")
     assert.equal(diagnostic.runtime.runtime_cache_path, "/env-cache")
+    assert.equal(calls, 1, "an injected inspector's preflight result is reused by admission")
+    // A restore that fails before any inspection (no inspector) still names the restore.
+    const noInspector = await admitInProcess({
+      argv: ["--root", root],
+      env: {},
+      cwd: root,
+      homeDir: root,
+      runtimeImporter: async () => { throw "not an Error" },
+      runtimeInspector: null,
+    })
+    assert.equal(noInspector.snapshot.diagnostic.reason, "runtime_restore_failed")
+    assert.equal(noInspector.snapshot.diagnostic.restore_error, "not an Error")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -146,7 +159,7 @@ test("startup handles unavailable runtime through diagnostics and guarded compat
       runtimeInspector: explicitInspector,
     }), explicitInspector)
 
-    const missingPack = await main({
+    const missingPack = (await admitInProcess({
       argv: ["--root", root],
       env: {},
       cwd: root,
@@ -154,7 +167,7 @@ test("startup handles unavailable runtime through diagnostics and guarded compat
       runtimeImporter: async () => assert.fail("runtime import should not run"),
       runtimeInspector: () => baseInspection,
       diagnosticServerStarter,
-    })
+    })).snapshot.diagnostic
     assert.equal(missingPack.reason, "missing_pack")
     assert.equal(missingPack.failure_kind, "missing_artifact")
 
@@ -317,7 +330,7 @@ test("startup handles unavailable runtime through diagnostics and guarded compat
     })
     assert.equal(forwardedTermination.forwardedSignal, "SIGTERM")
 
-    const inspectionFailure = await main({
+    const inspectionFailure = (await admitInProcess({
       argv: ["--root", root],
       env: {},
       cwd: root,
@@ -328,7 +341,7 @@ test("startup handles unavailable runtime through diagnostics and guarded compat
         throw new Error("corrupt support metadata")
       },
       diagnosticServerStarter,
-    })
+    })).snapshot.diagnostic
     assert.equal(inspectionFailure.reason, "runtime_inspection_failed")
     assert.equal(inspectionFailure.runtime.current_target.id, `${process.platform}-${process.arch}-node-${process.versions.modules}`)
     assert.deepEqual(inspectionFailure.runtime.paths_checked, ["/plugin"])

@@ -173,25 +173,25 @@ test("startup root resolution uses CLAUDE_PROJECT_DIR and the plugin data bindin
   }
 })
 
-test("main serves setup mode instead of exiting when no desk exists yet", async () => {
+test("main serves setup mode instead of exiting when no desk exists yet, and loads a desk created later in the same session", async () => {
   const fixture = makeFixture()
+  const { startInProcess } = await import("./_in_process_desk.js")
+  const { callTool } = await import("../../src/server.js")
+  let runtimeLoads = 0
+  const desk = await startInProcess({
+    argv: [],
+    env: { HOME: fixture.home, CLAUDE_PROJECT_DIR: fixture.codeRepo, CLAUDE_PLUGIN_DATA: fixture.pluginData },
+    homeDir: fixture.home,
+    cwd: fixture.codeRepo,
+    mcpRoot: "/fixture/mcp",
+    runtimeImporter: async () => {
+      runtimeLoads += 1
+      return { callTool, connectOrStartController: async () => ({ accepted: true, async status() { return { state: "READY" } } }) }
+    },
+  })
   try {
-    const started = []
-    await entrypoint.main({
-      argv: [],
-      env: { HOME: fixture.home, CLAUDE_PROJECT_DIR: fixture.codeRepo, CLAUDE_PLUGIN_DATA: fixture.pluginData },
-      homeDir: fixture.home,
-      cwd: fixture.codeRepo,
-      mcpRoot: "/fixture/mcp",
-      diagnosticServerStarter: (options) => {
-        started.push(options)
-      },
-      runtimeImporter: async () => {
-        throw new Error("runtime must not load without a desk")
-      },
-    })
-    assert.equal(started.length, 1)
-    const { diagnostic } = started[0]
+    const { payload: diagnostic } = await desk.call("desk_status")
+    assert.equal(diagnostic.state, "degraded:no_desk_root")
     assert.equal(diagnostic.mode, "setup")
     assert.equal(diagnostic.status, "setup_required")
     assert.equal(diagnostic.reason, "no_desk_root")
@@ -201,26 +201,36 @@ test("main serves setup mode instead of exiting when no desk exists yet", async 
       ["host-project", "fallback:ms-desk", "fallback:desk", "fallback:worker-workspace"],
     )
     assert.equal(diagnostic.remediation[0].action, "run_first_run_bootstrap")
+    assert.equal(diagnostic.remediation.at(-1).action, "check_binding")
     assert.match(diagnostic.summary, /no desk/iu)
+    assert.equal(runtimeLoads, 0, "the runtime is not loaded without a desk")
+    // First-run bootstrap creates the desk; the same session picks it up.
+    const created = path.join(fixture.home, "desk")
+    mkdirSync(path.join(created, "_meta"), { recursive: true })
+    mkdirSync(path.join(created, "_archive"), { recursive: true })
+    const ready = await desk.statusUntil((payload) => payload.state === "ready")
+    assert.equal(ready.root.path, created)
+    assert.equal(runtimeLoads, 1)
   } finally {
+    await desk.close()
     rmSync(fixture.root, { recursive: true, force: true })
   }
 })
 
-test("main still fails closed on a wrong explicit root", async () => {
+test("main reports a wrong explicit root as degraded:root_unavailable, never as setup mode", async () => {
   const fixture = makeFixture()
+  const { admitInProcess } = await import("./_in_process_desk.js")
   try {
-    await assert.rejects(
-      entrypoint.main({
-        argv: ["--root", path.join(fixture.root, "missing")],
-        env: { HOME: fixture.home },
-        homeDir: fixture.home,
-        mcpRoot: "/fixture/mcp",
-        diagnosticServerStarter: () => assert.fail("explicit misconfiguration must not become setup mode"),
-        runtimeImporter: async () => assert.fail("runtime must not load"),
-      }),
-      /--root path does not exist/u,
-    )
+    const started = await admitInProcess({
+      argv: ["--root", path.join(fixture.root, "missing")],
+      env: { HOME: fixture.home },
+      homeDir: fixture.home,
+      mcpRoot: "/fixture/mcp",
+      diagnosticServerStarter: () => assert.fail("explicit misconfiguration must not become setup mode"),
+      runtimeImporter: async () => assert.fail("runtime must not load"),
+    })
+    assert.equal(started.snapshot.state, "degraded:root_unavailable")
+    assert.match(started.snapshot.diagnostic.observed.message, /--root path does not exist/u)
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }

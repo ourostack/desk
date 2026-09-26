@@ -477,7 +477,7 @@ function waitForResponse(child, id, stderrChunks, timeoutMs = 20000) {
   });
 }
 
-async function runListToolsSession({ command, args, cwd, env }) {
+async function runListToolsSession({ command, args, cwd, env, waitForAdmission = false }) {
   const stderrChunks = [];
   const child = spawn(command, args, {
     cwd,
@@ -501,6 +501,12 @@ async function runListToolsSession({ command, args, cwd, env }) {
     assert.equal(tools.error, undefined, `tools/list failed: ${JSON.stringify(tools.error)}`);
     assert.ok(Array.isArray(tools.result?.tools), "tools/list should return tools");
     assert.ok(tools.result.tools.some((tool) => tool.name === "task_create"), "desk task_create tool should be available");
+    // The handshake comes first; the runtime restore runs during admission afterwards. desk_status waits for it.
+    for (let id = 3; waitForAdmission; id += 1) {
+      child.stdin.write(makeMcpEnvelope(id, "tools/call", { name: "desk_status", arguments: {} }));
+      const status = JSON.parse((await waitForResponse(child, id, stderrChunks)).result.content[0].text);
+      if (status.state !== "admitting") break;
+    }
     return tools;
   } finally {
     child.kill("SIGTERM");
@@ -514,6 +520,7 @@ async function runIndexListTools({ runtimeMcpRoot = mcpRoot, args, cwd, env }) {
     args: [path.join(runtimeMcpRoot, "index.js"), ...args],
     cwd,
     env,
+    waitForAdmission: true,
   });
 }
 

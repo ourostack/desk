@@ -8,6 +8,8 @@ import { transitionReadiness } from "./state.js"
 import { semanticContractDiagnostic, validateControllerEndpoint, validatePrivateDirectory } from "./identity.js"
 import { JournalIntegrityError, openChangeJournal } from "./journal.js"
 import { fenceEvents } from "./watcher.js"
+import { exitRelease as defaultExitRelease } from "./exit-release.js"
+import { readOwnProcessStart } from "./process-start.js"
 
 export async function startReadinessController({
   identity,
@@ -16,6 +18,8 @@ export async function startReadinessController({
   handlers = {},
   watcher,
   ephemeral = false,
+  exitRelease = defaultExitRelease,
+  ownProcessStart = readOwnProcessStart,
 } = {}) {
   validateControllerEndpoint(endpoint)
   if (process.platform !== "win32") validatePrivateDirectory(path.dirname(endpoint))
@@ -26,6 +30,9 @@ export async function startReadinessController({
     started_at: new Date(Date.now() - Math.floor(process.uptime() * 1000)).toISOString(),
     token: randomUUID(),
   }
+  // The owner's start time makes the record name this process, not just its PID, which a later process may reuse (owner-record.js).
+  const processStart = await ownProcessStart()
+  if (processStart !== null) owner.process_start = processStart
   let state = "CONTROL_READY"
   let convergence = null
   let convergenceResult = null
@@ -37,6 +44,7 @@ export async function startReadinessController({
   let freshnessReason = "initial_scan"
   let reconcileScheduled = null
   let closing = false
+  let unregisterRelease
   const semanticMode = identity.semantic_contract?.mode
   const semanticEnabled = semanticMode === "required" || semanticMode === "background"
   const server = net.createServer((socket) => {
@@ -258,9 +266,14 @@ export async function startReadinessController({
   }
 
   await listen(server, endpoint)
+  // listen() drops its one-shot error listener once bound; without a lasting one, a later server error would be an unhandled 'error' event that ends the whole Desk process.
+  server.on("error", (error) => {
+    process.stderr.write(`[desk-mcp] readiness controller server error: ${error?.message ?? String(error)}\n`)
+  })
+  let socket = null
   try {
     const socketStat = process.platform === "win32" ? null : lstatSync(endpoint)
-    const socket = socketStat === null ? null : { dev: socketStat.dev, ino: socketStat.ino }
+    socket = socketStat === null ? null : { dev: socketStat.dev, ino: socketStat.ino }
     writeFileSync(
       path.join(stateDir, "owner.json"),
       `${JSON.stringify({ schema_version: 1, identity, owner, endpoint, socket }, null, 2)}\n`,
@@ -277,12 +290,18 @@ export async function startReadinessController({
   if (!ephemeral) {
     server.unref()
   }
+  // Every normal end of this process (stdin closed, SIGTERM, SIGINT, beforeExit, exit) removes the rendezvous files while they are still ours, so the next session never finds an owner record naming a process that has gone.
+  unregisterRelease = exitRelease.register(() => {
+    unregisterRelease()
+    releaseRendezvous({ stateDir, endpoint, owner, socket })
+  })
   return {
     identity,
     owner,
     server,
     async close() {
       closing = true
+      unregisterRelease()
       if (reconcileScheduled) clearImmediate(reconcileScheduled)
       reconcileScheduled = null
       await convergence?.catch(() => {})
@@ -295,6 +314,36 @@ export async function startReadinessController({
       }
     },
   }
+}
+
+/**
+ * Remove the controller's owner record and socket file synchronously, but only while they are still this controller's: the record names this process (PID and start time) and this controller's token, and the socket file is the one it published. Anything else belongs to a controller elected since, and is left alone.
+ */
+export function releaseRendezvous({ stateDir, endpoint, owner, socket }) {
+  const ownerFile = path.join(stateDir, "owner.json")
+  let record
+  try {
+    record = JSON.parse(readFileSync(ownerFile, "utf8"))
+  } catch {
+    return false
+  }
+  const recorded = record?.owner
+  if (recorded?.token !== owner.token || recorded.pid !== owner.pid || recorded.process_start !== owner.process_start) return false
+  if (socket !== null) {
+    try {
+      const now = lstatSync(endpoint)
+      if (now.dev === socket.dev && now.ino === socket.ino) unlinkSync(endpoint)
+    } catch {
+      // Already gone.
+    }
+  }
+  try {
+    unlinkSync(ownerFile)
+    rmdirSync(stateDir)
+  } catch {
+    // The journal and other state stay: only the rendezvous files matter to the next session.
+  }
+  return true
 }
 
 function listen(server, endpoint) {

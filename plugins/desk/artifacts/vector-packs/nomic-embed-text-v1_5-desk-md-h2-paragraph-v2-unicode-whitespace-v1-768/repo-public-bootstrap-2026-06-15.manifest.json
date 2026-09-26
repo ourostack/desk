@@ -6,7 +6,7 @@
   "encoding": "float32-json",
   "row_count": 2,
   "rows_sha256": "edf5dd39ec4a23020fe05769dd0e4e65b45c2143d1c02365793681ac2ba5bad8",
-  "artifact_source_scope_hash": "sha256:a0ae309cfbcc53403916090fd08a33b89b891b2492652fe648f677ae77d64ac6",
+  "artifact_source_scope_hash": "sha256:09d166d406537301b8f02078cda4b0823a879be0f32bdc4ebafb3465f186565d",
   "document_tree_hash": "sha256:b8268841c4877dfe293de7c463eadf38339c741daa6416ffd5b1ec652087fba8",
   "represented_documents": [
     {
@@ -14,7 +14,7 @@
       "hash": "sha256:3886140d5ca53b11e39d670572bce11535d9f980e4d168dbdcbbd72bc10edf59"
     }
   ],
-  "created_at": "2026-09-24T04:10:55.903Z",
+  "created_at": "2026-09-26T06:35:41.739Z",
   "provenance": {
     "builder": "plugins/desk/mcp/scripts/build-vector-pack.js",
     "source": "local-db",

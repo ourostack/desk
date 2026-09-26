@@ -4,7 +4,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
-import { main, resolveStartupReadinessPolicy } from "../../index.js"
+import { resolveStartupReadinessPolicy } from "../../index.js"
+import { admitInProcess } from "../runtime/_in_process_desk.js"
 import { resolveWriteTarget } from "../../src/util/paths.js"
 
 const manifest = JSON.parse(readFileSync(new URL("../../../activation/desk.activation.json", import.meta.url)))
@@ -42,14 +43,13 @@ for (const mode of ["global-personal", "project-local"]) {
       }), expected)
       const argv = JSON.parse(result.generatedConfig.match(/^args = (.+)$/mu)[1]).slice(1)
       argv[argv.indexOf("--activation-config") + 1] = configPath
-      let started
-      await main({
+      const started = await admitInProcess({
         argv, env: {}, runtimeInspector: null,
         runtimeImporter: async () => ({
           connectOrStartController: async () => ({ accepted: true }),
-          startServer: async (options) => { started = options },
         }),
       })
+      assert.equal(started.snapshot.state, "ready")
       assert.deepEqual(started.statusContext.admission.authority, { mode: "workspace" })
       assert.equal(started.person ?? null, null)
       assert.equal(
@@ -73,14 +73,13 @@ test("Codex person policy reaches admission and enforces the generated person ar
     const configPath = path.join(root, "activation.json")
     writeFileSync(configPath, result.generatedActivationConfig)
     argv[argv.indexOf("--activation-config") + 1] = configPath
-    let started
-    await main({
+    const started = await admitInProcess({
       argv, env: {}, runtimeInspector: null,
       runtimeImporter: async () => ({
-        connectOrStartController: async () => ({ accepted: true }),
-        startServer: async (options) => { started = options },
+        connectOrStartController: async () => ({ accepted: true, async beginConvergence() {} }),
       }),
     })
+    assert.equal(started.snapshot.state, "ready")
     assert.deepEqual(started.statusContext.admission.authority, { mode: "person", person: "ari" })
     assert.equal(started.person, "ari")
     assert.equal(

@@ -425,12 +425,19 @@ async function runMcpListToolsSession(fixture, { timeoutMs = 10000, activationCo
     params: {},
   }) + "\n")
   const tools = await waitForResponse(2)
+  // The handshake comes first; the runtime restore runs during admission afterwards. desk_status waits for it.
+  let status
+  for (let id = 3; status === undefined || status.state === "admitting"; id += 1) {
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "desk_status", arguments: {} } }) + "\n")
+    status = JSON.parse((await waitForResponse(id)).result.content[0].text)
+  }
   child.kill("SIGTERM")
   await closePromise
   return {
     code: 0,
     initialize,
     tools,
+    status,
     stdout,
     stderr,
   }
@@ -568,8 +575,14 @@ async function runMcpStatusSession(fixture, {
       params: {},
     })
     const tools = await request("tools/list", {})
-    const initialStatus = await callTool("desk_status")
+    // The handshake comes first and desk_status answers at once, so the first answers can still be admitting.
+    let initialStatus = await callTool("desk_status")
     let body = observeStatus(initialStatus)
+    for (const admittingDeadline = performance.now() + timeoutMs; body.state === "admitting" && performance.now() < admittingDeadline;) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      initialStatus = await callTool("desk_status")
+      body = observeStatus(initialStatus)
+    }
     await onInitialStatus?.({ initialize, tools, initialStatus })
     let status = initialStatus
     if (waitForConvergence) {
@@ -892,8 +905,9 @@ test("MCP entrypoint restores runtime dependencies offline and serves list-tools
     assert.equal(first.tools.error, undefined, first.stderr || first.stdout)
     assert.ok(
       first.tools.result.tools.some((tool) => tool.name === "desk_search"),
-      "list-tools response must come from the restored runtime server",
+      "list-tools response must list the full tool set",
     )
+    assert.equal(first.status.state, "ready", JSON.stringify(first.status))
     assertNoBootstrapSideEffects(fixture)
     assertRuntimeDependenciesRestoredToCache(fixture)
     const firstMirrors = listSourceMirrors(fixture.runtimeCacheDir)
@@ -922,7 +936,7 @@ test("MCP entrypoint restores runtime dependencies offline and serves list-tools
       second.tools.result.tools.some((tool) => (
         tool.name === "desk_search" && tool.description.includes("Unit 7a source mirror sentinel.")
       )),
-      "list-tools response must be served from the updated source mirror",
+      "list-tools response must describe tools from the updated plugin source",
     )
     assert.equal(existsSync(path.join(fixture.mcpRoot, "node_modules")), false)
   } finally {
@@ -1050,7 +1064,8 @@ test("MCP entrypoint keeps a diagnostic MCP live when the current runtime pack i
 
     const result = await runMcpStatusSession(fixture)
     assert.equal(result.initialize.error, undefined, result.stderr || result.stdout)
-    assert.equal(result.initialize.result.serverInfo.name, "desk-mcp-diagnostic")
+    // The front door answers the handshake; the missing pack is found during admission afterwards.
+    assert.equal(result.initialize.result.serverInfo.name, "desk-mcp")
     assert.equal(result.initialize.result.serverInfo.version, packageJson.version)
     // Diagnostic mode lists the full tool set, so the list a host caches never changes once Desk recovers.
     assert.deepEqual(
@@ -1060,7 +1075,7 @@ test("MCP entrypoint keeps a diagnostic MCP live when the current runtime pack i
     assert.equal(result.status.result.isError, undefined)
     const status = JSON.parse(result.status.result.content[0].text)
     assert.equal(status.status, "degraded")
-    assert.equal(status.activation_status, "terminal")
+    assert.equal(status.activation_status, "terminal", JSON.stringify(status))
     assert.equal(status.retryable, false)
     assert.equal(status.phase, "VERIFYING")
     assert.equal(status.observed.reason, status.reason)

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs"
 import * as net from "node:net"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -8,15 +8,31 @@ import {
   controllerIdentity, deriveControllerEndpoint, lexicalControllerIdentity,
   semanticContractDiagnostic, stableStringify, validatePrivateDirectory,
 } from "./identity.js"
+import { ownerState } from "./owner-record.js"
 import { requestMessage } from "./protocol.js"
 import { startReadinessController } from "./controller-server.js"
 
 const localControllers = new Map()
+const ABANDONED_RECHECK_MS = 50
+// A running owner that is only busy gets one longer handshake before the session gives up on it for this attempt.
+const LIVE_OWNER_HANDSHAKE_MS = 1000
 const controllerStarts = new Map()
 const privateDirectoryValidators = {
   win32: Object,
   darwin: validatePrivateDirectory,
   linux: validatePrivateDirectory,
+}
+// Named pipes on Windows leave no socket file behind to reclaim, and binding one in use fails.
+export const socketTakeoverGuards = {
+  win32: async () => false,
+  darwin: guardSocketTakeover,
+  linux: guardSocketTakeover,
+}
+// Named pipes on Windows have no directory mode to tighten.
+const privateDirectoryTighteners = {
+  win32: Object,
+  darwin: tightenPrivateDirectory,
+  linux: tightenPrivateDirectory,
 }
 
 export async function connectOrStartController({
@@ -29,12 +45,14 @@ export async function connectOrStartController({
   watcher,
   watcherFactory,
   ephemeral = false,
+  onRepair = () => {},
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  privateDirectoryTighteners[process.platform](stateDir, onRepair)
   privateDirectoryValidators[process.platform](stateDir)
-  const endpoint = deriveControllerEndpoint({ identity })
+  const endpoint = await rendezvousEndpoint({ derived: deriveControllerEndpoint({ identity }), identity, stateDir })
 
   let local = localControllers.get(identity.id)
   if (!local) {
@@ -86,9 +104,7 @@ async function startOrReuseController({
     requireCompatibleHandshake(existing, identity)
     return
   }
-  if (process.platform !== "win32" && endpointIsReclaimable({ endpoint, identity, stateDir })) {
-    unlinkSync(endpoint)
-  }
+  if (await socketTakeoverGuards[process.platform]({ endpoint, identity, stateDir })) return
   let ownedWatcher = watcher
   try {
     ownedWatcher ??= await watcherFactory?.({ root: identity.root })
@@ -110,13 +126,29 @@ async function startOrReuseController({
   }
 }
 
+// Before binding: a controller whose owner runs is never taken over, even when it does not answer (no unlink, no second controller; the session stays controller-free and its hung-controller checks report it). Otherwise a stale socket of ours is removed. Resolves true when the running owner answered, so the session joins it instead of binding.
+async function guardSocketTakeover({ endpoint, identity, stateDir }) {
+  const owner = await ownerState({ stateDir, identity })
+  if (owner.state === "live") {
+    const answered = await tryHandshake({ endpoint, identity, stateDir, timeoutMs: LIVE_OWNER_HANDSHAKE_MS })
+    if (answered) {
+      requireCompatibleHandshake(answered, identity)
+      return true
+    }
+    throw Object.assign(new Error(`The readiness controller for this root belongs to a running process (pid ${owner.record.owner.pid}) that does not answer; Desk never starts a second controller while it runs.`), { code: "controller_owner_unresponsive", owner_pid: owner.record.owner.pid })
+  }
+  const stale = endpointIsReclaimable({ endpoint, owner }) ?? await endpointIsAbandoned(endpoint, { stateDir, identity })
+  if (stale) unlinkIfUnchanged(endpoint, stale)
+  return false
+}
+
 function isControllerElectionCollision(error) {
   return error?.code === "EADDRINUSE" || error?.code === "EEXIST"
 }
 
 function createClient({ endpoint, ephemeral, identity, local, token }) {
   let closed = false
-  const call = (method, params = {}, timeoutMs = 2_000, signal) => request({
+  const call = (method, params, timeoutMs = 2_000, signal) => request({
     endpoint,
     identity,
     method,
@@ -128,7 +160,7 @@ function createClient({ endpoint, ephemeral, identity, local, token }) {
     accepted: true,
     id: identity.id,
     identity,
-    status: () => call("status"),
+    status: (timeoutMs = 2_000) => call("status", {}, timeoutMs),
     beginConvergence: () => call("beginConvergence", {}, null),
     barrier: (params) => call("barrier", params, params?.wait ? null : 2_000),
     async recordChange(change) {
@@ -155,7 +187,7 @@ function createClient({ endpoint, ephemeral, identity, local, token }) {
   }
 }
 
-async function tryHandshake({ endpoint, identity, stateDir }) {
+async function tryHandshake({ endpoint, identity, stateDir, timeoutMs = 100 }) {
   try {
     const token = readControllerToken({ identity, stateDir })
     return await request({
@@ -163,7 +195,7 @@ async function tryHandshake({ endpoint, identity, stateDir }) {
       identity,
       method: "handshake",
       params: { token },
-      timeoutMs: 100,
+      timeoutMs,
     })
   } catch (error) {
     if (error.code === "controller_semantic_mismatch") throw error
@@ -211,28 +243,87 @@ function readControllerToken({ identity, stateDir }) {
   return record.owner.token
 }
 
-function endpointIsReclaimable({ endpoint, identity, stateDir }) {
+// A socket whose recorded owner is gone (or is this process, which has no controller for the root) and that is still the exact file the owner published. Returns the socket's stat when it may be removed, otherwise null.
+export function endpointIsReclaimable({ endpoint, owner }) {
+  if (owner.state !== "dead" && owner.state !== "self") return null
+  const record = owner.record
   try {
-    validatePrivateDirectory(stateDir)
     validatePrivateDirectory(path.dirname(endpoint))
     const stat = lstatSync(endpoint)
-    const reclaimableSocket = Number(stat.isSocket()) * Number(stat.uid === process.getuid()) === 1
-    if (!reclaimableSocket) return false
-    const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
-    if (stableStringify(lexicalControllerIdentity(record.identity)) !== stableStringify(lexicalControllerIdentity(identity))
-      || record.endpoint !== endpoint || record.socket?.dev !== stat.dev || record.socket?.ino !== stat.ino
-      || !Number.isInteger(record.owner?.pid) || record.owner.pid <= 0) {
-      return false
-    }
-    try {
-      process.kill(record.owner.pid, 0)
-      return false
-    } catch (error) {
-      return error?.code === "ESRCH"
-    }
+    if (!stat.isSocket() || stat.uid !== process.getuid()) return null
+    return record.endpoint === endpoint && record.socket?.dev === stat.dev && record.socket?.ino === stat.ino ? stat : null
   } catch {
-    return false
+    return null
   }
+}
+
+// A socket file of ours that nobody listens on (connecting is refused), when no running process owns it: the owner record is missing or corrupt (a crashed controller that never wrote one, or wrote it badly), or names an owner that is gone. A refused connection alone never counts: a running owner that is stopped, or whose accept queue is full, refuses too. Returns the socket's stat when it may be removed, otherwise null.
+export async function endpointIsAbandoned(endpoint, { stateDir, identity = null, probe = probeEndpoint }) {
+  if ((await ownerState({ stateDir, identity })).state === "live") return null
+  let stat
+  try {
+    validatePrivateDirectory(path.dirname(endpoint))
+    stat = lstatSync(endpoint)
+  } catch {
+    return null
+  }
+  if (!stat.isSocket() || stat.uid !== process.getuid()) return null
+  // A controller that has bound its socket but not yet called listen() also refuses, so one refusal is not proof: it must refuse twice, a little apart, with the socket file unchanged and still no running owner.
+  if (await probe(endpoint) !== "refused") return null
+  await new Promise((resolve) => setTimeout(resolve, ABANDONED_RECHECK_MS))
+  if (await probe(endpoint) !== "refused") return null
+  if ((await ownerState({ stateDir, identity })).state === "live") return null
+  try {
+    const again = lstatSync(endpoint)
+    return again.dev === stat.dev && again.ino === stat.ino ? stat : null
+  } catch {
+    return null
+  }
+}
+
+// Where to meet the root's controller: the derived endpoint, unless the owner record names a different one that answers (a controller started by an older Desk that derived its socket from XDG_RUNTIME_DIR). Every session then joins the same controller.
+async function rendezvousEndpoint({ derived, identity, stateDir }) {
+  let recorded
+  try {
+    recorded = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8")).endpoint
+  } catch {
+    return derived
+  }
+  if (typeof recorded !== "string" || recorded === derived) return derived
+  return await tryHandshake({ endpoint: recorded, identity, stateDir }) === null ? derived : recorded
+}
+
+export function probeEndpoint(endpoint, { timeoutMs = 250, connect = net.createConnection } = {}) {
+  return new Promise((resolve) => {
+    const socket = connect(endpoint)
+    const finish = (result) => {
+      clearTimeout(timer)
+      socket.destroy()
+      resolve(result)
+    }
+    const timer = setTimeout(() => finish("unknown"), timeoutMs)
+    socket.once("connect", () => finish("accepting"))
+    socket.once("error", (error) => finish(error?.code === "ECONNREFUSED" ? "refused" : "unknown"))
+  })
+}
+
+// Remove the endpoint only if it is still the file that was judged stale, so a controller that just replaced it keeps its socket.
+export function unlinkIfUnchanged(endpoint, stale) {
+  try {
+    const now = lstatSync(endpoint)
+    if (now.dev === stale.dev && now.ino === stale.ino) unlinkSync(endpoint)
+  } catch {
+    // Already gone: nothing to reclaim.
+  }
+}
+
+// A state directory of ours with a looser mode (for example 755 from a umask) is tightened to 700. A symlink, a directory owned by someone else or anything that is not a directory is left for validation to refuse.
+function tightenPrivateDirectory(directory, onRepair) {
+  const stat = lstatSync(directory)
+  const mode = stat.mode & 0o777
+  if (!stat.isDirectory() || stat.uid !== process.getuid() || mode === 0o700) return
+  chmodSync(directory, 0o700)
+  onRepair({ action: "chmod_700", path: directory, from: mode.toString(8) })
 }
 
 export function createControllerResponseAccumulator(onLine) {

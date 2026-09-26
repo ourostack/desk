@@ -1,4 +1,5 @@
-import { main } from "../../../index.js"
+import * as path from "node:path"
+import { startInProcess } from "../../runtime/_in_process_desk.js"
 import { connectOrStartController } from "../../../src/server.js"
 
 const [root, stateHome, allowedEndpoint] = process.argv.slice(2)
@@ -11,23 +12,24 @@ globalThis.fetch = async (url, options) => {
   return originalFetch(url, options)
 }
 let controller
-let started = false
-try {
-  await main({
-    argv: ["--root", root],
-    readinessPolicy: { semantic: "required" },
-    runtimeImporter: async () => ({
-      async connectOrStartController(options) {
-        controller = await connectOrStartController({ ...options, stateHome, ephemeral: true })
-        return controller
-      },
-      async startServer() { started = true },
-    }),
-  })
-  process.send({ started, id: controller.id, contract: controller.identity.semantic_contract, requests })
-} catch (error) {
-  process.send({ started, id: controller?.id, code: error.code, message: error.message, diagnostic: error.diagnostic, requests })
-}
+const desk = await startInProcess({
+  argv: ["--root", root],
+  readinessPolicy: { semantic: "required" },
+  stateHome: path.join(stateHome, "desk-state"),
+  runtimeImporter: async () => ({
+    async connectOrStartController(options) {
+      controller = await connectOrStartController({ ...options, stateHome, ephemeral: true })
+      return controller
+    },
+  }),
+}, { connect: false })
+const snapshot = await desk.settled()
+const started = snapshot.state === "ready"
+const failure = snapshot.diagnostic?.observed ?? {}
+process.send(started
+  ? { started, id: controller.id, contract: controller.identity.semantic_contract, requests }
+  : { started, id: controller?.id, code: failure.failure_code, message: failure.message, diagnostic: failure.diagnostic, requests })
 await new Promise((resolve) => process.once("message", resolve))
+await desk.close()
 await controller?.close()
 process.disconnect()

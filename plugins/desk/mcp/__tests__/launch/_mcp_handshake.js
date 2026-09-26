@@ -81,13 +81,22 @@ export function runHandshake({ command, args = [], env, cwd, timeoutMs = 20000 }
     let stderr = ""
     let handshakeMs = null
     let settled = false
+    // Close stdin first, the way a host ends a session: Desk and any Node it re-executed exit on their own and release the fixture folder (Windows refuses to remove a folder a running process uses). SIGTERM only if they have not exited within 5 s.
     const finish = (error, value) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      child.kill("SIGTERM")
-      if (error) reject(error)
-      else resolve(value)
+      const done = () => (error ? reject(error) : resolve(value))
+      if (child.exitCode !== null || child.signalCode !== null) {
+        done()
+        return
+      }
+      const killTimer = setTimeout(() => child.kill("SIGTERM"), 5000)
+      child.once("exit", () => {
+        clearTimeout(killTimer)
+        done()
+      })
+      child.stdin.end()
     }
     const timer = setTimeout(() => {
       finish(new Error(`no complete handshake within ${timeoutMs} ms; stdout:\n${stdout}\nstderr:\n${stderr}`))
@@ -113,8 +122,9 @@ export function runHandshake({ command, args = [], env, cwd, timeoutMs = 20000 }
         if (message.id === undefined || responses.has(message.id)) continue
         responses.set(message.id, message)
         if (message.id === 1) {
+          // Paced like a real host: notifications/initialized and tools/list are separate writes with a gap between them.
           child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
-          send(child, 2, "tools/list")
+          setTimeout(() => send(child, 2, "tools/list"), 30)
         } else if (message.id === 2) {
           handshakeMs = Date.now() - started
           send(child, 3, "tools/call", { name: "desk_status", arguments: {} })

@@ -3,12 +3,10 @@ import assert from "node:assert/strict"
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import { main } from "../../index.js"
 import {
-  beginBackgroundConvergence, connectOrStartController, createMcpServer, ensureIndex, startServer,
+  beginBackgroundConvergence, callTool, connectOrStartController, ensureIndex,
 } from "../../src/server.js"
+import { startInProcess, statusContextOf } from "./_in_process_desk.js"
 import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
 
 function deferred() {
@@ -19,22 +17,19 @@ function deferred() {
 
 async function session(t, { semantic = "background", handler } = {}) {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-live-status-"))
-  const server = createMcpServer()
-  const client = new Client({ name: "live-status-smoke", version: "1.0.0" })
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  const firstStatus = deferred()
   const probeEntered = deferred()
   const probeRelease = deferred()
-  const state = { controller: null, convergence: null, initial: null, context: null }
+  const state = { controller: null, convergence: null, initial: null, context: null, desk: null }
   const read = async () => {
-    const response = await client.callTool({ name: "desk_status", arguments: {} })
-    assert.equal(response.isError, undefined, response.content[0]?.text)
-    return JSON.parse(response.content[0].text)
+    const response = await state.desk.call("desk_status")
+    assert.equal(response.isError, false, JSON.stringify(response.payload))
+    return response.payload
   }
   t.after(async () => {
     probeRelease.resolve()
     await Promise.allSettled([state.convergence])
-    await client.close()
-    await server.close()
+    await state.desk?.close()
     await state.controller?.close()
     rmSync(root, { recursive: true, force: true })
   })
@@ -45,33 +40,39 @@ async function session(t, { semantic = "background", handler } = {}) {
   })
   return {
     root, state, read, probeEntered, probeRelease,
-    start: () => main({
-      argv: ["--root", root], env: {}, readinessPolicy: { semantic },
-      runtimeImporter: async () => ({
-        async connectOrStartController(options) {
-          state.controller = handler
-            ? await connectController({
-                root, stateHome: path.join(root, "controller-state"), ephemeral: true,
-                semanticContract: { mode: semantic },
-                handlers: { beginConvergence: handler },
-              })
-            : await connectOrStartController({
-                ...options, stateHome: path.join(root, "controller-state"), ephemeral: true,
-              })
-          return state.controller
-        },
-        beginBackgroundConvergence(admission) {
-          state.convergence = beginBackgroundConvergence(admission)
-          return state.convergence
-        },
-        async startServer(options) {
-          state.context = options.statusContext
-          await startServer({ ...options, server, transport: serverTransport })
-          await client.connect(clientTransport)
-          state.initial = await read()
-        },
-      }),
-    }),
+    async start() {
+      state.desk = await startInProcess({
+        argv: ["--root", root], env: {}, readinessPolicy: { semantic },
+        runtimeImporter: async () => ({
+          async callTool(request) {
+            const result = await callTool(request)
+            if (request.name === "desk_status") firstStatus.resolve()
+            return result
+          },
+          async connectOrStartController(options) {
+            // Exercise the controller-free status response before allowing election to finish.
+            await firstStatus.promise
+            state.controller = handler
+              ? await connectController({
+                  root, stateHome: path.join(root, "controller-state"), ephemeral: true,
+                  semanticContract: { mode: semantic },
+                  handlers: { beginConvergence: handler },
+                })
+              : await connectOrStartController({
+                  ...options, stateHome: path.join(root, "controller-state"), ephemeral: true,
+                })
+            return state.controller
+          },
+          beginBackgroundConvergence(admission) {
+            state.convergence = beginBackgroundConvergence(admission)
+            return state.convergence
+          },
+        }),
+      })
+      // The runtime can report not_checked before a controller exists; wait for its actual state.
+      state.initial = await state.desk.statusUntil((payload) => payload.readiness?.state !== undefined && payload.readiness.state !== "not_checked")
+      state.context = statusContextOf(state.desk)
+    },
   }
 }
 
@@ -89,8 +90,9 @@ for (const available of [false, true]) {
     await fixture.start()
     await fixture.probeEntered.promise
     const initial = fixture.state.initial
-    assert.equal(initial.readiness?.state, "CONTROL_READY")
-    assert.equal(initial.readiness.convergence.status, "not_checked")
+    // Admission starts background convergence before the first desk_status can read it.
+    assert.ok(["CONTROL_READY", "LEXICAL_CONVERGING"].includes(initial.readiness?.state), initial.readiness?.state)
+    assert.ok(["not_checked", "pending"].includes(initial.readiness.convergence.status))
     assert.equal(initial.query_embedding.available, "not_checked")
     assert.equal(initial.startup_fallback.mode, "not_checked")
     assert.equal(fixture.state.context.startup, undefined)
@@ -129,10 +131,12 @@ test("required startup exposes a populated READY status on the first real MCP ca
   t.mock.method(globalThis, "fetch", async () =>
     new Response(JSON.stringify({ embedding: Array(768).fill(0.1) })))
   await fixture.start()
-  assert.equal(fixture.state.initial.readiness?.state, "READY")
-  assert.equal(fixture.state.initial.readiness.convergence.status, "succeeded")
-  assert.equal(fixture.state.initial.query_embedding.available, true)
-  assert.equal(fixture.state.initial.startup_fallback.mode, "not_checked")
+  // desk_status answers at once; admission reaches ready only once required semantic coverage is proven, and then status is READY.
+  const ready = await fixture.state.desk.statusUntil((payload) => payload.state === "ready")
+  assert.equal(ready.readiness?.state, "READY")
+  assert.equal(ready.readiness.convergence.status, "succeeded")
+  assert.equal(ready.query_embedding.available, true)
+  assert.equal(ready.startup_fallback.mode, "not_checked")
   assert.equal(fixture.state.context.startup, undefined)
 })
 
@@ -150,9 +154,6 @@ test("failed background convergence is observable with a bounded diagnostic and 
     }
     return { semantic: { chunks_total: 1, vectors_indexed: 0, missing_vectors: 1 } }
   } })
-  // The normal startup reporter still logs the failure; keep the test output bounded.
-  const logged = []
-  t.mock.method(process.stderr, "write", (message) => { logged.push(message); return true })
   await fixture.start()
   await entered.promise
   assert.equal((await fixture.read()).readiness?.convergence.status, "pending")
@@ -164,7 +165,7 @@ test("failed background convergence is observable with a bounded diagnostic and 
   assert.match(failed.readiness.convergence.diagnostic.message, /index failed/u)
   assert.ok(failed.readiness.convergence.diagnostic.message.length <= 2048)
   assert.ok(failed.degraded_modes.includes("convergence_failed"))
-  assert.ok(logged.some((line) => line.includes("background convergence failed")))
+  assert.match(fixture.state.desk.stderr(), /background convergence failed/u)
   assert.equal(failed.startup_fallback.mode, "not_checked")
   await fixture.state.controller.beginConvergence()
   const recovered = await fixture.read()
@@ -174,15 +175,17 @@ test("failed background convergence is observable with a bounded diagnostic and 
   assert.equal(recovered.degraded_modes.includes("convergence_failed"), false)
 })
 
-test("a disconnected controller is reported as unavailable, not healthy stale readiness", async (t) => {
+test("a disconnected controller is never reported as healthy stale readiness: desk_status re-elects one in place", async (t) => {
   const fixture = await session(t, { handler: async () => ({ indexed: true }) })
   await fixture.start()
   await fixture.state.convergence
-  await fixture.state.controller.close()
-  const status = await fixture.read()
-  assert.equal(status.readiness?.state, "unavailable")
-  assert.equal(status.readiness.convergence.status, "unavailable")
-  assert.ok(status.readiness.convergence.diagnostic.message.length > 0)
-  assert.ok(status.degraded_modes.includes("readiness_unavailable"))
-  assert.equal(status.startup_fallback.mode, "not_checked")
+  const lost = fixture.state.controller
+  await lost.close()
+  // desk_status answers at once and checks the controller in the background; the next call sees the re-elected one.
+  await fixture.read()
+  const status = await fixture.state.desk.statusUntil((payload) => payload.state === "ready" && payload.readiness?.state !== "unavailable")
+  assert.equal(status.state, "ready")
+  assert.notEqual(fixture.state.controller, lost, "a new controller was elected in the same session")
+  assert.ok(status.admission.attempts >= 2)
+  assert.match(fixture.state.desk.stderr(), /state: degraded:controller_unavailable/u)
 })

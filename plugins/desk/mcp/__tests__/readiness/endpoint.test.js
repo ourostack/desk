@@ -55,24 +55,23 @@ for (const platform of ["linux", "darwin"]) {
   })
 }
 
-test("short, private XDG_RUNTIME_DIR is preferred without creating a fallback directory", () => {
-  const fs = filesystem({ "/run/user/501": { uid: 501, mode: 0o700 } })
-  const endpoint = endpoints.deriveControllerEndpoint({
-    identity, platform: "linux", uid: 501, env: { XDG_RUNTIME_DIR: "/run/user/501" }, fs,
-  })
-  assert.match(endpoint, /^\/run\/user\/501\/[a-f0-9]{32}\.sock$/u)
-  assert.deepEqual(fs.created, [])
-})
-
-for (const parent of [{ uid: 0, mode: 0o777 }, { uid: 502, mode: 0o755 }]) {
-  test(`private XDG leaf below an unsafe ancestor is not usable: ${JSON.stringify(parent)}`, () => {
+// Sessions on one root must rendezvous at one socket whatever their environment says, or they elect two controllers over one owner record and journal.
+for (const runtimeDir of ["/run/user/501", "relative", "/absent", "/" + "x".repeat(200)]) {
+  test(`XDG_RUNTIME_DIR never changes the endpoint: ${runtimeDir.slice(0, 20)}`, () => {
+    const fs = filesystem({ "/run/user/501": { uid: 501, mode: 0o700 } })
     const endpoint = endpoints.deriveControllerEndpoint({
-      identity, platform: "linux", uid: 501, env: { XDG_RUNTIME_DIR: "/unsafe/runtime" },
-      fs: filesystem({
-        "/unsafe": parent, "/unsafe/runtime": { uid: 501, mode: 0o700 },
-      }),
+      identity, platform: "linux", uid: 501, env: { XDG_RUNTIME_DIR: runtimeDir }, fs,
     })
-    assert.match(endpoint, /^\/tmp\/desk-readiness-501\//u)
+    assert.match(endpoint, /^\/tmp\/desk-readiness-501\/[a-f0-9]{32}\.sock$/u)
+  })
+}
+
+for (const parent of [{ uid: 502, mode: 0o777 }, { uid: 501, mode: 0o777 }]) {
+  test(`an unsafe temp root ancestor fails closed: ${JSON.stringify(parent)}`, () => {
+    assert.throws(() => endpoints.deriveControllerEndpoint({
+      identity, platform: "linux", uid: 501,
+      fs: filesystem({ "/tmp": { ...parent, realpath: "/tmp" } }),
+    }), /unsafe runtime directory ancestry/u)
   })
 }
 
@@ -86,29 +85,6 @@ test("macOS canonical short temp root remains bounded", () => {
   assert.match(endpoint, /^\/private\/tmp\/desk-readiness-501\/[a-f0-9]{32}\.sock$/u)
   assert.ok(Buffer.byteLength(endpoint) <= 100)
 })
-
-for (const entry of [
-  { uid: 502, mode: 0o700 }, { uid: 501, mode: 0o755 },
-  { uid: 501, mode: 0o770 }, { uid: 501, mode: 0o700, type: "symlink" },
-  { uid: 501, mode: 0o700, type: "file" },
-  { uid: 501, mode: 0o700, realpath: "/" + "x".repeat(100) },
-]) {
-  test(`unsafe or long XDG directory falls back: ${JSON.stringify(entry)}`, () => {
-    const endpoint = endpoints.deriveControllerEndpoint({
-      identity, platform: "darwin", uid: 501, env: { XDG_RUNTIME_DIR: "/run/user/501" },
-      fs: filesystem({ "/run/user/501": entry }),
-    })
-    assert.match(endpoint, /^\/tmp\/desk-readiness-501\//u)
-  })
-}
-
-for (const runtimeDir of ["relative", "/absent", "/" + "x".repeat(200)]) {
-  test(`unusable XDG path falls back: ${runtimeDir.slice(0, 20)}`, () => {
-    assert.match(endpoints.deriveControllerEndpoint({
-      identity, platform: "linux", uid: 501, env: { XDG_RUNTIME_DIR: runtimeDir }, fs: filesystem(),
-    }), /^\/tmp\/desk-readiness-501\//u)
-  })
-}
 
 for (const entry of [
   { uid: 502, mode: 0o700 }, { uid: 501, mode: 0o755 },
@@ -200,8 +176,9 @@ test("real POSIX listener refuses a caller-supplied overlong endpoint before met
   assert.equal(existsSync(path.join(root, "state", "owner.json")), false)
 })
 
+// A socket in the private endpoint folder is reclaimed when its recorded owner is dead, or when nobody listens on it at all (a crashed controller whose owner record no longer matches). A regular file is never removed, and a socket someone still listens on is never removed (see the hung-controller case in admission_conditions.test.js).
 for (const kind of ["file", "unidentified socket", "owned socket"]) {
-  test(`POSIX election reclaims only a positively identified dead-owner socket: ${kind}`, {
+  test(`POSIX election reclaims only a dead socket of ours: ${kind}`, {
     skip: process.platform === "win32",
   }, async (t) => {
     const root = mkdtempSync(path.join(tmpdir(), "desk-reclaim-"))
@@ -227,7 +204,7 @@ for (const kind of ["file", "unidentified socket", "owned socket"]) {
       owner: { pid: child.pid, token: "old-token" },
     }))
     const connecting = connectOrStartController({ root, stateHome, ephemeral: true })
-    if (kind === "owned socket") {
+    if (kind !== "file") {
       const client = await connecting
       try {
         assert.equal((await client.status()).state, "CONTROL_READY")
@@ -240,10 +217,19 @@ for (const kind of ["file", "unidentified socket", "owned socket"]) {
       try {
         await assert.rejects(async () => { unexpectedClient = await connecting }, /election|EADDRINUSE/u)
         assert.equal(lstatSync(endpoint).ino, stat.ino)
-        if (kind === "file") assert.equal(readFileSync(endpoint, "utf8"), "not a socket")
+        assert.equal(readFileSync(endpoint, "utf8"), "not a socket")
       } finally {
         await unexpectedClient?.close()
       }
     }
   })
 }
+
+test("identity helpers keep their defaults and a fallback folder that cannot be created fails closed", () => {
+  assert.throws(() => endpoints.controllerIdentity(), TypeError)
+  assert.throws(() => endpoints.deriveControllerEndpoint(), TypeError)
+  assert.equal(endpoints.semanticPartitionIdentity(undefined), endpoints.semanticPartitionIdentity(null))
+  const fs = filesystem()
+  fs.mkdirSync = () => { throw Object.assign(new Error("read-only file system"), { code: "EROFS" }) }
+  assert.throws(() => endpoints.deriveControllerEndpoint({ identity, platform: "linux", uid: 501, fs }), /read-only file system/u)
+})
