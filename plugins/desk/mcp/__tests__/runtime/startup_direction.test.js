@@ -126,3 +126,24 @@ test("resolve-desk-root --startup-line prints the Claude line, where the server 
     assert.equal(line({}), deskStartupDirection(null))
   })
 })
+
+test("root CLI preserves its JSON and root-only contracts with missing or malformed bindings", () => {
+  withSandbox(({ env, fallback, malformed }) => {
+    const run = (args, extra = {}) => execFileSync(process.execPath, [script, ...args], {
+      encoding: "utf8",
+      env: { ...env, NODE_OPTIONS: process.env.NODE_OPTIONS, NODE_PATH: process.env.NODE_PATH, ...extra },
+    })
+    assert.equal(run(["--root-only"]), fallback)
+    assert.equal(JSON.parse(run([])).root, fallback)
+    assert.match(run(["--startup-line"]), /Desk startup:/u)
+    const bad = JSON.parse(run([], { DESK_ACTIVATION_CONFIG: malformed }))
+    assert.equal(bad.root, null)
+    assert.deepEqual(bad.tried, [])
+    assert.match(bad.error, /JSON/)
+    rmSync(fallback, { recursive: true })
+    assert.equal(run(["--root-only"]), "")
+    const missing = JSON.parse(run([]))
+    assert.equal(missing.root, null)
+    assert.ok(missing.tried.length > 0)
+  })
+})

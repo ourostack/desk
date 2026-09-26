@@ -1,6 +1,6 @@
 ---
 name: git-hygiene
-description: Keep the code repos the agent touches synced and never leave state behind. Use at session start, before starting work in a code repo, after every ref change, when a required check fails or previous validation proof may be reused, before every push, and at session end.
+description: Keep the code repos the agent touches synced and never leave state behind. Use at session start, before starting work in a code repo, after every ref change, when a required check fails or previous validation proof may be reused, before every push, and when a task, iteration, delegated assignment or session ends.
 ---
 
 # Git hygiene
@@ -58,11 +58,15 @@ Keep delivery and exact resource dispositions in the mapped progress record unde
 
 ### Exact-owned cleanup
 
+**Close-out belongs to every owner, not just the root controller.** When a task, iteration or delegated assignment ends, its owner reconciles every worktree and branch it created, removes only exact-owned safe worktrees and merged local/remote branches whose endpoint permits removal, and returns every surviving checkout it touched to that checkout's recorded state branch (`main` by default). Switching is also a mutation: require authority, a clean checkout, no Git operation, preserved commits and no other writer; otherwise record the exact blocker rather than switching someone else's checkout. An intentional PR-only or alpha worktree remains on its delivery branch with a named owner and cleanup trigger. Do not wait for the parent task or the session to end.
+
 Record resources at creation with their owning task/attempt, repository/path or host operation identity, intended disposition and evidence pointer. Before cleanup, reconcile current ownership and live consumers; a remembered name, old PID, clean status or successful root exit alone is not proof. The host must identify the exact prior process generation and all owned descendants, including delegated/remote writers and MCP/command children. Never use process-name patterns, `pkill`, `killall` or pattern-based process termination; only the owning host's exact-identity cleanup path may terminate a verified task-owned process. Unobservable writers remain non-ready, not absent.
 
 Before deleting a worktree, require exact repository/path/branch ownership and verified absence of all writers and live consumers, plus preservation of uncommitted changes, untracked files and local-only commits. Read back the agreed delivery ref and source content at the destination; for a merged task verify the actual merge and that no post-review source was left behind. Do not use a matching branch-name pattern, a merge flag alone or an archive's mere existence as deletion authority. An intentionally unmerged alpha worktree is retained unless its recorded policy authorizes a verified transfer or later removal.
 
 After exact-owner removal, record **removed-and-absent** only with readback of the resource's absence, including its worktree registration/path or owned process generation/descendants. Otherwise record an acknowledged **named transfer** or **retained-with-trigger** with the responsible owner, exact resource and cleanup trigger through `task-lifecycle`. Failed cleanup, unknown ownership or an unresolved operation stays pending; never force-delete preserved work to manufacture a clean endpoint.
+
+The [workspace-tidy boot check](../../docs/workspace-tidy.md) lists only the bound desk and repositories on active or recently finished task cards, then defers all safety inspection and removal. It cannot infer ownership from a branch name, clean status, missing remote ref or dead root process. An owner may leave its documented machine-local version-2 release receipt only after the host has reconciled the entire generation and all consumers; no receipt is the safe default. Creation, revocation and reacquisition use the same exact branch/worktree claim as cleanup; never unlink a receipt directly or attach a consumer after a refused revocation, and never issue a removal receipt for an intentionally retained alpha. Read the repair's retained per-resource evidence, copy verified dispositions into canonical Resources, then acknowledge only that exact evidence id/digest. Another boot is not an acknowledgement and must not erase unresolved branches or removal receipts.
 
 ## Clone hygiene — `main` is the resting state; do work in worktrees
 
