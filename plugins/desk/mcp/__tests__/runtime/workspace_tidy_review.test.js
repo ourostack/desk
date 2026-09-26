@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs"
 import path from "node:path"
 import { mkTempRoot } from "../_temp_roots.js"
 import { withWorkspaceClaim } from "../../src/runtime/workspace-claim.js"
-import { dispositionRecord, mergeTidyEvidence, acknowledgeTidyEvidence } from "../../src/runtime/workspace-evidence.js"
+import { dispositionRecord, mergeTidyEvidence, acknowledgeTidyEvidence, encodeTidyReport, decodeTidyReport } from "../../src/runtime/workspace-evidence.js"
 import { normalizeDeliveryEndpoint, inspectWorkspace } from "../../src/runtime/workspace-tidy.js"
 import { readInspectionGit } from "../../src/runtime/git-inspection.js"
 import { pathToFileURL } from "node:url"
@@ -122,4 +122,46 @@ test("R5 an already-cancelled Git inspection spawns no continuing process", asyn
   const result = await inspectWorkspace({ deskRoot: process.cwd(), signal: controller.signal })
   assert.equal(result.complete, false)
   assert.match(result.issues[0], /budget/)
+})
+
+test("F1-I01 stored canonical records reconstruct all unacknowledged projections without duplicate history", () => {
+  const receipt = { repository: "/repo/.git", worktree: "/work/topic", branch: "refs/heads/topic", head: "abc", owner: "task" }
+  const removed = dispositionRecord(receipt, "removed", false)
+  const evidence = mergeTidyEvidence({}, { left: [{ path: "/other", reason: "unknown owner" }] }, removed)
+  evidence.acknowledgements = [{ id: "already-accounted", canonicalEvidence: "task.md" }]
+  evidence.root = "/desk"
+  evidence.updated = "2026-09-26T00:00:00.000Z"
+  evidence.line = "retained evidence"
+  const bytes = encodeTidyReport(evidence)
+  const stored = JSON.parse(bytes)
+  assert.equal(Object.hasOwn(stored, "removed"), false)
+  assert.equal(Object.hasOwn(stored, "left"), false)
+  assert.equal(Object.hasOwn(stored, "acknowledgements"), false)
+  const restored = decodeTidyReport(bytes)
+  assert.deepEqual(restored.resources, evidence.resources)
+  assert.deepEqual(restored.removed, evidence.removed)
+  assert.deepEqual(restored.left, evidence.left)
+  assert.equal(restored.root, "/desk")
+  assert.equal(restored.line, "retained evidence")
+  assert.deepEqual(restored.acknowledgements, [])
+  const legacy = { resources: evidence.resources, removed: evidence.removed, left: evidence.left }
+  assert.deepEqual(decodeTidyReport(JSON.stringify(legacy)), legacy)
+})
+
+test("F1-I01 writer and reader enforce the same exact byte boundary, including multibyte text", () => {
+  const report = { resources: [], issues: [], root: "/desk", updated: "2026-09-26T00:00:00.000Z", line: "" }
+  const overhead = Buffer.byteLength('{"format":"workspace-tidy-compact-v1","resources":[],"issues":[],"root":"/desk","updated":"2026-09-26T00:00:00.000Z","line":""}\n')
+  report.line = "x".repeat(1_048_576 - overhead)
+  const atLimit = encodeTidyReport(report)
+  assert.equal(Buffer.byteLength(atLimit), 1_048_576)
+  assert.equal(decodeTidyReport(atLimit).line, report.line)
+  report.line += "x"
+  assert.throws(() => encodeTidyReport(report), /capacity/)
+  assert.throws(() => decodeTidyReport(`${atLimit} `), /capacity/)
+  report.line = "\u20ac".repeat(400_000)
+  assert.throws(() => encodeTidyReport(report), /capacity/)
+  assert.throws(() => decodeTidyReport('{"format":"workspace-tidy-compact-v1","resources":null,"issues":[]}'), /invalid compact/)
+  assert.throws(() => decodeTidyReport('{"format":"workspace-tidy-compact-v1","resources":[],"issues":null}'), /invalid compact/)
+  assert.throws(() => encodeTidyReport({ resources: null, issues: [] }), /invalid compact/)
+  assert.throws(() => encodeTidyReport({ resources: [], issues: null }), /invalid compact/)
 })

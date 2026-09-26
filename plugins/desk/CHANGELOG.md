@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.45 — 2026-09-26
+
+A4 fix round 2: [workspace-tidy evidence](mcp/src/runtime/workspace-evidence.js) now stores each unacknowledged resource once and reconstructs its derived views on read. The reader and writer share the same 1,048,576-byte limit; acknowledged history stays in canonical accounting rather than accumulating in the local report. [Repair admission](hooks/boot-checks.cjs) checks pending and both final branch dispositions before cleanup, and every write checks capacity before replacing the file. Full capacity refuses cleanup while leaving evidence readable and acknowledgement able to make room.
+
+[Real Git boundary regressions](mcp/__tests__/runtime/workspace_tidy.test.js) prove accepted cleanup remains readable at the old near-limit boundary, exact acknowledgement drains its record, later cleanup resumes, and exhausted capacity preserves the worktree and all unacknowledged history. [Representation tests](mcp/__tests__/runtime/workspace_tidy_review.test.js) cover lossless reconstruction, legacy reads, the exact byte boundary and multibyte text. The previous ownership, hidden-edit, endpoint, traversal and process-budget fixes remain in place; the bound-desk symlink-alias limitation remains deferred and fail-closed. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
 ## 3.2.0-alpha.44 — 2026-09-26
 
 A4 review correction: [workspace cleanup](mcp/src/runtime/workspace-tidy.js) refuses `assume-unchanged` and `skip-worktree` index states that can hide uncommitted bytes. [Exact-resource claims](mcp/src/runtime/workspace-claim.js) coordinate version-2 receipt creation, revocation and reacquisition with cleanup through absence readback; ancestry-merged branch deletion compares the released HEAD atomically. [Per-resource evidence](mcp/src/runtime/workspace-evidence.js) is flushed before deletion and retained across scans until explicit canonical-accounting acknowledgement, including squash-retained branches and earlier report evidence.

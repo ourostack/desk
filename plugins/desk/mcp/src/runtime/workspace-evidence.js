@@ -2,6 +2,40 @@ import { createHash } from "node:crypto"
 
 const hash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex")
 const signed = (value) => ({ ...value, digest: hash(value) })
+export const TIDY_REPORT_MAX_BYTES = 1_048_576
+const REPORT_FORMAT = "workspace-tidy-compact-v1"
+
+function requireReportCapacity(bytes) {
+  if (Buffer.byteLength(bytes) > TIDY_REPORT_MAX_BYTES) {
+    throw new Error("workspace-tidy evidence capacity exhausted; acknowledge retained resources before cleanup")
+  }
+}
+
+function requireReportShape(report) {
+  if (!Array.isArray(report.resources) || !Array.isArray(report.issues)) throw new Error("invalid compact workspace-tidy report")
+}
+
+export function encodeTidyReport(report) {
+  requireReportShape(report)
+  const bytes = `${JSON.stringify({
+    format: REPORT_FORMAT,
+    resources: report.resources,
+    issues: report.issues,
+    root: report.root,
+    updated: report.updated,
+    line: report.line,
+  })}\n`
+  requireReportCapacity(bytes)
+  return bytes
+}
+
+export function decodeTidyReport(bytes) {
+  requireReportCapacity(bytes)
+  const report = JSON.parse(bytes)
+  if (report?.format !== REPORT_FORMAT) return report
+  requireReportShape(report)
+  return { ...report, ...mergeTidyEvidence(report, { issues: report.issues }) }
+}
 
 export function dispositionRecord(receipt, state, branchRemoved = false) {
   const value = {

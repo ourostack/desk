@@ -11,6 +11,8 @@ import { readInspectionGit } from "../../src/runtime/git-inspection.js"
 import { serializeMarkdown } from "../../src/util/fm.js"
 import { pathToFileURL } from "node:url"
 import { createRequire } from "node:module"
+import { dispositionRecord, mergeTidyEvidence } from "../../src/runtime/workspace-evidence.js"
+import { withWorkspaceClaim } from "../../src/runtime/workspace-claim.js"
 const boot = createRequire(import.meta.url)("../../../hooks/boot-checks.cjs")
 
 const moduleUrl = new URL("../../src/runtime/workspace-tidy.js", import.meta.url)
@@ -780,4 +782,76 @@ test("R6 canonical nested paths alone work and malformed repository indentation 
   }
   await fs.writeFile(f.card, "---\nstatus: processing\nrepos:\n  - mode: remote\n\n\n---")
   assert.equal((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).complete, true)
+})
+
+test("F1-I01 near-boundary history accepts safe cleanup, remains readable, acknowledges and resumes", async (t) => {
+  const f = await fixture()
+  const w = await worktree(f)
+  await fs.unlink(w.receipt)
+  await withWorkspaceClaim(w.record, () => w.save())
+  const limit = 1_048_576
+  const historical = []
+  const historyReport = () => ({ ...mergeTidyEvidence({ resources: historical }), root: f.desk, updated: new Date().toISOString() })
+  for (let index = 0; ; index += 1) {
+    const receipt = { ...structuredClone(w.record), worktree: path.join(f.root, `history-${index}`), branch: `refs/heads/history-${index}`, owner: `history/attempt-${index}` }
+    historical.push(dispositionRecord(receipt, "removed", true))
+    if (Buffer.byteLength(JSON.stringify(historyReport())) > limit - 512) { historical.pop(); break }
+  }
+  const spare = limit - 256 - Buffer.byteLength(JSON.stringify(historyReport()))
+  const last = historical.at(-1)
+  last.receipt.release.evidence += "x".repeat(Math.floor(spare / 2))
+  historical[historical.length - 1] = dispositionRecord(last.receipt, "removed", true)
+  const before = JSON.stringify(historyReport())
+  assert.ok(Buffer.byteLength(before) >= limit - 258 && Buffer.byteLength(before) < limit)
+  const file = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
+  await fs.writeFile(file, before)
+
+  const result = await boot.runRepair(f.desk)
+  assert.ok(result.removed.some((entry) => entry.path === w.directory))
+  await assert.rejects(fs.stat(w.directory), { code: "ENOENT" })
+  const readable = await boot.readReport(file)
+  assert.ok((await fs.stat(file)).size <= limit)
+  t.diagnostic(JSON.stringify({ historicalResources: historical.length, bytesBefore: Buffer.byteLength(before), bytesAfter: (await fs.stat(file)).size, acceptedCleanup: true }))
+  assert.deepEqual(readable.resources.filter((entry) => entry.path !== w.directory), historical)
+  const current = readable.resources.find((entry) => entry.path === w.directory)
+  await boot.acknowledgeRepair(f.desk, { id: current.id, digest: current.digest, canonicalEvidence: "task.md#resources" })
+  const drained = await boot.readReport(file)
+  assert.deepEqual(drained.resources, historical)
+  const later = await worktree(f, "later")
+  const resumed = await boot.runRepair(f.desk)
+  assert.ok(resumed.removed.some((entry) => entry.path === later.directory))
+  assert.ok((await fs.stat(file)).size <= limit)
+  assert.equal((await boot.readReport(file)).resources.length, historical.length + 1)
+})
+
+test("F1-I01 exhausted canonical capacity refuses before cleanup and acknowledgement releases capacity", async () => {
+  const f = await fixture()
+  const w = await worktree(f)
+  const historical = []
+  const seed = () => ({ format: "workspace-tidy-compact-v1", resources: historical, issues: [], root: f.desk, updated: new Date().toISOString(), line: "" })
+  for (let index = 0; ; index += 1) {
+    const receipt = { ...structuredClone(w.record), worktree: path.join(f.root, `history-${index}`), branch: `refs/heads/history-${index}`, owner: `history/attempt-${index}` }
+    historical.push(dispositionRecord(receipt, "removed", true))
+    if (Buffer.byteLength(JSON.stringify(seed())) > 1_048_000) { historical.pop(); break }
+  }
+  const last = historical.at(-1)
+  last.receipt.release.evidence += "x".repeat(1_048_512 - Buffer.byteLength(JSON.stringify(seed())))
+  historical[historical.length - 1] = dispositionRecord(last.receipt, "removed", true)
+  const before = JSON.stringify(seed())
+  assert.equal(Buffer.byteLength(before), 1_048_512)
+  const file = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
+  await fs.writeFile(file, before)
+  await assert.rejects(boot.runRepair(f.desk), /capacity/)
+  assert.ok((await fs.stat(w.directory)).isDirectory())
+  assert.equal(git(w.directory, "rev-parse", "HEAD"), w.record.head)
+  assert.equal(await fs.readFile(file, "utf8"), before)
+  assert.deepEqual((await boot.readReport(file)).resources, historical)
+  for (const entry of historical.slice(0, 4)) {
+    await boot.acknowledgeRepair(f.desk, { id: entry.id, digest: entry.digest, canonicalEvidence: "task.md#resources" })
+  }
+  const resumed = await boot.runRepair(f.desk)
+  assert.ok(resumed.removed.some((entry) => entry.path === w.directory))
+  const after = await boot.readReport(file)
+  assert.deepEqual(after.resources.filter((entry) => entry.path !== w.directory), historical.slice(4))
+  assert.ok((await fs.stat(file)).size <= 1_048_576)
 })

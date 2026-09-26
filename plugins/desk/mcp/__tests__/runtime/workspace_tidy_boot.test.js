@@ -41,7 +41,7 @@ test("boot check queues a detached repair, returns without waiting, and records 
   const deadline = Date.now() + 10_000
   let report
   while (Date.now() < deadline) {
-    try { report = JSON.parse(await fs.readFile(reportPath, "utf8")); break } catch (error) { if (error.code !== "ENOENT") throw error }
+    try { report = await boot.readReport(reportPath); break } catch (error) { if (error.code !== "ENOENT") throw error }
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
   assert.equal(report?.left.length, 1)

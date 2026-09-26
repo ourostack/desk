@@ -23,9 +23,10 @@ async function location(root) {
 }
 
 async function readReport(file) {
+  const { decodeTidyReport, TIDY_REPORT_MAX_BYTES } = await runtime("runtime/workspace-evidence.js");
   const info = await fs.lstat(file);
-  if (!info.isFile() || info.nlink !== 1 || info.size > 1024 * 1024) throw new Error("unsafe workspace-tidy report");
-  return JSON.parse(await fs.readFile(file, "utf8"));
+  if (!info.isFile() || info.nlink !== 1 || info.size > TIDY_REPORT_MAX_BYTES) throw new Error("unsafe workspace-tidy report");
+  return decodeTidyReport(await fs.readFile(file, "utf8"));
 }
 
 async function launchRepair(root, env) {
@@ -117,19 +118,24 @@ async function updateReport(root, operation) {
     await handle.writeFile(ownership);
     await handle.close();
     const { tidyLine } = await runtime("runtime/workspace-tidy.js");
+    const { encodeTidyReport } = await runtime("runtime/workspace-evidence.js");
     let previous = {};
     try { previous = await readReport(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
-    const persist = async (result) => {
+    const prepare = (result) => {
       result.line = tidyLine(result);
       result.root = root;
       result.updated = new Date().toISOString();
+      return encodeTidyReport(result);
+    };
+    const persist = async (result) => {
+      const bytes = prepare(result);
       const temporary = `${file}.${token}.tmp`;
       const output = await fs.open(temporary, "wx", 0o600);
-      try { await output.writeFile(`${JSON.stringify(result)}\n`); await output.sync(); } finally { await output.close(); }
+      try { await output.writeFile(bytes); await output.sync(); } finally { await output.close(); }
       await fs.rename(temporary, file);
       return result;
     };
-    return await operation(previous, persist);
+    return await operation(previous, persist, prepare);
   } finally {
     await handle.close();
     if (JSON.parse(await fs.readFile(lock, "utf8")).token === token) await fs.unlink(lock);
@@ -137,13 +143,19 @@ async function updateReport(root, operation) {
 }
 
 async function runRepair(root) {
-  return updateReport(root, async (previous, persist) => {
+  return updateReport(root, async (previous, persist, prepare) => {
     const { repairWorkspace } = await runtime("runtime/workspace-tidy.js");
-    const { mergeTidyEvidence } = await runtime("runtime/workspace-evidence.js");
+    const { dispositionRecord, mergeTidyEvidence } = await runtime("runtime/workspace-evidence.js");
     let evidence = previous;
     const result = await repairWorkspace({ deskRoot: root, onDisposition: async (entry) => {
-      evidence = mergeTidyEvidence(evidence, {}, entry);
-      await persist(evidence);
+      const next = mergeTidyEvidence(evidence, {}, entry);
+      if (entry.state === "cleanup_pending") {
+        for (const branchRemoved of [false, true]) {
+          prepare(mergeTidyEvidence(next, {}, dispositionRecord(entry.receipt, "removed", branchRemoved)));
+        }
+      }
+      await persist(next);
+      evidence = next;
     } });
     return persist(mergeTidyEvidence(evidence, result));
   });
