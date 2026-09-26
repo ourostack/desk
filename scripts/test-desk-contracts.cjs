@@ -700,6 +700,18 @@ contract("start-task reopens an archived task with task_move unarchive, not a ha
   assert.match(reopen, /`task_move` and `unarchive: true`[\s\S]*restores its row in the track's `## Tasks` table/u);
   assert.doesNotMatch(reopen, /git mv <track>\/_archive/u);
 });
+contract("task_move and track_rename document refusing uncommitted work unless allow_dirty", () => {
+  const names = text("plugins/desk/mcp/src/tool-names.js");
+  for (const tool of ["task_move", "track_rename"]) {
+    const description = new RegExp(`\\n  ${tool}:\\n    "([^\\n]+)",`, "u").exec(names)[1];
+    assert.match(description, /refuses a (task folder|track) with uncommitted changes or untracked, non-ignored files, because another session may be working there, unless `allow_dirty: true`; the refusal never quotes names/u, tool);
+  }
+  const readme = text("plugins/desk/mcp/README.md");
+  assert.match(readme, /- `task_move` —[^\n]+refuses a task with uncommitted changes[^\n]+`allow_dirty: true`/u);
+  assert.match(readme, /- `track_rename` —[^\n]+refuses a track with uncommitted changes[^\n]+`allow_dirty: true`/u);
+  assert.match(text("plugins/desk/skills/interaction-style/SKILL.md"), /refuse a folder with uncommitted changes[^\n]+never overrides that with `allow_dirty`/u);
+  assert.match(text("plugins/desk/migrations/02-tidy-desk.md"), /never pass allow_dirty/u);
+});
 contract("directory-structure documents the one-time tidy's _meta/organization.json", () => {
   const skill = text("plugins/desk/skills/directory-structure/SKILL.md");
   assert.match(skill, /^ {4}organization\.json {2,}# /mu);

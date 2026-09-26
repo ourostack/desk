@@ -79,6 +79,25 @@ function isGitRepository(root, spawnGit) {
 }
 
 /**
+ * Refuse to move a folder another session may be working in (M4-5 fix
+ * round 2): on a Git desk, a source with uncommitted tracked changes or
+ * untracked, non-ignored files is left alone unless the caller passes
+ * `allow_dirty: true`. The message never quotes the path's names.
+ */
+function assertSourceClean({ tool, root, from, allowDirty, spawnGit }) {
+  if (allowDirty || !isGitRepository(root, spawnGit)) return
+  const result = spawnGit("git", ["-C", root, "status", "--porcelain", "--", relPath(root, from)], {
+    encoding: "utf8",
+  })
+  if (result.status !== 0 || result.stdout.trim() !== "") {
+    throw new Error(
+      `${tool}: the source has uncommitted changes, so another session may be working there; ` +
+        "commit or finish that work first, or pass allow_dirty: true to move it anyway",
+    )
+  }
+}
+
+/**
  * Move `from` to `to` (both absolute paths under `root`). Stages the move
  * with `git add` (so an uncommitted/untracked source is picked up) then
  * `git mv` when `root` is a Git repository; a plain `fs.rename` otherwise.
@@ -253,7 +272,7 @@ function trueOrAbsent(tool, field, value) {
 /**
  * task_move
  *
- * Input: { track, slug, to_track?, to_slug?, unarchive?, into_task? }
+ * Input: { track, slug, to_track?, to_slug?, unarchive?, into_task?, allow_dirty? }
  *
  * Moves `<track>/<slug>/` (or, if the task is archived,
  * `<track>/_archive/<slug>/`) to `<to_track ?? track>/<to_slug ?? slug>/`
@@ -272,6 +291,9 @@ function trueOrAbsent(tool, field, value) {
  * slug>/` and makes sure the destination table has a row for it — the
  * source row moved or renamed when there is one, a new row (slug and the
  * card's status) otherwise. It never changes the card's status.
+ *
+ * On a Git desk it refuses a source with uncommitted changes (another
+ * session may be working there) unless `allow_dirty: true` (M4-5).
  *
  * `into_task: "<keeper>"` (M4-5) merges a duplicate task into the task that
  * keeps the job: it moves the task folder to
@@ -292,6 +314,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   rejectTraversalShapedInput("task_move", "track", track)
   rejectTraversalShapedInput("task_move", "slug", slug)
   const unarchive = trueOrAbsent("task_move", "unarchive", values.unarchive)
+  const allowDirty = trueOrAbsent("task_move", "allow_dirty", values.allow_dirty)
   const intoTask = values.into_task
   if (intoTask !== undefined) {
     rejectTraversalShapedInput("task_move", "into_task", intoTask)
@@ -375,6 +398,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   }
 
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
+  assertSourceClean({ tool: "task_move", root: effectiveRoot, from: srcDir, allowDirty, spawnGit })
   await movePath({ root: effectiveRoot, from: srcDir, to: destDir, spawnGit })
   if (intoTask !== undefined) {
     await movePath({ root: effectiveRoot, from: path.join(destDir, "task.md"), to: destFile, spawnGit })
@@ -468,10 +492,11 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
 /**
  * track_rename
  *
- * Input: { track, to }
+ * Input: { track, to, allow_dirty? }
  *
  * Moves `<track>/` to `<to>/`. Refuses if the target already exists, or if
- * `to` isn't a valid track name (M4-1's `validateTrackName`). Rewrites
+ * `to` isn't a valid track name (M4-1's `validateTrackName`), or, on a Git
+ * desk, if the track has uncommitted changes, unless `allow_dirty: true`. Rewrites
  * `track:` in every `task.md` under the moved tree, live and archived.
  *
  * Returns: { from, to, updated_files, mentions }
@@ -483,6 +508,7 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
   }
   const { track, to } = values
   rejectTraversalShapedInput("track_rename", "track", track)
+  const allowDirty = trueOrAbsent("track_rename", "allow_dirty", values.allow_dirty)
 
   const nameResult = validateTrackName(to, { operatorNames: operatorNames(deskRoot) })
   if (!nameResult.ok) {
@@ -502,6 +528,7 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
   }
 
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
+  assertSourceClean({ tool: "track_rename", root: effectiveRoot, from: srcDir, allowDirty, spawnGit })
   await movePath({ root: effectiveRoot, from: srcDir, to: destDir, spawnGit })
 
   const taskFiles = await findTaskCards(destDir)

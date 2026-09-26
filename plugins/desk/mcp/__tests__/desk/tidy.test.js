@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url"
 import {
   ORGANIZATION_RECORD,
   TIDY_VERSION,
+  identityCachePath,
   organizationRecord,
   parseDeskRegistry,
   readOrganizationRecord,
@@ -295,6 +296,64 @@ test("on a crew desk where no person resolves, Detect fires so the tidy says so 
   assert.equal(cli(["--detect"], { env: { DESK: root }, spawnGh: () => ({ status: 1, stdout: "" }) }).code, 0)
   const line = cli(["--report"], { env: { DESK: root }, spawnGh: () => ({ status: 1, stdout: "" }) })
   assert.deepEqual(line, { code: 1, stdout: "I couldn't tell which desk in this crew workspace is mine, so I left every desk as it is.\n", stderr: "" })
+})
+
+test("the gh identity is cached in Desk's state folder per desk: 24 hours when found, 1 hour when the lookup fails", () => {
+  const root = crewDesk()
+  const home = tempDir()
+  const calls = []
+  let answer = { status: 0, stdout: "Bob-Login\n" }
+  const spawnGh = () => {
+    calls.push(1)
+    return answer
+  }
+  const at = (ms) => status(root, { env: { DESK: root }, homeDir: home, spawnGh, now: ms }).person
+  const HOUR = 60 * 60 * 1000
+  const t0 = NOW
+
+  assert.equal(at(t0), "bob")
+  const file = identityCachePath({ env: {}, homeDir: home })
+  assert.equal(file, path.join(home, ".local", "state", "ouroboros-skills", "desk", "identity-cache.json"))
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { [root]: { identity: "Bob-Login", checked_at: t0 } })
+  assert.equal(at(t0 + 23 * HOUR), "bob")
+  assert.equal(calls.length, 1, "a found identity is reused for 24 hours")
+  answer = { status: 1, stdout: "" }
+  assert.equal(at(t0 + 24 * HOUR), null, "after 24 hours gh is asked again")
+  assert.equal(calls.length, 2)
+  assert.equal(at(t0 + 24 * HOUR + 59 * 60 * 1000), null)
+  assert.equal(calls.length, 2, "a failed lookup is reused for 1 hour")
+  answer = { status: 0, stdout: "alice-login\n" }
+  assert.equal(at(t0 + 25 * HOUR), "alice", "after 1 hour a failed lookup is retried")
+  assert.equal(calls.length, 3)
+  assert.equal(at(t0 + 24 * HOUR), "alice", "an entry from the future is not trusted")
+  assert.equal(calls.length, 4)
+
+  // Keyed by desk root: another desk looks its own identity up.
+  const other = crewDesk()
+  status(other, { env: { DESK: other }, homeDir: home, spawnGh, now: t0 })
+  assert.equal(calls.length, 5)
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(file, "utf8"))).sort(), [root, other].sort())
+})
+
+test("the identity cache honours XDG_STATE_HOME and survives a bad or unwritable cache", () => {
+  const home = tempDir()
+  assert.equal(identityCachePath({ env: { XDG_STATE_HOME: "~/state" }, homeDir: home }), path.join(home, "state", "ouroboros-skills", "desk", "identity-cache.json"))
+  assert.match(identityCachePath({ env: {} }), /\.local\/state\/ouroboros-skills\/desk\/identity-cache\.json$/)
+
+  const root = crewDesk()
+  const state = tempDir()
+  const file = identityCachePath({ env: { XDG_STATE_HOME: state }, homeDir: home })
+  const spawnGh = () => ({ status: 0, stdout: "bob-login\n" })
+  const person = () => status(root, { env: { DESK: root, XDG_STATE_HOME: state }, homeDir: home, spawnGh }).person
+  for (const body of ["{", "[]", "null", JSON.stringify({ [root]: "bob" }), JSON.stringify({ [root]: { identity: 7, checked_at: NOW } }), JSON.stringify({ [root]: { identity: "x", checked_at: "soon" } })]) {
+    write(path.dirname(file), path.basename(file), body)
+    assert.equal(person(), "bob", body)
+  }
+
+  // A state folder that is a file cannot hold the cache; the lookup still works.
+  const blocked = tempDir()
+  write(blocked, "ouroboros-skills", "not a folder")
+  assert.equal(status(root, { env: { DESK: root, XDG_STATE_HOME: blocked }, homeDir: home, spawnGh }).person, "bob")
 })
 
 test("an invalid person is treated as no person, never silently", () => {

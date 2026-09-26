@@ -47,7 +47,7 @@ Tidy this desk now, as ordinary work in this session. Do not ask first and do no
 Rules for every step:
 - Work only inside this session's own desk, named above. A peer's crew desk is theirs: never change it.
 - If the human has told you not to write in this session, skip the tidy entirely and leave everything as it is.
-- Leave alone every task and track that holds uncommitted changes (listed above, or git status --porcelain -- <path> is not empty): another session may be working there. Name them as left alone in the announcement.
+- Leave alone every task and track that holds uncommitted changes (listed above, or git status --porcelain -- <path> is not empty): another session may be working there. Name them as left alone in the announcement. task_move and track_rename refuse such a folder on their own; never pass allow_dirty to get past that.
 - Move and rename only through Git: task_move and track_rename stage a git mv, and git mv moves a loose file. An untracked loose file that is not ignored gets git add first, then git mv. Leave ignored files where they are. Never delete content.
 - Never change a task's status. Stale tasks are reported only; their status belongs to the work.
 - Build every new name from the outcome, 2 to 6 lowercase kebab-case words. Never copy text from an old name, and never write an old name that failed the credential or prompt check (shown as <redacted segment>, name_credential_like or name_prompt_like) anywhere: not in a card, a commit message or the announcement. Describe such a move by its new name only.

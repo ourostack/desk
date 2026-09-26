@@ -33,6 +33,7 @@ import * as path from "node:path"
 import { organizationFindings, redactedRelPath } from "./organization.js"
 import { operatorNames } from "./naming.js"
 import {
+  expandHome,
   personPrefix,
   resolveActivationConfigPath,
   resolveDeskRootWithSource,
@@ -53,6 +54,12 @@ const IN_PROGRESS_MARKERS = [
 ]
 
 const IDENTITY_TIMEOUT_MS = 10_000
+
+// The `gh` identity lookup is cached in Desk's state folder, keyed by the
+// desk root, so Detect makes no network call at most session starts (fix
+// round 2): a found identity for 24 hours, a failed lookup for 1 hour.
+const IDENTITY_FOUND_TTL_MS = 24 * 60 * 60 * 1000
+const IDENTITY_FAILED_TTL_MS = 60 * 60 * 1000
 
 /** `{ schema_version: 1, tidy_version: 1, tidied_at: <iso> }` */
 export function organizationRecord(now = new Date()) {
@@ -140,23 +147,60 @@ function registryPath(root) {
   return path.join(root, "_meta", "desks.md")
 }
 
-// This session's identity: `DESK_IDENTITY`, else the GitHub login `gh`
-// reports. Only asked on a crew desk with no `DESK_PERSON` override.
-function sessionIdentity(env, spawnGh) {
-  if (hasText(env.DESK_IDENTITY)) return env.DESK_IDENTITY.trim()
+/** The identity cache file in Desk's state folder (`$XDG_STATE_HOME`, else `~/.local/state`). */
+export function identityCachePath({ env, homeDir = os.homedir() }) {
+  const stateHome = hasText(env.XDG_STATE_HOME)
+    ? path.resolve(expandHome(env.XDG_STATE_HOME.trim(), homeDir))
+    : path.join(homeDir, ".local", "state")
+  return path.join(stateHome, "ouroboros-skills", "desk", "identity-cache.json")
+}
+
+function readIdentityCache(file) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"))
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function freshEntry(entry, now) {
+  if (entry === null || typeof entry !== "object") return false
+  if (typeof entry.checked_at !== "number" || !(typeof entry.identity === "string" || entry.identity === null)) return false
+  const age = now - entry.checked_at
+  const ttl = entry.identity === null ? IDENTITY_FAILED_TTL_MS : IDENTITY_FOUND_TTL_MS
+  return age >= 0 && age < ttl
+}
+
+// The GitHub login `gh` reports, through the cache. A cache that cannot be
+// written only costs a lookup next time.
+function ghIdentity(root, { env, spawnGh, homeDir, now }) {
+  const file = identityCachePath({ env, homeDir })
+  const key = real(root)
+  const cache = readIdentityCache(file)
+  if (freshEntry(cache[key], now)) return cache[key].identity
   const result = run(spawnGh, "gh", ["api", "user", "--jq", ".login"])
-  return result.status === 0 && hasText(result.stdout) ? result.stdout.trim() : null
+  const identity = result.status === 0 && hasText(result.stdout) ? result.stdout.trim() : null
+  try {
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, `${JSON.stringify({ ...cache, [key]: { identity, checked_at: now } }, null, 2)}\n`)
+  } catch {
+    // Unwritable state folder: the next Detect looks the identity up again.
+  }
+  return identity
 }
 
 /**
  * The person this script resolves for `root`: `DESK_PERSON` when set, else,
  * on a crew desk, the alias whose `identity` matches this session's
- * identity, else null.
+ * identity (`DESK_IDENTITY`, else the cached `gh` login), else null.
  */
-export function resolvePerson(root, { env, spawnGh = spawnSync }) {
+export function resolvePerson(root, { env, spawnGh = spawnSync, homeDir = os.homedir(), now = Date.now() }) {
   if (hasText(env.DESK_PERSON)) return env.DESK_PERSON.trim()
   if (root === null || !existsSync(registryPath(root))) return null
-  const identity = sessionIdentity(env, spawnGh)
+  const identity = hasText(env.DESK_IDENTITY)
+    ? env.DESK_IDENTITY.trim()
+    : ghIdentity(root, { env, spawnGh, homeDir, now })
   if (identity === null) return null
   const rows = parseDeskRegistry(readFileSync(registryPath(root), "utf8"))
   const row = rows.find((candidate) => candidate.identity.toLowerCase() === identity.toLowerCase())
@@ -189,7 +233,7 @@ export function tidyStatus({
   const resolvedRoot = resolveRoot({ env, cwd, homeDir })
   const bound = hasText(root)
   const deskRoot = bound ? path.resolve(root) : resolvedRoot
-  const resolvedPerson = resolvePerson(deskRoot, { env, spawnGh })
+  const resolvedPerson = resolvePerson(deskRoot, { env, spawnGh, homeDir, now: now ?? Date.now() })
   const alias = bound ? (hasText(person) ? person.trim() : null) : resolvedPerson
   const resolved = { root: resolvedRoot, person: resolvedPerson }
   const mismatch = bound && (resolvedRoot === null || !samePath(resolvedRoot, deskRoot) || resolvedPerson !== alias)
