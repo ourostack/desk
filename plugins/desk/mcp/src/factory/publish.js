@@ -33,7 +33,11 @@
 //     interval offset would carry that anchor's absolute time. Such a
 //     session is refused, not published: the result is `{ published: null,
 //     reason: "implausible_session_span" }`, and the flush quarantines it
-//     locally.
+//     locally. So is a session that starts before `EARLIEST_SESSION_START`
+//     (2025-01-01, controller ruling, fix round 3): neither host existed
+//     before then, so such a start is a bogus anchor too, and a guessable one
+//     (`2020-01-01`) inside the ten-year cap would otherwise still turn every
+//     interval offset back into absolute time.
 //   - A session ID that is not a version-4 UUID could carry a timestamp or a
 //     machine identifier, in the file and in its name, so it is refused
 //     with `reason: "session_id_not_v4"`.
@@ -46,7 +50,9 @@
 //     observation `offset_ms: null`, `unavailable` gains `{job_offsets,
 //     desk_public}`, and each job ID is replaced with the first 32 hex of
 //     `HMAC-SHA256(machineSecret, jobId)`, a per-machine key the flush keeps
-//     in the factory state folder.
+//     in the factory state folder. Those jobs are sorted by their keyed ID,
+//     so their order says nothing about the plain IDs (which binding sorts
+//     by).
 //   - No who. Local facts carry no contributor, and nothing here adds a
 //     machine, host name, desk path, account or branch. The file name is
 //     `<host>-<session id>.json` (`publishedFileName`).
@@ -61,14 +67,16 @@
 //   - No date or time shapes. A model ID or plugin name holding an ISO date
 //     (such as `gpt-4o-2024-08-06`) loses that date's hyphens
 //     (`gpt-4o-20240806`), and a model ID holding a time of day loses its
-//     colons, so the file passes the public gate's date and time checks
+//     colons (repeatedly, since removing one can uncover the other), so the
+//     file passes the public gate's date and time checks
 //     without losing the model. That date is the model's or plugin's
 //     release, not when the work happened, so keeping its digits says
 //     nothing about the session.
 //
 // `unavailable` keeps the local entries once each and adds the transform's
-// own; when the local entries alone would fill the schema limit, the
-// transform's are kept and the last local ones give way. The transform is
+// own markers after them; when the list would pass the schema limit, the
+// transform's markers are kept first (even one the local file already held)
+// and the last local entries give way. The transform is
 // pure and deterministic: it never mutates its input, shares no object with
 // it and reads no clock.
 //
@@ -82,6 +90,9 @@ import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, TIME_SHA
 
 /** Why `toPublished` returned no file. */
 export const REFUSALS = Object.freeze(["implausible_session_span", "session_id_not_v4"])
+
+/** No session this transform publishes can start earlier: neither host existed before it. */
+export const EARLIEST_SESSION_START = "2025-01-01T00:00:00.000Z"
 
 // Desks whose remote is known not to be public keep their job timing.
 const PRIVATE_DESKS = new Set(["private", "internal"])
@@ -106,8 +117,8 @@ const TIME_PARTS = /(\d{2}):(\d{2})/u
 // (`x-2024-08-06-01-02`, `m:08:30:00`).
 function scrub(id) {
   let text = id
-  while (DATE_SHAPE.test(text)) text = text.replace(DATE_PARTS, "$1$2$3")
-  while (TIME_SHAPE.test(text)) text = text.replace(TIME_PARTS, "$1$2")
+  // Each pass removes at least one character, so this ends.
+  while (DATE_SHAPE.test(text) || TIME_SHAPE.test(text)) text = text.replace(DATE_PARTS, "$1$2$3").replace(TIME_PARTS, "$1$2")
   return text
 }
 
@@ -232,7 +243,9 @@ export function toPublished(local, { visibility, deskVisibility, machineSecret }
 
   const startedMs = Date.parse(local.session.started_at)
   const durationMs = Date.parse(local.session.derived_through) - startedMs
-  if (durationMs > PUBLISHED_LIMITS.maxOffsetMs) return { published: null, dropped: null, reason: "implausible_session_span" }
+  if (durationMs > PUBLISHED_LIMITS.maxOffsetMs || startedMs < Date.parse(EARLIEST_SESSION_START)) {
+    return { published: null, dropped: null, reason: "implausible_session_span" }
+  }
   if (!SESSION_ID_V4.test(local.session.id)) return { published: null, dropped: null, reason: "session_id_not_v4" }
 
   // The local entries once each, then the transform's own.
@@ -243,12 +256,14 @@ export function toPublished(local, { visibility, deskVisibility, machineSecret }
     if (!has(localEntries, entry.field, entry.reason)) localEntries.push({ field: entry.field, reason: entry.reason })
   }
   const flag = (field, reason) => {
-    if (!has(localEntries, field, reason) && !has(own, field, reason)) own.push({ field, reason })
+    if (!has(own, field, reason)) own.push({ field, reason })
   }
 
   const intervals = publishIntervals(local.intervals, startedMs, durationMs, flag)
   const refs = publishRefs(local.refs, visibility)
-  const jobs = deskPrivate ? local.jobs.map((job) => publishJob(job, startedMs, flag)) : local.jobs.map((job) => protectedJob(job, machineSecret))
+  const jobs = deskPrivate
+    ? local.jobs.map((job) => publishJob(job, startedMs, flag))
+    : local.jobs.map((job) => protectedJob(job, machineSecret)).sort((a, b) => (a.job < b.job ? -1 : 1))
   if (!deskPrivate && jobs.length > 0) flag("job_offsets", "desk_public")
 
   const published = {
@@ -277,7 +292,7 @@ export function toPublished(local, { visibility, deskVisibility, machineSecret }
     },
     refs: { prs: refs.prs, commits: refs.commits, private: { ...refs.dropped } },
     jobs,
-    unavailable: [...localEntries.slice(0, LIMITS.unavailable - own.length), ...own],
+    unavailable: [...localEntries.filter((entry) => !has(own, entry.field, entry.reason)).slice(0, LIMITS.unavailable - own.length), ...own],
   }
   return { published, dropped: { ...refs.dropped } }
 }

@@ -100,7 +100,7 @@ export const LIMITS = Object.freeze({
   unavailable: 64,
 })
 
-const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
+export const isPlainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 const isSafeNonNegInt = (value) => Number.isSafeInteger(value) && value >= 0
 const isSafePositiveInt = (value) => Number.isSafeInteger(value) && value > 0
 export const joinPath = (parent, segment) => (parent === "" ? String(segment) : `${parent}.${segment}`)

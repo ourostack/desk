@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url"
 
 import { createHmac } from "node:crypto"
 
-import { toPublished, serializePublished, publishedFileName, REFUSALS } from "../../src/factory/publish.js"
+import { toPublished, serializePublished, publishedFileName, REFUSALS, EARLIEST_SESSION_START } from "../../src/factory/publish.js"
 import { validatePublished, validatePublishedBytes, PUBLISHED_LIMITS, DATE_SHAPE } from "../../src/factory/published-schema.js"
 import { validateLocalFacts, LIMITS, ENUMS } from "../../src/factory/schema.js"
 import { deriveClaudeSession } from "../../src/factory/derive-claude.js"
@@ -279,6 +279,16 @@ test("unavailable keeps the local entries, adds each new one once, and stays wit
   assert.deepEqual(full.unavailable.slice(0, -1), combos.slice(0, LIMITS.unavailable - 1))
   assert.equal(validatePublished(full).ok, true)
 
+  // The local file already holds the marker, in the place the cap cuts.
+  const cut = local()
+  cut.jobs = []
+  cut.intervals.push({ kind: "turn", agent: 0, start: "2026-09-25T09:29:00.000Z", end: "2026-09-25T09:31:00.000Z" })
+  const others = combos.filter((entry) => !(entry.field === "turns" && entry.reason === "source_unreadable"))
+  cut.unavailable = [...others.slice(0, LIMITS.unavailable - 1), { field: "turns", reason: "source_unreadable" }]
+  const kept = publish(cut).published.unavailable
+  assert.equal(kept.length, LIMITS.unavailable)
+  assert.deepEqual(kept.at(-1), { field: "turns", reason: "source_unreadable" }, "the transform's own marker is kept first")
+
   const few = local()
   few.jobs = [few.jobs[2], { ...few.jobs[2], job: "9f2c4b1a7d3e5f60718293a4b5c6d7e9" }]
   const result = publish(few).published.unavailable
@@ -331,13 +341,27 @@ test("a session starting at a 1970 or 2000 anchor is refused, never published wi
 
 test("a session exactly at the ten-year cap is published; one millisecond more is refused", () => {
   const value = local()
-  value.session.started_at = new Date(Date.parse(value.session.derived_through) - PUBLISHED_LIMITS.maxOffsetMs).toISOString()
+  value.session.started_at = EARLIEST_SESSION_START
+  value.session.derived_through = new Date(Date.parse(EARLIEST_SESSION_START) + PUBLISHED_LIMITS.maxOffsetMs).toISOString()
   value.jobs = []
   const { published } = publish(value)
   assert.equal(published.session.duration_ms, PUBLISHED_LIMITS.maxOffsetMs)
   assert.equal(validatePublished(published).ok, true)
-  value.session.started_at = new Date(Date.parse(value.session.started_at) - 1).toISOString()
+  value.session.derived_through = new Date(Date.parse(value.session.derived_through) + 1).toISOString()
   assert.equal(publish(value).reason, "implausible_session_span")
+})
+
+test("a session that starts before 2025, when neither host existed, is refused even inside the cap", () => {
+  assert.equal(EARLIEST_SESSION_START, "2025-01-01T00:00:00.000Z")
+  for (const anchor of ["2020-01-01T00:00:00.000Z", "2024-12-31T23:59:59.999Z"]) {
+    const value = local()
+    value.session.started_at = anchor
+    assert.deepEqual(publish(value), { published: null, dropped: null, reason: "implausible_session_span" }, anchor)
+  }
+  const value = local()
+  value.session.started_at = EARLIEST_SESSION_START
+  value.jobs = []
+  assert.equal(publish(value).published.session.duration_ms, Date.parse(value.session.derived_through) - Date.parse(EARLIEST_SESSION_START))
 })
 
 test("a session ID that is not version 4 is refused; a v4 one is published", () => {
@@ -367,8 +391,11 @@ test("a public or unknown desk publishes keyed job IDs, no job timing and desk_p
       session_offset_ms: null,
       transitions: [],
       observed: job.observed === null ? null : { status: job.observed.status, offset_ms: null },
-    })), deskVisibility)
-    assert.equal(published.jobs.some((job, index) => job.job === LOCAL_GOLDEN.jobs[index].job), false)
+    })).sort((a, b) => (a.job < b.job ? -1 : 1)), deskVisibility)
+    const keys = published.jobs.map((job) => job.job)
+    assert.deepEqual(keys, [...keys].sort(), "sorted by keyed ID")
+    assert.notDeepEqual(keys, LOCAL_GOLDEN.jobs.map((job) => keyed(job.job)), "the fixture's plain order differs, so the sort is real")
+    assert.equal(published.jobs.some((job) => LOCAL_GOLDEN.jobs.some((plain) => plain.job === job.job)), false)
     assert.deepEqual(published.unavailable, [
       { field: "permission_waits", reason: "host_does_not_record" },
       { field: "tool_durations", reason: "capped" },
@@ -398,13 +425,17 @@ test("private and internal desks keep plain job IDs and their offsets", () => {
 // Fix round 2: times of day and repeated references (review M1, M3).
 // ---------------------------------------------------------------------------
 
-test("a time of day inside a model ID loses its colons", () => {
+test("a time of day inside a model ID loses its colons, repeatedly, even when that uncovers a date", () => {
   const value = local()
   value.models[0].id = "m:08:30:00"
+  value.models[1].id = "m20:26-09-25"
   value.agents[0].model = "m-2024-08-06:08:30"
+  value.agents[1].model = "m:20:26-09-25"
   const { published } = publish(value)
   assert.equal(published.models[0].id, "m:083000")
+  assert.equal(published.models[1].id, "m20260925")
   assert.equal(published.agents[0].model, "m-202408060830")
+  assert.equal(published.agents[1].model, "m:20260925")
   assert.equal(validatePublished(published).ok, true)
 })
 
@@ -549,9 +580,10 @@ function randomLocal(random) {
   // 2000, the anchors a bogus first log line would give, and some run for
   // years, so the transform's refusal is exercised too.
   const anchorKind = random()
-  let start = Date.parse("2001-01-01T00:00:00.000Z") + int(98 * 365) * 86400000 + int(86400000)
-  if (anchorKind < 0.15) start = int(30 * 86400000)
-  else if (anchorKind < 0.3) start = Date.parse("2000-01-01T00:00:00.000Z") + int(30 * 86400000) - 15 * 86400000
+  let start = Date.parse(EARLIEST_SESSION_START) + int(74 * 365) * 86400000 + int(86400000)
+  if (anchorKind < 0.1) start = int(30 * 86400000)
+  else if (anchorKind < 0.2) start = Date.parse("2000-01-01T00:00:00.000Z") + int(30 * 86400000) - 15 * 86400000
+  else if (anchorKind < 0.3) start = Date.parse("2020-01-01T00:00:00.000Z") + int(30 * 86400000)
   const duration = random() < 0.2 ? int(40 * 365 * 86400000) : int(3 * 86400000)
   const hex = (length) => Array.from({ length }, () => "0123456789abcdef"[int(16)]).join("")
   const within = () => start + int(duration + 1)
@@ -611,7 +643,7 @@ test("property: 300 seeded random local files publish nothing that identifies a 
     const deskVisibility = ["private", "internal", "public", "unknown"][index % 4]
     const result = toPublished(value, { visibility: visible, deskVisibility, machineSecret: SECRET })
     const span = Date.parse(value.session.derived_through) - Date.parse(value.session.started_at)
-    if (span > PUBLISHED_LIMITS.maxOffsetMs) {
+    if (span > PUBLISHED_LIMITS.maxOffsetMs || Date.parse(value.session.started_at) < Date.parse(EARLIEST_SESSION_START)) {
       assert.deepEqual(result, { published: null, dropped: null, reason: "implausible_session_span" }, `sample ${index}`)
       seen.refused += 1
       continue
@@ -621,12 +653,12 @@ test("property: 300 seeded random local files publish nothing that identifies a 
     assertNothingLeaves(published, `sample ${index}`)
     if (deskVisibility === "public" || deskVisibility === "unknown") {
       seen.publicDesk += 1
-      for (const [jobIndex, job] of published.jobs.entries()) {
+      for (const job of published.jobs) {
         assert.equal(job.session_offset_ms, null)
         assert.deepEqual(job.transitions, [])
         assert.ok(job.observed === null || job.observed.offset_ms === null)
-        assert.equal(job.job, keyed(value.jobs[jobIndex].job))
       }
+      assert.deepEqual(published.jobs.map((job) => job.job), value.jobs.map((job) => keyed(job.job)).sort())
     }
     assert.equal(published.session.duration_ms, Date.parse(value.session.derived_through) - Date.parse(value.session.started_at))
     assert.equal(published.intervals.length, value.intervals.length, "in-span intervals are all kept")

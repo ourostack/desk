@@ -215,6 +215,57 @@ test("a repeated unavailable entry, PR or commit fails with duplicate naming the
   assert.equal(validatePublished(value).ok, true, "another number or repository is not a duplicate")
 })
 
+// ---------------------------------------------------------------------------
+// A desk marked public carries no job timing (fix round 3, N4).
+// ---------------------------------------------------------------------------
+
+function publicDesk() {
+  const value = golden()
+  value.jobs = value.jobs.map((job) => ({ ...job, session_offset_ms: null, transitions: [], observed: job.observed === null ? null : { status: job.observed.status, offset_ms: null } }))
+  value.unavailable = [{ field: "job_offsets", reason: "desk_public" }]
+  return value
+}
+
+test("a desk_public file with no job timing passes; any timing on a job is inconsistent", () => {
+  assert.deepEqual(validatePublished(publicDesk()), { ok: true, errors: [] })
+  let value = publicDesk()
+  value.jobs[0].session_offset_ms = 5
+  value.jobs[1].transitions = [{ to: "done", offset_ms: 1 }]
+  value.jobs[2].observed.offset_ms = 3
+  const result = validatePublished(value)
+  assert.deepEqual(result.errors, [{ code: "inconsistent", path: "jobs.0" }, { code: "inconsistent", path: "jobs.1" }, { code: "inconsistent", path: "jobs.2" }])
+  value = publicDesk()
+  value.jobs[1].transitions = [{ to: "done", offset_ms: null }]
+  assertSingle(validatePublished(value), "inconsistent", "jobs.1")
+})
+
+test("the desk_public check skips jobs and markers it cannot read, and ignores other job_offsets reasons", () => {
+  let value = publicDesk()
+  value.jobs[0] = `${SENTINEL} not a job`
+  value.jobs[1].transitions = `${SENTINEL} not a list`
+  const result = validatePublished(value)
+  assert.deepEqual(result.errors, [{ code: "type", path: "jobs.0" }, { code: "type", path: "jobs.1.transitions" }])
+  assertNoLeak(result)
+  value = publicDesk()
+  value.unavailable = [{ field: "job_offsets", reason: `${SENTINEL}` }]
+  value.jobs[0].session_offset_ms = 5
+  assertSingle(validatePublished(value), "enum", "unavailable.0.reason")
+  value = publicDesk()
+  value.unavailable = [{ field: "job_offsets", reason: "source_unreadable" }]
+  value.jobs[0].session_offset_ms = 5
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+  value = publicDesk()
+  value.unavailable = [`${SENTINEL}`]
+  assertSingle(validatePublished(value), "type", "unavailable.0")
+  value = publicDesk()
+  value.jobs = `${SENTINEL}`
+  assertSingle(validatePublished(value), "type", "jobs")
+  value = publicDesk()
+  value.unavailable = new Array(LIMITS.unavailable + 1).fill({ field: "job_offsets", reason: "desk_public" })
+  value.jobs[0].session_offset_ms = 5
+  assertSingle(validatePublished(value), "too_many", "unavailable")
+})
+
 test("an item with a bad field is left out of the duplicate check", () => {
   const value = golden()
   value.refs.prs.push({ repo: "ourostack/desk", number: 0 })

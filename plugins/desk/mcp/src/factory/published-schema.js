@@ -30,6 +30,11 @@
 //     values (review Critical, fix round 2).
 //   - `unavailable` holds no entry twice, and `refs` no PR (repository and
 //     number) or commit (SHA) twice.
+//   - A file whose `unavailable` says `{job_offsets, desk_public}` carries no
+//     job timing: every job's `session_offset_ms` and `observed.offset_ms`
+//     are `null` and its `transitions` empty, else `inconsistent` names the
+//     job (fix round 3). The store's CI then does not have to trust the
+//     flush's answer about the desk.
 //   - `jobs[].session_offset_ms` and every `offset_ms` are safe integers
 //     (signed: a session may begin before its task card exists) or `null`,
 //     and at most `PUBLISHED_LIMITS.maxOffsetMs` (ten years) either way. The
@@ -55,6 +60,7 @@ import {
   checkBasis,
   customField,
   enumField,
+  isPlainObject,
   joinPath,
   leaf,
   nonNegIntField,
@@ -279,6 +285,19 @@ export function validatePublished(value) {
   const refs = results.refs
   if (refs?.prs) noDuplicates(value.refs.prs, refs.prs, ["repo", "number"], (item) => `${item.repo}#${item.number}`, "refs.prs")
   if (refs?.commits) noDuplicates(value.refs.commits, refs.commits, ["sha"], (item) => item.sha, "refs.commits")
+
+  // A desk marked public publishes no job timing.
+  const deskPublic = Boolean(results.unavailable) && value.unavailable.some((entry, index) =>
+    results.unavailable[index]?.field === true && results.unavailable[index].reason === true && entry.field === "job_offsets" && entry.reason === "desk_public")
+  if (deskPublic && results.jobs) {
+    value.jobs.forEach((job, index) => {
+      if (!isPlainObject(job)) return
+      const timed = job.session_offset_ms !== null
+        || (Array.isArray(job.transitions) && job.transitions.length > 0)
+        || (isPlainObject(job.observed) && job.observed.offset_ms !== null)
+      if (timed) addError(errors, "inconsistent", `jobs.${index}`)
+    })
+  }
 
   // No interval may run past the session's end. Checked only when the
   // duration itself is sound, so one bad duration is one error.
