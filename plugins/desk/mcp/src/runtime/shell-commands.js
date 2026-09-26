@@ -199,8 +199,9 @@ function parse(tokens) {
       const value = tokens[i++]
       expect("in")
       const arms = []
-      while (keyword(tokens[i]) !== "esac") {
+      while (true) {
         while (tokens[i] === "\n") i++
+        if (keyword(tokens[i]) === "esac") break
         if (tokens[i] === "(") i++
         const patterns = []
         while (tokens[i]?.parts || tokens[i] === "|") {
@@ -344,7 +345,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     if (state.terminated) return [state]
     if (node.kind === "case") {
       const value = await expand(node.value, state)
-      let states = [state], fallthrough = false
+      let states = [{ ...state, status: true }], fallthrough = false
       for (const arm of node.arms) {
         let matched = fallthrough || value.includes("\0")
         for (const pattern of arm.patterns) {
@@ -408,17 +409,18 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       return [{ ...state, status: true }, { ...state, status: false }]
     }
     for (const redirect of node.redirects) await expand(redirect, state)
-    let args = []
-    for (const word of node.words) {
-      const assignment = /^[A-Za-z_]\w*=/u.test(word.parts[0].text)
-      const split = !(assignment && (args.length === 0 || args[0] === "export"))
-      args.push(...(split ? await expand(word, state, true) : [await expand(word, state)]))
-    }
     const local = { ...state, vars: { ...state.vars } }
-    while (args.length && /^[A-Za-z_]\w*=/u.test(args[0])) {
-      const at = args[0].indexOf("=")
-      local.vars[args[0].slice(0, at)] = args[0].slice(at + 1)
-      args.shift()
+    let leading = 0
+    while (leading < node.words.length && /^[A-Za-z_]\w*=/u.test(node.words[leading].parts[0].text)) {
+      const assignment = await expand(node.words[leading++], local)
+      const at = assignment.indexOf("=")
+      local.vars[assignment.slice(0, at)] = assignment.slice(at + 1)
+    }
+    let args = []
+    for (const word of node.words.slice(leading)) {
+      const assignment = /^[A-Za-z_]\w*=/u.test(word.parts[0].text)
+      const split = !(assignment && args[0] === "export")
+      args.push(...(split ? await expand(word, state, true) : [await expand(word, state)]))
     }
     if (!args.length) return [{ ...local, status: true }]
     if (args[0].includes("\0")) throw new Error("unresolved shell command")

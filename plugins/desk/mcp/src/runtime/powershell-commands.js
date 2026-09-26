@@ -17,10 +17,35 @@ function assign(map, name, value) {
 export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, locals = {} }) {
   if (depth > 16) throw new Error("PowerShell wrapper nesting exceeds 16")
   const tokens = tokenizeShell(command, true)
-  const variables = { home: env.HOME ?? env.USERPROFILE, pwd: cwd, ...locals }
-  const environment = { ...env }
+  let variables = { home: env.HOME ?? env.USERPROFILE, pwd: cwd, ...locals }
+  let environment = { ...env }
   let directory = physicalDirectory(cwd, ".") ?? cwd
   let statement = [], redirects = [], previous = null, status = null, terminated = false
+  let states = [snapshot()]
+
+  function snapshot() {
+    return { variables: { ...variables }, environment: { ...environment }, directory, status, terminated }
+  }
+
+  async function advance() {
+    const reachable = []
+    for (const state of states) {
+      variables = { ...state.variables }
+      environment = { ...state.environment }
+      directory = state.directory
+      status = state.status
+      terminated = state.terminated
+      if (statement.length && !terminated && status === null && (previous === "&&" || previous === "||")) {
+        // Keep the skipped branch before the executed branch changes its cwd or variables.
+        reachable.push({ ...snapshot(), status: previous === "||" })
+        status = previous === "&&"
+      }
+      await run(statement)
+      const next = snapshot()
+      reachable.push(next)
+    }
+    states = [...new Map(reachable.map((state) => [JSON.stringify(state), state])).values()]
+  }
 
   async function expand(word) {
     let result = ""
@@ -78,11 +103,11 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
       return
     }
     if (!words.every((word) => word.parts)) throw new Error("unresolved PowerShell expression")
-    // A bare quoted string is an expression, not an executable.
-    if (words[0].quoted && !callOperator) { status = true; return }
     for (const redirect of redirects) await expand(redirect)
     const args = []
     for (const word of words) args.push(await expand(word))
+    // The resulting string is data, but interpolation has already executed.
+    if (words[0].quoted && !callOperator) { status = true; return }
     if (args[0].includes("\0")) throw new Error("unresolved PowerShell command")
     const name = path.basename(args[0]).replace(/\.exe$/iu, "").toLowerCase()
     if (name === "exit") { terminated = true; return }
@@ -112,11 +137,12 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i]
     if ([";", "\n", "&&", "||", "|"].includes(token)) {
-      await run(statement); statement = []; redirects = []; previous = token
+      if (token === "\n" && statement.length === 0) continue
+      await advance(); statement = []; redirects = []; previous = token
     } else if (token.redirect) {
       if (!tokens[i + 1]?.parts) throw new Error("unresolved PowerShell redirection")
       redirects.push(tokens[++i])
     } else statement.push(token)
   }
-  await run(statement)
+  await advance()
 }

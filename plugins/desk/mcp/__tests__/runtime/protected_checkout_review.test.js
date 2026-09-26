@@ -19,13 +19,13 @@ const gitExecutable = process.platform === "win32"
   ? execFileSync("where.exe", ["git.exe"], { encoding: "utf8" }).trim().split(/\r?\n/u)[0]
   : "/usr/bin/git"
 
-function fixture(t) {
+function fixture(t, sharedName = "shared") {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-review-")))
   t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
   const env = { ...process.env, HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "no-global") }
   for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|CONFIG_(?:COUNT|KEY_|VALUE_))/u.test(key)) delete env[key]
   const git = (dir, ...args) => execFileSync(gitExecutable, ["-C", dir, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
-  const ordinary = path.join(root, "ordinary"), shared = path.join(root, "shared")
+  const ordinary = path.join(root, "ordinary"), shared = path.join(root, sharedName)
   for (const dir of [ordinary, shared]) {
     mkdirSync(path.join(dir, "child"), { recursive: true })
     git(dir, "init", "-q", "-b", "main")
@@ -361,4 +361,153 @@ test("Bash scalar and field expansion preserve empty values, literal dollars and
   const calls = []
   await inspectShell({ command: "G='a  b'; printf '%s' prefix${G}suffix", cwd: f.ordinary, env: f.env, visit: (call) => calls.push(call.args) })
   assert.deepEqual(calls, [["%s", "prefixa", "bsuffix"]])
+})
+
+function assertHookDecision(f, command, deny, { cwd = f.ordinary, powershell = false } = {}) {
+  const before = f.git(f.shared, "reflog", "--format=%H %gs")
+  for (const host of ["claude", "copilot"]) {
+    for (const child of [false, true]) {
+      const input = host === "claude"
+        ? { tool_name: powershell ? "PowerShell" : "Bash", tool_input: { command }, cwd, agent_id: child ? "child" : undefined }
+        : { toolName: powershell ? "powershell" : "bash", toolArgs: { command }, cwd, agentId: child ? "child" : undefined }
+      const result = spawnSync(process.execPath, [hook, host], { cwd, env: f.env, input: JSON.stringify(input), encoding: "utf8" })
+      assert.equal(result.status, 0, result.stderr)
+      const output = JSON.parse(result.stdout)
+      if (deny) {
+        const decision = output.hookSpecificOutput ?? output
+        assert.equal(decision.permissionDecision, "deny")
+        assert.equal(decision.permissionDecisionReason, WORKTREE_GUIDANCE)
+      } else assert.deepEqual(output, {})
+    }
+  }
+  assert.equal(f.git(f.shared, "reflog", "--format=%H %gs"), before, "hook inspection must leave the protected reflog unchanged")
+}
+
+function assertDirectCheckout(t, f, command, { cwd = f.ordinary, powershell = false, target = f.shared } = {}) {
+  f.git(target, "checkout", "main")
+  const before = f.git(target, "reflog", "--format=%H %gs")
+  const args = powershell ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command] : ["--noprofile", "--norc", "-c", command]
+  const result = spawnSync(powershell ? "pwsh" : "bash", args, { cwd, env: f.env, encoding: "utf8", timeout: 10000 })
+  if (powershell && result.error?.code === "ENOENT") { t.diagnostic("native PowerShell unavailable; hook and interpreter assertions still ran"); return }
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(f.git(target, "rev-parse", "--abbrev-ref", "HEAD"), "HEAD")
+  assert.notEqual(f.git(target, "reflog", "--format=%H %gs"), before)
+}
+
+test("A3-I06 round 2: multiline and empty case forms remain non-applicable in either checkout", async (t) => {
+  const f = fixture(t)
+  const cases = [
+    "case x in\n  x) echo harmless;;\nesac",
+    "case x in\nesac",
+    "case x in\n\n\t# no arms\n  esac",
+    "case x in\n x) echo harmless;;\n\n # end\n esac",
+    "case x in\n x) echo harmless\n ;;\n esac",
+  ]
+  for (const cwd of [f.shared, f.ordinary]) {
+    for (const command of cases) {
+      assert.equal((await f.guard(command, { cwd })).deny, false, command)
+      assertHookDecision(f, command, false, { cwd })
+      const actual = spawnSync("bash", ["--noprofile", "--norc", "-c", command], { cwd, env: f.env, encoding: "utf8" })
+      assert.equal(actual.status, 0, actual.stderr)
+    }
+  }
+  const mutation = `case x in\n  x) git -C ${q(f.shared)} checkout --detach HEAD;;\nesac`
+  assert.equal((await f.guard(mutation)).deny, true)
+  assertDirectCheckout(t, f, mutation)
+})
+
+test("A3-R1-I01: quoted PowerShell results are data but their executable interpolation is inspected", async (t) => {
+  const f = fixture(t)
+  for (const command of [
+    `"$(git -C ${psq(f.shared)} checkout --detach HEAD)"`,
+    `"prefix$(git -C ${psq(f.shared)} checkout --detach HEAD)suffix"`,
+  ]) {
+    assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
+    assertHookDecision(f, command, true, { powershell: true })
+    assertDirectCheckout(t, f, command, { powershell: true })
+  }
+  for (const command of ['"git checkout HEAD"', psq(`$(git -C ${psq(f.shared)} checkout HEAD)`), '"`$(git checkout HEAD)"']) {
+    assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
+    assertHookDecision(f, command, false, { powershell: true })
+  }
+})
+
+test("A3-R1-I02: unknown PowerShell status retains both conditional location and variable states", async (t) => {
+  const f = fixture(t)
+  const command = `git -C ${psq(path.join(f.root, "missing"))} status && Set-Location ${psq(f.ordinary)}; git checkout --detach HEAD`
+  assert.equal((await f.guard(command, { cwd: f.shared, powershell: true })).deny, true)
+  assertHookDecision(f, command, true, { cwd: f.shared, powershell: true })
+  assertDirectCheckout(t, f, command, { cwd: f.shared, powershell: true })
+  for (const operator of ["&&", "||"]) {
+    const calls = []
+    await inspectPowerShell({ command: `external-command ${operator} Set-Location ${psq(f.ordinary)}; git status`, cwd: f.shared, env: f.env, visit: (call) => { if (call.name === "git") calls.push(call.cwd) } })
+    assert.deepEqual([...new Set(calls)].sort(), [f.ordinary, f.shared].sort())
+    const variable = `$repo=${psq(f.shared)}; external-command ${operator} $repo=${psq(f.ordinary)}; git -C $repo checkout HEAD`
+    assert.equal((await f.guard(variable, { powershell: true })).deny, true)
+    const multiline = `external-command ${operator}\n Set-Location ${psq(f.ordinary)};\n git checkout HEAD`
+    assert.equal((await f.guard(multiline, { cwd: f.shared, powershell: true })).deny, true)
+    const environment = `$env:GIT_DIR=${psq(path.join(f.shared, ".git"))}; external-command ${operator} $env:GIT_DIR=${psq(path.join(f.ordinary, ".git"))}; git checkout HEAD`
+    assert.equal((await f.guard(environment, { powershell: true })).deny, true)
+  }
+  assert.equal((await f.guard("\n\nWrite-Output harmless\n\n", { powershell: true })).deny, false)
+  assert.equal((await f.guard(`Write-Output ok && Set-Location ${psq(f.ordinary)}; git checkout HEAD`, { cwd: f.shared, powershell: true })).deny, false)
+})
+
+test("A3-R1-I03: every leading Bash assignment is scalar before command argument splitting", async (t) => {
+  const f = fixture(t, "shared checkout")
+  for (const command of [
+    `X=${q(f.shared)}; A=1 P=$X; git -C "$P" checkout --detach HEAD`,
+    `X=${q(f.shared)}; A=1 B=2 P=$X; git -C "$P" checkout --detach HEAD`,
+    `A=${q(f.shared)} P=$A; git -C "$P" checkout --detach HEAD`,
+  ]) {
+    assert.equal((await f.guard(command)).deny, true, command)
+    assertHookDecision(f, command, true)
+    assertDirectCheckout(t, f, command)
+  }
+  const control = `P=${q(f.ordinary)}; X=${q(f.shared)}; A=1 P=$X git -C "$P" checkout --detach HEAD`
+  assert.equal((await f.guard(control)).deny, false, "command arguments expand before command-local assignments are applied")
+  assertDirectCheckout(t, f, control, { target: f.ordinary })
+})
+
+test("A3-R1-I04: case has its own status, including successful unmatched and empty arms", async (t) => {
+  const f = fixture(t)
+  const git = `git -C ${q(f.shared)} checkout --detach HEAD`
+  const cases = [
+    [`false; case x in y) echo unreachable;; esac && ${git}`, true],
+    [`false; case x in esac && ${git}`, true],
+    [`false; case x in x) ;; esac && ${git}`, true],
+    [`true; case x in x) false;; esac && ${git}`, false],
+    [`true; case x in x) false;; esac || ${git}`, true],
+    [`false; case x in y) echo unreachable;; esac || ${git}`, false],
+  ]
+  for (const [command, deny] of cases) {
+    assert.equal((await f.guard(command)).deny, deny, command)
+    assertHookDecision(f, command, deny)
+    if (deny) assertDirectCheckout(t, f, command)
+    else {
+      const before = f.git(f.shared, "reflog", "--format=%H %gs")
+      spawnSync("bash", ["--noprofile", "--norc", "-c", command], { cwd: f.ordinary, env: f.env, encoding: "utf8" })
+      assert.equal(f.git(f.shared, "reflog", "--format=%H %gs"), before)
+    }
+  }
+})
+
+test("A3-R1-I05: only negatable options compete for negative prefixes and ambiguity retains recognized mutation", async (t) => {
+  const f = fixture(t)
+  for (const option of ["--no-o", "--no-ov", "--no-overlay"]) {
+    const command = `git -C ${q(f.shared)} restore --source=HEAD ${option} -- file.txt`
+    writeFileSync(path.join(f.shared, "file.txt"), "changed\n")
+    assert.equal((await f.guard(command)).deny, true, command)
+    assertHookDecision(f, command, true)
+    f.git(f.shared, "restore", "--source=HEAD", option, "--", "file.txt")
+    assert.equal(readFileSync(path.join(f.shared, "file.txt"), "utf8"), "base\n")
+  }
+  for (const args of [
+    ["--source=HEAD", "--no-o"],
+    ["--source=HEAD", "--unrecognized"],
+    ["--source=HEAD", "--s"],
+    ["--unrecognized", "--source=HEAD"],
+  ]) assert.equal(inspectGitOptions("restore", args).enabled, true, args.join(" "))
+  assert.equal(inspectGitOptions("restore", ["--source=HEAD", "--no-source"]).enabled, false)
+  assert.equal((await f.guard(`git -C ${q(f.shared)} branch --format --no-o`)).deny, false)
 })

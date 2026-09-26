@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.42 — 2026-09-26
+
+Task A3, second review correction: the [Bash inspector](mcp/src/runtime/shell-commands.js) recognizes multiline and empty `case` forms after whitespace, gives an unmatched or empty case its own successful status, and treats every leading assignment word as scalar before splitting command arguments. The [PowerShell inspector](mcp/src/runtime/powershell-commands.js) inspects executable interpolation before treating a quoted result as data and retains both reachable directory, variable, environment and status states when an unknown external result controls `&&` or `||`.
+
+The [Git option parser](mcp/src/runtime/git-guard-options.js) now records negation eligibility per option, so `restore --source=HEAD --no-o` resolves `--no-overlay` rather than competing with the non-negatable `--ours`. Unknown or ambiguous option spellings cannot clear an already recognized mutation. [Executable regressions](mcp/__tests__/runtime/protected_checkout_review.test.js) cover all six re-review findings through both hook protocols and real disposable-repository Bash, PowerShell and Git execution, with literal-string, read-only, failed-arm and argument-expansion controls. Ships the unchanged `desk-mcp@1.4.0-alpha.6` dependency payload; native packs and snapshot source scope are unchanged.
+
 ## 3.2.0-alpha.41 — 2026-09-26
 
 Task A3 review corrections: [Git inspection](mcp/src/runtime/git-inspection.js) now uses a trusted absolute executable from standard host installation directories, never candidate `PATH`, and separates the modeled environment from the inspection-process environment. Only modeled Git location variables cross that boundary; candidate executable-search, loader and configuration overrides do not. The [review regressions](mcp/__tests__/runtime/protected_checkout_review.test.js) use a harmless executable sentinel, including a proposed command that explicitly names absolute Git, and require that inspection never runs it.
