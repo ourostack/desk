@@ -39,7 +39,11 @@ export function createExitRelease(proc = process) {
         if (alone) proc.kill(proc.pid, signal)
       })
     }
-    for (const [event, listener] of listeners) proc.on(event, listener)
+    for (const [event, listener] of listeners) {
+      // Passive exit observers must see Desk's listener removed before deciding whether to re-raise the signal.
+      if (SIGNALS.includes(event)) proc.prependListener(event, listener)
+      else proc.on(event, listener)
+    }
   }
 
   return {

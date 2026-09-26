@@ -128,7 +128,7 @@ function spawnOwner({ endpoint, stateDir, identity }, { keepAlive }) {
   return { child, up, ended }
 }
 
-test("a real process: the event loop running dry (beforeExit, then exit) releases the rendezvous", { skip: posixOnly }, async (t) => {
+test("a real process: the event loop running dry (beforeExit, then exit) releases the rendezvous", { skip: posixOnly, timeout: 30000 }, async (t) => {
   const context = await fixture(t, "desk-release-drain-")
   const owner = spawnOwner(context, { keepAlive: false })
   t.after(() => owner.child.kill("SIGKILL"))
@@ -138,7 +138,7 @@ test("a real process: the event loop running dry (beforeExit, then exit) release
 })
 
 for (const signal of ["SIGTERM", "SIGINT"]) {
-  test(`a real process: ${signal} releases the rendezvous and still ends the process by that signal`, { skip: posixOnly }, async (t) => {
+  test(`a real process: ${signal} releases the rendezvous and still ends the process by that signal`, { skip: posixOnly, timeout: 30000 }, async (t) => {
     const context = await fixture(t, "desk-release-signal-")
     const owner = spawnOwner(context, { keepAlive: true })
     t.after(() => owner.child.kill("SIGKILL"))

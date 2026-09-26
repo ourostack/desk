@@ -68,9 +68,26 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
     proc.on(signal, () => ran.push("host"))
     registry.register(() => ran.push("desk"))
     proc.emit(signal, signal)
-    assert.deepEqual(ran, ["host", "desk"])
+    assert.deepEqual(ran, ["desk", "host"])
     assert.deepEqual(proc.kills, [])
     assert.equal(proc.listenerCount(signal), 1, "only the host's listener stays")
+  })
+
+  test(`${signal} does not suppress a passive exit observer installed before Desk`, () => {
+    const proc = fakeProcess()
+    const registry = createExitRelease(proc)
+    const ran = []
+    proc.on(signal, () => {
+      if (proc.listenerCount(signal) === 1) {
+        ran.push("observer")
+        proc.kill(proc.pid, signal)
+      }
+    })
+    registry.register(() => ran.push("desk"))
+    proc.emit(signal, signal)
+    assert.deepEqual(ran, ["desk", "observer"])
+    assert.deepEqual(proc.kills, [[4242, signal]], "the observer preserves normal signal termination")
+    assert.equal(registry.size(), 0)
   })
 }
 
