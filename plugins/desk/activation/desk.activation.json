@@ -6,13 +6,13 @@
     {
       "id": "desk",
       "kind": "substrate",
-      "version": "3.2.0-alpha.42",
+      "version": "3.2.0-alpha.43",
       "provenance": {
         "source": "plugins/desk/.codex-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
-        "version": "3.2.0-alpha.42",
+        "version": "3.2.0-alpha.43",
         "integrity": "sha256-desk-activation-manifest-v1"
       }
     },
