@@ -6,7 +6,7 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writ
 import * as net from "node:net"
 import * as path from "node:path"
 import { spawn } from "node:child_process"
-import { connectOrStartController, endpointIsAbandoned, endpointIsReclaimable, probeEndpoint, unlinkIfUnchanged } from "../../src/readiness/controller-client.js"
+import { connectOrStartController, endpointIsAbandoned, endpointIsReclaimable, probeEndpoint, socketTakeoverGuards, unlinkIfUnchanged } from "../../src/readiness/controller-client.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
@@ -146,6 +146,11 @@ test("a socket is reclaimable at once only when its recorded owner is gone or is
   assert.equal(endpointIsReclaimable({ endpoint: path.join(privateDir, "gone.sock"), owner: { state: "dead", record } }), null, "no socket at all")
   writeFileSync(path.join(privateDir, "file.sock"), "")
   assert.equal(endpointIsReclaimable({ endpoint: path.join(privateDir, "file.sock"), owner: { state: "dead", record: { ...record, endpoint: path.join(privateDir, "file.sock") } } }), null, "not a socket")
+})
+
+test("on Windows there is no socket file to guard: a named pipe in use cannot be bound, so election just tries", async () => {
+  assert.equal(await socketTakeoverGuards.win32({ endpoint: "\\\\.\\pipe\\desk", identity: null, stateDir: "C:\\state" }), false)
+  assert.equal(socketTakeoverGuards.darwin, socketTakeoverGuards.linux)
 })
 
 test("an owner that starts running between the two refused probes keeps its socket", { skip: posixOnly }, async () => {

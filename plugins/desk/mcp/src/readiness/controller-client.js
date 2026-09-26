@@ -22,6 +22,12 @@ const privateDirectoryValidators = {
   darwin: validatePrivateDirectory,
   linux: validatePrivateDirectory,
 }
+// Named pipes on Windows leave no socket file behind to reclaim, and binding one in use fails.
+export const socketTakeoverGuards = {
+  win32: async () => false,
+  darwin: guardSocketTakeover,
+  linux: guardSocketTakeover,
+}
 // Named pipes on Windows have no directory mode to tighten.
 const privateDirectoryTighteners = {
   win32: Object,
@@ -98,20 +104,7 @@ async function startOrReuseController({
     requireCompatibleHandshake(existing, identity)
     return
   }
-  if (process.platform !== "win32") {
-    // A controller whose owner runs is never taken over, even when it does not answer: no unlink, no second controller. The session stays controller-free, and its hung-controller checks report it.
-    const owner = ownerState({ stateDir, identity })
-    if (owner.state === "live") {
-      const answered = await tryHandshake({ endpoint, identity, stateDir, timeoutMs: LIVE_OWNER_HANDSHAKE_MS })
-      if (answered) {
-        requireCompatibleHandshake(answered, identity)
-        return
-      }
-      throw Object.assign(new Error(`The readiness controller for this root belongs to a running process (pid ${owner.record.owner.pid}) that does not answer; Desk never starts a second controller while it runs.`), { code: "controller_owner_unresponsive", owner_pid: owner.record.owner.pid })
-    }
-    const stale = endpointIsReclaimable({ endpoint, owner }) ?? await endpointIsAbandoned(endpoint, { stateDir, identity })
-    if (stale) unlinkIfUnchanged(endpoint, stale)
-  }
+  if (await socketTakeoverGuards[process.platform]({ endpoint, identity, stateDir })) return
   let ownedWatcher = watcher
   try {
     ownedWatcher ??= await watcherFactory?.({ root: identity.root })
@@ -131,6 +124,22 @@ async function startOrReuseController({
     }
     await waitForHandshake({ endpoint, identity, stateDir })
   }
+}
+
+// Before binding: a controller whose owner runs is never taken over, even when it does not answer (no unlink, no second controller; the session stays controller-free and its hung-controller checks report it). Otherwise a stale socket of ours is removed. Resolves true when the running owner answered, so the session joins it instead of binding.
+async function guardSocketTakeover({ endpoint, identity, stateDir }) {
+  const owner = ownerState({ stateDir, identity })
+  if (owner.state === "live") {
+    const answered = await tryHandshake({ endpoint, identity, stateDir, timeoutMs: LIVE_OWNER_HANDSHAKE_MS })
+    if (answered) {
+      requireCompatibleHandshake(answered, identity)
+      return true
+    }
+    throw Object.assign(new Error(`The readiness controller for this root belongs to a running process (pid ${owner.record.owner.pid}) that does not answer; Desk never starts a second controller while it runs.`), { code: "controller_owner_unresponsive", owner_pid: owner.record.owner.pid })
+  }
+  const stale = endpointIsReclaimable({ endpoint, owner }) ?? await endpointIsAbandoned(endpoint, { stateDir, identity })
+  if (stale) unlinkIfUnchanged(endpoint, stale)
+  return false
 }
 
 function isControllerElectionCollision(error) {
