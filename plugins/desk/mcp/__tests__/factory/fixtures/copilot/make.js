@@ -395,7 +395,7 @@ function workspaceYaml(sessionId) {
 // ---------------------------------------------------------------------------
 
 const STORE_SCHEMA = `
-CREATE TABLE sessions (id TEXT PRIMARY KEY);
+CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, repository TEXT, summary TEXT);
 CREATE TABLE assistant_usage_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT NOT NULL REFERENCES sessions(id),
@@ -455,11 +455,39 @@ export function usageRow(sessionId, model, overrides = {}) {
 }
 
 /** The database rows every fixture session gets, plus rows of another session that must never leak in. */
+/** The commits in the fixture sessions' repository, which the fake resolver finds by prefix. */
+export const FIXTURE_COMMITS = Object.freeze([
+  "abcdef0000000000000000000000000000000001",
+  "abcdef0120000000000000000000000000000001",
+  "fc6ea8a0000000000000000000000000000000aa",
+])
+
+/**
+ * A fake `resolveCommits` for the deriver: in `root` it finds
+ * `FIXTURE_COMMITS` by prefix and reports `origin`; anywhere else it finds
+ * nothing. `calls` records every call.
+ */
+export function fakeCommitResolver({ root = `/tmp/${S}/repo`, origin = "https://github.com/ourostack/desk" } = {}) {
+  const calls = []
+  const resolveCommits = ({ gitRoot, cwd, shas }) => {
+    calls.push({ gitRoot, cwd, shas: [...shas] })
+    if (gitRoot !== root) return { origin: null, fulls: shas.map(() => null) }
+    return { origin, fulls: shas.map((sha) => FIXTURE_COMMITS.find((full) => full.startsWith(sha.toLowerCase())) ?? null) }
+  }
+  return Object.assign(resolveCommits, { calls })
+}
+
 export const OTHER_SESSION = "9d425161-7f8e-4091-a2a3-1e2f30415263"
 
 export function defaultStoreRows() {
   return {
-    sessions: [SESSIONS.full, SESSIONS.noShutdown, OTHER_SESSION],
+    // The real store's shapes (controller probe, M3-5 fix round 1): a
+    // session row carries its repository and working directory.
+    sessions: [
+      { id: SESSIONS.full, cwd: `/tmp/${S}/cwd`, repository: "ourostack/desk", summary: `${S} summary` },
+      { id: SESSIONS.noShutdown, cwd: `/tmp/${S}/cwd`, repository: `${S} not a repo`, summary: S },
+      { id: OTHER_SESSION, cwd: `/tmp/${S}/other`, repository: "ourostack/secret", summary: S },
+    ],
     usage: [
       // The full session has a shutdown; these rows must not be added to it.
       usageRow(SESSIONS.full, "claude-opus-5-5", { input_tokens: 999999 }),
@@ -471,7 +499,17 @@ export function defaultStoreRows() {
       usageRow(SESSIONS.noShutdown, "gpt-5.2", { output_tokens: -1, agent_id: S }),
       usageRow(OTHER_SESSION, "claude-opus-5-5", { input_tokens: 555555 }),
     ],
+    // Real rows are bare PR numbers and 7–9 character short SHAs; the
+    // `owner/repo#n`, URL and 40-hex forms are still accepted.
     refs: [
+      [SESSIONS.full, "pr", "7"],
+      [SESSIONS.full, "pr", "12"],
+      [SESSIONS.full, "commit", "fc6ea8a"],
+      [SESSIONS.full, "commit", "abcdef012"],
+      [SESSIONS.full, "commit", "0badc0de"],
+      [SESSIONS.full, "issue", "4"],
+      [SESSIONS.noShutdown, "pr", "5"],
+      [SESSIONS.noShutdown, "commit", "fc6ea8a"],
       [SESSIONS.full, "pr", "ourostack/desk#12"],
       [SESSIONS.full, "pr", "https://github.com/ourostack/factory/pull/3"],
       [SESSIONS.full, "pr", "https://github.com/ourostack/desk/pull/12/files"],
@@ -485,6 +523,7 @@ export function defaultStoreRows() {
       [SESSIONS.full, null, null],
       [OTHER_SESSION, "pr", "ourostack/secret#1"],
       [OTHER_SESSION, "commit", "1111111111111111111111111111111111111111"],
+      [OTHER_SESSION, "pr", "99"],
     ],
   }
 }
@@ -495,8 +534,11 @@ export function buildSessionStore(dbPath, rows = defaultStoreRows()) {
   const db = new DatabaseSync(dbPath)
   try {
     db.exec(STORE_SCHEMA)
-    const insertSession = db.prepare("INSERT INTO sessions (id) VALUES (?)")
-    for (const id of rows.sessions ?? []) insertSession.run(id)
+    const insertSession = db.prepare("INSERT INTO sessions (id, cwd, repository, summary) VALUES (?, ?, ?, ?)")
+    for (const session of rows.sessions ?? []) {
+      const { id, cwd = null, repository = null, summary = null } = typeof session === "string" ? { id: session } : session
+      insertSession.run(id, cwd, repository, summary)
+    }
     const columns = Object.keys(usageRow("x", "y"))
     const insertUsage = db.prepare(
       `INSERT INTO assistant_usage_events (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,

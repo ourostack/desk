@@ -13,14 +13,15 @@ import v8 from "node:v8"
 import vm from "node:vm"
 
 import { deriveCopilotSession, __internals__ } from "../../src/factory/derive-copilot.js"
-import { normalizeRow, readSessionRefs, readSessionRows, __internals__ as usageInternals } from "../../src/factory/copilot-usage.js"
+import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows, __internals__ as usageInternals } from "../../src/factory/copilot-usage.js"
 import { spawnSync } from "node:child_process"
-import { validateFacts, validateFactsBytes } from "../../src/factory/schema.js"
+import { validateLocalFacts as validateFacts, validateLocalFactsBytes as validateFactsBytes } from "../../src/factory/schema.js"
 import {
   SENTINEL,
   SESSIONS,
   FULL_FINAL_METRICS,
   OTHER_SESSION,
+  fakeCommitResolver,
   at,
   buildSessionStore,
   defaultStoreRows,
@@ -31,7 +32,6 @@ import {
 } from "./fixtures/copilot/make.js"
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "copilot")
-const CONTRIBUTOR = "0f3a9c1d2b4e6f70"
 const PLUGINS = [{ name: "desk", version: "3.2.0-alpha.22" }]
 
 /** A fresh Copilot home holding the named fixture sessions and, unless `store` is null, a synthetic database. */
@@ -52,11 +52,16 @@ function makeHome({ sessions = Object.values(SESSIONS), store = defaultStoreRows
   return home
 }
 
+// The fixtures' repository (`context.gitRoot`), where the fake resolver
+// finds `FIXTURE_COMMITS`; its origin is `ourostack/desk`.
+const GIT_ROOT = `/tmp/${SENTINEL}/repo`
+let fixtureResolver = fakeCommitResolver()
+
 function derive(home, sessionId, overrides = {}) {
   return deriveCopilotSession({
     sessionId,
     copilotHome: home,
-    contributor: CONTRIBUTOR,
+    resolveCommits: fixtureResolver,
     plugins: PLUGINS,
     endReason: "complete",
     ...overrides,
@@ -118,8 +123,8 @@ test("the full session derives one valid session across three resumes and four s
       end_reason: "complete",
       derived_through: at(99),
     })
-    assert.equal(facts.schema, "desk.factory.facts/1")
-    assert.equal(facts.contributor, CONTRIBUTOR)
+    assert.equal(facts.schema, "desk.factory.local/1")
+    assert.equal(Object.hasOwn(facts, "contributor"), false, "local facts carry no contributor")
     assert.deepEqual(facts.jobs, [])
     assert.deepEqual(intervalsOf(facts, "turn").map(({ start, end }) => ({ start, end })), [span(3, 43), span(45, 46), span(47, 48), span(61, 74), span(75.4, 75.6), span(91, 92), span(96, 97)])
   } finally {
@@ -299,18 +304,27 @@ test("plugins merge the marker's list with skill.invoked plugin versions", async
 test("refs come from this session's session_refs rows, validated", async () => {
   const home = makeHome()
   try {
+    fixtureResolver = fakeCommitResolver()
     const { facts, events } = await derive(home, SESSIONS.full)
     assert.deepEqual(facts.refs, {
       prs: [
+        { repo: "ourostack/desk", number: 7 },
         { repo: "ourostack/desk", number: 12 },
         { repo: "ourostack/factory", number: 3 },
       ],
       commits: [
-        { sha: "abcdef0000000000000000000000000000000001" },
-        { sha: "fc6ea8a0000000000000000000000000000000aa" },
+        { repo: "ourostack/desk", sha: "abcdef0000000000000000000000000000000001" },
+        { repo: "ourostack/desk", sha: "abcdef0120000000000000000000000000000001" },
+        { repo: "ourostack/desk", sha: "fc6ea8a0000000000000000000000000000000aa" },
       ],
+      unresolved: { prs: 0, commits: 1 },
     })
-    assert.deepEqual(events.commitShas, ["abcdef0000000000000000000000000000000001", "fc6ea8a0000000000000000000000000000000aa"])
+    assert.deepEqual(fixtureResolver.calls, [{
+      gitRoot: GIT_ROOT,
+      cwd: `/tmp/${SENTINEL}/cwd`,
+      shas: ["fc6ea8a", "abcdef012", "0badc0de", "fc6ea8a0000000000000000000000000000000aa", "ABCDEF0000000000000000000000000000000001"],
+    }], "every commit row is looked up in one batch, in the session's gitRoot")
+    assert.deepEqual(events.commitShas, ["abcdef0000000000000000000000000000000001", "abcdef0120000000000000000000000000000001", "fc6ea8a0000000000000000000000000000000aa"])
     assert.ok(!JSON.stringify(facts).includes(OTHER_SESSION))
     assert.ok(!JSON.stringify(facts).includes("ourostack/secret"))
   } finally {
@@ -426,7 +440,7 @@ test("a 1,000,000-line events log derives in a single pass with bounded memory",
     const { facts } = result
     assertValid(facts)
     assert.equal(facts.intervals.length, 100000, "intervals are capped at the schema limit")
-    assert.ok(facts.unavailable.some((entry) => entry.field === "tool_durations" && entry.reason === "log_truncated"))
+    assert.ok(facts.unavailable.some((entry) => entry.field === "tool_durations" && entry.reason === "capped"))
     assert.ok(facts.counts.tool_calls.shell >= 399000, "every call is still counted past the interval cap")
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -460,11 +474,6 @@ async function deriveText(events, { store = null, ...overrides } = {}) {
     rmSync(home, { recursive: true, force: true })
   }
 }
-
-test("an invalid contributor is a caller bug and throws", async () => {
-  await assert.rejects(() => deriveCopilotSession({ sessionId: EDGE, copilotHome: "/nonexistent", contributor: "Nope", plugins: [], endReason: null }), TypeError)
-  await assert.rejects(() => deriveCopilotSession({ sessionId: EDGE, copilotHome: "/nonexistent", contributor: 7, plugins: [], endReason: null }), TypeError)
-})
 
 test("a session id that is not a UUID is refused before any path is built", async () => {
   for (const sessionId of ["../../etc", 42, undefined]) {
@@ -632,7 +641,7 @@ test("shutdown metrics of odd shapes: a non-object, a bad model key, missing cou
   assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
 })
 
-test("more than 32 models, 64 plugins or 2000 commits are trimmed with log_truncated", async () => {
+test("more than 32 models, 64 plugins or 2000 commits are trimmed with capped", async () => {
   const ev = eventWriter()
   const metrics = Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`model-${String(index).padStart(2, "0")}`, { requests: { count: index }, usage: {} }]))
   const plugins = Array.from({ length: 65 }, (_, index) => ({ name: `plugin-${index}`, version: "1.0.0" }))
@@ -645,7 +654,8 @@ test("more than 32 models, 64 plugins or 2000 commits are trimmed with log_trunc
   assert.equal(facts.plugins.length, 64)
   assert.equal(facts.refs.commits.length, 2000)
   for (const field of ["models", "plugins", "commits"]) {
-    assert.ok(facts.unavailable.some((entry) => entry.field === field && entry.reason === "log_truncated"), field)
+    assert.ok(facts.unavailable.some((entry) => entry.field === field && entry.reason === "capped"), field)
+    assert.equal(facts.unavailable.some((entry) => entry.field === field && entry.reason === "log_truncated"), false, field)
   }
 })
 
@@ -690,7 +700,7 @@ test("the agent cap: past 9999 subagents, later ones are dropped and their tools
     assertValid(facts)
     assert.equal(facts.agents.length, 10000)
     assert.deepEqual(intervalsOf(facts, "tool").map(({ agent }) => agent), [0])
-    assert.ok(facts.unavailable.some((entry) => entry.field === "turns" && entry.reason === "log_truncated"))
+    assert.ok(facts.unavailable.some((entry) => entry.field === "turns" && entry.reason === "capped"))
     assert.ok(facts.unavailable.some((entry) => entry.field === "tool_durations" && entry.reason === "log_truncated"))
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -714,7 +724,8 @@ test("readSessionRefs reads the ambient COPILOT_HOME when no environment is pass
   const saved = process.env.COPILOT_HOME
   try {
     process.env.COPILOT_HOME = home
-    assert.deepEqual(readSessionRefs({ sessionId: OTHER_SESSION }).rows.map((row) => row.ref_type), ["pr", "commit"])
+    assert.deepEqual(readSessionRefs({ sessionId: OTHER_SESSION }).rows.map((row) => row.ref_type), ["pr", "commit", "pr"])
+    assert.deepEqual(readSessionRecord({ sessionId: OTHER_SESSION }), { repository: "ourostack/secret", cwd: `/tmp/${SENTINEL}/other` })
   } finally {
     if (saved === undefined) delete process.env.COPILOT_HOME
     else process.env.COPILOT_HOME = saved
@@ -950,8 +961,91 @@ test("nativeCommitShas carries this session's session_refs commits, which bind d
   const home = makeHome()
   try {
     const { events } = await derive(home, SESSIONS.full)
-    assert.deepEqual(events.nativeCommitShas, ["abcdef0000000000000000000000000000000001", "fc6ea8a0000000000000000000000000000000aa"])
+    assert.deepEqual(events.nativeCommitShas, ["abcdef0000000000000000000000000000000001", "abcdef0120000000000000000000000000000001", "fc6ea8a0000000000000000000000000000000aa"], "full SHAs only, so binding gets full hashes")
     assert.deepEqual(events.shellGitCommits, [], "the fixture's bash calls hold no git commit")
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Fix round 1 (M3-5): the real store's reference shapes.
+// ---------------------------------------------------------------------------
+
+async function refsOf({ repository = "octo-org/widgets", cwd = null, context = { cwd: `/tmp/${SENTINEL}` }, refs, resolveCommits = null }) {
+  const ev = eventWriter()
+  const lines = [ev("session.start", 0, { sessionId: EDGE, copilotVersion: "1.0.88", producer: "copilot-agent", context })]
+  const store = { sessions: [{ id: EDGE, repository, cwd }], usage: [], refs: refs.map(([type, value]) => [EDGE, type, value]) }
+  // `resolveCommits: null` asks for the deriver's own default resolver.
+  const { facts, events } = await deriveText(lines, { store, resolveCommits: resolveCommits ?? undefined })
+  return { refs: facts.refs, native: events.nativeCommitShas }
+}
+
+test("a bare PR number takes the session's repository; without a valid one it is unresolved", async () => {
+  let { refs } = await refsOf({ refs: [["pr", "5"], ["pr", "0"], ["pr", "99999999999999999999"], ["issue", "3"], ["pr", "ourostack/desk#8"]] })
+  assert.deepEqual(refs.prs, [{ repo: "octo-org/widgets", number: 5 }, { repo: "ourostack/desk", number: 8 }])
+  assert.deepEqual(refs.unresolved, { prs: 0, commits: 0 })
+  for (const repository of [null, `${SENTINEL} free text`, "a/b/c"]) {
+    ;({ refs } = await refsOf({ repository, refs: [["pr", "5"], ["pr", "6"], ["pr", "ourostack/desk#8"]] }))
+    assert.deepEqual(refs.prs, [{ repo: "ourostack/desk", number: 8 }], String(repository))
+    assert.deepEqual(refs.unresolved, { prs: 2, commits: 0 }, String(repository))
+  }
+})
+
+const FULL_A = "abc1234000000000000000000000000000000000"
+const FULL_B = "b".repeat(40)
+
+// A fake that answers from `answers` (sha -> full) with `origin`.
+function answering(answers, origin) {
+  const calls = []
+  const resolveCommits = ({ gitRoot, cwd, shas }) => {
+    calls.push({ gitRoot, cwd, shas: [...shas] })
+    return { origin, fulls: shas.map((sha) => answers[sha] ?? null) }
+  }
+  return Object.assign(resolveCommits, { calls })
+}
+
+test("a commit carries sessions.repository only when the resolving repository's origin is that repository", async () => {
+  const answers = { abc1234: FULL_A.toUpperCase(), [FULL_B]: FULL_B, bad0bad: `${SENTINEL} not a sha` }
+  const rows = [["commit", "abc1234"], ["commit", "bad0bad"], ["commit", "0000000"], ["commit", "abc"], ["commit", SENTINEL], ["commit", FULL_B], ["commit", "c".repeat(40)], ["commit", "C".repeat(40)]]
+  const matching = answering(answers, "https://github.com/octo-org/widgets")
+  let result = await refsOf({ repository: "Octo-Org/Widgets", context: { cwd: "/x", gitRoot: "/repo/root" }, cwd: "/fallback", refs: rows, resolveCommits: matching })
+  assert.deepEqual(matching.calls, [{ gitRoot: "/repo/root", cwd: "/fallback", shas: ["abc1234", "bad0bad", "0000000", FULL_B, "c".repeat(40), "C".repeat(40)] }], "too short or non-hex values are never asked")
+  assert.deepEqual(result.refs.commits, [
+    { repo: "Octo-Org/Widgets", sha: FULL_A },
+    { repo: "Octo-Org/Widgets", sha: FULL_B },
+    { repo: null, sha: "c".repeat(40) },
+  ], "a 40-hex row the repository lacks is kept, unlabeled, once")
+  assert.deepEqual(result.refs.unresolved, { prs: 0, commits: 2 })
+  assert.deepEqual(result.native, [FULL_A, FULL_B, "c".repeat(40)])
+
+  for (const origin of ["https://github.com/octo-org/fork", "https://gitlab.com/octo-org/widgets", null]) {
+    result = await refsOf({ context: { cwd: "/x", gitRoot: "/repo/root" }, refs: [["commit", "abc1234"], ["commit", FULL_B]], resolveCommits: answering(answers, origin) })
+    assert.deepEqual(result.refs.commits, [{ repo: null, sha: FULL_A }, { repo: null, sha: FULL_B }], String(origin))
+  }
+  result = await refsOf({ repository: null, context: { cwd: "/x" }, refs: [["commit", "abc1234"]], resolveCommits: answering(answers, "https://github.com/octo-org/widgets") })
+  assert.deepEqual(result.refs.commits, [{ repo: null, sha: FULL_A }])
+})
+
+test("with no commit rows the resolver is never asked", async () => {
+  const resolver = answering({}, null)
+  await refsOf({ refs: [["pr", "5"]], resolveCommits: resolver })
+  assert.deepEqual(resolver.calls, [])
+})
+
+test("the default resolver is the real one: with no repository on disk nothing resolves", async () => {
+  const { refs } = await refsOf({ context: { cwd: "/x", gitRoot: `/tmp/${SENTINEL}/no-such-repo` }, refs: [["commit", "abc1234"], ["commit", FULL_B]], resolveCommits: null })
+  assert.deepEqual(refs.commits, [{ repo: null, sha: FULL_B }])
+  assert.deepEqual(refs.unresolved, { prs: 0, commits: 1 })
+})
+
+test("readSessionRecord reads repository and cwd, each null when absent, not text or unreadable", () => {
+  const home = makeHome({ sessions: [], store: { sessions: [{ id: EDGE, repository: Buffer.from("ourostack/desk") }], usage: [], refs: [] } })
+  const env = { COPILOT_HOME: home }
+  try {
+    assert.deepEqual(readSessionRecord({ sessionId: EDGE, env }), { repository: null, cwd: null })
+    assert.deepEqual(readSessionRecord({ sessionId: OTHER_SESSION, env }), { repository: null, cwd: null })
+    assert.deepEqual(readSessionRecord({ sessionId: EDGE, env: { COPILOT_HOME: path.join(home, "none") } }), { repository: null, cwd: null })
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
