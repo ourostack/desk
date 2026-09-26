@@ -69,10 +69,10 @@ export function writeActivation(fixture, deskRuntime = { semantic: "unsupported"
 }
 
 /** Start index.js over stdio the way a host does, with the fixture's isolated environment. */
-export function startDesk(fixture, { args = [], env = {} } = {}) {
+export function startDesk(fixture, { args = [], env = {}, nodeArgs = [] } = {}) {
   return openSession({
     command: process.execPath,
-    args: [indexPath, ...args],
+    args: [...nodeArgs, indexPath, ...args],
     cwd: fixture.root,
     env: isolatedEnv(fixture, { DESK: undefined, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, ...env }),
   })

@@ -69,8 +69,8 @@ test("main answers the handshake, starts admission on its own without a client, 
     runtimeImporter: async () => ({ connectOrStartController: async () => ({ accepted: true }) }),
     onClosed: () => { closed = true },
   })
-  // The handshake starts admission; the kickoff timer that follows finds it already started.
-  input.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
+  // The first tools/list starts admission; the kickoff timer that follows finds it already started.
+  input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`)
   await new Promise((resolve) => setTimeout(resolve, 20))
   const deadline = Date.now() + 5000
   while (handle.admission.snapshot().state === "admitting" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5))
@@ -145,4 +145,106 @@ test("the entrypoint gives main an onClosed that exits when the host closes stdi
   })
   options.onClosed()
   assert.deepEqual(exits, [0])
+})
+
+test("--degraded: integrity codes refuse, read-only codes keep reads, and a crew-state code with --state-branch hands over to Desk", async () => {
+  const { launcherMode, parseArgs } = await import("../../index.js")
+  assert.equal(launcherMode({}), null)
+  assert.deepEqual(parseArgs(["--degraded", "snapshot_missing", "--degraded-reason", "no snapshot"]), { root: null, person: null, degraded: "snapshot_missing", degradedReason: "no snapshot" })
+  assert.deepEqual(launcherMode(parseArgs(["--degraded", "snapshot_missing", "--degraded-reason", "no snapshot"])), { code: "snapshot_missing", reason: "no snapshot", mode: "refuse", blocksWrites: true })
+  assert.deepEqual(launcherMode({ degraded: "Bad Code!" }), { code: "launcher_refused", reason: "the launcher reported launcher_refused", mode: "refuse", blocksWrites: true })
+  assert.deepEqual(launcherMode({ degraded: "identity_not_emu" }), { code: "identity_not_emu", reason: "the launcher reported identity_not_emu", mode: "read_only", blocksWrites: true })
+  assert.deepEqual(launcherMode({ degraded: "crew_state_not_main", stateBranch: "main" }), { code: "crew_state_not_main", reason: "the launcher reported crew_state_not_main", mode: "read_only", blocksWrites: false })
+  assert.equal(launcherMode({ degraded: "repository_mismatch", stateBranch: "main" }).blocksWrites, true, "only crew-state codes are handed to the state-branch check")
+})
+
+test("--degraded takes precedence over --onboarding", async () => {
+  const { startInProcess } = await import("./_in_process_desk.js")
+  const desk = await startInProcess({ argv: ["--onboarding", "crew:join-crew", "--degraded", "registry_malformed"], runtimeImporter: async () => assert.fail("no runtime in refuse mode") })
+  try {
+    assert.equal((await desk.statusUntil((payload) => payload.state !== "admitting")).state, "degraded:registry_malformed")
+  } finally {
+    await desk.close()
+  }
+})
+
+test("DESK_READINESS_PROBE_MS tunes the hung-controller probe", async () => {
+  const { hungTuning } = await import("../../index.js")
+  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "300" }), { probeMs: 300 })
+  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "0" }), {})
+  assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "soon" }), {})
+  assert.deepEqual(hungTuning({}), {})
+})
+
+test("crash handlers hand uncaught errors and rejections to the session, and are removed on close", async () => {
+  const { installCrashHandlers } = await import("../../index.js")
+  const { EventEmitter } = await import("node:events")
+  const target = new EventEmitter()
+  const recorded = []
+  const writes = []
+  const remove = installCrashHandlers({ session: { recordException: (kind, error) => recorded.push([kind, error]) }, stderr: { write: (text) => writes.push(text) }, target })
+  target.emit("uncaughtException", new Error("boom"))
+  target.emit("unhandledRejection", "rejected")
+  assert.deepEqual(recorded.map(([kind]) => kind), ["uncaught_exception", "unhandled_rejection"])
+  assert.match(writes.join(""), /crash handlers installed/u)
+  remove()
+  assert.equal(target.listenerCount("uncaughtException"), 0)
+  assert.equal(target.listenerCount("unhandledRejection"), 0)
+  const input = new PassThrough()
+  const root = await mkTempRoot("desk-main-crash-handlers-")
+  const handle = await main({
+    argv: ["--root", root], env: {}, cwd: root, homeDir: root, stateHome: path.join(root, "state"),
+    input, output: new PassThrough(), stderr: { write() { return true } }, admissionKickoffMs: 0,
+    runtimeInspector: null, runtimeImporter: async () => ({ connectOrStartController: async () => ({ accepted: true }) }),
+    crashHandlers: true,
+  })
+  const before = process.listenerCount("uncaughtException")
+  input.end()
+  await handle.closed
+  assert.equal(process.listenerCount("uncaughtException"), before - 1, "closing removes the handler main installed")
+})
+
+test("the shipped importer runs inspection and restore through the admission job, and each failure names its state", async () => {
+  const { importPreparedRuntime } = await import("../../index.js")
+  const { importRuntimeServer, inspectRuntimeDependencyPack } = await import("../../src/runtime/bootstrap.js")
+  const { admitInProcess } = await import("./_in_process_desk.js")
+  const root = await mkTempRoot("desk-main-worker-runtime-")
+  const jobs = []
+  const admitWith = (reply, extra = {}) => admitInProcess({
+    argv: ["--root", root], env: {}, cwd: root, homeDir: root,
+    runtimeImporter: importRuntimeServer,
+    runtimeInspector: inspectRuntimeDependencyPack,
+    offload: async (job) => {
+      jobs.push(job.kind)
+      if (job.kind === "resolve") return (await import("../../src/runtime/admission-worker.js")).runAdmissionJob(job)
+      assert.equal(job.input.inspect, extra.inspect ?? true)
+      return reply
+    },
+    ...extra,
+  })
+  assert.equal((await admitWith({ inspectionError: { message: "x" } })).snapshot.diagnostic.reason, "runtime_inspection_failed")
+  assert.equal((await admitWith({ inspection: { ok: false, reason: "missing_pack", runtime: {} } })).snapshot.diagnostic.reason, "missing_pack")
+  const locked = await admitWith({ inspection: null, restoreError: { message: "lock", lock: { dir: "/c.publish-lock", pid: 77 } } }, { runtimeInspector: null, inspect: false })
+  assert.equal(locked.snapshot.state, "degraded:runtime_restore_locked")
+  assert.match(locked.snapshot.fix, /pid 77/u)
+  const unknownHolder = await admitWith({ inspection: null, restoreError: { message: "lock", lock: { dir: "/c.publish-lock", pid: null } } }, { runtimeInspector: null, inspect: false })
+  assert.match(unknownHolder.snapshot.summary, /owner record is unreadable/u)
+  const restoreFailed = await admitWith({ inspection: { ok: true, runtime: {} }, restoreError: { message: "disk full" } })
+  assert.equal(restoreFailed.snapshot.diagnostic.reason, "runtime_restore_failed")
+  assert.equal(restoreFailed.snapshot.diagnostic.restore_error, "disk full")
+  const importFailed = await admitWith({ inspection: null, prepared: { sourceMirrorPath: path.join(root, "no-mirror") } }, { runtimeInspector: null, inspect: false })
+  assert.equal(importFailed.snapshot.diagnostic.reason, "runtime_restore_failed")
+  assert.ok(jobs.includes("runtime"))
+
+  const loaded = await importPreparedRuntime({
+    mcpRoot: "/plugin/mcp",
+    prepared: { sourceMirrorPath: "/mirror", runtimeCacheDir: "/cache", target: "t", packDir: "/pack" },
+    load: async (url) => {
+      assert.match(url, /\/mirror\/src\/server\.js$/u)
+      return { configureRuntimeArtifacts: ({ pluginRoot }) => assert.equal(pluginRoot, "/plugin"), marker: 1 }
+    },
+  })
+  assert.equal(loaded.marker, 1)
+  assert.deepEqual(loaded._deskRuntime, { plugin_root: "/plugin", runtime_cache_dir: "/cache", source_mirror_path: "/mirror", target: "t", pack_dir: "/pack", loaded_from_source_mirror: true })
+  assert.equal((await importPreparedRuntime({ mcpRoot: "/p/mcp", prepared: { sourceMirrorPath: "/m" }, load: async () => ({}) }))._deskRuntime.loaded_from_source_mirror, true)
 })

@@ -251,3 +251,18 @@ test("a check that finishes after dispose schedules nothing", async () => {
   await flush()
   assert.equal(timers.pending.size, 0)
 })
+
+test("fail() records a degraded state and waits for the backoff instead of re-admitting at once", async () => {
+  const timers = fakeTimers()
+  let attempts = 0
+  const machine = createAdmission({ timers, now: timers.now, attempt: async () => { attempts += 1; return { state: "ready" } } })
+  await machine.start()
+  const failed = machine.fail({ code: "runtime_exception", fix: "keep serving" })
+  assert.equal(failed.state, "degraded:runtime_exception")
+  assert.equal(attempts, 1, "no attempt runs at once")
+  assert.deepEqual(timers.delays(), [1000])
+  await timers.fire()
+  assert.equal(machine.snapshot().state, "ready")
+  machine.dispose()
+  assert.equal(machine.fail({ code: "late" }).state, "ready", "a disposed machine keeps its last state")
+})

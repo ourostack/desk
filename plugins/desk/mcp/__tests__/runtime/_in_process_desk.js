@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream"
 import * as path from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { main } from "../../index.js"
+import { runAdmissionJob } from "../../src/runtime/admission-worker.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 /** An MCP transport over a pair of streams: the client writes to `toServer` and reads `fromServer`. */
@@ -49,8 +50,10 @@ export async function startInProcess(options = {}, { connect = true } = {}) {
   const stderrLines = []
   const handle = await main({
     env: {},
-    // Without a client, nothing sends notifications/initialized: start admission at once.
-    ...(connect ? {} : { admissionKickoffMs: 0 }),
+    // Admission jobs run in this thread, so the coverage run measures them; the spawned tests exercise the real worker.
+    offload: runAdmissionJob,
+    // The SDK client never sends tools/list on connect: start admission at once instead of after the 1 s fallback.
+    admissionKickoffMs: 0,
     stderr: { write: (text) => { stderrLines.push(String(text)); return true } },
     ...options,
     stateHome,
@@ -113,6 +116,8 @@ export async function startInProcess(options = {}, { connect = true } = {}) {
 export async function admitInProcess(options = {}) {
   const desk = await startInProcess(options, { connect: false })
   const snapshot = await desk.settled()
+  // Background convergence starts in a promise after admission: let it report before the session closes.
+  await new Promise((resolve) => setImmediate(resolve))
   const { context } = desk.handle.session
   const result = {
     person: context.person ?? null,

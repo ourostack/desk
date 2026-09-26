@@ -1,13 +1,20 @@
 // Desk's small local record of how its latest start went, for boot checks and agents that did not see the session's tool calls.
 //
-// `last-start.json` in Desk's state directory holds the current admission state, its code and the latest repair. It is rewritten on every state change. `repairs.log` gets one line per repair Desk makes on its own.
+// `last-start.json` in Desk's state directory holds the latest admission state of any session, its code and the latest repair; `last-start/<root key>.json` holds the same for each desk root, so a boot check reads the record of its own root. Both are rewritten on every state change, starting with `admitting`. `repairs.log` gets one line per repair Desk makes on its own.
 
+import { createHash } from "node:crypto"
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
 export const LAST_START_FILE = "last-start.json"
 export const REPAIR_LOG_FILE = "repairs.log"
+export const LAST_START_ROOTS_DIR = "last-start"
+
+/** The per-root record's file name: a short digest of the root path. */
+export function lastStartRootKey(root) {
+  return createHash("sha256").update(root).digest("hex").slice(0, 16)
+}
 
 /** Desk's state directory: `$XDG_STATE_HOME/ouroboros-skills/desk`, else `~/.local/state/ouroboros-skills/desk`. */
 export function resolveDeskStateDir({ env = process.env, homeDir } = {}) {
@@ -22,7 +29,7 @@ export function resolveReadinessStateHome({ env = process.env, homeDir } = {}) {
   return path.join(home, ".cache", "ouroboros-skills", "desk", "readiness")
 }
 
-/** Replace last-start.json atomically. Returns the path written. */
+/** Replace last-start.json, and the root's own record when the root is known, atomically. Returns the path of last-start.json. */
 export function writeLastStart({ stateDir, snapshot, root = null, pid = process.pid, now = () => new Date() }) {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const file = path.join(stateDir, LAST_START_FILE)
@@ -36,10 +43,19 @@ export function writeLastStart({ stateDir, snapshot, root = null, pid = process.
     pid,
     updated_at: now().toISOString(),
   }
+  replaceFile(file, record, pid)
+  if (root !== null) {
+    const rootsDir = path.join(stateDir, LAST_START_ROOTS_DIR)
+    mkdirSync(rootsDir, { recursive: true, mode: 0o700 })
+    replaceFile(path.join(rootsDir, `${lastStartRootKey(root)}.json`), record, pid)
+  }
+  return file
+}
+
+function replaceFile(file, record, pid) {
   const temporary = `${file}.${pid}.tmp`
   writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
   renameSync(temporary, file)
-  return file
 }
 
 /** Append one repair line: `<time> <root> <line>`. */

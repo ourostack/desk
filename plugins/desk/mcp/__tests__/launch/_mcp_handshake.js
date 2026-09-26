@@ -113,8 +113,9 @@ export function runHandshake({ command, args = [], env, cwd, timeoutMs = 20000 }
         if (message.id === undefined || responses.has(message.id)) continue
         responses.set(message.id, message)
         if (message.id === 1) {
+          // Paced like a real host: notifications/initialized and tools/list are separate writes with a gap between them.
           child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
-          send(child, 2, "tools/list")
+          setTimeout(() => send(child, 2, "tools/list"), 30)
         } else if (message.id === 2) {
           handshakeMs = Date.now() - started
           send(child, 3, "tools/call", { name: "desk_status", arguments: {} })

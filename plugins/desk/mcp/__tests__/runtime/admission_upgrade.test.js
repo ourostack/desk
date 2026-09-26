@@ -105,3 +105,47 @@ test("a lost readiness controller is re-elected in the background by the survivi
   assert.equal(write.isError, false, JSON.stringify(write.payload))
   assert.equal((await second.statusUntil((payload) => payload.state === "ready")).readiness.state !== "unavailable", true)
 })
+
+test("a deliberate git switch mid-session stays put: writes go read-only with the doctor fix, and switching back restores ready", async (t) => {
+  const fixture = await makeGitDesk()
+  const configPath = writeActivation(fixture)
+  git(fixture.desk, "branch", "--track", "feature", "origin/feature")
+  const session = await startDesk(fixture, { args: ["--activation-config", configPath, "--state-branch", "main"] })
+  t.after(() => session.close())
+  assert.equal((await session.statusUntil(settled)).state, "ready")
+  // Clean and equal to its upstream: at startup Desk would switch this back; mid-session it must not.
+  git(fixture.desk, "switch", "feature")
+  await waitFor(() => readLastStart(fixture).state === "degraded:state_branch_mismatch")
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  assert.equal(git(fixture.desk, "symbolic-ref", "--short", "HEAD"), "feature", "Desk never switched the checkout")
+  const write = await session.call("task_create", { track: "ops", slug: "mid-session-switch-check", title: "Blocked" })
+  assert.equal(write.isError, true)
+  assert.equal(write.payload.code, "state_branch_mismatch")
+  assert.match(write.payload.fix, /desk_doctor with \{"repair":"switch_state_branch"\}/u)
+  const status = await session.statusUntil(settled)
+  assert.equal(status.state, "degraded:state_branch_mismatch")
+  assert.equal(git(fixture.desk, "symbolic-ref", "--short", "HEAD"), "feature")
+  git(fixture.desk, "switch", "main")
+  assert.equal((await session.statusUntil((payload) => payload.state === "ready")).state, "ready")
+})
+
+test("a crash after ready never ends the process: it degrades to runtime_exception, keeps answering and re-admits", { skip: process.platform === "win32" ? "POSIX signals" : false }, async (t) => {
+  const fixture = await makeGitDesk()
+  const configPath = writeActivation(fixture)
+  const preload = new URL("./fixtures/crash-after-ready-preload.mjs", import.meta.url).href
+  const session = await startDesk(fixture, { args: ["--activation-config", configPath], nodeArgs: ["--import", preload] })
+  t.after(() => session.close())
+  assert.equal((await session.statusUntil(settled)).state, "ready")
+  session.child.kill("SIGUSR2")
+  await waitFor(() => /caught unhandled_rejection/u.test(session.stderr()))
+  const status = (await session.call("desk_status")).payload
+  assert.deepEqual(status.admission.exceptions.map((entry) => [entry.kind, entry.message]), [
+    ["uncaught_exception", "injected unhandled error event"],
+    ["unhandled_rejection", "injected unhandled rejection"],
+  ])
+  assert.match(session.stderr(), /state: degraded:runtime_exception/u)
+  assert.equal((await session.statusUntil((payload) => payload.state === "ready")).state, "ready")
+  const write = await session.call("task_create", { track: "ops", slug: "after-crash-write", title: "Still serving" })
+  assert.equal(write.isError, false, JSON.stringify(write.payload))
+  assert.equal(session.child.exitCode, null, "the process is still running")
+})

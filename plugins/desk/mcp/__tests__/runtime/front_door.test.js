@@ -29,8 +29,8 @@ const tick = () => new Promise((resolve) => setImmediate(resolve))
 test("the tool list is the canonical one, and desk_doctor takes a format and a repair", () => {
   assert.deepEqual(FRONT_DOOR_TOOLS.map((tool) => tool.name), TOOL_NAMES)
   const doctor = FRONT_DOOR_TOOLS.find((tool) => tool.name === "desk_doctor")
-  assert.deepEqual(doctor.inputSchema.properties.repair.enum, ["switch_state_branch", "prune_readiness_state"])
-  assert.deepEqual(DOCTOR_REPAIRS, ["switch_state_branch", "prune_readiness_state"])
+  assert.deepEqual(doctor.inputSchema.properties.repair.enum, ["switch_state_branch", "reclaim_controller", "prune_readiness_state"])
+  assert.deepEqual(DOCTOR_REPAIRS, ["switch_state_branch", "reclaim_controller", "prune_readiness_state"])
   assert.equal(doctor.inputSchema.additionalProperties, false)
 })
 
@@ -40,8 +40,8 @@ test("initialize, ping, tools/list, unknown methods and parse errors answer at o
   send({ id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } })
   send({ id: 2, method: "initialize", params: {} })
   send({ id: 3, method: "ping" })
-  send({ id: 4, method: "tools/list" })
   send({ method: "notifications/initialized" })
+  send({ id: 4, method: "tools/list" })
   send({ method: "notifications/other" })
   send({ id: 5, method: "resources/list" })
   input.write("{not json\n\n")
@@ -59,16 +59,21 @@ test("initialize, ping, tools/list, unknown methods and parse errors answer at o
   assert.equal(lines.length, 6)
 })
 
-test("notifications/initialized alone fires the handshake, and tools/list_changed is sent only after it", async () => {
+test("the handshake hook waits for tools/list: notifications/initialized alone never starts admission", async () => {
   const handshakes = []
   const { lines, send, input, door } = serve({ callTool: () => ({}), onHandshake: () => handshakes.push("h") })
   door.notifyToolsChanged()
   send({ method: "notifications/initialized" })
+  await tick()
+  assert.deepEqual(handshakes, [], "a host sends tools/list after notifications/initialized, often in a separate write")
   door.notifyToolsChanged()
+  send({ id: 1, method: "tools/list" })
+  send({ id: 2, method: "tools/list" })
   input.end()
   await door.closed
-  assert.deepEqual(handshakes, ["h"])
-  assert.deepEqual(lines, [{ jsonrpc: "2.0", method: "notifications/tools/list_changed" }])
+  assert.deepEqual(handshakes, ["h"], "a second tools/list does not fire the hook again")
+  assert.deepEqual(lines[0], { jsonrpc: "2.0", method: "notifications/tools/list_changed" })
+  assert.equal(lines[1].id, 1)
 })
 
 test("tool calls answer synchronously or later, errors become isError results, and input end waits for calls in flight", async () => {
@@ -98,9 +103,12 @@ test("tool calls answer synchronously or later, errors become isError results, a
   const byId = new Map(lines.map((line) => [line.id, line]))
   assert.equal(byId.get(1).result.content[0].text, "sync")
   assert.equal(byId.get(2).result.content[0].text, "late")
-  assert.deepEqual(JSON.parse(byId.get(3).result.content[0].text), { status: "error", tool: "desk_recall", message: "async failure" })
+  const failure = JSON.parse(byId.get(3).result.content[0].text)
+  assert.deepEqual([failure.status, failure.code, failure.tool, failure.message], ["degraded", "tool_exception", "desk_recall", "async failure"])
+  assert.match(failure.fix, /Desk is still serving/u)
   assert.equal(JSON.parse(byId.get(4).result.content[0].text).message, "not an error")
-  assert.deepEqual(JSON.parse(byId.get(5).result.content[0].text), { status: "error", tool: null, message: "sync failure" })
+  const syncFailure = JSON.parse(byId.get(5).result.content[0].text)
+  assert.deepEqual([syncFailure.code, syncFailure.tool, syncFailure.message], ["tool_exception", null, "sync failure"])
   assert.equal(byId.get(5).result.isError, true)
 })
 

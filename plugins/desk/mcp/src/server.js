@@ -59,51 +59,31 @@ import { stableStringify } from "./readiness/identity.js"
 import { CanonicalWriteRecordingError } from "./readiness/journal.js"
 import { createDeskQueryRouter } from "./readiness/query-router.js"
 import { admitControlPlane } from "./activation/admit.js"
-import { ActivationFailure } from "./activation/failures.js"
 import { ACTIVE_EMBEDDING_SPEC } from "./indexer/spec.js"
 import { createWorkspaceWatcher } from "./readiness/workspace-watcher.js"
+import { readinessContracts } from "./readiness/contracts.js"
 import { probeEmbeddingService, resolveEmbeddingEndpoints, resolveEmbeddingModel } from "./indexer/embed.js"
 
 export { TOOL_NAMES, TOOL_DESCRIPTIONS }
-export { admitControlPlane, configureRuntimeArtifacts, ensureIndex }
+export { admitControlPlane, configureRuntimeArtifacts, ensureIndex, readinessContracts }
 
 let readinessControllerModulePromise
 
-function verifyEmbeddingModel(semantic) {
+// An effective DESK_EMBED_MODEL / OLLAMA_EMBED_MODEL that differs from the pinned model. The controller never uses it (it indexes and probes with the pinned model), so it only disqualifies this session's own query embeddings: semantic search degrades, lexical search and writes do not.
+export function embeddingOverride(semantic) {
+  if (semantic === "unsupported") return null
   const model = resolveEmbeddingModel()
-  if (model !== ACTIVE_EMBEDDING_SPEC.model) {
-    throw new ActivationFailure({
-      phase: "VERIFYING",
-      code: "embedding_model_mismatch",
-      expected: {
-        model: ACTIVE_EMBEDDING_SPEC.model,
-        embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id,
-      },
-      observed: { model, semantic },
-      summary: `Desk semantic admission refused: effective embedding model ${JSON.stringify(model)} differs from the pinned model ${ACTIVE_EMBEDDING_SPEC.model}. Unset DESK_EMBED_MODEL / OLLAMA_EMBED_MODEL or set the effective override to the pinned model; another model requires a separately versioned embedding specification.`,
-    })
-  }
-}
-
-// The contracts a readiness controller is identified by. Sessions on one root elect one controller only when these match.
-export function readinessContracts(policy) {
-  return {
-    protocolVersion: 1,
-    lexicalContract: {
-      schema: 1,
-      chunker: "markdown-v1",
-      normalization: "unicode-v1",
-      policy: {
-        lexical: policy.lexical,
-      },
-    },
-  }
+  if (model === ACTIVE_EMBEDDING_SPEC.model) return null
+  return Object.freeze({
+    code: "embedding_override",
+    model,
+    pinned_model: ACTIVE_EMBEDDING_SPEC.model,
+    embedding_spec_id: ACTIVE_EMBEDDING_SPEC.id,
+    fix: `Semantic search is unavailable in this session because its environment sets the embedding model to ${JSON.stringify(model)}, not the pinned ${ACTIVE_EMBEDDING_SPEC.model}. Lexical search and writes are unaffected. To restore semantic search, remove DESK_EMBED_MODEL / OLLAMA_EMBED_MODEL from the Desk MCP server's environment (or set it to ${ACTIVE_EMBEDDING_SPEC.model}) and reconnect the Desk MCP server; another model needs a separately versioned embedding specification.`,
+  })
 }
 
 export async function connectOrStartController({ deskRoot, policy, stateHome, ephemeral, onRepair }) {
-  if (policy.semantic !== "unsupported") {
-    verifyEmbeddingModel(policy.semantic)
-  }
   const embed = policy.semantic === "unsupported" ? null : Object.freeze({
     model: ACTIVE_EMBEDDING_SPEC.model,
     endpoints: Object.freeze(resolveEmbeddingEndpoints()),
@@ -158,6 +138,7 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
   const { connectOrStartController: connectReadinessController } = await loadReadinessController()
   const controller = await connectReadinessController(options)
   controller.generationPolicyIdentity = stableStringify(policy)
+  controller.embeddingOverride = embeddingOverride(policy.semantic)
   return controller
 }
 

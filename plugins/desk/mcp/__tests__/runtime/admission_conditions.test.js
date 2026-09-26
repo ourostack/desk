@@ -5,7 +5,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { TOOL_NAMES } from "../../src/tool-names.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
@@ -118,28 +118,42 @@ test("invalid write authority: reads serve, writes refuse with degraded:authorit
 
 // ---- readiness controller faults: controller-free reads, background re-election ----
 
-test("a hung controller (socket accepts, never replies): reads serve directly, writes wait", { skip: posixOnly }, async (t) => {
+// A controller process that accepts connections and never answers, and ignores SIGTERM, the way a wedged Desk does.
+async function startHungController(endpoint) {
+  mkdirSync(path.dirname(endpoint), { recursive: true, mode: 0o700 })
+  const child = spawn(process.execPath, ["-e", [
+    "process.on('SIGTERM', () => {})",
+    `require("net").createServer(() => {}).listen(${JSON.stringify(endpoint)}, () => process.stdout.write("up"))`,
+  ].join(";")], { stdio: ["ignore", "pipe", "inherit"] })
+  await new Promise((resolve) => child.stdout.once("data", resolve))
+  return child
+}
+
+test("a hung controller that is alive is reclaimed after 3 missed checks, and reads and writes work throughout", { skip: posixOnly, timeout: 90000 }, async (t) => {
   const fixture = await makeGitDesk()
   const configPath = writeActivation(fixture)
   const { endpoint, stateDir, identity } = controllerFixture(fixture)
-  mkdirSync(path.dirname(endpoint), { recursive: true, mode: 0o700 })
-  const net = await import("node:net")
-  const sockets = []
-  const hung = net.createServer((socket) => { sockets.push(socket) })
-  await new Promise((resolve) => hung.listen(endpoint, resolve))
-  t.after(() => { for (const socket of sockets) socket.destroy(); hung.close() })
+  const hung = await startHungController(endpoint)
+  const exited = new Promise((resolve) => hung.once("exit", (code, signal) => resolve(signal)))
+  t.after(() => hung.kill("SIGKILL"))
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const stat = statSync(endpoint)
   writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({
     schema_version: 1, identity, endpoint, socket: { dev: stat.dev, ino: stat.ino },
-    owner: { pid: process.pid, started_at: new Date().toISOString(), token: "hung-token" },
+    owner: { pid: hung.pid, started_at: new Date().toISOString(), token: "hung-token" },
   }))
-  await withDesk(t, fixture, { args: ["--activation-config", configPath] }, async (session) => {
+  await withDesk(t, fixture, { args: ["--activation-config", configPath], env: { DESK_READINESS_PROBE_MS: "300" } }, async (session) => {
     const status = await session.statusUntil(settled)
     assert.equal(status.state, "degraded:controller_unavailable")
-    assert.match(status.fix, /re-elect/u)
+    assert.match(status.fix, /desk_doctor with \{"repair":"reclaim_controller"\}/u)
     await assertReadsServeDirectly(session)
-    await assertWritesRefused(session, "controller_unavailable")
+    const write = await session.call("task_create", { track: "ops", slug: "while-controller-hung", title: "Hung" })
+    assert.equal(write.isError, false, JSON.stringify(write.payload))
+    const ready = await session.statusUntil((payload) => payload.state === "ready", { deadlineMs: 60000 })
+    assert.match(ready.repair, /reclaimed a hung readiness controller \(pid \d+/u)
+    assert.equal(await exited, "SIGKILL", "the owner ignored SIGTERM and was killed")
+    const after = await session.call("task_create", { track: "ops", slug: "after-controller-reclaim", title: "Reclaimed" })
+    assert.equal(after.isError, false, JSON.stringify(after.payload))
   })
 })
 
@@ -153,22 +167,27 @@ test("a rival controller with a different semantic contract: lexical reads, degr
     handlers: {},
   })
   t.after(() => rival.close())
-  // The rival derived its socket from this process's XDG_RUNTIME_DIR (set on Linux CI); Desk must see the same one to meet it.
-  await withDesk(t, fixture, { args: ["--activation-config", configPath], env: { XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR } }, async (session) => {
+  await withDesk(t, fixture, { args: ["--activation-config", configPath] }, async (session) => {
     const status = await session.statusUntil(settled)
     assert.equal(status.state, "degraded:controller_semantic_mismatch")
     await assertReadsServeDirectly(session)
   })
 })
 
-test("an embedding model override: lexical reads, degraded:embedding_model_mismatch", async (t) => {
+test("an embedding model override degrades semantic search only: ready, lexical reads and writes", async (t) => {
   const fixture = await makeGitDesk()
   const configPath = writeActivation(fixture, { semantic: "background" })
-  await withDesk(t, fixture, { args: ["--activation-config", configPath], env: { DESK_EMBED_MODEL: "some-other-model" } }, async (session) => {
+  await withDesk(t, fixture, { args: ["--activation-config", configPath], env: { DESK_EMBED_MODEL: "some-other-model", DESK_EMBED_ENDPOINT: "http://127.0.0.1:9" } }, async (session) => {
     const status = await session.statusUntil(settled)
-    assert.equal(status.state, "degraded:embedding_model_mismatch")
-    assert.match(status.fix, /DESK_EMBED_MODEL/u)
+    assert.equal(status.state, "ready")
+    assert.equal(status.semantic.status, "unavailable (embedding_override)")
+    assert.match(status.semantic.fix, /DESK_EMBED_MODEL/u)
     await assertReadsServeDirectly(session)
+    const recall = await session.call("desk_recall", { topic: "lighthouse" })
+    assert.equal(recall.isError, true)
+    assert.equal(recall.payload.code, "embedding_override")
+    const write = await session.call("task_create", { track: "ops", slug: "override-write-check", title: "Override" })
+    assert.equal(write.isError, false, JSON.stringify(write.payload))
   })
 })
 
@@ -349,4 +368,107 @@ test("the state branch can come from the activation config instead of the flag",
     assert.equal(status.state, "ready")
     assert.match(status.repair, /^repaired: detached HEAD → main/u)
   })
+})
+
+// ---- the controller rendezvous ignores XDG_RUNTIME_DIR ----
+
+test("two servers with different XDG_RUNTIME_DIR values elect one controller", { skip: posixOnly }, async (t) => {
+  const fixture = await makeGitDesk()
+  const configPath = writeActivation(fixture)
+  const runtimeDirs = [mkdtempSync("/tmp/dxa-"), mkdtempSync("/tmp/dxb-")]
+  t.after(() => { for (const dir of runtimeDirs) rmSync(dir, { recursive: true, force: true }) })
+  for (const dir of runtimeDirs) chmodSync(dir, 0o700)
+  const first = await startDesk(fixture, { args: ["--activation-config", configPath], env: { XDG_RUNTIME_DIR: runtimeDirs[0] } })
+  t.after(() => first.close())
+  const second = await startDesk(fixture, { args: ["--activation-config", configPath], env: { XDG_RUNTIME_DIR: runtimeDirs[1] } })
+  t.after(() => second.close())
+  for (const session of [first, second]) {
+    const status = await session.statusUntil((payload) => payload.state === "ready")
+    assert.equal(status.admission.controller, "connected")
+  }
+  const { stateDir } = controllerFixture(fixture)
+  const owner = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
+  assert.ok([first.child.pid, second.child.pid].includes(owner.owner.pid))
+  assert.match(owner.endpoint, /desk-readiness-\d+\/[0-9a-f]{32}\.sock$/u)
+  for (const dir of runtimeDirs) assert.deepEqual(readdirSync(dir), [], "no controller socket was derived from XDG_RUNTIME_DIR")
+})
+
+// ---- refuse-but-connect: the launcher's --degraded start mode ----
+
+test("--degraded with an integrity code starts connected and refuses every data tool", async (t) => {
+  const fixture = await makeGitDesk()
+  await withDesk(t, fixture, { args: ["--root", fixture.desk, "--degraded", "lifecycle_conflict", "--degraded-reason", "two providers claim worker"] }, async (session) => {
+    const status = await session.statusUntil(settled)
+    assert.equal(status.state, "degraded:lifecycle_conflict")
+    assert.equal(status.mode, "refused")
+    assert.match(status.fix, /two providers claim worker/u)
+    const read = await session.call("desk_search", { query: "lighthouse" })
+    assert.equal(read.isError, true)
+    assert.equal(read.payload.code, "lifecycle_conflict")
+    await assertWritesRefused(session, "lifecycle_conflict")
+  })
+})
+
+test("--degraded with a crew-state code serves reads and refuses writes; with --state-branch, Desk's own check takes over", async (t) => {
+  const fixture = await makeGitDesk()
+  const configPath = writeActivation(fixture)
+  await withDesk(t, fixture, { args: ["--activation-config", configPath, "--degraded", "identity_unavailable", "--degraded-reason", "gh is not signed in"] }, async (session) => {
+    const status = await session.statusUntil(settled)
+    assert.equal(status.state, "degraded:identity_unavailable")
+    await assertReadsServeDirectly(session)
+    await assertWritesRefused(session, "identity_unavailable")
+  })
+  const handedOff = await makeGitDesk()
+  const handedOffConfig = writeActivation(handedOff)
+  git(handedOff.desk, "checkout", "--detach", "origin/feature")
+  await withDesk(t, handedOff, { args: ["--activation-config", handedOffConfig, "--degraded", "crew_state_unavailable", "--state-branch", "main"] }, async (session) => {
+    const status = await session.statusUntil(settled)
+    assert.equal(status.state, "ready")
+    assert.match(status.repair, /^repaired: detached HEAD → main/u)
+  })
+})
+
+// ---- nothing blocks the thread that answers the host ----
+
+async function assertAnswersFast(session, { forMs = 4000, budgetMs = 200 } = {}) {
+  const until = Date.now() + forMs
+  const timings = []
+  while (Date.now() < until) {
+    for (const [method, params] of [["tools/list", {}], ["ping", {}], ["tools/call", { name: "desk_status", arguments: {} }]]) {
+      const { ms, response } = await session.timed(method, params)
+      assert.equal(response.error, undefined)
+      timings.push([method, ms])
+      assert.ok(ms < budgetMs, `${method} took ${ms} ms while admission was busy`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  return timings
+}
+
+test("a 30 s restore on the admission worker never delays tools/list, ping or desk_status", async (t) => {
+  const fixture = await makeGitDesk()
+  const configPath = writeActivation(fixture)
+  const preload = new URL("./fixtures/slow-restore-preload.mjs", import.meta.url).href
+  const session = await startDesk(fixture, { args: ["--activation-config", configPath], nodeArgs: ["--import", preload], env: { DESK_TEST_SLOW_RESTORE_MS: "30000" } })
+  t.after(() => session.close())
+  assert.ok(session.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${session.handshakeMs} ms`)
+  const timings = await assertAnswersFast(session)
+  t.diagnostic(`slowest answer during the stalled restore: ${Math.max(...timings.map(([, ms]) => ms))} ms over ${timings.length} requests`)
+  assert.equal((await session.call("desk_status")).payload.state, "admitting", "the restore is still stalled")
+})
+
+test("a runtime publication lock held by another process never delays tools/list, ping or desk_status, and admission completes once it is released", async (t) => {
+  const fixture = await makeGitDesk()
+  const configPath = writeActivation(fixture)
+  const lockDir = `${fixture.runtimeCache}.publish-lock`
+  mkdirSync(lockDir, { recursive: true })
+  writeFileSync(path.join(lockDir, "owner.json"), JSON.stringify({ schema_version: 1, pid: process.pid, token: "held-by-test" }))
+  t.after(() => rmSync(lockDir, { recursive: true, force: true }))
+  const session = await startDesk(fixture, { args: ["--activation-config", configPath] })
+  t.after(() => session.close())
+  const timings = await assertAnswersFast(session)
+  t.diagnostic(`slowest answer while the lock was held: ${Math.max(...timings.map(([, ms]) => ms))} ms over ${timings.length} requests`)
+  assert.equal((await session.call("desk_status")).payload.state, "admitting")
+  rmSync(lockDir, { recursive: true, force: true })
+  assert.equal((await session.statusUntil((payload) => payload.state === "ready", { deadlineMs: 40000 })).state, "ready")
 })

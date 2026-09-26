@@ -575,8 +575,14 @@ async function runMcpStatusSession(fixture, {
       params: {},
     })
     const tools = await request("tools/list", {})
-    const initialStatus = await callTool("desk_status")
+    // The handshake comes first and desk_status answers at once, so the first answers can still be admitting.
+    let initialStatus = await callTool("desk_status")
     let body = observeStatus(initialStatus)
+    for (const admittingDeadline = performance.now() + timeoutMs; body.state === "admitting" && performance.now() < admittingDeadline;) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      initialStatus = await callTool("desk_status")
+      body = observeStatus(initialStatus)
+    }
     await onInitialStatus?.({ initialize, tools, initialStatus })
     let status = initialStatus
     if (waitForConvergence) {

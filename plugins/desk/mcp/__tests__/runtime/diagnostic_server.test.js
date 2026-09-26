@@ -121,7 +121,8 @@ test("diagnostic format handling does not disguise an unexpected validator failu
     // The failure is reported as what it is, never as an unsupported-format input error, and the server keeps running.
     const response = parse(Buffer.concat(chunks).toString("utf8"))
     assert.equal(response.result.isError, true)
-    assert.deepEqual(parse(response.result.content[0].text), { status: "error", tool: "desk_doctor", message: "unexpected validator failure" })
+    const failure = parse(response.result.content[0].text)
+    assert.deepEqual([failure.status, failure.code, failure.tool, failure.message], ["degraded", "tool_exception", "desk_doctor", "unexpected validator failure"])
   } finally {
     mocked.mock.restore()
     input.emit("end")

@@ -17,6 +17,7 @@ import {
   runHandshake,
   toolPayload,
 } from "../launch/_mcp_handshake.js"
+import { openSession } from "../launch/_mcp_session.js"
 
 const entrypoint = await import(pathToFileURL(path.join(mcpRoot, "index.js")).href)
 const { TOOL_NAMES } = await import(pathToFileURL(path.join(mcpRoot, "src", "tool-names.js")).href)
@@ -376,21 +377,26 @@ for (const scenario of startupExceptions) {
   test(`a bad start (${scenario.id}): the handshake completes within 3 s with the full tool list, then a named degraded state`, async () => {
     const fixture = await makeIsolatedHome("desk-startup-exception-")
     const args = await scenario.args(fixture)
-    const result = await runHandshake({
+    const session = await openSession({
       command: compatibleNode,
       args: [indexPath, ...args],
       cwd: fixture.root,
       env: isolatedEnv(fixture, { DESK: undefined, PATH: `${path.dirname(compatibleNode)}:/usr/bin:/bin` }),
     })
-    assert.ok(result.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${result.handshakeMs} ms`)
-    assert.equal(result.initialize.result.serverInfo.name, "desk-mcp")
-    assertFullToolList(result.tools)
-    const status = toolPayload(result.status)
-    assert.equal(status.state, scenario.state)
-    assert.match(status.observed.message, scenario.message)
-    assert.match(status.fix, /desk_status/u)
-    if (scenario.failureCode) assert.equal(status.observed.failure_code, scenario.failureCode)
-    assert.doesNotMatch(result.stderr, /startup exception/u)
+    try {
+      assert.ok(session.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${session.handshakeMs} ms`)
+      assert.equal(session.initialize.result.serverInfo.name, "desk-mcp")
+      assertFullToolList(session.tools)
+      // desk_status answers at once, so it can still say admitting before the first attempt settles.
+      const status = await session.statusUntil((payload) => payload.state !== "admitting")
+      assert.equal(status.state, scenario.state)
+      assert.match(status.observed.message, scenario.message)
+      assert.match(status.fix, /desk_status/u)
+      if (scenario.failureCode) assert.equal(status.observed.failure_code, scenario.failureCode)
+      assert.doesNotMatch(session.stderr(), /startup exception/u)
+    } finally {
+      await session.close()
+    }
   })
 }
 

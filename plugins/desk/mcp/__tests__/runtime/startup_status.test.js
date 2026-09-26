@@ -123,10 +123,12 @@ test("required startup exposes a populated READY status on the first real MCP ca
   t.mock.method(globalThis, "fetch", async () =>
     new Response(JSON.stringify({ embedding: Array(768).fill(0.1) })))
   await fixture.start()
-  assert.equal(fixture.state.initial.readiness?.state, "READY")
-  assert.equal(fixture.state.initial.readiness.convergence.status, "succeeded")
-  assert.equal(fixture.state.initial.query_embedding.available, true)
-  assert.equal(fixture.state.initial.startup_fallback.mode, "not_checked")
+  // desk_status answers at once; admission reaches ready only once required semantic coverage is proven, and then status is READY.
+  const ready = await fixture.state.desk.statusUntil((payload) => payload.state === "ready")
+  assert.equal(ready.readiness?.state, "READY")
+  assert.equal(ready.readiness.convergence.status, "succeeded")
+  assert.equal(ready.query_embedding.available, true)
+  assert.equal(ready.startup_fallback.mode, "not_checked")
   assert.equal(fixture.state.context.startup, undefined)
 })
 
@@ -171,10 +173,11 @@ test("a disconnected controller is never reported as healthy stale readiness: de
   await fixture.state.convergence
   const lost = fixture.state.controller
   await lost.close()
-  const status = await fixture.read()
+  // desk_status answers at once and checks the controller in the background; the next call sees the re-elected one.
+  await fixture.read()
+  const status = await fixture.state.desk.statusUntil((payload) => payload.state === "ready" && payload.readiness?.state !== "unavailable")
   assert.equal(status.state, "ready")
   assert.notEqual(fixture.state.controller, lost, "a new controller was elected in the same session")
   assert.ok(status.admission.attempts >= 2)
-  assert.notEqual(status.readiness?.state, "unavailable")
   assert.match(fixture.state.desk.stderr(), /state: degraded:controller_unavailable/u)
 })

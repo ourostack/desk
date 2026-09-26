@@ -8,7 +8,7 @@ import { spawn } from "node:child_process"
  * Spawn `command args`, complete the initialize handshake and the first tools/list, and return a session.
  * `handshakeMs` is the time from spawn to the tools/list reply.
  */
-export async function openSession({ command, args = [], env, cwd, timeoutMs = 20000 }) {
+export async function openSession({ command, args = [], env, cwd, timeoutMs = 20000, paceMs = 30 }) {
   const started = Date.now()
   const child = spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] })
   const waiting = new Map()
@@ -99,12 +99,22 @@ export async function openSession({ command, args = [], env, cwd, timeoutMs = 20
     capabilities: {},
     clientInfo: { name: "desk-session-test", version: "1.0.0" },
   })
+  // Paced like a real host: notifications/initialized and tools/list are separate writes with a gap between them.
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
+  await new Promise((resolve) => setTimeout(resolve, paceMs))
   const tools = await request("tools/list")
   const handshakeMs = Date.now() - started
+  /** Send `method` and resolve with how long its answer took, in ms. */
+  async function timed(method, params = {}, options) {
+    const sent = Date.now()
+    const response = await request(method, params, options)
+    return { ms: Date.now() - sent, response }
+  }
+
   return {
     child,
     initialize,
+    timed,
     tools,
     handshakeMs,
     notifications,

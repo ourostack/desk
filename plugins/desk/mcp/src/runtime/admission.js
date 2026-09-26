@@ -126,6 +126,12 @@ export function createAdmission({
     return run()
   }
 
+  // Report a failure without re-admitting at once: the state shows it, and the next attempt comes on the backoff (or on desk_status).
+  function fail(outcome) {
+    if (disposed) return snapshot()
+    return settle({ ...outcome, state: "degraded" }) && snapshot()
+  }
+
   /** Run an attempt now unless one is running (then join it), and wait for it at most `waitMs`. A ready machine answers at once unless `force` asks for a fresh check. */
   async function refresh({ waitMs = 3000, force = false } = {}) {
     if (!force && current.state === "ready" && !running) return snapshot()
@@ -155,6 +161,7 @@ export function createAdmission({
     refresh,
     idle,
     degrade,
+    fail,
     snapshot,
     get running() {
       return running !== null

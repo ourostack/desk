@@ -6,7 +6,7 @@
 
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../tool-names.js"
 
-export const DOCTOR_REPAIRS = Object.freeze(["switch_state_branch", "prune_readiness_state"])
+export const DOCTOR_REPAIRS = Object.freeze(["switch_state_branch", "reclaim_controller", "prune_readiness_state"])
 
 // One tool list for every mode, in the canonical order. desk_doctor keeps its stricter schema.
 export const FRONT_DOOR_TOOLS = Object.freeze(TOOL_NAMES.map((name) => Object.freeze({
@@ -26,7 +26,7 @@ export const FRONT_DOOR_TOOLS = Object.freeze(TOOL_NAMES.map((name) => Object.fr
 
 /**
  * Serve MCP on `input`/`output`. `callTool({ name, input, signal })` returns an MCP tool result (or a promise of one).
- * `onHandshake` fires once, after `notifications/initialized` or the first tools/list reply, whichever comes first.
+ * `onHandshake` fires once, after the first tools/list reply is written: hosts send tools/list after notifications/initialized, often as a separate write, and admission must not start before that list is answered.
  * Returns `{ closed, notifyToolsChanged }`: `closed` resolves when input ends and every call in flight has answered.
  */
 export function startFrontDoor({
@@ -55,10 +55,23 @@ export function startFrontDoor({
   }
 
   const answerCall = (id, result) => write({ jsonrpc: "2.0", id, result })
-  const failCall = (id, name, error) => answerCall(id, {
-    content: [{ type: "text", text: JSON.stringify({ status: "error", tool: name ?? null, message: error instanceof Error ? error.message : String(error) }) }],
-    isError: true,
-  })
+  // The last resort for a tool that throws: a structured degraded result, never a failed call or a dead process.
+  const failCall = (id, name, error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    return answerCall(id, {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          status: "degraded",
+          code: "tool_exception",
+          tool: name ?? null,
+          message,
+          fix: "The tool failed unexpectedly and Desk is still serving. Retry the call; if it fails the same way, call desk_doctor and report the message.",
+        }),
+      }],
+      isError: true,
+    })
+  }
 
   const handleCall = (request) => {
     const { id } = request
@@ -95,7 +108,6 @@ export function startFrontDoor({
     }
     if (request.method === "notifications/initialized") {
       initialized = true
-      signalHandshake()
       return
     }
     if (request.method === "notifications/cancelled") {
