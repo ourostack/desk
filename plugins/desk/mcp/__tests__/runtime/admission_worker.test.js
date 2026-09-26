@@ -4,12 +4,13 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
 import { mkdirSync, writeFileSync } from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { MessageChannel } from "node:worker_threads"
 import { ActivationFailure } from "../../src/activation/failures.js"
 import {
-  attachAdmissionWorker, prepareRuntimeInputs, resolveAdmissionInputs, reviveError, runAdmissionJob, runInWorker, serializeError,
+  attachAdmissionWorker, prepareRuntimeInputs, warmNativeModules, resolveAdmissionInputs, reviveError, runAdmissionJob, runInWorker, serializeError,
 } from "../../src/runtime/admission-worker.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
@@ -41,7 +42,9 @@ test("resolve: root, activation and policy, or the error that stopped them, as p
 test("runtime: inspection, restore, and the failure that stopped either", () => {
   const input = { mcpRoot: "/plugin", env: {}, runtimeCacheDir: "/cache", sourceIdentity: null }
   const prepared = { runtimeCacheDir: "/cache", sourceMirrorPath: "/cache/mirror", target: "t", packDir: "/p" }
-  assert.deepEqual(prepareRuntimeInputs({ ...input, inspect: false, prepare: () => prepared }), { inspection: null, prepared })
+  const warmed = []
+  assert.deepEqual(prepareRuntimeInputs({ ...input, inspect: false, prepare: () => prepared, warm: (mirror) => warmed.push(mirror) }), { inspection: null, prepared })
+  assert.deepEqual(warmed, ["/cache/mirror"], "the restored native modules are loaded on the worker")
   const ok = prepareRuntimeInputs({ ...input, inspect: true, inspector: () => ({ ok: true, archiveEntries: [1], manifest: {}, runtime: { a: 1 } }), prepare: () => prepared })
   assert.deepEqual(ok, { inspection: { ok: true, runtime: { a: 1 } }, prepared })
   assert.deepEqual(prepareRuntimeInputs({ ...input, inspect: true, inspector: () => ({ ok: false, reason: "missing_pack" }) }), { inspection: { ok: false, reason: "missing_pack" } })
@@ -62,6 +65,29 @@ test("runtime: a publication-lock timeout names the lock and the process holding
   writeFileSync(path.join(lockDir, "owner.json"), JSON.stringify({}))
   assert.equal(prepareRuntimeInputs({ ...input, prepare: locked(lockDir) }).restoreError.lock.pid, null)
   assert.equal(prepareRuntimeInputs({ ...input, prepare: () => { throw "a string" } }).restoreError.message, "a string")
+})
+
+test("warmNativeModules loads better-sqlite3 and sqlite-vec from the source mirror and opens an in-memory database; any failure is harmless", () => {
+  const events = []
+  const fakeRequire = (from) => {
+    events.push(["from", from])
+    return (name) => {
+      events.push(["require", name])
+      if (name === "better-sqlite3") return class { constructor(file) { events.push(["open", file]) } close() { events.push(["close"]) } }
+      return { load: () => events.push(["load"]) }
+    }
+  }
+  assert.equal(warmNativeModules("/mirror", { requireFrom: fakeRequire }), true)
+  assert.deepEqual(events, [["from", path.join("/mirror", "src", "db", "init.js")], ["require", "better-sqlite3"], ["open", ":memory:"], ["require", "sqlite-vec"], ["load"], ["close"]])
+  events.length = 0
+  const failingVec = (from) => (name) => {
+    if (name === "better-sqlite3") return class { close() { events.push(["close"]) } }
+    throw new Error("no extension")
+  }
+  assert.equal(warmNativeModules("/mirror", { requireFrom: failingVec }), false)
+  assert.deepEqual(events, [["close"]], "the database is closed even when the extension fails")
+  assert.equal(warmNativeModules(path.join(os.tmpdir(), "desk-no-such-mirror")), false, "a mirror without the modules")
+  assert.equal(warmNativeModules(path.join(mcpRoot)), true, "this checkout's own modules load")
 })
 
 test("runtime job with the shipped inspector and restore defaults", async () => {

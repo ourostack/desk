@@ -1,10 +1,11 @@
 // Admission work that can block, run on a worker thread so the thread that answers the host never waits for it.
 //
-// Two jobs: "resolve" (the desk root, the activation config, the readiness policy and the state branch, all synchronous file reads) and "runtime" (inspecting the offline runtime pack, which hashes and unpacks its archive, and restoring it into the runtime cache, which can wait up to 30 s on another process's publication lock). Each job runs in a fresh worker; its result is plain data, and errors come back as plain objects with their code and fields.
+// Two jobs: "resolve" (the desk root, the activation config, the readiness policy and the state branch, all synchronous file reads) and "runtime" (inspecting the offline runtime pack, which hashes and unpacks its archive, restoring it into the runtime cache, which can wait up to 30 s on another process's publication lock, and loading the restored native modules once so their first load never runs on the thread that answers the host). Each job runs in a fresh worker; its result is plain data, and errors come back as plain objects with their code and fields.
 //
-// The worker imports only dependency-free modules. It never imports index.js, which would start Desk inside the worker.
+// The worker imports only dependency-free modules; the restored native modules are loaded by path at run time. It never imports index.js, which would start Desk inside the worker.
 
 import { readFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import * as path from "node:path"
 import { parentPort, Worker, workerData } from "node:worker_threads"
 import { normalizeReadinessPolicy } from "../activation/readiness-policy.js"
@@ -47,10 +48,30 @@ export function resolveAdmissionInputs({ args, env, cwd, homeDir, injectedReadin
   }
 }
 
+/**
+ * Load the restored runtime's native modules (better-sqlite3 and the sqlite-vec extension) once on this worker thread and open an in-memory database with them.
+ * A native library is loaded once per process, so the thread that answers the host later finds both already loaded: the first load of freshly restored files (60 to 80 ms here, more while the OS checks new files) happens here instead of at the transition to ready. Returns whether the warm-up ran; a failure is harmless, because the session loads the modules itself either way.
+ */
+export function warmNativeModules(sourceMirrorPath, { requireFrom = createRequire } = {}) {
+  try {
+    const load = requireFrom(path.join(sourceMirrorPath, "src", "db", "init.js"))
+    const Database = load("better-sqlite3")
+    const db = new Database(":memory:")
+    try {
+      load("sqlite-vec").load(db)
+    } finally {
+      db.close()
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** Inspect (when asked) and restore the runtime. Returns `{ inspection, prepared }`, or the inspection, `inspectionError` or `restoreError` that stopped it. */
 export function prepareRuntimeInputs({
   mcpRoot, env, runtimeCacheDir, sourceIdentity, inspect,
-  inspector = inspectRuntimeDependencyPack, prepare = prepareRuntime,
+  inspector = inspectRuntimeDependencyPack, prepare = prepareRuntime, warm = warmNativeModules,
 }) {
   let inspection = null
   if (inspect) {
@@ -63,11 +84,14 @@ export function prepareRuntimeInputs({
     }
     if (!inspection.ok) return { inspection }
   }
+  let prepared
   try {
-    return { inspection, prepared: prepare({ mcpRoot, env, runtimeCacheDir, sourceIdentity }) }
+    prepared = prepare({ mcpRoot, env, runtimeCacheDir, sourceIdentity })
   } catch (error) {
     return { inspection, restoreError: { ...serializeError(error), ...publicationLock(error) } }
   }
+  warm(prepared.sourceMirrorPath)
+  return { inspection, prepared }
 }
 
 // A restore that timed out on another process's publication lock: name the lock and, when its owner record says, the process holding it.
