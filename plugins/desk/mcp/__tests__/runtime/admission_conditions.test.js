@@ -5,6 +5,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
+import { once } from "node:events"
 import * as net from "node:net"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
@@ -361,6 +362,84 @@ test("a Desk session releases its controller on every normal end: stdin closed, 
     assert.equal(existsSync(record.endpoint), false, `${end}: the socket file was removed`)
   }
 })
+
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  test(`a host retaining ${signal} keeps its live controller through two signal and election cycles`, { skip: posixOnly, timeout: 120000 }, async (t) => {
+    const fixture = await makeGitDesk()
+    const configPath = writeActivation(fixture)
+    const { stateDir } = controllerFixture(fixture)
+    const ownerFile = path.join(stateDir, "owner.json")
+    const preload = path.join(fixture.root, "retaining-host.mjs")
+    writeFile(preload, `
+      import { isMainThread } from "node:worker_threads"
+      if (isMainThread) {
+        process.on(${JSON.stringify(signal)}, () => process.stderr.write("HOST_RETAINS_PROCESS\\n"))
+      }
+    `)
+    const sockets = []
+    const owner = await startDesk(fixture, { args: ["--activation-config", configPath], nodeArgs: ["--import", preload] })
+    t.after(() => {
+      for (const socket of sockets) socket.destroy()
+      return owner.close()
+    })
+    assertHandshake(owner)
+    assert.equal((await owner.statusUntil(settled)).state, "ready")
+    const record = JSON.parse(readFileSync(ownerFile, "utf8"))
+    assert.equal(record.owner.pid, owner.child.pid)
+    // Connect before either signal: even an unlinked controller can still answer through an accepted socket.
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      const socket = net.createConnection(record.endpoint)
+      sockets.push(socket)
+      await once(socket, "connect", { signal: AbortSignal.timeout(10000) })
+    }
+    const outcomes = []
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      owner.child.kill(signal)
+      while (owner.stderr().split("HOST_RETAINS_PROCESS\n").length - 1 <= cycle) {
+        await once(owner.child.stderr, "data", { signal: AbortSignal.timeout(10000) })
+      }
+      assert.equal(owner.child.exitCode, null)
+      assert.equal(owner.child.signalCode, null)
+      assert.deepEqual((await owner.request("ping")).result, {})
+      const ownershipKept = existsSync(ownerFile) && existsSync(record.endpoint)
+      const other = await startDesk(fixture, { args: ["--activation-config", configPath] })
+      t.after(() => other.close())
+      assertHandshake(other)
+      assert.equal((await other.statusUntil((payload) => payload.state === "ready")).admission.controller, "connected")
+      const elected = JSON.parse(readFileSync(ownerFile, "utf8"))
+      const socket = sockets[cycle]
+      let response = ""
+      socket.setEncoding("utf8")
+      socket.on("data", (chunk) => { response += chunk })
+      const reply = once(socket, "end", { signal: AbortSignal.timeout(10000) })
+      socket.write(`${JSON.stringify({
+        type: "request", id: cycle, method: "handshake",
+        params: { token: record.owner.token, identity: record.identity.id, semantic_contract: record.identity.semantic_contract },
+      })}\n`)
+      await reply
+      const handshake = JSON.parse(response).result
+      assert.equal(handshake.accepted, true)
+      assert.equal(handshake.owner.pid, owner.child.pid, "the original controller is still serving")
+      await assertReadsServeDirectly(other)
+      const write = await other.call("task_create", { track: "ops", slug: `retained-${signal.toLowerCase()}-${cycle}`, title: "Retained controller" })
+      assert.equal(write.isError, false, JSON.stringify(write.payload))
+      outcomes.push({
+        cycle: cycle + 1,
+        ownershipKept,
+        sameOwner: elected.owner.pid === owner.child.pid && elected.owner.token === record.owner.token,
+        sameSocket: elected.socket.dev === record.socket.dev && elected.socket.ino === record.socket.ino,
+      })
+      t.diagnostic(JSON.stringify({ signal, ...outcomes[cycle], originalPid: owner.child.pid, electedPid: elected.owner.pid }))
+      assert.deepEqual(await other.close(), { code: 0, signal: null })
+    }
+    assert.deepEqual(outcomes, [1, 2].map((cycle) => ({ cycle, ownershipKept: true, sameOwner: true, sameSocket: true })))
+    assert.deepEqual(JSON.parse(readFileSync(ownerFile, "utf8")), record, "the retained controller keeps its exact ownership record")
+    assert.deepEqual((await owner.request("tools/list")).result.tools, owner.tools.result.tools)
+    assert.deepEqual(await owner.close(), { code: 0, signal: null })
+    assert.equal(existsSync(ownerFile), false)
+    assert.equal(existsSync(record.endpoint), false)
+  })
+}
 
 test("a stale owner record whose PID now belongs to an unrelated process: other sessions reclaim the controller and reach ready", { skip: posixOnly, timeout: 120000 }, async (t) => {
   const fixture = await makeGitDesk()

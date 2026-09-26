@@ -61,22 +61,79 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
     assert.deepEqual(counts(proc), [1, 1, 1, 1], "a later controller installs the listeners again")
   })
 
-  test(`${signal} with the host's own listener: release, and leave the ending to that listener`, () => {
+  test(`${signal} with the host's own listener: keep ownership until the host actually exits`, () => {
     const proc = fakeProcess()
     const registry = createExitRelease(proc)
     const ran = []
     proc.on(signal, () => ran.push("host"))
     registry.register(() => ran.push("desk"))
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      proc.emit(signal, signal)
+      assert.deepEqual(ran, Array(cycle + 1).fill("host"), "the host retains the live controller")
+      assert.equal(registry.size(), 1)
+      assert.deepEqual(counts(proc), signal === "SIGTERM" ? [1, 1, 2, 1] : [1, 1, 1, 2])
+      assert.deepEqual(proc.kills, [])
+    }
+    proc.emit("exit", 0)
+    assert.deepEqual(ran, ["host", "host", "desk"])
+  })
+
+  test(`${signal} with a one-shot host handler: keep ownership for that signal, then terminate normally on the next`, () => {
+    const proc = fakeProcess()
+    const registry = createExitRelease(proc)
+    const ran = []
+    proc.once(signal, () => ran.push("host"))
+    registry.register(() => ran.push("desk"))
     proc.emit(signal, signal)
-    assert.deepEqual(ran, ["desk", "host"])
+    assert.deepEqual(ran, ["host"])
+    assert.equal(registry.size(), 1)
     assert.deepEqual(proc.kills, [])
-    assert.equal(proc.listenerCount(signal), 1, "only the host's listener stays")
+    proc.emit(signal, signal)
+    assert.deepEqual(ran, ["host", "desk"])
+    assert.deepEqual(proc.kills, [[4242, signal]])
+    assert.equal(registry.size(), 0)
+  })
+
+  test(`${signal} with a passive observer and a retaining host: keep ownership on repeated signals`, () => {
+    const proc = fakeProcess()
+    const registry = createExitRelease(proc)
+    const ran = []
+    proc.__signal_exit_emitter__ = { count: 1 }
+    proc.on(signal, () => {
+      if (proc.listenerCount(signal) === 1) proc.kill(proc.pid, signal)
+    })
+    proc.on(signal, () => ran.push("host"))
+    registry.register(() => ran.push("desk"))
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      proc.emit(signal, signal)
+      assert.deepEqual(ran, Array(cycle + 1).fill("host"))
+      assert.equal(registry.size(), 1)
+      assert.deepEqual(proc.kills, [])
+    }
+    proc.emit("exit", 0)
+    assert.deepEqual(ran, ["host", "host", "desk"])
+  })
+
+  test(`${signal} with a host that exits immediately: release during exit, not before the host decides`, () => {
+    const proc = fakeProcess()
+    const registry = createExitRelease(proc)
+    const ran = []
+    proc.on(signal, () => {
+      assert.equal(registry.size(), 1)
+      ran.push("host")
+      proc.emit("exit", 0)
+    })
+    registry.register(() => ran.push("desk"))
+    proc.emit(signal, signal)
+    assert.deepEqual(ran, ["host", "desk"])
+    assert.deepEqual(proc.kills, [])
   })
 
   test(`${signal} does not suppress a passive exit observer installed before Desk`, () => {
     const proc = fakeProcess()
     const registry = createExitRelease(proc)
     const ran = []
+    proc.__signal_exit_emitter__ = { count: 1 }
     proc.on(signal, () => {
       if (proc.listenerCount(signal) === 1) {
         ran.push("observer")

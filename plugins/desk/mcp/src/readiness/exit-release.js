@@ -2,7 +2,7 @@
 //
 // A Desk session ends when the host closes stdin (Desk then exits), on SIGTERM or SIGINT, or when nothing is left to run. Each of these runs the registered releases synchronously: `exit` and `beforeExit` directly, and a signal before the process ends. A release removes only files that are still this process's own (controller-server.js checks the owner record's PID, start time and token).
 //
-// A signal Desk handles alone keeps its usual meaning: after the releases, Desk removes its own listeners and raises the signal again, so the process ends the way it would have without them. When the host process has its own listener for that signal, that listener decides what happens next.
+// A signal Desk handles alone keeps its usual meaning: after the releases, Desk removes its own listeners and raises the signal again, so the process ends the way it would have without them. An active host signal handler may keep the process running, so its controllers retain ownership and their exit hooks until the host actually exits or closes them.
 
 const EVENTS = ["exit", "beforeExit"]
 const SIGNALS = ["SIGTERM", "SIGINT"]
@@ -32,7 +32,11 @@ export function createExitRelease(proc = process) {
     for (const signal of SIGNALS) {
       listeners.set(signal, () => {
         // Counted first: a release that unregisters the last controller removes this listener too.
-        const alone = proc.listenerCount(signal) === 1
+        const listenerCount = proc.listenerCount(signal)
+        const alone = listenerCount === 1
+        // signal-exit v3 shares its passive observer count across copies; every other listener may retain the host.
+        const passiveObservers = proc.__signal_exit_emitter__?.count ?? 0
+        if (!alone && listenerCount !== passiveObservers + 1) return
         releaseAll()
         releases.clear()
         uninstall()
