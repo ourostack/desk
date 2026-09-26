@@ -24,7 +24,7 @@ export const HUNG_PROBE_MS = 5000
 export async function probeController({ root, policy, stateHome, timeoutMs = HUNG_PROBE_MS, connect = net.createConnection, liveness = {} }) {
   const identity = controllerIdentity({ root, ...readinessContracts(policy) })
   const stateDir = path.join(stateHome, identity.id)
-  const owner = ownerState({ stateDir, identity, ...liveness })
+  const owner = await ownerState({ stateDir, identity, ...liveness })
   const record = owner.record
   const endpoint = typeof record?.endpoint === "string" ? record.endpoint : deriveControllerEndpoint({ identity })
   const answer = await handshakeProbe({ endpoint, record, identity, timeoutMs, connect })
@@ -64,7 +64,10 @@ function handshakeProbe({ endpoint, record, identity, timeoutMs, connect }) {
   })
 }
 
-/** What desk_status and desk_doctor say about a hung controller: its owner (from the owner record) and where it listens. */
+/**
+ * What desk_status and desk_doctor say about a hung controller: its owner (from the owner record) and where it listens.
+ * `owner_verified` is true when the record carries the owner's start time, so the running process with that PID was checked to be the owner itself; a record from an older Desk names a PID only, which another process may have reused.
+ */
 export function hungControllerReport(probe) {
   const pid = probe.record?.owner?.pid
   return {
@@ -72,5 +75,6 @@ export function hungControllerReport(probe) {
     endpoint: probe.endpoint,
     owner_pid: Number.isInteger(pid) ? pid : null,
     owner_started_at: typeof probe.record?.owner?.started_at === "string" ? probe.record.owner.started_at : null,
+    owner_verified: typeof probe.record?.owner?.process_start === "string",
   }
 }

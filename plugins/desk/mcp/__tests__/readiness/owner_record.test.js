@@ -40,18 +40,33 @@ test("owner.json is missing, corrupt (unreadable, malformed, incomplete or anoth
   assert.deepEqual(readOwnerRecord(unreadable), { status: "corrupt", record: null }, "a folder where owner.json should be")
 })
 
-test("an owner is this process, dead (no such process, or started before this boot) or alive (running, or another user's PID)", () => {
+test("an owner is this process, dead (no such process, or started before this boot) or alive (running, or another user's PID)", async () => {
   const owner = (pid, startedAt = "2026-09-26T11:30:00.000Z") => ({ owner: { pid, token: "t", started_at: startedAt } })
   const fails = (code) => () => { throw Object.assign(new Error(code), { code }) }
-  assert.equal(ownerLiveness(owner(100), { ...clock, kill: fails("ESRCH") }), "self")
-  assert.equal(ownerLiveness(owner(7), { ...clock, kill: () => true }), "alive")
-  assert.equal(ownerLiveness(owner(7), { ...clock, kill: fails("ESRCH") }), "dead")
-  assert.equal(ownerLiveness(owner(7), { ...clock, kill: fails("EPERM") }), "alive")
-  assert.equal(ownerLiveness(owner(7), { ...clock, kill: fails("EINVAL") }), "alive", "anything but 'no such process' keeps the owner")
+  const unread = { processStart: async () => { throw new Error("a record without a start time never reads one") } }
+  assert.equal(await ownerLiveness(owner(100), { ...clock, kill: fails("ESRCH") }), "self")
+  assert.equal(await ownerLiveness(owner(7), { ...clock, ...unread, kill: () => true }), "alive")
+  assert.equal(await ownerLiveness(owner(7), { ...clock, kill: fails("ESRCH") }), "dead")
+  assert.equal(await ownerLiveness(owner(7), { ...clock, ...unread, kill: fails("EPERM") }), "alive")
+  assert.equal(await ownerLiveness(owner(7), { ...clock, ...unread, kill: fails("EINVAL") }), "alive", "anything but 'no such process' keeps the owner")
   // Booted at 11:00; a few minutes of clock slack are allowed.
-  assert.equal(ownerLiveness(owner(7, "2026-09-26T10:58:00.000Z"), { ...clock, kill: () => true }), "alive")
-  assert.equal(ownerLiveness(owner(7, "2026-09-25T09:00:00.000Z"), { ...clock, kill: () => true }), "dead", "a PID from an earlier boot names some other process now")
-  assert.equal(ownerLiveness(owner(process.pid)), "self", "the defaults read this process")
+  assert.equal(await ownerLiveness(owner(7, "2026-09-26T10:58:00.000Z"), { ...clock, ...unread, kill: () => true }), "alive")
+  assert.equal(await ownerLiveness(owner(7, "2026-09-25T09:00:00.000Z"), { ...clock, kill: () => true }), "dead", "a PID from an earlier boot names some other process now")
+  assert.equal(await ownerLiveness(owner(process.pid)), "self", "the defaults read this process")
+})
+
+test("an owner is its PID plus its start time: a live PID that started at another time is a later process that reused the PID", async () => {
+  const owner = (processStart) => ({ owner: { pid: 7, token: "t", started_at: "2026-09-26T11:30:00.000Z", process_start: processStart } })
+  const reads = []
+  const startedAt = (value) => async (pid) => { reads.push(pid); return value }
+  const fails = (code) => () => { throw Object.assign(new Error(code), { code }) }
+  assert.equal(await ownerLiveness(owner("darwin:2026-09-26T11:29:59.000Z"), { ...clock, kill: () => true, processStart: startedAt("darwin:2026-09-26T11:29:59.000Z") }), "alive", "the same process")
+  assert.equal(await ownerLiveness(owner("darwin:2026-09-26T11:29:59.000Z"), { ...clock, kill: () => true, processStart: startedAt("darwin:2026-09-26T11:50:00.000Z") }), "dead", "the PID was reused")
+  assert.equal(await ownerLiveness(owner("darwin:2026-09-26T11:29:59.000Z"), { ...clock, kill: fails("EPERM"), processStart: startedAt("darwin:2026-09-26T11:50:00.000Z") }), "dead", "another user's process that reused the PID")
+  assert.equal(await ownerLiveness(owner("darwin:2026-09-26T11:29:59.000Z"), { ...clock, kill: () => true, processStart: startedAt(null) }), "alive", "a start time that cannot be read keeps the owner")
+  assert.deepEqual(reads, [7, 7, 7, 7])
+  assert.equal(await ownerLiveness(owner(42), { ...clock, kill: () => true, processStart: startedAt("x") }), "alive", "a start time that is not text is no start time: the PID alone decides")
+  assert.equal(reads.length, 4)
 })
 
 test("ownerState: a valid record names a live, dead or self owner; anything else passes its status through", async () => {
@@ -59,11 +74,14 @@ test("ownerState: a valid record names a live, dead or self owner; anything else
   const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
   const stateDir = path.join(root, "state")
   mkdirSync(stateDir, { recursive: true })
-  assert.equal(ownerState({ stateDir, identity }).state, "missing")
-  assert.equal(ownerState({ stateDir }).state, "missing", "the identity is optional")
+  assert.equal((await ownerState({ stateDir, identity })).state, "missing")
+  assert.equal((await ownerState({ stateDir })).state, "missing", "the identity is optional")
   writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify(record(identity, { pid: 7, token: "t", started_at: "2026-09-26T11:30:00.000Z" })))
-  assert.equal(ownerState({ stateDir, identity, ...clock, kill: () => true }).state, "live")
-  assert.equal(ownerState({ stateDir, identity, ...clock, kill: () => { throw Object.assign(new Error("gone"), { code: "ESRCH" }) } }).state, "dead")
-  assert.equal(ownerState({ stateDir, identity, ...clock, selfPid: 7 }).state, "self")
-  assert.equal(ownerState({ stateDir, identity, ...clock, kill: () => true }).record.owner.pid, 7)
+  assert.equal((await ownerState({ stateDir, identity, ...clock, kill: () => true })).state, "live")
+  assert.equal((await ownerState({ stateDir, identity, ...clock, kill: () => { throw Object.assign(new Error("gone"), { code: "ESRCH" }) } })).state, "dead")
+  assert.equal((await ownerState({ stateDir, identity, ...clock, selfPid: 7 })).state, "self")
+  assert.equal((await ownerState({ stateDir, identity, ...clock, kill: () => true })).record.owner.pid, 7)
+  writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify(record(identity, { pid: 7, token: "t", started_at: "2026-09-26T11:30:00.000Z", process_start: "linux:boot:100" })))
+  assert.equal((await ownerState({ stateDir, identity, ...clock, kill: () => true, processStart: async () => "linux:boot:900" })).state, "dead", "a reused PID")
+  assert.equal((await ownerState({ stateDir, identity, ...clock, kill: () => true, processStart: async () => "linux:boot:100" })).state, "live")
 })

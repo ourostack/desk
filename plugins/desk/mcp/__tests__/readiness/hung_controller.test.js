@@ -89,7 +89,7 @@ test("a hung controller is reported with its owner and endpoint, never signalled
   const probe = await probeController({ root: context.root, policy, stateHome: context.stateHome, timeoutMs: 200 })
   assert.equal(probe.state, "silent")
   const report = hungControllerReport(probe)
-  assert.deepEqual(report, { state: "silent", endpoint: context.endpoint, owner_pid: child.pid, owner_started_at: STARTED_AT })
+  assert.deepEqual(report, { state: "silent", endpoint: context.endpoint, owner_pid: child.pid, owner_started_at: STARTED_AT, owner_verified: false })
   assert.equal(child.exitCode, null, "the owner is still running")
   assert.equal(child.signalCode, null)
 })
@@ -118,7 +118,8 @@ test("a socket that refuses, or is gone, while its owner runs is unreachable, no
 })
 
 test("a report reads what the owner record says, and nothing when it says nothing", () => {
-  assert.deepEqual(hungControllerReport({ state: "silent", endpoint: "/e", record: { owner: { pid: 12, started_at: "2026-09-26T00:00:00.000Z" } } }), { state: "silent", endpoint: "/e", owner_pid: 12, owner_started_at: "2026-09-26T00:00:00.000Z" })
-  assert.deepEqual(hungControllerReport({ state: "silent", endpoint: "/e", record: null }), { state: "silent", endpoint: "/e", owner_pid: null, owner_started_at: null })
+  assert.deepEqual(hungControllerReport({ state: "silent", endpoint: "/e", record: { owner: { pid: 12, started_at: "2026-09-26T00:00:00.000Z" } } }), { state: "silent", endpoint: "/e", owner_pid: 12, owner_started_at: "2026-09-26T00:00:00.000Z", owner_verified: false })
+  assert.deepEqual(hungControllerReport({ state: "silent", endpoint: "/e", record: null }), { state: "silent", endpoint: "/e", owner_pid: null, owner_started_at: null, owner_verified: false })
+  assert.equal(hungControllerReport({ state: "silent", endpoint: "/e", record: { owner: { pid: 12, process_start: "darwin:2026-09-26T00:00:00.000Z" } } }).owner_verified, true, "a record with the owner's start time names the owner itself")
   assert.deepEqual(hungControllerReport({ state: "silent", endpoint: "/e", record: { owner: { pid: "12" } } }).owner_pid, null)
 })

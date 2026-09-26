@@ -628,7 +628,7 @@ export function createDeskSession(deps) {
       controller: report,
       missed_checks: context.hung.misses,
       summary: hung
-        ? `${notAnswering(report)}. Desk does not stop it or replace it: it runs inside that session's Desk MCP server, and stopping it would cost that session its Desk connection.`
+        ? `${notAnswering(report)}. Desk does not stop it or replace it while that process runs: a controller runs inside another session's Desk MCP server, and stopping it would cost that session its Desk connection.`
         : `The readiness controller for this root is not hung (probe: ${probe.state}); there is nothing to reclaim.`,
       fix: hung ? hungFix(report) : "Call desk_status.",
     })
@@ -860,13 +860,16 @@ function hungOutcome(controllerProblem, hung, needed) {
 }
 
 function notAnswering(report) {
-  const how = report.state === "silent" ? "accepts connections but does not answer" : "does not accept connections while its owner runs"
+  const how = report.state === "silent" ? "accepts connections but does not answer" : "does not accept connections while the process recorded as its owner runs"
   return `The readiness controller for this root (owner pid ${report.owner_pid}, ${report.endpoint}) ${how}`
 }
 
-// What the agent can do now: nothing. Every clause is true in this session as it runs.
+// What the agent can do now: nothing. Every clause is true in this session as it runs. The owner is named as a Desk process only when its start time was checked; a record without one names a PID that another process may have reused.
 function hungFix(report) {
-  return `Nothing to do: search uses plain text (lexical search and timeline read the files directly) and writes work (they go straight to the files). The controller recovers when it answers again or when its owning session (pid ${report.owner_pid}) ends; Desk keeps checking in the background.`
+  const owner = report.owner_verified
+    ? `the Desk process that owns it (pid ${report.owner_pid}) ends`
+    : `process ${report.owner_pid}, which its owner record names, ends (the record has no start time, so Desk cannot tell whether that process is still the owner or another process that reused its PID)`
+  return `Nothing to do: search uses plain text (lexical search and timeline read the files directly) and writes work (they go straight to the files). The controller recovers when it answers again or when ${owner}; Desk keeps checking in the background.`
 }
 
 function overrideOutcome(override) {

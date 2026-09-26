@@ -128,7 +128,7 @@ async function startOrReuseController({
 
 // Before binding: a controller whose owner runs is never taken over, even when it does not answer (no unlink, no second controller; the session stays controller-free and its hung-controller checks report it). Otherwise a stale socket of ours is removed. Resolves true when the running owner answered, so the session joins it instead of binding.
 async function guardSocketTakeover({ endpoint, identity, stateDir }) {
-  const owner = ownerState({ stateDir, identity })
+  const owner = await ownerState({ stateDir, identity })
   if (owner.state === "live") {
     const answered = await tryHandshake({ endpoint, identity, stateDir, timeoutMs: LIVE_OWNER_HANDSHAKE_MS })
     if (answered) {
@@ -259,7 +259,7 @@ export function endpointIsReclaimable({ endpoint, owner }) {
 
 // A socket file of ours that nobody listens on (connecting is refused), when no running process owns it: the owner record is missing or corrupt (a crashed controller that never wrote one, or wrote it badly), or names an owner that is gone. A refused connection alone never counts: a running owner that is stopped, or whose accept queue is full, refuses too. Returns the socket's stat when it may be removed, otherwise null.
 export async function endpointIsAbandoned(endpoint, { stateDir, identity = null, probe = probeEndpoint }) {
-  if (ownerState({ stateDir, identity }).state === "live") return null
+  if ((await ownerState({ stateDir, identity })).state === "live") return null
   let stat
   try {
     validatePrivateDirectory(path.dirname(endpoint))
@@ -272,7 +272,7 @@ export async function endpointIsAbandoned(endpoint, { stateDir, identity = null,
   if (await probe(endpoint) !== "refused") return null
   await new Promise((resolve) => setTimeout(resolve, ABANDONED_RECHECK_MS))
   if (await probe(endpoint) !== "refused") return null
-  if (ownerState({ stateDir, identity }).state === "live") return null
+  if ((await ownerState({ stateDir, identity })).state === "live") return null
   try {
     const again = lstatSync(endpoint)
     return again.dev === stat.dev && again.ino === stat.ino ? stat : null

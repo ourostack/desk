@@ -244,7 +244,7 @@ test("a hung controller is counted across attempts and marked controller_hung af
   const first = await session.admission.refresh()
   assert.equal(first.state, "degraded:controller_unavailable")
   assert.match(first.summary, /owner pid 4242, \/tmp\/x\.sock.*1 of 3 checks missed/u)
-  assert.equal(first.fix, "Nothing to do: search uses plain text (lexical search and timeline read the files directly) and writes work (they go straight to the files). The controller recovers when it answers again or when its owning session (pid 4242) ends; Desk keeps checking in the background.")
+  assert.equal(first.fix, "Nothing to do: search uses plain text (lexical search and timeline read the files directly) and writes work (they go straight to the files). The controller recovers when it answers again or when process 4242, which its owner record names, ends (the record has no start time, so Desk cannot tell whether that process is still the owner or another process that reused its PID); Desk keeps checking in the background.")
   assert.equal(requirementMet("write", session.context), true)
   await session.admission.refresh({ force: true })
   const hung = await session.admission.refresh({ force: true })
@@ -272,7 +272,7 @@ test("a running owner that refuses connections counts as a miss, and a controlle
   })
   await session.admission.refresh()
   assert.equal(session.context.hung.misses, 1)
-  assert.match(session.admission.snapshot().summary, /pid null, \/tmp\/x\) does not accept connections while its owner runs \(1 of 3/u)
+  assert.match(session.admission.snapshot().summary, /pid null, \/tmp\/x\) does not accept connections while the process recorded as its owner runs \(1 of 3/u)
   await session.admission.refresh({ force: true })
   assert.equal(session.context.hung.misses, 2)
   assert.match(session.admission.snapshot().summary, /accepts connections but does not answer \(2 of 3/u)
@@ -284,7 +284,8 @@ test("a running owner that refuses connections counts as a miss, and a controlle
 
 test("desk_doctor reclaim_controller reports the owner and reclaims nothing", async (t) => {
   const answers = []
-  const probe = async () => ({ state: answers.shift() ?? "silent", endpoint: "/tmp/x.sock", record: { owner: { pid: 7 } } })
+  const records = []
+  const probe = async () => ({ state: answers.shift() ?? "silent", endpoint: "/tmp/x.sock", record: records.shift() ?? { owner: { pid: 7 } } })
   const noRoot = await makeSession(t, { resolveInputs: async () => ({ rootError: { name: "Error", message: "gone", code: "DESK_ROOT_UNAVAILABLE" } }) })
   await noRoot.session.admission.refresh()
   const refused = await noRoot.session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } })
@@ -304,7 +305,11 @@ test("desk_doctor reclaim_controller reports the owner and reclaims nothing", as
   assert.doesNotMatch(report.fix, /task|A2b/u)
   answers.push("unreachable")
   const unreachable = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
-  assert.match(unreachable.summary, /does not accept connections while its owner runs\. Desk does not stop it/u)
+  assert.match(unreachable.summary, /does not accept connections while the process recorded as its owner runs\. Desk does not stop it or replace it while that process runs/u)
+  records.push({ owner: { pid: 7, process_start: "darwin:2026-09-26T00:00:00.000Z" } })
+  const verified = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
+  assert.equal(verified.controller.owner_verified, true)
+  assert.match(verified.fix, /recovers when it answers again or when the Desk process that owns it \(pid 7\) ends; Desk keeps checking/u, "a start-time-checked owner is named as the Desk process")
   answers.push("answering")
   const healthy = payload(await session.callTool({ name: "desk_doctor", input: { repair: "reclaim_controller" } }))
   assert.equal(healthy.reclaimed, false)

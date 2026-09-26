@@ -129,6 +129,33 @@ test("a socket whose recorded owner runs is never taken over, even when it refus
   assert.equal((await client.status()).owner.pid, process.pid)
 })
 
+test("a socket whose recorded owner PID now names a later process (its start time differs) is reclaimed, and that process is left alone", { skip: posixOnly }, async (t) => {
+  const { readProcessStart } = await import("../../src/readiness/process-start.js")
+  const root = await mkTempRoot("desk-reclaim-reused-pid-")
+  const stateHome = path.join(root, "state")
+  const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
+  const endpoint = deriveControllerEndpoint({ identity })
+  const stateDir = path.join(stateHome, identity.id)
+  t.after(() => rmSync(endpoint, { force: true }))
+  await deadSocket(endpoint)
+  const { dev, ino } = lstatSync(endpoint)
+  // ps reports whole seconds: the unrelated process starts in a later second than the recorded owner (this test process).
+  await new Promise((resolve) => setTimeout(resolve, 1100))
+  const unrelated = spawn("sleep", ["60"], { stdio: "ignore" })
+  t.after(() => unrelated.kill("SIGKILL"))
+  await new Promise((resolve) => unrelated.once("spawn", resolve))
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+  writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({
+    identity, endpoint, socket: { dev, ino },
+    owner: { pid: unrelated.pid, token: "t", started_at: new Date().toISOString(), process_start: await readProcessStart(process.pid) },
+  }))
+  const client = await connectOrStartController({ root, stateHome, ephemeral: true })
+  t.after(() => client.close())
+  assert.equal((await client.status()).owner.pid, process.pid, "a new controller was elected")
+  assert.equal(unrelated.exitCode, null)
+  assert.equal(unrelated.signalCode, null, "the process that reused the PID was never signalled")
+})
+
 test("a socket is reclaimable at once only when its recorded owner is gone or is this process, and it is still the file that owner published", { skip: posixOnly }, async () => {
   const root = await mkTempRoot("desk-rc-dead-")
   const privateDir = path.join(root, "private")
@@ -184,7 +211,10 @@ test("a running owner that is only busy gets one longer handshake and is joined,
   // Name a running process other than this one as the owner, and answer the first handshake too late.
   const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
   t.after(() => sleeper.kill("SIGKILL"))
-  writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({ ...record, owner: { ...record.owner, pid: sleeper.pid } }))
+  await new Promise((resolve) => sleeper.once("spawn", resolve))
+  // With that process's own start time, so the record names it exactly, as its owner's own record would.
+  const { readProcessStart } = await import("../../src/readiness/process-start.js")
+  writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({ ...record, owner: { ...record.owner, pid: sleeper.pid, process_start: await readProcessStart(sleeper.pid) } }))
   const listeners = running.server.listeners("connection")
   let delayed = false
   running.server.removeAllListeners("connection")
