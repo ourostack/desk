@@ -87,6 +87,25 @@ test("discover surfaces unexpected directory read errors", async (t) => {
   )
 })
 
+test("discover surfaces an unexpected read error from a folder inside the desk", async (t) => {
+  const root = await buildFixture()
+  const blocked = path.join(root, "trackA")
+  const original = fs.readdir
+  let reads = 0
+  // The exclusion loader reads every folder first; the walk's own read is the second.
+  t.mock.method(fs, "readdir", async (dir, options) => {
+    if (dir === blocked && ++reads === 2) {
+      const err = new Error("blocked inside")
+      err.code = "EACCES"
+      throw err
+    }
+    return original.call(fs, dir, options)
+  })
+
+  await assert.rejects(discover(root), (err) => err.code === "EACCES" && err.message === "blocked inside")
+  assert.equal(reads, 2)
+})
+
 test("discover rejects immediately when startup abort signal is already tripped", async () => {
   const root = await buildFixture()
   const controller = new AbortController()
@@ -276,4 +295,17 @@ test("normalizeDate preserves strings and normalizes Date or scalar values", () 
   )
   assert.equal(normalizeDate("already-text"), "already-text")
   assert.equal(normalizeDate(123), "123")
+})
+
+test("a merged duplicate's card is indexed as merged-task, never as a task", async () => {
+  const root = await mkTempRoot("desk-discover-merged-")
+  const rel = path.join("trackA", "keep-task", "_iterations", "2026-09-01-dup-task", "merged-task.md")
+  await fs.mkdir(path.join(root, path.dirname(rel)), { recursive: true })
+  await fs.writeFile(path.join(root, rel), "---\nstatus: processing\nmerged_into: keep-task\n---\n# The duplicate's goal\n", "utf8")
+
+  assert.equal(isIndexable(rel), true)
+  assert.deepEqual(classify(rel), { kind: "merged-task", track: "trackA", task_slug: "2026-09-01-dup-task" })
+  const docs = await discover(root)
+  assert.deepEqual(docs.map((d) => [d.path, d.kind]), [[rel, "merged-task"]])
+  assert.ok(!docs.some((d) => d.kind === "task"))
 })

@@ -24,7 +24,7 @@ For overlays with their own work-item tracker (and a work-item ID), consumer ove
 One job is one task (`task-lifecycle`). Before creating anything, search the desk for a task with the same outcome, live or archived (`desk_search` with `scope: "all"`). A follow-up, a re-review or a retry of the same outcome is a new iteration of the existing task, not a new task:
 
 - **Live task:** add the iteration under it and continue there.
-- **`done` or archived task:** reopen it. An archived task sits under `<track>/_archive/<slug>/`, and `task_move` keeps an archived task archived, so move it back with `git mv <track>/_archive/<slug> <track>/<slug>` and restore its row in the track's `## Tasks` table. Then set its status back to `processing` with `task_update`, record why in the card (which new round of the job this is and what asked for it), and say so in one line.
+- **`done` or archived task:** reopen it. An archived task sits under `<track>/_archive/<slug>/`; move it back with `task_move` and `unarchive: true`, which stages the move with `git mv`, restores its row in the track's `## Tasks` table and validates any new name as usual. Then set its status back to `processing` with `task_update`, record why in the card (which new round of the job this is and what asked for it), and say so in one line.
 
 An iteration goes where `directory-structure` puts it: `<task>/<repo>/<YYYY-MM-DD>-<slug>/` for each repository the task touches, or `<task>/_iterations/<YYYY-MM-DD>-<slug>/` for a task with no repositories (`repos: []`).
 

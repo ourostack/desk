@@ -8,7 +8,8 @@
 // other text files under the desk that still mention the old relative path,
 // so the agent (or the operator) can fix them if they matter. Neither
 // commits; staging (or a plain rename on a non-Git desk) is as far as this
-// goes, matching M4-1's "channels never commits" carry-in.
+// goes, matching M4-1's "channels never commits" carry-in. On a Git desk
+// they stage every file they write, too (M4-5 fix round 4).
 
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
@@ -21,6 +22,7 @@ import {
 } from "../util/fm.js"
 import { resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
+import { isGitRepository, hasUnstagedWork, stagePaths } from "../util/git-stage.js"
 import {
   validateName,
   validateTrackName,
@@ -29,6 +31,9 @@ import {
 } from "../desk/naming.js"
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".state"])
+
+// Mirrors tools/task.js's TERMINAL_STATUSES.
+const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 
 function relPath(root, absPath) {
   return path.relative(root, absPath)
@@ -64,18 +69,39 @@ function rejectTraversalShapedInput(tool, field, value) {
 //
 // `spawnGit` is an injectable seam over `node:child_process`'s `spawnSync`,
 // for tests only — real callers never pass it (mirrors `desk/naming.js`'s
-// `spawnGitConfig`).
+// `spawnGitConfig`). The shared helpers live in `util/git-stage.js`.
 
-function isGitRepository(root, spawnGit) {
-  let result
-  try {
-    result = spawnGit("git", ["-C", root, "rev-parse", "--is-inside-work-tree"], {
-      encoding: "utf8",
-    })
-  } catch {
-    return false
+/**
+ * Refuse to touch a path another session may be working in (M4-5 fix rounds
+ * 2-4): on a Git desk, the moved folder, or a `track.md` whose tasks table
+ * the move would edit, with unstaged changes to tracked files or untracked,
+ * non-ignored files is left alone unless the caller passes
+ * `allow_dirty: true`. Staged changes don't count: the move tools and the
+ * track tools stage everything they write, so a staged change is the
+ * current tidy's own work in progress (fix round 4). The message never
+ * quotes the path's names.
+ */
+function assertClean({ tool, root, paths, what, allowDirty, spawnGit }) {
+  if (allowDirty || !isGitRepository(root, spawnGit)) return
+  if (hasUnstagedWork(root, paths.map((p) => relPath(root, p)), spawnGit)) {
+    throw new Error(
+      `${tool}: ${what} has unstaged changes or untracked files, so another session may be working there; ` +
+        "commit or finish that work first, or pass allow_dirty: true to move it anyway",
+    )
   }
-  return result.status === 0 && result.stdout.trim() === "true"
+}
+
+/**
+ * Stage every file a move wrote after its `git mv` (the moved card, the
+ * edited `track.md` tables), so a later move in the same tidy sees them as
+ * this tidy's work, not another session's. A no-op on a non-Git desk.
+ */
+function stageWrites({ root, files, spawnGit }) {
+  if (files.length === 0 || !isGitRepository(root, spawnGit)) return
+  const result = stagePaths(root, files.map((p) => relPath(root, p)), spawnGit)
+  if (!result.ok) {
+    throw new Error(`desk-mcp: git add failed staging the move's edits: ${result.stderr}`)
+  }
 }
 
 /**
@@ -227,9 +253,33 @@ async function findMentions({ root, oldRelPath, exclude }) {
 // ── task_move ────────────────────────────────────────────────────────────
 
 /**
+ * A new "## Tasks" row for `slug`, shaped by the table's header row: the
+ * slug in backticks, `state` in the second column when there is one, and
+ * every other cell empty.
+ */
+function buildRow(headerLine, slug, state) {
+  const columns = headerLine.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").length
+  const cells = [`\`${slug}\``, state, ...Array(Math.max(columns - 2, 0)).fill("")].slice(0, columns)
+  return `| ${cells.join(" | ")} |`
+}
+
+/** The date an iteration folder is named after: the card's `created` day, or today. */
+function iterationDate(created) {
+  const parsed = created instanceof Date ? created : new Date(String(created))
+  return Number.isNaN(parsed.getTime()) ? nowIso().slice(0, 10) : parsed.toISOString().slice(0, 10)
+}
+
+function trueOrAbsent(tool, field, value) {
+  if (value !== undefined && typeof value !== "boolean") {
+    throw new Error(`${tool}: \`${field}\` must be true or false`)
+  }
+  return value === true
+}
+
+/**
  * task_move
  *
- * Input: { track, slug, to_track?, to_slug? }
+ * Input: { track, slug, to_track?, to_slug?, unarchive?, into_task?, allow_dirty? }
  *
  * Moves `<track>/<slug>/` (or, if the task is archived,
  * `<track>/_archive/<slug>/`) to `<to_track ?? track>/<to_slug ?? slug>/`
@@ -243,6 +293,27 @@ async function findMentions({ root, oldRelPath, exclude }) {
  * the moved card, and best-effort moves its row between the two `track.md`
  * "## Tasks" tables (or renames the row in place, for a same-track rename).
  *
+ * `unarchive: true` (M4-5) reopens an archived task: it moves
+ * `<track>/_archive/<slug>/` back to a live `<to_track ?? track>/<to_slug ??
+ * slug>/` and makes sure the destination table has a row for it — the
+ * source row moved or renamed when there is one, a new row (slug and the
+ * card's status) otherwise. It never changes the card's status.
+ *
+ * On a Git desk it refuses a source folder, or a `track.md` whose tasks
+ * table it would edit, with unstaged changes or untracked, non-ignored files
+ * (another session may be working there) unless `allow_dirty: true` (M4-5),
+ * and it stages every file it writes, so its own earlier edits never block
+ * a later move in the same tidy. `into_task` refuses to merge a live task
+ * into a done or cancelled one.
+ *
+ * `into_task: "<keeper>"` (M4-5) merges a duplicate task into the task that
+ * keeps the job: it moves the task folder to
+ * `<to_track ?? track>/<keeper>/_iterations/<created-date>-<slug>/`, renames
+ * its card to `merged-task.md` there (so it is history, not a second task
+ * card), records `merged_into:` on it, and drops its row from the source
+ * table. Nothing is deleted. It cannot be combined with `to_slug` or
+ * `unarchive`.
+ *
  * Returns: { from, to, updated_files, mentions }
  */
 export async function task_move({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
@@ -253,9 +324,22 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   const { track, slug } = values
   rejectTraversalShapedInput("task_move", "track", track)
   rejectTraversalShapedInput("task_move", "slug", slug)
+  const unarchive = trueOrAbsent("task_move", "unarchive", values.unarchive)
+  const allowDirty = trueOrAbsent("task_move", "allow_dirty", values.allow_dirty)
+  const intoTask = values.into_task
+  if (intoTask !== undefined) {
+    rejectTraversalShapedInput("task_move", "into_task", intoTask)
+    if (values.to_slug !== undefined || unarchive) {
+      throw new Error("task_move: `into_task` cannot be combined with `to_slug` or `unarchive`")
+    }
+  }
 
   const toTrack = values.to_track ?? track
   const toSlug = values.to_slug ?? slug
+
+  if (intoTask === slug && toTrack === track) {
+    throw new Error("task_move: a task cannot be merged into itself")
+  }
 
   if (values.to_slug !== undefined) {
     const nameResult = validateName(toSlug)
@@ -284,7 +368,14 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   const archivedSrcFile = await target([track, "_archive", slug, "task.md"])
 
   let archived
-  if (await pathExists(liveSrcFile)) {
+  if (unarchive) {
+    if (!(await pathExists(archivedSrcFile))) {
+      throw new Error(
+        `task_move: no archived task to unarchive at ${relPath(deskRoot, path.dirname(archivedSrcFile))}`,
+      )
+    }
+    archived = true
+  } else if (await pathExists(liveSrcFile)) {
     archived = false
   } else if (await pathExists(archivedSrcFile)) {
     archived = true
@@ -295,38 +386,84 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   }
 
   const srcSegments = archived ? [track, "_archive", slug] : [track, slug]
-  const destSegments = archived ? [toTrack, "_archive", toSlug] : [toTrack, toSlug]
   const srcDir = await target(srcSegments)
+  const srcCard = await readMarkdown(path.join(srcDir, "task.md"))
+
+  let destSegments
+  if (intoTask !== undefined) {
+    if (!(await pathExists(await target([toTrack, intoTask, "task.md"])))) {
+      throw new Error(
+        `task_move: the task to merge into doesn't exist at ${relPath(deskRoot, await target([toTrack, intoTask]))}`,
+      )
+    }
+    // Never hide a live task behind a finished one (M4-5 fix round 3).
+    const keeper = await readMarkdown(await target([toTrack, intoTask, "task.md"]))
+    if (!TERMINAL_STATUSES.has(srcCard.data.status) && TERMINAL_STATUSES.has(keeper.data.status)) {
+      throw new Error(
+        "task_move: this task is still live but the task to merge into is done or cancelled; " +
+          "keep the live task (merge the finished one into it instead) or skip the merge",
+      )
+    }
+    destSegments = [toTrack, intoTask, "_iterations", `${iterationDate(srcCard.data.created)}-${slug}`]
+  } else {
+    destSegments = archived && !unarchive ? [toTrack, "_archive", toSlug] : [toTrack, toSlug]
+  }
   const destDir = await target(destSegments)
-  const destFile = await target([...destSegments, "task.md"])
+  const cardName = intoTask === undefined ? "task.md" : "merged-task.md"
+  const destFile = await target([...destSegments, cardName])
 
   if (await pathExists(destDir)) {
     throw new Error(`task_move: target already exists at ${relPath(deskRoot, destDir)}`)
   }
 
+  const srcTrackMd = await target([track, "track.md"])
+  destTrackMd ??= await target([toTrack, "track.md"])
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
+  assertClean({ tool: "task_move", root: effectiveRoot, paths: [srcDir], what: "the source", allowDirty, spawnGit })
+  assertClean({
+    tool: "task_move",
+    root: effectiveRoot,
+    paths: [srcTrackMd, destTrackMd],
+    what: "a track.md this move would edit",
+    allowDirty,
+    spawnGit,
+  })
   await movePath({ root: effectiveRoot, from: srcDir, to: destDir, spawnGit })
+  if (intoTask !== undefined) {
+    await movePath({ root: effectiveRoot, from: path.join(destDir, "task.md"), to: destFile, spawnGit })
+  }
 
-  const existingCard = await readMarkdown(destFile)
-  const mergedCard = { ...existingCard.data, track: toTrack, updated: nowIso() }
-  await writeMarkdown(destFile, mergedCard, existingCard.content)
+  const mergedCard = { ...srcCard.data, track: toTrack, updated: nowIso() }
+  if (intoTask !== undefined) mergedCard.merged_into = intoTask
+  await writeMarkdown(destFile, mergedCard, srcCard.content)
 
   const updatedFiles = [relPath(deskRoot, destFile)]
   const touched = new Set([destFile])
 
-  const srcTrackMd = await target([track, "track.md"])
-  destTrackMd ??= await target([toTrack, "track.md"])
   touched.add(srcTrackMd)
   touched.add(destTrackMd)
 
-  if (track === toTrack) {
-    // Reaching here with `toSlug === slug` would mean destDir === srcDir,
-    // which the target-exists check above already refused — so a rename is
-    // the only way to get this far on a same-track move.
-    const result = await editTasksTable(srcTrackMd, (lines, bounds) => {
+  if (intoTask !== undefined) {
+    const removed = await editTasksTable(srcTrackMd, (lines, bounds) => {
       const idx = findRowIndex(lines, bounds, slug)
       if (idx === -1) return { changed: false }
-      lines[idx] = renameRowSlug(lines[idx], toSlug)
+      lines.splice(idx, 1)
+      return { changed: true }
+    })
+    if (removed.changed) updatedFiles.push(relPath(deskRoot, srcTrackMd))
+  } else if (track === toTrack) {
+    // A same-track move that isn't an unarchive is a rename: reaching here
+    // with `toSlug === slug` would mean destDir === srcDir, which the
+    // target-exists check above already refused.
+    const result = await editTasksTable(srcTrackMd, (lines, bounds) => {
+      const idx = findRowIndex(lines, bounds, slug)
+      if (idx !== -1) {
+        if (toSlug === slug) return { changed: false }
+        lines[idx] = renameRowSlug(lines[idx], toSlug)
+        return { changed: true }
+      }
+      if (!unarchive) return { changed: false }
+      lines.splice(bounds.rowEnd, 0, buildRow(lines[bounds.rowStart - 2], toSlug, mergedCard.status))
       return { changed: true }
     })
     if (result.changed) updatedFiles.push(relPath(deskRoot, srcTrackMd))
@@ -342,14 +479,23 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
       row = removed.row
       updatedFiles.push(relPath(deskRoot, srcTrackMd))
     }
-    if (row !== null) {
+    if (row !== null || unarchive) {
       const inserted = await editTasksTable(destTrackMd, (lines, bounds) => {
-        lines.splice(bounds.rowEnd, 0, renameRowSlug(row, toSlug))
+        const newRow = row === null
+          ? buildRow(lines[bounds.rowStart - 2], toSlug, mergedCard.status)
+          : renameRowSlug(row, toSlug)
+        lines.splice(bounds.rowEnd, 0, newRow)
         return { changed: true }
       })
       if (inserted.changed) updatedFiles.push(relPath(deskRoot, destTrackMd))
     }
   }
+
+  stageWrites({
+    root: effectiveRoot,
+    files: updatedFiles.map((p) => path.join(deskRoot, p)),
+    spawnGit,
+  })
 
   const mentions = await findMentions({
     root: effectiveRoot,
@@ -379,11 +525,13 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
 /**
  * track_rename
  *
- * Input: { track, to }
+ * Input: { track, to, allow_dirty? }
  *
  * Moves `<track>/` to `<to>/`. Refuses if the target already exists, or if
- * `to` isn't a valid track name (M4-1's `validateTrackName`). Rewrites
- * `track:` in every `task.md` under the moved tree, live and archived.
+ * `to` isn't a valid track name (M4-1's `validateTrackName`), or, on a Git
+ * desk, if the track has unstaged changes or untracked, non-ignored files,
+ * unless `allow_dirty: true`. Rewrites `track:` in every `task.md` under the
+ * moved tree, live and archived, and stages those edits on a Git desk.
  *
  * Returns: { from, to, updated_files, mentions }
  */
@@ -394,6 +542,7 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
   }
   const { track, to } = values
   rejectTraversalShapedInput("track_rename", "track", track)
+  const allowDirty = trueOrAbsent("track_rename", "allow_dirty", values.allow_dirty)
 
   const nameResult = validateTrackName(to, { operatorNames: operatorNames(deskRoot) })
   if (!nameResult.ok) {
@@ -413,6 +562,7 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
   }
 
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
+  assertClean({ tool: "track_rename", root: effectiveRoot, paths: [srcDir], what: "the source", allowDirty, spawnGit })
   await movePath({ root: effectiveRoot, from: srcDir, to: destDir, spawnGit })
 
   const taskFiles = await findTaskCards(destDir)
@@ -423,6 +573,7 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
     await writeMarkdown(file, merged, existing.content)
     updatedFiles.push(relPath(deskRoot, file))
   }
+  stageWrites({ root: effectiveRoot, files: taskFiles, spawnGit })
 
   const mentions = await findMentions({
     root: effectiveRoot,
