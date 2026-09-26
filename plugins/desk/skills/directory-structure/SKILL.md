@@ -1,6 +1,6 @@
 ---
 name: directory-structure
-description: Canonical layout of `$DESK/` — tracks, tasks, repo workspaces, reserved `_` directories, naming conventions, and rules for where planning/doing docs go. Use when creating a new track or task directory, placing a planning/doing doc, or auditing a track that looks disorganized.
+description: Canonical layout of `$DESK/` — tracks, tasks, repo workspaces, reserved `_` directories, what may sit at the desk and track roots, naming conventions, renames, and rules for where planning/doing docs go. Use when creating a new track or task directory, placing a planning/doing doc or report, renaming or moving a task or track, or auditing or tidying a desk that looks disorganized.
 ---
 
 # Directory structure
@@ -33,6 +33,7 @@ $DESK/
         <older-doc>.md
     <task-name>/                        # one directory per task within the track
       task.md                           # task card (see task-card-format)
+      _iterations/                      # iterations of a task with no repositories (repos: []), same <YYYY-MM-DD>-<slug>/ shape as below
       <repo-name>/                      # workspace per repo the task touches (matches task.md repos[].name)
         <YYYY-MM-DD>-<slug>/            # one iteration directory (e.g. 2026-04-13-initial-impl)
           planning.md                   # per-iteration planning doc
@@ -53,65 +54,54 @@ $DESK/
 
 a page is what i lay open on the desk for a single work session — one iteration directory per session, named by date.
 
-- **date prefix is `<YYYY-MM-DD>`, not `<YYYY-MM-DD-HHMM>`.** one
-  iteration per day per repo is the default expectation; if two
-  iterations land on the same day, the slug differentiates them
-  (e.g. `2026-04-13-initial-impl` and `2026-04-13-arch-refinement`).
-- **slug trigger values** (kebab-case; operator-confirmed at creation
-  time):
-  - `initial-impl` — first iteration on a repo; starts fresh or from
-    adoption
+- **date prefix is `<YYYY-MM-DD>`, not `<YYYY-MM-DD-HHMM>`.** one iteration per day per repo is the default expectation; if two iterations land on the same day, the slug differentiates them (e.g. `2026-04-13-initial-impl` and `2026-04-13-arch-refinement`).
+- **slug trigger values** (kebab-case; the agent picks the one that fits, or names a new trigger from what the iteration does):
+  - `initial-impl` — first iteration on a repo; starts fresh or from adoption
   - `review-pass-N` — PR feedback iteration; N increments per round
   - `architecture-review` — larger refactor triggered by review
   - `post-int-smoke-fixes` — integration-environment findings
   - `revert-and-reland` — previous PR reverted; re-PR with fixes
   - `pre-merge-polish` — final pass before merge
-- **no `iterations/` wrapper directory.** every direct child of
-  `<repo-name>/` is either `_archive/` or a date-prefixed iteration
-  directory. (an `iterations/` wrapper was considered and rejected —
-  redundant depth given the `_archive/` sibling already differentiates
-  active from archived.)
-- **`_archive/` is a direct child of `<repo-name>/`.** archived
-  iterations move there as a whole directory — `planning.md`,
-  `doing.md`, `feedback.md`, and `artifacts/` preserved together as
-  a single unit. see `archive-workflow`.
-- **`artifacts/` is per-iteration**, not per-doing-doc. coverage
-  checklists, audit logs, PR-description drafts, compliance logs —
-  every output for that iteration lands here.
+- **no `iterations/` wrapper directory.** every direct child of `<repo-name>/` is either `_archive/` or a date-prefixed iteration directory. (an `iterations/` wrapper was considered and rejected — redundant depth given the `_archive/` sibling already differentiates active from archived.)
+- **`_archive/` is a direct child of `<repo-name>/`.** archived iterations move there as a whole directory — `planning.md`, `doing.md`, `feedback.md`, and `artifacts/` preserved together as a single unit. see `archive-workflow`.
+- **`artifacts/` is per-iteration**, not per-doing-doc. coverage checklists, audit logs, PR-description drafts, compliance logs — every output for that iteration lands here.
 
-iteration frontmatter carries scope identifiers (`track`, `task`,
-`repo`, `iteration`, `pr`, `trigger`) so an agent doesn't need to
-parse the directory path to know which page it's looking at.
+iteration frontmatter carries scope identifiers (`track`, `task`, `repo`, `iteration`, `pr`, `trigger`) so an agent doesn't need to parse the directory path to know which page it's looking at.
 
 ## naming conventions
 
-- **track directory**: kebab-case slug from the originating Feature/Epic title. example: `order-service-hardening`.
-- **task directory**: kebab-case slug describing the work. must match `task.md`'s `title` field exactly. example: `api-validation-layer`.
+- **track directory**: outcome name for the body of work the track holds, such as the originating Feature/Epic's outcome; never a person's name or a catch-all. example: `order-service-hardening`.
+- **task directory**: outcome name for what the task delivers. must match `task.md`'s `title` field exactly. example: `api-validation-layer`.
 - **repo workspace**: matches the upstream repo name exactly. example: `OrderService`, `OrderUI`.
 - **system directories**: `artifacts/`, `_planning/`, `_archive/`, `_meta/`, `_history/`. these are not task directories. `_`-prefixed dirs sort to the top in `ls`; `artifacts/` is deliberately plain because it is shared repo data, not a hidden local cache.
 
-slugs are permanent — see the `interaction-style` skill for the slug-permanence rule. always propose a slug before creating a directory.
+The agent chooses every track and task name itself, from the outcome, without asking (`start-task` has the rules; `task_create`, `track_create`, `task_move` and `track_rename` enforce them). Names are not permanent. Rename or move a task with `task_move` (to another track, a new name or both) and rename a track with `track_rename`. Both stage the move with `git mv` on a Git desk, update `track:` in the moved task cards and the `## Tasks` tables, and report other files that still mention the old path; fix the ones that matter in the same commit.
 
 ## rules
 
-- **track directories** are created when a task references a Feature with no existing track.
-- **task directories** are created when the operator starts a new task.
+- **track directories** are created together with their first task, when no active track's scope line clearly fits the work (`start-task`, `track-card-format`).
+- **task directories** are created when new work starts (`start-task`), never for another round of an existing job (`task-lifecycle` "One job is one task").
 - **repo workspaces** are created when worker begins work on a specific repo within a task.
-- **track root stays readable.** only `track.md`, task directories, and reserved track-local `_` directories belong at track root. never dump planning artifacts, design docs, flow diagrams, or binaries directly at track root — use `_planning/`. `$DESK/artifacts/` is the workspace-level exception for shared index artifacts.
+- **track root stays readable.** never dump planning artifacts, design docs, flow diagrams, or binaries directly at track root — use `_planning/`. "What may sit where" below lists what belongs.
 - **repo-shared embedding artifacts live at `$DESK/artifacts/`, never `.state/`.** `.state/` is local and ignored; `artifacts/vector-packs/` and `artifacts/snapshots/` are committed only when the repo's publication policy explicitly approves them.
 - **PR-surface artifacts live at `<task>/<repo>/`, not inside an iteration's `artifacts/`.** the PR description, draft top-level PR comments, and other PR-surface artifacts span every iteration of the same PR (initial-impl → review-pass-N → pre-merge-polish → pr-feedback → pr-self-review) and are rewritten in place over time. they belong alongside other task-level surfaces like `integration-smoke.md`. the `<iteration>/artifacts/` directory is for iteration-bounded outputs only (diff snapshots, raw findings, evaluator logs). test: "is this artifact rewritten across multiple iterations of the same PR?" — yes → task-level (`<task>/<repo>/pr-description.md`); no → iteration-level (`<task>/<repo>/<iteration>/artifacts/`).
-- **ad-hoc operator-facing tooling lives in the desk, not the product repo.** smoke scripts, repro harnesses, exploration notebooks, quick-check utilities — these live in `$DESK/<track>/<task>/<RepoName>/...`, NOT in the product repo. the product repo is only for artifacts that go through production review and ship. heuristic: if reviewers on the product PR wouldn't want to see this file, it belongs on the desk. when a brief says "commit to repo," confirm the destination explicitly OR surface the desk as the default and require operator override.
+- **ad-hoc operator-facing tooling lives in the desk, not the product repo.** smoke scripts, repro harnesses, exploration notebooks, quick-check utilities — these live in `$DESK/<track>/<task>/<RepoName>/...`, NOT in the product repo. the product repo is only for artifacts that go through production review and ship. heuristic: if reviewers on the product PR wouldn't want to see this file, it belongs on the desk. when a brief leaves the destination open, the agent decides the destination itself (the desk by default for desk-owned content such as these tools), says where it put the file in one line, and never asks.
+
+## What may sit where
+
+Only these entries belong at each root; everything else is loose.
+
+- **At the desk root:** track folders (each with a `track.md`), underscore folders such as `_meta/` and `_archive/`, `desks/` in a crew workspace, the shared `artifacts/` folder this layout defines, `AGENTS.md`, `README.md`, `CLAUDE.md`, and dotfiles such as `.gitignore`.
+- **At a track root:** `track.md`, task folders (each with a `task.md`) and underscore folders such as `_planning/`, `_friction/` and `_archive/`.
+
+Reports, status notes and handoffs belong in a task or iteration folder, and cross-repo plans in `<track>/_planning/`. `desk_doctor` reports loose entries as `loose_file` in its Organization section, together with missing scope lines, person or catch-all track names, weak names, empty tracks, several tasks for one job and stale tasks. Fix what it reports by moving files into the task, iteration or underscore folder they belong to, and announce the tidy in one line under the safety rules in `interaction-style` section 2.
 
 ## planning doc scope determines location
 
 - **cross-repo plans** → `<track>/_planning/`
-- **single-repo plans** → inside the per-iteration directory:
-  `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/planning.md`
-- **doing docs** → per-iteration, sibling to `planning.md`:
-  `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/doing.md`
-- **feedback docs** (PR-feedback iterations only) → per-iteration,
-  sibling to planning/doing:
-  `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/feedback.md`
+- **single-repo plans** → inside the per-iteration directory: `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/planning.md`
+- **doing docs** → per-iteration, sibling to `planning.md`: `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/doing.md`
+- **feedback docs** (PR-feedback iterations only) → per-iteration, sibling to planning/doing: `<track>/<task>/<repo>/<YYYY-MM-DD>-<slug>/feedback.md`
 
 `_history/` within `_planning/` holds superseded/historical/binary artifacts with a `README.md` explaining what each was and what replaced it.
 

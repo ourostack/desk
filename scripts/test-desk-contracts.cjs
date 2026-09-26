@@ -224,7 +224,10 @@ const ownedRules = [
   [/Prereqs first/u, "session-start"],
   [/Desk MCP health guard/u, "session-start"],
   [/One decision group per message/u, "using-desk \"Alignment, then ownership\""],
-  [/Slugs are permanent/u, "interaction-style"],
+  [/Slugs are permanent/u, "nothing: the agent names from the outcome (start-task)"],
+  [/tidy up my desk/iu, "interaction-style"],
+  [/Cite every factual claim/u, "using-desk and evidence-discipline"],
+  [/Own the stack/u, "using-desk"],
   [/Commit \+ push/u, "using-desk \"Durable context and attribution\""],
   [/Long-lived work, bounded processes/u, "session-resumption"],
   [/Delivery has an owner|cleanup_pending/u, "task-lifecycle"],
@@ -535,47 +538,108 @@ contract("repo-handling and git-hygiene state the same clone rule word for word"
   }
 });
 
-// Hard-wrapped Markdown prose: these skills are fully unwrapped and must stay that way.
+// Hard-wrapped Markdown prose: every Desk and Crew skill, and Plain Language, keeps each paragraph and list item on
+// one physical line (Plain Language: never hard-wrap authored prose). A new skill is covered without being listed.
+// Blockquote paragraphs count as prose units too. These are not prose: YAML frontmatter, ``` and ~~~ fences, indented
+// code (four columns past the enclosing list item's content, after a blank line), headings, tables (with or without
+// a leading pipe), HTML blocks and comments, thematic breaks and explicit hard breaks (two trailing spaces or a
+// backslash).
+// Known false negatives, accepted because they are rare in skills: a wrapped line whose continuation starts with `#`,
+// `<`, `|` or `N. ` ends the unit early; a blockquote's lazy continuation line (no `>`) starts a new unit; a setext
+// heading's text line counts as prose. Indented code inside a list is recognized only relative to the most recent
+// list item's content column, not a full CommonMark container model.
 function proseUnits(file) {
-  const lines = text(file).split("\n");
+  return proseUnitsOf(text(file));
+}
+function proseUnitsOf(markdown) {
+  const lines = markdown.split("\n");
   let start = 0;
   if (lines[0] === "---") start = lines.indexOf("---", 1) + 1;
   const units = [];
-  let inCode = false;
+  let fence = null;
+  let block = null; // "code", "table", "html" or "comment" until the block ends
+  let inQuote = false;
+  let listIndent = 0; // content column of the most recent list item; 0 outside a list
+  let previousBlank = true;
   let unit = [];
   const flush = () => { if (unit.length > 0) units.push(unit); unit = []; };
+  const indentOf = (value) => value.match(/^ */u)[0].length;
+  const delimiterRow = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)+\|?\s*$/u;
   for (let index = start; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^\s*```/u.test(line)) { inCode = !inCode; flush(); continue; }
-    if (inCode) continue;
-    if (/^\s*$|^\s*(?:#|\||>|<|---\s*$)/u.test(line)) { flush(); continue; }
-    if (/^\s*(?:[-*+] |\d+\. )/u.test(line)) flush();
-    unit.push({ number: index + 1, line });
+    const line = lines[index].replace(/\t/gu, "    ");
+    const blank = /^\s*$/u.test(line);
+    const fenceMatch = /^\s*(`{3,}|~{3,})/u.exec(line);
+    if (fence !== null) {
+      if (fenceMatch && fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length) fence = null;
+      previousBlank = false;
+      continue;
+    }
+    if (fenceMatch) { flush(); fence = fenceMatch[1]; previousBlank = false; continue; }
+    if (block === "comment") {
+      if (line.includes("-->")) block = null;
+      previousBlank = false;
+      continue;
+    }
+    if (block !== null) {
+      if (blank) block = null;
+      else if (block === "code" && indentOf(line) < listIndent + 4) block = null;
+      else { previousBlank = false; continue; }
+    }
+    if (blank) { flush(); previousBlank = true; continue; }
+    if (listIndent > 0 && previousBlank && indentOf(line) < listIndent && !/^\s*(?:[-*+] |\d+\. )/u.test(line)) listIndent = 0;
+    if (previousBlank && indentOf(line) >= listIndent + 4) { flush(); block = "code"; previousBlank = false; continue; }
+    const quote = /^\s*>+ ?(.*)$/u.exec(line);
+    if (quote !== null && !inQuote) flush();
+    if (quote === null && inQuote) flush();
+    inQuote = quote !== null;
+    const body = inQuote ? quote[1] : line;
+    if (/^\s*$/u.test(body)) { flush(); previousBlank = true; continue; }
+    previousBlank = false;
+    if (/^\s{0,3}<!--/u.test(body)) { flush(); if (!body.includes("-->")) block = "comment"; continue; }
+    if (/^\s{0,3}<\/?[A-Za-z]/u.test(body)) { flush(); block = "html"; continue; }
+    if (index + 1 < lines.length && body.includes("|") && delimiterRow.test(lines[index + 1])) { flush(); block = "table"; continue; }
+    if (/^\s*(?:#|\|)|^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,}|=+\s*)$/u.test(body)) { flush(); continue; }
+    const listItem = /^(\s*(?:[-*+]|\d+\.) +)/u.exec(body);
+    if (listItem) { flush(); listIndent = listItem[1].length; }
+    unit.push({ number: index + 1, line: lines[index] });
+    if (/(?: {2}|\\)$/u.test(lines[index])) flush();
   }
   flush();
   return units;
 }
-for (const file of [
-  "plugins/desk/skills/cdp-headed-browser/SKILL.md",
-  "plugins/desk/skills/content-routing/SKILL.md",
-  "plugins/desk/skills/curator/SKILL.md",
-  "plugins/desk/skills/evidence-discipline/SKILL.md",
-  "plugins/desk/skills/friction-management/SKILL.md",
-  "plugins/desk/skills/git-hygiene/SKILL.md",
-  "plugins/desk/skills/interaction-style/SKILL.md",
-  "plugins/desk/skills/lesson-capture/SKILL.md",
-  "plugins/desk/skills/operator-voice-comments/SKILL.md",
-  "plugins/desk/skills/peer-pr-review/SKILL.md",
-  "plugins/desk/skills/pr-feedback-on-own-pr/SKILL.md",
-  "plugins/desk/skills/pr-review-interrogation/SKILL.md",
-  "plugins/desk/skills/preflight-actions/SKILL.md",
-  "plugins/desk/skills/repo-handling/SKILL.md",
-  "plugins/desk/skills/runtime-symptom-investigation/SKILL.md",
-  "plugins/desk/skills/session-resumption/SKILL.md",
-  "plugins/desk/skills/using-desk/SKILL.md",
-  "plugins/desk/skills/work-orchestration/SKILL.md",
-  "plugins/plain-language/skills/plain-language/SKILL.md",
-]) {
+contract("the hard-wrap detector skips code, tables and HTML, and still catches a wrap", () => {
+  const wrapped = (markdown) => proseUnitsOf(markdown).filter((unit) => unit.length > 1).map((unit) => unit[0].number);
+  const notProse = {
+    "tilde fence": "Intro.\n\n~~~\nfirst code line\nsecond code line\n~~~\n",
+    "indented code": "Intro.\n\n    first code line\n    second code line\n",
+    "indented code in a list item": "- item\n\n      first code line\n      second code line\n",
+    "table without a leading pipe": "Name | Value\n--- | ---\nalpha | one\nbeta | two\n",
+    "HTML block": "<details>\n<summary>More</summary>\nfirst html line\nsecond html line\n</details>\n",
+    "HTML comment": "<!--\nfirst comment line\nsecond comment line\n-->\n",
+    "thematic break under a paragraph": "One paragraph.\n***\nAnother paragraph.\n",
+  };
+  for (const [label, markdown] of Object.entries(notProse)) assert.deepEqual(wrapped(markdown), [], label);
+  const prose = {
+    "wrapped paragraph": "A paragraph that was\nwrapped at a column.\n",
+    "wrapped list item": "- a list item that was\n  wrapped at a column\n",
+    "wrapped blockquote": "> a quote that was\n> wrapped at a column\n",
+    "wrapped paragraph after indented code": "Intro.\n\n    code\n\nA paragraph that was\nwrapped at a column.\n",
+    "wrapped paragraph after a list": "- item\n\nA paragraph that was\nwrapped at a column.\n",
+  };
+  for (const [label, markdown] of Object.entries(prose)) assert.equal(wrapped(markdown).length, 1, label);
+});
+function skillFiles(plugin) {
+  const dir = path.join(root, "plugins", plugin, "skills");
+  return fs.readdirSync(dir)
+    .map((name) => `plugins/${plugin}/skills/${name}/SKILL.md`)
+    .filter((file) => fs.existsSync(path.join(root, file)));
+}
+const unwrappedSkills = [...skillFiles("desk"), ...skillFiles("crew"), "plugins/plain-language/skills/plain-language/SKILL.md"];
+contract("the hard-wrap check covers every Desk and Crew skill", () => {
+  assert.ok(skillFiles("desk").length >= 40, "expected the Desk skill set");
+  assert.ok(skillFiles("crew").length >= 3, "expected the Crew skill set");
+});
+for (const file of unwrappedSkills) {
   contract(`${file} prose is not hard-wrapped`, () => {
     const wrapped = proseUnits(file).filter((unit) => unit.length > 1).map((unit) => unit[1].number);
     assert.deepEqual(wrapped, []);
@@ -586,6 +650,129 @@ for (const file of [
     assert.deepEqual(split, []);
   });
 }
+// Organization: the agent owns how work is filed, named and tidied (spec §6a). Each rule lives in one owner skill;
+// using-desk carries the one-sentence summary.
+const organizationSkills = [...skillFiles("desk"), ...skillFiles("crew")];
+const skillsContaining = (pattern) => organizationSkills.filter((file) => pattern.test(text(file)));
+contract("no skill tells the agent to propose a name or wait for naming confirmation", () => {
+  const namingProposal = [
+    /propos\w*[^.\n]{0,40}\bslugs?\b/iu,
+    /slug[- ]permanence|slugs are permanent/iu,
+    /Proposing new task/u,
+    /durable naming/iu,
+    /\b(?:slug|name)s?\b[^.\n]{0,40}\boperator[- ]confirm|\boperator[- ]confirm\w*[^.\n]{0,20}(?:at creation|\bslug|\bname)/iu,
+    /wait for (?:the )?(?:operator|human)?[' s]*confirmation before creating/iu,
+    /what should the slug be|unless you object/iu,
+  ];
+  const offenders = [];
+  for (const file of [...organizationSkills, "plugins/desk/skills/work-orchestration/SKILL.md"]) {
+    for (const pattern of namingProposal) if (pattern.test(text(file))) offenders.push(`${file} ${pattern}`);
+  }
+  assert.deepEqual(offenders, []);
+});
+contract("using-desk carries the organization sentence exactly once", () => {
+  const sentence = "You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking.";
+  assert.equal(text("plugins/desk/skills/using-desk/SKILL.md").split(sentence).length - 1, 1);
+});
+contract("track-card-format owns the scope line and says it drives routing", () => {
+  const skill = text("plugins/desk/skills/track-card-format/SKILL.md");
+  assert.match(skill.split("```yaml", 2)[1].split("```", 1)[0], /^scope: "<what belongs>; not <what doesn't>"$/mu);
+  assert.match(skill, /## Scope line[\s\S]+one line[\s\S]+240 characters[\s\S]+`track_create` requires it[\s\S]+`track_update`[\s\S]+`track_missing_scope`/u);
+  assert.match(skill, /scope lines? (?:is|are) how new work is routed|routes? new work by (?:its|the) scope line/iu);
+});
+contract("start-task names from the outcome and routes by scope lines", () => {
+  const skill = text("plugins/desk/skills/start-task/SKILL.md");
+  assert.match(skill, /Name the task from the outcome[\s\S]+no proposal/iu);
+  assert.match(skill, /Route by scope line[\s\S]+`scope:`[\s\S]+clearly fits[\s\S]+new track[\s\S]+`track_create`[\s\S]+scope line/iu);
+  assert.match(skill, /follow-up, a re-review or a retry of the same outcome is a new iteration of the existing task/iu);
+  assert.match(skill, /never (?:file work under|create) a track named after a person[\s\S]{0,80}catch-all/iu);
+  assert.match(skill, /## Path B[\s\S]+announce[\s\S]+one line/iu);
+});
+contract("start-task reopens a finished task for another round of the same job", () => {
+  const skill = text("plugins/desk/skills/start-task/SKILL.md");
+  assert.match(skill, /`done` or archived[\s\S]{0,400}reopen[\s\S]{0,400}`processing`[\s\S]{0,200}why/iu);
+  assert.match(skill, /`<task>\/_iterations\/<YYYY-MM-DD>-<slug>\/`/u);
+  assert.match(text("plugins/desk/skills/task-lifecycle/SKILL.md"), /^\| `done` → `processing` \| NOTIFY \|[^\n]*reopen/imu);
+});
+contract("interaction-style and operator-voice-comments point at the one estimate rule", () => {
+  for (const file of ["plugins/desk/skills/interaction-style/SKILL.md", "plugins/desk/skills/operator-voice-comments/SKILL.md"]) {
+    assert.match(text(file), /`evidence-discipline` "Fixtures or refusal"/u, file);
+  }
+});
+contract("directory-structure says what may sit where", () => {
+  const skill = text("plugins/desk/skills/directory-structure/SKILL.md");
+  const where = skill.split("## What may sit where\n", 2)[1].split("\n## ", 1)[0];
+  assert.match(where, /everything else is loose/u);
+  assert.match(where, /desk root[\s\S]+`desks\/`[\s\S]+`AGENTS\.md`, `README\.md`, `CLAUDE\.md`[\s\S]+dotfiles[\s\S]+track root[\s\S]+`track\.md`/u);
+  assert.equal(skill.match(/everything else is loose/giu).length, 1, "state the loose rule once");
+  assert.doesNotMatch(skill, /Nothing is loose/u, "\"Nothing is loose\" contradicts the allow-list it introduces");
+  assert.doesNotMatch(skill, /confirm the destination/iu, "the agent decides where a file goes; it never asks");
+  assert.match(skill, /decides the destination[\s\S]{0,300}one line/iu);
+  assert.match(skill, /^ {6}_iterations\/ +# /mu, "the layout names where a task with no repositories keeps its iterations");
+  assert.match(skill, /reports, status notes and handoffs belong in a task or iteration folder/iu);
+  assert.match(skill, /`task_move`[\s\S]+`track_rename`/u);
+  assert.match(skill, /`desk_doctor`[\s\S]{0,200}`loose_file`/u);
+});
+contract("interaction-style owns tidy-and-announce and its safety rules", () => {
+  const skill = text("plugins/desk/skills/interaction-style/SKILL.md");
+  const section = skill.split("## 2. Organization: tidy and announce\n", 2)[1].split("\n## ", 1)[0];
+  assert.match(section, /"I'm going to tidy up my desk a bit: [^"]+ Say if you mind\."/u);
+  assert.match(section, /proceed without waiting/iu);
+  assert.match(section, /never[\s\S]{0,80}how (?:they|the human) would like it fixed/iu);
+  assert.match(section, /Git[\s\S]{0,60}reversible/iu);
+  assert.match(section, /never deletes? content/iu);
+  assert.match(section, /own desk subtree[\s\S]{0,80}peer's crew desk is theirs/iu);
+  assert.match(section, /explicit instruction not to write/iu);
+  assert.match(section, /objects?[\s\S]{0,40}revert/iu);
+});
+contract("interaction-style owns the frontloading procedure", () => {
+  const body = subsection("plugins/desk/skills/interaction-style/SKILL.md", "Frontload what you need from the human");
+  for (const pattern of [/one batch/iu, /whole outcome/iu, /about to step away/iu, /access/iu, /settings only they can change/iu, /decisions that are theirs/iu, /reviews or approvals/iu, /task card/iu]) {
+    assert.match(body, pattern);
+  }
+});
+contract("peer-pr-review names the review from the PR's theme without a proposal", () => {
+  const skill = text("plugins/desk/skills/peer-pr-review/SKILL.md");
+  assert.match(skill, /\*\*Name the review from the PR's theme\.\*\*[\s\S]{0,400}no proposal/iu);
+});
+contract("task-lifecycle owns one job, one task", () => {
+  assert.match(
+    text("plugins/desk/skills/task-lifecycle/SKILL.md"),
+    /## One job is one task[\s\S]+follow-up[\s\S]+re-review[\s\S]+retry[\s\S]+iteration of (?:that|the existing) task[\s\S]+`duplicate_job`/iu,
+  );
+});
+contract("evidence-discipline owns the citation procedure and the estimate rule", () => {
+  const skill = text("plugins/desk/skills/evidence-discipline/SKILL.md");
+  const section = skill.split("## Cite every factual claim\n", 2)[1].split("\n## ", 1)[0];
+  for (const pattern of [
+    /inline link to its primary source/iu,
+    /`file:line`[\s\S]+pull request[\s\S]+commit[\s\S]+CI run[\s\S]+issue[\s\S]+documentation URL[\s\S]+command with its output/iu,
+    /Markdown file MUST have its inline links/u,
+    /share a link/iu,
+    /source column/iu,
+    /inference or unverified/iu,
+    /own actions[\s\S]+link to the artifact[\s\S]+before it has happened/iu,
+    /estimate cites the historical data behind it or carries no number/iu,
+    /pointer to its protected location/iu,
+  ]) assert.match(section, pattern);
+  assert.match(skill.split("---", 3)[1], /factual claim/iu);
+});
+contract("each organization and citation rule has one owner", () => {
+  const owners = [
+    [/tidy up my desk a bit/iu, ["plugins/desk/skills/interaction-style/SKILL.md"]],
+    [/<what belongs>; not <what doesn't>/u, ["plugins/desk/skills/track-card-format/SKILL.md"]],
+    [/everything else is loose/iu, ["plugins/desk/skills/directory-structure/SKILL.md"]],
+    [/never deletes? content|never changes a task's `?status/iu, ["plugins/desk/skills/interaction-style/SKILL.md"]],
+    [/strip (?:it|them) at composition time|strip the number|strips the estimate|drop the number|Inheritance does not excuse/iu, ["plugins/desk/skills/evidence-discipline/SKILL.md"]],
+    [/^## One job is one task$/mu, ["plugins/desk/skills/task-lifecycle/SKILL.md"]],
+    [/source column/iu, ["plugins/desk/skills/evidence-discipline/SKILL.md"]],
+    [/^### Frontload what you need from the human$/mu, ["plugins/desk/skills/interaction-style/SKILL.md"]],
+    [/^## Cite every factual claim$/mu, ["plugins/desk/skills/evidence-discipline/SKILL.md", "plugins/desk/skills/using-desk/SKILL.md"]],
+    [/^## Own the stack$/mu, ["plugins/desk/skills/using-desk/SKILL.md"]],
+  ];
+  for (const [pattern, expected] of owners) assert.deepEqual(skillsContaining(pattern).sort(), [...expected].sort(), String(pattern));
+});
+
 contract("friction-management keeps its lead-in next to its list", () => {
   assert.match(text("plugins/desk/skills/friction-management/SKILL.md"), /rough edge:\n\n1\. decide the scope/u);
 });

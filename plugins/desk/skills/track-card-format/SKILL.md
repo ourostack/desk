@@ -1,6 +1,6 @@
 ---
 name: track-card-format
-description: Schema + body template for `track.md` — the per-track dashboard at the root of each track directory. Use when creating a new track, reading an existing track, or updating a track card's frontmatter or tasks table.
+description: Schema + body template for `track.md` — the per-track dashboard at the root of each track directory — including the one-line `scope:` that routes new work to a track. Use when creating a new track, reading an existing track, deciding whether work belongs in a track, or updating a track card's frontmatter, scope line or tasks table.
 ---
 
 # Track card format
@@ -13,6 +13,7 @@ description: Schema + body template for `track.md` — the per-track dashboard a
 ---
 schema_version: 1
 title: "<track title>"
+scope: "<what belongs>; not <what doesn't>"
 status: active | closed
 
 # Link to predecessor track (if this track succeeds a closed one)
@@ -33,11 +34,15 @@ planning: ./_planning/planning.md
 ---
 ```
 
-consumer agents extending this with their own work-tracker schema
-(e.g. enterprise overlays with Feature / Epic hierarchies) add their
-own frontmatter block — typically the overlay ships a
-`<overlay>:card-fields` skill defining the tracker-specific shape
-(e.g. `tracker:` and `tracker_defaults:` keys).
+consumer agents extending this with their own work-tracker schema (e.g. enterprise overlays with Feature / Epic hierarchies) add their own frontmatter block — typically the overlay ships a `<overlay>:card-fields` skill defining the tracker-specific shape (e.g. `tracker:` and `tracker_defaults:` keys).
+
+## Scope line
+
+`scope:` is one line, at most 240 characters, in the form `<what belongs>; not <what doesn't>`, for example `scope: "Billing service invoicing and payment retries; not the storefront checkout UI"`. The scope line is how new work is routed: `start-task` reads every active track's scope line and files work in a track only when the scope clearly fits, and otherwise creates a new track. Write it so a reader who has never seen the track can decide in seconds whether a piece of work belongs there; the `not` half names the neighbour work most likely to be misfiled.
+
+`track_create` requires it and rejects a missing, multi-line or over-long scope. `track_update` sets or changes it with the same check (`frontmatter.scope`). Tracks created before the scope line existed stay readable; `desk_doctor` reports each one as `track_missing_scope`, and the agent adds the line when it tidies (`interaction-style` section 2).
+
+A track name follows the same rules as a task name (see `start-task`), and in addition a track is never named after a person and never a catch-all such as `misc`, `general` or `inbox`: `track_create` and `track_rename` reject both. A track is created together with its first task; a track with no live tasks is archived (`archive-workflow`).
 
 ## Schema versioning
 
@@ -46,9 +51,9 @@ own frontmatter block — typically the overlay ships a
 ## Body sections (recommended template)
 
 ```markdown
-## Scope
+## Context
 
-One paragraph describing what this track covers.
+Optional: background a reader needs that the one-line `scope:` cannot hold.
 
 ## Tasks
 
@@ -68,8 +73,6 @@ One paragraph describing what this track covers.
 - **Planning docs preserved**: see `_planning/` (current) and `_planning/_history/` (superseded)
 ```
 
-consumer agents may add a "Work-tracker structure" body section
-(e.g. an enterprise Feature/Requirement/Task hierarchy) — that
-belongs in the consumer's extension skill, not here.
+consumer agents may add a "Work-tracker structure" body section (e.g. an enterprise Feature/Requirement/Task hierarchy) — that belongs in the consumer's extension skill, not here.
 
 keep the body concise. when a resuming operator slides the drawer open, they should know what's in flight and what's next in under 30 seconds.

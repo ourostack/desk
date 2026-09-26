@@ -11,7 +11,7 @@ Read the existing task, agreement and plan before choosing the matching Superpow
 
 ## Align new work before go
 
-Before new work starts, list every decision in it that needs the human's judgment: voice, relationships, durable naming, irreversible or hard-to-undo choices, and real ambiguity. Resolve each one you can from the request, the code or a sensible default. Put the rest to the human now, not when you reach the fork, and especially any entangled calls, where one answer changes another or changes work done before the fork. Ask them as one batch, each with your recommendation, so execution then runs without blocking on the human. A fork that could not have been foreseen is raised when it appears; one you did not think about beforehand is not unforeseeable.
+Before new work starts, list every decision in it that needs the human's judgment: voice, relationships, irreversible or hard-to-undo choices, and real ambiguity. Naming and filing are not among them: the agent owns them (`start-task`). Resolve each one you can from the request, the code or a sensible default. Put the rest to the human now, not when you reach the fork, and especially any entangled calls, where one answer changes another or changes work done before the fork. Ask them as one batch, each with your recommendation, so execution then runs without blocking on the human. A fork that could not have been foreseen is raised when it appears; one you did not think about beforehand is not unforeseeable.
 
 ## Authority and dependencies
 
