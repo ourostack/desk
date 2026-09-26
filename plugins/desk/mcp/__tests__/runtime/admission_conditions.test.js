@@ -10,7 +10,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import * as path from "node:path"
 import { TOOL_NAMES } from "../../src/tool-names.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
-import { connectOrStartController } from "../../src/readiness/controller-client.js"
+import { connectOrStartController, probeEndpoint } from "../../src/readiness/controller-client.js"
 import { readinessContracts } from "../../src/server.js"
 import {
   HANDSHAKE_BUDGET_MS, git, makeGitDesk, readLastStart, settled, startDesk, writeActivation, writeFile,
@@ -302,6 +302,42 @@ test("a stale socket whose owner PID is dead is reclaimed and admission reaches 
     const status = await session.statusUntil(settled)
     assert.equal(status.state, "ready", JSON.stringify(status.admission))
   })
+})
+
+test("a legacy owner pointing at a vanished XDG socket recovers a refused fallback socket on consecutive starts", { skip: posixOnly, timeout: 120000 }, async (t) => {
+  const fixture = await makeGitDesk()
+  const configPath = writeActivation(fixture)
+  const { endpoint, stateDir, identity } = controllerFixture(fixture)
+  const ownerFile = path.join(stateDir, "owner.json")
+  for (let cycle = 0; cycle < 2; cycle += 1) {
+    const deadPid = await leaveStaleSocket(endpoint)
+    const stat = statSync(endpoint)
+    const vanished = path.join(path.dirname(endpoint), `xdg-${identity.id.slice(0, 12)}-${cycle}`, "owner.sock")
+    assert.equal(existsSync(vanished), false)
+    assert.equal(await probeEndpoint(endpoint), "refused")
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 })
+    writeFileSync(ownerFile, JSON.stringify({
+      schema_version: 1, identity, endpoint: vanished, socket: { dev: stat.dev, ino: stat.ino },
+      owner: { pid: deadPid, started_at: new Date().toISOString(), token: `legacy-${cycle}` },
+    }))
+    await withDesk(t, fixture, { args: ["--activation-config", configPath] }, async (session) => {
+      const status = await session.statusUntil((payload) => payload.state === "ready")
+      assert.equal(status.admission.controller, "connected")
+      assert.equal(status.admission.hung_controller, null)
+      const elected = JSON.parse(readFileSync(ownerFile, "utf8"))
+      assert.equal(elected.endpoint, endpoint)
+      assert.equal(elected.owner.pid, session.child.pid)
+      assert.equal(typeof elected.owner.process_start, "string")
+      assert.equal(await probeEndpoint(endpoint), "accepting")
+      assert.deepEqual((await session.request("tools/list")).result.tools, session.tools.result.tools)
+      await assertReadsServeDirectly(session)
+      const write = await session.call("task_create", { track: "ops", slug: `legacy-recovery-${cycle}`, title: "Recovered" })
+      assert.equal(write.isError, false, JSON.stringify(write.payload))
+      await session.close()
+      assert.equal(existsSync(ownerFile), false)
+      assert.equal(existsSync(endpoint), false)
+    })
+  }
 })
 
 test("a Desk session releases its controller on every normal end: stdin closed, SIGTERM and SIGINT leave no owner record or socket file", { skip: posixOnly, timeout: 120000 }, async (t) => {
