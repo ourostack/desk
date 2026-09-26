@@ -31,6 +31,7 @@ import {
 } from "./src/runtime/bootstrap.js"
 import { startDiagnosticServer } from "./src/runtime/diagnostic-server.js"
 import { runInWorker } from "./src/runtime/admission-worker.js"
+import { importInChunks } from "./src/runtime/chunked-import.js"
 import { createDeskSession, LAUNCHER_READ_ONLY_CODES } from "./src/runtime/desk-session.js"
 import { startFrontDoor } from "./src/runtime/front-door.js"
 import { resolveDeskStateDir, resolveReadinessStateHome } from "./src/runtime/last-start.js"
@@ -352,7 +353,7 @@ async function loadRuntime({ activation, env, mcpRoot, offload, preflight, runti
 }
 
 // The last step of the shipped importer, after the worker restored the runtime: load the server from the source mirror, next to its native dependencies.
-export async function importPreparedRuntime({ mcpRoot, prepared, load = (url) => import(url) }) {
+export async function importPreparedRuntime({ mcpRoot, prepared, load = (url) => importInChunks(url) }) {
   const pluginRoot = path.resolve(mcpRoot, "..")
   const runtimeServer = await load(pathToFileURL(path.join(prepared.sourceMirrorPath, "src", "server.js")).href)
   runtimeServer.configureRuntimeArtifacts?.({ pluginRoot })

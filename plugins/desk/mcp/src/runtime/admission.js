@@ -133,9 +133,12 @@ export function createAdmission({
   }
 
   /** Run an attempt now unless one is running (then join it), and wait for it at most `waitMs`. A ready machine answers at once unless `force` asks for a fresh check. */
-  async function refresh({ waitMs = 3000, force = false } = {}) {
+  // `joinMs` bounds the wait when an attempt was already running before this call (default: `waitMs`): a caller that must answer at once joins a long attempt without waiting on it.
+  async function refresh({ waitMs = 3000, force = false, joinMs = waitMs } = {}) {
     if (!force && current.state === "ready" && !running) return snapshot()
+    if (running) waitMs = Math.min(waitMs, joinMs)
     const attemptDone = run()
+    if (waitMs <= 0) return snapshot()
     let waitTimer = null
     const timeout = new Promise((resolve) => {
       waitTimer = timers.setTimeout(resolve, waitMs)

@@ -109,6 +109,24 @@ test("refresh joins a running attempt, waits at most waitMs, and a ready machine
   assert.equal((await idleWhileRunning).state, "ready")
 })
 
+test("refresh with joinMs joins an attempt that was already running without waiting, and still waits for one it starts", async () => {
+  const timers = fakeTimers()
+  const releases = []
+  const machine = createAdmission({ timers, now: timers.now, attempt: () => new Promise((resolve) => releases.push(resolve)) })
+  machine.start()
+  assert.equal((await machine.refresh({ waitMs: 50, joinMs: 0 })).state, "admitting", "joined at once, no wait timer")
+  assert.equal(timers.pending.size, 0)
+  assert.equal(releases.length, 1)
+  releases[0](degraded("first"))
+  await flush()
+  const started = machine.refresh({ waitMs: 50, joinMs: 0 })
+  await flush()
+  assert.equal(releases.length, 2, "a new attempt started")
+  assert.deepEqual(timers.delays(), [50], "and this call waits for it")
+  releases[1]({ state: "ready" })
+  assert.equal((await started).state, "ready")
+})
+
 test("a thrown attempt becomes degraded:admission_exception with the cause and a fix", async () => {
   const timers = fakeTimers()
   const machine = createAdmission({ timers, now: timers.now, attempt: () => { throw Object.assign(new TypeError("boom"), { code: "E_BOOM" }) } })

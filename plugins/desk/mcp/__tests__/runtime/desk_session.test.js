@@ -664,8 +664,18 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   const started = Date.now()
   const slow = payload(await session.callTool({ name: "desk_status" }))
   assert.ok(Date.now() - started < 400, `desk_status took ${Date.now() - started} ms`)
-  assert.match(slow.status_detail, /did not answer in time/u)
+  assert.match(slow.status_detail, /^unavailable: .*did not answer in time/u)
   assert.equal(slow.state, "ready")
+  // Once a detail has arrived, a late one is replaced by the last, marked cached.
+  runtime.callTool = async () => ({ content: [{ type: "text", text: JSON.stringify({ status: "ok", local_db: { state: "fresh" } }) }] })
+  assert.equal(payload(await session.callTool({ name: "desk_status" })).local_db.state, "fresh")
+  runtime.callTool = () => new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: "{}" }] }), 1000))
+  const cachedStarted = Date.now()
+  const cached = payload(await session.callTool({ name: "desk_status" }))
+  assert.ok(Date.now() - cachedStarted < 200, `desk_status took ${Date.now() - cachedStarted} ms`)
+  assert.equal(cached.local_db.state, "fresh")
+  assert.match(cached.status_detail, /^cached: .*this detail is from \d{4}-/u)
+  assert.equal(cached.state, "ready", "the admission fields are current, not cached")
 })
 
 test("desk_status answers while an admission attempt is still running", async (t) => {

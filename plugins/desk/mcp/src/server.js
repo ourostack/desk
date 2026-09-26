@@ -101,6 +101,8 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
     },
     handlers: {
       async beginConvergence({ eventCursor, journal }) {
+        // Each synchronous stretch below (the first index check, then the reconcile) starts on its own turn of the event loop, so a session's answers to its host wait for one stretch at most, never for the chain.
+        await yieldTurn()
         const indexOptions = resolveEnsureIndexOptions({
           startup: false,
           skipEmbed: policy.semantic === "unsupported",
@@ -111,6 +113,7 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
         // Keep the opt-out at ensureIndex's normalization boundary; resolved
         // undefined would otherwise re-enable legacy snapshot auto-discovery.
         const result = await ensureIndexOrQuarantine(deskRoot, { ...indexOptions, snapshots: false })
+        await yieldTurn()
         const db = openDb(deskRoot)
         try {
           // A timestamp/snapshot fast path is not proof of journal coverage.
@@ -140,6 +143,10 @@ export async function connectOrStartController({ deskRoot, policy, stateHome, ep
   controller.generationPolicyIdentity = stableStringify(policy)
   controller.embeddingOverride = embeddingOverride(policy.semantic)
   return controller
+}
+
+function yieldTurn() {
+  return new Promise((resolve) => setImmediate(resolve))
 }
 
 // The index database is derived from the desk's files, so an unreadable one (truncated, or not a database at all) is moved aside and rebuilt instead of failing every convergence.

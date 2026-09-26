@@ -73,6 +73,8 @@ export async function ensureIndex(deskRoot, opts = {}) {
   throwIfAborted(effectiveOpts.signal)
   const db = openDb(deskRoot)
   try {
+    // Opening the database (the native driver's first load and any migrations) is one synchronous stretch; the checks below start on the next turn of the event loop, so a session's answers to its host wait for one stretch, not both.
+    await new Promise((resolve) => setImmediate(resolve))
     if (!effectiveOpts.skipEmbed) {
       const trustedSnapshot = snapshot?.restored
         && vectorProvenance(effectiveOpts.snapshots?.expectedSpec ?? ACTIVE_EMBEDDING_SPEC) === ACTIVE_VECTOR_PROVENANCE

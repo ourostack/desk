@@ -29,6 +29,8 @@ const SEMANTIC_TOOLS = new Set(["desk_recall", "desk_similar"])
 export const RECLAIM_REPAIR = "reclaim_controller"
 const STATUS_WAIT_MS = 50
 const STATUS_DETAIL_MS = 120
+// The most desk_status spends on its own waits (a new admission attempt, then the runtime status), well inside the 200 ms it must answer in.
+const STATUS_BUDGET_MS = 90
 const GATE_WAIT_MS = 10000
 const HEAD_DEBOUNCE_MS = 100
 const WRITE_PING_MS = 1000
@@ -90,6 +92,8 @@ export function createDeskSession(deps) {
   let headWatch = null
   let headTimer = null
   let disposed = false
+  // The latest runtime status detail, served (and marked cached) when a fresh one does not arrive within desk_status's budget.
+  let lastStatusDetail = null
 
   const log = (line) => stderr.write(`[desk-mcp] ${line}\n`)
 
@@ -340,8 +344,8 @@ export function createDeskSession(deps) {
   }
 
   function startBackgroundConvergence(admitted) {
-    // Started inside a promise so a synchronous throw is reported like a rejection.
-    Promise.resolve()
+    // Started on a later turn of the event loop, so its first synchronous stretch (opening the index database) never joins the transition to ready in one block; inside a promise, so a synchronous throw is reported like a rejection.
+    new Promise((resolve) => setImmediate(resolve))
       .then(() => context.runtimeServer.beginBackgroundConvergence?.(admitted))
       .catch((error) => log(`background convergence failed: ${error?.message ?? String(error)}`))
   }
@@ -514,19 +518,24 @@ export function createDeskSession(deps) {
   }
 
   async function deskStatus(input, signal) {
-    // desk_status must answer at once whatever admission is doing: it starts or joins an attempt but waits only briefly for it. A ready session also checks its controller in the background, so a lost one is re-elected without waiting for the 60 s check.
-    const snapshot = await admission.refresh({ waitMs: STATUS_WAIT_MS })
+    // desk_status must answer at once whatever admission is doing: it starts or joins an attempt but waits only briefly for it, and the whole answer shares one time budget. A ready session also checks its controller in the background, so a lost one is re-elected without waiting for the 60 s check.
+    const deadline = Date.now() + STATUS_BUDGET_MS
+    // An attempt that was already running (a slow restore, the import of the runtime, the controller election) is joined, not waited on.
+    const snapshot = await admission.refresh({ waitMs: STATUS_WAIT_MS, joinMs: 0 })
     if (snapshot.state === "ready") backgroundControllerCheck()
     let payload = baseDiagnostic(snapshot)
     if (context.runtimeServer && context.root && launcher?.mode !== "refuse") {
-      const outcome = await raceWithTimer(Promise.resolve().then(() => runtimeCall("desk_status", input, signal)), STATUS_DETAIL_MS)
-      if (outcome.timedOut) {
+      const outcome = await raceWithTimer(Promise.resolve().then(() => runtimeCall("desk_status", input, signal)), Math.max(0, Math.min(STATUS_DETAIL_MS, deadline - Date.now())))
+      if (outcome.timedOut && lastStatusDetail !== null) {
+        payload = { ...lastStatusDetail.payload, status_detail: `cached: the runtime status (index, readiness controller) did not answer in time; this detail is from ${lastStatusDetail.at}. Call desk_status again for a fresh one.` }
+      } else if (outcome.timedOut) {
         payload = { ...payload, status_detail: "unavailable: the runtime status (index, readiness controller) did not answer in time; call desk_status again" }
       } else if (outcome.error !== undefined) {
         const error = outcome.error
         payload = { ...payload, status_error: error instanceof Error ? error.message : String(error) }
       } else {
         payload = JSON.parse(outcome.value.content[0].text)
+        lastStatusDetail = { payload, at: new Date().toISOString() }
       }
     }
     return jsonResult(withAdmission(payload, admission.snapshot()))

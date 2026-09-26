@@ -496,19 +496,27 @@ test("--degraded with a crew-state code serves reads and refuses writes; with --
 
 // ---- nothing blocks the thread that answers the host ----
 
-async function assertAnswersFast(session, { forMs = 4000, budgetMs = 200 } = {}) {
-  const until = Date.now() + forMs
+// Send tools/list, ping and desk_status every `intervalMs` for `forMs`, or, with `untilState`, until desk_status reports that state and then `afterMs` more; every answer must come within `budgetMs`.
+async function assertAnswersFast(session, { forMs = 4000, budgetMs = 200, intervalMs = 100, untilState = null, afterMs = 0, deadlineMs = 60000 } = {}) {
+  const started = Date.now()
+  let until = untilState === null ? started + forMs : Infinity
   const timings = []
+  const states = []
   while (Date.now() < until) {
     for (const [method, params] of [["tools/list", {}], ["ping", {}], ["tools/call", { name: "desk_status", arguments: {} }]]) {
       const { ms, response } = await session.timed(method, params)
       assert.equal(response.error, undefined)
       timings.push([method, ms])
       assert.ok(ms < budgetMs, `${method} took ${ms} ms while admission was busy`)
+      if (method !== "tools/call") continue
+      const state = JSON.parse(response.result.content[0].text).state
+      if (states.at(-1) !== state) states.push(state)
+      if (state === untilState && until === Infinity) until = Date.now() + afterMs
     }
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.ok(Date.now() - started < deadlineMs, `desk_status never reported ${untilState}; states: ${states.join(" → ")}`)
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
   }
-  return timings
+  return { timings, states }
 }
 
 test("a 30 s restore on the admission worker never delays tools/list, ping or desk_status", async (t) => {
@@ -518,9 +526,22 @@ test("a 30 s restore on the admission worker never delays tools/list, ping or de
   const session = await startDesk(fixture, { args: ["--activation-config", configPath], nodeArgs: ["--import", preload], env: { DESK_TEST_SLOW_RESTORE_MS: "30000" } })
   t.after(() => session.close())
   assert.ok(session.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${session.handshakeMs} ms`)
-  const timings = await assertAnswersFast(session)
+  const { timings } = await assertAnswersFast(session)
   t.diagnostic(`slowest answer during the stalled restore: ${Math.max(...timings.map(([, ms]) => ms))} ms over ${timings.length} requests`)
   assert.equal((await session.call("desk_status")).payload.state, "admitting", "the restore is still stalled")
+})
+
+test("the transition to ready never delays tools/list, ping or desk_status: the runtime import, the controller election and the start of convergence", async (t) => {
+  const fixture = await makeGitDesk()
+  const configPath = writeActivation(fixture)
+  const preload = new URL("./fixtures/slow-restore-preload.mjs", import.meta.url).href
+  // A short stall, so the requests are already flowing when the restore finishes and admission reaches ready.
+  const session = await startDesk(fixture, { args: ["--activation-config", configPath], nodeArgs: ["--import", preload], env: { DESK_TEST_SLOW_RESTORE_MS: "1500" } })
+  t.after(() => session.close())
+  const { timings, states } = await assertAnswersFast(session, { intervalMs: 20, untilState: "ready", afterMs: 3000 })
+  assert.deepEqual(states, ["admitting", "ready"])
+  const slowest = Object.fromEntries(["tools/list", "ping", "tools/call"].map((method) => [method, Math.max(...timings.filter(([name]) => name === method).map(([, ms]) => ms))]))
+  t.diagnostic(`slowest answers across the transition to ready: ${JSON.stringify(slowest)} ms over ${timings.length} requests`)
 })
 
 test("a runtime publication lock held by another process never delays tools/list, ping or desk_status, and admission completes once it is released", async (t) => {
@@ -532,7 +553,7 @@ test("a runtime publication lock held by another process never delays tools/list
   t.after(() => rmSync(lockDir, { recursive: true, force: true }))
   const session = await startDesk(fixture, { args: ["--activation-config", configPath] })
   t.after(() => session.close())
-  const timings = await assertAnswersFast(session)
+  const { timings } = await assertAnswersFast(session)
   t.diagnostic(`slowest answer while the lock was held: ${Math.max(...timings.map(([, ms]) => ms))} ms over ${timings.length} requests`)
   assert.equal((await session.call("desk_status")).payload.state, "admitting")
   rmSync(lockDir, { recursive: true, force: true })
