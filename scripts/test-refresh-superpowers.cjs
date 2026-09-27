@@ -49,9 +49,10 @@ function filesNaming(version, files) {
 
 {
   // A Desk release names its version in exactly these files; the changelog keeps history and gains an entry instead.
-  // Tests use their own fixture versions, which a later release may coincide with. A test file is a release surface
-  // only when DESK_VERSION_FILES declares it (generated fixtures the release regenerates).
-  const isTest = (file) => file.includes("/__tests__/") || file.startsWith("tests/") || /^scripts\/test-[^/]+\.cjs$/u.test(file);
+  // Hand-written test files use their own sample versions, which a later release may coincide with, so they are never
+  // release surfaces unless DESK_VERSION_FILES declares them. Generated fixtures stay in the check: one that names the
+  // current version and is not declared fails here, in its own PR, instead of after the next release.
+  const isTest = (file) => /\.test\.[cm]?js$/u.test(file) || /^scripts\/test-[^/]+\.cjs$/u.test(file);
   const naming = filesNaming(currentDesk, trackedFiles()).filter((file) => (
     file !== "plugins/desk/CHANGELOG.md" && (!isTest(file) || DESK_VERSION_FILES.includes(file))
   ));
