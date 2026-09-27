@@ -31,5 +31,5 @@ Totals and distributions across jobs, including which waste costs the most, are 
 
 ### Plugin versions
 
-- desk 3.2.0-alpha.70: 3 sessions.
-- desk 3.2.0-alpha.71: 7 sessions.
+- desk 3.1.0: 3 sessions.
+- desk 3.1.1: 7 sessions.

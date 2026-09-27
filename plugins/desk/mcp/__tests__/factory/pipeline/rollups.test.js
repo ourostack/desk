@@ -106,7 +106,7 @@ test("jobRecord takes each measure from the formulas, excludes censored, partial
 
   const one = byJob[J("1")]
   assert.equal(one.job_class, "other")
-  assert.equal(one.plugin_version, "3.2.0-alpha.70")
+  assert.equal(one.plugin_version, "3.1.0")
   assert.equal(one.host, "claude-code")
   assert.deepEqual(one.measures.lead_time, { value: 10000 })
   assert.deepEqual(one.measures.queue_before_start, { value: 0 })
@@ -191,10 +191,10 @@ test("the measure rollups report median, p75 and counted jobs per group, and lis
   })
 
   const versions = rollups.measures.groupings.plugin_version
-  assert.deepEqual(Object.keys(versions), ["3.2.0-alpha.70", "3.2.0-alpha.71", "mixed"])
-  assert.equal(versions["3.2.0-alpha.70"].jobs, 2)
-  assert.deepEqual(versions["3.2.0-alpha.70"].measures.lead_time, { jobs_counted: 2, median: 10000, p75: 25000, jobs_excluded: [] })
-  assert.equal(versions["3.2.0-alpha.71"].jobs, 3)
+  assert.deepEqual(Object.keys(versions), ["3.1.0", "3.1.1", "mixed"])
+  assert.equal(versions["3.1.0"].jobs, 2)
+  assert.deepEqual(versions["3.1.0"].measures.lead_time, { jobs_counted: 2, median: 10000, p75: 25000, jobs_excluded: [] })
+  assert.equal(versions["3.1.1"].jobs, 3)
   assert.deepEqual(Object.keys(rollups.measures.groupings.host), ["claude-code", "copilot-cli", "mixed"])
   assert.deepEqual(Object.keys(rollups.measures.groupings.job_class), ["other"])
   assert.deepEqual(rollups.measures.quality_measures, QUALITY_MEASURES)
@@ -217,11 +217,11 @@ test("the muda Pareto sums labeled waste largest first, breaks ties by waste nam
   assert.deepEqual(overall.wastes.map((entry) => entry.waste), ["waiting", "defects", "extra_processing", "inventory", "motion", "non_utilized_talent", "overproduction", "transportation"])
 
   const versions = rollups.muda.groupings.plugin_version
-  // alpha.70: waiting 5000, then defects and extra_processing tie at 2000.
-  assert.deepEqual(versions["3.2.0-alpha.70"].wastes.slice(0, 3).map((entry) => [entry.waste, entry.total_ms]), [["waiting", 5000], ["defects", 2000], ["extra_processing", 2000]])
-  // alpha.71: only job 3 is fully labeled; defects and waiting tie at 2000.
-  assert.equal(versions["3.2.0-alpha.71"].jobs_labeled, 1)
-  assert.deepEqual(versions["3.2.0-alpha.71"].wastes.slice(0, 2).map((entry) => [entry.waste, entry.total_ms]), [["defects", 2000], ["waiting", 2000]])
+  // 3.1.0: waiting 5000, then defects and extra_processing tie at 2000.
+  assert.deepEqual(versions["3.1.0"].wastes.slice(0, 3).map((entry) => [entry.waste, entry.total_ms]), [["waiting", 5000], ["defects", 2000], ["extra_processing", 2000]])
+  // 3.1.1: only job 3 is fully labeled; defects and waiting tie at 2000.
+  assert.equal(versions["3.1.1"].jobs_labeled, 1)
+  assert.deepEqual(versions["3.1.1"].wastes.slice(0, 2).map((entry) => [entry.waste, entry.total_ms]), [["defects", 2000], ["waiting", 2000]])
   assert.deepEqual(Object.keys(rollups.muda.groupings.job_class), ["other"])
   assert.equal(rollups.muda.groupings.host, undefined)
 
@@ -307,7 +307,7 @@ test("the rollups Markdown shows the Pareto, the catalog per group, tool kinds a
   assert.match(text, /\| flow_efficiency \| 4 \| 68\.00% \| 70\.00% \|/u)
   assert.match(text, /\| search_waste \| 0 \| unavailable \| unavailable \| not_in_published_facts 6 \|/u)
   assert.match(text, /\| tool_failures \(quality\) \|/u)
-  assert.match(text, /### By plugin version: 3\.2\.0-alpha\.70/u)
+  assert.match(text, /### By plugin version: 3\.1\.0/u)
   assert.match(text, /### By host: mixed/u)
   assert.match(text, /### By job class: other/u)
   assert.match(text, /\| shell \| 4 \| 2 \| 2 \|/u)

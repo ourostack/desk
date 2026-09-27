@@ -38,7 +38,7 @@ Muda time: 14000 ms across 4 of 6 jobs fully labeled; excluded: not_labeled 1, p
 | overproduction | 0 ms | 0.00% | 100.00% | 0 |
 | transportation | 0 ms | 0.00% | 100.00% | 0 |
 
-### By plugin version: 3.2.0-alpha.70
+### By plugin version: 3.1.0
 
 Muda time: 9000 ms across 2 of 2 jobs fully labeled; excluded: none.
 
@@ -53,7 +53,7 @@ Muda time: 9000 ms across 2 of 2 jobs fully labeled; excluded: none.
 | overproduction | 0 ms | 0.00% | 100.00% | 0 |
 | transportation | 0 ms | 0.00% | 100.00% | 0 |
 
-### By plugin version: 3.2.0-alpha.71
+### By plugin version: 3.1.1
 
 Muda time: 4000 ms across 1 of 3 jobs fully labeled; excluded: not_labeled 1, partial 1.
 
@@ -116,7 +116,7 @@ Jobs: 6.
 | muda_time.extra_processing | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
 | search_waste | 0 | unavailable | unavailable | not_in_published_facts 6 |
 
-### By plugin version: 3.2.0-alpha.70
+### By plugin version: 3.1.0
 
 Jobs: 2.
 
@@ -145,7 +145,7 @@ Jobs: 2.
 | muda_time.extra_processing | 2 | 0 ms | 2000 ms | none |
 | search_waste | 0 | unavailable | unavailable | not_in_published_facts 2 |
 
-### By plugin version: 3.2.0-alpha.71
+### By plugin version: 3.1.1
 
 Jobs: 3.
 
