@@ -31,11 +31,8 @@ export async function protectCheckout({ root, stateBranch = null, git = runGit }
 
 async function protectedTarget(cwd, options, env) {
   const config = await readGit(cwd, [...options, "config", "--show-scope", "--type=bool", "--get-all", "desk.protected"], env)
-  if (!config.ok && config.code !== 1) {
-    // A location that is not a checkout has no local policy; anything else is an unreadable policy.
-    if (!(await readGit(cwd, [...options, "rev-parse", "--absolute-git-dir"], env)).ok) return false
-    throw new Error(`cannot read checkout protection: ${config.stderr}`)
-  }
+  // Outside a checkout, or with a location that is not one, Git reports no value (exit 1) and there is no local policy.
+  if (!config.ok && config.code !== 1) throw new Error(`cannot read checkout protection: ${config.stderr}`)
   const values = config.stdout.split(/\r?\n/u).filter((line) => /^(local|worktree)\s/u.test(line))
   return values.length > 0 && /\s+true$/u.test(values[values.length - 1])
 }
@@ -62,9 +59,9 @@ function checkoutContext(cwd, options, env) {
     tag: async (name) => await value(`tag ${name}`, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]) !== null,
     remoteBranch: async (name) => await value(`remote ${name}`, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${name}`]) !== null,
     pushed: async () => await value("pushed", ["for-each-ref", "--count=1", "--contains=HEAD", "--format=%(refname)", "refs/remotes"]) !== null,
+    // Called only on the state branch, so HEAD names a branch.
     async upstream() {
       const branch = await context.branch()
-      if (branch === null) return null
       const [ref, remote, merge] = await Promise.all([
         value("upstream", ["rev-parse", "--symbolic-full-name", "@{upstream}"]),
         value("upstream remote", ["config", "--get", `branch.${branch}.remote`]),

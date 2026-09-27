@@ -87,7 +87,7 @@ test("A3b: the desk write protocol and read-only Git pass in a protected checkou
     "rebase --continue", "rebase --abort", "rebase --skip",
     "worktree add --detach ../wt HEAD", "worktree add -b feature ../wt2", "worktree add -B feature ../wt3", "worktree list",
     "worktree lock ../wt", "worktree prune --dry-run", "stash list", "stash show",
-    "checkout", "checkout main", "switch main", "checkout -- file.txt", "checkout .", "checkout missing-path", "restore file.txt",
+    "checkout", "switch", "checkout main", "switch main", "checkout -- file.txt", "checkout .", "checkout missing-path", "restore file.txt",
     "restore --worktree file.txt", "restore --source=HEAD --no-source file.txt",
     "reset", "reset HEAD", "reset -- file.txt", "reset HEAD file.txt", "reset HEAD~1 file.txt", "reset HEAD~1 -- file.txt",
     "reset --soft HEAD", "reset --hard --mixed", "reset -p", "reset missing-path", "reset --pathspec-from-file=list",
@@ -121,7 +121,7 @@ test("A3b: every operation that moves HEAD, rewinds the branch or discards other
     ["branch -d main", MESSAGES.branch], ["branch --delete main", MESSAGES.branch], ["branch -m renamed", MESSAGES.branch],
     ["branch -M main other", MESSAGES.branch], ["branch -M topic main", MESSAGES.branch], ["branch -C topic main", MESSAGES.branch],
     ["branch -c main", MESSAGES.branch],
-    ["rebase topic", MESSAGES.rebase], ["rebase HEAD~1", MESSAGES.rebase], ["rebase --onto topic main", MESSAGES.rebase],
+    ["rebase topic", MESSAGES.rebase], ["rebase -", MESSAGES.rebase], ["rebase HEAD~1", MESSAGES.rebase], ["rebase --onto topic main", MESSAGES.rebase],
     ["rebase --root", MESSAGES.rebase], ["rebase -x true", MESSAGES.rebase], ["rebase --exec=true", MESSAGES.rebase],
     ["rebase --quit", MESSAGES.rebase], ["rebase --autostash", MESSAGES.autostash], ["rebase origin/main topic", MESSAGES.leave],
     ["pull origin topic", MESSAGES.pull], ["pull upstream main", MESSAGES.pull], ["pull origin main:main", MESSAGES.pull],
@@ -217,13 +217,17 @@ test("A3b: commands with no path to Git pass even when a value is unknown", asyn
   const f = desk(t)
   await protectCheckout({ root: f.shared, stateBranch: "main" })
   const env = { ...f.env, TMPDIR: f.root }
+  // A repository alias is expanded; an alias named after a Git command never is.
+  f.git(f.shared, "config", "alias.co", "checkout")
+  f.git(f.shared, "config", "alias.stage", "stash")
+  assert.equal((await f.guard("git stash", { cwd: path.join(f.root, "absent") })).deny, false, "a missing directory runs no Git")
   const allow = [
-    'echo "$(date)"', "echo `date`", 'x=$(date); echo "$x"', 'wt=$(mktemp -d); cd "$wt" && node x.js', 'cd "$wt" && node x.js',
+    'echo "$(date)"', "echo `date`", 'echo "$(printf x)"', 'cd "$(date; hostname)" && git status', 'x=$(date); echo "$x"', 'wt=$(mktemp -d); cd "$wt" && node x.js', 'cd "$wt" && node x.js',
     "jq . a.json | grep x", '"$(npm bin)/tsc" --build', 'cd "$(pick)" && git commit -m x', 'cd "$(pick)" && git status',
     'cd "$(pick)"; git push origin HEAD', 'git log --since="$(date)"', 'git commit -m "$(cat msg)"', 'D=$(date +%F); git commit -m "$D"',
     'wt=$(mktemp -d) && git worktree add --detach "$wt" HEAD && cd "$wt" && git switch -c fix && git reset --hard',
     'wt="$(mktemp -d -t desk)/"; cd "$wt"; git checkout -b x', 'pushd "$(pick)" && npm test && popd', "popd; git status",
-    "pushd; ls", "echo 'unterminated", "(echo", "case x in x) echo;",
+    "pushd; ls", "! grep -q x file.txt && echo absent", "git frobnicate", "git -c alias.stage=stash stage", "echo 'unterminated", "(echo", "case x in x) echo;",
     'source ~/.nvm/nvm.sh && nvm use 22', '. venv/bin/activate', 'bash -c "echo ok"', "eval 'echo ok'",
     "for f in a b c d e f g h i j k l m n o; do [ -x $f ] && $f --version; git status | grep x; done",
   ]
@@ -247,12 +251,14 @@ test("A3b: commands with no path to Git pass even when a value is unknown", asyn
     [`TMPDIR=${q(f.shared)}; wt=$(mktemp -d); cd "$wt" && git stash`, /^Desk protected checkout /u],
     [`wt=$(mktemp -d ${q(f.shared)}/x.XXXX); cd "$wt" && git stash`, /^Desk protected checkout /u],
     ["git status 'unterminated", /could not inspect this shell command \(unterminated shell quote\)/u],
+    ['cd "$(date; hostname)" && git stash', /which checkout/u], ['cd "$(mktemp -d -p /definitely-missing)" && git stash', /which checkout/u],
+    ["git co topic", /^Desk protected checkout .+: this would move HEAD off/u], ['$(cd x; command -v git) status', /the program/u],
   ]
   for (const [command, reason] of deny) {
     const result = await f.guard(command, { cwd: f.shared, env })
     assert.equal(result.deny, true, command)
     assert.match(result.reason, reason, command)
-    if (reason.source !== "^Desk protected checkout " && !reason.source.startsWith("could not inspect")) assert.match(result.reason, unresolved, command)
+    if (result.reason.startsWith("Desk could not resolve")) assert.match(result.reason, unresolved, command)
   }
 })
 
