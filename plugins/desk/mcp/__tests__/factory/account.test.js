@@ -142,6 +142,7 @@ test("gh failures while choosing are one stable result each", async () => {
   assert.deepEqual(await chooseAccount({ store: STORE, runner: failing((args) => (args[0] === "api" ? { code: 1, stdout: "", stderr: "gh: Server Error (HTTP 500)\n" } : undefined)) }), { result: "unexpected" })
   assert.deepEqual(await chooseAccount({ store: STORE, runner: failing((args) => (args[0] === "--version" ? { code: 0, stdout: "gh version 2.20.0 (2022-11-01)\n", stderr: "" } : undefined)) }), { result: "gh_too_old" })
   assert.deepEqual(await chooseAccount({ store: STORE, runner: failing((args) => (args[1] === "status" ? { code: 0, stdout: Symbol("not text"), stderr: "" } : undefined)) }), { result: "unexpected" })
+  assert.deepEqual(await chooseAccount({ store: STORE, runner: failing((args) => (args[1] === "status" ? { code: 0 } : undefined)) }), { result: "no_account_can_deliver", accounts: [] })
   await assert.rejects(chooseAccount({ store: "not a store", runner: base.runner }), /store must be/u)
 })
 
@@ -149,6 +150,11 @@ test("factory.js account refuses a malformed store and, with the real runner and
   let error = ""
   assert.equal(await factoryCli({ argv: ["account", "--store", "nope"], env, write: () => {}, logError: (text) => { error += text } }), 1)
   assert.match(error, /Usage: factory\.js account --store/u)
+  for (const argv of [["account"], ["account", "--store"], ["account", "--repo", STORE], ["account", "--store", STORE, "--extra", "x"]]) {
+    error = ""
+    assert.equal(await factoryCli({ argv, env, write: () => {}, logError: (text) => { error += text } }), 1)
+    assert.match(error, /Usage: factory\.js account --store/u, argv.join(" "))
+  }
   let out = ""
   const code = await factoryCli({ argv: ["account", "--store", STORE], env: { ...env, PATH: base }, write: (text) => { out += text }, logError: () => {} })
   assert.equal(code, 1)
