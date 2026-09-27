@@ -234,12 +234,13 @@ if the runtime does not support walked-up workspace MCP discovery, this step is 
 
 ## Step 4.8 — Factory boot lines
 
-the session-start hook appends at most one `Desk boot:` line, addressed to you; its clauses are separated by `; `. this step owns what the `Factory:` clauses about waste labels ask, and how to handle an answer from the waste evaluator's `evaluate` command, whether it ran here or from `desk:task-lifecycle`'s done step. no such clause → nothing to do.
+the session-start hook appends at most one `Desk boot:` line, addressed to you; its clauses are separated by `; `. this step owns what the `Factory:` clauses about waste labels and andon ask, and how to handle an answer from the waste evaluator's `evaluate` command, whether it ran here or from `desk:task-lifecycle`'s done step. no such clause → nothing to do.
 
 `<Desk plugin folder>` below is two levels above this skill's folder; run the commands from it.
 
 - **`Factory: N finished tasks have no waste labels yet; run the evaluator for them in the background`** → the hook has already started a detached `evaluate --pending` that prepares briefs, but only you can start evaluators. run `node <Desk plugin folder>/mcp/scripts/factory.js evaluate --pending` and handle each job in its `jobs` answer as below. don't wait for the evaluators before continuing.
 - **`Factory: N finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)`** → say so in one line of the Step 5 status block. there is nothing to run: labels are quarantined when the factory store refused them or when their session's facts were quarantined (a `facts_quarantined` record names those facts), under `quarantine/<store-slug>/labels/` in the protected factory state.
+- **`Factory: N open andon issues in <store> (#…); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)`** → the start-time refresh found open andon issues for plugins that store tracks. say so in one line of the Step 5 status block and offer a `curator` pass, which handles them first. nothing runs on its own.
 
 **handling an `evaluate` answer**, per job:
 

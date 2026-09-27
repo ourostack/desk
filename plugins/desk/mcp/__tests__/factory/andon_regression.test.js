@@ -1,8 +1,12 @@
 // Andon regression fixture: a test store whose latest Desk release makes
-// tool failures clearly worse. The store build's `andon` command, run
-// through the same gh API routes the store's workflow uses, opens one andon
-// issue, leaves it alone while nothing changes, and closes it once a later
-// release brings the measure back.
+// tool failures clearly worse. The store build's real `andon` command, over
+// a real facts folder and the store's `factory.json`, opens one andon issue,
+// leaves it alone while nothing changes, and closes it once a later release
+// brings the measure back. GitHub itself is simulated: an in-memory runner
+// answers only the REST routes the issues client sends. Every job is one
+// session, so each job is its own independent group, and each side needs at
+// least six groups before any alarm opens or closes. Dismissal and reopening
+// are covered by the andon unit tests, not here.
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -77,6 +81,10 @@ function writeJob(store, { version, failures }) {
   writeFileSync(path.join(store, "facts", `claude-code-${id}.json`), `${JSON.stringify(fact)}\n`)
 }
 
+function trackDesk(store) {
+  writeFileSync(path.join(store, "factory.json"), `${JSON.stringify({ andon: { plugins: ["desk"] } })}\n`)
+}
+
 async function andon(store, github) {
   return runAndonCommand({ argv: ["--store", store, "--repo", REPO], env: { GH_TOKEN: TOKEN }, runner: github.runner })
 }
@@ -84,13 +92,16 @@ async function andon(store, github) {
 test("andon opens one issue when a release makes tool failures clearly worse, and closes it when a later release recovers", async () => {
   const store = mkdtempSync(path.join(os.tmpdir(), "desk-andon-regression-"))
   try {
+    trackDesk(store)
     const github = fakeGitHub()
-    for (const failures of [1, 2, 1]) writeJob(store, { version: "3.3.0", failures })
-    for (const failures of [9, 10, 11]) writeJob(store, { version: "3.4.0", failures })
+    for (const failures of [1, 2, 1, 2, 1, 2]) writeJob(store, { version: "3.3.0", failures })
+    for (const failures of [9, 10, 11, 9, 10, 11]) writeJob(store, { version: "3.4.0", failures })
 
     const opened = await andon(store, github)
-    assert.deepEqual(opened.alarms.map(({ title, action }) => ({ title, action })), [{ title: "Andon: desk 3.4.0 tool_failures", action: "opened" }])
+    assert.deepEqual(opened.tracked, ["desk"])
+    assert.deepEqual(opened.alarms.map(({ action }) => action), ["opened"])
     assert.equal(github.issues.length, 1)
+    assert.match(github.issues[0].title, /^Andon: desk 3\.4\.0 tool_failures /u)
     assert.deepEqual(github.issues[0].labels, ["andon"])
     assert.equal(github.issues[0].state, "open")
     assert.match(github.issues[0].body, /3\.3\.0/u)
@@ -99,14 +110,35 @@ test("andon opens one issue when a release makes tool failures clearly worse, an
     assert.deepEqual((await andon(store, github)).alarms.map(({ action }) => action), ["unchanged"])
     assert.equal(github.issues.length, 1)
 
-    // A later release brings tool failures back down.
-    for (const failures of [1, 2]) writeJob(store, { version: "3.5.0", failures })
+    // A later release with too few jobs to judge changes nothing.
+    for (const failures of [1, 2, 1]) writeJob(store, { version: "3.5.0", failures })
+    assert.deepEqual((await andon(store, github)).alarms.map(({ action }) => action), ["unchanged"])
+    assert.equal(github.issues[0].state, "open")
+
+    // Enough jobs on the later release bring tool failures back down.
+    for (const failures of [2, 1, 2]) writeJob(store, { version: "3.5.0", failures })
     const closed = await andon(store, github)
-    assert.deepEqual(closed.alarms.map(({ title, action }) => ({ title, action })), [{ title: "Andon: desk 3.4.0 tool_failures", action: "closed" }])
+    assert.deepEqual(closed.alarms.map(({ action }) => action), ["closed"])
     assert.equal(github.issues[0].state, "closed")
     assert.equal(github.comments.length, 1)
     assert.match(github.comments[0].body, /3\.5\.0/u)
     assert.equal(github.issues.length, 1)
+  } finally {
+    rmSync(store, { recursive: true, force: true })
+  }
+})
+
+test("andon opens nothing while either version has fewer than six independent jobs, or for an untracked plugin", async () => {
+  const store = mkdtempSync(path.join(os.tmpdir(), "desk-andon-thin-"))
+  try {
+    const github = fakeGitHub()
+    for (const failures of [1, 2, 1, 2, 1]) writeJob(store, { version: "3.3.0", failures })
+    for (const failures of [9, 10, 11, 9, 10, 11]) writeJob(store, { version: "3.4.0", failures })
+    // No factory.json: nothing is tracked.
+    assert.deepEqual(await andon(store, github), { tracked: [], alarms: [], failed: 0 })
+    trackDesk(store)
+    assert.deepEqual((await andon(store, github)).alarms, [])
+    assert.equal(github.issues.length, 0)
   } finally {
     rmSync(store, { recursive: true, force: true })
   }

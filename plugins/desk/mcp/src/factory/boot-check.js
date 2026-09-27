@@ -36,6 +36,11 @@
 // `labelsLine(count)` and `labelsQuarantinedLine(quarantined)` are the
 // agent lines for a number above zero.
 //
+// `andonBootCheck({ env })` reads, when a store has `contribute: true`,
+// `status.json`'s `andon` record, which the start-time delivery refreshes
+// (`andon-watch.js`), and returns the open andon issues for each such store;
+// `andonLine(store, issues)` is the agent line for one store.
+//
 // Task cards are found only in the desk layout: `<track>/<task>/task.md`,
 // `<track>/_archive/<task>/task.md` and the same under `_archive/<track>/`,
 // below `desks/<alias>/` when a person prefix is given. A crew root's
@@ -186,6 +191,33 @@ export function labelsLine(count) {
 /** The agent line for `count` finished tasks whose waste labels are quarantined. */
 export function labelsQuarantinedLine(count) {
   return `Factory: ${count} finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)`
+}
+
+/** The agent line for the open andon issues `issues` (`[{ number }]`, at least one) recorded for `store`. */
+export function andonLine(store, issues) {
+  const count = issues.length
+  return `Factory: ${count} open andon ${count === 1 ? "issue" : "issues"} in ${store} (${issues.map(({ number }) => `#${number}`).join(", ")}); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)`
+}
+
+/**
+ * `andonBootCheck({ env }) -> [{ store, issues }]`: the open andon issues
+ * the last start-time refresh recorded (`andon-watch.js`) in `status.json`,
+ * for each store that still has `contribute: true`, sorted by store; stores
+ * with none are left out. Never writes; unreadable or misshapen state gives
+ * nothing.
+ */
+export function andonBootCheck({ env }) {
+  const stores = contributingStores(env).sort()
+  if (stores.length === 0) return []
+  const status = readState(path.join(factoryStateDir(env), "status.json"), {}) ?? {}
+  const andon = isPlainObject(status.andon) ? status.andon : {}
+  const found = []
+  for (const store of stores) {
+    const record = andon[store]
+    const issues = isPlainObject(record) && Array.isArray(record.issues) ? record.issues.filter((issue) => isPlainObject(issue) && Number.isSafeInteger(issue.number) && issue.number > 0) : []
+    if (issues.length > 0) found.push({ store, issues })
+  }
+  return found
 }
 
 /** See the header. Never writes and never opens a request or a quarantine record; every listing is capped. */
