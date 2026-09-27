@@ -81,7 +81,8 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
   let deny = false
   const inspected = new Set()
   async function visit({ name, args, cwd: directory, env: variables }) {
-    if (name !== "git") return
+    // One protected target decides the command; later Git calls cannot undo a denial.
+    if (deny || name !== "git") return
     const invocation = gitInvocation(args, directory)
     if (!invocation || !existsSync(invocation.cwd)) return
     const { location, aliases } = invocation
