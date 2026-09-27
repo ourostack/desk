@@ -25,11 +25,18 @@ const CARD = [
 ].join("\n")
 const body = (yaml, before = "Shell retries dominate.\n\n") => `${before}\`\`\`yaml\n${yaml}\n\`\`\`\n`
 
-// A finished job at one Desk version with one value per measure.
+// A finished job at one Desk version with one value per measure, in a session of its own.
 function job(n, version, values = {}, overrides = {}) {
   const measures = Object.fromEntries(MEASURE_IDS.map((id) => [id, id in values ? { value: values[id] } : { excluded: "not_in_fixture" }]))
-  return { job: J(n), job_class: "other", finished: true, plugins: { desk: version === null ? null : { min: version, max: version } }, measures, ...overrides }
+  return { job: J(n), job_class: "other", finished: true, plugins: { desk: version === null ? null : { min: version, max: version } }, sessions: [`s${n}`], measures, ...overrides }
 }
+
+// Jobs numbered from `first`, one per tool_retries value, at `version`.
+const retries = (first, version, values, overrides) => values.map((value, index) => job(first + index, version, { tool_retries: value }, overrides))
+// Six jobs a side, before (alpha.44) and after (alpha.45) the card's version.
+const sides = (before, after) => [...retries(1, "3.2.0-alpha.44", before), ...retries(101, "3.2.0-alpha.45", after)]
+const FEWER = sides([10, 12, 11, 10, 12, 11], [2, 3, 2, 3, 2, 3])
+const MORE = sides([1, 2, 1, 2, 1, 2], [8, 9, 8, 9, 8, 9])
 
 test("parseCard reads the one fenced yaml block of the plan's card shape", () => {
   assert.deepEqual(parseCard(body(CARD)), {
@@ -52,7 +59,7 @@ test("parseCard accepts block-style lists and maps, quotes, yml fences, CRLF and
     "# a card before its countermeasure ships",
     "kaizen: 1",
     'signal: "muda_time.defects"',
-    "job_class: engineering",
+    "job_class: other",
     "evidence_jobs:",
     `  - ${J(3)}`,
     "",
@@ -68,7 +75,7 @@ test("parseCard accepts block-style lists and maps, quotes, yml fences, CRLF and
     card: {
       kaizen: 1,
       signal: "muda_time.defects",
-      job_class: "engineering",
+      job_class: "other",
       evidence_jobs: [J(3)],
       countermeasure: null,
       plugin: "desk",
@@ -110,6 +117,8 @@ test("parseCard reports stable codes, never the card's own text", () => {
     { code: "invalid_version", field: "version" },
     { code: "invalid_hypothesis", field: "hypothesis" },
   ])
+  // A real job class that published facts cannot carry yet: the card says so instead of waiting forever.
+  assert.deepEqual(codes(body(CARD.replace("job_class: any", "job_class: engineering"))), [{ code: "job_class_not_published", field: "job_class" }])
   assert.deepEqual(codes(body(CARD.replace("hypothesis: { measure: tool_retries, direction: down }", "hypothesis: { measure: happiness, direction: down, why: because }"))), [{ code: "invalid_hypothesis", field: "hypothesis" }])
   assert.deepEqual(codes(body(CARD.replace("hypothesis: { measure: tool_retries, direction: down }", "hypothesis: tool_retries"))), [{ code: "invalid_hypothesis", field: "hypothesis" }])
   assert.deepEqual(codes(body(CARD.replace(`evidence_jobs: [${J(1)}, ${J(2)}]`, "evidence_jobs: 7"))), [{ code: "invalid_evidence_jobs", field: "evidence_jobs" }])
@@ -146,12 +155,11 @@ test("checkCard waits for a version before comparing anything", () => {
 test("checkCard compares finished jobs wholly before and wholly on or after the version, excluding mixed-version jobs", () => {
   const { card } = parseCard(body(CARD))
   const records = [
-    job(1, "3.2.0-alpha.43", { tool_retries: 9 }),
-    job(2, "3.2.0-alpha.44", { tool_retries: 10 }),
-    job(3, "3.2.0-alpha.44", { tool_retries: 11 }),
-    job(4, "3.2.0-alpha.45", { tool_retries: 2 }),
-    job(5, "3.2.0-alpha.46", { tool_retries: 3 }),
-    job(6, "3.2.0", { tool_retries: 1 }),
+    ...retries(1, "3.2.0-alpha.43", [9, 10]),
+    ...retries(3, "3.2.0-alpha.44", [11, 10, 12, 9]),
+    ...retries(21, "3.2.0-alpha.45", [2, 3]),
+    ...retries(23, "3.2.0-alpha.46", [1, 2]),
+    ...retries(25, "3.2.0", [3, 2]),
     job(7, "3.2.0-alpha.44", { tool_retries: 0 }, { plugins: { desk: { min: "3.2.0-alpha.44", max: "3.2.0-alpha.45" } } }),
     job(8, null, { tool_retries: 0 }),
     job(9, "3.2.0-alpha.45", {}, { finished: false }),
@@ -161,11 +169,11 @@ test("checkCard compares finished jobs wholly before and wholly on or after the 
   const result = checkCard(card, records, { seed: 17 })
   assert.equal(result.status, "checked")
   assert.equal(result.verdict, "confirmed")
-  assert.deepEqual(result.comparison.before, { jobs: 3, median: 10 })
-  assert.deepEqual(result.comparison.after, { jobs: 3, median: 2 })
+  assert.deepEqual(result.comparison.before, { jobs: 6, groups: 6, median: 10 })
+  assert.deepEqual(result.comparison.after, { jobs: 6, groups: 6, median: 2 })
   assert.equal(result.comparison.change, -8)
   assert.equal(result.comparison.direction, "down")
-  assert.equal(result.jobs, 11)
+  assert.equal(result.jobs, 17)
   assert.deepEqual(result.excluded, [
     { reason: "mixed_versions", jobs: 1 },
     { reason: "not_in_fixture", jobs: 1 },
@@ -174,57 +182,70 @@ test("checkCard compares finished jobs wholly before and wholly on or after the 
   ])
 })
 
-test("checkCard labels not-confirmed only when the interval lies wholly the other way, and keeps gathering otherwise", () => {
+test("checkCard tells too few independent jobs apart from no clear change, and labels not-confirmed only when the interval lies wholly the other way", () => {
   const { card } = parseCard(body(CARD))
-  const worse = [job(1, "3.2.0-alpha.44", { tool_retries: 1 }), job(2, "3.2.0-alpha.44", { tool_retries: 2 }), job(3, "3.2.0-alpha.45", { tool_retries: 8 }), job(4, "3.2.0-alpha.45", { tool_retries: 9 })]
-  assert.equal(checkCard(card, worse, { seed: 3 }).verdict, "not_confirmed")
-  const unclear = [job(1, "3.2.0-alpha.44", { tool_retries: 1 }), job(2, "3.2.0-alpha.44", { tool_retries: 9 }), job(3, "3.2.0-alpha.45", { tool_retries: 2 }), job(4, "3.2.0-alpha.45", { tool_retries: 8 })]
-  assert.equal(checkCard(card, unclear, { seed: 3 }).verdict, "gathering")
-  const thin = [job(1, "3.2.0-alpha.44", { tool_retries: 9 }), job(2, "3.2.0-alpha.45", { tool_retries: 1 })]
-  const one = checkCard(card, thin, { seed: 3 })
-  assert.equal(one.verdict, "gathering")
-  assert.equal(one.comparison.interval, null, "one job a side is never a verdict")
+  assert.equal(checkCard(card, MORE, { seed: 3 }).verdict, "not_confirmed")
+  const unclear = sides([1, 9, 2, 8, 3, 7], [2, 8, 1, 9, 3, 7])
+  const noChange = checkCard(card, unclear, { seed: 3 })
+  assert.equal(noChange.verdict, "no_clear_change")
+  assert.ok(noChange.comparison.interval[0] < 0 && noChange.comparison.interval[1] > 0)
+  // Fully separated, but five jobs before: a 95% interval cannot exist yet.
+  const thin = checkCard(card, sides([10, 12, 11, 10, 12], [2, 3, 2, 3, 2, 3]), { seed: 3 })
+  assert.equal(thin.verdict, "too_few_jobs")
+  assert.equal(thin.comparison.interval, null)
   const up = parseCard(body(CARD.replace("direction: down", "direction: up"))).card
-  assert.equal(checkCard(up, worse, { seed: 3 }).verdict, "confirmed")
+  assert.equal(checkCard(up, MORE, { seed: 3 }).verdict, "confirmed")
+})
+
+test("checkCard counts jobs that share a session as one independent group", () => {
+  const { card } = parseCard(body(CARD))
+  // Six after jobs, but pairs share a session: three groups, so no verdict yet.
+  const shared = [...retries(1, "3.2.0-alpha.44", [10, 12, 11, 10, 12, 11]), ...retries(101, "3.2.0-alpha.45", [2, 3, 2, 3, 2, 3]).map((record, index) => ({ ...record, sessions: [`shared${Math.floor(index / 2)}`] }))]
+  const result = checkCard(card, shared, { seed: 3 })
+  assert.deepEqual(result.comparison.after, { jobs: 6, groups: 3, median: 2 })
+  assert.equal(result.verdict, "too_few_jobs")
+  assert.match(kaizenComment({ card, result }), /\| After \(3\.2\.0-alpha\.45 or later\) \| 6 \| 3 \| 2 \|/u)
 })
 
 test("checkCard keeps to the card's job class unless it says any", () => {
-  const { card } = parseCard(body(CARD.replace("job_class: any", "job_class: review")))
+  const { card } = parseCard(body(CARD.replace("job_class: any", "job_class: other")))
   const records = [job(1, "3.2.0-alpha.44", { tool_retries: 9 }), job(2, "3.2.0-alpha.45", { tool_retries: 1 }, { job_class: "review" })]
   const result = checkCard(card, records, { seed: 1 })
   assert.equal(result.jobs, 1)
-  assert.deepEqual(result.comparison.before, { jobs: 0, median: null })
-  assert.match(kaizenComment({ card, result }), /for finished `review` jobs whose every session ran/u)
+  assert.deepEqual(result.comparison.after, { jobs: 0, groups: 0, median: null })
+  assert.match(kaizenComment({ card, result }), /for finished `other` jobs whose every session ran/u)
 })
 
 test("kaizenComment renders each status in plain words behind the marker, with no dates", () => {
   const { card } = parseCard(body(CARD))
-  const records = [job(1, "3.2.0-alpha.44", { tool_retries: 10 }), job(2, "3.2.0-alpha.44", { tool_retries: 12 }), job(3, "3.2.0-alpha.45", { tool_retries: 2 }), job(4, "3.2.0-alpha.45", { tool_retries: 3 }), job(5, "3.2.0-alpha.45", {}, { finished: false })]
+  const records = [...FEWER, job(5, "3.2.0-alpha.45", {}, { finished: false })]
   const checked = kaizenComment({ card, result: checkCard(card, records, { seed: 5 }) })
   assert.ok(checked.startsWith(`${KAIZEN_MARKER}\n### Kaizen check: confirmed\n`))
-  assert.match(checked, /\| Before \(earlier than 3\.2\.0-alpha\.45\) \| 2 \| 10 \|/u)
-  assert.match(checked, /\| After \(3\.2\.0-alpha\.45 or later\) \| 2 \| 2 \|/u)
-  assert.match(checked, /- Change in median \(after minus before\): -8\./u)
+  assert.match(checked, /\| Before \(earlier than 3\.2\.0-alpha\.45\) \| 6 \| 6 \| 11 \|/u)
+  assert.match(checked, /\| After \(3\.2\.0-alpha\.45 or later\) \| 6 \| 6 \| 2 \|/u)
+  assert.match(checked, /- Change in median \(after minus before\): -9\./u)
+  assert.match(checked, /Each side needs at least 6 groups, the fewest for which a distribution-free 95% interval for a median can exist\./u)
   assert.match(checked, /- 95% bootstrap interval: \[-?\d+, -\d+\]\./u)
   assert.match(checked, /- Jobs left out: open_job 1\./u)
   assert.doesNotMatch(checked, /\d{4}-\d{2}-\d{2}/u)
   assert.equal(checked, kaizenComment({ card, result: checkCard(card, records, { seed: 5 }) }), "byte-stable")
 
   const gathering = kaizenComment({ card, result: checkCard(card, [job(1, "3.2.0-alpha.44", { tool_retries: 10 })], { seed: 5 }) })
-  assert.match(gathering, /### Kaizen check: still gathering data/u)
-  assert.match(gathering, /\| After \(3\.2\.0-alpha\.45 or later\) \| 0 \| none \|/u)
+  assert.match(gathering, /### Kaizen check: not enough independent jobs yet/u)
+  assert.match(gathering, /\| After \(3\.2\.0-alpha\.45 or later\) \| 0 \| 0 \| none \|/u)
   assert.match(gathering, /- Change in median \(after minus before\): none yet\./u)
-  assert.match(gathering, /- 95% bootstrap interval: none yet; each side needs at least 2 finished jobs\./u)
+  assert.match(gathering, /- 95% bootstrap interval: none yet; each side needs at least 6 independent groups of jobs for a 95% interval to exist\./u)
   assert.match(gathering, /- Jobs left out: none\./u)
 
   const durationCard = parseCard(body(CARD.replaceAll("tool_retries", "lead_time"))).card
-  const durations = kaizenComment({ card: durationCard, result: checkCard(durationCard, [job(1, "3.2.0-alpha.44", { lead_time: 1000 }), job(2, "3.2.0-alpha.44", { lead_time: 1200 }), job(3, "3.2.0-alpha.45", { lead_time: 1000 }), job(4, "3.2.0-alpha.45", { lead_time: 1300 })], { seed: 2 }) })
-  assert.match(durations, /### Kaizen check: still gathering data/u)
+  const leads = (first, version, values) => values.map((value, index) => job(first + index, version, { lead_time: value }))
+  const durations = kaizenComment({ card: durationCard, result: checkCard(durationCard, [...leads(1, "3.2.0-alpha.44", [1000, 1200, 900, 1300, 1000, 1100]), ...leads(101, "3.2.0-alpha.45", [1000, 1300, 900, 1200, 1000, 1100])], { seed: 2 }) })
+  assert.match(durations, /### Kaizen check: no clear change so far/u)
   assert.match(durations, /\| 1000 ms \|/u)
   assert.match(durations, /- Change in median \(after minus before\): 0 ms\./u)
   assert.match(durations, /- 95% bootstrap interval: \[-?\d+ ms, \d+ ms\]\./u)
 
-  const notConfirmed = kaizenComment({ card, result: checkCard(card, [job(1, "3.2.0-alpha.44", { tool_retries: 1 }), job(2, "3.2.0-alpha.44", { tool_retries: 2 }), job(3, "3.2.0-alpha.45", { tool_retries: 8 }), job(4, "3.2.0-alpha.45", { tool_retries: 9 })], { seed: 5 }) })
+  const notConfirmed = kaizenComment({ card, result: checkCard(card, MORE, { seed: 5 }) })
   assert.match(notConfirmed, /### Kaizen check: not confirmed/u)
 
   const waiting = kaizenComment({ card, result: { status: "waiting_for_version" } })
@@ -237,7 +258,7 @@ test("kaizenComment renders each status in plain words behind the marker, with n
 })
 
 test("planCard turns an issue into its comment and the verdict label it should carry", () => {
-  const records = [job(1, "3.2.0-alpha.44", { tool_retries: 10 }), job(2, "3.2.0-alpha.44", { tool_retries: 12 }), job(3, "3.2.0-alpha.45", { tool_retries: 2 }), job(4, "3.2.0-alpha.45", { tool_retries: 3 })]
+  const records = FEWER
   const confirmed = planCard({ number: 4, body: body(CARD), records })
   assert.equal(confirmed.status, "confirmed")
   assert.equal(confirmed.label, "confirmed")
@@ -247,11 +268,13 @@ test("planCard turns an issue into its comment and the verdict label it should c
   assert.equal(planCard({ number: 4, body: body(CARD.replace("version: 3.2.0-alpha.45\n", "")), records }).status, "waiting_for_version")
   const worse = planCard({ number: 4, body: body(CARD.replace("direction: down", "direction: up")), records })
   assert.equal(worse.label, "not-confirmed")
-  assert.equal(planCard({ number: 4, body: body(CARD), records: records.slice(0, 3) }).label, null)
+  const thin = planCard({ number: 4, body: body(CARD), records: records.slice(0, 11) })
+  assert.equal(thin.status, "too_few_jobs")
+  assert.equal(thin.label, null)
 })
 
 test("syncKaizenCards keeps one comment per open card, updates it in place, fixes verdict labels and never closes a card", async () => {
-  const records = [job(1, "3.2.0-alpha.44", { tool_retries: 10 }), job(2, "3.2.0-alpha.44", { tool_retries: 12 }), job(3, "3.2.0-alpha.45", { tool_retries: 2 }), job(4, "3.2.0-alpha.45", { tool_retries: 3 })]
+  const records = FEWER
   const github = fakeIssues({
     issues: [
       { number: 1, title: "Retries", body: body(CARD), labels: ["kaizen", "not-confirmed"] },
@@ -263,7 +286,7 @@ test("syncKaizenCards keeps one comment per open card, updates it in place, fixe
     comments: { 1: [{ user: "someone", body: `${KAIZEN_MARKER}\nquoted by a person` }] },
   })
   const first = await syncKaizenCards({ client: github.client, records })
-  assert.deepEqual(first, { cards: [{ number: 1, status: "confirmed", comment: "created", labels: ["confirmed"] }, { number: 2, status: "invalid", comment: "created", labels: [] }] })
+  assert.deepEqual(first, { cards: [{ number: 1, status: "confirmed", comment: "created", labels: ["confirmed"] }, { number: 2, status: "invalid", comment: "created", labels: [] }], failed: 0 })
   assert.deepEqual(github.issue(1).labels, ["kaizen", "confirmed"])
   assert.deepEqual(github.issue(2).labels, ["kaizen"])
   assert.equal(github.botComments(1).length, 1)
@@ -282,4 +305,30 @@ test("syncKaizenCards keeps one comment per open card, updates it in place, fixe
   assert.equal(updated.cards[0].comment, "updated")
   assert.equal(github.botComments(1).length, 1)
   assert.match(github.botComments(1)[0].body, /open_job 1/u)
+})
+
+test("syncKaizenCards reports a card whose calls fail with a stable code and still checks the others", async () => {
+  const github = fakeIssues({
+    issues: [
+      { number: 1, title: "Too many comments", body: body(CARD), labels: ["kaizen"] },
+      { number: 2, title: "Fine", body: body(CARD), labels: ["kaizen"] },
+      { number: 3, title: "Odd failure", body: body(CARD), labels: ["kaizen"] },
+    ],
+  })
+  const listComments = github.client.listComments
+  github.client.listComments = async (number) => {
+    if (number === 1) throw Object.assign(new Error("factory issues: too_many_comments"), { code: "too_many_comments" })
+    if (number === 3) throw new Error("no code")
+    return listComments(number)
+  }
+  const result = await syncKaizenCards({ client: github.client, records: FEWER })
+  assert.deepEqual(result, {
+    cards: [
+      { number: 1, status: "failed", code: "too_many_comments" },
+      { number: 2, status: "confirmed", comment: "created", labels: ["confirmed"] },
+      { number: 3, status: "failed", code: "failed" },
+    ],
+    failed: 2,
+  })
+  assert.equal(github.botComments(2).length, 1)
 })

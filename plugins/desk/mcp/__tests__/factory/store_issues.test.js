@@ -97,5 +97,7 @@ test("failures become one stable code", async () => {
   const empty = issuesClient({ runner: async () => ok(), repo: "o/r", token: TOKEN })
   await assert.rejects(empty.createIssue({ title: "T", body: "B", labels: [] }), (error) => error.code === "unexpected_answer")
   const endless = issuesClient({ runner: async () => ok(Array.from({ length: 100 }, (_, index) => ({ id: index }))), repo: "o/r", token: TOKEN })
-  await assert.rejects(endless.listComments(1), (error) => error.code === "too_many")
+  await assert.rejects(endless.listComments(1), (error) => error.code === "too_many_comments")
+  const endlessIssues = issuesClient({ runner: async () => ok(Array.from({ length: 100 }, (_, index) => ({ number: index + 1, labels: [] }))), repo: "o/r", token: TOKEN })
+  await assert.rejects(endlessIssues.listIssues({ label: "andon", state: "all" }), (error) => error.code === "too_many_issues")
 })

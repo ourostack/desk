@@ -26,10 +26,13 @@
 // `kaizen-check` runs in a store's build: it compares each open kaizen card's
 // measure before and after its version and keeps the card's one comment and
 // verdict label current, with the token in `GH_TOKEN`. `andon` opens, updates
-// and closes the store's andon issues when a plugin's latest version makes a
-// quality measure clearly worse.
+// and closes the store's andon issues when a tracked plugin's latest
+// comparable version makes a quality measure clearly worse; the tracked
+// plugins are the `andon.plugins` list in the store's `factory.json`, and a
+// store without that file tracks none. Both print their JSON result and exit
+// 1 when any card or issue failed, after checking the rest.
 import { execFileSync } from "node:child_process"
-import { readFileSync, realpathSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync } from "node:fs"
 import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 
@@ -39,7 +42,7 @@ import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
 import { build, jobLink, storeRecords } from "../src/factory/pipeline/build.js"
-import { syncAndon } from "../src/factory/pipeline/andon.js"
+import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
 import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
 import { issuesClient } from "../src/factory/store-issues.js"
 import { factsPathsForSession, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
@@ -352,7 +355,10 @@ export async function runKaizenCheckCommand({ argv, env, runner }) {
 /** Runs `andon`: opens, updates, reopens and closes the store's andon issues; prints each alarm's action. */
 export async function runAndonCommand({ argv, env, runner }) {
   const context = await storeIssueContext({ argv, env, runner, usage: "Usage: factory.js andon --store <directory> --repo <owner/repo> [--author <login>]" })
-  return syncAndon(context)
+  const configPath = path.join(parseOptions(argv).get("store"), "factory.json")
+  const config = parseStoreConfig(existsSync(configPath) ? readFileSync(configPath, "utf8") : null)
+  if (!config.ok) throw new Error(`factory.js andon: the store's factory.json is not valid (${config.code})`)
+  return syncAndon({ ...context, plugins: config.plugins })
 }
 
 /** Runs the `consent` subcommand: validates `argv`, calls `setConsent`, and returns the JSON-ready result. */
@@ -394,7 +400,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    return subcommand === "validate-pr" && result.ok === false ? 1 : 0
+    return (subcommand === "validate-pr" && result.ok === false) || Object(result).failed > 0 ? 1 : 0
   } catch (error) {
     logError(`${error.message}\n`)
     return 1

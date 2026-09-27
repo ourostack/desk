@@ -57,6 +57,9 @@ export const ROLLUPS_SCHEMA = "desk.factory.rollups/1"
 export const JOB_CLASSES = Object.freeze(["engineering", "review", "investigation", "operations", "other"])
 
 const DEFAULT_JOB_CLASS = "other"
+// The job classes a store can fill today: published facts do not carry a
+// task's kind, so every job is `other`. The kaizen check offers only these.
+export const PUBLISHED_JOB_CLASSES = Object.freeze([DEFAULT_JOB_CLASS])
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const OPEN_JOB = "open_job"
 const DESK_PLUGIN = "desk"
@@ -230,8 +233,8 @@ function finished(formulas) {
 
 /**
  * `jobRecord({ timeline, formulas }, labelsByJobSession) -> record`: one
- * job's grouping keys, each plugin's version range (`plugins`), whether it
- * is finished, its catalog values (each
+ * job's grouping keys, each plugin's version range (`plugins`), its session
+ * ids (`sessions`, which the comparisons group by), whether it is finished, its catalog values (each
  * `{ value }` or `{ excluded: reason }`), and, when it is finished and fully
  * labeled, each session's waste totals (`muda_sessions`) for the Pareto.
  */
@@ -262,6 +265,7 @@ export function jobRecord({ timeline, formulas }, labelsByJobSession) {
     job_class: DEFAULT_JOB_CLASS,
     plugin_version: pluginVersion(sources),
     plugins: pluginRanges(sources),
+    sessions: [...new Set(sources.map((session) => session.session.id))].sort(compareText),
     host: oneOrMixed(sources.map((session) => session.session.host)),
     finished: done,
     measures,
