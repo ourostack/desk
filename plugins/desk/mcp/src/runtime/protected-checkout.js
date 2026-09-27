@@ -272,7 +272,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
 // operation safe in any checkout (a plain commit, pull, push or rebase onto the upstream) does not count.
 const FALLBACK_GIT = /(?<![\w.-])git(?:\.exe)?((?:\s+(?:-[Cc]\s+\S+|--?[\w-]+(?:=\S+)?))*)\s+([A-Za-z][\w-]*)([^\n;&|()`]*)/gu
 export function fallbackOperation(command) {
-  for (const match of command.replace(/["'\\]/gu, "").matchAll(FALLBACK_GIT)) {
+  for (const match of command.replace(/["']/gu, "").replaceAll("\\", "/").matchAll(FALLBACK_GIT)) {
     const operation = match[2]
     if (!hasRule(operation)) continue
     const rule = classifyGit(operation, match[3].split(/\s+/u).filter(Boolean))

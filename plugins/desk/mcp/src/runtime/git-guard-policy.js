@@ -61,7 +61,7 @@ const beforeDashDash = (parsed) => parsed.dashdash < 0 ? parsed.operands : parse
 // A pathspec that covers the whole tree (or cannot be read) rather than naming paths: `.`, `:/`, `*`, `..`, a magic
 // pathspec, or a list read from a file. Named paths are the agent's own files; the whole tree holds other sessions' work.
 const WHOLE_TREE = /^(?:(?:\.\.?\/?)+\*?|:\/?\*?|\*|:\(.*|\.\/\*)$/u
-const wholeTree = (paths) => !paths.length || paths.some((path) => path.includes("\0") || WHOLE_TREE.test(path))
+const wholeTree = (paths) => !paths.length || paths.some((path) => WHOLE_TREE.test(path))
 
 // The checkout's current branch or its state branch. Switching to either keeps HEAD where it belongs.
 async function ownBranch(ctx, name) {

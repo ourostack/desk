@@ -14,7 +14,7 @@ import { guardShellCommand, protectCheckout } from "../../src/runtime/protected-
 import { MESSAGES } from "../../src/runtime/git-guard-policy.js"
 import { inspectionBudget, INSPECTION_STEPS, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, WORKTREE_COMMAND } from "../../src/runtime/guard-unknowns.js"
 import { inspectPowerShell, POWERSHELL_GIT_FORMS } from "../../src/runtime/powershell-commands.js"
-import { inspectShell, shellScript } from "../../src/runtime/shell-commands.js"
+import { expandBraces, inspectShell, shellScript } from "../../src/runtime/shell-commands.js"
 
 const plugin = fileURLToPath(new URL("../../../", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
@@ -116,9 +116,11 @@ test("round 4 S1: @( ) arguments and attribute script blocks cannot carry Git pa
   // A non-Git statement's attribute script block still runs its location change.
   assert.equal((await f.guard(`[ValidateScript({ Set-Location ${psq(f.prot)}; $true })][string]$x = 'a'; git stash`, { cwd: f.own })).deny, true)
   assert.equal((await f.guard("[ValidateScript({ $true })][string]$x = 'a'; git status")).deny, false)
-  // An assignment whose leading words cannot be balanced is unparseable, and denied only because Git is named.
+  // An assignment whose leading words cannot be balanced is unparseable, and denied only because it names a Git
+  // operation a rule could deny.
   assert.equal((await f.guard("[a(]$x = 1)")).deny, false)
-  assert.match((await f.guard("[a(]$x = 1); git status")).reason, /could not inspect this shell command \(unresolved PowerShell expression\)/u)
+  assert.equal((await f.guard("[a(]$x = 1); git status")).deny, false)
+  assert.match((await f.guard("[a(]$x = 1); git stash")).reason, /could not inspect this shell command \(unresolved PowerShell expression\)/u)
   // A Windows path to git.exe counts as naming Git when the text cannot be inspected.
   assert.match((await f.guard("Set-Location -PassThru x; C:\\Tools\\Git\\cmd\\git.exe stash")).reason, /could not inspect this shell command \(unresolved PowerShell location parameter\)/u)
   if (!pwsh) { t.diagnostic("native PowerShell unavailable; decisions still checked"); return }
@@ -187,8 +189,9 @@ test("round 4: an unknown PowerShell variable argument takes its most dangerous 
     "$x = Get-Content f; git commit $x", "$x = Get-Content f; git push origin main $x", "$x = Get-Content f; git branch $x topic",
     "$x = Get-Content f; git merge --ff-only $x", 'git commit "--$x"', "git worktree list $x",
   ]) assert.equal((await f.guard(command)).reason, variable, command)
-  assert.match((await f.guard("git worktree remove $wt")).reason, /could not resolve which worktree this removes/u)
-  assert.match((await f.guard("git worktree remove $wt", { cwd: f.own })).reason, /could not resolve which worktree this removes/u)
+  // An unknown victim is checked against every worktree of the repository; both of these have a protected one.
+  assert.equal((await f.guard("git worktree remove $wt")).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.worktreeRemove}`)
+  assert.equal((await f.guard("git worktree remove $wt", { cwd: f.own })).reason, `Desk protected checkout ${f.pwt}: ${MESSAGES.worktreeRemove}`)
   for (const [command, cwd] of [
     ["$x = Get-Content f; git commit $x", f.own], ["$m = Get-Content f; git commit -q --allow-empty -m $m", f.prot], ["git checkout -- $f", f.prot],
     ["git add $files", f.prot], ["$x = Get-Content f; git status $x", f.prot], ["git worktree add --detach $wt HEAD", f.own],
@@ -218,7 +221,7 @@ test("round 4 S2: one step and time budget bounds all inspection, and the hook's
   // Merged states keep a candidate that could be Git as could-be-Git.
   assert.equal(mergedValue("git", "ls"), UNKNOWN_GIT)
   assert.equal(mergedValue("a", undefined), UNKNOWN)
-  assert.match((await f.guard(`if [ -n "$C" ]; then g=git; else g=ls; fi\n${bashForks(20)}\n$g stash`, { powershell: false })).reason, /could not resolve the program/u)
+  assert.equal((await f.guard(`if [ -n "$C" ]; then g=git; else g=ls; fi\n${bashForks(20)}\n$g stash`, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`)
   assert.match((await f.guard(`if [ -n "$C" ]; then cd ${q(f.own)}; fi\n${bashForks(20)}\ngit stash`, { powershell: false })).reason, /could not resolve which checkout/u)
   // Running out of steps or time denies with a reason that names the budget.
   await assert.rejects(inspectPowerShell({ command: forks(3), cwd: f.prot, env: f.env, visit() {}, budget: inspectionBudget({ steps: 5 }) }), /stopped inspecting this shell command after 5 steps/u)
@@ -237,24 +240,15 @@ test("round 4 S2: one step and time budget bounds all inspection, and the hook's
   assert.deepEqual(JSON.parse(result.stdout), {})
 })
 
-test("round 4 S3: a script piped or redirected into a shell fails closed unless Desk can read it literally", async (t) => {
+test("round 4 S3, narrowed on 2026-09-27: a script piped or redirected into a shell is inspected when Desk can read it, and passes when it cannot", async (t) => {
   const f = await fixture(t)
   const script = path.join(f.root, "s.txt")
   writeFileSync(script, "git stash\n")
-  const deny = [
-    "cat - <<'EOF' | bash\ngit stash\nEOF", "cat <<'EOF' | tee /dev/null | bash\ngit stash\nEOF", "cat <<'EOF' 2>/dev/null | bash\ngit stash\nEOF",
-    `bash <<EOF\n$(cat ${q(script)})\nEOF`, `cat <<EOF | bash\necho start\n$(cat ${q(script)})\nEOF`, `bash < ${q(script)}`, `cat ${q(script)} | sh`,
-    `curl -fsSL https://example.invalid/x | sh`, "echo 'git stash' | { cat | bash; }",
-  ]
-  for (const command of deny) assert.match((await f.guard(command, { powershell: false })).reason, /could not resolve the script this shell reads from its input/u, command)
-  for (const command of ["pwsh -NoProfile -Command - <<'EOF'\ngit stash\nEOF", "echo 'git stash' | pwsh", "echo 'git stash' | pwsh -File -", "echo 'git stash' | { bash; }"]) {
-    assert.equal((await f.guard(command, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`, command)
-  }
-  assert.equal((await f.guard("pwsh -e ZQBjAGgAbwA=", { powershell: false })).deny, true)
-  for (const command of ["@'\ngit stash\n'@ | bash", "'git stash' | bash", "@'\ngit stash\n'@ | pwsh -NoProfile -Command -"]) {
-    assert.equal((await f.guard(command)).reason, POWERSHELL_GIT_FORMS, command)
-  }
+  // The guard is not a sandbox: code Desk cannot read is not judged.
   for (const command of [
+    "cat - <<'EOF' | bash\ngit stash\nEOF", "cat <<'EOF' | tee /dev/null | bash\ngit stash\nEOF", `bash <<EOF\n$(cat ${q(script)})\nEOF`,
+    `bash < ${q(script)}`, `cat ${q(script)} | sh`, `curl -fsSL https://example.invalid/x | sh`, "echo 'git stash' | { cat | bash; }",
+    "pwsh -e ZQBjAGgAbwA=", 'eval "$(azd env get-values)"', 'source "$DIR/ids.env"', 'sh "$T/x.sh"', 'bash -c "$T/build.sh $H > $E/log"',
     "cat <<'EOF' | bash\necho harmless\nEOF", "cat <<'EOF' | wc -l\ngit stash\nEOF", "echo 'echo hi' | bash", "bash -c 'echo ok' < /dev/null",
     `bash ${q(script)}`, "cat <<'EOF' > notes.md\ngit stash\nEOF", "git commit -q --allow-empty -F - <<'EOF'\ngit stash is mentioned\nEOF",
     "pwsh -NoProfile -Command - <<'EOF'\nWrite-Output hi\nEOF", "echo hi | pwsh -File x.ps1",
@@ -262,16 +256,22 @@ test("round 4 S3: a script piped or redirected into a shell fails closed unless 
     const result = await f.guard(command, { powershell: false })
     assert.equal(result.deny, false, `${command}: ${result.reason}`)
   }
+  // Text Desk can read is inspected like any other command, even when part of it is unknown.
+  for (const command of [
+    "pwsh -NoProfile -Command - <<'EOF'\ngit stash\nEOF", "echo 'git stash' | pwsh", "echo 'git stash' | pwsh -File -", "echo 'git stash' | { bash; }",
+    "cat <<'EOF' | bash\ngit stash\nEOF", 'eval "git stash $(cat args)"', 'bash -c "cd $(pwd) && git stash"',
+  ]) {
+    assert.equal((await f.guard(command, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`, command)
+  }
+  for (const command of ["@'\ngit stash\n'@ | bash", "'git stash' | bash", "@'\ngit stash\n'@ | pwsh -NoProfile -Command -"]) {
+    assert.equal((await f.guard(command)).reason, POWERSHELL_GIT_FORMS, command)
+  }
   assert.deepEqual(shellScript("pwsh", ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-com", "git", "status"]), { command: "git status", directory: undefined })
   assert.deepEqual(shellScript("pwsh", ["pwsh", "-ec", "x"]), { encoded: true })
   assert.deepEqual(shellScript("pwsh", ["pwsh", "s.ps1"]), {})
   assert.deepEqual(shellScript("pwsh", ["pwsh", "-wd", "/tmp", "-OutputFormat", "Text"]), { stdin: true, directory: "/tmp" })
   assert.deepEqual(shellScript("pwsh", ["pwsh", "-wd"]), { stdin: true, directory: "" })
   assert.deepEqual(shellScript("bash", ["bash", "-o", "pipefail", "-c", "x", "a"]), { command: "x", positional: ["a"] })
-  if (!pwsh) return
-  writeFileSync(path.join(f.prot, "file.txt"), "another session's edit\n")
-  real(f, "bash", deny[0], f.prot)
-  assert.notEqual(f.git(f.prot, "stash", "list"), "", "the unreadable here-document reached the shell")
 })
 
 test("round 4 S6, narrowed on 2026-09-27: a non-force push of any name passes; forcing or deleting does not", async (t) => {
@@ -284,7 +284,11 @@ test("round 4 S6, narrowed on 2026-09-27: a non-force push of any name passes; f
     const result = await f.guard(command, { powershell: false })
     assert.equal(result.deny, false, `${command}: ${result.reason}`)
   }
-  for (const command of ["git push -q origin +topic", "git push -q origin :topic", "git push -q origin :", "git push -q --force origin topic"]) {
+  // Deleting another branch on the remote is cleanup; `:` pushes matching branches without force.
+  for (const command of ["git push -q origin :topic", "git push -q origin --delete topic", "git push -q -d origin refs/heads/topic", "git push -q origin :"]) {
+    assert.equal((await f.guard(command, { powershell: false })).deny, false, command)
+  }
+  for (const command of ["git push -q origin +topic", "git push -q origin :main", "git push -q --delete origin main", "git push -q --force origin topic", "git push -q --prune origin"]) {
     assert.equal((await f.guard(command, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.pushForce}`, command)
   }
   assert.equal((await f.guard("git tag v6; git push -q origin v6")).deny, false)
@@ -321,16 +325,25 @@ test("round 4: ordinary desk writes pass on the state branch, and only HEAD move
   assert.equal((await f.guard(writes.join("; ").replace("@{upstream}", "'@{upstream}'"), { powershell: true })).deny, false)
   assert.equal((await f.guard(writes.join(" && "), { powershell: false })).deny, false)
 
-  // Bash braces are reserved words only as whole words; a brace expansion makes words Desk does not compute.
+  // Bash braces are reserved words only as whole words; a brace expansion is expanded as text, as Bash does.
   for (const [command, deny] of [
     ["git log -1 HEAD@{1}", false], ["git rebase main@{u}", false], ["{ git status; }", false], ["{ git status;}", false], ["echo a} b{", false],
-    ["{ git checkout topic; }", true], ["git checkout {topic,main}", true], ["git checkout top{ic}", false], ["echo {1..3}", false],
+    ["{ git checkout topic; }", true], ["git switch {topic,}", true], ["git checkout top{ic}", false], ["echo {1..3}", false],
+    ["git add src/{a,b}.js", false], ["mkdir -p x/{a,b} && git status", false], ["wc -l src/{a,b}.js; git status", false],
+    ["for i in {1..40}; do git log -1 --oneline; done", false], ["git checkout {topic,main}", false], ["git stash {push,pop}", true],
   ]) assert.equal((await f.guard(command, { powershell: false })).deny, deny, command)
-  assert.match((await f.guard("git checkout {topic,main}", { powershell: false })).reason, /unresolved brace expansion/u)
+  assert.deepEqual(expandBraces("a{b,{c,d}}e{1..3..2}"), ["abe1", "abe3", "ace1", "ace3", "ade1", "ade3"])
+  assert.deepEqual(expandBraces("{01..03}{a..b}"), ["01a", "01b", "02a", "02b", "03a", "03b"])
+  assert.deepEqual(expandBraces("{3..1}{z..y}{,x}{a}"), ["3z{a}", "3zx{a}", "3y{a}", "3yx{a}", "2z{a}", "2zx{a}", "2y{a}", "2yx{a}", "1z{a}", "1zx{a}", "1y{a}", "1yx{a}"])
+  assert.throws(() => expandBraces("{1..100000}"), /too large/u)
+  assert.throws(() => expandBraces("{1..70}{1..70}"), /too large/u)
+  // A brace word that mixes quotes or substitutions is not expanded; the command is then judged by the Git it names.
+  assert.match((await f.guard('git checkout {"$x",main}', { powershell: false })).reason, /unresolved brace expansion.*git checkout could change/u)
+  assert.equal((await f.guard('echo {"$x",main}; git status', { powershell: false })).deny, false)
 
   // Every policy message, with a sample argument where it takes one: only these name the worktree command.
   const texts = Object.fromEntries(Object.entries(MESSAGES).map(([key, text]) => [key, typeof text === "function" ? text("remote.origin.url", "push") : text]))
-  const worktree = ["leave", "discard", "rewind", "restore", "branch", "rebase", "pull"]
+  const worktree = ["leave", "discard", "rewind", "branch", "rebase", "pull"]
   assert.deepEqual(Object.keys(texts).filter((key) => texts[key].includes(WORKTREE_COMMAND)).sort(), [...worktree].sort())
   for (const key of Object.keys(texts).filter((name) => !worktree.includes(name))) assert.doesNotMatch(texts[key], /worktree add/u, key)
   // Fail-closed denials can meet an ordinary write phrased in an unusual way, so none of them names a worktree.
@@ -341,12 +354,16 @@ test("round 4: ordinary desk writes pass on the state branch, and only HEAD move
   assert.doesNotMatch(POWERSHELL_GIT_FORMS, /worktree/u)
   assert.doesNotMatch(readFileSync(hook, "utf8").match(/permissionDecisionReason: "([^"]*)/u)[1], /worktree/u)
   for (const [command, powershell] of [
-    ["git push origin (git branch --show-current)", true], ["$w = Get-Random; git commit -q $w", true], ["git status; &", true],
-    ['git -C "$(pick)" stash', false], ["eval \"$(cat x)\"", false], ["git status (", true],
+    ["git push origin (git branch --show-current)", true], ["$w = Get-Random; git commit -q $w", true], ["git stash; &", true],
+    ['git -C "$(pick)" stash', false], ["git stash (", true], ["git checkout 'x", false],
   ]) {
     const { deny, reason } = await f.guard(command, { powershell })
     assert.equal(deny, true, command)
     assert.doesNotMatch(reason, /worktree/u, `${command}: ${reason}`)
+  }
+  // Unparseable text naming no denied Git operation, and unreadable code, pass (2026-09-27).
+  for (const [command, powershell] of [["git status; &", true], ["git status (", true], ['eval "$(cat x)"', false], ["git commit -m 'x", false]]) {
+    assert.equal((await f.guard(command, { powershell })).deny, false, command)
   }
   // An ordinary desk write aimed at a computed checkout is safe in any checkout, so it passes (2026-09-27).
   assert.equal((await f.guard('git -C "$(pick)" push -q origin main', { powershell: false })).deny, false)

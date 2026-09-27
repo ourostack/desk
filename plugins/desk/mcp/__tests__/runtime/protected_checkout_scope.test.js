@@ -88,8 +88,8 @@ test("A3b: the desk write protocol and read-only Git pass in a protected checkou
     "rebase --continue", "rebase --abort", "rebase --skip",
     "worktree add --detach ../wt HEAD", "worktree add -b feature ../wt2", "worktree add -B feature ../wt3", "worktree list",
     "worktree lock ../wt", "worktree prune --dry-run", "stash list", "stash show",
-    "checkout", "switch", "checkout main", "switch main", "checkout -- file.txt", "checkout .", "checkout missing-path", "restore file.txt",
-    "restore --worktree file.txt", "restore --source=HEAD --no-source file.txt",
+    "checkout", "switch", "checkout main", "switch main", "checkout -- file.txt", "checkout missing-path", "checkout HEAD -- file.txt", "checkout topic file.txt", "restore file.txt",
+    "restore --worktree file.txt", "restore --source=HEAD --no-source file.txt", "restore --source HEAD file.txt", "restore -s HEAD~1 file.txt", "restore -SW file.txt", "restore --source=HEAD~1 file.txt",
     "reset --soft HEAD", "reset --soft", "fetch origin main", "fetch origin main:refs/remotes/origin/main", "config user.name Fixture",
     "config --get remote.origin.url", "config get remote.origin.url", "config --list", "config remote.origin.url",
     "branch newbranch", "branch -d topic", "branch -D topic", "branch -f topic HEAD", "branch -m topic renamed", "branch -m",
@@ -98,6 +98,9 @@ test("A3b: the desk write protocol and read-only Git pass in a protected checkou
     "reset -- file.txt", "reset HEAD file.txt", "reset HEAD~1 file.txt", "reset missing-path", "reset --pathspec-from-file=list",
     "restore --staged file.txt", "restore -S file.txt", "restore --sta file.txt",
     "merge topic", "merge origin/main", "merge --no-ff origin/main", "merge --ff-only --no-ff topic",
+    // Ruled 2026-09-27: --autostash re-applies within the same command, pruning worktree records discards no work, and deleting a branch other than the state branch on the remote rewrites nothing the checkout tracks.
+    "rebase --autostash", "pull --autostash", "pull --rebase --autost", "merge --ff-only --autostash topic", "merge --autostash topic",
+    "worktree prune", "push --delete origin topic", "push -d origin topic", "push origin :topic", "push origin :",
     "pull --no-rebase origin topic", "pull --no-rebase upstream main", "pull --rebase=false origin topic",
     "push --all", "push --branches", "push origin topic", "push origin HEAD:topic", "push origin main:topic", "push origin 'refs/heads/*:refs/heads/*'",
     "bisect log", "merge -h", "clean -h", "stash --help", "--version", "help",
@@ -111,7 +114,7 @@ test("A3b: every operation that moves HEAD, rewinds the branch or discards other
     ["checkout topic", MESSAGES.leave], ["checkout v1", MESSAGES.leave], ["checkout HEAD~1", MESSAGES.leave],
     ["checkout --detach", MESSAGES.leave], ["checkout -b new", MESSAGES.leave], ["checkout -B main", MESSAGES.leave],
     ["checkout --orphan new", MESSAGES.leave], ["checkout -", MESSAGES.leave], ["checkout origin/main", MESSAGES.leave],
-    ["checkout HEAD -- file.txt", MESSAGES.restore], ["checkout topic file.txt", MESSAGES.restore],
+    ["checkout .", MESSAGES.restore], ["checkout HEAD -- .", MESSAGES.restore], ["checkout topic :/", MESSAGES.restore], ["checkout -- ..", MESSAGES.restore],
     ["checkout --pathspec-from-file=list HEAD", MESSAGES.restore], ["checkout -f", MESSAGES.discard], ["checkout -f main", MESSAGES.discard],
     ["switch topic", MESSAGES.leave], ["switch -c new", MESSAGES.leave], ["switch -C main", MESSAGES.leave], ["switch --detach HEAD", MESSAGES.leave],
     ["switch -", MESSAGES.leave], ["switch --orphan new", MESSAGES.leave], ["switch -f main", MESSAGES.discard],
@@ -120,8 +123,8 @@ test("A3b: every operation that moves HEAD, rewinds the branch or discards other
     ["reset --keep HEAD", MESSAGES.discard], ["reset --soft --hard", MESSAGES.discard], ["reset --har", MESSAGES.discard],
     ["reset", MESSAGES.unstage], ["reset HEAD", MESSAGES.unstage], ["reset --hard --mixed", MESSAGES.unstage], ["reset -p", MESSAGES.unstage],
     ["reset HEAD~1", MESSAGES.rewind], ["reset --soft HEAD~1", MESSAGES.rewind], ["reset topic", MESSAGES.rewind], ["reset HEAD~1 --", MESSAGES.rewind],
-    ["restore --source HEAD file.txt", MESSAGES.restore], ["restore -s HEAD~1 file.txt", MESSAGES.restore],
-    ["restore --staged --worktree file.txt", MESSAGES.restore], ["restore -SW file.txt", MESSAGES.restore], ["restore --source=HEAD~1 file.txt", MESSAGES.restore],
+    ["restore --source HEAD .", MESSAGES.restore], ["restore -s HEAD~1 :/", MESSAGES.restore],
+    ["restore --staged --worktree .", MESSAGES.restore], ["restore -SW :/", MESSAGES.restore], ["restore --source=HEAD~1 -- .", MESSAGES.restore],
     ["clean -n", MESSAGES.clean], ["clean -fd", MESSAGES.clean], ["clean -fdx", MESSAGES.clean],
     ["stash", MESSAGES.stash], ["stash push", MESSAGES.stash], ["stash -u", MESSAGES.stash], ["stash pop", MESSAGES.stash],
     ["stash apply", MESSAGES.stash], ["stash drop", MESSAGES.stash], ["stash clear", MESSAGES.stash], ["stash save note", MESSAGES.stash],
@@ -131,18 +134,16 @@ test("A3b: every operation that moves HEAD, rewinds the branch or discards other
     ["branch -c main", MESSAGES.branch],
     ["rebase topic", MESSAGES.rebase], ["rebase -", MESSAGES.rebase], ["rebase HEAD~1", MESSAGES.rebase], ["rebase --onto topic main", MESSAGES.rebase],
     ["rebase --root", MESSAGES.rebase], ["rebase -x true", MESSAGES.rebase], ["rebase --exec=true", MESSAGES.rebase],
-    ["rebase --quit", MESSAGES.rebase], ["rebase --autostash", MESSAGES.autostash], ["rebase origin/main topic", MESSAGES.leave],
+    ["rebase --quit", MESSAGES.rebase], ["rebase origin/main topic", MESSAGES.leave],
     ["pull --rebase origin topic", MESSAGES.pull], ["pull -r upstream main", MESSAGES.pull], ["pull --rebase origin main:main", MESSAGES.pull],
-    ["pull --autostash", MESSAGES.autostash], ["pull --rebase --autost", MESSAGES.autostash],
-    ["merge --ff-only --autostash topic", MESSAGES.autostash], ["merge --autostash topic", MESSAGES.autostash],
     ["push --force", MESSAGES.pushForce], ["push -f", MESSAGES.pushForce], ["push --force-w", MESSAGES.pushForce],
     ["push --force-with-lease", MESSAGES.pushForce], ["push --force-with-lease=main", MESSAGES.pushForce],
-    ["push --force-if-includes", MESSAGES.pushForce], ["push --mirror", MESSAGES.pushForce], ["push --delete origin topic", MESSAGES.pushForce],
-    ["push -d origin topic", MESSAGES.pushForce], ["push --prune origin", MESSAGES.pushForce], ["push origin +main", MESSAGES.pushForce],
-    ["push origin :topic", MESSAGES.pushForce], ["push origin :", MESSAGES.pushForce], ["push -uf origin main", MESSAGES.pushForce],
+    ["push --force-if-includes", MESSAGES.pushForce], ["push --mirror", MESSAGES.pushForce], ["push --delete origin main", MESSAGES.pushForce],
+    ["push -d origin main", MESSAGES.pushForce], ["push --prune origin", MESSAGES.pushForce], ["push origin +main", MESSAGES.pushForce],
+    ["push origin :main", MESSAGES.pushForce], ["push origin :refs/heads/main", MESSAGES.pushForce], ["push -uf origin main", MESSAGES.pushForce],
     ["push --all --force", MESSAGES.pushForce],
     ["commit --amend -m note", MESSAGES.amend], ["commit --amend --no-edit", MESSAGES.amend],
-    ["worktree prune", MESSAGES.prune], ["worktree add -B main ../wt3", MESSAGES.branch],
+    ["worktree add -B main ../wt3", MESSAGES.branch],
     ["bisect start", MESSAGES.leave], ["bisect reset", MESSAGES.leave],
   ])
 })
@@ -242,6 +243,9 @@ test("A3b: commands with no path to Git pass even when a value is unknown", asyn
     // Safe in any checkout, so an unknown target does not matter (2026-09-27).
     'cd "$(pick)"; git push origin HEAD', 'cd "$(pick)" && git add -A && git commit -qm x && git pull --rebase && git push',
     'cd "$(pick)" && git pull --ff-only', 'cd "$(pick)" && git merge --ff-only origin/main', 'cd "$(pick)" && git rebase',
+    // Unreadable or computed code is allowed; only text Desk can read is inspected (ruling, 2026-09-27).
+    "g=$(which git); $g status", '"$(pick)" git status', 'eval "$(cat script)"', 'bash -c "$(cat script)"', 'source "$(pick)"', '. "$(pick)"',
+    "$(cd x; command -v git) status", "git status 'unterminated",
   ]
   for (const command of allow) {
     const result = await f.guard(command, { cwd: f.shared, env })
@@ -253,18 +257,16 @@ test("A3b: commands with no path to Git pass even when a value is unknown", asyn
     ['git -C "$(pick)" reset --hard', /which checkout/u], ['GIT_DIR="$(pick)" git reset --hard', /could not inspect a Git command.*unresolved Git location/u],
     ['git --git-dir="$(pick)" reset --hard', /which checkout/u], ['popd; git checkout main', /which checkout/u], ["pushd +1 && git stash", /which checkout/u],
     ['cd "$(pick)" && git frobnicate', /which checkout/u],
-    ["$(command -v git) checkout main", /the program/u], ["g=$(which git); $g status", /the program/u], ['"$(pick)" git status', /the program/u],
-    ["`which git` stash", /the program/u], ['command "$(which git)" stash', /the program/u],
-    ['eval "$(cat script)"', /evaluates/u], ['bash -c "$(cat script)"', /evaluates/u], ['source "$(pick)"', /sources/u], ['. "$(pick)"', /sources/u],
+    ["$(command -v git) checkout topic", /move HEAD off/u], ["`which git` stash", /git stash takes other sessions/u], ['command "$(which git)" stash', /git stash takes other sessions/u],
     ['git "$(pick)" main', /which Git command/u], ['git checkout "$(cat branch)"', /a Git revision/u], ['git branch -D "$(cat b)"', /a branch name/u],
     ['git push origin "$(cat r)"', /a push refspec/u], ['git rebase "$(cat base)"', /a Git revision/u], ['git reset "$(cat base)"', /a Git revision/u],
-    ['git worktree remove --force "$(pick)"', /which worktree/u],
+    ['git worktree remove --force "$(pick)"', /would delete a protected checkout/u],
     [`wt=$(mktemp -d -p ${q(f.shared)}); cd "$wt"; git checkout topic`, /^Desk protected checkout /u],
     [`TMPDIR=${q(f.shared)}; wt=$(mktemp -d); cd "$wt" && git stash`, /^Desk protected checkout /u],
     [`wt=$(mktemp -d ${q(f.shared)}/x.XXXX); cd "$wt" && git stash`, /^Desk protected checkout /u],
-    ["git status 'unterminated", /could not inspect this shell command \(unterminated shell quote\)/u],
+    ["git stash 'unterminated", /could not inspect this shell command \(unterminated shell quote\), and its git stash could change a protected checkout/u],
     ['cd "$(date; hostname)" && git stash', /which checkout/u], ['cd "$(mktemp -d -p /definitely-missing)" && git stash', /which checkout/u],
-    ["git co topic", /^Desk protected checkout .+: this would move HEAD off/u], ['$(cd x; command -v git) status', /the program/u],
+    ["git co topic", /^Desk protected checkout .+: this would move HEAD off/u],
   ]
   for (const [command, reason] of deny) {
     const result = await f.guard(command, { cwd: f.shared, env })
@@ -325,7 +327,7 @@ test("A3b: the Git-reach rule, option parser and mktemp model", () => {
   assert.equal(classifyGit("status", []), null)
   assert.equal(classifyGit("merge", ["-h"]), null)
   assert.equal(classifyGit("merge", ["--", "-h"]), null, "a merge moves no HEAD off its branch")
-  assert.notEqual(classifyGit("merge", ["--autostash", "topic"]), null)
+  assert.equal(classifyGit("merge", ["--autostash", "topic"]), null, "--autostash re-applies within the same command")
   assert.equal(classifyGit("worktree", ["remove", "--force"]), null, "no worktree named")
   assert.equal(classifyGit("worktree", ["repair"]), null)
   const cwd = realpathSync(tmpdir())

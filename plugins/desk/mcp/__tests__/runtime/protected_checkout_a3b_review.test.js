@@ -67,11 +67,12 @@ function rows(f) {
     ["choice-stash-list", "bash", "prot", "allow", "git stash list"],
     ["choice-bisect-log", "bash", "prot", "allow", "git bisect log"],
     ["choice-clean-n", "bash", "prot", "deny", "git clean -n"],
-    ["choice-worktree-prune", "bash", "prot", "deny", "git worktree prune"],
+    ["choice-worktree-prune", "bash", "prot", "allow", "git worktree prune"],
     ["choice-amend-pushed", "bash", "prot", "deny", "git commit -q --amend -m amended"],
     ["choice-amend-abbrev", "bash", "prot", "deny", "git commit -q --amen -m amended"],
     // A3's reproductions.
-    ["a3-restore-sour", "bash", "prot", "deny", "git restore --sour=HEAD -- file.txt"],
+    ["a3-restore-sour", "bash", "prot", "deny", "git restore --sour=HEAD -- ."],
+    ["a3-restore-sour-path", "bash", "prot", "allow", "git restore --sour=HEAD -- file.txt"],
     ["a3-branch-forc-current", "bash", "prot", "deny", "git branch --forc main HEAD~1"],
     ["a3-ansi-c", "bash", "own", "deny", `git -C $${q(P)} checkout -q --detach HEAD`],
     ["a3-unquoted-var-words", "bash", "own", "deny", `G='git -C ${P}'; $G checkout -q --detach HEAD`],
@@ -82,7 +83,7 @@ function rows(f) {
     ["a3-ps-failed-and", "pwsh", "prot", "deny", `git -C ${psq(f.root + "/missing")} status && Set-Location ${psq(O)}; git checkout -q --detach HEAD`],
     ["a3-bash-second-assignment", "bash", "own", "deny", `X=${q(P)}; A=1 P=$X; git -C "$P" checkout -q --detach HEAD`],
     ["a3-case-no-match", "bash", "own", "deny", `false; case x in y) echo unreachable;; esac && git -C ${q(P)} checkout -q --detach HEAD`],
-    ["a3-restore-no-o", "bash", "prot", "deny", "git restore --source=HEAD~1 --no-o -- file.txt"],
+    ["a3-restore-no-o", "bash", "prot", "deny", "git restore --source=HEAD~1 --no-o -- :/"],
     ["a3-multiline-case-unprotected", "bash", "own", "allow", "case x in\n  x) echo harmless;;\nesac"],
     ["a3-git-dir-flag", "bash", "own", "deny", `git --git-dir=${q(P + "/.git")} --work-tree=${q(P)} checkout -q --detach HEAD`],
     // The loosened rules.
@@ -132,7 +133,7 @@ function rows(f) {
     ["new-pipe-bash", "bash", "own", "deny", `echo ${q(`git -C ${P} checkout -q --detach HEAD`)} | bash`],
     ["new-pipe-bash-harmless", "bash", "own", "allow", "echo 'echo harmless' | bash"],
     // Round 4 ruling: a script piped into a shell that Desk cannot read literally fails closed.
-    ["new-pipe-file-bash", "bash", "own", "deny", "cat script | sh"],
+    ["new-pipe-file-bash", "bash", "own", "allow", "cat script | sh"],
     // Unknown programs.
     ["new-unknown-prog-printf", "bash", "own", "deny", `$(printf 'g%s' it) -C ${q(P)} checkout -q --detach HEAD`],
     ["new-unknown-prog-file", "bash", "own", "deny", `X=$(cat ${q(f.root + "/cmd.txt")}); $X -C ${q(P)} checkout -q --detach HEAD`],
@@ -347,7 +348,8 @@ test("A3b review: configuration sources, alias forms and stdin scripts cover eve
     ["git --config-env bad push -q origin main", "allow"],
     ["git --config-env", "allow"],
     // git config writes.
-    [`git config --file ${q(f.root + "/x.cfg")} --local remote.origin.url x`, /would change remote\.origin\.url/u],
+    // --file names another file, not the checkout's configuration (replay ruling, 2026-09-27).
+    [`git config --file ${q(f.root + "/x.cfg")} --local remote.origin.url x`, "allow"],
     ["git config set remote.origin.mirror true", /would change remote\.origin\.mirror/u],
     ["git config --edit", /would change the configuration file/u],
     ["git config --unset user.name", "allow"],
@@ -357,17 +359,18 @@ test("A3b review: configuration sources, alias forms and stdin scripts cover eve
     ["cd \"$(pick)\" && git -c alias.co=status co", "allow"],
     ["cd \"$(pick)\" && git -c alias.x='!echo hi' x", /could not resolve which checkout/u],
     ["git --config-env=alias.co=UNSET_ALIAS_VALUE co", /could not resolve a Git alias/u],
-    // Stdin: a piped group is not a literal, so the shell's script is unreadable; a shell with a script operand reads no stdin script.
-    ["{ echo 'git stash'; } | bash", /could not resolve the script this shell reads from its input/u],
+    // Stdin: a piped group is not a literal, so the shell's script is unreadable and passes (unreadable code is not judged); a
+    // shell with a script operand reads no stdin script.
+    ["{ echo 'git stash'; } | bash", "allow"],
     ["echo 'git stash' | bash script.sh", "allow"],
-    ["echo 'git stash' | bash -", /git stash hides/u],
+    ["echo 'git stash' | bash -", /git stash takes other sessions/u],
   ]
   for (const [command, expected] of cases) {
     const got = await decide(command)
     if (expected === "allow") assert.equal(got, "allow", command)
     else assert.match(got, expected, command)
   }
-  assert.match(await decide(`git --git-dir ${q(P + "/.git")} --namespace ns -c alias.x='!git stash' x`, { cwd: O }), /git stash hides/u)
+  assert.match(await decide(`git --git-dir ${q(P + "/.git")} --namespace ns -c alias.x='!git stash' x`, { cwd: O }), /git stash takes other sessions/u)
   for (const command of ["$x = (git stash)"]) assert.equal(await decide(command, { powershell: true }), POWERSHELL_GIT_FORMS)
   assert.equal(await decide("$e = @(); $f = () + 1", { powershell: true }), "allow")
   // An upstream on the local repository itself ("."), and a key saved without a value.
@@ -421,7 +424,9 @@ test("A3b re-review: every PowerShell assignment form runs the command it captur
   assert.equal((await f.guard(`if ($true) { Set-Location ${psq(f.own)} }; git stash`, { powershell: true })).deny, true)
   assert.equal((await f.guard(`Set-Location ${psq(f.own)}; git stash`, { powershell: true })).deny, false)
   assert.match((await f.guard("$x = (git stash", { powershell: true })).reason, /could not inspect this shell command \(unresolved PowerShell expression\)/u)
-  assert.match((await f.guard("git status; }", { powershell: true })).reason, /could not inspect this shell command/u)
+  // Text that does not parse is judged by the Git operations it names: status passes, stash does not.
+  assert.equal((await f.guard("git status; }", { powershell: true })).deny, false)
+  assert.match((await f.guard("git stash; }", { powershell: true })).reason, /could not inspect this shell command .*git stash could change a protected checkout/u)
   if (!pwsh) { t.diagnostic("native PowerShell unavailable; decisions still checked"); return }
   for (const command of ["[string]$x = git stash", "$script:x = git stash", "$x = if ($true) { git stash }"]) {
     const real = await fixture(t)
@@ -438,12 +443,12 @@ test("A3b re-review: here-documents belong to the command that opens them, and l
     "bash <<'EOF' && echo done\ngit stash\nEOF", "sh <<'EOF'; echo done\ngit stash\nEOF", "bash <<'EOF' || true\ngit stash\nEOF",
     "{ bash <<'EOF'\ngit stash\nEOF\n} | cat", "bash << EOF\ngit stash\nEOF", "bash <<'EOF' > out.log 2>&1\ngit stash\nEOF",
     "printf '%s\\n' 'git stash' | sh", "printf 'git stash\\n' | bash", "echo -e 'git stash' | bash", "echo -ne 'git stash' | bash",
-    "printf '%s %s\\n' git stash | bash", "git show HEAD:x.sh | bash",
-    // Round 4 ruling: input Desk cannot read literally fails closed.
-    "cat x.sh | bash", "printf '%d' 3 | bash",
+    "printf '%s %s\\n' git stash | bash",
   ]
   for (const command of deny) assert.equal((await f.guard(command)).deny, true, command)
   const allow = [
+    // Replay ruling (2026-09-27): input Desk cannot read literally is unreadable code, which passes.
+    "git show HEAD:x.sh | bash", "cat x.sh | bash", "printf '%d' 3 | bash",
     "cat <<'EOF' | wc -l\ngit stash\nEOF", "cat > a.md <<'EOF'\ngit stash\nEOF\ncat > b.md <<'EOF'\ngit checkout main\nEOF\ngit status --short",
     "git commit -q --allow-empty -F - <<'EOF'\nExplain git reset --hard\nEOF", "echo -n 'echo hi' | bash",
     "echo -E 'echo \\n' | sh", "printf '%%s' | bash", "echo -n | bash", "printf 'echo %s %s' a | bash",

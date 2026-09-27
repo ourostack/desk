@@ -143,8 +143,13 @@ function braceEnd(text, start) {
   let depth = 0, comma = false
   for (let i = start; i < text.length; i++) {
     const c = text[i]
-    if (/[\s;&|<>()'"`$\\]/u.test(c)) return -1
-    if (c === "{") depth++
+    if (/[\s;&|<>()]/u.test(c)) return -1
+    // A quoted piece stays inside the word (word() then refuses to expand a word that mixes quotes).
+    if (c === "'" || c === '"') {
+      const close = text.indexOf(c, i + 1)
+      if (close < 0) return -1
+      i = close
+    } else if (c === "{") depth++
     else if (c === "}" && --depth === 0) return comma || /^\{(?:-?\d+\.\.-?\d+|[A-Za-z]\.\.[A-Za-z])(?:\.\.-?\d+)?\}$/u.test(text.slice(start, i + 1)) ? i : -1
     else if (c === "," && depth === 1) comma = true
   }
@@ -564,13 +569,14 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       const states = await condition(node.condition, state), out = []
       for (const s of states) {
         if (s.status !== node.until) out.push(...await run(node.body, s))
-        else out.push(s)
+        else out.push({ ...s, status: true })
       }
       return out
     }
     if (node.kind === "if") {
       const states = await condition(node.condition, state)
-      return (await Promise.all(states.map((s) => run(s.status ? node.yes : node.no, s)))).flat()
+      // An if whose condition fails and has no else branch succeeds.
+      return (await Promise.all(states.map((s) => run(s.status ? node.yes : node.no, { ...s, status: true })))).flat()
     }
     if (node.kind === "for") {
       let states = [state]

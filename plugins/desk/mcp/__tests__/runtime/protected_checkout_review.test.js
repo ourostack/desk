@@ -95,8 +95,9 @@ test("A3-I01: physical Git traversal and logical/physical cd inspect the same ch
 test("A3-I02: accepted Git option abbreviations mutate while option values remain read-only", async (t) => {
   const f = fixture(t)
   writeFileSync(path.join(f.shared, "file.txt"), "changed\n")
-  assert.equal((await f.guard(`git -C ${q(f.shared)} restore --sour=HEAD -- file.txt`)).deny, true)
-  f.git(f.shared, "restore", "--sour=HEAD", "--", "file.txt")
+  // A whole-tree restore is denied (named paths pass since 2026-09-27), so the abbreviation is checked on `.`.
+  assert.equal((await f.guard(`git -C ${q(f.shared)} restore --sour=HEAD -- .`)).deny, true)
+  f.git(f.shared, "restore", "--sour=HEAD", "--", ".")
   assert.equal(readFileSync(path.join(f.shared, "file.txt"), "utf8"), "base\n")
   assert.equal((await f.guard(`git -C ${q(f.shared)} branch --forc main HEAD`)).deny, true, "force-moving the current branch")
   assert.equal((await f.guard(`git -C ${q(f.shared)} branch --forc topic HEAD`)).deny, false, "force-moving another branch")
@@ -307,11 +308,15 @@ test("ANSI-C literal escapes decode without executing code or expanding quoted v
   for (const command of ["printf $'\\a\\b\\e\\E\\f\\n\\r\\t\\v\\\\\\'\\\"'", "printf $'\\cA\\z'"]) assert.equal((await f.guard(command)).deny, false)
   for (const command of ["echo $'unterminated", "echo $'\\x'", "echo $'\\c"]) {
     assert.equal((await f.guard(command)).deny, false, command)
-    assert.match((await f.guard(`git status; ${command}`)).reason, /could not inspect this shell command \(.*ANSI-C/u, command)
+    // Unparseable text is judged by the Git operations it names: status passes, stash does not.
+    assert.equal((await f.guard(`git status; ${command}`)).deny, false, command)
+    assert.match((await f.guard(`git -C ${q(f.shared)} stash; ${command}`)).reason, /could not inspect this shell command \(.*ANSI-C.*git stash could change/u, command)
   }
   assert.equal((await f.guard("$(opaque-command) status")).deny, false, "an unknown program with no path to Git")
-  assert.match((await f.guard("$(opaque-command) git status")).reason, /could not resolve the program/u)
-  assert.match((await f.guard("$(command -v git) status")).reason, /could not resolve the program/u)
+  // A computed program is judged as Git by its arguments (2026-09-27): read-only Git passes, a denied operation does not.
+  assert.equal((await f.guard("$(opaque-command) git status")).deny, false)
+  assert.equal((await f.guard("$(command -v git) status")).deny, false)
+  assert.match((await f.guard(`$(command -v git) -C ${q(f.shared)} stash`)).reason, /git stash takes other sessions/u)
   assert.equal((await f.guard(`G='git:-C:${f.shared}'; IFS=:; $G checkout HEAD`)).deny, true)
   assert.equal((await f.guard(`G='git -C ${f.shared}'; IFS=; $G checkout HEAD`)).deny, false)
 })
@@ -349,7 +354,9 @@ test("PowerShell non-Git expressions and redirects are allowed; computed targets
   // A computed program from an unprotected checkout can reach no protected one; from a protected checkout it is denied.
   assert.equal((await f.guard("$name = (Get-Command git).Source; & $name status", { powershell: true })).deny, false)
   assert.equal((await f.guard("$name = (Get-Command git).Source; & $name status", { powershell: true, cwd: f.shared })).deny, true)
-  for (const command of ["&; git status", `$repo = 1 + 2; sl $repo; git checkout HEAD`, `sl -unsupported ${psq(f.shared)}; git status`, `git -C "$(opaque-command)" checkout HEAD`]) {
+  assert.equal((await f.guard("&; git status", { powershell: true, cwd: f.shared })).deny, false, "unparseable, and names no denied operation")
+  assert.equal((await f.guard("&; git stash", { powershell: true, cwd: f.shared })).deny, true)
+  for (const command of [`$repo = 1 + 2; sl $repo; git checkout HEAD`, `sl -unsupported ${psq(f.shared)}; git stash`, `git -C "$(opaque-command)" checkout HEAD`]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
   }
   assert.equal((await f.guard(`Write-Output $(git -C ${psq(f.shared)} checkout HEAD)`, { powershell: true })).deny, true)
@@ -387,7 +394,8 @@ test("PowerShell keeps environment, local variables, conditional reachability an
   for (const command of ["git status; (opaque)", "git status; Write-Output $(echo (x))"]) assert.equal((await f.guard(command, { powershell: true })).deny, false, `${command}: groups are parsed, not unparseable`)
   for (const command of ["Write-Output >", "Write-Output $(Write-Output `)"]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
-    assert.match((await f.guard(`git status; ${command}`, { powershell: true })).reason, /could not inspect this shell command/u, command)
+    assert.equal((await f.guard(`git status; ${command}`, { powershell: true, cwd: f.shared })).deny, false, command)
+    assert.match((await f.guard(`git stash; ${command}`, { powershell: true, cwd: f.shared })).reason, /could not inspect this shell command|git stash takes other sessions/u, command)
   }
   // Only Git calls reach the policy.
   const calls = []
@@ -552,11 +560,11 @@ test("A3-R1-I04: case has its own status, including successful unmatched and emp
 test("A3-R1-I05: only negatable options compete for negative prefixes and ambiguity retains recognized mutation", async (t) => {
   const f = fixture(t)
   for (const option of ["--no-o", "--no-ov", "--no-overlay"]) {
-    const command = `git -C ${q(f.shared)} restore --source=HEAD ${option} -- file.txt`
+    const command = `git -C ${q(f.shared)} restore --source=HEAD ${option} -- .`
     writeFileSync(path.join(f.shared, "file.txt"), "changed\n")
     assert.equal((await f.guard(command)).deny, true, command)
     assertHookDecision(f, command, true, { reason: DENIED })
-    f.git(f.shared, "restore", "--source=HEAD", option, "--", "file.txt")
+    f.git(f.shared, "restore", "--source=HEAD", option, "--", ".")
     assert.equal(readFileSync(path.join(f.shared, "file.txt"), "utf8"), "base\n")
   }
   for (const args of [
