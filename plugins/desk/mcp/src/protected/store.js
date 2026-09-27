@@ -18,12 +18,11 @@
 
 import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
-import * as os from "node:os"
 import * as path from "node:path"
 
 import Database from "better-sqlite3"
 
-import { expandHome, isPathContained, personPrefix } from "../util/paths.js"
+import { isPathContained, personPrefix, resolveStateHome } from "../util/paths.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "../feedback/windows-acl.js"
 // The directory-chain guards (Git-checkout refusal, symlink refusal, mode
 // repair, macOS extended-ACL clearing) live in one place and are shared with
@@ -176,15 +175,6 @@ function partitionId(realDeskRoot, alias) {
     .update(JSON.stringify({ desk_root: realDeskRoot, person: alias }))
     .digest("hex")
     .slice(0, 32)
-}
-
-function resolveStateHome(env) {
-  const home = env.HOME ?? os.homedir()
-  const configured = env.XDG_STATE_HOME
-  if (typeof configured === "string" && configured.trim() !== "") {
-    return path.resolve(expandHome(configured, home))
-  }
-  return path.join(home, ".local", "state")
 }
 
 // The generic ancestor walk (any `.git` between here and the filesystem

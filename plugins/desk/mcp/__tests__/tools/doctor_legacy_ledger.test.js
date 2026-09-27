@@ -13,6 +13,7 @@ import * as path from "node:path"
 
 import { doctorRuntime } from "../../src/tools/doctor.js"
 import { legacyLedgerPartitions, LEGACY_LEDGER_SEGMENTS } from "../../src/protected/legacy-ledger.js"
+import { resolveStateHome } from "../../src/util/paths.js"
 
 function makeState() {
   const base = mkdtempSync(path.join(tmpdir(), "desk-legacy-ledger-"))
@@ -46,6 +47,18 @@ function snapshot(dir) {
 
 test("the legacy ledger path is the retired store's own namespace", () => {
   assert.deepEqual(LEGACY_LEDGER_SEGMENTS, ["ouroboros-skills", "desk", "work-ledger"])
+})
+
+test("the doctor counts under the same state home the protected stores use", () => {
+  // One shared lookup (review N2): if it ever changes, both sides move together.
+  for (const env of [
+    { HOME: "/home/a" },
+    { HOME: "/home/a", XDG_STATE_HOME: "  " },
+    { HOME: "/home/a", XDG_STATE_HOME: "/state/b" },
+    { HOME: "/home/a", XDG_STATE_HOME: "~/c" },
+  ]) {
+    assert.equal(legacyLedgerPartitions({ env }).path, path.join(resolveStateHome(env), ...LEGACY_LEDGER_SEGMENTS))
+  }
 })
 
 test("doctor reports zero legacy partitions when the retired store never existed", () => {

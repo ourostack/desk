@@ -68,7 +68,7 @@ Do not create a competing `.superpowers/sdd` tree. Keep canonical Git-backed Des
 
 On interruption, read the canonical progress record, not an upstream shadow ledger. Reuse the recorded step and attempt for reading; allocate an explicit new attempt for new output and preserve earlier evidence. Full task, repository and iteration qualification prevents same-basename plan and progress collisions.
 
-The evidence root must be an explicitly approved private artifact location outside Git-backed Desk. It must never be inside the factory's own state directory, `<state home>/ouroboros-skills/desk/factory/`. File contents remain subject to the repository's write authority and the selected private-storage policy. The mapper does not create, discover or protect an evidence store.
+The evidence root must be an explicitly approved private artifact location outside Git-backed Desk. It must never be inside the factory's own state directory, `<state home>/ouroboros-skills/desk/factory/`, or the retired work ledger's `<state home>/ouroboros-skills/desk/work-ledger/`, whose leftover folders `desk_doctor` counts. File contents remain subject to the repository's write authority and the selected private-storage policy. The mapper does not create, discover or protect an evidence store.
 
 ## Mapped controller close-out
 

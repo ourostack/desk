@@ -4,4 +4,4 @@
 
 **The M3-5 schema aliases are gone.** `validateFacts` and `validateFactsBytes` are no longer exported from the factory schema; use `validateLocalFacts` and `validateLocalFactsBytes`.
 
-**The frozen offline benchmark cannot run natively until a new dataset version drops the ledger case.** The `v2-alpha-v1` dataset still requires the `private.ledger` callback, which no Desk tool supplies now, so a native run is refused with `NATIVE_CALLBACK_UNMAPPED` ([offline evals](../../evals/offline/README.md)). The frozen dataset is not edited.
+**The frozen offline benchmark cannot run natively until a new dataset version drops the ledger case.** The `v2-alpha-v1` dataset still requires the `private.ledger` callback, which no Desk tool supplies now, so a native run is refused with `NATIVE_CALLBACK_UNMAPPED` ([offline evals](../../evals/offline/README.md)). The frozen dataset is not edited; [#56](https://github.com/ourostack/desk/issues/56) tracks the new version.

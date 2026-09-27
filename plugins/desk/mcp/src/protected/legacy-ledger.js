@@ -9,19 +9,11 @@
 // inside it, and it creates nothing.
 
 import { lstatSync, readdirSync } from "node:fs"
-import * as os from "node:os"
 import * as path from "node:path"
 
-import { expandHome } from "../util/paths.js"
+import { resolveStateHome } from "../util/paths.js"
 
 export const LEGACY_LEDGER_SEGMENTS = Object.freeze(["ouroboros-skills", "desk", "work-ledger"])
-
-function stateHome(env) {
-  const home = env.HOME ?? os.homedir()
-  const configured = env.XDG_STATE_HOME
-  if (typeof configured === "string" && configured.trim() !== "") return path.resolve(expandHome(configured, home))
-  return path.join(home, ".local", "state")
-}
 
 /**
  * `{ partitions, path }`: how many partition folders the retired ledger left
@@ -31,7 +23,8 @@ function stateHome(env) {
  * `unreadable`, never a made-up zero.
  */
 export function legacyLedgerPartitions({ env }) {
-  const dir = path.join(stateHome(env), ...LEGACY_LEDGER_SEGMENTS)
+  // The same state-home lookup the protected stores (and so the retired ledger) use.
+  const dir = path.join(resolveStateHome(env), ...LEGACY_LEDGER_SEGMENTS)
   let stat
   try {
     stat = lstatSync(dir)
