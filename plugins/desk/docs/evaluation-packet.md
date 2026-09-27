@@ -77,7 +77,7 @@ Start every session under test from `$EVAL/scratch`: a host project that is itse
 
 ### Claude Code
 
-**Warning:** this packet requires Desk 3.2.0-alpha.58 or later, the release in which every step of `SETUP.md` follows `CLAUDE_CONFIG_DIR`. Before that release, [`SETUP.md`](../../../SETUP.md#claude-code) steps 2, 3 and 4 edit your real `~/.claude` even in a throwaway profile, and step 4 can move content out of `~/.claude/agents/`, `skills/`, `hooks/` and `projects/*/memory/`. The setup block above backs up your whole real Claude config directory (`$REAL_CLAUDE_DIR`) to `$EVAL/claude-backup` whatever version you get. Answer step 4's question with "move or remove nothing". Any edit to your real `~/.claude` is a finding.
+**Warning:** this packet requires the Desk release that contains the `SETUP.md` config-directory fix, in which every step of `SETUP.md` follows `CLAUDE_CONFIG_DIR`. Check with `claude plugin list`, or read the Desk [changelog](../CHANGELOG.md) for that fix. Before that release, [`SETUP.md`](../../../SETUP.md#claude-code) steps 2, 3 and 4 edit your real `~/.claude` even in a throwaway profile, and step 4 can move content out of `~/.claude/agents/`, `skills/`, `hooks/` and `projects/*/memory/`. The setup block above backs up your whole real Claude config directory (`$REAL_CLAUDE_DIR`) to `$EVAL/claude-backup` whatever version you get. Answer step 4's question with "move or remove nothing". Any edit to your real `~/.claude` is a finding.
 
 1. In the terminal where you made the throwaway desk (its variables, including `CLAUDE_CONFIG_DIR`, are set), `cd "$EVAL/scratch"` and start `claude`. Sign in; the sign-in is yours, and `observer` records it as a human step ([evaluate-release](../skills/evaluate-release/SKILL.md#hands-off)).
 2. Give the agent the one link, https://github.com/ourostack/desk/blob/main/SETUP.md, and say "set this up".
@@ -86,7 +86,7 @@ Start every session under test from `$EVAL/scratch`: a host project that is itse
 
 **Good looks like** ([SETUP.md, steps 2, 4 and 6](../../../SETUP.md#2-install-the-plugins)):
 
-- `claude plugin list` shows `desk@ourostack`, `superpowers@ourostack` and `plain-language@ourostack` enabled, with Desk at 3.2.0-alpha.54 or later;
+- `claude plugin list` shows `desk@ourostack`, `superpowers@ourostack` and `plain-language@ourostack` enabled, with a Desk release that contains the `SETUP.md` config-directory fix (check its entry in the Desk [changelog](../CHANGELOG.md));
 - the new session runs as `desk:worker` and the Desk foundation appears at startup;
 - `desk:session-start` runs and offers work to resume or start;
 - `$CLAUDE_CONFIG_DIR/CLAUDE.md` is only the thin pointer to the desk ([SETUP.md, step 4](../../../SETUP.md#4-make-claudeclaudemd-a-thin-pointer)), and your real Claude config directory (`$REAL_CLAUDE_DIR`) matches `$EVAL/claude-backup`.

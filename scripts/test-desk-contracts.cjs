@@ -988,7 +988,9 @@ contract("the evaluation packet isolates the desk under test and proves it befor
   assert.doesNotMatch(setup, /reports the declared plugin chain/u, "desk_status has no chain for an env-bound desk; the launcher listing is the channel check");
   assert.ok(setup.indexOf("### Preflight") < setup.indexOf("### Start `observer`"), "the preflight comes before observer and the scenarios");
   assert.match(setup, /### Start `observer`[\s\S]+own working folder and its own profile, never from `\$EVAL`[\s\S]+evidence folder outside `\$EVAL`/u);
-  assert.match(setup, /requires Desk 3\.2\.0-alpha\.58 or later[\s\S]+backs up your whole real Claude config directory \(`\$REAL_CLAUDE_DIR`\) to `\$EVAL\/claude-backup` whatever version/u);
+  // The packet names channels, never versions: the release floor is described by the fix it carries.
+  assert.doesNotMatch(packet, /\d+\.\d+\.\d+-alpha\.\d+/u, "no hard-coded Desk version");
+  assert.match(setup, /requires the Desk release that contains the `SETUP\.md` config-directory fix[\s\S]+claude plugin list[\s\S]+changelog[\s\S]+backs up your whole real Claude config directory \(`\$REAL_CLAUDE_DIR`\) to `\$EVAL\/claude-backup` whatever version/u);
   assert.match(setup, /REAL_CLAUDE_DIR="\$\{CLAUDE_CONFIG_DIR:-\$HOME\/\.claude\}"[\s\S]+cp -R "\$REAL_CLAUDE_DIR" "\$EVAL\/claude-backup"[\s\S]+printf "export REAL_CLAUDE_DIR='%s'\\n"[\s\S]+printf "export CLAUDE_CONFIG_DIR=/u, "the backup follows the evaluator's real Claude config directory, read before env.sh replaces it");
   assert.match(setup, /If V2 is not installed in your normal profile, give `observer` a throwaway setup of its own[\s\S]+same preflight/u);
   assert.match(setup, /### A managed launcher with a company overlay[\s\S]+COPILOT_HOME[\s\S]+crew install[\s\S]+from its channel branch/u);
