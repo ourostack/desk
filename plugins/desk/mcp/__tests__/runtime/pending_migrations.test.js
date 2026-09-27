@@ -1,0 +1,321 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs"
+import { execFileSync, spawn, spawnSync } from "node:child_process"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
+import { createRequire } from "node:module"
+import { mkTempRoot } from "../_temp_roots.js"
+import {
+  MIGRATION_BUDGET_MS,
+  migrationCommand,
+  migrationLine,
+  parseMigration,
+  pendingMigrations,
+  readMigrations,
+  runBlock,
+  runMigrationCli,
+  shellQuote,
+  startupMigrationLine,
+} from "../../src/runtime/pending-migrations.js"
+
+const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
+const deskPluginRoot = path.resolve(mcpRoot, "..")
+const boot = createRequire(import.meta.url)("../../../hooks/boot-checks.cjs")
+
+function migrationText({ id, safety = "safe", restart = false, agent = null, detect = "exit 0", check = "exit 0", migrate = "exit 0", announce = "Done.", description = "a test migration" }) {
+  return [
+    "---",
+    `id: ${id}`,
+    `description: ${description}`,
+    ...(safety === null ? [] : [`safety: ${safety}`]),
+    `needs_restart: ${restart}`,
+    ...(agent === null ? [] : [`agent_work: ${agent}`]),
+    "---",
+    "",
+    "## Detect",
+    "",
+    "```bash",
+    detect,
+    "```",
+    "",
+    "## Safety check",
+    "",
+    "```bash",
+    check,
+    "```",
+    "",
+    "## Migrate",
+    "",
+    "```bash",
+    migrate,
+    "```",
+    "",
+    "## Announce",
+    "",
+    announce,
+    "",
+  ].join("\n")
+}
+
+async function plugin(migrations) {
+  const root = realpathSync(await mkTempRoot("desk-pending-migrations-"))
+  mkdirSync(path.join(root, "migrations"))
+  for (const options of migrations) writeFileSync(path.join(root, "migrations", `${options.id}.md`), migrationText(options))
+  return root
+}
+
+function io() {
+  const out = { stdout: "", stderr: "" }
+  return { out, io: { stdout: { write: (text) => { out.stdout += text } }, stderr: { write: (text) => { out.stderr += text } } } }
+}
+
+// ── Parsing ──────────────────────────────────────────────────────────────
+
+test("parseMigration reads the frontmatter, the three bash blocks and Announce, and rejects any other shape", () => {
+  const parsed = parseMigration(migrationText({ id: "05-x", agent: true, detect: "exit 3", announce: "Line one." }).replace(/\n/gu, "\r\n"), "05-x")
+  assert.deepEqual(parsed, {
+    id: "05-x",
+    description: "a test migration",
+    safety: "safe",
+    needsRestart: false,
+    agentWork: true,
+    blocks: { Detect: "exit 3", "Safety check": "exit 0", Migrate: "exit 0", Announce: "Line one." },
+  })
+  assert.equal(parseMigration("no frontmatter", "05-x"), null)
+  assert.equal(parseMigration(migrationText({ id: "05-x" }), "06-y"), null, "the id must match the file name")
+  assert.equal(parseMigration(migrationText({ id: "05-x" }).replace("```bash\nexit 0\n```\n\n## Migrate", "exit 0\n\n## Migrate"), "05-x"), null, "a block must be fenced bash")
+  assert.equal(parseMigration(migrationText({ id: "05-x" }).replace("## Announce\n\nDone.\n", "## Notes\n\nDone.\n"), "05-x"), null, "Announce is required")
+  const bare = parseMigration("---\nid: 05-x\nnot a key line\n---\n" + migrationText({ id: "05-x" }).split("---\n")[2], "05-x")
+  assert.equal(bare.description, "")
+  assert.equal(bare.safety, "")
+  assert.equal(bare.needsRestart, false)
+  assert.equal(bare.agentWork, false)
+})
+
+test("readMigrations lists well-formed migrations in id order and leaves out everything else", async () => {
+  const root = await plugin([{ id: "02-second" }, { id: "01-first" }])
+  writeFileSync(path.join(root, "migrations", "README.md"), "not a migration")
+  writeFileSync(path.join(root, "migrations", "03-broken.md"), "---\nid: 03-broken\n---\n")
+  mkdirSync(path.join(root, "migrations", "04-a-folder.md"))
+  assert.deepEqual(readMigrations(root).map((migration) => [migration.id, path.basename(migration.file)]), [["01-first", "01-first.md"], ["02-second", "02-second.md"]])
+  assert.deepEqual(readMigrations(path.join(root, "nowhere")), [])
+})
+
+test("Desk's own migrations all parse", () => {
+  const ids = readMigrations(deskPluginRoot).map((migration) => migration.id)
+  assert.ok(ids.includes("02-tidy-desk"))
+  assert.equal(readMigrations(deskPluginRoot).find((migration) => migration.id === "02-tidy-desk").agentWork, true)
+})
+
+// ── Running blocks ───────────────────────────────────────────────────────
+
+const noBash = (command, args, options) => spawn("/nonexistent/bash", args, options)
+
+test("runBlock reports the exit, the output, a timeout that kills the whole block, and a missing bash", async () => {
+  const ran = await runBlock("echo out; echo err >&2; exit 4", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
+  assert.deepEqual(ran, { status: 4, stdout: "out\n", stderr: "err\n", timedOut: false, unavailable: false })
+  const root = await mkTempRoot("desk-pending-block-")
+  const marker = path.join(root, "grandchild.pid")
+  const slow = await runBlock(`sleep 30 & echo $! > ${shellQuote(marker)}; wait`, { env: process.env, cwd: root, timeoutMs: 300 })
+  assert.equal(slow.timedOut, true)
+  assert.equal(slow.status, null)
+  assert.equal(slow.unavailable, false)
+  const grandchild = Number(execFileSync("cat", [marker], { encoding: "utf8" }).trim())
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.throws(() => process.kill(grandchild, 0), { code: "ESRCH" }, "the block's own children are killed with it")
+  const missing = await runBlock("exit 0", { env: process.env, cwd: process.cwd(), timeoutMs: 0.2, spawn: noBash })
+  assert.deepEqual(missing, { status: null, stdout: "", stderr: "", timedOut: false, unavailable: true })
+  const windows = await runBlock("sleep 5", { env: process.env, cwd: process.cwd(), timeoutMs: 200, platform: "win32" })
+  assert.equal(windows.timedOut, true, "without process groups the block itself is killed")
+  // A block that exits between its timer and its close event is not killed twice.
+  const gone = await runBlock("sleep 1", { env: process.env, cwd: process.cwd(), timeoutMs: 100, spawn: (command, args, options) => Object.defineProperty(spawn(command, args, options), "pid", { value: 2 ** 22 + 12345 }) })
+  assert.equal(gone.timedOut, true)
+  const chatty = await runBlock("yes | head -c 100000", { env: process.env, cwd: process.cwd(), timeoutMs: 10_000 })
+  assert.ok(chatty.stdout.length < 100_000, "output is kept bounded")
+})
+
+test("shellQuote keeps a path with spaces and quotes one word", () => {
+  assert.equal(shellQuote("/a b/it's"), `'/a b/it'\\''s'`)
+  assert.equal(execFileSync("bash", ["-c", `printf %s ${shellQuote("/a b/it's")}`], { encoding: "utf8" }), "/a b/it's")
+  assert.equal(migrationCommand("/p", "02-x"), `node '${path.join("/p", "mcp", "scripts", "migrations.js")}' run 02-x`)
+  assert.match(migrationCommand("/p", "02-x", { tools: true }), / run 02-x --tools-root <desk_status root\.path> --tools-person </u)
+})
+
+// ── What the startup hooks find ──────────────────────────────────────────
+
+test("pendingMigrations sorts every fired Detect into what the startup line asks for", async () => {
+  const root = await plugin([
+    { id: "01-not-needed", detect: "exit 1" },
+    { id: "02-tidy", agent: true, detect: '[ -z "${DESK_TOOLS_ROOT:-}" ] && [ -z "${DESK_TOOLS_PERSON:-}" ] && [ -n "$DESK_PLUGIN_ROOT" ]' },
+    { id: "03-move", restart: true },
+    { id: "04-confirm", safety: "confirm" },
+    { id: "05-unset", safety: null },
+    { id: "06-unsafe-now", check: "echo 'a merge is in progress'; exit 1" },
+    { id: "07-silent-stop", check: "exit 1" },
+    { id: "08-broken", migrate: "exit 2" },
+    { id: "09-quiet", migrate: "true", announce: "I fixed the thing." },
+    { id: "10-reporting", migrate: "echo 'moved 2 files'", announce: "Say if you mind." },
+    { id: "11-writes-file", migrate: 'touch "$DESK_PLUGIN_ROOT/ran"' },
+  ])
+  const pending = await pendingMigrations({ pluginRoot: root, env: { ...process.env, DESK_TOOLS_ROOT: "/stale", DESK_TOOLS_PERSON: "stale" }, cwd: root, budgetMs: 30_000 })
+  assert.deepEqual(pending, [
+    { id: "02-tidy", state: "agent_work", description: "a test migration" },
+    { id: "03-move", state: "restart", description: "a test migration" },
+    { id: "04-confirm", state: "run", reason: "its safety is confirm, so it does not run on its own" },
+    { id: "05-unset", state: "run", reason: "its safety is not set, so it does not run on its own" },
+    { id: "06-unsafe-now", state: "run", reason: "its Safety check stopped it: a merge is in progress" },
+    { id: "07-silent-stop", state: "run", reason: "its Safety check stopped it: no reason given" },
+    { id: "08-broken", state: "run", reason: "its Migrate failed" },
+    { id: "09-quiet", state: "ran", report: "", announce: "I fixed the thing." },
+    { id: "10-reporting", state: "ran", report: "moved 2 files", announce: "Say if you mind." },
+    { id: "11-writes-file", state: "ran", report: "", announce: "Done." },
+  ])
+  assert.ok(realpathSync(path.join(root, "ran")), "a safe, restart-free migration runs in the hook")
+})
+
+test("pendingMigrations keeps to its budget: slow blocks and an exhausted budget are unchecked or left to the agent", async () => {
+  const root = await plugin([
+    { id: "01-slow-detect", detect: "sleep 5" },
+    { id: "02-slow-check", check: "sleep 5" },
+    { id: "03-slow-migrate", migrate: "sleep 5" },
+  ])
+  const slow = await pendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000, blockLimitMs: 1_500 })
+  assert.deepEqual(slow, [
+    { id: "01-slow-detect", state: "unchecked" },
+    { id: "02-slow-check", state: "run", reason: "its Safety check did not finish in time" },
+    { id: "03-slow-migrate", state: "run", reason: "its Migrate did not finish in time" },
+  ])
+  // A clock that moves on at each reading runs the budget out before each later block.
+  for (const [steps, expected] of [
+    [0, [{ id: "01-a", state: "unchecked" }]],
+    [1, [{ id: "01-a", state: "run", reason: "its Safety check did not finish in time" }]],
+    [2, [{ id: "01-a", state: "run", reason: "its Migrate did not finish in time" }]],
+  ]) {
+    const one = await plugin([{ id: "01-a" }])
+    let reading = 0
+    const now = () => (reading++ < 1 + steps * 2 ? 0 : 10_000)
+    assert.deepEqual(await pendingMigrations({ pluginRoot: one, cwd: one, budgetMs: 1_000, now }), expected)
+  }
+  const missingBash = await plugin([{ id: "01-a" }])
+  assert.deepEqual(await pendingMigrations({ pluginRoot: missingBash, cwd: missingBash, spawn: noBash }), [], "a host without bash gets no line")
+  assert.equal(MIGRATION_BUDGET_MS, 2_000)
+})
+
+test("migrationLine says what to do for each state, with the exact command, and nothing when none is pending", () => {
+  assert.equal(migrationLine([], "/p"), "")
+  const command = `node '${path.join("/p", "mcp", "scripts", "migrations.js")}' run`
+  const line = migrationLine([
+    { id: "02-tidy", state: "agent_work", description: "Tidy\nthe desk" },
+    { id: "03-move", state: "restart", description: "Move it" },
+    { id: "04-quiet", state: "ran", report: "", announce: "Fixed." },
+    { id: "05-loud", state: "ran", report: "moved 2", announce: "Fixed." },
+    { id: "06-wait", state: "run", reason: "its Migrate failed" },
+    { id: "07-slow", state: "unchecked" },
+  ], "/p")
+  assert.equal(line, [
+    `Desk migrations: 02-tidy is pending (Tidy the desk). Do it at the start of this session, before other work and without asking: call desk_status (after desk:session-start's workspace sync, when you run that skill), then run \`${command} 02-tidy --tools-root <desk_status root.path> --tools-person <desk_status write_scope.person, or leave the flag out when it reports none>\` and do exactly what it prints, including its one-line announcement. It needs no go-ahead from the human, and this line returns at every session start until it is done.`,
+    `03-move is pending (Move it). Before other work, run \`${command} 03-move\`, show the human what it prints, and ask them to start a new session.`,
+    "04-quiet ran at startup. Tell the human in one line: Fixed.",
+    "05-loud ran at startup. Tell the human in one line: moved 2 Fixed.",
+    `06-wait is pending but did not run at startup because its Migrate failed. Before other work, run \`${command} 06-wait\` and follow what it prints.`,
+    `07-slow could not be checked in time at startup. Before other work, run \`${command} 07-slow --tools-root <desk_status root.path> --tools-person <desk_status write_scope.person, or leave the flag out when it reports none>\`; it prints that nothing is needed when that is so, and otherwise what to do.`,
+  ].join(" "))
+})
+
+test("startupMigrationLine never throws, and the boot-check hook helper passes the session's folder", async () => {
+  assert.equal(await startupMigrationLine({ pluginRoot: undefined }), "")
+  const root = await plugin([{ id: "01-where", agent: true, detect: '[ "$PWD" = "$EXPECTED" ]' }])
+  assert.match(await startupMigrationLine({ pluginRoot: root, env: { ...process.env, EXPECTED: root }, cwd: root }), /^Desk migrations: 01-where is pending/u)
+  assert.equal(await startupMigrationLine({ pluginRoot: root, env: { ...process.env, EXPECTED: root }, cwd: path.dirname(root) }), "")
+})
+
+// ── The real tidy migration, found by the startup hook helper ─────────────
+
+async function tidyDesk({ messy }) {
+  const root = realpathSync(await mkTempRoot("desk-pending-tidy-"))
+  const desk = path.join(root, "desk")
+  const home = path.join(root, "home")
+  mkdirSync(home)
+  mkdirSync(path.join(desk, "_meta"), { recursive: true })
+  mkdirSync(path.join(desk, "billing-disputes", "refund-flow-cleanup"), { recursive: true })
+  writeFileSync(path.join(desk, "billing-disputes", "track.md"), `---\ntitle: billing-disputes\nstatus: active\n${messy ? "" : "scope: billing disputes; not payroll\n"}---\n`)
+  writeFileSync(path.join(desk, "billing-disputes", "refund-flow-cleanup", "task.md"), `---\ntitle: refund-flow-cleanup\nstatus: processing\nupdated: '${new Date().toISOString()}'\n---\n`)
+  for (const args of [["init", "-q"], ["config", "user.name", "Fixture Owner"], ["config", "user.email", "fixture@example.invalid"], ["add", "-A"], ["commit", "-q", "-m", "fixture"]]) {
+    execFileSync("git", ["-C", desk, ...args])
+  }
+  const env = { ...process.env, HOME: home, DESK: desk, DESK_IDENTITY: "nobody", DESK_ACTIVATION_CONFIG: "" }
+  for (const key of ["CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_CONFIG_DIR", "AGENCY_TOML", "CODEX_HOME", "DESK_PERSON"]) delete env[key]
+  return { desk, home, env }
+}
+
+test("a pending tidy puts the tidy instruction in the startup context; a tidy desk gets no line", async () => {
+  const pending = await tidyDesk({ messy: true })
+  for (const host of ["claude", "copilot"]) {
+    const env = host === "claude" ? { ...pending.env, CLAUDE_PROJECT_DIR: pending.home } : pending.env
+    const line = await boot.migrationLine({ host, env, sessionFolder: pending.home, budgetMs: 60_000 })
+    assert.match(line, /^Desk migrations: 02-tidy-desk is pending \(Tidy this session's own desk once/u, host)
+    assert.ok(line.includes(`node '${path.join(deskPluginRoot, "mcp", "scripts", "migrations.js")}' run 02-tidy-desk --tools-root <desk_status root.path>`), host)
+    assert.doesNotMatch(line, /01-move-to-ourostack-desk/u)
+  }
+  const tidy = await tidyDesk({ messy: false })
+  assert.equal(await boot.migrationLine({ host: "claude", env: tidy.env, budgetMs: 60_000 }), "")
+  assert.equal(await boot.migrationLine({ host: "copilot", env: tidy.env, sessionFolder: tidy.home, budgetMs: 60_000 }), "")
+  assert.equal(await boot.migrationLine({ host: "copilot", env: tidy.env, budgetMs: 60_000 }), "", "no session folder: the process folder stands in")
+})
+
+// ── `scripts/migrations.js run <id>` ─────────────────────────────────────
+
+test("the run command walks one migration the way the migrations skill describes", async () => {
+  const root = await plugin([
+    { id: "01-not-needed", detect: "exit 1" },
+    { id: "02-confirm", safety: "confirm" },
+    { id: "03-unset", safety: null },
+    { id: "04-blocked", check: "echo 'git is required'; echo 'and more' >&2; exit 1" },
+    { id: "05-broken", migrate: "echo halfway; echo boom >&2; exit 3" },
+    { id: "06-steps", agent: true, migrate: 'printf "root=%s person=%s\\nstep 1\\n" "${DESK_TOOLS_ROOT:-none}" "${DESK_TOOLS_PERSON:-none}"', announce: "I tidied <counts>." },
+    { id: "07-wait", agent: true, migrate: "echo 'I left my desk untidied for now.'", announce: "I tidied <counts>." },
+    { id: "08-fixed", migrate: "echo 'changed one file'", announce: "All set." },
+    { id: "09-restart", restart: true, announce: "Moved." },
+  ])
+  const run = async (argv, env = process.env) => {
+    const captured = io()
+    const code = await runMigrationCli({ argv, env: { ...env, DESK_TOOLS_ROOT: "/stale", DESK_TOOLS_PERSON: "stale" }, io: captured.io, pluginRoot: root, cwd: root })
+    return { code, ...captured.out }
+  }
+  assert.deepEqual(await run(["run", "01-not-needed"]), { code: 0, stdout: "Migration 01-not-needed is not needed; nothing to do.\n", stderr: "" })
+  assert.deepEqual(await run(["run", "02-confirm"]), { code: 0, stdout: "Migration 02-confirm has safety: confirm, which is not implemented; skipping it.\n", stderr: "" })
+  assert.deepEqual(await run(["run", "03-unset"]), { code: 0, stdout: "Migration 03-unset has safety: (none), which is not implemented; skipping it.\n", stderr: "" })
+  assert.deepEqual(await run(["run", "04-blocked"]), { code: 1, stdout: "git is required\nand more\nMigration 04-blocked cannot run yet; resolve the reason above first.\n", stderr: "" })
+  assert.deepEqual(await run(["run", "05-broken"]), { code: 1, stdout: "halfway\nboom\nMigration 05-broken failed mid-run; manual intervention needed.\n", stderr: "" })
+  assert.deepEqual(await run(["run", "06-steps"]), { code: 0, stdout: "root=none person=none\nstep 1\n\nAnnounce line, filled in with this run's own counts and commit link:\nI tidied <counts>.\n", stderr: "" })
+  assert.equal((await run(["run", "06-steps", "--tools-root", "/desk", "--tools-person", "bob"])).stdout.split("\n")[0], "root=/desk person=bob")
+  assert.deepEqual(await run(["run", "07-wait"]), { code: 0, stdout: "I left my desk untidied for now.\n", stderr: "" })
+  assert.deepEqual(await run(["run", "08-fixed"]), { code: 0, stdout: "changed one file\nAll set.\n", stderr: "" })
+  assert.deepEqual(await run(["run", "09-restart"]), { code: 0, stdout: "Moved.\nPlease start a new session so my preamble loads against the migrated paths.\n", stderr: "" })
+
+  const usage = "usage: migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]\n"
+  assert.deepEqual(await run([]), { code: 2, stdout: "", stderr: usage })
+  assert.deepEqual(await run(["list"]), { code: 2, stdout: "", stderr: usage })
+  assert.deepEqual(await run(["run", "08-fixed", "--force"]), { code: 2, stdout: "", stderr: 'migrations.js: unknown or incomplete argument "--force"\n' })
+  assert.deepEqual(await run(["run", "08-fixed", "--tools-root"]), { code: 2, stdout: "", stderr: 'migrations.js: unknown or incomplete argument "--tools-root"\n' })
+  assert.deepEqual(await run(["run", "99-none"]), { code: 2, stdout: "", stderr: "migrations.js: Desk has no migration 99-none\n" })
+
+  const captured = io()
+  const code = await runMigrationCli({ argv: ["run", "08-fixed"], io: captured.io, pluginRoot: root, cwd: root, spawn: noBash })
+  assert.deepEqual({ code, ...captured.out }, { code: 1, stdout: "", stderr: "migrations.js: bash is required to run Desk's migrations\n" })
+})
+
+test("scripts/migrations.js runs Desk's own tidy migration and prints its steps and announcement", async () => {
+  const pending = await tidyDesk({ messy: true })
+  const script = path.join(mcpRoot, "scripts", "migrations.js")
+  const result = spawnSync(process.execPath, [script, "run", "02-tidy-desk", "--tools-root", pending.desk], { env: pending.env, cwd: pending.home, encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, new RegExp(`^Desk tools: ${pending.desk.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\n`, "u"))
+  assert.match(result.stdout, /track_missing_scope: billing-disputes/u)
+  assert.match(result.stdout, /Tidy this desk now, as ordinary work in this session\./u)
+  assert.match(result.stdout, /\nAnnounce line, filled in with this run's own counts and commit link:\nI tidied up my desk a bit: /u)
+  const tidy = await tidyDesk({ messy: false })
+  const nothing = spawnSync(process.execPath, [script, "run", "02-tidy-desk", "--tools-root", tidy.desk], { env: tidy.env, cwd: tidy.home, encoding: "utf8" })
+  assert.deepEqual([nothing.status, nothing.stdout], [0, "Migration 02-tidy-desk is not needed; nothing to do.\n"])
+})

@@ -379,6 +379,41 @@ test("a single-owner hub whose desks.md is a routing registry is tidied at its r
   }
 })
 
+// A live spoke desk's `_meta/desks.md`, verbatim (M4-7): a prose pointer to its hub with a quoted path and no table.
+// On alpha.86 the tidy treated any desks.md as a crew roster, stopped with "I couldn't tell which desk in this crew
+// workspace is mine" and fired again at every session start.
+const LIVE_SPOKE_POINTER = [
+  "# Desks — registry pointer (spoke desk)",
+  "",
+  "The canonical multi-desk registry — the operator's full desk list, paths/repos, and",
+  "which `worker` launches each — lives once in the **hub** (`work-default`) desk:",
+  "",
+  "> **Canonical registry → `~/ms-desk/_meta/desks.md`**",
+  "",
+  "This is a *spoke* desk. If `~/ms-desk` is cloned on this machine and a question belongs",
+  "to the work desk (e.g. \"what's my work status?\"), read the canonical file there. If the",
+  "hub isn't present, this desk runs single-desk — correct, since there's no sibling here",
+  "to route to.",
+  "",
+  "No table is mirrored here on purpose: one source of truth can't drift, and it keeps",
+  "work/crew repo identifiers off the personal account. Add or relabel desks from the hub",
+  "(the `register-desk` flow) — never hand-edit a second copy.",
+  "",
+].join("\n")
+
+test("a live spoke's prose pointer in desks.md is a single desk: the tidy runs at its root and stops re-firing once recorded", () => {
+  const root = registryDesk(LIVE_SPOKE_POINTER)
+  const result = status(root, { spawnGh: noGh })
+  assert.equal(result.unresolved_person, false)
+  assert.equal(result.subtree, root)
+  assert.equal(result.needed, true)
+  const report = cli(["--report", "--root", root], { env: { DESK: root }, spawnGh: noGh })
+  assert.equal(report.code, 0)
+  assert.doesNotMatch(report.stdout, /crew workspace/)
+  assert.equal(cli(["--write-record", "--root", root], { env: { DESK: root }, spawnGh: noGh }).code, 0)
+  assert.equal(cli(["--detect", "--root", root], { env: { DESK: root }, spawnGh: noGh }).code, 1, "once tidied, Detect stops firing")
+})
+
 test("a desks.md the tidy cannot read, or an alias-only roster beside desks/, stops the tidy instead of tidying the crew root", () => {
   const unreadable = registryDesk(HUB_REGISTRY)
   rmSync(path.join(unreadable, "_meta", "desks.md"))

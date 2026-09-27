@@ -7,7 +7,7 @@ description: Session-start checklist. Invoke as the FIRST thing in every agent s
 
 sitting down at the desk. the first thing every session — turn on the lamp, check the tools are where they were left, see what's still open across the drawers, surface it for the operator. the prereq probe has teeth: a real miss is a hard stop, not a hint to route around.
 
-This skill is the authoritative owner of migration ordering, workspace sync, task discovery, and resumption routing. The startup hook never performs a partial duplicate scan; it only injects the Desk foundation and points here.
+This skill is the authoritative owner of migration ordering, workspace sync, task discovery, and resumption routing. The startup hook never performs a partial duplicate scan; it injects the Desk foundation, points here, and checks Desk's own migrations (see Step 0.5).
 
 > **overlay users**: consumer overlays may extend session-start with their own identity-resolve, work-item-tracker staleness probes, and additional PR fan-out steps. this skill stays generic.
 
@@ -48,6 +48,8 @@ why here, not later: most later steps assume `$DESK/` already points at the righ
 on a machine with no pending migrations (the common case) this step is a few cheap Detect bash exits and returns immediately.
 
 a migration marked `agent_work: true` (such as `02-tidy-desk`, the one-time desk tidy) is the exception: it writes to the desk, so it runs after Step 2.6 instead, once the workspace is synced and this session's own desk is known.
+
+Desk's own migrations do not wait on this step: the startup hook runs their Detect blocks itself and adds one `Desk migrations:` line to the startup context when one is pending (`session-start-migrations` owns what that line says). When the startup context has that line, do what it says in this session; it is part of starting the session, not a suggestion.
 
 ## Step 0.75 — Desk MCP availability checkpoint
 
@@ -194,7 +196,7 @@ a single-owner OFF-mode desk has **no crew roster**: either no `_meta/desks.md` 
 
 ### agent-work migrations
 
-now that the workspace is synced and this session's own desk is known, run the `agent_work: true` migrations that Step 0.5 deferred, through `session-start-migrations`, with `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to the `root.path` and `write_scope.person` that `desk_status` reports. `02-tidy-desk` is the one today: when its Detect fires, tidy your own desk as its steps say, announce it in one line and carry on without waiting.
+now that the workspace is synced and this session's own desk is known, run the `agent_work: true` migrations that Step 0.5 deferred. for each one the startup context's `Desk migrations:` line names, run the command it gives with the `root.path` and `write_scope.person` that `desk_status` reports; for another plugin's, go through `session-start-migrations` with `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to the same values. `02-tidy-desk` is the one today: when it is pending, tidy your own desk as its steps say, announce it in one line and carry on without waiting.
 
 ## Step 3 — Scan for active tasks
 

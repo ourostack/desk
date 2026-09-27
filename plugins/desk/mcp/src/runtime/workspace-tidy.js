@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { parseFrontmatterLite } from "../desk/frontmatter-lite.js"
+import { isCredentialLike } from "../desk/naming.js"
 import { readInspectionGit } from "./git-inspection.js"
 import { readProcessStart } from "../readiness/process-start.js"
 import { withWorkspaceClaim } from "./workspace-claim.js"
@@ -19,6 +20,56 @@ const cleanLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ")
 export const TIDY_GIT_TIMEOUT_MS = 20_000
 export const tidyGit = (cwd, args, options) => readInspectionGit(cwd, ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS, ...options })
 const gitDefault = tidyGit
+
+// A task card's leading front matter block, read with one bounded read of at
+// most MAX_BYTES from the start of the file, however large the card is. A
+// card's body (a pasted log, a long transcript) never matters here: only the
+// front matter says which task owns which repositories. The block is returned
+// with its opening and closing `---` lines, split the way frontmatter-lite
+// splits it; a small card with no closing line runs to its end, as there. The
+// same text is compared again before a removal, so any change to the front
+// matter still stops that removal.
+//
+// Throws a `CardSkip` for a problem with this one card: it is not a regular
+// file with one link, it changed identity while being read, or its front
+// matter does not close within MAX_BYTES. The inventory then skips that card
+// by name instead of abandoning the whole desk.
+class CardSkip extends Error {}
+
+async function cardFrontmatter(file) {
+  const info = await fs.lstat(file)
+  if (!info.isFile() || info.nlink !== 1) throw new CardSkip("not a regular file")
+  const handle = await fs.open(file, "r")
+  let raw, truncated
+  try {
+    const current = await handle.stat()
+    if (current.ino !== info.ino || current.dev !== info.dev) throw new CardSkip("file identity changed")
+    const buffer = Buffer.alloc(MAX_BYTES + 1)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    truncated = bytesRead > MAX_BYTES
+    raw = buffer.toString("utf8", 0, Math.min(bytesRead, MAX_BYTES))
+  } finally {
+    await handle.close()
+  }
+  const lines = raw.replace(/\r\n/gu, "\n").split("\n")
+  const close = lines[0].trim() === "---" ? lines.findIndex((line, index) => index > 0 && line.trim() === "---") : -1
+  if (close > 0) return lines.slice(0, close + 1).join("\n")
+  if (truncated) throw new CardSkip("front matter not closed within 64 KiB")
+  return raw
+}
+
+// A skipped card's path for the boot line and report: relative to the desk,
+// with any segment that looks like it holds a secret's value redacted.
+function cardLabel(root, file) {
+  return path.relative(root, file).split(path.sep).map((segment) => (isCredentialLike(segment) ? "<redacted segment>" : segment)).join("/")
+}
+
+function skippedIssue(root, skipped) {
+  const sorted = [...skipped].sort((a, b) => (a.file < b.file ? -1 : 1))
+  const shown = sorted.slice(0, 3).map(({ file, reason }) => `${cardLabel(root, file)} (${reason})`).join(", ")
+  const more = skipped.length > 3 ? `, and ${skipped.length - 3} more` : ""
+  return `${skipped.length} task card${skipped.length === 1 ? "" : "s"} skipped: ${shown}${more}`
+}
 
 async function smallFile(file) {
   const info = await fs.lstat(file)
@@ -153,6 +204,7 @@ export async function inspectWorkspace({
     let directories = 0
     let entryCount = 0
     let unreadableRepos = 0
+    const skipped = []
     while (queue.length) {
       stop()
       if (++directories > maxDirectories) throw new Error("workspace-tidy directory budget exceeded")
@@ -168,9 +220,17 @@ export async function inspectWorkspace({
       if (entries.some((entry) => entry.name === "task.md")) {
         if (result.cards.length >= maxCards) throw new Error("workspace-tidy card budget exceeded")
         const file = path.join(dir, "task.md")
-        const body = await smallFile(file)
-        const { data, matter } = parseFrontmatterLite(body)
-        if (!text(data.status)) throw new Error(`unreadable task status: ${file}`)
+        // One card that cannot be read is skipped by name; it authorizes no
+        // removal, and every other card still counts.
+        let body, data, matter
+        try {
+          body = await cardFrontmatter(file)
+          ;({ data, matter } = parseFrontmatterLite(body))
+          if (!text(data.status)) throw new CardSkip("no readable status")
+        } catch (error) {
+          skipped.push({ file, reason: error instanceof CardSkip ? error.message : "unreadable card" })
+          continue
+        }
         const terminal = ["done", "cancelled"].includes(data.status)
         const updated = Date.parse(data.updated)
         if (!terminal || !Number.isFinite(updated) || now - updated <= RECENT_MS) {
@@ -200,6 +260,7 @@ export async function inspectWorkspace({
         queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 })
       }
     }
+    if (skipped.length) result.issues.push(skippedIssue(root, skipped))
     if (unreadableRepos) result.issues.push(`${unreadableRepos} task card${unreadableRepos === 1 ? "" : "s"} with unreadable repos; their repositories were not inspected`)
     result.repositories = [...repositories]
     const commonDirs = new Set()
@@ -303,7 +364,7 @@ async function candidate(item, inventory, options) {
   const card = path.resolve(options.deskRoot, record.task ?? "")
   if (record.version !== 2 || !text(record.owner) || record.worktree !== cwd || record.repository !== common || record.branch !== item.branch ||
       !inventory.cardRecords[card]?.repositories.includes(item.repository)) throw new Error("exact ownership mismatch")
-  if (await smallFile(card) !== inventory.cardRecords[card].body) throw new Error("task ownership changed")
+  if (await cardFrontmatter(card) !== inventory.cardRecords[card].body) throw new Error("task ownership changed")
   if (record.disposition !== "remove") throw new Error("intentionally retained worktree")
   if (record.identity?.dev !== info.dev || record.identity?.ino !== info.ino) throw new Error("worktree identity changed")
   if (!SHA.test(record.head) || item.head !== record.head) throw new Error("local commits or HEAD changed since release")

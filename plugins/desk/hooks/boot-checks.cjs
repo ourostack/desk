@@ -414,6 +414,24 @@ async function runBootChecks(options = {}) {
   return lines.length > 0 ? `Desk boot: ${lines.join("; ")}` : "";
 }
 
+/**
+ * The `Desk migrations:` line for this session, or "" when none of Desk's own
+ * migrations is pending (mcp/src/runtime/pending-migrations.js). It runs every
+ * Detect block itself, alongside the registry and outside its budget, with its
+ * own limit, so a pending migration never depends on the agent choosing to run
+ * the session-start skill's migration step. `budgetMs` is a test seam. Never
+ * rejects.
+ */
+async function migrationLine({ host, env = process.env, sessionFolder, budgetMs } = {}) {
+  try {
+    const { startupMigrationLine } = await runtime("runtime/pending-migrations.js");
+    const cwd = host === "copilot" ? sessionFolder || process.cwd() : env.CLAUDE_PROJECT_DIR || process.cwd();
+    return await startupMigrationLine({ pluginRoot: path.resolve(__dirname, ".."), env, cwd, budgetMs });
+  } catch {
+    return "";
+  }
+}
+
 /** Starts factory-start.cjs detached when a store has `contribute: true`; resolves whether it started. Never rejects. */
 async function startFactory({ env = process.env, launch = launchCommand } = {}) {
   try {
@@ -540,7 +558,7 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
 module.exports = {
   checks: [factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck],
   factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck,
-  runBootChecks, startFactory, launchCommand, recordSkipped,
+  runBootChecks, startFactory, migrationLine, launchCommand, recordSkipped,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
 };
 

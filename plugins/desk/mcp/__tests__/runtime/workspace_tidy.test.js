@@ -282,19 +282,27 @@ test("an fsmonitor configured by a repository is not executed during cleanup ins
   assert.ok(w)
 })
 
-test("malformed, inaccessible and oversized cards fail closed without broadening scope", async (t) => {
+test("one malformed, inaccessible or oversized card is skipped by name; every other card still counts", async (t) => {
   const f = await fixture()
   const original = await fs.readFile(f.card, "utf8")
+  const sibling = path.join(f.desk, "track", "sibling", "task.md")
+  await fs.mkdir(path.dirname(sibling), { recursive: true })
+  await fs.writeFile(sibling, original)
   for (const [body, reason] of [
-    ["---\nrepos: []\n---", /status/],
-    ["x".repeat(65537), /oversized/],
+    ["---\nrepos: []\n---", "no readable status"],
+    ["no front matter at all\n", "no readable status"],
+    ["---\nstatus: done\nstatus: done\n---\n", "unreadable card"],
+    [`---\nstatus: processing\nnotes: ${"x".repeat(65537)}\n---\n`, "front matter not closed within 64 KiB"],
   ]) {
     await fs.writeFile(f.card, body)
     const result = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
-    assert.equal(result.complete, false)
-    assert.match(result.issues.join(" "), reason)
+    assert.equal(result.complete, true, reason)
+    assert.deepEqual(result.issues, [`1 task card skipped: track/task/task.md (${reason})`])
+    assert.deepEqual(result.cards, [sibling], "the skipped card authorizes nothing; its sibling still counts")
+    assert.deepEqual(result.cardRecords[sibling].repositories, [await fs.realpath(f.desk), await fs.realpath(f.repo)])
   }
   // A card whose repos Desk cannot read is one card's issue, never the whole desk's, and it authorizes nothing.
+  await fs.rm(path.dirname(sibling), { recursive: true })
   for (const body of [
     '---\nstatus: processing\nrepos: [{mode: local}]\n---',
     '---\nstatus: processing\nrepos:\n  - local_path: "/x"\n---',
@@ -318,14 +326,67 @@ test("malformed, inaccessible and oversized cards fail closed without broadening
     }
     return handle
   })
-  assert.match((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).issues[0], /identity changed/)
+  assert.match((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).issues[0], /skipped: .*identity changed/)
   mock.mock.restore()
-  const growing = t.mock.method(fs, "open", async (file, ...args) => {
-    if (file === f.card) await fs.appendFile(file, "x".repeat(65537))
+  const unreadable = t.mock.method(fs, "open", async (file, ...args) => {
+    if (file === f.card) throw Object.assign(new Error("denied"), { code: "EACCES" })
     return open(file, ...args)
   })
-  assert.match((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).issues[0], /oversized/)
-  growing.mock.restore()
+  assert.deepEqual((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).issues, ["1 task card skipped: track/task/task.md (unreadable card)"])
+  unreadable.mock.restore()
+})
+
+test("a task card over 64 KiB is read by its front matter alone, so a large body never stops the tidy", async () => {
+  const f = await fixture()
+  const w = await worktree(f)
+  const frontMatter = await fs.readFile(f.card, "utf8")
+  // A real card on a live desk carried a 256 KB body of notes and transcripts.
+  await fs.writeFile(f.card, `${frontMatter}\n# Notes\n\n${"a long pasted log line\n".repeat(12_000)}`)
+  assert.ok((await fs.stat(f.card)).size > 256 * 1024)
+  const inventory = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
+  assert.equal(inventory.complete, true)
+  assert.deepEqual(inventory.issues, [])
+  assert.deepEqual(inventory.cards, [f.card])
+  assert.equal(inventory.cardRecords[f.card].body, frontMatter.replace(/\n$/u, ""))
+  // The card still authorizes the exactly released worktree, and a change to its body alone never counts as an ownership change.
+  const result = await tidy.repairWorkspace({ deskRoot: f.desk })
+  assert.deepEqual(result.left, [])
+  assert.equal(result.removed.length, 1)
+  await assert.rejects(fs.stat(w.directory), { code: "ENOENT" })
+})
+
+test("a large card whose front matter changes before removal stops that removal", async (t) => {
+  const f = await fixture()
+  const w = await worktree(f)
+  const frontMatter = await fs.readFile(f.card, "utf8")
+  await fs.writeFile(f.card, `${frontMatter}${"x".repeat(70_000)}\n`)
+  const lstat = fs.lstat.bind(fs)
+  let seen = 0
+  const mock = t.mock.method(fs, "lstat", async (file, ...args) => {
+    if (file === f.card && ++seen === 3) await fs.writeFile(f.card, `${frontMatter.replace("status: done", "status: processing")}${"x".repeat(70_000)}\n`)
+    return lstat(file, ...args)
+  })
+  const result = await tidy.repairWorkspace({ deskRoot: f.desk })
+  mock.mock.restore()
+  assert.equal(result.removed.length, 0)
+  assert.match(result.left.find((entry) => entry.path === w.directory)?.reason ?? "", /task ownership changed/)
+  assert.ok((await fs.stat(w.directory)).isDirectory())
+})
+
+test("skipped cards are listed three at a time, with credential-like segments redacted", async () => {
+  const f = await fixture()
+  const names = ["alpha", "bravo", "charlie", "delta", "echo"]
+  for (const name of names) {
+    const card = path.join(f.desk, "track", name, "task.md")
+    await fs.mkdir(path.dirname(card), { recursive: true })
+    await fs.writeFile(card, "---\nrepos: []\n---\n")
+  }
+  const { issues } = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
+  assert.equal(issues.length, 1)
+  assert.match(issues[0], /^5 task cards skipped: track\/alpha\/task\.md \(no readable status\), track\/bravo\/task\.md \(no readable status\), track\/charlie\/task\.md \(no readable status\), and 2 more$/)
+  for (const name of names.slice(1)) await fs.rm(path.join(f.desk, "track", name), { recursive: true })
+  await fs.rename(path.join(f.desk, "track", "alpha"), path.join(f.desk, "track", "hi-set-pw-hunter2"))
+  assert.deepEqual((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).issues, ["1 task card skipped: track/<redacted segment>/task.md (no readable status)"])
 })
 
 test("all inventory budgets and missing Git answers are explicit, including incomplete repair", async () => {
@@ -540,8 +601,8 @@ test("R4 symlinked task card stops traversal into code and evidence", async () =
   await fs.mkdir(path.dirname(nested), { recursive: true })
   await fs.writeFile(nested, await fs.readFile(other.card, "utf8"))
   const result = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
-  assert.equal(result.complete, false)
-  assert.match(result.issues[0], /unsafe/)
+  assert.equal(result.complete, true)
+  assert.deepEqual(result.issues, ["1 task card skipped: track/task/task.md (not a regular file)"])
   assert.ok(!result.cards.includes(nested))
   assert.ok(!result.repositories.includes(other.repo))
 })

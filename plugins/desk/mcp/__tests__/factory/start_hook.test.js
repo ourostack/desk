@@ -411,15 +411,19 @@ test("the real hooks with a bound desk and no decision say exactly the no-consen
 test("the Claude resolver appends the boot line only when there is one and starts delivery afterwards", async () => {
   const { main } = await import(pathToFileURL(path.join(PLUGIN, "mcp", "scripts", "resolve-desk-root.js")).href)
   const events = []
-  const loadBoot = async () => ({ default: { runBootChecks: async () => { events.push("checks"); return "" }, startFactory: async () => { events.push("factory") } } })
+  const loadBoot = async () => ({ default: { migrationLine: async () => { events.push("migrations"); return "" }, runBootChecks: async () => { events.push("checks"); return "" }, startFactory: async () => { events.push("factory") } } })
   let output = ""
   await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text; events.push("write") }, loadBoot })
-  assert.deepEqual(events, ["checks", "factory", "write"])
+  assert.deepEqual(events, ["migrations", "checks", "factory", "write"], "the migration check starts before the boot checks and runs alongside them")
   assert.doesNotMatch(output, /\n\n$/u)
-  assert.doesNotMatch(output, /Desk boot/u)
-  const speaking = async () => ({ default: { runBootChecks: async () => "Desk boot: x", startFactory: async () => {} } })
+  assert.doesNotMatch(output, /Desk boot|Desk migrations/u)
+  const speaking = async () => ({ default: { migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "Desk boot: x", startFactory: async () => {} } })
   await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text }, loadBoot: speaking })
-  assert.match(output, /\n\nDesk boot: x$/u)
+  assert.match(output, /\n\nDesk boot: x\n\nDesk migrations: y$/u)
+  const migrationsOnly = async () => ({ default: { migrationLine: async () => "Desk migrations: y", runBootChecks: async () => "", startFactory: async () => {} } })
+  await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text }, loadBoot: migrationsOnly })
+  assert.match(output, /[^\n]\n\nDesk migrations: y$/u)
+  assert.doesNotMatch(output, /Desk boot/u)
 })
 
 test("the plugin scan stops at the check's deadline and the factory check is then skipped, never guessed", () => scratch(async ({ env, desk }) => {

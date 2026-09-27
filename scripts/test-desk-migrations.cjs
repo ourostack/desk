@@ -1059,6 +1059,9 @@ function hookContexts() {
       CLAUDE_PLUGIN_ROOT: deskRoot,
       PLUGIN_ROOT: deskRoot,
     };
+    // The move migration's Detect reads these; the real machine's must not decide what this test sees.
+    delete env.CLAUDE_CONFIG_DIR;
+    delete env.AGENCY_TOML;
     fs.mkdirSync(env.HOME);
     const claude = spawnSync(BASH, [path.join(deskRoot, "hooks", "session-start.sh")], { cwd: scratch, env, encoding: "utf8" });
     assert.equal(claude.status, 0, claude.stderr);
@@ -1082,6 +1085,51 @@ test(`startup hooks ${marketplace.name === "ouroboros-skills" ? "open with the m
     } else {
       assert.doesNotMatch(context, /Desk has moved/u, `${host} startup must not tell users on the new home to move`);
     }
+  }
+});
+
+// M4-7-F2: the startup hooks run the Detect blocks themselves, so a pending tidy never depends on the agent choosing to
+// run the session-start migration step.
+function startupContexts(desk, home, extraEnv = {}) {
+  const env = { ...process.env, HOME: home, DESK: desk, DESK_IDENTITY: "nobody-in-the-registry", CLAUDE_PLUGIN_ROOT: deskRoot, PLUGIN_ROOT: deskRoot, ...extraEnv };
+  for (const key of [...HOST_BINDING_VARS, "CLAUDE_CONFIG_DIR", "AGENCY_TOML"]) if (!["DESK", "DESK_IDENTITY", "CLAUDE_PLUGIN_ROOT"].includes(key) && !(key in extraEnv)) delete env[key];
+  const claude = spawnSync(BASH, [path.join(deskRoot, "hooks", "session-start.sh")], { cwd: home, env, encoding: "utf8" });
+  assert.equal(claude.status, 0, claude.stderr);
+  const copilot = spawnSync(process.execPath, [path.join(deskRoot, "hooks", "copilot-session-start.cjs")], { cwd: home, env, input: JSON.stringify({ cwd: home }), encoding: "utf8" });
+  assert.equal(copilot.status, 0, copilot.stderr);
+  return { claude: JSON.parse(claude.stdout).hookSpecificOutput.additionalContext, copilot: JSON.parse(copilot.stdout).additionalContext };
+}
+
+const PENDING_TIDY_LINE = `Desk migrations: 02-tidy-desk is pending (`;
+const TIDY_COMMAND = `node '${path.join(deskRoot, "mcp", "scripts", "migrations.js")}' run 02-tidy-desk --tools-root <desk_status root.path>`;
+
+test("startup hooks tell the agent to tidy now, with the exact command, when the tidy is pending", () => {
+  withTidyDesk({}, (tidy) => {
+    for (const [host, context] of Object.entries(startupContexts(tidy.desk, path.join(tidy.root, "home")))) {
+      const line = context.split("\n").find((candidate) => candidate.startsWith(PENDING_TIDY_LINE));
+      assert.ok(line, `${host} startup must carry the pending-tidy line`);
+      assert.ok(line.includes(TIDY_COMMAND), `${host} startup must name the command that prints the tidy's work`);
+      assert.match(line, /Do it at the start of this session, before other work and without asking/u);
+      assert.equal(context.split(PENDING_TIDY_LINE).length - 1, 1, `${host} startup carries the line once`);
+    }
+    // The command the line names prints the tidy's findings, its steps and the Announce template.
+    const run = spawnSync(process.execPath, [path.join(deskRoot, "mcp", "scripts", "migrations.js"), "run", TIDY_ID, "--tools-root", tidy.desk], { cwd: path.join(tidy.root, "home"), env: tidy.env, encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stdout, /^Organization findings in it: \d+$/mu);
+    assert.match(run.stdout, /^Steps, in order:$/mu);
+    assert.match(run.stdout, /\nAnnounce line, filled in with this run's own counts and commit link:\nI tidied up my desk a bit: /u);
+  });
+});
+
+test("startup hooks stay silent about migrations when none is pending", () => {
+  const record = { schema_version: 1, tidy_version: 1, tidied_at: "2026-09-27T00:00:00.000Z" };
+  withTidyDesk({ record }, (tidy) => {
+    for (const [host, context] of Object.entries(startupContexts(tidy.desk, path.join(tidy.root, "home")))) {
+      assert.doesNotMatch(context, /Desk migrations:/u, `${host}: a tidied desk gets no migration line; got: ${context.slice(context.indexOf("Desk migrations:"), context.indexOf("Desk migrations:") + 400)}`);
+    }
+  });
+  for (const [host, context] of Object.entries(hookContexts())) {
+    assert.doesNotMatch(context, /Desk migrations:/u, `${host}: a folder that is not a Git desk gets no migration line`);
   }
 });
 
