@@ -25,7 +25,7 @@ Agency and other hosts that resolve plugins from Git use the coordinates `github
 .claude-plugin/marketplace.json   # Claude Code marketplace (ourostack)
 .agents/plugins/marketplace.json  # Codex marketplace
 plugins/desk/                     # Desk plugin, MCP server, activation and browser context broker
-plugins/superpowers/              # Vendored Superpowers, hash-locked in upstream-sources.lock.json
+plugins/superpowers/              # Vendored Superpowers; upstream-sources.lock.json records the upstream commit as evidence
 plugins/plain-language/           # Plain Language plugin
 plugins/crew/                     # Crew plugin
 evals/                            # Offline evaluation contracts
@@ -38,4 +38,4 @@ Hosts pick up changes differently: Agency re-resolves the branch, while Claude C
 
 ## Upstream sources
 
-`node scripts/check-upstream-sources.cjs` compares every vendored public source against `upstream-sources.lock.json` and reports whether it is current, changed without selected-payload changes, needs human approval, or is blocked. It never updates the lock or the vendored files.
+Vendored Superpowers follows its upstream default branch. A weekly [refresh workflow](.github/workflows/superpowers-upstream.yml) runs `node scripts/check-upstream-sources.cjs --update` to refresh `plugins/superpowers/` and `upstream-sources.lock.json`, then releases the change ([#32](https://github.com/ourostack/desk/pull/32)). The lock records which upstream commit each copy came from, as evidence, not a pin ([RFC section 5](plugins/desk/docs/agentic-engineering-v2-rfc.md#5-work-source-and-continuity)). Without `--update`, the script only compares every vendored public source against the lock and reports whether it is current, changed without selected-payload changes, needs human approval, or is blocked.

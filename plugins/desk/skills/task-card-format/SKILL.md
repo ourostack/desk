@@ -29,7 +29,7 @@ active_bridge: "bridge-abc123"          # set by bridge promotion — bridge ID 
 bridge_sessions: ["sess-xyz789"]        # set by bridge promotion — session IDs the bridge is coordinating
 
 # Optional: adoption signals
-planning_complete: true                 # skip ideator/planner; jump to work-doer
+planning_complete: true                 # skip brainstorming and planning; resume at implementation
 adopted_at: 2026-04-16T14:30:00Z        # when the task entered the workspace (distinct from `created`)
 
 repos:
