@@ -101,7 +101,7 @@ import { PATTERNS, isPlainObject } from "./schema.js"
 /** Every result `flush` can return. */
 export const FLUSH_CODES = Object.freeze([
   "delivered_pr_open", "intake_stale_retried", "nothing_pending", "not_opted_in", "no_account", "gh_missing", "gh_too_old", "auth_failed",
-  "store_missing", "fork_pending", "rate_limited", "offline", "locked", "deadline", "unexpected",
+  "store_missing", "account_cannot_deliver", "fork_pending", "rate_limited", "offline", "locked", "deadline", "unexpected",
 ])
 
 export const INTAKE_TITLE = "Factory intake"
@@ -313,7 +313,7 @@ function createClient({ runner, deadline, now }) {
     return answer.json
   }
 
-  return { session, api, need }
+  return { call, session, api, need }
 }
 
 function compareVersion(left, right) {
@@ -406,9 +406,28 @@ function publishOne(local, name, { transform, known, desk, secret }) {
 // Store side.
 // ---------------------------------------------------------------------------
 
+// A GitHub login with `_` belongs to an Enterprise Managed User: personal logins may hold only letters, digits and hyphens,
+// and a managed login is the handle, `_` and the enterprise's short code. A managed account cannot fork or open pull
+// requests on repositories outside its enterprise.
+const MANAGED_LOGIN = /_/u
+
+/**
+ * How `account` can open an intake pull request on a store it read as `info` (`GET /repos/{store}` with its token):
+ * `"direct"` with push permission, `"fork"` through its own fork, or why it cannot: `"forking_disabled"` or
+ * `"managed_account"`.
+ */
+export function deliveryRoute(account, info) {
+  if (info?.permissions?.push === true) return "direct"
+  if (info?.allow_forking === false) return "forking_disabled"
+  if (MANAGED_LOGIN.test(account)) return "managed_account"
+  return "fork"
+}
+
 async function resolveTarget(client, { store, account, info }) {
   const branch = info.default_branch
-  if (info.permissions?.push === true) return { repo: store, owner: store.split("/")[0], branch }
+  const route = deliveryRoute(account, info)
+  if (route === "direct") return { repo: store, owner: store.split("/")[0], branch }
+  if (route !== "fork") stop("account_cannot_deliver")
   const repoName = store.split("/")[1]
   let fork = null
   const existing = await client.api("GET", `repos/${account}/${repoName}`)
@@ -804,4 +823,70 @@ export async function finalize(env, {
   if (!delivered) return { result: "retained", flushes }
   await clearFinalize(env, job)
   return { result: "cleared", flushes }
+}
+
+// ---------------------------------------------------------------------------
+// Choosing the account.
+// ---------------------------------------------------------------------------
+
+/** Every result `chooseAccount` can return. */
+export const ACCOUNT_RESULTS = Object.freeze(["account_found", "no_account_can_deliver", "gh_missing", "gh_too_old", "rate_limited", "offline", "deadline", "unexpected"])
+
+/** The github.com logins in `gh auth status` output, the active one first. */
+export function signedInAccounts(text) {
+  const accounts = []
+  let current = null
+  for (const line of String(text).split("\n")) {
+    const login = /Logged in to github\.com account ([A-Za-z0-9][A-Za-z0-9_-]{0,38})(?:\s|$)/u.exec(line)
+    if (login) {
+      current = { login: login[1], active: false }
+      if (!accounts.some((entry) => entry.login === current.login)) accounts.push(current)
+      continue
+    }
+    if (/^\S/u.test(line)) current = null
+    else if (current !== null && /Active account:\s*true/u.test(line)) current.active = true
+  }
+  return [...accounts.filter((entry) => entry.active), ...accounts.filter((entry) => !entry.active)].map((entry) => entry.login)
+}
+
+/**
+ * `chooseAccount({ store, runner, deadlineMs })`: the signed-in github.com account that can open intake pull requests
+ * on `store`, never assumed from gh's active account. Each account signed in to gh is asked for `GET /repos/{store}`
+ * with its own token; one with push permission is preferred, then one that can fork, the active account first among
+ * equals. Returns `{ result: "account_found", account, route, accounts }`, or `{ result: "no_account_can_deliver",
+ * accounts }` where each account carries its `route` or the reason it cannot deliver (`store_not_visible`,
+ * `auth_failed`, `forking_disabled`, `managed_account`), or another of `ACCOUNT_RESULTS` when gh cannot be asked.
+ * Tokens stay in memory and reach gh only as `GH_TOKEN`.
+ */
+export async function chooseAccount({ store, runner, deadlineMs = 60000, now = Date.now }) {
+  if (!isRepo(store)) throw new Error("chooseAccount: store must be <owner>/<repo>")
+  const deadline = now() + deadlineMs
+  try {
+    const status = await createClient({ runner, deadline, now }).call(["auth", "status", "--hostname", "github.com"])
+    if (status.spawnError === "ENOENT" || status.code === 127) stop("gh_missing")
+    const accounts = []
+    for (const account of signedInAccounts(`${status.stdout ?? ""}\n${status.stderr ?? ""}`)) {
+      const client = createClient({ runner, deadline, now })
+      try {
+        await client.session(account)
+        const answer = await client.api("GET", `repos/${store}`)
+        if (answer.status === 200 && isPlainObject(answer.json)) {
+          const route = deliveryRoute(account, answer.json)
+          accounts.push(route === "direct" || route === "fork" ? { account, route } : { account, reason: route })
+        } else if (answer.status === 403 || answer.status === 404) {
+          accounts.push({ account, reason: "store_not_visible" })
+        } else {
+          stop("unexpected")
+        }
+      } catch (error) {
+        if (!(error instanceof Stop) || error.code !== "auth_failed") throw error
+        accounts.push({ account, reason: "auth_failed" })
+      }
+    }
+    const chosen = accounts.find((entry) => entry.route === "direct") ?? accounts.find((entry) => entry.route === "fork")
+    return chosen ? { result: "account_found", account: chosen.account, route: chosen.route, accounts } : { result: "no_account_can_deliver", accounts }
+  } catch (error) {
+    if (error instanceof Stop) return { result: error.code }
+    throw error
+  }
 }
