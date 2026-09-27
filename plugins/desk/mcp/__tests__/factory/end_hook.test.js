@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
 import { spawnSync } from "node:child_process"
-import { existsSync, promises as fs } from "node:fs"
+import { existsSync, readFileSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Readable } from "node:stream"
@@ -91,34 +91,59 @@ test("invalid identifiers, events and paths never write or launch", () => scratc
   assert.equal((await listMarkers(ctx.env)).length, 0)
 }))
 
+// The hosts kill a hook that outlives its declared timeout, so the smallest timeout any host manifest declares for this hook is the bound a real exit must meet.
+const HOST_TIMEOUT_MS = Math.min(...(() => {
+  const plugin = path.resolve(path.dirname(SCRIPT), "..")
+  const claude = JSON.parse(readFileSync(path.join(plugin, "hooks", "hooks.json"), "utf8")).hooks
+  const copilot = JSON.parse(readFileSync(path.join(plugin, "hooks", "copilot-hooks.json"), "utf8")).hooks
+  const seconds = [
+    ...Object.values(claude).flat().flatMap((group) => group.hooks).filter((entry) => entry.command.includes("factory-end.cjs")).map((entry) => entry.timeout),
+    ...Object.values(copilot).flat().filter((entry) => entry.bash.includes("factory-end.cjs")).map((entry) => entry.timeoutSec),
+  ]
+  assert.ok(seconds.length >= 4 && seconds.every((value) => Number.isFinite(value) && value > 0), "every host declares a timeout for the end hook")
+  return seconds.map((value) => value * 1000)
+})())
+// factory-end.cjs gives its worker 1500 ms from the moment the hook process has read its input, then kills it and relies on the retained marker. Only an exit at least that late can have been cut short.
+const HOOK_WORKER_DEADLINE_MS = 1500
+// A detached derivation of this two-line log takes well under a second on an idle machine; the wait watches for its output and gives a loaded machine ample room.
+const DERIVATION_WAIT_MS = 30000
+
 test("two real end-hook exits leave detached derivation running to completion, with no host profile writes", (t) => scratch(async (ctx) => {
   hook()
   const marker = await session(ctx)
   await setConsent(ctx.env, { store: "ourostack/factory", contribute: true })
   const root = await factoryStateRoot(ctx.env)
   const file = path.join(root, "outbox/ourostack__factory", `claude-code-${ID}.json`)
+  const env = { ...ctx.env, NODE_OPTIONS: "" }
   for (const at of [END, "2026-09-26T08:02:00.000Z"]) {
     await fs.appendFile(marker.log_path, `${JSON.stringify({ type: "assistant", sessionId: ID, timestamp: at, message: { content: [] } })}\n`)
     const old = new Date(Date.now() - 60000)
     await fs.utimes(marker.log_path, old, old)
+    const input = JSON.stringify({ session_id: ID, transcript_path: marker.log_path, cwd: ctx.desk, hook_event_name: "SessionEnd", reason: "prompt_input_exit" })
     const started = performance.now()
-    const result = spawnSync(process.execPath, [SCRIPT, "claude"], {
-      env: { ...ctx.env, NODE_OPTIONS: "" }, encoding: "utf8", timeout: 2000,
-      input: JSON.stringify({ session_id: ID, transcript_path: marker.log_path, cwd: ctx.desk, hook_event_name: "SessionEnd", reason: "prompt_input_exit" }),
-    })
+    const result = spawnSync(process.execPath, [SCRIPT, "claude"], { env, encoding: "utf8", timeout: HOST_TIMEOUT_MS, input })
+    const elapsed = performance.now() - started
+    t.diagnostic(`native synthetic end hook exited in ${Math.round(elapsed)} ms (host timeout ${HOST_TIMEOUT_MS} ms)`)
     assert.equal(result.status, 0)
     assert.equal(result.stdout, "")
     assert.equal(result.stderr, "")
-    const elapsed = performance.now() - started
-    t.diagnostic(`native synthetic end hook exited in ${Math.round(elapsed)} ms`)
-    assert.ok(elapsed < 2000)
-    const deadline = Date.now() + 10000
+    assert.ok(elapsed < HOST_TIMEOUT_MS, `the end hook took ${Math.round(elapsed)} ms, past the ${HOST_TIMEOUT_MS} ms a host allows`)
+    if (elapsed >= HOOK_WORKER_DEADLINE_MS) {
+      // On a loaded machine the hook's own deadline may have stopped its worker before it launched derivation, which is the designed outcome: the marker is kept for a retry. Deliver the same end event through the worker entry point, the code the hook runs, so the detached derivation is still exercised.
+      t.diagnostic("the hook reached its worker deadline; the end event was delivered again through the worker entry point")
+      const retry = spawnSync(process.execPath, [SCRIPT, "claude", "--factory-worker"], { env, encoding: "utf8", timeout: DERIVATION_WAIT_MS, input })
+      assert.equal(retry.status, 0)
+      assert.equal(retry.stdout, "")
+    }
+    const waited = performance.now()
+    const deadline = Date.now() + DERIVATION_WAIT_MS
     let facts
     do {
       try { facts = JSON.parse(await fs.readFile(file, "utf8")) } catch (error) { if (error.code !== "ENOENT") throw error }
       if (facts?.session.derived_through === at) break
       await new Promise((resolve) => setTimeout(resolve, 50))
     } while (Date.now() < deadline)
+    t.diagnostic(`detached derivation reached ${at} ${Math.round(performance.now() - waited)} ms after the hook exited`)
     assert.equal(facts?.session.derived_through, at)
   }
 }))

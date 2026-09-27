@@ -8,6 +8,9 @@ import { once } from "node:events"
 import { mkTempRoot } from "../_temp_roots.js"
 import { readProcessStart } from "../../src/readiness/process-start.js"
 import { readInspectionGit } from "../../src/runtime/git-inspection.js"
+import { TIDY_GIT_TIMEOUT_MS } from "../../src/runtime/workspace-tidy.js"
+// Injected Git runners stand in for workspace tidy's own, so they keep its per-call limit rather than the hooks' 2 s default.
+const tidyInspectionGit = (cwd, args) => readInspectionGit(cwd, args, {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS })
 import { serializeMarkdown } from "../../src/util/fm.js"
 import { pathToFileURL } from "node:url"
 import { createRequire } from "node:module"
@@ -218,7 +221,7 @@ test("another checkout acquiring the released branch prevents branch deletion", 
   await worktree(f)
   const other = path.join(f.root, "new-consumer")
   const run = async (cwd, args) => {
-    const result = await readInspectionGit(cwd, args, {})
+    const result = await tidyInspectionGit(cwd, args)
     if (args[0] === "worktree" && args[1] === "remove" && result.ok) git(f.repo, "worktree", "add", other, "topic")
     return result
   }
@@ -233,7 +236,7 @@ test("branch absence after worktree removal is recorded, not mislabeled as a lef
   const f = await fixture()
   await worktree(f)
   const run = async (cwd, args) => {
-    const result = await readInspectionGit(cwd, args, {})
+    const result = await tidyInspectionGit(cwd, args)
     if (args[0] === "worktree" && args[1] === "remove" && result.ok) git(f.repo, "branch", "-d", "topic")
     return result
   }
@@ -262,7 +265,7 @@ test("a changed task card revokes an already listed release", async () => {
   let lists = 0
   const run = async (cwd, args) => {
     if (cwd === f.repo && args[0] === "worktree" && args[1] === "list" && ++lists === 2) await fs.writeFile(f.card, "---\nstatus: processing\nrepos: []\n---\n")
-    return readInspectionGit(cwd, args, {})
+    return tidyInspectionGit(cwd, args)
   }
   const result = await tidy.repairWorkspace({ deskRoot: f.desk, git: run })
   assert.equal(result.removed.length, 0)
@@ -328,7 +331,7 @@ test("all inventory budgets and missing Git answers are explicit, including inco
   assert.equal(repair.left.length, 1)
   assert.match(repair.left[0].reason, /incomplete/)
   for (const command of ["rev-parse", "worktree"]) {
-    const run = (cwd, args) => args[0] === command ? Promise.resolve({ ok: false, code: 128 }) : readInspectionGit(cwd, args, {})
+    const run = (cwd, args) => args[0] === command ? Promise.resolve({ ok: false, code: 128 }) : tidyInspectionGit(cwd, args)
     const result = await tidy.inspectWorkspace({ deskRoot: f.desk, git: run, budgetMs: 5000 })
     assert.equal(result.complete, false)
     assert.match(result.issues[0], /cannot/)
@@ -426,7 +429,7 @@ test("Git refusals and state changes at each deletion boundary remain visible", 
         if (fault === "remove") return { ok: false, code: 128 }
         if (fault === "absence") return { ok: true, stdout: "" }
       }
-      const result = await readInspectionGit(cwd, args, {})
+      const result = await tidyInspectionGit(cwd, args)
       if (cwd === f.repo && args[0] === "worktree" && args[1] === "list") {
         lists += 1
         if (fault === "prunable") result.stdout = result.stdout.replace(`branch ${w.record.branch}\0`, `branch ${w.record.branch}\0prunable missing\0`)
@@ -558,7 +561,7 @@ test("R2 exclusive cleanup claim refuses compliant revocation and consumer reacq
   let statusCount = 0
   let revoked = false
   const run = async (cwd, args) => {
-    const result = await readInspectionGit(cwd, args, {})
+    const result = await tidyInspectionGit(cwd, args)
     if (args[0] === "status" && ++statusCount === 2) {
       await assert.rejects(tidy.revokeWorkspaceRelease({
         repository: w.record.repository, worktree: w.directory, branch: w.record.branch, owner: w.record.owner,
@@ -595,7 +598,7 @@ test("R2 raw receipt revocation after final status is observed before removal", 
   let count = 0
   let consumer
   const run = async (cwd, args) => {
-    const result = await readInspectionGit(cwd, args, {})
+    const result = await tidyInspectionGit(cwd, args)
     if (args[0] === "status" && ++count === 2) {
       await fs.unlink(w.receipt)
       consumer = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { cwd: w.directory, stdio: "ignore" })
@@ -619,7 +622,7 @@ test("R2 atomic expected-head deletion preserves a reacquired ref already merged
   const newHead = git(f.repo, "rev-parse", "HEAD")
   let changed = false
   const run = async (cwd, args) => {
-    const result = await readInspectionGit(cwd, args, {})
+    const result = await tidyInspectionGit(cwd, args)
     if (args[0] === "rev-parse" && args.includes("--quiet") && args.includes(w.record.branch)) {
       git(f.repo, "update-ref", w.record.branch, newHead)
       changed = true
@@ -750,7 +753,7 @@ test("R2 late changed receipt and failed revocation absence are explicit refusal
   const w = await worktree(f)
   let count = 0
   const run = async (cwd, args) => {
-    const result = await readInspectionGit(cwd, args, {})
+    const result = await tidyInspectionGit(cwd, args)
     if (args[0] === "status" && ++count === 2) {
       w.record.owner = "new owner"
       await w.save()

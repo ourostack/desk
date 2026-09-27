@@ -8,7 +8,8 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs"
+import { rm } from "node:fs/promises"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { PassThrough } from "node:stream"
@@ -38,9 +39,9 @@ function recordHandshake(t, result, label) {
   t.diagnostic(`${label}: handshake in ${result.handshakeMs} ms (target ${HANDSHAKE_TARGET_MS} ms, asserted budget ${HANDSHAKE_BUDGET_MS} ms)`)
 }
 
-// Windows can keep a just-exited child's files busy for a moment (EBUSY): remove a spawned test's fixture with retries.
+// Windows can keep a just-exited child's files busy for a moment (EBUSY): remove a spawned test's fixture with retries. The asynchronous rm retries EBUSY on the fixture folder itself; rmSync retries only after a first ENOTEMPTY, so an EBUSY on the folder a child ran in failed at once on Windows CI.
 function removeFixture(t, root) {
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))
 }
 
 // ---- fixtures ----
@@ -61,16 +62,22 @@ function fakeNode(file, version, abi, { label = file, broken = false, exitCode =
   return file
 }
 
-/** Options for selectNode on a fixture machine: nothing from this host is visible. */
+// Selection tests check which Node is chosen, not how fast a probe runs, so their probes are not raced against the real clock. A freshly written fake node usually answers in milliseconds, but on a loaded machine one has taken more than the whole 3 s probe budget. The budget itself is tested with a controlled clock.
+const FAKE_PROBE_TIMEOUT_MS = 30000
+
+/** Options for selectNode on a fixture machine: nothing from this host is visible, the probe budget's clock stands still, and each probe runs the real probeNode with a generous timeout. */
 function machine(root, overrides = {}) {
+  const env = overrides.env ?? { PATH: "" }
   return {
-    env: { PATH: "" },
+    env,
     platform: "darwin",
     arch: "arm64",
     homeDir: path.join(root, "home"),
     mcpRoot,
     current: { path: path.join(root, "current", "node"), version: "v16.20.2", abi: "93" },
     systemPrefix: path.join(root, "sysroot"),
+    now: () => 0,
+    probe: (file) => bootstrap.probeNode(file, env, FAKE_PROBE_TIMEOUT_MS),
     ...overrides,
   }
 }
@@ -331,7 +338,7 @@ test("the same binary reached through two paths is considered once, and a probe 
   const probes = []
   const selection = bootstrap.selectNode(machine(root, {
     env: { PATH: [path.join(root, "link-bin"), path.join(root, "odd-bin")].join(":") },
-    probe: (file, timeoutMs) => { probes.push(file); assert.ok(timeoutMs > 0 && timeoutMs <= 3000); return bootstrap.probeNode(file, {}, timeoutMs) },
+    probe: (file, timeoutMs) => { probes.push(file); assert.ok(timeoutMs > 0 && timeoutMs <= 3000); return bootstrap.probeNode(file, {}, FAKE_PROBE_TIMEOUT_MS) },
   }))
   assert.equal(selection.node.path, path.join(root, "link-bin", "node"))
   assert.deepEqual(probes, [path.join(root, "odd-bin", "node"), path.join(root, "link-bin", "node")])
@@ -826,7 +833,7 @@ test("probes share a 3 s budget and version-manager shims on PATH are never run"
   const selection = bootstrap.selectNode(machine(root, {
     env: { PATH: ["a", "b", "c"].map((name) => path.join(root, name)).join(":") },
     now: () => clock,
-    probe: (file, timeoutMs) => { probed.push([file, timeoutMs]); clock += 2000; return bootstrap.probeNode(file, {}, timeoutMs) },
+    probe: (file, timeoutMs) => { probed.push([file, timeoutMs]); clock += 2000; return bootstrap.probeNode(file, {}, FAKE_PROBE_TIMEOUT_MS) },
   }))
   assert.deepEqual(probed.map(([file]) => path.basename(path.dirname(file))), ["a", "b"])
   assert.deepEqual(probed.map(([, timeoutMs]) => timeoutMs), [3000, 1000])

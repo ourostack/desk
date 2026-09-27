@@ -51,7 +51,9 @@ function reportPath(root, common) {
 
 async function location(root) {
   const { readInspectionGit } = await runtime("runtime/git-inspection.js");
-  const result = await readInspectionGit(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {});
+  const { TIDY_GIT_TIMEOUT_MS } = await runtime("runtime/workspace-tidy.js");
+  // The report location serves the detached repair and the CLI, never the boot check's budget.
+  const result = await readInspectionGit(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS });
   if (!result.ok) throw new Error("bound desk is not an inspectable repository");
   const common = await fs.realpath(result.stdout);
   return reportPath(await fs.realpath(root), common);
@@ -77,7 +79,7 @@ async function launchRepair(root, env) {
   await launchCommand([process.execPath, __filename, "--repair", root], env);
 }
 
-async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair }, expired, signal) {
+async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair, inspectionBudgetMs }, expired, signal) {
   try {
     const [{ resolveStartupRoot }, { resolveActivationConfigPath, isDeskWorkspace }] = await Promise.all([
       runtime("util/startup-direction.js"), runtime("util/paths.js"),
@@ -92,7 +94,7 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     }
     if (!bound.root) return "workspace-tidy skipped; no bound desk.";
     const { inspectWorkspace, tidyLine } = await runtime("runtime/workspace-tidy.js");
-    const inventory = await inspectWorkspace({ deskRoot: bound.root, signal });
+    const inventory = await inspectWorkspace({ deskRoot: bound.root, signal, budgetMs: inspectionBudgetMs });
     if (expired()) return "";
     let previous = "";
     if (inventory.commonDirectory) {
@@ -134,7 +136,7 @@ async function runWorkspaceTidy(ctx) {
         timer = setTimeout(() => {
           stopAll();
           resolve("workspace-tidy budget exceeded; deferred; run the repair with the desk_status root.");
-        }, Math.max(1, ctx.budgetMs - TIDY_SOFT_MARGIN_MS));
+        }, Math.max(1, Math.min(ctx.tidyBudgetMs ?? Infinity, ctx.budgetMs - TIDY_SOFT_MARGIN_MS)));
       }),
     ]);
     return line ? { line } : {};

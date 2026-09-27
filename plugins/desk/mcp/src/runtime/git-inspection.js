@@ -33,18 +33,26 @@ export function inspectionEnvironment(modeled) {
   return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }
 }
 
-export function readInspectionGit(cwd, args, modeled, { signal } = {}) {
+// A hook answers its host within seconds, so by default each inspection call gets 2 s. Callers off that path, such as the detached workspace repair, pass a longer limit.
+export const INSPECTION_TIMEOUT_MS = 2000
+
+export function readInspectionGit(cwd, args, modeled, { signal, timeoutMs = INSPECTION_TIMEOUT_MS } = {}) {
   trustedGit ??= resolveInspectionGit()
   const env = inspectionEnvironment(modeled)
   return new Promise((resolve, reject) => {
     let outcome
     // Abort can call the callback before the process and pipes are closed.
     // Settle only after close; this exact child never runs repository hooks.
-    const child = execFile(trustedGit, args, { cwd, env, signal, killSignal: "SIGKILL", encoding: "utf8", timeout: 2000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+    const child = execFile(trustedGit, args, { cwd, env, signal, killSignal: "SIGKILL", encoding: "utf8", timeout: timeoutMs, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       outcome = { error, stdout, stderr }
     })
     child.once("close", () => {
       const { error, stdout, stderr } = outcome
+      // execFile reports its own timeout only as a SIGKILLed "Command failed"; name the cause so a retained resource explains itself.
+      if (error?.killed && error.code === null && !signal?.aborted) {
+        reject(Object.assign(new Error(`Git inspection timed out after ${timeoutMs} ms: git ${args.join(" ")}`), { code: "ETIMEDOUT", cause: error }))
+        return
+      }
       if (error && (error.killed || typeof error.code !== "number")) { reject(error); return }
       resolve({ ok: !error, stdout: stdout.trim(), stderr: stderr.trim(), code: error?.code })
     })
