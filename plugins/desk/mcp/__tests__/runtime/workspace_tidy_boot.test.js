@@ -13,6 +13,8 @@ const require = createRequire(import.meta.url)
 const hookPath = new URL("../../../hooks/boot-checks.cjs", import.meta.url)
 let boot = {}
 try { boot = require(hookPath.pathname) } catch (error) { if (error.code !== "MODULE_NOT_FOUND") throw error }
+// The workspace-tidy check alone, through the shared registry.
+const tidy = (options = {}) => boot.runBootChecks({ checks: [boot.workspaceTidyCheck], ...options })
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
 
 async function fixture() {
@@ -29,8 +31,9 @@ async function fixture() {
 async function readBootDetails(options) {
   let line
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    line = await boot.runBootChecks(options)
-    if (!line.includes("budget exceeded")) break
+    line = await tidy(options)
+    // A loaded host can push the check past its budget (skipped: no line) or its own soft deadline.
+    if (line !== "" && !line.includes("budget exceeded")) break
   }
   return line
 }
@@ -41,8 +44,8 @@ test("boot check queues a detached repair, returns without waiting, and records 
   const w = path.join(f.root, "unowned")
   git(f.desk, "worktree", "add", "-b", "unowned", w)
   const started = performance.now()
-  const line = await boot.runBootChecks({ host: "copilot", env: f.env, sessionFolder: f.desk })
-  assert.ok(performance.now() - started < 1000)
+  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: f.desk, totalBudgetMs: 1500, checkBudgets: { "workspace-tidy": 1500 } })
+  assert.ok(performance.now() - started < 2000)
   assert.match(line, /^Desk boot: workspace-tidy/)
   assert.match(line, /deferred/)
   assert.equal(line.split("\n").length, 1)
@@ -67,7 +70,7 @@ test("ambiguous Copilot binding never launches cleanup against a guessed desk", 
   const other = path.join(f.root, "other")
   await fs.mkdir(path.join(other, "_meta"), { recursive: true })
   await fs.mkdir(path.join(other, "_archive"))
-  const line = await boot.runBootChecks({ host: "copilot", env: f.env, sessionFolder: other })
+  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: other })
   assert.match(line, /binding.*ambiguous/)
   assert.equal((await fs.readdir(path.join(f.desk, ".git"))).some((name) => name.startsWith("desk-workspace")), false)
 })
@@ -76,7 +79,7 @@ test("boot failure degrades in one bounded line and never blocks session start",
   const f = await fixture()
   const bad = path.join(f.root, "bad.json")
   await fs.writeFile(bad, "{")
-  const line = await boot.runBootChecks({ host: "claude", env: { ...f.env, DESK_ACTIVATION_CONFIG: bad } })
+  const line = await tidy({ host: "claude", env: { ...f.env, DESK_ACTIVATION_CONFIG: bad } })
   assert.match(line, /^Desk boot:/)
   assert.match(line, /binding|configuration/)
   assert.ok(line.length <= 512)
@@ -85,7 +88,10 @@ test("boot failure degrades in one bounded line and never blocks session start",
 test("both actual startup hooks include exactly one boot line without changing their host envelope", async () => {
   const f = await fixture()
   const plugin = path.resolve(hookPath.pathname, "../..")
-  const env = { ...f.env, PLUGIN_ROOT: plugin, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: f.desk }
+  // Generous budgets: this test is about the envelope and the single line, not about a loaded host's timing.
+  const preload = path.join(f.root, "relax-budgets.cjs")
+  await fs.writeFile(preload, `const boot = require(${JSON.stringify(fileURLToPath(hookPath))}); const run = boot.runBootChecks; boot.runBootChecks = (options) => run({ ...options, totalBudgetMs: 5000, checkBudgets: { factory: 2000, "desk-health": 2000, "workspace-tidy": 2000 } });\n`)
+  const env = { ...f.env, PLUGIN_ROOT: plugin, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: f.desk, NODE_OPTIONS: `--require=${preload}` }
   for (const host of ["copilot", "claude"]) {
     const result = host === "copilot"
       ? execFileSync(process.execPath, [path.join(plugin, "hooks", "copilot-session-start.cjs")], { env, input: JSON.stringify({ cwd: f.desk }), encoding: "utf8" })
@@ -102,7 +108,7 @@ test("both actual startup hooks include exactly one boot line without changing t
 test("the complete boot check has a deadline even when launching repair stalls", async () => {
   const f = await fixture()
   const started = performance.now()
-  const line = await boot.runBootChecks({ host: "copilot", env: f.env, sessionFolder: f.desk, budgetMs: 60, launch: () => new Promise(() => {}) })
+  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: f.desk, checkBudgets: { "workspace-tidy": 60 }, launch: () => new Promise(() => {}) })
   assert.ok(performance.now() - started < 300)
   assert.match(line, /budget.*deferred/)
 })
@@ -174,7 +180,7 @@ test("R3/R2 CLI acknowledges exact canonical accounting and refuses wrong revoca
 })
 
 test("boot reports absent bindings, malformed reports and repair launch failures explicitly", async () => {
-  assert.match(await boot.runBootChecks(), /no bound desk/)
+  assert.match(await tidy(), /no bound desk/)
   const f = await fixture()
   const common = git(f.desk, "rev-parse", "--absolute-git-dir")
   const file = boot.reportPath(f.desk, common)
@@ -217,7 +223,7 @@ test("boot lock I/O failures and a slow report read do not authorize late launch
     return read(candidate, ...args)
   })
   let launched = false
-  const pending = boot.runBootChecks({ host: "claude", env: f.env, budgetMs: 500, launch: async () => { launched = true } })
+  const pending = tidy({ host: "claude", env: f.env, launch: async () => { launched = true } })
   await entered
   assert.match(await pending, /budget/)
   finish()
@@ -248,7 +254,7 @@ test("whole-check cancellation suppresses launch when inventory resolves late", 
     return realpath(file)
   })
   let launched = false
-  const check = boot.runBootChecks({ host: "claude", env: f.env, budgetMs: 50, launch: async () => { launched = true } })
+  const check = tidy({ host: "claude", env: f.env, checkBudgets: { "workspace-tidy": 50 }, launch: async () => { launched = true } })
   await ready
   assert.match(await check, /budget/)
   finish()

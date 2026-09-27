@@ -150,7 +150,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
   }
 }
 
-module.exports = { readInput, runHook, launch };
+module.exports = { readInput, runHook, launch, metadata };
 
 async function runBoundedHook(host, input) {
   const deadline = Date.now() + 1500;

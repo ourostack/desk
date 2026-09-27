@@ -1,0 +1,344 @@
+// The session-start side of the factory: the boot-check registry both startup
+// hooks run, the detached factory start, and byte-for-byte startup output.
+// Every desk, store and process here is a throwaway fixture; nothing reaches
+// the network, and hook processes run with a temporary HOME and state folder.
+
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { execFileSync, spawnSync } from "node:child_process"
+import { existsSync, promises as fs, readFileSync } from "node:fs"
+import { createRequire } from "node:module"
+import * as path from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
+
+import { factoryStateRoot, readStatus, requestFinalize, setConsent } from "../../src/factory/outbox.js"
+import { jobId } from "../../src/factory/binding.js"
+import { resolveDeskStateDir, writeLastStart } from "../../src/runtime/last-start.js"
+import { copilotStartupDirection, claudeStartupDirection } from "../../src/util/startup-direction.js"
+import { STORE, scratch } from "./_session_helpers.js"
+
+const require = createRequire(import.meta.url)
+const HOOKS = fileURLToPath(new URL("../../../hooks/", import.meta.url))
+const PLUGIN = path.dirname(HOOKS)
+const BOOT = path.join(HOOKS, "boot-checks.cjs")
+const START = path.join(HOOKS, "factory-start.cjs")
+const boot = () => {
+  assert.ok(existsSync(BOOT), "the boot-check registry must exist")
+  return require(BOOT)
+}
+const NO_CONSENT = "Factory: this desk hasn't decided whether to contribute measurement data; ask the operator once (desk:session-start)"
+const DAY = 24 * 60 * 60 * 1000
+
+const quiet = { launchRepair: async () => {}, launch: async () => {}, record: async () => {} }
+const check = (id, run, budgetMs = 100) => ({ id, budgetMs, run })
+
+// ---------------------------------------------------------------------------
+// The registry.
+// ---------------------------------------------------------------------------
+
+test("the registry runs its checks in order: factory, then desk-health, then workspace-tidy", () => {
+  assert.deepEqual(boot().checks.map((entry) => entry.id), ["factory", "desk-health", "workspace-tidy"])
+  assert.equal(boot().TOTAL_BUDGET_MS, 300)
+  assert.ok(boot().checks.every((entry) => entry.budgetMs <= 300))
+})
+
+test("no line from any check means no output at all; lines join into exactly one Desk boot line", async () => {
+  const { runBootChecks } = boot()
+  const order = []
+  const silent = await runBootChecks({ ...quiet, checks: [check("a", async () => { order.push("a"); return {} }), check("b", async () => { order.push("b"); return { line: "   " } })] })
+  assert.equal(silent, "")
+  assert.deepEqual(order, ["a", "b"])
+  const spoken = await runBootChecks({ ...quiet, checks: [check("a", async () => ({ line: "first\nhalf" })), check("b", () => undefined), check("c", async () => ({ line: "second" }))] })
+  assert.equal(spoken, "Desk boot: first half; second")
+  assert.equal(spoken.split("\n").length, 1)
+})
+
+test("repairs start detached after every check has run, and a repair that cannot start is ignored", async () => {
+  const { runBootChecks } = boot()
+  const events = []
+  const launchRepair = async (command) => {
+    events.push(["repair", command])
+    if (command[0] === "fails") throw new Error("spawn failed")
+  }
+  const line = await runBootChecks({
+    ...quiet,
+    launchRepair,
+    checks: [
+      check("a", async () => { events.push(["check", "a"]); return { repair: { command: ["fails"] } } }),
+      check("b", async () => { events.push(["check", "b"]); return { repair: { command: ["node", "x.js"] }, line: "b" } }),
+      check("c", async () => { events.push(["check", "c"]); return { repair: { command: [] } } }),
+      check("d", async () => ({ repair: { command: ["node", 7] } })),
+      check("e", async () => ({ repair: "node x" })),
+    ],
+  })
+  assert.equal(line, "Desk boot: b")
+  assert.deepEqual(events, [["check", "a"], ["check", "b"], ["check", "c"], ["repair", ["fails"]], ["repair", ["node", "x.js"]]])
+})
+
+test("a check that overruns its budget or throws is skipped for this start and recorded; the rest still run", async () => {
+  const { runBootChecks } = boot()
+  const recorded = []
+  let aborted = false
+  const started = performance.now()
+  const line = await runBootChecks({
+    ...quiet,
+    record: async (_env, skipped) => { recorded.push(...skipped) },
+    checks: [
+      check("slow", (ctx) => new Promise((resolve) => { ctx.signal.addEventListener("abort", () => { aborted = true }); setTimeout(() => resolve({ line: "late" }), 400) }), 50),
+      check("self-stopped", async () => { throw Object.assign(new Error("over"), { code: "boot_check_budget" }) }),
+      check("broken", async () => { throw new Error("boom") }),
+      check("fine", async () => ({ line: "fine" })),
+    ],
+  })
+  assert.equal(line, "Desk boot: fine")
+  assert.ok(performance.now() - started < 300)
+  assert.ok(aborted, "the overrunning check is told to stop")
+  assert.deepEqual(recorded, [{ id: "slow", reason: "budget" }, { id: "self-stopped", reason: "budget" }, { id: "broken", reason: "error" }])
+})
+
+test("the total budget caps every check, and checks after it are skipped", async () => {
+  const { runBootChecks } = boot()
+  const recorded = []
+  const budgets = []
+  const line = await runBootChecks({
+    ...quiet,
+    totalBudgetMs: 120,
+    record: async (_env, skipped) => { recorded.push(...skipped) },
+    checkBudgets: { first: 1000 },
+    checks: [
+      check("first", (ctx) => { budgets.push(ctx.budgetMs); return new Promise(() => {}) }, 50),
+      check("second", async () => ({ line: "never" })),
+    ],
+  })
+  assert.equal(line, "")
+  assert.ok(budgets[0] <= 120)
+  assert.deepEqual(recorded.map((entry) => entry.reason), ["budget", "total_budget"])
+  const quick = await runBootChecks({ ...quiet, record: async () => { throw new Error("cannot record") }, checks: [check("x", () => new Promise(() => {}), 10)] })
+  assert.equal(quick, "")
+})
+
+test("skips are recorded in the protected factory status only when factory state already exists", () => scratch(async ({ env, base }) => {
+  const { recordSkipped, runBootChecks } = boot()
+  assert.equal(await recordSkipped(env, [{ id: "x", reason: "budget" }]), false)
+  assert.equal(existsSync(path.join(base, "state")), false)
+  await setConsent(env, { store: STORE, contribute: false })
+  await runBootChecks({ env, launchRepair: async () => {}, checks: [check("stalled", () => new Promise(() => {}), 10)] })
+  const status = await readStatus(env)
+  assert.deepEqual(status.boot_checks.skipped, [{ id: "stalled", reason: "budget" }])
+  assert.match(status.boot_checks.at, /^\d{4}-\d{2}-\d{2}T/u)
+}))
+
+test("launchCommand starts detached with ignored stdio and never waits for the child", async () => {
+  const { launchCommand } = boot()
+  const seen = []
+  const spawnImpl = (file, args, options) => {
+    const handlers = {}
+    const child = { once: (event, fn) => { handlers[event] = fn }, unref: () => seen.push("unref") }
+    seen.push({ file, args, options })
+    setImmediate(() => handlers.spawn())
+    return child
+  }
+  await launchCommand(["node", "script.js", "--flag"], { A: "1" }, spawnImpl)
+  assert.deepEqual(seen[0].file, "node")
+  assert.deepEqual(seen[0].args, ["script.js", "--flag"])
+  assert.equal(seen[0].options.detached, true)
+  assert.equal(seen[0].options.stdio, "ignore")
+  assert.deepEqual(seen[0].options.env, { A: "1" })
+  assert.equal(seen[1], "unref")
+  const failing = (file) => {
+    const handlers = {}
+    setImmediate(() => handlers.error(new Error(`no ${file}`)))
+    return { once: (event, fn) => { handlers[event] = fn }, unref() {} }
+  }
+  await assert.rejects(launchCommand(["missing"], {}, failing), /no missing/u)
+})
+
+// ---------------------------------------------------------------------------
+// The factory and desk-health checks inside the registry.
+// ---------------------------------------------------------------------------
+
+test("the factory check asks once when the bound desk's store has no decision, and is silent without a desk", () => scratch(async ({ env, desk }) => {
+  const { runBootChecks, factoryCheck } = boot()
+  const run = (options) => runBootChecks({ ...quiet, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, ...options })
+  assert.equal(await run({ host: "claude", env }), `Desk boot: ${NO_CONSENT}`)
+  assert.equal(await run({ host: "copilot", env, sessionFolder: desk }), `Desk boot: ${NO_CONSENT}`)
+  const unbound = { ...env, DESK: "" }
+  delete unbound.DESK
+  assert.equal(await run({ host: "claude", env: { ...unbound, HOME: path.join(desk, "..", "empty-home") } }), "")
+}))
+
+test("the factory check starts one detached finalize for finished jobs whose facts are not delivered", () => scratch(async ({ env, desk }) => {
+  const { runBootChecks, factoryCheck } = boot()
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  const folder = path.join(desk, "alpha", "shipped")
+  await fs.mkdir(folder, { recursive: true })
+  await fs.writeFile(path.join(folder, "task.md"), `---\nstatus: done\nupdated: ${new Date(Date.now() - DAY).toISOString()}\n---\n`)
+  const job = jobId({ deskRemote: `local:${await fs.realpath(desk)}`, personPrefix: "", track: "alpha", slug: "shipped" })
+  await requestFinalize(env, { job, deskRoot: desk })
+  const repairs = []
+  const line = await runBootChecks({ ...quiet, host: "claude", env, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command) })
+  assert.equal(line, "")
+  assert.deepEqual(repairs, [[process.execPath, path.join(PLUGIN, "mcp", "scripts", "factory.js"), "finalize", "--job", job]])
+  const person = []
+  await runBootChecks({ ...quiet, host: "claude", env: { ...env, DESK_PERSON: "../bad" }, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => person.push(command) })
+  assert.equal(person.length, 1, "an invalid person alias falls back to the desk's own tracks")
+  const none = []
+  await runBootChecks({ ...quiet, host: "claude", env: { ...env, DESK_PERSON: "sam" }, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => none.push(command) })
+  assert.deepEqual(none, [], "a person's desk has no finished cards here")
+}))
+
+test("the desk-health check reports a degraded last start and otherwise asks for the fast-forward", () => scratch(async ({ env, desk, base }) => {
+  const { runBootChecks, deskHealthCheck } = boot()
+  const run = (options) => runBootChecks({ ...quiet, checks: [deskHealthCheck], checkBudgets: { "desk-health": 2000 }, totalBudgetMs: 2000, ...options })
+  assert.equal(await run({ host: "claude", env }), "")
+  execFileSync("git", ["init", "-q", "-b", "main", desk])
+  const stateDir = resolveDeskStateDir({ env })
+  const real = await fs.realpath(desk)
+  writeLastStart({ stateDir, root: real, snapshot: { state: "degraded:state_branch_detached", code: "state_branch_detached", repair: null, fix: null } })
+  assert.equal(await run({ host: "claude", env }), "Desk boot: Desk: degraded (desk checkout detached; writes paused); run desk_doctor")
+  writeLastStart({ stateDir, root: real, snapshot: { state: "ready", code: null, repair: null, fix: null } })
+  const repairs = []
+  assert.equal(await run({ host: "claude", env, launchRepair: async (command) => repairs.push(command) }), "")
+  assert.deepEqual(repairs, [[process.execPath, BOOT, "--fast-forward", desk]])
+  const crew = path.join(base, "crew")
+  await fs.mkdir(path.join(crew, "_meta"), { recursive: true })
+  await fs.mkdir(path.join(crew, "desks"), { recursive: true })
+  execFileSync("git", ["init", "-q", "-b", "main", crew])
+  writeLastStart({ stateDir, root: crew, snapshot: { state: "degraded:crew_state_not_main", code: "crew_state_not_main", repair: null, fix: null } })
+  assert.equal(await run({ host: "copilot", env, sessionFolder: crew }), "Desk boot: Desk: degraded (crew_state_not_main; writes paused); run desk_status for the fix", "the session's own desk comes first on Copilot")
+}))
+
+test("the fast-forward repair entry point runs the detached fast-forward and reports as JSON", () => scratch(async ({ env, base }) => {
+  const plain = path.join(base, "plain")
+  await fs.mkdir(plain)
+  const result = spawnSync(process.execPath, [BOOT, "--fast-forward", plain], { env, encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), { result: "skipped", reason: "not_a_checkout" })
+  const usage = spawnSync(process.execPath, [BOOT, "--fast-forward"], { env, encoding: "utf8" })
+  assert.equal(usage.status, 1)
+  assert.match(usage.stderr, /--fast-forward <desk>/u)
+}))
+
+// ---------------------------------------------------------------------------
+// Starting delivery.
+// ---------------------------------------------------------------------------
+
+test("startFactory starts factory-start.cjs detached only when a store has contribute: true", () => scratch(async ({ env }) => {
+  const { startFactory } = boot()
+  const launched = []
+  const launch = async (command, childEnv) => launched.push({ command, childEnv })
+  assert.equal(await startFactory({ env, launch }), false)
+  await setConsent(env, { store: STORE, contribute: false })
+  assert.equal(await startFactory({ env, launch }), false)
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  assert.equal(await startFactory({ env, launch }), true)
+  assert.deepEqual(launched.map((entry) => entry.command), [[process.execPath, START]])
+  assert.equal(launched[0].childEnv, env)
+  assert.equal(await startFactory({ env, launch: async () => { throw new Error("spawn failed") } }), false)
+}))
+
+test("factory-start.cjs runs sweep and flush for consented stores, prints nothing and exits 0", () => scratch(async ({ env }) => {
+  const start = require(START)
+  assert.equal(start.DEADLINE_MS, 120000)
+  assert.deepEqual(await start.main({ env }), { stores: {} })
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  const binDir = path.join(env.HOME, "bin")
+  await fs.mkdir(binDir)
+  await fs.writeFile(path.join(binDir, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
+  const summary = await start.main({ env: { ...env, PATH: `${binDir}${path.delimiter}${process.env.PATH}` }, deadlineMs: 20000 })
+  assert.deepEqual(summary.stores, { [STORE]: { result: "nothing_pending" } })
+  const run = spawnSync(process.execPath, [START], { env, encoding: "utf8", timeout: 30000 })
+  assert.equal(run.status, 0)
+  assert.equal(run.stdout, "")
+  assert.equal(run.stderr, "")
+  assert.equal((await readStatus(env)).last_flush[STORE].result, "nothing_pending")
+}))
+
+// ---------------------------------------------------------------------------
+// Startup output, byte for byte.
+// ---------------------------------------------------------------------------
+
+async function preloadFor(dir, { lines = null, calls }) {
+  const file = path.join(dir, `preload-${Math.random().toString(16).slice(2)}.cjs`)
+  await fs.writeFile(file, `
+const fs = require("node:fs");
+const boot = require(${JSON.stringify(BOOT)});
+boot.checks.splice(0, boot.checks.length, ...${JSON.stringify(lines ?? [])}.map((line, index) => ({ id: "fixture-" + index, budgetMs: 100, run: async () => ({ line }) })));
+boot.startFactory = async () => { fs.appendFileSync(${JSON.stringify(calls)}, "started\\n"); return true; };
+`)
+  return file
+}
+
+function runHook(host, env, desk) {
+  return host === "copilot"
+    ? spawnSync(process.execPath, [path.join(HOOKS, "copilot-session-start.cjs")], { env, input: JSON.stringify({ cwd: desk }), encoding: "utf8" })
+    : spawnSync("bash", [path.join(HOOKS, "session-start.sh"), path.join(PLUGIN, "skills", "using-desk", "SKILL.md")], { env, encoding: "utf8" })
+}
+
+function expectedContext(host, env, desk) {
+  const skill = readFileSync(path.join(PLUGIN, "skills", "using-desk", "SKILL.md"), "utf8")
+  const rfc = path.join(PLUGIN, "docs", "agentic-engineering-v2-rfc.md")
+  if (host === "copilot") return `${skill.trimEnd()}\n\nDesk RFC: ${rfc}\n\n${copilotStartupDirection({ env, sessionFolder: desk })}`
+  // Bash command substitution drops the file's trailing newlines, as `trimEnd` does for the newline-only tail.
+  return `${skill.replace(/\n+$/u, "")}\n\nDesk RFC: ${rfc}\n\n${claudeStartupDirection({ env })}`
+}
+
+function envelope(host, context) {
+  if (host === "copilot") return JSON.stringify({ additionalContext: context })
+  return `${execFileSync("jq", ["-nc", "--arg", "c", context, "{hookSpecificOutput:{hookEventName:\"SessionStart\",additionalContext:$c}}"], { encoding: "utf8" }).trimEnd()}\n`
+}
+
+for (const host of ["claude", "copilot"]) {
+  test(`${host} session-start output is byte-identical when no boot check speaks, and gains exactly one line when they do`, () => scratch(async ({ env, desk, base }) => {
+    const calls = path.join(base, "calls.txt")
+    const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk }
+    const silent = await preloadFor(base, { calls })
+    const quietRun = runHook(host, { ...hookEnv, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${silent}`.trim() }, desk)
+    assert.equal(quietRun.status, 0, quietRun.stderr)
+    const context = expectedContext(host, hookEnv, desk)
+    const hasJq = spawnSync("jq", ["--version"]).status === 0
+    if (host === "copilot" || hasJq) assert.equal(quietRun.stdout, envelope(host, context), "silent boot checks leave the output byte-identical")
+    const parsed = JSON.parse(quietRun.stdout)
+    assert.equal(parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext, context)
+    assert.doesNotMatch(quietRun.stdout, /Desk boot:/u)
+
+    const speaking = await preloadFor(base, { lines: ["one", "two"], calls })
+    const spokenRun = runHook(host, { ...hookEnv, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${speaking}`.trim() }, desk)
+    assert.equal(spokenRun.status, 0, spokenRun.stderr)
+    const spoken = JSON.parse(spokenRun.stdout)
+    assert.equal(spoken.additionalContext ?? spoken.hookSpecificOutput.additionalContext, `${context}\n\nDesk boot: one; two`)
+    if (host === "copilot" || hasJq) assert.equal(spokenRun.stdout, envelope(host, `${context}\n\nDesk boot: one; two`))
+    assert.equal(readFileSync(calls, "utf8"), "started\nstarted\n", "each start launches factory delivery once, after its output is built")
+  }))
+}
+
+test("the real hooks with a bound desk and no decision say exactly the no-consent line, once", () => scratch(async ({ env, desk, base }) => {
+  const preload = path.join(base, "relax.cjs")
+  await fs.writeFile(preload, `const boot = require(${JSON.stringify(BOOT)}); const run = boot.runBootChecks; boot.runBootChecks = (options) => run({ ...options, launch: async () => {}, launchRepair: async () => {}, totalBudgetMs: 5000, checkBudgets: { factory: 2000, "desk-health": 2000, "workspace-tidy": 2000 } });\n`)
+  const hookEnv = { ...env, PLUGIN_ROOT: PLUGIN, CLAUDE_PLUGIN_ROOT: PLUGIN, CLAUDE_PROJECT_DIR: desk, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() }
+  for (const host of ["claude", "copilot"]) {
+    const result = runHook(host, hookEnv, desk)
+    assert.equal(result.status, 0, result.stderr)
+    const parsed = JSON.parse(result.stdout)
+    const context = parsed.additionalContext ?? parsed.hookSpecificOutput.additionalContext
+    const bootLines = context.split("\n").filter((line) => line.startsWith("Desk boot:"))
+    assert.equal(bootLines.length, 1, context)
+    assert.ok(bootLines[0].includes(NO_CONSENT), `${host}: ${bootLines[0]}`)
+    assert.doesNotMatch(bootLines[0], /\b(you|please|human)\b/iu, "the line is addressed to the agent")
+  }
+  assert.equal(existsSync(path.join(base, "state", "ouroboros-skills", "desk", "factory")), false, "startup never creates factory state")
+}))
+
+test("the Claude resolver appends the boot line only when there is one and starts delivery afterwards", async () => {
+  const { main } = await import(pathToFileURL(path.join(PLUGIN, "mcp", "scripts", "resolve-desk-root.js")).href)
+  const events = []
+  const loadBoot = async () => ({ default: { runBootChecks: async () => { events.push("checks"); return "" }, startFactory: async () => { events.push("factory") } } })
+  let output = ""
+  await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text; events.push("write") }, loadBoot })
+  assert.deepEqual(events, ["checks", "factory", "write"])
+  assert.doesNotMatch(output, /\n\n$/u)
+  assert.doesNotMatch(output, /Desk boot/u)
+  const speaking = async () => ({ default: { runBootChecks: async () => "Desk boot: x", startFactory: async () => {} } })
+  await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text }, loadBoot: speaking })
+  assert.match(output, /\n\nDesk boot: x$/u)
+})

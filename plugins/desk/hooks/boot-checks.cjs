@@ -1,6 +1,37 @@
 #!/usr/bin/env node
 "use strict";
 
+// The boot-check registry both session-start hooks run after building their
+// existing output (Claude through resolve-desk-root.js --boot-checks, Copilot
+// through copilot-session-start.cjs).
+//
+// Each check is `{ id, budgetMs, run(ctx) -> { line?, repair?: { command } } }`
+// and they run in order under one 300 ms total budget; a check gets the
+// smaller of its own budget and what is left. A check still running when its
+// budget timer fires is skipped for this start, and so is one that throws; a
+// check doing synchronous work stops itself at `ctx.deadline` by throwing an
+// error whose code is `boot_check_budget`. When factory state exists the skip
+// is recorded in its protected status.json (`boot_checks`). Repairs start detached with
+// ignored stdio after every check has run. The hook appends exactly one line,
+// `Desk boot: <line>; <line>`, addressed to the agent, and nothing at all when
+// no check has a line, so its output is then byte-identical to the output it
+// built before the registry ran.
+//
+// The registry, in order:
+//   1. factory: whether the bound desk's store has a consent decision, and a
+//      detached `factory.js finalize` for finished jobs whose facts are not
+//      delivered yet (mcp/src/factory/boot-check.js);
+//   2. desk-health: the bound root's last Desk start, and a detached
+//      fast-forward of a clean state branch (mcp/src/runtime/desk-health.js);
+//   3. workspace-tidy: stale worktree listing with its own detached repair
+//      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself so
+//      its line can say whether the launch happened, and keeps a soft deadline
+//      inside its budget so an unfinished inspection still reports "deferred".
+//
+// `startFactory` starts factory-start.cjs (sweep, then flush every consented
+// store) detached; the hooks call it after their output is built, and only
+// when a store has `contribute: true`.
+
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
@@ -8,6 +39,10 @@ const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const runtime = (name) => import(pathToFileURL(path.join(__dirname, "..", "mcp", "src", name)).href);
 const oneLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ").slice(0, 480);
+const TOTAL_BUDGET_MS = 300;
+const TIDY_SOFT_MARGIN_MS = 20;
+const FACTORY_SCRIPT = path.join(__dirname, "..", "mcp", "scripts", "factory.js");
+const PERSON = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 
 function reportPath(root, common) {
   const key = createHash("sha256").update(root).digest("hex").slice(0, 16);
@@ -29,14 +64,17 @@ async function readReport(file) {
   return decodeTidyReport(await fs.readFile(file, "utf8"));
 }
 
-async function launchRepair(root, env) {
+/** Starts `command` detached with ignored stdio and lets this process exit without waiting for it. */
+async function launchCommand(command, env, spawnImpl = spawn) {
   await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [__filename, "--repair", root], {
-      detached: true, stdio: "ignore", windowsHide: true, env,
-    });
+    const child = spawnImpl(command[0], command.slice(1), { detached: true, stdio: "ignore", windowsHide: true, env });
     child.once("error", reject);
     child.once("spawn", () => { child.unref(); resolve(); });
   });
+}
+
+async function launchRepair(root, env) {
+  await launchCommand([process.execPath, __filename, "--repair", root], env);
 }
 
 async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair }, expired, signal) {
@@ -48,11 +86,11 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
       env, activationConfigPath: resolveActivationConfigPath({ env }),
       hostProjectRoot: host === "claude" ? env.CLAUDE_PROJECT_DIR : undefined,
     });
-    if (bound.error) return "Desk boot: workspace-tidy deferred; binding configuration unreadable; resolve with desk_status.";
+    if (bound.error) return "workspace-tidy deferred; binding configuration unreadable; resolve with desk_status.";
     if (host === "copilot" && isDeskWorkspace(sessionFolder) && path.resolve(sessionFolder) !== bound.root) {
-      return "Desk boot: workspace-tidy deferred; binding is ambiguous; use desk_status root before requesting repair.";
+      return "workspace-tidy deferred; binding is ambiguous; use desk_status root before requesting repair.";
     }
-    if (!bound.root) return "Desk boot: workspace-tidy skipped; no bound desk.";
+    if (!bound.root) return "workspace-tidy skipped; no bound desk.";
     const { inspectWorkspace, tidyLine } = await runtime("runtime/workspace-tidy.js");
     const inventory = await inspectWorkspace({ deskRoot: bound.root, signal });
     if (expired()) return "";
@@ -77,29 +115,206 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     // mutations run after launch in the detached process, with fresh evidence.
     if (expired()) return "";
     await launch(bound.root, env);
-    return `Desk boot: workspace-tidy ${oneLine(`${previous}deferred (${inventory.worktrees.length} listed)${inventory.issues.length ? `; ${inventory.issues.join("; ")}` : ""}`)}`;
+    return `workspace-tidy ${oneLine(`${previous}deferred (${inventory.worktrees.length} listed)${inventory.issues.length ? `; ${inventory.issues.join("; ")}` : ""}`)}`;
   } catch (error) {
-    return `Desk boot: workspace-tidy deferred; ${oneLine(error.message)}`;
+    return `workspace-tidy deferred; ${oneLine(error.message)}`;
   }
 }
 
-async function runBootChecks(options = {}) {
+async function runWorkspaceTidy(ctx) {
   let expired = false;
   let timer;
   const cancellation = new AbortController();
+  const stopAll = () => { expired = true; cancellation.abort(); };
+  ctx.signal?.addEventListener("abort", stopAll);
   try {
-    return await Promise.race([
-      checkWorkspace(options, () => expired, cancellation.signal),
+    const line = await Promise.race([
+      checkWorkspace(ctx, () => expired, cancellation.signal),
       new Promise((resolve) => {
         timer = setTimeout(() => {
-          expired = true;
-          cancellation.abort();
-          resolve("Desk boot: workspace-tidy budget exceeded; deferred; run the repair with the desk_status root.");
-        }, options.budgetMs ?? 500);
+          stopAll();
+          resolve("workspace-tidy budget exceeded; deferred; run the repair with the desk_status root.");
+        }, Math.max(1, ctx.budgetMs - TIDY_SOFT_MARGIN_MS));
       }),
     ]);
+    return line ? { line } : {};
   } finally {
     clearTimeout(timer);
+    ctx.signal?.removeEventListener("abort", stopAll);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The factory and desk-health checks.
+// ---------------------------------------------------------------------------
+
+function personPrefix(env) {
+  const alias = typeof env.DESK_PERSON === "string" ? env.DESK_PERSON.trim() : "";
+  return PERSON.test(alias) ? `desks/${alias}` : "";
+}
+
+/**
+ * The root the factory end hook binds sessions to, resolved the same way as
+ * resolve-desk-root.js `resolveHookDeskRoot` (bounded activation reads), and
+ * shared by the checks of one start. It imports the resolver's parts rather
+ * than that script, which is the Claude hook's entry point and is still
+ * running this registry from its top-level await.
+ */
+async function boundRoot(ctx) {
+  ctx.shared.root ??= (async () => {
+    const [{ resolveActivationConfigPath, resolveDeskRootWithSource }, { readSmallText }] = await Promise.all([runtime("util/paths.js"), runtime("factory/marker.js")]);
+    try {
+      return resolveDeskRootWithSource({
+        activationConfigPath: resolveActivationConfigPath({ env: ctx.env }),
+        env: ctx.env,
+        cwd: ctx.host === "copilot" ? ctx.sessionFolder ?? process.cwd() : ctx.env.CLAUDE_PROJECT_DIR || process.cwd(),
+        homeDir: ctx.env.HOME || require("node:os").homedir(),
+        hostProjectRoot: ctx.env.CLAUDE_PROJECT_DIR,
+        readActivationConfig: (file) => readSmallText(file),
+      }).root;
+    } catch {
+      return null;
+    }
+  })();
+  return ctx.shared.root;
+}
+
+const factoryCheck = {
+  id: "factory",
+  budgetMs: 100,
+  async run(ctx) {
+    const root = await boundRoot(ctx);
+    if (!root) return {};
+    const [{ factoryBootCheck }, { readSmallText }, { PATTERNS }] = await Promise.all([
+      runtime("factory/boot-check.js"), runtime("factory/marker.js"), runtime("factory/schema.js"),
+    ]);
+    const { metadata } = require("./factory-end.cjs");
+    const home = ctx.env.HOME || require("node:os").homedir();
+    const pluginRoot = ctx.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
+    let plugins = { dirs: [], incomplete: true };
+    try {
+      plugins = metadata({ host: ctx.host === "copilot" ? "copilot" : "claude", pluginRoot, home, env: ctx.env, readSmallText, PATTERNS });
+    } catch {
+      // An unreadable plugin set leaves only the desk's own declaration.
+    }
+    const result = factoryBootCheck({
+      env: ctx.env, deskRoot: root, personPrefix: personPrefix(ctx.env), pluginDirs: plugins.dirs, pluginScanIncomplete: plugins.incomplete, deadline: ctx.deadline,
+    });
+    const repair = result.jobs?.length ? { command: [process.execPath, FACTORY_SCRIPT, "finalize", ...result.jobs.flatMap((job) => ["--job", job])] } : undefined;
+    return { line: result.line, repair };
+  },
+};
+
+const deskHealthCheck = {
+  id: "desk-health",
+  budgetMs: 50,
+  async run(ctx) {
+    const [{ deskHealthCheck: check }, { isDeskWorkspace }] = await Promise.all([runtime("runtime/desk-health.js"), runtime("util/paths.js")]);
+    const roots = [];
+    if (ctx.host === "copilot" && isDeskWorkspace(ctx.sessionFolder)) roots.push(path.resolve(ctx.sessionFolder));
+    const bound = await boundRoot(ctx);
+    if (bound && !roots.includes(bound)) roots.push(bound);
+    for (const root of roots) {
+      const result = check({ env: ctx.env, root });
+      if (result.line) return { line: result.line };
+      if (result.fastForward) return { repair: { command: [process.execPath, __filename, "--fast-forward", root] } };
+    }
+    return {};
+  },
+};
+
+const workspaceTidyCheck = { id: "workspace-tidy", budgetMs: 260, run: runWorkspaceTidy };
+
+// ---------------------------------------------------------------------------
+// The registry.
+// ---------------------------------------------------------------------------
+
+/** Records skipped checks in the protected factory status.json, only when factory state already exists. */
+async function recordSkipped(env, skipped) {
+  const { factoryStateRoot, writeStatus } = await runtime("factory/outbox.js");
+  if (await factoryStateRoot(env, { create: false }) === null) return false;
+  await writeStatus(env, { boot_checks: { at: new Date().toISOString(), skipped } });
+  return true;
+}
+
+const validRepair = (repair) => Array.isArray(repair?.command) && repair.command.length > 0 && repair.command.every((part) => typeof part === "string" && part !== "");
+
+/**
+ * Runs the registry (see the header). Options: `host`, `env`, `sessionFolder`,
+ * plus for tests `checks`, `totalBudgetMs`, `checkBudgets` ({ id: ms }),
+ * `launchRepair(command, env)`, `record(env, skipped)` and `launch` (the
+ * workspace-tidy repair launcher). Resolves `""` or one `Desk boot:` line;
+ * never rejects.
+ */
+async function runBootChecks(options = {}) {
+  const {
+    checks = module.exports.checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand, record = recordSkipped,
+  } = options;
+  const env = options.env ?? process.env;
+  // Time charged to the total budget: a skipped check is charged its whole budget, so what is left never depends on timer jitter.
+  let used = 0;
+  const shared = {};
+  const lines = [];
+  const repairs = [];
+  const skipped = [];
+  for (const check of checks) {
+    const budget = Math.min(checkBudgets[check.id] ?? check.budgetMs, totalBudgetMs - used);
+    // Timers resolve to whole milliseconds, so less than one left is none left.
+    if (budget < 1) {
+      skipped.push({ id: check.id, reason: "total_budget" });
+      continue;
+    }
+    const cancellation = new AbortController();
+    const checkStarted = performance.now();
+    const deadline = checkStarted + budget;
+    let timer;
+    const outcome = await Promise.race([
+      Promise.resolve()
+        .then(() => check.run({ ...options, env, budgetMs: budget, deadline, signal: cancellation.signal, shared }))
+        .then((value) => ({ value }), (error) => (error?.code === "boot_check_budget" ? { overrun: true } : { failed: true })),
+      new Promise((resolve) => { timer = setTimeout(resolve, Math.ceil(budget), { overrun: true }); }),
+    ]);
+    clearTimeout(timer);
+    used += outcome.overrun ? budget : Math.min(budget, performance.now() - checkStarted);
+    if (outcome.overrun) {
+      cancellation.abort();
+      skipped.push({ id: check.id, reason: "budget" });
+      continue;
+    }
+    if (outcome.failed) {
+      skipped.push({ id: check.id, reason: "error" });
+      continue;
+    }
+    const { line, repair } = outcome.value ?? {};
+    if (typeof line === "string" && line.trim() !== "") lines.push(oneLine(line.trim()));
+    if (validRepair(repair)) repairs.push(repair.command);
+  }
+  for (const command of repairs) {
+    try {
+      await startRepair(command, env);
+    } catch {
+      // A repair that cannot start is retried at the next session start.
+    }
+  }
+  if (skipped.length > 0) {
+    try {
+      await record(env, skipped);
+    } catch {
+      // Recording a skip never changes the startup output.
+    }
+  }
+  return lines.length > 0 ? `Desk boot: ${lines.join("; ")}` : "";
+}
+
+/** Starts factory-start.cjs detached when a store has `contribute: true`; resolves whether it started. Never rejects. */
+async function startFactory({ env = process.env, launch = launchCommand } = {}) {
+  try {
+    const { hasContributingStore } = await runtime("factory/boot-check.js");
+    if (!hasContributingStore(env)) return false;
+    await launch([process.execPath, path.join(__dirname, "factory-start.cjs")], env);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -168,11 +383,18 @@ async function acknowledgeRepair(root, acknowledgement) {
   });
 }
 
-module.exports = { runBootChecks, runRepair, acknowledgeRepair, reportPath, readReport };
+module.exports = {
+  checks: [factoryCheck, deskHealthCheck, workspaceTidyCheck],
+  factoryCheck, deskHealthCheck, workspaceTidyCheck,
+  runBootChecks, startFactory, launchCommand, recordSkipped,
+  runRepair, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS,
+};
 
 if (require.main === module) {
   const [command, root, id, digest, canonicalEvidence] = process.argv.slice(2);
-  const run = command === "--repair" && root
+  const run = command === "--fast-forward" && root
+    ? runtime("runtime/desk-health.js").then(({ fastForwardStateBranch }) => fastForwardStateBranch({ env: process.env, root }))
+    : command === "--repair" && root
     ? runRepair(root)
     : command === "--ack" && root && id && digest && canonicalEvidence
       ? acknowledgeRepair(root, { id, digest, canonicalEvidence })
@@ -180,7 +402,7 @@ if (require.main === module) {
         ? runtime("runtime/workspace-tidy.js").then(({ revokeWorkspaceRelease }) => revokeWorkspaceRelease({
           repository: root, worktree: id, branch: digest, owner: canonicalEvidence,
         }))
-        : Promise.reject(new Error("usage: boot-checks.cjs --repair <desk> | --ack <desk> <id> <digest> <canonical-evidence> | --revoke <common-git-dir> <worktree> <branch-ref> <owner>"));
+        : Promise.reject(new Error("usage: boot-checks.cjs --fast-forward <desk> | --repair <desk> | --ack <desk> <id> <digest> <canonical-evidence> | --revoke <common-git-dir> <worktree> <branch-ref> <owner>"));
   run.then((result) => process.stdout.write(`${JSON.stringify(result)}\n`)).catch((error) => {
     process.stderr.write(`workspace-tidy: ${oneLine(error.message)}\n`);
     process.exitCode = 1;
