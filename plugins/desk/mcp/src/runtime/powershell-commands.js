@@ -583,7 +583,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     }
     if (SHELLS.has(name)) {
       const script = shellScript(name, args)
-      if (script.encoded) throw unresolved("an encoded script this command runs")
+      // An encoded script is not decoded (shellScript gives it no source): unreadable code passes, as in Bash.
       const literal = script.stdin && input ? literalInput(input) : null
       const piped = script.stdin && input ? (literal ? await expand(literal) : UNKNOWN) : undefined
       const source = script.command ?? piped

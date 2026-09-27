@@ -157,7 +157,7 @@ test("round 4 S5: subexpressions, background jobs, loops, launchers and opaque s
     assert.match((await f.guard(command)).reason, /could not resolve which checkout/u, command)
   }
   for (const [command, reason] of [
-    ["pwsh -EncodedCommand ZQBjAGgAbwA=", /encoded script/u], ["Start-Process \"git $x\"", /Desk allows Git in PowerShell/u],
+    ["Start-Process \"git $x\"", /Desk allows Git in PowerShell/u],
     ["& $p iex", /could not resolve the program this command runs/u],
     ["iex \"git stash $x\"", /^Desk protected checkout /u], ['"git stash $x" | pwsh -Command -', /^Desk protected checkout /u],
   ]) assert.match((await f.guard(command)).reason, reason, command)
@@ -165,7 +165,7 @@ test("round 4 S5: subexpressions, background jobs, loops, launchers and opaque s
   // Git) is allowed; only inline text Desk can read is inspected.
   for (const command of [
     "Start-Process $x", "[scriptblock]::Create($x)", "Get-Content s.ps1 | pwsh", "Get-Content s.sh | bash", "Write-Output 'echo hi' | bash",
-    '"echo $x" | bash', "[scriptblock]::Create('Set-' + 'Location x')", ". $script", "iex (Get-Content x.ps1 -Raw)", "& (eval x) status",
+    '"echo $x" | bash', "[scriptblock]::Create('Set-' + 'Location x')", ". $script", "iex (Get-Content x.ps1 -Raw)", "pwsh -EncodedCommand ZQBjAGgAbwA=", "& (eval x) status",
   ]) assert.equal((await f.guard(command)).deny, false, command)
   // A hashtable entry's value runs, and a prefix increment changes its variable.
   assert.equal((await f.guard(`$h = @{ a = $(Set-Location ${psq(f.prot)}); b=1; c= 2 }; git stash`, { cwd: f.own })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`)
