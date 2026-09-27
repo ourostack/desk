@@ -62,6 +62,7 @@ test("healthy desk_doctor uses the same dependency-free diagnostic vocabulary", 
     }))
 
     assert.deepEqual(Object.keys(body).sort(), [
+      "factory",
       "mode",
       "organization",
       "reason",

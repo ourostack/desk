@@ -3,6 +3,7 @@ import { diagnosticFormat, previewRuntimeSnapshot } from "../runtime/preview-sna
 import { organizationFindings } from "../desk/organization.js"
 import { operatorNames } from "../desk/naming.js"
 import { personPrefix } from "../util/paths.js"
+import { factoryStatus, factorySummary } from "./factory-context.js"
 
 // Every code `organizationFindings` can return — printed in this fixed
 // order regardless of which codes actually fired, so the section's shape is
@@ -69,7 +70,7 @@ function collectOrganization({ deskRoot, person }) {
   return findings
 }
 
-export function doctorRuntime({ input, statusContext = {}, deskRoot, person = null } = {}) {
+export function doctorRuntime({ input, statusContext = {}, deskRoot, person = null, env = process.env } = {}) {
   if (diagnosticFormat(input) === "preview") {
     return previewRuntimeSnapshot("ready")
   }
@@ -77,9 +78,11 @@ export function doctorRuntime({ input, statusContext = {}, deskRoot, person = nu
 
   const organizationResult = collectOrganization({ deskRoot, person })
   const organization = organizationResult ?? []
+  // The factory section, like the organization one, needs a bound desk.
+  const factory = organizationResult === null ? null : factoryStatus({ env, deskRoot })
   const summary = organizationResult === null
     ? "Desk MCP runtime dependencies are ready."
-    : `Desk MCP runtime dependencies are ready.\n\n${organizationSection(organization)}`
+    : `Desk MCP runtime dependencies are ready.\n\n${organizationSection(organization)}\n\n${factorySummary(factory)}`
 
   return {
     status: "ok",
@@ -95,6 +98,7 @@ export function doctorRuntime({ input, statusContext = {}, deskRoot, person = nu
       support_matrix_path: runtime.support_matrix_path,
     },
     organization,
+    ...(factory === null ? {} : { factory }),
     remediation: [],
   }
 }

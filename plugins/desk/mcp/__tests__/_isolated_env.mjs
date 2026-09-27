@@ -2,7 +2,7 @@
 //
 // Loaded three ways, so no test can reach the real ~/.cache or ~/.local/state:
 // - `npm test`, the coverage runner and the native Windows CI steps preload it with `--import`, and the test runner passes that to every test file's process;
-// - `_temp_roots.js` imports it, so a test file run on its own with `node --test <file>` is isolated too;
+// - `_temp_roots.js` and `factory/_session_helpers.js` import it, so a test file run on its own with `node --test <file>` is isolated too;
 // - a process that inherits DESK_TEST_RUN_DIR from its parent reuses the parent's folder, so one run shares one folder.
 //
 // The write guard covers this process's own `node:fs` calls (sync, callback and promise forms). A path under the real home is refused unless it is under the OS temp folder or this repository checkout, which may themselves sit under the home.
