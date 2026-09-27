@@ -1110,7 +1110,6 @@ contract("the evaluation packet prose is not hard-wrapped", () => {
 
 // Session start never prints a desk folder name it has not redacted (review of #51, B1 and S2): a folder another
 // machine created can carry a secret's value in its name, and a git diffstat or a glob would put it in the transcript.
-const sessionStart = "plugins/desk/skills/session-start/SKILL.md";
 contract("session start syncs the desk quietly and says why", () => {
   const skill = text(sessionStart);
   assert.match(skill, /cd \$DESK && git pull --rebase --quiet origin main/u);
