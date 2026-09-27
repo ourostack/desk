@@ -194,6 +194,8 @@ test("the production reader routes through maintained index validation but never
     validateEvidenceIndex: (...args) => { validated += 1; return maintained.validateEvidenceIndex(...args); },
     readEvidenceFile: () => { throw new Error("UNADOPTED_UNBOUNDED_ROUTE"); },
     readWorkspaceFile: () => { throw new Error("UNADOPTED_UNBOUNDED_ROUTE"); },
+    readEvidenceRange: () => { throw new Error("UNADOPTED_READ_ROUTE"); },
+    searchEvidence: () => { throw new Error("UNADOPTED_READ_ROUTE"); },
   };
   const reader = createEvidenceReader({ root: directory, index: { files: ["proof.txt"] }, gauntlet });
   assert.deepEqual(reader.read("proof.txt", 0, 3), { text: "abc", totalCharacters: 6, nextOffset: 3 });
