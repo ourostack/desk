@@ -43,6 +43,21 @@ test("build matches every golden output byte for byte and returns exact counts",
   for (const relative of Object.keys(expected)) assert.equal(Buffer.compare(actual[relative], expected[relative]), 0, relative)
 }))
 
+test("build ignores labels, even malformed ones, until the reports consume them", () => scratch((root) => {
+  const store = path.join(root, "store")
+  const out = path.join(root, "out")
+  cpSync(STORE, store, { recursive: true })
+  assert.equal(existsSync(path.join(store, "labels", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "11111111-1111-4111-8111-111111111111.json")), true)
+  mkdirSync(path.join(store, "labels", "nested", "deeper"), { recursive: true })
+  writeFileSync(path.join(store, "labels", "nested", "deeper", "junk.json"), `{"${SENTINEL}":`)
+  writeFileSync(path.join(store, "labels", SENTINEL), SENTINEL)
+  assert.deepEqual(build({ storeDir: store, outDir: out }), { jobs: 2, sessions: 4 })
+  const actual = bytesByPath(out)
+  const expected = bytesByPath(EXPECTED)
+  assert.deepEqual(Object.keys(actual), Object.keys(expected))
+  for (const relative of Object.keys(expected)) assert.equal(Buffer.compare(actual[relative], expected[relative]), 0, relative)
+}))
+
 test("two builds over identical input are byte-identical", () => scratch((root) => {
   const first = path.join(root, "first")
   const second = path.join(root, "second")
