@@ -2,12 +2,14 @@ import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, wr
 import * as path from "node:path"
 
 import { jobId } from "../binding.js"
+import { validateLabelsBytes } from "../label-schema.js"
 import { PATTERNS } from "../schema.js"
 import { calculateFormulas } from "./formulas.js"
 import { normalizePublished, stableStringify } from "./normalize.js"
 import { buildCoverage, renderIndexMarkdown, renderJobMarkdown, renderReadme } from "./report.js"
+import { computeRollups, jobRecord, renderRollupsMarkdown, resolveLabels } from "./rollups.js"
 import { buildTimelines } from "./timeline.js"
-import { isFactsPath, validatePr } from "./validate-pr.js"
+import { isFactsPath, labelsPathParts, validatePr } from "./validate-pr.js"
 
 function compareText(left, right) {
   return Number(left > right) - Number(left < right)
@@ -70,6 +72,52 @@ function readSessions(storeDir) {
   return sessions
 }
 
+const JOB_DIRECTORY = /^[0-9a-f]{32}$/u
+
+function visibleEntries(directory) {
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => !entry.name.startsWith("."))
+    .sort((left, right) => compareText(left.name, right.name))
+}
+
+// Labels live at `labels/<job>/<session id>.json`. As under `facts/`,
+// dotfiles are ignored and anything else that is not a labels file of that
+// shape stops the build (`invalid_labels_entry`), because `validate-pr` never
+// lets one merge unreviewed. Each file must pass the labels gate and name the
+// job and session of its path (`invalid_published_labels`); whether it still
+// matches its session's facts is `resolveLabels`' question, since a facts
+// file can be re-derived after its labels merged.
+function readLabels(storeDir) {
+  const labelsDir = path.join(storeDir, "labels")
+  const stat = existingEntry(labelsDir)
+  if (stat === null) return []
+  if (!stat.isDirectory()) throw buildError("labels_not_directory", "labels must be a real directory")
+  const labels = []
+  for (const jobEntry of visibleEntries(labelsDir)) {
+    if (!jobEntry.isDirectory() || !JOB_DIRECTORY.test(jobEntry.name)) throw buildError("invalid_labels_entry", "labels entries must be job directories of labels files")
+    for (const entry of visibleEntries(path.join(labelsDir, jobEntry.name))) {
+      const relative = `labels/${jobEntry.name}/${entry.name}`
+      const parts = labelsPathParts(relative)
+      if (!entry.isFile() || parts === null) throw buildError("invalid_labels_entry", "labels entries must be job directories of labels files")
+      const bytes = readFileSync(path.join(labelsDir, jobEntry.name, entry.name))
+      if (!validateLabelsBytes(bytes).ok) throw buildError("invalid_published_labels", relative)
+      const value = JSON.parse(bytes.toString("utf8"))
+      if (value.job !== parts.job || value.session !== parts.session) throw buildError("invalid_published_labels", relative)
+      labels.push(value)
+    }
+  }
+  return labels
+}
+
+function writeRollups(directory, rollups) {
+  mkdirSync(directory)
+  writeFileSync(path.join(directory, "index.md"), renderRollupsMarkdown(rollups))
+  writeFileSync(path.join(directory, "measures.json"), `${stableStringify(rollups.measures)}\n`)
+  writeFileSync(path.join(directory, "muda.json"), `${stableStringify(rollups.muda)}\n`)
+  writeFileSync(path.join(directory, "tool-kinds.json"), `${stableStringify(rollups.tool_kinds)}\n`)
+  writeFileSync(path.join(directory, "coverage.json"), `${stableStringify(rollups.coverage)}\n`)
+}
+
 export function build({ storeDir, outDir }) {
   if (typeof storeDir !== "string" || typeof outDir !== "string") throw new TypeError("build: storeDir and outDir must be paths")
   const store = path.resolve(storeDir)
@@ -81,7 +129,9 @@ export function build({ storeDir, outDir }) {
   requireDirectory(store, "store")
 
   const sessions = readSessions(store)
+  const labels = resolveLabels(readLabels(store), sessions)
   const reports = buildTimelines(sessions).map((timeline) => ({ timeline, formulas: calculateFormulas(timeline) }))
+  const rollups = computeRollups({ records: reports.map((report) => jobRecord(report, labels.byJobSession)), sessions, labels })
   const temporary = `${out}.factory-tmp-${process.pid}`
   rmSync(temporary, { recursive: true, force: true })
   mkdirSync(path.join(temporary, "jobs"), { recursive: true })
@@ -92,6 +142,7 @@ export function build({ storeDir, outDir }) {
       writeFileSync(path.join(temporary, "jobs", `${timeline.job}.json`), `${stableStringify({ job: timeline.job, timeline: outputTimeline(timeline), formulas })}\n`)
       writeFileSync(path.join(temporary, "jobs", `${timeline.job}.md`), renderJobMarkdown({ timeline, formulas }))
     }
+    writeRollups(path.join(temporary, "rollups"), rollups)
     replaceDirectory(temporary, out)
   } catch (error) {
     rmSync(temporary, { recursive: true, force: true })
