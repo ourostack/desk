@@ -73,3 +73,22 @@ test("replay ruling: nested Git that moves HEAD, rewrites pushed history or disc
     assert.equal((await f.guard(command, f.ord)).deny, false, `${command} in the ordinary checkout`)
   }
 })
+
+test("replay ruling: edge forms of groups, subexpressions and piped scripts", async (t) => {
+  const f = await fixture(t)
+  for (const [command, deny] of [
+    // Text that does not parse falls back to the operation it names (a read passes, a HEAD move does not).
+    ['git log "a$(b"', false], ["git log (git rev-parse HEAD", false], ['git checkout "$(a"', true],
+    // Member access on a group is not a plain argument.
+    ["git log (Get-Item x).Name", true], ["git log @(Get-Item x)[0]", true],
+    // A group whose statements do not parse, or that are not one plain Git command, yields one unknown value.
+    ["git log --format (&) -1", false], ["git log --format (git status; git log) -1", false],
+    // A string with more parts, or an unquoted word, piped into a shell is not a literal script Desk reads.
+    ["'git stash'x | bash", false], ["hello | bash", false],
+    // A computed program or file with readable text that runs code is denied; without it, it passes.
+    ["Start-Process $x -ArgumentList iex", true], [". $x eval", true], ["Start-Process $x -ArgumentList notepad", false],
+  ]) {
+    const decision = await f.guard(command, f.prot)
+    assert.equal(decision.deny, deny, `${command}: ${decision.reason}`)
+  }
+})

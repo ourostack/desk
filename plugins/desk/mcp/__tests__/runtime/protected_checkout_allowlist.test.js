@@ -275,9 +275,11 @@ test("round 4 S3, narrowed on 2026-09-27: a script piped or redirected into a sh
   ]) {
     assert.equal((await f.guard(command, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`, command)
   }
+  // A PowerShell string or here-string piped into a shell is its script, read like one (replay ruling, 2026-09-27).
   for (const command of ["@'\ngit stash\n'@ | bash", "'git stash' | bash", "@'\ngit stash\n'@ | pwsh -NoProfile -Command -"]) {
-    assert.equal((await f.guard(command)).reason, POWERSHELL_GIT_FORMS, command)
+    assert.equal((await f.guard(command)).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`, command)
   }
+  for (const command of ["@'\necho hi\n'@ | bash", '@"\necho $x\n"@ | bash']) assert.equal((await f.guard(command)).deny, false, command)
   assert.deepEqual(shellScript("pwsh", ["pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-com", "git", "status"]), { command: "git status", directory: undefined })
   assert.deepEqual(shellScript("pwsh", ["pwsh", "-ec", "x"]), { encoded: true })
   assert.deepEqual(shellScript("pwsh", ["pwsh", "s.ps1"]), {})
@@ -304,7 +306,8 @@ test("round 4 S6, narrowed on 2026-09-27: a non-force push of any name passes; f
     assert.equal((await f.guard(command, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.pushForce}`, command)
   }
   assert.equal((await f.guard("git tag v6; git push -q origin v6")).deny, false)
-  assert.equal((await f.guard("if ($env:NOPE) { git tag v5 }; git push -q origin v5")).reason, POWERSHELL_GIT_FORMS)
+  // Git in a PowerShell block runs as its own statement (replay ruling, 2026-09-27), like the Bash row above.
+  assert.equal((await f.guard("if ($env:NOPE) { git tag v5 }; git push -q origin v5")).deny, false)
 })
 
 test("round 4: unknown Git configuration from the environment fails closed for checked operations", async (t) => {
@@ -366,7 +369,8 @@ test("round 4: ordinary desk writes pass on the state branch, and only HEAD move
   assert.doesNotMatch(POWERSHELL_GIT_FORMS, /worktree/u)
   assert.doesNotMatch(readFileSync(hook, "utf8").match(/permissionDecisionReason: "([^"]*)/u)[1], /worktree/u)
   for (const [command, powershell] of [
-    ["git push origin (git branch --show-current)", true], ["$w = Get-Random; git commit -q $w", true], ["git stash; &", true],
+    // A group's value is its static answer (replay ruling, 2026-09-27), so an unresolved group stands in here.
+    ["git push origin (Get-Content b.txt)", true], ["$w = Get-Random; git commit -q $w", true], ["git stash; &", true],
     ['git -C "$(pick)" stash', false], ["git stash (", true], ["git checkout 'x", false],
   ]) {
     const { deny, reason } = await f.guard(command, { powershell })

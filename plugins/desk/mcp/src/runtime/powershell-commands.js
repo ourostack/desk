@@ -52,13 +52,13 @@ function subexpressionEnd(text, start) {
   return -1
 }
 
-// `text` without its `$( … )` subexpressions, or null when one is not closed.
+// `text` without its `$( … )` subexpressions. One that is not closed is kept, so its `$` still reads as code.
 function withoutSubexpressions(text) {
   let result = ""
   for (let i = 0; i < text.length; i++) {
     if (!text.startsWith("$(", i)) { result += text[i]; continue }
     const end = subexpressionEnd(text, i)
-    if (end < 0) return null
+    if (end < 0) return result + text.slice(i)
     i = end
   }
   return result
@@ -83,7 +83,7 @@ function outerText(words) {
       if (word === "(" || word === "{") depth++
       else if (word === ")" || word === "}") depth--
       else if (depth === 0 && !(word.quoted && (evaluates || script))) {
-        kept.push(word.parts ? word.parts.map((part) => (part.expand ? withoutSubexpressions(part.text) ?? part.text : part.text)).join("") : word)
+        kept.push(word.parts ? word.parts.map((part) => (part.expand ? withoutSubexpressions(part.text) : part.text)).join("") : word)
       }
     }
   }
@@ -179,7 +179,6 @@ function plainArgument(word) {
   return parts.every((part, index) => {
     if (!part.expand) return true
     const text = withoutSubexpressions(part.text)
-    if (text === null) return false
     return part.quoted ? !DOUBLE_QUOTED_CODE.test(text) : !text.includes("$") && !(index === 0 && text.startsWith("@"))
   })
 }
@@ -193,12 +192,12 @@ function argumentSpans(words) {
     const array = word.parts && !word.quoted && wordText(word) === "@" && words[i + 1] === "("
     if (word === "(" || array) {
       let nesting = 0, end = array ? i + 1 : i
+      // The tokenizer closes every group; the bound only guards the loop.
       do {
-        if (end === words.length) return null
         if (words[end] === "(" || words[end] === "{") nesting++
         if (words[end] === ")" || words[end] === "}") nesting--
         end++
-      } while (nesting)
+      } while (nesting && end < words.length)
       // `(…).Name` and `(…)[0]` are expressions on the group's value, which Desk does not follow.
       if (words[end]?.parts && /^[.[]/u.test(wordText(words[end]))) return null
       spans.push(words.slice(i, end))
@@ -239,7 +238,9 @@ function literalInput(element) {
   const [word] = element.words
   if (element.words.length !== 1 || element.redirects.length || !word.parts) return null
   const parts = word.parts.filter((part) => part.text !== "")
-  return parts.length === 1 && parts[0].quoted ? word : null
+  // A quoted string, or a here-string: its body between an unquoted @ on each side.
+  const body = parts.length === 3 && !parts[0].quoted && parts[0].text === "@" && !parts[2].quoted && parts[2].text === "@" ? parts[1] : parts.length === 1 ? parts[0] : null
+  return body?.quoted ? { parts: [body], quoted: true } : null
 }
 
 export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, budget = inspectionBudget() }) {

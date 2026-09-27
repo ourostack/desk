@@ -371,7 +371,8 @@ test("A3b review: configuration sources, alias forms and stdin scripts cover eve
     else assert.match(got, expected, command)
   }
   assert.match(await decide(`git --git-dir ${q(P + "/.git")} --namespace ns -c alias.x='!git stash' x`, { cwd: O }), /git stash takes other sessions/u)
-  for (const command of ["$x = (git stash)"]) assert.equal(await decide(command, { powershell: true }), POWERSHELL_GIT_FORMS)
+  // A group runs its Git as its own statement (replay ruling, 2026-09-27).
+  for (const command of ["$x = (git stash)"]) assert.match(await decide(command, { powershell: true }), /git stash takes other sessions/u)
   assert.equal(await decide("$e = @(); $f = () + 1", { powershell: true }), "allow")
   // An upstream on the local repository itself ("."), and a key saved without a value.
   f.git(P, "config", "branch.main.remote", ".")
