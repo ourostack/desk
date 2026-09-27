@@ -189,6 +189,11 @@ test("Codex plugin metadata declares host-native Desk activation surfaces", () =
   assert.equal(deskPlugin.activation?.codex?.targets?.["desk:worker"]?.default, true)
   assert.equal(deskPlugin.activation?.codex?.targets?.["desk:worker"]?.source, "agents/worker.toml")
   assert.equal(deskPlugin.activation?.codex?.targets?.["desk:worker"]?.activationSurface, "global-or-project-agents-md")
+  assert.deepEqual(deskPlugin.activation?.codex?.targets?.["desk:observer"], {
+    default: false,
+    source: "agents/observer.toml",
+    activationSurface: "subagent",
+  })
   assert.deepEqual(deskPlugin.activation?.codex?.nativeSurfaces, [
     "plugins.<plugin>.enabled",
     "plugins.<plugin>.mcp_servers.<server>",

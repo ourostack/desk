@@ -678,6 +678,7 @@ test("run and startCli expose success, failure, and no-op CLI paths", () => {
         if (file === "plugins/desk/README.md") {
           return `${goodBody}\n[Canonical RFC](./docs/agentic-engineering-v2-rfc.md)`
         }
+        if (file === "plugins/desk/docs/evaluation-packet.md") return `${goodBody}\n[The RFC](agentic-engineering-v2-rfc.md)`
         if (file === "plugins/desk/mcp/README.md") return mcpReadmeBody()
         if (file === "plugins/desk/mcp/src/tool-names.js") return toolNamesSource()
         if (file === "plugins/desk/skills/cdp-headed-browser/SKILL.md") return browserPolicyBody()

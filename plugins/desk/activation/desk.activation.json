@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "id": "desk",
-  "version": "3.2.0-alpha.54",
+  "version": "3.2.0-alpha.59",
   "dependencies": [
     {
       "id": "desk",
       "kind": "substrate",
-      "version": "3.2.0-alpha.54",
+      "version": "3.2.0-alpha.59",
       "provenance": {
         "source": "plugins/desk/.codex-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
-        "version": "3.2.0-alpha.54",
+        "version": "3.2.0-alpha.59",
         "integrity": "sha256-desk-activation-manifest-v1"
       }
     },
@@ -62,6 +62,24 @@
         "startup": {
           "foundation": "skills/using-desk/SKILL.md",
           "authoritative_scan": "skills/session-start/SKILL.md"
+        }
+      },
+      {
+        "id": "desk:observer",
+        "kind": "agent",
+        "default": false,
+        "depends_on": [
+          "desk",
+          "superpowers",
+          "plain-language"
+        ],
+        "entrypoints": {
+          "claude": "agents/observer.md",
+          "codex": "agents/observer.toml",
+          "copilot": "agents/observer.agent.md"
+        },
+        "startup": {
+          "foundation": "skills/using-desk/SKILL.md"
         }
       }
     ],
@@ -173,6 +191,11 @@
         "desk:worker": {
           "default": true,
           "source": "agents/worker.md",
+          "activationSurface": "plugin-agent"
+        },
+        "desk:observer": {
+          "default": false,
+          "source": "agents/observer.md",
           "activationSurface": "plugin-agent"
         }
       },

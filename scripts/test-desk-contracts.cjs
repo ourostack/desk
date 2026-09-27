@@ -853,6 +853,174 @@ requires(
   /operator teaches[\s\S]+even offhand[\s\S]+no-write/iu,
 );
 
+// The observer agent: worker's sibling, named for Lean's process observer, who watches the work, times it and
+// classifies each step, and never does the work. Its three bodies carry identity only, like worker's.
+const observerBodies = [
+  "plugins/desk/agents/observer.md",
+  "plugins/desk/agents/observer.agent.md",
+  "plugins/desk/agents/observer.toml",
+];
+for (const file of observerBodies) {
+  contract(`${file} carries identity only`, () => {
+    const body = text(file);
+    for (const [pattern, owner] of ownedRules) {
+      assert.doesNotMatch(body, pattern, `restates a rule owned by ${owner}`);
+    }
+    for (const required of [
+      "I'm **observer**",
+      "the full `using-desk` foundation exactly once",
+      "Do not duplicate it here.",
+      "Lean's process observer",
+      "**Independent.**",
+      "**Evidence only.**",
+      "**Hands off.**",
+      "**Never my own judge.**",
+      "`desk:evaluate-release`",
+    ]) assert.ok(body.includes(required), `missing identity: ${required}`);
+    assert.match(body, /never do, fix or finish the work I observe/u);
+    assert.match(body, /never certify my own work/u);
+    // using-desk owns the citation rule; the body points to it rather than restating it.
+    assert.match(body, /cited the way `using-desk` asks/u);
+    assert.doesNotMatch(body, /claims? I make cites?|cites? its source|source for every claim/iu, "restates using-desk's citation rule");
+    assert.doesNotMatch(body, /desk:session-start/u, "observer does not pick up the desk's work at startup");
+    assert.ok(Buffer.byteLength(body) <= 4096, `body is ${Buffer.byteLength(body)} bytes; identity fits in 4 KB`);
+  });
+}
+contract("the three observer bodies share one identity text", () => {
+  const shared = (body) => body.slice(body.indexOf("I'm **observer**")).split("\n'''", 1)[0].trim();
+  const [claude, copilot, codex] = observerBodies.map((file) => shared(text(file)));
+  assert.equal(copilot, claude, "observer.agent.md drifted from observer.md");
+  assert.equal(codex, claude, "observer.toml drifted from observer.md");
+});
+contract("the observer bodies keep worker's frontmatter and tool shape per host", () => {
+  const frontmatterKeys = (body) => body.split(/\r?\n---\r?\n/u, 1)[0].split(/\r?\n/u).filter((line) => /^[A-Za-z-]+:/u.test(line)).map((line) => line.split(":", 1)[0]);
+  const tomlKeys = (body) => body.split(/\r?\n/u).filter((line) => /^[a-z_]+ = /u.test(line)).map((line) => line.split(" ", 1)[0]);
+  assert.deepEqual(frontmatterKeys(text("plugins/desk/agents/observer.md")), frontmatterKeys(text("plugins/desk/agents/worker.md")));
+  assert.deepEqual(frontmatterKeys(text("plugins/desk/agents/observer.agent.md")), frontmatterKeys(text("plugins/desk/agents/worker.agent.md")));
+  assert.deepEqual(tomlKeys(text("plugins/desk/agents/observer.toml")), tomlKeys(text("plugins/desk/agents/worker.toml")));
+  assert.match(text("plugins/desk/agents/observer.md"), /^name: observer$/mu);
+  assert.match(text("plugins/desk/agents/observer.md"), /^tools: \["\*"\]$/mu);
+  assert.match(text("plugins/desk/agents/observer.agent.md"), /^name: observer$[\s\S]+^target: github-copilot$[\s\S]+^user-invocable: true$/mu);
+  assert.match(text("plugins/desk/agents/observer.toml"), /^name = "observer"$/mu);
+});
+
+// observer's release evaluation (spec §12 milestone 6): cold start on a named host, per-step evidence, one class per
+// problem, measured time, and a report that fixes nothing and certifies nothing.
+const evaluateRelease = "plugins/desk/skills/evaluate-release/SKILL.md";
+contract("evaluate-release is observer's skill and says when not to use it", () => {
+  const skill = text(evaluateRelease);
+  assert.match(skill, /^name: evaluate-release$/mu);
+  assert.match(skill.split(/\n---\n/u, 1)[0], /^description: .*`desk:observer`.*packet.*cold start/mu);
+  const notFor = skill.split("## When not to use it", 2)[1]?.split("\n## ", 1)[0] ?? "";
+  assert.match(notFor, /work you did/u);
+  assert.match(notFor, /`superpowers:requesting-code-review`/u);
+  assert.match(notFor, /waste/u);
+});
+requires(evaluateRelease, "evaluate-release starts cold on the named host and tests the channel as it stands",
+  /## Start cold on the named host[\s\S]+named host[\s\S]+throwaway profile[\s\S]+channel as it stands[\s\S]+commit you observed[\s\S]+evidence, never as a pin/u);
+requires(evaluateRelease, "evaluate-release records every step's outcome with evidence",
+  /## Record every step[\s\S]+commands? with (?:its|their) output[\s\S]+screenshots?[\s\S]+`desk_status`[\s\S]+host logs?[\s\S]+`pass`, `fail`, `blocked` or `unavailable`/u);
+requires(evaluateRelease, "evaluate-release classifies every problem as a defect, a confusion or a gap",
+  /## Classify every problem[\s\S]+exactly one class[\s\S]+\*\*Defect\.\*\*[\s\S]+\*\*Confusion\.\*\*[\s\S]+\*\*Gap\.\*\*/u);
+requires(evaluateRelease, "evaluate-release measures time and never estimates it",
+  /## Time each scenario[\s\S]+measured, never estimated[\s\S]+`unavailable`/u);
+requires(evaluateRelease, "evaluate-release reports without fixing anything",
+  /## Hands off[\s\S]+never fix[\s\S]+workaround[\s\S]+record it and (?:carry on|continue)/iu);
+requires(evaluateRelease, "evaluate-release never certifies observer's own work or the release",
+  /never certif[\s\S]+release call is the (?:human|evaluator)'s/iu);
+requires(evaluateRelease, "evaluate-release files one issue per finding, labeled evaluation, after the evaluator approves it",
+  /## Report[\s\S]+one issue per finding[\s\S]+`ourostack\/desk`[\s\S]+labeled `evaluation`[\s\S]+work equivalent[\s\S]+`desk:operator-voice-comments`/u);
+requires(evaluateRelease, "evaluate-release runs observer outside the desk under test and keeps its record there too",
+  /## Start cold on the named host[\s\S]+own working folder with its own profile, outside the throwaway area and the desk under test[\s\S]+never write to it[\s\S]+evidence folder[\s\S]+outside the desk under test/u);
+requires(evaluateRelease, "evaluate-release stops the evaluation when the preflight names another desk",
+  /Hold the preflight[\s\S]+`desk_status`[\s\S]+throwaway desk[\s\S]+any other desk, the evaluation stops[\s\S]+defect/u);
+requires(evaluateRelease, "evaluate-release has a separate driver run a dry run while observer only observes, handles gates and files nothing",
+  /## Observe a dry run[\s\S]+separate driver[\s\S]+never write to the desk under test[\s\S]+The driver runs the packet, not you[\s\S]+tmux send-keys[\s\S]+You never run those commands[\s\S]+sign-in[\s\S]+`blocked`[\s\S]+File nothing[\s\S]+`desk:operator-voice-comments`/u);
+contract("evaluate-release keeps public findings free of times of day and private content", () => {
+  const skill = text(evaluateRelease);
+  assert.match(skill, /durations?, never (?:a )?times? of day/u);
+  assert.match(skill, /`desk:content-routing`/u);
+});
+
+// The evaluation packet (spec §9 and §12 milestone 6) is public, names channels only and carries its scenarios.
+const evaluationPacket = "plugins/desk/docs/evaluation-packet.md";
+contract("the evaluation packet names channels, never commits", () => {
+  const packet = text(evaluationPacket);
+  assert.doesNotMatch(packet, /\b[0-9a-f]{7,40}\b/u, "no commit hash");
+  assert.doesNotMatch(packet, /frozen|\bpin(?:ned)? (?:to|at) /iu);
+  assert.match(packet, /channel as it stands/u);
+  assert.match(packet, /https:\/\/github\.com\/ourostack\/desk\/blob\/main\/SETUP\.md/u);
+});
+contract("the evaluation packet covers who it is for, V2, setup, scenarios and recording", () => {
+  const packet = text(evaluationPacket);
+  const headings = packet.split("\n").filter((line) => /^#{2,3} /u.test(line)).map((line) => line.replace(/^#+ /u, ""));
+  for (const heading of ["Who this is for", "What V2 is", "Set up from nothing", "The scenarios", "Record what you find"]) {
+    assert.ok(headings.includes(heading), `missing section ${heading}`);
+  }
+  const scenarios = headings.filter((heading) => /^\d\. /u.test(heading)).map((heading) => heading.replace(/ \(lands by the evaluation\)$/u, ""));
+  assert.deepEqual(scenarios, [
+    "1. Start new work: alignment, then ownership",
+    "2. Hand over a whole outcome and step away",
+    "3. Change a requirement mid-run",
+    "4. A desk that needs tidying",
+    "5. A Desk tool fault that heals in the session",
+    "6. A finished task reaches the factory",
+    "7. A kaizen card's check",
+  ]);
+  for (const section of packet.split(/\n### \d\. /u).slice(1)) {
+    assert.match(section, /\*\*Do:\*\*[\s\S]+\*\*Good looks like:?\*\*/u, `scenario ${section.split("\n", 1)[0]} lacks steps or observable outcomes`);
+  }
+  assert.match(packet, /`observer`[\s\S]+`desk:evaluate-release`/u);
+  assert.match(packet, /labeled `evaluation`/u);
+  assert.match(packet, /measured, not estimated/u);
+  assert.match(packet, /\[[^\]]+\]\(agentic-engineering-v2-rfc\.md\)/u);
+});
+// Review fix round 1 (controller ruling): nothing under test may touch a desk the evaluator already has.
+contract("the evaluation packet isolates the desk under test and proves it before any scenario", () => {
+  const packet = text(evaluationPacket);
+  const setup = packet.split("## Set up from nothing", 2)[1].split("\n## The scenarios", 1)[0];
+  assert.match(setup, /### Make the throwaway desk[\s\S]+mktemp -d[\s\S]+_meta[\s\S]+_archive[\s\S]+git -C "\$EVAL\/desk" init/u);
+  // Review fix round 2: the throwaway sessions get their own Desk state and cache, and every variable lives in env.sh.
+  for (const variable of ["EVAL", "DESK_ACTIVATION_CONFIG", "DESK", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CLAUDE_CONFIG_DIR", "COPILOT_HOME"]) {
+    assert.match(setup, new RegExp(`printf "export ${variable}='%s'\\\\n" "\\$EVAL`, "u"), `env.sh exports ${variable} inside $EVAL`);
+  }
+  assert.match(setup, /### Preflight: the session uses the throwaway desk[\s\S]+resolve-desk-root\.js[\s\S]+read-only first prompt[\s\S]+exactly `\$EVAL\/desk` with `"source":"activation-config"`[\s\S]+stop the evaluation[\s\S]+defect[\s\S]+What this cannot prevent/u);
+  assert.doesNotMatch(setup, /reports the declared plugin chain/u, "desk_status has no chain for an env-bound desk; the launcher listing is the channel check");
+  assert.ok(setup.indexOf("### Preflight") < setup.indexOf("### Start `observer`"), "the preflight comes before observer and the scenarios");
+  assert.match(setup, /### Start `observer`[\s\S]+own working folder and its own profile, never from `\$EVAL`[\s\S]+evidence folder outside `\$EVAL`/u);
+  assert.match(setup, /requires Desk 3\.2\.0-alpha\.54 or later[\s\S]+backs up your whole `~\/\.claude` folder to `\$EVAL\/claude-backup` whatever version/u);
+  assert.match(setup, /If V2 is not installed in your normal profile, give `observer` a throwaway setup of its own[\s\S]+same preflight/u);
+  assert.match(setup, /### A managed launcher with a company overlay[\s\S]+COPILOT_HOME[\s\S]+crew install[\s\S]+from its channel branch/u);
+});
+contract("the evaluation packet's scenarios run against the throwaway desk with reachable outcomes", () => {
+  const packet = text(evaluationPacket);
+  const scenario = (number) => packet.split(`\n### ${number}. `, 2)[1].split(/\n### \d\. |\n## /u, 1)[0];
+  assert.match(scenario(4), /organization\.json[\s\S]+hi-can-you-fix-the-login[\s\S]+status-notes\.md[\s\S]+`track_person_name`[\s\S]+`tidy_version: 1`/u);
+  assert.match(scenario(5), /state_branch|state branch/u);
+  assert.match(scenario(5), /status --porcelain[\s\S]+push -q origin main[\s\S]+switch -q --detach[\s\S]+another terminal[\s\S]+repaired: detached HEAD → main[\s\S]+`state_branch_detached`[\s\S]+switch_state_branch[\s\S]+`ready` in the same session/u);
+  assert.doesNotMatch(scenario(5), /root_unavailable|#L\d/u);
+  assert.match(scenario(6), /`ourostack\/factory`[\s\S]+`reports` branch[\s\S]+`jobs\/<job>\.md`[\s\S]+factory\.js job-link/u);
+  assert.match(scenario(7), /V2 design's section 6, "Kaizen"[\s\S]+not yet public/u);
+  assert.doesNotMatch(scenario(7), /RFC §4/u);
+});
+// Review fix round 2: every command block that writes fails closed and stays inside $EVAL.
+contract("every writing command block in the evaluation packet fails closed inside $EVAL", () => {
+  const blocks = [...text(evaluationPacket).matchAll(/^\s*```sh\n([\s\S]*?)^\s*```$/gmu)].map((match) => match[1]);
+  const writes = /git (?:-C "[^"]+" )?(?:commit|push|switch|rm|add|init)|mkdir|rm -[rf]|cp -R|> "|-exec rm/u;
+  const writing = blocks.filter((block) => writes.test(block));
+  assert.ok(writing.length >= 5, `expected the setup, tidy, two detach and clean-up blocks; found ${writing.length}`);
+  for (const block of writing) {
+    assert.match(block, /^[ \t]*\(\s*set -eu/mu, `block does not start a fail-closed subshell:\n${block}`);
+    assert.match(block, /stopping\./u, `block has no guard that stops:\n${block}`);
+    for (const target of block.matchAll(/(?:> |mkdir -p |cp -R "[^"]+" |--bare |-C )"([^"]+)"/gu)) {
+      assert.match(target[1], /^\$EVAL\//u, `writes outside $EVAL: ${target[1]}`);
+    }
+  }
+});
+contract("the evaluation packet prose is not hard-wrapped", () => {
+  assert.deepEqual(proseUnits(evaluationPacket).filter((unit) => unit.length > 1).map((unit) => unit[0].number), []);
+});
+
 assert.equal(
   contractFailures.length,
   0,
