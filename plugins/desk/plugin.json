@@ -27,6 +27,11 @@
           "default": true,
           "source": "agents/worker.agent.md",
           "activationSurface": "root-plugin-agent"
+        },
+        "desk:observer": {
+          "default": false,
+          "source": "agents/observer.agent.md",
+          "activationSurface": "root-plugin-agent"
         }
       },
       "dependencies": {

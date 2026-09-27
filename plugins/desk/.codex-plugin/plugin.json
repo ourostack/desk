@@ -31,6 +31,11 @@
           "default": true,
           "source": "agents/worker.toml",
           "activationSurface": "global-or-project-agents-md"
+        },
+        "desk:observer": {
+          "default": false,
+          "source": "agents/observer.toml",
+          "activationSurface": "subagent"
         }
       },
       "nativeSurfaces": [

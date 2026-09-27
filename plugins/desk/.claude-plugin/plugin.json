@@ -18,7 +18,8 @@
   ],
   "skills": "./skills/",
   "agents": [
-    "./agents/worker.md"
+    "./agents/worker.md",
+    "./agents/observer.md"
   ],
   "mcpServers": "./.mcp.json",
   "dependencies": [

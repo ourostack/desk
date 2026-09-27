@@ -26,6 +26,7 @@ const copilotBundleCommand =
 const expectedCopilotSourcePaths = [
   "plugins/desk/plugin.json",
   "plugins/desk/agents/worker.agent.md",
+  "plugins/desk/agents/observer.agent.md",
   "plugins/desk/hooks/copilot-hooks.json",
   "plugins/desk/hooks/copilot-session-start.cjs",
   "plugins/desk/.mcp.copilot.json",
@@ -243,6 +244,28 @@ test("Copilot root plugin metadata exposes Desk worker and MCP without manual re
   assert.equal(worker.name, "worker")
   assert.equal(worker.target, "github-copilot")
   assert.equal(worker["user-invocable"], true)
+})
+
+test("Copilot root plugin metadata exposes the observer agent beside worker", () => {
+  const activation = loadJson(activationManifestPath)
+  const deskPlugin = loadJson("plugins", "desk", "plugin.json")
+  const observer = parseSimpleFrontmatter("plugins", "desk", "agents", "observer.agent.md")
+  const activationTarget = findByField(activation.provides.activation_targets, "id", "desk:observer", activationManifestPath)
+
+  assert.deepEqual(deskPlugin.activation?.copilot?.targets?.["desk:observer"], {
+    default: false,
+    source: "agents/observer.agent.md",
+    activationSurface: "root-plugin-agent",
+  })
+  assert.equal(activationTarget.default, false)
+  assert.deepEqual(activationTarget.entrypoints, {
+    claude: "agents/observer.md",
+    codex: "agents/observer.toml",
+    copilot: "agents/observer.agent.md",
+  })
+  assert.equal(observer.name, "observer")
+  assert.equal(observer.target, "github-copilot")
+  assert.equal(observer["user-invocable"], true)
 })
 
 test("Copilot root packaging declares a generated flattened dependency closure", () => {

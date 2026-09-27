@@ -63,6 +63,24 @@
           "foundation": "skills/using-desk/SKILL.md",
           "authoritative_scan": "skills/session-start/SKILL.md"
         }
+      },
+      {
+        "id": "desk:observer",
+        "kind": "agent",
+        "default": false,
+        "depends_on": [
+          "desk",
+          "superpowers",
+          "plain-language"
+        ],
+        "entrypoints": {
+          "claude": "agents/observer.md",
+          "codex": "agents/observer.toml",
+          "copilot": "agents/observer.agent.md"
+        },
+        "startup": {
+          "foundation": "skills/using-desk/SKILL.md"
+        }
       }
     ],
     "overlay_agents": []
@@ -173,6 +191,11 @@
         "desk:worker": {
           "default": true,
           "source": "agents/worker.md",
+          "activationSurface": "plugin-agent"
+        },
+        "desk:observer": {
+          "default": false,
+          "source": "agents/observer.md",
           "activationSurface": "plugin-agent"
         }
       },
