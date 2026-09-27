@@ -37,8 +37,9 @@ function setVersion(root, plugin, version, { marketplace = true } = {}) {
   }
 }
 
-// A throwaway repository with two plugins committed as the base.
-function withRepo(fn) {
+// A throwaway repository with two plugins committed as the base. With `fragments`, alpha is released from
+// changelog fragments: its base already has a changelog.d/ folder.
+function withRepo(fn, { fragments = false } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "release-integrity-"))
   try {
     git(root, "init", "-q", "-b", "main")
@@ -52,6 +53,10 @@ function withRepo(fn) {
     setVersion(root, "beta", "2.0.0", { marketplace: false })
     writeJson(root, "plugins/alpha/agency.json", { name: "alpha", version: "1.0.0-alpha.9" })
     writeFileSync(path.join(root, "plugins", "alpha", "skill.md"), "one\n")
+    if (fragments) {
+      mkdirSync(path.join(root, "plugins", "alpha", "changelog.d"))
+      writeFileSync(path.join(root, "plugins", "alpha", "changelog.d", "README.md"), "How to write a fragment.\n")
+    }
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", "base")
     git(root, "branch", "base")
@@ -131,6 +136,72 @@ test("a plugin that is new since the base needs no bump", () => {
     setVersion(root, "gamma", "0.1.0", { marketplace: false })
     commit(root)
     assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [])
+  })
+})
+
+function writeFragment(root, name, text) {
+  writeFileSync(path.join(root, "plugins", "alpha", "changelog.d", name), text)
+}
+
+test("a fragment-released plugin needs a new, non-empty changelog fragment instead of a version bump", () => {
+  withRepo((root) => {
+    writeFileSync(path.join(root, "plugins", "alpha", "skill.md"), "two\n")
+    // Neither the folder's README nor a file that is not Markdown is a fragment.
+    writeFragment(root, "README.md", "Reworded instructions.\n")
+    writeFragment(root, "notes.txt", "not a fragment\n")
+    commit(root)
+    assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [
+      "alpha: files under plugins/alpha/ changed since base; add a changelog fragment, plugins/alpha/changelog.d/<short-slug>.md, that says what changed",
+    ])
+
+    writeFragment(root, "skill-wording.md", " \n\n")
+    commit(root)
+    assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [
+      "alpha: plugins/alpha/changelog.d/skill-wording.md is empty; say what changed",
+    ])
+
+    writeFragment(root, "skill-wording.md", "The skill now says two.\n")
+    commit(root)
+    assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [])
+  }, { fragments: true })
+})
+
+test("a fragment-released plugin keeps its version in the pull request", () => {
+  withRepo((root) => {
+    writeFileSync(path.join(root, "plugins", "alpha", "skill.md"), "two\n")
+    writeFragment(root, "skill-wording.md", "The skill now says two.\n")
+    setVersion(root, "alpha", "1.0.0-alpha.10")
+    writeJson(root, "plugins/alpha/agency.json", { name: "alpha", version: "1.0.0-alpha.10" })
+    commit(root)
+    assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [
+      "alpha: its version changed from 1.0.0-alpha.9 to 1.0.0-alpha.10, but plugins/alpha/ is released from changelog fragments; leave every version surface alone, and the release workflow assigns the next version after the merge",
+    ])
+  }, { fragments: true })
+})
+
+test("a branch behind a release on the base is judged from where it left the base", () => {
+  withRepo((root) => {
+    git(root, "switch", "-q", "-c", "feature")
+    writeFileSync(path.join(root, "plugins", "alpha", "skill.md"), "two\n")
+    writeFragment(root, "skill-wording.md", "The skill now says two.\n")
+    commit(root)
+    // The release workflow ships another change on the base after the branch left it.
+    git(root, "switch", "-q", "base")
+    setVersion(root, "alpha", "1.0.0-alpha.10")
+    writeJson(root, "plugins/alpha/agency.json", { name: "alpha", version: "1.0.0-alpha.10" })
+    commit(root)
+    git(root, "switch", "-q", "feature")
+    assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [])
+  }, { fragments: true })
+})
+
+test("the pull request that introduces changelog.d/ still releases with a version bump", () => {
+  withRepo((root) => {
+    writeFileSync(path.join(root, "plugins", "alpha", "skill.md"), "two\n")
+    mkdirSync(path.join(root, "plugins", "alpha", "changelog.d"))
+    writeFragment(root, "README.md", "How to write a fragment.\n")
+    commit(root)
+    assert.match(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" })[0], /^alpha: .*version 1\.0\.0-alpha\.9 is not above 1\.0\.0-alpha\.9/u)
   })
 })
 
