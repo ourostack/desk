@@ -14,17 +14,17 @@ async function temporaryRoot(t) {
 
 test("root resolution with omitted options uses isolated home defaults without provisioning", async (t) => {
   const home = await temporaryRoot(t)
-  await fs.mkdir(path.join(home, "desk"))
+  await fs.mkdir(path.join(home, "desk", "_meta"), { recursive: true })
+  await fs.mkdir(path.join(home, "desk", "_archive"))
   const oldDesk = process.env.DESK
   delete process.env.DESK
   t.mock.method(os, "homedir", () => home)
   syncBuiltinESMExports()
   try {
     assert.deepEqual(resolveDeskRootWithSource(), {
-      root: path.join(home, "desk"), source: "fallback:desk",
+      root: path.join(home, "desk"), source: "home_fallback",
       tried: [
-        { source: "fallback:ms-desk", path: path.join(home, "ms-desk") },
-        { source: "fallback:desk", path: path.join(home, "desk") },
+        { source: "home_fallback", path: path.join(home, "desk") },
       ],
     })
   } finally {

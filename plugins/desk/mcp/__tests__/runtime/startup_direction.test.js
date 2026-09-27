@@ -1,10 +1,10 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import {
   copilotStartupDirection,
@@ -15,7 +15,7 @@ import {
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const script = path.join(mcpRoot, "scripts", "resolve-desk-root.js")
 
-// A temporary HOME with a ~/desk fallback, a solo desk, a crew-shaped workspace and a plain repository.
+// A temporary HOME with a ~/desk fallback that has the desk layout, a solo desk, a crew-shaped workspace and a plain repository.
 function withSandbox(body) {
   const scratch = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-startup-line-")))
   try {
@@ -24,7 +24,7 @@ function withSandbox(body) {
     const solo = path.join(scratch, "solo")
     const crew = path.join(scratch, "crew")
     const codeRepo = path.join(scratch, "code-repo")
-    for (const dir of [fallback, path.join(solo, "_meta"), path.join(solo, "_archive"), path.join(crew, "_meta"), path.join(crew, "desks"), codeRepo]) {
+    for (const dir of [path.join(fallback, "_meta"), path.join(fallback, "_archive"), path.join(solo, "_meta"), path.join(solo, "_archive"), path.join(crew, "_meta"), path.join(crew, "desks"), codeRepo]) {
       mkdirSync(dir, { recursive: true })
     }
     const malformed = path.join(scratch, "bad.json")
@@ -42,8 +42,8 @@ test("the startup line names the bound root and where it came from", () => {
     ["host-project", "this session's project folder is a desk"],
     ["activation-config", "the saved desk binding"],
     ["env:DESK", "the DESK environment variable"],
-    ["fallback:worker-workspace", "a home-folder fallback"],
-    ["fallback:desk", "a home-folder fallback"],
+    ["home_fallback", "a home-folder fallback"],
+    ["overlay_home_fallback", "the home-folder desk of a work overlay loaded in this session"],
   ]) {
     const line = deskStartupDirection({ root: "/desks/one", source })
     assert.ok(line.startsWith(`Desk startup: $DESK is /desks/one (${label}). `), `${source}: ${line}`)
@@ -76,8 +76,34 @@ test("an unreadable root configuration is reported as unreadable, never as setup
   assert.match(inDesk, /This session's folder \/work\/crew is a desk; an overlay that launches Desk in this folder binds it\./u)
 })
 
+test("a binding whose folder is missing is named as unusable, never as setup mode or another desk", () => {
+  const line = deskStartupDirection({ root: null, unavailable: { path: "/gone/desk", message: "desk-mcp: the saved desk binding /b.json names /gone/desk, which does not exist. Desk does not fall back to another desk." } })
+  assert.match(line, /^Desk startup: Desk cannot use the desk it is bound to \(desk-mcp: the saved desk binding \/b\.json names \/gone\/desk, which does not exist\./u)
+  assert.match(line, /desk_status reports root_unavailable with the fix/u)
+  assert.match(line, /desk:first-run-bootstrap/u)
+  assert.doesNotMatch(line, /no desk is bound yet|\$DESK is/u)
+  withSandbox(({ env, fallback }) => {
+    const binding = path.join(env.HOME, "binding.json")
+    writeFileSync(binding, JSON.stringify({ schema_version: 1, desk: { root: path.join(env.HOME, "moved") } }))
+    const bound = resolveStartupRoot({ env: { ...env, DESK: fallback }, homeDir: env.HOME, activationConfigPath: binding })
+    assert.equal(bound.root, null)
+    assert.equal(bound.unavailable.path, path.join(env.HOME, "moved"))
+    assert.match(bound.unavailable.message, /does not fall back/u)
+    const saved = copilotStartupDirection({ env: { ...env, DESK_ACTIVATION_CONFIG: binding }, homeDir: env.HOME })
+    assert.match(saved, /Desk cannot use the desk it is bound to/u)
+    assert.match(saved, /rebind with desk:first-run-bootstrap/u)
+    assert.equal(saved.split("does not fall back").length, 2, "the line says it once")
+    // A missing $DESK is fixed by correcting DESK, not by rebinding.
+    const fromEnv = copilotStartupDirection({ env: { ...env, DESK: path.join(env.HOME, "moved") }, homeDir: env.HOME })
+    assert.match(fromEnv, /correct or unset DESK and reconnect the Desk MCP server/u)
+    assert.doesNotMatch(fromEnv, /first-run-bootstrap/u)
+    assert.equal(fromEnv.split("does not fall back").length, 2, "the line says it once")
+    assert.equal(resolveStartupRoot({ env, homeDir: env.HOME, explicitRoot: path.join(env.HOME, "nope") }).unavailable.path, path.join(env.HOME, "nope"))
+  })
+})
+
 test("when the session folder is a desk the server will not bind, the line names both roots and never asserts one", () => {
-  const line = deskStartupDirection({ root: "/home/me/desk", source: "fallback:desk" }, { sessionDesk: "/work/crew" })
+  const line = deskStartupDirection({ root: "/home/me/desk", source: "home_fallback" }, { sessionDesk: "/work/crew" })
   assert.match(line, /^Desk startup: this session's folder \/work\/crew is a desk, but Desk without an overlay binds \/home\/me\/desk \(a home-folder fallback\); an overlay that launches Desk in this folder binds \/work\/crew instead\./u)
   assert.match(line, /desk_status reports the root Desk actually bound, and it wins\./u)
   assert.match(line, /Invoke desk:session-start now for the authoritative workspace scan before other work/u)
@@ -90,7 +116,7 @@ test("when the session folder is a desk the server will not bind, the line names
 
 test("resolveStartupRoot separates a missing desk from an unreadable configuration", () => {
   withSandbox(({ env, fallback, malformed }) => {
-    assert.deepEqual(resolveStartupRoot({ env, homeDir: env.HOME }), { root: fallback, source: "fallback:desk" })
+    assert.deepEqual(resolveStartupRoot({ env, homeDir: env.HOME }), { root: fallback, source: "home_fallback" })
     rmSync(fallback, { recursive: true })
     assert.deepEqual(resolveStartupRoot({ env, homeDir: env.HOME }), { root: null })
     const broken = resolveStartupRoot({ env, homeDir: env.HOME, activationConfigPath: malformed })
@@ -103,23 +129,23 @@ test("Copilot compares the session folder with the root the plain Desk server bi
   withSandbox(({ env, fallback, solo, crew, codeRepo, malformed }) => {
     const copilot = (extra, sessionFolder) => copilotStartupDirection({ env: { ...env, ...extra }, sessionFolder, homeDir: env.HOME })
     // An ordinary folder: one root, the one the server binds.
-    assert.equal(copilot({}, codeRepo), deskStartupDirection({ root: fallback, source: "fallback:desk" }))
+    assert.equal(copilot({}, codeRepo), deskStartupDirection({ root: fallback, source: "home_fallback" }))
     // A desk-shaped session folder that the server also binds: one root.
     assert.equal(copilot({ DESK: crew }, crew), deskStartupDirection({ root: crew, source: "env:DESK" }))
     // A desk-shaped session folder that the server does not bind: both roots, desk_status wins.
     assert.equal(copilot({ DESK: solo }, crew), deskStartupDirection({ root: solo, source: "env:DESK" }, { sessionDesk: crew }))
-    assert.equal(copilot({}, crew), deskStartupDirection({ root: fallback, source: "fallback:desk" }, { sessionDesk: crew }))
+    assert.equal(copilot({}, crew), deskStartupDirection({ root: fallback, source: "home_fallback" }, { sessionDesk: crew }))
     // An unreadable saved binding is reported as unreadable.
     assert.match(copilot({ DESK_ACTIVATION_CONFIG: malformed }, codeRepo), /root configuration could not be read/u)
     // No session folder at all behaves like an ordinary folder.
-    assert.equal(copilot({}, undefined), deskStartupDirection({ root: fallback, source: "fallback:desk" }))
+    assert.equal(copilot({}, undefined), deskStartupDirection({ root: fallback, source: "home_fallback" }))
   })
 })
 
 test("resolve-desk-root --startup-line prints the Claude line, where the server also takes the project folder", () => {
   withSandbox(({ env, fallback, crew, malformed }) => {
     const line = (extra) => execFileSync(process.execPath, [script, "--startup-line"], { encoding: "utf8", env: { ...env, ...extra } })
-    assert.equal(line({}), deskStartupDirection({ root: fallback, source: "fallback:desk" }))
+    assert.equal(line({}), deskStartupDirection({ root: fallback, source: "home_fallback" }))
     assert.equal(line({ CLAUDE_PROJECT_DIR: crew }), deskStartupDirection({ root: crew, source: "host-project" }))
     assert.match(line({ DESK_ACTIVATION_CONFIG: malformed }), /root configuration could not be read/u)
     rmSync(fallback, { recursive: true })
@@ -146,4 +172,37 @@ test("root CLI preserves its JSON and root-only contracts with missing or malfor
     assert.equal(missing.root, null)
     assert.ok(missing.tried.length > 0)
   })
+})
+
+test("Desk running from an Agency session that loads the ms-desk overlay still names ~/ms-desk; without the overlay it does not", async () => {
+  const scratch = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-agency-session-")))
+  try {
+    const home = path.join(scratch, "home")
+    for (const desk of ["ms-desk", "desk"]) for (const part of ["_meta", "_archive"]) mkdirSync(path.join(home, desk, part), { recursive: true })
+    // Desk's own resolver modules, copied where Agency copies the plugin for one session.
+    const load = async (container, overlays) => {
+      const util = path.join(scratch, container, "desk", "mcp", "src", "util")
+      mkdirSync(util, { recursive: true })
+      for (const file of ["paths.js", "startup-direction.js"]) copyFileSync(path.join(mcpRoot, "src", "util", file), path.join(util, file))
+      writeFileSync(path.join(scratch, container, "desk", "mcp", "package.json"), JSON.stringify({ type: "module" }))
+      for (const overlay of overlays) {
+        mkdirSync(path.join(scratch, container, overlay), { recursive: true })
+        writeFileSync(path.join(scratch, container, overlay, "plugin.json"), JSON.stringify({ name: overlay }))
+      }
+      return import(pathToFileURL(path.join(util, "startup-direction.js")).href)
+    }
+    const env = { PATH: process.env.PATH, HOME: home, USERPROFILE: home }
+    const withOverlay = await load("agency-plugin-Zx9.p101", ["ms-desk"])
+    assert.equal(
+      withOverlay.copilotStartupDirection({ env, homeDir: home }),
+      deskStartupDirection({ root: path.join(home, "ms-desk"), source: "overlay_home_fallback" }),
+    )
+    const plain = await load("agency-plugin-Yw8.p102", [])
+    assert.equal(
+      plain.copilotStartupDirection({ env, homeDir: home }),
+      deskStartupDirection({ root: path.join(home, "desk"), source: "home_fallback" }),
+    )
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
 })
