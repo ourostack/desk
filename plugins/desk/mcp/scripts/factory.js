@@ -5,21 +5,31 @@
 //   node scripts/factory.js validate-pr --base <sha> --head <sha> --author-association <value>
 //   node scripts/factory.js build --store <directory> --out <directory>
 //   node scripts/factory.js job-link --store <owner/repo> --desk-remote <url> --person-prefix <prefix> --track <track> --slug <slug>
+//   node scripts/factory.js evaluate --desk <desk root> --task [desks/<alias>/]<track>/<slug>
+//   node scripts/factory.js evaluate-accept --job <job>
 //
 // Every subcommand prints one JSON value on success. Validation failures print
 // their stable JSON result and exit 1; usage errors print one line to stderr.
 // Candidate revisions are inspected through Git as bytes and are never loaded.
 // `validate-pr` accepts published facts (`facts/<host>-<session id>.json`) and
 // published labels (`labels/<job>/<session id>.json`) from anyone; anything
-// else is maintenance.
+// else is maintenance. `evaluate` prepares the waste evaluator's briefs for a
+// finished task's sessions and `evaluate-accept` checks what the evaluator
+// wrote; both print paths and codes only, never session content.
 import { execFileSync } from "node:child_process"
+import { readFileSync, realpathSync } from "node:fs"
+import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 
+import { jobId } from "../src/factory/binding.js"
+import { readDeskRemote } from "../src/factory/desk-repo.js"
+import { acceptEvaluations, prepareEvaluation } from "../src/factory/evaluate-run.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
+import { PATTERNS } from "../src/factory/schema.js"
 import { build, jobLink } from "../src/factory/pipeline/build.js"
 import { factsPathsForSession, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["consent", "derive", "status", "validate-pr", "build", "job-link"])
+export const SUPPORTED_COMMANDS = Object.freeze(["consent", "derive", "status", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
@@ -192,6 +202,50 @@ export async function runJobLinkCommand({ argv }) {
   }
 }
 
+/** The installed Desk plugin's version, which the evaluator's labels carry. */
+export function deskVersion() {
+  return JSON.parse(readFileSync(new URL("../../plugin.json", import.meta.url), "utf8")).version
+}
+
+const EVALUATE_USAGE = "Usage: factory.js evaluate --desk <absolute desk root> --task [desks/<alias>/]<track>/<slug>"
+
+/**
+ * Runs `evaluate`: the task's job ID, computed exactly as the task tools
+ * compute it, then `prepareEvaluation`. Prints the result and brief paths.
+ */
+export async function runEvaluateCommand({ argv, env, pluginVersion = deskVersion() }) {
+  const options = parseOptions(argv)
+  if (options === null || options.size !== 2 || !options.has("desk") || !options.has("task") || !path.isAbsolute(options.get("desk"))) {
+    throw new Error(EVALUATE_USAGE)
+  }
+  const segments = options.get("task").split("/")
+  const crew = segments.length === 4 && segments[0] === "desks"
+  if (segments.length !== (crew ? 4 : 2)) throw new Error(EVALUATE_USAGE)
+  let root
+  try {
+    root = realpathSync(options.get("desk"))
+  } catch {
+    throw new Error("factory.js evaluate: the desk folder could not be read")
+  }
+  let job
+  try {
+    const deskRemote = readDeskRemote({ deskRoot: root }) || `local:${root}`
+    job = jobId({ deskRemote, personPrefix: crew ? `desks/${segments[1]}` : "", track: segments.at(-2), slug: segments.at(-1) })
+  } catch {
+    throw new Error(EVALUATE_USAGE)
+  }
+  return prepareEvaluation(env, { job, pluginVersion })
+}
+
+/** Runs `evaluate-accept`: checks each written answer for the job and moves accepted labels into the outbox. */
+export async function runEvaluateAcceptCommand({ argv, env }) {
+  const options = parseOptions(argv)
+  if (options === null || options.size !== 1 || !PATTERNS.jobId.test(options.get("job") ?? "")) {
+    throw new Error("Usage: factory.js evaluate-accept --job <job>")
+  }
+  return acceptEvaluations(env, { job: options.get("job") })
+}
+
 /** Runs the `consent` subcommand: validates `argv`, calls `setConsent`, and returns the JSON-ready result. */
 export async function runConsentCommand({ argv, env }) {
   const options = parseOptions(argv)
@@ -222,6 +276,8 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
       "validate-pr": runValidatePrCommand,
       build: runBuildCommand,
       "job-link": runJobLinkCommand,
+      evaluate: runEvaluateCommand,
+      "evaluate-accept": runEvaluateAcceptCommand,
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git })
     write(`${JSON.stringify(result)}\n`)

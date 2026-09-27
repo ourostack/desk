@@ -73,6 +73,17 @@
 //     release, not when the work happened, so keeping its digits says
 //     nothing about the session.
 //
+// `publishedClock(local)` is the session clock alone: the same duration,
+// intervals and refusals `toPublished` produces, for the waste evaluator,
+// whose labels must cite exactly the intervals the store will hold.
+//
+// `toPublishedLabels(labels, { deskVisibility, machineSecret })` is the
+// labels' transform. Local labels (`desk.factory.labels/1`, `label-schema.js`)
+// are already on the published session clock and carry no free text, so
+// only the job changes: a desk that is not known to be private publishes
+// the same keyed job ID as its facts. The file goes to
+// `labels/<job>/<session id>.json`.
+//
 // `unavailable` keeps the local entries once each and adds the transform's
 // own markers after them; when the list would pass the schema limit, the
 // transform's markers are kept first (even one the local file already held)
@@ -85,6 +96,7 @@
 
 import { createHmac } from "node:crypto"
 
+import { validateLabels } from "./label-schema.js"
 import { LIMITS, validateLocalFacts } from "./schema.js"
 import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, TIME_SHAPE, validatePublished } from "./published-schema.js"
 
@@ -181,10 +193,31 @@ function publishRefs(refs, visibility) {
   return { prs, commits, dropped }
 }
 
+// The per-machine keyed form of a job ID, for a desk that is not known to be private.
+function keyedJobId(job, machineSecret) {
+  return createHmac("sha256", machineSecret).update(job).digest("hex").slice(0, 32)
+}
+
+// Whether job timing is kept; a desk that withholds it needs the key for its job IDs.
+function deskIsPrivate(deskVisibility, machineSecret, caller) {
+  const deskPrivate = PRIVATE_DESKS.has(deskVisibility)
+  if (!deskPrivate && !(machineSecret instanceof Uint8Array && machineSecret.length >= MIN_SECRET_BYTES)) {
+    throw new TypeError(`${caller}: a desk that is not private needs a machineSecret of at least 32 bytes`)
+  }
+  return deskPrivate
+}
+
+// Why a session cannot be published at all, or `null`.
+function refusalOf(local, startedMs, durationMs) {
+  if (durationMs > PUBLISHED_LIMITS.maxOffsetMs || startedMs < Date.parse(EARLIEST_SESSION_START)) return "implausible_session_span"
+  if (!SESSION_ID_V4.test(local.session.id)) return "session_id_not_v4"
+  return null
+}
+
 // A public (or not surely private) desk's job: a keyed ID and no timing.
 function protectedJob(job, machineSecret) {
   return {
-    job: createHmac("sha256", machineSecret).update(job.job).digest("hex").slice(0, 32),
+    job: keyedJobId(job.job, machineSecret),
     basis: [...job.basis],
     session_offset_ms: null,
     transitions: [],
@@ -236,17 +269,12 @@ function publishJob(job, startedMs, flag) {
 export function toPublished(local, { visibility, deskVisibility, machineSecret } = {}) {
   if (typeof visibility !== "function") throw new TypeError("toPublished: visibility must be a function")
   if (!validateLocalFacts(local).ok) throw new TypeError("toPublished: local facts must pass validateLocalFacts")
-  const deskPrivate = PRIVATE_DESKS.has(deskVisibility)
-  if (!deskPrivate && !(machineSecret instanceof Uint8Array && machineSecret.length >= MIN_SECRET_BYTES)) {
-    throw new TypeError("toPublished: a desk that is not private needs a machineSecret of at least 32 bytes")
-  }
+  const deskPrivate = deskIsPrivate(deskVisibility, machineSecret, "toPublished")
 
   const startedMs = Date.parse(local.session.started_at)
   const durationMs = Date.parse(local.session.derived_through) - startedMs
-  if (durationMs > PUBLISHED_LIMITS.maxOffsetMs || startedMs < Date.parse(EARLIEST_SESSION_START)) {
-    return { published: null, dropped: null, reason: "implausible_session_span" }
-  }
-  if (!SESSION_ID_V4.test(local.session.id)) return { published: null, dropped: null, reason: "session_id_not_v4" }
+  const reason = refusalOf(local, startedMs, durationMs)
+  if (reason !== null) return { published: null, dropped: null, reason }
 
   // The local entries once each, then the transform's own.
   const own = []
@@ -306,4 +334,55 @@ export function serializePublished(published) {
 export function publishedFileName(published) {
   if (!validatePublished(published).ok) throw new TypeError("publishedFileName: the value must pass validatePublished")
   return `${published.session.host}-${published.session.id}.json`
+}
+
+/**
+ * `publishedClock(local) -> { clock: { duration_ms, ended, intervals } }`,
+ * or `{ clock: null, reason }` with a reason from `REFUSALS`: the published
+ * session clock `toPublished` would produce for valid local facts, and
+ * nothing else. An interval `toPublished` drops is dropped here too.
+ */
+export function publishedClock(local) {
+  if (!validateLocalFacts(local).ok) throw new TypeError("publishedClock: local facts must pass validateLocalFacts")
+  const startedMs = Date.parse(local.session.started_at)
+  const durationMs = Date.parse(local.session.derived_through) - startedMs
+  const reason = refusalOf(local, startedMs, durationMs)
+  if (reason !== null) return { clock: null, reason }
+  return {
+    clock: {
+      duration_ms: durationMs,
+      ended: local.session.ended_at !== null,
+      intervals: publishIntervals(local.intervals, startedMs, durationMs, () => {}),
+    },
+  }
+}
+
+/**
+ * `toPublishedLabels(labels, { deskVisibility, machineSecret }) -> { path,
+ * published }`: valid local labels as the store receives them, at
+ * `labels/<job>/<session id>.json`. The job is keyed exactly as
+ * `toPublished` keys it; everything else is copied field by field. Caller
+ * contracts as for `toPublished`: a violation throws a `TypeError` that
+ * names no value.
+ */
+export function toPublishedLabels(labels, { deskVisibility, machineSecret } = {}) {
+  if (!validateLabels(labels).ok) throw new TypeError("toPublishedLabels: labels must pass validateLabels")
+  const job = deskIsPrivate(deskVisibility, machineSecret, "toPublishedLabels") ? labels.job : keyedJobId(labels.job, machineSecret)
+  const published = {
+    schema: labels.schema,
+    job,
+    session: labels.session,
+    evaluator: { plugin_version: labels.evaluator.plugin_version, model: labels.evaluator.model, rubric: labels.evaluator.rubric },
+    stretches: labels.stretches.map((stretch) => ({
+      start_ms: stretch.start_ms,
+      end_ms: stretch.end_ms,
+      class: stretch.class,
+      waste: stretch.waste,
+      mura: stretch.mura,
+      muri: stretch.muri,
+      evidence: stretch.evidence.map((range) => [range[0], range[1]]),
+    })),
+    unavailable: [...labels.unavailable],
+  }
+  return { path: `labels/${job}/${labels.session}.json`, published }
 }

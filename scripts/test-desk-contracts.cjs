@@ -876,6 +876,7 @@ for (const file of observerBodies) {
       "**Hands off.**",
       "**Never my own judge.**",
       "`desk:evaluate-release`",
+      "`desk:factory-evaluator`",
     ]) assert.ok(body.includes(required), `missing identity: ${required}`);
     assert.match(body, /never do, fix or finish the work I observe/u);
     assert.match(body, /never certify my own work/u);
@@ -941,6 +942,36 @@ contract("evaluate-release keeps public findings free of times of day and privat
   assert.match(skill, /durations?, never (?:a )?times? of day/u);
   assert.match(skill, /`desk:content-routing`/u);
 });
+
+// observer's waste labeling (spec §6 classification, milestone 5): the rubric is written for the evaluator, cites
+// evidence as exact fact intervals, writes no free text, and starts from done without the worker's context.
+const factoryEvaluator = "plugins/desk/skills/factory-evaluator/SKILL.md";
+contract("factory-evaluator is observer's skill and says when not to use it", () => {
+  const skill = text(factoryEvaluator);
+  assert.match(skill, /^name: factory-evaluator$/mu);
+  assert.match(skill.split(/\n---\n/u, 1)[0], /^description: .*`desk:observer`.*waste.*`done`/mu);
+  assert.match(skill, /^Rubric version: \d{1,3}$/mu);
+  const notFor = skill.split("## When not to use it", 2)[1]?.split("\n## ", 1)[0] ?? "";
+  assert.match(notFor, /`desk:evaluate-release`/u);
+  assert.match(notFor, /you did or helped with/u);
+});
+requires(factoryEvaluator, "factory-evaluator classifies value, support and muda with the eight wastes",
+  /## Classify each stretch[\s\S]+\*\*`value`\*\*[\s\S]+\*\*`support`\*\*[\s\S]+\*\*`muda`\*\*[\s\S]+`defects`[\s\S]+`overproduction`[\s\S]+`waiting`[\s\S]+`non_utilized_talent`[\s\S]+`transportation`[\s\S]+`inventory`[\s\S]+`motion`[\s\S]+`extra_processing`[\s\S]+\*\*`mura`\*\*[\s\S]+\*\*`muri`\*\*/u);
+requires(factoryEvaluator, "factory-evaluator cites evidence as intervals copied exactly from the facts",
+  /## Cite evidence[\s\S]+copied exactly from `facts\.intervals`/u);
+requires(factoryEvaluator, "factory-evaluator writes no free text and no time of day",
+  /## Write labels, nothing else[\s\S]+No free text anywhere[\s\S]+times of day/u);
+requires(factoryEvaluator, "factory-evaluator declares what it could not read with the unavailable codes",
+  /`session_log_missing`[\s\S]+`facts_missing`[\s\S]+`stretches` is empty/u);
+requires(factoryEvaluator, "factory-evaluator hands its labels in through the accept step",
+  /## Hand it in[\s\S]+factory\.js evaluate-accept --job/u);
+contract("factory-evaluator stays public-safe", () => {
+  const skill = text(factoryEvaluator);
+  assert.doesNotMatch(skill, /\b(?:microsoft|azure devops|ado)\b/iu);
+  assert.ok(Buffer.byteLength(skill) <= 8192, `rubric is ${Buffer.byteLength(skill)} bytes; keep it concise`);
+});
+requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle starts the waste evaluator in the background on done",
+  /transitioning to `done` → start the waste evaluator in the background when the factory store has consent[\s\S]+factory\.js evaluate --desk[\s\S]+fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`done` does not wait for the evaluator/u);
 
 // The evaluation packet (spec §9 and §12 milestone 6) is public, names channels only and carries its scenarios.
 const evaluationPacket = "plugins/desk/docs/evaluation-packet.md";

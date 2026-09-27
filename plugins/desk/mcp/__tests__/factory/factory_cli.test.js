@@ -12,17 +12,21 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
+  deskVersion,
   isMainModule,
   main,
   parseOptions,
   runBuildCommand,
   runConsentCommand,
   runDeriveCommand,
+  runEvaluateAcceptCommand,
+  runEvaluateCommand,
   runJobLinkCommand,
   runStatusCommand,
   runValidatePrCommand,
 } from "../../scripts/factory.js"
-import { readConsent } from "../../src/factory/outbox.js"
+import { jobId } from "../../src/factory/binding.js"
+import { factoryStateRoot, readConsent, setConsent, updateJobsIndex, writeLocalFacts } from "../../src/factory/outbox.js"
 
 const SCRIPT = fileURLToPath(new URL("../../scripts/factory.js", import.meta.url))
 const FIXTURE_STORE = fileURLToPath(new URL("fixtures/store", import.meta.url))
@@ -600,5 +604,97 @@ test("the real CLI exits non-zero and prints one line to stderr for a bad invoca
   } catch (error) {
     assert.equal(error.status, 1)
     assert.match(error.stderr.toString(), /Usage: factory\.js consent/u)
+  }
+}))
+
+// ---------------------------------------------------------------------------
+// evaluate and evaluate-accept.
+// ---------------------------------------------------------------------------
+
+const LOCAL_GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("fixtures/local-golden.json", import.meta.url)), "utf8"))
+const LABELS_GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("fixtures/labels-golden.json", import.meta.url)), "utf8"))
+const EVAL_SESSION = LOCAL_GOLDEN.session.id
+
+// Local facts of the golden session bound to `job`, in a consented store's outbox.
+async function seedJob(env, job) {
+  const facts = structuredClone(LOCAL_GOLDEN)
+  facts.jobs[2].job = job
+  facts.jobs.sort((a, b) => (a.job < b.job ? -1 : 1))
+  await setConsent(env, { store: "ourostack/factory", contribute: true })
+  await writeLocalFacts(env, "ourostack/factory", facts)
+  await updateJobsIndex(env, job, `claude-code-${EVAL_SESSION}.json`)
+}
+
+test("deskVersion is the installed plugin's version", () => {
+  assert.equal(deskVersion(), JSON.parse(readFileSync(fileURLToPath(new URL("../../../plugin.json", import.meta.url)), "utf8")).version)
+})
+
+test("evaluate computes the task's job as the task tools do and prepares its briefs", () => scratch(async (env) => {
+  const desk = path.join(env.HOME, "desk")
+  await fs.mkdir(desk)
+  const job = jobId({ deskRemote: `local:${desk}`, personPrefix: "", track: "factory", slug: "evaluator" })
+  assert.deepEqual(await runEvaluateCommand({ argv: ["--desk", desk, "--task", "factory/evaluator"], env, pluginVersion: "3.2.0-alpha.40" }), { result: "not_opted_in", job, briefs: [] })
+  await seedJob(env, job)
+  let output = ""
+  assert.equal(await main({ argv: ["evaluate", "--desk", desk, "--task", "factory/evaluator"], env, write: (text) => { output += text }, logError: () => assert.fail("evaluate must succeed") }), 0)
+  const prepared = JSON.parse(output)
+  assert.equal(prepared.result, "ready")
+  assert.equal(prepared.briefs.length, 1)
+  const brief = JSON.parse(readFileSync(prepared.briefs[0], "utf8"))
+  assert.equal(brief.job, job)
+  assert.equal(brief.evaluator.plugin_version, deskVersion())
+
+  const crew = jobId({ deskRemote: `local:${desk}`, personPrefix: "desks/ari", track: "factory", slug: "evaluator" })
+  assert.equal((await runEvaluateCommand({ argv: ["--desk", desk, "--task", "desks/ari/factory/evaluator"], env })).job, crew)
+}))
+
+test("evaluate uses the desk's origin remote when it has one", () => scratch(async (env) => {
+  const desk = path.join(env.HOME, "desk")
+  await fs.mkdir(desk)
+  execFileSync("git", ["init", "-q", desk])
+  execFileSync("git", ["-C", desk, "remote", "add", "origin", "https://github.com/example/desk.git"])
+  const job = jobId({ deskRemote: "https://github.com/example/desk.git", personPrefix: "", track: "factory", slug: "evaluator" })
+  assert.equal((await runEvaluateCommand({ argv: ["--desk", desk, "--task", "factory/evaluator"], env })).job, job)
+}))
+
+test("evaluate refuses malformed options, a relative or missing desk and a malformed task", () => scratch(async (env) => {
+  const desk = path.join(env.HOME, "desk")
+  await fs.mkdir(desk)
+  for (const argv of [
+    [],
+    ["--desk", desk],
+    ["--desk", desk, "--task", "factory/evaluator", "--extra", "x"],
+    ["--desk", "relative", "--task", "factory/evaluator"],
+    ["--desk", desk, "--other", "factory/evaluator"],
+    ["--desk", desk, "--task", "factory"],
+    ["--desk", desk, "--task", "a/b/c"],
+    ["--desk", desk, "--task", "desks/ari/factory"],
+    ["--desk", desk, "--task", "factory/_archive"],
+    ["--desk", desk, "--task", "desks/../factory/evaluator"],
+  ]) {
+    await assert.rejects(runEvaluateCommand({ argv, env }), /Usage: factory\.js evaluate/u)
+  }
+  await assert.rejects(runEvaluateCommand({ argv: ["--desk", path.join(env.HOME, "absent"), "--task", "factory/evaluator"], env }), /desk folder could not be read/u)
+}))
+
+test("evaluate-accept checks the evaluator's answer and moves accepted labels into the outbox", () => scratch(async (env) => {
+  const job = LABELS_GOLDEN.job
+  await seedJob(env, job)
+  const { prepareEvaluation } = await import("../../src/factory/evaluate-run.js")
+  const [briefFile] = (await prepareEvaluation(env, { job, pluginVersion: LABELS_GOLDEN.evaluator.plugin_version })).briefs
+  const brief = JSON.parse(readFileSync(briefFile, "utf8"))
+  // No marker names this session's log, so the labels rest on the facts alone.
+  const labels = { ...LABELS_GOLDEN, unavailable: ["session_log_missing"] }
+  await fs.writeFile(brief.output, JSON.stringify({ ...labels, note: "SENTINEL" }))
+  let output = ""
+  assert.equal(await main({ argv: ["evaluate-accept", "--job", job], env, write: (text) => { output += text }, logError: () => assert.fail("evaluate-accept must succeed") }), 0)
+  assert.equal(output.includes("SENTINEL"), false)
+  assert.deepEqual(JSON.parse(output).sessions, [{ session: EVAL_SESSION, result: "rejected", errors: [{ code: "unknown_key", path: "" }] }])
+  await fs.writeFile(brief.output, JSON.stringify(labels))
+  assert.deepEqual(await runEvaluateAcceptCommand({ argv: ["--job", job], env }), { job, sessions: [{ session: EVAL_SESSION, result: "accepted" }] })
+  const root = await factoryStateRoot(env)
+  assert.ok(existsSync(path.join(root, "labels", "ourostack__factory", job, `${EVAL_SESSION}.json`)))
+  for (const argv of [[], ["--job", "SENTINEL"], ["--other", "x"], ["--job", job, "--extra", "x"]]) {
+    await assert.rejects(runEvaluateAcceptCommand({ argv, env }), (error) => /Usage: factory\.js evaluate-accept/u.test(error.message) && !error.message.includes("SENTINEL"))
   }
 }))

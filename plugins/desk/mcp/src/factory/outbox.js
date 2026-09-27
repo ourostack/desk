@@ -30,6 +30,19 @@
 //   finalize/<job>.json                a Desk task tool's sync-at-done request
 //   jobs-index.json                    job -> [outbox file names]
 //   machine-secret                     32 random bytes, created once
+//   labels/<store-slug>/<job>/<session_id>.json   local waste labels
+//   evaluations/<job>/<store-slug>/<host>-<session_id>.brief.json
+//                                      the waste evaluator's brief
+//   evaluations/<job>/<store-slug>/<host>-<session_id>.labels.json
+//                                      what the evaluator wrote, checked
+//                                      before it becomes local labels
+//
+// Local labels (`desk.factory.labels/1`) are already on the published
+// session clock and carry no free text; like local facts they leave only
+// through the publishing transform (`publish.js`'s `toPublishedLabels`),
+// which keys the job on a desk that is not known to be private. Their
+// delivered record shares `delivered/<store-slug>.json`, keyed
+// `labels/<job>/<session_id>.json` so it never meets a facts file name.
 //
 // `store-slug` is `owner__repo`. Everything is owner-only (`0700` folders,
 // `0600` files); every write is atomic (temp file, fsync, then rename), with
@@ -60,7 +73,8 @@ import {
   realpathExistingPrefix,
 } from "./os-protect.js"
 import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js"
-import { ENUMS, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
+import { validateLabels } from "./label-schema.js"
+import { ENUMS, LIMITS, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
 import { MAX_MARKER_BYTES, readSmallText, validMarker } from "./marker.js"
 
 const OWNER_FILE_MODE = 0o600
@@ -77,6 +91,9 @@ const VISIBILITY_VALUES = ["public", "private", "unknown"]
 const SESSION_ID_SRC = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 const OUTBOX_NAME_PATTERN = new RegExp(`^(?:${ENUMS.host.join("|")})-${SESSION_ID_SRC}\\.json$`, "u")
 const FINALIZE_NAME_PATTERN = /^[0-9a-f]{32}\.json$/u
+const LABELS_NAME_PATTERN = new RegExp(`^${SESSION_ID_SRC}\\.json$`, "u")
+const BRIEF_NAME_PATTERN = new RegExp(`^((?:${ENUMS.host.join("|")})-${SESSION_ID_SRC})\\.brief\\.json$`, "u")
+const STORE_SLUG_PATTERN = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)__([A-Za-z0-9._-]{1,100})$/u
 
 // `store.js` uses one `naming` per caller (`desk_feedback`, `desk_work_ledger`);
 // this is the factory outbox's, also passed as `protectWindowsPaths`'s `label`.
@@ -881,4 +898,163 @@ export async function updateJobsIndex(env, job, fileName, { platform = process.p
     const existing = current[job] ?? []
     return { ...current, [job]: existing.includes(fileName) ? existing : [...existing, fileName] }
   }, { platform, env, runner })
+}
+
+// ---------------------------------------------------------------------------
+// Local facts reads, local labels and the waste evaluator's files.
+// ---------------------------------------------------------------------------
+
+/** Reads a regular, owner-only file under the state root; `null` when it is absent. */
+async function readProtectedBytes(file) {
+  if ((await lstatIfPresent(file, NAMING)) === null) return null
+  await protectLeafFile(file, process.platform, NAMING)
+  return fsp.readFile(file)
+}
+
+/**
+ * `readLocalFacts(env, store, name) -> LocalFacts | null`: the outbox file
+ * `name` (`<host>-<session_id>.json`) for `store`, or `null` when it is
+ * absent, not an outbox name, not JSON or not valid local facts. A symlink
+ * or hard link is refused, as on every other read.
+ */
+export async function readLocalFacts(env, store, name) {
+  const slug = storeSlug(store)
+  if (typeof name !== "string" || !OUTBOX_NAME_PATTERN.test(name)) return null
+  const root = await factoryStateRoot(env)
+  const bytes = await readProtectedBytes(path.join(root, "outbox", slug, name))
+  if (bytes === null) return null
+  let facts
+  try {
+    facts = JSON.parse(bytes.toString("utf8"))
+  } catch {
+    return null
+  }
+  return validateLocalFacts(facts).ok ? facts : null
+}
+
+/**
+ * Validates `labels` (`validateLabels`) and writes them, as canonical bytes,
+ * to `labels/<store-slug>/<job>/<session_id>.json`, unless that store's
+ * consent is absent or `contribute: false` (a no-op then). Invalid labels
+ * are never written; their errors are `{ code, path }` only.
+ */
+export async function writeLocalLabels(env, store, labels) {
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env)
+  const record = (await readConsentAt(root, process.platform)).stores[store]
+  if (record === undefined || record.contribute !== true) return { written: false, errors: [] }
+  const { ok, errors } = validateLabels(labels)
+  if (!ok) return { written: false, errors }
+  const file = path.join(root, "labels", slug, labels.job, `${labels.session}.json`)
+  await writeAtomic(root, file, `${JSON.stringify(labels)}\n`, { platform: process.platform, env })
+  return { written: true, name: `labels/${labels.job}/${labels.session}.json` }
+}
+
+/**
+ * `pendingLabels(env, store, { publishedBytesFor }) -> Array<{ name, localBytes }>`:
+ * every local labels file for `store` whose last delivered published blob
+ * SHA differs from `gitBlobSha(publishedBytesFor(localLabels))`, named
+ * `labels/<job>/<session_id>.json`, the key `markDelivered` records. A file
+ * `publishedBytesFor` answers `null` for is skipped, and so is one that
+ * fails to parse. Only regular files of the labels shape under a job folder
+ * are considered.
+ */
+export async function pendingLabels(env, store, { publishedBytesFor } = {}) {
+  if (typeof publishedBytesFor !== "function") fail("publishedBytesFor", "must be a function")
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env)
+  const dir = path.join(root, "labels", slug)
+  const delivered = await readJsonFileSafe(path.join(root, "delivered", `${slug}.json`), {}, process.platform)
+  const pending = []
+  for (const job of await listDirSafe(dir)) {
+    if (!PATTERNS.jobId.test(job)) continue
+    for (const file of await listRegularFiles(path.join(dir, job), LABELS_NAME_PATTERN)) {
+      const localBytes = await readProtectedBytes(path.join(dir, job, file))
+      let localLabels
+      try {
+        localLabels = JSON.parse(localBytes.toString("utf8"))
+      } catch {
+        continue
+      }
+      const publishedBytes = publishedBytesFor(localLabels)
+      if (publishedBytes === null) continue
+      const name = `labels/${job}/${file}`
+      if (delivered[name] !== gitBlobSha(publishedBytes)) pending.push({ name, localBytes })
+    }
+  }
+  return pending
+}
+
+/**
+ * `evaluationPaths(env, { job, store, name }) -> { brief, output }`: where
+ * the waste evaluator's brief for outbox file `name` of `store` lives, and
+ * where the evaluator writes its labels.
+ */
+export async function evaluationPaths(env, { job, store, name }) {
+  requirePattern(job, PATTERNS.jobId, "job")
+  const slug = storeSlug(store)
+  requirePattern(name, OUTBOX_NAME_PATTERN, "name")
+  const root = await factoryStateRoot(env)
+  const dir = path.join(root, "evaluations", job, slug)
+  const base = name.slice(0, -".json".length)
+  return { brief: path.join(dir, `${base}.brief.json`), output: path.join(dir, `${base}.labels.json`) }
+}
+
+/** Writes the evaluator's `brief` for `{ job, store, name }` and returns its path. */
+export async function writeEvaluationBrief(env, { job, store, name, brief }) {
+  const paths = await evaluationPaths(env, { job, store, name })
+  const root = await factoryStateRoot(env)
+  await writeJsonAtomic(root, paths.brief, brief, { platform: process.platform, env })
+  // The folder exists now, so the evaluator can write its output beside the brief.
+  return paths.brief
+}
+
+/**
+ * `listEvaluationBriefs(env, job) -> Array<{ store, name, brief, output }>`:
+ * every readable brief for `job`, by store. A brief that fails to parse, or
+ * a folder or file of the wrong shape, is skipped.
+ */
+export async function listEvaluationBriefs(env, job) {
+  requirePattern(job, PATTERNS.jobId, "job")
+  const root = await factoryStateRoot(env)
+  const results = []
+  for (const slug of await listDirSafe(path.join(root, "evaluations", job))) {
+    const store = STORE_SLUG_PATTERN.exec(slug)
+    if (store === null) continue
+    const dir = path.join(root, "evaluations", job, slug)
+    for (const file of await listRegularFiles(dir, BRIEF_NAME_PATTERN)) {
+      const base = BRIEF_NAME_PATTERN.exec(file)[1]
+      try {
+        const brief = JSON.parse((await readProtectedBytes(path.join(dir, file))).toString("utf8"))
+        results.push({ store: `${store[1]}/${store[2]}`, name: `${base}.json`, brief, output: path.join(dir, `${base}.labels.json`) })
+      } catch {
+        // A corrupt brief is dropped, not allowed to block the rest.
+      }
+    }
+  }
+  return results
+}
+
+/**
+ * `readEvaluationOutput(env, file) -> Buffer | null`: what the evaluator
+ * wrote at an output path `evaluationPaths` gave, `null` when it has not
+ * written it. The file is made owner-only first; a symlink, a hard link, a
+ * path outside the evaluations folder or a file over the facts size cap is
+ * refused.
+ */
+export async function readEvaluationOutput(env, file) {
+  const root = await factoryStateRoot(env)
+  const relative = typeof file === "string" ? path.relative(path.join(root, "evaluations"), file).split(path.sep) : []
+  if (relative.length !== 3 || !PATTERNS.jobId.test(relative[0]) || !STORE_SLUG_PATTERN.test(relative[1]) || !/\.labels\.json$/u.test(relative[2])) {
+    fail("file", "must be an evaluation output path")
+  }
+  const stat = await lstatIfPresent(file, NAMING)
+  if (stat !== null && stat.size > LIMITS.maxBytes) fail("file", "evaluation output is too large")
+  return readProtectedBytes(file)
+}
+
+/** Removes the brief and the output for `{ job, store, name }`; a no-op for either one already gone. */
+export async function clearEvaluation(env, { job, store, name }) {
+  const paths = await evaluationPaths(env, { job, store, name })
+  for (const file of [paths.brief, paths.output]) await fsp.rm(file, { force: true })
 }

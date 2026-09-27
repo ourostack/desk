@@ -109,6 +109,7 @@ Auth and push convention is consumer-specific: corporate-worker overlays push un
 ### 5. Downstream triggers
 
 - If transitioning to `done` or `cancelled` → invoke `archive-workflow`.
+- If transitioning to `done` → start the waste evaluator in the background when the factory store has consent. Run `node <Desk plugin folder>/mcp/scripts/factory.js evaluate --desk "$DESK" --task <track>/<slug>` from the Desk plugin folder (two levels above this skill's folder); on a crew desk the task is `desks/<alias>/<track>/<slug>`. When it answers `"result":"ready"`, start a fresh `desk:observer` subagent in the background whose whole prompt is: "Label the waste in these evaluator briefs with `desk:factory-evaluator`: <the `briefs` paths>." Give it nothing else from this conversation; the evaluator must not see the working agent's context. `not_opted_in` or `no_sessions` means no evaluator. `done` does not wait for the evaluator, and a missing or failed evaluation never reopens the task.
 - (Optional, overlay context) If the transition is shiproom-relevant (`processing`, `validating`, `done`, `blocked`) → invoke the consumer overlay's status-update skill to refresh the parent work-item's status note. Skip for non-coding / non-tracker contexts.
 
 ### Why the applicable writes
