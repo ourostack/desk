@@ -13,7 +13,7 @@ Choose exactly one entrance from current workspace evidence. Entrance A owns fre
 
 ### Entrance A — new to Desk
 
-Use this entrance when no desk is bound: the startup hook says so, or `desk_status` reports setup mode. If `desk_status` names a different `onboarding_skill` — an overlay that owns its workspace, such as a crew's `crew:join-crew` — follow that path instead; it owns discovery and binding for that workspace. Desk stays running in setup mode throughout; never end onboarding by leaving Desk unavailable. Look first, then ask once with what you found.
+Use this entrance when no desk is bound: the startup hook says so, or `desk_status` reports setup mode. Also use it to rebind when `desk_status` reports `degraded:root_unavailable` and the operator agrees to bind a different desk instead of restoring the one at the configured path. If `desk_status` names a different `onboarding_skill` — an overlay that owns its workspace, such as a crew's `crew:join-crew` — follow that path instead; it owns discovery and binding for that workspace. Desk stays running in setup mode throughout; never end onboarding by leaving Desk unavailable. Look first, then ask once with what you found.
 
 #### A1. Look for a desk that already exists, locally
 
@@ -46,7 +46,7 @@ If nothing was found, lead with creating a fresh desk. Never offer "continue wit
 
 - **Local desk:** bind it in place; do not copy or move it.
 - **Clone:** clone with the authenticated remote into the chosen path, then verify origin and the desk shape.
-- **Fresh-create:** create `_archive/`, `_meta/`, a `.gitignore` containing `.state/`, and a short README; initialize Git and commit. Offer to create the remote with `gh repo create <owner>/desk --private --source <path> --push`, asking for owner and visibility rather than choosing them silently.
+- **Fresh-create:** create `_archive/` and `_meta/`, each holding an empty `.gitkeep` so a clone keeps the desk shape, a `.gitignore` containing `.state/`, and a short README; initialize Git and commit. Offer to create the remote with `gh repo create <owner>/desk --private --source <path> --push`, asking for owner and visibility rather than choosing them silently.
 - **Operator-provided path or URL:** bind an existing path without copying it; clone a URL.
 - **Skip:** warn that task lifecycle, recall, resumption, friction and lesson persistence are unavailable for this session, and offer bootstrap again next session.
 
