@@ -237,10 +237,11 @@ test("boot reports absent bindings, malformed reports and repair launch failures
   await assert.rejects(boot.readReport(file), /unsafe/)
 })
 
+// Generous deadlines: these tests are about what the boot check says and starts, not its timing.
 async function bootLine(options) {
   let line
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    line = await boot.runBootChecks(options)
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    line = await boot.runBootChecks({ budgetMs: 10_000, inspectionBudgetMs: 5_000, ...options })
     if (!line.includes("budget exceeded")) break
   }
   return line
