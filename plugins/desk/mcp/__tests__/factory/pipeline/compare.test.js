@@ -16,7 +16,7 @@ test("versions order by semantic-version precedence, as Desk's release checks do
     assert.ok(compareVersions(ordered[index - 1], ordered[index]) < 0, `${ordered[index - 1]} < ${ordered[index]}`)
     assert.ok(compareVersions(ordered[index], ordered[index - 1]) > 0, `${ordered[index]} > ${ordered[index - 1]}`)
   }
-  assert.equal(compareVersions("3.2.0-alpha.93", "3.2.0-alpha.93"), 0)
+  assert.equal(compareVersions("3.1.0-alpha.7", "3.1.0-alpha.7"), 0)
   // A shorter prerelease sorts first when every shared identifier is equal.
   assert.ok(compareVersions("1.0.0-alpha", "1.0.0-alpha.1") < 0)
   assert.ok(compareVersions("1.0.0-alpha.1", "1.0.0-alpha") > 0)
@@ -24,9 +24,9 @@ test("versions order by semantic-version precedence, as Desk's release checks do
 })
 
 test("isVersion accepts the published semver shape only", () => {
-  assert.equal(isVersion("3.2.0-alpha.93"), true)
+  assert.equal(isVersion("3.1.0-alpha.7"), true)
   assert.equal(isVersion("3.2.0"), true)
-  for (const value of ["3.2", "v3.2.0", "3.2.0-", "3.2.0+build", 3, null, "3.2.0-alpha.93 "]) assert.equal(isVersion(value), false, String(value))
+  for (const value of ["3.2", "v3.2.0", "3.2.0-", "3.2.0+build", 3, null, "3.1.0-alpha.7 "]) assert.equal(isVersion(value), false, String(value))
   assert.throws(() => compareVersions("3.2", "3.2.0"), /not a version/u)
 })
 

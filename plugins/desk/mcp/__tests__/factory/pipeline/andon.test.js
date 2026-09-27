@@ -19,8 +19,8 @@ function job(version, retries, overrides = {}) {
 const jobs = (version, values, overrides) => values.map((value) => job(version, value, overrides))
 
 test("andon titles name the plugin, version and measure, and parse back only when well formed", () => {
-  assert.equal(andonTitle("desk", "3.2.0-alpha.95", "tool_retries"), "Andon: desk 3.2.0-alpha.95 tool_retries")
-  assert.deepEqual(parseAndonTitle("Andon: desk 3.2.0-alpha.95 tool_retries"), { plugin: "desk", version: "3.2.0-alpha.95", measure: "tool_retries" })
+  assert.equal(andonTitle("desk", "3.1.0-alpha.7", "tool_retries"), "Andon: desk 3.1.0-alpha.7 tool_retries")
+  assert.deepEqual(parseAndonTitle("Andon: desk 3.1.0-alpha.7 tool_retries"), { plugin: "desk", version: "3.1.0-alpha.7", measure: "tool_retries" })
   assert.deepEqual(parseAndonTitle("Andon: desk 1.0.0 muda_time.defects"), { plugin: "desk", version: "1.0.0", measure: "muda_time.defects" })
   for (const title of ["Andon: desk 1.0 tool_retries", "Andon: desk 1.0.0 lead_time", "Andon: Desk! 1.0.0 tool_retries", "andon: desk 1.0.0 tool_retries", "Andon: desk 1.0.0 tool_retries extra", ""]) {
     assert.equal(parseAndonTitle(title), null, title)
