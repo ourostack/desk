@@ -95,6 +95,44 @@ function crewDesk() {
   return root
 }
 
+// A single-owner hub: `_meta/desks.md` is a cross-desk routing registry, with
+// its own "Solo desks" and "Crew desks" tables and no crew roster. Synthetic;
+// only the shape (headings and columns) follows a real hub.
+const HUB_REGISTRY = [
+  "# Desks — this operator's desk registry",
+  "",
+  "## Solo desks (you own the whole desk)",
+  "",
+  "| desk | local path | repo | account | launch |",
+  "|---|---|---|---|---|",
+  "| work-desk | ~/work-desk | example-org/work-desk | example-login | desk-work |",
+  "| home-desk | ~/home-desk | example/home-desk | example-home | desk-home |",
+  "",
+  "## Crew desks (shared; you write only your own desk)",
+  "",
+  "| crew | local path | repo | your alias | launch |",
+  "|---|---|---|---|---|",
+  "| example-crew | ~/crews/example | example-org/crew-workspace | alex | crew-example |",
+  "",
+  "## Notes",
+  "",
+  "Routing context only.",
+  "",
+].join("\n")
+
+// A spoke desk: `_meta/desks.md` only points at its hub, with no table at all.
+const SPOKE_POINTER = "# Desks — registry pointer (spoke desk)\n\nThe registry for this operator's desks lives in the hub desk.\n"
+
+function registryDesk(registry, { messy = true } = {}) {
+  const root = tempDir()
+  write(root, "_meta/desks.md", registry)
+  mkdirSync(path.join(root, "_archive"), { recursive: true })
+  cleanTrack(root)
+  if (messy) messyTrack(root)
+  initGit(root)
+  return root
+}
+
 // The script's own view of a desk: $DESK names it, as the Desk MCP would find it.
 function status(root, extra = {}) {
   return tidyStatus({ env: { DESK: root }, homeDir: tempDir(), cwd: tempDir(), now: NOW, ...extra })
@@ -306,6 +344,64 @@ test("on a crew desk where no person resolves, Detect fires so the tidy says so 
   assert.deepEqual(line, { code: 1, stdout: "I couldn't tell which desk in this crew workspace is mine, so I left every desk as it is.\n", stderr: "" })
 })
 
+// ── Hubs and spokes: a `_meta/desks.md` that is not a crew roster ───────────
+
+test("a single-owner hub whose desks.md is a routing registry is tidied at its root, with no person", () => {
+  for (const registry of [HUB_REGISTRY, SPOKE_POINTER]) {
+    const root = registryDesk(registry)
+    const result = status(root, { spawnGh: noGh })
+    assert.equal(result.unresolved_person, false)
+    assert.equal(result.person, null)
+    assert.equal(result.resolved.person, null)
+    assert.equal(result.subtree, root)
+    assert.equal(result.applicable, true)
+    assert.equal(result.needed, true)
+    assert.equal(result.reason, "tidy needed")
+    assert.deepEqual(
+      [...new Set(result.findings.map((f) => f.code))].sort(),
+      ["loose_file", "name_prompt_like", "track_catch_all", "track_missing_scope"],
+      "the hub's own messy track is found; none of its registry's names count as a person",
+    )
+
+    // The Desk tools bind a hub with no person (OFF mode): they agree with the script.
+    const bound = tidyStatus({ root, env: { DESK: root }, homeDir: tempDir(), cwd: tempDir(), now: NOW, spawnGh: noGh })
+    assert.equal(bound.mismatch, false)
+    assert.equal(bound.subtree, root)
+
+    assert.equal(cli(["--detect", "--root", root], { env: { DESK: root }, spawnGh: noGh }).code, 0)
+    const report = cli(["--report", "--root", root], { env: { DESK: root }, spawnGh: noGh })
+    assert.equal(report.code, 0)
+    assert.match(report.stdout, new RegExp(`^Desk tools: ${root}\\nThis script: ${root}\\nThis session's own desk: ${root}\\n`))
+    assert.doesNotMatch(report.stdout, /crew workspace/)
+
+    const clean = registryDesk(registry, { messy: false })
+    assert.equal(status(clean, { spawnGh: noGh }).needed, false, "a clean hub needs no tidy")
+  }
+})
+
+test("a desks.md the tidy cannot read, or an alias-only roster beside desks/, stops the tidy instead of tidying the crew root", () => {
+  const unreadable = registryDesk(HUB_REGISTRY)
+  rmSync(path.join(unreadable, "_meta", "desks.md"))
+  mkdirSync(path.join(unreadable, "_meta", "desks.md"))
+  const aliasOnly = registryDesk("| alias | path |\n|---|---|\n| alice | desks/alice |\n")
+  cleanTrack(aliasOnly, "desks/alice/")
+  for (const root of [unreadable, aliasOnly]) {
+    const result = status(root, { spawnGh: noGh })
+    assert.equal(result.unresolved_person, true)
+    assert.equal(result.needed, true)
+    assert.equal(result.applicable, false)
+  }
+})
+
+test("the crew roster, not the file, makes a crew desk: a roster after a hub-style table still counts", () => {
+  const root = registryDesk(`${HUB_REGISTRY}\n## Crew roster\n\n| path | identity | alias |\n|---|---|---|\n| desks/bob | bob-login | bob |\n`)
+  const unresolved = status(root, { spawnGh: () => ({ status: 1, stdout: "" }) })
+  assert.equal(unresolved.unresolved_person, true)
+  const bob = status(root, { env: { DESK: root, DESK_IDENTITY: "BOB-LOGIN" }, spawnGh: noGh })
+  assert.equal(bob.person, "bob")
+  assert.equal(bob.subtree, path.join(root, "desks", "bob"))
+})
+
 test("the gh identity is cached in Desk's state folder per desk: 24 hours when found, 1 hour when the lookup fails", () => {
   const root = crewDesk()
   const home = tempDir()
@@ -393,8 +489,14 @@ test("the registry parser reads alias and identity from the table and skips rows
     { alias: "sam", identity: "" },
   ])
   assert.deepEqual(parseDeskRegistry("| name | login |\n|---|---|\n| a | b |\n"), [])
+  assert.deepEqual(parseDeskRegistry(HUB_REGISTRY), [], "a hub's routing registry has no crew roster")
+  assert.deepEqual(parseDeskRegistry("| alias | path |\n|---|---|\n| alex | desks/alex |\n"), [], "a roster needs its identity column")
   assert.equal(resolvePerson(null, { env: {} }), null)
   assert.equal(resolvePerson(soloDesk(), { env: {} }), null, "a solo desk has no person and asks no one")
+  assert.equal(resolvePerson(registryDesk(HUB_REGISTRY), { env: {}, spawnGh: noGh }), null, "a hub has no person and asks no one")
+  const roster = [{ alias: "", identity: "someone" }, { alias: "cam", identity: "cam-login" }]
+  assert.equal(resolvePerson(soloDesk(), { env: { DESK_IDENTITY: "cam-login" }, roster, spawnGh: noGh }), "cam", "an already parsed roster is used as given")
+  assert.equal(resolvePerson(crewDesk(), { env: { DESK_IDENTITY: "bob-login" }, roster: null, spawnGh: noGh }), null, "a roster the caller found missing is not read again")
 })
 
 // ── Safety: in-progress Git operations and other sessions' work ─────────────────

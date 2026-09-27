@@ -17,11 +17,15 @@
 // The same desk the tools use (fix-round ruling): the driver passes the
 // Desk MCP's own root and person from `desk_status` (`--root`, `--person`).
 // The script also resolves the desk on its own — the root the way the Desk
-// MCP finds one, and on a crew desk the person from `_meta/desks.md`'s
+// MCP finds one, and on a crew desk the person from the crew roster's
 // identity column, with `DESK_PERSON` as an override — and the report stops
 // with one line when the two disagree. On a crew desk where no person
 // resolves, Detect still fires so the tidy can say so in one line: it is
 // never silent there.
+//
+// A crew desk is one whose `_meta/desks.md` holds the crew roster table
+// (`crew-roster.js`). A single-owner hub keeps a routing registry in that
+// file and a spoke keeps a pointer there; both are tidied at their root.
 //
 // A desk that is not a Git work tree is never tidied: tidying is safe only
 // because every move goes through Git and can be undone.
@@ -32,6 +36,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { organizationFindings, redactedRelPath } from "./organization.js"
 import { operatorNames } from "./naming.js"
+import { crewWorkspace, parseCrewRoster, readCrewRoster } from "./crew-roster.js"
 import {
   expandHome,
   personPrefix,
@@ -123,28 +128,12 @@ function hasText(value) {
   return typeof value === "string" && value.trim() !== ""
 }
 
-/** `[{ alias, identity }]` rows of a `_meta/desks.md` registry table. */
+/**
+ * `[{ alias, identity }]` rows of `_meta/desks.md`'s crew roster that name an
+ * alias; [] when the text has no crew roster (see `crew-roster.js`).
+ */
 export function parseDeskRegistry(raw) {
-  const rows = []
-  let header = null
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim()
-    if (!trimmed.startsWith("|")) continue
-    const cells = trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim())
-    if (header === null) {
-      header = cells.map((cell) => cell.toLowerCase())
-      continue
-    }
-    if (cells.every((cell) => /^:?-+:?$/.test(cell))) continue
-    const alias = cells[header.indexOf("alias")] ?? ""
-    const identity = cells[header.indexOf("identity")] ?? ""
-    if (alias !== "") rows.push({ alias, identity })
-  }
-  return rows
-}
-
-function registryPath(root) {
-  return path.join(root, "_meta", "desks.md")
+  return (parseCrewRoster(raw) ?? []).filter((row) => row.alias !== "")
 }
 
 /** The identity cache file in Desk's state folder (`$XDG_STATE_HOME`, else `~/.local/state`). */
@@ -194,15 +183,19 @@ function ghIdentity(root, { env, spawnGh, homeDir, now }) {
  * The person this script resolves for `root`: `DESK_PERSON` when set, else,
  * on a crew desk, the alias whose `identity` matches this session's
  * identity (`DESK_IDENTITY`, else the cached `gh` login), else null.
+ * `roster` is the desk's already parsed crew roster (null for a desk that has
+ * none); when it is left out, it is read from `root`. A desk without a crew
+ * roster has no person, so no identity is looked up for it.
  */
-export function resolvePerson(root, { env, spawnGh = spawnSync, homeDir = os.homedir(), now = Date.now() }) {
+export function resolvePerson(root, { env, spawnGh = spawnSync, homeDir = os.homedir(), now = Date.now(), roster }) {
   if (hasText(env.DESK_PERSON)) return env.DESK_PERSON.trim()
-  if (root === null || !existsSync(registryPath(root))) return null
+  if (root === null) return null
+  const rows = (roster === undefined ? readCrewRoster(root) : roster)?.filter((row) => row.alias !== "")
+  if (rows === undefined || rows.length === 0) return null
   const identity = hasText(env.DESK_IDENTITY)
     ? env.DESK_IDENTITY.trim()
     : ghIdentity(root, { env, spawnGh, homeDir, now })
   if (identity === null) return null
-  const rows = parseDeskRegistry(readFileSync(registryPath(root), "utf8"))
   const row = rows.find((candidate) => candidate.identity.toLowerCase() === identity.toLowerCase())
   return row === undefined ? null : row.alias
 }
@@ -233,7 +226,10 @@ export function tidyStatus({
   const resolvedRoot = resolveRoot({ env, cwd, homeDir })
   const bound = hasText(root)
   const deskRoot = bound ? path.resolve(root) : resolvedRoot
-  const resolvedPerson = resolvePerson(deskRoot, { env, spawnGh, homeDir, now: now ?? Date.now() })
+  // Read once: the crew workspace check decides crew mode, and its roster
+  // resolves the person.
+  const workspace = crewWorkspace(deskRoot)
+  const resolvedPerson = resolvePerson(deskRoot, { env, spawnGh, homeDir, now: now ?? Date.now(), roster: workspace.roster })
   const alias = bound ? (hasText(person) ? person.trim() : null) : resolvedPerson
   const resolved = { root: resolvedRoot, person: resolvedPerson }
   // "root" when the script finds another desk (or none), "person" when it
@@ -244,7 +240,11 @@ export function tidyStatus({
   const fields = { root: deskRoot, person: alias, subtree: null, resolved, mismatch }
 
   if (deskRoot === null) return base(fields, "no desk is bound")
-  const crew = existsSync(registryPath(deskRoot))
+  // A crew workspace is one whose `_meta/desks.md` holds the crew roster, or
+  // one it cannot rule out (see `crewWorkspace`). A hub's routing registry or
+  // a spoke's pointer in that file is not one: that desk is tidied at its
+  // root like any single-owner desk.
+  const crew = workspace.crew
   if (crew && alias === null) {
     return { ...base(fields, "this is a crew desk and no person names this session's own desk"), needed: true, unresolved_person: true }
   }

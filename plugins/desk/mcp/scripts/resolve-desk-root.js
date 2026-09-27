@@ -8,7 +8,8 @@
 // start.
 import process from "node:process"
 import * as os from "node:os"
-import { pathToFileURL } from "node:url"
+import { realpathSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import {
   claudeBindingPath,
   resolveActivationConfigPath,
@@ -48,6 +49,20 @@ export async function main({ argv = process.argv.slice(2), env = process.env, wr
   write(output)
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Whether this module is the script Node was asked to run. Node gives
+// `import.meta.url` as the real path, while `argv[1]` keeps the spelling the
+// hook used, which can run through a symlink (the macOS `$TMPDIR`, a
+// symlinked `~/.claude` or `CLAUDE_CONFIG_DIR`), so both are compared as real
+// paths.
+export function isEntrypoint(argv1 = process.argv[1], moduleUrl = import.meta.url) {
+  if (!argv1) return false
+  try {
+    return realpathSync(argv1) === realpathSync(fileURLToPath(moduleUrl))
+  } catch {
+    return false
+  }
+}
+
+if (isEntrypoint()) {
   await main()
 }
