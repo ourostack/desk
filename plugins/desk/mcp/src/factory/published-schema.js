@@ -91,7 +91,8 @@ export const PUBLISHED_LIMITS = Object.freeze({
 const PUBLISHED_SCHEMA_PATTERN = /^desk\.factory\.published\/1$/u
 
 // A pattern-checked string that must also carry no date and no time of day.
-function publicPatternField(pattern) {
+// Exported for `label-schema.js`, which applies the same public rules.
+export function publicPatternField(pattern) {
   const base = patternField(pattern)
   return leaf((value, path, errors) => {
     if (!base.check(value, path, errors)) return false
@@ -108,7 +109,7 @@ function publicPatternField(pattern) {
 }
 
 // A duration in milliseconds, at most the offset cap.
-const durationField = () => leaf((value, path, errors) => {
+export const durationField = () => leaf((value, path, errors) => {
   if (!Number.isSafeInteger(value) || value < 0) {
     addError(errors, "integer", path)
     return false

@@ -206,6 +206,152 @@ test("validate-pr marks non-fact files under facts/ and maintainer removals as m
   })
 }))
 
+const LABEL_1111 = "labels/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/11111111-1111-4111-8111-111111111111.json"
+const LABEL_2222 = "labels/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/22222222-2222-4222-8222-222222222222.json"
+
+function label2222() {
+  const value = JSON.parse(readFileSync(path.join(FIXTURE_STORE, LABEL_1111), "utf8"))
+  value.job = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  value.session = "22222222-2222-4222-8222-222222222222"
+  value.stretches = [{ start_ms: 0, end_ms: 10000, class: "muda", waste: "waiting", mura: false, muri: false, evidence: [[2500, 3500], [4000, 4500]] }]
+  return `${JSON.stringify(value)}\n`
+}
+
+test("validate-pr gates labels as data against the facts the merge would leave in the store", () => scratch(async (env) => {
+  const repo = path.join(env.HOME, "store")
+  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim()
+  const write = async (relative, text) => {
+    await fs.mkdir(path.dirname(path.join(repo, relative)), { recursive: true })
+    await fs.writeFile(path.join(repo, relative), text)
+  }
+  const facts1111 = "facts/claude-code-11111111-1111-4111-8111-111111111111.json"
+  const facts2222 = "facts/copilot-cli-22222222-2222-4222-8222-222222222222.json"
+  await write(facts1111, readFileSync(path.join(FIXTURE_STORE, facts1111), "utf8"))
+  git("init", "-q", "-b", "main")
+  git("config", "user.name", "Fixture")
+  git("config", "user.email", "fixture@example.invalid")
+  git("add", "facts")
+  git("commit", "-q", "-m", "base")
+  const forkPoint = git("rev-parse", "HEAD")
+  const validate = (base, head, association = "CONTRIBUTOR") => runValidatePrCommand({ argv: ["--base", base, "--head", head, "--author-association", association], cwd: repo })
+
+  // A contributor's labels file for a session whose facts are already on main.
+  git("checkout", "-q", "-b", "label-1111")
+  await write(LABEL_1111, readFileSync(path.join(FIXTURE_STORE, LABEL_1111), "utf8"))
+  git("add", "labels")
+  git("commit", "-q", "-m", "label")
+  const label1111Head = git("rev-parse", "HEAD")
+  assert.deepEqual(await validate(forkPoint, label1111Head), { ok: true, maintenance: false, errors: [] })
+
+  // Labels whose facts arrive in the same pull request.
+  git("checkout", "-q", "-b", "with-facts", forkPoint)
+  await write(facts2222, readFileSync(path.join(FIXTURE_STORE, facts2222), "utf8"))
+  await write(LABEL_2222, label2222())
+  git("add", "facts", "labels")
+  git("commit", "-q", "-m", "facts and label")
+  assert.deepEqual(await validate(forkPoint, git("rev-parse", "HEAD")), { ok: true, maintenance: false, errors: [] })
+
+  // Labels whose facts are nowhere yet are refused...
+  git("checkout", "-q", "-b", "label-only", forkPoint)
+  await write(LABEL_2222, label2222())
+  git("add", "labels")
+  git("commit", "-q", "-m", "label only")
+  const labelOnlyHead = git("rev-parse", "HEAD")
+  assert.deepEqual(await validate(forkPoint, labelOnlyHead), { ok: false, maintenance: false, errors: [{ code: "facts_missing", path: LABEL_2222 }] })
+  // ...and pass once main has the facts, even though the branch predates them.
+  git("checkout", "-q", "main")
+  await write(facts2222, readFileSync(path.join(FIXTURE_STORE, facts2222), "utf8"))
+  git("add", "facts")
+  git("commit", "-q", "-m", "facts on main")
+  const movedBase = git("rev-parse", "HEAD")
+  assert.deepEqual(await validate(movedBase, labelOnlyHead), { ok: true, maintenance: false, errors: [] })
+
+  // A maintainer who removes the facts in the same pull request leaves the labels without them.
+  git("checkout", "-q", "-b", "remove-facts", movedBase)
+  git("rm", "-q", facts2222)
+  await write(LABEL_2222, label2222())
+  git("add", "labels")
+  git("commit", "-q", "-m", "remove facts, add label")
+  assert.deepEqual(await validate(movedBase, git("rev-parse", "HEAD"), "OWNER"), { ok: false, maintenance: false, errors: [{ code: "facts_missing", path: LABEL_2222 }] })
+
+  // Removing labels is maintenance for a maintainer and refused for anyone else.
+  git("checkout", "-q", "-b", "drop-label", label1111Head)
+  git("rm", "-q", LABEL_1111)
+  git("commit", "-q", "-m", "drop label")
+  const dropHead = git("rev-parse", "HEAD")
+  assert.deepEqual(await validate(label1111Head, dropHead, "MEMBER"), { ok: true, maintenance: true, errors: [] })
+  assert.deepEqual(await validate(label1111Head, dropHead, "NONE"), { ok: false, maintenance: false, errors: [{ code: "removal", path: LABEL_1111 }] })
+
+  // A labels file that is not valid JSON data is refused without being echoed or run.
+  git("checkout", "-q", "-b", "bad-label", forkPoint)
+  const marker = path.join(env.HOME, "executed")
+  await write(LABEL_1111, `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ghp_SENTINEL")`)
+  git("add", "labels")
+  git("commit", "-q", "-m", "bad label")
+  const bad = await validate(forkPoint, git("rev-parse", "HEAD"))
+  assert.deepEqual(bad, { ok: false, maintenance: false, errors: [{ code: "json", path: LABEL_1111 }] })
+  assert.equal(JSON.stringify(bad).includes("ghp_"), false)
+  assert.equal(existsSync(marker), false)
+}))
+
+test("validate-pr reads a labeled session's facts at head when the pull request changes them and at base otherwise", async () => {
+  const shaA = "a".repeat(40)
+  const shaB = "b".repeat(40)
+  const shaC = "c".repeat(40)
+  const facts1111 = "facts/claude-code-11111111-1111-4111-8111-111111111111.json"
+  const facts2222 = "facts/copilot-cli-22222222-2222-4222-8222-222222222222.json"
+  const bytes = {
+    [facts1111]: readFileSync(path.join(FIXTURE_STORE, facts1111)),
+    [facts2222]: readFileSync(path.join(FIXTURE_STORE, facts2222)),
+    [LABEL_1111]: readFileSync(path.join(FIXTURE_STORE, LABEL_1111)),
+    [LABEL_2222]: Buffer.from(label2222()),
+  }
+  const calls = []
+  const result = await runValidatePrCommand({
+    argv: ["--base", shaA, "--head", shaB, "--author-association", "NONE"],
+    git: (gitArgs) => {
+      calls.push(gitArgs.join(" "))
+      if (gitArgs[0] === "diff") return `A\0${LABEL_1111}\0M\0${facts2222}\0A\0${LABEL_2222}\0`
+      if (gitArgs[0] === "merge-base") return `${shaC}\n`
+      if (gitArgs[0] === "ls-tree") {
+        // Git lists only what exists; a stray name it could never return is ignored.
+        return gitArgs.includes(facts1111) ? `${facts1111}\0facts/other.json\0` : `${facts2222}\0`
+      }
+      return bytes[gitArgs[1].slice(41)]
+    },
+  })
+  assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
+  assert.deepEqual(calls, [
+    "diff --name-status -z --no-renames " + `${shaA}...${shaB}`,
+    `show ${shaB}:${LABEL_1111}`,
+    `ls-tree -z --name-only ${shaA} -- ${facts1111} facts/copilot-cli-11111111-1111-4111-8111-111111111111.json`,
+    `show ${shaA}:${facts1111}`,
+    `show ${shaB}:${facts2222}`,
+    "merge-base " + `${shaA} ${shaB}`,
+    `show ${shaC}:${facts2222}`,
+    `show ${shaB}:${LABEL_2222}`,
+    `ls-tree -z --name-only ${shaA} -- facts/claude-code-22222222-2222-4222-8222-222222222222.json`,
+    `show ${shaB}:${facts2222}`,
+  ])
+})
+
+test("validate-pr asks Git nothing about base facts when the pull request touches every facts path of a labeled session", async () => {
+  const facts1111 = "facts/claude-code-11111111-1111-4111-8111-111111111111.json"
+  const copilot1111 = "facts/copilot-cli-11111111-1111-4111-8111-111111111111.json"
+  const bytes = { [facts1111]: readFileSync(path.join(FIXTURE_STORE, facts1111)), [LABEL_1111]: readFileSync(path.join(FIXTURE_STORE, LABEL_1111)) }
+  const calls = []
+  const result = await runValidatePrCommand({
+    argv: ["--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "NONE"],
+    git: (gitArgs) => {
+      calls.push(gitArgs[0])
+      if (gitArgs[0] === "diff") return `A\0${facts1111}\0D\0${copilot1111}\0A\0${LABEL_1111}\0`
+      return bytes[gitArgs[1].slice(41)]
+    },
+  })
+  assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "removal", path: copilot1111 }] })
+  assert.deepEqual(calls, ["diff", "show", "show", "show"])
+})
+
 test("validate-pr asks Git for the merge base once and refuses a malformed one", async () => {
   const shaA = "a".repeat(40)
   const shaB = "b".repeat(40)
