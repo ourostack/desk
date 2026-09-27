@@ -6,10 +6,17 @@ name: Desk release
 # release straight to main (scripts/release-desk.cjs). Runs one at a time; a run that finds no fragment, because an
 # earlier run already released them, does nothing.
 #
+# Three jobs, because steps in one job share a runner and anything a step leaves behind (a git hook, a background
+# process, git configuration) runs in the later steps:
+# - build holds only a read token. It installs dependencies, builds the release commit and checks that exact commit,
+#   because a push made with the workflow token starts no CI on main.
+# - push holds the write token and runs no npm and no repository script. It takes the checked commit from build as a
+#   git bundle, verifies it is one commit on the main build started from that changes only release surfaces and
+#   removes only fragments, and pushes that commit with hooks disabled.
+# - report opens, updates or closes the "Desk release needs attention" issue.
 # The commit is pushed with the workflow token, which main accepts because it has no branch protection or ruleset.
 # If main is ever protected, allow this workflow's token to bypass the rule for this push, or give the push a
-# deploy key or GitHub App token that may; nothing else here changes. A push made with the workflow token starts no
-# other workflow, so the release commit itself is checked here before it is pushed.
+# deploy key or GitHub App token that may; nothing else here changes.
 
 on:
   push:
@@ -31,22 +38,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release Desk from changelog fragments
+  build:
+    name: Build and check the Desk release
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write
-      # Only to open, comment on and close the "Desk release needs attention" issue.
-      issues: write
-      # Only to dispatch a new run when main moves while a release is being checked.
-      actions: write
+      contents: read
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      summary: ${{ steps.release.outputs.summary }}
+      sha: ${{ steps.release.outputs.sha }}
+      base: ${{ steps.release.outputs.base }}
     env:
-      ISSUE_TITLE: Desk release needs attention
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      # No write credential is left in .git/config: dependency install scripts and the release checks run next, and only
-      # the push step receives the token.
       - name: Check out main
         uses: actions/checkout@v4
         with:
@@ -66,13 +71,14 @@ jobs:
         run: npm ci
 
       # Builds the release on the checked-out main and runs every check that reads a version surface, the changelog or a
-      # fragment, because a push made with the workflow token starts no CI on main. Runs with no write credential.
+      # fragment. The list follows the release-sensitive checks in validate-skills.yml.
       - name: Build and check the release
         id: release
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          base="$(git rev-parse HEAD)"
           node scripts/release-desk.cjs --date "$(date -u +%F)" > "$RUNNER_TEMP/release.json"
           if [ "$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").released')" != "true" ]; then
             echo "No changelog fragment is pending; nothing to release." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -83,6 +89,7 @@ jobs:
           version="$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").to')"
           git add --all -- .claude-plugin plugins/desk
           git commit --quiet --message "Release Desk $version" --message "$summary. Released by $RUN_URL."
+          sha="$(git rev-parse HEAD)"
           # The checks run on the commit that will be pushed: some list tracked files, which must not include the fragments
           # the release deleted.
           test -z "$(git status --porcelain)"
@@ -91,38 +98,116 @@ jobs:
             node "scripts/$check.cjs"
           done
           (cd plugins/desk/mcp && node --import ./__tests__/_isolated_env.mjs --test "__tests__/release/**/*.test.js" "__tests__/activation/**/*.test.js" "__tests__/artifacts/**/*.test.js" "__tests__/docs/**/*.test.js" "__tests__/scripts/**/*.test.js")
-          { echo "released=true"; echo "summary=$summary"; } >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/desk-release"
+          git bundle create "$RUNNER_TEMP/desk-release/release.bundle" refs/heads/main "^$base"
+          { echo "released=true"; echo "summary=$summary"; echo "sha=$sha"; echo "base=$base"; } >> "$GITHUB_OUTPUT"
 
-      # The only step that holds the write token: it goes to the one git push, through that command's environment, and is
-      # never written to disk. If another merge landed on main after the checkout, the push is refused and a new run
-      # releases on the current main, where this run's fragments are still pending; a push never overwrites main.
-      - name: Push the release to main
+      - name: Hand the checked release commit to the push job
         if: steps.release.outputs.released == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-release
+          path: ${{ runner.temp }}/desk-release/release.bundle
+          retention-days: 1
+          if-no-files-found: error
+
+  push:
+    name: Push the Desk release to main
+    needs: build
+    if: needs.build.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      # Only to dispatch a new run when main moves while a release is being checked.
+      actions: write
+    outputs:
+      handed_off: ${{ steps.push.outputs.handed_off }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the checked release commit
+        uses: actions/download-artifact@v4
+        with:
+          name: desk-release
+          path: ${{ runner.temp }}/desk-release
+
+      # Runs git and the shell only. The build job ran dependency code, so nothing it produced is trusted until this step has
+      # verified it: the bundle must hold the exact commit build checked, as the only commit on the main build started
+      # from, changing only the release surfaces release-desk.cjs names (read from main, not run) and removing only
+      # fragments. The token goes to the one git push, through that command's environment, with hooks disabled.
+      - name: Verify and push the release
+        id: push
         env:
           PUSH_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
-          SUMMARY: ${{ steps.release.outputs.summary }}
+          SHA: ${{ needs.build.outputs.sha }}
+          BASE: ${{ needs.build.outputs.base }}
+          SUMMARY: ${{ needs.build.outputs.summary }}
         run: |
           set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ && "$BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::The build job handed over no valid commit."; exit 1; }
+          git -c core.hooksPath=/dev/null fetch --quiet --no-tags "$RUNNER_TEMP/desk-release/release.bundle" "+refs/heads/main:refs/desk-release/checked"
+          [ "$(git rev-parse refs/desk-release/checked)" = "$SHA" ] || { echo "::error::The release bundle does not hold the checked commit $SHA."; exit 1; }
+          [ "$(git rev-list --parents -n 1 "$SHA")" = "$SHA $BASE" ] || { echo "::error::The release commit $SHA is not a single commit on $BASE."; exit 1; }
+          if [ "$(git rev-parse HEAD)" != "$BASE" ]; then
+            gh workflow run desk-release.yml --repo "$GITHUB_REPOSITORY" --ref main
+            echo "handed_off=true" >> "$GITHUB_OUTPUT"
+            echo "main moved while this release was checked, so it was not pushed; a new run releases on the current main." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          allowed="$(sed -n '/^const DESK_VERSION_FILES = \[/,/^\];/s/^ *"\([^"]*\)",$/\1/p; s/^const CHANGELOG = "\([^"]*\)";$/\1/p' scripts/release-desk.cjs)"
+          [ "$(printf '%s\n' "$allowed" | wc -l)" -ge 2 ] || { echo "::error::Could not read the release surfaces from scripts/release-desk.cjs."; exit 1; }
+          while IFS=$'\t' read -r status file; do
+            if [ "$status" = "M" ] && printf '%s\n' "$allowed" | grep -qxF -- "$file"; then continue; fi
+            if [ "$status" = "D" ] && [[ "$file" =~ ^plugins/desk/changelog\.d/[^/]+\.md$ ]] && [ "$file" != "plugins/desk/changelog.d/README.md" ]; then continue; fi
+            echo "::error::The release commit changes $file ($status), which is not a release surface or a pending fragment."
+            exit 1
+          done < <(git diff --no-renames --name-status "$BASE" "$SHA")
           credential="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w0)"
           echo "::add-mask::$credential"
-          if push_error="$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $credential" git push --quiet origin HEAD:main 2>&1)"; then
+          set +e
+          result="$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $credential" git -c core.hooksPath=/dev/null push --porcelain --no-verify origin "$SHA:refs/heads/main" 2> "$RUNNER_TEMP/push-error.txt")"
+          code=$?
+          set -e
+          if [ "$code" = 0 ]; then
             echo "Released $SUMMARY." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if printf '%s' "$push_error" | grep -qE 'fetch first|non-fast-forward'; then
+          # --porcelain prints one stable status line per ref: "!", the refspec, then "[rejected] (fetch first)" or
+          # "[rejected] (non-fast-forward)" when main moved after the check above.
+          if printf '%s\n' "$result" | grep -qE $'^!\t[0-9a-f]{40}:refs/heads/main\t\\[rejected\\] \\((fetch first|non-fast-forward)\\)$'; then
             gh workflow run desk-release.yml --repo "$GITHUB_REPOSITORY" --ref main
-            echo "main moved while this release was checked, so the push was refused; a new run releases on the current main." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "handed_off=true" >> "$GITHUB_OUTPUT"
+            echo "main moved while this release was pushed, so the push was refused; a new run releases on the current main." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          echo "::error::The release push was refused: $push_error. If main now refuses this workflow's pushes (for example a new branch rule), allow them."
+          echo "::error::The release push was refused: $result $(cat "$RUNNER_TEMP/push-error.txt"). If main now refuses this workflow's pushes (for example a new branch rule), allow them."
           exit 1
 
-      # One open issue per problem: a new failure comments on it, and the next successful run closes it.
+  # One open issue per problem: a new failure comments on it, and the next run that releases or finds nothing pending
+  # closes it. A run that handed its release to a new run leaves it open, because its fragments are still pending.
+  report:
+    name: Report the release outcome
+    needs: [build, push]
+    if: always() && needs.build.result != 'cancelled' && needs.push.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Only to open, comment on and close the "Desk release needs attention" issue.
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_TITLE: Desk release needs attention
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
       - name: Report the failed release
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
+        if: needs.build.result == 'failure' || needs.push.result == 'failure'
         run: |
           set -euo pipefail
           body="The Desk release failed in $RUN_URL. The changelog fragments on main stay unreleased, and the Desk changes they describe ship without a new version, until a release succeeds. Read the failed step, fix the cause on main (a fragment the release rejects, a failing release check or a refused push), then dispatch desk-release.yml or wait for the daily run."
@@ -134,9 +219,7 @@ jobs:
           fi
 
       - name: Close the release issue after a successful run
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
+        if: needs.build.result == 'success' && (needs.push.result == 'success' || needs.push.result == 'skipped') && needs.push.outputs.handed_off != 'true'
         run: |
           set -euo pipefail
           for number in $(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number,title --jq "map(select(.title == env.ISSUE_TITLE)) | .[].number"); do
