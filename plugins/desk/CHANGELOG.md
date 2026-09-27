@@ -2,7 +2,7 @@
 
 ## 3.2.0-alpha.53 — 2026-09-27
 
-Two [factory formula](mcp/src/factory/pipeline/formulas.js) edges are corrected. A job whose latest transition reopens it after `done` is open again: its lead time and flow efficiency are censored at the latest session end like any open job's, its status matches, and the earlier `done` stays in its transition history. A `tool_durations` gap, such as an open session's unfinished tool call, now marks the active-time family `partial` with the uncovered session count instead of `unavailable`; only sessions that lack their `turns` can make active time unavailable. Golden report outputs are unchanged. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+Two [factory formula](mcp/src/factory/pipeline/formulas.js) edges are corrected. A job whose latest transition reopens it after `done` is open again: its lead time and flow efficiency are censored at the latest session end like any open job's, its status matches, and the earlier `done` stays in its transition history. When it closes again, lead time ends at the first `done` after the last reopen instead of the first close. A `tool_durations` gap, such as an open session's unfinished tool call, now marks the active-time family `partial` with the uncovered session count instead of `unavailable`; only sessions that lack their `turns` can make active time unavailable. Golden report outputs are unchanged. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
 
 ## 3.2.0-alpha.49 — 2026-09-27
 

@@ -167,7 +167,13 @@ function currentStatus(timeline) {
 function leadTime(timeline, status) {
   if (status.value === "cancelled") return unavailable("cancelled")
   if (status.value === "done") {
-    const done = timeline.transitions.find((entry) => entry.to === "done" && entry.offset_ms !== null)
+    // Lead time ends at the `done` that begins the job's final terminal
+    // stretch: the first `done` after the last reopen. A job closed once is
+    // unaffected; a job reopened and closed again ends at its reclosing.
+    const timed = timeline.transitions.filter((entry) => entry.offset_ms !== null)
+    let finalStretch = timed.length
+    while (finalStretch > 0 && TERMINAL_STATUSES.has(timed[finalStretch - 1].to)) finalStretch -= 1
+    const done = timed.slice(finalStretch).find((entry) => entry.to === "done")
     if (done) return measured(Math.max(0, done.offset_ms), { censored: false, basis: "first_done_transition" })
     const observedDone = timeline.observations.find((entry) => entry.status === "done" && entry.offset_ms !== null)
     if (observedDone) return declared(Math.max(0, observedDone.offset_ms), { censored: false, basis: "terminal_observation" })

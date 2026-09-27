@@ -350,6 +350,36 @@ test("the latest terminal transition decides status, so a reopened job reports i
   assert.equal(formulas.lead_contributors.censored, true)
   assert.deepEqual(timeline.transitions.map((entry) => entry.to), ["processing", "done", "processing"])
 
+  // Reopened and closed again: lead time ends at the reclosing, the first
+  // done after the last reopen, not at the first close.
+  reopened.jobs[0].transitions = [
+    { to: "processing", offset_ms: 0 },
+    { to: "done", offset_ms: 100 },
+    { to: "processing", offset_ms: 200 },
+    { to: "done", offset_ms: 300 },
+  ]
+  formulas = calculateFormulas(buildJobTimeline(CLOSED, [reopened]))
+  assert.deepEqual(formulas.status, { class: "measured", value: "done" })
+  assert.deepEqual(formulas.lead_time_ms, { class: "measured", value: 300, censored: false, basis: "first_done_transition" })
+  assert.deepEqual(formulas.flow_efficiency, { class: "inferred", value: 300 / 300, censored: false, method: "active_in_lead_ms/lead_time_ms" })
+
+  // Consecutive terminal transitions after the last reopen: the first done of that stretch ends lead time.
+  reopened.jobs[0].transitions = [
+    { to: "processing", offset_ms: 0 },
+    { to: "done", offset_ms: 100 },
+    { to: "processing", offset_ms: 200 },
+    { to: "done", offset_ms: 4000 },
+    { to: "done", offset_ms: 9000 },
+  ]
+  formulas = calculateFormulas(buildJobTimeline(CLOSED, [reopened]))
+  assert.deepEqual(formulas.lead_time_ms, { class: "measured", value: 4000, censored: false, basis: "first_done_transition" })
+  assert.deepEqual(formulas.flow_efficiency, { class: "inferred", value: 4000 / 4000, censored: false, method: "active_in_lead_ms/lead_time_ms" })
+
+  reopened.jobs[0].transitions = [
+    { to: "processing", offset_ms: 0 },
+    { to: "done", offset_ms: 100 },
+    { to: "processing", offset_ms: 200 },
+  ]
   // A done observation cannot close a job whose latest transition reopened it.
   reopened.jobs[0].observed = { status: "done", offset_ms: 150 }
   formulas = calculateFormulas(buildJobTimeline(CLOSED, [reopened]))
