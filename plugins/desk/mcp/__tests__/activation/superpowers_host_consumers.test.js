@@ -68,7 +68,7 @@ test("Claude selected-provider mismatch adds its own diagnostic", () => {
   const input = claude()
   const baseline = validateClaudePackagingContract(input)
   input.superpowersPlugin.version = "6.2.0"
-  assert.deepEqual(validateClaudePackagingContract(input).filter((error) => !baseline.includes(error)), ["Superpowers Claude version must match activation lock 6.3.0"])
+  assert.deepEqual(validateClaudePackagingContract(input).filter((error) => !baseline.includes(error)), [`Superpowers Claude version must match activation lock ${input.activation.dependencies.find((entry) => entry.id === "superpowers").lock.version}`])
 })
 test("Claude alpha native dependency metadata cannot activate a second lifecycle", () => {
   const input = claude()

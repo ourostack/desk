@@ -28,7 +28,7 @@ Do these steps in order: make the throwaway desk, set up one host, pass the pref
 
 ### Make the throwaway desk
 
-In a new terminal, create a throwaway folder holding a desk with a local remote, a scratch repository for the engineering work, a backup of your `~/.claude`, the folders where Desk keeps its state and cache for this evaluation, and a binding that points Desk at the throwaway desk:
+In a new terminal, create a throwaway folder holding a desk with a local remote, a scratch repository for the engineering work, a backup of your real Claude config directory (`$CLAUDE_CONFIG_DIR` if your shell sets it, otherwise `~/.claude`), the folders where Desk keeps its state and cache for this evaluation, and a binding that points Desk at the throwaway desk:
 
 ```sh
 export EVAL="$(cd "$(mktemp -d)" && pwd -P)/v2-eval"
@@ -36,7 +36,8 @@ export EVAL="$(cd "$(mktemp -d)" && pwd -P)/v2-eval"
   set -eu
   [ -n "$EVAL" ] && [ ! -e "$EVAL" ] || { echo "EVAL must name a new folder; stopping." >&2; exit 1; }
   mkdir -p "$EVAL/desk/_meta" "$EVAL/desk/_archive" "$EVAL/scratch" "$EVAL/state" "$EVAL/cache"
-  if [ -d "$HOME/.claude" ]; then cp -R "$HOME/.claude" "$EVAL/claude-backup"; fi
+  REAL_CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  if [ -d "$REAL_CLAUDE_DIR" ]; then cp -R "$REAL_CLAUDE_DIR" "$EVAL/claude-backup"; fi
   git -C "$EVAL/desk" init -q -b main
   [ "$(git -C "$EVAL/desk" rev-parse --show-toplevel)" = "$EVAL/desk" ] || { echo "Not the throwaway desk; stopping." >&2; exit 1; }
   touch "$EVAL/desk/_meta/.gitkeep" "$EVAL/desk/_archive/.gitkeep"
@@ -52,6 +53,7 @@ export EVAL="$(cd "$(mktemp -d)" && pwd -P)/v2-eval"
   printf '{"schema_version":1,"desk":{"root":"%s","state_branch":"main"}}\n' "$EVAL/desk" > "$EVAL/desk.activation.json"
   {
     printf "export EVAL='%s'\n" "$EVAL"
+    printf "export REAL_CLAUDE_DIR='%s'\n" "$REAL_CLAUDE_DIR"
     printf "export DESK_ACTIVATION_CONFIG='%s'\n" "$EVAL/desk.activation.json"
     printf "export DESK='%s'\n" "$EVAL/desk"
     printf "export XDG_STATE_HOME='%s'\n" "$EVAL/state"
@@ -69,13 +71,13 @@ Why each piece is there:
 - `DESK_ACTIVATION_CONFIG` binds the throwaway desk on every host that honors it, and its `state_branch` keeps it on `main`. `DESK` names the same desk, so a binding that ever misses falls back to the throwaway desk rather than to a desk in your home folder ([root resolution order](../mcp/src/util/paths.js)).
 - `XDG_STATE_HOME` and `XDG_CACHE_HOME` give these sessions their own Desk state and cache: factory consent, session markers, outbox and readiness state all live under the state folder ([factory outbox](../mcp/src/factory/outbox.js), [start records](../mcp/src/runtime/last-start.js)), so the evaluation never reads or changes yours, and scenario 6 sees the one-time consent question for real.
 - `CLAUDE_CONFIG_DIR` and `COPILOT_HOME` give each host a fresh profile inside `$EVAL`.
-- `$EVAL/claude-backup` is a copy of your `~/.claude`, taken before anything else runs, so you can check it is unchanged at the end.
+- `$EVAL/claude-backup` is a copy of your real Claude config directory, taken before anything else runs, so you can check it is unchanged at the end. `env.sh` records that directory as `REAL_CLAUDE_DIR`: the `CLAUDE_CONFIG_DIR` your shell had before setup, otherwise `~/.claude`.
 
 Start every session under test from `$EVAL/scratch`: a host project that is itself a desk would bind that desk instead ([root resolution order](../mcp/src/util/paths.js)). Keep the printed `$EVAL` path; `observer` needs it. If you want pull requests in the engineering scenarios, use a throwaway GitHub repository of your own instead of `$EVAL/scratch`.
 
 ### Claude Code
 
-**Warning:** this packet requires Desk 3.2.0-alpha.54 or later, the release in which every step of `SETUP.md` follows `CLAUDE_CONFIG_DIR`. Before that release, [`SETUP.md`](../../../SETUP.md#claude-code) steps 2, 3 and 4 edit your real `~/.claude` even in a throwaway profile, and step 4 can move content out of `~/.claude/agents/`, `skills/`, `hooks/` and `projects/*/memory/`. The setup block above backs up your whole `~/.claude` folder to `$EVAL/claude-backup` whatever version you get. Answer step 4's question with "move or remove nothing". Any edit to your real `~/.claude` is a finding.
+**Warning:** this packet requires the Desk release that contains the `SETUP.md` config-directory fix, in which every step of `SETUP.md` follows `CLAUDE_CONFIG_DIR`. Check with `claude plugin list`, or read the Desk [changelog](../CHANGELOG.md) for that fix. Before that release, [`SETUP.md`](../../../SETUP.md#claude-code) steps 2, 3 and 4 edit your real `~/.claude` even in a throwaway profile, and step 4 can move content out of `~/.claude/agents/`, `skills/`, `hooks/` and `projects/*/memory/`. The setup block above backs up your whole real Claude config directory (`$REAL_CLAUDE_DIR`) to `$EVAL/claude-backup` whatever version you get. Answer step 4's question with "move or remove nothing". Any edit to your real `~/.claude` is a finding.
 
 1. In the terminal where you made the throwaway desk (its variables, including `CLAUDE_CONFIG_DIR`, are set), `cd "$EVAL/scratch"` and start `claude`. Sign in; the sign-in is yours, and `observer` records it as a human step ([evaluate-release](../skills/evaluate-release/SKILL.md#hands-off)).
 2. Give the agent the one link, https://github.com/ourostack/desk/blob/main/SETUP.md, and say "set this up".
@@ -84,10 +86,10 @@ Start every session under test from `$EVAL/scratch`: a host project that is itse
 
 **Good looks like** ([SETUP.md, steps 2, 4 and 6](../../../SETUP.md#2-install-the-plugins)):
 
-- `claude plugin list` shows `desk@ourostack`, `superpowers@ourostack` and `plain-language@ourostack` enabled, with Desk at 3.2.0-alpha.54 or later;
+- `claude plugin list` shows `desk@ourostack`, `superpowers@ourostack` and `plain-language@ourostack` enabled, with a Desk release that contains the `SETUP.md` config-directory fix (check its entry in the Desk [changelog](../CHANGELOG.md));
 - the new session runs as `desk:worker` and the Desk foundation appears at startup;
 - `desk:session-start` runs and offers work to resume or start;
-- `$CLAUDE_CONFIG_DIR/CLAUDE.md` is only the thin pointer to the desk ([SETUP.md, step 4](../../../SETUP.md#4-make-claudeclaudemd-a-thin-pointer)), and your real `~/.claude` matches `$EVAL/claude-backup`.
+- `$CLAUDE_CONFIG_DIR/CLAUDE.md` is only the thin pointer to the desk ([SETUP.md, step 4](../../../SETUP.md#4-make-claudeclaudemd-a-thin-pointer)), and your real Claude config directory (`$REAL_CLAUDE_DIR`) matches `$EVAL/claude-backup`.
 
 ### A managed launcher with a company overlay
 
@@ -288,7 +290,7 @@ This scenario depends on the kaizen loop in the factory store `ourostack/factory
 
 ## Clean up
 
-Remove everything the evaluation made except the backup of your `~/.claude`. The block stops unless `$EVAL` looks like the throwaway folder:
+Remove everything the evaluation made except the backup of your real Claude config directory. The block stops unless `$EVAL` looks like the throwaway folder:
 
 ```sh
 ( set -eu
@@ -298,4 +300,4 @@ Remove everything the evaluation made except the backup of your `~/.claude`. The
 )
 ```
 
-Then compare your `~/.claude` with the backup, for example `diff -rq ~/.claude "$EVAL/claude-backup"`; only session logs, history and caches should differ, and any other difference is a finding. When you're satisfied, remove the folder with `rm -rf "$EVAL"` and close the terminals that sourced its `env.sh`. Keep the evidence folder. `observer` removes what it started and lists it in its report ([evaluate-release](../skills/evaluate-release/SKILL.md#clean-up)).
+Then compare your real Claude config directory with the backup, for example `diff -rq "$REAL_CLAUDE_DIR" "$EVAL/claude-backup"`; only session logs, history and caches should differ, and any other difference is a finding. When you're satisfied, remove the folder with `rm -rf "$EVAL"` and close the terminals that sourced its `env.sh`. Keep the evidence folder. `observer` removes what it started and lists it in its report ([evaluate-release](../skills/evaluate-release/SKILL.md#clean-up)).
