@@ -158,6 +158,39 @@ const PATTERN_DATES = [
   { keys: ["refs", "commits", 0, "repo"], value: "acme/2026-09-25" },
 ]
 
+// Credential-shaped free tokens with no spaces: each carries a sentinel, or
+// is a bare hex run asserted absent by value.
+const CREDENTIAL_TOKENS = [
+  { keys: ["models", 0, "id"], value: "ghp_SENTINEL0123456789abcdefghijklmnopqrstuv" },
+  { keys: ["agents", 0, "model"], value: "github_pat_SENTINEL0123456789_abcdefghijklmnopqrstuvwxyz" },
+  { keys: ["agents", 1, "model"], value: "gho_SENTINEL0123456789abcdefghijklmnopqrstuv" },
+  { keys: ["models", 1, "id"], value: "sk-ant-SENTINEL-api03-abcdefghijklmnop" },
+  { keys: ["models", 0, "id"], value: "0123456789abcdef0123456789abcdef" },
+  { keys: ["plugins", 0, "name"], value: "sentinel-0123456789abcdef0123456789abcdef" },
+  { keys: ["refs", "prs", 0, "repo"], value: "acme/ghp_SENTINEL0123456789abcdefghijklmnopqrstuv" },
+  { keys: ["refs", "commits", 0, "repo"], value: "acme/sentinel-0123456789abcdef0123456789abcdef" },
+]
+
+for (const { keys, value } of CREDENTIAL_TOKENS) {
+  test(`a credential-shaped ${ps(keys)} with no spaces fails with credential_like and is never echoed`, () => {
+    const result = validatePublished(setPath(golden(), keys, value))
+    assertSingle(result, "credential_like", ps(keys))
+    const serialized = JSON.stringify(result).toLowerCase()
+    for (const fragment of ["sentinel", "ghp_", "github_pat_", "gho_", "sk-ant", "0123456789abcdef0123456789abcdef"]) assert.equal(serialized.includes(fragment), false, value)
+  })
+}
+
+test("real model IDs, plugin names and repositories are not credential-like", () => {
+  for (const [keys, value] of [
+    [["models", 0, "id"], "claude-3-5-sonnet-20241022"],
+    [["agents", 0, "model"], "us.anthropic.claude-3-7-sonnet-20250219-v1:0"],
+    [["plugins", 0, "name"], "plain-language"],
+    [["refs", "prs", 0, "repo"], "ourostack/ouroboros-agent-harness"],
+  ]) {
+    assert.deepEqual(validatePublished(setPath(golden(), keys, value)), { ok: true, errors: [] }, value)
+  }
+})
+
 test("TIME_SHAPE matches a time of day; compact release stamps are not one", () => {
   assert.ok(TIME_SHAPE.test("m:08:30:00"))
   assert.equal(TIME_SHAPE.test("gpt-4o-20240806"), false)

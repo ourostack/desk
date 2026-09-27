@@ -16,10 +16,18 @@
 //
 //   - `job` is a job ID and `session` a version-4 session ID, as in
 //     published facts.
-//   - `evaluator.plugin_version` is a semver, `evaluator.model` a token of at
-//     most 64 characters with no spaces, and `evaluator.rubric` a digit string
-//     with no leading zero. Each is also refused as `date` or `time` when it
-//     holds a date or a time of day.
+//   - `evaluator.plugin_version` is a Desk version: `major.minor.patch`, each
+//     of at most three digits, optionally followed by `-alpha.N`, `-beta.N`
+//     or `-rc.N` with N of at most four digits. No other prerelease token is
+//     allowed, so the field cannot carry a name or a date.
+//   - `evaluator.model` uses published facts' own model-ID validator
+//     (`published-schema.js`'s `modelIdField`): a token of at most 80
+//     characters with no spaces, refused as `date` or `time` when it holds a
+//     date or a time of day and as `credential_like` when it looks like a
+//     secret.
+//   - `evaluator.rubric` is the rubric's version number as a digit string,
+//     1 to 999 with no leading zero, too short to hold a date or an epoch
+//     value.
 //   - Each stretch is `[start_ms, end_ms)` on the session clock, with
 //     `start_ms < end_ms` (else `order`). Stretches are listed in start order
 //     (else `order`) and never overlap (else `overlap`); touching ends and
@@ -30,14 +38,17 @@
 //   - `evidence` is a non-empty list (else `empty`) of distinct (else
 //     `duplicate`) `[start_ms, end_ms]` ranges with `start_ms <= end_ms`.
 //     They are time ranges, not list positions, so labels stay valid when a
-//     still-running session is re-derived and grows.
+//     still-running session is re-derived and grows. Evidence may cite any
+//     interval of the session, not only one inside its own stretch: a
+//     defect stretch may rest on an earlier failed tool call, for example.
 //   - `unavailable` lists what the evaluator could not read, from a closed
 //     set of codes, none twice:
 //       `session_log_missing`: the host's session log for this session was
 //         gone or unreadable, so the labels rest on the facts alone.
 //       `facts_missing`: the job's local facts for this session were missing,
 //         so there is no evidence to cite and `stretches` must be empty
-//         (else `inconsistent`).
+//         (else `inconsistent`). The store accepts such labels even when it
+//         holds no facts file for the session.
 //
 // `checkLabelsAgainstFacts` is the store-side half: it compares
 // already-valid labels with the session's already-valid published facts.
@@ -46,10 +57,14 @@
 // and every evidence range must equal one interval's `start_ms` and `end_ms`
 // exactly (`evidence_unmatched`).
 //
+// `evaluatorDowngrade` supports the store's replacement rule: a labels file
+// may be replaced only by labels from an evaluator whose plugin version and
+// rubric are both no lower than the ones it replaces.
+//
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
-import { durationField, publicPatternField, SESSION_ID_V4 } from "./published-schema.js"
+import { durationField, modelIdField, publicPatternField, SESSION_ID_V4 } from "./published-schema.js"
 import {
   PATTERNS,
   addError,
@@ -90,8 +105,9 @@ export const LABEL_LIMITS = Object.freeze({
 })
 
 const LABELS_SCHEMA_PATTERN = /^desk\.factory\.labels\/1$/u
-const EVALUATOR_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u
-const RUBRIC = /^(0|[1-9][0-9]{0,8})$/u
+const DESK_VERSION = /^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(?:-(alpha|beta|rc)\.([0-9]{1,4}))?$/u
+const RUBRIC = /^[1-9][0-9]{0,2}$/u
+const STAGES = Object.freeze(["alpha", "beta", "rc"])
 
 // One `[start_ms, end_ms]` evidence range: exactly two durations, in order.
 function checkEvidenceRange(value, path, errors) {
@@ -113,8 +129,8 @@ function checkEvidenceRange(value, path, errors) {
 }
 
 const EVALUATOR = {
-  plugin_version: publicPatternField(PATTERNS.semver),
-  model: publicPatternField(EVALUATOR_MODEL),
+  plugin_version: patternField(DESK_VERSION),
+  model: modelIdField(),
   rubric: patternField(RUBRIC),
 }
 
@@ -225,4 +241,27 @@ export function checkLabelsAgainstFacts(labels, facts) {
     })
   })
   return { ok: errors.length === 0, errors }
+}
+
+// A Desk version as a comparable tuple; a release sorts after its prereleases.
+function versionTuple(version) {
+  const [, major, minor, patch, stage, number] = DESK_VERSION.exec(version)
+  return [Number(major), Number(minor), Number(patch), stage === undefined ? STAGES.length : STAGES.indexOf(stage), Number(number ?? 0)]
+}
+
+function compareTuples(left, right) {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index]
+  }
+  return 0
+}
+
+/**
+ * `evaluatorDowngrade(previous, current) -> boolean`: whether valid labels
+ * `current` come from an older evaluator than valid labels `previous`, by
+ * plugin version or by rubric.
+ */
+export function evaluatorDowngrade(previous, current) {
+  return compareTuples(versionTuple(current.evaluator.plugin_version), versionTuple(previous.evaluator.plugin_version)) < 0
+    || Number(current.evaluator.rubric) < Number(previous.evaluator.rubric)
 }

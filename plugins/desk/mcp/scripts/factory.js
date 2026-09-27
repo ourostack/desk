@@ -155,7 +155,12 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
           bytes,
           ...(change.status === "modified" ? { previousBytes: revisionBytes({ revision: previousRevision(), filePath: change.path, cwd, git }) } : {}),
         }
-      : { ...change, bytes, facts: labeledSessionFacts({ session: labels.session, listed, base, head, cwd, git }) }
+      : {
+          ...change,
+          bytes,
+          ...(change.status === "modified" ? { previousBytes: revisionBytes({ revision: previousRevision(), filePath: change.path, cwd, git }) } : {}),
+          facts: labeledSessionFacts({ session: labels.session, listed, base, head, cwd, git }),
+        }
     errors.push(...validatePr({ changes: [current] }).errors)
   })
   const result = { ok: errors.length === 0, errors }

@@ -274,6 +274,22 @@ test("validate-pr gates labels as data against the facts the merge would leave i
   git("commit", "-q", "-m", "remove facts, add label")
   assert.deepEqual(await validate(movedBase, git("rev-parse", "HEAD"), "OWNER"), { ok: false, maintenance: false, errors: [{ code: "facts_missing", path: LABEL_2222 }] })
 
+  // A replacement reads the previous labels at the merge base: a newer rubric passes, an older evaluator does not.
+  const replace = async (branch, mutate) => {
+    git("checkout", "-q", "-b", branch, label1111Head)
+    const value = JSON.parse(readFileSync(path.join(FIXTURE_STORE, LABEL_1111), "utf8"))
+    mutate(value)
+    await write(LABEL_1111, `${JSON.stringify(value)}\n`)
+    git("commit", "-q", "-am", branch)
+    return git("rev-parse", "HEAD")
+  }
+  assert.deepEqual(await validate(label1111Head, await replace("relabel", (value) => { value.evaluator.rubric = "2" })), { ok: true, maintenance: false, errors: [] })
+  assert.deepEqual(await validate(label1111Head, await replace("downgrade", (value) => { value.evaluator.plugin_version = "3.2.0-alpha.1" })), {
+    ok: false,
+    maintenance: false,
+    errors: [{ code: "evaluator_downgrade", path: LABEL_1111 }],
+  })
+
   // Removing labels is maintenance for a maintainer and refused for anyone else.
   git("checkout", "-q", "-b", "drop-label", label1111Head)
   git("rm", "-q", LABEL_1111)

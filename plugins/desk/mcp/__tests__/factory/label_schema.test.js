@@ -21,10 +21,11 @@ import {
   LABEL_WASTES,
   __LABEL_SPECS__,
   checkLabelsAgainstFacts,
+  evaluatorDowngrade,
   validateLabels,
   validateLabelsBytes,
 } from "../../src/factory/label-schema.js"
-import { PUBLISHED_LIMITS } from "../../src/factory/published-schema.js"
+import { PUBLISHED_LIMITS, validatePublished } from "../../src/factory/published-schema.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const GOLDEN_BYTES = readFileSync(path.join(here, "fixtures", "labels-golden.json"))
@@ -88,6 +89,86 @@ test("the golden labels and the brief's example pass on their own", () => {
   assert.deepEqual(validateLabels(structuredClone(BRIEF_EXAMPLE)), { ok: true, errors: [] })
 })
 
+test("every Desk-shaped plugin version and every rubric from 1 to 999 passes", () => {
+  for (const version of ["3.2.0", "0.0.1", "999.999.999", "3.2.0-alpha.58", "3.2.0-beta.7", "3.2.0-rc.1", "3.2.0-alpha.9999"]) {
+    const value = golden()
+    value.evaluator.plugin_version = version
+    assert.deepEqual(validateLabels(value), { ok: true, errors: [] }, version)
+  }
+  for (const rubric of ["1", "9", "10", "999"]) {
+    const value = golden()
+    value.evaluator.rubric = rubric
+    assert.deepEqual(validateLabels(value), { ok: true, errors: [] }, rubric)
+  }
+})
+
+// Credential-shaped values with no spaces, each built around a sentinel so
+// the no-echo assertion is exact. The hex run carries no letters to plant,
+// so its own value is asserted absent.
+const HEX_RUN = "0123456789abcdef0123456789abcdef"
+const CREDENTIAL_MODELS = [
+  "ghp_SENTINEL0123456789abcdefghijklmnopqrstuv",
+  "github_pat_SENTINEL0123456789_abcdefghijklmnopqrstuvwxyz",
+  "gho_SENTINEL0123456789abcdefghijklmnopqrstuv",
+  "sk-ant-SENTINEL-api03-abcdefghijklmnop",
+  HEX_RUN,
+  `model-${HEX_RUN}`,
+]
+
+test("credential-shaped model IDs with no spaces are refused as credential_like and never echoed", () => {
+  for (const model of CREDENTIAL_MODELS) {
+    const value = golden()
+    value.evaluator.model = model
+    const result = validateLabels(value)
+    assert.deepEqual(result, { ok: false, errors: [{ code: "credential_like", path: "evaluator.model" }] }, model)
+    const serialized = JSON.stringify(result)
+    for (const fragment of ["SENTINEL", "ghp_", "github_pat_", "gho_", "sk-ant", HEX_RUN]) assert.equal(serialized.includes(fragment), false, model)
+  }
+})
+
+test("labels and published facts judge every model ID with the same validator", () => {
+  const cases = [
+    "claude-opus-5-5",
+    "claude-3-5-sonnet-20241022",
+    "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "gpt-5.1-codex",
+    "m".repeat(80),
+    "m".repeat(81),
+    "claude opus",
+    "-leading-dash",
+    "model-2026-09-25",
+    "model:08:30",
+    ...CREDENTIAL_MODELS,
+  ]
+  for (const model of cases) {
+    const labels = golden()
+    labels.evaluator.model = model
+    const facts = structuredClone(FACTS)
+    facts.models[0].id = model
+    const fromLabels = validateLabels(labels).errors.map((item) => item.code)
+    const fromFacts = validatePublished(facts).errors.map((item) => item.code)
+    assert.deepEqual(fromLabels, fromFacts, model)
+  }
+  for (const model of ["claude-opus-5-5", "claude-3-5-sonnet-20241022", "us.anthropic.claude-3-7-sonnet-20250219-v1:0", "m".repeat(80)]) {
+    const labels = golden()
+    labels.evaluator.model = model
+    assert.deepEqual(validateLabels(labels), { ok: true, errors: [] }, model)
+  }
+})
+
+test("evaluatorDowngrade compares plugin versions, prerelease stages and rubrics", () => {
+  const with_ = (plugin_version, rubric = "1") => ({ evaluator: { plugin_version, model: "claude-opus-5-5", rubric } })
+  const ordered = ["3.1.9", "3.2.0-alpha.9", "3.2.0-alpha.58", "3.2.0-beta.1", "3.2.0-rc.1", "3.2.0", "3.2.1-alpha.1", "3.10.0", "10.0.0"]
+  for (let index = 1; index < ordered.length; index += 1) {
+    assert.equal(evaluatorDowngrade(with_(ordered[index]), with_(ordered[index - 1])), true, `${ordered[index - 1]} < ${ordered[index]}`)
+    assert.equal(evaluatorDowngrade(with_(ordered[index - 1]), with_(ordered[index])), false, `${ordered[index - 1]} < ${ordered[index]}`)
+  }
+  assert.equal(evaluatorDowngrade(with_("3.2.0-alpha.58"), with_("3.2.0-alpha.58")), false)
+  assert.equal(evaluatorDowngrade(with_("3.2.0", "2"), with_("3.2.0", "1")), true)
+  assert.equal(evaluatorDowngrade(with_("3.2.0", "2"), with_("3.2.0", "10")), false)
+  assert.equal(evaluatorDowngrade(with_("3.2.0", "2"), with_("3.2.1", "1")), true)
+})
+
 test("labels with no stretches and every unavailable code pass", () => {
   const value = golden()
   value.stretches = []
@@ -146,9 +227,16 @@ const FIELD_CASES = [
   { keys: ["evaluator"], value: SENTINEL, code: "type" },
   { keys: ["evaluator", "plugin_version"], value: SENTINEL, code: "pattern" },
   { keys: ["evaluator", "plugin_version"], value: "3.2", code: "pattern" },
+  { keys: ["evaluator", "plugin_version"], value: "3.2.0-ari.macbook", code: "pattern" },
+  { keys: ["evaluator", "plugin_version"], value: "3.2.0-20260927.0830", code: "pattern" },
+  { keys: ["evaluator", "plugin_version"], value: "3.2.0-alpha", code: "pattern" },
+  { keys: ["evaluator", "plugin_version"], value: "3.2.0-alpha.12345", code: "pattern" },
+  { keys: ["evaluator", "plugin_version"], value: "1000.0.0", code: "pattern" },
+  { keys: ["evaluator", "plugin_version"], value: `3.2.0-${SENTINEL}`, code: "pattern" },
   { keys: ["evaluator", "model"], value: SENTINEL.replace("_", " "), code: "pattern" },
   { keys: ["evaluator", "model"], value: "claude opus", code: "pattern" },
-  { keys: ["evaluator", "model"], value: "m".repeat(65), code: "pattern" },
+  { keys: ["evaluator", "model"], value: "m".repeat(81), code: "pattern" },
+  { keys: ["evaluator", "model"], value: SENTINEL, code: "credential_like" },
   { keys: ["evaluator", "model"], value: "-leading-dash", code: "pattern" },
   { keys: ["evaluator", "model"], value: "model-2026-09-25", code: "date" },
   { keys: ["evaluator", "model"], value: "model:08:30", code: "time" },
@@ -159,6 +247,10 @@ const FIELD_CASES = [
   { keys: ["evaluator", "rubric"], value: "01", code: "pattern" },
   { keys: ["evaluator", "rubric"], value: "1.0", code: "pattern" },
   { keys: ["evaluator", "rubric"], value: "1".repeat(10), code: "pattern" },
+  { keys: ["evaluator", "rubric"], value: "0", code: "pattern" },
+  { keys: ["evaluator", "rubric"], value: "1000", code: "pattern" },
+  { keys: ["evaluator", "rubric"], value: "20260927", code: "pattern" },
+  { keys: ["evaluator", "rubric"], value: "999999999", code: "pattern" },
   { keys: ["stretches"], value: SENTINEL, code: "type" },
   { keys: ["stretches", 0], value: SENTINEL, code: "type" },
   { keys: ["stretches", 0, "start_ms"], value: SENTINEL, code: "integer" },

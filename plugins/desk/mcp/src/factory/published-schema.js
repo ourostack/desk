@@ -19,6 +19,12 @@
 //     contains a date shape (`DATE_SHAPE`), and with code `time` when it
 //     contains a time of day (`TIME_SHAPE`). Model IDs, plugin names and
 //     repository names are the patterns loose enough to hold one.
+//   - Those free tokens (model IDs, plugin names, and PR and commit
+//     repository names) are also refused, with code `credential_like`, when
+//     they look like a secret (`credential.js`: a token prefix such as
+//     `ghp_` or `sk-`, a 16+ character hex or letter-and-digit run, a
+//     password value or an IPv4-looking run). Every published model field,
+//     here and in labels (`label-schema.js`), uses the one `modelIdField`.
 //   - `session.id` is a version-4 (random) UUID. Other versions can carry a
 //     timestamp (v1, v6, v7) or a machine identifier (v1), and the ID is
 //     also the file name (review I1, fix round 2).
@@ -72,6 +78,7 @@ import {
   validateCanonicalBytes,
   validateObject,
 } from "./schema.js"
+import { isCredentialLike } from "./credential.js"
 
 export const PUBLISHED_SCHEMA = "desk.factory.published/1"
 
@@ -108,6 +115,23 @@ export function publicPatternField(pattern) {
   })
 }
 
+// A free token (a name chosen elsewhere, not a fixed-format ID): the public
+// rules, then no credential-shaped value (`credential.js`).
+function publicTokenField(pattern) {
+  const base = publicPatternField(pattern)
+  return leaf((value, path, errors) => {
+    if (!base.check(value, path, errors)) return false
+    if (isCredentialLike(value)) {
+      addError(errors, "credential_like", path)
+      return false
+    }
+    return true
+  })
+}
+
+/** The one model-ID validator for every published model field, in facts and labels alike. */
+export const modelIdField = () => publicTokenField(PATTERNS.modelId)
+
 // A duration in milliseconds, at most the offset cap.
 export const durationField = () => leaf((value, path, errors) => {
   if (!Number.isSafeInteger(value) || value < 0) {
@@ -140,28 +164,28 @@ const offsetField = () => leaf((value, path, errors) => {
 
 const PLUGIN = {
   ...PLUGIN_SPEC,
-  name: publicPatternField(PATTERNS.pluginName),
+  name: publicTokenField(PATTERNS.pluginName),
   version: publicPatternField(PATTERNS.semver),
 }
 
 const MODEL = {
   ...MODEL_SPEC,
-  id: publicPatternField(PATTERNS.modelId),
+  id: modelIdField(),
 }
 
 const AGENT = {
   ...AGENT_SPEC,
-  model: publicPatternField(PATTERNS.modelId),
+  model: modelIdField(),
 }
 
 const PR = {
   ...PR_SPEC,
-  repo: publicPatternField(PATTERNS.prRepo),
+  repo: publicTokenField(PATTERNS.prRepo),
 }
 
 // Unlike the local form, a published commit always names its repository.
 const COMMIT = {
-  repo: publicPatternField(PATTERNS.prRepo),
+  repo: publicTokenField(PATTERNS.prRepo),
   sha: publicPatternField(PATTERNS.commitSha),
 }
 

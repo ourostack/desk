@@ -201,9 +201,8 @@ function noEcho(result) {
 }
 
 test("validatePr accepts an added or modified labels file whose evidence matches the session's facts", () => {
-  for (const status of ["added", "modified"]) {
-    assert.deepEqual(validatePr({ changes: [{ path: LABEL_PATH, status, bytes: LABELS_BYTES, facts: LABEL_FACTS }] }), { ok: true, errors: [] })
-  }
+  assert.deepEqual(validatePr({ changes: [{ path: LABEL_PATH, status: "added", bytes: LABELS_BYTES, facts: LABEL_FACTS }] }), { ok: true, errors: [] })
+  assert.deepEqual(validatePr({ changes: [{ path: LABEL_PATH, status: "modified", bytes: LABELS_BYTES, previousBytes: LABELS_BYTES, facts: LABEL_FACTS }] }), { ok: true, errors: [] })
   assert.deepEqual(validatePr({
     changes: [
       { path: VALID_PATH, status: "added", bytes: GOLDEN_BYTES },
@@ -352,4 +351,43 @@ test("validatePr rejects labels whose evidence, stretches or job do not fit the 
       { code: "job_unbound", path: unboundPath },
     ],
   })
+})
+
+test("validatePr lets a labels file be replaced only by an evaluator no older than the one it replaces", () => {
+  const change = (mutate, previousBytes) => ({ path: LABEL_PATH, status: "modified", bytes: labelBytes(mutate), previousBytes, facts: LABEL_FACTS })
+  const previous = labelBytes((value) => { value.evaluator.plugin_version = "3.2.0-alpha.58"; value.evaluator.rubric = "2" })
+  for (const mutate of [
+    (value) => { value.evaluator.plugin_version = "3.2.0-alpha.58"; value.evaluator.rubric = "2" },
+    (value) => { value.evaluator.plugin_version = "3.2.0-alpha.59"; value.evaluator.rubric = "2" },
+    (value) => { value.evaluator.plugin_version = "3.2.0"; value.evaluator.rubric = "3" },
+  ]) assert.deepEqual(validatePr({ changes: [change(mutate, previous)] }), { ok: true, errors: [] })
+  const result = validatePr({
+    changes: [
+      change((value) => { value.evaluator.plugin_version = "3.2.0-alpha.57"; value.evaluator.rubric = "2" }, previous),
+      change((value) => { value.evaluator.plugin_version = "3.2.0-alpha.58"; value.evaluator.rubric = "1" }, previous),
+      change(() => {}, undefined),
+      change(() => {}, Buffer.from(`{"${TOKEN_SENTINEL}":`)),
+    ],
+  })
+  assert.deepEqual(result, {
+    ok: false,
+    errors: [
+      { code: "evaluator_downgrade", path: LABEL_PATH },
+      { code: "evaluator_downgrade", path: LABEL_PATH },
+      { code: "previous_missing", path: LABEL_PATH },
+      { code: "previous_invalid", path: LABEL_PATH },
+    ],
+  })
+  noEcho(result)
+})
+
+test("validatePr accepts labels that declare facts_missing without a facts file, and still checks one that exists", () => {
+  const declared = labelBytes((value) => { value.stretches = []; value.unavailable = ["facts_missing"] })
+  assert.deepEqual(validatePr({ changes: [{ path: LABEL_PATH, status: "added", bytes: declared, facts: [] }] }), { ok: true, errors: [] })
+  assert.deepEqual(validatePr({ changes: [{ path: LABEL_PATH, status: "added", bytes: declared, facts: LABEL_FACTS }] }), { ok: true, errors: [] })
+  const unboundJob = "d".repeat(32)
+  const unboundPath = `labels/${unboundJob}/${LABELS.session}.json`
+  const unbound = labelBytes((value) => { value.job = unboundJob; value.stretches = []; value.unavailable = ["facts_missing"] })
+  assert.deepEqual(validatePr({ changes: [{ path: unboundPath, status: "added", bytes: unbound, facts: LABEL_FACTS }] }), { ok: false, errors: [{ code: "job_unbound", path: unboundPath }] })
+  assert.deepEqual(validatePr({ changes: [{ path: LABEL_PATH, status: "added", bytes: declared, facts: [{ path: VALID_PATH, bytes: Buffer.from("{") }] }] }), { ok: false, errors: [{ code: "facts_invalid", path: LABEL_PATH }] })
 })
