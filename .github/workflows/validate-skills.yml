@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - main
+  # The scheduled Superpowers refresh dispatches this workflow on its branch, because pull request events raised by
+  # the workflow token start no runs.
+  workflow_dispatch:
 
 jobs:
   validate:
@@ -35,6 +38,9 @@ jobs:
         run: node scripts/check-dependency-channels.cjs
 
       - name: Check every changed plugin ships a new version
+        env:
+          # A dispatched run has no pull request base, so it compares against main.
+          DESK_RELEASE_BASE: ${{ github.event_name == 'workflow_dispatch' && 'origin/main' || '' }}
         run: node scripts/check-release-integrity.cjs
 
       - name: Validate skill eval contracts
@@ -48,6 +54,12 @@ jobs:
 
       - name: Validate upstream source steward
         run: node scripts/test-upstream-sources.cjs
+
+      - name: Validate the scheduled Superpowers refresh
+        run: node scripts/test-refresh-superpowers.cjs && node scripts/test-superpowers-upstream-pr.cjs
+
+      - name: Validate Claude config directory references
+        run: node scripts/test-claude-config-dir.cjs
 
       - name: Validate Desk healthy-path docs
         run: node scripts/test-desk-docs.cjs

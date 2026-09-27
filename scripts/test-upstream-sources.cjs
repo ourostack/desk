@@ -9,11 +9,15 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const {
+  compactSources,
   createGitHubClient,
+  createGitTreeReader,
+  formatLock,
   inspectSource,
   inspectSources,
   main,
   selectedPayloadDigest,
+  updateSource,
 } = require("./check-upstream-sources.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
@@ -554,6 +558,261 @@ process.stdout.write(JSON.stringify(value));
   assert.equal(drift.classification, "blocked");
   assert.equal(drift.reason, "selected payload at the locked commit does not match the recorded hashes");
   assert.deepEqual(drift.changed_paths, ["skills/example/SKILL.md"]);
+}
+
+// ---- Update mode: a fixture upstream Git tree in, byte-identical selected files and a correct lock out. ----
+
+{
+  // The formatter reproduces the checked-in lock byte for byte, so a refresh diff shows only changed entries.
+  const text = fs.readFileSync(path.join(repoRoot, "upstream-sources.lock.json"), "utf8");
+  const lock = JSON.parse(text);
+  const compact = compactSources(text, lock);
+  assert.deepEqual([...compact], ["obra-superpowers"]);
+  assert.equal(formatLock(lock, compact), text);
+  assert.equal(compactSources("{}", { sources: [{ id: "empty", files: [] }] }).size, 0);
+}
+
+function git(dir, ...args) {
+  const result = spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
+// Writes each fixture file, marks executables in the index, and commits, returning the commit.
+function commitUpstream(dir, files, message) {
+  for (const entry of fs.readdirSync(dir)) {
+    if (entry !== ".git") fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+  }
+  for (const [file, { content }] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), content);
+  }
+  git(dir, "add", "--all");
+  for (const [file, { executable = false }] of Object.entries(files)) {
+    git(dir, "update-index", `--chmod=${executable ? "+" : "-"}x`, file);
+  }
+  git(dir, "commit", "--quiet", "--allow-empty", "--message", message);
+  return git(dir, "rev-parse", "HEAD");
+}
+
+function initUpstream(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  git(dir, "init", "--quiet");
+  git(dir, "config", "user.name", "Fixture");
+  git(dir, "config", "user.email", "fixture@example.invalid");
+  git(dir, "config", "core.autocrlf", "false");
+  git(dir, "config", "commit.gpgsign", "false");
+}
+
+const lockedUpstream = {
+  "LICENSE": { content: "MIT fixture license\n" },
+  "README.md": { content: "unselected root file\n" },
+  "hooks/run-hook": { content: "#!/bin/sh\necho locked\n", executable: true },
+  "hooks/extra.json": { content: "{}\n" },
+  "skills/alpha/SKILL.md": { content: "alpha skill\r\nwith CRLF bytes\r\n" },
+  "skills/alpha/old.md": { content: "removed upstream\n" },
+  "skills/alpha/refs/gone.md": { content: "removed with its folder\n" },
+  "skills/beta/SKILL.md": { content: "beta skill\n" },
+  "skills/beta/tool": { content: "#!/bin/sh\necho tool\n", executable: true },
+  "skills/beta/drifted.md": { content: "beta drift target\n" },
+  "skills/beta/missing.md": { content: "beta missing target\n" },
+};
+const refreshedUpstream = {
+  "LICENSE": lockedUpstream.LICENSE,
+  "README.md": { content: "unselected root file, changed\n" },
+  "hooks/run-hook": { content: "#!/bin/sh\necho refreshed\n", executable: true },
+  "hooks/extra.json": { content: "{\"unselected\": true}\n" },
+  "skills/alpha/SKILL.md": lockedUpstream["skills/alpha/SKILL.md"],
+  "skills/alpha/new/script": { content: "#!/bin/sh\necho new\n", executable: true },
+  "skills/beta/SKILL.md": lockedUpstream["skills/beta/SKILL.md"],
+  "skills/beta/tool": { content: lockedUpstream["skills/beta/tool"].content, executable: false },
+  "skills/beta/drifted.md": lockedUpstream["skills/beta/drifted.md"],
+  "skills/beta/missing.md": lockedUpstream["skills/beta/missing.md"],
+  "skills/gamma/SKILL.md": { content: "a new upstream skill\n" },
+};
+const selectedLocked = Object.keys(lockedUpstream).filter((file) => file !== "README.md" && file !== "hooks/extra.json").sort();
+
+function fixtureLock(commit) {
+  return {
+    schemaVersion: 1,
+    sources: [
+      {
+        id: "fixture-superpowers",
+        repository: "owner/superpowers",
+        commit,
+        license: "MIT",
+        files: selectedLocked.map((sourcePath) => ({
+          sourcePath,
+          generatedPath: `plugins/fixture/${sourcePath}`,
+          sha256: hash(lockedUpstream[sourcePath].content),
+        })),
+      },
+      {
+        id: "untouched",
+        repository: "owner/other",
+        commit: "3".repeat(40),
+        license: "MIT",
+        files: [{ sourcePath: "x.md", generatedPath: "vendor/x.md", sha256: hash("x") }],
+      },
+    ],
+  };
+}
+
+function writeFixtureRoot(root, lock) {
+  fs.mkdirSync(root, { recursive: true });
+  const text = formatLock(lock, new Set(["fixture-superpowers"]));
+  fs.writeFileSync(path.join(root, "upstream-sources.lock.json"), text);
+  for (const sourcePath of selectedLocked) {
+    const target = path.join(root, "plugins/fixture", sourcePath);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, lockedUpstream[sourcePath].content);
+    fs.chmodSync(target, lockedUpstream[sourcePath].executable ? 0o755 : 0o644);
+  }
+  return text;
+}
+
+{
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "upstream-source-update-"));
+  try {
+    const upstreamDir = path.join(tempRoot, "upstream");
+    initUpstream(upstreamDir);
+    const lockedCommitSha = commitUpstream(upstreamDir, lockedUpstream, "locked");
+    const refreshedCommitSha = commitUpstream(upstreamDir, refreshedUpstream, "refreshed");
+    const root = path.join(tempRoot, "desk");
+    const originalLockText = writeFixtureRoot(root, fixtureLock(lockedCommitSha));
+    const lockPath = path.join(root, "upstream-sources.lock.json");
+    fs.writeFileSync(path.join(root, "plugins/fixture/skills/beta/drifted.md"), "local drift\n");
+    fs.rmSync(path.join(root, "plugins/fixture/skills/beta/missing.md"));
+
+    // The locked commit itself changes nothing that is committed, except the two local defects it repairs.
+    const atLock = createGitTreeReader({ dir: upstreamDir, ref: lockedCommitSha });
+    assert.equal(atLock.commit, lockedCommitSha);
+    const repair = updateSource({ lockPath, sourceId: "fixture-superpowers", upstream: atLock });
+    assert.deepEqual(repair.updated_paths, ["skills/beta/drifted.md", "skills/beta/missing.md"]);
+    assert.equal(repair.changed, true);
+    assert.equal(fs.readFileSync(lockPath, "utf8"), originalLockText);
+
+    const upstream = createGitTreeReader({ dir: upstreamDir });
+    assert.equal(upstream.commit, refreshedCommitSha);
+    assert.equal(upstream.tree, git(upstreamDir, "rev-parse", "HEAD^{tree}"));
+    const report = updateSource({ lockPath, sourceId: "fixture-superpowers", upstream });
+    assert.deepEqual(report, {
+      source_id: "fixture-superpowers",
+      repository: "owner/superpowers",
+      previous_commit: lockedCommitSha,
+      commit: refreshedCommitSha,
+      tree: upstream.tree,
+      changed: true,
+      added_paths: ["skills/alpha/new/script"],
+      updated_paths: ["hooks/run-hook"],
+      mode_changed_paths: ["skills/beta/tool"],
+      removed_paths: ["skills/alpha/old.md", "skills/alpha/refs/gone.md"],
+      unselected_skills: ["skills/gamma"],
+    });
+
+    const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    const refreshed = lock.sources[0];
+    const expectedSelected = Object.keys(refreshedUpstream)
+      .filter((file) => !["README.md", "hooks/extra.json", "skills/gamma/SKILL.md"].includes(file))
+      .sort();
+    assert.equal(refreshed.commit, refreshedCommitSha);
+    assert.deepEqual(refreshed.files.map((file) => file.sourcePath), expectedSelected);
+    for (const file of refreshed.files) {
+      const blob = spawnSync("git", ["-C", upstreamDir, "cat-file", "blob", `HEAD:${file.sourcePath}`]).stdout;
+      const vendored = fs.readFileSync(path.join(root, file.generatedPath));
+      assert.equal(Buffer.compare(vendored, blob), 0, `${file.sourcePath} must be byte-identical to upstream`);
+      assert.equal(file.sha256, hash(blob));
+      assert.equal(file.generatedPath, `plugins/fixture/${file.sourcePath}`);
+      if (process.platform !== "win32") {
+        const executable = Boolean(refreshedUpstream[file.sourcePath].executable);
+        assert.equal((fs.statSync(path.join(root, file.generatedPath)).mode & 0o111) !== 0, executable, file.sourcePath);
+      }
+    }
+    assert.match(fs.readFileSync(path.join(root, "plugins/fixture/skills/alpha/SKILL.md"), "latin1"), /\r\n/u);
+    assert.equal(fs.existsSync(path.join(root, "plugins/fixture/skills/alpha/old.md")), false);
+    assert.equal(fs.existsSync(path.join(root, "plugins/fixture/skills/alpha/refs")), false);
+    assert.equal(fs.existsSync(path.join(root, "plugins/fixture/skills/gamma")), false);
+    assert.deepEqual(lock.sources[1], fixtureLock(lockedCommitSha).sources[1]);
+    const lockText = fs.readFileSync(lockPath, "utf8");
+    assert.equal(formatLock(lock, new Set(["fixture-superpowers"])), lockText);
+    assert.match(lockText, /\{"sourcePath": "skills\/alpha\/new\/script", "generatedPath": "plugins\/fixture\/skills\/alpha\/new\/script", "sha256": "[0-9a-f]{64}"\}/u);
+
+    // A second run over the same upstream is a no-op and writes nothing.
+    const again = updateSource({ lockPath, sourceId: "fixture-superpowers", upstream });
+    assert.equal(again.changed, false);
+    assert.equal(again.previous_commit, refreshedCommitSha);
+    assert.equal(fs.readFileSync(lockPath, "utf8"), lockText);
+
+    // An upstream commit that touches only unselected files is not a refresh and leaves the lock at its commit.
+    commitUpstream(upstreamDir, { ...refreshedUpstream, "README.md": { content: "only unselected changes\n" } }, "unselected");
+    let output = "";
+    assert.equal(main(["--update", "--source", "fixture-superpowers", "--upstream-dir", upstreamDir, "--lock", lockPath], {
+      stdout: { write(value) { output += value; } },
+    }), 0);
+    assert.equal(JSON.parse(output).changed, false);
+    assert.equal(fs.readFileSync(lockPath, "utf8"), lockText);
+
+    // The CLI reads an explicit ref and exits cleanly.
+    const cli = spawnSync(process.execPath, [
+      path.join(__dirname, "check-upstream-sources.cjs"),
+      "--update", "--source", "fixture-superpowers", "--upstream-dir", upstreamDir, "--lock", lockPath, "--ref", refreshedCommitSha,
+    ], { encoding: "utf8" });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.equal(JSON.parse(cli.stdout).commit, refreshedCommitSha);
+
+    assert.throws(
+      () => updateSource({ lockPath, sourceId: "missing", upstream }),
+      /upstream source lock has no source missing/u,
+    );
+    assert.throws(() => createGitTreeReader({ dir: path.join(tempRoot, "not-a-repo") }), /git rev-parse --verify HEAD\^\{commit\} failed/u);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+{
+  // Update refuses what it cannot copy faithfully, before writing anything.
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "upstream-source-refuse-"));
+  try {
+    const entry = (mode = "100644", type = "blob") => ({ mode, type, object: "0".repeat(40) });
+    const fake = (paths) => ({
+      commit: candidateCommit,
+      tree: "4".repeat(40),
+      entries: new Map(Object.entries(paths)),
+      read: () => Buffer.from("content"),
+    });
+    const refuse = (files, upstream, pattern) => {
+      const lockPath = path.join(tempRoot, "lock.json");
+      const text = JSON.stringify({ schemaVersion: 1, sources: [{ id: "s", repository: "o/r", commit: lockedCommit, license: "MIT", files }] });
+      fs.writeFileSync(lockPath, text);
+      assert.throws(() => updateSource({ lockPath, sourceId: "s", upstream }), pattern);
+      assert.equal(fs.readFileSync(lockPath, "utf8"), text);
+    };
+    const file = (sourcePath, generatedPath = `vendor/${sourcePath}`) => ({ sourcePath, generatedPath, sha256: hash("content") });
+    refuse([file("LICENSE", "vendor/COPYING")], fake({}), /does not mirror LICENSE/u);
+    refuse([file("LICENSE"), file("hooks/a", "other/hooks/a")], fake({}), /do not share one vendored root/u);
+    refuse([file("LICENSE")], fake({}), /selected upstream file was removed: LICENSE/u);
+    refuse([file("skills/a/SKILL.md")], fake({ LICENSE: entry() }), /selected upstream skill was removed: skills\/a\//u);
+    refuse([file("skills/a/SKILL.md")], fake({ "skills/a/SKILL.md": entry("120000") }), /not a regular file: skills\/a\/SKILL.md \(120000 blob\)/u);
+    refuse([file("vendored")], fake({ vendored: entry("160000", "commit") }), /not a regular file: vendored \(160000 commit\)/u);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+{
+  // Git failures surface their own message, then the spawn error, then the exit status.
+  for (const [result, pattern] of [
+    [{ status: 128, stderr: "fatal: not a git repository" }, /failed: fatal: not a git repository/u],
+    [{ status: null, stderr: "", error: new Error("spawn git ENOENT") }, /failed: spawn git ENOENT/u],
+    [{ status: 2, stderr: "" }, /failed: exit 2/u],
+  ]) {
+    assert.throws(() => createGitTreeReader({ dir: "/nowhere", run: () => result }), pattern);
+  }
+  for (const argv of [["--update"], ["--update", "--source", "s"], ["--update", "--upstream-dir", "."]]) {
+    assert.throws(() => main(argv, { stdout: { write() {} } }), /--update requires --source <id> and --upstream-dir/u);
+  }
+  assert.throws(() => main(["--ref"], { stdout: { write() {} } }), /unknown or incomplete argument: --ref/u);
 }
 
 console.log("upstream source steward tests passed.");

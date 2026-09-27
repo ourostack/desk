@@ -16,6 +16,9 @@ const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
 )
 const activationManifestPath = "plugins/desk/activation/desk.activation.json"
+// The shipped Superpowers version moves with every upstream refresh, so it is read from the activation lock.
+const lockedSuperpowersVersion = JSON.parse(readFileSync(path.join(repoRoot, activationManifestPath), "utf8"))
+  .dependencies.find((dependency) => dependency.id === "superpowers").lock.version
 const evidencePath = "plugins/desk/activation/host-capability-evidence.md"
 const supportMatrixPath = "plugins/desk/activation/support-matrix.json"
 const claudeNativeWorkerSource = "agents/worker.md"
@@ -270,7 +273,7 @@ test("Claude plugin metadata declares native Desk surfaces and Superpowers depen
     },
   ])
   assert.equal(Object.hasOwn(deskPlugin, "activation"), false)
-  assert.equal(superpowersPlugin.version, "6.3.0")
+  assert.equal(superpowersPlugin.version, lockedSuperpowersVersion)
 })
 
 test("Claude worker agent is exposed without unsupported scoped permission fields", () => {
@@ -517,7 +520,7 @@ test("Claude packaging validation rejects missing Superpowers dependency and sta
   staleProviderVersion.superpowersPlugin.version = "2.1.2"
   assert.deepEqual(
     validateClaudePackagingContract(staleProviderVersion),
-    ["Superpowers Claude version must match activation lock 6.3.0"],
+    [`Superpowers Claude version must match activation lock ${lockedSuperpowersVersion}`],
   )
 })
 
