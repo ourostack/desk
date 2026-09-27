@@ -879,7 +879,9 @@ for (const file of observerBodies) {
     ]) assert.ok(body.includes(required), `missing identity: ${required}`);
     assert.match(body, /never do, fix or finish the work I observe/u);
     assert.match(body, /never certify my own work/u);
-    assert.match(body, /Every claim I make cites its source/u);
+    // using-desk owns the citation rule; the body points to it rather than restating it.
+    assert.match(body, /cited the way `using-desk` asks/u);
+    assert.doesNotMatch(body, /claims? I make cites?|cites? its source|source for every claim/iu, "restates using-desk's citation rule");
     assert.doesNotMatch(body, /desk:session-start/u, "observer does not pick up the desk's work at startup");
     assert.ok(Buffer.byteLength(body) <= 4096, `body is ${Buffer.byteLength(body)} bytes; identity fits in 4 KB`);
   });
@@ -928,6 +930,12 @@ requires(evaluateRelease, "evaluate-release never certifies observer's own work 
   /never certif[\s\S]+release call is the (?:human|evaluator)'s/iu);
 requires(evaluateRelease, "evaluate-release files one issue per finding, labeled evaluation, after the evaluator approves it",
   /## Report[\s\S]+one issue per finding[\s\S]+`ourostack\/desk`[\s\S]+labeled `evaluation`[\s\S]+work equivalent[\s\S]+`desk:operator-voice-comments`/u);
+requires(evaluateRelease, "evaluate-release runs observer outside the desk under test and keeps its record there too",
+  /## Start cold on the named host[\s\S]+own working folder with its own profile, outside the throwaway area and the desk under test[\s\S]+never write to it[\s\S]+evidence folder[\s\S]+outside the desk under test/u);
+requires(evaluateRelease, "evaluate-release stops the evaluation when the preflight names another desk",
+  /Hold the preflight[\s\S]+`desk_status`[\s\S]+throwaway desk[\s\S]+any other desk, the evaluation stops[\s\S]+defect/u);
+requires(evaluateRelease, "evaluate-release says how a dry run drives a session, handles gates and files nothing",
+  /## Drive a dry run[\s\S]+tmux send-keys[\s\S]+sign-in[\s\S]+`blocked`[\s\S]+File nothing[\s\S]+`desk:operator-voice-comments`/u);
 contract("evaluate-release keeps public findings free of times of day and private content", () => {
   const skill = text(evaluateRelease);
   assert.match(skill, /durations?, never (?:a )?times? of day/u);
@@ -960,12 +968,34 @@ contract("the evaluation packet covers who it is for, V2, setup, scenarios and r
     "7. A kaizen card's check",
   ]);
   for (const section of packet.split(/\n### \d\. /u).slice(1)) {
-    assert.match(section, /\*\*Do:\*\*[\s\S]+\*\*Good looks like\*\*/u, `scenario ${section.split("\n", 1)[0]} lacks steps or observable outcomes`);
+    assert.match(section, /\*\*Do:\*\*[\s\S]+\*\*Good looks like:?\*\*/u, `scenario ${section.split("\n", 1)[0]} lacks steps or observable outcomes`);
   }
   assert.match(packet, /`observer`[\s\S]+`desk:evaluate-release`/u);
   assert.match(packet, /labeled `evaluation`/u);
   assert.match(packet, /measured, not estimated/u);
   assert.match(packet, /\[[^\]]+\]\(agentic-engineering-v2-rfc\.md\)/u);
+});
+// Review fix round 1 (controller ruling): nothing under test may touch a desk the evaluator already has.
+contract("the evaluation packet isolates the desk under test and proves it before any scenario", () => {
+  const packet = text(evaluationPacket);
+  const setup = packet.split("## Set up from nothing", 2)[1].split("\n## The scenarios", 1)[0];
+  assert.match(setup, /### Make the throwaway desk[\s\S]+mktemp -d[\s\S]+_meta[\s\S]+_archive[\s\S]+git -C "\$EVAL\/desk" init[\s\S]+export DESK_ACTIVATION_CONFIG=[^\n]+ DESK=/u);
+  assert.match(setup, /### Preflight: the session uses the throwaway desk[\s\S]+`desk_status`[\s\S]+exactly `\$EVAL\/desk`[\s\S]+`activation-config`[\s\S]+stop the evaluation[\s\S]+defect/u);
+  assert.ok(setup.indexOf("### Preflight") < setup.indexOf("### Start `observer`"), "the preflight comes before observer and the scenarios");
+  assert.match(setup, /### Start `observer`[\s\S]+own working folder and its own profile, never from `\$EVAL`[\s\S]+evidence folder outside `\$EVAL`/u);
+  assert.match(setup, /requires Desk 3\.2\.0-alpha\.54 or later[\s\S]+back up your whole `~\/\.claude` folder/u);
+  assert.match(setup, /### A managed launcher with a company overlay[\s\S]+COPILOT_HOME[\s\S]+crew install[\s\S]+from its channel branch/u);
+});
+contract("the evaluation packet's scenarios run against the throwaway desk with reachable outcomes", () => {
+  const packet = text(evaluationPacket);
+  const scenario = (number) => packet.split(`\n### ${number}. `, 2)[1].split(/\n### \d\. |\n## /u, 1)[0];
+  assert.match(scenario(4), /organization\.json[\s\S]+hi-can-you-fix-the-login[\s\S]+status-notes\.md[\s\S]+`track_person_name`[\s\S]+`tidy_version: 1`/u);
+  assert.match(scenario(5), /state_branch|state branch/u);
+  assert.match(scenario(5), /switch --detach[\s\S]+repaired: detached HEAD → main[\s\S]+`state_branch_detached`[\s\S]+switch_state_branch[\s\S]+`ready` in the same session/u);
+  assert.doesNotMatch(scenario(5), /root_unavailable|#L\d/u);
+  assert.match(scenario(6), /`ourostack\/factory`[\s\S]+`reports` branch[\s\S]+`jobs\/<job>\.md`[\s\S]+factory\.js job-link/u);
+  assert.match(scenario(7), /V2 design's section 6, "Kaizen"[\s\S]+not yet public/u);
+  assert.doesNotMatch(scenario(7), /RFC §4/u);
 });
 contract("the evaluation packet prose is not hard-wrapped", () => {
   assert.deepEqual(proseUnits(evaluationPacket).filter((unit) => unit.length > 1).map((unit) => unit[0].number), []);

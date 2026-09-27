@@ -10,7 +10,7 @@ Work through an evaluation packet, such as the [V2 evaluation packet](../../docs
 ## When to use it
 
 - A human evaluator asks you to work through a packet with them on a named host. They drive the steps; you watch, time and record.
-- An agent dry run of a packet: you drive the steps a human evaluator would take, in a separate session under test on a throwaway profile, and the agent in that session does the work. You type what the packet says to type and run what it says to run; you never do the part the agent under test is being evaluated on.
+- An agent dry run of a packet: you drive the steps a human evaluator would take, in a separate session under test on a throwaway profile, and the agent in that session does the work. You type what the packet says to type and run what it says to run; you never do the part the agent under test is being evaluated on. See [Drive a dry run](#drive-a-dry-run).
 
 ## When not to use it
 
@@ -31,9 +31,11 @@ These rules hold for the whole evaluation.
 ## Start cold on the named host
 
 1. Confirm the named host (for example Claude Code, or a managed launcher with a company overlay) and the packet. One run covers one host; a second host is a second run.
-2. Start from nothing: a fresh machine, or a throwaway profile the packet names (for Claude Code, a new empty `CLAUDE_CONFIG_DIR`). Record the starting state before step 1: host and version, operating system, the installed plugins (none), and that no desk is bound. Keep your own session in your normal profile, so your record survives when the throwaway profile is removed.
-3. Test the channel as it stands. Install exactly what the packet says, from the channel it names. Record the commit you observed on that channel and the plugin versions the host reports after install, as evidence, never as a pin. If the channel moves during the evaluation, note when and carry on; do not freeze or roll back anything.
-4. Keep the record in the evaluation's task on your desk: one task for the evaluation, one iteration per host run (`desk:start-task` places it).
+2. Run from your own place, never from the one under test. Your session starts in its own working folder with its own profile, outside the throwaway area and the desk under test. Ask the evaluator for the paths under test: the throwaway folder, the throwaway desk, and the host profile folder under test (`CLAUDE_CONFIG_DIR` or `COPILOT_HOME`). You read the desk under test as evidence and never write to it.
+3. Keep the record in the evidence folder the evaluator names, outside the desk under test and outside the throwaway folder, so it survives clean-up and never shows up as a finding in the desk it describes. Private evidence stays there too, never in Git.
+4. Start from nothing: a fresh machine, or the throwaway profile and throwaway desk the packet creates. Record the starting state before step 1: host and version, operating system, the installed plugins (none), and the throwaway desk the packet created.
+5. Test the channel as it stands. Install exactly what the packet says, from the channel it names. Record the commit you observed on that channel and the plugin versions the host reports after install, as evidence, never as a pin. If the channel moves during the evaluation, note when and carry on; do not freeze or roll back anything.
+6. Hold the preflight. Before any scenario, `desk_status` in the session under test must name the throwaway desk as its root. If it names any other desk, the evaluation stops there: record a defect with the `desk_status` output as evidence, and run no scenario against that desk.
 
 ## Record every step
 
@@ -51,7 +53,7 @@ For each step of each scenario, record one entry:
 - `pass` means the observed result matches the packet's outcome and the evidence shows it. `fail` means it does not. `blocked` means an earlier failure or a human gate stopped the step. `unavailable` means you could not observe it; say why.
 - Take `desk_status` from the session under test, not your own: your session's `desk_status` describes your desk. Read it from that session's output or its host log.
 - Host logs: Claude Code keeps a session log under its configuration directory's `projects/` folder; Copilot CLI keeps one under `COPILOT_HOME`, otherwise `~/.copilot`. Cite the path and the line or event, not a paraphrase.
-- A screenshot shows a visible state a log cannot (a rendered page, a pull request's state, a startup banner). Nonvisual steps get no artificial screenshots.
+- A screenshot shows a visible state a log cannot (a rendered page, a pull request's state, a startup banner).
 - Anything the agent under test claims ("tests pass", "merged") is checked against its artifact before you record it as observed.
 
 ## Time each scenario
@@ -70,7 +72,7 @@ When a problem fits two classes, pick the one whose fix would remove it: a defec
 
 ## Report
 
-Write the report in the iteration folder, then give it to the evaluator:
+Write the report in the evidence folder, then give it to the evaluator:
 
 1. **Summary:** host, packet, channel and the commit observed, plugin versions, and per scenario its outcome against "good looks like" and its measured elapsed time.
 2. **Findings:** each problem with its class, the step, expected, observed, evidence and whether it blocked the scenario. Describe where it happened and what good would have looked like; do not write the fix.
@@ -79,6 +81,14 @@ Write the report in the iteration folder, then give it to the evaluator:
 The release call is the evaluator's. Your report never says the release is ready or not ready.
 
 File one issue per finding in `ourostack/desk`, labeled `evaluation`, or in the work equivalent when the host run used a company overlay: that overlay's own tracker, with its equivalent label, since public issues carry no work context. An issue is posted from the evaluator's account, so draft each one and follow `desk:operator-voice-comments`: the evaluator approves the exact content before it is filed. Each issue carries the host, the scenario and step, the class, expected and observed, evidence links, the elapsed time and the commit observed. Public issues follow `desk:content-routing`: no private names, no secrets, private evidence by pointer only, and durations, never times of day.
+
+## Drive a dry run
+
+In a dry run no human watches, so you also play the evaluator's hands. The rules above still hold.
+
+- Run the session under test as its own process, in the throwaway area with the packet's environment: a terminal multiplexer session you type into (for example `tmux send-keys`), or the host's non-interactive mode resumed turn by turn (for example `claude -p` with `--resume`). Read its replies from the terminal and its host log.
+- Human gates stay human. The host's sign-in must be done by a person before you start, in the throwaway profile. When a step reaches a gate no person has passed, record it as `blocked`.
+- File nothing. Draft each issue into the evidence folder instead. A person approves the exact text of each one later, following `desk:operator-voice-comments`, before anything is filed.
 
 ## Clean up
 
