@@ -6,7 +6,7 @@ import { runGit } from "./state-branch.js"
 import { readInspectionGit } from "./git-inspection.js"
 import { existingDirectory, physicalDirectory } from "./shell-paths.js"
 import { BUILTINS, canonicalKey, classifyGit, createdTag, hasRule, MESSAGES } from "./git-guard-policy.js"
-import { GuardDenial, mayInvokeGit, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
+import { GuardDenial, inspectionBudget, mayInvokeGit, namesGit, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
 
 export { WORKTREE_COMMAND }
 
@@ -78,8 +78,8 @@ function checkoutContext(read, cwd, options, env, policy, branch, created) {
     head: () => value("head", ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]),
     commit: (rev) => value(`commit ${known(rev, "a Git revision")}`, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`]),
     fullName: (rev) => value(`name ${known(rev, "a Git revision")}`, ["rev-parse", "--symbolic-full-name", rev.startsWith("-") ? "--" : rev]),
-    // A tag an earlier, unconditional `git tag <name>` creates in this checkout counts as a tag, unless a local
-    // branch has that name: then a failed `git tag` would leave the push pushing the branch.
+    // A tag an earlier `git tag <name>` in this checkout creates counts, unless a local branch has that name: if the
+    // `git tag` is skipped or fails, pushing a name nothing resolves fails in Git, while a branch would be pushed.
     tag: async (name) => await value(`tag ${name}`, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]) !== null
       || (created.has(`${cwd}\0${name}`) && await value(`branch ${name}`, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]) === null),
     remoteBranch: async (name) => await value(`remote ${name}`, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${name}`]) !== null,
@@ -148,13 +148,15 @@ const GIT_LIKE = /^(?:-C|-c|--git-dir|--work-tree|--config-env)/u
 export async function guardShellCommand({ command, cwd, env = process.env, powershell = false, budgetMs = GUARD_INSPECTION_BUDGET_MS, readGit = readInspectionGit, now = Date.now }) {
   const inspected = new Set(), created = new Set()
   const deadline = now() + budgetMs
+  // Inspection steps share this deadline with the Git reads, across Bash, PowerShell and nested scripts.
+  const budget = inspectionBudget({ deadline, now, budgetMs })
   // Each read gets what is left of the budget; a spent budget, like a read that timed out, is ETIMEDOUT.
   async function read(dir, args, variables) {
     const timeoutMs = deadline - now()
     if (timeoutMs <= 0) throw Object.assign(new Error(`protected-checkout inspection budget of ${budgetMs} ms is spent`), { code: "ETIMEDOUT" })
     return readGit(dir, args, variables, { timeoutMs })
   }
-  async function visit({ name, args, cwd: directory, env: variables, computed = false, certain = true }) {
+  async function visit({ name, args, cwd: directory, env: variables, computed = false, powershell: fromPowerShell = false }) {
     if (name !== "git") return
     const invocation = gitInvocation(args, directory, variables)
     if (!invocation || invocation.name === undefined) return
@@ -182,7 +184,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
       const rest = operands.map(quote).join(" ")
       if (!alias.startsWith("!")) {
         // Git expands a plain alias in the same process, with the issuing command's options.
-        await inspectShell({ command: `git ${invocation.global.map(quote).join(" ")} ${alias} ${rest}`, cwd: directory, env: variables, powershell: false, visit })
+        await inspectShell({ command: `git ${invocation.global.map(quote).join(" ")} ${alias} ${rest}`, cwd: directory, env: variables, powershell: false, visit, budget })
         return
       }
       if (target === null) throw unresolved(where)
@@ -195,15 +197,17 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
         exported[variable] = option === "--namespace" ? value : path.resolve(target, value)
       }
       exported.GIT_CONFIG_PARAMETERS = [variables.GIT_CONFIG_PARAMETERS, ...invocation.commandLine.map(([k, v]) => `'${k}'='${v}'`)].filter(Boolean).join(" ")
-      await inspectShell({ command: `${alias.slice(1)} ${rest}`, cwd: top.ok ? top.stdout : target, env: exported, powershell: false, visit })
+      await inspectShell({ command: `${alias.slice(1)} ${rest}`, cwd: top.ok ? top.stdout : target, env: exported, powershell: false, visit, budget })
       return
     }
-    // Only a `git tag` reached unconditionally counts; one that might be skipped leaves the name a branch push.
-    const tag = operation === "tag" && target !== null && certain ? createdTag(operands) : undefined
+    const tag = operation === "tag" && target !== null ? createdTag(operands) : undefined
     if (tag !== undefined) created.add(`${target}\0${tag}`)
-    const rule = classifyGit(operation, operands, overrides)
+    const rule = classifyGit(operation, operands, overrides, { variables: fromPowerShell })
     if (!rule) return
     if (target === null || location.some((option) => option.includes(UNKNOWN))) throw unresolved(where)
+    // Configuration from an environment variable Desk cannot compute could override what a rule trusts. (An unknown
+    // GIT_DIR or GIT_WORK_TREE already stops the policy read.)
+    if (Object.entries(variables).some(([key, value]) => /^GIT_CONFIG_/iu.test(key) && String(value).includes(UNKNOWN))) throw unresolved("the Git configuration this command inherits")
     if (rule.victim !== undefined) {
       // Force-removal checks the removed checkout with its own identity, not the issuer's overrides.
       const worktrees = await read(target, [...location, "worktree", "list", "--porcelain"], variables)
@@ -233,11 +237,11 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     }
   }
   try {
-    await inspectShell({ command, cwd, env, powershell, visit: guardedVisit })
+    await inspectShell({ command, cwd, env, powershell, visit: guardedVisit, budget })
   } catch (error) {
     if (error instanceof GuardDenial) return { deny: true, reason: error.reason }
-    // Text Desk cannot parse is allowed unless it could reach Git (guard-unknowns.js).
-    if (!mayInvokeGit(command)) return { deny: false }
+    // Text Desk cannot parse is allowed unless it could reach Git (guard-unknowns.js), including a Windows path to git.exe.
+    if (!mayInvokeGit(command) && !namesGit(command)) return { deny: false }
     return { deny: true, reason: `Desk could not inspect this shell command (${error.message}), and it could run Git in a protected checkout. Split it into simpler commands, or work in your own worktree: ${WORKTREE_COMMAND}` }
   }
   return { deny: false }

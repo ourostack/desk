@@ -9,7 +9,7 @@ import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout, protect
 import { inspectionEnvironment, readInspectionGit, resolveInspectionGit } from "../../src/runtime/git-inspection.js"
 import { hasOption, parseGitOptions, SPECS } from "../../src/runtime/git-guard-options.js"
 import { inspectShell } from "../../src/runtime/shell-commands.js"
-import { inspectPowerShell } from "../../src/runtime/powershell-commands.js"
+import { inspectPowerShell, POWERSHELL_GIT_FORMS } from "../../src/runtime/powershell-commands.js"
 
 const plugin = fileURLToPath(new URL("../../../", import.meta.url))
 const LEAVE = /^Desk protected checkout .+: this would move HEAD off the checkout's branch\. To leave the state branch, use your own worktree: git worktree add --detach "\$\(mktemp -d\)" <ref>$/u
@@ -336,9 +336,11 @@ test("case patterns, branch fallthrough and subshell boundaries match reachable 
 
 test("PowerShell non-Git expressions and redirects are allowed; computed targets and calls fail safely", async (t) => {
   const f = fixture(t)
-  for (const command of ["", '"git checkout HEAD"', "Write-Output harmless > result.txt", "$unused = 1 + 2; Write-Output ok"]) {
+  for (const command of ["", "Write-Output harmless > result.txt", "$unused = 1 + 2; Write-Output ok"]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
   }
+  // Round 4 ruling: text that names Git outside the plain forms is denied, even a string.
+  assert.equal((await f.guard('"git checkout HEAD"', { powershell: true })).reason, POWERSHELL_GIT_FORMS)
   for (const command of ["&", "$name = 1 + 2; & $name", "$repo = 1 + 2; sl $repo", `sl -unsupported ${psq(f.shared)}`]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
   }
@@ -382,9 +384,10 @@ test("PowerShell keeps environment, local variables, conditional reachability an
     assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
     assert.match((await f.guard(`git status; ${command}`, { powershell: true })).reason, /could not inspect this shell command/u, command)
   }
+  // Only Git calls reach the policy.
   const calls = []
-  await inspectPowerShell({ command: "Write-Output ok", cwd: f.ordinary, env: {}, visit: (call) => calls.push(call.name) })
-  assert.deepEqual(calls, ["write-output"])
+  await inspectPowerShell({ command: "Write-Output ok; git status", cwd: f.ordinary, env: {}, visit: (call) => calls.push(call.name) })
+  assert.deepEqual(calls, ["git"])
 })
 
 test("Bash scalar and field expansion preserve empty values, literal dollars and case fallthrough", async (t) => {
@@ -457,19 +460,21 @@ test("A3-I06 round 2: multiline and empty case forms remain non-applicable in ei
   assertDirectCheckout(t, f, mutation)
 })
 
-test("A3-R1-I01: quoted PowerShell results are data but their executable interpolation is inspected", async (t) => {
+// Round 4 ruling: a string that names Git is outside the plain forms, whether or not its interpolation runs Git.
+test("A3-R1-I01: quoted PowerShell results that name Git are denied, and their executable interpolation would run", async (t) => {
   const f = fixture(t)
+  const forms = new RegExp(`^${POWERSHELL_GIT_FORMS.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`, "u")
   for (const command of [
     `"$(git -C ${psq(f.shared)} checkout --detach HEAD)"`,
     `"prefix$(git -C ${psq(f.shared)} checkout --detach HEAD)suffix"`,
   ]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
-    assertHookDecision(f, command, true, { powershell: true })
+    assertHookDecision(f, command, true, { powershell: true, reason: forms })
     assertDirectCheckout(t, f, command, { powershell: true })
   }
   for (const command of ['"git checkout HEAD"', psq(`$(git -C ${psq(f.shared)} checkout HEAD)`), '"`$(git checkout HEAD)"']) {
-    assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
-    assertHookDecision(f, command, false, { powershell: true })
+    assert.equal((await f.guard(command, { powershell: true })).reason, POWERSHELL_GIT_FORMS, command)
+    assertHookDecision(f, command, true, { powershell: true, reason: forms })
   }
 })
 
@@ -477,12 +482,13 @@ test("A3-R1-I02: unknown PowerShell status retains both conditional location and
   const f = fixture(t)
   const command = `git -C ${psq(path.join(f.root, "missing"))} status && Set-Location ${psq(f.ordinary)}; git checkout --detach HEAD`
   assert.equal((await f.guard(command, { cwd: f.shared, powershell: true })).deny, true)
-  assertHookDecision(f, command, true, { cwd: f.shared, powershell: true })
+  assertHookDecision(f, command, true, { cwd: f.shared, powershell: true, reason: /^Desk could not resolve which checkout this Git command runs in/u })
   assertDirectCheckout(t, f, command, { cwd: f.shared, powershell: true })
   for (const operator of ["&&", "||"]) {
+    // A statement that may or may not run leaves the location it could change unknown.
     const calls = []
     await inspectPowerShell({ command: `external-command ${operator} Set-Location ${psq(f.ordinary)}; git status`, cwd: f.shared, env: f.env, visit: (call) => { if (call.name === "git") calls.push(call.cwd) } })
-    assert.deepEqual([...new Set(calls)].sort(), [f.ordinary, f.shared].sort())
+    assert.deepEqual(calls, ["\0"])
     const variable = `$repo=${psq(f.shared)}; external-command ${operator} $repo=${psq(f.ordinary)}; git -C $repo checkout HEAD`
     assert.equal((await f.guard(variable, { powershell: true })).deny, true)
     const multiline = `external-command ${operator}\n Set-Location ${psq(f.ordinary)};\n git checkout HEAD`

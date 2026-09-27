@@ -135,8 +135,10 @@ test("shell wrappers and positional arguments preserve Git's target", async (t) 
     `move() { git -C "$1" checkout HEAD; }; move '${root}'`,
     `git -C "$(printf '%s' '${root}')" checkout HEAD`,
   ]) assert.equal((await guard(command)).deny, true, command)
-  assert.equal((await guard("again() { again; }; again")).deny, false, "over-complex text without Git is allowed")
-  assert.match((await guard("again() { again; git status; }; again")).reason, /inspection budget/u)
+  // Round 4 ruling: running out of the step budget fails closed, with or without Git.
+  for (const command of ["again() { again; }; again", "again() { again; git status; }; again"]) {
+    assert.match((await guard(command)).reason, /^Desk stopped inspecting this shell command after 20000 steps/u, command)
+  }
 })
 
 test("home expansion respects quoting and inline alias cache keys include alias definitions", async (t) => {

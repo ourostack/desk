@@ -11,6 +11,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout } from "../../src/runtime/protected-checkout.js"
 import { MESSAGES } from "../../src/runtime/git-guard-policy.js"
+import { POWERSHELL_GIT_FORMS } from "../../src/runtime/powershell-commands.js"
 
 const plugin = fileURLToPath(new URL("../../../", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
@@ -127,7 +128,9 @@ function rows(f) {
     ["new-heredoc-bash", "bash", "own", "deny", `bash <<'EOF'\ngit -C ${q(P)} checkout -q --detach HEAD\nEOF`],
     ["new-herestring-bash", "bash", "own", "deny", `bash <<< ${q(`git -C ${P} stash`)}`],
     ["new-pipe-bash", "bash", "own", "deny", `echo ${q(`git -C ${P} checkout -q --detach HEAD`)} | bash`],
-    ["new-pipe-bash-harmless", "bash", "own", "allow", "echo 'echo harmless' | bash; cat script | sh"],
+    ["new-pipe-bash-harmless", "bash", "own", "allow", "echo 'echo harmless' | bash"],
+    // Round 4 ruling: a script piped into a shell that Desk cannot read literally fails closed.
+    ["new-pipe-file-bash", "bash", "own", "deny", "cat script | sh"],
     // Unknown programs.
     ["new-unknown-prog-printf", "bash", "own", "deny", `$(printf 'g%s' it) -C ${q(P)} checkout -q --detach HEAD`],
     ["new-unknown-prog-file", "bash", "own", "deny", `X=$(cat ${q(f.root + "/cmd.txt")}); $X -C ${q(P)} checkout -q --detach HEAD`],
@@ -174,7 +177,9 @@ function rows(f) {
     ["ps-assign-env", "pwsh", "prot", "deny", "$env:X = git stash"],
     ["ps-assign-paren", "pwsh", "prot", "deny", "$n = (git stash).Length"],
     ["ps-assign-chained", "pwsh", "prot", "deny", "$a = $b = git stash"],
-    ["ps-assign-readonly", "pwsh", "prot", "allow", "$s = git status --short; $d = Get-Date; $n = 3; $t = 'text'; $p = (Get-Command git).Source"],
+    ["ps-assign-readonly", "pwsh", "prot", "allow", "$s = git status --short; $d = Get-Date; $n = 3; $t = 'text'"],
+    // Round 4 ruling: a statement that names Git outside the plain forms is denied.
+    ["ps-group-names-git", "pwsh", "prot", "deny", "$p = (Get-Command git).Source"],
     ["ps-void", "pwsh", "own", "deny", `[void](git -C ${psq(P)} checkout -q --detach HEAD)`],
     ["ps-if", "pwsh", "own", "deny", `if (git -C ${psq(P)} checkout -q --detach HEAD) { 'y' }`],
     ["ps-out-null", "pwsh", "own", "deny", `git -C ${psq(P)} checkout -q --detach HEAD | Out-Null`],
@@ -341,8 +346,8 @@ test("A3b review: configuration sources, alias forms and stdin scripts cover eve
     ["cd \"$(pick)\" && git -c alias.co=status co", "allow"],
     ["cd \"$(pick)\" && git -c alias.x='!echo hi' x", /could not resolve which checkout/u],
     ["git --config-env=alias.co=UNSET_ALIAS_VALUE co", /could not resolve a Git alias/u],
-    // Stdin: a piped group is not a literal; a shell with a script operand reads no stdin script.
-    ["{ echo 'git stash'; } | bash", "allow"],
+    // Stdin: a piped group is not a literal, so the shell's script is unreadable; a shell with a script operand reads no stdin script.
+    ["{ echo 'git stash'; } | bash", /could not resolve the script this shell reads from its input/u],
     ["echo 'git stash' | bash script.sh", "allow"],
     ["echo 'git stash' | bash -", /git stash hides/u],
   ]
@@ -352,7 +357,7 @@ test("A3b review: configuration sources, alias forms and stdin scripts cover eve
     else assert.match(got, expected, command)
   }
   assert.match(await decide(`git --git-dir ${q(P + "/.git")} --namespace ns -c alias.x='!git stash' x`, { cwd: O }), /git stash hides/u)
-  for (const command of ["$x = (git stash)"]) assert.match(await decide(command, { powershell: true }), /git stash hides/u)
+  for (const command of ["$x = (git stash)"]) assert.equal(await decide(command, { powershell: true }), POWERSHELL_GIT_FORMS)
   assert.equal(await decide("$e = @(); $f = () + 1", { powershell: true }), "allow")
   // An upstream on the local repository itself ("."), and a key saved without a value.
   f.git(P, "config", "branch.main.remote", ".")
@@ -387,13 +392,15 @@ test("A3b re-review: every PowerShell assignment form runs the command it captur
     "$x = foreach ($i in 1) { git stash }", "$h = @{}; $h.x = git stash", "$h = @{}; $h['x'] = git stash",
     "$x = git stash; $x", "if (Test-Path x) { git stash; echo hi }", "$x = while ($false) { git stash }",
     "& (Get-Command git) checkout main", "& (Get-Command x) stash", "$x = @(git stash)", `$x = "$(git stash)"`,
+    // Round 4 ruling: typed, scoped and expression forms that name Git are outside the allowlist, even when read-only.
+    "[string]$b = git rev-parse --abbrev-ref HEAD", "$script:b = git rev-parse HEAD", "(git log).Count", "@(git status --short)", "$x = 'git stash'",
   ]
   for (const command of deny) assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
   const allow = [
-    "$x = git status", "[string]$b = git rev-parse --abbrev-ref HEAD", "$script:b = git rev-parse HEAD",
+    "$x = git status", "$x=git status", "$x =git status", "$x= git status",
     "$s = git status --porcelain; if ($s) { 'dirty' }", "$files = git diff --name-only; foreach ($f in $files) { Write-Output $f }",
-    "$out = git push -q origin main 2>&1", "$null = git fetch", "(git log).Count", "@(git status --short)", "& (Get-Command node) --version",
-    "$x = 'git stash'", "$x = $y", "$n = 3", "[void]$x", "$x.Count", "if ($true) { 'y' } else { 'n' }", "$h = @{}; $h.x = 1", "$x += 'more'",
+    "$out = git push -q origin main 2>&1", "$null = git fetch", "& (Get-Command node) --version",
+    "$x = $y", "$n = 3", "[void]$x", "$x.Count", "if ($true) { 'y' } else { 'n' }", "$h = @{}; $h.x = 1", "$x += 'more'",
   ]
   for (const command of allow) {
     const result = await f.guard(command, { powershell: true })
@@ -421,12 +428,14 @@ test("A3b re-review: here-documents belong to the command that opens them, and l
     "{ bash <<'EOF'\ngit stash\nEOF\n} | cat", "bash << EOF\ngit stash\nEOF", "bash <<'EOF' > out.log 2>&1\ngit stash\nEOF",
     "printf '%s\\n' 'git stash' | sh", "printf 'git stash\\n' | bash", "echo -e 'git stash' | bash", "echo -ne 'git stash' | bash",
     "printf '%s %s\\n' git stash | bash", "git show HEAD:x.sh | bash",
+    // Round 4 ruling: input Desk cannot read literally fails closed.
+    "cat x.sh | bash", "printf '%d' 3 | bash",
   ]
   for (const command of deny) assert.equal((await f.guard(command)).deny, true, command)
   const allow = [
     "cat <<'EOF' | wc -l\ngit stash\nEOF", "cat > a.md <<'EOF'\ngit stash\nEOF\ncat > b.md <<'EOF'\ngit checkout main\nEOF\ngit status --short",
-    "git commit -q --allow-empty -F - <<'EOF'\nExplain git reset --hard\nEOF", "echo -n 'echo hi' | bash", "cat x.sh | bash",
-    "printf '%d' 3 | bash", "echo -E 'echo \\n' | sh", "printf '%%s' | bash", "echo -n | bash", "printf 'echo %s %s' a | bash",
+    "git commit -q --allow-empty -F - <<'EOF'\nExplain git reset --hard\nEOF", "echo -n 'echo hi' | bash",
+    "echo -E 'echo \\n' | sh", "printf '%%s' | bash", "echo -n | bash", "printf 'echo %s %s' a | bash",
     "cat <<'EOF' > notes.md && bash -n /dev/null\ngit stash is denied here\nEOF",
   ]
   for (const command of allow) {
@@ -510,27 +519,32 @@ test("A3b re-review 2: every PowerShell group is its own command sequence and st
     ["& (Get-Command git) status", f.prot],
     ["$x = (Get-Content x | Where-Object { git stash })", f.prot],
   ]
-  for (const [command, cwd] of deny) assert.equal((await f.guard(command, { cwd, powershell: true })).deny, true, command)
-  const allow = [
+  // Round 4 ruling: Git inside a group, subexpression, script block, function or control statement is denied, even when
+  // read-only; each has a plain rewrite.
+  for (const [command, cwd] of [
     ["cd (git rev-parse --show-toplevel); git pull -q --rebase origin main", path.join(f.prot, "sub")],
     ["git push -q origin (git branch --show-current)", f.prot],
-    ["$b = git branch --show-current; git push -q origin $b", f.prot],
-    ["$b = git rev-parse --abbrev-ref HEAD; git push -q origin $b", f.prot],
     ['Write-Host "Branch: $(git branch --show-current)"', f.prot],
     [`git commit -q --allow-empty -m (Get-Content ${psq(f.root + "/b.txt")} -Raw)`, f.prot],
     ["if (git status --porcelain) { git add -A; git commit -q -m x }", f.prot],
-    ["git status --porcelain | ForEach-Object { $_.Substring(3) }", f.prot],
     ["function Get-Br { git branch --show-current }; Get-Br", f.prot],
-    ["$a = @('status'); Write-Output @a", f.prot],
     ["$h = @{ a = 'git stash'; b = 2 }", f.prot],
-    ["$h = @{}; $h.x = 1; $e = @{ (1) = 2 }", f.prot],
     ["foreach ($f in (git diff --name-only)) { Write-Output $f }", f.prot],
+  ]) deny.push([command, cwd])
+  for (const [command, cwd] of deny) assert.equal((await f.guard(command, { cwd, powershell: true })).deny, true, command)
+  const allow = [
+    ["$top = git rev-parse --show-toplevel; cd $top; git pull -q --rebase origin main", path.join(f.prot, "sub")],
+    ["$b = git branch --show-current; git push -q origin $b", f.prot],
+    ["$b = git rev-parse --abbrev-ref HEAD; git push -q origin $b", f.prot],
+    ["git status --porcelain | ForEach-Object { $_.Substring(3) }", f.prot],
+    ["$a = @('status'); Write-Output @a", f.prot],
+    ["$h = @{}; $h.x = 1; $e = @{ (1) = 2 }", f.prot],
   ]
   for (const [command, cwd] of allow) {
     const result = await f.guard(command, { cwd, powershell: true })
     assert.equal(result.deny, false, `${command}: ${result.reason}`)
   }
-  assert.match((await f.guard("$a = @('stash'); git @a", { powershell: true })).reason, /could not inspect this shell command \(unresolved PowerShell splatting\)/u)
+  assert.equal((await f.guard("$a = @('stash'); git @a", { powershell: true })).reason, POWERSHELL_GIT_FORMS)
   if (!pwsh) { t.diagnostic("native PowerShell unavailable; decisions still checked"); return }
   // Real PowerShell: the checkout, stash and worktree-removal forms change the protected state.
   const checkout = await fixture(t)
@@ -545,15 +559,18 @@ test("A3b re-review 2: every PowerShell group is its own command sequence and st
   assert.equal((await import("node:fs")).existsSync(pwt), false, "the protected worktree and its unsaved file are gone")
 })
 
-test("A3b re-review 2: tags count only when created unconditionally, and here-documents piped into shells are scripts", async (t) => {
+// Round 4 (S6): a tag counts whenever an earlier `git tag` names it and no local branch has its name; if that `git tag` is
+// skipped or fails, Git cannot push a name nothing resolves.
+test("A3b re-review 2: tags count unless a local branch has their name, and here-documents piped into shells are scripts", async (t) => {
   const f = await fixture(t)
   for (const command of [
     'test -n "$NOPE" && git tag topic; git push -q origin topic', "git tag topic no-such-rev; git push -q origin topic",
-    "if true; then git tag v5; fi; git push -q origin v5", "false || git tag v6; git push -q origin v6", "[ -f x ]; git tag v7; git push -q origin v7",
     "cat <<'EOF' | bash\ngit stash\nEOF", "bash -s -- x <<'EOF'\ngit stash\nEOF", "cat <<< 'git stash' | sh",
   ]) assert.equal((await f.guard(command)).deny, true, command)
   for (const command of [
     "git tag v2 && git push -q origin v2", "git add -A && git tag v3; git push -q origin v3", "bash -c 'git tag v4'; git push -q origin v4",
+    "if true; then git tag v5; fi; git push -q origin v5", "false || git tag v6; git push -q origin v6", "[ -f x ]; git tag v7; git push -q origin v7",
+    '[ -z "$(git status --porcelain)" ] && git tag v8 && git push -q origin v8', "if git tag v9; then git push -q origin v9; fi",
     'git push -q origin "$(git branch --show-current)"', 'git push -q origin "$(git rev-parse --abbrev-ref HEAD)"',
     "cat <<'EOF' | bash\necho harmless\nEOF", "bash -s -- x <<'EOF'\necho \"$1\"\nEOF",
   ]) {

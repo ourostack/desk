@@ -51,7 +51,8 @@ function forms(f, args) {
   return [
     [`cd ${q(f.shared)} && git ${args}`, {}],
     [`git -C ${q(f.shared)} ${args}`, {}],
-    [`Set-Location ${psq(f.shared)}; git ${args}`, { powershell: true }],
+    // A bare @ is a PowerShell parse error, so the PowerShell spelling quotes it.
+    [`Set-Location ${psq(f.shared)}; git ${args.replace(/(?<=^| )@(?= |$)/u, "'@'")}`, { powershell: true }],
   ]
 }
 
@@ -273,7 +274,7 @@ test("A3b: PowerShell unknown values follow the same rule", async (t) => {
   const allow = [
     '$d = Get-Date; Write-Output "$d"', 'Write-Output "$(Get-Date)"', "$wt = New-Item -ItemType Directory x; Set-Location $wt; node x.js",
     "$wt = New-Item -ItemType Directory x; Set-Location $wt; git commit -m x", "Pop-Location; git status", "popd; Write-Output ok",
-    "Invoke-Expression 'Write-Output ok'", "iex 'git status'", `pushd ${psq(f.own)}; git checkout topic`, "(opaque)",
+    "Invoke-Expression 'Write-Output ok'", `pushd ${psq(f.own)}; git checkout topic`, "(opaque)",
     "$x = 1 + 2; & $x", "& $(Get-Date)",
   ]
   for (const command of allow) {
@@ -283,9 +284,11 @@ test("A3b: PowerShell unknown values follow the same rule", async (t) => {
   for (const [command, reason] of [
     ["$wt = New-Item -ItemType Directory x; Set-Location $wt; git checkout main", /which checkout/u],
     ["Pop-Location; git stash", /which checkout/u], [`pushd ${psq(f.shared)}; git stash`, /^Desk protected checkout /u],
-    ["$g = (Get-Command git).Source; & $g checkout main", /the program/u], ["& $(Get-Command git) status", /the program/u],
-    ["& (Get-Command git) checkout main", /could not resolve the program/u],
-    [`iex "git -C ${psq(f.shared)} checkout topic"`, /^Desk protected checkout /u], ["$script = Get-Content x; iex $script", /evaluates/u],
+    // Round 4 ruling: Git named anywhere but a plain form is denied, whatever evaluates it.
+    ["$g = (Get-Command git).Source; & $g checkout main", /^Desk allows Git in PowerShell only/u], ["& $(Get-Command git) status", /^Desk allows Git in PowerShell only/u],
+    ["& (Get-Command git) checkout main", /^Desk allows Git in PowerShell only/u], ["iex 'git status'", /^Desk allows Git in PowerShell only/u],
+    [`iex "git -C ${psq(f.shared)} checkout topic"`, /^Desk allows Git in PowerShell only/u], ["$script = Get-Content x; iex $script", /evaluates/u],
+    ["$g = -join ('g', 'i', 't'); & $g checkout topic", /^Desk protected checkout /u],
     ["Invoke-Expression $(Get-Content x)", /evaluates/u], [". $(Get-Item x)", /dot-sources/u], ["$script = Get-Content x; pwsh -Command $script", /evaluates/u],
     ["$script = Get-Content x; bash -c $script", /evaluates/u],
   ]) {

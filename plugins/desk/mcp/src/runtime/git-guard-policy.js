@@ -35,6 +35,7 @@ export const MESSAGES = {
   upstream: `this would point the checkout's branch at a different upstream. Keep <remote>/<state branch>, or ${WORKTREE}`,
   config: (key) => `this would change ${key}, which decides what push, pull, rebase, aliases or this guard do in the shared checkout. Leave it, or ${WORKTREE}`,
   override: (key, operation) => `the configuration override ${key} changes what this git ${operation} does. Run it without the override, or ${WORKTREE}`,
+  variable: `Desk cannot tell what a PowerShell variable passes to this Git command, and a variable can hold options such as --force or several arguments. Write the value literally, or ${WORKTREE}`,
 }
 
 // Keys whose value changes what the configuration-trusting rules decide, or what the guard reads.
@@ -310,15 +311,33 @@ export function hasRule(operation) {
   return Object.hasOwn(RULES, operation)
 }
 
+// Whether an unknown argument (UNKNOWN, "\0") sits where Git would read an operand or an option name, so it
+// could be any options or several arguments. An unknown value of an option (`-m $msg`) or a path after `--` cannot.
+function unknownArgument(operation, args) {
+  const unknown = (arg) => arg.includes("\0")
+  if (!args.some(unknown)) return false
+  const spec = operation === "worktree" ? SPECS[`worktree ${args[0]}`] : SPECS[operation]
+  const list = operation === "worktree" ? args.slice(1) : args
+  if (!spec) return true
+  const parsed = parseGitOptions(spec, list)
+  const options = parsed.dashdash < 0 ? parsed.operands : parsed.operands.slice(0, parsed.dashdash)
+  return options.some(unknown) || list.some((arg) => arg.startsWith("-") && unknown(arg.split("=")[0]))
+}
+
 /**
  * null when `git <operation> <args>` is allowed in any checkout; otherwise a check of the target checkout.
- * `overrides` are the command's -c, --config-env and GIT_CONFIG_* entries as [key, value] pairs.
+ * `overrides` are the command's -c, --config-env and GIT_CONFIG_* entries as [key, value] pairs. With `variables`
+ * (PowerShell), an unknown argument takes its most dangerous reading: any options or arguments.
  */
-export function classifyGit(operation, args, overrides = []) {
+export function classifyGit(operation, args, overrides = [], { variables = false } = {}) {
   const end = args.indexOf("--")
   // `-h` and `--help` print usage and change nothing.
   if ((end < 0 ? args : args.slice(0, end)).some((arg) => arg === "-h" || arg === "--help")) return null
   if (!hasRule(operation)) return null
+  if (variables && unknownArgument(operation, args)) {
+    // A worktree command could force-remove any worktree; others are checked against the target checkout.
+    return operation === "worktree" && !["add", "list"].includes(args[0]) ? { victim: "\0" } : fixed(MESSAGES.variable)
+  }
   if (OVERRIDE_OPERATIONS.has(operation)) {
     const override = overrides.find(([key]) => OVERRIDDEN.test(canonicalKey(key)))
     if (override) return fixed(MESSAGES.override(override[0], operation))

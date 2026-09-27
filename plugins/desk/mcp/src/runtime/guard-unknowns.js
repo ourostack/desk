@@ -24,6 +24,33 @@ export function mayInvokeGit(text) {
   return GIT_WORD.test(plain) || CODE_RUNNERS.test(plain)
 }
 
+/** Whether PowerShell text names `git` as a word (`git`, `git.exe`, a path ending in either), ignoring quotes and backticks. */
+export function namesGit(text) {
+  return GIT_WORD.test(text.replace(/[`'"]/gu, ""))
+}
+
+// One command's inspection shares a step budget and the deadline its Git reads use. Running out of either
+// denies the command with a reason that names the budget; inspection yields every few hundred steps so the
+// hook's own 9 s answer can always fire.
+export const INSPECTION_STEPS = 20000
+
+export function inspectionBudget({ steps = INSPECTION_STEPS, deadline = Infinity, now = Date.now, budgetMs = 0 } = {}) {
+  let used = 0
+  return {
+    async step() {
+      used++
+      if (used > steps) throw new GuardDenial(`Desk stopped inspecting this shell command after ${steps} steps, so it is denied to keep a protected checkout safe. Split it into shorter commands, or work in your own worktree: ${WORKTREE_COMMAND}`)
+      if (now() > deadline) throw new GuardDenial(`Desk could not finish inspecting this shell command within its ${budgetMs / 1000} s budget, so it is denied to keep a protected checkout safe. Split it into shorter commands, or work in your own worktree: ${WORKTREE_COMMAND}`)
+      if (used % 256 === 0) await new Promise((resolve) => { setImmediate(resolve) })
+    },
+  }
+}
+
+/** A value that differs between reachable states: unknown, and could-be-Git when any candidate could run Git. */
+export function mergedValue(...values) {
+  return values.some((value) => value !== undefined && (value.includes(UNKNOWN_GIT) || mayInvokeGit(value))) ? UNKNOWN_GIT : UNKNOWN
+}
+
 /** The marker for output computed by `text`. */
 export function unknownOutput(text) {
   return mayInvokeGit(text) ? UNKNOWN_GIT : UNKNOWN

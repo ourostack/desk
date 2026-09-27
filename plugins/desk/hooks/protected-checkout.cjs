@@ -7,9 +7,10 @@
 // accidentally moving a shared checkout off its state branch or discarding other sessions'
 // work. It is not a sandbox against a determined adversary. It must deny every spelling an
 // agent would plausibly produce, fail closed only where it cannot tell which program runs, and
-// always answer within the hosts' 10 s hook deadline: inspection has one 7 s budget across
-// all its Git reads (denying when it runs out), and this entry point answers "deny" at 9 s
-// whatever happens.
+// always answer within the hosts' 10 s hook deadline: inspection has one 7 s budget and one
+// 20,000-step budget across all Bash and PowerShell inspection and its Git reads (denying, with
+// a reason that names the budget, when either runs out), it yields to the event loop as it
+// goes, and this entry point answers "deny" at 9 s whatever happens.
 //
 // Purpose. A checkout whose local Git config has desk.protected=true is shared by sessions.
 // The guard keeps its HEAD on its state branch and keeps other sessions' work in place. It
@@ -49,12 +50,18 @@
 // directory with a known name ("$(npm bin)/nx") is that program. `git rev-parse --show-toplevel`
 // resolves to the checkout containing the directory, and a tag an earlier `git tag` creates counts.
 // A here-document (attached to the command that opened it), here-string or literal echo/printf
-// piped into sh/bash is inspected as that shell's script. Every PowerShell assignment form (casts,
-// scopes, ${name}, member/index and multiple targets, every operator, statement values) runs its
-// right-hand side through the same statement path, and control statements run all their blocks.
-// Every PowerShell ( ), $( ) and { } group runs as its own command sequence wherever it appears and,
-// as an argument, stands for one unknown value; splatting a Git call is unparseable. A tag counts only
-// when its `git tag` is reached unconditionally and no local branch has its name.
+// piped into a shell is inspected as that shell's script; a script piped or redirected into a
+// shell that Desk cannot read literally fails closed. A tag an earlier `git tag` creates counts
+// unless a local branch has its name.
+//
+// PowerShell (fix round 4 ruling) is a closed allowlist. A command that names `git` (git.exe, or
+// a path ending in either) passes only when each statement naming it is `git <args>`,
+// `$name = git <args>`, or `git <args>` piped to Out-String, Select-String, Select-Object,
+// Where-Object, ForEach-Object, Measure-Object, Sort-Object, Out-Null or Write-Output with no Git
+// inside, each argument literal text or a plain $variable (an unknown one takes its most dangerous
+// reading). Anything else that names Git is denied with a request for separate plain git commands.
+// Statements without Git are walked for their location, variables and environment; whatever may
+// or may not run leaves what it could change unknown.
 // When the shell text cannot be parsed at all, it is denied only if it mentions `git` or
 // evaluates code in the same sense. Everything else, such as `echo "$(date)"`,
 // `cd "$wt" && node x.js` or `jq . f.json | grep x`, is allowed.
