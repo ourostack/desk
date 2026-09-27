@@ -38,6 +38,19 @@ async function scratch(run) {
   }
 }
 
+// validate-pr asks Git for its version, the head's own merge commits and the
+// merge result's tree before it lists changes. `mergeGit` answers those three
+// for a fake Git and passes every other call to `handler`.
+const MERGE_TREE = "e".repeat(40)
+function mergeGit(handler, { version = "git version 2.54.0\n", merges = "", tree = () => `${MERGE_TREE}\n` } = {}) {
+  return (gitArgs, options) => {
+    if (gitArgs[0] === "version") return version
+    if (gitArgs[0] === "rev-list") return merges
+    if (gitArgs[0] === "merge-tree") return tree(gitArgs)
+    return handler(gitArgs, options)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // parseOptions.
 // ---------------------------------------------------------------------------
@@ -140,7 +153,7 @@ test("validate-pr reads base and head as Git data, enforces facts for contributo
   assert.equal(existsSync(marker), false)
 }))
 
-test("validate-pr marks non-fact files under facts/ and maintainer removals as maintenance, and reads previous bytes at the merge base", () => scratch(async (env) => {
+test("validate-pr marks non-fact files under facts/ and maintainer removals as maintenance, and refuses a head whose merge conflicts", () => scratch(async (env) => {
   const repo = path.join(env.HOME, "store")
   const facts = path.join(repo, "facts")
   await fs.mkdir(facts, { recursive: true })
@@ -161,15 +174,15 @@ test("validate-pr marks non-fact files under facts/ and maintainer removals as m
   await fs.writeFile(path.join(facts, names[0]), `${JSON.stringify(updated)}\n`)
   git("commit", "-q", "-am", "update")
   const updateHead = git("rev-parse", "HEAD")
-  // ...while main has since removed it, so its previous bytes exist only at the merge base.
+  // ...while main has since removed it: the merge cannot land, so it is refused.
   git("checkout", "-q", "main")
   git("rm", "-q", path.join("facts", names[0]))
   git("commit", "-q", "-m", "remove on main")
   const movedBase = git("rev-parse", "HEAD")
   assert.deepEqual(await runValidatePrCommand({ argv: ["--base", movedBase, "--head", updateHead, "--author-association", "NONE"], cwd: repo }), {
-    ok: true,
+    ok: false,
     maintenance: false,
-    errors: [],
+    errors: [{ code: "merge_conflict", path: "head" }],
   })
 
   git("checkout", "-q", "-b", "notes", forkPoint)
@@ -274,7 +287,7 @@ test("validate-pr gates labels as data against the facts the merge would leave i
   git("commit", "-q", "-m", "remove facts, add label")
   assert.deepEqual(await validate(movedBase, git("rev-parse", "HEAD"), "OWNER"), { ok: false, maintenance: false, errors: [{ code: "facts_missing", path: LABEL_2222 }] })
 
-  // A replacement reads the previous labels at the merge base: a newer rubric passes, an older evaluator does not.
+  // A replacement reads the previous labels at the base: a newer rubric passes, an older evaluator does not.
   const replace = async (branch, mutate) => {
     git("checkout", "-q", "-b", branch, label1111Head)
     const value = JSON.parse(readFileSync(path.join(FIXTURE_STORE, LABEL_1111), "utf8"))
@@ -310,7 +323,7 @@ test("validate-pr gates labels as data against the facts the merge would leave i
   assert.equal(existsSync(marker), false)
 }))
 
-test("validate-pr reads a labeled session's facts at head when the pull request changes them and at base otherwise", async () => {
+test("validate-pr reads a labeled session's facts in the merge result when the pull request changes them and at base otherwise", async () => {
   const shaA = "a".repeat(40)
   const shaB = "b".repeat(40)
   const shaC = "c".repeat(40)
@@ -325,29 +338,27 @@ test("validate-pr reads a labeled session's facts at head when the pull request 
   const calls = []
   const result = await runValidatePrCommand({
     argv: ["--base", shaA, "--head", shaB, "--author-association", "NONE"],
-    git: (gitArgs) => {
+    git: mergeGit((gitArgs) => {
       calls.push(gitArgs.join(" "))
       if (gitArgs[0] === "diff") return `A\0${LABEL_1111}\0M\0${facts2222}\0A\0${LABEL_2222}\0`
-      if (gitArgs[0] === "merge-base") return `${shaC}\n`
       if (gitArgs[0] === "ls-tree") {
         // Git lists only what exists; a stray name it could never return is ignored.
         return gitArgs.includes(facts1111) ? `${facts1111}\0facts/other.json\0` : `${facts2222}\0`
       }
       return bytes[gitArgs[1].slice(41)]
-    },
+    }),
   })
   assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
   assert.deepEqual(calls, [
-    "diff --name-status -z --no-renames " + `${shaA}...${shaB}`,
-    `show ${shaB}:${LABEL_1111}`,
+    `diff --name-status -z --no-renames ${shaA} ${MERGE_TREE}`,
+    `show ${MERGE_TREE}:${LABEL_1111}`,
     `ls-tree -z --name-only ${shaA} -- ${facts1111} facts/copilot-cli-11111111-1111-4111-8111-111111111111.json`,
     `show ${shaA}:${facts1111}`,
-    `show ${shaB}:${facts2222}`,
-    "merge-base " + `${shaA} ${shaB}`,
-    `show ${shaC}:${facts2222}`,
-    `show ${shaB}:${LABEL_2222}`,
+    `show ${MERGE_TREE}:${facts2222}`,
+    `show ${shaA}:${facts2222}`,
+    `show ${MERGE_TREE}:${LABEL_2222}`,
     `ls-tree -z --name-only ${shaA} -- facts/claude-code-22222222-2222-4222-8222-222222222222.json`,
-    `show ${shaB}:${facts2222}`,
+    `show ${MERGE_TREE}:${facts2222}`,
   ])
 })
 
@@ -358,50 +369,83 @@ test("validate-pr asks Git nothing about base facts when the pull request touche
   const calls = []
   const result = await runValidatePrCommand({
     argv: ["--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "NONE"],
-    git: (gitArgs) => {
+    git: mergeGit((gitArgs) => {
       calls.push(gitArgs[0])
       if (gitArgs[0] === "diff") return `A\0${facts1111}\0D\0${copilot1111}\0A\0${LABEL_1111}\0`
       return bytes[gitArgs[1].slice(41)]
-    },
+    }),
   })
   assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "removal", path: copilot1111 }] })
   assert.deepEqual(calls, ["diff", "show", "show", "show"])
 })
 
-test("validate-pr asks Git for the merge base once and refuses a malformed one", async () => {
+test("validate-pr reads the landed bytes from the merge result and the previous bytes at the base", async () => {
   const shaA = "a".repeat(40)
   const shaB = "b".repeat(40)
-  const shaC = "c".repeat(40)
   const names = ["claude-code-11111111-1111-4111-8111-111111111111.json", "copilot-cli-22222222-2222-4222-8222-222222222222.json"]
   const bytes = Object.fromEntries(names.map((name) => [`facts/${name}`, readFileSync(path.join(FIXTURE_STORE, "facts", name))]))
   const args = ["--base", shaA, "--head", shaB, "--author-association", "NONE"]
   const revisions = []
-  let mergeBases = 0
+  const calls = []
   const result = await runValidatePrCommand({
     argv: args,
-    git: (gitArgs) => {
-      if (gitArgs[0] === "diff") return names.map((name) => `M\0facts/${name}\0`).join("")
-      if (gitArgs[0] === "merge-base") {
-        mergeBases += 1
-        assert.deepEqual(gitArgs, ["merge-base", shaA, shaB])
-        return `${shaC}\n`
+    git: mergeGit((gitArgs) => {
+      if (gitArgs[0] === "diff") {
+        assert.deepEqual(gitArgs, ["diff", "--name-status", "-z", "--no-renames", shaA, MERGE_TREE])
+        return names.map((name) => `M\0facts/${name}\0`).join("")
       }
       const [revision, filePath] = gitArgs[1].split(":")
       revisions.push(revision)
       return bytes[filePath]
-    },
+    }, {
+      merges: "",
+      tree: (gitArgs) => {
+        calls.push(gitArgs)
+        return `${MERGE_TREE}\n`
+      },
+    }),
   })
   assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
-  assert.equal(mergeBases, 1)
-  assert.deepEqual(revisions, [shaB, shaC, shaB, shaC])
+  assert.deepEqual(calls, [["merge-tree", "--write-tree", "--no-messages", shaA, shaB]])
+  assert.deepEqual(revisions, [MERGE_TREE, shaA, MERGE_TREE, shaA])
 
   await assert.rejects(
-    runValidatePrCommand({
-      argv: args,
-      git: (gitArgs) => gitArgs[0] === "diff" ? `M\0facts/${names[0]}\0` : gitArgs[0] === "merge-base" ? "not a sha\n" : bytes[`facts/${names[0]}`],
-    }),
+    runValidatePrCommand({ argv: args, git: mergeGit(() => "", { tree: () => "not a tree\n" }) }),
     /Git data could not be read/u,
   )
+})
+
+test("validate-pr refuses head merge commits, merge conflicts, a missing merge-tree and Git older than 2.38", async () => {
+  const args = ["--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "OWNER"]
+  const untouched = () => assert.fail("no change list is read")
+  assert.deepEqual(await runValidatePrCommand({ argv: args, git: mergeGit(untouched, { merges: `${"c".repeat(40)}\n` }) }), {
+    ok: false,
+    maintenance: false,
+    errors: [{ code: "unexpected_merge", path: "head" }],
+  })
+  const failing = (status) => () => {
+    const error = new Error("git failed")
+    error.status = status
+    throw error
+  }
+  assert.deepEqual(await runValidatePrCommand({ argv: args, git: mergeGit(untouched, { tree: failing(1) }) }), {
+    ok: false,
+    maintenance: false,
+    errors: [{ code: "merge_conflict", path: "head" }],
+  })
+  for (const status of [129, null]) {
+    await assert.rejects(runValidatePrCommand({ argv: args, git: mergeGit(untouched, { tree: failing(status) }) }), /merge_tree_unavailable/u)
+  }
+  for (const version of ["git version 2.37.9\n", "git version 1.99.0\n", "not git\n"]) {
+    await assert.rejects(runValidatePrCommand({ argv: args, git: mergeGit(untouched, { version }) }), /git_too_old/u)
+  }
+  assert.deepEqual(await runValidatePrCommand({ argv: args, git: mergeGit(() => "", { version: "git version 3.0.0\n" }) }), {
+    ok: true,
+    maintenance: false,
+    errors: [],
+  })
+  // A Git that cannot even start reports the generic error.
+  await assert.rejects(runValidatePrCommand({ argv: args, cwd: path.join(os.tmpdir(), "desk-factory-missing-cwd-8b1d") }), /Git data could not be read/u)
 })
 
 test("validate-pr handles added, removed, unknown, invalid-path, malformed, oversized, and Git-error inputs without loading unsafe paths", async () => {
@@ -414,39 +458,39 @@ test("validate-pr handles added, removed, unknown, invalid-path, malformed, over
   let calls = 0
   let result = await runValidatePrCommand({
     argv: args,
-    git: (gitArgs, options) => {
+    git: mergeGit((gitArgs, options) => {
       calls += 1
       if (gitArgs[0] === "diff") return `A\0${validPath}\0`
       assert.equal(options.encoding, null)
       return Buffer.from(validBytes)
-    },
+    }),
   })
   assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
   assert.equal(calls, 2)
 
   for (const [status, code] of [["D", "removal"], ["X", "status"]]) {
-    result = await runValidatePrCommand({ argv: args, git: () => `${status}\0${validPath}\0` })
+    result = await runValidatePrCommand({ argv: args, git: mergeGit(() => `${status}\0${validPath}\0`) })
     assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code, path: validPath }] })
   }
 
   calls = 0
   result = await runValidatePrCommand({
     argv: args,
-    git: (gitArgs) => {
+    git: mergeGit((gitArgs) => {
       calls += 1
       assert.equal(gitArgs[0], "diff")
       return "A\0facts/nested/SENTINEL.js\0"
-    },
+    }),
   })
   assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "path", path: "changes.0" }] })
   assert.equal(calls, 1)
 
   await assert.rejects(
-    runValidatePrCommand({ argv: args, git: () => "A\0" }),
+    runValidatePrCommand({ argv: args, git: mergeGit(() => "A\0") }),
     /change list is malformed/u,
   )
   const many = Array.from({ length: 501 }, (_, index) => `A\0outside-${index}\0`).join("")
-  assert.deepEqual(await runValidatePrCommand({ argv: args, git: () => many }), {
+  assert.deepEqual(await runValidatePrCommand({ argv: args, git: mergeGit(() => many) }), {
     ok: false,
     maintenance: false,
     errors: [{ code: "too_many_changes", path: "changes" }],
@@ -487,7 +531,7 @@ test("validate-pr rejects malformed options and main exits one while still print
   const invalidCode = await main({
     argv: ["validate-pr", "--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "NONE"],
     env,
-    git: () => `D\0${validPath}\0`,
+    git: mergeGit(() => `D\0${validPath}\0`),
     write: (text) => { output += text },
     logError: (text) => { logged += text },
   })
