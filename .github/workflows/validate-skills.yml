@@ -49,6 +49,9 @@ jobs:
       - name: Validate upstream source steward
         run: node scripts/test-upstream-sources.cjs
 
+      - name: Validate Claude config directory references
+        run: node scripts/test-claude-config-dir.cjs
+
       - name: Validate Desk healthy-path docs
         run: node scripts/test-desk-docs.cjs
 
