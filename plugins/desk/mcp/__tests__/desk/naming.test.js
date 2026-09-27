@@ -419,6 +419,36 @@ test("operatorNames tolerates a desks.md with no alias/identity columns", async 
   assert.deepEqual(operatorNames(root, noGitIdentity), [])
 })
 
+test("operatorNames takes names only from the crew roster, never from a hub's routing registry", async () => {
+  const root = await mkTempRoot()
+  await fs.mkdir(path.join(root, "_meta"), { recursive: true })
+  const hub = [
+    "# Desks",
+    "## Solo desks",
+    "| desk | local path | repo | account | launch |",
+    "|---|---|---|---|---|",
+    "| work-desk | ~/work-desk | example-org/work-desk | example-login | desk-work |",
+    "",
+    "## Crew desks",
+    "| crew | local path | repo | your alias | launch |",
+    "|---|---|---|---|---|",
+    "| example-crew | ~/crews/example | example-org/crew | alex | crew-example |",
+    "",
+  ].join("\n")
+  await fs.writeFile(path.join(root, "_meta", "desks.md"), hub, "utf8")
+  assert.deepEqual(operatorNames(root, noGitIdentity), [], "a hub registry names no operator")
+
+  await fs.writeFile(
+    path.join(root, "_meta", "desks.md"),
+    `${hub}\n## Crew roster\n| alias | identity | path |\n|---|---|---|\n| cam | cam-login | desks/cam |\n`,
+    "utf8",
+  )
+  assert.deepEqual(operatorNames(root, noGitIdentity), ["cam", "cam-login"], "a roster after other tables still counts")
+
+  await fs.writeFile(path.join(root, "_meta", "desks.md"), "| alias | identity |\n|---|---|\n| dee |  |\n", "utf8")
+  assert.deepEqual(operatorNames(root, noGitIdentity), ["dee"], "an alias without an identity still counts")
+})
+
 test("operatorNames tolerates an unreadable desks.md (directory in its place)", async () => {
   const root = await mkTempRoot()
   await fs.mkdir(path.join(root, "_meta", "desks.md"), { recursive: true })

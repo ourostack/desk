@@ -798,7 +798,11 @@ function gitIn(root, ...args) {
 
 const HOST_BINDING_VARS = ["CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "DESK", "DESK_PERSON", "DESK_IDENTITY", "DESK_TOOLS_ROOT", "DESK_TOOLS_PERSON", "DESK_PLUGIN_ROOT"];
 
-function withTidyDesk({ build = messyDesk, crew = false, git = true, record = null, pluginRoot = "installed" } = {}, body) {
+// A single-owner hub's `_meta/desks.md` is a cross-desk routing registry, not a crew roster. Synthetic; only its shape
+// (headings and columns) follows a real hub.
+const HUB_REGISTRY = "# Desks — this operator's desk registry\n\n## Solo desks\n\n| desk | local path | repo | account | launch |\n|---|---|---|---|---|\n| work-desk | ~/work-desk | example-org/work-desk | example-login | desk-work |\n\n## Crew desks\n\n| crew | local path | repo | your alias | launch |\n|---|---|---|---|---|\n| example-crew | ~/crews/example | example-org/crew | alex | crew-example |\n";
+
+function withTidyDesk({ build = messyDesk, crew = false, registry = null, git = true, record = null, pluginRoot = "installed" } = {}, body) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "desk-tidy-migration-")));
   try {
     const desk = path.join(root, "desk");
@@ -812,6 +816,7 @@ function withTidyDesk({ build = messyDesk, crew = false, git = true, record = nu
       fs.mkdirSync(own, { recursive: true });
     }
     build(own);
+    if (registry !== null) put(desk, "_meta/desks.md", registry);
     if (record !== null) put(own, "_meta/organization.json", `${JSON.stringify(record)}\n`);
     if (git) {
       gitIn(desk, "init", "-q");
@@ -926,6 +931,18 @@ test("tidy Detect never fires for a non-Git desk, without the plugin root, or on
     assert.equal(tidy.run(blocks.Detect, { DESK_PERSON: "" }).status, 0, "with no person the tidy still fires, to say so in one line");
     assert.equal(tidy.run(blocks.Detect, { DESK_PERSON: "alice" }).status, 0, "alice's own session tidies alice's desk");
   });
+});
+
+test("tidy runs at the root of a single-owner hub whose desks.md is a routing registry, not a crew roster", () => {
+  const { blocks } = tidyMigration();
+  withTidyDesk({ registry: HUB_REGISTRY }, (tidy) => {
+    assert.equal(tidy.run(blocks.Detect).status, 0, "the hub's own findings fire Detect");
+    const migrate = tidy.run(blocks.Migrate, { DESK_TOOLS_ROOT: tidy.desk });
+    assert.equal(migrate.status, 0, migrate.stderr);
+    assert.match(migrate.stdout, new RegExp(`^Desk tools: ${tidy.desk}\\nThis script: ${tidy.desk}\\nThis session's own desk: ${tidy.desk}\\n`, "u"));
+    assert.doesNotMatch(migrate.stdout, /crew workspace/u);
+  });
+  withTidyDesk({ registry: HUB_REGISTRY, build: cleanDesk }, (tidy) => assert.equal(tidy.run(blocks.Detect).status, 1, "a clean hub needs no tidy"));
 });
 
 test("tidy Migrate prints the findings and the steps, changes nothing, and never echoes a credential-like name", () => {
