@@ -125,7 +125,7 @@ test("finalize clears the request once the job's files are delivered or quaranti
 }))
 
 const RETAINING = [
-  ...["not_opted_in", "no_account", "gh_missing", "gh_too_old", "auth_failed", "store_missing", "fork_pending", "rate_limited", "offline", "deadline", "unexpected"].map((code) => [code, { result: code, pending: null }]),
+  ...["not_opted_in", "no_account", "gh_missing", "gh_too_old", "auth_failed", "store_missing", "account_cannot_deliver", "fork_pending", "rate_limited", "offline", "deadline", "unexpected"].map((code) => [code, { result: code, pending: null }]),
   ["the job's file still in the open PR", { result: "delivered_pr_open", pr: { number: 1, url: "u" }, pending: [null] }],
 ]
 

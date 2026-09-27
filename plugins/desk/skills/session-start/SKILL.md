@@ -196,6 +196,33 @@ a single-owner OFF-mode desk has **no crew roster**: either no `_meta/desks.md` 
 
 now that the workspace is synced and this session's own desk is known, run the `agent_work: true` migrations that Step 0.5 deferred, through `session-start-migrations`, with `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to the `root.path` and `write_scope.person` that `desk_status` reports. `02-tidy-desk` is the one today: when its Detect fires, tidy your own desk as its steps say, announce it in one line and carry on without waiting.
 
+## Step 2.7 — Factory contribution: ask once
+
+Desk can contribute measurement data about finished tasks to a factory store, which builds a report for each finished job. Each desk reports to one store, and this machine records one decision per store.
+
+Check `factory` in the `desk_status` result. Ask only when `factory.consent` is `undecided`; the startup hook's `Desk boot:` line says the desk hasn't decided in exactly that case, because both read the decision with the same code. A recorded decision is never asked again: for `yes` or `no`, say nothing. `held` means no store is resolved for this desk, so there is nothing to ask, and the boot line does not ask either. `unreadable` is a `desk_doctor` finding to report, not a question.
+
+Before asking, find the GitHub account that would open the intake pull requests. Never assume gh's active account: it may be a work account that cannot open pull requests on the store. Run the Desk factory CLI (the same one the recording commands below use), which asks GitHub about the store with each signed-in account's own token:
+
+```bash
+node <Desk plugin folder>/mcp/scripts/factory.js account --store <store>
+```
+
+With `result: account_found`, `account` is the `<login>` to name. With `no_account_can_deliver`, do not ask: tell the operator in one line that no signed-in GitHub account can open pull requests on `<store>`, with each account's `reason` (`managed_account` is an Enterprise Managed User account, which cannot open pull requests outside its enterprise; `store_not_visible`, `auth_failed`, `forking_disabled`), and that signing in a personal account with `gh auth login` lets the next session ask. Any other `result` is a GitHub or `gh` problem to report the same way; ask in a later session. Then ask once, as its own decision group in the Step 5 message, naming the store from `factory.store`:
+
+> Desk can contribute measurement data about your finished tasks to `<store>`, which builds a report for each finished job. What it publishes: durations, counts, tool kinds, plugin and model versions, and references to public repositories. What it never publishes: prompt, assistant or tool content, names, or dates and times of day. `<store>` is a public repository, and your GitHub account `<login>` appears as the author of the intake pull requests that deliver the data. Contribute? (yes or no)
+
+Record the answer, yes or no, with the Desk factory CLI in the Desk plugin folder (two levels above this skill's folder):
+
+```bash
+node <Desk plugin folder>/mcp/scripts/factory.js consent --store <store> --contribute yes --account <login>
+node <Desk plugin folder>/mcp/scripts/factory.js consent --store <store> --contribute no
+```
+
+`no` is a decision too: it is recorded, nothing is collected for that store, and the question is not asked again. The operator can change the decision later by running the same command with the other answer. Record consent only through this command.
+
+In a noninteractive session, such as `claude -p`, a scheduled run or a subagent with no operator in the conversation, do not ask and do not record anything. The next interactive session asks. Never hold up the rest of session-start for the answer.
+
 ## Step 3 — Scan for active tasks
 
 glob `$DESK/**/task.md` excluding `_archive/`. parse each card's YAML frontmatter. filter to non-terminal status (NOT `done`, NOT `cancelled`). group by track, sort by `updated` descending. this is the look across the drawers to see what's still open. **in a shared crew workspace** (crew roster present from Step 2.6), the glob naturally spans every `desks/<alias>/` subtree — surface peers' open tasks as theirs (attributed by desk), and this session's own desk first.
@@ -288,6 +315,6 @@ these prompts are one decision group each, per `interaction-style`. if both fire
 
 ## Never skip, never route around
 
-every step in this skill — Step 0 plus the Step 1 through Step 5 chain (including the `.x` sub-steps for 2.5, 2.6, 4.5, 4.6, 4.7, 4.8) — runs every session. Step 2.6 (desk-registry awareness) is a cheap existence-check that is silent on the single-desk happy path (no `_meta/desks.md` → no-op). the host-identity probe (Step 0) is cheap and silent on the single-host happy path; the prereq probe (Step 1) is load-bearing — most mid-session failures trace back to a missing tool, an old `gh`, or stale auth that wasn't caught at start.
+every step in this skill — Step 0 plus the Step 1 through Step 5 chain (including the `.x` sub-steps for 2.5, 2.6, 2.7, 4.5, 4.6, 4.7, 4.8) — runs every session. Step 2.6 (desk-registry awareness) is a cheap existence-check that is silent on the single-desk happy path (no `_meta/desks.md` → no-op). the host-identity probe (Step 0) is cheap and silent on the single-host happy path; the prereq probe (Step 1) is load-bearing — most mid-session failures trace back to a missing tool, an old `gh`, or stale auth that wasn't caught at start.
 
 **auto-mode is license for action, not for skipping safety checks.** a prereq-probe failure is like a compile error: fix it, don't proceed. if the operator insists on proceeding with broken prereqs, surface the specific risk (e.g., "no gh = can't push to the workspace state repo = state won't sync across machines") and require an explicit override.

@@ -76,7 +76,7 @@ async function publishedFor(env, facts, { deskVisibility = "unknown", visibility
 
 test("flush without consent, with a declined store or without an account records a stable code and never runs gh", () => scratch(async ({ env }) => {
   const { flush, FLUSH_CODES } = await load()
-  assert.deepEqual([...FLUSH_CODES].sort(), ["auth_failed", "deadline", "delivered_pr_open", "fork_pending", "gh_missing", "gh_too_old", "intake_stale_retried", "locked", "no_account", "not_opted_in", "nothing_pending", "offline", "rate_limited", "store_missing", "unexpected"])
+  assert.deepEqual([...FLUSH_CODES].sort(), ["account_cannot_deliver", "auth_failed", "deadline", "delivered_pr_open", "fork_pending", "gh_missing", "gh_too_old", "intake_stale_retried", "locked", "no_account", "not_opted_in", "nothing_pending", "offline", "rate_limited", "store_missing", "unexpected"])
   const github = fakeGitHub()
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "not_opted_in" })
   assert.equal(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory")), false, "flushing never creates factory state")
