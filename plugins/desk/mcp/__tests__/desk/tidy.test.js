@@ -637,6 +637,11 @@ test("--detect exits 0 only when the tidy is needed, and prints nothing", () => 
   assert.equal(cli(["--detect", "--root", path.join(messy, "missing")]).code, 1)
 })
 
+test("tidyStatus finds the desk from the process's own folder and home when none is given", () => {
+  const root = soloDesk()
+  assert.equal(tidyStatus({ env: { DESK: root } }).subtree, root)
+})
+
 test("with no mode the status is printed as JSON", () => {
   const root = soloDesk()
   const result = cli([], { env: { DESK: root } })

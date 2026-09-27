@@ -871,7 +871,7 @@ test("the tidy migration tidies and announces: announce-and-proceed wording and 
   assert.doesNotMatch(text, /how would you like|would you like|shall I|should I|do you want/iu);
   // The ordered Migrate steps from the brief, each with its safety rule.
   const steps = [...blocks.Migrate.matchAll(/^(\d)\. ([^.]+)\./gmu)].map((match) => `${match[1]} ${match[2]}`);
-  assert.deepEqual(steps, ["1 Scope lines", "2 Names", "3 Duplicates", "4 Loose files", "5 Person-named and catch-all tracks (track_person_name, track_catch_all)", "6 Empty tracks (track_empty)", "7 Record and commit"]);
+  assert.deepEqual(steps, ["1 Scope lines", "2 Names", "3 Duplicates", "4 Loose files", "5 Person-named and catch-all tracks (track_person_name, track_catch_all)", "6 Empty tracks (track_empty)", "7 Check, record and commit"]);
   assert.match(blocks.Migrate, /only inside this session's own desk/u);
   assert.match(blocks.Migrate, /told you not to write in this session, skip the tidy/u);
   assert.match(blocks.Migrate, /Never delete content/u);
@@ -879,12 +879,15 @@ test("the tidy migration tidies and announces: announce-and-proceed wording and 
   // Fix round 1: other sessions' work, loose files, judgment on merges, names in commits, the revert.
   assert.match(blocks.Migrate, /Leave alone every task and track that holds uncommitted changes[\s\S]{0,200}left alone in the announcement/u);
   assert.match(blocks.Migrate, /untracked loose file that is not ignored gets git add first, then git mv\. Leave ignored files where they are\./u);
-  assert.match(blocks.Migrate, /git diff --cached --name-status -- <tidy paths>[\s\S]{0,300}stop with one line[\s\S]{0,100}commit with git commit -- <tidy paths> and nothing else, so any other staged work stays staged exactly as it was; never unstage anyone else's work\./u);
+  assert.match(blocks.Migrate, /git diff --cached --name-status -- <tidy paths>[\s\S]{0,300}run the defer command above, and stop with one line[\s\S]{0,200}commit with git commit -- <tidy paths> <the record> and nothing else, so any other staged work stays staged exactly as it was and is never committed with the tidy; never unstage anyone else's work\./u);
+  // Review of the startup-hook change: stage only the tidy's own paths, write the record only after the checks, and defer instead of stopping silently.
+  assert.match(blocks.Migrate, /stage only what the tidy itself changed[\s\S]{0,400}never git add a folder, a pattern or -A\./u);
+  assert.match(blocks.Migrate, /If the tidy cannot finish in this session for any reason[\s\S]{0,200}run: \$defer/u);
   assert.doesNotMatch(blocks.Migrate, /unstage it/u);
   // Fix round 4: the tidy stages as it goes, so its own earlier steps never read as another session's work.
-  assert.match(blocks.Migrate, /Stage as you go[\s\S]{0,120}task_move, track_rename, track_create and track_update stage what they write\. Right after any other change the tidy makes[\s\S]{0,120}git add exactly that path\./u);
+  assert.match(blocks.Migrate, /Stage as you go[\s\S]{0,200}task_move, track_rename, track_create and track_update stage what they write\. Right after any other change the tidy makes[\s\S]{0,120}git add exactly that path[.;]/u);
   assert.match(blocks.Migrate, /let staged changes through as this tidy's own work and refuse unstaged changes or untracked files, which belong to another session; never pass allow_dirty/u);
-  assert.match(blocks.Migrate, /Then git add the record\.[\s\S]{0,400}git diff --name-only -- <tidy paths> and git ls-files --others --exclude-standard -- <tidy paths> print nothing/u);
+  assert.match(blocks.Migrate, /git diff --name-only -- <tidy paths> and git ls-files --others --exclude-standard -- <tidy paths> print nothing[\s\S]{0,400}Otherwise write _meta\/organization\.json[\s\S]{0,40}\$record\n {3}Then git add the record and commit/u);
   assert.doesNotMatch(blocks.Migrate, /git status --porcelain -- <path>/u, "mid-tidy, git status also lists the tidy's own staged work");
   assert.match(blocks.Migrate, /never write an old name that failed the credential or prompt check[\s\S]{0,200}Describe such a move by its new name only\./u);
   assert.match(blocks.Migrate, /Merge a group only when you judge that both cards describe the same outcome; leave the others and mention them\./u);
@@ -959,12 +962,12 @@ test("tidy Migrate prints the findings and the steps, changes nothing, and never
     assert.match(migrate.stdout, /^ {2}track_catch_all: inbox — /mu);
     assert.match(migrate.stdout, /^ {2}name_credential_like: normal-track\/<redacted segment> — /mu);
     assert.ok(!migrate.stdout.includes(CARD_SECRET.slice(0, 6)), "no part of a credential-like name is printed");
-    assert.match(migrate.stdout, new RegExp(`with: node '${tidy.env.DESK_PLUGIN_ROOT}/mcp/scripts/tidy-status\\.js' --write-record\\n`, "u"));
+    assert.match(migrate.stdout, new RegExp(`with: node '${tidy.env.DESK_PLUGIN_ROOT}/mcp/scripts/tidy-status\\.js' --write-record --claim '[0-9a-f-]{36}'\\n`, "u"));
     assert.equal(snapshot(tidy.desk), before, "Migrate itself changes nothing; the agent does the tidy");
     assert.equal(gitIn(tidy.desk, "status", "--porcelain"), "");
 
     // Step 7 records the tidy; Detect then stays quiet even though findings remain.
-    const recordCommand = /with: (node '[^']+' --write-record)\n/u.exec(migrate.stdout)[1];
+    const recordCommand = /with: (node '[^']+' --write-record --claim '[^']+')\n/u.exec(migrate.stdout)[1];
     const record = tidy.run(recordCommand);
     assert.equal(record.status, 0, record.stderr);
     const written = json(path.join(tidy.desk, "_meta", "organization.json"));
@@ -978,7 +981,7 @@ test("tidy Migrate prints the findings and the steps, changes nothing, and never
     assert.match(migrate.stdout, new RegExp(`^This session's own desk: ${path.join(tidy.desk, "desks", "bob")}$`, "mu"));
     assert.ok(!/desks\/alice/u.test(migrate.stdout), "a peer's desk never appears in the tidy");
     // Run in the same environment, the printed command records bob's own desk.
-    const recordCommand = /with: (node '[^']+' --write-record)\n/u.exec(migrate.stdout)[1];
+    const recordCommand = /with: (node '[^']+' --write-record --claim '[^']+')\n/u.exec(migrate.stdout)[1];
     assert.equal(tidy.run(recordCommand).status, 0);
     assert.ok(fs.existsSync(path.join(tidy.desk, "desks", "bob", "_meta", "organization.json")));
     assert.equal(fs.existsSync(path.join(tidy.desk, "desks", "alice", "_meta", "organization.json")), false);
@@ -991,7 +994,7 @@ test("tidy Migrate works on the desk_status desk, and says one line instead when
     const agree = tidy.run(blocks.Migrate, { DESK_TOOLS_ROOT: tidy.desk });
     assert.equal(agree.status, 0, agree.stderr);
     assert.match(agree.stdout, new RegExp(`^Desk tools: ${tidy.desk}\\nThis script: ${tidy.desk}\\n`, "u"));
-    assert.match(agree.stdout, new RegExp(`with: node '[^']+' --write-record --root '${tidy.desk}'\\n`, "u"));
+    assert.match(agree.stdout, new RegExp(`with: node '[^']+' --write-record --root '${tidy.desk}' --claim '[0-9a-f-]{36}'\\n`, "u"));
 
     const other = path.join(tidy.root, "other-desk");
     fs.mkdirSync(other);
@@ -1100,8 +1103,8 @@ function startupContexts(desk, home, extraEnv = {}) {
   return { claude: JSON.parse(claude.stdout).hookSpecificOutput.additionalContext, copilot: JSON.parse(copilot.stdout).additionalContext };
 }
 
-const PENDING_TIDY_LINE = `Desk migrations: 02-tidy-desk is pending (`;
-const TIDY_COMMAND = `node '${path.join(deskRoot, "mcp", "scripts", "migrations.js")}' run 02-tidy-desk --tools-root <desk_status root.path>`;
+const PENDING_TIDY_LINE = `Desk migrations: 02-tidy-desk is pending. `;
+const TIDY_COMMAND = `node '${path.join(deskRoot, "mcp", "scripts", "migrations.js")}' run 02-tidy-desk --tools-root <root.path>`;
 
 test("startup hooks tell the agent to tidy now, with the exact command, when the tidy is pending", () => {
   withTidyDesk({}, (tidy) => {
@@ -1109,15 +1112,24 @@ test("startup hooks tell the agent to tidy now, with the exact command, when the
       const line = context.split("\n").find((candidate) => candidate.startsWith(PENDING_TIDY_LINE));
       assert.ok(line, `${host} startup must carry the pending-tidy line`);
       assert.ok(line.includes(TIDY_COMMAND), `${host} startup must name the command that prints the tidy's work`);
-      assert.match(line, /Do it at the start of this session, before other work and without asking/u);
+      assert.match(line, /Do it now, before other work and without asking/u);
       assert.equal(context.split(PENDING_TIDY_LINE).length - 1, 1, `${host} startup carries the line once`);
     }
-    // The command the line names prints the tidy's findings, its steps and the Announce template.
+    // The command the line names prints the tidy's findings, its steps and the Announce template, all of them even when
+    // the desk's report runs past 10 KB (a live desk's did).
+    for (let index = 0; index < 200; index += 1) fs.writeFileSync(path.join(tidy.desk, `loose-note-${String(index).padStart(3, "0")}.txt`), "stray\n");
     const run = spawnSync(process.execPath, [path.join(deskRoot, "mcp", "scripts", "migrations.js"), "run", TIDY_ID, "--tools-root", tidy.desk], { cwd: path.join(tidy.root, "home"), env: tidy.env, encoding: "utf8" });
     assert.equal(run.status, 0, run.stderr);
+    assert.ok(run.stdout.length > 10_000, `the report is large (${run.stdout.length} characters)`);
     assert.match(run.stdout, /^Organization findings in it: \d+$/mu);
     assert.match(run.stdout, /^Steps, in order:$/mu);
+    assert.match(run.stdout, /--write-record --root '[^']+' --claim '[0-9a-f-]{36}'/u);
     assert.match(run.stdout, /\nAnnounce line, filled in with this run's own counts and commit link:\nI tidied up my desk a bit: /u);
+    // That run holds the tidy's claim, so the next session start names the hold instead of a second tidy.
+    for (const [host, context] of Object.entries(startupContexts(tidy.desk, path.join(tidy.root, "home")))) {
+      assert.ok(!context.includes(PENDING_TIDY_LINE), `${host}: a second session is not told to tidy`);
+      assert.match(context, /^Desk migrations: 02-tidy-desk is on hold because another session has been tidying this desk since /mu, host);
+    }
   });
 });
 

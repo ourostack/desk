@@ -284,6 +284,7 @@ test("the run command walks one migration the way the migrations skill describes
     { id: "08-fixed", migrate: "echo 'changed one file'", announce: "All set." },
     { id: "09-restart", restart: true, announce: "Moved." },
     // Steps longer than the hooks' output bound still reach the agent whole.
+    { id: "11-held", agent: true, detect: "echo 'held: another session is on it'; exit 1" },
     { id: "10-long", agent: true, migrate: 'for i in $(seq 1 400); do echo "finding $i: a long report line that fills the output"; done; echo "Steps, in order:"; echo "7. Record."', announce: "Tidied." },
   ])
   const run = async (argv, env = process.env) => {
@@ -301,6 +302,7 @@ test("the run command walks one migration the way the migrations skill describes
   assert.deepEqual(await run(["run", "07-wait"]), { code: 0, stdout: "I left my desk untidied for now.\n", stderr: "" })
   assert.deepEqual(await run(["run", "08-fixed"]), { code: 0, stdout: "changed one file\nAll set.\n", stderr: "" })
   assert.deepEqual(await run(["run", "09-restart"]), { code: 0, stdout: "Moved.\nPlease start a new session so my preamble loads against the migrated paths.\n", stderr: "" })
+  assert.deepEqual(await run(["run", "11-held"]), { code: 0, stdout: "Migration 11-held is on hold because another session is on it; nothing to do now.\n", stderr: "" })
   const long = await run(["run", "10-long"])
   assert.ok(long.stdout.length > 20_000, String(long.stdout.length))
   assert.match(long.stdout, /\nfinding 400: [^\n]*\nSteps, in order:\n7\. Record\.\n\nAnnounce line, filled in with this run's own counts and commit link:\nTidied\.\n$/u)

@@ -465,10 +465,6 @@ function otherClaim(gitDir, token, now) {
   return freshClaim(current, now) && current.token !== token ? current : null
 }
 
-function releaseClaim(gitDir, token, now) {
-  if (otherClaim(gitDir, token, now) === null) removeFile(path.join(gitDir, CLAIM_FILE))
-}
-
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16)
 
 function rosterText(root) {
@@ -487,7 +483,7 @@ function holdFingerprint(kind, status, spawnGit) {
   if (kind === "who") return digest([status.resolved, rosterText(status.resolved.root ?? status.root)])
   if (kind === "busy") return digest(tidySafetyProblem(status.root, { spawnGit }))
   const head = run(spawnGit, "git", ["-C", status.root, "rev-parse", "HEAD"])
-  return digest([head.stdout.trim(), uncommittedPaths(status.root, status.subtree ?? status.root, { spawnGit })])
+  return digest([head.stdout.trim(), uncommittedPaths(status.root, status.subtree, { spawnGit })])
 }
 
 function writeHold(gitDir, status, { kind, reason }, { spawnGit, now }) {
@@ -569,16 +565,16 @@ function parseArgs(argv) {
  * printed.
  */
 export function runTidyStatusCli({
-  argv = process.argv.slice(2),
-  env = process.env,
-  io = process,
+  argv,
+  env,
+  io,
   cwd,
   homeDir,
   now,
   spawnGit = spawnSync,
   spawnGh = spawnSync,
   spawnBackground = spawnChild,
-} = {}) {
+}) {
   let args
   try {
     args = parseArgs(argv)
@@ -591,7 +587,7 @@ export function runTidyStatusCli({
   const clock = now ?? Date.now()
 
   if (args.mode === "refresh-identity") {
-    ghIdentity(path.resolve(args.root), { env, spawnGh, homeDir: homeDir ?? os.homedir(), now: clock })
+    ghIdentity(path.resolve(args.root), { env, spawnGh, homeDir, now: clock })
     return 0
   }
 
@@ -630,6 +626,8 @@ export function runTidyStatusCli({
     return 0
   }
 
+  // Past this check the claim is this session's, stale or absent, so both
+  // modes below may remove it.
   const other = otherClaim(gitDir, args.claim, clock)
   if (other !== null) {
     io.stdout.write(`Another session has been tidying this desk since ${new Date(other.claimed_at).toISOString()}, so I changed nothing.\n`)
@@ -639,13 +637,13 @@ export function runTidyStatusCli({
   if (args.mode === "defer") {
     const reason = args.reason.replace(/[\x00-\x1f\x7f]+/gu, " ").trim()
     writeHold(gitDir, status, { kind: "agent", reason }, { spawnGit, now: clock })
-    releaseClaim(gitDir, args.claim, clock)
+    removeFile(path.join(gitDir, CLAIM_FILE))
     io.stdout.write(`The tidy is on hold: ${reason}. Session start names it until this desk's latest commit or its uncommitted changes differ, and then the tidy runs again.\n`)
     return 0
   }
 
   const file = writeOrganizationRecord(status.subtree, now === undefined ? undefined : new Date(now))
-  releaseClaim(gitDir, args.claim, clock)
+  removeFile(path.join(gitDir, CLAIM_FILE))
   removeFile(path.join(gitDir, HOLD_FILE))
   io.stdout.write(`${path.relative(status.root, file)}\n`)
   return 0
