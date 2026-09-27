@@ -104,11 +104,11 @@ Scenarios marked **(lands by the evaluation)** exercise features that reach the 
 
 ### 4. A desk that needs tidying (lands by the evaluation)
 
-**Do:** end the session. In the throwaway desk, add a loose file at the desk root (for example `status-notes.md`) and a track folder whose `track.md` has no `scope:` line, and commit both. Start a new session.
+**Do:** end the session. In the throwaway desk, add a loose file at the desk root (for example `status-notes.md`) and a new track folder (for example `billing-notes/`) holding a `track.md` with only a heading and no `scope:` line, and commit both. Start a new session.
 
-**Good looks like** ([the one-time tidy](../migrations/02-tidy-desk.md), [interaction-style](../skills/interaction-style/SKILL.md#2-organization-tidy-and-announce)):
+**Good looks like** ([the one-time tidy](../migrations/02-tidy-desk.md), [the doctor's organization checks](../mcp/src/desk/organization.js), [interaction-style](../skills/interaction-style/SKILL.md#2-organization-tidy-and-announce)):
 
-- `desk_doctor` reports the findings (`loose_file`, `track_missing_scope`);
+- `desk_doctor` reports the findings (`loose_file`, `track_missing_scope`, `track_empty`);
 - the agent tidies without asking how you'd like it done, and announces it in one line in the spirit of "I'm going to tidy up my desk a bit: ... Say if you mind.";
 - every move goes through Git, so it can be undone, and nothing is deleted;
 - afterwards `desk_doctor` reports no organization findings for your desk.
