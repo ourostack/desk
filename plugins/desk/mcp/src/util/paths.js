@@ -39,6 +39,10 @@ export const DESK_ROOT_NOT_FOUND = "DESK_ROOT_NOT_FOUND"
 export const DESK_ROOT_UNAVAILABLE = "DESK_ROOT_UNAVAILABLE"
 // An activation config that cannot be read, is not JSON, or has the wrong schema.
 export const ACTIVATION_CONFIG_INVALID = "ACTIVATION_CONFIG_INVALID"
+// The source of a personal home-folder fallback ($HOME/desk, $HOME/worker-workspace).
+export const HOME_FALLBACK = "home_fallback"
+// The source of a loaded work overlay's home-folder desk ($HOME/ms-desk).
+export const OVERLAY_HOME_FALLBACK = "overlay_home_fallback"
 
 export function resolveDeskRoot(explicit, options = {}) {
   return resolveDeskRootWithSource({
@@ -47,14 +51,14 @@ export function resolveDeskRoot(explicit, options = {}) {
   }).root
 }
 
-// The source of a personal home-folder fallback ($HOME/desk, $HOME/worker-workspace).
-export const HOME_FALLBACK = "home_fallback"
-// The source of a loaded work overlay's home-folder desk ($HOME/ms-desk).
-export const OVERLAY_HOME_FALLBACK = "overlay_home_fallback"
-
 // Agency copies every plugin a session selects into one per-session container
 // named agency-plugin-<id>.p<pid>, one folder per plugin. A plugin folder next
-// to Desk's own in that container is loaded in the same session.
+// to Desk's own in that container is loaded in the same session. This relies on
+// those folders being real copies: the module path below is the real path Node
+// loaded, so a container whose desk folder were a symlink to a cache copy would
+// not be recognized, and the overlay's home desk would not be consulted.
+// "Loaded" means present in this Agency session's composition, not that the
+// session's selected agent belongs to the overlay.
 export const AGENCY_SESSION_CONTAINER = /^agency-plugin-[A-Za-z0-9_-]+\.p[1-9][0-9]*$/u
 
 // Work overlays whose home-folder desk Desk may bind when nothing else binds a
@@ -87,7 +91,7 @@ export function resolveDeskRootWithSource({
     if (problem === null) return { root: resolved, source: "explicit-root", tried }
     throw codedError(
       `desk-mcp: --root path ${problem}: ${resolved}. ` +
-        `Pass --root <path> pointing at an existing desk workspace, or set $DESK.`,
+        `Pass --root <path> pointing at an existing desk workspace. Desk does not fall back to another desk.`,
       DESK_ROOT_UNAVAILABLE,
       { path: resolved, source: "explicit-root", problem, tried },
     )
@@ -99,7 +103,7 @@ export function resolveDeskRootWithSource({
     const problem = explicitRootProblem(resolved)
     if (problem === null) return { root: resolved, source: "host-session-root", tried }
     throw codedError(
-      `desk-mcp: host/session root path ${problem}: ${resolved}.`,
+      `desk-mcp: host/session root path ${problem}: ${resolved}. Desk does not fall back to another desk.`,
       DESK_ROOT_UNAVAILABLE,
       { path: resolved, source: "host-session-root", problem, tried },
     )
@@ -144,12 +148,12 @@ export function resolveDeskRootWithSource({
     )
   }
 
-  // Home-folder fallbacks: a loaded work overlay's own desk first, then the
-  // personal locations. Plain Desk never consults an overlay's desk. These are
-  // guesses, so a candidate binds only when it has the desk layout: an empty
-  // or unrelated folder leaves Desk in setup mode instead.
-  const fallbacks = [
-    ...loadedOverlayHomeDesks({ deskPluginRoot, homeDir }),
+  // Home-folder fallbacks. A session that loads a work overlay tries only that
+  // overlay's own desk; plain Desk tries only the personal locations. Neither
+  // crosses into the other's desk. These are guesses, so a candidate binds only
+  // when it has the desk layout: otherwise Desk stays in setup mode.
+  const overlayDesks = loadedOverlayHomeDesks({ deskPluginRoot, homeDir })
+  const fallbacks = overlayDesks.length > 0 ? overlayDesks : [
     { source: HOME_FALLBACK, path: path.join(homeDir, "desk") },
     { source: HOME_FALLBACK, path: path.join(homeDir, "worker-workspace") },
   ]
@@ -288,7 +292,6 @@ function resolveRootPath(value, { cwd, homeDir }) {
   const expanded = expandHome(value, homeDir)
   return path.resolve(path.isAbsolute(expanded) ? expanded : path.join(cwd, expanded))
 }
-
 
 // ── Shared-workspace write-prefix ─────────────────────────────────────────────
 //

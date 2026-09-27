@@ -389,7 +389,7 @@ function agencySession(fixture, plugins) {
   return path.join(container, "desk")
 }
 
-test("an Agency session that loads the ms-desk overlay still binds ~/ms-desk, ahead of the personal fallbacks", () => {
+test("an Agency session that loads the ms-desk overlay still binds ~/ms-desk, instead of the personal fallbacks", () => {
   const resolveDeskRootWithSource = requireFunction(pathsModule, "resolveDeskRootWithSource")
   const fixture = makeFixture()
   try {
@@ -522,26 +522,52 @@ test("a home-folder guess binds only a folder with the desk layout; an empty ~/d
   const fixture = makeFixture()
   try {
     const home = path.join(fixture.root, "fresh-home")
-    // An empty ~/desk, a ~/worker-workspace with only _meta, and a ~/ms-desk that is not a desk, in a session that loads the overlay.
+    // Plain Desk: an empty ~/desk and a ~/worker-workspace with only _meta.
     mkdirSync(path.join(home, "desk"), { recursive: true })
     mkdirSync(path.join(home, "worker-workspace", "_meta"), { recursive: true })
-    mkdirSync(path.join(home, "ms-desk"), { recursive: true })
-    const deskPluginRoot = agencySession(fixture, { desk: "desk", "ms-desk": "ms-desk" })
     assert.throws(
-      () => resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: home }),
+      () => resolveDeskRootWithSource({ env: {}, homeDir: home }),
       (err) => {
         assert.equal(err.code, pathsModule.DESK_ROOT_NOT_FOUND)
-        assert.deepEqual(err.tried.map((entry) => entry.source), ["overlay_home_fallback", "home_fallback", "home_fallback"])
+        assert.deepEqual(err.tried.map((entry) => entry.source), ["home_fallback", "home_fallback"])
         return true
       },
     )
     // Once a guess has the layout (a crew-shaped desks/ counts too), it binds.
     mkdirSync(path.join(home, "worker-workspace", "desks"), { recursive: true })
-    assert.equal(resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: home }).root, path.join(home, "worker-workspace"))
+    assert.equal(resolveDeskRootWithSource({ env: {}, homeDir: home }).root, path.join(home, "worker-workspace"))
     makeDesk(path.join(home, "desk"))
-    assert.equal(resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: home }).root, path.join(home, "desk"))
+    assert.equal(resolveDeskRootWithSource({ env: {}, homeDir: home }).root, path.join(home, "desk"))
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("a session that loads the ms-desk overlay tries only ~/ms-desk: a missing or non-desk ~/ms-desk is setup mode, never the personal ~/desk", () => {
+  const resolveDeskRootWithSource = requireFunction(pathsModule, "resolveDeskRootWithSource")
+  const fixture = makeFixture()
+  try {
+    const home = path.join(fixture.root, "work-home")
+    // Real personal desks are present; the overlay's own desk is missing, then empty.
+    makeDesk(path.join(home, "desk"))
+    makeDesk(path.join(home, "worker-workspace"))
+    const deskPluginRoot = agencySession(fixture, { desk: "desk", "ms-desk": "ms-desk" })
+    const setupOnly = (label) => assert.throws(
+      () => resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: home }),
+      (err) => {
+        assert.equal(err.code, pathsModule.DESK_ROOT_NOT_FOUND, label)
+        assert.deepEqual(err.tried, [{ source: "overlay_home_fallback", overlay: "ms-desk", path: path.join(home, "ms-desk") }], label)
+        assert.doesNotMatch(err.message, new RegExp(`${escapeRegExp(path.join(home, "desk"))}$`, "mu"), label)
+        return true
+      },
+    )
+    setupOnly("missing ~/ms-desk")
+    mkdirSync(path.join(home, "ms-desk"), { recursive: true })
+    setupOnly("empty ~/ms-desk")
     makeDesk(path.join(home, "ms-desk"))
-    assert.equal(resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: home }).source, "overlay_home_fallback")
+    const bound = resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: home })
+    assert.equal(bound.root, path.join(home, "ms-desk"))
+    assert.equal(bound.source, "overlay_home_fallback")
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }

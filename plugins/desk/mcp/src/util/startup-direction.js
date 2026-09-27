@@ -42,7 +42,7 @@ export function resolveStartupRoot(options) {
     return { root, source }
   } catch (error) {
     if (error.code === DESK_ROOT_NOT_FOUND) return { root: null }
-    if (error.code === DESK_ROOT_UNAVAILABLE) return { root: null, unavailable: { path: error.path, message: error.message } }
+    if (error.code === DESK_ROOT_UNAVAILABLE) return { root: null, unavailable: { path: error.path, source: error.source, message: error.message } }
     return { root: null, error: error.message }
   }
 }
@@ -58,7 +58,10 @@ export function deskStartupDirection(bound, { sessionDesk = null } = {}) {
     return `Desk startup: Desk's root configuration could not be read (${bound.error}), so this hook cannot say which desk is bound. desk_status reports the actual state.${overlay} ${START}`
   }
   if (bound?.unavailable) {
-    return `Desk startup: Desk cannot use the desk it is bound to (${bound.unavailable.message}). Desk does not fall back to another desk: desk_status reports root_unavailable with the fix (restore the desk there, or rebind with desk:first-run-bootstrap), and Desk recovers in place once the folder exists. ${START}`
+    const remedy = bound.unavailable.source === "env:DESK"
+      ? "restore the desk there, or correct or unset DESK and reconnect the Desk MCP server"
+      : "restore the desk there, or rebind with desk:first-run-bootstrap"
+    return `Desk startup: Desk cannot use the desk it is bound to (${bound.unavailable.message}) desk_status reports root_unavailable with the fix (${remedy}), and Desk recovers in place once the folder exists. ${START}`
   }
   if (sessionDesk && sessionDesk !== root) {
     const plain = root
