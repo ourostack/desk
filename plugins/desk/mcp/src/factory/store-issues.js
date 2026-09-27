@@ -7,7 +7,8 @@
 //
 // Failures throw an `Error` whose `code` is one stable value: `gh_missing`,
 // `timeout`, `http_<status>` for an HTTP error, `unexpected_answer` for an
-// answer of the wrong shape, `too_many` past the page limit, or `gh_failed`.
+// answer of the wrong shape, `too_many_issues` or `too_many_comments` past
+// the page limit of the list that overflowed, or `gh_failed`.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -77,7 +78,7 @@ export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_
     }
   }
 
-  async function pages(route, view) {
+  async function pages(route, view, overflow) {
     const items = []
     for (let page = 1; page <= MAX_PAGES; page += 1) {
       const answer = await api("GET", `${route}${route.includes("?") ? "&" : "?"}per_page=${PER_PAGE}&page=${page}`)
@@ -85,17 +86,17 @@ export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_
       items.push(...answer.map(view))
       if (answer.length < PER_PAGE) return items
     }
-    throw failure("too_many")
+    throw failure(overflow)
   }
 
   const base = `repos/${repo}`
   return {
     async listIssues({ label, state }) {
       if (typeof label !== "string" || !STATES.has(state)) throw new TypeError("listIssues: label and state are required")
-      return pages(`${base}/issues?state=${state}&labels=${encodeURIComponent(label)}`, issueView)
+      return pages(`${base}/issues?state=${state}&labels=${encodeURIComponent(label)}`, issueView, "too_many_issues")
     },
     async listComments(number) {
-      return pages(`${base}/issues/${number}/comments`, commentView)
+      return pages(`${base}/issues/${number}/comments`, commentView, "too_many_comments")
     },
     async createComment(number, body) {
       await api("POST", `${base}/issues/${number}/comments`, { body })

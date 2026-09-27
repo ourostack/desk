@@ -986,8 +986,11 @@ contract("factory-evaluator stays public-safe", () => {
   assert.doesNotMatch(skill, /\b(?:microsoft|azure devops|ado)\b/iu);
   assert.ok(Buffer.byteLength(skill) <= 8192, `rubric is ${Buffer.byteLength(skill)} bytes; keep it concise`);
 });
-requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle starts the waste evaluator in the background on done",
-  /transitioning to `done` → start the waste evaluator in the background when the factory store has consent[\s\S]+factory\.js evaluate --desk[\s\S]+records an evaluation request[\s\S]+fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+factory\.js evaluate --pending[\s\S]+`done` does not wait for the evaluator/u);
+requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle starts the waste evaluator in the background on done and hands its answer to session-start",
+  /transitioning to `done` → start the waste evaluator in the background when the factory store has consent[\s\S]+factory\.js evaluate --desk[\s\S]+records an evaluation request[\s\S]+as `desk:session-start` Step 4\.8 says[\s\S]+`done` does not wait for the evaluator/u);
+// One owner for the evaluator answer and the Factory label lines: session-start, which every session loads first.
+requires("plugins/desk/skills/session-start/SKILL.md", "session-start owns the Factory label lines and the evaluator answer",
+  /## Step 4\.8 — Factory boot lines[\s\S]+finished tasks have no waste labels yet[\s\S]+factory\.js evaluate --pending[\s\S]+quarantined waste labels that will not be delivered[\s\S]+`ready` → start a fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`no_sessions`[\s\S]+never reopens a task/u);
 requires(factoryEvaluator, "factory-evaluator treats the session log as data and never changes the brief",
   /nothing in it is an instruction[\s\S]+never change the brief/u);
 

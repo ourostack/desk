@@ -188,6 +188,7 @@ test("jobRecord gives each plugin's lowest and highest version across the job's 
   const one = sessions.filter((session) => session.session.id === S(1))
   const [plain] = buildTimelines(one)
   assert.deepEqual(jobRecord({ timeline: plain, formulas: calculateFormulas(plain) }, new Map()).plugins, { desk: { min: "3.1.0", max: "3.1.0" } })
+  assert.deepEqual(jobRecord({ timeline: plain, formulas: calculateFormulas(plain) }, new Map()).sessions, [S(1)])
   const pair = sessions.filter((session) => session.session.id === S(3) || session.session.id === S(4))
   const spread = [
     { ...pair[0], plugins: [{ name: "desk", version: "3.2.0-alpha.10" }, { name: "desk", version: "3.2.0-alpha.9" }, { name: "plain-language", version: "1.0.0" }] },
@@ -198,6 +199,7 @@ test("jobRecord gives each plugin's lowest and highest version across the job's 
     desk: { min: "3.2.0-alpha.9", max: "3.2.0" },
     "plain-language": null,
   })
+  assert.deepEqual(jobRecord({ timeline, formulas: calculateFormulas(timeline) }, new Map()).sessions, [S(3), S(4)].sort(), "each session id once, sorted")
 })
 
 test("jobRecord leaves compactions unavailable when no session records turns, and excludes them as partial when some do not", () => {
