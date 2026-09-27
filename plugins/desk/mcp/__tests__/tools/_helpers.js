@@ -8,7 +8,8 @@ import matter from "gray-matter"
 
 const tempDeskRoots = new Set()
 
-after(() => Promise.all([...tempDeskRoots].map((root) => fs.rm(root, { recursive: true, force: true }))))
+// A git child a test started can still be writing under .git/objects when the file ends, so removal retries as _temp_roots.js does.
+after(() => Promise.all([...tempDeskRoots].map((root) => fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }))))
 
 export async function mkTempDeskRoot() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-test-"))

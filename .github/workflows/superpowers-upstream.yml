@@ -1,9 +1,10 @@
 name: Superpowers upstream refresh
 
 # Keeps the vendored Superpowers payload following obra/superpowers. Each run rebuilds the refresh from main: it
-# copies the selected upstream files byte for byte, updates upstream-sources.lock.json, releases new Superpowers and
-# Desk versions, pushes the superpowers-upstream branch, opens or updates its pull request, dispatches CI on it and
-# merges when every check passes. A failing check leaves the pull request open and files an upstream-refresh issue.
+# copies the selected upstream files byte for byte, updates upstream-sources.lock.json, releases a new Superpowers
+# version, adds a Desk changelog fragment, pushes the superpowers-upstream branch, opens or updates its pull request,
+# dispatches CI on it and merges when every check passes, then dispatches the Desk release on main. A failing check
+# leaves the pull request open and files an upstream-refresh issue.
 
 on:
   schedule:
@@ -67,9 +68,7 @@ jobs:
         id: refresh
         run: |
           set -euo pipefail
-          current="$(node -p 'require("./plugins/desk/.claude-plugin/plugin.json").version')"
-          desk_version="$(node scripts/superpowers-upstream-pr.cjs next-desk-version --repo "$REPO" --current "$current" --branch "$BRANCH")"
-          node scripts/refresh-superpowers.cjs --upstream-dir "$RUNNER_TEMP/upstream" --date "$(date -u +%F)" --desk-version "$desk_version" > "$RUNNER_TEMP/refresh-report.json"
+          node scripts/refresh-superpowers.cjs --upstream-dir "$RUNNER_TEMP/upstream" > "$RUNNER_TEMP/refresh-report.json"
           changed="$(node -p 'require(process.env.RUNNER_TEMP + "/refresh-report.json").changed')"
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
           if [ "$changed" != "true" ]; then
@@ -83,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           commit="$(node -p 'require(process.env.RUNNER_TEMP + "/refresh-report.json").commit')"
-          versions="$(node -p 'const r = require(process.env.RUNNER_TEMP + "/refresh-report.json").release; `Superpowers ${r.superpowers.to}, Desk ${r.desk.to}`')"
+          versions="$(node -p 'const r = require(process.env.RUNNER_TEMP + "/refresh-report.json").release; `Superpowers ${r.superpowers.to} with a Desk changelog fragment`')"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch --create "$BRANCH"
