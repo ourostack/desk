@@ -171,6 +171,8 @@ export async function main({
   hung,
   onClosed = () => {},
 }) {
+  // The tools find the installed plugin (its hooks and the plugins beside it) through DESK_PLUGIN_ROOT. Claude's launcher sets it; Copilot's and Codex's configs pass no environment, and the server's code runs from a source mirror with no `hooks/` beside it, so every host gets this entrypoint's own plugin folder here.
+  if (!hasText(env.DESK_PLUGIN_ROOT)) env.DESK_PLUGIN_ROOT = path.resolve(mcpRoot, "..")
   runtimeInspector = resolveRuntimeInspector({ runtimeImporter, runtimeInspector })
   const serverVersion = resolveMcpServerVersion({ mcpRoot })
   const startRuntimeDiagnostic = (options) => diagnosticServerStarter({

@@ -716,4 +716,63 @@ describe("runtime cache and host launch contract", () => {
 
     assert.equal(existsSync(requiredRuntimeFile), true, "current-marked caches missing required runtime files should be repaired");
   });
+
+  // Review M3-11 D1: Copilot starts the server from `.mcp.copilot.json`, whose `env` is empty, so nothing names Desk's
+  // plugin root, and the installed server runs from a source mirror with no `hooks/` beside it. Launched exactly the way
+  // Copilot's config launches it, with no plugin-root variable from anywhere, desk_status must still read the plugin set
+  // installed beside Desk and route the desk to the overlay's store.
+  it("under Copilot's own launch config, desk_status reads the plugins installed beside Desk", async () => {
+    const installRoot = makeUntrackedTempRoot("desk-copilot-factory-");
+    try {
+      const installed = makeInstalledPluginFixture(installRoot);
+      const store = "example-org/team-factory";
+      writeJson(path.join(ensureDir(path.join(installRoot, "installed", "overlay")), "plugin.json"), { name: "overlay", version: "1.0.0", desk: { factory: { store } } });
+      const tempRoot = makeTempRoot("desk-copilot-factory-run-");
+      const { homeDir, deskRoot } = makeDeskHome(tempRoot);
+      const nodeShim = prependNodeShimToPath(tempRoot, "/usr/bin:/bin");
+      const copilot = declarationCases(installed.pluginRoot).find((declaration) => declaration.id === "desk plugin.json");
+      const server = copilot.resolveServer();
+      assert.deepEqual(server.env, {}, "Copilot's config passes no environment of its own");
+      const launch = materializeHostLaunch(server, { ...copilot, processCwd: tempRoot });
+      const env = {
+        ...process.env,
+        ...launch.env,
+        DESK: deskRoot,
+        DESK_RUNTIME_CACHE_DIR: ensureDir(path.join(tempRoot, "runtime-cache")),
+        HOME: homeDir,
+        XDG_STATE_HOME: path.join(tempRoot, "state"),
+        XDG_CACHE_HOME: path.join(tempRoot, "cache"),
+        PATH: nodeShim.path,
+        DESK_NODE_SYSTEM_PREFIX: ensureDir(path.join(tempRoot, "no-system-node")),
+      };
+      for (const name of ["DESK_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT", "COPILOT_PLUGIN_ROOT", "CLAUDE_CONFIG_DIR", "NVM_DIR", "FNM_DIR", "VOLTA_HOME", "ASDF_DATA_DIR", "MISE_DATA_DIR", "XDG_DATA_HOME"]) delete env[name];
+      const status = await deskStatusSession({ command: launch.command, args: launch.args, cwd: launch.cwd, env });
+      assert.deepEqual(
+        { store: status.factory?.store, source: status.factory?.source, consent: status.factory?.consent },
+        { store, source: "overlay", consent: "undecided" },
+        `desk_status.factory under Copilot's launch: ${JSON.stringify(status.factory ?? status)}`,
+      );
+    } finally {
+      rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
 });
+
+async function deskStatusSession({ command, args, cwd, env }) {
+  const stderrChunks = [];
+  const child = spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+  child.stderr.on("data", (chunk) => stderrChunks.push(chunk.toString("utf8")));
+  const closePromise = new Promise((resolve) => child.once("close", resolve));
+  try {
+    child.stdin.write(makeMcpEnvelope(1, "initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "copilot-factory-test", version: "1.0.0" } }));
+    await waitForResponse(child, 1, stderrChunks);
+    for (let id = 2; ; id += 1) {
+      child.stdin.write(makeMcpEnvelope(id, "tools/call", { name: "desk_status", arguments: {} }));
+      const status = JSON.parse((await waitForResponse(child, id, stderrChunks, 60000)).result.content[0].text);
+      if (status.state !== "admitting") return status;
+    }
+  } finally {
+    child.kill("SIGTERM");
+    await closePromise;
+  }
+}
