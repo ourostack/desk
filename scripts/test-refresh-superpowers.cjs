@@ -49,9 +49,12 @@ function filesNaming(version, files) {
 
 {
   // A Desk release names its version in exactly these files; the changelog keeps history and gains an entry instead.
-  // Root test scripts use their own fixture versions, which may coincide with the current one.
-  const naming = filesNaming(currentDesk, trackedFiles())
-    .filter((file) => file !== "plugins/desk/CHANGELOG.md" && !/^scripts\/test-[^/]+\.cjs$/u.test(file));
+  // Tests use their own fixture versions, which a later release may coincide with. A test file is a release surface
+  // only when DESK_VERSION_FILES declares it (generated fixtures the release regenerates).
+  const isTest = (file) => file.includes("/__tests__/") || file.startsWith("tests/") || /^scripts\/test-[^/]+\.cjs$/u.test(file);
+  const naming = filesNaming(currentDesk, trackedFiles()).filter((file) => (
+    file !== "plugins/desk/CHANGELOG.md" && (!isTest(file) || DESK_VERSION_FILES.includes(file))
+  ));
   assert.deepEqual(naming.sort(), [...DESK_VERSION_FILES].sort(), "every surface naming the Desk version must be bumped by the Desk release");
 
   // The shipped Superpowers version appears only on these surfaces outside tests and history. The README names the
