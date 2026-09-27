@@ -8,6 +8,8 @@ const { spawnSync } = require("node:child_process");
 
 const repoRoot = path.resolve(__dirname, "..");
 const ancestryStates = new Set(["identical", "ahead", "behind", "diverged"]);
+// SHA-256 of the Gauntlet LICENSE (Apache-2.0) reviewed for the evaluation leaves exception.
+const APPROVED_GAUNTLET_LICENSE_SHA256 = "bab74adbfbcdc79e08e43573584ef6e0bc067354e8306aa4128c245967ee549f";
 
 function sha256(content) {
   return crypto.createHash("sha256").update(content).digest("hex");
@@ -84,8 +86,21 @@ function createGitHubClient(run = spawnSync) {
     return Buffer.from(response.content.replace(/\s/gu, ""), "base64");
   }
 
-  return { repository, latestRelease, commit, compare, file };
+  // The names at the top of a commit's tree, where a repository keeps its NOTICE or COPYING file.
+  function topLevel(repository, ref) {
+    const response = get(`repos/${repository}/git/trees/${encodeURIComponent(ref)}`);
+    if (!Array.isArray(response.tree) || response.truncated === true) {
+      throw new Error(`${repository}@${ref} did not return a complete top-level tree`);
+    }
+    return response.tree.map((entry) => entry.path);
+  }
+
+  return { repository, latestRelease, commit, compare, file, topLevel };
 }
+
+// Apache-2.0 section 4(d) makes a NOTICE file's contents part of what a redistributor must carry, and a COPYING file can
+// add terms, so one that the lock does not vendor needs a person's review even when LICENSE itself is unchanged.
+const LICENSE_NOTICE = /^(?:NOTICE|COPYING)(?:\.|$)/iu;
 
 function compareAncestry(github, repository, base, head) {
   const status = github.compare(repository, base, head).status;
@@ -105,11 +120,12 @@ function inspectSource(source, github) {
   if (!Array.isArray(source.files) || source.files.length === 0) {
     throw new Error(`source ${source.id} has no selected files`);
   }
-  // Provenance evidence, not a dependency: the Apache-2.0 exception was approved for the Gauntlet files vendored
-  // from this one reviewed commit, so a lock that moves to another commit needs a new license review.
+  // The Apache-2.0 exception was approved for the Gauntlet files under the license text reviewed at commit
+  // 187a9af979a7cf096c0890d0eeb998cc3008343a, so it follows those LICENSE bytes rather than one commit: an upstream
+  // move that leaves the license alone keeps the approval, and one that changes it lists LICENSE as a changed path.
   const approvedGauntlet = source.id === "prime-radiant-inc-gauntlet-evaluation-leaves"
     && source.repository === "prime-radiant-inc/gauntlet"
-    && source.commit === "187a9af979a7cf096c0890d0eeb998cc3008343a";
+    && source.files.some((file) => file.sourcePath === "LICENSE" && file.sha256 === APPROVED_GAUNTLET_LICENSE_SHA256);
   if (approvedGauntlet && source.license !== "Apache-2.0") {
     throw new Error(`approved Gauntlet source must lock Apache-2.0: got ${source.license ?? "missing"}`);
   }
@@ -168,6 +184,10 @@ function inspectSource(source, github) {
     };
   });
   const changedPaths = selectedFiles.filter((file) => file.changed).map((file) => file.source_path);
+  const vendored = new Set(source.files.map((file) => file.sourcePath));
+  const unvendoredNotices = approvedGauntlet
+    ? github.topLevel(source.repository, candidateCommit).filter((name) => LICENSE_NOTICE.test(name) && !vendored.has(name)).sort()
+    : [];
 
   let classification;
   let reason;
@@ -186,6 +206,10 @@ function inspectSource(source, github) {
   } else {
     classification = "needs-human-approval";
     reason = "forward candidate changes selected payload";
+  }
+  if (classification !== "blocked" && unvendoredNotices.length > 0) {
+    classification = "needs-human-approval";
+    reason = `upstream has license notice files the lock does not vendor (${unvendoredNotices.join(", ")}); review them and add them to the lock`;
   }
 
   return {
@@ -206,6 +230,7 @@ function inspectSource(source, github) {
     ancestry,
     selected_payload_digest: selectedPayloadDigest(selectedFiles),
     changed_paths: changedPaths,
+    unvendored_license_notices: unvendoredNotices,
     classification,
     reason,
     selected_files: selectedFiles,
