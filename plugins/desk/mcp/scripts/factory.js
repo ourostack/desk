@@ -9,6 +9,8 @@
 // Every subcommand prints one JSON value on success. Validation failures print
 // their stable JSON result and exit 1; usage errors print one line to stderr.
 // Candidate revisions are inspected through Git as bytes and are never loaded.
+// validate-pr judges the tree that merging the head into the base produces
+// (`git merge-tree`, Git 2.38 or later), not a diff against one merge base.
 import { execFileSync } from "node:child_process"
 import { pathToFileURL } from "node:url"
 
@@ -54,13 +56,47 @@ export async function runStatusCommand({ argv, env }) {
 function runGit(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 }) {
   try {
     return execFileSync("git", args, { cwd, encoding, maxBuffer, stdio: ["ignore", "pipe", "pipe"] })
-  } catch {
-    throw new Error("factory.js validate-pr: Git data could not be read")
+  } catch (error) {
+    const failure = new Error("factory.js validate-pr: Git data could not be read")
+    failure.status = typeof error?.status === "number" ? error.status : null
+    throw failure
   }
 }
 
-function changedPaths({ base, head, cwd, git }) {
-  const output = git(["diff", "--name-status", "-z", "--no-renames", `${base}...${head}`], { cwd })
+// `git merge-tree --write-tree` arrived in Git 2.38. Anything older, or a
+// version that cannot be read, fails closed.
+const MERGE_TREE_MINIMUM = [2, 38]
+
+function requireMergeTree({ cwd, git }) {
+  const match = /^git version (\d+)\.(\d+)/u.exec(git(["version"], { cwd }))
+  const major = match === null ? 0 : Number(match[1])
+  const minor = match === null ? 0 : Number(match[2])
+  if (major < MERGE_TREE_MINIMUM[0] || (major === MERGE_TREE_MINIMUM[0] && minor < MERGE_TREE_MINIMUM[1])) {
+    throw new Error("factory.js validate-pr: git_too_old (merge-tree needs Git 2.38 or later)")
+  }
+}
+
+// The tree the merge of `head` into `base` produces, as `git merge-tree`
+// builds it from every merge base (the same `ort` merge GitHub performs), or
+// `null` when the merge has conflicts.
+function mergeResultTree({ base, head, cwd, git }) {
+  let output
+  try {
+    output = git(["merge-tree", "--write-tree", "--no-messages", base, head], { cwd })
+  } catch (error) {
+    if (error.status === 1) return null
+    throw new Error("factory.js validate-pr: merge_tree_unavailable")
+  }
+  const tree = output.split("\n")[0]
+  if (!GIT_REF.test(tree)) throw new Error("factory.js validate-pr: Git data could not be read")
+  return tree
+}
+
+// What merging `head` changes on `base`: the base commit against the merge
+// result's tree. A `base...head` diff reads only one merge base and can
+// differ from what the merge lands when there are several (review C1).
+function changedPaths({ base, tree, cwd, git }) {
+  const output = git(["diff", "--name-status", "-z", "--no-renames", base, tree], { cwd })
   const fields = output.split("\0").filter((field) => field !== "")
   const changes = []
   for (let index = 0; index < fields.length; index += 2) {
@@ -91,7 +127,16 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
     throw new Error("factory.js validate-pr: unknown option")
   }
 
-  const listed = changedPaths({ base, head, cwd, git })
+  requireMergeTree({ cwd, git })
+  // A pull request head never needs merge commits of its own; refusing them
+  // also rules out a crafted second merge base (review C1, defense in depth).
+  if (git(["rev-list", "--merges", `${base}..${head}`], { cwd }).trim() !== "") {
+    return { ok: false, errors: [{ code: "unexpected_merge", path: "head" }], maintenance: false }
+  }
+  const tree = mergeResultTree({ base, head, cwd, git })
+  if (tree === null) return { ok: false, errors: [{ code: "merge_conflict", path: "head" }], maintenance: false }
+
+  const listed = changedPaths({ base, tree, cwd, git })
   const trustedMaintainer = MAINTAINER_ASSOCIATIONS.has(association)
   if (listed.length > 500) {
     const result = validatePr({ changes: Array.from({ length: 501 }) })
@@ -101,14 +146,6 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
   // `facts/`, and a maintainer's removal of a facts file are maintenance: the
   // store's merge workflow never merges them.
   let maintenance = false
-  let mergeBase = null
-  const previousRevision = () => {
-    // The change list is taken from the merge base (`base...head`), so the
-    // previous bytes are read there too, not at the base tip.
-    mergeBase ??= git(["merge-base", base, head], { cwd }).trim()
-    if (!GIT_REF.test(mergeBase)) throw new Error("factory.js validate-pr: Git data could not be read")
-    return mergeBase
-  }
   const errors = []
   listed.forEach((change, index) => {
     if (!isFactsPath(change.path)) {
@@ -126,8 +163,9 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
     }
     const current = {
       ...change,
-      bytes: revisionBytes({ revision: head, filePath: change.path, cwd, git }),
-      ...(change.status === "modified" ? { previousBytes: revisionBytes({ revision: previousRevision(), filePath: change.path, cwd, git }) } : {}),
+      // The bytes the merge lands, and the bytes they replace on the base.
+      bytes: revisionBytes({ revision: tree, filePath: change.path, cwd, git }),
+      ...(change.status === "modified" ? { previousBytes: revisionBytes({ revision: base, filePath: change.path, cwd, git }) } : {}),
     }
     errors.push(...validatePr({ changes: [current] }).errors)
   })

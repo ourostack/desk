@@ -8,7 +8,7 @@ The store design, the published schema and the "no who, no when, just how" stanc
 
 - A repository whose `main` holds `README.md`, `.github/workflows/` and published facts under `facts/`.
 - A ruleset on `main`: every change arrives by pull request, the `factory-validate` check must pass, and nobody can force-push or delete the branch. Admins can bypass only while merging a pull request.
-- `factory-validate`, which checks every pull request with Desk's validator and never runs anything from the pull request.
+- `factory-validate`, which checks every pull request with Desk's validator. Our workflow file never runs the candidate's files, but GitHub runs a pull request's own workflow files, so the check alone is not evidence (see "Merging by hand" below).
 - `factory-merge`, which validates each intake pull request again and merges it or closes it with `factory-rejected: <code>` comments. It never merges maintenance pull requests.
 - `factory-build`, which rebuilds the reports and publishes them on the `reports` branch as one commit with no history.
 - The labels `maintenance`, `kaizen`, `andon`, `confirmed` and `not-confirmed`.
@@ -20,7 +20,7 @@ The store design, the published schema and the "no who, no when, just how" stanc
 - **Maintainers are people with write access.** The workflows treat a pull request's author as a maintainer when their permission on the store repository is `admin` or `write` (the `maintain` role reads as `write`). They read it from `GET /repos/{owner}/{repo}/collaborators/{author}/permission` with the workflow's own read-only token. They do not use GitHub's author association, which reports an organization member whose membership is private as `CONTRIBUTOR`. Give each maintainer write access or more, directly or through a team; nothing else is needed.
 - **Private stores need a paid plan.** Rulesets on a private repository need GitHub Team or higher. A private store also needs the fork pull request settings in step 4.
 - **Tools.** The GitHub CLI (`gh`), `git` and `jq`, and a token with the `repo` and `workflow` scopes. Pass the token per command as `GH_TOKEN=$(gh auth token --user <login>)`; do not switch the CLI's active account. The commands below assume `export GH_TOKEN=$(gh auth token --user <login>)` in the same shell.
-- **Desk.** The workflows run `plugins/desk/mcp/scripts/factory.js` from `ourostack/desk` `main`, which must provide the `validate-pr` and `build` commands.
+- **Desk.** The workflows run `plugins/desk/mcp/scripts/factory.js` from `ourostack/desk` `main`, which must provide the `validate-pr` and `build` commands, and the runner's Git must be 2.38 or later, which GitHub-hosted runners provide. On an older Git, `validate-pr` fails closed with `git_too_old` and nothing merges.
 
 Set the store name once:
 
@@ -44,7 +44,7 @@ Use `--private` instead of `--public` for a private store. The README must say:
 - the published schema's guarantees, with a link to section 4 of the RFC;
 - how to read the `reports` branch (`index.md`, `jobs/<job>.md`, `jobs/<job>.json`);
 - that contribution is opt-in through Desk;
-- that an intake pull request's author, a GitHub account, is visible to anyone who can read the store.
+- that an intake pull request's author, a GitHub account, is visible to anyone who can read the store, as are the times of the pull request and its commits, and that a rejected pull request stays readable after it is closed.
 
 Copy the README of `ourostack/factory` and change the store name and links. Then:
 
@@ -178,7 +178,7 @@ What each part does:
 - `deletion` and `non_fast_forward`: nobody can delete `main` or force-push it.
 - `pull_request` with no required approvals and merge method `merge`: every change arrives through a pull request; no human review is required, because the validator decides.
 - `require_extra_approval_for_unattributed_changes: false`: GitHub turns this on when a ruleset leaves it out. It demands a human approval for commits whose author email maps to no GitHub account, which would stall automatic intake merges.
-- `required_status_checks` with `factory-validate` from integration `15368` (GitHub Actions): the validator's check must pass, and only GitHub Actions can supply it. It is not strict, so an intake does not need to be rebased onto the latest `main`.
+- `required_status_checks` with `factory-validate` from integration `15368` (GitHub Actions): the validator's check must pass, and only GitHub Actions can supply it. A pull request's own workflow files also run on GitHub Actions, so a pull request can supply a green `factory-validate` of its own; the ruleset keeps unvalidated changes off `main` only together with the rule in "Merging by hand". It is not strict, so an intake does not need to be rebased onto the latest `main`.
 - The bypass: the repository Admin role (actor `5`) in `pull_request` mode. Admins cannot push to `main` directly; they can only merge a pull request past a failing requirement, and GitHub records the bypass on the pull request. Use it only for a maintenance pull request that cannot pass, such as a fix to a broken validator.
 
 The check can be required before it has ever run. Prove the protection by trying a direct push; it must be refused with "push declined due to repository rule violations":
@@ -561,12 +561,32 @@ jobs:
 
 Why the workflows are shaped this way:
 
-- **The candidate is data.** `factory-validate` runs on `pull_request`, so GitHub uses the pull request's copy of the workflow file. A pull request that rewrites it can make its own check pass, which is why `factory-merge` runs from `main`, validates again with Desk `main`, and rejects anything that fails there.
+- **The candidate's workflow runs; its files are data.** `factory-validate` runs on `pull_request`, so GitHub uses the pull request's copy of the workflow files, with a read-only token and no secrets. A pull request that rewrites `validate.yml`, or adds any workflow with a job named `factory-validate`, can post a green check, and one that names a workflow `factory-validate` or `factory-merge` can start `factory-merge` or `factory-build`. That is why `factory-merge` runs from `main`, reads only `head_sha` from the event, validates again with Desk `main` in a step that holds no token, and rejects anything that fails there, and why `factory-build` reads no event data at all. Changes under `.github/` are outside `facts/`, so a non-maintainer's are always rejected.
+- **The merge, not a diff.** `validate-pr` judges the tree that merging the head into `main` produces (`git merge-tree`, Git 2.38 or later), refuses heads whose merge conflicts or that carry merge commits of their own, and fails closed on an older Git. A `main...head` diff reads only one merge base and can miss what a crafted merge changes.
 - **Maintainers by permission.** Both workflows read the author's repository permission and pass `COLLABORATOR` to `validate-pr` for `admin` or `write`, and `NONE` otherwise. A login that is not a plain GitHub user name, or any API error, gives `NONE`, so the check fails closed. No token is widened: the permission API works with the default read-only workflow token.
 - **Fork pull requests.** `workflow_run.pull_requests` is empty for a pull request from a fork, so `factory-merge` finds pull requests by the validated head commit.
 - **No stale merges.** The merge call passes the validated head as `sha`, so GitHub refuses it if the head moved after validation.
 - **Builds after automatic merges.** A merge made with the workflow token starts no `push` workflow, so `factory-build` also runs when `factory-merge` completes. `factory-validate` → `factory-merge` → `factory-build` is three `workflow_run` levels, GitHub's limit.
 - **Deterministic reports.** The build output is byte-stable and the reports commit has fixed metadata, so the same facts produce the same commit and an unchanged build pushes nothing. The `reports` branch is outside the ruleset, and each build replaces it.
+
+### Merging by hand
+
+Maintainers merge by hand only maintenance pull requests. Follow these rules:
+
+- **Your own maintenance pull requests.** Merge after `factory-validate` passes; you know what the pull request contains.
+- **Anyone else's pull request.** Let `factory-merge` merge it, or run `validate-pr` yourself at its exact head before merging. A green `factory-validate` on someone else's pull request is not evidence on its own, because the pull request's own workflow files may have produced it. This matters most when `factory-merge` took no action (`validator_unavailable`) or the pull request carries `maintenance`.
+
+To validate a pull request yourself, from a clone of the store and a clone of `ourostack/desk` `main`:
+
+```sh
+git fetch origin main "pull/<n>/head"
+node <desk clone>/plugins/desk/mcp/scripts/factory.js validate-pr \
+  --base "$(git rev-parse origin/main)" --head <the pull request's head sha> --author-association NONE
+```
+
+Use `COLLABORATOR` instead of `NONE` only when the author has write access or more. Merge with `gh pr merge <n> --merge --match-head-commit <the same sha>`.
+
+**Rejection comments.** `factory-merge` posts `factory-rejected: <code>` as `github-actions[bot]`. Anyone can post a comment that looks the same on a public pull request, so anything that reads these comments must accept them only from `github-actions[bot]`.
 
 ## 7. Point desks at the store
 
