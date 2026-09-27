@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert"
 import { test } from "node:test"
 import { execFileSync } from "node:child_process"
 import { createRequire } from "node:module"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -146,9 +146,8 @@ function writeFragment(root, name, text) {
 test("a fragment-released plugin needs a new, non-empty changelog fragment instead of a version bump", () => {
   withRepo((root) => {
     writeFileSync(path.join(root, "plugins", "alpha", "skill.md"), "two\n")
-    // Neither the folder's README nor a file that is not Markdown is a fragment.
+    // Rewording the folder's README is not a fragment.
     writeFragment(root, "README.md", "Reworded instructions.\n")
-    writeFragment(root, "notes.txt", "not a fragment\n")
     commit(root)
     assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [
       "alpha: files under plugins/alpha/ changed since base; add a changelog fragment, plugins/alpha/changelog.d/<short-slug>.md, that says what changed",
@@ -157,12 +156,75 @@ test("a fragment-released plugin needs a new, non-empty changelog fragment inste
     writeFragment(root, "skill-wording.md", " \n\n")
     commit(root)
     assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [
-      "alpha: plugins/alpha/changelog.d/skill-wording.md is empty; say what changed",
+      "alpha: plugins/alpha/changelog.d/skill-wording.md is empty; a changelog fragment says what changed",
     ])
 
-    writeFragment(root, "skill-wording.md", "The skill now says two.\n")
+    // A ### heading is part of the entry; only # and ## would compete with the version heading.
+    writeFragment(root, "skill-wording.md", "The skill now says two.\n\n### Details\n\nMore.\n")
     commit(root)
     assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [])
+  }, { fragments: true })
+})
+
+test("the pull request check refuses every added path the release would reject or leave behind", () => {
+  for (const [name, addPath, expected] of [
+    ["a ## heading", (root) => writeFragment(root, "doc.md", "Intro.\n\n## Heading\n"), "plugins/alpha/changelog.d/doc.md has a # or ## heading"],
+    ["a # title", (root) => writeFragment(root, "doc.md", "# Title\n\nBody.\n"), "plugins/alpha/changelog.d/doc.md has a # or ## heading"],
+    ["a fragment in a subfolder", (root) => {
+      mkdirSync(path.join(root, "plugins", "alpha", "changelog.d", "sub"))
+      writeFragment(root, "sub/doc.md", "Nested.\n")
+    }, "plugins/alpha/changelog.d/sub/doc.md is not directly in plugins/alpha/changelog.d/"],
+    ["a folder named like a fragment", (root) => {
+      mkdirSync(path.join(root, "plugins", "alpha", "changelog.d", "dir.md"))
+      writeFragment(root, "dir.md/inner.md", "Inside a folder.\n")
+    }, "plugins/alpha/changelog.d/dir.md/inner.md is not directly in plugins/alpha/changelog.d/"],
+    ["a file that is not Markdown", (root) => writeFragment(root, "notes.txt", "Notes.\n"), "plugins/alpha/changelog.d/notes.txt is not a changelog fragment"],
+    ["a symbolic link", (root) => {
+      writeFileSync(path.join(root, "plugins", "alpha", "real.md"), "Linked.\n")
+      symlinkSync("../real.md", path.join(root, "plugins", "alpha", "changelog.d", "link.md"))
+    }, "plugins/alpha/changelog.d/link.md is not a regular file"],
+  ]) {
+    withRepo((root) => {
+      writeFileSync(path.join(root, "plugins", "alpha", "skill.md"), "two\n")
+      addPath(root)
+      commit(root)
+      const problems = checker.checkReleaseIntegrity({ repoRoot: root, base: "base" })
+      assert.equal(problems.length, 1, `${name}: ${problems.join("; ")}`)
+      assert.ok(problems[0].startsWith(`alpha: ${expected}`), `${name}: ${problems[0]}`)
+      // A valid fragment beside it does not excuse it.
+      writeFragment(root, "good.md", "A good change.\n")
+      commit(root)
+      assert.equal(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }).length, 1, name)
+    }, { fragments: true })
+  }
+})
+
+test("a pull request may not delete or change a fragment another merged change left pending", () => {
+  withRepo((root) => {
+    // Another change merged with its fragment, and the release has not folded it yet.
+    git(root, "switch", "-q", "base")
+    writeFragment(root, "other.md", "The other change.\n")
+    commit(root)
+    git(root, "switch", "-q", "-c", "feature")
+    writeFileSync(path.join(root, "plugins", "alpha", "skill.md"), "two\n")
+    writeFragment(root, "mine.md", "My change.\n")
+    // Editing the folder's README stays allowed.
+    writeFragment(root, "README.md", "Clearer instructions.\n")
+    commit(root)
+    assert.deepEqual(checker.checkReleaseIntegrity({ repoRoot: root, base: "base" }), [])
+
+    const pending = "alpha: plugins/alpha/changelog.d/other.md is a pending fragment from another merged change"
+    writeFragment(root, "other.md", "Rewritten by someone else.\n")
+    commit(root)
+    const [changedProblem, ...restChanged] = checker.checkReleaseIntegrity({ repoRoot: root, base: "base" })
+    assert.ok(changedProblem.startsWith(pending), changedProblem)
+    assert.deepEqual(restChanged, [])
+
+    git(root, "rm", "-q", "plugins/alpha/changelog.d/other.md")
+    commit(root)
+    const [deletedProblem, ...restDeleted] = checker.checkReleaseIntegrity({ repoRoot: root, base: "base" })
+    assert.ok(deletedProblem.startsWith(pending), deletedProblem)
+    assert.deepEqual(restDeleted, [])
   }, { fragments: true })
 })
 

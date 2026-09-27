@@ -96,10 +96,11 @@ test("pending fragments become the next alpha on every surface and one changelog
 test("a bad fragment, date or changelog stops the release before any file changes, and a stale surface list stops it loudly", (t) => {
   for (const [breakFixture, date, pattern] of [
     [(root) => fragment(root, "empty.md", " \n\n"), "2026-10-01", /changelog\.d\/empty\.md is empty/u],
-    [(root) => fragment(root, "heading.md", "Intro.\n\n## 9.9.9 — someday\n"), "2026-10-01", /heading\.md has a top-level heading/u],
-    [(root) => fragment(root, "title.md", "# Title\n"), "2026-10-01", /title\.md has a top-level heading/u],
+    [(root) => fragment(root, "heading.md", "Intro.\n\n## 9.9.9 — someday\n"), "2026-10-01", /heading\.md has a # or ## heading/u],
+    [(root) => fragment(root, "title.md", "# Title\n"), "2026-10-01", /title\.md has a # or ## heading/u],
     [(root) => writeFileSync(path.join(root, release.CHANGELOG), "# Changes\n"), "2026-10-01", /CHANGELOG\.md must begin with its title/u],
     [() => {}, "October 1st", /the release date must be YYYY-MM-DD: October 1st/u],
+    [(root) => mkdirSync(path.join(root, fragmentDir, "dir.md")), "2026-10-01", /changelog\.d\/dir\.md is not a regular file/u],
   ]) {
     const root = fixture(t)
     fragment(root, "good.md", "A good change.\n")
@@ -108,10 +109,27 @@ test("a bad fragment, date or changelog stops the release before any file change
     assert.throws(() => release.releaseDesk({ root, date }), pattern)
     assert.deepEqual(snapshot(root), before)
   }
+  // A stale surface list is found before any surface is rewritten, so no file is left half released.
   const root = fixture(t)
   fragment(root, "good.md", "A good change.\n")
   writeFileSync(path.join(root, "plugins/desk/agency.json"), "{}\n")
+  const before = snapshot(root)
   assert.throws(() => release.releaseDesk({ root, date: "2026-10-01" }), /plugins\/desk\/agency\.json does not name version .*; the release surface list is stale/u)
+  assert.deepEqual(snapshot(root), before)
+})
+
+test("one fragment rule serves the release and the pull request check", (t) => {
+  const root = fixture(t)
+  const problem = (file, dir) => release.fragmentProblem(root, file, dir)
+  fragment(root, "good.md", "A change.\n\n### Details\n")
+  assert.equal(problem(`${fragmentDir}/good.md`), null)
+  assert.match(problem(`${fragmentDir}/README.md`), /README\.md is not a changelog fragment/u)
+  assert.match(problem(`${fragmentDir}/missing.md`), /missing\.md is not a regular file/u)
+  assert.match(problem(`${fragmentDir}/sub/good.md`), /is not directly in plugins\/desk\/changelog\.d\//u)
+  assert.match(problem("plugins/other/changelog.d/good.md"), /is not directly in plugins\/desk\/changelog\.d\//u)
+  mkdirSync(path.join(root, "plugins/other/changelog.d"), { recursive: true })
+  writeFileSync(path.join(root, "plugins/other/changelog.d/good.md"), "Another plugin's change.\n")
+  assert.equal(problem("plugins/other/changelog.d/good.md", "plugins/other/changelog.d"), null)
 })
 
 test("the CLI takes --date and --root, prints the result and reports errors on stderr", (t) => {
@@ -137,7 +155,7 @@ test("the CLI takes --date and --root, prints the result and reports errors on s
   assert.ok(existsSync(path.join(repoRoot, fragmentDir, "README.md")))
 })
 
-test("the release workflow runs on main one at a time, checks the release and pushes it", () => {
+test("the release workflow runs on main one at a time and daily, checks the release, pushes it and reports a failure", () => {
   const workflow = readRepo(".github/workflows/desk-release.yml")
   for (const required of [
     /\n {2}push:\n {4}branches:\n {6}- main\n {4}paths:\n {6}- "plugins\/desk\/changelog\.d\/\*\*"\n/u,
@@ -148,7 +166,12 @@ test("the release workflow runs on main one at a time, checks the release and pu
     /node scripts\/release-desk\.cjs --date/u,
     /node scripts\/check-release-integrity\.cjs/u,
     /__tests__\/release\/release_coupling\.test\.js/u,
-    /git push --quiet origin HEAD:main/u,
+    /git push --quiet origin HEAD:main 2>&1/u,
+    /\n {2}schedule:\n {4}- cron: "[^"]+"\n/u,
+    /\n {6}issues: write\n/u,
+    /\n {6}- name: Report the failed release\n {8}if: failure\(\)\n/u,
+    /gh issue create --repo "\$GITHUB_REPOSITORY" --title "\$ISSUE_TITLE"/u,
+    /\n {6}- name: Close the release issue after a successful run\n {8}if: success\(\)\n/u,
   ]) {
     assert.match(workflow, required)
   }

@@ -46,14 +46,16 @@ function versionToken(version) {
   return new RegExp(`(?<![\\w.^~<>=-])${escapeRegExp(version)}(?![\\w.+-])`, "gu");
 }
 
+// Every surface is read and rewritten in memory first, so a stale surface list changes no file.
 function replaceVersion(root, files, from, to) {
-  for (const file of files) {
+  const rewritten = files.map((file) => {
     const target = path.join(root, file);
     const text = fs.readFileSync(target, "utf8");
     const next = text.replace(versionToken(from), to);
     if (next === text) throw new Error(`${file} does not name version ${from}; the release surface list is stale`);
-    fs.writeFileSync(target, next);
-  }
+    return [target, next];
+  });
+  for (const [target, next] of rewritten) fs.writeFileSync(target, next);
 }
 
 function nextAlpha(version) {
@@ -76,16 +78,33 @@ function pendingFragments(root) {
     .map((name) => `${FRAGMENT_DIR}/${name}`);
 }
 
+/**
+ * Why a path cannot be released as a changelog fragment, or null when it can. The release and the pull request check
+ * (scripts/check-release-integrity.cjs) both use this, so a fragment that passes review is one the release accepts.
+ * A fragment is a regular Markdown file directly in its changelog.d/ folder, other than README.md, whose text is not
+ * empty and has no `#` or `##` heading, because the release writes the version heading.
+ */
+function fragmentProblem(root, file, fragmentDir = FRAGMENT_DIR) {
+  const name = path.posix.basename(file);
+  if (path.posix.dirname(file) !== fragmentDir) return `${file} is not directly in ${fragmentDir}/; the release reads only fragments at the top of that folder`;
+  if (!name.endsWith(".md") || name === FRAGMENT_README) return `${file} is not a changelog fragment; a fragment is a Markdown file named after the change`;
+  const stat = fs.lstatSync(path.join(root, file), { throwIfNoEntry: false });
+  if (!stat || !stat.isFile()) return `${file} is not a regular file; a changelog fragment is one Markdown file`;
+  const body = fs.readFileSync(path.join(root, file), "utf8").trim();
+  if (body === "") return `${file} is empty; a changelog fragment says what changed`;
+  if (/^#{1,2} /mu.test(body)) return `${file} has a # or ## heading; the release writes the version heading, so use ### or plain paragraphs`;
+  return null;
+}
+
 function releaseDesk({ root, date }) {
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(date)) throw new Error(`the release date must be YYYY-MM-DD: ${date}`);
   const fragments = pendingFragments(root);
   if (fragments.length === 0) return { released: false, fragments };
   // Everything is read and checked before any file is written, so a bad fragment leaves the tree untouched.
   const bodies = fragments.map((file) => {
-    const body = fs.readFileSync(path.join(root, file), "utf8").trim();
-    if (body === "") throw new Error(`${file} is empty; a changelog fragment says what changed`);
-    if (/^#{1,2} /mu.test(body)) throw new Error(`${file} has a top-level heading; the release writes the version heading`);
-    return body;
+    const problem = fragmentProblem(root, file);
+    if (problem) throw new Error(problem);
+    return fs.readFileSync(path.join(root, file), "utf8").trim();
   });
   const changelogPath = path.join(root, CHANGELOG);
   const changelog = fs.readFileSync(changelogPath, "utf8");
@@ -135,6 +154,7 @@ module.exports = {
   DESK_VERSION_FILES,
   FRAGMENT_DIR,
   FRAGMENT_README,
+  fragmentProblem,
   main,
   nextAlpha,
   parseArgs,

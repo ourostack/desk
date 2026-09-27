@@ -17,6 +17,7 @@
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const { fragmentProblem } = require("./release-desk.cjs");
 
 const VERSIONED_MANIFESTS = ["plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json", "agency.json"];
 const MARKETPLACE = ".claude-plugin/marketplace.json";
@@ -109,8 +110,11 @@ function checkReleaseIntegrity({ repoRoot = process.cwd(), base = null, git = de
 }
 
 // A fragment-released plugin keeps the version its branch started from, and the pull request adds at least one
-// non-empty fragment. The version is read where the branch left the base, so a branch that is merely behind a
-// release on main is not blamed for it.
+// fragment the release will accept (release-desk.cjs fragmentProblem, the one definition both sides use). Every other
+// path the pull request adds under changelog.d/ must be a valid fragment too, because the release would otherwise fail
+// on it or leave it behind. Pending fragments belong to other merged changes: only the release removes them. The
+// version and the diffs are read from where the branch left the base, so a branch that is merely behind a release on
+// main is not blamed for it.
 function checkFragmentRelease({ git, repoRoot, base, dir, name, version }) {
   const problems = [];
   const forkPoint = git(["merge-base", base, "HEAD"]).trim();
@@ -118,14 +122,20 @@ function checkFragmentRelease({ git, repoRoot, base, dir, name, version }) {
   if (version !== forkVersion) {
     problems.push(`${name}: its version changed from ${forkVersion} to ${version}, but ${dir}/ is released from changelog fragments; leave every version surface alone, and the release workflow assigns the next version after the merge`);
   }
-  const fragments = git(["diff", "--name-only", "--diff-filter=A", `${base}...HEAD`, "--", `${dir}/${FRAGMENT_DIR}/`])
+  const fragmentDir = `${dir}/${FRAGMENT_DIR}`;
+  const readme = `${fragmentDir}/${FRAGMENT_README}`;
+  const changed = (filter) => git(["diff", "--name-only", "--no-renames", `--diff-filter=${filter}`, `${base}...HEAD`, "--", `${fragmentDir}/`])
     .split("\n")
-    .filter((file) => file.endsWith(".md") && path.posix.basename(file) !== FRAGMENT_README);
-  if (fragments.length === 0) {
-    problems.push(`${name}: files under ${dir}/ changed since ${base}; add a changelog fragment, ${dir}/${FRAGMENT_DIR}/<short-slug>.md, that says what changed`);
+    .filter((file) => file !== "" && file !== readme);
+  const added = changed("A");
+  const invalid = added.map((file) => fragmentProblem(repoRoot, file, fragmentDir)).filter(Boolean);
+  problems.push(...invalid.map((problem) => `${name}: ${problem}`));
+  // An invalid fragment already says what to fix; the generic request is only for a pull request that added none.
+  if (added.length === 0) {
+    problems.push(`${name}: files under ${dir}/ changed since ${base}; add a changelog fragment, ${fragmentDir}/<short-slug>.md, that says what changed`);
   }
-  for (const file of fragments) {
-    if (fs.readFileSync(path.join(repoRoot, file), "utf8").trim() === "") problems.push(`${name}: ${file} is empty; say what changed`);
+  for (const file of changed("DM")) {
+    problems.push(`${name}: ${file} is a pending fragment from another merged change; leave it alone, because only the release removes fragments when it folds them into the changelog`);
   }
   return problems;
 }

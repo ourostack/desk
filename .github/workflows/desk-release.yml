@@ -19,6 +19,10 @@ on:
       - "plugins/desk/changelog.d/**"
   # The Superpowers refresh merges with the workflow token, which starts no push-triggered run, so it dispatches this.
   workflow_dispatch:
+  # A failed release leaves its fragments pending on main. The daily run releases whatever is still pending, so a fix
+  # merged without a fragment, or a transient failure, does not strand them until the next fragment merge.
+  schedule:
+    - cron: "23 6 * * *"
 
 permissions: {}
 
@@ -33,7 +37,10 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      # Only to open, comment on and close the "Desk release needs attention" issue.
+      issues: write
     env:
+      ISSUE_TITLE: Desk release needs attention
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Check out main
@@ -74,11 +81,37 @@ jobs:
             version="$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").to')"
             git add --all -- .claude-plugin plugins/desk
             git commit --quiet --message "Release Desk $version" --message "$summary. Released by $RUN_URL."
-            if git push --quiet origin HEAD:main; then
+            if push_error="$(git push --quiet origin HEAD:main 2>&1)"; then
               echo "Released $summary." | tee -a "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-            echo "main moved during release attempt $attempt; rebuilding the release on the new main."
+            echo "Push attempt $attempt was refused: $push_error"
+            echo "Rebuilding the release on the current main."
           done
-          echo "::error::main kept moving; dispatch this workflow again to release the pending fragments."
+          echo "::error::The release was not pushed after 5 attempts. The last refusal was: $push_error. If main kept moving, the next run releases the pending fragments; if main now refuses this workflow's pushes (for example a new branch rule), allow them."
           exit 1
+
+      # One open issue per problem: a new failure comments on it, and the next successful run closes it.
+      - name: Report the failed release
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          body="The Desk release failed in $RUN_URL. The changelog fragments on main stay unreleased, and the Desk changes they describe ship without a new version, until a release succeeds. Read the failed step, fix the cause on main (a fragment the release rejects, a failing release check or a refused push), then dispatch desk-release.yml or wait for the daily run."
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number,title --jq "map(select(.title == env.ISSUE_TITLE)) | .[0].number // empty")"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "$body"
+          fi
+
+      - name: Close the release issue after a successful run
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for number in $(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number,title --jq "map(select(.title == env.ISSUE_TITLE)) | .[].number"); do
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "Resolved: $RUN_URL finished without a pending fragment left unreleased."
+          done
