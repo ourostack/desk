@@ -40,6 +40,12 @@ const EXPECTED_TOOLS = [
   "desk_doctor",
 ]
 
+// A folder with the desk layout: home-folder guesses bind only these.
+function makeDesk(dir) {
+  mkdirSync(path.join(dir, "_meta"), { recursive: true })
+  mkdirSync(path.join(dir, "_archive"), { recursive: true })
+}
+
 test("server scaffolds all 18 expected tool names", () => {
   for (const name of EXPECTED_TOOLS) {
     assert.ok(
@@ -116,7 +122,7 @@ test("path resolver — falls through $HOME canonical locations when env unset",
     const fakeHome = path.join(tmp, "home")
     mkdirSync(fakeHome)
     // Create ~/desk only — verify ~/desk is found.
-    mkdirSync(path.join(fakeHome, "desk"))
+    makeDesk(path.join(fakeHome, "desk"))
     const prevDesk = process.env.DESK
     const prevHome = process.env.HOME
     delete process.env.DESK
@@ -139,9 +145,9 @@ test("path resolver — prefers desk over worker-workspace and never binds a wor
     const fakeHome = path.join(tmp, "home")
     mkdirSync(fakeHome)
     // Create all three — plain Desk skips ~/ms-desk, which belongs to the ms-desk overlay.
-    mkdirSync(path.join(fakeHome, "ms-desk"))
-    mkdirSync(path.join(fakeHome, "desk"))
-    mkdirSync(path.join(fakeHome, "worker-workspace"))
+    makeDesk(path.join(fakeHome, "ms-desk"))
+    makeDesk(path.join(fakeHome, "desk"))
+    makeDesk(path.join(fakeHome, "worker-workspace"))
     const prevDesk = process.env.DESK
     const prevHome = process.env.HOME
     delete process.env.DESK
@@ -163,7 +169,7 @@ test("path resolver — falls back to worker-workspace as last resort", async ()
   try {
     const fakeHome = path.join(tmp, "home")
     mkdirSync(fakeHome)
-    mkdirSync(path.join(fakeHome, "worker-workspace"))
+    makeDesk(path.join(fakeHome, "worker-workspace"))
     const prevDesk = process.env.DESK
     const prevHome = process.env.HOME
     delete process.env.DESK
@@ -187,14 +193,13 @@ test("path resolver — fatal error lists every path tried", async () => {
     mkdirSync(fakeHome)
     const prevDesk = process.env.DESK
     const prevHome = process.env.HOME
-    process.env.DESK = path.join(tmp, "missing-env-desk")
+    delete process.env.DESK
     process.env.HOME = fakeHome
     try {
       assert.throws(
         () => resolveDeskRoot(null),
         (err) => {
           assert.match(err.message, /no desk workspace found/)
-          assert.match(err.message, /\$DESK=/)
           assert.doesNotMatch(err.message, /ms-desk/)
           assert.match(err.message, /worker-workspace/)
           return true

@@ -30,6 +30,12 @@ const hostPackPaths = runtimeDeps.deriveRuntimeDependencyPackPaths({
 })
 const hostRuntimePackExists = existsSync(hostPackPaths.archivePath)
 
+// A folder with the desk layout: home-folder guesses bind only these.
+function makeDesk(dir) {
+  mkdirSync(path.join(dir, "_meta"), { recursive: true })
+  mkdirSync(path.join(dir, "_archive"), { recursive: true })
+}
+
 function makeFixture() {
   const root = mkdtempSync(path.join(tmpdir(), "desk-activation-config-"))
   const dirs = {
@@ -46,8 +52,8 @@ function makeFixture() {
     mkdirSync(dir, { recursive: true })
   }
   // A work overlay's desk and a personal desk, both in the home folder.
-  mkdirSync(path.join(dirs.home, "ms-desk"), { recursive: true })
-  mkdirSync(path.join(dirs.home, "desk"), { recursive: true })
+  makeDesk(path.join(dirs.home, "ms-desk"))
+  makeDesk(path.join(dirs.home, "desk"))
   dirs.configPath = path.join(root, "desk.activation-config.json")
   return dirs
 }
@@ -447,17 +453,13 @@ test("root resolver final diagnostic lists every fallback source attempted in or
   try {
     const emptyHome = path.join(root, "empty-home")
     mkdirSync(emptyHome, { recursive: true })
-    const missingEnvDesk = path.join(root, "missing-env-desk")
     assert.throws(
-      () => resolveDeskRootWithSource({
-        env: { DESK: missingEnvDesk },
-        homeDir: emptyHome,
-      }),
+      () => resolveDeskRootWithSource({ env: {}, homeDir: emptyHome }),
       (err) => {
+        assert.equal(err.code, pathsModule.DESK_ROOT_NOT_FOUND)
         assert.match(err.message, /no desk workspace found/u)
         assert.doesNotMatch(err.message, /ms-desk/u)
         const expected = [
-          `$DESK=${missingEnvDesk}`,
           path.join(emptyHome, "desk"),
           path.join(emptyHome, "worker-workspace"),
         ]
@@ -473,6 +475,75 @@ test("root resolver final diagnostic lists every fallback source attempted in or
     )
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a set $DESK is explicit: a missing, non-folder or unreadable $DESK is root_unavailable and never falls back to ~/desk", () => {
+  const resolveDeskRootWithSource = requireFunction(pathsModule, "resolveDeskRootWithSource")
+  const fixture = makeFixture()
+  try {
+    const missing = path.join(fixture.root, "missing-env-desk")
+    const file = path.join(fixture.root, "env-file")
+    writeFileSync(file, "not a desk\n", "utf8")
+    const cases = [[missing, "does not exist"], [file, "is not a folder"]]
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      const locked = path.join(fixture.root, "locked-env-desk")
+      mkdirSync(locked)
+      chmodSync(locked, 0o000)
+      cases.push([locked, "cannot be read"])
+    }
+    try {
+      for (const [desk, problem] of cases) {
+        assert.throws(
+          () => resolveDeskRootWithSource({ env: { DESK: desk }, homeDir: fixture.home }),
+          (err) => {
+            assert.equal(err.code, pathsModule.DESK_ROOT_UNAVAILABLE)
+            assert.equal(err.source, "env:DESK")
+            assert.equal(err.path, desk)
+            assert.equal(err.problem, problem)
+            assert.match(err.message, /does not fall back to another desk/u)
+            assert.deepEqual(err.tried.map((entry) => entry.source), ["env:DESK"], "no home folder is consulted")
+            return true
+          },
+        )
+      }
+    } finally {
+      if (cases.length === 3) chmodSync(cases[2][0], 0o700)
+    }
+    // An existing $DESK keeps today's acceptance even without the desk layout.
+    assert.equal(resolveDeskRootWithSource({ env: { DESK: fixture.envRoot }, homeDir: fixture.home }).source, "env:DESK")
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("a home-folder guess binds only a folder with the desk layout; an empty ~/desk leaves Desk in setup mode", () => {
+  const resolveDeskRootWithSource = requireFunction(pathsModule, "resolveDeskRootWithSource")
+  const fixture = makeFixture()
+  try {
+    const home = path.join(fixture.root, "fresh-home")
+    // An empty ~/desk, a ~/worker-workspace with only _meta, and a ~/ms-desk that is not a desk, in a session that loads the overlay.
+    mkdirSync(path.join(home, "desk"), { recursive: true })
+    mkdirSync(path.join(home, "worker-workspace", "_meta"), { recursive: true })
+    mkdirSync(path.join(home, "ms-desk"), { recursive: true })
+    const deskPluginRoot = agencySession(fixture, { desk: "desk", "ms-desk": "ms-desk" })
+    assert.throws(
+      () => resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: home }),
+      (err) => {
+        assert.equal(err.code, pathsModule.DESK_ROOT_NOT_FOUND)
+        assert.deepEqual(err.tried.map((entry) => entry.source), ["overlay_home_fallback", "home_fallback", "home_fallback"])
+        return true
+      },
+    )
+    // Once a guess has the layout (a crew-shaped desks/ counts too), it binds.
+    mkdirSync(path.join(home, "worker-workspace", "desks"), { recursive: true })
+    assert.equal(resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: home }).root, path.join(home, "worker-workspace"))
+    makeDesk(path.join(home, "desk"))
+    assert.equal(resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: home }).root, path.join(home, "desk"))
+    makeDesk(path.join(home, "ms-desk"))
+    assert.equal(resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: home }).source, "overlay_home_fallback")
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
   }
 })
 

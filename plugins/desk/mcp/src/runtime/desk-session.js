@@ -843,6 +843,9 @@ function rootUnavailableFix(error) {
   if (error?.source === "activation-config") {
     return `The saved desk binding ${error.activation_config} names ${missing}. Restore or clone the desk at ${missing}, or rebind: run desk:first-run-bootstrap, which finds an existing desk or creates one and rewrites the binding; ${recheck}`
   }
+  if (error?.source === "env:DESK") {
+    return `The DESK environment variable names ${missing}. Restore or clone the desk there, or correct or unset DESK in the environment that launches Desk and reconnect the Desk MCP server; ${recheck}`
+  }
   return `Create or clone the desk at ${missing} (or correct the root the host passes), ${recheck}`
 }
 

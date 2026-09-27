@@ -15,7 +15,7 @@ import {
 const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
 const script = path.join(mcpRoot, "scripts", "resolve-desk-root.js")
 
-// A temporary HOME with a ~/desk fallback, a solo desk, a crew-shaped workspace and a plain repository.
+// A temporary HOME with a ~/desk fallback that has the desk layout, a solo desk, a crew-shaped workspace and a plain repository.
 function withSandbox(body) {
   const scratch = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-startup-line-")))
   try {
@@ -24,7 +24,7 @@ function withSandbox(body) {
     const solo = path.join(scratch, "solo")
     const crew = path.join(scratch, "crew")
     const codeRepo = path.join(scratch, "code-repo")
-    for (const dir of [fallback, path.join(solo, "_meta"), path.join(solo, "_archive"), path.join(crew, "_meta"), path.join(crew, "desks"), codeRepo]) {
+    for (const dir of [path.join(fallback, "_meta"), path.join(fallback, "_archive"), path.join(solo, "_meta"), path.join(solo, "_archive"), path.join(crew, "_meta"), path.join(crew, "desks"), codeRepo]) {
       mkdirSync(dir, { recursive: true })
     }
     const malformed = path.join(scratch, "bad.json")
@@ -170,7 +170,7 @@ test("Desk running from an Agency session that loads the ms-desk overlay still n
   const scratch = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-agency-session-")))
   try {
     const home = path.join(scratch, "home")
-    for (const desk of ["ms-desk", "desk"]) mkdirSync(path.join(home, desk, "_meta"), { recursive: true })
+    for (const desk of ["ms-desk", "desk"]) for (const part of ["_meta", "_archive"]) mkdirSync(path.join(home, desk, part), { recursive: true })
     // Desk's own resolver modules, copied where Agency copies the plugin for one session.
     const load = async (container, overlays) => {
       const util = path.join(scratch, container, "desk", "mcp", "src", "util")

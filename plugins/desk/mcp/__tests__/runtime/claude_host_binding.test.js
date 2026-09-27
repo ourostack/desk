@@ -296,6 +296,52 @@ test("a saved binding to a missing folder degrades to root_unavailable, binds no
   }
 })
 
+test("a $DESK naming a missing folder degrades to root_unavailable with a DESK fix and never binds ~/desk", async () => {
+  const fixture = makeFixture()
+  const { admitInProcess } = await import("./_in_process_desk.js")
+  mkdirSync(path.join(fixture.home, "desk", "_meta"), { recursive: true })
+  mkdirSync(path.join(fixture.home, "desk", "_archive"), { recursive: true })
+  const missing = path.join(fixture.root, "gone-desk")
+  try {
+    const started = await admitInProcess({
+      argv: [],
+      env: { HOME: fixture.home, DESK: missing },
+      homeDir: fixture.home,
+      mcpRoot: "/fixture/mcp",
+      diagnosticServerStarter: () => assert.fail("a set $DESK is not setup mode"),
+      runtimeImporter: async () => assert.fail("no other desk may be bound"),
+    })
+    assert.equal(started.snapshot.state, "degraded:root_unavailable")
+    assert.deepEqual(started.snapshot.diagnostic.root, { path: missing, source: "env:DESK", problem: "does not exist", activation_config: null })
+    assert.match(started.snapshot.fix, /The DESK environment variable names/u)
+    assert.match(started.snapshot.fix, /unset DESK/u)
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("an empty ~/desk is not a desk: with no binding, main serves setup mode instead of binding it", async () => {
+  const fixture = makeFixture()
+  const { startInProcess } = await import("./_in_process_desk.js")
+  mkdirSync(path.join(fixture.home, "desk"), { recursive: true })
+  const desk = await startInProcess({
+    argv: [],
+    env: { HOME: fixture.home },
+    homeDir: fixture.home,
+    mcpRoot: "/fixture/mcp",
+    runtimeImporter: async () => assert.fail("an empty ~/desk must not be bound"),
+  })
+  try {
+    const { payload } = await desk.call("desk_status")
+    assert.equal(payload.state, "degraded:no_desk_root")
+    assert.equal(payload.mode, "setup")
+    assert.deepEqual(payload.paths_tried.map((entry) => entry.path), [path.join(fixture.home, "desk"), path.join(fixture.home, "worker-workspace")])
+  } finally {
+    await desk.close()
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test("resolve-desk-root script reports the same root the server would use", () => {
   const fixture = makeFixture()
   try {

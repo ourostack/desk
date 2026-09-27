@@ -7,16 +7,18 @@
 //   2b. Host project directory, only when it is itself a desk workspace
 //       (Claude Code passes CLAUDE_PROJECT_DIR; opening a desk binds to it)
 //   3. Activation config desk.root (the saved binding)
-//   4. $DESK env var (if set and path exists)
+//   4. $DESK env var
 //   5. A loaded work overlay's home-folder desk: $HOME/ms-desk/, only while the
 //      ms-desk overlay is loaded in the same Agency session as this Desk
-//   6. $HOME/desk/ (if exists)
+//   6. $HOME/desk/
 //   7. $HOME/worker-workspace/ (legacy operators may still have this)
+//   Steps 5-7 are guesses: each binds only a folder with the desk layout
+//   (isDeskWorkspace).
 //   8. Fail — listing every path tried, so the operator can diagnose
 //
 // We don't auto-create the dir here; consumers expect to point at an
-// existing desk workspace. An explicit binding (--root, the host/session root
-// or the activation config's desk.root) never falls back: when its folder is
+// existing desk workspace. An explicit binding (--root, the host/session root,
+// the activation config's desk.root or $DESK) never falls back: when its folder is
 // missing, not a folder or unreadable, resolution fails with
 // DESK_ROOT_UNAVAILABLE naming the configured path, and Desk degrades to
 // root_unavailable until the folder exists. Malformed activation config also
@@ -32,8 +34,8 @@ import { fileURLToPath } from "node:url"
 // Raised only when no source names a desk at all, as opposed to an explicit
 // root that is wrong. Hosts may treat it as "no desk yet" and start setup.
 export const DESK_ROOT_NOT_FOUND = "DESK_ROOT_NOT_FOUND"
-// An explicit binding (--root, the host/session root or the activation config's
-// desk.root) whose folder is missing, not a folder or unreadable.
+// An explicit binding (--root, the host/session root, the activation config's
+// desk.root or $DESK) whose folder is missing, not a folder or unreadable.
 export const DESK_ROOT_UNAVAILABLE = "DESK_ROOT_UNAVAILABLE"
 // An activation config that cannot be read, is not JSON, or has the wrong schema.
 export const ACTIVATION_CONFIG_INVALID = "ACTIVATION_CONFIG_INVALID"
@@ -128,15 +130,24 @@ export function resolveDeskRootWithSource({
     )
   }
 
-  // $DESK env var.
+  // $DESK is explicit too: the operator set it on purpose, so a folder that is
+  // gone never falls through to a home-folder desk.
   if (hasText(env.DESK)) {
     const resolved = resolveRootPath(env.DESK, { cwd, homeDir })
     tried.push({ source: "env:DESK", path: resolved })
-    if (existsSync(resolved)) return { root: resolved, source: "env:DESK", tried }
+    const problem = explicitRootProblem(resolved)
+    if (problem === null) return { root: resolved, source: "env:DESK", tried }
+    throw codedError(
+      `desk-mcp: $DESK names ${resolved}, which ${problem}. Desk does not fall back to another desk.`,
+      DESK_ROOT_UNAVAILABLE,
+      { path: resolved, source: "env:DESK", problem, tried },
+    )
   }
 
   // Home-folder fallbacks: a loaded work overlay's own desk first, then the
-  // personal locations. Plain Desk never consults an overlay's desk.
+  // personal locations. Plain Desk never consults an overlay's desk. These are
+  // guesses, so a candidate binds only when it has the desk layout: an empty
+  // or unrelated folder leaves Desk in setup mode instead.
   const fallbacks = [
     ...loadedOverlayHomeDesks({ deskPluginRoot, homeDir }),
     { source: HOME_FALLBACK, path: path.join(homeDir, "desk") },
@@ -144,15 +155,16 @@ export function resolveDeskRootWithSource({
   ]
   for (const candidate of fallbacks) {
     tried.push(candidate)
-    if (existsSync(candidate.path)) {
+    if (isDeskWorkspace(candidate.path)) {
       return { root: candidate.path, source: candidate.source, tried }
     }
   }
 
-  // Fail with diagnostic listing every path tried.
+  // Fail with diagnostic listing every path tried. $DESK never reaches here: a
+  // set $DESK either binds or fails as DESK_ROOT_UNAVAILABLE.
   const error = new Error(
     `desk-mcp: no desk workspace found. Tried (in order):\n` +
-      tried.map((entry) => `  - ${formatTriedEntry(entry)}`).join("\n") +
+      tried.map((entry) => `  - ${entry.path}`).join("\n") +
       `\nPass --root <path> pointing at an existing desk workspace, or set $DESK.`,
   )
   error.code = DESK_ROOT_NOT_FOUND
@@ -277,10 +289,6 @@ function resolveRootPath(value, { cwd, homeDir }) {
   return path.resolve(path.isAbsolute(expanded) ? expanded : path.join(cwd, expanded))
 }
 
-function formatTriedEntry(entry) {
-  if (entry.source === "env:DESK") return `$DESK=${entry.path}`
-  return entry.path
-}
 
 // ── Shared-workspace write-prefix ─────────────────────────────────────────────
 //

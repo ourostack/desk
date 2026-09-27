@@ -14,7 +14,8 @@ async function temporaryRoot(t) {
 
 test("root resolution with omitted options uses isolated home defaults without provisioning", async (t) => {
   const home = await temporaryRoot(t)
-  await fs.mkdir(path.join(home, "desk"))
+  await fs.mkdir(path.join(home, "desk", "_meta"), { recursive: true })
+  await fs.mkdir(path.join(home, "desk", "_archive"))
   const oldDesk = process.env.DESK
   delete process.env.DESK
   t.mock.method(os, "homedir", () => home)
