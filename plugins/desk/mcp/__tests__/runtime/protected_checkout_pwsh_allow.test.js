@@ -79,6 +79,10 @@ test("replay ruling: edge forms of groups, subexpressions and piped scripts", as
   for (const [command, deny] of [
     // Text that does not parse falls back to the operation it names (a read passes, a HEAD move does not).
     ['git log "a$(b"', false], ["git log (git rev-parse HEAD", false], ['git checkout "$(a"', true],
+    // A subexpression the tokenizer closes but PowerShell does not (an escaped `)`) keeps its `$`, so it is code.
+    ['git log "$(a`)"', true],
+    // Text PowerShell cannot parse runs nothing; its statements fall back to the operation it names.
+    ["git log ({)", false], ["git log (git status }", false], ['git log "$(})"', false], ['git checkout "$(})"', true],
     // Member access on a group is not a plain argument.
     ["git log (Get-Item x).Name", true], ["git log @(Get-Item x)[0]", true],
     // A group whose statements do not parse, or that are not one plain Git command, yields one unknown value.
