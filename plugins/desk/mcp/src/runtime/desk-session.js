@@ -586,10 +586,11 @@ export function createDeskSession(deps) {
     return run
   }
 
+  // `promise` never rejects: a status run settles with its payload or its error.
   function raceWithTimer(promise, ms) {
     let timer
     return Promise.race([
-      promise.then((value) => ({ value }), (error) => ({ error })),
+      promise.then((value) => ({ value })),
       new Promise((resolve) => {
         timer = setTimeout(() => resolve({ timedOut: true }), ms)
         timer.unref?.()
