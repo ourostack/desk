@@ -15,7 +15,7 @@ import vm from "node:vm"
 import { deriveCopilotSession, __internals__ } from "../../src/factory/derive-copilot.js"
 import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows, __internals__ as usageInternals } from "../../src/factory/copilot-usage.js"
 import { spawnSync } from "node:child_process"
-import { validateLocalFacts as validateFacts, validateLocalFactsBytes as validateFactsBytes } from "../../src/factory/schema.js"
+import { validateLocalFacts, validateLocalFactsBytes } from "../../src/factory/schema.js"
 import {
   SENTINEL,
   SESSIONS,
@@ -69,9 +69,9 @@ function derive(home, sessionId, overrides = {}) {
 }
 
 function assertValid(facts) {
-  const result = validateFacts(facts)
-  assert.deepEqual(result.errors, [], "facts must always pass validateFacts")
-  assert.equal(validateFactsBytes(JSON.stringify(facts)).ok, true, "the canonical bytes must pass too")
+  const result = validateLocalFacts(facts)
+  assert.deepEqual(result.errors, [], "facts must always pass validateLocalFacts")
+  assert.equal(validateLocalFactsBytes(JSON.stringify(facts)).ok, true, "the canonical bytes must pass too")
 }
 
 function intervalsOf(facts, kind) {

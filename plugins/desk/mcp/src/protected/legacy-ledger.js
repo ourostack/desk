@@ -30,7 +30,7 @@ function stateHome(env) {
  * `not_a_directory` (including a symlink, which is never followed) or
  * `unreadable`, never a made-up zero.
  */
-export function legacyLedgerPartitions({ env = process.env } = {}) {
+export function legacyLedgerPartitions({ env }) {
   const dir = path.join(stateHome(env), ...LEGACY_LEDGER_SEGMENTS)
   let stat
   try {

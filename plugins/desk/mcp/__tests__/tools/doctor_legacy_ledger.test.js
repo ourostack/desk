@@ -58,6 +58,11 @@ test("doctor reports zero legacy partitions when the retired store never existed
     assert.equal(body.summary, "Desk MCP runtime dependencies are ready.")
     // Counting created nothing.
     assert.throws(() => statSync(state.stateHome), /ENOENT/u)
+
+    // A file where a parent folder would be means the legacy folder cannot exist either.
+    mkdirSync(path.join(state.stateHome, "ouroboros-skills"), { recursive: true })
+    writeFileSync(path.join(state.stateHome, "ouroboros-skills", "desk"), "not a folder")
+    assert.deepEqual(legacyLedgerPartitions({ env }), { partitions: 0, path: state.ledgerDir })
   } finally {
     rmSync(state.base, { recursive: true, force: true })
   }
@@ -95,6 +100,8 @@ test("the legacy count uses ~/.local/state when XDG_STATE_HOME is unset or blank
     }
     // `~` in XDG_STATE_HOME expands against HOME.
     assert.deepEqual(legacyLedgerPartitions({ env: { HOME: state.base, XDG_STATE_HOME: "~/.local/state" } }), { partitions: 2, path: ledgerDir })
+    // Without HOME in the environment, an absolute XDG_STATE_HOME still decides the path on its own.
+    assert.deepEqual(legacyLedgerPartitions({ env: { XDG_STATE_HOME: path.join(state.base, ".local", "state") } }), { partitions: 2, path: ledgerDir })
   } finally {
     rmSync(state.base, { recursive: true, force: true })
   }
