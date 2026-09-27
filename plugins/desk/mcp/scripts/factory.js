@@ -11,6 +11,8 @@
 //   node scripts/factory.js evaluate --desk <desk root> --task [desks/<alias>/]<track>/<slug>
 //   node scripts/factory.js evaluate --pending
 //   node scripts/factory.js evaluate-accept --job <job>
+//   node scripts/factory.js kaizen-check --store <directory> --repo <owner/repo> [--author <login>]
+//   node scripts/factory.js andon --store <directory> --repo <owner/repo> [--author <login>]
 //
 // `account` names the signed-in GitHub account that can open intake pull
 // requests on the store, asking GitHub with each account's own token rather
@@ -26,8 +28,16 @@
 // else is maintenance. `evaluate` prepares the waste evaluator's briefs for a
 // finished task's sessions and `evaluate-accept` checks what the evaluator
 // wrote; both print paths and codes only, never session content.
+// `kaizen-check` runs in a store's build: it compares each open kaizen card's
+// measure before and after its version and keeps the card's one comment and
+// verdict label current, with the token in `GH_TOKEN`. `andon` opens, updates
+// and closes the store's andon issues when a tracked plugin's latest
+// comparable version makes a quality measure clearly worse; the tracked
+// plugins are the `andon.plugins` list in the store's `factory.json`, and a
+// store without that file tracks none. Both print their JSON result and exit
+// 1 when any card or issue failed, after checking the rest.
 import { execFileSync } from "node:child_process"
-import { readFileSync, realpathSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync } from "node:fs"
 import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 
@@ -36,10 +46,13 @@ import { readDeskRemote } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
-import { build, jobLink } from "../src/factory/pipeline/build.js"
+import { build, jobLink, storeRecords } from "../src/factory/pipeline/build.js"
+import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
+import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
+import { issuesClient } from "../src/factory/store-issues.js"
 import { factsPathsForSession, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept"])
+export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
@@ -328,6 +341,39 @@ export async function runAccountCommand({ argv, env, runner }) {
   return chooseAccount({ store: options.get("store"), runner: runner ?? ghRunner({ env }) })
 }
 
+const STORE_ISSUE_OPTIONS = ["store", "repo", "author"]
+
+// The options `kaizen-check` (and andon) share: the checked-out store, the
+// store's `owner/repo`, the bot login whose comments are the build's own, and
+// the token from `GH_TOKEN`.
+async function storeIssueContext({ argv, env, runner, usage }) {
+  const options = parseOptions(argv)
+  if (options === null || !options.has("store") || !PATTERNS.prRepo.test(options.get("repo") ?? "") || [...options.keys()].some((key) => !STORE_ISSUE_OPTIONS.includes(key))) {
+    throw new Error(usage)
+  }
+  const token = env.GH_TOKEN ?? ""
+  if (token === "") throw new Error(`${usage}; GH_TOKEN must hold the store's token`)
+  const records = storeRecords(options.get("store"))
+  const { ghRunner } = await import("../src/factory/flush.js")
+  const client = issuesClient({ runner: runner ?? ghRunner({ env }), repo: options.get("repo"), token })
+  return { records, client, ...(options.has("author") ? { author: options.get("author") } : {}) }
+}
+
+/** Runs `kaizen-check`: the kaizen check on every open card of the store; prints each card's status. */
+export async function runKaizenCheckCommand({ argv, env, runner }) {
+  const context = await storeIssueContext({ argv, env, runner, usage: "Usage: factory.js kaizen-check --store <directory> --repo <owner/repo> [--author <login>]" })
+  return syncKaizenCards(context)
+}
+
+/** Runs `andon`: opens, updates, reopens and closes the store's andon issues; prints each alarm's action. */
+export async function runAndonCommand({ argv, env, runner }) {
+  const context = await storeIssueContext({ argv, env, runner, usage: "Usage: factory.js andon --store <directory> --repo <owner/repo> [--author <login>]" })
+  const configPath = path.join(parseOptions(argv).get("store"), "factory.json")
+  const config = parseStoreConfig(existsSync(configPath) ? readFileSync(configPath, "utf8") : null)
+  if (!config.ok) throw new Error(`factory.js andon: the store's factory.json is not valid (${config.code})`)
+  return syncAndon({ ...context, plugins: config.plugins })
+}
+
 /** Runs the `consent` subcommand: validates `argv`, calls `setConsent`, and returns the JSON-ready result. */
 export async function runConsentCommand({ argv, env }) {
   const options = parseOptions(argv)
@@ -363,10 +409,12 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
       "job-link": runJobLinkCommand,
       evaluate: runEvaluateCommand,
       "evaluate-accept": runEvaluateAcceptCommand,
+      "kaizen-check": runKaizenCheckCommand,
+      andon: runAndonCommand,
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    const failed = (subcommand === "validate-pr" && result.ok === false) || (subcommand === "account" && result.result !== "account_found")
+    const failed = (subcommand === "validate-pr" && result.ok === false) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
     return failed ? 1 : 0
   } catch (error) {
     logError(`${error.message}\n`)

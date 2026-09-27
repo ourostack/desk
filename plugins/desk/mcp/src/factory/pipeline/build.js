@@ -118,6 +118,26 @@ function writeRollups(directory, rollups) {
   writeFileSync(path.join(directory, "coverage.json"), `${stableStringify(rollups.coverage)}\n`)
 }
 
+// Everything the build derives from a store's `facts/` and `labels/`.
+function readStore(store) {
+  const sessions = readSessions(store)
+  const labels = resolveLabels(readLabels(store), sessions)
+  const reports = buildTimelines(sessions).map((timeline) => ({ timeline, formulas: calculateFormulas(timeline) }))
+  return { sessions, labels, reports, records: reports.map((report) => jobRecord(report, labels.byJobSession)) }
+}
+
+/**
+ * `storeRecords(storeDir) -> records`: every job's rollup record
+ * (`jobRecord`), read exactly as `build` reads the store. The kaizen check
+ * and andon compare these.
+ */
+export function storeRecords(storeDir) {
+  if (typeof storeDir !== "string") throw new TypeError("storeRecords: storeDir must be a path")
+  const store = path.resolve(storeDir)
+  requireDirectory(store, "store")
+  return readStore(store).records
+}
+
 export function build({ storeDir, outDir }) {
   if (typeof storeDir !== "string" || typeof outDir !== "string") throw new TypeError("build: storeDir and outDir must be paths")
   const store = path.resolve(storeDir)
@@ -128,10 +148,8 @@ export function build({ storeDir, outDir }) {
   }
   requireDirectory(store, "store")
 
-  const sessions = readSessions(store)
-  const labels = resolveLabels(readLabels(store), sessions)
-  const reports = buildTimelines(sessions).map((timeline) => ({ timeline, formulas: calculateFormulas(timeline) }))
-  const rollups = computeRollups({ records: reports.map((report) => jobRecord(report, labels.byJobSession)), sessions, labels })
+  const { sessions, labels, reports, records } = readStore(store)
+  const rollups = computeRollups({ records, sessions, labels })
   const temporary = `${out}.factory-tmp-${process.pid}`
   rmSync(temporary, { recursive: true, force: true })
   mkdirSync(path.join(temporary, "jobs"), { recursive: true })
