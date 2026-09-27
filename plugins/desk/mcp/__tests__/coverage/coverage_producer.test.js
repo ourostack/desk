@@ -5,7 +5,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import processOnSpawn from "process-on-spawn"
+import { fileURLToPath } from "node:url"
 import { runCoverageCommand } from "../../src/coverage/runner.js"
+
+const realRepoRoot = fileURLToPath(new URL("../../../../../", import.meta.url))
 
 const esmSource = "plugins/desk/mcp/src/subject.js"
 const cjsSource = "scripts/subject.cjs"
@@ -14,7 +17,7 @@ const offlineEsmSource = "evals/offline/subject.mjs"
 const offlineTypeScriptSource = "evals/offline/vendor/gauntlet/src/subject.ts"
 const offlineBridgeSource = "scripts/skill-evals.cjs"
 
-function runProducerFixture(t, { complete, includeUnexecuted = false, viaChild = false, childFromRepoRoot = false, offline = false, offlineTests = true, offlinePinnedTypeScript = true, offlineRegistration = true, bridgeExecuted = true, exclusions = [] }) {
+function runProducerFixture(t, { complete, includeUnexecuted = false, viaChild = false, childFromRepoRoot = false, offline = false, offlineTests = true, offlinePinnedTypeScript = true, offlineRegistration = true, offlineTypeScriptUnchanged = false, bridgeExecuted = true, exclusions = [] }) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-producer-"))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const repoRoot = path.join(root, "repo")
@@ -154,16 +157,8 @@ function runProducerFixture(t, { complete, includeUnexecuted = false, viaChild =
       "}",
       "",
     ].join("\n"))
-    // Mirrors the maintained registration pair: the instrumentation hook plus the format hook that gives the source-pinned TypeScript leaves a module format the hook will instrument.
-    if (offlineRegistration) writeSource("evals/offline/__tests__/helpers/coverage-format.mjs", [
-      "let admittedUrls = new Set()",
-      "export function initialize({ urls }) { admittedUrls = new Set(urls) }",
-      "export async function resolve(specifier, context, nextResolve) {",
-      "  const result = await nextResolve(specifier, context)",
-      '  return admittedUrls.has(result.url) ? { ...result, format: "module" } : result',
-      "}",
-      "",
-    ].join("\n"))
+    // The maintained registration pair: the instrumentation hook plus the repository's own format hook, copied as is, which gives the source-pinned TypeScript leaves a format the hook will instrument and lets Node strip a leaf the change does not require.
+    if (offlineRegistration) writeSource("evals/offline/__tests__/helpers/coverage-format.mjs", readFileSync(path.join(realRepoRoot, "evals/offline/__tests__/helpers/coverage-format.mjs"), "utf8"))
     if (offlineRegistration) writeSource("evals/offline/__tests__/helpers/register-coverage.mjs", [
       'import { createRequire, register } from "node:module"',
       'import path from "node:path"',
@@ -217,6 +212,13 @@ function runProducerFixture(t, { complete, includeUnexecuted = false, viaChild =
       "})",
       "",
     ].join("\n"))
+  }
+  if (offlineTypeScriptUnchanged) {
+    // The pinned leaf is already on the base, so this change does not require it and nothing instruments it.
+    for (const args of [["add", "--", offlineTypeScriptSource], ["-c", "user.name=Coverage Producer Test", "-c", "user.email=coverage-producer@example.invalid", "commit", "--quiet", "-m", "pinned leaf"]]) {
+      const step = spawnSync("git", args, { cwd: repoRoot, env, encoding: "utf8" })
+      assert.equal(step.status, 0, step.stderr)
+    }
   }
   const output = { stdout: "", stderr: "" }
   const executions = []
@@ -362,6 +364,14 @@ test("the maintained coverage entry measures the offline evaluation implementati
   const bridge = entry(run, offlineBridgeSource)
   assert.deepEqual([bridge.statements.covered, bridge.statements.total], [4, 4])
   assert.deepEqual([bridge.branches.covered, bridge.branches.total], [2, 2])
+})
+
+test("a change that does not require a pinned TypeScript leaf still loads it, with Node stripping its types", t => {
+  const run = runProducerFixture(t, { complete: true, offline: true, offlineTypeScriptUnchanged: true })
+  assert.equal(run.result, 0, JSON.stringify(run.output))
+  assert.doesNotMatch(run.output.stdout, /SyntaxError/u)
+  assert.equal(entry(run, offlineEsmSource).statements.pct, 100)
+  assert.equal(run.summary[path.join(realpathSync(run.repoRoot), offlineTypeScriptSource)] ?? run.summary[offlineTypeScriptSource], undefined)
 })
 
 test("the maintained coverage entry reports the real missed offline statement rather than reporting the untested implementation as complete", t => {
