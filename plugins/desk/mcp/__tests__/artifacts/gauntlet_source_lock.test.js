@@ -10,13 +10,13 @@ const root = fileURLToPath(new URL("../../../../../", import.meta.url))
 const expected = {
   id: "prime-radiant-inc-gauntlet-evaluation-leaves",
   repository: "prime-radiant-inc/gauntlet",
-  commit: "187a9af979a7cf096c0890d0eeb998cc3008343a",
+  commit: "aa08b72989fe59c57362c42f5d1bfe2c26417253",
   license: "Apache-2.0",
   files: [
     { sourcePath: "LICENSE", generatedPath: "evals/offline/vendor/gauntlet/LICENSE", sha256: "bab74adbfbcdc79e08e43573584ef6e0bc067354e8306aa4128c245967ee549f" },
     { sourcePath: "src/agent/validators.ts", generatedPath: "evals/offline/vendor/gauntlet/src/agent/validators.ts", sha256: "618d14e3a42b4a68de30fcff7943da18db57c8ecc563e8f1ea08a7dda222df57" },
-    { sourcePath: "src/context/scoped-read.ts", generatedPath: "evals/offline/vendor/gauntlet/src/context/scoped-read.ts", sha256: "009068020308d6078f5306e0c85ba904159fd315619d22b69dc0ba2a9804ef9b" },
-    { sourcePath: "src/types.ts", generatedPath: "evals/offline/vendor/gauntlet/src/types.ts", sha256: "37d34c4f54dc1952be51a3711840fd03a08c3cc875b5639d8061be817bdb5391" },
+    { sourcePath: "src/context/scoped-read.ts", generatedPath: "evals/offline/vendor/gauntlet/src/context/scoped-read.ts", sha256: "13de1571a5629d72fd8a211068194b0a3e80cf2ed81dd9a1b8a7bedf57062e84" },
+    { sourcePath: "src/types.ts", generatedPath: "evals/offline/vendor/gauntlet/src/types.ts", sha256: "22fa4e5fd1e2c130d01e77e701c0bedf5954f8faf94b25ebac6730fd57f17baf" },
   ],
 }
 
