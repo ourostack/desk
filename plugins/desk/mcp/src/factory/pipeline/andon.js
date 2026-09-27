@@ -22,7 +22,12 @@
 // issue with the same title. The body gives the numbers, every compared job
 // as evidence, and the other plugins whose versions also changed between the
 // two sets of jobs: the regression then belongs to that set of versions, not
-// to one plugin.
+// to one plugin. Those other plugins are named only when they are public by
+// the publishing rule (`publicPlugins`: names a client that applies the
+// rule has published, so each came from a public install source) and every
+// compared job on both sides reports them. A plugin collapsed into
+// `refs.private.plugins` on one side is therefore never named, and never
+// shows up as "not reported" (M3-12 ruling).
 //
 // The build closes its own andon issue, with a comment saying why, when,
 // with enough groups on each side:
@@ -113,30 +118,31 @@ function compare({ plugin, measure, jobClass }, data, baseline, version) {
   return compareMedians(data.groups.get(baseline), data.groups.get(version), { seed: seedFromText(`${plugin} ${baseline} ${version} ${measure} ${jobClass}`) })
 }
 
-// Each other plugin's versions over a set of jobs, as one comparable text.
+// Each other plugin's versions over a set of jobs, as one comparable text, or
+// null when any job does not report it.
 function versionsText(jobs, plugin) {
   const versions = new Set()
   for (const record of jobs) {
     const range = record.plugins[plugin] ?? null
-    if (range === null) versions.add("not reported")
-    else versions.add(range.min).add(range.max)
+    if (range === null) return null
+    versions.add(range.min).add(range.max)
   }
-  return [...versions].sort((left, right) => (left === "not reported" ? 1 : right === "not reported" ? -1 : compareVersions(left, right))).join(", ")
+  return [...versions].sort(compareVersions).join(", ")
 }
 
-// The other plugins whose versions differ between the two sets of jobs.
-function coChanged(plugin, before, after) {
-  const names = [...new Set([...before, ...after].flatMap((record) => Object.keys(record.plugins)))].filter((name) => name !== plugin).sort()
+// The other public plugins, reported by every job on both sides, whose versions differ between the two sets of jobs.
+function coChanged(plugin, before, after, publicPlugins) {
+  const names = [...new Set([...before, ...after].flatMap((record) => Object.keys(record.plugins)))].filter((name) => name !== plugin && publicPlugins.has(name)).sort()
   return names.flatMap((name) => {
     const was = versionsText(before, name)
     const now = versionsText(after, name)
-    return was === now ? [] : [{ plugin: name, before: was, after: now }]
+    return was === null || now === null || was === now ? [] : [{ plugin: name, before: was, after: now }]
   })
 }
 
-function renderBody({ plugin, version, baseline, measure, jobClass, comparison, before, after }) {
+function renderBody({ plugin, version, baseline, measure, jobClass, comparison, before, after }, publicPlugins) {
   const format = (value) => formatMeasure(measure, value)
-  const others = coChanged(plugin, before, after)
+  const others = coChanged(plugin, before, after, publicPlugins)
   return [
     ANDON_MARKER,
     `### Andon: \`${measure}\` is clearly worse on \`${plugin}\` ${version} (job class \`${jobClass}\`)`,
@@ -154,9 +160,9 @@ function renderBody({ plugin, version, baseline, measure, jobClass, comparison, 
     `- Evidence jobs on ${version}: ${after.map((record) => `\`${record.job}\``).sort().join(", ")}.`,
     "",
     ...(others.length === 0
-      ? [`No other plugin's version changed between these two sets of jobs.`]
+      ? [`No other publicly sourced plugin that every compared job reports changed version between these two sets of jobs.`]
       : [
-          `Other plugins also changed between these two sets of jobs, so the change belongs to this set of versions, not necessarily to \`${plugin}\` alone:`,
+          `Other publicly sourced plugins also changed between these two sets of jobs, so the change belongs to this set of versions, not necessarily to \`${plugin}\` alone:`,
           "",
           ...others.map((other) => `- \`${other.plugin}\`: ${other.before} before, ${other.after} after.`),
         ]),
@@ -166,28 +172,31 @@ function renderBody({ plugin, version, baseline, measure, jobClass, comparison, 
   ].join("\n")
 }
 
-function alarmFor(key, data, baseline, version) {
+function alarmFor(key, data, baseline, version, publicPlugins) {
   const comparison = compare(key, data, baseline, version)
   if (comparison.direction !== WORSE) return { comparison }
   const before = data.byVersion.get(baseline)
   const after = data.byVersion.get(version)
-  return { comparison, body: renderBody({ ...key, version, baseline, comparison, before, after }) }
+  return { comparison, body: renderBody({ ...key, version, baseline, comparison, before, after }, publicPlugins) }
 }
 
 /**
- * `planAndon(records, { plugins }) -> alarms`: every alarm the tracked
- * `plugins` raise, as `{ plugin, version, baseline, measure, job_class,
- * title, comparison, body }`, ordered by plugin, then `QUALITY_MEASURES`,
- * then `JOB_CLASSES`. `records` are the rollups' job records.
+ * `planAndon(records, { plugins, publicPlugins }) -> alarms`: every alarm the
+ * tracked `plugins` raise, as `{ plugin, version, baseline, measure,
+ * job_class, title, comparison, body }`, ordered by plugin, then
+ * `QUALITY_MEASURES`, then `JOB_CLASSES`. `records` are the rollups' job
+ * records; `publicPlugins` (`storePublicPlugins`, default none) are the only
+ * other plugins a body may name.
  */
-export function planAndon(records, { plugins }) {
+export function planAndon(records, { plugins, publicPlugins = [] }) {
+  const named = new Set(publicPlugins)
   return [...plugins].sort().flatMap((plugin) => QUALITY_MEASURES.flatMap((measure) => JOB_CLASSES.flatMap((jobClass) => {
     const key = { plugin, measure, jobClass }
     const data = series(records, key)
     if (data.comparable.length < 2) return []
     const version = data.comparable.at(-1)
     const baseline = data.comparable.at(-2)
-    const { comparison, body } = alarmFor(key, data, baseline, version)
+    const { comparison, body } = alarmFor(key, data, baseline, version, named)
     if (body === undefined) return []
     return [{ plugin, version, baseline, measure, job_class: jobClass, title: andonTitle(plugin, version, measure, jobClass), comparison, body }]
   })))
@@ -196,13 +205,13 @@ export function planAndon(records, { plugins }) {
 // What should happen to an open alarm the latest versions no longer raise:
 // `{ close }` with the comment, `{ body }` with its current numbers, or `{}`
 // when there are too few groups to say.
-function reviewAlarm(records, key) {
+function reviewAlarm(records, key, publicPlugins) {
   const { version, measure } = key
   const data = series(records, key)
   const at = data.comparable.indexOf(version)
   if (at < 1) return {}
   const baseline = data.comparable[at - 1]
-  const alarm = alarmFor(key, data, baseline, version)
+  const alarm = alarmFor(key, data, baseline, version, publicPlugins)
   if (alarm.body === undefined) {
     return { close: `${ANDON_MARKER}\nClosed by the build: with the data now in the store, \`${measure}\` on \`${key.plugin}\` ${version} is no longer clearly worse than ${baseline} for \`${key.jobClass}\` jobs.\n` }
   }
@@ -236,8 +245,8 @@ async function raise(client, issue, alarm) {
   return { number: issue.number, action: "updated" }
 }
 
-async function review(client, records, issue) {
-  const result = reviewAlarm(records, parseAndonTitle(issue.title))
+async function review(client, records, issue, publicPlugins) {
+  const result = reviewAlarm(records, parseAndonTitle(issue.title), publicPlugins)
   if (issue.labels.includes(DISMISSED_LABEL)) return noteDismissed(client, issue, result.body)
   if (result.close !== undefined) {
     await client.createComment(issue.number, result.close)
@@ -252,7 +261,7 @@ async function review(client, records, issue) {
 const failureCode = (error) => (typeof error.code === "string" ? error.code : "failed")
 
 /**
- * `syncAndon({ client, records, plugins, author }) -> { tracked, alarms,
+ * `syncAndon({ client, records, plugins, publicPlugins, author }) -> { tracked, alarms,
  * failed }`: opens, updates, reopens and closes the build's andon issues for
  * the tracked `plugins` through `client` (`store-issues.js`). Each entry is
  * `{ number, title, action }` with `action` one of `opened`, `updated`,
@@ -263,8 +272,9 @@ const failureCode = (error) => (typeof error.code === "string" ? error.code : "f
  * `author`, for untracked plugins, pull requests and titles that do not
  * parse are left alone.
  */
-export async function syncAndon({ client, records, plugins, author = BOT_LOGIN }) {
+export async function syncAndon({ client, records, plugins, publicPlugins = [], author = BOT_LOGIN }) {
   const tracked = new Set(plugins)
+  const named = new Set(publicPlugins)
   const own = (await client.listIssues({ label: ANDON_LABEL, state: "all" }))
     .filter((issue) => !issue.pull_request && issue.author === author && tracked.has(parseAndonTitle(issue.title)?.plugin))
     .sort((left, right) => left.number - right.number)
@@ -272,7 +282,7 @@ export async function syncAndon({ client, records, plugins, author = BOT_LOGIN }
   for (const issue of own) if (!byTitle.has(issue.title)) byTitle.set(issue.title, issue)
   const results = []
   const raised = new Set()
-  for (const alarm of planAndon(records, { plugins })) {
+  for (const alarm of planAndon(records, { plugins, publicPlugins })) {
     raised.add(alarm.title)
     const issue = byTitle.get(alarm.title)
     try {
@@ -285,7 +295,7 @@ export async function syncAndon({ client, records, plugins, author = BOT_LOGIN }
   for (const issue of byTitle.values()) {
     if (issue.state !== "open" || raised.has(issue.title)) continue
     try {
-      results.push({ number: issue.number, title: issue.title, action: await review(client, records, issue) })
+      results.push({ number: issue.number, title: issue.title, action: await review(client, records, issue, named) })
     } catch (error) {
       results.push({ number: issue.number, title: issue.title, action: "failed", code: failureCode(error) })
     }

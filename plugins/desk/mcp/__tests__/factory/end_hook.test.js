@@ -28,7 +28,8 @@ for (const event of ["SessionEnd", "Stop", "sessionEnd", "agentStop"]) {
     await json(path.join(pluginRoot, "plugin.json"), { name: "desk", version: "3.2.0-alpha.42" })
     await json(path.join(path.dirname(pluginRoot), "overlay/plugin.json"), { name: "overlay", version: "1.0.0", desk: { factory: { store: "example/factory" } } })
     await json(path.join(ctx.base, ".claude/plugins/installed_plugins.json"), { version: 2, plugins: { "desk@ourostack": [{ version: "3.2.0-alpha.42", installPath: pluginRoot }] } })
-    await json(path.join(ctx.base, ".claude/plugins/known_marketplaces.json"), { ourostack: { source: { source: "github", repo: "ourostack/desk" } } })
+    await json(path.join(ctx.base, ".claude/plugins/known_marketplaces.json"), { ourostack: { source: { source: "github", repo: "ourostack/desk" }, installLocation: path.join(ctx.base, "mkt") } })
+    await json(path.join(ctx.base, "mkt/.claude-plugin/marketplace.json"), { name: "ourostack", plugins: [{ name: "desk", source: "./plugins/desk" }] })
     await json(path.join(ctx.base, ".local/agency/plugins/cache/cache_index.json"), { entries: { "copilot:github:ourostack/desk:plugins/desk@main": { dir_name: "e1" } } })
     await json(path.join(ctx.base, ".local/agency/plugins/cache/entries/e1/plugin.json"), { name: "desk", version: "3.2.0-alpha.42" })
     const result = await hook().runHook({ host: claude ? "claude" : "copilot", payload, env: ctx.env, pluginRoot, launch: async (...args) => spawned.push(args) })
@@ -185,11 +186,17 @@ async function scanFor(ctx, host, pluginRoot, extra = {}) {
   return hook().metadata({ host, pluginRoot, home: ctx.base, env: ctx.env, readSmallText, PATTERNS, ...extra })
 }
 
-test("Claude plugins take their source from a GitHub marketplace and nothing else", () => scratch(async (ctx) => {
+test("Claude plugins take their source only from a GitHub marketplace whose cached manifest lists them", () => scratch(async (ctx) => {
   const dir = (name) => path.join(ctx.base, "installed", name)
   const record = (name, version = "1.0.0") => [{ version, installPath: dir(name) }]
   await json(path.join(ctx.base, ".claude/plugins/installed_plugins.json"), { version: 2, plugins: {
     "desk@ourostack": record("desk"),
+    "ext@ourostack": record("ext"),
+    "urlsrc@ourostack": record("urlsrc"),
+    "dup@ourostack": record("dup"),
+    "escape@ourostack": record("escape"),
+    "unlisted@ourostack": record("unlisted"),
+    "secret-tool@team": record("secret-tool"),
     "hub@official": record("hub"),
     "folder@local-dir": record("folder"),
     "lost@forgotten": record("lost"),
@@ -198,28 +205,59 @@ test("Claude plugins take their source from a GitHub marketplace and nothing els
     "proto@__proto__": record("proto"),
     "twice@ourostack": [{ version: "1.0.0", installPath: dir("twice") }, { version: "1.0.0", installPath: dir("twice2") }],
   } })
+  const at = (name) => path.join(ctx.base, "marketplaces", name)
   await json(path.join(ctx.base, ".claude/plugins/known_marketplaces.json"), {
-    ourostack: { source: { source: "github", repo: "ourostack/desk" } },
+    ourostack: { source: { source: "github", repo: "ourostack/desk" }, installLocation: at("ourostack") },
+    // A reused marketplace name, now pointing at a public repository that never listed the plugin.
+    team: { source: { source: "github", repo: "pub/team-marketplace" }, installLocation: at("team") },
     official: { source: { source: "github", repo: "anthropics/claude-plugins-official" } },
-    "local-dir": { source: { source: "directory", path: "/somewhere" } },
-    weird: { source: { source: "github", repo: `${SENTINEL} not/a repo` } },
+    "local-dir": { source: { source: "directory", path: "/somewhere" }, installLocation: at("local-dir") },
+    weird: { source: { source: "github", repo: `${SENTINEL} not/a repo` }, installLocation: at("weird") },
   })
+  await json(path.join(at("ourostack"), ".claude-plugin/marketplace.json"), { name: "ourostack", plugins: [
+    { name: "desk", source: "./plugins/desk" },
+    { name: "twice", source: "./plugins/twice" },
+    { name: "ext", source: { source: "github", repo: "pub/ext" } },
+    { name: "urlsrc", source: { source: "url", url: "https://example.invalid/private.git" } },
+    { name: "dup", source: "./plugins/dup" },
+    { name: "dup", source: { source: "github", repo: "pub/other" } },
+    { name: "escape", source: "./../elsewhere" },
+    { source: "./plugins/nameless" },
+  ] })
+  await json(path.join(at("team"), ".claude-plugin/marketplace.json"), { name: "team", plugins: [{ name: "other-tool", source: "./plugins/other-tool" }] })
+  await json(path.join(at("local-dir"), ".claude-plugin/marketplace.json"), { name: "local-dir", plugins: [{ name: "folder", source: "./folder" }] })
   const { plugins } = await scanFor(ctx, "claude", dir("desk"))
-  assert.deepEqual(plugins, [
-    { name: "desk", version: "1.0.0", source: "ourostack/desk" },
-    { name: "hub", version: "1.0.0", source: "anthropics/claude-plugins-official" },
-    { name: "folder", version: "1.0.0", source: null },
-    { name: "lost", version: "1.0.0", source: null },
-    { name: "odd", version: "1.0.0", source: null },
-    { name: "bare", version: "1.0.0", source: null },
-    { name: "proto", version: "1.0.0", source: null },
-    { name: "twice", version: "1.0.0", source: "ourostack/desk" },
-  ])
+  assert.deepEqual(Object.fromEntries(plugins.map((plugin) => [plugin.name, plugin.source])), {
+    desk: "ourostack/desk", // a relative path inside a public GitHub marketplace
+    ext: "pub/ext", // the listing's own GitHub repository
+    urlsrc: null, // listed, but hosted somewhere that is not a GitHub repository
+    dup: null, // listed twice with different sources
+    escape: null, // a relative path that leaves the marketplace
+    unlisted: null, // installed from the marketplace, but its manifest does not list it
+    "secret-tool": null, // the marketplace name was re-pointed at a repository that never listed it
+    hub: null, // no cached manifest to check
+    folder: null, // not a GitHub marketplace
+    lost: null,
+    odd: null,
+    bare: null,
+    proto: null,
+    twice: "ourostack/desk",
+  })
   const skipped = await scanFor(ctx, "claude", dir("desk"), { sources: false })
   assert.ok(skipped.plugins.every((plugin) => plugin.source === null), "a caller that needs only folders skips the lookup")
-  assert.equal(skipped.dirs.length, 9)
+  assert.equal(skipped.dirs.length, 15)
+  const late = await scanFor(ctx, "claude", dir("desk"), { sourceDeadline: 0 })
+  assert.ok(late.plugins.every((plugin) => plugin.source === null), "past the source budget nothing is named")
+  assert.equal(late.plugins.length, 14, "and every plugin is still recorded")
+  assert.equal(late.incomplete, false)
 
-  for (const broken of ["not json", "[]", JSON.stringify({ ourostack: null }), JSON.stringify({ ourostack: { source: "github" } })]) {
+  await json(path.join(at("ourostack"), ".claude-plugin/marketplace.json"), { plugins: Array.from({ length: 257 }, (_, index) => ({ name: index === 0 ? "desk" : `p${index}`, source: "./x" })) })
+  assert.equal((await scanFor(ctx, "claude", dir("desk"))).plugins[0].source, null, "an oversized manifest lists nothing for certain")
+  for (const manifest of [{ plugins: "desk" }, [], "not json"]) {
+    await fs.writeFile(path.join(at("ourostack"), ".claude-plugin/marketplace.json"), typeof manifest === "string" ? manifest : JSON.stringify(manifest))
+    assert.equal((await scanFor(ctx, "claude", dir("desk"))).plugins[0].source, null, JSON.stringify(manifest))
+  }
+  for (const broken of ["not json", "[]", JSON.stringify({ ourostack: null }), JSON.stringify({ ourostack: { source: "github" } }), JSON.stringify({ ourostack: { source: { source: "github", repo: "ourostack/desk" }, installLocation: "relative/path" } })]) {
     await fs.writeFile(path.join(ctx.base, ".claude/plugins/known_marketplaces.json"), broken)
     const scan = await scanFor(ctx, "claude", dir("desk"))
     assert.ok(scan.plugins.every((plugin) => plugin.source === null), broken)
@@ -229,11 +267,19 @@ test("Claude plugins take their source from a GitHub marketplace and nothing els
   assert.equal((await scanFor(ctx, "claude", dir("desk"))).plugins[0].source, null)
 }))
 
-test("Copilot under Agency takes each plugin's source from Agency's cache; an ambiguous one has none", () => scratch(async (ctx) => {
+async function agencyFixture(ctx, plugins, entries, manifests) {
   const sessionDir = path.join(ctx.base, ".local/agency/plugins/sessions/s1")
   const cache = path.join(ctx.base, ".local/agency/plugins/cache")
-  const plugins = { desk: "3.2.0-alpha.65", pwf: "2.0.0", "work-suite": "1.1.0", superpowers: "6.3.0", teams: "1.0.0", orphan: "1.0.0", named: "4.0.0" }
   for (const [name, version] of Object.entries(plugins)) await json(path.join(sessionDir, name, "plugin.json"), { name, version })
+  await json(path.join(cache, "cache_index.json"), { entries })
+  for (const [file, value] of Object.entries(manifests)) await json(path.join(cache, "entries", file), value)
+  return { root: path.join(sessionDir, Object.keys(plugins)[0]), cache }
+}
+
+const sourcesOf = (scan) => Object.fromEntries(scan.plugins.map((plugin) => [plugin.name, plugin.source]))
+
+test("Copilot under Agency names a source only from a complete scan with every entry at the exact version from one GitHub repository", () => scratch(async (ctx) => {
+  const plugins = { desk: "3.2.0-alpha.65", pwf: "2.0.0", "work-suite": "1.1.0", superpowers: "6.3.0", teams: "1.0.0", named: "4.0.0", foo: "9.9.9", bar: "1.0.0" }
   const entries = {
     "copilot:github:ourostack/desk:plugins/desk@v2": { dir_name: "a" },
     "copilot:github:ourostack/ouroboros-skills:plugins/desk@v1": { dir_name: "b" },
@@ -243,48 +289,130 @@ test("Copilot under Agency takes each plugin's source from Agency's cache; an am
     "copilot:github:ourostack/ouroboros-skills:plugins/work-suite@v1": { dir_name: "f" },
     "copilot:ado:org/project/repo:plugins/teams@v1": { dir_name: "g" },
     "copilot:github:someone/named:plugins/named@v1": { dir_name: "h" },
-    "copilot:github:someone/escape:plugins/x@v1": { dir_name: "../../../outside" },
-    "copilot:github:someone/dots:plugins/x@v1": { dir_name: ".." },
-    "copilot:github:someone/null:plugins/x@v1": null,
-    [`copilot:github:${SENTINEL} bad:plugins/x@v1`]: { dir_name: "i" },
+    // The reviewer's first probe: a private foo from Azure DevOps beside a public foo at another version.
+    "copilot:ado:contoso/secret/repo:plugins/foo@v1": { dir_name: "i" },
+    "copilot:github:pub/tools:plugins/foo@v1": { dir_name: "j" },
+    // The same name and version from a public GitHub repository and from somewhere else.
+    "copilot:github:pub/tools:plugins/bar@v1": { dir_name: "k" },
+    [`copilot:${SENTINEL}:plugins/bar@v1`]: { dir_name: "l" },
   }
-  await json(path.join(cache, "cache_index.json"), { entries })
-  await json(path.join(cache, "entries/a/plugin.json"), { name: "desk", version: "3.2.0-alpha.65" })
-  await json(path.join(cache, "entries/b/plugin.json"), { name: "desk", version: "3.2.0-alpha.9" })
-  await json(path.join(cache, "entries/c/agency.json"), { name: "pwf" })
-  await json(path.join(cache, "entries/d/plugin.json"), { name: "superpowers", version: "6.3.0" })
-  await json(path.join(cache, "entries/e/plugin.json"), { name: "superpowers", version: "6.3.0" })
-  await json(path.join(cache, "entries/f/plugin.json"), { name: "work-suite", version: "1.0.0" })
-  await json(path.join(cache, "entries/g/plugin.json"), { name: "teams", version: "1.0.0" })
-  await json(path.join(cache, "entries/h/agency.json"), { name: "named", version: 4 })
-  await json(path.join(cache, "entries/i/plugin.json"), { name: "orphan", version: "1.0.0" })
-  await json(path.join(ctx.base, "outside/plugin.json"), { name: "orphan", version: "1.0.0" })
-  const { plugins: found } = await scanFor(ctx, "copilot", path.join(sessionDir, "desk"))
-  const sources = Object.fromEntries(found.map((plugin) => [plugin.name, plugin.source]))
-  assert.deepEqual(sources, {
-    desk: "ourostack/desk", // two repositories, told apart by version
-    pwf: "teams-org/workflows", // named only by agency.json, from either host's spec
-    "work-suite": "ourostack/ouroboros-skills", // no entry at this version: the name alone is unambiguous
+  const { root, cache } = await agencyFixture(ctx, plugins, entries, {
+    "a/plugin.json": { name: "desk", version: "3.2.0-alpha.65" },
+    "b/plugin.json": { name: "desk", version: "3.2.0-alpha.9" },
+    "c/agency.json": { name: "pwf" },
+    "d/plugin.json": { name: "superpowers", version: "6.3.0" },
+    "e/plugin.json": { name: "superpowers", version: "6.3.0" },
+    "f/plugin.json": { name: "work-suite", version: "1.0.0" },
+    "g/plugin.json": { name: "teams", version: "1.0.0" },
+    "h/agency.json": { name: "named", version: 4 },
+    "i/plugin.json": { name: "foo", version: "9.9.9" },
+    "j/plugin.json": { name: "foo", version: "1.0.0" },
+    "k/plugin.json": { name: "bar", version: "1.0.0" },
+    "l/plugin.json": { name: "bar", version: "1.0.0" },
+  })
+  assert.deepEqual(sourcesOf(await scanFor(ctx, "copilot", root)), {
+    desk: "ourostack/desk", // two repositories, told apart by the exact version
+    pwf: null, // no version in the cache, so no exact match
+    "work-suite": null, // no entry at this version, and a name alone never matches
     superpowers: null, // the same name and version from two repositories
     teams: null, // not a GitHub source
-    orphan: null, // only in an entry whose spec or folder is refused
-    named: "someone/named", // a manifest version that is not a string still names the plugin
+    named: null, // no string version in the cache
+    foo: null, // the private entry at this version is not GitHub, and the public one is another version
+    bar: null, // the same version also comes from a source that is not GitHub
   })
-
-  const plain = path.join(ctx.base, ".copilot/installed-plugins/agency/desk")
-  await json(path.join(plain, "plugin.json"), { name: "desk", version: "3.2.0-alpha.65" })
-  assert.deepEqual((await scanFor(ctx, "copilot", plain)).plugins, [{ name: "desk", version: "3.2.0-alpha.65", source: null }], "plain Copilot records no repository")
-  const skipped = await scanFor(ctx, "copilot", path.join(sessionDir, "desk"), { sources: false })
+  const skipped = await scanFor(ctx, "copilot", root, { sources: false })
   assert.ok(skipped.plugins.every((plugin) => plugin.source === null))
 
+  // An entry whose folder cannot be read or is refused could be any plugin, so the index names nothing.
+  for (const bad of [{ dir_name: "../../../outside" }, { dir_name: ".." }, null, { dir_name: "missing" }]) {
+    await json(path.join(cache, "cache_index.json"), { entries: { ...entries, "copilot:github:someone/x:plugins/x@v1": bad } })
+    assert.equal(sourcesOf(await scanFor(ctx, "copilot", root)).desk, null, JSON.stringify(bad))
+  }
   for (const broken of ["not json", JSON.stringify({ entries: [] }), JSON.stringify({})]) {
     await fs.writeFile(path.join(cache, "cache_index.json"), broken)
-    const scan = await scanFor(ctx, "copilot", path.join(sessionDir, "desk"))
+    const scan = await scanFor(ctx, "copilot", root)
     assert.ok(scan.plugins.every((plugin) => plugin.source === null), broken)
     assert.equal(scan.incomplete, false)
   }
   await json(path.join(cache, "cache_index.json"), { entries })
-  const late = await scanFor(ctx, "copilot", path.join(sessionDir, "desk"), { deadline: 0 })
+  const late = await scanFor(ctx, "copilot", root, { deadline: 0 })
   assert.equal(late.timedOut, true)
   assert.deepEqual(late.plugins, [], "a scan past its deadline reads no cache entries and names no plugin")
+}))
+
+test("Copilot under Agency names nothing when the scan is cut short by the entry cap or the source budget", () => scratch(async (ctx) => {
+  // The reviewer's second probe: a private GitHub foo listed after 300 other entries, with a public foo within the first 256.
+  const entries = { "copilot:github:pub/tools:plugins/foo@v1": { dir_name: "pub" } }
+  const manifests = { "pub/plugin.json": { name: "foo", version: "1.0.0" } }
+  for (let index = 0; index < 300; index += 1) {
+    entries[`copilot:github:pub/filler${index}:plugins/f@v1`] = { dir_name: `f${index}` }
+    manifests[`f${index}/plugin.json`] = { name: `filler${index}`, version: "1.0.0" }
+  }
+  entries["copilot:github:secret/internal:plugins/foo@v1"] = { dir_name: "secret" }
+  manifests["secret/plugin.json"] = { name: "foo", version: "2.0.0" }
+  const { root, cache } = await agencyFixture(ctx, { foo: "2.0.0", desk: "1.0.0" }, entries, manifests)
+  assert.deepEqual(sourcesOf(await scanFor(ctx, "copilot", root)), { foo: null, desk: null }, "past the entry cap nothing is named")
+
+  // Within the cap, a source budget that runs out mid-scan names nothing either, and every plugin is still recorded.
+  const small = { "copilot:github:ourostack/desk:plugins/desk@v1": { dir_name: "d" }, "copilot:github:pub/tools:plugins/foo@v1": { dir_name: "pub" } }
+  await json(path.join(cache, "cache_index.json"), { entries: small })
+  await json(path.join(cache, "entries/d/plugin.json"), { name: "desk", version: "1.0.0" })
+  await json(path.join(cache, "entries/pub/plugin.json"), { name: "foo", version: "2.0.0" })
+  assert.deepEqual(sourcesOf(await scanFor(ctx, "copilot", root)), { foo: "pub/tools", desk: "ourostack/desk" }, "the same cache, fully read, names both")
+  const { readSmallText } = await import("../../src/factory/marker.js")
+  const { PATTERNS } = await import("../../src/factory/schema.js")
+  let reads = 0
+  const slow = (file, limit) => {
+    // Each cached manifest takes longer than the whole source budget.
+    if (file.includes(`${path.sep}entries${path.sep}`)) {
+      reads += 1
+      const until = performance.now() + 400
+      while (performance.now() < until) { /* a slow disk */ }
+    }
+    return readSmallText(file, limit)
+  }
+  const cut = hook().metadata({ host: "copilot", pluginRoot: root, home: ctx.base, env: ctx.env, readSmallText: slow, PATTERNS, sourceDeadline: performance.now() + 200 })
+  assert.ok(reads >= 1 && reads < 4, "the scan stopped after the budget ran out")
+  assert.deepEqual(sourcesOf(cut), { foo: null, desk: null })
+  assert.equal(cut.incomplete, false, "a short source budget never holds routing")
+}))
+
+test("plain Copilot takes a plugin's source from its install record's GitHub marketplace", () => scratch(async (ctx) => {
+  const home = ctx.env.COPILOT_HOME
+  const folder = path.join(home, "installed-plugins/ourostack")
+  for (const [name, version] of Object.entries({ desk: "3.2.0-alpha.65", mine: "1.0.0", twin: "1.0.0", stale: "2.0.0", gitsrc: "1.0.0", nowhere: "1.0.0" })) {
+    await json(path.join(folder, name, "plugin.json"), { name, version })
+  }
+  const installed = [
+    { name: "desk", marketplace: "ourostack", version: "3.2.0-alpha.65" },
+    { name: "mine", marketplace: "private-mkt", version: "1.0.0" },
+    { name: "twin", marketplace: "ourostack", version: "1.0.0" },
+    { name: "twin", marketplace: "private-mkt", version: "1.0.0" },
+    { name: "stale", marketplace: "ourostack", version: "1.0.0" },
+    { name: "gitsrc", marketplace: "git-mkt", version: "1.0.0" },
+    { name: "nowhere", marketplace: "unknown-mkt", version: "1.0.0" },
+    "not an object",
+  ]
+  await fs.mkdir(home, { recursive: true })
+  await fs.writeFile(path.join(home, "config.json"), `// User settings belong in settings.json.\n// This file is managed automatically.\n${JSON.stringify({ installedPlugins: installed })}\n`)
+  await json(path.join(home, "settings.json"), { extraKnownMarketplaces: {
+    ourostack: { source: { source: "github", repo: "ourostack/desk" } },
+    "private-mkt": { source: { source: "github", repo: `${SENTINEL} bad` } },
+    "git-mkt": { source: { source: "git", url: "https://example.invalid/x.git" } },
+  } })
+  assert.deepEqual(sourcesOf(await scanFor(ctx, "copilot", path.join(folder, "desk"))), {
+    desk: "ourostack/desk",
+    mine: null, // its marketplace does not name a GitHub repository
+    twin: null, // two install records at this version
+    stale: null, // no install record at this version
+    gitsrc: null, // a marketplace that is not on GitHub
+    nowhere: null, // a marketplace settings.json does not know
+  })
+  assert.ok((await scanFor(ctx, "copilot", path.join(folder, "desk"), { sourceDeadline: 0 })).plugins.every((plugin) => plugin.source === null))
+  for (const [file, text] of [["config.json", "{broken"], ["config.json", JSON.stringify({ installedPlugins: Array.from({ length: 257 }, () => installed[0]) })], ["settings.json", "[]"]]) {
+    const saved = await fs.readFile(path.join(home, file), "utf8")
+    await fs.writeFile(path.join(home, file), text)
+    assert.equal(sourcesOf(await scanFor(ctx, "copilot", path.join(folder, "desk"))).desk, null, `${file}: ${text.slice(0, 20)}`)
+    await fs.writeFile(path.join(home, file), saved)
+  }
 }))

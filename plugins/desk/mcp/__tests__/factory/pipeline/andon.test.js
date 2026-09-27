@@ -65,7 +65,7 @@ test("planAndon fires for a tracked plugin's quality measure clearly worse on th
   assert.equal(alarm.comparison.direction, "up")
   assert.ok(alarm.body.startsWith(`${ANDON_MARKER}\n### Andon: \`tool_retries\` is clearly worse on \`desk\` 1.1.0 (job class \`other\`)\n`))
   assert.match(alarm.body, /\| Before \(1\.0\.0\) \| 6 \| 6 \| 1 \|/u)
-  assert.match(alarm.body, /No other plugin's version changed between these two sets of jobs\./u)
+  assert.match(alarm.body, /No other publicly sourced plugin that every compared job reports changed version between these two sets of jobs\./u)
   assert.match(alarm.body, /labels it `andon-dismissed`/u)
   for (const record of records) assert.ok(alarm.body.includes(record.job), "every compared job is listed as evidence")
   assert.doesNotMatch(alarm.body, /\d{4}-\d{2}-\d{2}/u)
@@ -109,22 +109,39 @@ test("planAndon compares only finished single-version jobs, and raises one alarm
   assert.deepEqual(planAndon(both, DESK).map((alarm) => alarm.job_class), ["review", "other"], "job classes run in the catalog's order")
 })
 
-test("planAndon names the other plugins whose versions changed with the same jobs, and attributes the change to the version set", () => {
+test("planAndon names the other public plugins whose versions changed with the same jobs, and attributes the change to the version set", () => {
   const withOthers = (version, values, others) => jobs(version, values).map((record) => ({ ...record, plugins: { ...record.plugins, ...others } }))
+  const PUBLIC = { plugins: ["desk"], publicPlugins: ["superpowers", "steady", "added", "extra"] }
   const records = [
-    ...withOthers("1.0.0", LOW, { superpowers: { min: "6.4.1", max: "6.4.1" }, steady: { min: "2.0.0", max: "2.0.0" } }),
+    ...withOthers("1.0.0", LOW, { superpowers: { min: "6.4.1", max: "6.4.1" }, steady: { min: "2.0.0", max: "2.0.0" }, added: { min: "0.0.1", max: "0.0.1" } }),
     ...withOthers("1.1.0", HIGH, { superpowers: { min: "6.4.2", max: "6.4.2" }, steady: { min: "2.0.0", max: "2.0.0" }, added: { min: "0.1.0", max: "0.2.0" } }),
   ]
-  const [alarm] = planAndon(records, DESK)
-  assert.match(alarm.body, /the change belongs to this set of versions, not necessarily to `desk` alone:/u)
+  const [alarm] = planAndon(records, PUBLIC)
+  assert.match(alarm.body, /Other publicly sourced plugins also changed between these two sets of jobs, so the change belongs to this set of versions, not necessarily to `desk` alone:/u)
   assert.match(alarm.body, /- `superpowers`: 6\.4\.1 before, 6\.4\.2 after\./u)
-  assert.match(alarm.body, /- `added`: not reported before, 0\.1\.0, 0\.2\.0 after\./u)
+  assert.match(alarm.body, /- `added`: 0\.0\.1 before, 0\.1\.0, 0\.2\.0 after\./u)
   assert.doesNotMatch(alarm.body, /`steady`/u)
-  // Some jobs lacking a plugin on one side is a change too, and "not reported" sorts last.
-  const partly = [...withOthers("1.0.0", LOW, { extra: { min: "1.0.0", max: "1.0.0" } }).slice(0, 3), ...jobs("1.0.0", LOW).slice(3), ...withOthers("1.1.0", HIGH, { extra: { min: "1.0.0", max: "1.0.0" } })]
-  assert.match(planAndon(partly, DESK)[0].body, /- `extra`: 1\.0\.0, not reported before, 1\.0\.0 after\./u)
-  const reversed = [...withOthers("1.0.0", LOW, { extra: { min: "1.0.0", max: "1.0.0" } }), ...jobs("1.1.0", HIGH).slice(0, 3), ...withOthers("1.1.0", HIGH, { extra: { min: "1.0.0", max: "1.0.0" } }).slice(3)]
-  assert.match(planAndon(reversed, DESK)[0].body, /- `extra`: 1\.0\.0 before, 1\.0\.0, not reported after\./u)
+  // A plugin some job does not report, on either side, is never named and never shown as "not reported".
+  const partly = [...withOthers("1.0.0", LOW, { extra: { min: "1.0.0", max: "1.0.0" } }).slice(0, 3), ...jobs("1.0.0", LOW).slice(3), ...withOthers("1.1.0", HIGH, { extra: { min: "2.0.0", max: "2.0.0" } })]
+  const reversed = [...withOthers("1.0.0", LOW, { extra: { min: "1.0.0", max: "1.0.0" } }), ...jobs("1.1.0", HIGH).slice(0, 3), ...withOthers("1.1.0", HIGH, { extra: { min: "2.0.0", max: "2.0.0" } }).slice(3)]
+  for (const set of [partly, reversed]) {
+    const [body] = planAndon(set, PUBLIC).map((item) => item.body)
+    assert.doesNotMatch(body, /`extra`|not reported/u)
+    assert.match(body, /No other publicly sourced plugin that every compared job reports changed version/u)
+  }
+})
+
+test("planAndon never names a plugin that is not public by the publishing rule, including one collapsed after the rule shipped", () => {
+  // Before: an older client named the private plugin in every job. After: the ruled client collapsed it into the private count.
+  const before = jobs("1.0.0", LOW).map((record) => ({ ...record, plugins: { ...record.plugins, "ms-desk": { min: "2.29.11", max: "2.29.11" }, superpowers: { min: "6.4.1", max: "6.4.1" } } }))
+  const after = jobs("1.1.0", HIGH).map((record) => ({ ...record, plugins: { ...record.plugins, superpowers: { min: "6.4.2", max: "6.4.2" } } }))
+  const [alarm] = planAndon([...before, ...after], { plugins: ["desk"], publicPlugins: ["desk", "superpowers"] })
+  assert.doesNotMatch(alarm.body, /ms-desk|not reported/u)
+  assert.match(alarm.body, /- `superpowers`: 6\.4\.1 before, 6\.4\.2 after\./u)
+  // A private plugin changing version on both sides is not named either, and with no public list nothing else is named.
+  const bothSides = [...before, ...after.map((record) => ({ ...record, plugins: { ...record.plugins, "ms-desk": { min: "2.29.12", max: "2.29.12" } } }))]
+  assert.doesNotMatch(planAndon(bothSides, { plugins: ["desk"], publicPlugins: ["superpowers"] })[0].body, /ms-desk/u)
+  assert.doesNotMatch(planAndon(bothSides, DESK)[0].body, /ms-desk|superpowers/u)
 })
 
 test("syncAndon opens one issue per alarm, never duplicates it and writes nothing when nothing changed", async () => {
