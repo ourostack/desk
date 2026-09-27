@@ -1,8 +1,12 @@
 # desk plugin — changelog
 
-## 3.2.0-alpha.92 — 2026-09-27
+## 3.2.0-alpha.94 — 2026-09-27
 
 The `desk MCP tests` workflow now finishes in about two and a half minutes instead of about seventeen. Its coverage gate ran the 237 instrumented test files one at a time in one job, and that one step took 11 to 17 minutes. CI now runs the files as twelve parallel shards, each on its own runner and still one file at a time under the same instrumentation ([runner](mcp/src/coverage/runner.js) `--shard <index>/<total> --output <dir>`). The `desk MCP test suite` job then admits the result with `--merge <dir>` only when every shard of the split is present once and passed, every shard measured the same changed files, and together they ran exactly the test files of one whole-suite run; the same 100% line, branch, function and statement gate then applies once to the combined raw coverage. Shards are balanced by each file's measured seconds in [coverage-shards.json](mcp/config/coverage-shards.json), which affects only the balance, and each shard records fresh timings for refreshing it. The Windows feedback job restores its installed test dependencies when the Node version and the lock are unchanged, because its `npm ci` became the longest step once the gate was sharded. `npm run test:coverage` with no arguments is unchanged. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
+## 3.2.0-alpha.93 — 2026-09-27
+
+Superpowers refresh: Desk now ships Superpowers 6.4.2, the selected payload of [obra/superpowers](https://github.com/obra/superpowers/commit/8ca22dba9a94f28898bbce59f2537ff4d87c747d) (upstream version 6.4.2) copied byte for byte. Selected files: 17 changed, 4 added, 1 removed. [upstream-sources.lock.json](../../upstream-sources.lock.json) records every path and SHA-256. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
 
 ## 3.2.0-alpha.87 — 2026-09-27
 
