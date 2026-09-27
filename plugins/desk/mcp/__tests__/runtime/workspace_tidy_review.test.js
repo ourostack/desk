@@ -5,7 +5,7 @@ import path from "node:path"
 import { mkTempRoot } from "../_temp_roots.js"
 import { withWorkspaceClaim } from "../../src/runtime/workspace-claim.js"
 import { dispositionRecord, mergeTidyEvidence, acknowledgeTidyEvidence, encodeTidyReport, decodeTidyReport } from "../../src/runtime/workspace-evidence.js"
-import { normalizeDeliveryEndpoint, inspectWorkspace } from "../../src/runtime/workspace-tidy.js"
+import { normalizeDeliveryEndpoint, inspectWorkspace, tidyGit, TIDY_GIT_TIMEOUT_MS } from "../../src/runtime/workspace-tidy.js"
 import { readInspectionGit } from "../../src/runtime/git-inspection.js"
 import { pathToFileURL } from "node:url"
 
@@ -122,6 +122,19 @@ test("R5 an already-cancelled Git inspection spawns no continuing process", asyn
   const result = await inspectWorkspace({ deskRoot: process.cwd(), signal: controller.signal })
   assert.equal(result.complete, false)
   assert.match(result.issues[0], /budget/)
+})
+
+// A Git call that runs for a set time: an alias that sleeps in the shell.
+const slowGit = (seconds) => ["-c", `alias.slow=!sleep ${seconds}`, "slow"]
+
+test("a Git inspection that runs out of time says so, with the limit it was given", async () => {
+  await assert.rejects(readInspectionGit(process.cwd(), slowGit(1), {}, { timeoutMs: 100 }), /Git inspection timed out after 100 ms: git -c alias\.slow=!sleep 1 slow/u)
+})
+
+test("workspace tidy gives each Git call longer than the hooks' 2 s, so a loaded machine does not turn repairs into retained worktrees", async () => {
+  assert.ok(TIDY_GIT_TIMEOUT_MS > 2000)
+  const result = await tidyGit(process.cwd(), slowGit(2.5))
+  assert.equal(result.ok, true, JSON.stringify(result))
 })
 
 test("F1-I01 stored canonical records reconstruct all unacknowledged projections without duplicate history", () => {

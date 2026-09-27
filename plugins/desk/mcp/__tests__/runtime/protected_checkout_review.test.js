@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { guardShellCommand, protectCheckout, protectedCheckoutHook } from "../../src/runtime/protected-checkout.js"
+import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout, protectedCheckoutHook } from "../../src/runtime/protected-checkout.js"
 import { inspectionEnvironment, readInspectionGit, resolveInspectionGit } from "../../src/runtime/git-inspection.js"
 import { hasOption, parseGitOptions, SPECS } from "../../src/runtime/git-guard-options.js"
 import { inspectShell } from "../../src/runtime/shell-commands.js"
@@ -237,9 +237,33 @@ test("inspection trust is independent of candidate runtime search and fails expl
   assert.throws(() => resolveInspectionGit({ platform: "win32", env: {} }), /trusted Git is unavailable/u)
   assert.throws(() => resolveInspectionGit({ platform: "linux", accessible: () => false }), /trusted Git is unavailable/u)
   await assert.rejects(readInspectionGit(f.root + "/absent", ["status"], {}), /ENOENT/u)
-  await assert.rejects(readInspectionGit(f.ordinary, ["hash-object", "--stdin"], {}), /^Error: Git did not answer in time: git hash-object --stdin$/u)
+  // hash-object --stdin waits on input the inspection never sends, so the hooks' default 2 s limit ends it and says so.
+  await assert.rejects(readInspectionGit(f.ordinary, ["hash-object", "--stdin"], {}), /Git inspection timed out after 2000 ms: git hash-object --stdin/u)
   // A missing value is an answer (exit 1 with no output), not an inspection failure.
   assert.deepEqual(await readInspectionGit(f.ordinary, ["config", "--get", "alias.log"], {}), { ok: false, stdout: "", stderr: "", code: 1 })
+})
+
+test("the guard shares one inspection budget across its Git calls, below every host's hook timeout", async (t) => {
+  // The hosts stop a PreToolUse hook at its declared timeout; the guard must decide well before the smallest one.
+  const claude = JSON.parse(readFileSync(path.join(plugin, "hooks", "hooks.json"), "utf8")).hooks.PreToolUse.flatMap((group) => group.hooks)
+  const copilot = JSON.parse(readFileSync(path.join(plugin, "hooks", "copilot-hooks.json"), "utf8")).hooks.preToolUse
+  const hostTimeouts = [...claude.map((entry) => entry.timeout), ...copilot.map((entry) => entry.timeoutSec)].map((seconds) => seconds * 1000)
+  assert.ok(hostTimeouts.length >= 2 && GUARD_INSPECTION_BUDGET_MS <= Math.min(...hostTimeouts) - 2000, `budget ${GUARD_INSPECTION_BUDGET_MS} ms against host timeouts ${hostTimeouts}`)
+
+  const f = fixture(t)
+  const command = `git -C ${q(f.shared)} checkout --detach HEAD`
+  // Each call may use what is left of the budget, not a fixed 2 s: a loaded machine's slow calls still decide.
+  let clock = 0
+  const limits = []
+  const slowGit = (cwd, args, env, options) => { limits.push(options.timeoutMs); clock += 2500; return readInspectionGit(cwd, args, env) }
+  assert.equal((await f.guard(command, { readGit: slowGit, now: () => clock })).deny, true)
+  assert.deepEqual(limits, [GUARD_INSPECTION_BUDGET_MS, GUARD_INSPECTION_BUDGET_MS - 2500])
+  // Once the budget is spent the guard fails closed and says why.
+  clock = 0
+  const spentGit = (cwd, args, env) => { clock += GUARD_INSPECTION_BUDGET_MS; return readInspectionGit(cwd, args, env) }
+  const spent = await f.guard(command, { readGit: spentGit, now: () => clock })
+  assert.equal(spent.deny, true)
+  assert.match(spent.reason, new RegExp(`within its ${GUARD_INSPECTION_BUDGET_MS / 1000} s budget because Git answered too slowly`, "u"))
 })
 
 test("operation option parsing consumes values, detects unambiguous prefixes and respects negation", () => {

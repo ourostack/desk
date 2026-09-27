@@ -6,8 +6,6 @@ import * as path from "node:path"
 // particular PATH, executable search paths and loader variables are not input.
 const HOST_ENV = { ...process.env }
 const LOCATION_KEYS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_NAMESPACE"]
-// One read never outlasts the whole guard budget (protected-checkout.js); callers pass what is left.
-const TIMEOUT_MS = 5000
 let trustedGit
 
 export function resolveInspectionGit({ platform = process.platform, env = HOST_ENV, accessible = (file) => {
@@ -35,7 +33,10 @@ export function inspectionEnvironment(modeled) {
   return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }
 }
 
-export function readInspectionGit(cwd, args, modeled, { signal, timeoutMs = TIMEOUT_MS } = {}) {
+// A hook answers its host within seconds, so by default each inspection call gets 2 s. The protected-checkout guard passes what is left of its whole-command budget; callers off the hook path, such as the detached workspace repair, pass a longer limit.
+export const INSPECTION_TIMEOUT_MS = 2000
+
+export function readInspectionGit(cwd, args, modeled, { signal, timeoutMs = INSPECTION_TIMEOUT_MS } = {}) {
   trustedGit ??= resolveInspectionGit()
   const env = inspectionEnvironment(modeled)
   return new Promise((resolve, reject) => {
@@ -47,14 +48,12 @@ export function readInspectionGit(cwd, args, modeled, { signal, timeoutMs = TIME
     })
     child.once("close", () => {
       const { error, stdout, stderr } = outcome
-      // A Git exit status, including 1 for "no such value", is an answer; only a timeout or a spawn failure is not.
-      if (error?.killed) {
-        const timeout = new Error(`Git did not answer in time: git ${args.join(" ")}`)
-        timeout.timeout = true
-        reject(timeout)
+      // execFile reports its own timeout only as a SIGKILLed "Command failed"; name the cause so a retained resource explains itself.
+      if (error?.killed && error.code === null && !signal?.aborted) {
+        reject(Object.assign(new Error(`Git inspection timed out after ${timeoutMs} ms: git ${args.join(" ")}`), { code: "ETIMEDOUT", cause: error }))
         return
       }
-      if (error && typeof error.code !== "number") { reject(error); return }
+      if (error && (error.killed || typeof error.code !== "number")) { reject(error); return }
       resolve({ ok: !error, stdout: stdout.trim(), stderr: stderr.trim(), code: error?.code })
     })
   })

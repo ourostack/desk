@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { inspectShell } from "./shell-commands.js"
 import { runGit } from "./state-branch.js"
-import { readInspectionGit as readGit } from "./git-inspection.js"
+import { readInspectionGit } from "./git-inspection.js"
 import { existingDirectory, physicalDirectory } from "./shell-paths.js"
 import { BUILTINS, canonicalKey, classifyGit, hasRule, MESSAGES } from "./git-guard-policy.js"
 import { GuardDenial, mayInvokeGit, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
@@ -30,8 +30,9 @@ export async function protectCheckout({ root, stateBranch = null, git = runGit }
   return { protected: true }
 }
 
-// The whole decision, across every inspection read, stays below the hosts' 10 s hook deadline.
-export const BUDGET_MS = 7000
+// The hosts stop a PreToolUse hook at its declared timeout (10 s for both). One command's Git reads share this
+// budget, so a loaded machine's slow reads can still decide, and the guard always answers, failing closed, first.
+export const GUARD_INSPECTION_BUDGET_MS = 7000
 // One read answers protection, the state branch, upstreams and push configuration.
 const POLICY_KEYS = "^(desk\\.(protected|statebranch)|branch\\..+\\.(remote|merge)|remote\\..+\\.(mirror|push)|push\\.default)$"
 
@@ -141,17 +142,14 @@ function aliasFrom(overrides, name) {
 const quote = (arg) => `'${arg.replaceAll("'", "'\\''")}'`
 const GIT_LIKE = /^(?:-C|-c|--git-dir|--work-tree|--config-env)/u
 
-export async function guardShellCommand({ command, cwd, env = process.env, powershell = false, budgetMs = BUDGET_MS }) {
+export async function guardShellCommand({ command, cwd, env = process.env, powershell = false, budgetMs = GUARD_INSPECTION_BUDGET_MS, readGit = readInspectionGit, now = Date.now }) {
   const inspected = new Set()
-  const deadline = Date.now() + budgetMs
+  const deadline = now() + budgetMs
+  // Each read gets what is left of the budget; a spent budget, like a read that timed out, is ETIMEDOUT.
   async function read(dir, args, variables) {
-    const left = deadline - Date.now()
-    if (left <= 0) {
-      const timeout = new Error("the inspection budget is spent")
-      timeout.timeout = true
-      throw timeout
-    }
-    return readGit(dir, args, variables, { timeoutMs: left })
+    const timeoutMs = deadline - now()
+    if (timeoutMs <= 0) throw Object.assign(new Error(`protected-checkout inspection budget of ${budgetMs} ms is spent`), { code: "ETIMEDOUT" })
+    return readGit(dir, args, variables, { timeoutMs })
   }
   async function visit({ name, args, cwd: directory, env: variables, computed = false }) {
     if (name !== "git") return
@@ -224,7 +222,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
   async function guardedVisit(call) {
     try { await visit(call) } catch (error) {
       if (error instanceof GuardDenial) throw error
-      if (error.timeout) throw new GuardDenial(`Desk could not finish checking this command within its ${budgetMs / 1000} s budget because Git answered too slowly, so it is denied to keep a protected checkout safe. Retry it, or work in your own worktree: ${WORKTREE_COMMAND}`)
+      if (error.code === "ETIMEDOUT") throw new GuardDenial(`Desk could not finish checking this command within its ${budgetMs / 1000} s budget because Git answered too slowly, so it is denied to keep a protected checkout safe. Retry it, or work in your own worktree: ${WORKTREE_COMMAND}`)
       throw new GuardDenial(`Desk could not inspect a Git command in this shell command (${error.message}), and it could change a protected checkout. Retry it, or work in your own worktree: ${WORKTREE_COMMAND}`)
     }
   }

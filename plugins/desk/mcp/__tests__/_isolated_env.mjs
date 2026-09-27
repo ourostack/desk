@@ -7,6 +7,7 @@
 //
 // The write guard covers this process's own `node:fs` calls (sync, callback and promise forms). A path under the real home is refused unless it is under the OS temp folder or this repository checkout, which may themselves sit under the home.
 
+import { spawnSync } from "node:child_process"
 import fs from "node:fs"
 import { syncBuiltinESMExports } from "node:module"
 import * as os from "node:os"
@@ -152,5 +153,38 @@ if (!fs.__deskTestGuard) {
   Object.defineProperty(fs, "__deskTestGuard", { value: true })
   syncBuiltinESMExports()
 }
+
+// ---- this checkout's Git configuration stays untouched ----
+//
+// Admission marks the Git checkout of every desk root it binds as protected (desk-protected.config plus an includeIf in the shared config). A test that bound this repository's own folder once wrote that marker onto the real worktree, and the installed guard then refused Git commands there. Every process snapshots the repository and worktree configuration that applies to this checkout when it starts, and compares it when it exits: the top-level test runner, and a test file run on its own, fail the run when it changed; a test file's process under the runner names itself, so the log shows which files were running. Several worktrees can share one repository config file, and other work on the machine legitimately adds branch, remote and includeIf entries to it, so those keys are left out, as is desk.stateBranch, which Desk writes beside desk.protected; what an include sets for this checkout (such as desk.protected) still shows up.
+export const GUARDED_CHECKOUT = "DESK_TEST_GUARDED_CHECKOUT"
+
+/** The repository- and worktree-scope Git configuration that applies to `checkout`, one "scope key=value" line each, or null outside a Git checkout. */
+export function checkoutConfig(checkout) {
+  const result = spawnSync("git", ["-C", checkout, "config", "--list", "--show-scope"], {
+    encoding: "utf8", env: { PATH: process.env.PATH, HOME: process.env.HOME, SystemRoot: process.env.SystemRoot, GIT_CONFIG_NOSYSTEM: "1" },
+  })
+  if (result.status !== 0 || result.error) return null
+  return result.stdout.split(/\r?\n/u)
+    .filter((line) => /^(?:local|worktree)\t/u.test(line) && !/^\w+\t(?:includeif\.|branch\.|remote\.|desk\.statebranch=)/iu.test(line))
+    .sort()
+    .join("\n")
+}
+
+const guardedCheckout = process.env[GUARDED_CHECKOUT] || repoRoot
+const configSnapshot = checkoutConfig(guardedCheckout)
+process.once("exit", () => {
+  if (configSnapshot === null) return
+  const now = checkoutConfig(guardedCheckout)
+  if (now === configSnapshot) return
+  const before = new Set(configSnapshot.split("\n"))
+  const after = new Set((now ?? "").split("\n"))
+  const shown = (line) => line.replace("\t", " ")
+  const added = [...after].filter((line) => line && !before.has(line)).map(shown)
+  const removed = [...before].filter((line) => line && !after.has(line)).map(shown)
+  const underRunner = typeof process.env.NODE_TEST_CONTEXT === "string"
+  process.stderr.write(`test isolation: the Git configuration of the checkout ${guardedCheckout} changed while ${underRunner ? process.argv[1] : "this test run"} ran (added: ${added.join(", ") || "none"}; removed: ${removed.join(", ") || "none"}). Tests must bind temporary repositories only; restore the checkout's configuration by hand.\n`)
+  if (!underRunner) process.exitCode = 1
+})
 
 export const testRun = Object.freeze({ runDir, realHome, ...locations })

@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { BUDGET_MS, guardShellCommand, protectCheckout } from "../../src/runtime/protected-checkout.js"
+import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout } from "../../src/runtime/protected-checkout.js"
 import { MESSAGES } from "../../src/runtime/git-guard-policy.js"
 
 const plugin = fileURLToPath(new URL("../../../", import.meta.url))
@@ -288,7 +288,7 @@ async function slowGit(t, f, delayMs) {
 }
 
 test("A3b review: one inspection budget bounds the decision below the hosts' 10 s hook deadline", { skip: process.platform === "win32" ? "mkfifo is POSIX-only" : false }, async (t) => {
-  assert.ok(BUDGET_MS <= 7000, "the budget leaves room inside the 10 s hook timeout")
+  assert.ok(GUARD_INSPECTION_BUDGET_MS <= 7000, "the budget leaves room inside the 10 s hook timeout")
   for (const manifest of ["hooks.json", "copilot-hooks.json"]) {
     const text = JSON.stringify(JSON.parse((await import("node:fs")).readFileSync(path.join(plugin, "hooks", manifest), "utf8")))
     assert.match(text, /protected-checkout\.cjs[^}]*"timeout(?:Sec)?":10/u, manifest)

@@ -232,7 +232,10 @@ test("a stopped owner is never taken over: the other session reports controller_
   assert.equal(recovered.admission.hung_controller, null)
   assert.deepEqual(JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8")), record, "still the one controller the owner started")
   assert.equal(statSync(record.endpoint).ino, inode)
-  assert.equal((await owner.statusUntil(settled)).state, "ready", "the owner answers again")
+  // The owner's session saw its own controller stop too. It recovers on its own admission backoff, which can be a poll or more behind the other session, so wait for ready rather than accepting its first settled answer.
+  const resumed = performance.now()
+  assert.equal((await owner.statusUntil((payload) => payload.state === "ready", { deadlineMs: 60000, intervalMs: 500 })).state, "ready", "the owner answers again")
+  t.diagnostic(`the owner's session reported ready ${Math.round(performance.now() - resumed)} ms after the other session did`)
   const journaled = await other.call("task_create", { track: "ops", slug: "after-owner-resumed", title: "Resumed owner" })
   assert.equal(journaled.isError, false, JSON.stringify(journaled.payload))
 })
@@ -508,7 +511,8 @@ test("a truncated index database never breaks desk_status and is rebuilt in the 
   const configPath = writeActivation(fixture)
   writeFile(path.join(fixture.desk, ".state", "desk-index.sqlite"), "SQLite format 3\u0000truncated")
   await withDesk(t, fixture, { args: ["--activation-config", configPath] }, async (session) => {
-    const status = await session.statusUntil((payload) => payload.state === "ready" && payload.local_db?.state === "available")
+    // The rebuild runs in the background: desk_status answers throughout, and the rebuilt lexical index can land a poll after the database reports available.
+    const status = await session.statusUntil((payload) => payload.state === "ready" && payload.local_db?.state === "available" && payload.lexical_index?.available === true)
     assert.equal(status.lexical_index.available, true)
     await assertReadsServeDirectly(session)
   })
