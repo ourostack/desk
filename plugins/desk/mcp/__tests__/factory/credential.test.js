@@ -53,6 +53,8 @@ test("known token prefixes are credential-like in any case, even when short", ()
     assert.equal(isCredentialLike(value), true, value)
   }
   assert.equal(isCredentialLike("0123456789abcdef0123456789abcdef"), true)
+  // The documented false positive: a real name with a 16+ letter-and-digit run.
+  assert.equal(isCredentialLike("acme/build2026Q3release"), true)
 })
 
 test("real model IDs, plugin names and repository names are not credential-like", () => {

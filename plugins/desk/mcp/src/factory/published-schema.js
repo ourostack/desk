@@ -25,6 +25,8 @@
 //     `ghp_` or `sk-`, a 16+ character hex or letter-and-digit run, a
 //     password value or an IPv4-looking run). Every published model field,
 //     here and in labels (`label-schema.js`), uses the one `modelIdField`.
+//     The rule can refuse a real name: a repository such as
+//     `acme/build2026Q3release` holds a 16-character letter-and-digit run.
 //   - `session.id` is a version-4 (random) UUID. Other versions can carry a
 //     timestamp (v1, v6, v7) or a machine identifier (v1), and the ID is
 //     also the file name (review I1, fix round 2).
