@@ -11,6 +11,18 @@
       "env": {
         "DESK_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}"
       }
+    },
+    "desk-browser": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "-e",
+        "var fs=require('fs'),path=require('path'),roots=[process.env.DESK_PLUGIN_ROOT,process.cwd()],root=null;for(var i=0;i<roots.length&&root===null;i++){if(roots[i]&&fs.existsSync(path.join(roots[i],'mcp','browser.cjs')))root=roots[i]}if(root===null){process.stderr.write('[desk-browser] Desk could not find its plugin files. Refresh or reinstall the Desk plugin, then reconnect the desk-browser MCP server.\\n');process.exit(1)}require(path.join(root,'mcp','browser.cjs')).run({args:[]})"
+      ],
+      "cwd": ".",
+      "env": {
+        "DESK_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}"
+      }
     }
   }
 }
