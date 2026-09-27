@@ -161,7 +161,24 @@ test("controller reports a forced generation after a fresh fast path as built", 
   } finally { await client.close() }
 })
 
-test("support smoke: process restart replays durable mutations and discovers external downtime writes", async () => {
+// A SIGKILLed process is normally gone within milliseconds; the wait watches for it and gives a loaded machine ample room.
+const CONTROLLER_EXIT_WAIT_MS = 30000
+
+async function waitForExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    try {
+      process.kill(pid, 0)
+    } catch (error) {
+      if (error.code === "ESRCH") return
+      throw error
+    }
+    assert.ok(Date.now() < deadline, `process ${pid} still exists ${timeoutMs} ms after SIGKILL`)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
+test("support smoke: process restart replays durable mutations and discovers external downtime writes", async (t) => {
   const directory = await mkTempRoot("desk-task4-restart-")
   const root = path.join(directory, "workspace")
   const stateHome = path.join(directory, "state")
@@ -180,9 +197,9 @@ test("support smoke: process restart replays durable mutations and discovers ext
       statusContext: { admission: { controller } },
     });
     if (result.isError) throw new Error(JSON.stringify(result));
-    console.log(controller.id);
     const owner = (await controller.status()).owner;
     if (owner.pid === process.pid) throw new Error("controller must be a child");
+    console.log(JSON.stringify({ id: controller.id, pid: owner.pid }));
     process.kill(owner.pid, "SIGKILL");
     process.exit(0);
   `], { stdio: ["ignore", "pipe", "pipe"] })
@@ -195,7 +212,11 @@ test("support smoke: process restart replays durable mutations and discovers ext
     child.once("close", resolve)
   })
   assert.equal(code, 0, stderr)
-  const id = stdout.trim()
+  const { id, pid } = JSON.parse(stdout.trim())
+  // SIGKILL is delivered asynchronously: until the killed controller is gone, Desk rightly refuses to start a second controller beside a running owner (controller_owner_unresponsive). Restart only once the process no longer exists.
+  const killed = performance.now()
+  await waitForExit(pid, CONTROLLER_EXIT_WAIT_MS)
+  t.diagnostic(`the killed controller ${pid} was gone ${Math.round(performance.now() - killed)} ms after its parent exited`)
   assert.equal(JSON.parse(fs.readFileSync(path.join(stateHome, id, "journal", "journal.json"))).clean_shutdown, false)
   const canonicalBefore = fs.readFileSync(path.join(root, "track", "durable-task", "task.md"), "utf8")
   fs.writeFileSync(path.join(root, "track", "durable-task", "doing.md"), "# external downtime write\n")

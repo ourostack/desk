@@ -18,6 +18,16 @@ async function until(predicate, message, timeout = 10000) {
   }
 }
 
+// The owner record as it is on disk right now, or null while a re-election has removed it or is still writing it (the controller writes owner.json in place, so a reader can see it missing or half-written).
+function currentOwner(ownerFile) {
+  try {
+    return JSON.parse(readFileSync(ownerFile, "utf8"))
+  } catch (error) {
+    if (error.code === "ENOENT" || error instanceof SyntaxError) return null
+    throw error
+  }
+}
+
 function ownerRecord(fixture) {
   const [directory] = readdirSync(fixture.readinessHome)
   const ownerFile = path.join(fixture.readinessHome, directory, "owner.json")
@@ -179,6 +189,9 @@ for (const observers of ["passive-v3", "passive-v4", "passive-v3-v4", "capturing
   }
 }
 
+// A child that swallowed the signal never re-elects at all, so the wait only bounds how long a loaded machine may take to end the child and publish its replacement.
+const REELECTION_WAIT_MS = 30000
+
 for (const signal of ["SIGTERM", "SIGINT"]) {
   test(`a controller child inherits a passive v4 preload but ${signal} still ends it and re-elects, twice`, { skip: posixOnly, timeout: 60000 }, async (t) => {
     const fixture = await makeGitDesk("desk-child-inherited-observer-")
@@ -189,10 +202,12 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
     for (let cycle = 0; cycle < 2; cycle += 1) {
       const record = ownerRecord(fixture)
       process.kill(record.owner.pid, signal)
+      const signalled = performance.now()
       await until(() => {
-        if (!existsSync(record.ownerFile)) return false
-        return JSON.parse(readFileSync(record.ownerFile, "utf8")).owner.token !== record.owner.token
-      }, `the child swallowed ${signal} with an inherited passive observer`, 5000)
+        const current = currentOwner(record.ownerFile)
+        return current !== null && current.owner.token !== record.owner.token
+      }, `the child swallowed ${signal} with an inherited passive observer`, REELECTION_WAIT_MS)
+      t.diagnostic(`cycle ${cycle + 1}: ${signal} ended the child and a new owner was published ${Math.round(performance.now() - signalled)} ms later`)
       await assertConnected([session])
       await session.statusUntil((status) => status.state === "ready")
     }

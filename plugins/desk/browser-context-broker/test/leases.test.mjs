@@ -19,6 +19,7 @@ import {
 } from '../src/leases.mjs';
 import { readRegistry, writeRegistry } from '../src/registry.mjs';
 import { startFakeCdpServer } from './fixtures/fake-cdp-server.mjs';
+import { REQUEST_TIMEOUT_LIMIT_MS, settlesWithin } from './fixtures/settle.mjs';
 
 const scratchRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '.lease-state');
 const holdLeaseLockFixture = new URL('./fixtures/hold-lease-lock.mjs', import.meta.url);
@@ -788,19 +789,14 @@ test('release records a silent close as failed and releases its operation lock f
   assert.equal(retained.releasing, true);
 
   silenceClose = false;
-  const retried = await Promise.race([
-    releaseLease({
-      stateDir: directory,
-      leaseId: lease.id,
-      declaration,
-      providerInvoker: attestingProvider,
-      cdpClientOptions: { commandTimeoutMs: 25 },
-    }),
-    new Promise((_, reject) => setTimeout(
-      () => reject(new Error('release operation lock was not released')),
-      500,
-    )),
-  ]);
+  // The retry's close is answered, so its command timeout only has to outlast a loaded machine's round trip.
+  const retried = await settlesWithin(t, 'release operation lock was not released', releaseLease({
+    stateDir: directory,
+    leaseId: lease.id,
+    declaration,
+    providerInvoker: attestingProvider,
+    cdpClientOptions: { commandTimeoutMs: REQUEST_TIMEOUT_LIMIT_MS },
+  }));
 
   assert.equal(retried.released, true);
   assert.equal((await readRegistry(directory)).leases[lease.id], undefined);
@@ -991,19 +987,14 @@ test('stale cleanup records a silent close as failed and releases its operation 
   assert.equal(retained.releasing, false);
 
   silenceClose = false;
-  const retried = await Promise.race([
-    cleanupStaleLease({
-      stateDir: directory,
-      leaseId: lease.id,
-      declaration,
-      providerInvoker: attestingProvider,
-      cdpClientOptions: { commandTimeoutMs: 25 },
-    }),
-    new Promise((_, reject) => setTimeout(
-      () => reject(new Error('cleanup operation lock was not released')),
-      500,
-    )),
-  ]);
+  // The retry's close is answered, so its command timeout only has to outlast a loaded machine's round trip.
+  const retried = await settlesWithin(t, 'cleanup operation lock was not released', cleanupStaleLease({
+    stateDir: directory,
+    leaseId: lease.id,
+    declaration,
+    providerInvoker: attestingProvider,
+    cdpClientOptions: { commandTimeoutMs: REQUEST_TIMEOUT_LIMIT_MS },
+  }));
 
   assert.equal(retried.released, true);
   assert.equal((await readRegistry(directory)).leases[lease.id], undefined);
