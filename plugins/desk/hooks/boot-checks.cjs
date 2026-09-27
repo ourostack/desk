@@ -21,7 +21,9 @@ function reportPath(root, common) {
 async function location(root) {
   const canonical = await fs.realpath(root);
   const { readInspectionGit } = await runtime("runtime/git-inspection.js");
-  const result = await readInspectionGit(canonical, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {});
+  const { TIDY_GIT_TIMEOUT_MS } = await runtime("runtime/workspace-tidy.js");
+  // The report location serves the detached repair and the CLI, never the boot check's budget.
+  const result = await readInspectionGit(canonical, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS });
   if (!result.ok) throw new Error("bound desk is not an inspectable repository");
   const common = await fs.realpath(result.stdout);
   return { canonical, file: reportPath(canonical, common) };
@@ -46,7 +48,7 @@ async function launchRepair(root, env, node) {
   });
 }
 
-async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair, resolveNode = compatibleNode }, expired, signal) {
+async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair, resolveNode = compatibleNode, inspectionBudgetMs }, expired, signal) {
   try {
     const [{ resolveStartupRoot }, { resolveActivationConfigPath, isDeskWorkspace }] = await Promise.all([
       runtime("util/startup-direction.js"), runtime("util/paths.js"),
@@ -64,7 +66,7 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
       return "Desk boot: workspace-tidy deferred; binding is ambiguous; use desk_status root before requesting repair.";
     }
     if (!root) return "Desk boot: workspace-tidy skipped; no bound desk.";
-    const inventory = await inspectWorkspace({ deskRoot: root, signal });
+    const inventory = await inspectWorkspace({ deskRoot: root, signal, budgetMs: inspectionBudgetMs });
     if (expired()) return "";
     let previous = "";
     if (inventory.commonDirectory) {

@@ -2,12 +2,14 @@ import { existsSync, realpathSync } from "node:fs"
 import * as path from "node:path"
 import { inspectShell } from "./shell-commands.js"
 import { runGit } from "./state-branch.js"
-import { readInspectionGit as readGit } from "./git-inspection.js"
+import { readInspectionGit } from "./git-inspection.js"
 import { physicalDirectory } from "./shell-paths.js"
 import { inspectGitOptions } from "./git-guard-options.js"
 
 export const WORKTREE_GUIDANCE = 'shared checkout: use git worktree add --detach "$(mktemp -d)" <ref>'
 const OPERATIONS = new Set(["checkout", "switch", "reset", "rebase", "pull", "merge", "stash", "clean"])
+// The hosts stop a PreToolUse hook at its declared timeout (10 s for both). One command's Git calls share this budget, so a loaded machine's slow calls can still decide, and the guard always answers, failing closed, before the host gives up on it.
+export const GUARD_INSPECTION_BUDGET_MS = 7000
 
 // Git copies config.worktree to new worktrees. An exact gitdir conditional include
 // keeps this local marker on the bound checkout without changing Git's extensions.
@@ -26,7 +28,7 @@ export async function protectCheckout({ root, git = runGit }) {
   return { protected: true }
 }
 
-async function protectedTarget(cwd, options, env) {
+async function protectedTarget(cwd, options, env, readGit) {
   const location = await readGit(cwd, [...options, "rev-parse", "--absolute-git-dir"], env)
   if (!location.ok) return false
   const config = await readGit(cwd, [...options, "config", "--show-scope", "--type=bool", "--get-all", "desk.protected"], env)
@@ -69,7 +71,13 @@ function destructive(name, args) {
   return name === "worktree" && args[0] === "remove" && inspectGitOptions("remove", args.slice(1)).enabled
 }
 
-export async function guardShellCommand({ command, cwd, env = process.env, powershell = false }) {
+export async function guardShellCommand({ command, cwd, env = process.env, powershell = false, readGit: read = readInspectionGit, now = Date.now }) {
+  const deadline = now() + GUARD_INSPECTION_BUDGET_MS
+  function readGit(directory, args, variables) {
+    const timeoutMs = deadline - now()
+    if (timeoutMs <= 0) throw new Error(`protected-checkout inspection budget of ${GUARD_INSPECTION_BUDGET_MS} ms is spent`)
+    return read(directory, args, variables, { timeoutMs })
+  }
   let deny = false
   const inspected = new Set()
   async function visit({ name, args, cwd: directory, env: variables }) {
@@ -103,11 +111,11 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
         let resolved = path.resolve(invocation.cwd, target)
         try { resolved = realpathSync(resolved) } catch (error) { if (error.code !== "ENOENT") throw error }
         const found = paths.find((p) => p === resolved) ?? paths.find((p) => path.basename(p) === target)
-        if (found && await protectedTarget(found, [], {})) deny = true
+        if (found && await protectedTarget(found, [], {}, readGit)) deny = true
       }
       return
     }
-    if (await protectedTarget(invocation.cwd, location, variables)) deny = true
+    if (await protectedTarget(invocation.cwd, location, variables, readGit)) deny = true
   }
   await inspectShell({ command, cwd, env, powershell, visit })
   return deny ? { deny: true, reason: WORKTREE_GUIDANCE } : { deny: false }
