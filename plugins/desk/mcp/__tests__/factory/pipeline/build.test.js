@@ -5,7 +5,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { build, jobLink } from "../../../src/factory/pipeline/build.js"
+import { build, jobLink, storeRecords } from "../../../src/factory/pipeline/build.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, "..", "fixtures")
@@ -227,4 +227,12 @@ test("jobLink reuses the accepted job identity and validates the public store na
   }), "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md")
   assert.throws(() => jobLink({ store: "not a store", deskRemote: "https://github.com/ourostack/desk", personPrefix: "", track: "factory", slug: "store-pipeline" }), /store/u)
   assert.throws(() => jobLink({ store: null, deskRemote: "https://github.com/ourostack/desk", personPrefix: "", track: "factory", slug: "store-pipeline" }), /store/u)
+})
+
+test("storeRecords gives every job's rollup record exactly as the build reads the store", () => {
+  const records = storeRecords(ROLLUP_STORE)
+  assert.deepEqual(records.map((record) => record.job), ["1", "2", "3", "4", "5", "6"].map((digit) => digit.repeat(32)))
+  assert.deepEqual(records[0].plugins, { desk: { min: "3.1.0", max: "3.1.0" } })
+  assert.throws(() => storeRecords(5), /storeDir must be a path/u)
+  assert.throws(() => storeRecords(path.join(ROLLUP_STORE, "facts", readdirSync(path.join(ROLLUP_STORE, "facts"))[0])), /store must be a real directory/u)
 })
