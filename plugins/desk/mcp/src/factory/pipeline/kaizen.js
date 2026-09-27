@@ -5,7 +5,7 @@
 //
 //   kaizen: 1
 //   signal: tool_retries            # a measureId from the rollups' catalog
-//   job_class: engineering          # or any
+//   job_class: any                  # or a class the store fills (PUBLISHED_JOB_CLASSES)
 //   evidence_jobs: [<job>, ...]     # optional
 //   countermeasure: https://github.com/<owner>/<repo>/pull/<n>   # optional
 //   plugin: desk
@@ -25,11 +25,16 @@
 // session ran an earlier version are "before", and the rest are left out
 // (`mixed_versions`, `plugin_not_reported`, `open_job`, or the measure's own
 // exclusion reason). `compareMedians` compares the hypothesis's measure
-// between them with a 95% bootstrap interval seeded with the card's number.
-// The card gets `confirmed` when the whole interval lies in the hypothesis's
-// direction, `not-confirmed` when it lies wholly in the other, and neither
-// otherwise ("still gathering data"). The check keeps exactly one comment of
-// its own per card, updated in place, and never closes a card.
+// between them, resampling groups of jobs that share sessions, with a 95%
+// cluster-bootstrap interval seeded with the card's number. The card gets
+// `confirmed` when the whole interval lies in the hypothesis's direction,
+// `not-confirmed` when it lies wholly in the other, and neither otherwise,
+// with two distinct states: "not enough independent jobs yet" (a side has
+// fewer groups than a 95% interval needs, so there is no interval) and "no
+// clear change so far" (the interval touches or spans zero). The check keeps
+// exactly one comment of its own per card, updated in place, and never
+// closes a card. A card whose issue cannot be read or written is reported as
+// `failed` with a stable code, and the check goes on to the next card.
 //
 // Nothing a card says is echoed back: errors are stable codes with a field
 // name from the fixed schema or a line number of the block, and the comment
@@ -39,8 +44,8 @@
 // files.
 
 import { PATTERNS } from "../schema.js"
-import { BOOTSTRAP_RESAMPLES, CONFIDENCE, MIN_JOBS_PER_SIDE, compareMedians } from "./compare.js"
-import { JOB_CLASSES, MEASURE_IDS, formatMeasure } from "./rollups.js"
+import { BOOTSTRAP_RESAMPLES, CONFIDENCE, MIN_GROUPS_PER_SIDE, clusterJobs, compareMedians } from "./compare.js"
+import { JOB_CLASSES, MEASURE_IDS, PUBLISHED_JOB_CLASSES, formatMeasure } from "./rollups.js"
 import { compareVersions, isVersion } from "./versions.js"
 
 export const KAIZEN_LABEL = "kaizen"
@@ -174,6 +179,7 @@ function validateCard(values) {
   if (has("kaizen") && values.kaizen !== 1) fail("unsupported_card_version", "kaizen")
   if (has("signal") && !MEASURE_IDS.includes(values.signal)) fail("unknown_measure", "signal")
   if (has("job_class") && !(values.job_class === "any" || JOB_CLASSES.includes(values.job_class))) fail("invalid_job_class", "job_class")
+  else if (has("job_class") && values.job_class !== "any" && !PUBLISHED_JOB_CLASSES.includes(values.job_class)) fail("job_class_not_published", "job_class")
   const jobs = values.evidence_jobs ?? []
   if (!Array.isArray(jobs) || jobs.length > MAX_EVIDENCE_JOBS || !jobs.every((job) => typeof job === "string" && PATTERNS.jobId.test(job))) fail("invalid_evidence_jobs", "evidence_jobs")
   if (has("countermeasure") && !(typeof values.countermeasure === "string" && COUNTERMEASURE.test(values.countermeasure))) fail("invalid_countermeasure", "countermeasure")
@@ -241,7 +247,8 @@ function countReasons(reasons) {
  * `checkCard(card, records, { seed }) -> result`: `{ status:
  * "waiting_for_version" }` for a card with no version, else `{ status:
  * "checked", verdict, comparison, jobs, excluded }` where `verdict` is
- * `confirmed`, `not_confirmed` or `gathering`, `comparison` is
+ * `confirmed`, `not_confirmed`, `too_few_jobs` (no interval) or
+ * `no_clear_change` (an interval that touches or spans zero), `comparison` is
  * `compareMedians`' result, `jobs` the number of jobs in the card's class
  * and `excluded` each reason a job was left out with its count. `records`
  * are the rollups' job records (`jobRecord`).
@@ -260,14 +267,14 @@ export function checkCard(card, records, { seed }) {
     else if (side === null) reasons.push("plugin_not_reported")
     else if (side === undefined) reasons.push("mixed_versions")
     else if (!("value" in measure)) reasons.push(measure.excluded)
-    else side.push(measure.value)
+    else side.push({ job: record.job, sessions: record.sessions, value: measure.value })
   }
-  const comparison = compareMedians(before, after, { seed })
-  const verdict = comparison.direction === null ? "gathering" : comparison.direction === card.hypothesis.direction ? "confirmed" : "not_confirmed"
+  const comparison = compareMedians(clusterJobs(before), clusterJobs(after), { seed })
+  const verdict = comparison.interval === null ? "too_few_jobs" : comparison.direction === null ? "no_clear_change" : comparison.direction === card.hypothesis.direction ? "confirmed" : "not_confirmed"
   return { status: "checked", verdict, comparison, jobs: inClass.length, excluded: countReasons(reasons) }
 }
 
-const HEADINGS = Object.freeze({ confirmed: "confirmed", not_confirmed: "not confirmed", gathering: "still gathering data" })
+const HEADINGS = Object.freeze({ confirmed: "confirmed", not_confirmed: "not confirmed", too_few_jobs: "not enough independent jobs yet", no_clear_change: "no clear change so far" })
 
 function errorLine(error) {
   if (error.field !== undefined) return `- \`${error.code}\` in \`${error.field}\``
@@ -275,7 +282,7 @@ function errorLine(error) {
   return `- \`${error.code}\``
 }
 
-const RULE = `A verdict label is applied only when the whole ${CONFIDENCE * 100}% interval lies on one side of zero: \`${VERDICT_LABELS.confirmed}\` in the hypothesis's direction, \`${VERDICT_LABELS.not_confirmed}\` in the other. The interval comes from ${BOOTSTRAP_RESAMPLES.toLocaleString("en-US")} bootstrap resamples seeded with the card's number, so every build reproduces it. This check never closes a card.`
+const RULE = `Jobs that share a session are one independent group, and the interval comes from ${BOOTSTRAP_RESAMPLES.toLocaleString("en-US")} bootstrap resamples of those groups seeded with the card's number, so every build reproduces it. Each side needs at least ${MIN_GROUPS_PER_SIDE} groups, the fewest for which a distribution-free ${CONFIDENCE * 100}% interval for a median can exist. A verdict label is applied only when the whole interval lies on one side of zero: \`${VERDICT_LABELS.confirmed}\` in the hypothesis's direction, \`${VERDICT_LABELS.not_confirmed}\` in the other. This check never closes a card.`
 
 /**
  * `kaizenComment({ card, result } | { errors }) -> string`: the check's
@@ -298,13 +305,13 @@ export function kaizenComment({ card, result, errors }) {
     "",
     `The build compares \`${measure}\` for ${jobsOf} whose every session ran \`${card.plugin}\` ${card.version} or later (after) with those whose every session ran an earlier version (before). The card's hypothesis is that it goes ${card.hypothesis.direction}.`,
     "",
-    "| Jobs | Count | Median |",
-    "| --- | ---: | ---: |",
-    `| Before (earlier than ${card.version}) | ${comparison.before.jobs} | ${format(comparison.before.median)} |`,
-    `| After (${card.version} or later) | ${comparison.after.jobs} | ${format(comparison.after.median)} |`,
+    "| Jobs | Count | Independent groups | Median |",
+    "| --- | ---: | ---: | ---: |",
+    `| Before (earlier than ${card.version}) | ${comparison.before.jobs} | ${comparison.before.groups} | ${format(comparison.before.median)} |`,
+    `| After (${card.version} or later) | ${comparison.after.jobs} | ${comparison.after.groups} | ${format(comparison.after.median)} |`,
     "",
     `- Change in median (after minus before): ${comparison.change === null ? "none yet" : format(comparison.change)}.`,
-    `- ${CONFIDENCE * 100}% bootstrap interval: ${comparison.interval === null ? `none yet; each side needs at least ${MIN_JOBS_PER_SIDE} finished jobs` : `[${format(comparison.interval[0])}, ${format(comparison.interval[1])}]`}.`,
+    `- ${CONFIDENCE * 100}% bootstrap interval: ${comparison.interval === null ? `none yet; each side needs at least ${MIN_GROUPS_PER_SIDE} independent groups of jobs for a ${CONFIDENCE * 100}% interval to exist` : `[${format(comparison.interval[0])}, ${format(comparison.interval[1])}]`}.`,
     `- Jobs left out: ${result.excluded.length === 0 ? "none" : result.excluded.map((entry) => `${entry.reason} ${entry.jobs}`).join(", ")}.`,
     "",
     RULE,
@@ -315,7 +322,8 @@ export function kaizenComment({ card, result, errors }) {
 /**
  * `planCard({ number, body, records }) -> { status, comment, label }`: what
  * the check writes for one card: `status` (`invalid`,
- * `waiting_for_version`, `confirmed`, `not_confirmed` or `gathering`), the
+ * `waiting_for_version`, `confirmed`, `not_confirmed`, `too_few_jobs` or
+ * `no_clear_change`), the
  * comment, and the verdict label it should carry (`null` for none).
  */
 export function planCard({ number, body, records }) {
@@ -326,12 +334,34 @@ export function planCard({ number, body, records }) {
   return { status, comment: kaizenComment({ card: parsed.card, result }), label: VERDICT_LABELS[status] ?? null }
 }
 
+async function syncCard({ client, records, author, issue }) {
+  const plan = planCard({ number: issue.number, body: issue.body, records })
+  const mine = (await client.listComments(issue.number)).find((comment) => comment.author === author && comment.body.startsWith(KAIZEN_MARKER))
+  let comment = "unchanged"
+  if (mine === undefined) {
+    await client.createComment(issue.number, plan.comment)
+    comment = "created"
+  } else if (mine.body !== plan.comment) {
+    await client.updateComment(mine.id, plan.comment)
+    comment = "updated"
+  }
+  for (const label of Object.values(VERDICT_LABELS)) {
+    const has = issue.labels.includes(label)
+    if (plan.label === label && !has) await client.addLabels(issue.number, [label])
+    if (plan.label !== label && has) await client.removeLabel(issue.number, label)
+  }
+  return { number: issue.number, status: plan.status, comment, labels: plan.label === null ? [] : [plan.label] }
+}
+
 /**
- * `syncKaizenCards({ client, records, author }) -> { cards }`: runs the
- * check on every open `kaizen` issue through `client` (`store-issues.js`):
- * creates or updates the one comment `author` (the workflow's bot) left
- * starting with `KAIZEN_MARKER`, writing only when it changed, and adds or
- * removes the verdict labels. Pull requests are skipped; no card is closed.
+ * `syncKaizenCards({ client, records, author }) -> { cards, failed }`: runs
+ * the check on every open `kaizen` issue through `client`
+ * (`store-issues.js`): creates or updates the one comment `author` (the
+ * workflow's bot) left starting with `KAIZEN_MARKER`, writing only when it
+ * changed, and adds or removes the verdict labels. Pull requests are
+ * skipped; no card is closed. A card whose calls fail is reported as `{
+ * number, status: "failed", code }` and the rest are still checked;
+ * `failed` counts them.
  */
 export async function syncKaizenCards({ client, records, author = BOT_LOGIN }) {
   const issues = (await client.listIssues({ label: KAIZEN_LABEL, state: "open" }))
@@ -339,22 +369,11 @@ export async function syncKaizenCards({ client, records, author = BOT_LOGIN }) {
     .sort((left, right) => left.number - right.number)
   const cards = []
   for (const issue of issues) {
-    const plan = planCard({ number: issue.number, body: issue.body, records })
-    const mine = (await client.listComments(issue.number)).find((comment) => comment.author === author && comment.body.startsWith(KAIZEN_MARKER))
-    let comment = "unchanged"
-    if (mine === undefined) {
-      await client.createComment(issue.number, plan.comment)
-      comment = "created"
-    } else if (mine.body !== plan.comment) {
-      await client.updateComment(mine.id, plan.comment)
-      comment = "updated"
+    try {
+      cards.push(await syncCard({ client, records, author, issue }))
+    } catch (error) {
+      cards.push({ number: issue.number, status: "failed", code: typeof error.code === "string" ? error.code : "failed" })
     }
-    for (const label of Object.values(VERDICT_LABELS)) {
-      const has = issue.labels.includes(label)
-      if (plan.label === label && !has) await client.addLabels(issue.number, [label])
-      if (plan.label !== label && has) await client.removeLabel(issue.number, label)
-    }
-    cards.push({ number: issue.number, status: plan.status, comment, labels: plan.label === null ? [] : [plan.label] })
   }
-  return { cards }
+  return { cards, failed: cards.filter((card) => card.status === "failed").length }
 }

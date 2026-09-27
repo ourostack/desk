@@ -55,6 +55,27 @@ export function fakeGitHub({
     return facts?.type === "tree" ? trees.get(facts.sha) : new Map()
   }
 
+  // Every blob path under a tree, `dir/name` style.
+  const filesOf = (treeSha, prefix = "") => {
+    const out = new Map()
+    for (const [name, entry] of trees.get(treeSha) ?? []) {
+      if (entry.type === "tree") for (const [sub, sha] of filesOf(entry.sha, `${prefix}${name}/`)) out.set(sub, sha)
+      else out.set(`${prefix}${name}`, entry.sha)
+    }
+    return out
+  }
+  // A new tree from `treeSha` with `path` set to blob `sha`, creating folders as needed.
+  const withPath = (treeSha, parts, sha) => {
+    const entries = new Map(trees.get(treeSha) ?? [])
+    if (parts.length === 1) entries.set(parts[0], { type: "blob", sha })
+    else {
+      const child = entries.get(parts[0])
+      entries.set(parts[0], { type: "tree", sha: withPath(child?.type === "tree" ? child.sha : null, parts.slice(1), sha) })
+    }
+    return putTree([...entries])
+  }
+  const DATA = /^(?:facts|labels)\//u
+
   const factsEntries = Object.entries(mainFacts).map(([name, bytes]) => {
     const sha = gitBlobSha(bytes)
     blobs.set(sha, Buffer.from(bytes).toString("utf8"))
@@ -82,8 +103,8 @@ export function fakeGitHub({
   function prFiles(pr) {
     const head = repo(pr.headRepo).refs.get(`heads/${pr.head.ref}`)
     const main = storeRepo().refs.get("heads/main")
-    const before = factsOf(main)
-    return [...factsOf(head)].filter(([name, entry]) => before.get(name)?.sha !== entry.sha).map(([name]) => ({ filename: `facts/${name}` }))
+    const before = filesOf(commits.get(main).tree)
+    return [...filesOf(commits.get(head).tree)].filter(([name, sha]) => DATA.test(name) && before.get(name) !== sha).map(([name]) => ({ filename: name }))
   }
 
   function api(method, route, body) {
@@ -131,18 +152,13 @@ export function fakeGitHub({
       return ok({ sha: m[2], truncated: false, tree: [...tree].map(([name, entry]) => ({ path: name, mode: entry.type === "tree" ? "040000" : "100644", ...entry })) })
     }
     if (method === "POST" && (m = /^repos\/([^/]+\/[^/]+)\/git\/trees$/u.exec(pathPart))) {
-      const base = trees.get(body.base_tree)
-      const root = new Map(base)
-      const facts = new Map(root.get("facts")?.type === "tree" ? trees.get(root.get("facts").sha) : [])
+      let sha = body.base_tree
       for (const entry of body.tree) {
-        const name = entry.path.slice("facts/".length)
-        const sha = gitBlobSha(Buffer.from(entry.content, "utf8"))
-        blobs.set(sha, entry.content)
-        facts.set(name, { type: "blob", sha })
+        const blob = gitBlobSha(Buffer.from(entry.content, "utf8"))
+        blobs.set(blob, entry.content)
+        sha = withPath(sha, entry.path.split("/"), blob)
       }
-      root.set("facts", { type: "tree", sha: putTree([...facts]) })
-      const sha = putTree([...root])
-      return ok({ sha, tree: [...root].map(([name, entry]) => ({ path: name, ...entry })) }, 201)
+      return ok({ sha, tree: [...trees.get(sha)].map(([name, entry]) => ({ path: name, ...entry })) }, 201)
     }
     if (method === "GET" && (m = /^repos\/([^/]+\/[^/]+)\/git\/commits\/([0-9a-f]+)$/u.exec(pathPart))) {
       const commit = commits.get(m[2])
@@ -231,6 +247,13 @@ export function fakeGitHub({
     forkName,
     storeMain: () => storeRepo().refs.get("heads/main"),
     mainFacts: () => factsOf(storeRepo().refs.get("heads/main")),
+    /** Every data file (`facts/…`, `labels/…`) on the store's main, path to blob SHA. */
+    mainFiles: () => new Map([...filesOf(commits.get(storeRepo().refs.get("heads/main")).tree)].filter(([name]) => DATA.test(name))),
+    /** Every data file on a branch of a repository, or `null` without that branch. */
+    headFiles: (repoName, branch) => {
+      const sha = repo(repoName)?.refs.get(`heads/${branch}`)
+      return sha ? new Map([...filesOf(commits.get(sha).tree)].filter(([name]) => DATA.test(name))) : null
+    },
     headFacts: (repoName, branch) => {
       const sha = repo(repoName)?.refs.get(`heads/${branch}`)
       return sha ? factsOf(sha) : null
@@ -254,11 +277,9 @@ export function fakeGitHub({
       const pr = pulls.find((item) => item.state === "open")
       const headSha = repo(pr.headRepo).refs.get(`heads/${pr.head.ref}`)
       const main = storeRepo().refs.get("heads/main")
-      const facts = new Map(factsOf(main))
-      for (const [name, entry] of factsOf(headSha)) facts.set(name, entry)
-      const root = new Map(trees.get(commits.get(main).tree))
-      root.set("facts", { type: "tree", sha: putTree([...facts]) })
-      storeRepo().refs.set("heads/main", putCommit(putTree([...root]), [main, headSha], "merge"))
+      let tree = commits.get(main).tree
+      for (const [name, sha] of filesOf(commits.get(headSha).tree)) if (DATA.test(name)) tree = withPath(tree, name.split("/"), sha)
+      storeRepo().refs.set("heads/main", putCommit(tree, [main, headSha], "merge"))
       pr.state = "closed"
       pr.merged_at = "merged"
       return pr
@@ -276,7 +297,7 @@ export function fakeGitHub({
       const [owner, ref] = (headLabel ?? `${storeOwner}:intake/0000000000000000`).split(":")
       pulls.push({ number, state: "closed", merged_at: merged ? "merged" : null, title: "Factory intake", body: "1", head: { ref, label: `${owner}:${ref}` }, base: { ref: "main" }, headRepo: store, html_url: `https://github.com/${store}/pull/${number}` })
       if (comment !== null) comments.set(number, [{ user: { login: commentBy, type: commentBy === BOT ? "Bot" : "User" }, body: comment }])
-      files.set(number, fileNames.map((name) => ({ filename: `facts/${name}` })))
+      files.set(number, fileNames.map((name) => ({ filename: name.includes("/") ? name : `facts/${name}` })))
       return number
     },
   }

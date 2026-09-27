@@ -135,6 +135,23 @@ test("shell wrappers and positional arguments preserve Git's target", async (t) 
   await assert.rejects(guard("again() { again; }; again"), /inspection budget/u)
 })
 
+// A loop body whose commands have unknown exit statuses leaves the same few states after every
+// iteration, so a long loop costs steps in proportion to its length, not 2^n: the guard decides
+// it instead of failing closed on its step budget.
+test("long loops over commands with unknown exit statuses stay within the inspection budget", async (t) => {
+  const { root, guard } = fixture(t)
+  const values = Array.from({ length: 60 }, (_, index) => `v${index}`).join(" ")
+  assert.equal((await guard(`for f in ${values}; do wc -l "$f" && grep -c x "$f" || true; done`)).deny, false)
+  assert.equal((await guard(`for f in ${values}; do wc -l "$f"; done; git checkout HEAD`)).deny, true)
+  assert.equal((await guard(`for f in ${values}; do if test -f "$f"; then git -C '${root}' checkout HEAD; fi; done`)).deny, true)
+  assert.equal((await guard(`for f in ${values}; do while read line; do wc -l "$line"; done < "$f"; done`)).deny, false)
+
+  // A while loop merges identical exit states too: the command after `||` is walked once for the one failed state, not once per path that failed.
+  const visited = []
+  await inspectShell({ command: "while read line; do wc -l \"$line\"; done || touch marker", cwd: tmpdir(), env: {}, visit({ name }) { visited.push(name) } })
+  assert.deepEqual(visited.filter((name) => name === "touch"), ["touch"])
+})
+
 test("home expansion respects quoting and inline alias cache keys include alias definitions", async (t) => {
   const { root, guard } = fixture(t)
   const env = { ...process.env, HOME: root }

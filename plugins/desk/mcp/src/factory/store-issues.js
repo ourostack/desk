@@ -7,7 +7,8 @@
 //
 // Failures throw an `Error` whose `code` is one stable value: `gh_missing`,
 // `timeout`, `http_<status>` for an HTTP error, `unexpected_answer` for an
-// answer of the wrong shape, `too_many` past the page limit, or `gh_failed`.
+// answer of the wrong shape, `too_many_issues` or `too_many_comments` past
+// the page limit of the list that overflowed, or `gh_failed`.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -32,6 +33,7 @@ function issueView(raw) {
   if (!isObject(raw) || !Number.isSafeInteger(raw.number) || !Array.isArray(raw.labels)) throw failure("unexpected_answer")
   return {
     number: raw.number,
+    url: typeof raw.html_url === "string" ? raw.html_url : null,
     title: typeof raw.title === "string" ? raw.title : "",
     body: typeof raw.body === "string" ? raw.body : "",
     labels: raw.labels.map((label) => (isObject(label) ? label.name : label)).filter((name) => typeof name === "string"),
@@ -51,7 +53,10 @@ function commentView(raw) {
  * label, state })`, `listComments(number)`, `createComment(number, body)`,
  * `updateComment(id, body)`, `addLabels(number, labels)`,
  * `removeLabel(number, label)`, `createIssue({ title, body, labels }) -> {
- * number, url }` and `updateIssue(number, patch)` for the store `repo`.
+ * number, url }`, `updateIssue(number, patch)` and `visibility() ->
+ * "public" | "private" | "unknown"` (the repository's, where anything but
+ * GitHub's explicit `private: true` or `private: false` is `unknown`) for
+ * the store `repo`.
  */
 export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_MS }) {
   if (typeof runner !== "function") throw new TypeError("issuesClient: runner must be a function")
@@ -77,7 +82,7 @@ export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_
     }
   }
 
-  async function pages(route, view) {
+  async function pages(route, view, overflow) {
     const items = []
     for (let page = 1; page <= MAX_PAGES; page += 1) {
       const answer = await api("GET", `${route}${route.includes("?") ? "&" : "?"}per_page=${PER_PAGE}&page=${page}`)
@@ -85,17 +90,17 @@ export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_
       items.push(...answer.map(view))
       if (answer.length < PER_PAGE) return items
     }
-    throw failure("too_many")
+    throw failure(overflow)
   }
 
   const base = `repos/${repo}`
   return {
     async listIssues({ label, state }) {
       if (typeof label !== "string" || !STATES.has(state)) throw new TypeError("listIssues: label and state are required")
-      return pages(`${base}/issues?state=${state}&labels=${encodeURIComponent(label)}`, issueView)
+      return pages(`${base}/issues?state=${state}&labels=${encodeURIComponent(label)}`, issueView, "too_many_issues")
     },
     async listComments(number) {
-      return pages(`${base}/issues/${number}/comments`, commentView)
+      return pages(`${base}/issues/${number}/comments`, commentView, "too_many_comments")
     },
     async createComment(number, body) {
       await api("POST", `${base}/issues/${number}/comments`, { body })
@@ -116,6 +121,10 @@ export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_
     },
     async updateIssue(number, patch) {
       await api("PATCH", `${base}/issues/${number}`, patch)
+    },
+    async visibility() {
+      const answer = await api("GET", base)
+      return answer?.private === true ? "private" : answer?.private === false ? "public" : "unknown"
     },
   }
 }

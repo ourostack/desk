@@ -26,13 +26,13 @@ test("issuesClient refuses a bad runner, repository or token", () => {
 })
 
 test("listIssues pages through the store's issues and keeps only the fields the steps use", async () => {
-  const full = Array.from({ length: 100 }, (_, index) => ({ number: index + 1, title: "t", body: null, labels: [{ name: "kaizen" }], state: "open", user: { login: "someone" } }))
+  const full = Array.from({ length: 100 }, (_, index) => ({ number: index + 1, html_url: `https://github.com/ourostack/factory/issues/${index + 1}`, title: "t", body: null, labels: [{ name: "kaizen" }], state: "open", user: { login: "someone" } }))
   const { calls, runner } = recorder([ok(full), ok([{ number: 101, body: "b", labels: ["kaizen", 7], state: "closed", pull_request: {}, user: null }])])
   const client = issuesClient({ runner, repo: "ourostack/factory", token: TOKEN })
   const issues = await client.listIssues({ label: "kaizen", state: "all" })
   assert.equal(issues.length, 101)
-  assert.deepEqual(issues[0], { number: 1, title: "t", body: "", labels: ["kaizen"], state: "open", author: "someone", pull_request: false })
-  assert.deepEqual(issues[100], { number: 101, title: "", body: "b", labels: ["kaizen"], state: "closed", author: null, pull_request: true })
+  assert.deepEqual(issues[0], { number: 1, url: "https://github.com/ourostack/factory/issues/1", title: "t", body: "", labels: ["kaizen"], state: "open", author: "someone", pull_request: false })
+  assert.deepEqual(issues[100], { number: 101, url: null, title: "", body: "b", labels: ["kaizen"], state: "closed", author: null, pull_request: true })
   assert.deepEqual(calls.map(route), [
     "repos/ourostack/factory/issues?state=all&labels=kaizen&per_page=100&page=1",
     "repos/ourostack/factory/issues?state=all&labels=kaizen&per_page=100&page=2",
@@ -97,5 +97,19 @@ test("failures become one stable code", async () => {
   const empty = issuesClient({ runner: async () => ok(), repo: "o/r", token: TOKEN })
   await assert.rejects(empty.createIssue({ title: "T", body: "B", labels: [] }), (error) => error.code === "unexpected_answer")
   const endless = issuesClient({ runner: async () => ok(Array.from({ length: 100 }, (_, index) => ({ id: index }))), repo: "o/r", token: TOKEN })
-  await assert.rejects(endless.listComments(1), (error) => error.code === "too_many")
+  await assert.rejects(endless.listComments(1), (error) => error.code === "too_many_comments")
+  const endlessIssues = issuesClient({ runner: async () => ok(Array.from({ length: 100 }, (_, index) => ({ number: index + 1, labels: [] }))), repo: "o/r", token: TOKEN })
+  await assert.rejects(endlessIssues.listIssues({ label: "andon", state: "all" }), (error) => error.code === "too_many_issues")
+})
+
+test("visibility reads the repository and says unknown unless GitHub says private or public explicitly", async () => {
+  const answers = [ok({ private: false }), ok({ private: true }), ok({ visibility: "internal" }), ok()]
+  const { calls, runner } = recorder(answers)
+  const client = issuesClient({ runner, repo: "o/r", token: TOKEN })
+  assert.equal(await client.visibility(), "public")
+  assert.equal(await client.visibility(), "private")
+  assert.equal(await client.visibility(), "unknown")
+  assert.equal(await client.visibility(), "unknown")
+  assert.equal(route(calls[0]), "repos/o/r")
+  assert.equal(method(calls[0]), "GET")
 })

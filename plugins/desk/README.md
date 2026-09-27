@@ -149,6 +149,13 @@ a furnished room, ready to settle into. the layout, the lifecycle, the small cer
 - `pr-self-review`, `pr-review-interrogation`, `pr-surface-hygiene` — pre-open and post-open PR discipline
 - `peer-pr-review`, `pr-reviewer-audit` — reviewing others' code
 
+### browser
+- a `desk-browser` MCP server ships beside the Desk MCP on Claude Code and Copilot CLI, so every fresh install can open and drive web pages with no setup. A server of your own named `playwright` stays yours: Desk never uses that name
+- `mcp/browser.cjs` starts a copy of `@playwright/mcp` installed in Desk's state folder (`~/.local/state/ouroboros-skills/desk/browser`, or under `$XDG_STATE_HOME`), under the same compatible Node the Desk bootstrap picks. The first launch installs it; later launches start it at once with no network call, then refresh it from the `@latest` channel in the background (never a pinned version), so a new release reaches the next session. Installs and refreshes share one lock, so sessions that start together never race, and every npm call runs with no retries and a short timeout
+- the browser is headless and has an in-memory profile, so agents never take the operator's focus or fight over one profile. Playwright MCP writes snapshots and screenshots to `output/` in that state folder, never into the session's project. The launcher's first stderr line names the `@playwright/mcp` and `playwright-core` versions it started; `last-refresh.json` records the last refresh. To reproduce a problem with an exact release for one debugging session, run `npx -y @playwright/mcp@<version>` by hand; never commit a version
+- it drives Google Chrome, or Edge when Chrome is not installed. With neither, install one, or run `npx -y @playwright/mcp@latest install-browser chrome`, which installs Google Chrome system-wide and asks for an administrator password on macOS and Linux
+- signed-in or persistent browser contexts go through the claims-based browser context broker (`browser-context-broker/`, `desk:cdp-headed-browser`); an overlay supplies the provider and each workspace declares its contexts. Without an overlay provider, add a separate workspace MCP server that runs Playwright MCP with `--extension` (the operator's running browser) or `--user-data-dir`/`--storage-state` (a persistent signed-in profile); `desk:cdp-headed-browser` explains both
+
 ### friction / learning
 - `friction-management` — pin a card to the corkboard, then encode the pattern
 - `lesson-capture` (post-task) — mine a finished task for patterns and propose what's earned a place on the reference shelf; waste the evaluator found in the shared system becomes a kaizen card
