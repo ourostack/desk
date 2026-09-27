@@ -256,3 +256,15 @@ test("a crew person's finished job is found through its pending request even whe
   await requestFinalize(env, { job, deskRoot: crew })
   assert.deepEqual(factoryBootCheck({ env, deskRoot: crew, now: NOW }), { jobs: [job] })
 }))
+
+test("labelsBootCheck counts retained evaluation requests only for a contributing store, with or without options", () => scratch(async ({ env, desk }) => {
+  const { labelsBootCheck, labelsLine } = await load()
+  assert.deepEqual(labelsBootCheck(), { count: 0 })
+  assert.deepEqual(labelsBootCheck({}), { count: 0 })
+  assert.deepEqual(labelsBootCheck({ env }), { count: 0 })
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  const { requestEvaluation } = await import("../../src/factory/outbox.js")
+  await requestEvaluation(env, { job: "9f2c4b1a7d3e5f60718293a4b5c6d7e8", deskRoot: desk })
+  assert.deepEqual(labelsBootCheck({ env }), { count: 1 })
+  assert.equal(labelsLine(1), "Factory: 1 finished tasks have no waste labels yet; run the evaluator for them in the background")
+}))

@@ -24,9 +24,12 @@
 //   1. factory: whether the bound desk's store has a consent decision, and a
 //      detached `factory.js finalize` for finished jobs whose facts are not
 //      delivered yet (mcp/src/factory/boot-check.js);
-//   2. desk-health: the bound root's last Desk start, and a detached
+//   2. labels: finished jobs whose waste labels are not complete yet, and a
+//      detached `factory.js evaluate --pending` that prepares their evaluator
+//      briefs again (mcp/src/factory/boot-check.js);
+//   3. desk-health: the bound root's last Desk start, and a detached
 //      fast-forward of a clean state branch (mcp/src/runtime/desk-health.js);
-//   3. workspace-tidy: stale worktree listing with its own detached repair
+//   4. workspace-tidy: stale worktree listing with its own detached repair
 //      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself so
 //      its line can say whether the launch happened, and keeps a soft deadline
 //      inside its budget so an unfinished inspection still reports "deferred".
@@ -212,6 +215,17 @@ const factoryCheck = {
   },
 };
 
+const labelsCheck = {
+  id: "labels",
+  budgetMs: 40,
+  async run(ctx) {
+    const { labelsBootCheck, labelsLine } = await runtime("factory/boot-check.js");
+    const { count } = labelsBootCheck({ env: ctx.env });
+    if (count === 0) return {};
+    return { line: labelsLine(count), repair: { command: [process.execPath, FACTORY_SCRIPT, "evaluate", "--pending"] } };
+  },
+};
+
 const deskHealthCheck = {
   id: "desk-health",
   budgetMs: 50,
@@ -393,8 +407,8 @@ async function acknowledgeRepair(root, acknowledgement) {
 }
 
 module.exports = {
-  checks: [factoryCheck, deskHealthCheck, workspaceTidyCheck],
-  factoryCheck, deskHealthCheck, workspaceTidyCheck,
+  checks: [factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck],
+  factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck,
   runBootChecks, startFactory, launchCommand, recordSkipped,
   runRepair, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS,
 };

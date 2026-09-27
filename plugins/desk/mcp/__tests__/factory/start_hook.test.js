@@ -11,7 +11,7 @@ import { createRequire } from "node:module"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { factoryStateRoot, readStatus, requestFinalize, setConsent } from "../../src/factory/outbox.js"
+import { factoryStateRoot, readStatus, requestEvaluation, requestFinalize, setConsent } from "../../src/factory/outbox.js"
 import { jobId } from "../../src/factory/binding.js"
 import { resolveDeskStateDir, writeLastStart } from "../../src/runtime/last-start.js"
 import { copilotStartupDirection, claudeStartupDirection } from "../../src/util/startup-direction.js"
@@ -36,8 +36,8 @@ const check = (id, run, budgetMs = 100) => ({ id, budgetMs, run })
 // The registry.
 // ---------------------------------------------------------------------------
 
-test("the registry runs its checks in order: factory, then desk-health, then workspace-tidy", () => {
-  assert.deepEqual(boot().checks.map((entry) => entry.id), ["factory", "desk-health", "workspace-tidy"])
+test("the registry runs its checks in order: factory, then labels, then desk-health, then workspace-tidy", () => {
+  assert.deepEqual(boot().checks.map((entry) => entry.id), ["factory", "labels", "desk-health", "workspace-tidy"])
   assert.equal(boot().TOTAL_BUDGET_MS, 300)
   assert.ok(boot().checks.every((entry) => entry.budgetMs <= 300))
 })
@@ -235,6 +235,25 @@ test("the factory check starts one detached finalize for finished jobs whose fac
   const none = []
   await runBootChecks({ ...quiet, host: "claude", env: { ...env, DESK_PERSON: "sam" }, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => none.push(command) })
   assert.deepEqual(none, repairs, "a pending request is finalized whatever person prefix the task tools bound it under")
+}))
+
+test("the labels check names how many finished tasks have no waste labels and starts evaluate --pending", () => scratch(async ({ env, desk }) => {
+  const { runBootChecks, labelsCheck } = boot()
+  const repairs = []
+  const run = (options = {}) => runBootChecks({ ...quiet, host: "claude", env, checks: [labelsCheck], checkBudgets: { labels: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command), ...options })
+  // No consent, or nothing retained: silent, and no factory state is created.
+  assert.equal(await run(), "")
+  assert.equal(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills")), false)
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  assert.equal(await run(), "")
+  await requestEvaluation(env, { job: "9f2c4b1a7d3e5f60718293a4b5c6d7e8", deskRoot: desk })
+  await requestEvaluation(env, { job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", deskRoot: desk })
+  await fs.writeFile(path.join(await factoryStateRoot(env), "evaluate-requests", "notes.txt"), "x")
+  assert.equal(await run(), "Desk boot: Factory: 2 finished tasks have no waste labels yet; run the evaluator for them in the background")
+  assert.deepEqual(repairs, [[process.execPath, path.join(PLUGIN, "mcp", "scripts", "factory.js"), "evaluate", "--pending"]])
+  // A declined store keeps the check silent.
+  await setConsent(env, { store: STORE, contribute: false, account: "contributor" })
+  assert.equal(await run(), "")
 }))
 
 test("the desk-health check reports a degraded last start and otherwise asks for the fast-forward", () => scratch(async ({ env, desk, base }) => {

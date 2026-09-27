@@ -94,6 +94,7 @@ const SESSION_ID_SRC = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const OUTBOX_NAME_PATTERN = new RegExp(`^(?:${ENUMS.host.join("|")})-${SESSION_ID_SRC}\\.json$`, "u")
 const FINALIZE_NAME_PATTERN = /^[0-9a-f]{32}\.json$/u
 const LABELS_NAME_PATTERN = new RegExp(`^${SESSION_ID_SRC}\\.json$`, "u")
+const LABELS_KEY_PATTERN = new RegExp(`^labels/[0-9a-f]{32}/${SESSION_ID_SRC}\\.json$`, "u")
 const BRIEF_NAME_PATTERN = new RegExp(`^((?:${ENUMS.host.join("|")})-${SESSION_ID_SRC})\\.brief\\.json$`, "u")
 const STORE_SLUG_PATTERN = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)__([A-Za-z0-9._-]{1,100})$/u
 
@@ -629,9 +630,14 @@ export async function markDelivered(env, store, { name, publishedBlobSha }, { pl
   return updateJsonLocked(root, file, {}, (current) => ({ ...current, [name]: publishedBlobSha }), { platform, env, runner })
 }
 
-/** Quarantines outbox file `name` (must be a real outbox file name) for `store` under `reason` (a transform refusal or CI rejection code). */
+/**
+ * Quarantines outbox file `name` for `store` under `reason` (a transform
+ * refusal or CI rejection code). `name` is a facts file name or a local
+ * labels key, `labels/<job>/<session_id>.json`, which is quarantined at
+ * `quarantine/<store-slug>/labels/<job>/<session_id>.json`.
+ */
 export async function quarantine(env, store, name, reason, { now = defaultNow, platform = process.platform, runner = undefined } = {}) {
-  requirePattern(name, OUTBOX_NAME_PATTERN, "name")
+  if (!LABELS_KEY_PATTERN.test(String(name))) requirePattern(name, OUTBOX_NAME_PATTERN, "name")
   requirePattern(reason, REASON_PATTERN, "reason")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
@@ -957,9 +963,9 @@ export async function writeLocalLabels(env, store, labels) {
  * every local labels file for `store` whose last delivered published blob
  * SHA differs from `gitBlobSha(publishedBytesFor(localLabels))`, named
  * `labels/<job>/<session_id>.json`, the key `markDelivered` records. A file
- * `publishedBytesFor` answers `null` for is skipped, and so is one that
- * fails to parse. Only regular files of the labels shape under a job folder
- * are considered.
+ * `publishedBytesFor` answers `null` for is skipped, and so are one that
+ * fails to parse and one that is quarantined. Only regular files of the
+ * labels shape under a job folder are considered.
  */
 export async function pendingLabels(env, store, { publishedBytesFor } = {}) {
   if (typeof publishedBytesFor !== "function") fail("publishedBytesFor", "must be a function")
@@ -971,6 +977,7 @@ export async function pendingLabels(env, store, { publishedBytesFor } = {}) {
   for (const job of await listDirSafe(dir)) {
     if (!PATTERNS.jobId.test(job)) continue
     for (const file of await listRegularFiles(path.join(dir, job), LABELS_NAME_PATTERN)) {
+      if ((await lstatIfPresent(path.join(root, "quarantine", slug, "labels", job, file), NAMING)) !== null) continue
       const localBytes = await readProtectedBytes(path.join(dir, job, file))
       let localLabels
       try {

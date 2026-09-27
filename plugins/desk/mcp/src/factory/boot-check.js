@@ -18,6 +18,11 @@
 //     finalize` for them. A declined store, an invalid store declaration, no
 //     bound desk or unreadable state return `{ jobs: [] }`.
 //
+// `labelsBootCheck({ env })` counts, by name only, the retained waste
+// evaluation requests in `evaluate-requests/` (a finished job whose labels
+// are not complete yet) when a store has `contribute: true`, and returns
+// `{ count }`; `labelsLine(count)` is the agent line for a count above zero.
+//
 // Task cards are found only in the desk layout: `<track>/<task>/task.md`,
 // `<track>/_archive/<task>/task.md` and the same under `_archive/<track>/`,
 // below `desks/<alias>/` when a person prefix is given. A crew root's
@@ -148,6 +153,17 @@ function updatedAt(value) {
 export function hasContributingStore(env = process.env) {
   const consent = readState(path.join(factoryStateDir(env), "consent.json"), null)
   return isPlainObject(consent?.stores) && Object.values(consent.stores).some((record) => isPlainObject(record) && record.contribute === true)
+}
+
+/** The agent line for `count` finished tasks whose waste labels are not complete. */
+export function labelsLine(count) {
+  return `Factory: ${count} finished tasks have no waste labels yet; run the evaluator for them in the background`
+}
+
+/** See the header. Never writes and never opens a request; names are counted, capped with every listing. */
+export function labelsBootCheck({ env = process.env } = {}) {
+  if (!hasContributingStore(env)) return { count: 0 }
+  return { count: listNames(path.join(factoryStateDir(env), "evaluate-requests")).filter((name) => FINALIZE_NAME.test(name)).length }
 }
 
 /** `[{ track, slug }]` for finished, recent cards of the desk; see the header. */
