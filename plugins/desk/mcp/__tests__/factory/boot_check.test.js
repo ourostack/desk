@@ -50,8 +50,11 @@ test("a store with no consent decision asks the agent to ask the operator once, 
   const root = await factoryStateRoot(env)
   await fs.writeFile(path.join(root, "consent.json"), "{ not json")
   assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] }, "unreadable consent stays silent")
+  // desk_status reads a consent file whose `stores` is not an object as unreadable, so the boot line stays silent too (review M3-11 D1).
   await fs.writeFile(path.join(root, "consent.json"), JSON.stringify({ schema_version: 1, stores: [] }))
-  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { line: FACTORY_NO_CONSENT_LINE })
+  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] }, "a malformed consent file is unreadable, as desk_status reports it")
+  await fs.writeFile(path.join(root, "consent.json"), JSON.stringify({ schema_version: 1, stores: { [STORE]: { contribute: "maybe" } } }))
+  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { line: FACTORY_NO_CONSENT_LINE }, "a record without a yes or no is undecided, as desk_status reports it")
 }))
 
 test("the check never creates or changes factory state", () => scratch(async ({ env, desk, base }) => {

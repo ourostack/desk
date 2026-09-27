@@ -192,3 +192,37 @@ test("unsafe or malformed state files read as unreadable, never as a guess", () 
   assert.equal(status.consent, "undecided", "a record that is not a decision is no decision")
   assert.deepEqual(status.stores.map((entry) => [entry.store, entry.last_flush]), [[STORE, null]], "invalid store keys and result codes are dropped")
 }))
+
+// Review M3-11 D1: the startup hook's boot line and desk_status must agree. The line asks exactly when desk_status reports
+// `undecided`; `held` (no store resolved), `unreadable`, `yes` and `no` mean there is nothing to ask.
+test("the boot line asks exactly when desk_status reports undecided, in every routing and consent state", () => scratch(async ({ desk, env }) => {
+  const { factoryLocalStatus } = await load()
+  const { factoryStateDir } = await import("../../src/factory/boot-check.js")
+  const consentFile = path.join(factoryStateDir(env), "consent.json")
+  const writeConsent = async (text) => {
+    await fs.mkdir(path.dirname(consentFile), { recursive: true, mode: 0o700 })
+    await fs.writeFile(consentFile, text, { mode: 0o600 })
+  }
+  const declaration = path.join(desk, "_meta", "factory.json")
+  const cases = [
+    { name: "undecided default store", expect: "undecided" },
+    { name: "incomplete plugin scan holds routing", scanIncomplete: true, expect: "held" },
+    { name: "invalid desk declaration", declare: { schema_version: 1, store: "not a store" }, expect: "held" },
+    { name: "desk declaration with an incomplete scan", declare: { schema_version: 1, store: OTHER }, scanIncomplete: true, expect: "undecided" },
+    { name: "recorded yes", consent: JSON.stringify({ schema_version: 1, stores: { [STORE]: { contribute: true, account: "example-user" } } }), expect: "yes" },
+    { name: "recorded no", consent: JSON.stringify({ schema_version: 1, stores: { [STORE]: { contribute: false } } }), expect: "no" },
+    { name: "a record without a boolean decision", consent: JSON.stringify({ schema_version: 1, stores: { [STORE]: { contribute: "maybe" } } }), expect: "undecided" },
+    { name: "unparseable consent file", consent: "{ broken", expect: "unreadable" },
+    { name: "consent file whose stores is not an object", consent: JSON.stringify({ schema_version: 1, stores: "yes" }), expect: "unreadable" },
+  ]
+  for (const entry of cases) {
+    await fs.rm(declaration, { force: true })
+    await fs.rm(consentFile, { force: true })
+    if (entry.declare) await json(declaration, entry.declare)
+    if (entry.consent) await writeConsent(entry.consent)
+    const status = factoryLocalStatus({ env, deskRoot: desk, pluginScanIncomplete: entry.scanIncomplete === true })
+    const boot = factoryBootCheck({ env, deskRoot: desk, pluginScanIncomplete: entry.scanIncomplete === true })
+    assert.equal(status.consent, entry.expect, `${entry.name}: desk_status consent`)
+    assert.equal(boot.line === FACTORY_NO_CONSENT_LINE, status.consent === "undecided", `${entry.name}: the boot line asks only when desk_status says undecided`)
+  }
+}))

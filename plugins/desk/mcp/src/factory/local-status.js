@@ -38,7 +38,7 @@
 import { readdirSync } from "node:fs"
 import * as path from "node:path"
 
-import { factoryStateDir } from "./boot-check.js"
+import { consentDecision, consentRecords as readConsentRecords, factoryStateDir } from "./boot-check.js"
 import { readSmallText } from "./marker.js"
 import { jobLink } from "./pipeline/build.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
@@ -74,18 +74,13 @@ function outboxNames(dir) {
   }
 }
 
-/** The recorded consent map, `{}` when nothing is decided, or `UNREADABLE`. */
+/** The recorded consent map, `{}` when nothing is decided, or `UNREADABLE`; read exactly as the boot check reads it. */
 function consentRecords(dir) {
-  const consent = readState(path.join(dir, "consent.json"), { stores: {} })
-  if (consent === UNREADABLE || !isPlainObject(consent.stores)) return UNREADABLE
-  return consent.stores
+  return readConsentRecords(dir) ?? UNREADABLE
 }
 
 function decision(records, store) {
-  if (records === UNREADABLE) return "unreadable"
-  const record = Object.hasOwn(records, store) ? records[store] : undefined
-  if (!isPlainObject(record) || typeof record.contribute !== "boolean") return "undecided"
-  return record.contribute ? "yes" : "no"
+  return consentDecision(records === UNREADABLE ? null : records, store)
 }
 
 function route({ deskRoot, pluginDirs, pluginScanIncomplete }) {

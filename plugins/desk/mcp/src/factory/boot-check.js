@@ -86,6 +86,20 @@ function readState(file, fallback) {
   }
 }
 
+/** The recorded consent map from `consent.json` in `dir`: `{}` when nothing is decided, `null` when it is unsafe, unreadable or malformed. */
+export function consentRecords(dir) {
+  const consent = readState(path.join(dir, "consent.json"), { stores: {} })
+  return consent === null || !isPlainObject(consent.stores) ? null : consent.stores
+}
+
+/** One store's decision from `consentRecords`: "yes", "no", "undecided" or "unreadable". The boot line, desk_status and the report link all use it. */
+export function consentDecision(records, store) {
+  if (records === null) return "unreadable"
+  const record = Object.hasOwn(records, store) ? records[store] : undefined
+  if (!isPlainObject(record) || typeof record.contribute !== "boolean") return "undecided"
+  return record.contribute ? "yes" : "no"
+}
+
 /** The entry names of a folder, capped; empty when it is absent or unreadable. Names are only compared, never opened. */
 function listNames(dir) {
   try {
@@ -187,11 +201,10 @@ export function factoryBootCheck({
   // As in the end hook: an incomplete plugin scan may have missed an overlay's declaration, so only the desk's own counts.
   if (route.store === null || (pluginScanIncomplete && route.source !== "desk")) return { jobs: [] }
   const dir = factoryStateDir(env)
-  const consent = readState(path.join(dir, "consent.json"), { stores: {} })
-  if (consent === null) return { jobs: [] }
-  const record = isPlainObject(consent.stores) ? consent.stores[route.store] : undefined
-  if (!isPlainObject(record)) return { line: FACTORY_NO_CONSENT_LINE }
-  if (record.contribute !== true) return { jobs: [] }
+  // The same decision desk_status reports, so the boot line asks exactly when desk_status says `undecided`.
+  const decided = consentDecision(consentRecords(dir), route.store)
+  if (decided === "undecided") return { line: FACTORY_NO_CONSENT_LINE }
+  if (decided !== "yes") return { jobs: [] }
 
   // Every pending finalize request is a job the task tools finished, whatever person prefix they bound it under.
   const jobs = new Set(listNames(path.join(dir, "finalize")).filter((name) => FINALIZE_NAME.test(name)).map((name) => name.slice(0, -5)))
