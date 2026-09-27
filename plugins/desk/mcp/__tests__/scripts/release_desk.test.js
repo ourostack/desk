@@ -165,7 +165,7 @@ test("the release workflow runs on main one at a time and daily, checks the rele
     /\n {6}contents: write\n/u,
     /node scripts\/release-desk\.cjs --date/u,
     /node scripts\/check-release-integrity\.cjs/u,
-    /__tests__\/release\/release_coupling\.test\.js/u,
+    /"__tests__\/release\/\*\*\/\*\.test\.js"/u,
     /git push --quiet origin HEAD:main 2>&1/u,
     /\n {2}schedule:\n {4}- cron: "[^"]+"\n/u,
     /\n {6}issues: write\n/u,
@@ -177,4 +177,36 @@ test("the release workflow runs on main one at a time and daily, checks the rele
   }
   assert.doesNotMatch(workflow, /pull_request/u, "the release never runs for an unmerged pull request")
   assert.doesNotMatch(workflow, /--force/u, "a release never overwrites main")
+})
+
+test("the release workflow keeps its write token away from installs and checks, and checks every release surface", () => {
+  const workflow = readRepo(".github/workflows/desk-release.yml")
+  // Each step's text, without the comment lines that introduce the step after it.
+  const steps = workflow.split(/\n(?= {6}- name: )/u).map((text) => text.split("\n").filter((line) => !/^ *#/u.test(line)).join("\n"))
+  const step = (name) => {
+    const found = steps.find((text) => text.startsWith(`      - name: ${name}\n`))
+    assert.ok(found, `missing step: ${name}`)
+    return found
+  }
+  assert.match(step("Check out main"), /\n {10}persist-credentials: false\n/u, "no write credential stays in .git/config")
+  // Only the push step and the issue steps receive the token; the install and the release checks never do.
+  for (const text of steps) {
+    if (!/github\.token/u.test(text)) continue
+    assert.match(text, /^ {6}- name: (Push the release to main|Report the failed release|Close the release issue after a successful run)\n/u, text.split("\n")[0])
+  }
+  assert.doesNotMatch(step("Install Desk MCP dependencies"), /env:|token/iu)
+  const build = step("Build and check the release")
+  assert.doesNotMatch(build, /env:|token|git push/iu)
+  for (const check of ["check-release-integrity", "validate-skills", "test-desk-docs", "test-desk-host-manifests", "test-desk-generated-artifacts", "test-desk-contracts"]) {
+    assert.match(build, new RegExp(`${check}`, "u"), check)
+  }
+  for (const folder of ["release", "activation", "artifacts", "docs", "scripts"]) {
+    assert.ok(build.includes(`"__tests__/${folder}/**/*.test.js"`), folder)
+  }
+  const push = step("Push the release to main")
+  assert.match(push, /if: steps\.release\.outputs\.released == 'true'/u)
+  assert.match(push, /GIT_CONFIG_VALUE_0="AUTHORIZATION: basic \$credential" git push --quiet origin HEAD:main 2>&1/u)
+  assert.match(push, /::add-mask::\$credential/u)
+  assert.match(push, /grep -qE 'fetch first\|non-fast-forward'[\s\S]*gh workflow run desk-release\.yml --repo "\$GITHUB_REPOSITORY" --ref main/u, "a refusal because main moved starts a release on the new main")
+  assert.match(workflow, /\n {6}actions: write\n/u)
 })

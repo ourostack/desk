@@ -39,15 +39,20 @@ jobs:
       contents: write
       # Only to open, comment on and close the "Desk release needs attention" issue.
       issues: write
+      # Only to dispatch a new run when main moves while a release is being checked.
+      actions: write
     env:
       ISSUE_TITLE: Desk release needs attention
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
+      # No write credential is left in .git/config: dependency install scripts and the release checks run next, and only
+      # the push step receives the token.
       - name: Check out main
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -60,35 +65,57 @@ jobs:
         working-directory: plugins/desk/mcp
         run: npm ci
 
-      # Another merge can land while this runs. The release is then rebuilt on the new main, which folds that merge's
-      # fragment too, and pushed again; a push never overwrites main.
-      - name: Release and push to main
+      # Builds the release on the checked-out main and runs every check that reads a version surface, the changelog or a
+      # fragment, because a push made with the workflow token starts no CI on main. Runs with no write credential.
+      - name: Build and check the release
+        id: release
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          for attempt in 1 2 3 4 5; do
-            git fetch --quiet origin main
-            git reset --quiet --hard origin/main
-            node scripts/release-desk.cjs --date "$(date -u +%F)" > "$RUNNER_TEMP/release.json"
-            if [ "$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").released')" != "true" ]; then
-              echo "No changelog fragment is pending; nothing to release." | tee -a "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            node scripts/check-release-integrity.cjs
-            (cd plugins/desk/mcp && node --import ./__tests__/_isolated_env.mjs --test __tests__/release/release_coupling.test.js __tests__/activation/copilot_packaging.test.js)
-            summary="$(node -p 'const r = require(process.env.RUNNER_TEMP + "/release.json"); `Desk ${r.to} from ${r.fragments.length} changelog fragment(s): ${r.fragments.map((f) => f.split("/").pop()).join(", ")}`')"
-            version="$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").to')"
-            git add --all -- .claude-plugin plugins/desk
-            git commit --quiet --message "Release Desk $version" --message "$summary. Released by $RUN_URL."
-            if push_error="$(git push --quiet origin HEAD:main 2>&1)"; then
-              echo "Released $summary." | tee -a "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            echo "Push attempt $attempt was refused: $push_error"
-            echo "Rebuilding the release on the current main."
+          node scripts/release-desk.cjs --date "$(date -u +%F)" > "$RUNNER_TEMP/release.json"
+          if [ "$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").released')" != "true" ]; then
+            echo "No changelog fragment is pending; nothing to release." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          summary="$(node -p 'const r = require(process.env.RUNNER_TEMP + "/release.json"); `Desk ${r.to} from ${r.fragments.length} changelog fragment(s): ${r.fragments.map((f) => f.split("/").pop()).join(", ")}`')"
+          version="$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").to')"
+          git add --all -- .claude-plugin plugins/desk
+          git commit --quiet --message "Release Desk $version" --message "$summary. Released by $RUN_URL."
+          # The checks run on the commit that will be pushed: some list tracked files, which must not include the fragments
+          # the release deleted.
+          test -z "$(git status --porcelain)"
+          node scripts/check-release-integrity.cjs
+          for check in validate-skills test-desk-docs test-desk-host-manifests test-desk-generated-artifacts test-desk-contracts; do
+            node "scripts/$check.cjs"
           done
-          echo "::error::The release was not pushed after 5 attempts. The last refusal was: $push_error. If main kept moving, the next run releases the pending fragments; if main now refuses this workflow's pushes (for example a new branch rule), allow them."
+          (cd plugins/desk/mcp && node --import ./__tests__/_isolated_env.mjs --test "__tests__/release/**/*.test.js" "__tests__/activation/**/*.test.js" "__tests__/artifacts/**/*.test.js" "__tests__/docs/**/*.test.js" "__tests__/scripts/**/*.test.js")
+          { echo "released=true"; echo "summary=$summary"; } >> "$GITHUB_OUTPUT"
+
+      # The only step that holds the write token: it goes to the one git push, through that command's environment, and is
+      # never written to disk. If another merge landed on main after the checkout, the push is refused and a new run
+      # releases on the current main, where this run's fragments are still pending; a push never overwrites main.
+      - name: Push the release to main
+        if: steps.release.outputs.released == 'true'
+        env:
+          PUSH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          SUMMARY: ${{ steps.release.outputs.summary }}
+        run: |
+          set -euo pipefail
+          credential="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$credential"
+          if push_error="$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $credential" git push --quiet origin HEAD:main 2>&1)"; then
+            echo "Released $SUMMARY." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if printf '%s' "$push_error" | grep -qE 'fetch first|non-fast-forward'; then
+            gh workflow run desk-release.yml --repo "$GITHUB_REPOSITORY" --ref main
+            echo "main moved while this release was checked, so the push was refused; a new run releases on the current main." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "::error::The release push was refused: $push_error. If main now refuses this workflow's pushes (for example a new branch rule), allow them."
           exit 1
 
       # One open issue per problem: a new failure comments on it, and the next successful run closes it.
