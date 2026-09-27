@@ -19,6 +19,10 @@ function parsePublished(bytes) {
   }
 }
 
+export function isFactsPath(value) {
+  return typeof value === "string" && FACT_PATH.test(value)
+}
+
 export function validatePr(input) {
   const changes = input?.changes
   if (!Array.isArray(changes)) return { ok: false, errors: [error("type", "changes")] }
