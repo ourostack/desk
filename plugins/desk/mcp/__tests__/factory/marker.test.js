@@ -94,6 +94,23 @@ test("protected marker reads accept only matching regular entries and cap serial
   await assert.rejects(writeMarker(ctx.env, large), /too large/u)
 }))
 
+for (const change of ["directory", "hardlink", "rewrite", "replacement"]) {
+  test(`metadata read rejects a ${change} after open instead of returning a stale pathname snapshot`, (t) => scratch(async ({ base }) => {
+    const file = path.join(base, "metadata")
+    fs.writeFileSync(file, "1234")
+    const read = fs.readSync
+    t.mock.method(fs, "readSync", (...args) => {
+      const count = read(...args)
+      if (change === "directory") { fs.renameSync(file, path.join(base, "old")); fs.mkdirSync(file) }
+      if (change === "hardlink") fs.linkSync(file, path.join(base, "other"))
+      if (change === "rewrite") fs.writeFileSync(file, "56789")
+      if (change === "replacement") { fs.renameSync(file, path.join(base, "old")); fs.writeFileSync(file, "1234") }
+      return count
+    })
+    assert.throws(() => readSmallText(file), /metadata_unreadable/u)
+  }))
+}
+
 test("finalize hook enumeration ignores invalid entries and caps work at eight jobs or 128 entries", (t) => scratch(async ({ env, base }) => {
   const root = await factoryStateRoot(env)
   const dir = path.join(root, "finalize")

@@ -449,16 +449,41 @@ export async function writeMarker(env, marker, { platform = process.platform, ru
 
 async function protectMarkerDirectory(root, { env, platform, runner }) {
   const dir = path.join(root, "markers")
+  const before = await lstatIfPresent(dir, NAMING)
   const batch = []
   await ensureDirChain(dir, root, platform, batch)
   if (platform === "win32") await protectWindowsPaths(batch, { env, runner, label: NAMING.label })
-  return dir
+  const identity = await fsp.lstat(dir)
+  if (before !== null && !sameInode(before, identity)) throw new Error("marker_changed")
+  return { dir, identity }
 }
 
-async function readMarkerAt(file, { env, platform, runner }) {
+const sameInode = (left, right) => left.dev === right.dev && left.ino === right.ino
+
+async function assertMarkerDirectory({ dir, identity }) {
+  const current = await fsp.lstat(dir)
+  if (!current.isDirectory() || !sameInode(identity, current) || current.mode !== identity.mode) throw new Error("marker_changed")
+  await assertNotGitCheckout(dir, NAMING)
+}
+
+async function assertMarkerLeaf(file, identity) {
+  const current = await fsp.lstat(file)
+  if (!current.isFile() || current.nlink !== 1 || !sameInode(identity, current) || current.size !== identity.size || current.mtimeMs !== identity.mtimeMs) throw new Error("marker_changed")
+}
+
+async function readMarkerAt(file, directory, { env, platform, runner }) {
+  await assertMarkerDirectory(directory)
+  const identity = await fsp.lstat(file)
+  await assertMarkerDirectory(directory)
+  const text = readSmallText(file)
+  // Do not repair a leaf reached through a transient external parent. Validate the read first.
+  await assertMarkerDirectory(directory)
+  await assertMarkerLeaf(file, identity)
   await protectLeafFile(file, platform, NAMING)
   if (platform === "win32") await protectWindowsPaths([{ path: file, kind: "file", created: false }], { env, runner, label: NAMING.label })
-  const marker = JSON.parse(readSmallText(file))
+  await assertMarkerLeaf(file, identity)
+  await assertMarkerDirectory(directory)
+  const marker = JSON.parse(text)
   return validMarker(marker) && path.basename(file) === `${marker.host}-${marker.session_id}.json` ? marker : null
 }
 
@@ -466,8 +491,8 @@ async function readMarkerAt(file, { env, platform, runner }) {
 export async function readMarker(env, file, { platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
   if (typeof file !== "string" || path.dirname(file) !== path.join(root, "markers") || !OUTBOX_NAME_PATTERN.test(path.basename(file))) return null
-  await protectMarkerDirectory(root, { env, platform, runner })
-  return readMarkerAt(file, { env, platform, runner })
+  const directory = await protectMarkerDirectory(root, { env, platform, runner })
+  return readMarkerAt(file, directory, { env, platform, runner })
 }
 
 /** Serialize the source read, facts replacement and receipt for one session. */
@@ -488,7 +513,8 @@ export async function withDerivationLock(env, name, body, { deskRoot = null } = 
 export async function listMarkers(env, { now = defaultNow, platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
   const options = { env, platform, runner }
-  const dir = await protectMarkerDirectory(root, options)
+  const directory = await protectMarkerDirectory(root, options)
+  const { dir } = directory
   const nowMs = Date.parse(now())
   const kept = []
   for (const name of await listRegularFiles(dir, OUTBOX_NAME_PATTERN)) {
@@ -496,14 +522,14 @@ export async function listMarkers(env, { now = defaultNow, platform = process.pl
     const before = await lstatIfPresent(file, NAMING)
     let marker = null
     try {
-      marker = await readMarkerAt(file, options)
+      marker = await readMarkerAt(file, directory, options)
     } catch (error) {
-      if (error.code === "ENOENT" || error.message === "metadata_unreadable") continue
+      if (error.code === "ENOENT" || error.message === "metadata_unreadable" || error.message === "marker_changed") continue
       if (!(error instanceof SyntaxError)) throw error
     }
     if (marker === null || nowMs - Date.parse(marker.updated_at) > MARKER_TTL_MS) {
       // Recheck the directory and exact leaf before pruning; never follow a replacement.
-      await protectMarkerDirectory(root, options)
+      await assertMarkerDirectory(directory)
       const current = await lstatIfPresent(file, NAMING)
       if (before !== null && current !== null && current.isFile() && current.nlink === 1 && current.dev === before.dev && current.ino === before.ino) {
         await fsp.unlink(file).catch(() => {})
@@ -512,6 +538,7 @@ export async function listMarkers(env, { now = defaultNow, platform = process.pl
       kept.push(marker)
     }
   }
+  await assertMarkerDirectory(directory)
   return kept
 }
 

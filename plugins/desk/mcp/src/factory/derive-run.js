@@ -24,31 +24,32 @@ function markerHash(marker) {
   return createHash("sha256").update(JSON.stringify(content)).digest("hex")
 }
 
-export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, quietMs = 0, requireQuiet = false } = {}) {
+export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, quietMs = 0, requireQuiet = false, requireStored = false } = {}) {
   if (!validMarker(marker)) return { result: "invalid", store: null }
   if (marker.desk_root === null) return { result: "held", store: null }
   try {
-    return await withDerivationLock(env, `${marker.host}-${marker.session_id}.json`, (root) => deriveUnlocked(env, marker, { claude, copilot, quietMs, requireQuiet, root }), { deskRoot: marker.desk_root })
+    return await withDerivationLock(env, `${marker.host}-${marker.session_id}.json`, (root) => deriveUnlocked(env, marker, { claude, copilot, quietMs, requireQuiet, requireStored, root }), { deskRoot: marker.desk_root })
   } catch {
     return { result: "source_unreadable", store: null }
   }
 }
 
-async function newestMarker(env, root, marker) {
+async function newestMarker(env, root, marker, requireStored) {
   try {
     const stored = await readMarker(env, path.join(root, "markers", `${marker.host}-${marker.session_id}.json`))
     if (stored === null) throw new Error("invalid_marker")
+    if (requireStored) return stored
     return (stored.ended_at ?? stored.updated_at) > (marker.ended_at ?? marker.updated_at) ? stored : marker
   } catch (error) {
-    if (error.code === "ENOENT") return marker
+    if (error.code === "ENOENT" && !requireStored) return marker
     throw error
   }
 }
 
-async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQuiet, root }) {
+async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQuiet, requireStored, root }) {
   let store = null
   try {
-    let marker = await newestMarker(env, root, input)
+    let marker = await newestMarker(env, root, input, requireStored)
     if (marker.desk_root === null) return { result: "held", store }
     await factoryStateRoot(env, { deskRoot: marker.desk_root })
     const current = resolveStore({ deskRoot: marker.desk_root })
@@ -104,14 +105,7 @@ async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQui
 export async function sweep(env, { quietMs = 600000 } = {}) {
   const summary = { written: 0, held: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0 }
   for (const marker of await listMarkers(env)) {
-    try {
-      const stamp = await sourceStamp(marker.log_path)
-      if (marker.ended_at === null && Date.now() - stamp.mtime < quietMs) { summary.skipped += 1; continue }
-    } catch (error) {
-      summary[error.code === "ENOENT" ? "log_missing" : "source_unreadable"] += 1
-      continue
-    }
-    const { result } = await deriveMarker(env, marker, { quietMs })
+    const { result } = await deriveMarker(env, marker, { quietMs, requireStored: true })
     summary[result] += 1
   }
   return summary
@@ -131,7 +125,7 @@ export async function deriveFile(env, file, { quietMs = 0, maxWaitMs = 300000 } 
       marker = await readMarker(env, file)
       if (marker === null) return { result: "invalid", store: null }
     }
-    return deriveMarker(env, marker, { quietMs, requireQuiet: true })
+    return deriveMarker(env, marker, { quietMs, requireQuiet: true, requireStored: true })
   } catch (error) {
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store: null }
   }

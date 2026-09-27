@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.48 — 2026-09-26
+
+M3-7 affected re-review correction: [marker reads](mcp/src/factory/marker.js) now compare the opened descriptor with both the post-read descriptor and current pathname. [Enumeration](mcp/src/factory/outbox.js) retains the protected directory's identity across repair, reading, return and pruning, and defers leaf protection until the read is bound to that directory and leaf. A swap to an external directory followed by restoration cannot supply a marker or trigger repair/pruning of that external record.
+
+[Sweep and file-based derivation](mcp/src/factory/derive-run.js) use the protected marker reread under the session lock, never a newer-looking enumerated copy or a vanished file's stale contents. [Deterministic regressions](mcp/__tests__/factory/marker_identity.test.js) cover swap-out/open/swap-back, corrupt/expired external records, protection-time directory replacement and stale copies at use. Existing Windows ACL repair remains in place; no hook or test budget changed. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
 ## 3.2.0-alpha.47 — 2026-09-26
 
 M3-7 review corrections: [marker enumeration](mcp/src/factory/outbox.js) now shares direct-read protection, byte limits and filename/session identity checks, including protection repair on native Windows. Capture, derivation and completion requests reject state beneath the bound desk even without Git and through symlink aliases. The [end hook](hooks/factory-end.cjs) treats every Claude registry cap as incomplete, refuses unsafe activation metadata through the canonical resolver and supervises synchronous work in a separate process under the unchanged deadline.

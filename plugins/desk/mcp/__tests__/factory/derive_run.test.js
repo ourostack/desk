@@ -142,6 +142,7 @@ test("quiet waiting sees late shutdown writes and uses refreshed markers", () =>
 test("sweep reports invalid, missing and unreadable sources without losing other markers", () => scratch(async (ctx) => {
   const { sweep, deriveMarker } = await runner()
   const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
   await writeMarker(ctx.env, marker)
   await fs.unlink(marker.log_path)
   assert.equal((await sweep(ctx.env)).log_missing, 1)
