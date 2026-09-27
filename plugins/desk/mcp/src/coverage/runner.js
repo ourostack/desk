@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process"
 import {
+  copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -36,6 +38,12 @@ export function runCoverageCommand(options = {}) {
     return 1
   }
 
+  const request = parseCoverageArguments(options.argv ?? [])
+  if (request.error) {
+    io.stderr.write(`[coverage-gate] ${request.error}; no coverage was measured\n`)
+    return 1
+  }
+
   const paths = options.paths ?? defaultPaths()
   const repoRoot = realpathSync(paths.repoRoot)
   const fsOps = options.fsOps ?? defaultFsOps()
@@ -52,19 +60,53 @@ export function runCoverageCommand(options = {}) {
   const tmp = fsOps.makeTempDir()
 
   try {
-    const testResult = runInstrumentedTests({
-      repoRoot,
-      requiredFiles: coverageIncludeFiles,
-      reportDirectory: tmp,
-      fsOps,
-      spawn,
-      env,
-    })
-    io.stdout.write(testResult.stdout ?? "")
-    io.stderr.write(testResult.stderr ?? "")
-    if (testResult.status !== 0) {
-      if (testResult.error) io.stderr.write(`[coverage-gate] the instrumented test run could not finish (${testResult.error.code ?? testResult.error.message})\n`)
-      return testResult.status ?? 1
+    if (request.mode === "shard") {
+      return runCoverageShard({
+        repoRoot,
+        request,
+        requiredFiles,
+        coverageIncludeFiles,
+        weights: readShardWeights(paths.shardWeightsPath),
+        reportDirectory: tmp,
+        fsOps,
+        spawn,
+        env,
+        io,
+      })
+    }
+    if (request.mode === "merge") {
+      const merged = mergeCoverageShards({
+        repoRoot,
+        request,
+        requiredFiles,
+        coverageIncludeFiles,
+        reportDirectory: tmp,
+        fsOps,
+        spawn,
+        env,
+      })
+      io.stdout.write(merged.stdout ?? "")
+      io.stderr.write(merged.stderr ?? "")
+      if (merged.issues.length) {
+        io.stderr.write("[coverage-gate] failed\n")
+        for (const issue of merged.issues) io.stderr.write(`- ${issue}\n`)
+        return 1
+      }
+    } else {
+      const testResult = runInstrumentedTests({
+        repoRoot,
+        requiredFiles: coverageIncludeFiles,
+        reportDirectory: tmp,
+        fsOps,
+        spawn,
+        env,
+      })
+      io.stdout.write(testResult.stdout ?? "")
+      io.stderr.write(testResult.stderr ?? "")
+      if (testResult.status !== 0) {
+        if (testResult.error) io.stderr.write(`[coverage-gate] the instrumented test run could not finish (${testResult.error.code ?? testResult.error.message})\n`)
+        return testResult.status ?? 1
+      }
     }
 
     const reportPath = path.join(tmp, "coverage-summary.json")
@@ -157,15 +199,188 @@ function coverageBaseCandidates({ repoRoot, spawn, env }) {
   return unique(candidates)
 }
 
-function runInstrumentedTests({
-  repoRoot,
-  requiredFiles,
-  reportDirectory,
-  fsOps,
-  spawn,
-  env,
-}) {
-  const offline = resolveOfflineEvaluationScope({ repoRoot, requiredFiles })
+/** Parse the coverage command's arguments: none for one whole-suite run, `--shard <index>/<total> --output <dir>` for one shard of the suite, or `--merge <dir>` to admit the combined shards. */
+export function parseCoverageArguments(argv) {
+  if (!argv.length) return { mode: "full" }
+  const [flag, value, ...rest] = argv
+  if (flag === "--shard") {
+    const match = /^(\d+)\/(\d+)$/u.exec(value ?? "")
+    const index = match ? Number(match[1]) : 0
+    const total = match ? Number(match[2]) : 0
+    if (index < 1 || index > total) return { error: `--shard needs <index>/<total> with 1 <= index <= total; got ${value}` }
+    if (rest.length !== 2 || rest[0] !== "--output" || !rest[1]) return { error: "--shard needs --output <dir> and nothing else" }
+    return { mode: "shard", index, total, output: rest[1] }
+  }
+  if (flag === "--merge" && value && !rest.length) return { mode: "merge", input: value }
+  return { error: `unrecognized arguments: ${argv.join(" ")}` }
+}
+
+/**
+ * The test files one whole-suite run executes, as sorted repository-relative paths: every `plugins/desk/mcp/__tests__/**\/*.test.js`, plus the offline evaluation tests and CLI contract when the offline scope is selected.
+ * It follows the whole-suite glob's rules: dot entries and node_modules are never entered.
+ */
+export function collectCoverageTestFiles({ repoRoot, offline }) {
+  const testRoot = path.join(repoRoot, "plugins", "desk", "mcp", "__tests__")
+  const files = walkTestFiles(testRoot).filter((file) => file.endsWith(".test.js"))
+  if (offline.selected) {
+    const offlineTests = path.join(repoRoot, "evals", "offline", "__tests__")
+    if (existsSync(offlineTests)) {
+      for (const entry of readdirSync(offlineTests)) {
+        if (entry.endsWith(".test.mjs")) files.push(path.join(offlineTests, entry))
+      }
+    }
+    const contractTest = path.join(repoRoot, "scripts", "test-skill-evals.cjs")
+    if (existsSync(contractTest)) files.push(contractTest)
+  }
+  return files.map((file) => normalizePath(path.relative(repoRoot, file))).sort()
+}
+
+function walkTestFiles(dir) {
+  if (!existsSync(dir)) return []
+  const out = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith(".") || entry.name === "node_modules") continue
+    const file = path.join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...walkTestFiles(file))
+    else out.push(file)
+  }
+  return out
+}
+
+/**
+ * Split the test files into `total` shards of similar expected duration: the longest file first, each onto the shard with the least expected time so far.
+ * Weights only balance the shards. Every file lands in exactly one shard whatever the weights say, and a file without a recorded weight counts as `default_seconds`.
+ */
+export function partitionCoverageTestFiles({ files, total, weights = {} }) {
+  const weightOf = (file) => weights.file_seconds?.[file] ?? weights.default_seconds ?? 1
+  const shards = Array.from({ length: total }, () => ({ load: 0, files: [] }))
+  const ordered = [...files].sort((left, right) => weightOf(right) - weightOf(left) || (left < right ? -1 : 1))
+  for (const file of ordered) {
+    const target = shards.reduce((lightest, shard) => (shard.load < lightest.load ? shard : lightest))
+    target.files.push(file)
+    target.load += weightOf(file)
+  }
+  return shards.map((shard) => shard.files.sort())
+}
+
+function readShardWeights(weightsPath) {
+  return weightsPath && existsSync(weightsPath) ? JSON.parse(readFileSync(weightsPath, "utf8")) : {}
+}
+
+/** The manifest schema each shard writes next to its raw coverage. */
+export const COVERAGE_SHARD_SCHEMA_VERSION = 1
+
+function runCoverageShard({ repoRoot, request, requiredFiles, coverageIncludeFiles, weights, reportDirectory, fsOps, spawn, env, io }) {
+  const output = path.resolve(request.output)
+  if (existsSync(output) && readdirSync(output).length) {
+    io.stderr.write(`[coverage-gate] shard output ${output} already has content; no coverage was measured\n`)
+    return 1
+  }
+  mkdirSync(output, { recursive: true })
+  const offline = resolveOfflineEvaluationScope({ repoRoot, requiredFiles: coverageIncludeFiles })
+  const testFiles = partitionCoverageTestFiles({
+    files: collectCoverageTestFiles({ repoRoot, offline }),
+    total: request.total,
+    weights,
+  })[request.index - 1]
+  const rawDirectory = path.join(output, "raw")
+  const started = Date.now()
+  let status = 0
+  if (testFiles.length) {
+    const result = runInstrumentedTests({
+      repoRoot,
+      requiredFiles: coverageIncludeFiles,
+      reportDirectory,
+      rawDirectory,
+      testFiles: testFiles.map((file) => path.join(repoRoot, file)),
+      timingsPath: path.join(output, "timings.json"),
+      fsOps,
+      spawn,
+      env,
+    })
+    io.stdout.write(result.stdout ?? "")
+    io.stderr.write(result.stderr ?? "")
+    if (result.error) io.stderr.write(`[coverage-gate] the instrumented test run could not finish (${result.error.code ?? result.error.message})\n`)
+    status = result.status ?? 1
+  }
+  // Process bookkeeping is not coverage; only the per-process coverage files travel to the merge.
+  rmSync(path.join(rawDirectory, "processinfo"), { recursive: true, force: true })
+  const seconds = Math.round((Date.now() - started) / 100) / 10
+  writeFileSync(path.join(output, "shard.json"), `${JSON.stringify({
+    schema_version: COVERAGE_SHARD_SCHEMA_VERSION,
+    index: request.index,
+    total: request.total,
+    status,
+    seconds,
+    required_files: requiredFiles,
+    test_files: testFiles,
+  }, null, 2)}\n`)
+  io.stdout.write(`[coverage-gate] shard ${request.index}/${request.total} ran ${testFiles.length} test file(s) in ${seconds} s with status ${status}; the merge step owns admission\n`)
+  return status
+}
+
+/**
+ * Admit the combined shards: every shard of one split is present once and passed, measured the same changed files, and together they ran exactly the test files one whole-suite run would. Their raw coverage is then reported as one run.
+ */
+function mergeCoverageShards({ repoRoot, request, requiredFiles, coverageIncludeFiles, reportDirectory, fsOps, spawn, env }) {
+  const input = path.resolve(request.input)
+  const manifests = (existsSync(input) ? readdirSync(input, { withFileTypes: true }) : [])
+    .filter((entry) => entry.isDirectory() && existsSync(path.join(input, entry.name, "shard.json")))
+    .map((entry) => ({ directory: path.join(input, entry.name), ...JSON.parse(readFileSync(path.join(input, entry.name, "shard.json"), "utf8")) }))
+    .sort((left, right) => left.index - right.index)
+  if (!manifests.length) return { issues: [`no coverage shard manifests under ${input}`] }
+  const total = manifests[0].total
+  const indexes = manifests.map((manifest) => manifest.index)
+  const expectedIndexes = Array.from({ length: total }, (_, offset) => offset + 1)
+  if (manifests.some((manifest) => manifest.schema_version !== COVERAGE_SHARD_SCHEMA_VERSION || manifest.total !== total) ||
+    JSON.stringify(indexes) !== JSON.stringify(expectedIndexes)) {
+    return { issues: [`coverage shards must be exactly 1..${total} of one split; found ${manifests.map((manifest) => `${manifest.index}/${manifest.total}`).join(", ")}`] }
+  }
+  const issues = []
+  for (const manifest of manifests) {
+    if (!Array.isArray(manifest.test_files)) issues.push(`coverage shard ${manifest.index}/${manifest.total} does not list its test files`)
+    if (manifest.status !== 0) issues.push(`coverage shard ${manifest.index}/${manifest.total} finished with status ${manifest.status}`)
+    if (JSON.stringify(manifest.required_files) !== JSON.stringify(requiredFiles)) {
+      issues.push(`coverage shard ${manifest.index}/${manifest.total} measured a different changed-file set than this merge`)
+    }
+  }
+  const offline = resolveOfflineEvaluationScope({ repoRoot, requiredFiles: coverageIncludeFiles })
+  const expectedTests = collectCoverageTestFiles({ repoRoot, offline })
+  const ranTests = manifests.flatMap((manifest) => manifest.test_files ?? [])
+  const counts = new Map()
+  for (const file of ranTests) counts.set(file, (counts.get(file) ?? 0) + 1)
+  const duplicated = [...counts].filter(([, count]) => count > 1).map(([file]) => file)
+  const missing = expectedTests.filter((file) => !counts.has(file))
+  const unexpected = [...counts.keys()].filter((file) => !expectedTests.includes(file))
+  if (duplicated.length) issues.push(`test files ran in more than one shard: ${duplicated.join(", ")}`)
+  if (missing.length) issues.push(`test files no shard ran: ${missing.join(", ")}`)
+  if (unexpected.length) issues.push(`shards ran test files this checkout does not have: ${unexpected.join(", ")}`)
+  if (issues.length) return { issues }
+
+  const rawDirectory = path.join(reportDirectory, "raw")
+  mkdirSync(rawDirectory, { recursive: true })
+  for (const manifest of manifests) {
+    const shardRaw = path.join(manifest.directory, "raw")
+    if (!existsSync(shardRaw)) continue
+    for (const entry of readdirSync(shardRaw)) {
+      if (entry.endsWith(".json")) copyFileSync(path.join(shardRaw, entry), path.join(rawDirectory, `shard-${manifest.index}-${entry}`))
+    }
+  }
+  const configPath = writeProducerConfig({ repoRoot, requiredFiles: coverageIncludeFiles, offline, reportDirectory, rawDirectory, fsOps })
+  const report = spawn(process.execPath, [require.resolve("nyc/bin/nyc.js"), "report", "--cwd", repoRoot, "--nycrc-path", configPath], {
+    cwd: defaultMcpRoot,
+    encoding: "utf8",
+    maxBuffer: COVERAGE_OUTPUT_MAX_BYTES,
+    env: { ...env, DESK_COVERAGE_RUNNER_CHILD: "1" },
+  })
+  const shardLines = manifests.map((manifest) => `[coverage-gate] shard ${manifest.index}/${manifest.total}: ${manifest.test_files.length} test file(s) in ${manifest.seconds} s\n`).join("")
+  if (report.status !== 0) {
+    issues.push(`the combined coverage report could not be produced (${report.error?.code ?? report.error?.message ?? `status ${report.status}`})`)
+  }
+  return { issues, stdout: `${shardLines}${report.stdout ?? ""}`, stderr: report.stderr ?? "" }
+}
+
+function writeProducerConfig({ repoRoot, requiredFiles, offline, reportDirectory, rawDirectory, silent = false, fsOps }) {
   const configPath = path.join(reportDirectory, "nyc.json")
   fsOps.writeText(configPath, JSON.stringify({
     cwd: repoRoot,
@@ -181,10 +396,28 @@ function runInstrumentedTests({
     ...(offline.requiresTypeScript ? { parserPlugins: ["typescript"] } : {}),
     reporter: ["json-summary", "json", "text"],
     reportDir: reportDirectory,
-    tempDir: path.join(reportDirectory, "raw"),
+    tempDir: rawDirectory,
     cache: false,
     checkCoverage: false,
+    // A shard only records raw coverage; the merge step reports the combined result once.
+    ...(silent ? { silent: true } : {}),
   }))
+  return configPath
+}
+
+function runInstrumentedTests({
+  repoRoot,
+  requiredFiles,
+  reportDirectory,
+  rawDirectory = path.join(reportDirectory, "raw"),
+  testFiles,
+  timingsPath,
+  fsOps,
+  spawn,
+  env,
+}) {
+  const offline = resolveOfflineEvaluationScope({ repoRoot, requiredFiles })
+  const configPath = writeProducerConfig({ repoRoot, requiredFiles, offline, reportDirectory, rawDirectory, silent: Boolean(testFiles), fsOps })
   const loader = pathToFileURL(require.resolve("@istanbuljs/esm-loader-hook")).href
   const registration = `import { register } from "node:module"; register(${JSON.stringify(loader)});`
   // The repository's own offline registration helper is a superset of this registration: it installs the same maintained hook and additionally gives the source-pinned TypeScript leaves a module format that hook will instrument.
@@ -202,9 +435,13 @@ function runInstrumentedTests({
     "--test",
     // Instrumented fixture children must not compete with other test files for their unchanged startup deadlines.
     "--test-concurrency=1",
-    path.join(repoRoot, "plugins/desk/mcp/__tests__/**/*.test.js"),
-    // Separate path arguments run as separate test workers, so the offline suite and the CLI contract keep their own hooks.
-    ...offline.testTargets,
+    // A shard keeps the TAP output and also records each file's duration for rebalancing the shards.
+    ...(timingsPath ? [
+      "--test-reporter=tap", "--test-reporter-destination=stdout",
+      `--test-reporter=${path.join(defaultMcpRoot, "__tests__", "_file_timing_reporter.mjs")}`, `--test-reporter-destination=${timingsPath}`,
+    ] : []),
+    // A shard names its own files; the whole suite is the glob plus, as separate path arguments that run as separate test workers, the offline suite and the CLI contract with their own hooks.
+    ...(testFiles ?? [path.join(repoRoot, "plugins/desk/mcp/__tests__/**/*.test.js"), ...offline.testTargets]),
   ]
   return spawn(process.execPath, args, {
     cwd: defaultMcpRoot,
@@ -247,6 +484,7 @@ function defaultPaths() {
     repoRoot: defaultRepoRoot,
     mcpRoot: defaultMcpRoot,
     configPath: path.join(defaultMcpRoot, "config", "coverage-gate.json"),
+    shardWeightsPath: path.join(defaultMcpRoot, "config", "coverage-shards.json"),
     packageJsonPath: path.join(defaultMcpRoot, "package.json"),
     workflowPath: path.join(defaultRepoRoot, ".github", "workflows", "desk-mcp-tests.yml"),
   }

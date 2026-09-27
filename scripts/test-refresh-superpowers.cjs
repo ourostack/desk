@@ -9,21 +9,19 @@ const path = require("node:path");
 const { execFileSync, spawnSync } = require("node:child_process");
 
 const {
-  DESK_VERSION_FILES,
   SUPERPOWERS_VERSION_FILES,
   chooseSuperpowersVersion,
   main,
-  nextAlpha,
   refresh,
   upstreamVersion,
   versionToken,
 } = require("./refresh-superpowers.cjs");
+const { DESK_VERSION_FILES, nextAlpha } = require("./release-desk.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const readRepoJson = (file) => JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8"));
 const currentSuperpowers = readRepoJson("plugins/superpowers/.claude-plugin/plugin.json").version;
 const currentDesk = readRepoJson("plugins/desk/.claude-plugin/plugin.json").version;
-const mcpVersion = readRepoJson("plugins/desk/mcp/package.json").version;
 const lock = readRepoJson("upstream-sources.lock.json");
 const superpowersSource = lock.sources.find((source) => source.id === "obra-superpowers");
 
@@ -54,7 +52,7 @@ function filesNaming(version, files) {
   // Root test scripts use their own fixture versions, which may coincide with the current one.
   const naming = filesNaming(currentDesk, trackedFiles())
     .filter((file) => file !== "plugins/desk/CHANGELOG.md" && !/^scripts\/test-[^/]+\.cjs$/u.test(file));
-  assert.deepEqual(naming.sort(), [...DESK_VERSION_FILES].sort(), "every surface naming the Desk version must be bumped by the refresh");
+  assert.deepEqual(naming.sort(), [...DESK_VERSION_FILES].sort(), "every surface naming the Desk version must be bumped by the Desk release");
 
   // The shipped Superpowers version appears only on these surfaces outside tests and history. The README names the
   // upstream version separately, and tests derive the shipped version instead of hard-coding it.
@@ -121,7 +119,6 @@ function buildFixture(tempRoot) {
     ...SUPERPOWERS_VERSION_FILES,
     ...DESK_VERSION_FILES,
     "plugins/desk/CHANGELOG.md",
-    "plugins/desk/mcp/package.json",
     "plugins/superpowers/README.md",
     "upstream-sources.lock.json",
     ...superpowersSource.files.map((file) => file.generatedPath),
@@ -196,7 +193,7 @@ const newerUpstream = `${major}.${minor + 1}.0`;
     fs.writeFileSync(path.join(upstreamDir, "README.md"), "an unselected upstream change\n");
     commitChange(upstreamDir, "unselected");
     let output = "";
-    assert.equal(main(["--upstream-dir", upstreamDir, "--root", root, "--date", "2026-01-02"], {
+    assert.equal(main(["--upstream-dir", upstreamDir, "--root", root], {
       stdout: { write(value) { output += value; } },
     }), 0);
     const unchanged = JSON.parse(output);
@@ -212,15 +209,16 @@ const newerUpstream = `${major}.${minor + 1}.0`;
     git(upstreamDir, "update-index", "--chmod=+x", "skills/using-superpowers/scripts-new-helper");
     const executableHead = commitChange(upstreamDir, "upstream release");
     const tree = git(upstreamDir, "rev-parse", "HEAD^{tree}");
-    const result = refresh({ root, upstream: require("./check-upstream-sources.cjs").createGitTreeReader({ dir: upstreamDir }), date: "2026-01-03", deskVersion: null });
+    const result = refresh({ root, upstream: require("./check-upstream-sources.cjs").createGitTreeReader({ dir: upstreamDir }) });
     assert.equal(result.changed, true);
     assert.equal(result.previous_commit, base);
     assert.equal(result.commit, executableHead);
     assert.deepEqual(result.updated_paths, [skillFile.sourcePath]);
     assert.deepEqual(result.added_paths, ["skills/using-superpowers/scripts-new-helper"]);
+    const fragment = `plugins/desk/changelog.d/superpowers-${newerUpstream}.md`;
     assert.deepEqual(result.release, {
       superpowers: { from: currentSuperpowers, to: newerUpstream, upstream: newerUpstream },
-      desk: { from: currentDesk, to: nextAlpha(currentDesk) },
+      fragment,
     });
 
     // The payload is byte-identical to upstream and the lock records it.
@@ -251,55 +249,40 @@ const newerUpstream = `${major}.${minor + 1}.0`;
     assert.match(readme, new RegExp(`version ${newerUpstream.replaceAll(".", "\\.")}, commit \`${executableHead}\``, "u"));
     assert.match(readme, new RegExp(`the upstream tree is \`${tree}\``, "u"));
 
-    // Every Desk surface ships the next alpha, with a changelog entry and release date the coupling test reads.
-    const deskVersion = nextAlpha(currentDesk);
+    // Desk gains a changelog fragment like any other pull request and keeps its version and changelog; the Desk
+    // release workflow takes the next alpha once the refresh merges.
+    assert.equal(readFixture(root, fragment), `Superpowers refresh: Desk now ships Superpowers ${newerUpstream}, the selected payload of [obra/superpowers](https://github.com/obra/superpowers/commit/${executableHead}) (upstream version ${newerUpstream}) copied byte for byte. Selected files: 1 changed, 1 added. [upstream-sources.lock.json](../../upstream-sources.lock.json) records every path and SHA-256.\n`);
     for (const file of DESK_VERSION_FILES) {
       const text = readFixture(root, file);
-      assert.doesNotMatch(text, versionToken(currentDesk), file);
-      assert.match(text, versionToken(deskVersion), file);
+      assert.match(text, versionToken(currentDesk), file);
+      assert.doesNotMatch(text, versionToken(nextAlpha(currentDesk)), file);
     }
-    const changelog = readFixture(root, "plugins/desk/CHANGELOG.md");
-    assert.ok(changelog.startsWith(`# desk plugin — changelog\n\n## ${deskVersion} — 2026-01-03\n\nSuperpowers refresh: Desk now ships Superpowers ${newerUpstream}`), changelog.slice(0, 300));
-    assert.match(changelog.split("\n## ")[1], new RegExp(`Selected files: 1 changed, 1 added\\. .*desk-mcp@${mcpVersion.replaceAll(".", "\\.")}`, "u"));
-    assert.ok(changelog.includes(fs.readFileSync(path.join(repoRoot, "plugins/desk/CHANGELOG.md"), "utf8").slice("# desk plugin — changelog\n\n".length)));
-    assert.match(readFixture(root, "plugins/desk/mcp/__tests__/release/release_coupling.test.js"), /const expectedReleaseDate = "2026-01-03"/u);
+    assert.equal(readFixture(root, "plugins/desk/CHANGELOG.md"), fs.readFileSync(path.join(repoRoot, "plugins/desk/CHANGELOG.md"), "utf8"));
 
-    // Upstream changes the payload again without a new version: Superpowers takes the next patch, Desk the chosen alpha.
+    // Upstream changes the payload again without a new version: Superpowers takes the next patch and gets its own fragment.
     fs.appendFileSync(path.join(upstreamDir, skillFile.sourcePath), "A second addition.\n");
     fs.rmSync(path.join(upstreamDir, "skills/using-superpowers/scripts-new-helper"));
     const second = commitChange(upstreamDir, "unreleased change");
     output = "";
-    assert.equal(main(["--upstream-dir", upstreamDir, "--root", root, "--date", "2026-01-04", "--desk-version", `${currentDesk.split("-")[0]}-alpha.900`, "--ref", second], {
+    assert.equal(main(["--upstream-dir", upstreamDir, "--root", root, "--ref", second], {
       stdout: { write(value) { output += value; } },
     }), 0);
     const patch = JSON.parse(output);
     assert.deepEqual(patch.removed_paths, ["skills/using-superpowers/scripts-new-helper"]);
     assert.equal(patch.release.superpowers.to, `${major}.${minor + 1}.1`);
-    assert.equal(patch.release.desk.to, `${currentDesk.split("-")[0]}-alpha.900`);
-    assert.match(readFixture(root, "plugins/desk/CHANGELOG.md"), /Selected files: 1 changed, 1 removed\./u);
-
-    // A chosen Desk version must move forward.
-    fs.appendFileSync(path.join(upstreamDir, skillFile.sourcePath), "A third addition.\n");
-    commitChange(upstreamDir, "third");
-    assert.throws(
-      () => main(["--upstream-dir", upstreamDir, "--root", root, "--desk-version", currentDesk], { stdout: { write() {} } }),
-      new RegExp(`Desk version ${currentDesk.replaceAll(".", "\\.")} must be above`, "u"),
-    );
-    assert.throws(
-      () => main(["--upstream-dir", upstreamDir, "--root", root, "--desk-version", "not-a-version"], { stdout: { write() {} } }),
-      /Desk version not-a-version must be above/u,
-    );
+    assert.equal(patch.release.fragment, `plugins/desk/changelog.d/superpowers-${major}.${minor + 1}.1.md`);
+    assert.match(readFixture(root, patch.release.fragment), /Selected files: 1 changed, 1 removed\./u);
+    assert.equal(JSON.parse(readFixture(root, "plugins/desk/.claude-plugin/plugin.json")).version, currentDesk);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
 {
-  // A stale surface list, a reworded README or a changelog without its title stops the release loudly.
+  // A stale surface list or a reworded README stops the release loudly.
   for (const [breakFixture, pattern] of [
     [(root) => fs.writeFileSync(path.join(root, "plugins/superpowers/plugin.json"), "{}\n"), /plugins\/superpowers\/plugin\.json does not name version .*; the release surface list is stale/u],
     [(root) => fs.writeFileSync(path.join(root, "plugins/superpowers/README.md"), "# Superpowers provider\n"), /README\.md no longer states the upstream version, commit and tree/u],
-    [(root) => fs.writeFileSync(path.join(root, "plugins/desk/CHANGELOG.md"), "# Changes\n"), /CHANGELOG\.md must begin with its title/u],
   ]) {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "refresh-superpowers-stale-"));
     try {
@@ -331,7 +314,7 @@ const newerUpstream = `${major}.${minor + 1}.0`;
     [[], /--upstream-dir <git checkout of obra\/superpowers> is required/u],
     [["--upstream-dir"], /unknown or incomplete argument: --upstream-dir/u],
     [["--bogus", "x"], /unknown or incomplete argument: --bogus/u],
-    [["--upstream-dir", ".", "--date", "tomorrow"], /--date must be YYYY-MM-DD: tomorrow/u],
+    [["--upstream-dir", ".", "--desk-version", "3.2.0-alpha.9"], /unknown or incomplete argument: --desk-version/u],
   ]) {
     assert.throws(() => main(argv, { stdout: { write() {} } }), pattern);
   }
