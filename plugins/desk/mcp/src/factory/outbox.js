@@ -24,7 +24,9 @@
 //   markers/<host>-<session_id>.json   pending-session bookkeeping
 //   outbox/<store-slug>/<host>-<session_id>.json   local facts, never as-is
 //   delivered/<store-slug>.json        name -> last delivered published blob sha
-//   quarantine/<store-slug>/<name>     { reason, at }
+//   quarantine/<store-slug>/<name>     { reason, at }, and for labels
+//                                      held back for quarantined facts
+//                                      { reason: "facts_quarantined", facts, at }
 //   visibility.json                    repo visibility cache (7-day expiry)
 //   status.json                        last flush result per store
 //   finalize/<job>.json                a Desk task tool's sync-at-done request
@@ -94,7 +96,9 @@ const VISIBILITY_VALUES = ["public", "private", "unknown"]
 const SESSION_ID_SRC = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 const OUTBOX_NAME_PATTERN = new RegExp(`^(?:${ENUMS.host.join("|")})-${SESSION_ID_SRC}\\.json$`, "u")
 const FINALIZE_NAME_PATTERN = /^[0-9a-f]{32}\.json$/u
+const SESSION_ID_PATTERN = new RegExp(`^${SESSION_ID_SRC}$`, "u")
 const LABELS_NAME_PATTERN = new RegExp(`^${SESSION_ID_SRC}\\.json$`, "u")
+const LABELS_KEY_PATTERN = new RegExp(`^labels/[0-9a-f]{32}/${SESSION_ID_SRC}\\.json$`, "u")
 const BRIEF_NAME_PATTERN = new RegExp(`^((?:${ENUMS.host.join("|")})-${SESSION_ID_SRC})\\.brief\\.json$`, "u")
 const STORE_SLUG_PATTERN = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)__([A-Za-z0-9._-]{1,100})$/u
 
@@ -630,13 +634,21 @@ export async function markDelivered(env, store, { name, publishedBlobSha }, { pl
   return updateJsonLocked(root, file, {}, (current) => ({ ...current, [name]: publishedBlobSha }), { platform, env, runner })
 }
 
-/** Quarantines outbox file `name` (must be a real outbox file name) for `store` under `reason` (a transform refusal or CI rejection code). */
-export async function quarantine(env, store, name, reason, { now = defaultNow, platform = process.platform, runner = undefined } = {}) {
-  requirePattern(name, OUTBOX_NAME_PATTERN, "name")
+/**
+ * Quarantines outbox file `name` for `store` under `reason` (a transform
+ * refusal or CI rejection code). `name` is a facts file name or a local
+ * labels key, `labels/<job>/<session_id>.json`, which is quarantined at
+ * `quarantine/<store-slug>/labels/<job>/<session_id>.json`. `facts`, a facts
+ * file name, is recorded beside the reason when given: the quarantined facts
+ * a labels key is held back for.
+ */
+export async function quarantine(env, store, name, reason, { facts = undefined, now = defaultNow, platform = process.platform, runner = undefined } = {}) {
+  if (!LABELS_KEY_PATTERN.test(String(name))) requirePattern(name, OUTBOX_NAME_PATTERN, "name")
   requirePattern(reason, REASON_PATTERN, "reason")
+  if (facts !== undefined) requirePattern(facts, OUTBOX_NAME_PATTERN, "facts")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
-  const record = { reason, at: now() }
+  const record = facts === undefined ? { reason, at: now() } : { reason, facts, at: now() }
   await writeJsonAtomic(root, path.join(root, "quarantine", slug, name), record, { platform, env, runner })
   return record
 }
@@ -958,9 +970,9 @@ export async function writeLocalLabels(env, store, labels) {
  * every local labels file for `store` whose last delivered published blob
  * SHA differs from `gitBlobSha(publishedBytesFor(localLabels))`, named
  * `labels/<job>/<session_id>.json`, the key `markDelivered` records. A file
- * `publishedBytesFor` answers `null` for is skipped, and so is one that
- * fails to parse. Only regular files of the labels shape under a job folder
- * are considered.
+ * `publishedBytesFor` answers `null` for is skipped, and so are one that
+ * fails to parse and one that is quarantined. Only regular files of the
+ * labels shape under a job folder are considered.
  */
 export async function pendingLabels(env, store, { publishedBytesFor } = {}) {
   if (typeof publishedBytesFor !== "function") fail("publishedBytesFor", "must be a function")
@@ -972,6 +984,7 @@ export async function pendingLabels(env, store, { publishedBytesFor } = {}) {
   for (const job of await listDirSafe(dir)) {
     if (!PATTERNS.jobId.test(job)) continue
     for (const file of await listRegularFiles(path.join(dir, job), LABELS_NAME_PATTERN)) {
+      if ((await lstatIfPresent(path.join(root, "quarantine", slug, "labels", job, file), NAMING)) !== null) continue
       const localBytes = await readProtectedBytes(path.join(dir, job, file))
       let localLabels
       try {
@@ -986,6 +999,29 @@ export async function pendingLabels(env, store, { publishedBytesFor } = {}) {
     }
   }
   return pending
+}
+
+/**
+ * `holdLabels(env, store, { job, session }) -> string | null`: the facts file
+ * name of `session` that is quarantined for `store`, or `null` when none is.
+ * Labels can only ever be delivered with their session's facts, so when
+ * those facts are quarantined the labels key `labels/<job>/<session>.json`
+ * is quarantined too, as `facts_quarantined` naming the facts file, whether
+ * or not the labels exist yet; a key already quarantined keeps its record.
+ */
+export async function holdLabels(env, store, { job, session }) {
+  requirePattern(job, PATTERNS.jobId, "job")
+  requirePattern(session, SESSION_ID_PATTERN, "session")
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env)
+  for (const host of ENUMS.host) {
+    const facts = `${host}-${session}.json`
+    if ((await lstatIfPresent(path.join(root, "quarantine", slug, facts), NAMING)) === null) continue
+    const key = `labels/${job}/${session}.json`
+    if ((await lstatIfPresent(path.join(root, "quarantine", slug, key), NAMING)) === null) await quarantine(env, store, key, "facts_quarantined", { facts })
+    return facts
+  }
+  return null
 }
 
 /**

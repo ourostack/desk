@@ -259,3 +259,54 @@ test("a crew person's finished job is found through its pending request even whe
   await requestFinalize(env, { job, deskRoot: crew })
   assert.deepEqual(factoryBootCheck({ env, deskRoot: crew, now: NOW }), { jobs: [job] })
 }))
+
+test("labelsBootCheck counts retained evaluation requests only for a contributing store, with or without options", () => scratch(async ({ env, desk }) => {
+  const { labelsBootCheck, labelsLine } = await load()
+  assert.deepEqual(labelsBootCheck(), { count: 0, quarantined: 0 })
+  assert.deepEqual(labelsBootCheck({}), { count: 0, quarantined: 0 })
+  assert.deepEqual(labelsBootCheck({ env }), { count: 0, quarantined: 0 })
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  const { requestEvaluation } = await import("../../src/factory/outbox.js")
+  await requestEvaluation(env, { job: "9f2c4b1a7d3e5f60718293a4b5c6d7e8", deskRoot: desk })
+  assert.deepEqual(labelsBootCheck({ env }), { count: 1, quarantined: 0 })
+  assert.equal(labelsLine(1), "Factory: 1 finished tasks have no waste labels yet; run the evaluator for them in the background")
+}))
+
+test("labelsBootCheck reports quarantined labels, and a request whose every session is held back is not counted as waiting", () => scratch(async ({ env, desk }) => {
+  const { labelsBootCheck, labelsQuarantinedLine } = await load()
+  const { requestEvaluation } = await import("../../src/factory/outbox.js")
+  const OTHER_STORE = "ourostack/other"
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await setConsent(env, { store: OTHER_STORE, contribute: true, account: "contributor" })
+  const root = await factoryStateRoot(env)
+  const [held, partly, unindexed, broken, old] = ["a1", "b2", "c3", "d4", "e5"].map((prefix) => prefix.repeat(16))
+  const labelsKey = (job, n) => `labels/${job}/${sessionId(n)}.json`
+  const facts = (n) => `claude-code-${sessionId(n)}.json`
+  // `held`: both sessions held back, one in each contributing store.
+  await updateJobsIndex(env, held, facts(1))
+  await updateJobsIndex(env, held, facts(2))
+  await quarantine(env, STORE, labelsKey(held, 1), "facts_quarantined", { facts: facts(1) })
+  await quarantine(env, OTHER_STORE, labelsKey(held, 2), "facts_quarantined", { facts: facts(2) })
+  await requestEvaluation(env, { job: held, deskRoot: desk })
+  // `partly`: one session of two held back; still waiting.
+  await updateJobsIndex(env, partly, facts(3))
+  await updateJobsIndex(env, partly, "not an outbox name")
+  await quarantine(env, STORE, labelsKey(partly, 3), "facts_quarantined", { facts: facts(3) })
+  await requestEvaluation(env, { job: partly, deskRoot: desk })
+  // `unindexed`: a request with no sessions in the index is waiting.
+  await requestEvaluation(env, { job: unindexed, deskRoot: desk })
+  // `broken`: a labels quarantine folder with only a stray file and no records is not a quarantined job.
+  await fs.mkdir(path.join(root, "quarantine", "ourostack__factory", "labels", broken), { recursive: true })
+  await fs.writeFile(path.join(root, "quarantine", "ourostack__factory", "labels", broken, "notes.txt"), "x")
+  await fs.writeFile(path.join(root, "quarantine", "ourostack__factory", "labels", "not-a-job"), "x")
+  // `old`: quarantined more than 30 days ago, no longer reported.
+  await quarantine(env, STORE, labelsKey(old, 5), "too_large")
+  const past = new Date(NOW - 40 * DAY)
+  await fs.utimes(path.join(root, "quarantine", "ourostack__factory", "labels", old), past, past)
+
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }), { count: 2, quarantined: 2 })
+  // Without an index to consult, nothing is held back and every request waits.
+  await fs.writeFile(path.join(root, "jobs-index.json"), "not json")
+  assert.deepEqual(labelsBootCheck({ env, now: NOW }), { count: 3, quarantined: 2 })
+  assert.equal(labelsQuarantinedLine(2), "Factory: 2 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
+}))

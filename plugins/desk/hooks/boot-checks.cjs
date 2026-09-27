@@ -24,9 +24,14 @@
 //   1. factory: whether the bound desk's store has a consent decision, and a
 //      detached `factory.js finalize` for finished jobs whose facts are not
 //      delivered yet (mcp/src/factory/boot-check.js);
-//   2. desk-health: the bound root's last Desk start, and a detached
+//   2. labels: finished jobs whose waste labels are not complete yet, and a
+//      detached `factory.js evaluate --pending` that prepares their evaluator
+//      briefs again, and finished jobs whose labels are quarantined and will
+//      not be delivered, reported without a repair
+//      (mcp/src/factory/boot-check.js);
+//   3. desk-health: the bound root's last Desk start, and a detached
 //      fast-forward of a clean state branch (mcp/src/runtime/desk-health.js);
-//   3. workspace-tidy: stale worktree listing with its own detached repair
+//   4. workspace-tidy: stale worktree listing with its own detached repair
 //      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself so
 //      its line can say whether the launch happened, and keeps a soft deadline
 //      inside its budget so an unfinished inspection still reports "deferred".
@@ -294,6 +299,18 @@ const factoryCheck = {
   },
 };
 
+const labelsCheck = {
+  id: "labels",
+  budgetMs: 40,
+  async run(ctx) {
+    const { labelsBootCheck, labelsLine, labelsQuarantinedLine } = await runtime("factory/boot-check.js");
+    const { count, quarantined } = labelsBootCheck({ env: ctx.env });
+    const lines = [...(count > 0 ? [labelsLine(count)] : []), ...(quarantined > 0 ? [labelsQuarantinedLine(quarantined)] : [])];
+    if (lines.length === 0) return {};
+    return { line: lines.join("; "), repair: count > 0 ? { command: compatibleCommand(FACTORY_SCRIPT, "evaluate", "--pending") } : undefined };
+  },
+};
+
 const deskHealthCheck = {
   id: "desk-health",
   budgetMs: 50,
@@ -521,8 +538,8 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
 }
 
 module.exports = {
-  checks: [factoryCheck, deskHealthCheck, workspaceTidyCheck],
-  factoryCheck, deskHealthCheck, workspaceTidyCheck,
+  checks: [factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck],
+  factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck,
   runBootChecks, startFactory, launchCommand, recordSkipped,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
 };

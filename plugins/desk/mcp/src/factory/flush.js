@@ -36,6 +36,18 @@
 //      result is `intake_stale_retried` with the number of stale PRs read.
 //   5. A file whose exact published blob already sits at `facts/<name>` on
 //      the store's default branch is marked delivered.
+//
+//   Accepted waste labels (`pendingLabels`) go the same way: each becomes
+//   `labels/<job>/<session id>.json` through `toPublishedLabels`, with the
+//   job keyed exactly as its session's facts are, and passes
+//   `validateLabelsBytes`, else it is quarantined under its local key. A
+//   rejected PR quarantines its labels with its facts; a stale one sends them
+//   again. Labels go only with their session's facts, on the default branch
+//   or in the same batch, since the store refuses labels without facts and
+//   that refusal would quarantine the whole PR. Labels whose session's facts
+//   are quarantined, by this flush or an earlier one, can therefore never go:
+//   they are quarantined too (`holdLabels`), as `facts_quarantined` naming
+//   those facts, instead of waiting forever.
 //   6. The rest (at most 500 files and 24 MiB per flush) becomes one tree on
 //      top of the store's default branch and one commit titled `Factory
 //      intake`, and the task-owned branch `intake/<intake_id>` is
@@ -81,10 +93,12 @@ import {
   clearFinalize,
   factoryStateRoot,
   gitBlobSha,
+  holdLabels,
   listFinalizeRequests,
   listMarkers,
   markDelivered,
   pendingFiles,
+  pendingLabels,
   quarantine,
   readConsent,
   readJobsIndex,
@@ -94,7 +108,8 @@ import {
   writeStatus,
   writeVisibilityCache,
 } from "./outbox.js"
-import { serializePublished, toPublished } from "./publish.js"
+import { validateLabelsBytes } from "./label-schema.js"
+import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
 import { validatePublishedBytes } from "./published-schema.js"
 import { PATTERNS, isPlainObject } from "./schema.js"
 
@@ -127,6 +142,7 @@ const REJECTED = /^factory-rejected: ([a-z][a-z0-9_]{0,63})$/u
 const DELIVERED_OPEN = new Set(["delivered_pr_open", "intake_stale_retried"])
 const FACTS_NAME = /^(?:claude-code|copilot-cli)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/u
 const FACTS_PATH = /^facts\/((?:claude-code|copilot-cli)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json)$/u
+const HOSTS = Object.freeze(["claude-code", "copilot-cli"])
 const HTTP_STATUS = /\(HTTP (\d{3})\)/u
 const RATE_LIMIT = /rate limit/iu
 const OFFLINE = /error connecting to|could not resolve|no such host|dial tcp|connection refused|connection reset|network is unreachable|i\/o timeout|TLS handshake timeout|timed out/iu
@@ -402,6 +418,29 @@ function publishOne(local, name, { transform, known, desk, secret }) {
   return { bytes }
 }
 
+// The facts file names a labels file's session can have, one per host.
+// A local labels key; `pendingLabels` lists only keys of this shape.
+const LABELS_KEY = /^labels\/([0-9a-f]{32})\/(.+)\.json$/u
+const factsNamesOf = (session) => HOSTS.map((host) => `${host}-${session}.json`)
+
+// A local labels file as the store receives it: the job keyed exactly as its
+// facts are (the desk remote of the session's marker decides), then the
+// labels gate.
+function publishLabelsOne(local, key, { known, desks, secret }) {
+  if (`labels/${local?.job}/${local?.session}.json` !== key) return { reason: "invalid" }
+  const desk = factsNamesOf(local.session).map((name) => desks.get(name)).find((repo) => typeof repo === "string")
+  let out
+  try {
+    out = toPublishedLabels(local, { deskVisibility: desk === undefined ? "unknown" : known.get(desk.toLowerCase()), machineSecret: secret })
+  } catch {
+    return { reason: "invalid" }
+  }
+  const bytes = Buffer.from(serializePublished(out.published), "utf8")
+  const checked = validateLabelsBytes(bytes)
+  if (!checked.ok) return { reason: checked.errors[0].code }
+  return { path: out.path, bytes }
+}
+
 // ---------------------------------------------------------------------------
 // Store side.
 // ---------------------------------------------------------------------------
@@ -461,7 +500,7 @@ async function readPages(client, route, { perPage, maxItems, stopAt = () => fals
   return items.slice(0, maxItems)
 }
 
-async function readRejections(env, client, { store, head, through }) {
+async function readRejections(env, client, { store, head, through, labelKeys }) {
   const rejected = new Set()
   let stale = 0
   let highest = through
@@ -496,7 +535,8 @@ async function readRejections(env, client, { store, head, through }) {
     }
     // A batch holds up to MAX_FILES files; GitHub pages them 100 at a time.
     for (const file of await readPages(client, `repos/${store}/pulls/${pr.number}/files`, { perPage: 100, maxItems: MAX_FILES })) {
-      const name = FACTS_PATH.exec(String(file?.filename))?.[1]
+      // A labels file is known by its published path; only labels still waiting here can be named back to their local key.
+      const name = FACTS_PATH.exec(String(file?.filename))?.[1] ?? labelKeys.get(String(file?.filename))
       if (name === undefined) continue
       await quarantine(env, store, name, code)
       rejected.add(name)
@@ -524,6 +564,21 @@ async function factsOnBranch(client, repo, treeSha) {
   return blobs
 }
 
+/** The blob SHA at each `labels/<job>/<session>.json` of `paths` in the tree, reading only the jobs asked about. */
+async function labelsOnBranch(client, repo, treeSha, paths) {
+  const blobs = new Map()
+  if (paths.length === 0) return blobs
+  const labels = treeEntries(await client.need("GET", `repos/${repo}/git/trees/${treeSha}`)).get("labels")
+  if (labels?.type !== "tree") return blobs
+  const jobs = treeEntries(await client.need("GET", `repos/${repo}/git/trees/${requireSha(labels.sha)}`))
+  for (const job of [...new Set(paths.map((item) => item.split("/")[1]))].sort()) {
+    const entry = jobs.get(job)
+    if (entry?.type !== "tree") continue
+    for (const [name, blob] of treeEntries(await client.need("GET", `repos/${repo}/git/trees/${requireSha(entry.sha)}`))) blobs.set(`labels/${job}/${name}`, blob.sha)
+  }
+  return blobs
+}
+
 function takeBatch(remaining, { maxFiles, maxBytes }) {
   const batch = []
   let bytes = 0
@@ -538,12 +593,13 @@ function takeBatch(remaining, { maxFiles, maxBytes }) {
 async function pushBatch(client, { target, branch, base, batch }) {
   const created = await client.need("POST", `repos/${target.repo}/git/trees`, {
     base_tree: base.tree,
-    tree: batch.map((item) => ({ path: `facts/${item.name}`, mode: "100644", type: "blob", content: item.bytes.toString("utf8") })),
+    tree: batch.map((item) => ({ path: item.path, mode: "100644", type: "blob", content: item.bytes.toString("utf8") })),
   })
   const tree = requireSha(created?.sha)
   // The tree must hold exactly the bytes that were checked.
   const landed = await factsOnBranch(client, target.repo, tree)
-  for (const item of batch) if (landed.get(item.name) !== item.sha) stop("unexpected")
+  const landedLabels = await labelsOnBranch(client, target.repo, tree, batch.filter((item) => item.labels).map((item) => item.path))
+  for (const item of batch) if ((item.labels ? landedLabels.get(item.path) : landed.get(item.name)) !== item.sha) stop("unexpected")
   const current = await client.api("GET", `repos/${target.repo}/git/ref/heads/${branch}`)
   if (current.status !== 200 && current.status !== 404) stop("unexpected")
   const headSha = current.status === 200 ? requireSha(current.json?.object?.sha) : null
@@ -588,13 +644,16 @@ async function deliver(env, context) {
   const { account } = record
 
   const candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL })
-  if (candidates.length === 0) return { result: "nothing_pending" }
+  const labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })
+  if (candidates.length === 0 && labelCandidates.length === 0) return { result: "nothing_pending" }
 
-  // `pendingFiles` already quarantined every file that does not parse.
+  // `pendingFiles` already quarantined every file that does not parse, and `pendingLabels` lists only labels that parse.
   const parsed = candidates.map(({ name, localBytes }) => ({ name, local: JSON.parse(localBytes.toString("utf8")) }))
+  const parsedLabels = labelCandidates.map(({ name, localBytes }) => ({ key: name, local: JSON.parse(localBytes.toString("utf8")) }))
   const desks = await deskRepositories(env, { deadline, now })
   const repos = parsed.flatMap(({ local }) => referencedRepos(local))
   for (const { name } of parsed) if (desks.get(name)) repos.push(desks.get(name))
+  for (const { local } of parsedLabels) for (const name of factsNamesOf(local?.session)) if (desks.get(name)) repos.push(desks.get(name))
   const known = await resolveVisibility(env, client, account, repos, nowIso)
   const secret = await readMachineSecret(env)
 
@@ -604,9 +663,28 @@ async function deliver(env, context) {
     if (out.bytes) bytesByName.set(name, out.bytes)
     else await quarantine(env, store, name, out.reason)
   }
-  // Every file without published bytes was just quarantined, so the listing below never asks about one.
-  let pending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts.session.host}-${facts.session.id}.json`) }))
-    .map(({ name }) => ({ name, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)) }))
+  const labelsByKey = new Map()
+  for (const { key, local } of parsedLabels) {
+    const out = publishLabelsOne(local, key, { known, desks, secret })
+    if (out.bytes) labelsByKey.set(key, out)
+    else await quarantine(env, store, key, out.reason)
+  }
+  // Every file without published bytes was just quarantined, so the listings below never ask about one.
+  const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts.session.host}-${facts.session.id}.json`) }))
+    .map(({ name }) => ({ name, path: `facts/${name}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)) }))
+  const labelsPending = (await pendingLabels(env, store, { publishedBytesFor: (labels) => labelsByKey.get(`labels/${labels.job}/${labels.session}.json`).bytes }))
+    .map(({ name }) => {
+      const { path: published, bytes } = labelsByKey.get(name)
+      const [, job, session] = LABELS_KEY.exec(name)
+      return { name, path: published, bytes, sha: gitBlobSha(bytes), labels: true, job, session }
+    })
+  // Labels whose facts are quarantined never go; `holdLabels` quarantines them instead. Checked again after rejections, which may quarantine facts.
+  const withoutHeld = async (items) => {
+    const kept = []
+    for (const item of items) if (!item.labels || (await holdLabels(env, store, { job: item.job, session: item.session })) === null) kept.push(item)
+    return kept
+  }
+  let pending = await withoutHeld([...factsPending, ...labelsPending])
   if (pending.length === 0) return { result: "nothing_pending" }
   progress.pending = pending.map((item) => item.name)
 
@@ -619,22 +697,28 @@ async function deliver(env, context) {
   const head = { ref: branch, label: `${target.owner}:${branch}` }
 
   const through = (await readStatus(env)).last_flush?.[store]?.rejections_through
-  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0 })
+  const labelKeys = new Map(labelsPending.map((item) => [item.path, item.name]))
+  const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys })
   progress.rejectionsThrough = rejections.through
-  pending = pending.filter((item) => !rejections.rejected.has(item.name))
+  pending = await withoutHeld(pending.filter((item) => !rejections.rejected.has(item.name)))
 
   const main = await client.need("GET", `repos/${store}/branches/${target.branch}`)
   const base = { sha: requireSha(main?.commit?.sha), tree: requireSha(main?.commit?.commit?.tree?.sha) }
   const onMain = await factsOnBranch(client, store, base.tree)
+  const labelsOnMain = await labelsOnBranch(client, store, base.tree, pending.filter((item) => item.labels).map((item) => item.path))
   const remaining = []
   for (const item of pending) {
-    if (onMain.get(item.name) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha })
+    if ((item.labels ? labelsOnMain.get(item.path) : onMain.get(item.name)) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha })
     else remaining.push(item)
   }
   progress.pending = remaining.map((item) => item.name)
   if (remaining.length === 0) return { result: "nothing_pending" }
 
-  const batch = takeBatch(remaining, { maxFiles, maxBytes })
+  // Facts go first. Labels go only with their session's facts, on the default branch or in the same batch: the store's gate refuses labels without facts, and that refusal would quarantine every file of the PR.
+  const taken = takeBatch(remaining, { maxFiles, maxBytes })
+  const factsReady = new Set([...onMain.keys(), ...taken.filter((item) => !item.labels).map((item) => item.name)])
+  const batch = taken.filter((item) => !item.labels || factsNamesOf(item.session).some((name) => factsReady.has(name)))
+  if (batch.length === 0) return { result: "nothing_pending" }
   await pushBatch(client, { target, branch, base, batch })
   const pr = await openPr(client, { store, head, base: target.branch, count: batch.length })
   // A stale refusal is not a delivery failure, but it is not a plain delivery either: say so, with how many stale PRs this flush read.

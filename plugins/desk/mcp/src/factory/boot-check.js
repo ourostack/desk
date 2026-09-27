@@ -18,6 +18,24 @@
 //     finalize` for them. A declined store, an invalid store declaration, no
 //     bound desk or unreadable state return `{ jobs: [] }`.
 //
+// `labelsBootCheck({ env, now })` reads, when a store has `contribute: true`,
+// the names in `evaluate-requests/` and in each contributing store's
+// `quarantine/<store-slug>/labels/<job>/`, the times of those job folders,
+// and, only when both hold something, `jobs-index.json`. It returns
+// `{ count, quarantined }`:
+//
+//   - `count`: retained waste evaluation requests (a finished job whose
+//     labels are not complete yet), except a job whose every indexed
+//     session has quarantined labels, which can never be completed;
+//   - `quarantined`: finished jobs with quarantined labels, which will not
+//     be delivered: a job folder in labels quarantine updated within 30
+//     days, or a request left out of `count` for that reason. Labels are
+//     quarantined when the store's gate refuses them or when their facts are
+//     quarantined (`outbox.js`'s `holdLabels`).
+//
+// `labelsLine(count)` and `labelsQuarantinedLine(quarantined)` are the
+// agent lines for a number above zero.
+//
 // Task cards are found only in the desk layout: `<track>/<task>/task.md`,
 // `<track>/_archive/<task>/task.md` and the same under `_archive/<track>/`,
 // below `desks/<alias>/` when a person prefix is given. A crew root's
@@ -54,6 +72,10 @@ const MAX_ENTRIES = 4096
 const TERMINAL = new Set(["done", "cancelled"])
 const BARE_DATE = /^\d{4}-\d{2}-\d{2}$/u
 const FINALIZE_NAME = /^[0-9a-f]{32}\.json$/u
+const JOB_NAME = /^[0-9a-f]{32}$/u
+const SESSION_SRC = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+const SESSION_FILE = new RegExp(`^${SESSION_SRC}\\.json$`, "u")
+const SESSION_OF = new RegExp(`-(${SESSION_SRC})\\.json$`, "u")
 
 class BudgetExceeded extends Error {
   constructor() {
@@ -158,10 +180,56 @@ function updatedAt(value) {
   return typeof value === "string" && BARE_DATE.test(value.trim()) ? Date.parse(`${value.trim()}T00:00:00.000Z`) : Number.NaN
 }
 
+/** The stores with `contribute: true`, from a bounded read of `consent.json`. */
+function contributingStores(env) {
+  const consent = readState(path.join(factoryStateDir(env), "consent.json"), null)
+  if (!isPlainObject(consent?.stores)) return []
+  return Object.entries(consent.stores).filter(([, record]) => isPlainObject(record) && record.contribute === true).map(([store]) => store)
+}
+
 /** Whether any store has `contribute: true`, from a bounded read of `consent.json`; the session-start hooks start delivery only then. */
 export function hasContributingStore(env = process.env) {
-  const consent = readState(path.join(factoryStateDir(env), "consent.json"), null)
-  return isPlainObject(consent?.stores) && Object.values(consent.stores).some((record) => isPlainObject(record) && record.contribute === true)
+  return contributingStores(env).length > 0
+}
+
+/** The agent line for `count` finished tasks whose waste labels are not complete. */
+export function labelsLine(count) {
+  return `Factory: ${count} finished tasks have no waste labels yet; run the evaluator for them in the background`
+}
+
+/** The agent line for `count` finished tasks whose waste labels are quarantined. */
+export function labelsQuarantinedLine(count) {
+  return `Factory: ${count} finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)`
+}
+
+/** See the header. Never writes and never opens a request or a quarantine record; every listing is capped. */
+export function labelsBootCheck({ env = process.env, now = Date.now() } = {}) {
+  const stores = contributingStores(env)
+  if (stores.length === 0) return { count: 0, quarantined: 0 }
+  const dir = factoryStateDir(env)
+  const requests = listNames(path.join(dir, "evaluate-requests")).filter((name) => FINALIZE_NAME.test(name)).map((name) => name.slice(0, -5))
+  // job -> the sessions whose labels are quarantined, in any contributing store; and the jobs quarantined recently.
+  const held = new Map()
+  const quarantined = new Set()
+  for (const store of stores) {
+    const base = path.join(dir, "quarantine", store.replace("/", "__"), "labels")
+    for (const job of listNames(base).filter((name) => JOB_NAME.test(name))) {
+      const sessions = held.get(job) ?? new Set()
+      for (const name of listNames(path.join(base, job))) if (SESSION_FILE.test(name)) sessions.add(name.slice(0, -5))
+      held.set(job, sessions)
+      // A folder gone since the listing has no time, and the comparison with `undefined` is false.
+      if (sessions.size > 0 && now - lstatSync(path.join(base, job), { throwIfNoEntry: false })?.mtimeMs <= RECENT_MS) quarantined.add(job)
+    }
+  }
+  const index = held.size > 0 && requests.length > 0 ? readState(path.join(dir, "jobs-index.json"), {}) ?? {} : {}
+  let count = 0
+  for (const job of requests) {
+    const names = Array.isArray(index[job]) ? index[job] : []
+    const sessions = names.map((name) => SESSION_OF.exec(String(name))?.[1])
+    if (sessions.length > 0 && sessions.every((session) => held.get(job)?.has(session))) quarantined.add(job)
+    else count += 1
+  }
+  return { count, quarantined: quarantined.size }
 }
 
 /** `[{ track, slug }]` for finished, recent cards of the desk; see the header. */
