@@ -37,6 +37,10 @@ what i'm looking for:
 - **cross-skill conflicts** — places where two skills' guidance disagreed and one had to give
 - **a rule that keeps being broken** — the surrounding process shape is pushing against it; propose the process change (reorder a step, add a phase), not a louder restatement of the rule
 
+## Waste the evaluator found
+
+when the job reported to a factory store, its job report there carries the evaluator's waste labels and the job's measures (tool failures, retries, defects, flow efficiency). waste whose cause is the shared system (Desk, a skill, a tool, the factory) is not a private note: open a kaizen card for it with `friction_add` and `about: "system"`, the measure the waste moved as `signal`, and the job ids as `evidence_jobs`, worded generically per `friction-management`. the store's build then checks the countermeasure against that measure once it ships. waste whose cause is this desk's setup, or the work's own subject matter, follows the rest of this skill.
+
 ## Output: lesson proposals
 
 for each lesson worth shelving, i write a concrete proposal:

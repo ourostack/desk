@@ -1,6 +1,6 @@
 ---
 name: friction-management
-description: How worker maintains the operator's friction log — appending new entries during real use, updating `Status:` lines when fixes land, and archiving landed/partial entries so the live log stays signal-dense. Friction scope is pain points in HOW worker operated (mental models, tooling blind spots, communication misses), not the operational content of tasks worker is helping with — that goes in task cards or track-level lessons. Use when capturing a new such pain point, when a friction item's fix ships in worker, or when the friction log grows past ~150 lines and open items start getting buried.
+description: How worker maintains the operator's friction log — appending new entries during real use, filing friction about the shared system (Desk, its skills and tools, the factory) as a public kaizen card, updating `Status:` lines when fixes land, and archiving landed/partial entries so the live log stays signal-dense. Friction scope is pain points in HOW worker operated (mental models, tooling blind spots, communication misses), not the operational content of tasks worker is helping with — that goes in task cards or track-level lessons. Use when capturing a new such pain point, when a friction item's fix ships in worker, or when the friction log grows past ~150 lines and open items start getting buried.
 ---
 
 # Friction management
@@ -19,6 +19,17 @@ quick test: would a different agent (different model, different runtime) hit thi
 
 mixing the two dulls the corkboard. operational knowledge is task knowledge — it goes where the work is. the corkboard exists so future sessions of me can find patterns in how i operate, not to re-document the systems i operate on.
 
+### About the system, or about this desk's setup
+
+every card is about one of two things, and `friction_add` takes it as `about`:
+
+- **`system`**: the shared system snagged: Desk, a skill, a tool, a hook, the factory. any agent on any desk doing similar work would hit it. system friction becomes a kaizen card, an issue labeled `kaizen` in the desk's factory store, so the fix is measured by the store's build once it ships. `friction_add` files it with the store's recorded consent and account and keeps only the card's URL on the desk. give it a `title`, the `body`, and, when you know them, the `signal` (the rollups measure the snag moves, such as `tool_failures` or `tool_retries`) and the `evidence_jobs` (factory job ids that show it).
+- **`setup`** (the default): this desk's own setup snagged: the operator's machine, accounts, credentials, local configuration, one track's arrangements. it stays on the desk as today.
+
+a kaizen card is public. write it generically: describe the pattern, not the incident. no names of people, customers, private repositories or tracks; no paths, hostnames, email addresses, tokens or quoted private text. "shell tool calls fail when a heredoc holds a backtick" is a card; "the build for <private repo> broke on <person>'s laptop" is not. `friction_add` refuses anything credential-shaped, a home or drive path, or an email address; rewrite and file again rather than dropping it to `setup`.
+
+when the card can't be filed (the store isn't opted in, no account, `gh` unavailable), the entry stays on the desk with the reason, and the result's `kaizen` field gives the code. the kaizen worker (`curator`) files it later.
+
 when a card's fix is later encoded (the `curator` pass), *where* it lands — workspace vs plugin, which plugin, always-on vs a triggered skill — is a `content-routing` decision.
 
 When the operator asks why skill-driven work omitted something, diverged from an agreement, or landed somewhere unexpected, treat the question as a friction report. Before continuing, verify whether the applicable rule already exists and whether it was loaded, then record the expected outcome, the verified cause, and why the existing rules did not prevent it. Do not assume the rule is missing; the `curator` pass checks that before encoding.
@@ -29,7 +40,7 @@ pin whenever the operator teaches me something about how i work, even offhand. o
 
 when the operator hits friction, or when i notice a recurring rough edge:
 
-1. decide the scope. is this operator-wide (`_meta/friction.md`), or does it belong to one drawer (`<track>/_friction/friction.md`)? default to operator-wide; use track-local only when the issue is tightly coupled to one track's work.
+1. decide the scope. first, system or setup (above): system friction goes through `friction_add` with `about: "system"` and the steps below apply only to what stays on the desk. then, is this operator-wide (`_meta/friction.md`), or does it belong to one drawer (`<track>/_friction/friction.md`)? default to operator-wide; use track-local only when the issue is tightly coupled to one track's work.
 2. append a new entry at the END of the file using this format:
 
    ```markdown
@@ -57,6 +68,8 @@ the bias is toward writing the entry while the failure is still fresh, even if i
 a short live-capture entry is more useful than a long after-the-fact one. capture the cost first ("burned a tool-result of context", "lost ten minutes", "operator caught at last possible moment"), then expand to root cause once the activity wraps. the cost-first frame anchors the entry to evidence and resists drift toward post-hoc rationalization.
 
 ## 2. Mark a card landed
+
+system friction filed as a kaizen card is marked landed on the card, not here: the kaizen worker (`curator`) closes it when the store's build confirms the countermeasure helped. the desk entry holding only the card's URL comes off the corkboard in the same motion.
 
 when a fix ships in the owning plugin or repo that resolves a card on the corkboard:
 

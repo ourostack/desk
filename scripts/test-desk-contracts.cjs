@@ -852,6 +852,22 @@ requires(
   "friction-management logs what the operator teaches",
   /operator teaches[\s\S]+even offhand[\s\S]+no-write/iu,
 );
+// The kaizen loop: system friction becomes a public, generic kaizen card; the kaizen worker ships, checks and closes it.
+requires(
+  "plugins/desk/skills/friction-management/SKILL.md",
+  "friction-management files system friction as a generic kaizen card",
+  /### About the system, or about this desk.s setup[\s\S]+\*\*`system`\*\*[\s\S]+kaizen card[\s\S]+only the card's URL[\s\S]+setup[\s\S]+stays on the desk[\s\S]+kaizen card is public[\s\S]+generically/iu,
+);
+requires(
+  "plugins/desk/skills/lesson-capture/SKILL.md",
+  "lesson-capture opens kaizen cards from the evaluator's waste",
+  /## Waste the evaluator found[\s\S]+not a private note[\s\S]+kaizen card[\s\S]+signal[\s\S]+evidence_jobs/iu,
+);
+requires(
+  "plugins/desk/skills/curator/SKILL.md",
+  "curator works kaizen cards from filing to verdict",
+  /## The kaizen worker[\s\S]+file the system friction[\s\S]+PR flow[\s\S]+fill `version` when the release lands[\s\S]+confirmed[\s\S]+close[\s\S]+not-confirmed[\s\S]+revert[\s\S]+re-plan[\s\S]+never close a card because the data is thin[\s\S]+andon/iu,
+);
 
 // The observer agent: worker's sibling, named for Lean's process observer, who watches the work, times it and
 // classifies each step, and never does the work. Its three bodies carry identity only, like worker's.

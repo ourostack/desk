@@ -119,3 +119,73 @@ test("friction_add requires a body", async () => {
     /body.*required/,
   )
 })
+
+// ── about: "system" — friction about the system becomes a kaizen card ────────
+
+const URL = "https://github.com/ourostack/factory/issues/12"
+const JOB = "9f2c4b1a7d3e5f60718293a4b5c6d7e8"
+
+function cardFiler(answer) {
+  const calls = []
+  const fileCard = async (env, options) => {
+    calls.push({ env, options })
+    return answer
+  }
+  return { calls, fileCard }
+}
+
+test("friction_add about system files a kaizen card and keeps only its URL on the desk", async () => {
+  const root = await mkTempDeskRoot()
+  const env = { HOME: root }
+  const { calls, fileCard } = cardFiler({ result: "filed", store: "ourostack/factory", url: URL })
+  const result = await friction_add({
+    deskRoot: root,
+    input: { about: "system", title: "Shell tool calls fail often", body: "Most tool failures are shell calls.", signal: "tool_failures", evidence_jobs: [JOB] },
+    env,
+    fileCard,
+  })
+  assert.deepEqual(result, { status: "filed", url: URL, path: path.join("_meta", "friction.md") })
+  assert.equal(calls[0].env, env)
+  assert.deepEqual(calls[0].options, { deskRoot: root, title: "Shell tool calls fail often", body: "Most tool failures are shell calls.", signal: "tool_failures", evidenceJobs: [JOB] })
+  const content = await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8")
+  assert.equal(content, `Filed as a kaizen card: ${URL}\n`)
+})
+
+test("friction_add about system keeps the entry on the desk with the reason when the card is not filed", async () => {
+  const root = await mkTempDeskRoot()
+  const { calls, fileCard } = cardFiler({ result: "not_opted_in", store: "ourostack/factory" })
+  const result = await friction_add({
+    deskRoot: root,
+    input: { about: "system", track: "t1", theme: "tools", title: "A generic title", body: "The friction." },
+    env: {},
+    fileCard,
+  })
+  assert.equal(result.status, "added")
+  assert.equal(result.kaizen, "not_opted_in")
+  assert.match(result.path, /^t1\/_friction\/\d{4}-\d{2}-\d{2}-tools\.md$/)
+  assert.deepEqual(calls[0].options, { deskRoot: root, title: "A generic title", body: "The friction.", signal: null, evidenceJobs: [] })
+  const content = await fs.readFile(path.join(root, result.path), "utf8")
+  assert.match(content, /The friction\.\n\nNot filed as a kaizen card yet \(not_opted_in\)\. Title: A generic title\n$/)
+})
+
+test("friction_add about setup, or with no about, stays on the desk and files nothing", async () => {
+  const root = await mkTempDeskRoot()
+  const { calls, fileCard } = cardFiler({ result: "filed", url: URL })
+  assert.equal((await friction_add({ deskRoot: root, input: { about: "setup", body: "Local setup." }, fileCard })).status, "added")
+  assert.equal((await friction_add({ deskRoot: root, input: { body: "Also local." }, fileCard })).status, "added")
+  assert.equal(calls.length, 0)
+})
+
+test("friction_add rejects an unknown about, or system friction with no title", async () => {
+  const root = await mkTempDeskRoot()
+  await assert.rejects(() => friction_add({ deskRoot: root, input: { about: "other", body: "x" } }), /about/u)
+  await assert.rejects(() => friction_add({ deskRoot: root, input: { about: "system", body: "x" } }), /title/u)
+  assert.equal(await exists(path.join(root, "_meta", "friction.md")), false)
+})
+
+test("friction_add about system uses the factory's filer by default, which files nothing without consent", async () => {
+  const root = await mkTempDeskRoot()
+  const env = { HOME: root, XDG_STATE_HOME: path.join(root, ".state") }
+  const result = await friction_add({ deskRoot: root, input: { about: "system", title: "A generic title", body: "The friction." }, env })
+  assert.equal(result.kaizen, "not_opted_in")
+})
