@@ -19,7 +19,7 @@ Use a brokered headed context when:
 - Several agents need the same persistent authenticated context while keeping their targets isolated.
 - A provider-backed persistent profile is required for the task.
 
-Keep the default isolated browser when it works. Broker setup has a persistent-context and provider cost that unauthenticated tasks do not need.
+Keep the default isolated browser when it works. Desk ships it as the `playwright` MCP server on every install: headless, with an in-memory profile, started from the `@playwright/mcp` channel. Broker setup has a persistent-context and provider cost that unauthenticated tasks do not need.
 
 ## Required runtime inputs
 

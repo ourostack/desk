@@ -149,6 +149,11 @@ a furnished room, ready to settle into. the layout, the lifecycle, the small cer
 - `pr-self-review`, `pr-review-interrogation`, `pr-surface-hygiene` — pre-open and post-open PR discipline
 - `peer-pr-review`, `pr-reviewer-audit` — reviewing others' code
 
+### browser
+- a `playwright` MCP server ships beside the Desk MCP on Claude Code and Copilot CLI, so every fresh install can open and drive web pages with no setup. `mcp/browser.cjs` starts `@playwright/mcp@latest` (the package's channel, never a pinned version) under the same compatible Node the Desk bootstrap picks, headless and with an in-memory profile so agents never take the operator's focus or fight over one profile
+- it drives Google Chrome, or Edge when Chrome is not installed. with neither, install one, or run `npx -y @playwright/mcp@latest install-browser chrome`
+- authenticated or persistent browser contexts go through the claims-based browser context broker (`browser-context-broker/`, `desk:cdp-headed-browser`); an overlay supplies the provider and each workspace declares its contexts
+
 ### friction / learning
 - `friction-management` — pin a card to the corkboard, then encode the pattern
 - `lesson-capture` (post-task) — mine a finished task for patterns and propose what's earned a place on the reference shelf
