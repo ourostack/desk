@@ -63,6 +63,7 @@ export function runCoverageCommand(options = {}) {
     io.stdout.write(testResult.stdout ?? "")
     io.stderr.write(testResult.stderr ?? "")
     if (testResult.status !== 0) {
+      if (testResult.error) io.stderr.write(`[coverage-gate] the instrumented test run could not finish (${testResult.error.code ?? testResult.error.message})\n`)
       return testResult.status ?? 1
     }
 
@@ -93,6 +94,9 @@ export function runCoverageCommand(options = {}) {
     fsOps.removeDir(tmp)
   }
 }
+
+/** The most test output the gate collects from the instrumented suite. */
+export const COVERAGE_OUTPUT_MAX_BYTES = 256 * 1024 * 1024
 
 export function collectChangedCoverageFiles({ repoRoot, spawn = spawnSync, env = process.env }) {
   const changed = new Set(collectChangedFiles({ repoRoot, spawn, env }))
@@ -205,6 +209,8 @@ function runInstrumentedTests({
   return spawn(process.execPath, args, {
     cwd: defaultMcpRoot,
     encoding: "utf8",
+    // The whole suite's TAP output passed spawnSync's 1 MiB default once the suite grew; a truncated child is killed and fails the gate with no message.
+    maxBuffer: COVERAGE_OUTPUT_MAX_BYTES,
     env: {
       ...env,
       // Ordinary Node descendants do not inherit the parent's execArgv.

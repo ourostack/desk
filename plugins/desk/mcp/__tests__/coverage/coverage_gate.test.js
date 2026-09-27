@@ -821,6 +821,32 @@ test("coverage runner preserves the environment and recursion marker at the prod
   assert.equal(captured.options.cwd, mcpRoot)
   assert.equal(captured.options.env.CUSTOM_ENV, "1")
   assert.equal(captured.options.env.DESK_COVERAGE_RUNNER_CHILD, "1")
+  // The whole suite's output is larger than spawnSync's 1 MiB default buffer.
+  assert.equal(captured.options.maxBuffer, 256 * 1024 * 1024)
+  assert.ok(captured.options.maxBuffer > 1024 * 1024)
+})
+
+test("coverage runner names a test run that could not finish, such as output over its buffer", async () => {
+  const { runCoverageCommand } = await loadRunner()
+  const git = (cmd, args) => (args[0] === "merge-base" ? { status: 0, stdout: "base-sha\n", stderr: "" } : { status: 0, stdout: "", stderr: "" })
+  for (const [error, expected] of [[{ code: "ENOBUFS" }, /could not finish \(ENOBUFS\)/u], [{ message: "spawn failed" }, /could not finish \(spawn failed\)/u]]) {
+    let stderr = ""
+    const result = runCoverageCommand({
+      spawn: (cmd, args, options) => (cmd === process.execPath ? { status: null, stdout: "partial", stderr: "", error } : git(cmd, args, options)),
+      env: { DESK_COVERAGE_BASE_REF: "origin/main" },
+      io: { stdout: { write() {} }, stderr: { write: (text) => { stderr += text } } },
+    })
+    assert.equal(result, 1)
+    assert.match(stderr, expected)
+  }
+  let quiet = ""
+  const failed = runCoverageCommand({
+    spawn: (cmd, args, options) => (cmd === process.execPath ? { status: 3, stdout: "", stderr: "" } : git(cmd, args, options)),
+    env: { DESK_COVERAGE_BASE_REF: "origin/main" },
+    io: { stdout: { write() {} }, stderr: { write: (text) => { quiet += text } } },
+  })
+  assert.equal(failed, 3)
+  assert.equal(quiet, "", "an ordinary failing run adds nothing of its own")
 })
 
 test("coverage runner include filter removes exclusions without mutating required files", async () => {
