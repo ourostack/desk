@@ -10,7 +10,6 @@ import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS 
 import { mkTempDeskRoot } from "./_helpers.js"
 import { withPrivateStore } from "../../src/feedback/store.js"
 import { cleanup, mkFeedbackFixture, useStateHome } from "../feedback/_helpers.js"
-import { mkLedgerFixture, useHostEnv } from "../measurement/_helpers.js"
 
 // The surface as it was advertised while the private feedback API was still
 // registered. Retiring that API has to remove exactly one name from this list
@@ -37,6 +36,10 @@ const SURFACE_BEFORE_FEEDBACK_RETIREMENT = [
   "desk_status",
   "desk_doctor",
 ]
+
+// The manual work-measurement ledger retired when the factory started
+// accounting for finished jobs automatically (M3-12).
+const RETIRED_PRIVATE_TOOLS = ["desk_feedback", "desk_work_ledger"]
 
 function parseResult(res) {
   return JSON.parse(res.content[0].text)
@@ -396,7 +399,7 @@ test("server MCP factory helpers construct default SDK instances", () => {
 // the ordinary unknown-tool path before any feedback storage is opened or
 // created.
 
-test("the live server advertises one tool fewer and no longer names desk_feedback", async () => {
+test("the live server advertises neither retired private tool", async () => {
   const fixture = await mkFeedbackFixture()
   try {
     const { list } = await liveHandlers({ deskRoot: fixture.deskRoot, person: "ari" })
@@ -404,19 +407,20 @@ test("the live server advertises one tool fewer and no longer names desk_feedbac
     const advertised = listed.tools.map((tool) => tool.name)
 
     assert.equal(listed.tools.some((tool) => tool.name === "desk_feedback"), false)
-    assert.equal(listed.tools.some((tool) => tool.name === "desk_work_ledger"), true)
+    assert.equal(listed.tools.some((tool) => tool.name === "desk_work_ledger"), false)
     assert.equal(
       listed.tools.length,
-      SURFACE_BEFORE_FEEDBACK_RETIREMENT.length - 1,
-      `expected exactly one retired tool; advertised: ${advertised.join(", ")}`,
+      SURFACE_BEFORE_FEEDBACK_RETIREMENT.length - RETIRED_PRIVATE_TOOLS.length,
+      `expected exactly the retired private tools to be gone; advertised: ${advertised.join(", ")}`,
     )
     assert.deepEqual(
       advertised,
-      SURFACE_BEFORE_FEEDBACK_RETIREMENT.filter((name) => name !== "desk_feedback"),
+      SURFACE_BEFORE_FEEDBACK_RETIREMENT.filter((name) => !RETIRED_PRIVATE_TOOLS.includes(name)),
     )
     for (const tool of listed.tools) {
       assert.equal(typeof tool.description, "string")
       assert.notEqual(tool.description, "")
+      assert.doesNotMatch(tool.description, /work[- ]ledger|work-measurement/iu)
     }
   } finally {
     await cleanup(fixture.base)
@@ -474,9 +478,9 @@ test("calling desk_feedback is refused without opening or creating feedback stor
   }
 })
 
-test("person scoping and the private measurement route survive the feedback retirement", async () => {
-  const fixture = await mkLedgerFixture()
-  const restore = useHostEnv(fixture)
+test("person scoping survives both private-tool retirements", async () => {
+  const fixture = await mkFeedbackFixture()
+  const restore = useStateHome(fixture.stateHome)
   try {
     const { call } = await liveHandlers({ deskRoot: fixture.deskRoot, person: "rowan" })
 
@@ -485,14 +489,52 @@ test("person scoping and the private measurement route survive the feedback reti
     })
     assert.equal(written.isError, undefined)
     assert.equal(parseResult(written).path, path.join("desks", "rowan", "t", "book-flights", "task.md"))
-
-    const capabilities = await call({
-      params: { name: "desk_work_ledger", arguments: { action: "capabilities" } },
-    })
-    assert.equal(capabilities.isError, undefined, JSON.stringify(capabilities.content))
-    assert.equal(parseResult(capabilities).status, "ok")
   } finally {
     restore()
     await cleanup(fixture.base)
+  }
+})
+
+// ── Retired manual work ledger ──────────────────────────────────────────────
+//
+// `desk_work_ledger` is gone. A retained private partition under the legacy
+// `work-ledger/` state path stays exactly where it is, byte-for-byte: a call to
+// the retired name is refused by the ordinary unknown-tool path before any
+// storage is opened, created, migrated or removed.
+
+test("calling desk_work_ledger is refused without touching retained ledger partitions", async () => {
+  const preserved = await mkFeedbackFixture()
+  const restore = useStateHome(preserved.stateHome)
+  try {
+    const partition = path.join(preserved.stateHome, "ouroboros-skills", "desk", "work-ledger", "0123456789abcdef0123456789abcdef")
+    await fs.mkdir(partition, { recursive: true, mode: 0o700 })
+    await fs.writeFile(path.join(partition, "work-ledger.sqlite"), "retained private bytes", { mode: 0o600 })
+    const before = await hashedTree(preserved.stateHome)
+
+    const { call } = await liveHandlers({ deskRoot: preserved.deskRoot, person: "ari" })
+    for (const args of [{ action: "capabilities" }, { action: "report" }, { action: "delete", work_item_id: "x", confirm: true }]) {
+      const refused = await call({ params: { name: "desk_work_ledger", arguments: args } })
+      assert.equal(refused.isError, true)
+      assert.equal(refused.content[0].text, "unknown tool: desk_work_ledger")
+    }
+    assert.deepEqual(await hashedTree(preserved.stateHome), before)
+    assert.equal(TOOL_IMPLS.desk_work_ledger, undefined)
+
+    // A binding with no state yet must not gain any from the refusal.
+    const fresh = await mkFeedbackFixture()
+    const restoreFresh = useStateHome(fresh.stateHome)
+    try {
+      const refused = await (await liveHandlers({ deskRoot: fresh.deskRoot, person: "rowan" })).call({
+        params: { name: "desk_work_ledger", arguments: { action: "intake", request: "r", requested_by: "operator" } },
+      })
+      assert.equal(refused.isError, true)
+      await assert.rejects(() => fs.stat(fresh.stateHome), /ENOENT/u)
+    } finally {
+      restoreFresh()
+      await cleanup(fresh.base)
+    }
+  } finally {
+    restore()
+    await cleanup(preserved.base)
   }
 })

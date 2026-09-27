@@ -25,8 +25,6 @@ const EXPECTED_TOOLS = [
   "track_rename",
   "friction_add",
   "lesson_add",
-  // Private, non-Git work measurement the owner keeps about their own work
-  "desk_work_ledger",
   // Search (Units 4-6)
   "desk_search",
   "desk_recall",
@@ -46,7 +44,7 @@ function makeDesk(dir) {
   mkdirSync(path.join(dir, "_archive"), { recursive: true })
 }
 
-test("server scaffolds all 18 expected tool names", () => {
+test("server scaffolds all 17 expected tool names", () => {
   for (const name of EXPECTED_TOOLS) {
     assert.ok(
       TOOL_NAMES.includes(name),

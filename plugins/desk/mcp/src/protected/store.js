@@ -1,18 +1,20 @@
 // The shared protected-store primitive.
 //
-// Two private stores live in the operating-system user's own state directory:
-// the participant's qualitative feedback and the operator's work ledger. They
-// share one set of protections — owner-only permissions, refusal to sit inside
-// a Git checkout, refusal to follow a symlink or a hard link, DELETE
-// journalling and secure_delete — and they share nothing else: separate
-// namespaces, separate database files, separate schemas.
+// A private store lives in the operating-system user's own state directory,
+// today the participant's qualitative feedback. Every store shares one set of
+// protections — owner-only permissions, refusal to sit inside a Git checkout,
+// refusal to follow a symlink or a hard link, DELETE journalling and
+// secure_delete — and nothing else: separate namespaces, separate database
+// files, separate schemas. (The retired manual work ledger used this primitive
+// too; its leftover partitions are counted by `legacy-ledger.js` and never
+// opened.)
 //
 // `namespace`, `filename`, `label` and `subject` are module-internal constants
-// of the two callers. They are never tool input, so no caller can address a
-// store it was not bound to, or ask for a schema of its choosing. `label`
-// prefixes a message and `subject` names the thing inside it; both are
-// parameterised because a prefix alone would leave the work ledger reporting a
-// compromised *feedback* database.
+// of each caller. They are never tool input, so no caller can address a store
+// it was not bound to, or ask for a schema of its choosing. `label` prefixes a
+// message and `subject` names the thing inside it; both are parameterised
+// because a prefix alone would leave a second store reporting a compromised
+// *feedback* database.
 
 import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"

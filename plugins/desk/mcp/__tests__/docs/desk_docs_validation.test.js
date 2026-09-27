@@ -256,9 +256,9 @@ test("MCP tool documentation is compared against the registry rather than a priv
   const drifted = []
   docsValidator.validateMcpToolRegistrySurface(drifted, {
     tools: ["desk_status", "desk_feedback"],
-    readFile: () => toolNamesSource(["desk_status", "desk_work_ledger"]),
+    readFile: () => toolNamesSource(["desk_status", "desk_reindex"]),
   })
-  assert.ok(drifted.some((error) => error.includes("missing registered tool(s) desk_work_ledger")))
+  assert.ok(drifted.some((error) => error.includes("missing registered tool(s) desk_reindex")))
   assert.ok(drifted.some((error) => error.includes("unregistered tool(s) desk_feedback")))
 
   const unreadable = []

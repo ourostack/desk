@@ -161,13 +161,20 @@ test("the Desk adapter delegates every non-entry responsibility to its existing 
     "desk:session-resumption",
     "superpowers:requesting-code-review",
     "desk:work-orchestration",
-    "desk:work-measurement-ledger",
   ]) {
     assert.ok(text.includes(owner), `the adapter must route its non-entry responsibility to ${owner}`)
     const [plugin, skill] = owner.split(":")
     assert.ok(existsSync(new URL(`plugins/${plugin}/skills/${skill}/SKILL.md`, repoRoot)), `${owner} must be a shipped skill`)
   }
   assert.match(text, /recorded repository policy/u)
+})
+
+test("work accounting is automatic factory capture, not a manual ledger skill to route to", () => {
+  const text = read(adapter)
+  assert.match(text, /\| Work accounting \| automatic: the factory captures each session when it ends and reports each finished job; nothing to route \|/u)
+  assert.match(text, /\| Evaluating a finished job \| `desk:online-evaluation` \|/u)
+  for (const file of [adapter, integration]) assert.doesNotMatch(read(file), /work-measurement-ledger|work-measurement\/|desk_work_ledger/u)
+  assert.equal(existsSync(new URL("plugins/desk/skills/work-measurement-ledger/SKILL.md", repoRoot)), false, "the manual ledger skill must not ship")
 })
 
 test("the retired integration name redirects to the adapter without becoming a second contract", () => {

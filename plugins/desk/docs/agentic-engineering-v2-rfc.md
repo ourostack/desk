@@ -142,6 +142,7 @@ Public, generic policy lives here and in the layer foundations. Environment-spec
 - **The public factory store.** [`ourostack/factory`](https://github.com/ourostack/factory) is live. Using the store pipeline ([#27](https://github.com/ourostack/desk/pull/27)), its intake validated and merged a synthetic facts file and built its report ([factory#8](https://github.com/ourostack/factory/pull/8)), and rejected a file that carried a date ([factory#3](https://github.com/ourostack/factory/pull/3)).
 - **Session-end capture.** On Claude Code and Copilot CLI, the end of a session records its facts locally, outside any desk ([#26](https://github.com/ourostack/desk/pull/26), [local capture](factory-local-capture.md)). Contribution is opt-in ([#22](https://github.com/ourostack/desk/pull/22)), and the transform that produces published facts removes identity and time of day ([#18](https://github.com/ourostack/desk/pull/18)).
 - **Waste labels.** The store gates waste labels as a second data path beside facts ([#34](https://github.com/ourostack/desk/pull/34)).
+- **No manual ledger.** The factory replaced the manual work-measurement ledger, which is retired: no tool, skill or instruction asks anyone to record work by hand. Records it left on a machine stay there, and `desk_doctor` counts them without reading or deleting them.
 
 **Built, not yet live end to end.**
 
@@ -155,7 +156,6 @@ Public, generic policy lives here and in the layer foundations. Environment-spec
 - The kaizen check, which turns repeated waste into a fix, and the andon, which stops the work when a problem keeps coming back (section 4, “The loop closes”).
 - Draining recorded friction into kaizen cards, the improvement tasks that fix it.
 - A separate factory store for work done under a company overlay, and the admin session that manages it (section 4, “How the data flows”).
-- Retiring the manual work-measurement ledger, which the factory replaces ([the ledger skill](../skills/work-measurement-ledger/SKILL.md)).
 - Browser access for fresh installs by default (section 3).
 
 **Next.** An evaluation by an engineer outside the team, then the maintainer's decision on promotion.

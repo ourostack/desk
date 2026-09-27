@@ -15,8 +15,7 @@
 // raw bytes to be the canonical serialization of what they parse to, so a
 // duplicate JSON key — which `JSON.parse` silently collapses to its last
 // value — cannot let free text ride along in bytes that otherwise parse
-// clean. The M3-1 names `validateFacts` and `validateFactsBytes` remain as
-// aliases until M3-12 retires them.
+// clean.
 //
 // The schema is a real declarative spec walker: one field-spec object per
 // level (`SESSION_SPEC`, `MODEL_SPEC`, ...) is the *only* place that names a
@@ -604,7 +603,3 @@ export function validateCanonicalBytes(buffer, validate) {
 export function validateLocalFactsBytes(buffer) {
   return validateCanonicalBytes(buffer, validateLocalFacts)
 }
-
-// The M3-1 names, kept as aliases of the local validators until M3-12.
-export const validateFacts = validateLocalFacts
-export const validateFactsBytes = validateLocalFactsBytes

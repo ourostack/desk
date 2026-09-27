@@ -97,8 +97,8 @@ const LABELS_NAME_PATTERN = new RegExp(`^${SESSION_ID_SRC}\\.json$`, "u")
 const BRIEF_NAME_PATTERN = new RegExp(`^((?:${ENUMS.host.join("|")})-${SESSION_ID_SRC})\\.brief\\.json$`, "u")
 const STORE_SLUG_PATTERN = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)__([A-Za-z0-9._-]{1,100})$/u
 
-// `store.js` uses one `naming` per caller (`desk_feedback`, `desk_work_ledger`);
-// this is the factory outbox's, also passed as `protectWindowsPaths`'s `label`.
+// `store.js` uses one `naming` per caller (`desk_feedback`); this is the
+// factory outbox's, also passed as `protectWindowsPaths`'s `label`.
 const NAMING = { label: "desk_factory", subject: "factory state" }
 
 // Shape checks for `readJsonFileSafe`: valid JSON of the wrong shape is
