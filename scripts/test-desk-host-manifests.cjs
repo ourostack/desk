@@ -279,6 +279,19 @@ function checkClaudePlugin({ repoRoot, methodId, errors, checked }) {
   }
 }
 
+function validateFactoryHooks(claude, copilot) {
+  const errors = [];
+  for (const [event, timeout] of [["SessionEnd", 5], ["Stop", 3]]) {
+    const expected = [{ hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/factory-end.cjs" claude', timeout }] }];
+    if (!sameJson(claude.hooks?.[event], expected)) errors.push(`factory-hooks ${event} must register the bounded, silent factory end hook`);
+  }
+  for (const event of ["sessionEnd", "agentStop"]) {
+    const expected = [{ type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot', powershell: 'node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot', timeoutSec: 3 }];
+    if (!sameJson(copilot.hooks?.[event], expected)) errors.push(`factory-hooks ${event} must register the bounded, silent factory end hook`);
+  }
+  return errors;
+}
+
 function parseFrontmatter(text) {
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/u);
   if (!match) return {};
@@ -598,6 +611,8 @@ async function verifyDeskHostManifests(options = {}) {
     await checkCopilotBundle({ repoRoot, mcpRoot, methodId, errors, checked });
     checkCodexPlugin({ repoRoot, methodId, errors, checked });
     checkClaudePlugin({ repoRoot, methodId, errors, checked });
+    checked.push("factory-hooks");
+    errors.push(...validateFactoryHooks(readJson(repoRoot, "plugins/desk/hooks/hooks.json"), readJson(repoRoot, "plugins/desk/hooks/copilot-hooks.json")));
     checkWorkerSources({ repoRoot, errors, checked });
     checkHumanizePackaging({ repoRoot, errors, checked });
     await checkStartupComposition({ repoRoot, mcpRoot, errors, checked });
@@ -641,4 +656,5 @@ module.exports = {
   defaultRepoRoot,
   runCli,
   verifyDeskHostManifests,
+  validateFactoryHooks,
 };

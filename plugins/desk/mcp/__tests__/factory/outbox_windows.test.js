@@ -12,7 +12,7 @@ import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { readMachineSecret, setConsent, writeMarker } from "../../src/factory/outbox.js"
+import { listMarkers, readMachineSecret, setConsent, writeMarker } from "../../src/factory/outbox.js"
 import { nativeProbe } from "../feedback/_helpers.js"
 
 const isWindows = process.platform === "win32"
@@ -63,9 +63,22 @@ test("native: the factory state root, the machine secret and an outbox file each
     const root = path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory")
     const secretFile = path.join(root, "machine-secret")
     const markerFile = path.join(root, "markers", `${marker.host}-${marker.session_id}.json`)
+    const markerDir = path.dirname(markerFile)
     const self = readAcl(root).owner
 
-    for (const target of [root, secretFile, markerFile]) {
+    for (const target of [markerDir, markerFile]) {
+      nativeProbe(
+        "$a=Get-Acl -LiteralPath $request.path;" +
+          "$sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-1-0');" +
+          "$r=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'Read','Allow');" +
+          "$a.AddAccessRule($r);Set-Acl -LiteralPath $request.path -AclObject $a;" +
+          "ConvertTo-Json -Compress -InputObject ([pscustomobject]@{changed=$true})",
+        { path: target },
+      )
+      assert.equal(readAcl(target).count, 2)
+    }
+    assert.deepEqual(await listMarkers(env), [marker])
+    for (const target of [root, secretFile, markerDir, markerFile]) {
       const acl = readAcl(target)
       assert.equal(acl.owner, self, `${target} must be owned by the current user`)
       assert.equal(acl.protected, true, `${target} must not inherit rules`)

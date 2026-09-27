@@ -49,6 +49,7 @@ export function resolveDeskRootWithSource({
   homeDir = os.homedir(),
   hostProjectRoot,
   hostSessionRoot,
+  readActivationConfig = readFileSync,
 } = {}) {
   const tried = []
 
@@ -80,7 +81,7 @@ export function resolveDeskRootWithSource({
     if (isDeskWorkspace(resolved)) return { root: resolved, source: "host-project", tried }
   }
 
-  const activationConfig = loadActivationConfig({ configPath: activationConfigPath, cwd, homeDir })
+  const activationConfig = loadActivationConfig({ configPath: activationConfigPath, cwd, homeDir, read: readActivationConfig })
   if (activationConfig !== null) {
     const resolved = resolveRootPath(activationConfig.desk.root, { cwd, homeDir })
     tried.push({ source: "activation-config", path: resolved })
@@ -155,12 +156,12 @@ export function resolveActivationConfigPath({ explicit, env = process.env } = {}
   return null
 }
 
-export function loadActivationConfig({ configPath, cwd = process.cwd(), homeDir = os.homedir() } = {}) {
+export function loadActivationConfig({ configPath, cwd = process.cwd(), homeDir = os.homedir(), read = readFileSync } = {}) {
   if (!hasText(configPath)) return null
   const resolvedPath = resolveRootPath(configPath, { cwd, homeDir })
   let raw
   try {
-    raw = readFileSync(resolvedPath, "utf8")
+    raw = read(resolvedPath, "utf8")
   } catch {
     throw codedError(`desk-mcp: activation config ${resolvedPath} could not be read`, ACTIVATION_CONFIG_INVALID, { path: resolvedPath })
   }

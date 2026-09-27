@@ -55,10 +55,10 @@ function isObject(value) {
 // `{ found: false }` when the file does not exist, else `{ found: true,
 // json, problem }`: `json` is `undefined` and `problem` names why when the
 // file could not be read or parsed.
-function readJson(file) {
+function readJson(file, read) {
   let text
   try {
-    text = readFileSync(file, "utf8")
+    text = read(file, "utf8")
   } catch (error) {
     if (error.code === "ENOENT" || error.code === "ENOTDIR") return { found: false }
     return { found: true, json: undefined, problem: "manifest_unreadable" }
@@ -70,8 +70,8 @@ function readJson(file) {
   }
 }
 
-function deskDeclaration(deskRoot) {
-  const { found, json } = readJson(path.join(deskRoot, "_meta", "factory.json"))
+function deskDeclaration(deskRoot, read) {
+  const { found, json } = readJson(path.join(deskRoot, "_meta", "factory.json"), read)
   if (!found) return null
   const keys = isObject(json) ? Object.keys(json).sort() : []
   if (keys.join(",") !== "schema_version,store" || json.schema_version !== 1 || !isStore(json.store)) return invalid()
@@ -80,8 +80,8 @@ function deskDeclaration(deskRoot) {
 
 // `undefined` when the manifest declares nothing, else the declaration. A
 // manifest that can't be read as an object adds a warning and declares nothing.
-function manifestDeclaration(file, warnings) {
-  const { found, json, problem } = readJson(file)
+function manifestDeclaration(file, warnings, read) {
+  const { found, json, problem } = readJson(file, read)
   if (!found) return undefined
   if (!isObject(json)) {
     warnings.push({ code: problem ?? "manifest_unparseable", manifest: file })
@@ -97,11 +97,11 @@ function manifestDeclaration(file, warnings) {
   return { store: factory.store, source: "overlay" }
 }
 
-function overlayDeclaration(pluginDirs, warnings) {
+function overlayDeclaration(pluginDirs, warnings, read) {
   for (const dir of Array.isArray(pluginDirs) ? pluginDirs : []) {
     if (typeof dir !== "string") continue
     for (const manifest of MANIFESTS) {
-      const declaration = manifestDeclaration(path.join(dir, manifest), warnings)
+      const declaration = manifestDeclaration(path.join(dir, manifest), warnings, read)
       if (declaration !== undefined) return declaration
     }
   }
@@ -109,9 +109,9 @@ function overlayDeclaration(pluginDirs, warnings) {
 }
 
 /** `resolveStore({ deskRoot, pluginDirs }) -> { store, source, warnings }`; see the header. */
-export function resolveStore({ deskRoot, pluginDirs = [] }) {
+export function resolveStore({ deskRoot, pluginDirs = [], read = readFileSync }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("resolveStore: deskRoot must be an absolute path")
   const warnings = []
-  const result = deskDeclaration(deskRoot) ?? overlayDeclaration(pluginDirs, warnings) ?? { store: DEFAULT_STORE, source: "default" }
+  const result = deskDeclaration(deskRoot, read) ?? overlayDeclaration(pluginDirs, warnings, read) ?? { store: DEFAULT_STORE, source: "default" }
   return { ...result, warnings }
 }

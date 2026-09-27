@@ -1,5 +1,23 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.48 — 2026-09-26
+
+M3-7 affected re-review correction: [marker reads](mcp/src/factory/marker.js) now compare the opened descriptor with both the post-read descriptor and current pathname. [Enumeration](mcp/src/factory/outbox.js) retains the protected directory's identity across repair, reading, return and pruning, and defers leaf protection until the read is bound to that directory and leaf. A swap to an external directory followed by restoration cannot supply a marker or trigger repair/pruning of that external record.
+
+[Sweep and file-based derivation](mcp/src/factory/derive-run.js) use the protected marker reread under the session lock, never a newer-looking enumerated copy or a vanished file's stale contents. [Deterministic regressions](mcp/__tests__/factory/marker_identity.test.js) cover swap-out/open/swap-back, corrupt/expired external records, protection-time directory replacement and stale copies at use. Existing Windows ACL repair remains in place; no hook or test budget changed. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
+## 3.2.0-alpha.47 — 2026-09-26
+
+M3-7 review corrections: [marker enumeration](mcp/src/factory/outbox.js) now shares direct-read protection, byte limits and filename/session identity checks, including protection repair on native Windows. Capture, derivation and completion requests reject state beneath the bound desk even without Git and through symlink aliases. The [end hook](hooks/factory-end.cjs) treats every Claude registry cap as incomplete, refuses unsafe activation metadata through the canonical resolver and supervises synchronous work in a separate process under the unchanged deadline.
+
+[Lifetime reconciliation](mcp/src/factory/session-lifetime.js) invalidates stale end evidence after a native resume or later root activity. [Derivation](mcp/src/factory/derive-run.js) rechecks quietness and source identity under its lock, refuses changed snapshots and honors newer protected markers. [Review regressions](mcp/__tests__/factory/review_fixes.test.js) reproduce the five findings, including an actual FIFO, a blocked worker, protected-state refusal and concurrent resume/late-shutdown writes. No hook budget was increased. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
+## 3.2.0-alpha.46 — 2026-09-26
+
+Session capture now connects the host lifecycle to the [protected local factory outbox](mcp/src/factory/outbox.js). The [end hook](hooks/factory-end.cjs) records bounded, content-free metadata on Claude `Stop`/`SessionEnd` and Copilot `agentStop`/`sessionEnd`, then starts detached derivation only on session end. It imports the [canonical desk resolver](mcp/scripts/resolve-desk-root.js) without printing startup output and retains routing and launcher context before host plugin folders disappear. Prompt and assistant fields are ignored; markers stay owner-only and outside Git.
+
+The [derivation runner](mcp/src/factory/derive-run.js) binds native session evidence to jobs, respects per-store consent, serializes each session's writes and recovers quiet or ended markers through `sweep`. The [factory CLI](mcp/scripts/factory.js) adds `derive --marker <file> --wait-quiet <milliseconds>` and `status`. [Task completion and archive](mcp/src/tools/task.js) request finalization without failing the task operation; end-of-turn dispatch remains dormant until the finalize command ships. [Synthetic lifecycle tests](mcp/__tests__/factory/end_hook.test.js) cover all four events and detached completion across two hook exits. Transport, startup recovery wiring and installed-host proof remain separate work; see [local capture](docs/factory-local-capture.md). Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
 ## 3.2.0-alpha.45 — 2026-09-26
 
 A4 fix round 2: [workspace-tidy evidence](mcp/src/runtime/workspace-evidence.js) now stores each unacknowledged resource once and reconstructs its derived views on read. The reader and writer share the same 1,048,576-byte limit; acknowledged history stays in canonical accounting rather than accumulating in the local report. [Repair admission](hooks/boot-checks.cjs) checks pending and both final branch dispositions before cleanup, and every write checks capacity before replacing the file. Full capacity refuses cleanup while leaving evidence readable and acknowledgement able to make room.

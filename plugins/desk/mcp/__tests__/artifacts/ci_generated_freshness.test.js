@@ -99,6 +99,7 @@ const requiredHostManifestChecks = [
   "copilot-plugin-metadata",
   "codex-plugin",
   "claude-plugin",
+  "factory-hooks",
   "worker-sources",
   "humanize-skill",
   "startup-composition",

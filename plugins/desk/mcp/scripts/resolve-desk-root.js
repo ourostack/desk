@@ -5,37 +5,43 @@
 // the `Desk startup:` line the Claude hook appends. Always exits 0: a hook must
 // not block session start.
 import process from "node:process"
+import * as os from "node:os"
+import { pathToFileURL } from "node:url"
 import {
   claudeBindingPath,
   resolveActivationConfigPath,
   resolveDeskRootWithSource,
 } from "../src/util/paths.js"
 import { claudeStartupDirection } from "../src/util/startup-direction.js"
+import { readSmallText } from "../src/factory/marker.js"
 
-const env = process.env
-const bindingPath = claudeBindingPath(env)
-let result
-try {
-  const resolved = resolveDeskRootWithSource({
-    activationConfigPath: resolveActivationConfigPath({ env }),
-    env,
-    hostProjectRoot: env.CLAUDE_PROJECT_DIR,
-  })
-  result = { root: resolved.root, source: resolved.source, binding_path: bindingPath }
-} catch (error) {
-  result = {
-    root: null,
-    source: null,
-    binding_path: bindingPath,
-    tried: error.tried ?? [],
-    error: error.message,
+export function resolveHookDeskRoot({ env = process.env, cwd = process.cwd() } = {}) {
+  const bindingPath = claudeBindingPath(env)
+  try {
+    const resolved = resolveDeskRootWithSource({
+      activationConfigPath: resolveActivationConfigPath({ env }),
+      env, cwd, homeDir: env.HOME || os.homedir(),
+      hostProjectRoot: env.CLAUDE_PROJECT_DIR,
+      readActivationConfig: (file) => readSmallText(file),
+    })
+    return { root: resolved.root, source: resolved.source, binding_path: bindingPath }
+  } catch (error) {
+    return { root: null, source: null, binding_path: bindingPath, tried: error.tried ?? [], error: error.message }
   }
 }
-let output = `${JSON.stringify(result)}\n`
-if (process.argv.includes("--root-only")) output = result.root ?? ""
-if (process.argv.includes("--startup-line")) output = claudeStartupDirection({ env })
-if (process.argv.includes("--boot-checks")) {
-  const { default: boot } = await import("../../hooks/boot-checks.cjs")
-  output += `\n\n${await boot.runBootChecks({ host: "claude", env })}`
+
+export async function main({ argv = process.argv.slice(2), env = process.env, write = (text) => process.stdout.write(text) } = {}) {
+  const result = resolveHookDeskRoot({ env })
+  let output = `${JSON.stringify(result)}\n`
+  if (argv.includes("--root-only")) output = result.root ?? ""
+  if (argv.includes("--startup-line")) output = claudeStartupDirection({ env })
+  if (argv.includes("--boot-checks")) {
+    const { default: boot } = await import("../../hooks/boot-checks.cjs")
+    output += `\n\n${await boot.runBootChecks({ host: "claude", env })}`
+  }
+  write(output)
 }
-process.stdout.write(output)
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main()
+}
