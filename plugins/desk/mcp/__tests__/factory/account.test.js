@@ -119,14 +119,19 @@ test("factory.js account names the account, or exits 1 with each account's reaso
 test("a flush whose recorded account cannot fork the store stops with account_cannot_deliver instead of waiting on a fork", () => scratch(async ({ env }) => {
   const golden = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
   golden.refs = { prs: [], commits: [], unresolved: { prs: 0, commits: 0 } }
-  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
-  assert.equal((await writeLocalFacts(env, STORE, golden)).written, true)
-  const noForks = { code: 0, stdout: JSON.stringify({ ...PUBLIC_READ, allow_forking: false }), stderr: "" }
-  const github = fakeGitHub({ push: false, intercept: (call) => (call.args[0] === "api" && call.args.at(-1) === `repos/${STORE}` ? noForks : undefined) })
-  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "account_cannot_deliver" })
-  assert.equal(github.calls.some((call) => call.args[0] === "api" && call.args.some((arg) => /\/forks$/u.test(arg))), false, "no fork is attempted")
-}))
+  const forks = (github) => github.calls.filter((call) => call.args[0] === "api" && call.args.some((arg) => /\/forks$/u.test(arg))).length
 
-test("a managed login is never recorded as the delivering account", () => scratch(async ({ env }) => {
-  await assert.rejects(setConsent(env, { store: STORE, contribute: true, account: "worker_corp" }), /account: must match/u)
+  // A managed (EMU) login may be recorded, because a work store needs one, but it cannot fork a public store outside its enterprise.
+  await setConsent(env, { store: STORE, contribute: true, account: "worker_corp" })
+  assert.equal((await writeLocalFacts(env, STORE, golden)).written, true)
+  let github = fakeGitHub({ push: false, account: "worker_corp" })
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "account_cannot_deliver" })
+  assert.equal(forks(github), 0, "no fork is attempted")
+
+  // A store that disallows forks stops a personal account without push permission the same way.
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  const noForks = { code: 0, stdout: JSON.stringify({ ...PUBLIC_READ, allow_forking: false }), stderr: "" }
+  github = fakeGitHub({ push: false, intercept: (call) => (call.args[0] === "api" && call.args.at(-1) === `repos/${STORE}` ? noForks : undefined) })
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "account_cannot_deliver" })
+  assert.equal(forks(github), 0, "no fork is attempted")
 }))

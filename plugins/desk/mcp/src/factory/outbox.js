@@ -86,7 +86,8 @@ const VISIBILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const STALE_TMP_MS = 60 * 60 * 1000
 const LOCK_STALE_MS = 10 * 60 * 1000
 const LOCK_RETRY_DELAY_MS = 15
-const ACCOUNT_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?$/u
+// A GitHub login: letters, digits and hyphens, and for an Enterprise Managed User the enterprise short code after `_`, the account a work store needs.
+const ACCOUNT_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?(?:_[A-Za-z0-9]{1,20})?$/u
 const REASON_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u
 const SHA1 = /^[0-9a-f]{40}$/u
 const VISIBILITY_VALUES = ["public", "private", "unknown"]
