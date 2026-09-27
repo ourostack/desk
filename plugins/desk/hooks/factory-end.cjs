@@ -78,12 +78,18 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS }) {
   } else {
     try {
       const installed = JSON.parse(readSmallText(path.join(env.CLAUDE_CONFIG_DIR || path.join(home, ".claude"), "plugins", "installed_plugins.json"), MAX_INPUT));
-      incomplete = Object.keys(installed.plugins || {}).length > 64;
-      for (const [key, records] of Object.entries(installed.plugins || {}).slice(0, 64)) {
-        for (const record of (Array.isArray(records) ? records : []).slice(0, 64)) {
-          if (!record || typeof record !== "object") continue;
+      if (!installed.plugins || typeof installed.plugins !== "object" || Array.isArray(installed.plugins)) throw new Error("registry_unreadable");
+      incomplete = Object.keys(installed.plugins).length > 64;
+      for (const [key, records] of Object.entries(installed.plugins).slice(0, 64)) {
+        if (!Array.isArray(records)) { incomplete = true; continue; }
+        if (records.length > 64) incomplete = true;
+        for (const record of records.slice(0, 64)) {
+          if (!record || typeof record !== "object") { incomplete = true; continue; }
           add(key.split("@")[0], record.version);
-          if (typeof record.installPath === "string" && path.isAbsolute(record.installPath) && dirs.length < 64) dirs.push(record.installPath);
+          if (typeof record.installPath !== "string" || !path.isAbsolute(record.installPath)) { incomplete = true; continue; }
+          if (dirs.includes(record.installPath)) continue;
+          if (dirs.length === 64) incomplete = true;
+          else dirs.push(record.installPath);
         }
       }
     } catch (error) {
@@ -112,6 +118,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
       runtime("scripts/resolve-desk-root.js"), runtime("src/factory/outbox.js"), runtime("src/factory/store-route.js"), runtime("scripts/factory.js"),
     ]);
     const { root: deskRoot } = resolveHookDeskRoot({ env, cwd: payload.cwd });
+    if (deskRoot === null) return "unavailable";
     const { plugins, dirs, incomplete } = metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS });
     const ended = event === "SessionEnd" || event === "sessionEnd";
     const at = !claude && Number.isSafeInteger(payload.timestamp) && payload.timestamp >= 0 ? new Date(payload.timestamp).toISOString() : new Date().toISOString();
@@ -144,8 +151,28 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
 }
 
 module.exports = { readInput, runHook, launch };
+
+async function runBoundedHook(host, input) {
+  const deadline = Date.now() + 1500;
+  const payload = await readInput(input);
+  if (payload === null || Date.now() >= deadline) return;
+  // A separate process makes the unchanged deadline effective even during synchronous OS calls.
+  await new Promise((resolve) => {
+    const child = spawn(process.execPath, [__filename, host, "--factory-worker"], {
+      stdio: ["pipe", "ignore", "ignore"], windowsHide: true, env: process.env,
+    });
+    const timer = setTimeout(() => child.kill("SIGKILL"), Math.max(0, deadline - Date.now()));
+    const finish = () => { clearTimeout(timer); resolve(); };
+    child.once("error", finish);
+    child.once("close", finish);
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
+
 if (require.main === module) {
-  const timer = setTimeout(() => process.exit(0), 1500);
-  readInput(process.stdin).then((payload) => runHook({ host: process.argv[2], payload }))
-    .finally(() => { clearTimeout(timer); process.exit(0); });
+  const work = process.argv[3] === "--factory-worker"
+    ? readInput(process.stdin).then((payload) => runHook({ host: process.argv[2], payload }))
+    : runBoundedHook(process.argv[2], process.stdin);
+  work.then(() => process.exit(0), () => process.exit(0));
 }

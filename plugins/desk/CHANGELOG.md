@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.47 — 2026-09-26
+
+M3-7 review corrections: [marker enumeration](mcp/src/factory/outbox.js) now shares direct-read protection, byte limits and filename/session identity checks, including protection repair on native Windows. Capture, derivation and completion requests reject state beneath the bound desk even without Git and through symlink aliases. The [end hook](hooks/factory-end.cjs) treats every Claude registry cap as incomplete, refuses unsafe activation metadata through the canonical resolver and supervises synchronous work in a separate process under the unchanged deadline.
+
+[Lifetime reconciliation](mcp/src/factory/session-lifetime.js) invalidates stale end evidence after a native resume or later root activity. [Derivation](mcp/src/factory/derive-run.js) rechecks quietness and source identity under its lock, refuses changed snapshots and honors newer protected markers. [Review regressions](mcp/__tests__/factory/review_fixes.test.js) reproduce the five findings, including an actual FIFO, a blocked worker, protected-state refusal and concurrent resume/late-shutdown writes. No hook budget was increased. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
 ## 3.2.0-alpha.46 — 2026-09-26
 
 Session capture now connects the host lifecycle to the [protected local factory outbox](mcp/src/factory/outbox.js). The [end hook](hooks/factory-end.cjs) records bounded, content-free metadata on Claude `Stop`/`SessionEnd` and Copilot `agentStop`/`sessionEnd`, then starts detached derivation only on session end. It imports the [canonical desk resolver](mcp/scripts/resolve-desk-root.js) without printing startup output and retains routing and launcher context before host plugin folders disappear. Prompt and assistant fields are ignored; markers stay owner-only and outside Git.

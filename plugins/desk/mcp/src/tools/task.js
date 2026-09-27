@@ -24,7 +24,7 @@ const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 
 async function requestTaskFinalize({ deskRoot, person, track, slug, env }) {
   try {
-    if (await factoryStateRoot(env, { create: false }) === null) return
+    if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return
     const root = await fs.realpath(deskRoot)
     const prefix = path.relative(deskRoot, personPrefix(deskRoot, person)).split(path.sep).join("/")
     const deskRemote = readDeskRemote({ deskRoot: root }) || `local:${root}`

@@ -48,10 +48,33 @@ test("bounded metadata reads refuse non-files, links, oversize and growth during
   fs.linkSync(file, linked)
   assert.throws(() => readSmallText(file), /metadata_unreadable/u)
   fs.unlinkSync(linked)
-  const original = fs.fstatSync
-  t.mock.method(fs, "fstatSync", (fd) => ({ ...original(fd), size: 1, isFile: () => true }))
+  fs.writeFileSync(file, "12")
+  const original = fs.readSync
+  const read = t.mock.method(fs, "readSync", (...args) => {
+    fs.writeFileSync(file, "1234")
+    return original(...args)
+  })
   assert.throws(() => readSmallText(file, 3), /metadata_unreadable/u)
+  assert.equal(read.mock.callCount(), 1)
 }))
+
+for (const race of ["directory", "hardlink", "growth", "replacement", "volume"]) {
+  test(`bounded metadata reads refuse ${race} changes between inspection and open`, (t) => scratch(async ({ base }) => {
+    const file = path.join(base, "metadata")
+    fs.writeFileSync(file, "1234")
+    const open = fs.openSync
+    const fstat = fs.fstatSync
+    t.mock.method(fs, "openSync", (...args) => {
+      if (race === "directory") { fs.unlinkSync(file); fs.mkdirSync(file) }
+      if (race === "hardlink") fs.linkSync(file, path.join(base, "other"))
+      if (race === "growth") fs.writeFileSync(file, "12345")
+      if (race === "replacement") { fs.renameSync(file, path.join(base, "old")); fs.writeFileSync(file, "1234") }
+      return open(...args)
+    })
+    if (race === "volume") t.mock.method(fs, "fstatSync", (fd) => ({ ...fstat(fd), isFile: () => true, dev: fstat(fd).dev + 1 }))
+    assert.throws(() => readSmallText(file, 4), /metadata_unreadable/u)
+  }))
+}
 
 test("protected marker reads accept only matching regular entries and cap serialized marker size", () => scratch(async (ctx) => {
   const marker = await session(ctx)

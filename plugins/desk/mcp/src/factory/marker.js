@@ -37,10 +37,12 @@ export function validMarker(marker) {
 
 // Metadata only: never block on a pipe or read an unbounded manifest.
 export function readSmallText(file, limit = MAX_MARKER_BYTES) {
+  const before = fs.lstatSync(file)
+  if (!before.isFile() || before.nlink !== 1 || before.size > limit) throw new Error("metadata_unreadable")
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW)
   try {
     const stat = fs.fstatSync(fd)
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit) throw new Error("metadata_unreadable")
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit || stat.dev !== before.dev || stat.ino !== before.ino) throw new Error("metadata_unreadable")
     const bytes = Buffer.alloc(limit + 1)
     const size = fs.readSync(fd, bytes, 0, bytes.length, 0)
     if (size > limit) throw new Error("metadata_unreadable")

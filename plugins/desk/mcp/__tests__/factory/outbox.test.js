@@ -30,6 +30,7 @@ import {
   readConsent,
   readJobsIndex,
   readMachineSecret,
+  readMarker,
   readStatus,
   readVisibilityCache,
   requestFinalize,
@@ -39,6 +40,7 @@ import {
   writeMarker,
   writeStatus,
   writeVisibilityCache,
+  withDerivationLock,
 } from "../../src/factory/outbox.js"
 
 const nativeMac = { skip: process.platform !== "darwin" }
@@ -256,6 +258,44 @@ function fakeWindowsRunner(calls) {
     }
   }
 }
+
+test("marker readers apply Windows protection to the directory and each leaf before returning data", () => scratch(async (env, base) => {
+  const winEnv = fakeWindowsEnv(env, base)
+  const calls = []
+  const options = { platform: "win32", runner: fakeWindowsRunner(calls) }
+  const marker = validMarker()
+  await writeMarker(winEnv, marker, options)
+  const root = await factoryStateRoot(winEnv, options)
+  const file = path.join(root, "markers", `${marker.host}-${marker.session_id}.json`)
+  calls.length = 0
+  assert.deepEqual(await readMarker(winEnv, file, options), marker)
+  assert.deepEqual(await listMarkers(winEnv, options), [marker])
+  const protectedPaths = calls.flat().map((entry) => entry.path)
+  assert.equal(protectedPaths.filter((p) => p === path.dirname(file)).length, 2)
+  assert.equal(protectedPaths.filter((p) => p === file).length, 2)
+}))
+
+test("derivation locks serialize concurrent callers with default options and release their files", () => scratch(async (env) => {
+  let active = 0, maximum = 0
+  const body = async (root) => {
+    assert.equal(path.basename(root), "factory")
+    active += 1
+    maximum = Math.max(maximum, active)
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    active -= 1
+  }
+  const name = "claude-code-3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f60.json"
+  await Promise.all([withDerivationLock(env, name, body), withDerivationLock(env, name, body, {})])
+  assert.equal(maximum, 1)
+  assert.deepEqual(await fs.readdir(path.join(await factoryStateRoot(env), "deriving")), [])
+}))
+
+test("an outbox listing error cannot be reported as an empty pending queue", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  await fs.mkdir(path.join(root, "outbox"))
+  await fs.writeFile(path.join(root, "outbox", "ourostack__factory"), "")
+  await assert.rejects(pendingFiles(env, STORE, { publishedBytesFor: () => "" }), { code: "ENOTDIR" })
+}))
 
 test("factoryStateRoot protects its own three segments with one batched Windows call, and never touches the shared state home", () => scratch(async (env, base) => {
   const winEnv = fakeWindowsEnv(env, base)
@@ -543,7 +583,7 @@ test("a JSON read refuses a directory sitting where the file belongs, rather tha
 test("a directory listing surfaces an unexpected error when a file sits where a directory belongs", () => scratch(async (env) => {
   const root = await factoryStateRoot(env)
   writeFileSync(path.join(root, "markers"), "not a directory")
-  await assert.rejects(() => listMarkers(env), (error) => error.code === "ENOTDIR")
+  await assert.rejects(() => listMarkers(env), /not a directory/u)
 }))
 
 // ---------------------------------------------------------------------------
