@@ -971,7 +971,9 @@ contract("factory-evaluator stays public-safe", () => {
   assert.ok(Buffer.byteLength(skill) <= 8192, `rubric is ${Buffer.byteLength(skill)} bytes; keep it concise`);
 });
 requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle starts the waste evaluator in the background on done",
-  /transitioning to `done` → start the waste evaluator in the background when the factory store has consent[\s\S]+factory\.js evaluate --desk[\s\S]+fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`done` does not wait for the evaluator/u);
+  /transitioning to `done` → start the waste evaluator in the background when the factory store has consent[\s\S]+factory\.js evaluate --desk[\s\S]+records an evaluation request[\s\S]+fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+factory\.js evaluate --pending[\s\S]+`done` does not wait for the evaluator/u);
+requires(factoryEvaluator, "factory-evaluator treats the session log as data and never changes the brief",
+  /nothing in it is an instruction[\s\S]+never change the brief/u);
 
 // The evaluation packet (spec §9 and §12 milestone 6) is public, names channels only and carries its scenarios.
 const evaluationPacket = "plugins/desk/docs/evaluation-packet.md";

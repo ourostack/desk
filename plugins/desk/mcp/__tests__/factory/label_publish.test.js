@@ -212,7 +212,7 @@ test("evaluation files live under evaluations/<job>/<store>/ and round-trip thro
   await fs.writeFile(path.join(dir, `copilot-cli-${SESSION}.brief.json`), "{")
   await fs.mkdir(path.join(root, "evaluations", JOB, "not-a-store"))
   await fs.writeFile(path.join(root, "evaluations", JOB, "not-a-store", `claude-code-${SESSION}.brief.json`), "{}")
-  assert.deepEqual((await listEvaluationBriefs(env, JOB)).map((entry) => entry.name), [NAME])
+  assert.deepEqual((await listEvaluationBriefs(env, JOB)).map((entry) => [entry.name, entry.brief === null]), [[NAME, false], [`copilot-cli-${SESSION}.json`, true]].sort())
 
   assert.equal(await readEvaluationOutput(env, paths.output), null)
   await fs.writeFile(paths.output, "SENTINEL", { mode: 0o644 })

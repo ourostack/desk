@@ -36,6 +36,8 @@
 //   evaluations/<job>/<store-slug>/<host>-<session_id>.labels.json
 //                                      what the evaluator wrote, checked
 //                                      before it becomes local labels
+//   evaluate-requests/<job>.json       a finished job still needing labels
+//   evaluate-requests/quarantine/<job>.json   { reason, at }
 //
 // Local labels (`desk.factory.labels/1`) are already on the published
 // session clock and carry no free text; like local facts they leave only
@@ -1011,8 +1013,8 @@ export async function writeEvaluationBrief(env, { job, store, name, brief }) {
 
 /**
  * `listEvaluationBriefs(env, job) -> Array<{ store, name, brief, output }>`:
- * every readable brief for `job`, by store. A brief that fails to parse, or
- * a folder or file of the wrong shape, is skipped.
+ * every brief file for `job`, by store; `brief` is `null` for one that is
+ * unsafe or fails to parse. A folder or file of the wrong shape is skipped.
  */
 export async function listEvaluationBriefs(env, job) {
   requirePattern(job, PATTERNS.jobId, "job")
@@ -1024,12 +1026,13 @@ export async function listEvaluationBriefs(env, job) {
     const dir = path.join(root, "evaluations", job, slug)
     for (const file of await listRegularFiles(dir, BRIEF_NAME_PATTERN)) {
       const base = BRIEF_NAME_PATTERN.exec(file)[1]
+      let brief = null
       try {
-        const brief = JSON.parse((await readProtectedBytes(path.join(dir, file))).toString("utf8"))
-        results.push({ store: `${store[1]}/${store[2]}`, name: `${base}.json`, brief, output: path.join(dir, `${base}.labels.json`) })
+        brief = JSON.parse((await readProtectedBytes(path.join(dir, file))).toString("utf8"))
       } catch {
-        // A corrupt brief is dropped, not allowed to block the rest.
+        // A corrupt or unsafe brief is listed as `null`, so the caller can report it.
       }
+      results.push({ store: `${store[1]}/${store[2]}`, name: `${base}.json`, brief, output: path.join(dir, `${base}.labels.json`) })
     }
   }
   return results
@@ -1051,6 +1054,54 @@ export async function readEvaluationOutput(env, file) {
   const stat = await lstatIfPresent(file, NAMING)
   if (stat !== null && stat.size > LIMITS.maxBytes) fail("file", "evaluation output is too large")
   return readProtectedBytes(file)
+}
+
+/** Whether `store` holds local labels for `job`'s session `session`. */
+export async function hasLocalLabels(env, store, job, session) {
+  const slug = storeSlug(store)
+  requirePattern(job, PATTERNS.jobId, "job")
+  const root = await factoryStateRoot(env)
+  return (await lstatIfPresent(path.join(root, "labels", slug, job, `${session}.json`), NAMING)) !== null
+}
+
+/**
+ * Records that `job` finished and still needs waste labels
+ * (`evaluate-requests/<job>.json`), kept until its labels are complete or
+ * the request is quarantined, like a finalize request.
+ */
+export async function requestEvaluation(env, { job, deskRoot }) {
+  requirePattern(job, PATTERNS.jobId, "job")
+  requireAbsolutePath(deskRoot, "deskRoot")
+  const root = await factoryStateRoot(env, { deskRoot })
+  const file = path.join(root, "evaluate-requests", `${job}.json`)
+  const existing = await readJsonFileSafe(file, null, process.platform)
+  const record = { schema_version: 1, job, desk_root: deskRoot, requested_at: existing?.requested_at ?? defaultNow() }
+  await writeJsonAtomic(root, file, record, { platform: process.platform, env })
+  return record
+}
+
+/** Every pending evaluation request; one that fails to parse or has the wrong shape is skipped. */
+export async function listEvaluationRequests(env) {
+  const root = await factoryStateRoot(env)
+  const dir = path.join(root, "evaluate-requests")
+  const results = []
+  for (const name of await listRegularFiles(dir, FINALIZE_NAME_PATTERN)) {
+    const record = await readJsonFileSafe(path.join(dir, name), null, process.platform)
+    if (record !== null && record.job === name.slice(0, -".json".length) && typeof record.desk_root === "string" && PATTERNS.timestamp.test(record.requested_at ?? "")) results.push(record)
+  }
+  return results
+}
+
+/** Removes `evaluate-requests/<job>.json`, or moves it to `evaluate-requests/quarantine/<job>.json` with `reason` (a stable code). */
+export async function clearEvaluationRequest(env, job, reason = null) {
+  requirePattern(job, PATTERNS.jobId, "job")
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "evaluate-requests", `${job}.json`)
+  if (reason !== null) {
+    requirePattern(reason, REASON_PATTERN, "reason")
+    await writeJsonAtomic(root, path.join(root, "evaluate-requests", "quarantine", `${job}.json`), { reason, at: defaultNow() }, { platform: process.platform, env })
+  }
+  await fsp.rm(file, { force: true })
 }
 
 /** Removes the brief and the output for `{ job, store, name }`; a no-op for either one already gone. */

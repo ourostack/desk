@@ -34,15 +34,22 @@
 // labels are rebuilt from the parsed value, so formatting and a duplicated
 // key's shadowed value are dropped.
 //
+// The done step (`evaluateTask`) first records an evaluation request for
+// the job (`evaluate-requests/<job>.json`), because the session that
+// finished the job is usually not derived yet. `evaluatePending` prepares
+// retained requests again; a request is cleared only once every session of
+// the job has ended and has accepted labels, and quarantined with a stable
+// code when it expires or its stores lose consent.
+//
 // `prepareEvaluation(env, { job, pluginVersion })` writes a brief for each
 // of the job's sessions (from the jobs index) that a store with consent
 // holds, and `acceptEvaluations(env, { job })` checks each answer against
 // its brief and writes accepted labels to the outbox (`writeLocalLabels`),
 // clearing the brief. A rejected answer stays where it is, beside its brief,
-// for another try; it never enters the outbox. The brief is the snapshot the
-// evaluator worked from, so a session that grew since is checked against
-// what the evaluator saw; the store's own gate checks the labels again
-// against the facts it holds.
+// for another try; it never enters the outbox. The brief file is for the
+// evaluator only: the answer is checked against a brief rebuilt from the
+// session's own local facts, so editing the brief changes nothing, and a
+// session whose facts are gone is refused as `facts_missing`.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -53,14 +60,18 @@ import { promises as fsp } from "node:fs"
 import { checkLabelsAgainstFacts, validateLabels } from "./label-schema.js"
 import {
   clearEvaluation,
+  clearEvaluationRequest,
   evaluationPaths,
   factoryStateRoot,
+  hasLocalLabels,
   listEvaluationBriefs,
+  listEvaluationRequests,
   readConsent,
   readEvaluationOutput,
   readJobsIndex,
   readLocalFacts,
   readMarker,
+  requestEvaluation,
   writeEvaluationBrief,
   writeLocalLabels,
 } from "./outbox.js"
@@ -181,42 +192,79 @@ async function sessionLog(env, root, name) {
   }
 }
 
+// The session's local facts when they bind `job` and could ever be published, else `null`.
+async function labelableFacts(env, store, name, job) {
+  const localFacts = await readLocalFacts(env, store, name)
+  if (localFacts === null || !localFacts.jobs.some((bound) => bound.job === job)) return null
+  return publishedClock(localFacts).reason === "session_id_not_v4" ? null : localFacts
+}
+
+async function consentedStores(env) {
+  const consent = await readConsent(env)
+  return Object.keys(consent.stores).filter((store) => consent.stores[store].contribute === true).sort()
+}
+
 /**
  * `prepareEvaluation(env, { job, pluginVersion }) -> { result, job, briefs }`:
  * `result` is `ready` with the brief paths, `not_opted_in` when no store has
- * consent, or `no_sessions` when no consented store holds a session of the
- * job that could be published.
+ * consent, `no_sessions` when no consented store holds a session of the job
+ * that could be published, or `complete` when every such session already
+ * has local labels and has ended. A session that has labels but is still
+ * open is briefed again, so its labels follow the finished session.
  */
 export async function prepareEvaluation(env, { job, pluginVersion }) {
   if (typeof job !== "string" || !PATTERNS.jobId.test(job)) throw new TypeError("prepareEvaluation: job must be a job ID")
-  const consent = await readConsent(env)
-  const stores = Object.keys(consent.stores).filter((store) => consent.stores[store].contribute === true).sort()
+  const stores = await consentedStores(env)
   if (stores.length === 0) return { result: "not_opted_in", job, briefs: [] }
   const root = await factoryStateRoot(env)
   const names = (await readJobsIndex(env))[job] ?? []
   const briefs = []
+  let sessions = 0
   for (const store of stores) {
     for (const name of names) {
-      const localFacts = await readLocalFacts(env, store, name)
+      const localFacts = await labelableFacts(env, store, name, job)
       if (localFacts === null) continue
+      sessions += 1
       const paths = await evaluationPaths(env, { job, store, name })
       const brief = buildEvaluatorBrief({ job, localFacts, logPath: await sessionLog(env, root, name), outputPath: paths.output, pluginVersion })
-      if (brief === null) continue
+      if (localFacts.session.ended_at !== null && (await hasLocalLabels(env, store, job, localFacts.session.id))) continue
       briefs.push(await writeEvaluationBrief(env, { job, store, name, brief }))
     }
   }
-  return { result: briefs.length > 0 ? "ready" : "no_sessions", job, briefs }
+  if (sessions === 0) return { result: "no_sessions", job, briefs }
+  return { result: briefs.length > 0 ? "ready" : "complete", job, briefs }
+}
+
+// The brief the answer is checked against: rebuilt from the session's local
+// facts and marker, never read from the brief file the evaluator can edit.
+async function trustedBrief(env, { job, store, name, output, pluginVersion }) {
+  const localFacts = await labelableFacts(env, store, name, job)
+  if (localFacts === null) return null
+  const root = await factoryStateRoot(env)
+  return buildEvaluatorBrief({ job, localFacts, logPath: await sessionLog(env, root, name), outputPath: output, pluginVersion })
+}
+
+async function answerBytes(env, output) {
+  try {
+    return { bytes: await readEvaluationOutput(env, output) }
+  } catch (error) {
+    return { error: /too large/u.test(error.message) ? "too_large" : "unsafe_file" }
+  }
 }
 
 /**
- * `acceptEvaluations(env, { job }) -> { job, sessions: [{ session, result,
- * errors? }] }`: for each brief of `job`, `missing` (no answer yet),
- * `rejected` with `{ code, path }` errors, `accepted` (written to the outbox,
- * brief and answer cleared), `not_opted_in` (the store's consent was
- * withdrawn; nothing written) or `invalid_brief` (the brief file no longer
- * names this job and session; run `prepareEvaluation` again).
+ * `acceptEvaluations(env, { job, pluginVersion }) -> { job, sessions, request }`:
+ * for each brief of `job`, `missing` (no answer yet), `rejected` with
+ * `{ code, path }` errors, `accepted` (written to the outbox, brief and
+ * answer cleared), `not_opted_in` (the store's consent was withdrawn;
+ * nothing written) or `invalid_brief` (the brief file is unreadable or no
+ * longer names this job and session; run `prepareEvaluation` again). The
+ * answer is checked against the session's own local facts, rebuilt here;
+ * facts that are gone are `facts_missing`. `request` is `cleared` when the
+ * job's labels are then complete (its evaluation request is removed), else
+ * `kept`.
  */
-export async function acceptEvaluations(env, { job }) {
+export async function acceptEvaluations(env, { job, pluginVersion }) {
   const sessions = []
   for (const { store, name, brief, output } of await listEvaluationBriefs(env, job)) {
     // The session comes from the brief's file name, which the listing checked.
@@ -225,12 +273,21 @@ export async function acceptEvaluations(env, { job }) {
       sessions.push({ session, result: "invalid_brief" })
       continue
     }
-    const bytes = await readEvaluationOutput(env, output)
-    if (bytes === null) {
+    const answer = await answerBytes(env, output)
+    if (answer.error !== undefined) {
+      sessions.push({ session, result: "rejected", errors: [{ code: answer.error, path: "" }] })
+      continue
+    }
+    if (answer.bytes === null) {
       sessions.push({ session, result: "missing" })
       continue
     }
-    const checked = acceptEvaluation(brief, bytes)
+    const trusted = await trustedBrief(env, { job, store, name, output, pluginVersion })
+    if (trusted === null) {
+      sessions.push({ session, result: "rejected", errors: [{ code: "facts_missing", path: "" }] })
+      continue
+    }
+    const checked = acceptEvaluation(trusted, answer.bytes)
     if (!checked.ok) {
       sessions.push({ session, result: "rejected", errors: checked.errors })
       continue
@@ -243,5 +300,64 @@ export async function acceptEvaluations(env, { job }) {
     await clearEvaluation(env, { job, store, name })
     sessions.push({ session, result: "accepted" })
   }
-  return { job, sessions }
+  const status = await labelStatus(env, job)
+  if (status === "complete") await clearEvaluationRequest(env, job)
+  return { job, sessions, request: status === "complete" ? "cleared" : "kept" }
+}
+
+// Whether the job's labels are complete, without writing any brief.
+async function labelStatus(env, job) {
+  const stores = await consentedStores(env)
+  const names = (await readJobsIndex(env))[job] ?? []
+  let sessions = 0
+  for (const store of stores) {
+    for (const name of names) {
+      const localFacts = await labelableFacts(env, store, name, job)
+      if (localFacts === null) continue
+      sessions += 1
+      if (localFacts.session.ended_at === null || !(await hasLocalLabels(env, store, job, localFacts.session.id))) return "incomplete"
+    }
+  }
+  return sessions > 0 ? "complete" : "incomplete"
+}
+
+/**
+ * `evaluateTask(env, { job, deskRoot, pluginVersion })`: the done step.
+ * Without factory state or consent it answers `not_opted_in` and creates
+ * nothing. Otherwise it records the job's evaluation request, then prepares
+ * briefs; a `complete` job's request is cleared at once.
+ */
+export async function evaluateTask(env, { job, deskRoot, pluginVersion }) {
+  if ((await factoryStateRoot(env, { create: false, deskRoot })) === null || (await consentedStores(env)).length === 0) {
+    return { result: "not_opted_in", job, briefs: [] }
+  }
+  await requestEvaluation(env, { job, deskRoot })
+  const prepared = await prepareEvaluation(env, { job, pluginVersion })
+  if (prepared.result === "complete") await clearEvaluationRequest(env, job)
+  return prepared
+}
+
+const REQUEST_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * `evaluatePending(env, { pluginVersion, now })`: every retained evaluation
+ * request, prepared again. A request older than 30 days is quarantined as
+ * `expired`, one whose stores all lack consent as `not_opted_in`, and a
+ * `complete` one is cleared; the rest are kept for the next run.
+ */
+export async function evaluatePending(env, { pluginVersion, now = Date.now() }) {
+  const jobs = []
+  for (const request of await listEvaluationRequests(env)) {
+    const { job } = request
+    if (now - Date.parse(request.requested_at) > REQUEST_TTL_MS) {
+      await clearEvaluationRequest(env, job, "expired")
+      jobs.push({ result: "expired", job, briefs: [] })
+      continue
+    }
+    const prepared = await prepareEvaluation(env, { job, pluginVersion })
+    if (prepared.result === "not_opted_in") await clearEvaluationRequest(env, job, "not_opted_in")
+    if (prepared.result === "complete") await clearEvaluationRequest(env, job)
+    jobs.push(prepared)
+  }
+  return { jobs }
 }

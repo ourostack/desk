@@ -19,9 +19,20 @@ import {
   acceptEvaluation,
   acceptEvaluations,
   buildEvaluatorBrief,
+  evaluatePending,
+  evaluateTask,
   prepareEvaluation,
 } from "../../src/factory/evaluate-run.js"
-import { factoryStateRoot, setConsent, updateJobsIndex, writeLocalFacts, writeMarker } from "../../src/factory/outbox.js"
+import {
+  clearEvaluationRequest,
+  factoryStateRoot,
+  listEvaluationRequests,
+  requestEvaluation,
+  setConsent,
+  updateJobsIndex,
+  writeLocalFacts,
+  writeMarker,
+} from "../../src/factory/outbox.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const LOCAL = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))
@@ -297,14 +308,15 @@ test("acceptEvaluations turns a valid answer into local labels and clears the br
   const root = await factoryStateRoot(env)
   const dir = path.join(root, "evaluations", JOB, "ourostack__factory")
   const output = path.join(dir, `claude-code-${SESSION}.labels.json`)
-  assert.deepEqual(await acceptEvaluations(env, { job: JOB }), { job: JOB, sessions: [{ session: SESSION, result: "missing" }] })
+  assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [{ session: SESSION, result: "missing" }], request: "kept" })
 
   await fs.writeFile(output, JSON.stringify(labels(), null, 2))
-  assert.deepEqual(await acceptEvaluations(env, { job: JOB }), { job: JOB, sessions: [{ session: SESSION, result: "accepted" }] })
+  assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [{ session: SESSION, result: "accepted" }], request: "cleared" })
   const stored = path.join(root, "labels", "ourostack__factory", JOB, `${SESSION}.json`)
   assert.equal(await fs.readFile(stored, "utf8"), `${JSON.stringify(LABELS)}\n`)
   assert.deepEqual(await fs.readdir(dir), [])
-  assert.deepEqual(await acceptEvaluations(env, { job: JOB }), { job: JOB, sessions: [] })
+  assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [], request: "cleared" })
+  assert.deepEqual(await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION }), { result: "complete", job: JOB, briefs: [] })
 }))
 
 test("a rejected answer stays out of the outbox, keeps its brief for a retry and is never echoed", () => scratch(async (env) => {
@@ -315,8 +327,8 @@ test("a rejected answer stays out of the outbox, keeps its brief for a retry and
   const bad = labels()
   bad.stretches[0].note = SENTINEL
   await fs.writeFile(output, JSON.stringify(bad))
-  const result = await acceptEvaluations(env, { job: JOB })
-  assert.deepEqual(result, { job: JOB, sessions: [{ session: SESSION, result: "rejected", errors: [{ code: "unknown_key", path: "stretches.0" }] }] })
+  const result = await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })
+  assert.deepEqual(result, { job: JOB, sessions: [{ session: SESSION, result: "rejected", errors: [{ code: "unknown_key", path: "stretches.0" }] }], request: "kept" })
   noEcho(result)
   await assert.rejects(fs.stat(path.join(root, "labels")), { code: "ENOENT" })
   assert.equal((await fs.readdir(path.dirname(output))).length, 2)
@@ -328,7 +340,7 @@ test("an answer accepted after consent is withdrawn is not written", () => scrat
   const root = await factoryStateRoot(env)
   await fs.writeFile(path.join(root, "evaluations", JOB, "ourostack__factory", `claude-code-${SESSION}.labels.json`), JSON.stringify(labels()))
   await setConsent(env, { store: STORE, contribute: false })
-  assert.deepEqual(await acceptEvaluations(env, { job: JOB }), { job: JOB, sessions: [{ session: SESSION, result: "not_opted_in" }] })
+  assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [{ session: SESSION, result: "not_opted_in" }], request: "kept" })
   await assert.rejects(fs.stat(path.join(root, "labels")), { code: "ENOENT" })
 }))
 
@@ -344,6 +356,144 @@ test("a brief file that no longer names its job and session is reported, not tru
     (value) => ({ ...value, session: null }),
   ]) {
     await fs.writeFile(file, JSON.stringify(edit(structuredClone(original))))
-    assert.deepEqual(await acceptEvaluations(env, { job: JOB }), { job: JOB, sessions: [{ session: SESSION, result: "invalid_brief" }] })
+    assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [{ session: SESSION, result: "invalid_brief" }], request: "kept" })
   }
+}))
+
+// ---------------------------------------------------------------------------
+// Review fix round 1: facts read at accept time, evaluation requests, edges.
+// ---------------------------------------------------------------------------
+
+async function answer(env, value) {
+  const root = await factoryStateRoot(env)
+  const dir = path.join(root, "evaluations", JOB, "ourostack__factory")
+  const output = path.join(dir, `claude-code-${SESSION}.labels.json`)
+  await fs.writeFile(output, typeof value === "string" ? value : JSON.stringify(value))
+  return { dir, output, brief: path.join(dir, `claude-code-${SESSION}.brief.json`), root }
+}
+
+test("an edited brief cannot change what the answer is checked against", () => scratch(async (env) => {
+  await seed(env)
+  await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
+  const forged = labels()
+  forged.stretches[0].evidence = [[1, 2]]
+  const { brief } = await answer(env, forged)
+  const original = JSON.parse(await fs.readFile(brief, "utf8"))
+  const rejected = { job: JOB, sessions: [{ session: SESSION, result: "rejected", errors: [{ code: "evidence_unmatched", path: "stretches.0.evidence.0" }] }], request: "kept" }
+  assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), rejected)
+
+  const widened = structuredClone(original)
+  widened.facts.intervals.push({ kind: "turn", agent: 0, start_ms: 1, end_ms: 2 })
+  await fs.writeFile(brief, JSON.stringify(widened))
+  assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), rejected)
+
+  await fs.writeFile(brief, JSON.stringify({ ...original, facts: null, unavailable: [] }))
+  assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), rejected)
+}))
+
+test("an answer whose session facts are gone is refused as facts_missing", () => scratch(async (env) => {
+  await seed(env)
+  await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
+  const { root } = await answer(env, labels())
+  await fs.rm(path.join(root, "outbox", "ourostack__factory", NAME))
+  assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), {
+    job: JOB, sessions: [{ session: SESSION, result: "rejected", errors: [{ code: "facts_missing", path: "" }] }], request: "kept",
+  })
+}))
+
+test("an unreadable answer or brief is one session's result, not a failed run", () => scratch(async (env) => {
+  await seed(env)
+  await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
+  const { output, brief, root } = await answer(env, "x")
+  const handle = await fs.open(output, "w")
+  await handle.truncate(16 * 1024 * 1024 + 1)
+  await handle.close()
+  assert.deepEqual((await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })).sessions, [{ session: SESSION, result: "rejected", errors: [{ code: "too_large", path: "" }] }])
+  await fs.rm(output)
+  await fs.symlink(path.join(root, "consent.json"), output)
+  assert.deepEqual((await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })).sessions, [{ session: SESSION, result: "rejected", errors: [{ code: "unsafe_file", path: "" }] }])
+  await fs.writeFile(brief, "{")
+  assert.deepEqual((await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })).sessions, [{ session: SESSION, result: "invalid_brief" }])
+}))
+
+test("the done step creates nothing without factory state or consent", () => scratch(async (env, base) => {
+  const deskRoot = path.join(base, "desk")
+  assert.deepEqual(await evaluateTask(env, { job: JOB, deskRoot, pluginVersion: VERSION }), { result: "not_opted_in", job: JOB, briefs: [] })
+  await assert.rejects(fs.stat(path.join(base, "state", "ouroboros-skills")), { code: "ENOENT" })
+  await factoryStateRoot(env)
+  assert.equal((await evaluateTask(env, { job: JOB, deskRoot, pluginVersion: VERSION })).result, "not_opted_in")
+  assert.deepEqual(await listEvaluationRequests(env), [])
+}))
+
+test("the done step keeps the job's request until every session has ended and has labels", () => scratch(async (env, base) => {
+  const deskRoot = path.join(base, "desk")
+  await setConsent(env, { store: STORE, contribute: true })
+  assert.deepEqual(await evaluateTask(env, { job: JOB, deskRoot, pluginVersion: VERSION }), { result: "no_sessions", job: JOB, briefs: [] })
+  assert.deepEqual((await listEvaluationRequests(env)).map((request) => request.job), [JOB])
+
+  // The finishing session is derived later, still open.
+  const open = local()
+  open.session.ended_at = null
+  open.session.end_reason = null
+  await writeLocalFacts(env, STORE, open)
+  await updateJobsIndex(env, JOB, NAME)
+  const labelsOpen = { ...labels(), unavailable: ["session_log_missing"] }
+  labelsOpen.stretches = labelsOpen.stretches.slice(0, 1)
+  const [pending] = (await evaluatePending(env, { pluginVersion: VERSION })).jobs
+  assert.equal(pending.result, "ready")
+  await answer(env, labelsOpen)
+  assert.equal((await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })).request, "kept")
+  assert.equal((await evaluateTask(env, { job: JOB, deskRoot, pluginVersion: VERSION })).result, "ready")
+
+  // Once the session has ended and its labels are accepted, the request is cleared.
+  await writeLocalFacts(env, STORE, local())
+  await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
+  await answer(env, labelsOpen)
+  assert.equal((await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })).request, "cleared")
+  assert.deepEqual(await listEvaluationRequests(env), [])
+  assert.deepEqual(await evaluateTask(env, { job: JOB, deskRoot, pluginVersion: VERSION }), { result: "complete", job: JOB, briefs: [] })
+  assert.deepEqual(await listEvaluationRequests(env), [])
+}))
+
+test("pending requests are cleared when complete and quarantined when expired or without consent", () => scratch(async (env, base) => {
+  const deskRoot = path.join(base, "desk")
+  const other = "5e6f708192a3b4c5d6e7f8091a2b3c4d"
+  await setConsent(env, { store: STORE, contribute: true })
+  const first = await requestEvaluation(env, { job: JOB, deskRoot })
+  assert.equal((await requestEvaluation(env, { job: JOB, deskRoot })).requested_at, first.requested_at)
+  await requestEvaluation(env, { job: other, deskRoot })
+  const root = await factoryStateRoot(env)
+  await fs.writeFile(path.join(root, "evaluate-requests", "c0ffee00c0ffee00c0ffee00c0ffee00.json"), JSON.stringify({ job: "c0ffee00c0ffee00c0ffee00c0ffee00", desk_root: deskRoot }))
+  await fs.writeFile(path.join(root, "evaluate-requests", "d0ffee00c0ffee00c0ffee00c0ffee00.json"), JSON.stringify({ job: "c0ffee00c0ffee00c0ffee00c0ffee00" }))
+  assert.deepEqual((await listEvaluationRequests(env)).map((request) => request.job).sort(), [other, JOB].sort())
+
+  assert.deepEqual((await evaluatePending(env, { pluginVersion: VERSION })).jobs.map((job) => job.result), ["no_sessions", "no_sessions"])
+  const later = Date.parse(first.requested_at) + 31 * 24 * 60 * 60 * 1000
+  assert.deepEqual((await evaluatePending(env, { pluginVersion: VERSION, now: later })).jobs.map((job) => job.result), ["expired", "expired"])
+  assert.equal(JSON.parse(await fs.readFile(path.join(root, "evaluate-requests", "quarantine", `${JOB}.json`), "utf8")).reason, "expired")
+
+  await requestEvaluation(env, { job: JOB, deskRoot })
+  await setConsent(env, { store: STORE, contribute: false })
+  assert.deepEqual((await evaluatePending(env, { pluginVersion: VERSION })).jobs.map((job) => job.result), ["not_opted_in"])
+  assert.equal(JSON.parse(await fs.readFile(path.join(root, "evaluate-requests", "quarantine", `${JOB}.json`), "utf8")).reason, "not_opted_in")
+
+  await seed(env)
+  await requestEvaluation(env, { job: JOB, deskRoot })
+  await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })
+  await answer(env, labels())
+  await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION })
+  await requestEvaluation(env, { job: JOB, deskRoot })
+  assert.deepEqual((await evaluatePending(env, { pluginVersion: VERSION })).jobs, [{ result: "complete", job: JOB, briefs: [] }])
+  assert.deepEqual(await listEvaluationRequests(env), [])
+  await assert.rejects(clearEvaluationRequest(env, JOB, "Not A Code"), /reason/u)
+}))
+
+test("a session of another job in the index, or one that can never publish, is not counted", () => scratch(async (env) => {
+  await setConsent(env, { store: STORE, contribute: true })
+  const unbound = local()
+  unbound.jobs = unbound.jobs.filter((job) => job.job !== JOB)
+  await writeLocalFacts(env, STORE, unbound)
+  await updateJobsIndex(env, JOB, NAME)
+  assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).result, "no_sessions")
+  assert.deepEqual(await acceptEvaluations(env, { job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", pluginVersion: VERSION }), { job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", sessions: [], request: "kept" })
 }))

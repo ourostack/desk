@@ -6,6 +6,7 @@
 //   node scripts/factory.js build --store <directory> --out <directory>
 //   node scripts/factory.js job-link --store <owner/repo> --desk-remote <url> --person-prefix <prefix> --track <track> --slug <slug>
 //   node scripts/factory.js evaluate --desk <desk root> --task [desks/<alias>/]<track>/<slug>
+//   node scripts/factory.js evaluate --pending
 //   node scripts/factory.js evaluate-accept --job <job>
 //
 // Every subcommand prints one JSON value on success. Validation failures print
@@ -23,7 +24,7 @@ import { pathToFileURL } from "node:url"
 
 import { jobId } from "../src/factory/binding.js"
 import { readDeskRemote } from "../src/factory/desk-repo.js"
-import { acceptEvaluations, prepareEvaluation } from "../src/factory/evaluate-run.js"
+import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
 import { build, jobLink } from "../src/factory/pipeline/build.js"
@@ -207,13 +208,16 @@ export function deskVersion() {
   return JSON.parse(readFileSync(new URL("../../plugin.json", import.meta.url), "utf8")).version
 }
 
-const EVALUATE_USAGE = "Usage: factory.js evaluate --desk <absolute desk root> --task [desks/<alias>/]<track>/<slug>"
+const EVALUATE_USAGE = "Usage: factory.js evaluate --desk <absolute desk root> --task [desks/<alias>/]<track>/<slug> | --pending"
 
 /**
  * Runs `evaluate`: the task's job ID, computed exactly as the task tools
- * compute it, then `prepareEvaluation`. Prints the result and brief paths.
+ * compute it, then `evaluateTask` (record the job's evaluation request and
+ * prepare its briefs). `--pending` prepares every retained request again.
+ * Prints results and brief paths only.
  */
 export async function runEvaluateCommand({ argv, env, pluginVersion = deskVersion() }) {
+  if (argv.length === 1 && argv[0] === "--pending") return evaluatePending(env, { pluginVersion })
   const options = parseOptions(argv)
   if (options === null || options.size !== 2 || !options.has("desk") || !options.has("task") || !path.isAbsolute(options.get("desk"))) {
     throw new Error(EVALUATE_USAGE)
@@ -230,20 +234,20 @@ export async function runEvaluateCommand({ argv, env, pluginVersion = deskVersio
   let job
   try {
     const deskRemote = readDeskRemote({ deskRoot: root }) || `local:${root}`
-    job = jobId({ deskRemote, personPrefix: crew ? `desks/${segments[1]}` : "", track: segments.at(-2), slug: segments.at(-1) })
+    job = jobId({ deskRemote, personPrefix: crew ? `desks/${segments[1].trim()}` : "", track: segments.at(-2), slug: segments.at(-1) })
   } catch {
     throw new Error(EVALUATE_USAGE)
   }
-  return prepareEvaluation(env, { job, pluginVersion })
+  return evaluateTask(env, { job, deskRoot: root, pluginVersion })
 }
 
 /** Runs `evaluate-accept`: checks each written answer for the job and moves accepted labels into the outbox. */
-export async function runEvaluateAcceptCommand({ argv, env }) {
+export async function runEvaluateAcceptCommand({ argv, env, pluginVersion = deskVersion() }) {
   const options = parseOptions(argv)
   if (options === null || options.size !== 1 || !PATTERNS.jobId.test(options.get("job") ?? "")) {
     throw new Error("Usage: factory.js evaluate-accept --job <job>")
   }
-  return acceptEvaluations(env, { job: options.get("job") })
+  return acceptEvaluations(env, { job: options.get("job"), pluginVersion })
 }
 
 /** Runs the `consent` subcommand: validates `argv`, calls `setConsent`, and returns the JSON-ready result. */

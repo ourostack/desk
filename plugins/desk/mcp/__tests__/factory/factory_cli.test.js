@@ -633,6 +633,7 @@ test("evaluate computes the task's job as the task tools do and prepares its bri
   const desk = path.join(env.HOME, "desk")
   await fs.mkdir(desk)
   const job = jobId({ deskRemote: `local:${desk}`, personPrefix: "", track: "factory", slug: "evaluator" })
+  assert.deepEqual(await runEvaluateCommand({ argv: ["--pending"], env, pluginVersion: "3.2.0-alpha.40" }), { jobs: [] })
   assert.deepEqual(await runEvaluateCommand({ argv: ["--desk", desk, "--task", "factory/evaluator"], env, pluginVersion: "3.2.0-alpha.40" }), { result: "not_opted_in", job, briefs: [] })
   await seedJob(env, job)
   let output = ""
@@ -646,6 +647,8 @@ test("evaluate computes the task's job as the task tools do and prepares its bri
 
   const crew = jobId({ deskRemote: `local:${desk}`, personPrefix: "desks/ari", track: "factory", slug: "evaluator" })
   assert.equal((await runEvaluateCommand({ argv: ["--desk", desk, "--task", "desks/ari/factory/evaluator"], env })).job, crew)
+  assert.equal((await runEvaluateCommand({ argv: ["--desk", desk, "--task", "desks/ ari /factory/evaluator"], env })).job, crew)
+  assert.deepEqual((await runEvaluateCommand({ argv: ["--pending"], env })).jobs.map((entry) => entry.job).sort(), [crew, job].sort())
 }))
 
 test("evaluate uses the desk's origin remote when it has one", () => scratch(async (env) => {
@@ -662,6 +665,7 @@ test("evaluate refuses malformed options, a relative or missing desk and a malfo
   await fs.mkdir(desk)
   for (const argv of [
     [],
+    ["--desk"],
     ["--desk", desk],
     ["--desk", desk, "--task", "factory/evaluator", "--extra", "x"],
     ["--desk", "relative", "--task", "factory/evaluator"],
@@ -691,7 +695,7 @@ test("evaluate-accept checks the evaluator's answer and moves accepted labels in
   assert.equal(output.includes("SENTINEL"), false)
   assert.deepEqual(JSON.parse(output).sessions, [{ session: EVAL_SESSION, result: "rejected", errors: [{ code: "unknown_key", path: "" }] }])
   await fs.writeFile(brief.output, JSON.stringify(labels))
-  assert.deepEqual(await runEvaluateAcceptCommand({ argv: ["--job", job], env }), { job, sessions: [{ session: EVAL_SESSION, result: "accepted" }] })
+  assert.deepEqual(await runEvaluateAcceptCommand({ argv: ["--job", job], env, pluginVersion: LABELS_GOLDEN.evaluator.plugin_version }), { job, sessions: [{ session: EVAL_SESSION, result: "accepted" }], request: "cleared" })
   const root = await factoryStateRoot(env)
   assert.ok(existsSync(path.join(root, "labels", "ourostack__factory", job, `${EVAL_SESSION}.json`)))
   for (const argv of [[], ["--job", "SENTINEL"], ["--other", "x"], ["--job", job, "--extra", "x"]]) {
