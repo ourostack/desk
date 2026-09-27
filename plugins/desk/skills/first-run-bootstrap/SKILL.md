@@ -78,6 +78,8 @@ Entrance B must never route into Entrance A choices or initialize over the exist
 
 Both entrances end at one Desk, one active plugin chain, admitted MCPs, startup foundations present, and the operator ready to resume or start the first real job from the same durable workspace. Later healthy sessions resume through ordinary `session-start` flow instead of replaying onboarding.
 
+At the endpoint, ask the factory contribution question once when `desk_status` reports `factory.consent` as `undecided`. Use the words and the recording commands in `desk:session-start` Step 2.7: what is published, what never is, that the store is public, and that the contributor's GitHub account appears as the intake pull request's author. Record yes or no through `factory.js consent`, so the next session start does not ask again. Skip the question in a noninteractive session, and never block onboarding on it.
+
 The public RFC stays optional and on demand. Use it when the operator wants design context; do not require healthy startup or resumption to reread it.
 
 ## Completion evidence

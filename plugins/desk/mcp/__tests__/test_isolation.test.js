@@ -55,3 +55,18 @@ test("npm test and the coverage runner both preload the setup, so a test file th
   assert.match(pkg.scripts.test, /^node --import \.\/__tests__\/_isolated_env\.mjs --test /u)
   assert.match(await fsPromises.readFile(path.join(mcpRoot, "src", "coverage", "runner.js"), "utf8"), /"__tests__", "_isolated_env\.mjs"/u)
 })
+
+test("a factory test file run on its own with node --test never reads the machine's recorded factory consent", async () => {
+  // A machine that contributes to a factory store has consent.json under its real state folder. boot_check.test.js reads
+  // the default environment on purpose, so run alone without the preload it must still see its own temporary state.
+  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+  const machine = await mkTempRoot("desk-machine-home-")
+  const consent = path.join(machine, ".local", "state", "ouroboros-skills", "desk", "factory", "consent.json")
+  mkdirSync(path.dirname(consent), { recursive: true })
+  writeFileSync(consent, JSON.stringify({ schema_version: 1, stores: { "ourostack/factory": { contribute: true, account: "machine-owner", decided_at: "2026-09-01T00:00:00.000Z" } } }))
+  const env = { ...process.env, HOME: machine, USERPROFILE: machine, DESK_TEST_REAL_HOME: machine }
+  for (const key of ["DESK_TEST_RUN_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "NODE_OPTIONS", "NODE_TEST_CONTEXT"]) delete env[key]
+  const { spawnSync } = await import("node:child_process")
+  const run = spawnSync(process.execPath, ["--test", path.join("__tests__", "factory", "boot_check.test.js")], { cwd: mcpRoot, env, encoding: "utf8", timeout: 120000 })
+  assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`.split("\n").filter((line) => /^not ok|expected|actual|Error/u.test(line)).join("\n"))
+})

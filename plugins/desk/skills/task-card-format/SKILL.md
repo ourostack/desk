@@ -27,6 +27,7 @@ validator: "ari"                        # who validates completion
 artifacts: [https://github.com/.../pull/123]  # outputs produced by this task (PR URLs / file paths)
 active_bridge: "bridge-abc123"          # set by bridge promotion — bridge ID this task durably records
 bridge_sessions: ["sess-xyz789"]        # set by bridge promotion — session IDs the bridge is coordinating
+factory_report: https://github.com/<store>/blob/reports/jobs/<job>.md  # set by the task tools at done when the factory store has consent
 
 # Optional: adoption signals
 planning_complete: true                 # skip brainstorming and planning; resume at implementation
@@ -87,6 +88,7 @@ these fields are read by the harness, not the agent. set them when the task repr
 - **`artifacts`** — list of outputs this task produced. PR URLs, file paths, document references. appended to as the task progresses.
 - **`active_bridge`** — set automatically by `promoteBridgeToDesk`. records the bridge ID this task durably represents. read by the bridge lifecycle reconciler to auto-resolve bridges when their backing task reaches `done` / `cancelled`.
 - **`bridge_sessions`** — set automatically by `promoteBridgeToDesk`. session IDs the bridge is coordinating across. read by the same reconciler.
+- **`factory_report`** — the link to this job's factory report, written by `task_update` or `task_archive` on the transition to `done` when the desk's resolved factory store has consent (see `desk:session-start` Step 2.7). the link is deterministic, so it is written at once and may not resolve until the store has merged the job's facts and rebuilt its reports; `done` never waits for that. cards without consent, cards finished before the field existed and `cancelled` cards have no link. never write or edit it by hand.
 
 agents creating tasks via `desk` skills don't typically set runtime fields directly — they're added by `ouro reminder create`, by bridge promotion, or by the operator. but agents reading task cards should understand what these fields mean so they don't strip them on edits.
 

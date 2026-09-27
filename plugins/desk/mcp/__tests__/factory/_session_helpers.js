@@ -1,3 +1,5 @@
+// The global test setup, so a factory test file run on its own with `node --test <file>` reads and writes only temporary state, never the machine's own factory consent.
+import "../_isolated_env.mjs"
 import { mkdtemp, realpath, mkdir, writeFile, rm } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"

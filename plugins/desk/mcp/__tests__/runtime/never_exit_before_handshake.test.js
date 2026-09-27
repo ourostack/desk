@@ -514,3 +514,25 @@ test("a failure payload keeps an own __proto__ key as a plain property", () => {
   assert.deepEqual(Object.keys(failure.observed), ["__proto__", "kept"])
   assert.equal(failure.observed.polluted, undefined)
 })
+
+// Review M3-11 D1: the tools find the installed plugin through DESK_PLUGIN_ROOT. The entrypoint keeps a host's value
+// (Claude's launcher sets one) and otherwise names its own plugin folder, before anything else runs.
+test("the entrypoint names its own plugin root for the tools unless the host already did", async () => {
+  const run = (env) => entrypoint.main({
+    argv: [],
+    env,
+    mcpRoot,
+    nodeVersion: "16.20.2",
+    runtimeInspector: null,
+    runtimeImporter: async () => { throw new Error("must not import") },
+    nodeCandidateDiscoverer: () => [],
+    nodeSelector: () => ({ mode: "diagnostic", reason: "no_compatible_node", paths_checked: [] }),
+    diagnosticServerStarter: async () => {},
+  })
+  const bare = {}
+  await run(bare)
+  assert.equal(bare.DESK_PLUGIN_ROOT, path.resolve(mcpRoot, ".."))
+  const hosted = { DESK_PLUGIN_ROOT: "/host/named/desk" }
+  await run(hosted)
+  assert.equal(hosted.DESK_PLUGIN_ROOT, "/host/named/desk")
+})
