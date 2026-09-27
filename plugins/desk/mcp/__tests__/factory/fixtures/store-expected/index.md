@@ -9,6 +9,8 @@
 
 Flow efficiency divides active time inside the lead-time window by lead time. Active before card is work before the task card existed; it is outside lead time.
 
+Totals and distributions across jobs, including which waste costs the most, are in `rollups/index.md`.
+
 ## Coverage
 
 - Sessions seen: unavailable (not_reported_to_store).

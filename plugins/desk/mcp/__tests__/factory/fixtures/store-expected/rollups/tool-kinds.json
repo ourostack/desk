@@ -1,0 +1,1 @@
+{"schema":"desk.factory.rollups/1","sessions":4,"tool_kinds":[{"calls":3,"failures":1,"sessions":1,"tool":"edit"},{"calls":2,"failures":1,"sessions":1,"tool":"shell"},{"calls":2,"failures":0,"sessions":2,"tool":"agent"},{"calls":1,"failures":0,"sessions":1,"tool":"read"},{"calls":1,"failures":0,"sessions":1,"tool":"search"}]}
