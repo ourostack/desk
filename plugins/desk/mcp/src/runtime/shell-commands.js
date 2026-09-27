@@ -103,6 +103,14 @@ export function tokenizeShell(text, powershell = false) {
         const end = text.indexOf("}", i)
         if (end >= 0) { value += text.slice(i, end + 1); i = end; continue }
       }
+      // Bash's { and } are reserved words only as whole words, so `@{upstream}` and `HEAD@{1}` are one word. A brace
+      // expansion such as `{main,topic}` makes several words Desk does not compute.
+      if (!powershell && (c === "{" || c === "}") && (active || !(next === undefined || (c === "{" ? /\s/u : /[\s;&|)<>]/u).test(next)))) {
+        const close = c === "{" ? text.indexOf("}", i) : -1
+        if (close > 0 && /,|\.\./u.test(text.slice(i, close))) throw new Error("unresolved brace expansion")
+        active = true; value += c
+        continue
+      }
       word()
       let op = (c === "&" || c === "|") && next === c ? c + text[++i] : c
       if (c === ";" && (next === ";" || next === "&")) {

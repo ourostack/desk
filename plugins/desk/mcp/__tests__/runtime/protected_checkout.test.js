@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url"
 
 const source = new URL("../../src/runtime/protected-checkout.js", import.meta.url)
 const plugin = fileURLToPath(new URL("../../../", import.meta.url))
-const guidance = /^Desk protected checkout .+: .*git worktree add --detach "\$\(mktemp -d\)" <ref>/u
+const guidance = /^Desk protected checkout .+: .*git worktree add --detach "\$HOME\/<new directory>" <ref>/u
 let root, protectedRoot, ordinary, child
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`
@@ -36,14 +36,16 @@ async function guard(command, cwd = ordinary, extra = {}) {
 
 test("HEAD-moving and work-discarding operations alone are denied in a locally protected checkout", async () => {
   const deny = [
-    "checkout HEAD", "switch topic", "reset --hard", "rebase topic", "merge topic", "stash", "clean -nd",
+    "checkout HEAD", "switch topic", "reset --hard", "rebase topic", "stash", "clean -nd",
     "restore --source HEAD file", "restore --source=HEAD file", "restore -s HEAD file", "restore -sHEAD file",
-    "restore --staged file", "branch -M renamed", "branch -m renamed", "pull", "reset",
+    "restore --staged --worktree file", "branch -M renamed", "branch -m renamed", "reset",
   ]
   const allow = [
     "status", "diff", "log -1", "show HEAD", "fetch", "add file", "commit -m checkout", "push", "stash list",
     "restore file", "restore -- --source", "branch", "branch --list", "branch -f topic HEAD", "branch --force topic",
     "branch -fD topic", "branch -d topic", "branch -- topic-f", "worktree list", "worktree add --detach /tmp/new HEAD",
+    // Merges add history and move nothing off the branch; path-limited unstaging leaves HEAD alone (2026-09-27 ruling).
+    "merge topic", "pull", "restore --staged file", "reset -- file", "reset HEAD file",
   ]
   for (const args of deny) {
     assert.match((await guard(`git ${args}`, protectedRoot)).reason, /^Desk protected checkout /u, args)

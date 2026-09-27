@@ -5,7 +5,9 @@
 // script, or an unknown directory or operand of a Git operation the guard must check.
 export const UNKNOWN = "\0"
 export const UNKNOWN_GIT = "\0\x01"
-export const WORKTREE_COMMAND = 'git worktree add --detach "$(mktemp -d)" <ref>'
+// The own-worktree form denials name. It runs as written in Bash and in PowerShell, and both guards allow it.
+// Only denials of real HEAD moves, rewrites or discards name it; the desk's ordinary writes are never sent to a worktree.
+export const WORKTREE_COMMAND = 'git worktree add --detach "$HOME/<new directory>" <ref>'
 
 /** A decided denial: inspection stops and the hook reports `reason`. */
 export class GuardDenial extends Error {
@@ -39,8 +41,8 @@ export function inspectionBudget({ steps = INSPECTION_STEPS, deadline = Infinity
   return {
     async step() {
       used++
-      if (used > steps) throw new GuardDenial(`Desk stopped inspecting this shell command after ${steps} steps, so it is denied to keep a protected checkout safe. Split it into shorter commands, or work in your own worktree: ${WORKTREE_COMMAND}`)
-      if (now() > deadline) throw new GuardDenial(`Desk could not finish inspecting this shell command within its ${budgetMs / 1000} s budget, so it is denied to keep a protected checkout safe. Split it into shorter commands, or work in your own worktree: ${WORKTREE_COMMAND}`)
+      if (used > steps) throw new GuardDenial(`Desk stopped inspecting this shell command after ${steps} steps, so it is denied to keep a protected checkout safe. Split it into shorter commands.`)
+      if (now() > deadline) throw new GuardDenial(`Desk could not finish inspecting this shell command within its ${budgetMs / 1000} s budget, so it is denied to keep a protected checkout safe. Split it into shorter commands.`)
       if (used % 256 === 0) await new Promise((resolve) => { setImmediate(resolve) })
     },
   }
@@ -57,5 +59,5 @@ export function unknownOutput(text) {
 }
 
 export function unresolved(what) {
-  return new GuardDenial(`Desk could not resolve ${what}, and it could run Git in a protected checkout. Resolve the value in a separate command first, or work in your own worktree: ${WORKTREE_COMMAND}`)
+  return new GuardDenial(`Desk could not resolve ${what}, and it could run Git in a protected checkout. Resolve the value in a separate command first.`)
 }

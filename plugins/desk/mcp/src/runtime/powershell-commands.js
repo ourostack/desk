@@ -5,9 +5,9 @@
 // statement, the right side of `&&`/`||` after an unknown status) leaves every value it could change unknown.
 import { physicalDirectory, staticGitOutput } from "./shell-paths.js"
 import { inspectShell, shellScript, tokenizeShell } from "./shell-commands.js"
-import { GuardDenial, inspectionBudget, mayInvokeGit, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, unknownOutput, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
+import { GuardDenial, inspectionBudget, mayInvokeGit, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, unknownOutput, unresolved } from "./guard-unknowns.js"
 
-export const POWERSHELL_GIT_FORMS = `Desk allows Git in PowerShell only as a plain command in its own statement: git <arguments>, $name = git <arguments>, or git <arguments> piped to Out-String, Select-String, Select-Object, Where-Object, ForEach-Object, Measure-Object, Sort-Object, Out-Null or Write-Output, where every argument is literal text or a plain $variable. Rewrite this command as separate plain git commands joined by ; (for example $b = git branch --show-current; git push origin $b), or work in your own worktree: ${WORKTREE_COMMAND}`
+export const POWERSHELL_GIT_FORMS = `Desk allows Git in PowerShell only as a plain command in its own statement: git <arguments>, $name = git <arguments>, or git <arguments> piped to Out-String, Select-String, Select-Object, Where-Object, ForEach-Object, Measure-Object, Sort-Object, Out-Null or Write-Output, where every argument is literal text or a plain $variable. Rewrite this command as separate plain git commands joined by ; (for example $b = git branch --show-current; git push origin $b)`
 
 const GIT_PROGRAM = /^(?:.*[\\/])?git(?:\.exe)?$/iu
 const READ_ONLY = new Set(["out-string", "select-string", "sls", "select-object", "select", "where-object", "where", "?", "foreach-object", "foreach", "%", "measure-object", "measure", "sort-object", "sort", "out-null", "write-output", "write", "echo"])
@@ -307,10 +307,16 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
   }
 
   async function statementOf(words) {
-    if (namesGit(tokensText(words))) {
+    const text = tokensText(words)
+    if (namesGit(text)) {
       const form = gitForm(words)
-      if (!form) throw new GuardDenial(POWERSHELL_GIT_FORMS)
-      return gitCall(form)
+      if (form) return gitCall(form)
+      // The allowlist protects protected checkouts only: `visit.unmodeled` answers whether this statement can reach
+      // one. When it cannot, the statement runs unchecked, and what it may assign becomes unknown.
+      if (!await visit.unmodeled?.({ text, cwd: directory, env: environment })) throw new GuardDenial(POWERSHELL_GIT_FORMS)
+      for (const match of text.matchAll(ASSIGNED)) set(match[1] ?? match[2] ?? match[3] ?? match[4], UNKNOWN)
+      status = null
+      return
     }
     const elements = pipeline(words)
     for (const [index, element] of elements.entries()) await run(element.words, element.redirects, index ? elements[index - 1] : null)

@@ -12,7 +12,7 @@ import { inspectShell } from "../../src/runtime/shell-commands.js"
 import { inspectPowerShell, POWERSHELL_GIT_FORMS } from "../../src/runtime/powershell-commands.js"
 
 const plugin = fileURLToPath(new URL("../../../", import.meta.url))
-const LEAVE = /^Desk protected checkout .+: this would move HEAD off the checkout's branch\. To leave the state branch, use your own worktree: git worktree add --detach "\$\(mktemp -d\)" <ref>$/u
+const LEAVE = /^Desk protected checkout .+: this would move HEAD off the checkout's branch\. To leave the state branch, use your own worktree: git worktree add --detach "\$HOME\/<new directory>" <ref>$/u
 const DENIED = /^Desk protected checkout .+: /u
 const enabled = (operation, args, name) => hasOption(parseGitOptions(SPECS[operation], args), name)
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
@@ -339,12 +339,17 @@ test("PowerShell non-Git expressions and redirects are allowed; computed targets
   for (const command of ["", "Write-Output harmless > result.txt", "$unused = 1 + 2; Write-Output ok"]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
   }
-  // Round 4 ruling: text that names Git outside the plain forms is denied, even a string.
-  assert.equal((await f.guard('"git checkout HEAD"', { powershell: true })).reason, POWERSHELL_GIT_FORMS)
+  // Round 4 ruling: in a protected checkout, text that names Git outside the plain forms is denied, even a string.
+  // An unprotected checkout never gets the allowlist denial (narrowed 2026-09-27).
+  assert.equal((await f.guard('"git checkout HEAD"', { powershell: true, cwd: f.shared })).reason, POWERSHELL_GIT_FORMS)
+  assert.equal((await f.guard('"git checkout HEAD"', { powershell: true })).deny, false)
   for (const command of ["&", "$name = 1 + 2; & $name", "$repo = 1 + 2; sl $repo", `sl -unsupported ${psq(f.shared)}`]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
   }
-  for (const command of ["&; git status", "$name = (Get-Command git).Source; & $name status", `$repo = 1 + 2; sl $repo; git checkout HEAD`, `sl -unsupported ${psq(f.shared)}; git status`, `git -C "$(opaque-command)" checkout HEAD`]) {
+  // A computed program from an unprotected checkout can reach no protected one; from a protected checkout it is denied.
+  assert.equal((await f.guard("$name = (Get-Command git).Source; & $name status", { powershell: true })).deny, false)
+  assert.equal((await f.guard("$name = (Get-Command git).Source; & $name status", { powershell: true, cwd: f.shared })).deny, true)
+  for (const command of ["&; git status", `$repo = 1 + 2; sl $repo; git checkout HEAD`, `sl -unsupported ${psq(f.shared)}; git status`, `git -C "$(opaque-command)" checkout HEAD`]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
   }
   assert.equal((await f.guard(`Write-Output $(git -C ${psq(f.shared)} checkout HEAD)`, { powershell: true })).deny, true)
@@ -473,8 +478,13 @@ test("A3-R1-I01: quoted PowerShell results that name Git are denied, and their e
     assertDirectCheckout(t, f, command, { powershell: true })
   }
   for (const command of ['"git checkout HEAD"', psq(`$(git -C ${psq(f.shared)} checkout HEAD)`), '"`$(git checkout HEAD)"']) {
-    assert.equal((await f.guard(command, { powershell: true })).reason, POWERSHELL_GIT_FORMS, command)
-    assertHookDecision(f, command, true, { powershell: true, reason: forms })
+    assert.equal((await f.guard(command, { powershell: true, cwd: f.shared })).reason, POWERSHELL_GIT_FORMS, command)
+    assertHookDecision(f, command, true, { powershell: true, reason: forms, cwd: f.shared })
+  }
+  // From an unprotected checkout, only text that could reach another checkout keeps the allowlist denial.
+  assert.equal((await f.guard(psq(`$(git -C ${psq(f.shared)} checkout HEAD)`), { powershell: true })).reason, POWERSHELL_GIT_FORMS)
+  for (const command of ['"git checkout HEAD"', '"`$(git checkout HEAD)"']) {
+    assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
   }
 })
 

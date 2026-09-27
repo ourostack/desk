@@ -77,7 +77,7 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 // The hosts stop a hook at 10 s; answer first, and deny, if inspection has not finished at 9 s.
 const deadline = setTimeout(() => {
-  const decision = { permissionDecision: "deny", permissionDecisionReason: "Desk could not finish checking this command in time, so it is denied to keep a protected checkout safe. Retry it, or work in your own worktree: git worktree add --detach \"$(mktemp -d)\" <ref>" };
+  const decision = { permissionDecision: "deny", permissionDecisionReason: "Desk could not finish checking this command in time, so it is denied to keep a protected checkout safe. Retry it." };
   process.stdout.write(`${JSON.stringify(process.argv[2] === "claude" ? { hookSpecificOutput: { hookEventName: "PreToolUse", ...decision } } : decision)}\n`);
   process.exit(0);
 }, Number(process.env.DESK_GUARD_DEADLINE_MS) || 9000);

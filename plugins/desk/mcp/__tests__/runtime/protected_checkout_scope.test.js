@@ -94,6 +94,12 @@ test("A3b: the desk write protocol and read-only Git pass in a protected checkou
     "config --get remote.origin.url", "config get remote.origin.url", "config --list", "config remote.origin.url",
     "branch newbranch", "branch -d topic", "branch -D topic", "branch -f topic HEAD", "branch -m topic renamed", "branch -m",
     "branch -c copy", "branch -C topic copy", "branch -u origin/main", "branch -r -d origin/main",
+    // Narrowed 2026-09-27: path-limited unstaging, merges, merge-mode pulls and non-force pushes of any name move no HEAD and rewrite nothing pushed.
+    "reset -- file.txt", "reset HEAD file.txt", "reset HEAD~1 file.txt", "reset missing-path", "reset --pathspec-from-file=list",
+    "restore --staged file.txt", "restore -S file.txt", "restore --sta file.txt",
+    "merge topic", "merge origin/main", "merge --no-ff origin/main", "merge --ff-only --no-ff topic",
+    "pull --no-rebase origin topic", "pull --no-rebase upstream main", "pull --rebase=false origin topic",
+    "push --all", "push --branches", "push origin topic", "push origin HEAD:topic", "push origin main:topic", "push origin 'refs/heads/*:refs/heads/*'",
     "bisect log", "merge -h", "clean -h", "stash --help", "--version", "help",
   ].map((args) => [args, false]))
 })
@@ -112,12 +118,10 @@ test("A3b: every operation that moves HEAD, rewinds the branch or discards other
     ["switch --discard-changes main", MESSAGES.discard],
     ["reset --hard", MESSAGES.discard], ["reset --hard HEAD", MESSAGES.discard], ["reset --merge", MESSAGES.discard],
     ["reset --keep HEAD", MESSAGES.discard], ["reset --soft --hard", MESSAGES.discard], ["reset --har", MESSAGES.discard],
-    ["reset", MESSAGES.unstage], ["reset HEAD", MESSAGES.unstage], ["reset -- file.txt", MESSAGES.unstage],
-    ["reset HEAD file.txt", MESSAGES.unstage], ["reset HEAD~1 file.txt", MESSAGES.unstage], ["reset --hard --mixed", MESSAGES.unstage],
-    ["reset -p", MESSAGES.unstage], ["reset missing-path", MESSAGES.unstage], ["reset --pathspec-from-file=list", MESSAGES.unstage],
+    ["reset", MESSAGES.unstage], ["reset HEAD", MESSAGES.unstage], ["reset --hard --mixed", MESSAGES.unstage], ["reset -p", MESSAGES.unstage],
     ["reset HEAD~1", MESSAGES.rewind], ["reset --soft HEAD~1", MESSAGES.rewind], ["reset topic", MESSAGES.rewind], ["reset HEAD~1 --", MESSAGES.rewind],
     ["restore --source HEAD file.txt", MESSAGES.restore], ["restore -s HEAD~1 file.txt", MESSAGES.restore],
-    ["restore --staged file.txt", MESSAGES.restore], ["restore -S file.txt", MESSAGES.restore], ["restore --sta file.txt", MESSAGES.restore],
+    ["restore --staged --worktree file.txt", MESSAGES.restore], ["restore -SW file.txt", MESSAGES.restore], ["restore --source=HEAD~1 file.txt", MESSAGES.restore],
     ["clean -n", MESSAGES.clean], ["clean -fd", MESSAGES.clean], ["clean -fdx", MESSAGES.clean],
     ["stash", MESSAGES.stash], ["stash push", MESSAGES.stash], ["stash -u", MESSAGES.stash], ["stash pop", MESSAGES.stash],
     ["stash apply", MESSAGES.stash], ["stash drop", MESSAGES.stash], ["stash clear", MESSAGES.stash], ["stash save note", MESSAGES.stash],
@@ -128,18 +132,15 @@ test("A3b: every operation that moves HEAD, rewinds the branch or discards other
     ["rebase topic", MESSAGES.rebase], ["rebase -", MESSAGES.rebase], ["rebase HEAD~1", MESSAGES.rebase], ["rebase --onto topic main", MESSAGES.rebase],
     ["rebase --root", MESSAGES.rebase], ["rebase -x true", MESSAGES.rebase], ["rebase --exec=true", MESSAGES.rebase],
     ["rebase --quit", MESSAGES.rebase], ["rebase --autostash", MESSAGES.autostash], ["rebase origin/main topic", MESSAGES.leave],
-    ["pull origin topic", MESSAGES.pull], ["pull upstream main", MESSAGES.pull], ["pull origin main:main", MESSAGES.pull],
+    ["pull --rebase origin topic", MESSAGES.pull], ["pull -r upstream main", MESSAGES.pull], ["pull --rebase origin main:main", MESSAGES.pull],
     ["pull --autostash", MESSAGES.autostash], ["pull --rebase --autost", MESSAGES.autostash],
-    ["merge topic", MESSAGES.merge], ["merge origin/main", MESSAGES.merge], ["merge --no-ff origin/main", MESSAGES.merge],
-    ["merge --ff-only --no-ff topic", MESSAGES.merge], ["merge --ff-only --autostash topic", MESSAGES.autostash],
+    ["merge --ff-only --autostash topic", MESSAGES.autostash], ["merge --autostash topic", MESSAGES.autostash],
     ["push --force", MESSAGES.pushForce], ["push -f", MESSAGES.pushForce], ["push --force-w", MESSAGES.pushForce],
     ["push --force-with-lease", MESSAGES.pushForce], ["push --force-with-lease=main", MESSAGES.pushForce],
     ["push --force-if-includes", MESSAGES.pushForce], ["push --mirror", MESSAGES.pushForce], ["push --delete origin topic", MESSAGES.pushForce],
     ["push -d origin topic", MESSAGES.pushForce], ["push --prune origin", MESSAGES.pushForce], ["push origin +main", MESSAGES.pushForce],
-    ["push origin :topic", MESSAGES.pushForce], ["push origin :", MESSAGES.pushTarget], ["push -uf origin main", MESSAGES.pushForce],
-    ["push --all", MESSAGES.pushTarget], ["push --branches", MESSAGES.pushTarget], ["push origin topic", MESSAGES.pushTarget],
-    ["push origin HEAD:topic", MESSAGES.pushTarget], ["push origin main:topic", MESSAGES.pushTarget],
-    ["push origin 'refs/heads/*:refs/heads/*'", MESSAGES.pushTarget],
+    ["push origin :topic", MESSAGES.pushForce], ["push origin :", MESSAGES.pushForce], ["push -uf origin main", MESSAGES.pushForce],
+    ["push --all --force", MESSAGES.pushForce],
     ["commit --amend -m note", MESSAGES.amend], ["commit --amend --no-edit", MESSAGES.amend],
     ["worktree prune", MESSAGES.prune], ["worktree add -B main ../wt3", MESSAGES.branch],
     ["bisect start", MESSAGES.leave], ["bisect reset", MESSAGES.leave],
@@ -155,9 +156,9 @@ test("A3b: pull, rebase and amend depend on the state branch and on what is alre
   assert.equal((await at("commit --amend -m local")).deny, false)
   f.git(f.shared, "reset", "-q", "--hard", "origin/main")
   assert.equal((await at("commit --amend -m pushed")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.amend}`)
-  // Off the state branch, pull and rebase are denied, but returning to the state branch is not.
+  // Off the state branch, a merge-mode pull passes, a rebase with no upstream of its own is denied, and returning to the state branch passes.
   f.git(f.shared, "switch", "-q", "topic")
-  for (const [args, reason] of [["pull", MESSAGES.pullBranch], ["pull --rebase", MESSAGES.pullBranch], ["rebase", MESSAGES.rebaseBranch], ["checkout topic", null], ["switch main", null], ["checkout main", null], ["push origin topic", null], ["branch -f topic HEAD", MESSAGES.branch]]) {
+  for (const [args, reason] of [["pull", null], ["pull --no-rebase origin main", null], ["pull --rebase", MESSAGES.noUpstream], ["rebase", MESSAGES.noUpstream], ["checkout topic", null], ["switch main", null], ["checkout main", null], ["push origin topic", null], ["branch -f topic HEAD", MESSAGES.branch]]) {
     const result = await at(args)
     assert.equal(result.reason, reason === null ? undefined : `Desk protected checkout ${f.shared}: ${reason}`, args)
   }
@@ -165,13 +166,15 @@ test("A3b: pull, rebase and amend depend on the state branch and on what is alre
   await protectCheckout({ root: f.shared })
   assert.equal(spawnSync("git", ["-C", f.shared, "config", "--includes", "--get", "desk.stateBranch"], { env: f.env }).status, 1)
   // topic has no upstream, so there is nothing of its own to pull or rebase onto.
-  assert.equal((await at("pull")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.pull}`)
-  assert.equal((await at("rebase")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.rebase}`)
-  assert.equal((await at("rebase origin/main")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.rebase}`, "topic has no upstream")
-  assert.equal((await at("pull origin topic")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.pull}`, "topic has no upstream")
+  assert.equal((await at("pull")).deny, false, "a merge-mode pull moves no HEAD")
+  assert.equal((await at("pull --rebase")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.noUpstream}`)
+  assert.equal((await at("rebase")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.noUpstream}`)
+  assert.equal((await at("rebase origin/main")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.noUpstream}`, "topic has no upstream")
+  assert.equal((await at("pull --rebase origin topic")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.noUpstream}`, "topic has no upstream")
+  assert.equal((await at("pull origin topic")).deny, false, "a merge-mode pull of any branch moves no HEAD")
   // A detached protected checkout pulls, rebases and pushes nothing by name.
   f.git(f.shared, "switch", "-q", "--detach", "HEAD")
-  for (const [args, reason] of [["pull", MESSAGES.pullBranch], ["rebase", MESSAGES.rebaseBranch], ["push origin HEAD:main", MESSAGES.pushTarget], ["push origin HEAD", null], ["checkout HEAD", MESSAGES.leave]]) {
+  for (const [args, reason] of [["pull --rebase", MESSAGES.noUpstream], ["rebase", MESSAGES.noUpstream], ["push origin HEAD:main", null], ["push origin HEAD", null], ["push --force origin HEAD:main", MESSAGES.pushForce], ["checkout HEAD", MESSAGES.leave]]) {
     const result = await at(args)
     assert.equal(result.reason, reason === null ? undefined : `Desk protected checkout ${f.shared}: ${reason}`, args)
   }
@@ -236,12 +239,15 @@ test("A3b: commands with no path to Git pass even when a value is unknown", asyn
     "pushd; ls", "! grep -q x file.txt && echo absent", "git frobnicate", "git -c alias.stage=stash stage", "echo 'unterminated", "(echo", "case x in x) echo;",
     'source ~/.nvm/nvm.sh && nvm use 22', '. venv/bin/activate', 'bash -c "echo ok"', "eval 'echo ok'",
     "for f in a b c d e f g h i j k l m n o; do [ -x $f ] && $f --version; git status | grep x; done",
+    // Safe in any checkout, so an unknown target does not matter (2026-09-27).
+    'cd "$(pick)"; git push origin HEAD', 'cd "$(pick)" && git add -A && git commit -qm x && git pull --rebase && git push',
+    'cd "$(pick)" && git pull --ff-only', 'cd "$(pick)" && git merge --ff-only origin/main', 'cd "$(pick)" && git rebase',
   ]
   for (const command of allow) {
     const result = await f.guard(command, { cwd: f.shared, env })
     assert.equal(result.deny, false, `${command} -> ${result.reason}`)
   }
-  const unresolved = /^Desk could not resolve .+, and it could run Git in a protected checkout\. Resolve the value in a separate command first, or work in your own worktree: git worktree add --detach "\$\(mktemp -d\)" <ref>$/u
+  const unresolved = /^Desk could not resolve .+, and it could run Git in a protected checkout\. Resolve the value in a separate command first\.$/u
   const deny = [
     ['cd "$(pick)" && git checkout main', /which checkout/u], ['cd "$(pick)"; git stash', /which checkout/u],
     ['git -C "$(pick)" reset --hard', /which checkout/u], ['GIT_DIR="$(pick)" git reset --hard', /could not inspect a Git command.*unresolved Git location/u],
@@ -257,7 +263,7 @@ test("A3b: commands with no path to Git pass even when a value is unknown", asyn
     [`TMPDIR=${q(f.shared)}; wt=$(mktemp -d); cd "$wt" && git stash`, /^Desk protected checkout /u],
     [`wt=$(mktemp -d ${q(f.shared)}/x.XXXX); cd "$wt" && git stash`, /^Desk protected checkout /u],
     ["git status 'unterminated", /could not inspect this shell command \(unterminated shell quote\)/u],
-    ['cd "$(date; hostname)" && git stash', /which checkout/u], ['cd "$(pick)"; git push origin HEAD', /which checkout/u], ['cd "$(mktemp -d -p /definitely-missing)" && git stash', /which checkout/u],
+    ['cd "$(date; hostname)" && git stash', /which checkout/u], ['cd "$(mktemp -d -p /definitely-missing)" && git stash', /which checkout/u],
     ["git co topic", /^Desk protected checkout .+: this would move HEAD off/u], ['$(cd x; command -v git) status', /the program/u],
   ]
   for (const [command, reason] of deny) {
@@ -318,7 +324,8 @@ test("A3b: the Git-reach rule, option parser and mktemp model", () => {
   assert.equal(parse("branch", ["--contains", "-f"]).set.get("contains").value, true)
   assert.equal(classifyGit("status", []), null)
   assert.equal(classifyGit("merge", ["-h"]), null)
-  assert.notEqual(classifyGit("merge", ["--", "-h"]), null)
+  assert.equal(classifyGit("merge", ["--", "-h"]), null, "a merge moves no HEAD off its branch")
+  assert.notEqual(classifyGit("merge", ["--autostash", "topic"]), null)
   assert.equal(classifyGit("worktree", ["remove", "--force"]), null, "no worktree named")
   assert.equal(classifyGit("worktree", ["repair"]), null)
   const cwd = realpathSync(tmpdir())

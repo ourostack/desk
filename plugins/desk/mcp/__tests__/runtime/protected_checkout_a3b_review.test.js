@@ -86,16 +86,18 @@ function rows(f) {
     ["a3-multiline-case-unprotected", "bash", "own", "allow", "case x in\n  x) echo harmless;;\nesac"],
     ["a3-git-dir-flag", "bash", "own", "deny", `git --git-dir=${q(P + "/.git")} --work-tree=${q(P)} checkout -q --detach HEAD`],
     // The loosened rules.
-    ["new-push-head-other", "bash", "prot", "deny", "git push -q origin HEAD:other"],
+    ["new-push-head-other", "bash", "prot", "allow", "git push -q origin HEAD:other"],
     ["new-push-force-with-lease", "bash", "prot", "deny", "git push -q --force-with-lease"],
     ["new-push-plus-refspec", "bash", "prot", "deny", "git push -q origin +main"],
-    ["new-push-u-other", "bash", "prot", "deny", "git push -q -u origin other"],
+    ["new-push-u-other", "bash", "prot", "allow", "git push -q -u origin other"],
     ["new-push-other-into-main", "bash", "prot", "allow", "git push -q origin topic:main"],
-    ["new-pull-other-branch", "bash", "prot", "deny", "git pull -q origin other"],
+    ["new-pull-other-branch", "bash", "prot", "allow", "git pull -q origin other"],
+    ["new-pull-rebase-other-branch", "bash", "prot", "deny", "git pull -q --rebase origin other"],
     ["new-pull-rebase-merges-foreign", "bash", "prot", "deny", "git pull -q --rebase=merges origin other"],
-    ["new-pull-url-no-refspec", "bash", "prot", "deny", `git pull -q --no-rebase --no-edit ${q(f.foreign)}`],
-    ["new-pull-dot", "bash", "prot", "deny", "git pull -q . topic"],
-    ["new-merge-no-ff-only", "bash", "prot", "deny", "git merge -q --no-edit origin/other"],
+    ["new-pull-url-no-refspec", "bash", "prot", "allow", `git pull -q --no-rebase --no-edit ${q(f.foreign)}`],
+    ["new-pull-rebase-url", "bash", "prot", "deny", `git pull -q --rebase ${q(f.foreign)} main`],
+    ["new-pull-dot", "bash", "prot", "allow", "git pull -q . topic"],
+    ["new-merge-no-ff-only", "bash", "prot", "allow", "git merge -q --no-edit origin/other"],
     ["new-merge-ff-only-foreign", "bash", "prot", "allow", "git merge -q --ff-only origin/other"],
     ["new-rebase-i-upstream", "bash", "prot", "allow", "git rebase -i"],
     ["new-rebase-i-HEAD~1", "bash", "prot", "deny", "git rebase -i HEAD~1"],
@@ -161,12 +163,12 @@ function rows(f) {
     ["cfg-config-write-desk", "bash", "prot", "deny", "git config desk.protected false"],
     ["cfg-config-remove-section", "bash", "prot", "deny", "git config --remove-section remote.origin"],
     ["idx-reset-unstage-all", "bash", "prot", "deny", "git reset -q"],
-    ["idx-restore-staged", "bash", "prot", "deny", "git restore --staged file.txt"],
+    ["idx-restore-staged", "bash", "prot", "allow", "git restore --staged file.txt"],
     // PowerShell.
-    ["ps-push-head-other", "pwsh", "own", "deny", `Set-Location ${psq(P)}; git push -q origin HEAD:other`],
+    ["ps-push-head-other", "pwsh", "own", "allow", `Set-Location ${psq(P)}; git push -q origin HEAD:other`],
     ["ps-push-fwl", "pwsh", "own", "deny", `git -C ${psq(P)} push -q --force-with-lease`],
     ["ps-pull-other", "pwsh", "own", "deny", `& git -C ${psq(P)} pull -q origin other`],
-    ["ps-merge", "pwsh", "prot", "deny", "git merge -q --no-edit origin/other"],
+    ["ps-merge", "pwsh", "prot", "allow", "git merge -q --no-edit origin/other"],
     ["ps-alias", "pwsh", "prot", "deny", "git -c alias.co='checkout -q --detach HEAD' co"],
     ["ps-alias-upper", "pwsh", "prot", "deny", "git -c alias.CO='checkout -q --detach HEAD' co"],
     ["ps-subexpr-write-output", "pwsh", "own", "deny", `Write-Output "$(git -C ${psq(P)} checkout -q --detach HEAD)"`],
@@ -216,18 +218,27 @@ test("A3b review: the denial reasons name what the new rules protect", async (t)
   const f = await fixture(t)
   const reason = async (command, extra) => (await f.guard(command, extra)).reason
   assert.equal(await reason("git -c remote.origin.mirror=true push -q origin"), `Desk protected checkout ${f.prot}: ${MESSAGES.override("remote.origin.mirror", "push")}`)
-  assert.equal(await reason(`git pull -q ${q(f.foreign)}`), `Desk protected checkout ${f.prot}: ${MESSAGES.pull}`)
+  assert.equal(await reason(`git pull -q --rebase ${q(f.foreign)}`), `Desk protected checkout ${f.prot}: ${MESSAGES.pull}`)
   assert.equal(await reason("git config remote.origin.mirror true"), `Desk protected checkout ${f.prot}: ${MESSAGES.config("remote.origin.mirror")}`)
   assert.equal(await reason("git branch -u origin/other"), `Desk protected checkout ${f.prot}: ${MESSAGES.upstream}`)
   assert.equal(await reason("git fetch origin other:main"), `Desk protected checkout ${f.prot}: ${MESSAGES.fetch}`)
   assert.equal(await reason("git reset"), `Desk protected checkout ${f.prot}: ${MESSAGES.unstage}`)
   assert.equal(await reason("$s = git stash", { powershell: true }), `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`)
-  // Saved configuration that turns a plain push into a mirror, forced or other-branch push.
-  for (const [key, value, message] of [["remote.origin.mirror", "true", MESSAGES.pushForce], ["remote.origin.push", "+refs/heads/main:refs/heads/main", MESSAGES.pushForce], ["remote.origin.push", "refs/heads/main:refs/heads/other", MESSAGES.pushTarget], ["push.default", "matching", MESSAGES.pushTarget]]) {
+  // Saved configuration that turns a plain push into a mirror or forced push; non-force pushes of other refs pass.
+  for (const [key, value, message] of [["remote.origin.mirror", "true", MESSAGES.pushForce], ["remote.origin.push", "+refs/heads/main:refs/heads/main", MESSAGES.pushForce], ["remote.origin.push", "refs/heads/main:refs/heads/other"], ["push.default", "matching"]]) {
     f.git(f.prot, "config", key, value)
-    assert.equal(await reason("git push -q"), `Desk protected checkout ${f.prot}: ${message}`, key)
+    assert.equal(await reason("git push -q"), message && `Desk protected checkout ${f.prot}: ${message}`, key)
     f.git(f.prot, "config", "--unset-all", key)
   }
+  // A saved pull.rebase makes a pull of another branch a rebase onto it; --no-rebase merges.
+  f.git(f.prot, "config", "pull.rebase", "true")
+  assert.equal(await reason("git pull -q origin other"), `Desk protected checkout ${f.prot}: ${MESSAGES.pull}`)
+  assert.equal(await reason("git pull -q --no-rebase origin other"), undefined)
+  assert.equal(await reason("git pull -q --rebase=false origin other"), undefined)
+  f.git(f.prot, "config", "branch.main.rebase", "false")
+  assert.equal(await reason("git pull -q origin other"), undefined, "the branch's own setting wins")
+  f.git(f.prot, "config", "--unset", "branch.main.rebase")
+  f.git(f.prot, "config", "--unset", "pull.rebase")
   f.git(f.prot, "config", "remote.origin.push", "refs/heads/main:refs/heads/main")
   assert.equal(await reason("git push -q"), undefined, "a configured push of the state branch itself")
 })
@@ -240,7 +251,7 @@ test("A3b review: reproduced bypasses are denied, and would have changed the pro
     ["ps-assign-git-stash", "pwsh", "prot", () => "$s = git stash", "stash", (f) => writeFileSync(path.join(f.prot, "file.txt"), "another session's edit\n")],
     ["ps-unknown-prog", "pwsh", "own", (f) => `$g = -join ('g','i','t'); & $g -C ${psq(f.prot)} checkout -q --detach HEAD`, "branch"],
     ["new-unknown-prog-printf", "bash", "own", (f) => `$(printf 'g%s' it) -C ${q(f.prot)} checkout -q --detach HEAD`, "branch"],
-    ["new-pull-url-no-refspec", "bash", "prot", (f) => `git pull -q --no-rebase --no-edit ${q(f.foreign)}`, "head"],
+    ["new-pull-rebase-url", "bash", "prot", (f) => `git pull -q --rebase ${q(f.foreign)} main`, "head"],
     ["cfg-mirror-push", "bash", "prot", () => "git -c remote.origin.mirror=true push -q origin", "remote"],
     ["cfg-set-upstream-then-pull", "bash", "prot", () => "git branch -q -u origin/other && git pull -q --no-rebase --no-edit", "head"],
     ["cfg-fetch-update-head-ok", "bash", "prot", () => 'git fetch -q --update-head-ok . "+$(git rev-parse HEAD~1):refs/heads/main"', "head"],
@@ -468,19 +479,20 @@ test("A3b re-review: ordinary chained work the guard can resolve soundly passes"
     const result = await f.guard(command)
     assert.equal(result.deny, false, `${command}: ${result.reason}`)
   }
-  const deny = [
-    `git -C ${q(f.own)} tag v2 && git push -q origin v2`, "git tag -d v2 && git push -q origin v2", "git tag -l v2 && git push -q origin v2",
-    "git tag --contains HEAD && git push -q origin HEAD", 'cd "$(git rev-parse --show-toplevel)" && git stash',
+  // Non-force pushes of any name pass (2026-09-27 ruling), and so does a pull whose checkout Desk cannot resolve.
+  for (const command of [
+    `git -C ${q(f.own)} tag v2 && git push -q origin v2`, "git tag -d v2 && git push -q origin v2", "git tag --contains HEAD && git push -q origin HEAD",
     'GIT_DIR=x; cd "$(git rev-parse --show-toplevel)" && git pull', 'cd /; cd "$(git rev-parse --show-toplevel)" && git pull',
-    'cd "$(pick)"; cd "$(git rev-parse --show-toplevel)" && git pull',
-  ]
-  // `git tag --contains` lists tags; `git push origin HEAD` stays allowed, so only the other rows deny.
-  for (const command of deny) assert.equal((await f.guard(command)).deny, !command.includes("--contains"), command)
+  ]) assert.equal((await f.guard(command)).deny, false, command)
+  for (const command of [
+    'cd "$(git rev-parse --show-toplevel)" && git stash', 'GIT_DIR=x; cd "$(git rev-parse --show-toplevel)" && git stash',
+    'cd /; cd "$(git rev-parse --show-toplevel)" && git stash', 'cd "$(pick)"; cd "$(git rev-parse --show-toplevel)" && git stash',
+  ]) assert.equal((await f.guard(command)).deny, true, command)
   assert.equal((await f.guard('cd "$(git rev-parse --show-toplevel)" && git pull', { cwd: f.own })).deny, false)
   // The top level is the nearest ancestor with a .git entry; outside any checkout it is unknown.
   mkdirSync(path.join(f.prot, "sub"))
   assert.equal((await f.guard('cd "$(git rev-parse --show-toplevel)" && git stash', { cwd: path.join(f.prot, "sub") })).deny, true)
-  assert.match((await f.guard(`cd ${q(f.root)} && cd "$(git rev-parse --show-toplevel)" && git pull`)).reason, /could not resolve which checkout/u)
+  assert.match((await f.guard(`cd ${q(f.root)} && cd "$(git rev-parse --show-toplevel)" && git stash`)).reason, /could not resolve which checkout/u)
   assert.equal((await f.guard(`cd ${q(f.own)} && cd "$(git rev-parse --show-toplevel)" && git stash`)).deny, false, "the toplevel of the ordinary clone")
   // The real sequence succeeds.
   const real = spawnSync("bash", ["--noprofile", "--norc", "-c", "git tag v2 && git push -q origin v2"], { cwd: f.prot, env: f.env, encoding: "utf8" })
@@ -561,13 +573,13 @@ test("A3b re-review 2: every PowerShell group is its own command sequence and st
 
 // Round 4 (S6): a tag counts whenever an earlier `git tag` names it and no local branch has its name; if that `git tag` is
 // skipped or fails, Git cannot push a name nothing resolves.
-test("A3b re-review 2: tags count unless a local branch has their name, and here-documents piped into shells are scripts", async (t) => {
+test("A3b re-review 2: non-force pushes of any name pass, and here-documents piped into shells are scripts", async (t) => {
   const f = await fixture(t)
   for (const command of [
-    'test -n "$NOPE" && git tag topic; git push -q origin topic', "git tag topic no-such-rev; git push -q origin topic",
     "cat <<'EOF' | bash\ngit stash\nEOF", "bash -s -- x <<'EOF'\ngit stash\nEOF", "cat <<< 'git stash' | sh",
   ]) assert.equal((await f.guard(command)).deny, true, command)
   for (const command of [
+    'test -n "$NOPE" && git tag topic; git push -q origin topic', "git tag topic no-such-rev; git push -q origin topic",
     "git tag v2 && git push -q origin v2", "git add -A && git tag v3; git push -q origin v3", "bash -c 'git tag v4'; git push -q origin v4",
     "if true; then git tag v5; fi; git push -q origin v5", "false || git tag v6; git push -q origin v6", "[ -f x ]; git tag v7; git push -q origin v7",
     '[ -z "$(git status --porcelain)" ] && git tag v8 && git push -q origin v8', "if git tag v9; then git push -q origin v9; fi",
@@ -585,9 +597,12 @@ test("A3b re-review 2: tags count unless a local branch has their name, and here
   writeFileSync(path.join(wt, ".git"), "not a gitdir line\n")
   assert.equal((await f.guard('git push -q origin "$(git branch --show-current)"', { cwd: wt })).deny, true, "an unreadable .git file leaves the branch unknown")
   assert.equal((await f.guard('cd / && git push -q origin "$(git branch --show-current)"')).deny, false, "outside any checkout nothing is protected")
+  // Detached, the current branch is empty and Git rejects the empty refspec itself.
   f.git(f.prot, "switch", "-q", "--detach", "HEAD")
-  assert.match((await f.guard('git push -q origin "$(git branch --show-current)"')).reason, /pushes only its own branch/u)
+  assert.equal((await f.guard('git push -q origin "$(git branch --show-current)"')).deny, false)
   assert.equal((await f.guard('git push -q origin "$(git rev-parse --abbrev-ref HEAD)"')).deny, false, "pushing HEAD while detached fails in Git itself")
-  const real = spawnSync("bash", ["--noprofile", "--norc", "-c", "git tag topic no-such-rev; git push -q origin topic"], { cwd: f.prot, env: f.env, encoding: "utf8" })
-  assert.equal(real.status, 0, "without the guard, the failed tag leaves the branch push")
+  // A refspec whose start is unknown could force or delete.
+  assert.match((await f.guard('git push -q origin "$(pick)"')).reason, /could not resolve a push refspec/u)
+  assert.match((await f.guard('cd "$(pick)" && git push -q origin "$(pick)"')).reason, /could not resolve which checkout/u)
+  assert.equal((await f.guard('git push -q origin "HEAD:$(pick)"')).deny, false)
 })

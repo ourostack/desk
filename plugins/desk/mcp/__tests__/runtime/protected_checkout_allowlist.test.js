@@ -6,13 +6,13 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync, spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { guardShellCommand, protectCheckout } from "../../src/runtime/protected-checkout.js"
 import { MESSAGES } from "../../src/runtime/git-guard-policy.js"
-import { inspectionBudget, INSPECTION_STEPS, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT } from "../../src/runtime/guard-unknowns.js"
+import { inspectionBudget, INSPECTION_STEPS, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, WORKTREE_COMMAND } from "../../src/runtime/guard-unknowns.js"
 import { inspectPowerShell, POWERSHELL_GIT_FORMS } from "../../src/runtime/powershell-commands.js"
 import { inspectShell, shellScript } from "../../src/runtime/shell-commands.js"
 
@@ -92,8 +92,10 @@ test("round 4: PowerShell Git runs only as git <args>, $name = git <args> or git
     "git -C (Get-Location) status", "git -C $pwd.Path status", "git status $x[0]", "git show HEAD@{1}", "git log `$(x)",
   ]
   for (const command of forms) assert.equal((await f.guard(command)).reason, POWERSHELL_GIT_FORMS, command)
-  // The allowlist is decided before any Git read, in every checkout, so an unprotected one gets the same answer.
-  assert.equal((await f.guard("(git status)", { cwd: f.own })).reason, POWERSHELL_GIT_FORMS)
+  // Narrowed 2026-09-27: an unprotected checkout never gets the allowlist denial, unless the text could reach another checkout.
+  assert.equal((await f.guard("(git status)", { cwd: f.own })).deny, false)
+  assert.equal((await f.guard(`(git -C ${psq(f.prot)} status)`, { cwd: f.own })).reason, POWERSHELL_GIT_FORMS)
+  assert.equal((await f.guard("(git --git-dir x status)", { cwd: f.own })).reason, POWERSHELL_GIT_FORMS)
   assert.equal(namesGit("Write-Output 'g`it'"), true)
   assert.equal(namesGit("Get-Content .git/config; cd github"), false)
 })
@@ -272,27 +274,21 @@ test("round 4 S3: a script piped or redirected into a shell fails closed unless 
   assert.notEqual(f.git(f.prot, "stash", "list"), "", "the unreadable here-document reached the shell")
 })
 
-test("round 4 S6: a tag counts after any earlier git tag unless a local branch has its name", async (t) => {
+test("round 4 S6, narrowed on 2026-09-27: a non-force push of any name passes; forcing or deleting does not", async (t) => {
   const f = await fixture(t)
   for (const command of [
     '[ -z "$(git status --porcelain)" ] && git tag v2 && git push -q origin v2', "if git tag v3; then git push -q origin v3; fi",
-    'if [ -n "$NOPE" ]; then git tag v4; fi; git push -q origin v4',
+    'if [ -n "$NOPE" ]; then git tag v4; fi; git push -q origin v4', 'test -n "$NOPE" && git tag topic; git push -q origin topic',
+    "git push -q origin topic", "git push -q origin HEAD:other", "git push -q --all", "git push -q origin refs/heads/topic:refs/heads/topic",
   ]) {
     const result = await f.guard(command, { powershell: false })
     assert.equal(result.deny, false, `${command}: ${result.reason}`)
   }
-  for (const command of ["if ($env:NOPE) { git tag v5 }; git push -q origin v5", "git tag v6; git push -q origin v6"]) {
-    const result = await f.guard(command)
-    assert.equal(result.deny, !command.startsWith("git tag"), `${command}: ${result.reason}`)
+  for (const command of ["git push -q origin +topic", "git push -q origin :topic", "git push -q origin :", "git push -q --force origin topic"]) {
+    assert.equal((await f.guard(command, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.pushForce}`, command)
   }
-  for (const command of ['test -n "$NOPE" && git tag topic; git push -q origin topic', "git tag topic no-such-rev; git push -q origin topic"]) {
-    assert.equal((await f.guard(command, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.pushTarget}`, command)
-  }
-  // When the guarded `git tag` is skipped, Git cannot push a name nothing resolves, so nothing leaves the checkout.
-  const before = f.git(f.origin, "for-each-ref")
-  const skipped = real(f, "bash", 'if [ -n "$NOPE" ]; then git tag v4; fi; git push -q origin v4', f.prot)
-  assert.notEqual(skipped.status, 0)
-  assert.equal(f.git(f.origin, "for-each-ref"), before)
+  assert.equal((await f.guard("git tag v6; git push -q origin v6")).deny, false)
+  assert.equal((await f.guard("if ($env:NOPE) { git tag v5 }; git push -q origin v5")).reason, POWERSHELL_GIT_FORMS)
 })
 
 test("round 4: unknown Git configuration from the environment fails closed for checked operations", async (t) => {
@@ -300,4 +296,104 @@ test("round 4: unknown Git configuration from the environment fails closed for c
   assert.match((await f.guard('GIT_CONFIG_PARAMETERS="$(cat x)" git push -q origin main', { powershell: false })).reason, /could not resolve the Git configuration this command inherits/u)
   assert.equal((await f.guard('GIT_CONFIG_PARAMETERS="$(cat x)" git status', { powershell: false })).deny, false)
   assert.match((await f.guard(`Set-Item env:GIT_CONFIG_PARAMETERS "'remote.origin.mirror'"; git push -q origin main`)).reason, /unresolved Git location/u)
+})
+
+// Coordinator ruling (2026-09-27): on a desk checkout's state branch, the desk's ordinary writes pass, and only denials
+// of a real HEAD move, a rewrite of the shared branch or discarded work send an agent to a worktree.
+test("round 4: ordinary desk writes pass on the state branch, and only HEAD moves or discards name a worktree", async (t) => {
+  const f = await fixture(t)
+  writeFileSync(path.join(f.prot, "note.md"), "note\n")
+  const writes = [
+    "git status", "git add -A", "git add note.md", "git commit -q -m note", "git commit -q -m note -- note.md", "git fetch -q origin",
+    "git pull -q --rebase origin main", "git pull -q --rebase", "git pull -q", "git pull -q --ff-only", "git pull -q origin main",
+    "git rebase", "git rebase origin/main", "git rebase @{upstream}", "git rebase --continue", "git rebase --abort", "git merge --ff-only origin/main",
+    "git merge --abort", "git push -q", "git push -q origin main", "git push -q origin HEAD:main", "git push -q -u origin main", "git push -q origin HEAD",
+    "git rm -q --cached note.md", "git mv note.md note2.md", "git restore note.md", "git switch main", "git checkout main",
+    "git tag v9", "git tag v9 && git push -q origin v9", "git branch -u origin/main", "git worktree add -q --detach ../wt HEAD",
+  ]
+  for (const command of writes) {
+    for (const powershell of [false, true]) {
+      // PowerShell reads an unquoted @{ } as a hashtable, so the upstream shorthand is quoted there.
+      const result = await f.guard(powershell ? command.replace("@{upstream}", "'@{upstream}'") : command, { powershell })
+      assert.equal(result.deny, false, `${powershell ? "PowerShell" : "Bash"} ${command}: ${result.reason}`)
+    }
+  }
+  assert.equal((await f.guard(writes.join("; ").replace("@{upstream}", "'@{upstream}'"), { powershell: true })).deny, false)
+  assert.equal((await f.guard(writes.join(" && "), { powershell: false })).deny, false)
+
+  // Bash braces are reserved words only as whole words; a brace expansion makes words Desk does not compute.
+  for (const [command, deny] of [
+    ["git log -1 HEAD@{1}", false], ["git rebase main@{u}", false], ["{ git status; }", false], ["{ git status;}", false], ["echo a} b{", false],
+    ["{ git checkout topic; }", true], ["git checkout {topic,main}", true], ["git checkout top{ic}", false], ["echo {1..3}", false],
+  ]) assert.equal((await f.guard(command, { powershell: false })).deny, deny, command)
+  assert.match((await f.guard("git checkout {topic,main}", { powershell: false })).reason, /unresolved brace expansion/u)
+
+  // Every policy message, with a sample argument where it takes one: only these name the worktree command.
+  const texts = Object.fromEntries(Object.entries(MESSAGES).map(([key, text]) => [key, typeof text === "function" ? text("remote.origin.url", "push") : text]))
+  const worktree = ["leave", "discard", "rewind", "restore", "branch", "rebase", "pull"]
+  assert.deepEqual(Object.keys(texts).filter((key) => texts[key].includes(WORKTREE_COMMAND)).sort(), [...worktree].sort())
+  for (const key of Object.keys(texts).filter((name) => !worktree.includes(name))) assert.doesNotMatch(texts[key], /worktree add/u, key)
+  // Fail-closed denials can meet an ordinary write phrased in an unusual way, so none of them names a worktree.
+  const budget = inspectionBudget({ steps: 0 })
+  await assert.rejects(budget.step(), (error) => !/worktree/u.test(error.reason))
+  const late = inspectionBudget({ deadline: 0, now: () => 1, budgetMs: 7000 })
+  await assert.rejects(late.step(), (error) => !/worktree/u.test(error.reason))
+  assert.doesNotMatch(POWERSHELL_GIT_FORMS, /worktree/u)
+  assert.doesNotMatch(readFileSync(hook, "utf8").match(/permissionDecisionReason: "([^"]*)/u)[1], /worktree/u)
+  for (const [command, powershell] of [
+    ["git push origin (git branch --show-current)", true], ["$w = Get-Random; git commit -q $w", true], ["git status; &", true],
+    ['git -C "$(pick)" stash', false], ["eval \"$(cat x)\"", false], ["git status (", true],
+  ]) {
+    const { deny, reason } = await f.guard(command, { powershell })
+    assert.equal(deny, true, command)
+    assert.doesNotMatch(reason, /worktree/u, `${command}: ${reason}`)
+  }
+  // An ordinary desk write aimed at a computed checkout is safe in any checkout, so it passes (2026-09-27).
+  assert.equal((await f.guard('git -C "$(pick)" push -q origin main', { powershell: false })).deny, false)
+  // Real HEAD moves and discards still name it.
+  for (const command of ["git checkout topic", "git reset --hard", "git switch -c other", "git rebase --onto topic main"]) {
+    assert.ok((await f.guard(command, { powershell: false })).reason.endsWith(WORKTREE_COMMAND), command)
+  }
+
+  // Without an upstream of <remote>/<state branch>, pull and rebase ask for one instead of a worktree.
+  f.git(f.prot, "branch", "--unset-upstream")
+  for (const command of ["git pull -q --rebase origin main", "git rebase origin/main"]) {
+    assert.equal((await f.guard(command, { powershell: false })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.noUpstream}`, command)
+  }
+  // The suggested git branch -u passes (it is among the writes above); once it has run, the pull passes.
+  f.git(f.prot, "branch", "-u", "origin/main")
+  assert.equal((await f.guard("git pull -q --rebase origin main", { powershell: false })).deny, false)
+
+  // The worktree command runs as written in both shells, passes both guards and leaves the checkout on its branch.
+  for (const [shell, name] of [["bash", "wt-bash"], ["pwsh", "wt-pwsh"]]) {
+    const command = WORKTREE_COMMAND.replace("<new directory>", name).replace("<ref>", "HEAD")
+    assert.equal((await f.guard(command, { powershell: shell === "pwsh" })).deny, false, command)
+    if (shell === "pwsh" && !pwsh) continue
+    const run = real(f, shell, command, f.prot)
+    assert.equal(run.status, 0, run.stderr)
+    assert.ok(existsSync(path.join(f.env.HOME, name, "file.txt")))
+  }
+  assert.equal(f.git(f.prot, "symbolic-ref", "--short", "HEAD"), "main")
+})
+
+test("round 4, 2026-09-27: the PowerShell allowlist never fires where the statement can only reach an unprotected checkout", async (t) => {
+  const f = await fixture(t)
+  const own = (command, extra = {}) => f.guard(command, { cwd: f.own, ...extra })
+  // Every assignment form in an unmodeled statement leaves its variable unknown, and later Git use of it is judged as such.
+  for (const command of ["${a} = (git status); git status", "$b += (git status); git status", "[void](++$c + (git log -1))", "[void](++${d} + (git log -1))"]) {
+    assert.equal((await own(command)).deny, false, command)
+  }
+  assert.equal((await own("$b = (git branch --show-current); git -C $b stash")).deny, true, "the unmodeled assignment leaves $b unknown")
+  // Anything that could move where Git runs keeps the allowlist denial, even from an unprotected checkout.
+  for (const command of [`(git -C ${psq(f.prot)} status)`, "(git --git-dir x status)", `(git worktree list)`, `Set-Location ${psq(f.prot)}; (git status)`, "$env:GIT_DIR = 'x'; (git status)"]) {
+    assert.equal((await own(command)).reason, POWERSHELL_GIT_FORMS, command)
+  }
+  assert.equal((await own("(git status)", { env: { ...f.env, GIT_WORK_TREE: f.prot } })).reason, POWERSHELL_GIT_FORMS)
+  // A checkout whose protection cannot be read is treated as protected.
+  const broken = path.join(f.root, "broken")
+  execFileSync("git", ["init", "-q", broken], { env: f.env })
+  writeFileSync(path.join(broken, ".git", "config"), "[core\n\tbroken = \n")
+  assert.equal((await f.guard("(git status)", { cwd: broken })).deny, true)
+  // A caller that does not answer the question gets the allowlist denial.
+  await assert.rejects(inspectPowerShell({ command: "(git status)", cwd: f.own, env: f.env, visit() {} }), (error) => error.reason === POWERSHELL_GIT_FORMS)
 })

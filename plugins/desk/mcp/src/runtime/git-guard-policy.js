@@ -1,8 +1,8 @@
-// What Git may do in a protected checkout (Desk 3.2 ruling for task A3b). The guard keeps a
-// shared checkout's HEAD on its state branch and keeps other sessions' work in place, and
-// otherwise leaves the desk's normal write protocol alone: status, log, diff, fetch, add,
-// rm, mv, commit, push of the current branch, pull and upstream rebase on the state branch,
-// merge --ff-only and worktree add all pass. `classifyGit` needs no Git reads; it returns
+// What Git may do in a protected checkout (Desk 3.2 ruling for task A3b, narrowed on 2026-09-27).
+// The guard denies only what moves a protected checkout's HEAD off its state branch, rewrites
+// pushed history, or discards work; everything else passes: status, log, diff, fetch, add, rm,
+// mv, commit, path-limited unstaging, non-force pushes, merges, pulls and rebases onto the
+// branch's own upstream, and worktree add. `classifyGit` needs no Git reads; it returns
 // null (allowed anywhere), or a check that reads the target checkout through `ctx`.
 // Rules that trust Git's configuration (push, pull, rebase, fetch, merge) are denied when a
 // command-line or environment override changes that configuration, and `git config` or
@@ -19,23 +19,20 @@ export const MESSAGES = {
   clean: "git clean deletes untracked files other sessions may own. Delete only files you created, by name",
   stash: "git stash hides other sessions' work; commit or leave it",
   branch: `this would force-move, rename or delete the checkout's current or state branch. Create a new branch instead, or ${WORKTREE}`,
-  rebaseBranch: `git rebase is allowed here only on the state branch. To rebase another branch, ${WORKTREE}`,
-  rebase: `git rebase here may only replay the state branch onto its own upstream (git rebase, or git rebase @{upstream}). For --onto, --root, --exec, --quit or another base, ${WORKTREE}`,
-  pullBranch: `git pull is allowed here only on the state branch. To pull another branch, ${WORKTREE}`,
-  pull: `git pull here may only merge the state branch's own upstream. To merge another branch, ${WORKTREE}`,
+  rebase: `a rebase onto anything but the branch's own upstream can rewrite pushed commits. Rebase onto the upstream (git rebase, or git pull --rebase), or for --onto, --root, --exec, --quit or another base, ${WORKTREE}`,
+  pull: `git pull --rebase from anything but the branch's own upstream can rewrite pushed commits. Pull the upstream (git pull --rebase), merge the other branch instead (git pull --no-rebase <remote> <branch>), or ${WORKTREE}`,
+  noUpstream: "this rebase has no upstream of the branch's own name (<remote>/<branch>) to replay onto, so it could rewrite pushed commits. If HEAD is detached, switch back first (git switch <state branch>); otherwise set the upstream (git branch -u <remote>/<branch>), or merge instead (git pull --no-rebase)",
   autostash: "--autostash stashes, which hides other sessions' work; commit or leave it",
-  merge: `only git merge --ff-only is allowed here. For other merges, ${WORKTREE}`,
-  pushForce: "force, mirror, delete and prune pushes can discard work on the remote. Fetch, rebase onto the upstream and push without them",
-  pushTarget: `this checkout pushes only its own branch (and tags). To push another branch, ${WORKTREE}`,
+  pushForce: "force, mirror, delete and prune pushes can discard work on the remote. Fetch, rebase onto the upstream (git pull --rebase) and push without them",
   amend: "the commit you would amend is already pushed; make a new commit instead",
   worktreeRemove: "git worktree remove --force would delete a protected checkout and its uncommitted work. Remove only worktrees you created, without --force",
   prune: "git worktree prune can drop other sessions' worktree records; leave them, or run it with --dry-run",
-  unstage: `unstaging changes the shared index, which can hold other sessions' staged work. Commit only your own paths (git commit <paths>), or ${WORKTREE}`,
+  unstage: `unstaging changes the shared index, which can hold other sessions' staged work. Unstage only your own paths (git restore --staged <paths>), or commit only your own paths (git commit <paths>)`,
   fetch: "fetching into the checkout's own branch rewrites it like a reset; fetch into remote-tracking refs (git fetch origin) instead",
-  upstream: `this would point the checkout's branch at a different upstream. Keep <remote>/<state branch>, or ${WORKTREE}`,
-  config: (key) => `this would change ${key}, which decides what push, pull, rebase, aliases or this guard do in the shared checkout. Leave it, or ${WORKTREE}`,
-  override: (key, operation) => `the configuration override ${key} changes what this git ${operation} does. Run it without the override, or ${WORKTREE}`,
-  variable: `Desk cannot tell what a PowerShell variable passes to this Git command, and a variable can hold options such as --force or several arguments. Write the value literally, or ${WORKTREE}`,
+  upstream: "this would point the checkout's branch at an upstream of another name, so a later git pull --rebase could rewrite pushed commits. Keep <remote>/<branch> (git branch -u <remote>/<branch>)",
+  config: (key) => `this would change ${key}, which decides what push, pull, rebase, aliases or this guard do in the shared checkout. Leave it`,
+  override: (key, operation) => `the configuration override ${key} changes what this git ${operation} does. Run it without the override`,
+  variable: `Desk cannot tell what a PowerShell variable passes to this Git command, and a variable can hold options such as --force or several arguments. Write the value literally`,
 }
 
 // Keys whose value changes what the configuration-trusting rules decide, or what the guard reads.
@@ -57,6 +54,8 @@ export function isTrue(value) {
 const ALLOWED_BISECT = new Set(["log", "view", "visualize", "help", "terms"])
 const any = (parsed, names) => names.some((name) => hasOption(parsed, name))
 const fixed = (reason) => async () => reason
+// A check that is safe in any checkout, even a protected one on its state branch: an unknown target does not deny it.
+const anywhere = (check) => Object.assign(check, { anywhere: true })
 const lastOf = (parsed, names) => parsed.sequence.filter((entry) => names.includes(entry.name)).at(-1)
 const beforeDashDash = (parsed) => parsed.dashdash < 0 ? parsed.operands : parsed.operands.slice(0, parsed.dashdash)
 
@@ -69,15 +68,11 @@ function protectedBranch(ctx, name) {
   return ownBranch(ctx, ctx.known(name, "a branch name").replace(/^refs\/heads\//u, ""))
 }
 
-// The state branch's configured upstream, only when it is <remote>/<state branch>.
+// The current branch's configured upstream, only when it is <remote>/<the same name>: replaying onto it rewrites only
+// commits that are not pushed there yet.
 async function ownUpstream(ctx) {
   const own = await ctx.upstream()
-  return own !== null && own.merge === `refs/heads/${await ctx.stateBranch()}` ? own : null
-}
-
-async function onStateBranch(ctx) {
-  const branch = await ctx.branch()
-  return branch !== null && branch === await ctx.stateBranch()
+  return own !== null && own.merge === `refs/heads/${await ctx.branch()}` ? own : null
 }
 
 function checkout(args) {
@@ -110,12 +105,16 @@ function reset(args) {
   const mode = lastOf(parsed, ["mixed", "soft", "hard", "merge", "keep"])?.name
   if (["hard", "merge", "keep"].includes(mode)) return fixed(MESSAGES.discard)
   const refs = beforeDashDash(parsed)
-  // Every mixed reset rewrites the shared index, like the denied `restore --staged`; a soft reset to HEAD changes nothing.
+  // Path-limited unstaging (`git reset [<commit>] -- <paths>`) changes only those index entries and leaves HEAD alone.
+  if (hasOption(parsed, "pathspec-from-file") || parsed.operands.length > refs.length) return null
+  // A whole mixed reset rewrites the shared index, which can hold other sessions' staged work; a soft reset to HEAD changes nothing.
   const unstage = mode !== "soft"
-  if (any(parsed, ["patch", "pathspec-from-file"]) || refs.length !== 1 || parsed.operands.length > 1) return unstage ? fixed(MESSAGES.unstage) : null
+  if (hasOption(parsed, "patch") || !refs.length) return unstage ? fixed(MESSAGES.unstage) : null
   return async (ctx) => {
     const commit = await ctx.commit(refs[0])
-    if (commit && commit !== await ctx.head()) return MESSAGES.rewind
+    // Without --, Git reads the first operand as a commit when it names one, and the rest as paths.
+    if (!commit || refs.length > 1) return null
+    if (commit !== await ctx.head()) return MESSAGES.rewind
     return unstage ? MESSAGES.unstage : null
   }
 }
@@ -132,8 +131,8 @@ function branch(args) {
   if (upstream && !upstream.negated) return async (ctx) => {
     const target = names[0] ?? await ctx.branch()
     if (target === null || !await protectedBranch(ctx, target)) return null
-    // Only <remote>/<state branch> keeps pull and rebase on the state branch's own history.
-    return ctx.known(upstream.value, "an upstream name").endsWith(`/${await ctx.stateBranch()}`) ? null : MESSAGES.upstream
+    // Only <remote>/<the same name> keeps pull and rebase on the branch's own history.
+    return ctx.known(upstream.value, "an upstream name").endsWith(`/${target.replace(/^refs\/heads\//u, "")}`) ? null : MESSAGES.upstream
   }
   if (!touched.length) return null
   return async (ctx) => {
@@ -150,72 +149,67 @@ function rebase(args) {
   if (any(parsed, ["onto", "root", "exec", "quit"])) return fixed(MESSAGES.rebase)
   if (hasOption(parsed, "autostash")) return fixed(MESSAGES.autostash)
   const [upstream, other] = parsed.operands
-  return async (ctx) => {
-    if (!await onStateBranch(ctx)) return MESSAGES.rebaseBranch
+  const check = async (ctx) => {
     // `git rebase <upstream> <branch>` switches to <branch> first.
     if (other !== undefined && other !== await ctx.branch()) return MESSAGES.leave
     const own = await ownUpstream(ctx)
-    if (own === null) return MESSAGES.rebase
+    if (own === null) return MESSAGES.noUpstream
     return upstream === undefined || await ctx.fullName(upstream) === own.ref ? null : MESSAGES.rebase
   }
+  return upstream === undefined ? anywhere(check) : check
+}
+
+// Whether a pull rebases: --rebase, or else the branch's or pull's saved setting, unless --no-rebase or =false.
+function pullRebases(parsed, ctx, branch) {
+  const option = parsed.set.get("rebase")
+  if (option) return !option.negated && option.value !== "false"
+  const setting = ctx.config(`branch.${branch}.rebase`) ?? ctx.config("pull.rebase")
+  return setting !== undefined && setting !== "false"
 }
 
 function pull(args) {
   const parsed = parseGitOptions(SPECS.pull, args)
   if (hasOption(parsed, "autostash")) return fixed(MESSAGES.autostash)
   const [remote, ...refspecs] = parsed.operands
-  return async (ctx) => {
-    if (!await onStateBranch(ctx)) return MESSAGES.pullBranch
+  const check = async (ctx) => {
+    // A merge adds history and moves nothing off the branch; only a rebase onto another base rewrites pushed commits.
+    const branch = await ctx.branch()
+    if (!pullRebases(parsed, ctx, branch)) return null
     const own = await ownUpstream(ctx)
+    if (own === null) return MESSAGES.noUpstream
     // A repository operand (a remote name, path or URL) must be the upstream's own remote.
-    if (own === null || (remote !== undefined && ctx.known(remote, "a pull repository") !== own.remote)) return MESSAGES.pull
+    if (remote !== undefined && ctx.known(remote, "a pull repository") !== own.remote) return MESSAGES.pull
     const names = [own.merge, own.merge.replace(/^refs\/heads\//u, "")]
     return refspecs.every((spec) => names.includes(spec.replace(/^\+/u, ""))) ? null : MESSAGES.pull
   }
+  return remote === undefined ? anywhere(check) : check
 }
 
 function merge(args) {
   const parsed = parseGitOptions(SPECS.merge, args)
   if (any(parsed, ["abort", "continue", "quit"])) return null
-  if (hasOption(parsed, "autostash")) return fixed(MESSAGES.autostash)
-  const mode = lastOf(parsed, ["ff", "ff-only"])
-  return mode?.name === "ff-only" ? null : fixed(MESSAGES.merge)
+  // A merge adds history and moves nothing off the branch; Git refuses to overwrite uncommitted work.
+  return hasOption(parsed, "autostash") ? fixed(MESSAGES.autostash) : null
 }
 
-// Refspecs push may use: tags, HEAD and the current branch. A leading "+" forces; an empty source deletes.
-function pushTargets(refspecs) {
-  const targets = []
-  for (let i = 0; i < refspecs.length; i++) {
-    const spec = refspecs[i]
-    if (spec === "tag") { i++; continue }
-    if (spec === ":") return MESSAGES.pushTarget
-    if (spec.startsWith("+") || spec.startsWith(":")) return MESSAGES.pushForce
-    const colon = spec.indexOf(":")
-    if (colon < 0 && ["HEAD", "@"].includes(spec)) continue
-    const target = (colon < 0 ? spec : spec.slice(colon + 1)).replace(/^refs\/heads\//u, "")
-    if (!target.startsWith("refs/tags/")) targets.push(target)
-  }
-  return targets
-}
+// A non-force push only fast-forwards the remote, so it rewrites and discards nothing. A leading "+" forces, and an
+// empty source (":" or ":<ref>") deletes.
+const forcedRefspec = (spec) => spec.startsWith("+") || spec.startsWith(":")
 
 function push(args) {
   const parsed = parseGitOptions(SPECS.push, args)
   if (any(parsed, ["force", "force-with-lease", "force-if-includes", "mirror", "delete", "prune"])) return fixed(MESSAGES.pushForce)
-  if (any(parsed, ["all", "branches"])) return fixed(MESSAGES.pushTarget)
   const [remote, ...refspecs] = parsed.operands
-  return async (ctx) => {
-    // Saved configuration can turn a plain push into a mirror, forced or other-branch push.
+  if (refspecs.some(forcedRefspec)) return fixed(MESSAGES.pushForce)
+  // A refspec whose start Desk cannot compute could force (+) or delete (:), in any checkout.
+  const unknown = refspecs.find((spec) => spec.startsWith("\0"))
+  if (unknown !== undefined) return async (ctx) => ctx.known(unknown, "a push refspec")
+  // Saved configuration can turn a plain push into a mirror or forced push; a target Desk cannot read is not checked.
+  return anywhere(async (ctx) => {
     const name = remote === undefined ? (await ctx.upstream())?.remote ?? "origin" : ctx.known(remote, "a push repository")
     if (isTrue(ctx.config(`remote.${name}.mirror`))) return MESSAGES.pushForce
-    const configured = refspecs.length ? refspecs : ctx.configAll(`remote.${name}.push`)
-    if (!configured.length) return ctx.config("push.default") === "matching" ? MESSAGES.pushTarget : null
-    const targets = pushTargets(configured)
-    if (typeof targets === "string") return targets
-    for (const target of targets) {
-      if (target !== await ctx.branch() && !await ctx.tag(ctx.known(target, "a push refspec"))) return MESSAGES.pushTarget
-    }
-    return null
-  }
+    return !refspecs.length && ctx.configAll(`remote.${name}.push`).some(forcedRefspec) ? MESSAGES.pushForce : null
+  })
 }
 
 function fetch(args) {
@@ -273,7 +267,12 @@ const RULES = {
   checkout,
   switch: switchBranch,
   reset,
-  restore: (args) => any(parseGitOptions(SPECS.restore, args), ["source", "staged"]) ? fixed(MESSAGES.restore) : null,
+  // `restore --staged <paths>` only unstages those paths; restoring from another commit, or the index and the files
+  // together, overwrites work.
+  restore: (args) => {
+    const parsed = parseGitOptions(SPECS.restore, args)
+    return hasOption(parsed, "source") || (hasOption(parsed, "staged") && hasOption(parsed, "worktree")) ? fixed(MESSAGES.restore) : null
+  },
   clean: () => fixed(MESSAGES.clean),
   stash: ([subcommand]) => ["list", "show"].includes(subcommand) ? null : fixed(MESSAGES.stash),
   branch,
@@ -298,13 +297,6 @@ export const BUILTINS = new Set([
   "sparse-checkout", "status", "submodule", "symbolic-ref", "tag", "update-index", "update-ref", "var",
   "verify-commit", "verify-tag", "version", "write-tree",
 ])
-
-/** The tag `git tag <args>` creates, or undefined when it lists, deletes or verifies tags instead. */
-export function createdTag(args) {
-  const parsed = parseGitOptions(SPECS.tag, args)
-  const other = ["list", "delete", "verify", "contains", "no-contains", "with", "without", "merged", "no-merged", "points-at", "-n", "column", "sort", "format"]
-  return other.some((name) => parsed.set.has(name)) ? undefined : parsed.operands[0]
-}
 
 /** Whether `git <operation>` has a rule; an unknown program whose first operand is one could be Git. */
 export function hasRule(operation) {
