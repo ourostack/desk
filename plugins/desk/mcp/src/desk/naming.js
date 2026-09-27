@@ -13,9 +13,10 @@
 // IPv4-looking run) rather than its topic — ordinary engineering names like
 // "api-key-rotation" or "token-budget-report" are not credential_like.
 
-import { existsSync, readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
-import * as path from "node:path"
+import * as os from "node:os"
+import { readCrewRoster } from "./crew-roster.js"
+import { ghLogins } from "./gh-logins.js"
 
 // `^[a-z0-9]+(-[a-z0-9]+){1,5}$` — lowercase kebab-case, 2-6 words.
 const SHAPE_RE = /^[a-z0-9]+(-[a-z0-9]+){1,5}$/
@@ -281,45 +282,17 @@ function kebabCase(value) {
     .replace(/^-+|-+$/g, "")
 }
 
-// Parse the `alias` and `identity` columns out of `_meta/desks.md`'s table
-// (schema documented in `desk:session-start` Step 2.6). Tolerant of a
-// missing file/table — a solo desk simply has no registry.
-function parseDesksRegistry(raw) {
+// Every `alias` and `identity` in `_meta/desks.md`'s crew roster (schema
+// documented in `desk:session-start` Step 2.6; parsed by `crew-roster.js`).
+// A desk without a roster — a solo desk with no file, a hub's routing
+// registry, a spoke's pointer, an unreadable file — contributes no names.
+function readDesksRegistryNames(deskRoot) {
   const names = []
-  const lines = raw.split("\n")
-  let headerCols = null
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed.startsWith("|")) continue
-    const cells = trimmed
-      .slice(1, trimmed.endsWith("|") ? -1 : undefined)
-      .split("|")
-      .map((cell) => cell.trim())
-    if (headerCols === null) {
-      headerCols = cells.map((cell) => cell.toLowerCase())
-      continue
-    }
-    // Skip the `|---|---|` separator row.
-    if (cells.every((cell) => /^:?-+:?$/.test(cell))) continue
-
-    const aliasIdx = headerCols.indexOf("alias")
-    const identityIdx = headerCols.indexOf("identity")
-    if (aliasIdx !== -1 && cells[aliasIdx]) names.push(cells[aliasIdx])
-    if (identityIdx !== -1 && cells[identityIdx]) names.push(cells[identityIdx])
+  for (const row of readCrewRoster(deskRoot) ?? []) {
+    if (row.alias) names.push(row.alias)
+    if (row.identity) names.push(row.identity)
   }
   return names
-}
-
-function readDesksRegistryNames(deskRoot) {
-  const registryPath = path.join(deskRoot, "_meta", "desks.md")
-  if (!existsSync(registryPath)) return []
-  let raw
-  try {
-    raw = readFileSync(registryPath, "utf8")
-  } catch {
-    return []
-  }
-  return parseDesksRegistry(raw)
 }
 
 function readGitUserName(deskRoot, spawnGitConfig) {
@@ -337,22 +310,19 @@ function readGitUserName(deskRoot, spawnGitConfig) {
 }
 
 /**
- * operatorNames(deskRoot, { spawnGitConfig? }) -> string[]
+ * operatorNames(deskRoot, { spawnGitConfig?, env?, platform?, homeDir? }) -> string[]
  *
  * Lowercase, kebab-cased names the operator is known by on this desk:
- * every `alias` and `identity` in `_meta/desks.md` (when present), plus the
- * desk's own `git config user.name`. `spawnGitConfig` is an injectable seam
- * over `node:child_process`'s `spawnSync`, for tests only — real callers
- * never pass it.
- *
- * Desk's activation data does not currently record a GitHub login anywhere
- * (checked `src/activation/schema.js` and friends) — there is no field to
- * read, so none is included here. If activation ever gains one, it belongs
- * in this list.
+ * every `alias` and `identity` in `_meta/desks.md`'s crew roster (when the
+ * desk has one), the desk's own `git config user.name`, and every GitHub
+ * login in gh's local hosts config (`gh-logins.js`: read locally, never over
+ * the network). `spawnGitConfig`, `env`, `platform` and `homeDir` are test
+ * seams — real callers never pass them.
  */
-export function operatorNames(deskRoot, { spawnGitConfig = spawnSync } = {}) {
+export function operatorNames(deskRoot, { spawnGitConfig = spawnSync, env = process.env, platform = process.platform, homeDir = os.homedir() } = {}) {
   const names = [...readDesksRegistryNames(deskRoot)]
   const gitUserName = readGitUserName(deskRoot, spawnGitConfig)
   if (gitUserName) names.push(gitUserName)
+  names.push(...ghLogins({ env, platform, homeDir }))
   return [...new Set(names.map(kebabCase).filter((name) => name !== ""))]
 }

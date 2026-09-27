@@ -6,6 +6,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
+// Loaded only when a worker starts: the Stop hook runs after every turn.
+const compatibleNode = (options) => require("./compatible-node.cjs").compatibleNode(options);
 const ownRoot = path.resolve(__dirname, "..");
 const runtime = (file) => import(pathToFileURL(path.join(ownRoot, "mcp", file)).href);
 const MAX_INPUT = 1024 * 1024;
@@ -40,9 +42,14 @@ async function readInput(stream, timeoutMs = 150) {
   });
 }
 
-async function launch(script, args, env) {
+// factory.js loads Desk's MCP code, so it runs in a Node that satisfies the
+// MCP's engines range, never simply in the hook's own Node. With none
+// installed nothing starts, and the retained marker is the retry path.
+async function launch(script, args, env, resolveNode = compatibleNode) {
+  const { node } = resolveNode({ env });
+  if (!node) return;
   await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [script, ...args], { detached: true, stdio: "ignore", windowsHide: true, env });
+    const child = spawn(node, [script, ...args], { detached: true, stdio: "ignore", windowsHide: true, env });
     child.once("error", reject);
     child.once("spawn", () => { child.unref(); resolve(); });
   });
@@ -148,11 +155,14 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     if (!validMarker(marker)) return "invalid";
     await outbox.writeMarker(env, marker);
     const script = path.join(ownRoot, "mcp", "scripts", "factory.js");
+    // One Node search per hook run, however many jobs it starts.
+    let resolved;
+    const resolveOnce = (options) => (resolved ??= compatibleNode(options));
     if (ended) {
       const root = await outbox.factoryStateRoot(env);
-      await start(script, ["derive", "--marker", path.join(root, "markers", `${marker.host}-${id}.json`), "--wait-quiet", "30000"], env);
+      await start(script, ["derive", "--marker", path.join(root, "markers", `${marker.host}-${id}.json`), "--wait-quiet", "30000"], env, resolveOnce);
     } else if (supportsFinalize ?? cli.SUPPORTED_COMMANDS.includes("finalize")) {
-      for (const job of await outbox.listFinalizeJobs(env)) await start(script, ["finalize", "--job", job], env);
+      for (const job of await outbox.listFinalizeJobs(env)) await start(script, ["finalize", "--job", job], env, resolveOnce);
     }
     return "written";
   } catch {
