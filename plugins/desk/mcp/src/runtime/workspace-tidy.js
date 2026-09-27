@@ -103,6 +103,22 @@ export async function canonicalDeskRoot(deskRoot) {
   }
 }
 
+// A card's repositories, as real paths. A card with no `repos:` has none
+// besides the desk. One whose `repos:` Desk cannot read (another YAML shape,
+// a relative or missing path) throws here; the inventory then counts it in
+// one issue and gives that card no repositories at all, so it authorizes no
+// removal, while every other card still counts.
+async function resolveCardRepositories(matter, homeDir) {
+  if (!/^repos:/mu.test(matter)) return []
+  const resolved = []
+  for (const value of cardRepositories(matter)) {
+    const repo = value.startsWith("~/") ? path.join(homeDir, value.slice(2)) : value
+    if (!path.isAbsolute(repo)) throw new Error("unresolved repo path")
+    resolved.push(await fs.realpath(repo))
+  }
+  return resolved
+}
+
 export function parseWorktrees(output, repository) {
   return output.split("\0\0").filter(Boolean).map((block) => {
     const item = { repository }
@@ -136,6 +152,7 @@ export async function inspectWorkspace({
     const queue = [{ dir: root, depth: 0 }]
     let directories = 0
     let entryCount = 0
+    let unreadableRepos = 0
     while (queue.length) {
       stop()
       if (++directories > maxDirectories) throw new Error("workspace-tidy directory budget exceeded")
@@ -158,13 +175,16 @@ export async function inspectWorkspace({
         const updated = Date.parse(data.updated)
         if (!terminal || !Number.isFinite(updated) || now - updated <= RECENT_MS) {
           result.cards.push(file)
-          const cardRepos = [root]
-          for (const value of cardRepositories(matter)) {
-            const repo = value.startsWith("~/") ? path.join(homeDir, value.slice(2)) : value
-            if (!path.isAbsolute(repo)) throw new Error(`unresolved repo path: ${file}`)
-            const canonical = await fs.realpath(repo)
+          let cardRepos
+          try {
+            cardRepos = [root, ...await resolveCardRepositories(matter, homeDir)]
+          } catch {
+            unreadableRepos += 1
+            cardRepos = []
+          }
+          stop()
+          for (const canonical of cardRepos) {
             repositories.add(canonical)
-            cardRepos.push(canonical)
             if (repositories.size > maxRepositories) throw new Error("workspace-tidy repository budget exceeded")
           }
           result.cardRecords[file] = { body, repositories: cardRepos }
@@ -180,6 +200,7 @@ export async function inspectWorkspace({
         queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 })
       }
     }
+    if (unreadableRepos) result.issues.push(`${unreadableRepos} task card${unreadableRepos === 1 ? "" : "s"} with unreadable repos; their repositories were not inspected`)
     result.repositories = [...repositories]
     const commonDirs = new Set()
     for (const repo of repositories) {
