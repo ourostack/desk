@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.97 — 2026-09-27
+
+Pull requests that change the offline evaluation suite pass the coverage gate again. The offline coverage hook resolved the vendored gauntlet TypeScript files as plain JavaScript modules so the coverage instrumenter would pick them up, which only works when those files are instrumented. When a change did not touch them, Node parsed raw TypeScript as JavaScript, and every offline test that imports one failed with `SyntaxError: Unexpected token '{'` (11 of 12 shards in run 36348056164). The [hook](../../evals/offline/__tests__/helpers/coverage-format.mjs) now loads an uninstrumented TypeScript file as TypeScript, so Node strips its types, and a producer test covers a change that leaves those files alone. The coverage shards also gained measured weights for the 75 offline test files ([coverage-shards.json](mcp/config/coverage-shards.json)): an offline-scope run is now bounded by its slowest file, `controller-publication.test.mjs` at about 392 s, with the other shards at about 129 s instead of piling onto it.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.96 — 2026-09-27
 
 Accepted waste labels now reach the store, and finished tasks without labels are noticed at session start. The [flush](mcp/src/factory/flush.js) delivers local labels in the same intake pull request as facts: each becomes `labels/<job>/<session-id>.json` through `toPublishedLabels`, with the job keyed as its session's facts are, and passes the labels gate; a refused one is quarantined under its local key. A rejected intake PR quarantines its labels with its facts, and a stale one sends them again. Labels go only with their session's facts, already on the store's default branch or in the same batch, so a batch cap can never send labels the store would refuse for missing facts.
