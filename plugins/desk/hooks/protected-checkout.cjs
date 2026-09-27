@@ -52,14 +52,18 @@
 // earlier `git tag` creates counts unless a local branch has its name. Brace expansion, process
 // substitution, set -e, and directories the command itself creates are modeled.
 //
-// PowerShell (fix round 4 ruling) is a closed allowlist. A command that names `git` (git.exe, or
-// a path ending in either) passes only when each statement naming it is `git <args>`,
-// `$name = git <args>`, or `git <args>` piped to Out-String, Select-String, Select-Object,
-// Where-Object, ForEach-Object, Measure-Object, Sort-Object, Out-Null or Write-Output with no Git
-// inside, each argument literal text or a plain $variable (an unknown one takes its most dangerous
-// reading). Anything else that names Git is denied with a request for separate plain git commands.
-// Statements without Git are walked for their location, variables and environment; whatever may
-// or may not run leaves what it could change unknown.
+// PowerShell (fix round 4 ruling, narrowed on 2026-09-27) runs each Git call through the same
+// policy, wherever it appears: Git inside groups, subexpressions, script blocks, control
+// statements, functions, Invoke-Command, `& git`, a variable whose known value is Git, and a
+// literal iex, [scriptblock]::Create or shell script runs as its own statement. A statement that
+// names Git in its own text must be `git <args>`, `$name = git <args>`, or `git <args>` piped to
+// Out-String, Select-String, Select-Object, Where-Object, ForEach-Object, Measure-Object,
+// Sort-Object, Out-Null or Write-Output with no Git inside, each argument literal text, a plain
+// $variable or a group standing for one value (an unknown one takes its most dangerous
+// reading); anything else there is denied with a request for separate plain git commands. Code
+// Desk cannot read passes unless its readable text names Git. Statements without Git are walked
+// for their location, variables and environment; whatever may or may not run leaves what it
+// could change unknown. The PowerShell allowlist never fires in an unprotected checkout.
 // When the shell text cannot be parsed at all, it is denied only if it names a Git operation
 // whose rule could deny it there and does not run in a known unprotected checkout. Everything
 // else, such as `echo "$(date)"`, `cd "$wt" && node x.js` or `jq . f.json | grep x`, is allowed.

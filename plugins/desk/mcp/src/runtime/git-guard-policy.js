@@ -31,7 +31,7 @@ export const MESSAGES = {
   upstream: "this would point the checkout's branch at an upstream of another name, so a later git pull --rebase could rewrite pushed commits. Keep <remote>/<branch> (git branch -u <remote>/<branch>)",
   config: (key) => `this would change ${key}, which decides what push, pull, rebase, aliases or this guard do in the shared checkout. Leave it`,
   override: (key, operation) => `the configuration override ${key} changes what this git ${operation} does. Run it without the override`,
-  variable: `Desk cannot tell what a PowerShell variable passes to this Git command, and a variable can hold options such as --force or several arguments. Write the value literally`,
+  variable: `Desk cannot tell what a PowerShell variable or group passes to this Git command, and it can hold options such as --force or several arguments. Write the value literally`,
 }
 
 // Keys whose value changes what the configuration-trusting rules decide, or what the guard reads.

@@ -571,6 +571,12 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       status = dir === UNKNOWN ? null : true
       return
     }
+    // A program whose known value is Git (`$g = 'git'; & $g stash`) is Git, under the same policy.
+    if (GIT_PROGRAM.test(args[0])) {
+      await visit({ name: "git", args: args.slice(1), cwd: directory, env: gitEnvironment(), powershell: true })
+      status = null
+      return
+    }
     if (["iex", "invoke-expression"].includes(name)) {
       // Invoke-Expression runs in the caller's scope.
       await evaluated(args.slice(1).join(" "))

@@ -210,3 +210,10 @@ test("replay: an alias named after a builtin of the installed Git is that builti
   }
   assert.equal((await guardShellCommand({ command: "git newbuiltin", cwd: f.prot, env: f.env, readGit })).deny, false)
 })
+
+test("replay: a PowerShell program whose known value is Git is judged as Git", async (t) => {
+  const f = await fixture(t)
+  await expectDenied(f, [["$g = 'git'; & $g stash", /git stash takes other sessions/u], ["$g='git.exe'; & $g checkout topic", /move HEAD off/u]], { powershell: true })
+  await expectAllowed(f, ["$g = 'git'; & $g status"], { powershell: true })
+  await expectAllowed(f, ["$g = 'git'; & $g stash"], { powershell: true, cwd: f.plain })
+})
