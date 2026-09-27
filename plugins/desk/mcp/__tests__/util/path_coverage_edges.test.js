@@ -21,10 +21,9 @@ test("root resolution with omitted options uses isolated home defaults without p
   syncBuiltinESMExports()
   try {
     assert.deepEqual(resolveDeskRootWithSource(), {
-      root: path.join(home, "desk"), source: "fallback:desk",
+      root: path.join(home, "desk"), source: "home_fallback",
       tried: [
-        { source: "fallback:ms-desk", path: path.join(home, "ms-desk") },
-        { source: "fallback:desk", path: path.join(home, "desk") },
+        { source: "home_fallback", path: path.join(home, "desk") },
       ],
     })
   } finally {

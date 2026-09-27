@@ -115,7 +115,7 @@ test("path resolver — falls through $HOME canonical locations when env unset",
   try {
     const fakeHome = path.join(tmp, "home")
     mkdirSync(fakeHome)
-    // Create ~/desk but NOT ~/ms-desk — verify ~/desk is found.
+    // Create ~/desk only — verify ~/desk is found.
     mkdirSync(path.join(fakeHome, "desk"))
     const prevDesk = process.env.DESK
     const prevHome = process.env.HOME
@@ -132,13 +132,13 @@ test("path resolver — falls through $HOME canonical locations when env unset",
   }
 })
 
-test("path resolver — prefers ms-desk over desk over worker-workspace", async () => {
+test("path resolver — prefers desk over worker-workspace and never binds a work overlay's ms-desk", async () => {
   const { resolveDeskRoot } = await import("../src/util/paths.js")
   const tmp = mkdtempSync(path.join(tmpdir(), "desk-paths-"))
   try {
     const fakeHome = path.join(tmp, "home")
     mkdirSync(fakeHome)
-    // Create all three — ms-desk should win per order.
+    // Create all three — plain Desk skips ~/ms-desk, which belongs to the ms-desk overlay.
     mkdirSync(path.join(fakeHome, "ms-desk"))
     mkdirSync(path.join(fakeHome, "desk"))
     mkdirSync(path.join(fakeHome, "worker-workspace"))
@@ -147,7 +147,7 @@ test("path resolver — prefers ms-desk over desk over worker-workspace", async 
     delete process.env.DESK
     process.env.HOME = fakeHome
     try {
-      assert.equal(resolveDeskRoot(null), path.join(fakeHome, "ms-desk"))
+      assert.equal(resolveDeskRoot(null), path.join(fakeHome, "desk"))
     } finally {
       if (prevDesk !== undefined) process.env.DESK = prevDesk
       process.env.HOME = prevHome
@@ -195,7 +195,7 @@ test("path resolver — fatal error lists every path tried", async () => {
         (err) => {
           assert.match(err.message, /no desk workspace found/)
           assert.match(err.message, /\$DESK=/)
-          assert.match(err.message, /ms-desk/)
+          assert.doesNotMatch(err.message, /ms-desk/)
           assert.match(err.message, /worker-workspace/)
           return true
         },

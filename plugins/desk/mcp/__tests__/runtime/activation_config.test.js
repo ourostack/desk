@@ -2,6 +2,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -44,7 +45,9 @@ function makeFixture() {
   for (const dir of Object.values(dirs)) {
     mkdirSync(dir, { recursive: true })
   }
+  // A work overlay's desk and a personal desk, both in the home folder.
   mkdirSync(path.join(dirs.home, "ms-desk"), { recursive: true })
+  mkdirSync(path.join(dirs.home, "desk"), { recursive: true })
   dirs.configPath = path.join(root, "desk.activation-config.json")
   return dirs
 }
@@ -153,8 +156,8 @@ test("resolveDeskRootWithSource applies explicit, host-session, activation, DESK
       },
       homeDir: fixture.home,
     })
-    assert.equal(fallback.root, path.join(fixture.home, "ms-desk"))
-    assert.equal(fallback.source, "fallback:ms-desk")
+    assert.equal(fallback.root, path.join(fixture.home, "desk"), "plain Desk skips the work overlay's ~/ms-desk")
+    assert.equal(fallback.source, "home_fallback")
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
@@ -268,71 +271,171 @@ test("root resolver reports nonexistent explicit and host-session roots", () => 
   }
 })
 
-test("missing activation-config roots fall through to DESK and safe defaults", () => {
+test("a saved binding to a missing folder is root_unavailable and never falls back to $DESK or a home folder", () => {
   const resolveDeskRootWithSource = requireFunction(pathsModule, "resolveDeskRootWithSource")
   const fixture = makeFixture()
   try {
     const missingActivation = path.join(fixture.root, "missing-activation")
     writeActivationConfig(fixture.configPath, missingActivation)
-    const envFallback = resolveDeskRootWithSource({
-      activationConfigPath: fixture.configPath,
-      env: { DESK: fixture.envRoot },
-      homeDir: fixture.home,
-    })
-    assert.equal(envFallback.root, fixture.envRoot)
-    assert.equal(envFallback.source, "env:DESK")
-    assert.deepEqual(projectTried(envFallback).map(([source]) => source), [
-      "activation-config",
-      "env:DESK",
-    ])
-
-    const homeFallback = resolveDeskRootWithSource({
-      activationConfigPath: fixture.configPath,
-      env: {},
-      homeDir: fixture.home,
-    })
-    assert.equal(homeFallback.root, path.join(fixture.home, "ms-desk"))
-    assert.equal(homeFallback.source, "fallback:ms-desk")
-    assert.deepEqual(projectTried(homeFallback).map(([source]) => source), [
-      "activation-config",
-      "fallback:ms-desk",
-    ])
+    for (const env of [{ DESK: fixture.envRoot }, {}]) {
+      assert.throws(
+        () => resolveDeskRootWithSource({
+          activationConfigPath: fixture.configPath,
+          env,
+          homeDir: fixture.home,
+        }),
+        (err) => {
+          assert.equal(err.code, pathsModule.DESK_ROOT_UNAVAILABLE)
+          assert.equal(err.path, missingActivation)
+          assert.equal(err.source, "activation-config")
+          assert.equal(err.problem, "does not exist")
+          assert.equal(err.activation_config, fixture.configPath)
+          assert.match(err.message, new RegExp(`${escapeRegExp(fixture.configPath)} names ${escapeRegExp(missingActivation)}, which does not exist`, "u"))
+          assert.match(err.message, /does not fall back to another desk/u)
+          assert.deepEqual(err.tried.map((entry) => entry.source), ["activation-config"], "nothing after the binding is consulted")
+          return true
+        },
+      )
+    }
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
 })
 
-test("root resolver final diagnostic includes missing activation config root", () => {
+test("an explicit binding whose folder is not a folder or cannot be read is root_unavailable", () => {
   const resolveDeskRootWithSource = requireFunction(pathsModule, "resolveDeskRootWithSource")
   const fixture = makeFixture()
   try {
-    rmSync(path.join(fixture.home, "ms-desk"), { recursive: true, force: true })
-    const missingActivation = path.join(fixture.root, "missing-activation")
-    writeActivationConfig(fixture.configPath, missingActivation)
+    const file = path.join(fixture.root, "a-file")
+    writeFileSync(file, "not a desk\n", "utf8")
+    for (const options of [
+      { explicitRoot: file },
+      { hostSessionRoot: file },
+      { activationConfigPath: fixture.configPath },
+    ]) {
+      writeActivationConfig(fixture.configPath, file)
+      assert.throws(
+        () => resolveDeskRootWithSource({ ...options, env: { DESK: fixture.envRoot }, homeDir: fixture.home }),
+        (err) => {
+          assert.equal(err.code, pathsModule.DESK_ROOT_UNAVAILABLE)
+          assert.equal(err.problem, "is not a folder")
+          assert.equal(err.path, file)
+          return true
+        },
+      )
+    }
+    // A path under a file does not exist either.
     assert.throws(
-      () => resolveDeskRootWithSource({
-        activationConfigPath: fixture.configPath,
-        env: {},
-        homeDir: fixture.home,
-      }),
+      () => resolveDeskRootWithSource({ explicitRoot: path.join(file, "desk"), homeDir: fixture.home }),
+      (err) => err.code === pathsModule.DESK_ROOT_UNAVAILABLE && err.problem === "does not exist",
+    )
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      // A folder Desk cannot list, and a folder inside a parent Desk cannot search.
+      const locked = path.join(fixture.root, "locked-desk")
+      mkdirSync(path.join(locked, "inner"), { recursive: true })
+      chmodSync(locked, 0o000)
+      try {
+        for (const root of [locked, path.join(locked, "inner")]) {
+          writeActivationConfig(fixture.configPath, root)
+          assert.throws(
+            () => resolveDeskRootWithSource({ activationConfigPath: fixture.configPath, env: {}, homeDir: fixture.home }),
+            (err) => err.code === pathsModule.DESK_ROOT_UNAVAILABLE && err.problem === "cannot be read" && err.path === root,
+          )
+        }
+      } finally {
+        chmodSync(locked, 0o700)
+      }
+    }
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("with no binding at all, a work overlay's ~/ms-desk is never bound by plain Desk", () => {
+  const resolveDeskRootWithSource = requireFunction(pathsModule, "resolveDeskRootWithSource")
+  const fixture = makeFixture()
+  try {
+    rmSync(path.join(fixture.home, "desk"), { recursive: true, force: true })
+    assert.throws(
+      () => resolveDeskRootWithSource({ env: {}, homeDir: fixture.home }),
       (err) => {
-        assert.match(err.message, /no desk workspace found/u)
-        const expected = [
-          missingActivation,
-          path.join(fixture.home, "ms-desk"),
+        assert.equal(err.code, pathsModule.DESK_ROOT_NOT_FOUND)
+        assert.deepEqual(err.tried.map((entry) => entry.path), [
           path.join(fixture.home, "desk"),
           path.join(fixture.home, "worker-workspace"),
-        ]
-        let cursor = -1
-        for (const item of expected) {
-          const next = err.message.indexOf(item)
-          assert.notEqual(next, -1, `${item} must appear in diagnostic`)
-          assert.ok(next > cursor, `${item} must appear after the previous attempted source`)
-          cursor = next
-        }
+        ])
+        assert.doesNotMatch(err.message, /ms-desk/u)
         return true
       },
     )
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+// An Agency session container holding Desk and the plugins selected with it.
+function agencySession(fixture, plugins) {
+  const container = path.join(fixture.root, "sessions", "agency-plugin-Ab3_x-9.p4242")
+  for (const [folder, name] of Object.entries(plugins)) {
+    mkdirSync(path.join(container, folder), { recursive: true })
+    if (name !== null) writeFileSync(path.join(container, folder, "plugin.json"), JSON.stringify({ name }), "utf8")
+  }
+  return path.join(container, "desk")
+}
+
+test("an Agency session that loads the ms-desk overlay still binds ~/ms-desk, ahead of the personal fallbacks", () => {
+  const resolveDeskRootWithSource = requireFunction(pathsModule, "resolveDeskRootWithSource")
+  const fixture = makeFixture()
+  try {
+    const deskPluginRoot = agencySession(fixture, { desk: "desk", "ms-desk": "ms-desk", superpowers: "superpowers" })
+    const bound = resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: fixture.home })
+    assert.equal(bound.root, path.join(fixture.home, "ms-desk"))
+    assert.equal(bound.source, "overlay_home_fallback")
+    assert.deepEqual(bound.tried, [{ source: "overlay_home_fallback", overlay: "ms-desk", path: path.join(fixture.home, "ms-desk") }])
+    assert.deepEqual(pathsModule.loadedOverlayHomeDesks({ deskPluginRoot, homeDir: fixture.home }).map((entry) => entry.overlay), ["ms-desk"])
+
+    // Any binding still wins over the overlay's home folder.
+    writeActivationConfig(fixture.configPath, fixture.activationRoot)
+    assert.equal(resolveDeskRootWithSource({ activationConfigPath: fixture.configPath, deskPluginRoot, env: {}, homeDir: fixture.home }).source, "activation-config")
+    assert.equal(resolveDeskRootWithSource({ deskPluginRoot, env: { DESK: fixture.envRoot }, homeDir: fixture.home }).source, "env:DESK")
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("the ms-desk overlay counts as loaded only as a declared sibling in an Agency session container", () => {
+  const fixture = makeFixture()
+  try {
+    const cases = {
+      "no ms-desk sibling": agencySession(fixture, { desk: "desk" }),
+      "a sibling folder that declares another name": (() => {
+        const root = path.join(fixture.root, "other", "agency-plugin-Qq.p7")
+        mkdirSync(path.join(root, "ms-desk"), { recursive: true })
+        writeFileSync(path.join(root, "ms-desk", "plugin.json"), JSON.stringify({ name: "impostor" }), "utf8")
+        return path.join(root, "desk")
+      })(),
+      "a sibling with no readable manifest": (() => {
+        const root = path.join(fixture.root, "bare", "agency-plugin-Rr.p8")
+        mkdirSync(path.join(root, "ms-desk"), { recursive: true })
+        return path.join(root, "desk")
+      })(),
+      "a plain install folder, not an Agency container": (() => {
+        const root = path.join(fixture.root, "installed-plugins", "ourostack")
+        mkdirSync(path.join(root, "ms-desk"), { recursive: true })
+        writeFileSync(path.join(root, "ms-desk", "plugin.json"), JSON.stringify({ name: "ms-desk" }), "utf8")
+        return path.join(root, "desk")
+      })(),
+      "no plugin root": "",
+    }
+    for (const [label, deskPluginRoot] of Object.entries(cases)) {
+      assert.deepEqual(pathsModule.loadedOverlayHomeDesks({ deskPluginRoot, homeDir: fixture.home }), [], label)
+      const bound = pathsModule.resolveDeskRootWithSource({ deskPluginRoot, env: {}, homeDir: fixture.home })
+      assert.equal(bound.root, path.join(fixture.home, "desk"), label)
+      assert.equal(bound.source, "home_fallback", label)
+    }
+    // This checkout is not an Agency session, so the default plugin root loads no overlay.
+    assert.deepEqual(pathsModule.loadedOverlayHomeDesks({ homeDir: fixture.home }), [])
+    assert.deepEqual(pathsModule.loadedOverlayHomeDesks(), [])
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
@@ -352,9 +455,9 @@ test("root resolver final diagnostic lists every fallback source attempted in or
       }),
       (err) => {
         assert.match(err.message, /no desk workspace found/u)
+        assert.doesNotMatch(err.message, /ms-desk/u)
         const expected = [
           `$DESK=${missingEnvDesk}`,
-          path.join(emptyHome, "ms-desk"),
           path.join(emptyHome, "desk"),
           path.join(emptyHome, "worker-workspace"),
         ]

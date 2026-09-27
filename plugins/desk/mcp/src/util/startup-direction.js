@@ -12,6 +12,9 @@ import * as path from "node:path"
 
 import {
   DESK_ROOT_NOT_FOUND,
+  DESK_ROOT_UNAVAILABLE,
+  HOME_FALLBACK,
+  OVERLAY_HOME_FALLBACK,
   isDeskWorkspace,
   resolveActivationConfigPath,
   resolveDeskRootWithSource,
@@ -26,7 +29,8 @@ function sourceLabel(source) {
   if (source === "host-project") return "this session's project folder is a desk"
   if (source === "activation-config") return "the saved desk binding"
   if (source === "env:DESK") return "the DESK environment variable"
-  if (typeof source === "string" && source.startsWith("fallback:")) return "a home-folder fallback"
+  if (source === HOME_FALLBACK) return "a home-folder fallback"
+  if (source === OVERLAY_HOME_FALLBACK) return "the home-folder desk of a work overlay loaded in this session"
   return "the root passed to Desk"
 }
 
@@ -37,7 +41,9 @@ export function resolveStartupRoot(options) {
     const { root, source } = resolveDeskRootWithSource(options)
     return { root, source }
   } catch (error) {
-    return error.code === DESK_ROOT_NOT_FOUND ? { root: null } : { root: null, error: error.message }
+    if (error.code === DESK_ROOT_NOT_FOUND) return { root: null }
+    if (error.code === DESK_ROOT_UNAVAILABLE) return { root: null, unavailable: { path: error.path, message: error.message } }
+    return { root: null, error: error.message }
   }
 }
 
@@ -50,6 +56,9 @@ export function deskStartupDirection(bound, { sessionDesk = null } = {}) {
       ? ` This session's folder ${sessionDesk} is a desk; an overlay that launches Desk in this folder binds it.`
       : ""
     return `Desk startup: Desk's root configuration could not be read (${bound.error}), so this hook cannot say which desk is bound. desk_status reports the actual state.${overlay} ${START}`
+  }
+  if (bound?.unavailable) {
+    return `Desk startup: Desk cannot use the desk it is bound to (${bound.unavailable.message}). Desk does not fall back to another desk: desk_status reports root_unavailable with the fix (restore the desk there, or rebind with desk:first-run-bootstrap), and Desk recovers in place once the folder exists. ${START}`
   }
   if (sessionDesk && sessionDesk !== root) {
     const plain = root
