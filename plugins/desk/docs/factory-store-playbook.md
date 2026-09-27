@@ -10,7 +10,8 @@ The store design, the published schema and the "no who, no when, just how" stanc
 - A ruleset on `main`: every change arrives by pull request, the `factory-validate` check must pass, and nobody can force-push or delete the branch. Admins can bypass only while merging a pull request.
 - `factory-validate`, which checks every pull request with Desk's validator. Our workflow file never runs the candidate's files, but GitHub runs a pull request's own workflow files, so the check alone is not evidence (see "Merging by hand" below).
 - `factory-merge`, which validates each intake pull request again and merges it or closes it with `factory-rejected: <code>` comments. It never merges maintenance pull requests.
-- `factory-build`, which rebuilds the reports and publishes them on the `reports` branch as one commit with no history.
+- `factory-build`, which rebuilds the reports and publishes them on the `reports` branch as one commit with no history, then runs the kaizen check on every open kaizen card and andon on each plugin's latest version.
+- A kaizen issue form (`.github/ISSUE_TEMPLATE/kaizen.yml`) that opens cards with the `kaizen` label and the card's `yaml` block.
 - The labels `maintenance`, `kaizen`, `andon`, `confirmed` and `not-confirmed`.
 - Three proof pull requests: one intake merged automatically, one intake rejected and closed, and one maintenance cleanup merged by a maintainer.
 
@@ -69,7 +70,7 @@ EOF
 gh api "repos/$STORE" --jq '{has_issues,has_wiki,allow_merge_commit,allow_squash_merge,allow_rebase_merge,allow_auto_merge,delete_branch_on_merge}'
 ```
 
-Issues stay on: the kaizen and andon steps added in milestone 5 open issues.
+Issues stay on: kaizen cards are issues, and the build's kaizen and andon steps comment on them, label them and open andon issues.
 
 ## 3. Labels
 
@@ -83,7 +84,7 @@ label not-confirmed bfd4f2 "A kaizen or andon finding that review did not confir
 gh api "repos/$STORE/labels?per_page=100" --jq '[.[].name]'
 ```
 
-`factory-merge` adds `maintenance` to maintenance pull requests and skips every pull request that carries it. The other four are used from milestone 5.
+`factory-merge` adds `maintenance` to maintenance pull requests and skips every pull request that carries it. Kaizen cards carry `kaizen`; the build's kaizen check adds `confirmed` or `not-confirmed` to a card and removes them when the data no longer supports them; andon issues carry `andon`.
 
 ## 4. Actions settings
 
@@ -189,11 +190,11 @@ git commit --allow-empty -m "Probe protection" && git push origin HEAD:main; git
 
 ## 6. The workflows
 
-Add the three files below unchanged, on a branch, and open the pull request with the `maintenance` label so `factory-merge` leaves it alone:
+Add the four files below unchanged, on a branch, and open the pull request with the `maintenance` label so `factory-merge` leaves it alone:
 
 ```sh
 git switch -c maintenance/workflows
-git add .github/workflows/validate.yml .github/workflows/merge.yml .github/workflows/build.yml
+git add .github/workflows/validate.yml .github/workflows/merge.yml .github/workflows/build.yml .github/ISSUE_TEMPLATE/kaizen.yml
 git commit -m "Add the factory workflows"
 git push -u origin maintenance/workflows
 gh pr create --repo "$STORE" --base main --head maintenance/workflows --label maintenance \
@@ -523,9 +524,24 @@ jobs:
 # so the same facts always produce the same commit and an unchanged build
 # pushes nothing. The commit has no parent and holds only the build output.
 #
+# It also runs when an issue is opened, edited, reopened or labeled, so a new
+# or edited kaizen card is checked right away. Changes the build itself makes
+# with the workflow token start no new run.
+#
+# After publishing, the build runs the kaizen check: for every open issue
+# labeled `kaizen` it compares the card's measure before and after the
+# card's version, keeps one comment of its own on the card up to date and
+# sets or clears the `confirmed` and `not-confirmed` labels. It never closes
+# a card. Card bodies are untrusted data: Desk parses them strictly and
+# echoes nothing back but stable codes and validated values. Then andon
+# compares each plugin's latest version with the one before it on the
+# quality measures and opens, updates, reopens or closes the issues labeled
+# `andon` that this workflow opened; it never touches anyone else's issue.
+#
 # A pull request can name one of its own workflows `factory-merge` and start
-# this workflow through `workflow_run`. That is harmless because this
-# workflow reads no event data: it always builds main. Keep it that way.
+# this workflow through `workflow_run`, and anyone can open an issue. That is
+# harmless because this workflow reads no event data: it always builds main.
+# Keep it that way.
 name: factory-build
 
 on:
@@ -534,6 +550,8 @@ on:
   workflow_run:
     workflows: [factory-merge]
     types: [completed]
+  issues:
+    types: [opened, edited, reopened, labeled]
   schedule:
     - cron: "23 4 * * *"
   workflow_dispatch:
@@ -606,6 +624,66 @@ jobs:
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
             push --quiet --force "https://github.com/$REPOSITORY" HEAD:refs/heads/reports
           echo "Published reports: $built" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Check the kaizen cards
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/desk/plugins/desk/mcp/scripts/factory.js" kaizen-check --store . --repo "$REPOSITORY" > "$RUNNER_TEMP/kaizen.json"
+          echo "Kaizen check: $(cat "$RUNNER_TEMP/kaizen.json")" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Pull the andon cord
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/desk/plugins/desk/mcp/scripts/factory.js" andon --store . --repo "$REPOSITORY" > "$RUNNER_TEMP/andon.json"
+          echo "Andon: $(cat "$RUNNER_TEMP/andon.json")" | tee -a "$GITHUB_STEP_SUMMARY"
+```
+
+### `.github/ISSUE_TEMPLATE/kaizen.yml`
+
+The issue form for kaizen cards. It applies the `kaizen` label and fills the card's `yaml` block with a template.
+
+```yaml
+name: Kaizen card
+description: Propose one improvement to how the work runs, with the measure the build checks once it ships.
+title: "Kaizen: "
+labels: [kaizen]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A kaizen card names a signal from the rollups, the countermeasure meant to improve it, and the measure the store's build compares before and after the version that ships it. The build keeps one comment on the card with the numbers and adds `confirmed` or `not-confirmed` only when the 95% bootstrap interval for the change in median lies wholly on one side of zero.
+
+        Write the card generically: no person, private repository, work system, date or time of day.
+  - type: textarea
+    id: signal
+    attributes:
+      label: What the rollups show
+      description: The signal in plain words, for example "shell tool failures are most of every job's tool failures".
+    validations:
+      required: true
+  - type: textarea
+    id: card
+    attributes:
+      label: Card
+      description: The block the build checks. Set `version` to the first plugin version that carries the countermeasure once its release lands. `job_class` is engineering, review, investigation, operations, other or any.
+      render: yaml
+      value: |
+        kaizen: 1
+        signal: tool_failures
+        job_class: any
+        evidence_jobs: []
+        countermeasure: null
+        plugin: desk
+        version: null
+        hypothesis: { measure: tool_failures, direction: down }
+    validations:
+      required: true
 ```
 
 Why the workflows are shaped this way:
@@ -616,6 +694,8 @@ Why the workflows are shaped this way:
 - **Fork pull requests.** `workflow_run.pull_requests` is empty for a pull request from a fork, so `factory-merge` finds pull requests by the validated head commit.
 - **No stale merges.** The merge call passes the validated head as `sha`, so GitHub refuses it if the head moved after validation.
 - **Builds after automatic merges.** A merge made with the workflow token starts no `push` workflow, so `factory-build` also runs when `factory-merge` completes. `factory-validate` → `factory-merge` → `factory-build` is three `workflow_run` levels, GitHub's limit.
+- **Kaizen cards are data.** Anyone can open an issue on a public store, and the issue form applies `kaizen` for them. The kaizen check reads only open issues labeled `kaizen`, parses each card with a strict YAML subset, comments only stable error codes and validated values, and edits only its own comment (a `github-actions[bot]` comment that starts with `<!-- desk-kaizen-check -->`). Runs the build starts itself with the workflow token start no new run, so its own comments and labels cannot loop.
+- **Andon reads only its own issues.** Andon lists issues labeled `andon` and changes only those `github-actions[bot]` opened with a title of the form `Andon: <plugin> <version> <measure>`, so a look-alike issue opened by anyone else is never updated, reopened or closed.
 - **Deterministic reports.** The build output is byte-stable and the reports commit has fixed metadata, so the same facts produce the same commit and an unchanged build pushes nothing. The `reports` branch is outside the ruleset, and each build replaces it.
 
 ### Merging by hand
