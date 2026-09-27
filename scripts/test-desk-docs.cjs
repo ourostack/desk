@@ -19,6 +19,11 @@ const PUBLIC_RFC_POINTERS = Object.freeze([
     file: "plugins/desk/README.md",
     target: "docs/agentic-engineering-v2-rfc.md",
   }),
+  // The evaluation packet goes to outside evaluators, so it is held to the RFC's public-safety denylist too.
+  Object.freeze({
+    file: "plugins/desk/docs/evaluation-packet.md",
+    target: "agentic-engineering-v2-rfc.md",
+  }),
 ]);
 const PUBLIC_RFC_DENYLIST = new RegExp([
   "\\bMicrosoft\\b",

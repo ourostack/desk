@@ -23,6 +23,7 @@ const expectedClaudeSourcePaths = [
   "plugins/desk/.claude-plugin/plugin.json",
   "plugins/desk/.mcp.json",
   `plugins/desk/${claudeNativeWorkerSource}`,
+  "plugins/desk/agents/observer.md",
   "plugins/superpowers/.claude-plugin/plugin.json",
   "plugins/plain-language/.claude-plugin/plugin.json",
 ]
@@ -252,7 +253,7 @@ test("Claude plugin metadata declares native Desk surfaces and Superpowers depen
   const superpowersPlugin = loadJson("plugins", "superpowers", ".claude-plugin", "plugin.json")
 
   assert.equal(deskPlugin.skills, "./skills/")
-  assert.deepEqual(deskPlugin.agents, ["./agents/worker.md"])
+  assert.deepEqual(deskPlugin.agents, ["./agents/worker.md", "./agents/observer.md"])
   assert.equal(deskPlugin.mcpServers, "./.mcp.json")
   // Claude Code loads hooks/hooks.json automatically and rejects a manifest that declares it again.
   assert.equal(Object.hasOwn(deskPlugin, "hooks"), false)
@@ -282,6 +283,24 @@ test("Claude worker agent is exposed without unsupported scoped permission field
   assert.equal(Object.hasOwn(worker, "hooks"), false)
   assert.equal(Object.hasOwn(worker, "mcpServers"), false)
   assert.equal(Object.hasOwn(worker, "permissionMode"), false)
+})
+
+test("Claude observer agent is exposed beside worker and is never the default", () => {
+  const observer = parseSimpleFrontmatter("plugins", "desk", "agents", "observer.md")
+  const activation = loadJson(activationManifestPath)
+
+  assert.equal(observer.name, "observer")
+  assert.equal(observer.model, "inherit")
+  assert.equal(observer.background, false)
+  assert.equal(Object.hasOwn(observer, "hooks"), false)
+  assert.equal(Object.hasOwn(observer, "mcpServers"), false)
+  assert.equal(Object.hasOwn(observer, "permissionMode"), false)
+  assert.deepEqual(activation.host_activation?.claude?.targets?.["desk:observer"], {
+    default: false,
+    source: "agents/observer.md",
+    activationSurface: "plugin-agent",
+  })
+  assert.equal(loadJson("plugins", "desk", "settings.json").agent, "desk:worker")
 })
 
 test("Claude activation metadata records Agent View and background-session disposition", () => {
