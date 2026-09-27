@@ -101,6 +101,8 @@ const refusals = [
   ["git operation", async (f, w) => fs.writeFile(path.join(w.admin, "MERGE_HEAD"), w.record.head)],
   ["git operation", async (f, w) => fs.writeFile(path.join(w.admin, "index.lock"), "")],
   ["ownership", async (f, w) => fs.unlink(w.receipt)],
+  // A receipt is read whole, so one over 64 KiB is unreadable rather than cut short.
+  ["ownership", async (f, w) => { w.record.padding = "x".repeat(70_000); await w.save() }],
   ["ownership", async (f, w) => { w.record.branch = "refs/heads/unrelated"; await w.save() }],
   ["ownership", async (f, w) => { w.record.repository = f.desk; await w.save() }],
   ["ownership", async (f, w) => { w.record.task = "../outside/task.md"; await w.save() }],
@@ -855,6 +857,15 @@ test("R8 a desk bound through a symlink alias is the same desk: task lookup, rep
   // A report written before roots were canonical names the alias; it still belongs to this desk.
   await fs.writeFile(file, JSON.stringify({ ...persisted, root: alias }))
   assert.match(await boots(), /Last repair:/)
+
+  // An issue the last repair already named is not repeated in the live part of the line.
+  await fs.mkdir(path.join(f.desk, "track", "unfinished"), { recursive: true })
+  await fs.writeFile(path.join(f.desk, "track", "unfinished", "task.md"), "---\ntitle: unfinished\n---\n")
+  const issue = "1 task card skipped: track/unfinished/task.md (no readable status)"
+  assert.ok((await boots()).includes(`deferred (0 listed); ${issue}`), "a live issue the report lacks is named")
+  await fs.writeFile(file, JSON.stringify({ ...persisted, issues: [issue] }))
+  const line = await boots()
+  assert.equal(line.split(issue).length - 1, 1, line)
 })
 
 test("inspection combines its cancellation signals without AbortSignal.any, and releases its listeners", async (t) => {

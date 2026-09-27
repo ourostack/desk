@@ -36,21 +36,26 @@ const gitDefault = tidyGit
 // by name instead of abandoning the whole desk.
 class CardSkip extends Error {}
 
-async function cardFrontmatter(file) {
+// One bounded read of a regular, singly linked file that must keep its
+// identity while open: at most MAX_BYTES + 1 bytes, so `truncated` says whether
+// the file is longer than MAX_BYTES. `Fail` is the error class to throw.
+async function boundedRead(file, Fail) {
   const info = await fs.lstat(file)
-  if (!info.isFile() || info.nlink !== 1) throw new CardSkip("not a regular file")
+  if (!info.isFile() || info.nlink !== 1) throw new Fail("not a regular file")
   const handle = await fs.open(file, "r")
-  let raw, truncated
   try {
     const current = await handle.stat()
-    if (current.ino !== info.ino || current.dev !== info.dev) throw new CardSkip("file identity changed")
+    if (current.ino !== info.ino || current.dev !== info.dev) throw new Fail("file identity changed")
     const buffer = Buffer.alloc(MAX_BYTES + 1)
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
-    truncated = bytesRead > MAX_BYTES
-    raw = buffer.toString("utf8", 0, Math.min(bytesRead, MAX_BYTES))
+    return { raw: buffer.toString("utf8", 0, Math.min(bytesRead, MAX_BYTES)), truncated: bytesRead > MAX_BYTES }
   } finally {
     await handle.close()
   }
+}
+
+async function cardFrontmatter(file) {
+  const { raw, truncated } = await boundedRead(file, CardSkip)
   const lines = raw.replace(/\r\n/gu, "\n").split("\n")
   const close = lines[0].trim() === "---" ? lines.findIndex((line, index) => index > 0 && line.trim() === "---") : -1
   if (close > 0) return lines.slice(0, close + 1).join("\n")
@@ -65,26 +70,16 @@ function cardLabel(root, file) {
 }
 
 function skippedIssue(root, skipped) {
-  const sorted = [...skipped].sort((a, b) => (a.file < b.file ? -1 : 1))
+  const sorted = [...skipped].sort((a, b) => a.file.localeCompare(b.file, "en"))
   const shown = sorted.slice(0, 3).map(({ file, reason }) => `${cardLabel(root, file)} (${reason})`).join(", ")
   const more = skipped.length > 3 ? `, and ${skipped.length - 3} more` : ""
   return `${skipped.length} task card${skipped.length === 1 ? "" : "s"} skipped: ${shown}${more}`
 }
 
 async function smallFile(file) {
-  const info = await fs.lstat(file)
-  if (!info.isFile() || info.nlink !== 1 || info.size > MAX_BYTES) throw new Error("unsafe or oversized file")
-  const handle = await fs.open(file, "r")
-  try {
-    const current = await handle.stat()
-    if (current.ino !== info.ino || current.dev !== info.dev) throw new Error("file identity changed")
-    const buffer = Buffer.alloc(MAX_BYTES + 1)
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
-    if (bytesRead > MAX_BYTES) throw new Error("oversized file")
-    return buffer.toString("utf8", 0, bytesRead)
-  } finally {
-    await handle.close()
-  }
+  const { raw, truncated } = await boundedRead(file, Error)
+  if (truncated) throw new Error("oversized file")
+  return raw
 }
 
 // Only the ordinary block-list form is admitted without a YAML runtime. Other

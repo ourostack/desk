@@ -8,4 +8,4 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { runMigrationCli } from "../src/runtime/pending-migrations.js"
 
-process.exitCode = await runMigrationCli({ pluginRoot: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..") })
+process.exitCode = await runMigrationCli({ argv: process.argv.slice(2), env: process.env, io: process, pluginRoot: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."), cwd: process.cwd() })

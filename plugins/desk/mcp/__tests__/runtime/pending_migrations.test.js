@@ -139,7 +139,7 @@ test("shellQuote keeps a path with spaces and quotes one word", () => {
   assert.equal(shellQuote("/a b/it's"), `'/a b/it'\\''s'`)
   assert.equal(execFileSync("bash", ["-c", `printf %s ${shellQuote("/a b/it's")}`], { encoding: "utf8" }), "/a b/it's")
   assert.equal(migrationCommand("/p", "02-x"), `node '${path.join("/p", "mcp", "scripts", "migrations.js")}' run 02-x`)
-  assert.match(migrationCommand("/p", "02-x", { tools: true }), / run 02-x --tools-root <desk_status root\.path> --tools-person </u)
+  assert.match(migrationCommand("/p", "02-x", { tools: true }), / run 02-x --tools-root <root\.path> --tools-person <write_scope\.person; leave out when none>$/u)
 })
 
 // ── What the startup hooks find ──────────────────────────────────────────
@@ -157,10 +157,12 @@ test("pendingMigrations sorts every fired Detect into what the startup line asks
     { id: "09-quiet", migrate: "true", announce: "I fixed the thing." },
     { id: "10-reporting", migrate: "echo 'moved 2 files'", announce: "Say if you mind." },
     { id: "11-writes-file", migrate: 'touch "$DESK_PLUGIN_ROOT/ran"' },
+    { id: "12-held", agent: true, detect: "echo 'checking'; echo 'held: another session\ttidies'; exit 1" },
+    { id: "13-quiet-no", detect: "echo 'not held'; exit 1" },
   ])
   const pending = await pendingMigrations({ pluginRoot: root, env: { ...process.env, DESK_TOOLS_ROOT: "/stale", DESK_TOOLS_PERSON: "stale" }, cwd: root, budgetMs: 30_000 })
   assert.deepEqual(pending, [
-    { id: "02-tidy", state: "agent_work", description: "a test migration" },
+    { id: "02-tidy", state: "agent_work" },
     { id: "03-move", state: "restart", description: "a test migration" },
     { id: "04-confirm", state: "run", reason: "its safety is confirm, so it does not run on its own" },
     { id: "05-unset", state: "run", reason: "its safety is not set, so it does not run on its own" },
@@ -170,6 +172,7 @@ test("pendingMigrations sorts every fired Detect into what the startup line asks
     { id: "09-quiet", state: "ran", report: "", announce: "I fixed the thing." },
     { id: "10-reporting", state: "ran", report: "moved 2 files", announce: "Say if you mind." },
     { id: "11-writes-file", state: "ran", report: "", announce: "Done." },
+    { id: "12-held", state: "held", reason: "another session tidies" },
   ])
   assert.ok(realpathSync(path.join(root, "ran")), "a safe, restart-free migration runs in the hook")
 })
@@ -206,7 +209,8 @@ test("migrationLine says what to do for each state, with the exact command, and 
   assert.equal(migrationLine([], "/p"), "")
   const command = `node '${path.join("/p", "mcp", "scripts", "migrations.js")}' run`
   const line = migrationLine([
-    { id: "02-tidy", state: "agent_work", description: "Tidy\nthe desk" },
+    { id: "02-tidy", state: "agent_work" },
+    { id: "02-held", state: "held", reason: "the desk repository is in the middle of a merge" },
     { id: "03-move", state: "restart", description: "Move it" },
     { id: "04-quiet", state: "ran", report: "", announce: "Fixed." },
     { id: "05-loud", state: "ran", report: "moved 2", announce: "Fixed." },
@@ -214,12 +218,13 @@ test("migrationLine says what to do for each state, with the exact command, and 
     { id: "07-slow", state: "unchecked" },
   ], "/p")
   assert.equal(line, [
-    `Desk migrations: 02-tidy is pending (Tidy the desk). Do it at the start of this session, before other work and without asking: call desk_status (after desk:session-start's workspace sync, when you run that skill), then run \`${command} 02-tidy --tools-root <desk_status root.path> --tools-person <desk_status write_scope.person, or leave the flag out when it reports none>\` and do exactly what it prints, including its one-line announcement. It needs no go-ahead from the human, and this line returns at every session start until it is done.`,
+    `Desk migrations: 02-tidy is pending. Do it now, before other work and without asking: call desk_status, then run \`${command} 02-tidy --tools-root <root.path> --tools-person <write_scope.person; leave out when none>\` and do what it prints.`,
+    "02-held is on hold because the desk repository is in the middle of a merge. Nothing to do for it now; mention it to the human in one line if it matters to them.",
     `03-move is pending (Move it). Before other work, run \`${command} 03-move\`, show the human what it prints, and ask them to start a new session.`,
     "04-quiet ran at startup. Tell the human in one line: Fixed.",
     "05-loud ran at startup. Tell the human in one line: moved 2 Fixed.",
     `06-wait is pending but did not run at startup because its Migrate failed. Before other work, run \`${command} 06-wait\` and follow what it prints.`,
-    `07-slow could not be checked in time at startup. Before other work, run \`${command} 07-slow --tools-root <desk_status root.path> --tools-person <desk_status write_scope.person, or leave the flag out when it reports none>\`; it prints that nothing is needed when that is so, and otherwise what to do.`,
+    `07-slow could not be checked in time at startup. Before other work, run \`${command} 07-slow --tools-root <root.path> --tools-person <write_scope.person; leave out when none>\`; it prints that nothing is needed when that is so, and otherwise what to do.`,
   ].join(" "))
 })
 
@@ -254,8 +259,9 @@ test("a pending tidy puts the tidy instruction in the startup context; a tidy de
   for (const host of ["claude", "copilot"]) {
     const env = host === "claude" ? { ...pending.env, CLAUDE_PROJECT_DIR: pending.home } : pending.env
     const line = await boot.migrationLine({ host, env, sessionFolder: pending.home, budgetMs: 60_000 })
-    assert.match(line, /^Desk migrations: 02-tidy-desk is pending \(Tidy this session's own desk once/u, host)
-    assert.ok(line.includes(`node '${path.join(deskPluginRoot, "mcp", "scripts", "migrations.js")}' run 02-tidy-desk --tools-root <desk_status root.path>`), host)
+    assert.match(line, /^Desk migrations: 02-tidy-desk is pending\. Do it now, before other work and without asking/u, host)
+    assert.ok(line.includes(`node '${path.join(deskPluginRoot, "mcp", "scripts", "migrations.js")}' run 02-tidy-desk --tools-root <root.path>`), host)
+    assert.ok(line.length < 400, `${host}: the line stays short (${line.length})`)
     assert.doesNotMatch(line, /01-move-to-ourostack-desk/u)
   }
   const tidy = await tidyDesk({ messy: false })
@@ -277,6 +283,8 @@ test("the run command walks one migration the way the migrations skill describes
     { id: "07-wait", agent: true, migrate: "echo 'I left my desk untidied for now.'", announce: "I tidied <counts>." },
     { id: "08-fixed", migrate: "echo 'changed one file'", announce: "All set." },
     { id: "09-restart", restart: true, announce: "Moved." },
+    // Steps longer than the hooks' output bound still reach the agent whole.
+    { id: "10-long", agent: true, migrate: 'for i in $(seq 1 400); do echo "finding $i: a long report line that fills the output"; done; echo "Steps, in order:"; echo "7. Record."', announce: "Tidied." },
   ])
   const run = async (argv, env = process.env) => {
     const captured = io()
@@ -293,6 +301,9 @@ test("the run command walks one migration the way the migrations skill describes
   assert.deepEqual(await run(["run", "07-wait"]), { code: 0, stdout: "I left my desk untidied for now.\n", stderr: "" })
   assert.deepEqual(await run(["run", "08-fixed"]), { code: 0, stdout: "changed one file\nAll set.\n", stderr: "" })
   assert.deepEqual(await run(["run", "09-restart"]), { code: 0, stdout: "Moved.\nPlease start a new session so my preamble loads against the migrated paths.\n", stderr: "" })
+  const long = await run(["run", "10-long"])
+  assert.ok(long.stdout.length > 20_000, String(long.stdout.length))
+  assert.match(long.stdout, /\nfinding 400: [^\n]*\nSteps, in order:\n7\. Record\.\n\nAnnounce line, filled in with this run's own counts and commit link:\nTidied\.\n$/u)
 
   const usage = "usage: migrations.js run <id> [--tools-root <path>] [--tools-person <alias>]\n"
   assert.deepEqual(await run([]), { code: 2, stdout: "", stderr: usage })
@@ -315,6 +326,15 @@ test("scripts/migrations.js runs Desk's own tidy migration and prints its steps 
   assert.match(result.stdout, /track_missing_scope: billing-disputes/u)
   assert.match(result.stdout, /Tidy this desk now, as ordinary work in this session\./u)
   assert.match(result.stdout, /\nAnnounce line, filled in with this run's own counts and commit link:\nI tidied up my desk a bit: /u)
+  // The steps carry this run's claim to the record and defer commands.
+  const token = /^Tidy claim: (\S+) /mu.exec(result.stdout)[1]
+  assert.ok(result.stdout.includes(`--write-record --root '${pending.desk}' --claim '${token}'`))
+  assert.ok(result.stdout.includes(`--defer '<one-line reason>' --root '${pending.desk}' --claim '${token}'`))
+  // While that claim is fresh, a second session is told the tidy is taken, at startup and from the command.
+  const again = spawnSync(process.execPath, [script, "run", "02-tidy-desk", "--tools-root", pending.desk], { env: pending.env, cwd: pending.home, encoding: "utf8" })
+  assert.equal(again.status, 0)
+  assert.match(again.stdout, /^Migration 02-tidy-desk is on hold because another session has been tidying this desk since \S+; nothing to do now\.\n$/u)
+  assert.match(await boot.migrationLine({ host: "claude", env: { ...pending.env, CLAUDE_PROJECT_DIR: pending.home }, budgetMs: 60_000 }), /^Desk migrations: 02-tidy-desk is on hold because another session has been tidying this desk since \S+\. Nothing to do for it now/u)
   const tidy = await tidyDesk({ messy: false })
   const nothing = spawnSync(process.execPath, [script, "run", "02-tidy-desk", "--tools-root", tidy.desk], { env: tidy.env, cwd: tidy.home, encoding: "utf8" })
   assert.deepEqual([nothing.status, nothing.stdout], [0, "Migration 02-tidy-desk is not needed; nothing to do.\n"])

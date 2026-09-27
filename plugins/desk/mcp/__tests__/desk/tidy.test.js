@@ -13,14 +13,18 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
+  CLAIM_STALE_MS,
+  HOLD_MAX_MS,
   ORGANIZATION_RECORD,
   TIDY_VERSION,
+  heldReason,
   identityCachePath,
   organizationRecord,
   parseDeskRegistry,
   readOrganizationRecord,
   resolvePerson,
   runTidyStatusCli,
+  takeClaim,
   tidySafetyProblem,
   tidyStatus,
   uncommittedPaths,
@@ -149,11 +153,20 @@ function io() {
   }
 }
 
+// Background identity lookups Detect started, as [command, ...args]; none runs.
+const backgrounds = []
+const background = (command, args) => {
+  backgrounds.push([command, ...args])
+  return { unref() {} }
+}
+
 function cli(argv, extra = {}) {
   const captured = io()
-  const code = runTidyStatusCli({ argv, env: {}, io: captured.io, homeDir: tempDir(), cwd: tempDir(), now: NOW, ...extra })
+  const code = runTidyStatusCli({ argv, env: {}, io: captured.io, homeDir: tempDir(), cwd: tempDir(), now: NOW, spawnBackground: background, ...extra })
   return { code, ...captured.out }
 }
+
+const claimOf = (report) => /^Tidy claim: (\S+) /mu.exec(report.stdout)[1]
 
 const noGh = () => {
   throw new Error("gh must not be called")
@@ -339,7 +352,13 @@ test("on a crew desk where no person resolves, Detect fires so the tidy says so 
     assert.equal(result.applicable, false)
     assert.equal(result.subtree, null)
   }
-  assert.equal(cli(["--detect"], { env: { DESK: root }, spawnGh: () => ({ status: 1, stdout: "" }) }).code, 0)
+  // Detect never waits on gh: a cold cache starts the lookup in the background, and Detect fires once the cache has the answer.
+  const homeDir = tempDir()
+  backgrounds.length = 0
+  assert.deepEqual(cli(["--detect"], { env: { DESK: root }, homeDir, spawnGh: noGh }), { code: 1, stdout: "", stderr: "" })
+  assert.deepEqual(backgrounds, [[process.execPath, SCRIPT, "--refresh-identity", "--root", root]])
+  assert.equal(cli(["--refresh-identity", "--root", root], { homeDir, spawnGh: () => ({ status: 1, stdout: "" }) }).code, 0)
+  assert.equal(cli(["--detect"], { env: { DESK: root }, homeDir, spawnGh: noGh }).code, 0)
   const line = cli(["--report"], { env: { DESK: root }, spawnGh: () => ({ status: 1, stdout: "" }) })
   assert.deepEqual(line, { code: 1, stdout: "I couldn't tell which desk in this crew workspace is mine, so I left every desk as it is.\n", stderr: "" })
 })
@@ -410,7 +429,7 @@ test("a live spoke's prose pointer in desks.md is a single desk: the tidy runs a
   const report = cli(["--report", "--root", root], { env: { DESK: root }, spawnGh: noGh })
   assert.equal(report.code, 0)
   assert.doesNotMatch(report.stdout, /crew workspace/)
-  assert.equal(cli(["--write-record", "--root", root], { env: { DESK: root }, spawnGh: noGh }).code, 0)
+  assert.equal(cli(["--write-record", "--root", root, "--claim", claimOf(report)], { env: { DESK: root }, spawnGh: noGh }).code, 0)
   assert.equal(cli(["--detect", "--root", root], { env: { DESK: root }, spawnGh: noGh }).code, 1, "once tidied, Detect stops firing")
 })
 
@@ -614,7 +633,7 @@ test("--detect exits 0 only when the tidy is needed, and prints nothing", () => 
   assert.deepEqual(cli(["--detect", "--root", messy]), { code: 0, stdout: "", stderr: "" })
   assert.equal(cli(["--detect", "--root", soloDesk({ messy: false })]).code, 1)
   assert.equal(cli(["--detect"], { env: { DESK: messy } }).code, 0)
-  assert.equal(cli(["--detect", "--root", crewDesk(), "--person", "bob"], { spawnGh: () => ({ status: 1, stdout: "" }) }).code, 0)
+  assert.equal(cli(["--detect", "--root", crewDesk(), "--person", "bob"], { env: { DESK_IDENTITY: "nobody" } }).code, 0)
   assert.equal(cli(["--detect", "--root", path.join(messy, "missing")]).code, 1)
 })
 
@@ -654,6 +673,126 @@ test("--write-record writes the record in this session's own subtree and turns D
   const solo = soloDesk()
   assert.equal(runTidyStatusCli({ argv: ["--write-record"], env: { DESK: solo }, io: io().io, homeDir: tempDir(), cwd: tempDir() }), 0)
   assert.ok(Date.parse(readOrganizationRecord(solo).tidied_at) >= now - 1000)
+})
+
+// ── One tidy at a time, and no repeated instruction when it cannot finish ──
+
+const iso = (ms) => new Date(ms).toISOString()
+
+test("only one session tidies a desk at a time: the claim holds off a second report, Detect, the record and a deferral until it goes stale", () => {
+  const root = soloDesk()
+  const env = { DESK: root }
+  const first = cli(["--report"], { env })
+  assert.equal(first.code, 0)
+  const token = claimOf(first)
+  assert.match(first.stdout, new RegExp(`\\nTidy claim: ${token} \\(this session's until ${iso(NOW + CLAIM_STALE_MS)};`))
+
+  const later = NOW + 60_000
+  assert.deepEqual(cli(["--report"], { env, now: later }), {
+    code: 1,
+    stdout: `Another session has been tidying this desk since ${iso(NOW)}, so I left the tidy to it. If that session is this one, carry on with the steps it printed.\n`,
+    stderr: "",
+  })
+  assert.deepEqual(cli(["--detect"], { env, now: later }), { code: 1, stdout: `held: another session has been tidying this desk since ${iso(NOW)}\n`, stderr: "" })
+  const refused = `Another session has been tidying this desk since ${iso(NOW)}, so I changed nothing.\n`
+  assert.deepEqual(cli(["--write-record"], { env, now: later }), { code: 1, stdout: refused, stderr: "" })
+  assert.deepEqual(cli(["--defer", "busy", "--claim", "not-the-token"], { env, now: later }), { code: 1, stdout: refused, stderr: "" })
+  assert.equal(readOrganizationRecord(root), null)
+
+  // An abandoned claim goes stale, and the next session takes it over.
+  const stale = NOW + CLAIM_STALE_MS
+  assert.equal(cli(["--detect"], { env, now: stale }).code, 0)
+  const second = cli(["--report"], { env, now: stale })
+  assert.equal(second.code, 0)
+  assert.notEqual(claimOf(second), token)
+  assert.equal(cli(["--write-record", "--claim", claimOf(second)], { env, now: stale }).code, 0)
+  assert.throws(() => readFileSync(path.join(root, ".git", "desk-tidy-claim.json")), { code: "ENOENT" }, "the record releases the claim")
+  assert.equal(cli(["--detect"], { env, now: stale }).code, 1)
+})
+
+test("a claim is exclusive: a corrupt claim is replaced, and a claim that cannot be created counts as held", () => {
+  const gitDir = tempDir()
+  writeFileSync(path.join(gitDir, "desk-tidy-claim.json"), "not json")
+  const taken = takeClaim(gitDir, { now: NOW, token: "mine" })
+  assert.deepEqual(taken, { token: "mine" })
+  assert.deepEqual(JSON.parse(readFileSync(path.join(gitDir, "desk-tidy-claim.json"), "utf8")), { token: "mine", claimed_at: NOW })
+  assert.deepEqual(takeClaim(gitDir, { now: NOW + 1 }), { held: { token: "mine", claimed_at: NOW } })
+  assert.deepEqual(takeClaim(path.join(gitDir, "missing"), { now: NOW }), { held: { claimed_at: NOW } })
+  assert.match(takeClaim(tempDir(), { now: NOW }).token, /^[0-9a-f-]{36}$/u)
+})
+
+test("a tidy that stops is held with its reason until the state that stopped it changes", () => {
+  // Git mid-merge: held until the merge ends.
+  const merging = soloDesk()
+  write(path.join(merging, ".git"), "MERGE_HEAD", "")
+  assert.equal(cli(["--report"], { env: { DESK: merging } }).code, 1)
+  assert.deepEqual(cli(["--detect"], { env: { DESK: merging } }), { code: 1, stdout: "held: the desk repository is in the middle of a merge\n", stderr: "" })
+  rmSync(path.join(merging, ".git", "MERGE_HEAD"))
+  assert.deepEqual(cli(["--detect"], { env: { DESK: merging } }), { code: 0, stdout: "", stderr: "" })
+
+  // No person resolves on a crew desk: held until the identity or the roster changes.
+  const crew = crewDesk()
+  const nobody = { DESK: crew, DESK_IDENTITY: "nobody" }
+  assert.equal(cli(["--report"], { env: nobody }).code, 1)
+  assert.deepEqual(cli(["--detect"], { env: nobody }), { code: 1, stdout: "held: no person in this crew workspace's roster matches this session\n", stderr: "" })
+  assert.equal(cli(["--detect"], { env: nobody, now: NOW + HOLD_MAX_MS }).code, 0, "a hold lapses after HOLD_MAX_MS")
+  assert.equal(cli(["--detect"], { env: nobody, now: NOW - 1 }).code, 0, "a hold from the future does not count")
+  write(crew, "_meta/desks.md", `${readFileSync(path.join(crew, "_meta/desks.md"), "utf8")}| carol | carol-login | desks/carol |\n`)
+  assert.equal(cli(["--detect"], { env: nobody }).code, 0, "a changed roster lifts the hold")
+
+  // The tools and the script disagree about the person.
+  const bob = { DESK: crew, DESK_IDENTITY: "alice-login" }
+  assert.equal(cli(["--report", "--root", crew, "--person", "bob"], { env: bob }).code, 1)
+  assert.deepEqual(cli(["--detect"], { env: bob }).code, 1)
+  assert.equal(cli(["--detect", "--root", crew, "--person", "bob"], { env: bob }).stdout, "held: the Desk tools and the tidy resolve different desks\n")
+  assert.equal(cli(["--report", "--root", crew, "--person", "bob"], { env: { DESK: crew, DESK_IDENTITY: "nobody" } }).code, 1)
+  assert.equal(cli(["--detect", "--root", crew, "--person", "bob"], { env: { DESK: crew, DESK_IDENTITY: "nobody" } }).stdout, "held: the Desk tools' person does not match this session's identity\n")
+})
+
+test("the agent defers a tidy it cannot finish, and it returns once the desk's commit or uncommitted changes differ", () => {
+  const root = soloDesk()
+  const env = { DESK: root }
+  const token = claimOf(cli(["--report"], { env }))
+  assert.deepEqual(cli(["--defer", "tidy paths hold\nanother session's changes", "--claim", token], { env }), {
+    code: 0,
+    stdout: "The tidy is on hold: tidy paths hold another session's changes. Session start names it until this desk's latest commit or its uncommitted changes differ, and then the tidy runs again.\n",
+    stderr: "",
+  })
+  assert.throws(() => readFileSync(path.join(root, ".git", "desk-tidy-claim.json")), { code: "ENOENT" }, "deferring releases the claim")
+  assert.deepEqual(cli(["--detect"], { env }), { code: 1, stdout: "held: tidy paths hold another session's changes\n", stderr: "" })
+  write(root, "another-loose-file.txt", "new\n")
+  assert.equal(cli(["--detect"], { env }).code, 0)
+
+  // A new report lifts any hold, and a malformed hold is ignored.
+  assert.equal(cli(["--defer", "again"], { env }).code, 0)
+  assert.equal(cli(["--detect"], { env }).code, 1)
+  const again = cli(["--report"], { env })
+  assert.equal(again.code, 0)
+  assert.throws(() => readFileSync(path.join(root, ".git", "desk-tidy-hold.json")), { code: "ENOENT" })
+  for (const hold of [{ kind: "later", reason: "x", held_at: NOW }, { kind: "agent", reason: " ", held_at: NOW }, { kind: "agent", reason: "x" }, []]) {
+    writeFileSync(path.join(root, ".git", "desk-tidy-hold.json"), JSON.stringify(hold))
+    assert.equal(heldReason(status(root), { now: NOW + CLAIM_STALE_MS }), null)
+  }
+  assert.equal(heldReason({ root: tempDir() }), null, "outside Git nothing is held")
+})
+
+test("a hold that cannot be written only means Detect fires again, and Detect survives a background lookup that cannot start", () => {
+  const root = soloDesk()
+  mkdirSync(path.join(root, ".git", "desk-tidy-hold.json"))
+  write(path.join(root, ".git"), "MERGE_HEAD", "")
+  assert.equal(cli(["--report"], { env: { DESK: root } }).code, 1)
+  assert.equal(cli(["--detect"], { env: { DESK: root } }).code, 0)
+
+  const crew = crewDesk()
+  const failing = () => {
+    throw new Error("spawn EAGAIN")
+  }
+  assert.deepEqual(cli(["--detect"], { env: { DESK: crew }, spawnBackground: failing }), { code: 1, stdout: "", stderr: "" })
+})
+
+test("--defer needs a reason and --refresh-identity needs a root", () => {
+  assert.deepEqual(cli(["--defer"]), { code: 2, stdout: "", stderr: "tidy-status: --defer needs a one-line reason\n" })
+  assert.deepEqual(cli(["--refresh-identity"]), { code: 2, stdout: "", stderr: "tidy-status: --refresh-identity needs --root\n" })
 })
 
 test("an unknown argument is refused with exit code 2", () => {

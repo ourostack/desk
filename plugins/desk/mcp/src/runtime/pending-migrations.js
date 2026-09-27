@@ -11,6 +11,11 @@
 //   with the Desk tools. The line names it and gives the exact command that
 //   prints the work, and it returns at every session start until Detect stops
 //   firing.
+// - A Detect that does not fire but prints `held: <reason>` names a migration
+//   that is pending but cannot make progress now (the tidy while another
+//   session holds its claim, or after it stopped for a reason that has not
+//   changed). The line gives that reason in one sentence and asks for
+//   nothing.
 // - A `safety: safe` migration with `needs_restart: false` and no agent work
 //   runs right in the hook (Safety check, then Migrate), and the line gives
 //   the agent its announcement to relay.
@@ -109,14 +114,16 @@ export function readMigrations(pluginRoot) {
 }
 
 /**
- * runBlock(block, { env, cwd, timeoutMs, spawn, platform }) -> Promise<{ status, stdout, stderr, timedOut, unavailable }>
+ * runBlock(block, { env, cwd, timeoutMs, outputChars, spawn, platform }) -> Promise<{ status, stdout, stderr, timedOut, unavailable }>
  *
  * Runs one bash block without blocking the event loop, so the hooks' boot
  * checks run alongside it. `unavailable` means bash could not start at all (a
  * host without bash); `timedOut` means the block ran out of time, and then its
  * whole process group is killed, so a `node` it started does not outlive it.
+ * Each stream stops growing once it reaches `outputChars`: the hooks keep a
+ * bounded amount for one line, and the command line keeps everything.
  */
-export function runBlock(block, { env, cwd, timeoutMs, spawn = spawnChild, platform = process.platform }) {
+export function runBlock(block, { env, cwd, timeoutMs, outputChars = OUTPUT_MAX_CHARS * 4, spawn = spawnChild, platform = process.platform }) {
   return new Promise((resolve) => {
     // On Windows there are no process groups to kill; the block itself is killed.
     const posix = platform !== "win32"
@@ -124,7 +131,7 @@ export function runBlock(block, { env, cwd, timeoutMs, spawn = spawnChild, platf
     let stdout = ""
     let stderr = ""
     let timedOut = false
-    const keep = (text, chunk) => (text.length < OUTPUT_MAX_CHARS * 4 ? text + chunk : text)
+    const keep = (text, chunk) => (text.length < outputChars ? text + chunk : text)
     child.stdout.setEncoding("utf8")
     child.stderr.setEncoding("utf8")
     child.stdout.on("data", (chunk) => { stdout = keep(stdout, chunk) })
@@ -152,7 +159,7 @@ export function runBlock(block, { env, cwd, timeoutMs, spawn = spawnChild, platf
 export function migrationCommand(pluginRoot, id, { tools = false } = {}) {
   const script = path.join(pluginRoot, "mcp", "scripts", "migrations.js")
   const base = `node ${shellQuote(script)} run ${id}`
-  return tools ? `${base} --tools-root <desk_status root.path> --tools-person <desk_status write_scope.person, or leave the flag out when it reports none>` : base
+  return tools ? `${base} --tools-root <root.path> --tools-person <write_scope.person; leave out when none>` : base
 }
 
 /**
@@ -166,9 +173,11 @@ export function migrationCommand(pluginRoot, id, { tools = false } = {}) {
  *   "ran"         the hook ran it; `report` and `announce` are for the agent
  *   "run"         Detect fired but the hook could not run it; `reason` says why
  *   "unchecked"   Detect did not finish in time
- * A migration whose Detect does not fire, or that bash cannot run, is left out.
+ *   "held"        Detect did not fire but printed `held: <reason>`
+ * A migration whose Detect does not fire otherwise, or that bash cannot run,
+ * is left out.
  */
-export async function pendingMigrations({ pluginRoot, env = process.env, cwd = process.cwd(), budgetMs = MIGRATION_BUDGET_MS, blockLimitMs = Infinity, spawn, now = () => performance.now() } = {}) {
+export async function pendingMigrations({ pluginRoot, env = process.env, cwd, budgetMs = MIGRATION_BUDGET_MS, blockLimitMs = Infinity, spawn, now = () => performance.now() }) {
   const started = now()
   const left = () => budgetMs - (now() - started)
   const limit = () => Math.min(left(), blockLimitMs)
@@ -191,9 +200,14 @@ export async function pendingMigrations({ pluginRoot, env = process.env, cwd = p
       pending.push({ id, state: "unchecked" })
       continue
     }
-    if (detect.unavailable || detect.status !== 0) continue
+    if (detect.unavailable) continue
+    if (detect.status !== 0) {
+      const held = /^held: (.+)$/mu.exec(detect.stdout)
+      if (held) pending.push({ id, state: "held", reason: oneLine(held[1]).slice(0, OUTPUT_MAX_CHARS) })
+      continue
+    }
     if (migration.agentWork) {
-      pending.push({ id, state: "agent_work", description: migration.description })
+      pending.push({ id, state: "agent_work" })
       continue
     }
     if (migration.needsRestart) {
@@ -228,7 +242,9 @@ export function migrationLine(pending, pluginRoot) {
     const run = (options) => `run \`${migrationCommand(pluginRoot, entry.id, options)}\``
     switch (entry.state) {
       case "agent_work":
-        return `${entry.id} is pending (${oneLine(entry.description)}). Do it at the start of this session, before other work and without asking: call desk_status (after desk:session-start's workspace sync, when you run that skill), then ${run({ tools: true })} and do exactly what it prints, including its one-line announcement. It needs no go-ahead from the human, and this line returns at every session start until it is done.`
+        return `${entry.id} is pending. Do it now, before other work and without asking: call desk_status, then ${run({ tools: true })} and do what it prints.`
+      case "held":
+        return `${entry.id} is on hold because ${entry.reason}. Nothing to do for it now; mention it to the human in one line if it matters to them.`
       case "restart":
         return `${entry.id} is pending (${oneLine(entry.description)}). Before other work, ${run()}, show the human what it prints, and ask them to start a new session.`
       case "ran":
@@ -243,7 +259,7 @@ export function migrationLine(pending, pluginRoot) {
 }
 
 /** The startup line for this session, or "". Never rejects. */
-export async function startupMigrationLine({ pluginRoot, env = process.env, cwd = process.cwd(), budgetMs, spawn } = {}) {
+export async function startupMigrationLine({ pluginRoot, env = process.env, cwd = process.cwd(), budgetMs, spawn }) {
   try {
     return migrationLine(await pendingMigrations({ pluginRoot, env, cwd, budgetMs, spawn }), pluginRoot)
   } catch {
@@ -276,7 +292,7 @@ function parseRunArgs(argv) {
  * changed the machine, as the template to fill in for agent work that printed
  * steps, and followed by the restart request when the migration needs one.
  */
-export async function runMigrationCli({ argv = process.argv.slice(2), env = process.env, io = process, pluginRoot, cwd = process.cwd(), spawn } = {}) {
+export async function runMigrationCli({ argv, env = process.env, io, pluginRoot, cwd, spawn }) {
   let args
   try {
     args = parseRunArgs(argv)
@@ -292,7 +308,8 @@ export async function runMigrationCli({ argv = process.argv.slice(2), env = proc
   const blockEnv = { ...env, DESK_PLUGIN_ROOT: pluginRoot, DESK_TOOLS_ROOT: args.toolsRoot, DESK_TOOLS_PERSON: args.toolsPerson }
   if (!args.toolsRoot) delete blockEnv.DESK_TOOLS_ROOT
   if (!args.toolsPerson) delete blockEnv.DESK_TOOLS_PERSON
-  const run = (section) => runBlock(migration.blocks[section], { env: blockEnv, cwd, timeoutMs: 2 ** 31 - 1, spawn })
+  // No time or output limit: the agent needs every line the migration prints.
+  const run = (section) => runBlock(migration.blocks[section], { env: blockEnv, cwd, timeoutMs: 2 ** 31 - 1, outputChars: Infinity, spawn })
 
   const detect = await run("Detect")
   if (detect.unavailable) {
@@ -300,7 +317,8 @@ export async function runMigrationCli({ argv = process.argv.slice(2), env = proc
     return 1
   }
   if (detect.status !== 0) {
-    io.stdout.write(`Migration ${args.id} is not needed; nothing to do.\n`)
+    const held = /^held: (.+)$/mu.exec(detect.stdout)
+    io.stdout.write(held ? `Migration ${args.id} is on hold because ${oneLine(held[1])}; nothing to do now.\n` : `Migration ${args.id} is not needed; nothing to do.\n`)
     return 0
   }
   if (migration.safety !== "safe") {

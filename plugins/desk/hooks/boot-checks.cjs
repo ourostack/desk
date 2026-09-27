@@ -180,12 +180,17 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     const inventory = await inspectWorkspace({ deskRoot: root, signal, budgetMs: inspectionBudgetMs });
     if (expired()) return "";
     let previous = "";
+    // Issues the last repair's line already names are not repeated after it.
+    let named = [];
     if (inventory.commonDirectory) {
       try {
         const file = reportPath(root, inventory.commonDirectory);
         const report = await readReport(file);
         // A report written before roots were canonical may carry the alias.
-        if (await canonicalDeskRoot(report.root) === root) previous = `Last repair: ${tidyLine(report)}; `;
+        if (await canonicalDeskRoot(report.root) === root) {
+          previous = `Last repair: ${tidyLine(report)}; `;
+          named = Array.isArray(report.issues) ? report.issues : [];
+        }
       } catch (error) {
         if (error.code !== "ENOENT") previous = "Previous workspace-tidy report unreadable; ";
       }
@@ -208,7 +213,8 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     if (expired()) return "";
     // The repair gets the binding's own spelling and resolves it again itself.
     await launch(bound.root, env);
-    return `workspace-tidy ${oneLine(`${previous}deferred (${inventory.worktrees.length} listed)${inventory.issues.length ? `; ${inventory.issues.join("; ")}` : ""}`)}`;
+    const issues = inventory.issues.filter((issue) => !named.includes(issue));
+    return `workspace-tidy ${oneLine(`${previous}deferred (${inventory.worktrees.length} listed)${issues.length ? `; ${issues.join("; ")}` : ""}`)}`;
   } catch (error) {
     return `workspace-tidy deferred; ${oneLine(error.message)}`;
   }

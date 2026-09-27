@@ -14,6 +14,8 @@ agent_work: true
 # repository. On a crew desk where no person resolves it fires too, so the tidy can say so in one line.
 # The driver sets DESK_PLUGIN_ROOT to the Desk plugin root that holds this file, and DESK_TOOLS_ROOT and
 # DESK_TOOLS_PERSON to the root.path and write_scope.person desk_status reports, so the tidy works on the tools' desk.
+# It does not fire while another session holds the tidy's claim, or while a hold's reason still stands (the tidy
+# stopped and nothing that stopped it has changed); then it prints `held: <reason>`, which the startup hooks relay.
 command -v node >/dev/null 2>&1 || exit 1
 [ -f "${DESK_PLUGIN_ROOT:-}/mcp/scripts/tidy-status.js" ] || exit 1
 node "$DESK_PLUGIN_ROOT/mcp/scripts/tidy-status.js" --detect ${DESK_TOOLS_ROOT:+--root "$DESK_TOOLS_ROOT"} ${DESK_TOOLS_PERSON:+--person "$DESK_TOOLS_PERSON"}
@@ -31,24 +33,32 @@ exit 0
 ## Migrate
 
 ```bash
-# The tidy is agent work, so this block changes nothing. It prints this desk's findings and the steps the agent now
-# performs in this session with the Desk tools, in order. When the tidy cannot run this session, it prints the one
-# line to say instead, and no steps.
+# The tidy is agent work, so this block changes no desk content. It takes the tidy's claim, so no other session
+# tidies this desk meanwhile, and prints this desk's findings and the steps the agent now performs in this session
+# with the Desk tools, in order. When the tidy cannot run this session, it prints the one line to say instead, and no
+# steps.
 set -u
 script="$DESK_PLUGIN_ROOT/mcp/scripts/tidy-status.js"
-if ! node "$script" --report ${DESK_TOOLS_ROOT:+--root "$DESK_TOOLS_ROOT"} ${DESK_TOOLS_PERSON:+--person "$DESK_TOOLS_PERSON"}; then
+if ! report=$(node "$script" --report ${DESK_TOOLS_ROOT:+--root "$DESK_TOOLS_ROOT"} ${DESK_TOOLS_PERSON:+--person "$DESK_TOOLS_PERSON"}); then
+  printf '%s\n' "$report"
   exit 0
 fi
-record="node '$script' --write-record${DESK_TOOLS_ROOT:+ --root '$DESK_TOOLS_ROOT'}${DESK_TOOLS_PERSON:+ --person '$DESK_TOOLS_PERSON'}"
+printf '%s\n' "$report"
+claim=$(printf '%s\n' "$report" | sed -n 's/^Tidy claim: \([^ ]*\) .*/\1/p')
+flags="${DESK_TOOLS_ROOT:+ --root '$DESK_TOOLS_ROOT'}${DESK_TOOLS_PERSON:+ --person '$DESK_TOOLS_PERSON'} --claim '$claim'"
+record="node '$script' --write-record$flags"
+defer="node '$script' --defer '<one-line reason>'$flags"
 cat <<STEPS
 
-Tidy this desk now, as ordinary work in this session. Do not ask first and do not wait for an answer: tidy, announce it in one line, and carry on.
+Tidy this desk now, as ordinary work in this session. Do not ask first and do not wait for an answer: tidy, announce it in one line, and carry on. This session holds the tidy's claim (above), so no other session tidies this desk meanwhile.
 
 Rules for every step:
 - Work only inside this session's own desk, named above. A peer's crew desk is theirs: never change it.
 - If the human has told you not to write in this session, skip the tidy entirely and leave everything as it is.
 - Leave alone every task and track that holds uncommitted changes listed above: another session may be working there. Name them as left alone in the announcement.
-- Stage as you go, so your own earlier steps never look like another session's work. On a Git desk task_move, track_rename, track_create and track_update stage what they write. Right after any other change the tidy makes, such as a task_create card or a file you fix by hand, git add exactly that path. task_move and track_rename let staged changes through as this tidy's own work and refuse unstaged changes or untracked files, which belong to another session; never pass allow_dirty to get past that.
+- Stage as you go, and stage only what the tidy itself changed, so your own earlier steps never look like another session's work. On a Git desk task_move, track_rename, track_create and track_update stage what they write. Right after any other change the tidy makes, such as a task_create card or a file you fix by hand, git add exactly that path; never git add a folder, a pattern or -A. task_move and track_rename let staged changes through as this tidy's own work and refuse unstaged changes or untracked files, which belong to another session; never pass allow_dirty to get past that. Before moving a task or track, check git diff --cached --name-only -- <its path>: if it lists anything the tidy did not stage, leave that task or track alone.
+- If the tidy cannot finish in this session for any reason (for example the checks in step 7 fail, or a guard refuses a git command), stop, leave what you staged as it is, and run: $defer
+  with the reason in place of <one-line reason>. That releases the claim and keeps session start from asking again until this desk's latest commit or its uncommitted changes differ. Then say the reason in one line.
 - Move and rename only through Git: task_move and track_rename stage a git mv, and git mv moves a loose file. An untracked loose file that is not ignored gets git add first, then git mv. Leave ignored files where they are. Never delete content.
 - Never change a task's status. Stale tasks are reported only; their status belongs to the work.
 - Build every new name from the outcome, 2 to 6 lowercase kebab-case words. Never copy text from an old name, and never write an old name that failed the credential or prompt check (shown as <redacted segment>, name_credential_like or name_prompt_like) anywhere: not in a card, a commit message or the announcement. Describe such a move by its new name only.
@@ -60,8 +70,8 @@ Steps, in order:
 4. Loose files. git mv each loose file or folder (loose_file) into the task it belongs to, or into the track's _planning/ when it concerns the whole track, or into _meta/ when it concerns the whole desk. Never create a task just to hold files. A loose folder that is clearly a task gets a card with task_create instead of a move. A loose entry whose name fails the name rules gets an outcome name when it moves.
 5. Person-named and catch-all tracks (track_person_name, track_catch_all). Move each task, live or archived, into a track whose scope line clearly fits, or into a new track made with track_create (an outcome name and a scope line), using task_move (to_track). Then git mv the emptied track into the desk's _archive/.
 6. Empty tracks (track_empty). git mv each into the desk's _archive/.
-7. Record and commit. Write _meta/organization.json in this session's own desk with: $record
-   Then git add the record. Fix the files that task_move and track_rename reported under mentions when they matter, and git add each one. Run desk_doctor to confirm the Organization section. The tidy paths are the old and the new path of every move and rename, the files you fixed and the record. Everything the tidy changed is staged, so before committing check that git diff --name-only -- <tidy paths> and git ls-files --others --exclude-standard -- <tidy paths> print nothing, and that git diff --cached --name-status -- <tidy paths> lists only the tidy's changes. If one of those paths holds changes that are not the tidy's, leave the tidy uncommitted and stop with one line saying so. Otherwise commit with git commit -- <tidy paths> and nothing else, so any other staged work stays staged exactly as it was; never unstage anyone else's work. The message lists every move and rename by its new name. Then push.
+7. Check, record and commit. Fix the files that task_move and track_rename reported under mentions when they matter, and git add each one. Run desk_doctor to confirm the Organization section. The tidy paths are the old and the new path of every move and rename and the files you fixed. Everything the tidy changed is staged, so check that git diff --name-only -- <tidy paths> and git ls-files --others --exclude-standard -- <tidy paths> print nothing, and that git diff --cached --name-status -- <tidy paths> lists only the tidy's changes. If one of those paths holds changes that are not the tidy's, leave the tidy uncommitted, run the defer command above, and stop with one line saying so. Otherwise write _meta/organization.json in this session's own desk with: $record
+   Then git add the record and commit with git commit -- <tidy paths> <the record> and nothing else, so any other staged work stays staged exactly as it was and is never committed with the tidy; never unstage anyone else's work. The message lists every move and rename by its new name. Then push.
 
 Then send the Announce line below with this tidy's own counts, anything left alone, and the commit link.
 If the human objects, run git revert --no-commit <tidy commit>, restore the record with git checkout <tidy commit> -- <this session's own desk>/_meta/organization.json, and commit both together, so the desk is back as it was and the tidy does not run again.
