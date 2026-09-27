@@ -17,7 +17,7 @@ operator's workspace, `crew` is what turns one git repo into a shared workspace 
   committed identity-to-alias mapping, seed a new member from the complete repo template, and bind writes
   to that member's desk.
 
-Vendor-neutral. Layers on top of `desk` + `work-suite`. A corporate overlay supplies
+Vendor-neutral. Layers on top of `desk`. A corporate overlay supplies
 the identity skin (how a teammate's writes authenticate); this plugin is the substrate-neutral core.
 
 ## Skills

@@ -22,7 +22,7 @@ DESK=~/<your-workspace> node ./index.js
 
 ## Factory capture and store pipeline
 
-Claude and Copilot end/stop hooks write protected local markers; detached derivation binds native session evidence to jobs and writes consent-gated local facts. The factory CLI exposes the local runner with `derive` and `status`, validates store intake (published facts and waste labels) with `validate-pr`, builds deterministic reports with `build`, and derives a hashed report URL with `job-link`. Task completion queues finalization when factory state exists, but transport, store workflows and installed-host qualification remain separate milestone work. See [the factory capture and pipeline contract](../docs/factory-local-capture.md) for privacy, commands, formulas and recovery boundaries.
+Claude and Copilot end/stop hooks write protected local markers; detached derivation binds native session evidence to jobs and writes consent-gated local facts. The factory CLI exposes the local runner with `derive` and `status`, validates store intake (published facts and waste labels) with `validate-pr`, builds deterministic reports and cross-job waste rollups with `build`, and derives a hashed report URL with `job-link`. Task completion queues finalization when factory state exists, but transport, store workflows and installed-host qualification remain separate milestone work. See [the factory capture and pipeline contract](../docs/factory-local-capture.md) for privacy, commands, formulas and recovery boundaries.
 
 ## Tools exposed (18)
 
