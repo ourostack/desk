@@ -95,7 +95,7 @@ args = ["-y", "@playwright/mcp@latest"]
 # optional: env = { KEY = "value" }
 ```
 
-Use `@<scope>/<name>@latest` or pin a specific version.
+Use `@<scope>/<name>@latest`, or the package's own channel tag. Never pin an exact version or commit: V2 follows channels, so fixes reach every session. If a release breaks, report it and fix forward instead of freezing the version.
 
 #### Why not `[mcps.builtins.<alias>] type = "npx"` for external MCPs?
 
