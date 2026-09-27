@@ -6,7 +6,7 @@ The store design, the published schema and the "no who, no when, just how" stanc
 
 ## What you end with
 
-- A repository whose `main` holds `README.md`, `.github/workflows/` and published facts under `facts/`.
+- A repository whose `main` holds `README.md`, `.github/workflows/` and two data paths: published facts at `facts/<host>-<session id>.json` and published waste labels at `labels/<job>/<session id>.json`. Anyone may add data files, grow a facts file or replace labels with a newer evaluator's; every other change, including any other file under those folders and every removal, is maintenance.
 - A ruleset on `main`: every change arrives by pull request, the `factory-validate` check must pass, and nobody can force-push or delete the branch. Admins can bypass only while merging a pull request.
 - `factory-validate`, which checks every pull request with Desk's validator. Our workflow file never runs the candidate's files, but GitHub runs a pull request's own workflow files, so the check alone is not evidence (see "Merging by hand" below).
 - `factory-merge`, which validates each intake pull request again and merges it or closes it with `factory-rejected: <code>` comments. It never merges maintenance pull requests.
@@ -75,7 +75,7 @@ Issues stay on: the kaizen and andon steps added in milestone 5 open issues.
 
 ```sh
 label() { gh api -X POST "repos/$STORE/labels" -f name="$1" -f color="$2" -f description="$3" --jq .name; }
-label maintenance fbca04 "Maintainer change outside facts/; never auto-merged"
+label maintenance fbca04 "Maintainer change outside facts/ and labels/; never auto-merged"
 label kaizen 0e8a16 "Improvement proposal raised from factory evidence"
 label andon d93f0b "Stop-the-line signal raised from factory evidence"
 label confirmed 1d76db "A kaizen or andon finding confirmed by review"
@@ -210,10 +210,19 @@ gh pr merge --repo "$STORE" maintenance/workflows --merge
 # Validates every pull request against the published facts schema.
 #
 # The candidate is untrusted data. This workflow checks out the base, fetches
-# the pull request's exact head commit as Git objects only, and reads the
-# changed files through `git diff --name-status` and `git show` inside Desk's
-# validator, cloned from ourostack/desk main. Nothing from the candidate is
-# checked out, installed or executed. Failures report stable reason codes only.
+# the pull request's exact head commit as Git objects only, and runs Desk's
+# validator, cloned from ourostack/desk main, on what merging that head into
+# the base would land. This file never checks out, installs or executes the
+# candidate's files. Failures report stable reason codes only.
+#
+# GitHub runs the workflow files of the pull request's own merge commit on
+# `pull_request`, so a pull request that edits this file, or adds a workflow
+# with a job named `factory-validate`, runs its own code here instead, with
+# a read-only token and no secrets, and can post a green check. A green
+# `factory-validate` is therefore not evidence on its own: factory-merge
+# validates again from main before it merges, and a maintainer merges
+# someone else's pull request only through factory-merge or after running
+# validate-pr at its exact head.
 #
 # A maintainer is the pull request author when their permission on this
 # repository is `admin` or `write` (`maintain` reads as `write`), read from
@@ -318,17 +327,27 @@ jobs:
 ```yaml
 # Merges or rejects intake pull requests after factory-validate completes.
 #
-# This workflow always runs from main, so the candidate cannot change it. It
-# never trusts the triggering run: it validates again, with Desk main, the
-# exact head commit that run validated, fetched as Git objects only. It merges
-# only when both validations pass and the pull request still has that head,
-# and GitHub enforces the head match again at merge time. It rejects only when
-# the trusted validation fails and the head is unchanged, with a comment of
-# `factory-rejected: <code>` lines and nothing else. Maintenance pull requests
-# (changes outside facts/ by a maintainer) are labeled
-# `maintenance` and left for a maintainer to merge. A maintainer is the pull
-# request author when their permission on this repository is `admin` or
-# `write`, read from the collaborator permission API; any API error means
+# This workflow always runs from main, so a pull request cannot change it.
+# It never trusts the triggering run: a pull request's own workflow files run
+# on its `pull_request` event and can post a green `factory-validate`, or name
+# a workflow `factory-validate`, so the only field of the `workflow_run`
+# event used here is `head_sha`, and that head is validated again with Desk
+# main, fetched as Git objects only. Keep it that way: never read any other
+# event field, and never trust the triggering conclusion alone.
+#
+# Three steps keep the write token away from candidate data: the first finds
+# the open pull requests at that head and their authors' permission; the
+# second, which holds no token, runs Desk's validator; the third acts on the
+# results. It merges only when both validations pass and the pull request
+# still has that head, and the merge call passes that head as `sha`, so
+# GitHub refuses the merge if the head moved. It rejects only when the
+# trusted validation fails and the head is unchanged, with a comment of
+# `factory-rejected: <code>` lines and nothing else. Maintenance pull
+# requests (changes outside the data paths facts/ and labels/, including
+# .github/, by a maintainer) are labeled `maintenance` and left for a
+# maintainer; the same changes from anyone else fail validation with `path`
+# and are rejected. A maintainer is the pull request author when their
+# permission on this repository is `admin` or `write`; any API error means
 # "not a maintainer".
 name: factory-merge
 
@@ -372,16 +391,16 @@ jobs:
           git clone --quiet --depth 1 --branch main https://github.com/ourostack/desk "$RUNNER_TEMP/desk"
           echo "Desk main: $(git -C "$RUNNER_TEMP/desk" rev-parse HEAD)"
 
-      - name: Merge or reject
+      - name: Find the pull requests at the validated head
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -euo pipefail
           summary() { printf '%s\n' "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          : > "$RUNNER_TEMP/factory-prs.tsv"
 
           if ! printf '%s' "$HEAD_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
             summary "factory-merge: invalid head"
@@ -397,11 +416,6 @@ jobs:
             exit 0
           fi
 
-          git fetch --quiet --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
-          git fetch --quiet --no-tags origin "$HEAD_SHA"
-          test "$(git rev-parse --verify "$HEAD_SHA^{commit}")" = "$HEAD_SHA"
-          base_sha=$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")
-
           for number in $numbers; do
             pr=$(gh api "repos/$REPOSITORY/pulls/$number")
             if [ "$(jq -r '.state' <<<"$pr")" != "open" ] || [ "$(jq -r '.head.sha' <<<"$pr")" != "$HEAD_SHA" ]; then
@@ -412,7 +426,6 @@ jobs:
               summary "factory-merge: #$number is maintenance; left for a maintainer"
               continue
             fi
-
             author=$(jq -r '.user.login' <<<"$pr")
             association=NONE
             if printf '%s' "$author" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9-]{0,38}$'; then
@@ -424,13 +437,44 @@ jobs:
                 summary "factory-merge: #$number maintainer_check_unavailable"
               fi
             fi
-            result="$RUNNER_TEMP/factory-validate-$number.json"
+            printf '%s\t%s\n' "$number" "$association" >> "$RUNNER_TEMP/factory-prs.tsv"
+          done
+
+      - name: Validate with Desk main (no token)
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ ! -s "$RUNNER_TEMP/factory-prs.tsv" ]; then
+            exit 0
+          fi
+          git fetch --quiet --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          git fetch --quiet --no-tags origin "$HEAD_SHA"
+          test "$(git rev-parse --verify "$HEAD_SHA^{commit}")" = "$HEAD_SHA"
+          base_sha=$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH")
+          while IFS=$'\t' read -r number association; do
             node "$RUNNER_TEMP/desk/plugins/desk/mcp/scripts/factory.js" validate-pr \
               --base "$base_sha" --head "$HEAD_SHA" --author-association "$association" \
-              > "$result" 2> /dev/null || true
+              > "$RUNNER_TEMP/factory-validate-$number.json" 2> /dev/null || true
+          done < "$RUNNER_TEMP/factory-prs.tsv"
+
+      - name: Merge or reject
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          set -euo pipefail
+          summary() { printf '%s\n' "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          unavailable=0
+          while IFS=$'\t' read -r number association; do
+            result="$RUNNER_TEMP/factory-validate-$number.json"
             if ! jq -e '(.ok | type) == "boolean"' "$result" > /dev/null 2>&1; then
               summary "factory-merge: #$number validator_unavailable; no action"
-              exit 1
+              unavailable=1
+              continue
             fi
 
             if jq -e '.ok == true' "$result" > /dev/null; then
@@ -463,7 +507,8 @@ jobs:
             gh api -X PATCH "repos/$REPOSITORY/pulls/$number" -f state=closed > /dev/null
             summary "factory-merge: #$number rejected and closed"
             summary "$codes"
-          done
+          done < "$RUNNER_TEMP/factory-prs.tsv"
+          exit "$unavailable"
 ```
 
 ### `.github/workflows/build.yml`
@@ -477,6 +522,10 @@ jobs:
 # and on demand. The build is deterministic and the commit has fixed metadata,
 # so the same facts always produce the same commit and an unchanged build
 # pushes nothing. The commit has no parent and holds only the build output.
+#
+# A pull request can name one of its own workflows `factory-merge` and start
+# this workflow through `workflow_run`. That is harmless because this
+# workflow reads no event data: it always builds main. Keep it that way.
 name: factory-build
 
 on:
@@ -561,7 +610,7 @@ jobs:
 
 Why the workflows are shaped this way:
 
-- **The candidate's workflow runs; its files are data.** `factory-validate` runs on `pull_request`, so GitHub uses the pull request's copy of the workflow files, with a read-only token and no secrets. A pull request that rewrites `validate.yml`, or adds any workflow with a job named `factory-validate`, can post a green check, and one that names a workflow `factory-validate` or `factory-merge` can start `factory-merge` or `factory-build`. That is why `factory-merge` runs from `main`, reads only `head_sha` from the event, validates again with Desk `main` in a step that holds no token, and rejects anything that fails there, and why `factory-build` reads no event data at all. Changes under `.github/` are outside `facts/`, so a non-maintainer's are always rejected.
+- **The candidate's workflow runs; its files are data.** `factory-validate` runs on `pull_request`, so GitHub uses the pull request's copy of the workflow files, with a read-only token and no secrets. A pull request that rewrites `validate.yml`, or adds any workflow with a job named `factory-validate`, can post a green check, and one that names a workflow `factory-validate` or `factory-merge` can start `factory-merge` or `factory-build`. That is why `factory-merge` runs from `main`, reads only `head_sha` from the event, validates again with Desk `main` in a step that holds no token, and rejects anything that fails there, and why `factory-build` reads no event data at all. Changes under `.github/` are outside the data paths, so a non-maintainer's are always rejected.
 - **The merge, not a diff.** `validate-pr` judges the tree that merging the head into `main` produces (`git merge-tree`, Git 2.38 or later), refuses heads whose merge conflicts or that carry merge commits of their own, and fails closed on an older Git. A `main...head` diff reads only one merge base and can miss what a crafted merge changes.
 - **Maintainers by permission.** Both workflows read the author's repository permission and pass `COLLABORATOR` to `validate-pr` for `admin` or `write`, and `NONE` otherwise. A login that is not a plain GitHub user name, or any API error, gives `NONE`, so the check fails closed. No token is widened: the permission API works with the default read-only workflow token.
 - **Fork pull requests.** `workflow_run.pull_requests` is empty for a pull request from a fork, so `factory-merge` finds pull requests by the validated head commit.
