@@ -853,6 +853,124 @@ requires(
   /operator teaches[\s\S]+even offhand[\s\S]+no-write/iu,
 );
 
+// The observer agent: worker's sibling, named for Lean's process observer, who watches the work, times it and
+// classifies each step, and never does the work. Its three bodies carry identity only, like worker's.
+const observerBodies = [
+  "plugins/desk/agents/observer.md",
+  "plugins/desk/agents/observer.agent.md",
+  "plugins/desk/agents/observer.toml",
+];
+for (const file of observerBodies) {
+  contract(`${file} carries identity only`, () => {
+    const body = text(file);
+    for (const [pattern, owner] of ownedRules) {
+      assert.doesNotMatch(body, pattern, `restates a rule owned by ${owner}`);
+    }
+    for (const required of [
+      "I'm **observer**",
+      "the full `using-desk` foundation exactly once",
+      "Do not duplicate it here.",
+      "Lean's process observer",
+      "**Independent.**",
+      "**Evidence only.**",
+      "**Hands off.**",
+      "**Never my own judge.**",
+      "`desk:evaluate-release`",
+    ]) assert.ok(body.includes(required), `missing identity: ${required}`);
+    assert.match(body, /never do, fix or finish the work I observe/u);
+    assert.match(body, /never certify my own work/u);
+    assert.match(body, /Every claim I make cites its source/u);
+    assert.doesNotMatch(body, /desk:session-start/u, "observer does not pick up the desk's work at startup");
+    assert.ok(Buffer.byteLength(body) <= 4096, `body is ${Buffer.byteLength(body)} bytes; identity fits in 4 KB`);
+  });
+}
+contract("the three observer bodies share one identity text", () => {
+  const shared = (body) => body.slice(body.indexOf("I'm **observer**")).split("\n'''", 1)[0].trim();
+  const [claude, copilot, codex] = observerBodies.map((file) => shared(text(file)));
+  assert.equal(copilot, claude, "observer.agent.md drifted from observer.md");
+  assert.equal(codex, claude, "observer.toml drifted from observer.md");
+});
+contract("the observer bodies keep worker's frontmatter and tool shape per host", () => {
+  const frontmatterKeys = (body) => body.split(/\r?\n---\r?\n/u, 1)[0].split(/\r?\n/u).filter((line) => /^[A-Za-z-]+:/u.test(line)).map((line) => line.split(":", 1)[0]);
+  const tomlKeys = (body) => body.split(/\r?\n/u).filter((line) => /^[a-z_]+ = /u.test(line)).map((line) => line.split(" ", 1)[0]);
+  assert.deepEqual(frontmatterKeys(text("plugins/desk/agents/observer.md")), frontmatterKeys(text("plugins/desk/agents/worker.md")));
+  assert.deepEqual(frontmatterKeys(text("plugins/desk/agents/observer.agent.md")), frontmatterKeys(text("plugins/desk/agents/worker.agent.md")));
+  assert.deepEqual(tomlKeys(text("plugins/desk/agents/observer.toml")), tomlKeys(text("plugins/desk/agents/worker.toml")));
+  assert.match(text("plugins/desk/agents/observer.md"), /^name: observer$/mu);
+  assert.match(text("plugins/desk/agents/observer.md"), /^tools: \["\*"\]$/mu);
+  assert.match(text("plugins/desk/agents/observer.agent.md"), /^name: observer$[\s\S]+^target: github-copilot$[\s\S]+^user-invocable: true$/mu);
+  assert.match(text("plugins/desk/agents/observer.toml"), /^name = "observer"$/mu);
+});
+
+// observer's release evaluation (spec §12 milestone 6): cold start on a named host, per-step evidence, one class per
+// problem, measured time, and a report that fixes nothing and certifies nothing.
+const evaluateRelease = "plugins/desk/skills/evaluate-release/SKILL.md";
+contract("evaluate-release is observer's skill and says when not to use it", () => {
+  const skill = text(evaluateRelease);
+  assert.match(skill, /^name: evaluate-release$/mu);
+  assert.match(skill.split(/\n---\n/u, 1)[0], /^description: .*`desk:observer`.*packet.*cold start/mu);
+  const notFor = skill.split("## When not to use it", 2)[1]?.split("\n## ", 1)[0] ?? "";
+  assert.match(notFor, /work you did/u);
+  assert.match(notFor, /`superpowers:requesting-code-review`/u);
+  assert.match(notFor, /waste/u);
+});
+requires(evaluateRelease, "evaluate-release starts cold on the named host and tests the channel as it stands",
+  /## Start cold on the named host[\s\S]+named host[\s\S]+throwaway profile[\s\S]+channel as it stands[\s\S]+commit you observed[\s\S]+evidence, never as a pin/u);
+requires(evaluateRelease, "evaluate-release records every step's outcome with evidence",
+  /## Record every step[\s\S]+commands? with (?:its|their) output[\s\S]+screenshots?[\s\S]+`desk_status`[\s\S]+host logs?[\s\S]+`pass`, `fail`, `blocked` or `unavailable`/u);
+requires(evaluateRelease, "evaluate-release classifies every problem as a defect, a confusion or a gap",
+  /## Classify every problem[\s\S]+exactly one class[\s\S]+\*\*Defect\.\*\*[\s\S]+\*\*Confusion\.\*\*[\s\S]+\*\*Gap\.\*\*/u);
+requires(evaluateRelease, "evaluate-release measures time and never estimates it",
+  /## Time each scenario[\s\S]+measured, never estimated[\s\S]+`unavailable`/u);
+requires(evaluateRelease, "evaluate-release reports without fixing anything",
+  /## Hands off[\s\S]+never fix[\s\S]+workaround[\s\S]+record it and (?:carry on|continue)/iu);
+requires(evaluateRelease, "evaluate-release never certifies observer's own work or the release",
+  /never certif[\s\S]+release call is the (?:human|evaluator)'s/iu);
+requires(evaluateRelease, "evaluate-release files one issue per finding, labeled evaluation, after the evaluator approves it",
+  /## Report[\s\S]+one issue per finding[\s\S]+`ourostack\/desk`[\s\S]+labeled `evaluation`[\s\S]+work equivalent[\s\S]+`desk:operator-voice-comments`/u);
+contract("evaluate-release keeps public findings free of times of day and private content", () => {
+  const skill = text(evaluateRelease);
+  assert.match(skill, /durations?, never (?:a )?times? of day/u);
+  assert.match(skill, /`desk:content-routing`/u);
+});
+
+// The evaluation packet (spec §9 and §12 milestone 6) is public, names channels only and carries its scenarios.
+const evaluationPacket = "plugins/desk/docs/evaluation-packet.md";
+contract("the evaluation packet names channels, never commits", () => {
+  const packet = text(evaluationPacket);
+  assert.doesNotMatch(packet, /\b[0-9a-f]{7,40}\b/u, "no commit hash");
+  assert.doesNotMatch(packet, /frozen|\bpin(?:ned)? (?:to|at) /iu);
+  assert.match(packet, /channel as it stands/u);
+  assert.match(packet, /https:\/\/github\.com\/ourostack\/desk\/blob\/main\/SETUP\.md/u);
+});
+contract("the evaluation packet covers who it is for, V2, setup, scenarios and recording", () => {
+  const packet = text(evaluationPacket);
+  const headings = packet.split("\n").filter((line) => /^#{2,3} /u.test(line)).map((line) => line.replace(/^#+ /u, ""));
+  for (const heading of ["Who this is for", "What V2 is", "Set up from nothing", "The scenarios", "Record what you find"]) {
+    assert.ok(headings.includes(heading), `missing section ${heading}`);
+  }
+  const scenarios = headings.filter((heading) => /^\d\. /u.test(heading)).map((heading) => heading.replace(/ \(lands by the evaluation\)$/u, ""));
+  assert.deepEqual(scenarios, [
+    "1. Start new work: alignment, then ownership",
+    "2. Hand over a whole outcome and step away",
+    "3. Change a requirement mid-run",
+    "4. A desk that needs tidying",
+    "5. A Desk tool fault that heals in the session",
+    "6. A finished task reaches the factory",
+    "7. A kaizen card's check",
+  ]);
+  for (const section of packet.split(/\n### \d\. /u).slice(1)) {
+    assert.match(section, /\*\*Do:\*\*[\s\S]+\*\*Good looks like\*\*/u, `scenario ${section.split("\n", 1)[0]} lacks steps or observable outcomes`);
+  }
+  assert.match(packet, /`observer`[\s\S]+`desk:evaluate-release`/u);
+  assert.match(packet, /labeled `evaluation`/u);
+  assert.match(packet, /measured, not estimated/u);
+  assert.match(packet, /\[[^\]]+\]\(agentic-engineering-v2-rfc\.md\)/u);
+});
+contract("the evaluation packet prose is not hard-wrapped", () => {
+  assert.deepEqual(proseUnits(evaluationPacket).filter((unit) => unit.length > 1).map((unit) => unit[0].number), []);
+});
+
 assert.equal(
   contractFailures.length,
   0,

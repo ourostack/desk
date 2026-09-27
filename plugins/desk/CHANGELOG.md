@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.52 — 2026-09-27
+
+Adds `observer`, `worker`'s sibling agent named for Lean's process observer: it watches work it did not do, times it and classifies each step from evidence, and never does, fixes or certifies that work. Its identity-only bodies ([Claude](agents/observer.md), [Copilot](agents/observer.agent.md), [Codex](agents/observer.toml)) are registered beside `worker` in every host manifest and the [activation manifest](activation/desk.activation.json), never as the default. Its first skill, [`evaluate-release`](skills/evaluate-release/SKILL.md), works through a packet from a cold start on a named host, records each step with evidence and measured time, classifies every problem as a defect, a confusion or a gap, and reports without fixing anything. The [evaluation packet](docs/evaluation-packet.md) gives an outside evaluator setup from nothing on each host, seven scenarios with observable outcomes, and how to file findings as issues labeled `evaluation`; three scenarios are marked as landing by the evaluation. [Content contracts](../../scripts/test-desk-contracts.cjs) and the [host manifest verifier](../../scripts/test-desk-host-manifests.cjs) pin the bodies, the registrations, the skill and the packet. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
 ## 3.2.0-alpha.48 — 2026-09-26
 
 M3-7 affected re-review correction: [marker reads](mcp/src/factory/marker.js) now compare the opened descriptor with both the post-read descriptor and current pathname. [Enumeration](mcp/src/factory/outbox.js) retains the protected directory's identity across repair, reading, return and pruning, and defers leaf protection until the read is bound to that directory and leaf. A swap to an external directory followed by restoration cannot supply a marker or trigger repair/pruning of that external record.

@@ -8,6 +8,8 @@ The desk plugin ships a substrate-default engineering agent named `worker`. The 
 | `worker.agent.md` | Copilot CLI | YAML frontmatter (`target: github-copilot`, `user-invocable: true`) + markdown body | A discrete agent that appears in Copilot CLI's agent picker. Invoke `copilot --agent worker`. |
 | `worker.toml` | Codex CLI | TOML subagent — `name`, `description`, `developer_instructions` | Source format for hosts that expose explicit subagents; Codex's healthy path is activation-owned default behavior. |
 
+The plugin also ships `observer`, `worker`'s sibling, in the same three formats (`observer.md`, `observer.agent.md`, `observer.toml`). Named for Lean's process observer, it watches work it did not do, times it and classifies each step from evidence, and never does, fixes or certifies that work. It is never the default agent: invoke `claude --agent desk:observer` or `copilot --agent observer`, and see [its release-evaluation skill](../skills/evaluate-release/SKILL.md) and the [evaluation packet](evaluation-packet.md).
+
 ## Install + invoke per harness
 
 ### Claude Code

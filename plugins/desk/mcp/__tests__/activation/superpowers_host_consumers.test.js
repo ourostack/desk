@@ -23,7 +23,7 @@ function legacyActivation() {
     provenance: { source: "plugins/work-suite/.codex-plugin/plugin.json", package: "ourostack/work-suite" },
     lock: { version: "4.0.0-alpha.2", integrity: "sha256-work-suite-activation-manifest-v1" },
   })
-  value.provides.activation_targets[0].depends_on = ["desk", "work-suite", "plain-language"]
+  for (const target of value.provides.activation_targets) target.depends_on = ["desk", "work-suite", "plain-language"]
   for (const host of Object.values(value.host_activation)) {
     if (host.dependencies?.superpowers) {
       host.dependencies["work-suite"] = { ...host.dependencies.superpowers, path: "../work-suite", version: "4.0.0-alpha.2" }
