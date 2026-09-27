@@ -342,11 +342,11 @@ test("the fixture's rollups keep their bytes when sessions, labels and records a
 })
 
 test("the page lists plugin versions in version order, a release after its prereleases, then mixed and unknown", () => {
-  const versions = ["unknown", "3.2.0-alpha.100", "3.2.0", "mixed", "3.2.0-alpha.70", "3.10.0", "3.2.0-beta.1", "3.9.0"]
+  const versions = ["unknown", "3.1.0-alpha.100", "3.2.0", "mixed", "3.1.0-alpha.70", "3.10.0", "3.2.0-beta.1", "3.9.0"]
   const labels = { files: 0, byJobSession: new Map(), unused: [] }
   const text = renderRollupsMarkdown(computeRollups({ records: versions.map((version, index) => record(String(index).repeat(32), { plugin_version: version })), sessions: [], labels }))
   const order = [...text.matchAll(/^### By plugin version: (.+)$/gmu)].map((match) => match[1])
-  const expected = ["3.2.0-alpha.70", "3.2.0-alpha.100", "3.2.0-beta.1", "3.2.0", "3.9.0", "3.10.0", "mixed", "unknown"]
+  const expected = ["3.1.0-alpha.70", "3.1.0-alpha.100", "3.2.0-beta.1", "3.2.0", "3.9.0", "3.10.0", "mixed", "unknown"]
   assert.deepEqual(order, [...expected, ...expected], "the Pareto and the catalog both use version order")
 })
 
