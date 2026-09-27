@@ -21,8 +21,8 @@ export async function mkFeedbackFixture() {
 export async function writePosixNodeProvider(providerPath, body) {
   // Keep the required .exe launch path, but give Node's loader a recognized payload extension.
   await fs.writeFile(`${providerPath}.cjs`, `${body}\n`)
-  // The stand-in runs the test's own Node by absolute path, not whatever `node` PATH finds first, and without the test runner's NODE_OPTIONS preloads (coverage instrumentation), which it inherits from the provider's environment. A stand-in started through PATH with those preloads timed out at the runner's real 20 s default under contention.
-  await fs.writeFile(providerPath, `#!/bin/sh\nexec /usr/bin/env -u NODE_OPTIONS ${shellQuote(process.execPath)} "$0.cjs" "$@"\n`, { mode: 0o755 })
+  // The stand-in runs the test's own Node by absolute path, not whatever `node` PATH finds first (on a developer machine that can be a version-manager shim or an older Node). It keeps the caller's NODE_OPTIONS, which posix_provider_fixture.test.js requires.
+  await fs.writeFile(providerPath, `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$0.cjs" "$@"\n`, { mode: 0o755 })
 }
 
 function shellQuote(value) {
