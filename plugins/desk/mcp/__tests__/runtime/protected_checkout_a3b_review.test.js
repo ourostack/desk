@@ -375,3 +375,105 @@ test("A3b review: configuration sources, alias forms and stdin scripts cover eve
   writeFileSync(path.join(f.root, "broken.cfg"), "")
   assert.match((await guardShellCommand({ command: "git checkout topic", cwd: P, env: f.env, budgetMs: 0 })).reason, /within its 0 s budget/u)
 })
+
+// Re-review 1 (task-A3b-rereview-1-evidence/rr1-variants.mjs, rr1-probes.mjs, rr1-probes2.mjs).
+test("A3b re-review: every PowerShell assignment form runs the command it captures", async (t) => {
+  const f = await fixture(t)
+  const deny = [
+    "$x=git stash", "$x =git stash", "${x} = git stash", "$x += git stash", "$x -= git stash", "$x ??= git stash",
+    "$global:x = git stash", "$local:x = git stash", "$private:x = git stash", "$script:x = git stash",
+    "[string]$x = git stash", "[string[]]$files = git stash", "[int]$n = (git stash).Count", "$a, $b = git stash",
+    "$x = if ($true) { git stash }", "$x = switch (1) { 1 { git stash } }", "$x = try { git stash } catch { }",
+    "$x = foreach ($i in 1) { git stash }", "$h = @{}; $h.x = git stash", "$h = @{}; $h['x'] = git stash",
+    "$x = git stash; $x", "if (Test-Path x) { git stash; echo hi }", "$x = while ($false) { git stash }",
+    "& (Get-Command git) checkout main", "& (Get-Command x) stash", "$x = @(git stash)", `$x = "$(git stash)"`,
+  ]
+  for (const command of deny) assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
+  const allow = [
+    "$x = git status", "[string]$b = git rev-parse --abbrev-ref HEAD", "$script:b = git rev-parse HEAD",
+    "$s = git status --porcelain; if ($s) { 'dirty' }", "$files = git diff --name-only; foreach ($f in $files) { Write-Output $f }",
+    "$out = git push -q origin main 2>&1", "$null = git fetch", "(git log).Count", "@(git status --short)", "& (Get-Command node) --version",
+    "$x = 'git stash'", "$x = $y", "$n = 3", "[void]$x", "$x.Count", "if ($true) { 'y' } else { 'n' }", "$h = @{}; $h.x = 1", "$x += 'more'",
+  ]
+  for (const command of allow) {
+    const result = await f.guard(command, { powershell: true })
+    assert.equal(result.deny, false, `${command}: ${result.reason}`)
+  }
+  // Either branch of a control statement may run, so a location it changes does not hide the protected checkout.
+  assert.equal((await f.guard(`if ($true) { Set-Location ${psq(f.own)} }; git stash`, { powershell: true })).deny, true)
+  assert.equal((await f.guard(`Set-Location ${psq(f.own)}; git stash`, { powershell: true })).deny, false)
+  assert.match((await f.guard("$x = (git stash", { powershell: true })).reason, /could not inspect this shell command \(unresolved PowerShell expression\)/u)
+  assert.match((await f.guard("git status; }", { powershell: true })).reason, /could not inspect this shell command/u)
+  if (!pwsh) { t.diagnostic("native PowerShell unavailable; decisions still checked"); return }
+  for (const command of ["[string]$x = git stash", "$script:x = git stash", "$x = if ($true) { git stash }"]) {
+    const real = await fixture(t)
+    writeFileSync(path.join(real.prot, "file.txt"), "another session's edit\n")
+    spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { cwd: real.prot, env: real.env, encoding: "utf8" })
+    assert.notEqual(real.git(real.prot, "stash", "list"), "", `${command} stashes when run`)
+  }
+})
+
+test("A3b re-review: here-documents belong to the command that opens them, and literal pipes are scripts", async (t) => {
+  const f = await fixture(t)
+  const deny = [
+    "bash <<'EOF' | tail -5\ngit stash\nEOF", "bash <<'EOF' 2>&1 | tee log.txt\ngit checkout -q --detach HEAD\nEOF",
+    "bash <<'EOF' && echo done\ngit stash\nEOF", "sh <<'EOF'; echo done\ngit stash\nEOF", "bash <<'EOF' || true\ngit stash\nEOF",
+    "{ bash <<'EOF'\ngit stash\nEOF\n} | cat", "bash << EOF\ngit stash\nEOF", "bash <<'EOF' > out.log 2>&1\ngit stash\nEOF",
+    "printf '%s\\n' 'git stash' | sh", "printf 'git stash\\n' | bash", "echo -e 'git stash' | bash", "echo -ne 'git stash' | bash",
+    "printf '%s %s\\n' git stash | bash", "git show HEAD:x.sh | bash",
+  ]
+  for (const command of deny) assert.equal((await f.guard(command)).deny, true, command)
+  const allow = [
+    "cat <<'EOF' | wc -l\ngit stash\nEOF", "cat > a.md <<'EOF'\ngit stash\nEOF\ncat > b.md <<'EOF'\ngit checkout main\nEOF\ngit status --short",
+    "git commit -q --allow-empty -F - <<'EOF'\nExplain git reset --hard\nEOF", "echo -n 'echo hi' | bash", "cat x.sh | bash",
+    "printf '%d' 3 | bash", "echo -E 'echo \\n' | sh", "printf '%%s' | bash", "echo -n | bash", "printf 'echo %s %s' a | bash",
+    "cat <<'EOF' > notes.md && bash -n /dev/null\ngit stash is denied here\nEOF",
+  ]
+  for (const command of allow) {
+    const result = await f.guard(command)
+    assert.equal(result.deny, false, `${command}: ${result.reason}`)
+  }
+  // Real Bash runs the here-document through the command that opened it.
+  const command = "bash <<'EOF' | tail -5\ngit stash\nEOF"
+  writeFileSync(path.join(f.prot, "file.txt"), "another session's edit\n")
+  spawnSync("bash", ["--noprofile", "--norc", "-c", command], { cwd: f.prot, env: f.env, encoding: "utf8" })
+  assert.notEqual(f.git(f.prot, "stash", "list"), "")
+})
+
+test("A3b re-review: a computed directory with a known program name is that program", async (t) => {
+  const f = await fixture(t)
+  for (const command of ['"$(npm bin)/nx" reset', '"$(npm bin)/lerna" clean --yes', "lerna clean", '"$(brew --prefix)/bin/gmake" -C build clean', '"$(git rev-parse --show-toplevel)/scripts/check.sh"']) {
+    assert.equal((await f.guard(command)).deny, false, command)
+  }
+  for (const command of ['"$(dirname x)/git" stash', "$(printf 'g%s' it) stash", "X=$(cat f); $X stash"]) assert.equal((await f.guard(command)).deny, true, command)
+  for (const command of ['& "$(Get-Location)/nx" reset']) assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
+})
+
+test("A3b re-review: ordinary chained work the guard can resolve soundly passes", async (t) => {
+  const f = await fixture(t)
+  const allow = [
+    "git tag v2 && git push -q origin v2", "git tag -a v3 -m 'release v3' && git push -q origin v3", "git tag -m note v4 HEAD; git push -q origin v4",
+    'cd "$(git rev-parse --show-toplevel)" && git pull -q', 'cd "$(git rev-parse --show-toplevel)" && git push -q',
+  ]
+  for (const command of allow) {
+    const result = await f.guard(command)
+    assert.equal(result.deny, false, `${command}: ${result.reason}`)
+  }
+  const deny = [
+    `git -C ${q(f.own)} tag v2 && git push -q origin v2`, "git tag -d v2 && git push -q origin v2", "git tag -l v2 && git push -q origin v2",
+    "git tag --contains HEAD && git push -q origin HEAD", 'cd "$(git rev-parse --show-toplevel)" && git stash',
+    'GIT_DIR=x; cd "$(git rev-parse --show-toplevel)" && git pull', 'cd /; cd "$(git rev-parse --show-toplevel)" && git pull',
+    'cd "$(pick)"; cd "$(git rev-parse --show-toplevel)" && git pull',
+  ]
+  // `git tag --contains` lists tags; `git push origin HEAD` stays allowed, so only the other rows deny.
+  for (const command of deny) assert.equal((await f.guard(command)).deny, !command.includes("--contains"), command)
+  assert.equal((await f.guard('cd "$(git rev-parse --show-toplevel)" && git pull', { cwd: f.own })).deny, false)
+  // The top level is the nearest ancestor with a .git entry; outside any checkout it is unknown.
+  mkdirSync(path.join(f.prot, "sub"))
+  assert.equal((await f.guard('cd "$(git rev-parse --show-toplevel)" && git stash', { cwd: path.join(f.prot, "sub") })).deny, true)
+  assert.match((await f.guard(`cd ${q(f.root)} && cd "$(git rev-parse --show-toplevel)" && git pull`)).reason, /could not resolve which checkout/u)
+  assert.equal((await f.guard(`cd ${q(f.own)} && cd "$(git rev-parse --show-toplevel)" && git stash`)).deny, false, "the toplevel of the ordinary clone")
+  // The real sequence succeeds.
+  const real = spawnSync("bash", ["--noprofile", "--norc", "-c", "git tag v2 && git push -q origin v2"], { cwd: f.prot, env: f.env, encoding: "utf8" })
+  assert.equal(real.status, 0, real.stderr)
+})

@@ -5,7 +5,7 @@ import { inspectShell } from "./shell-commands.js"
 import { runGit } from "./state-branch.js"
 import { readInspectionGit } from "./git-inspection.js"
 import { existingDirectory, physicalDirectory } from "./shell-paths.js"
-import { BUILTINS, canonicalKey, classifyGit, hasRule, MESSAGES } from "./git-guard-policy.js"
+import { BUILTINS, canonicalKey, classifyGit, createdTag, hasRule, MESSAGES } from "./git-guard-policy.js"
 import { GuardDenial, mayInvokeGit, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
 
 export { WORKTREE_COMMAND }
@@ -59,7 +59,7 @@ async function readPolicy(read, cwd, options, env) {
 }
 
 // Reads of the target checkout for the policy's checks: the prefetched policy and branch, and lazy reads.
-function checkoutContext(read, cwd, options, env, policy, branch) {
+function checkoutContext(read, cwd, options, env, policy, branch, created) {
   const value = async (key, args) => {
     const result = await read(cwd, [...options, ...args], env)
     return result.ok && result.stdout ? result.stdout : null
@@ -78,7 +78,8 @@ function checkoutContext(read, cwd, options, env, policy, branch) {
     head: () => value("head", ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]),
     commit: (rev) => value(`commit ${known(rev, "a Git revision")}`, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`]),
     fullName: (rev) => value(`name ${known(rev, "a Git revision")}`, ["rev-parse", "--symbolic-full-name", rev.startsWith("-") ? "--" : rev]),
-    tag: async (name) => await value(`tag ${name}`, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]) !== null,
+    // A tag an earlier `git tag <name>` in the same command creates in this checkout counts as a tag.
+    tag: async (name) => created.has(`${cwd}\0${name}`) || await value(`tag ${name}`, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]) !== null,
     remoteBranch: async (name) => await value(`remote ${name}`, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${name}`]) !== null,
     pushed: async () => await value("pushed", ["for-each-ref", "--count=1", "--contains=HEAD", "--format=%(refname)", "refs/remotes"]) !== null,
     // The upstream from saved configuration, with its remote-tracking ref under the default fetch layout.
@@ -143,7 +144,7 @@ const quote = (arg) => `'${arg.replaceAll("'", "'\\''")}'`
 const GIT_LIKE = /^(?:-C|-c|--git-dir|--work-tree|--config-env)/u
 
 export async function guardShellCommand({ command, cwd, env = process.env, powershell = false, budgetMs = GUARD_INSPECTION_BUDGET_MS, readGit = readInspectionGit, now = Date.now }) {
-  const inspected = new Set()
+  const inspected = new Set(), created = new Set()
   const deadline = now() + budgetMs
   // Each read gets what is left of the budget; a spent budget, like a read that timed out, is ETIMEDOUT.
   async function read(dir, args, variables) {
@@ -195,6 +196,8 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
       await inspectShell({ command: `${alias.slice(1)} ${rest}`, cwd: top.ok ? top.stdout : target, env: exported, powershell: false, visit })
       return
     }
+    const tag = operation === "tag" && target !== null ? createdTag(operands) : undefined
+    if (tag !== undefined) created.add(`${target}\0${tag}`)
     const rule = classifyGit(operation, operands, overrides)
     if (!rule) return
     if (target === null || location.some((option) => option.includes(UNKNOWN))) throw unresolved(where)
@@ -216,7 +219,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
       read(target, [...location, "symbolic-ref", "--quiet", "--short", "HEAD"], variables),
     ])
     if (!policy.protected) return
-    const reason = await rule(checkoutContext(read, target, location, variables, policy, head.ok && head.stdout ? head.stdout : null))
+    const reason = await rule(checkoutContext(read, target, location, variables, policy, head.ok && head.stdout ? head.stdout : null, created))
     if (reason) throw new GuardDenial(`Desk protected checkout ${target}: ${reason}`)
   }
   async function guardedVisit(call) {

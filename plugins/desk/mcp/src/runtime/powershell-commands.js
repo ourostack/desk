@@ -13,22 +13,80 @@ function assign(map, name, value) {
   map[key] = value
 }
 
+// Assignment targets: optional casts, $name, ${name} or $scope:name, member and index access, comma-separated.
+const CAST = String.raw`(?:\[(?:[^\[\]]|\[[^\]]*\])*\]\s*)*`
+const NAME = String.raw`\$(?:\{[^}]+\}|(?:[A-Za-z]\w*:)?[A-Za-z_?][\w?]*)`
+const TARGET = `${CAST}${NAME}(?:\\.\\w+|\\[[^\\]]*\\])*`
+const ASSIGNMENT = new RegExp(`^(${TARGET}(?:\\s*,\\s*${TARGET})*)\\s*(\\?\\?|[-+*/%])?=(?!=)\\s*`, "u")
+const SIMPLE_TARGET = new RegExp(`^${CAST}\\$(?:\\{([^}]+)\\}|((?:[A-Za-z]\\w*:)?[A-Za-z_?][\\w?]*))$`, "u")
+const CONTROL = new Set(["if", "elseif", "else", "switch", "foreach", "for", "while", "do", "until", "try", "catch", "finally", "trap", "function", "filter", "begin", "process", "end"])
+const SEPARATORS = new Set([";", "\n", "&&", "||", "|"])
+
+const wordText = (word) => word.parts?.map((part) => part.text).join("") ?? word
+const tokensText = (tokens) => tokens.map(wordText).join(" ")
+
+// A token list's statements, split only at separators outside ( ) and { } groups.
+function statements(tokens) {
+  const list = []
+  let depth = 0, current = { words: [], redirects: [], previous: null }
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]
+    if (token === "(" || token === "{") depth++
+    else if ((token === ")" || token === "}") && --depth < 0) throw new Error("unresolved PowerShell expression")
+    if (depth === 0 && SEPARATORS.has(token)) {
+      if (token === "\n" && current.words.length === 0) continue
+      list.push(current)
+      current = { words: [], redirects: [], previous: token }
+    } else if (depth === 0 && token.redirect) {
+      if (!tokens[i + 1]?.parts) throw new Error("unresolved PowerShell redirection")
+      current.redirects.push(tokens[++i])
+    } else current.words.push(token)
+  }
+  if (depth !== 0) throw new Error("unresolved PowerShell expression")
+  list.push(current)
+  return list
+}
+
+// Remove the first `count` characters of a word, across its parts.
+function dropCharacters(word, count) {
+  const parts = []
+  for (const part of word.parts) {
+    if (count >= part.text.length) { count -= part.text.length; continue }
+    parts.push({ ...part, text: part.text.slice(count) })
+    count = 0
+  }
+  return { ...word, parts, quoted: parts.some((part) => part.quoted) }
+}
+
+// `targets op value` when the statement is an assignment: the operator may touch either side.
+function assignment(words) {
+  const lead = []
+  for (const word of words) { if (!word.parts) break; lead.push(word) }
+  const match = ASSIGNMENT.exec(lead.map(wordText).join(" "))
+  if (!match) return null
+  let start = 0, index = 0
+  while (index < lead.length && match[0].length >= start + wordText(lead[index]).length) start += wordText(lead[index++]).length + 1
+  const value = index < lead.length && match[0].length > start ? [dropCharacters(lead[index], match[0].length - start), ...words.slice(index + 1)] : words.slice(index)
+  return { targets: match[1].trim(), compound: match[2] !== undefined, value }
+}
+
 // PowerShell has case-insensitive variables and location commands, no POSIX field
-// splitting, and "$name = value" assignments rather than shell environment prefixes.
+// splitting, and "$name = value" assignments rather than shell environment prefixes. A
+// statement that starts with a variable is an expression, never a call; `&` calls.
 export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, locals = {} }) {
   if (depth > 16) throw new Error("PowerShell wrapper nesting exceeds 16")
   const tokens = tokenizeShell(command, true)
   let variables = { home: env.HOME ?? env.USERPROFILE, pwd: cwd, ...locals }
   let environment = { ...env }
   let directory = physicalDirectory(cwd, ".") ?? cwd
-  let statement = [], redirects = [], previous = null, status = null, terminated = false
+  let status = null, terminated = false, forks = []
   let states = [snapshot()]
 
   function snapshot() {
     return { variables: { ...variables }, environment: { ...environment }, directory, status, terminated }
   }
 
-  async function advance() {
+  async function advance({ words, redirects, previous }) {
     const reachable = []
     for (const state of states) {
       variables = { ...state.variables }
@@ -36,14 +94,14 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
       directory = state.directory
       status = state.status
       terminated = state.terminated
-      if (statement.length && !terminated && status === null && (previous === "&&" || previous === "||")) {
+      forks = []
+      if (words.length && !terminated && status === null && (previous === "&&" || previous === "||")) {
         // Keep the skipped branch before the executed branch changes its cwd or variables.
         reachable.push({ ...snapshot(), status: previous === "||" })
         status = previous === "&&"
       }
-      await run(statement)
-      const next = snapshot()
-      reachable.push(next)
+      await run(words, redirects, previous)
+      reachable.push(...forks, snapshot())
     }
     states = [...new Map(reachable.map((state) => [JSON.stringify(state), state])).values()]
   }
@@ -69,10 +127,10 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
           result += /^(?:get-location|pwd)$/iu.test(text.trim()) ? directory : unknownOutput(text)
           i = end
         } else {
-          const match = /^\$(?:\{((?:env:)?[A-Za-z_]\w*)\}|((?:env:)?[A-Za-z_]\w*))/iu.exec(part.text.slice(i))
+          const match = /^\$(?:\{((?:\w+:)?[A-Za-z_]\w*)\}|((?:\w+:)?[A-Za-z_]\w*))/iu.exec(part.text.slice(i))
           if (match) {
             const name = match[1] ?? match[2]
-            result += /^env:/iu.test(name) ? variable(environment, name.slice(4)) ?? "" : variable(variables, name) ?? ""
+            result += /^env:/iu.test(name) ? variable(environment, name.slice(4)) ?? "" : variable(variables, name.replace(/^\w+:/u, "")) ?? ""
             i += match[0].length - 1
           } else result += part.text[i]
         }
@@ -81,29 +139,39 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
     return result
   }
 
-  // The value of `$x = ...`: a literal, a variable or a string is data; anything else is a command
-  // whose output is assigned, so it runs through the same statement path as `...` alone.
-  async function assignedValue(words) {
-    if (words[0] === "(" && words.at(-1) === ")") words = words.slice(1, -1)
-    const text = words.map((word) => word.parts?.map((part) => part.text).join("") ?? word).join(" ")
-    const data = words.length === 1 && words[0].parts && (words[0].quoted || /^(?:\$|[-+]?\d)/u.test(words[0].parts[0].text))
-    if (data) return expand(words[0])
-    if (words.length && words.every((word) => word.parts || word === "&")) await run(words)
-    else {
-      // An expression runs the commands in its parenthesized groups, such as (git stash).Length.
-      const open = []
-      for (let i = 0; i < words.length; i++) {
-        if (words[i] === "(") open.push(i)
-        else if (words[i] === ")" && open.length) {
-          const inner = words.slice(open.pop() + 1, i).filter((word) => word.parts)
-          if (inner.length) await run(inner)
-        }
+  // Run the statements inside each top-level ( ) or { } group of `words`; return the words outside them.
+  async function groups(words) {
+    const outside = []
+    for (let i = 0; i < words.length; i++) {
+      if (words[i] !== "(" && words[i] !== "{") { outside.push(words[i]); continue }
+      let nesting = 1, end = i + 1
+      for (; nesting; end++) {
+        if (words[end] === "(" || words[end] === "{") nesting++
+        if (words[end] === ")" || words[end] === "}") nesting--
       }
+      for (const inner of statements(words.slice(i + 1, end - 1))) await run(inner.words, inner.redirects, inner.previous)
+      i = end - 1
     }
-    return unknownOutput(text)
+    return outside
   }
 
-  async function run(words) {
+  // The value of an assignment: a literal, a variable or a string is data; anything else is a
+  // command, group or control statement whose output is assigned, so it runs as a statement.
+  async function assignedValue(words) {
+    const data = words.length === 1 && words[0].parts && (words[0].quoted || /^(?:\$|[-+]?\d)/u.test(words[0].parts[0].text))
+    if (data) return expand(words[0])
+    await run(words, [], null)
+    return unknownOutput(tokensText(words))
+  }
+
+  // A program whose name is unknown fails closed when its text names Git or runs code, and is judged as
+  // Git when its arguments read like a checked Git command.
+  async function unknownProgram(text, args) {
+    if (args.some((arg) => arg.includes(UNKNOWN_GIT)) || mayInvokeGit(text)) throw unresolved("the program this command runs")
+    await visit({ name: "git", args: args.slice(1), cwd: directory, env: environment, computed: true })
+  }
+
+  async function run(words, redirects, previous) {
     if (!words.length || terminated) return
     const execute = previous !== "&&" || status !== false
     const skip = previous === "||" && status === true
@@ -111,30 +179,44 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
     let callOperator = false
     if (words[0] === "&") { callOperator = true; words = words.slice(1) }
     if (!words.length) throw new Error("unresolved PowerShell call")
-    const first = words[0].parts?.[0]?.text ?? ""
-    const assignment = /^\$((?:env:)?[A-Za-z_]\w*)\s*=/iu.exec(first)
-    const separate = /^\$((?:env:)?[A-Za-z_]\w*)$/iu.exec(first)
-    if (assignment || (separate && words[1]?.parts?.[0]?.text === "=")) {
-      const name = (assignment ?? separate)[1]
-      const valueWords = assignment
-        ? [{ ...words[0], parts: words[0].parts.map((p, i) => i === 0 ? { ...p, text: p.text.slice(assignment[0].length) } : p) }, ...words.slice(1)]
-        : words.slice(2)
-      const value = await assignedValue(valueWords)
-      if (/^env:/iu.test(name)) assign(environment, name.slice(4), value)
-      else assign(variables, name, value)
+    const assigned = callOperator ? null : assignment(words)
+    if (assigned) {
+      const value = await assignedValue(assigned.value)
+      const simple = SIMPLE_TARGET.exec(assigned.targets)
+      if (simple) {
+        const name = simple[1] ?? simple[2]
+        const result = assigned.compound ? unknownOutput(tokensText(assigned.value)) : value
+        if (/^env:/iu.test(name)) assign(environment, name.slice(4), result)
+        else assign(variables, name.replace(/^\w+:/u, ""), result)
+      }
       status = true
       return
     }
-    if (!words.every((word) => word.parts)) throw new Error("unresolved PowerShell expression")
+    if (CONTROL.has(String(wordText(words[0])).toLowerCase())) {
+      // Either branch may run: keep the state from before the blocks as well.
+      forks.push(snapshot())
+      await groups(words)
+      status = null
+      return
+    }
+    if (!words.every((word) => word.parts)) {
+      const outside = await groups(words)
+      if (!words[0].parts) {
+        // `& (expression) args` calls whatever the expression yields: a program Desk cannot name.
+        if (callOperator) await unknownProgram(tokensText(words), [UNKNOWN, ...await Promise.all(outside.map(expand))])
+        status = null
+        return
+      }
+      words = outside
+    }
     for (const redirect of redirects) await expand(redirect)
     const args = []
     for (const word of words) args.push(await expand(word))
-    // The resulting string is data, but interpolation has already executed.
-    if (words[0].quoted && !callOperator) { status = true; return }
-    if (args[0].includes(UNKNOWN)) {
-      const text = words.map((word) => word.parts.map((part) => part.text).join("")).join(" ")
-      if (args.some((arg) => arg.includes(UNKNOWN_GIT)) || mayInvokeGit(text)) throw unresolved("the program this command runs")
-      await visit({ name: "git", args: args.slice(1), cwd: directory, env: environment, computed: true })
+    const text = tokensText(words)
+    // The resulting string is data, but interpolation has already executed; so is a variable expression.
+    if (!callOperator && (words[0].quoted || wordText(words[0]).startsWith("$"))) { status = true; return }
+    if (path.basename(args[0]).includes(UNKNOWN) || args[0] === "") {
+      await unknownProgram(text, args)
       status = null
       return
     }
@@ -171,15 +253,5 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
     status = ["echo", "write-host", "write-output"].includes(name) ? true : null
   }
 
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i]
-    if ([";", "\n", "&&", "||", "|"].includes(token)) {
-      if (token === "\n" && statement.length === 0) continue
-      await advance(); statement = []; redirects = []; previous = token
-    } else if (token.redirect) {
-      if (!tokens[i + 1]?.parts) throw new Error("unresolved PowerShell redirection")
-      redirects.push(tokens[++i])
-    } else statement.push(token)
-  }
-  await advance()
+  for (const statement of statements(tokens)) await advance(statement)
 }

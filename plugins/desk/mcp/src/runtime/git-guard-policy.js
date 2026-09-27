@@ -298,6 +298,13 @@ export const BUILTINS = new Set([
   "verify-commit", "verify-tag", "version", "write-tree",
 ])
 
+/** The tag `git tag <args>` creates, or undefined when it lists, deletes or verifies tags instead. */
+export function createdTag(args) {
+  const parsed = parseGitOptions(SPECS.tag, args)
+  const other = ["list", "delete", "verify", "contains", "no-contains", "with", "without", "merged", "no-merged", "points-at", "-n", "column", "sort", "format"]
+  return other.some((name) => parsed.set.has(name)) ? undefined : parsed.operands[0]
+}
+
 /** Whether `git <operation>` has a rule; an unknown program whose first operand is one could be Git. */
 export function hasRule(operation) {
   return Object.hasOwn(RULES, operation)

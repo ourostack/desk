@@ -1,4 +1,4 @@
-import { realpathSync, statSync } from "node:fs"
+import { existsSync, realpathSync, statSync } from "node:fs"
 import * as path from "node:path"
 import { UNKNOWN } from "./guard-unknowns.js"
 
@@ -49,4 +49,13 @@ export function mktempPath(args, cwd, vars, serial) {
   if (parent === null) parent = template?.includes("/") ? path.dirname(template) : template && !temporary ? "." : base
   const dir = physicalDirectory(cwd, parent || base)
   return dir && `${dir}${path.sep}${MKTEMP_PREFIX}${serial}`
+}
+
+/** The top level of the Git checkout containing `dir` (the nearest ancestor with a .git entry), or unknown. */
+export function gitToplevel(dir) {
+  if (dir.includes(UNKNOWN)) return UNKNOWN
+  for (let current = dir; ; current = path.dirname(current)) {
+    if (existsSync(path.join(current, ".git"))) return current
+    if (path.dirname(current) === current) return UNKNOWN
+  }
 }

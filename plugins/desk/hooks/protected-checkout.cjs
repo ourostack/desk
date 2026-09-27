@@ -45,8 +45,13 @@
 // - an unknown eval, source/. or shell -c script;
 // - an unknown directory, Git subcommand or operand for a Git operation the policy must check
 //   (for example `cd "$(pick)" && git checkout main`; `cd "$(pick)" && git commit` passes).
-// A here-document, here-string or literal echo/printf piped into sh/bash is inspected as that
-// shell's script; PowerShell assignments ($x = git ...) run their command through the same path.
+// A program whose name is unknown is judged as Git when its arguments read like Git; a computed
+// directory with a known name ("$(npm bin)/nx") is that program. `git rev-parse --show-toplevel`
+// resolves to the checkout containing the directory, and a tag an earlier `git tag` creates counts.
+// A here-document (attached to the command that opened it), here-string or literal echo/printf
+// piped into sh/bash is inspected as that shell's script. Every PowerShell assignment form (casts,
+// scopes, ${name}, member/index and multiple targets, every operator, statement values) runs its
+// right-hand side through the same statement path, and control statements run all their blocks.
 // When the shell text cannot be parsed at all, it is denied only if it mentions `git` or
 // evaluates code in the same sense. Everything else, such as `echo "$(date)"`,
 // `cd "$wt" && node x.js` or `jq . f.json | grep x`, is allowed.

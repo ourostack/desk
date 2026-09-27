@@ -284,7 +284,7 @@ test("A3b: PowerShell unknown values follow the same rule", async (t) => {
     ["$wt = New-Item -ItemType Directory x; Set-Location $wt; git checkout main", /which checkout/u],
     ["Pop-Location; git stash", /which checkout/u], [`pushd ${psq(f.shared)}; git stash`, /^Desk protected checkout /u],
     ["$g = (Get-Command git).Source; & $g checkout main", /the program/u], ["& $(Get-Command git) status", /the program/u],
-    ["& (Get-Command git) checkout main", /could not inspect this shell command/u],
+    ["& (Get-Command git) checkout main", /could not resolve the program/u],
     [`iex "git -C ${psq(f.shared)} checkout topic"`, /^Desk protected checkout /u], ["$script = Get-Content x; iex $script", /evaluates/u],
     ["Invoke-Expression $(Get-Content x)", /evaluates/u], [". $(Get-Item x)", /dot-sources/u], ["$script = Get-Content x; pwsh -Command $script", /evaluates/u],
     ["$script = Get-Content x; bash -c $script", /evaluates/u],

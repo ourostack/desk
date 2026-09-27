@@ -5,7 +5,7 @@
 // an unknown directory is carried forward, and only an unknown program, script or Git
 // target that could reach Git ends inspection with a denial.
 import * as path from "node:path"
-import { mktempPath, physicalDirectory } from "./shell-paths.js"
+import { gitToplevel, mktempPath, physicalDirectory } from "./shell-paths.js"
 import { inspectPowerShell } from "./powershell-commands.js"
 import { mayInvokeGit, UNKNOWN, UNKNOWN_GIT, unknownOutput, unresolved } from "./guard-unknowns.js"
 
@@ -25,7 +25,7 @@ export function tokenizeShell(text, powershell = false) {
     const token = { parts, quoted }
     tokens.push(token)
     if (pendingHere) {
-      heredocs.push({ delimiter: parts.map((p) => p.text).join(""), expand: !parts.some((p) => !p.expand), tabs: pendingHere === "<<-" })
+      heredocs.push({ delimiter: parts.map((p) => p.text).join(""), expand: !parts.some((p) => !p.expand), tabs: pendingHere.redirect === "<<-", token: pendingHere })
       pendingHere = null
     }
     parts = []; active = false; quoted = false
@@ -71,7 +71,7 @@ export function tokenizeShell(text, powershell = false) {
       i--
     } else if (c === "\n") {
       word()
-      // A here-document belongs to the command before this newline: it is that command's stdin.
+      // A here-document's body follows the line, but it belongs to the redirect that opened it: that command's stdin.
       for (const here of heredocs.splice(0)) {
         let body = ""
         while (++i < text.length) {
@@ -82,7 +82,8 @@ export function tokenizeShell(text, powershell = false) {
           if ((here.tabs ? line.replace(/^\t+/u, "") : line) === here.delimiter) break
           body += `${line}\n`
         }
-        tokens.push({ heredoc: body, literal: !here.expand })
+        here.token.heredoc = body
+        here.token.literal = !here.expand
       }
       tokens.push("\n")
     } else if (/\s/u.test(c)) {
@@ -93,8 +94,9 @@ export function tokenizeShell(text, powershell = false) {
       word()
       let op = c
       while (text[i + 1] === c || ["&", "-"].includes(text[i + 1])) op += text[++i]
-      tokens.push({ redirect: op })
-      if (op === "<<" || op === "<<-") pendingHere = op
+      const redirect = { redirect: op }
+      tokens.push(redirect)
+      if (op === "<<" || op === "<<-") pendingHere = redirect
     } else if (separators.has(c)) {
       // Braces inside ${VAR} belong to the word.
       if (c === "{" && value.endsWith("$")) {
@@ -261,13 +263,12 @@ function parse(tokens) {
       const token = tokens[i++]
       if (token.redirect) {
         if (tokens[i]?.parts) {
-          redirects.push(tokens[i])
-          if (token.redirect === "<<<") stdin = tokens[i]
+          // A here-document's delimiter word is not a path; its body is the command's stdin.
+          if (token.heredoc !== undefined) stdin = { parts: [{ text: token.heredoc, expand: !token.literal }] }
+          else if (token.redirect === "<<<") stdin = tokens[i]
+          redirects.push(token.heredoc !== undefined ? stdin : tokens[i])
           i++
         }
-      } else if (token.heredoc !== undefined) {
-        stdin = { parts: [{ text: token.heredoc, expand: !token.literal }] }
-        redirects.push(stdin)
       } else words.push(token)
     }
     if (!words.length && !redirects.length) throw new Error(`unexpected shell operator ${tokens[i]}`)
@@ -297,6 +298,10 @@ function globPattern(text) {
     } else result += literalPattern(text[i])
   }
   return result
+}
+
+function unescapeText(text) {
+  return text.replace(/\\([nt\\])/gu, (_, c) => ({ n: "\n", t: "\t", "\\": "\\" })[c])
 }
 
 function wordText(words) {
@@ -354,8 +359,24 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     const words = []
     for (const token of tokens) words.push(await expand(token, state))
     if (words[0] === "pwd" && words.length === 1) return state.cwd
-    if (words[0] === "echo") return words.slice(1).join(" ").replace(/\n+$/u, "")
-    if (words[0] === "printf" && words[1] === "%s") return words.slice(2).join("").replace(/\n+$/u, "")
+    // `git rev-parse --show-toplevel` is read-only and names the checkout that contains the directory.
+    if (words.join(" ") === "git rev-parse --show-toplevel" && state.vars.GIT_DIR === undefined && state.vars.GIT_WORK_TREE === undefined) return gitToplevel(state.cwd)
+    if (words[0] === "echo") {
+      let i = 1, escapes = false
+      for (; /^-[neE]+$/u.test(words[i] ?? ""); i++) escapes = /e[^E]*$/u.test(words[i])
+      const output = words.slice(i).join(" ")
+      return (escapes ? unescapeText(output) : output).replace(/\n+$/u, "")
+    }
+    if (words[0] === "printf" && words.length > 1) {
+      // Only %s, %b and %% conversions are modeled; the format repeats while arguments remain.
+      const format = words[1], values = words.slice(2)
+      if (/%[^%sb]/u.test(format)) return unknownOutput(text)
+      let output = "", k = 0
+      do {
+        output += format.replace(/%([%sb])/gu, (_, c) => c === "%" ? "%" : values[k++] ?? "")
+      } while (k > 0 && k < values.length)
+      return unescapeText(output).replace(/\n+$/u, "")
+    }
     if (words[0] === "mktemp") return mktempPath(words.slice(1), state.cwd, state.vars, ++serial) ?? UNKNOWN
     return unknownOutput(text)
   }
@@ -439,8 +460,9 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       for (const item of node.nodes) {
         await run(item, { ...state, vars: { ...state.vars }, stdin: input })
         const output = item.kind === "command" && !item.redirects.length ? await outputOf(item.words, wordText(item.words), state) : UNKNOWN
-        // Wholly computed input, such as `cat script | bash`, is a script file: outside the boundary like `bash script`.
-        input = output === UNKNOWN || output === UNKNOWN_GIT ? null : output
+        // Wholly computed input, such as `cat script | bash`, is a script file: outside the boundary like `bash script`,
+        // unless the command that produces it names Git.
+        input = output === UNKNOWN ? null : output
       }
       return [{ ...state, status: true }, { ...state, status: false }]
     }
@@ -482,9 +504,10 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       name = path.basename(args[0] ?? "").replace(/\.exe$/iu, "").toLowerCase()
     }
     const unknown = [{ ...state, status: true }, { ...state, status: false }]
-    if (args[0]?.includes(UNKNOWN)) {
-      // An unknown program fails closed when its text, or the text that computed it, names Git or runs code;
-      // otherwise it is judged as Git if its arguments read like a checked Git command.
+    if (path.basename(args[0] ?? "").includes(UNKNOWN)) {
+      // A program whose name is unknown fails closed when its text, or the text that computed it, names Git or runs
+      // code; otherwise it is judged as Git if its arguments read like a checked Git command. A computed directory
+      // with a known name, such as "$(npm bin)/nx", is that program.
       if (args.some((arg) => arg.includes(UNKNOWN_GIT)) || mayInvokeGit(wordText(node.words))) throw unresolved("the program this command runs")
       await visit({ name: "git", args: args.slice(1), cwd: local.cwd, env: local.vars, computed: true })
       return unknown

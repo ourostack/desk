@@ -377,7 +377,8 @@ test("PowerShell keeps environment, local variables, conditional reachability an
   assert.equal((await f.guard("sl '~'; echo no-home", { powershell: true, env: {} })).deny, false)
   assert.equal((await f.guard("echo harmless", { powershell: true, cwd: f.root + "/absent" })).deny, false)
   assert.equal((await f.guard("git -C $(Get-Location) checkout HEAD", { powershell: true, cwd: f.shared })).deny, true)
-  for (const command of ["Write-Output >", "(opaque)", "Write-Output $(echo (x))", "Write-Output $(Write-Output `)"]) {
+  for (const command of ["git status; (opaque)", "git status; Write-Output $(echo (x))"]) assert.equal((await f.guard(command, { powershell: true })).deny, false, `${command}: groups are parsed, not unparseable`)
+  for (const command of ["Write-Output >", "Write-Output $(Write-Output `)"]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
     assert.match((await f.guard(`git status; ${command}`, { powershell: true })).reason, /could not inspect this shell command/u, command)
   }
