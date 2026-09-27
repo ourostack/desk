@@ -82,6 +82,17 @@ function checkoutContext(read, cwd, options, env, policy, branch) {
     fullName: (rev) => value(`name ${known(rev, "a Git revision")}`, ["rev-parse", "--symbolic-full-name", rev.startsWith("-") ? "--" : rev]),
     remoteBranch: async (name) => await value(`remote ${name}`, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${name}`]) !== null,
     pushed: async () => await value("pushed", ["for-each-ref", "--count=1", "--contains=HEAD", "--format=%(refname)", "refs/remotes"]) !== null,
+    // An absolute path relative to the checkout's top level: "" for the top level or an ancestor of it, null outside it.
+    async rootRelative(spec) {
+      const top = await value("top", ["rev-parse", "--show-toplevel"])
+      if (top === null) return null
+      const real = (file) => {
+        try { return realpathSync(file) } catch { return path.join(real(path.dirname(file)), path.basename(file)) }
+      }
+      const relative = path.relative(real(top), real(path.resolve(spec)))
+      if (!relative.startsWith("..") && !path.isAbsolute(relative)) return relative.split(path.sep).join("/")
+      return (real(top) + path.sep).startsWith(real(path.resolve(spec)).replace(/[\\/]*$/u, path.sep)) ? "" : null
+    },
     // The upstream from saved configuration, with its remote-tracking ref under the default fetch layout.
     async upstream() {
       const remote = context.config(`branch.${branch}.remote`), merge = context.config(`branch.${branch}.merge`)
@@ -281,10 +292,18 @@ export function fallbackOperation(command) {
   return null
 }
 
-// Credentials in a URL's user information (https://user:token@host) never reach a denial message.
+// Credentials never reach a denial message: a URL's user information (https://user:token@host), the user information
+// of any url.<base> configuration key, with or without a scheme (url.<token>@host:.insteadOf), an scp-style user that
+// looks like a token (<token>@host:path), and an Authorization header value.
 export function redact(text) {
-  return text.replace(/([a-z][\w+.-]*:\/\/)[^\s/@'"]+@/giu, "$1<redacted>@")
+  return text
+    .replace(/([a-z][\w+.-]*:\/\/)[^\s/@'"]+@/giu, "$1<redacted>@")
+    .replace(/(\burl\.)(?!<redacted>)([^\s/@'"=]+)@/giu, "$1<redacted>@")
+    .replace(/([^\s'"]*)@(?=[\w.-]+:)/gu, (match, user) => user.endsWith("<redacted>") || /^[\w.-]{1,23}$/u.test(user) && !TOKEN_PREFIX.test(user) ? match : "<redacted>@")
+    .replace(/((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic|token)?\s*)[^\s'"]+/giu, "$1<redacted>")
+    .replace(/(?<![\w.-])(?:gh[pousr]_|github_pat_|glpat-|sk-|xox[abpr]-)[\w-]{8,}/gu, "<redacted>")
 }
+const TOKEN_PREFIX = /^(?:gh[pousr]_|github_pat_|glpat-|sk-|xox[abpr]-)/u
 
 export async function protectedCheckoutHook(input, host) {
   const name = String(input.tool_name ?? input.toolName).toLowerCase()

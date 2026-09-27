@@ -17,26 +17,31 @@
 // pushed history, or discards other sessions' work. Everything else is allowed, and no denial
 // sends an agent to a worktree for an ordinary desk write.
 //
-// Allowed in a protected checkout: read-only Git and plumbing, add, rm, mv, commit, commit
-// --amend of an unpushed commit, unstaging or restoring named paths, non-force pushes of any
-// branch or tag, deleting another branch on the remote, every merge, pull and rebase onto the
-// state branch's own upstream (with or without --autostash), config writes to another file,
-// worktree add, list and prune.
+// Allowed in a protected checkout: read-only Git, plumbing that leaves HEAD and the tree alone,
+// add, rm, mv, commit, commit --amend of an unpushed commit, unstaging or restoring named paths
+// (globs that name files too), non-force pushes of any branch or tag, deleting another branch on
+// the remote, every merge, pull and rebase onto the state branch's own upstream (with or without
+// --autostash or rebase/merge.autoStash), config writes to another file, worktree add, list and
+// prune.
 //
-// Denied: checkout/switch to another branch or a detached commit; reset --hard, --merge, --keep
-// and a reset that moves HEAD; unstaging or restoring the whole tree (no path, ., :/, *, a magic
-// pathspec or --pathspec-from-file); clean; stash (except list and show); branch -f, -D, -m, -C
-// or -u of the current or state branch; other rebases; pulls with --rebase from another
-// repository or branch; force, mirror and prune pushes and deleting the state branch on the
-// remote, including through saved remote.<name>.mirror/push or push.default=matching; fetches
-// into the checkout's branch; commit --amend of a pushed commit; worktree remove --force of a
-// protected checkout; bisect; git config writes to the checkout's own desk, alias, include,
-// remote, push, branch, rebase, pull, merge, fetch and url sections; and push, pull, rebase,
-// fetch or merge under a -c, --config-env or GIT_CONFIG_* override of the configuration those
-// rules trust (an insteadOf that only adds credentials to the same URL is not an override).
-// Aliases from any of those sources are expanded, case-insensitively, with the issuing
-// command's options. The deny message says what is protected and what to do instead, and
-// credentials in URLs are redacted from it.
+// Denied: checkout/switch to another branch or a detached commit; reset --hard, --merge, --keep and
+// a reset that moves HEAD; unstaging or restoring any pathspec that covers the checkout root (no
+// path, . or .. spelled any way, :/, wildcard-only patterns such as * and */, magic and exclude
+// pathspecs, the root as an absolute path such as "$PWD", or --pathspec-from-file); symbolic-ref
+// HEAD to another ref; update-ref of HEAD, the current or the state branch; read-tree -u with
+// --reset or -m; checkout-index -f of -a, --stdin or root-covering paths; clean; stash (except list
+// and show); branch -f, -D, -m, -C or -u of the current or state branch; other rebases; pulls with
+// --rebase from another repository or branch; force, mirror and prune pushes and deleting the state
+// branch on the remote, including through saved remote.<name>.mirror/push or push.default=matching;
+// fetches into the checkout's branch; commit --amend of a pushed commit; worktree remove --force of
+// a protected checkout; bisect; git config writes to the checkout's own desk, alias, include,
+// remote, push, branch, rebase, pull, merge, fetch and url sections; and push, pull, rebase, fetch
+// or merge under a -c, --config-env or GIT_CONFIG_* override of the configuration those rules trust
+// (an insteadOf that only adds credentials to the same URL is not an override). Aliases from any of
+// those sources are expanded, case-insensitively, with the issuing command's options. The deny
+// message says what is protected and what to do instead, and credentials (URL user information,
+// scp-style token users, Authorization values, known token prefixes) are redacted from it and from
+// the hook's own error message.
 //
 // Commands the guard cannot fully resolve. The inspector never runs the command. A value it
 // cannot compute (a $(...) or backtick substitution other than literal pwd, echo, printf '%s'
@@ -89,7 +94,11 @@ process.stdin.on("end", async () => {
     const output = await protectedCheckoutHook(JSON.parse(input), process.argv[2]);
     process.stdout.write(`${JSON.stringify(output)}\n`);
   } catch (error) {
-    process.stderr.write(`Desk protected-checkout guard could not inspect this command: ${error.message}\n`);
+    // The message can quote the command, so it goes through the same credential redaction as a denial; if the guard
+    // module itself cannot load, only the error's name is written.
+    const detail = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/protected-checkout.js")).href)
+      .then(({ redact }) => redact(String(error?.message ?? error)), () => String(error?.name ?? "Error"));
+    process.stderr.write(`Desk protected-checkout guard could not inspect this command: ${detail}\n`);
     process.exitCode = 2;
   } finally {
     clearTimeout(deadline);

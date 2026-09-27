@@ -4,10 +4,11 @@
 // had to learn (process substitution, heredocs inside $( ), a newline after &&, case arms, zsh arrays, set -e).
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { execFileSync, spawnSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 import { fallbackOperation, guardShellCommand, protectCheckout, redact } from "../../src/runtime/protected-checkout.js"
 import { classifyGit, MESSAGES } from "../../src/runtime/git-guard-policy.js"
 import { readInspectionGit } from "../../src/runtime/git-inspection.js"
@@ -31,7 +32,9 @@ async function fixture(t) {
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env })
   execFileSync("git", ["init", "-q", "-b", "main", prot], { env })
   writeFileSync(path.join(prot, "file.txt"), "base\n")
-  git(prot, "add", "file.txt"); git(prot, "commit", "-qm", "first")
+  mkdirSync(path.join(prot, "sub"))
+  writeFileSync(path.join(prot, "sub", "s.txt"), "base\n")
+  git(prot, "add", "file.txt", "sub"); git(prot, "commit", "-qm", "first")
   git(prot, "branch", "topic")
   git(prot, "remote", "add", "origin", origin)
   git(prot, "push", "-q", "-u", "origin", "main", "topic")
@@ -45,7 +48,7 @@ async function fixture(t) {
     await protectCheckout({ root: prot, stateBranch: "main" })
     await protectCheckout({ root: pwt })
   } finally { process.env.HOME = saved }
-  return { root, env, prot, own, pwt, plain, guard: (command, { cwd = prot, ...extra } = {}) => guardShellCommand({ command, cwd, env, ...extra }) }
+  return { root, env, git, origin, prot, own, pwt, plain, guard: (command, { cwd = prot, ...extra } = {}) => guardShellCommand({ command, cwd, env, ...extra }) }
 }
 
 async function expectAllowed(f, rows, extra) {
@@ -216,4 +219,97 @@ test("replay: a PowerShell program whose known value is Git is judged as Git", a
   await expectDenied(f, [["$g = 'git'; & $g stash", /git stash takes other sessions/u], ["$g='git.exe'; & $g checkout topic", /move HEAD off/u]], { powershell: true })
   await expectAllowed(f, ["$g = 'git'; & $g status"], { powershell: true })
   await expectAllowed(f, ["$g = 'git'; & $g stash"], { powershell: true, cwd: f.plain })
+})
+
+// Round 4 review (review-30-round4.md): credentials in every spelling the reviewer tried, whole-tree discard spelled
+// as a path, and plumbing that moves HEAD or discards work.
+const hook = fileURLToPath(new URL("../../../hooks/protected-checkout.cjs", import.meta.url))
+const FAKE = ["ghp_FAKE0000SECRET", "hunter2pass", "tok_FAKE_ENV_9999", "sk-FAKEFAKEFAKEFAKE1234"]
+
+test("review 4: no credential reaches a denial, in the guard or through the hook", async (t) => {
+  const f = await fixture(t)
+  const env = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "url.https://u:tok_FAKE_ENV_9999@h.example/.insteadOf", GIT_CONFIG_VALUE_0: "https://other.example/" }
+  const cases = [
+    ["git -c 'url.https://x-access-token:ghp_FAKE0000SECRET@github.com/.insteadOf=https://gitlab.com/' pull --rebase", {}],
+    ["git -c 'url.https://x-access-token:ghp_FAKE0000SECRET@github.com/.insteadOf=https://github.com/' push origin main", {}],
+    ["git -c 'url.https://ghp_FAKE0000SECRET@github.com/.pushInsteadOf=git@github.com:' push origin main", {}],
+    ["git -c 'url.ghp_FAKE0000SECRET@github.com:.insteadOf=https://github.com/' pull --rebase", {}],
+    ["git -c 'url.HTTPS://user:hunter2pass@example.com/.insteadOf=https://other/' fetch origin main:main", {}],
+    ["git pull --rebase https://user:hunter2pass@example.com/repo.git topic", {}],
+    ["git push --force https://user:hunter2pass@example.com/repo.git main", {}],
+    ["git -c remote.origin.url=https://user:hunter2pass@example.com/r.git pull --rebase", {}],
+    ["git -C 'https://user:hunter2pass@example.com/x' checkout topic", {}],
+    ["git --git-dir='https://user:hunter2pass@example.com/x' checkout topic", {}],
+    ["GIT_CONFIG_PARAMETERS=\"'url.https://u:tok_FAKE_ENV_9999@h.example/.insteadof'='https://other.example/'\" git pull --rebase", {}],
+    ["GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.https://u:tok_FAKE_ENV_9999@h.example/.insteadOf' GIT_CONFIG_VALUE_0=https://other.example/ git pull --rebase", {}],
+    ["git pull --rebase", { env }],
+    ["GH_TOKEN=ghp_FAKE0000SECRET git switch topic", {}],
+    ["export OPENAI_API_KEY=sk-FAKEFAKEFAKEFAKE1234; git switch topic; echo 'unterminated", {}],
+    ["git -c http.extraHeader='Authorization: Bearer ghp_FAKE0000SECRET' push --force origin main", {}],
+    ["git config url.https://u:hunter2pass@example.com/.insteadOf https://example.com/", {}],
+    ["git config remote.origin.url https://u:hunter2pass@example.com/r.git", {}],
+    ["git -c 'alias.pp=!git push https://u:hunter2pass@example.com/r.git +main' pp", {}],
+    ["git -c 'url.https://x-access-token:ghp_FAKE0000SECRET@github.com/.insteadOf=https://gitlab.com/' pull --rebase", { powershell: true }],
+    ["$env:GH_TOKEN = 'ghp_FAKE0000SECRET'; git switch topic", { powershell: true }],
+  ]
+  for (const [command, extra] of cases) {
+    const variables = { ...f.env, ...extra.env }
+    const result = await guardShellCommand({ command, cwd: f.prot, env: variables, powershell: extra.powershell === true })
+    const payload = JSON.stringify({ tool_name: extra.powershell ? "PowerShell" : "Bash", tool_input: { command }, cwd: f.prot })
+    const run = spawnSync(process.execPath, [hook, "claude"], { cwd: f.prot, env: variables, input: payload, encoding: "utf8", timeout: 60000 })
+    const text = `${result.reason ?? ""}\n${run.stdout}\n${run.stderr}`
+    for (const secret of FAKE) assert.equal(text.includes(secret), false, `${command} leaks ${secret}`)
+  }
+  assert.match((await f.guard("git -c 'url.ghp_FAKE0000SECRET@github.com:.insteadOf=https://github.com/' pull --rebase")).reason, /url\.<redacted>@github\.com:\.insteadOf/u)
+  // The hook's own crash message (here, input that is not JSON) is redacted too.
+  const crash = spawnSync(process.execPath, [hook, "claude"], { cwd: f.prot, env: f.env, input: '{"x": https://u:ghp_FAKE0000SECRET@h/', encoding: "utf8", timeout: 60000 })
+  assert.match(crash.stderr, /could not inspect this command/u)
+  assert.equal(crash.stderr.includes("ghp_FAKE0000SECRET"), false, crash.stderr)
+  assert.equal(redact("url.git@github.com:.insteadof, git@github.com:o/r.git, ab:cd@host:x, Authorization: token abc123"), "url.<redacted>@github.com:.insteadof, git@github.com:o/r.git, <redacted>@host:x, Authorization: token <redacted>")
+})
+
+test("review 4: a pathspec that covers the checkout root is a whole-tree discard, however it is spelled", async (t) => {
+  const f = await fixture(t)
+  const { prot } = f, sub = path.join(prot, "sub")
+  const whole = [
+    "git restore -- ':!file.txt'", "git checkout -- ':^file.txt'", "git restore -- ':(exclude)file.txt'", `git restore ${q(prot)}`, 'git restore "$PWD"',
+    'git checkout -- "$(pwd)"', "git restore */", `git restore ${q(`${prot}/`)}`, `git restore ${q(`${prot}/*`)}`, `git restore ${q(`${prot}/..`)}`,
+    "git restore ./.", "git restore .//", "git restore sub/..", "git restore '*'", "git restore '**'", "git restore ':/*'", `git checkout HEAD -- ${q(prot)}`,
+    "git checkout-index -a -f", "git checkout-index --all --force", "git checkout-index -f -- .",
+  ]
+  await expectDenied(f, whole.map((command) => [command, /every file/u]))
+  await expectDenied(f, [['git restore "$(git rev-parse --show-toplevel)"', /every file/u]], { cwd: sub })
+  await expectDenied(f, [["git reset -- ':!x'", /unstaging everything/u], [`git reset -q -- ${q(prot)}`, /unstaging everything/u], [`git restore --staged ${q(prot)}`, /unstaging everything/u]])
+  await expectAllowed(f, [
+    "git restore file.txt", `git restore ${q(`${prot}/file.txt`)}`, "git restore sub/s.txt", "git restore ':/sub/s.txt'", "git restore '*.txt'", "git restore 'sub/*'",
+    `git checkout -- ${q(sub)}`, "git checkout-index -f -- file.txt", "git checkout-index -a", `git restore ${q("/definitely-missing/x")}`,
+  ])
+  // Each escape the review found really discards the other session's edit in an ordinary clone.
+  for (const command of ["git restore -- ':!file.txt'", "git restore \"$PWD\"", "git restore */", "git checkout -- \"$(pwd)\"", "git checkout-index -a -f"]) {
+    const clone = mkdtempSync(path.join(f.root, "real-"))
+    execFileSync("git", ["clone", "-q", f.origin, clone], { env: f.env })
+    writeFileSync(path.join(clone, "sub", "s.txt"), "other session\n")
+    spawnSync("bash", ["--noprofile", "--norc", "-c", command], { cwd: clone, env: { ...f.env, PWD: clone } })
+    assert.equal(readFileSync(path.join(clone, "sub", "s.txt"), "utf8"), "base\n", command)
+  }
+})
+
+test("review 4: plumbing that moves HEAD or discards work is denied; other refs stay free", async (t) => {
+  const f = await fixture(t)
+  await expectDenied(f, [
+    ["git symbolic-ref HEAD refs/heads/topic", /move HEAD off/u], ["git symbolic-ref -d HEAD", /move HEAD off/u],
+    ["git update-ref refs/heads/main HEAD~1", /another commit/u], ["git update-ref --no-deref HEAD HEAD~1", /another commit/u],
+    ["git update-ref HEAD HEAD~1", /another commit/u], ["git update-ref -d refs/heads/main", /another commit/u], ["git update-ref -m x main HEAD", /another commit/u],
+    ["git read-tree --reset -u HEAD", /discard other sessions/u], ["git read-tree -m -u HEAD", /discard other sessions/u],
+  ])
+  await expectAllowed(f, [
+    "git symbolic-ref HEAD refs/heads/main", "git symbolic-ref HEAD", "git symbolic-ref --short HEAD", "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main",
+    "git update-ref refs/heads/topic HEAD", "git update-ref refs/tags/x HEAD", "git update-ref --stdin", "git read-tree HEAD", "git read-tree --reset HEAD",
+    "git read-tree -u --prefix=x/ HEAD", "git -c rebase.autoStash=true pull --rebase", "git -c merge.autostash=true merge topic", "git checkout-index -f",
+  ])
+  await expectDenied(f, [["git checkout-index -f --stdin", /every file/u], ["git restore --pathspec-from-file=list.txt", /every file/u]])
+  // A checkout whose top level Git cannot report resolves no absolute path to its root, so the path stays a named path.
+  const readGit = (cwd, args, modeled, options) => args.includes("--show-toplevel") ? { ok: false, code: 128, stdout: "", stderr: "" } : readInspectionGit(cwd, args, modeled, options)
+  assert.equal((await guardShellCommand({ command: `git restore ${q(f.prot)}`, cwd: f.prot, env: f.env, readGit })).deny, false)
+  await expectAllowed(f, ["git symbolic-ref HEAD refs/heads/topic", "git update-ref refs/heads/main HEAD", "git read-tree --reset -u HEAD"], { cwd: f.plain })
 })

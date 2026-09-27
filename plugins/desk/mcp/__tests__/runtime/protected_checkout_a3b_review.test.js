@@ -153,7 +153,7 @@ function rows(f) {
     ["cfg-rebase-at-u-foreign", "bash", "prot", "deny", "git -c branch.main.merge=refs/heads/other rebase -q '@{u}'"],
     ["cfg-set-upstream-then-pull", "bash", "prot", "deny", "git branch -q -u origin/other && git pull -q --no-rebase --no-edit"],
     ["cfg-set-upstream-own", "bash", "prot", "allow", "git branch -q -u origin/main && git pull -q"],
-    ["cfg-autostash-pull", "bash", "prot", "deny", "git -c rebase.autoStash=true pull -q --rebase"],
+    ["cfg-autostash-pull", "bash", "prot", "allow", "git -c rebase.autoStash=true pull -q --rebase"],
     ["cfg-git-config-env-mirror", "bash", "prot", "deny", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.mirror GIT_CONFIG_VALUE_0=true git push -q origin"],
     ["cfg-git-config-parameters", "bash", "prot", "deny", "GIT_CONFIG_PARAMETERS=\"'remote.origin.mirror'='true'\" git push -q origin"],
     ["cfg-config-env-mirror", "bash", "prot", "deny", "M=true git --config-env=remote.origin.mirror=M push -q origin"],

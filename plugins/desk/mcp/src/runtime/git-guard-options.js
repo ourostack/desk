@@ -35,6 +35,11 @@ export const SPECS = {
   commit: spec("q|quiet v|verbose F|file= author= date= m|message= c|reedit-message= C|reuse-message= fixup= squash= reset-author trailer= s|signoff t|template= e|edit cleanup= status S|gpg-sign=? a|all i|include interactive p|patch U|unified=! inter-hunk-context=! o|only -n verify dry-run short branch ahead-behind porcelain long z|null amend post-rewrite u|untracked-files=? pathspec-from-file= pathspec-file-nul allow-empty allow-empty-message"),
   fetch: spec("v|verbose q|quiet all set-upstream a|append atomic upload-pack= f|force m|multiple t|tags j|jobs= prefetch p|prune P|prune-tags recurse-submodules=? dry-run porcelain write-fetch-head k|keep u|update-head-ok progress depth= shallow-since= shallow-exclude= deepen= unshallow! refetch! submodule-prefix= recurse-submodules-default= update-shallow refmap=! o|server-option= 4|ipv4! 6|ipv6! negotiation-tip= negotiate-only filter= auto-maintenance auto-gc show-forced-updates write-commit-graph stdin"),
   tag: spec("l|list! d|delete! v|verify! a|annotate m|message=! F|file= trailer= e|edit s|sign cleanup= u|local-user= f|force create-reflog column=? contains=^! no-contains=^! with=^! without=^! merged=^! no-merged=^! omit-empty sort= points-at=^ format= color=? i|ignore-case -n=?"),
+  // Plumbing that can move HEAD or discard work (ruling, 2026-09-27).
+  "symbolic-ref": spec("q|quiet d|delete short recurse -m="),
+  "update-ref": spec("-m= -d deref -z stdin create-reflog 0|batch-updates"),
+  "read-tree": spec("super-prefix= index-output= empty v|verbose -m trivial aggressive reset prefix= -u -i exclude-per-directory= n|dry-run sparse-checkout debug-unpack recurse-submodules=? q|quiet"),
+  "checkout-index": spec("a|all ignore-skip-worktree-bits f|force q|quiet n|create u|index -z stdin temp prefix= stage="),
   "worktree add": spec("f|force -b= -B= orphan d|detach checkout lock reason= q|quiet track guess-remote relative-paths"),
   "worktree remove": spec("f|force"),
   "worktree prune": spec("n|dry-run v|verbose expire="),

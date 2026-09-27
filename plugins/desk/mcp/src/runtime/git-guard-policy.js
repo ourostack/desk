@@ -8,6 +8,7 @@
 // Rules that trust Git's configuration (push, pull, rebase, fetch, merge) are denied when a
 // command-line or environment override changes that configuration, and `git config` or
 // `git branch -u` cannot rewrite it on the protected checkout first.
+import { posix } from "node:path"
 import { hasOption, parseGitOptions, SPECS } from "./git-guard-options.js"
 import { WORKTREE_COMMAND } from "./guard-unknowns.js"
 
@@ -58,10 +59,44 @@ const anywhere = (check) => Object.assign(check, { anywhere: true })
 const lastOf = (parsed, names) => parsed.sequence.filter((entry) => names.includes(entry.name)).at(-1)
 const beforeDashDash = (parsed) => parsed.dashdash < 0 ? parsed.operands : parsed.operands.slice(0, parsed.dashdash)
 
-// A pathspec that covers the whole tree (or cannot be read) rather than naming paths: `.`, `:/`, `*`, `..`, a magic
-// pathspec, or a list read from a file. Named paths are the agent's own files; the whole tree holds other sessions' work.
-const WHOLE_TREE = /^(?:(?:\.\.?\/?)+\*?|:\/?\*?|\*|:\(.*|\.\/\*)$/u
-const wholeTree = (paths) => !paths.length || paths.some((path) => WHOLE_TREE.test(path))
+// A pathspec that covers the checkout root rather than naming paths (ruling, 2026-09-27): no path at all, `.` or `..`
+// spelled any way, `:/`, a magic or exclude pathspec (`:(…)`, `:!x`, `:^x`), a pattern whose every segment is only
+// wildcards (`*`, `*/`), or an absolute path that resolves to the root or an ancestor of it. Named paths are the agent's
+// own files; the whole tree holds other sessions' work. A value Desk cannot compute counts as a named path.
+const WHOLE_TREE = /^(?:(?:\.\.?\/?)+\*?|:\/?\*?|\*|:\(.*|:[!^].*|\.\/\*)$/u
+const GLOB_ONLY = /^(?:[*?]+\/*)+$/u
+function pathCoverage(spec) {
+  if (spec.includes("\0")) return "named"
+  const text = spec.replaceAll("\\", "/")
+  if (WHOLE_TREE.test(text) || GLOB_ONLY.test(text)) return "whole"
+  const top = text.startsWith(":/") ? text.slice(2) : null
+  const relative = top ?? text
+  const normal = posix.normalize(relative)
+  if (normal === "." || normal === "./" || normal === ".." || normal.startsWith("../") || GLOB_ONLY.test(normal)) return "whole"
+  if (top !== null) return "named"
+  return /^(?:\/|[A-Za-z]:\/)/u.test(text) ? "absolute" : "named"
+}
+// true, false, or "absolute" when only resolving an absolute path against the checkout root can tell.
+function wholeTree(paths) {
+  if (!paths.length) return true
+  const kinds = paths.map(pathCoverage)
+  return kinds.includes("whole") ? true : kinds.includes("absolute") ? "absolute" : false
+}
+async function coversRoot(ctx, paths) {
+  const whole = wholeTree(paths)
+  if (whole !== "absolute") return whole
+  for (const spec of paths.filter((spec) => pathCoverage(spec) === "absolute")) {
+    const relative = await ctx.rootRelative(spec)
+    if (relative !== null && (relative === "" || GLOB_ONLY.test(relative))) return true
+  }
+  return false
+}
+// A rule for discarding or unstaging `paths`: denied with `reason` when they cover the checkout root.
+function pathRule(paths, reason) {
+  const whole = wholeTree(paths)
+  if (whole === true) return fixed(reason)
+  return whole ? async (ctx) => await coversRoot(ctx, paths) ? reason : null : null
+}
 
 // The checkout's current branch or its state branch. Switching to either keeps HEAD where it belongs.
 async function ownBranch(ctx, name) {
@@ -85,16 +120,16 @@ function checkout(args) {
   const refs = beforeDashDash(parsed), force = hasOption(parsed, "force")
   // `checkout [<tree-ish>] -- <paths>` restores those paths like `git restore`: named paths pass, the whole tree does not.
   if (hasOption(parsed, "pathspec-from-file")) return fixed(MESSAGES.restore)
-  if (parsed.dashdash >= 0) return wholeTree(parsed.operands.slice(parsed.dashdash)) ? fixed(MESSAGES.restore) : null
+  if (parsed.dashdash >= 0) return pathRule(parsed.operands.slice(parsed.dashdash), MESSAGES.restore)
   if (!refs.length) return force ? fixed(MESSAGES.discard) : null
   return async (ctx) => {
     const [target] = refs
     if (refs.length === 1 && await ownBranch(ctx, target)) return force ? MESSAGES.discard : null
     // Git takes the first operand as a commit when it names one, or a remote branch it can guess; the rest are paths.
     if (target === "-" || await ctx.commit(target) || await ctx.remoteBranch(target)) {
-      return refs.length === 1 ? MESSAGES.leave : wholeTree(refs.slice(1)) ? MESSAGES.restore : null
+      return refs.length === 1 ? MESSAGES.leave : await coversRoot(ctx, refs.slice(1)) ? MESSAGES.restore : null
     }
-    return wholeTree(refs) ? MESSAGES.restore : null
+    return await coversRoot(ctx, refs) ? MESSAGES.restore : null
   }
 }
 
@@ -114,17 +149,17 @@ function reset(args) {
   const refs = beforeDashDash(parsed)
   // Unstaging named paths (`git reset [<commit>] [--] <paths>`) changes only those index entries and leaves HEAD alone;
   // the whole tree is the whole index.
-  const paths = (list) => wholeTree(list) ? MESSAGES.unstage : null
+  const paths = async (ctx, list) => await coversRoot(ctx, list) ? MESSAGES.unstage : null
   if (hasOption(parsed, "pathspec-from-file")) return null
-  if (parsed.operands.length > refs.length) return fixed(paths(parsed.operands.slice(refs.length)))
+  if (parsed.operands.length > refs.length) return pathRule(parsed.operands.slice(refs.length), MESSAGES.unstage)
   // A whole mixed reset rewrites the shared index, which can hold other sessions' staged work; a soft reset to HEAD changes nothing.
   const unstage = mode !== "soft"
   if (hasOption(parsed, "patch") || !refs.length) return unstage ? fixed(MESSAGES.unstage) : null
   return async (ctx) => {
     const commit = await ctx.commit(refs[0])
     // Without --, Git reads the first operand as a commit when it names one, and the rest as paths.
-    if (!commit) return paths(refs)
-    if (refs.length > 1) return paths(refs.slice(1))
+    if (!commit) return paths(ctx, refs)
+    if (refs.length > 1) return paths(ctx, refs.slice(1))
     if (commit !== await ctx.head()) return MESSAGES.rewind
     return unstage ? MESSAGES.unstage : null
   }
@@ -284,10 +319,35 @@ const RULES = {
   // discards other sessions' work, or unstages the whole shared index.
   restore: (args) => {
     const parsed = parseGitOptions(SPECS.restore, args)
-    if (!hasOption(parsed, "pathspec-from-file") && !wholeTree(parsed.operands)) return null
-    return fixed(hasOption(parsed, "staged") && !hasOption(parsed, "worktree") ? MESSAGES.unstage : MESSAGES.restore)
+    const reason = hasOption(parsed, "staged") && !hasOption(parsed, "worktree") ? MESSAGES.unstage : MESSAGES.restore
+    return hasOption(parsed, "pathspec-from-file") ? fixed(reason) : pathRule(parsed.operands, reason)
   },
   clean: () => fixed(MESSAGES.clean),
+  // Plumbing that moves HEAD or discards work (ruling, 2026-09-27). update-ref of any other ref stays allowed.
+  "symbolic-ref": (args) => {
+    const parsed = parseGitOptions(SPECS["symbolic-ref"], args)
+    const [name, ref] = parsed.operands
+    if (name !== "HEAD" || (ref === undefined && !hasOption(parsed, "delete"))) return null
+    return async (ctx) => ref !== undefined && await protectedBranch(ctx, ref) ? null : MESSAGES.leave
+  },
+  "update-ref": (args) => {
+    const parsed = parseGitOptions(SPECS["update-ref"], args)
+    const [ref] = parsed.operands
+    if (ref === undefined) return null
+    if (ref === "HEAD") return fixed(MESSAGES.rewind)
+    return async (ctx) => /^(?:refs\/heads\/)?[^/]/u.test(ref) && await protectedBranch(ctx, ref) ? MESSAGES.rewind : null
+  },
+  "read-tree": (args) => {
+    const parsed = parseGitOptions(SPECS["read-tree"], args)
+    return hasOption(parsed, "-u") && any(parsed, ["reset", "-m"]) ? fixed(MESSAGES.discard) : null
+  },
+  "checkout-index": (args) => {
+    const parsed = parseGitOptions(SPECS["checkout-index"], args)
+    if (!hasOption(parsed, "force")) return null
+    // Paths read from standard input are unknown, so they count as the whole tree; -f alone checks out nothing.
+    if (any(parsed, ["all", "stdin"])) return fixed(MESSAGES.restore)
+    return parsed.operands.length ? pathRule(parsed.operands, MESSAGES.restore) : null
+  },
   stash: ([subcommand]) => ["list", "show"].includes(subcommand) ? null : fixed(MESSAGES.stash),
   branch,
   rebase,
@@ -366,7 +426,8 @@ export function classifyGit(operation, args, overrides = [], { variables = false
     return operation === "worktree" && !["add", "list"].includes(args[0]) ? { victim: "\0" } : fixed(MESSAGES.variable)
   }
   if (OVERRIDE_OPERATIONS.has(operation)) {
-    const override = overrides.find(([key, value]) => OVERRIDDEN.test(canonicalKey(key)) && !credentialsOnly(key, value))
+    // An autostash setting does what --autostash does, which is allowed.
+    const override = overrides.find(([key, value]) => OVERRIDDEN.test(canonicalKey(key)) && !/^(?:rebase|merge)\.autostash$/u.test(canonicalKey(key)) && !credentialsOnly(key, value))
     if (override) return fixed(MESSAGES.override(override[0], operation))
   }
   return RULES[operation](args)
