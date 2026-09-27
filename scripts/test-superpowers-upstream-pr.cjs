@@ -10,7 +10,6 @@ const { spawnSync } = require("node:child_process");
 const {
   createGh,
   main,
-  nextDeskVersion,
   parseArgs,
   publish,
   pullRequestBody,
@@ -31,7 +30,7 @@ const report = {
   unselected_skills: ["skills/new-skill"],
   release: {
     superpowers: { from: "6.3.0", to: "6.4.2", upstream: "6.4.2" },
-    desk: { from: "3.2.0-alpha.49", to: "3.2.0-alpha.54" },
+    fragment: "plugins/desk/changelog.d/superpowers-6.4.2.md",
   },
 };
 
@@ -111,14 +110,19 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
     [`pr merge 7 --repo ${repo} --merge --match-head-commit ${sha} --delete-branch`, ok("")],
     [`issue list --repo ${repo} --label upstream-refresh --state open --limit 20`, ok([{ number: 3 }])],
     [`issue close 3 --repo ${repo}`, ok("")],
+    [`workflow run desk-release.yml --repo ${repo} --ref main`, ok("")],
   ]);
   assert.equal(result.outcome, "merged");
+  // The merge used the workflow token, which starts no push-triggered run, so the Desk release is dispatched on main.
+  assert.equal(result.message, "Every check passed, the refresh merged and the Desk release was dispatched.");
+  assert.equal(calls.at(-1).line, `workflow run desk-release.yml --repo ${repo} --ref main`);
   assert.equal(result.pull, "https://github.com/owner/desk/pull/7");
   assert.equal(polls, 3);
   assert.deepEqual(result.jobs.map((job) => job.conclusion), ["success", "success"]);
   const edit = calls.find((call) => call.line.startsWith("pr edit 7"));
   assert.match(edit.line, /--title Refresh Superpowers from upstream bbbbbbbbbbbb --body-file -/u);
   assert.match(edit.input, /byte-identical to upstream/u);
+  assert.match(edit.input, /Superpowers 6\.3\.0 → 6\.4\.2\. Desk gains the changelog fragment `plugins\/desk\/changelog\.d\/superpowers-6\.4\.2\.md`, and the release workflow takes its next version when this merges\./u);
   assert.match(edit.input, /Changed: `skills\/a\/SKILL.md`\./u);
   assert.match(edit.input, /Added: none\./u);
   assert.match(edit.input, /New upstream skills not selected .*: `skills\/new-skill`\./u);
@@ -239,30 +243,6 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
 }
 
 {
-  // The next free Desk alpha skips versions claimed by other open pull requests, ignoring the refresh branch itself,
-  // other release lines, unreadable heads and non-alpha versions.
-  const manifest = (version) => ok(`${Buffer.from(JSON.stringify({ version })).toString("base64")}\n`);
-  const { gh, calls } = fakeGh([
-    [`pr list --repo ${repo} --state open --limit 100 --json headRefName,headRefOid`, ok([
-      { headRefName: "feature-a", headRefOid: "1" },
-      { headRefName: branch, headRefOid: "2" },
-      { headRefName: "feature-b", headRefOid: "3" },
-      { headRefName: "fork-c", headRefOid: "4" },
-      { headRefName: "feature-d", headRefOid: "5" },
-      { headRefName: "feature-e", headRefOid: "6" },
-    ])],
-    [/contents\/plugins\/desk\/\.claude-plugin\/plugin\.json\?ref=1 /u, manifest("3.2.0-alpha.53")],
-    [/ref=3 /u, manifest("3.3.0-alpha.99")],
-    [/ref=4 /u, fail("gh: Not Found (HTTP 404)")],
-    [/ref=5 /u, manifest("3.2.0")],
-    [/ref=6 /u, manifest("3.2.0-alpha.52")],
-  ]);
-  assert.equal(nextDeskVersion({ gh, repo, current: "3.2.0-alpha.49", branch }), "3.2.0-alpha.54");
-  assert.equal(calls.some((call) => call.line.includes("ref=2")), false);
-  assert.throws(() => nextDeskVersion({ gh, repo, current: "3.2.0", branch }), /Desk version 3\.2\.0 is not an alpha release/u);
-}
-
-{
   // gh failures carry stderr, then the spawn error, then the exit status.
   for (const [result, pattern] of [
     [{ status: 1, stdout: "", stderr: "HTTP 403" }, /gh pr list failed: HTTP 403/u],
@@ -273,7 +253,7 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
   }
   assert.deepEqual(createGh({ run: () => fail("nope") }).call(["x"], { allowFailure: true }), { ok: false, stdout: "", stderr: "nope", error: "nope" });
   assert.equal(createGh({ run: () => fail("nope") }).json(["x"], { allowFailure: true }), null);
-  assert.match(pullRequestBody({ report, runUrl }), /Superpowers 6\.3\.0 → 6\.4\.2; Desk 3\.2\.0-alpha\.49 → 3\.2\.0-alpha\.54\./u);
+  assert.match(pullRequestBody({ report, runUrl }), /Superpowers 6\.3\.0 → 6\.4\.2\. Desk gains the changelog fragment/u);
   const started = Date.now();
   sleepSync(5);
   assert.ok(Date.now() - started >= 4);
@@ -285,14 +265,12 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
     [["bogus"], /usage: superpowers-upstream-pr\.cjs/u],
     [["publish", "repo", "x"], /unknown or incomplete argument: repo/u],
     [["publish", "--repo"], /unknown or incomplete argument: --repo/u],
-    [["next-desk-version", "--repo", repo], /next-desk-version requires --current, --branch/u],
+    // Desk no longer takes a version in the refresh pull request, so there is no next-free-alpha command.
+    [["next-desk-version", "--repo", repo, "--current", "3.2.0-alpha.1", "--branch", branch], /usage: superpowers-upstream-pr\.cjs publish/u],
+    [["publish", "--repo", repo], /publish requires --branch, --base, --sha, --report, --workflows, --run-url/u],
   ]) {
     assert.throws(() => parseArgs(argv), pattern);
   }
-  assert.deepEqual(parseArgs(["next-desk-version", "--repo", repo, "--current", "3.2.0-alpha.1", "--branch", branch]), {
-    command: "next-desk-version",
-    options: { repo, current: "3.2.0-alpha.1", branch },
-  });
 }
 
 {
@@ -338,21 +316,8 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
     assert.match(output, /- ci\.yml: \[a\]\(https:\/\/job\/61\) — success/u);
     assert.equal(now(), Date.parse("2026-09-27T00:00:00Z") + 2000);
 
-    // The CLI runs next-desk-version against gh on PATH and reports usage errors on stderr.
-    const fakeBin = path.join(tempRoot, "bin");
-    fs.mkdirSync(fakeBin);
-    const fakeGhPath = path.join(fakeBin, "gh");
-    fs.writeFileSync(fakeGhPath, "#!/usr/bin/env node\nprocess.stdout.write(\"[]\");\n");
-    fs.chmodSync(fakeGhPath, 0o755);
+    // The CLI reports usage errors on stderr.
     const script = path.join(__dirname, "superpowers-upstream-pr.cjs");
-    if (process.platform !== "win32") {
-      const cli = spawnSync(process.execPath, [script, "next-desk-version", "--repo", repo, "--current", "3.2.0-alpha.49", "--branch", branch], {
-        encoding: "utf8",
-        env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH}` },
-      });
-      assert.equal(cli.status, 0, cli.stderr);
-      assert.equal(cli.stdout, "3.2.0-alpha.50\n");
-    }
     const usage = spawnSync(process.execPath, [script], { encoding: "utf8" });
     assert.equal(usage.status, 1);
     assert.match(usage.stderr, /usage: superpowers-upstream-pr\.cjs/u);
@@ -410,22 +375,20 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
     jobs(71, [{ name: "a", conclusion: "success", html_url: "https://job/71" }]),
     jobs(72, [{ name: "b", conclusion: "success", html_url: "https://job/72" }]),
   ];
-  const quiet = publishWith([...base, [`api repos/${repo}/rules/branches/main`, { status: 0, stdout: "", stderr: "" }], ["pr merge 7", ok("")], ["issue list", ok([])]]);
+  // A refused release dispatch still reports the merge, and says how to release by hand.
+  const quiet = publishWith([
+    ["workflow run desk-release.yml", fail("HTTP 403: Resource not accessible by integration")],
+    ...base,
+    [`api repos/${repo}/rules/branches/main`, { status: 0, stdout: "", stderr: "" }],
+    ["pr merge 7", ok("")],
+    ["issue list", ok([])],
+  ]);
   assert.equal(quiet.result.outcome, "merged");
+  assert.equal(quiet.result.message, "Every check passed and the refresh merged, but the Desk release could not be dispatched: HTTP 403: Resource not accessible by integration. Dispatch desk-release.yml on main.");
   assert.throws(
     () => publishWith([...base, [`api repos/${repo}/rules/branches/main`, { status: 0, stdout: "<html>", stderr: "" }]]),
     /gh api repos\/owner\/desk\/rules\/branches\/main returned invalid JSON/u,
   );
-}
-
-{
-  // An open pull request whose manifest read is empty or not JSON claims no version.
-  const { gh } = fakeGh([
-    [`pr list --repo ${repo} --state open`, ok([{ headRefName: "a", headRefOid: "1" }, { headRefName: "b", headRefOid: "2" }])],
-    [/ref=1 /u, ok("\n")],
-    [/ref=2 /u, ok(Buffer.from("not json").toString("base64"))],
-  ]);
-  assert.equal(nextDeskVersion({ gh, repo, current: "3.2.0-alpha.67", branch }), "3.2.0-alpha.68");
 }
 
 console.log("Superpowers upstream pull request tests passed.");

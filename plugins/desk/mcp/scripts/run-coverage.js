@@ -2,4 +2,4 @@
 
 import { runCoverageCommand } from "../src/coverage/runner.js"
 
-process.exitCode = runCoverageCommand()
+process.exitCode = runCoverageCommand({ argv: process.argv.slice(2) })
