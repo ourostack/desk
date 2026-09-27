@@ -66,6 +66,7 @@ function github({
   license = "MIT",
   release = null,
   failure = null,
+  files = {},
 } = {}) {
   return {
     repository() {
@@ -91,8 +92,9 @@ function github({
       return { status: compareStatus };
     },
     file(_repository, sourcePath, ref) {
-      assert.equal(sourcePath, "skills/example/SKILL.md");
       assert.equal(ref, candidate);
+      if (Object.hasOwn(files, sourcePath)) return Buffer.from(files[sourcePath]);
+      assert.equal(sourcePath, "skills/example/SKILL.md");
       return Buffer.from(actualContent);
     },
   };
@@ -505,18 +507,21 @@ process.stdout.write(JSON.stringify(value));
 {
   // License-policy characterization uses the existing injected GitHub fixture,
   // not the evaluator payload or a new network harness.
+  // The license exception follows the reviewed LICENSE bytes, which the vendored copy keeps.
+  const licenseText = fs.readFileSync(path.join(repoRoot, "evals/offline/vendor/gauntlet/LICENSE"));
+  const licenseEntry = { sourcePath: "LICENSE", generatedPath: "plugins/example/LICENSE", sha256: hash(licenseText) };
   const approved = {
     ...source(),
     id: "prime-radiant-inc-gauntlet-evaluation-leaves",
     repository: "prime-radiant-inc/gauntlet",
-    // The provenance commit the license exception was approved for (evidence, not a dependency).
-    commit: "187a9af979a7cf096c0890d0eeb998cc3008343a",
     license: "Apache-2.0",
   };
+  approved.files = [...approved.files, licenseEntry];
   const remote = (overrides = {}) => github({
     fullName: approved.repository,
     candidate: approved.commit,
     license: "Apache-2.0",
+    files: { LICENSE: licenseText },
     ...overrides,
   });
 
@@ -538,10 +543,18 @@ process.stdout.write(JSON.stringify(value));
       { message: `approved Gauntlet source must lock Apache-2.0: got ${license ?? "missing"}` },
     );
   }
+  // An upstream move that keeps the license keeps the approval; one that changes it needs a person.
+  const moved = inspectSource(approved, remote({ candidate: candidateCommit }));
+  assert.equal(moved.classification, "candidate-no-selected-payload-change");
+  const relicensed = inspectSource(approved, remote({ candidate: candidateCommit, files: { LICENSE: "Other terms" } }));
+  assert.equal(relicensed.classification, "needs-human-approval");
+  assert.deepEqual(relicensed.changed_paths, ["LICENSE"]);
+
   for (const overrides of [
     { id: "unapproved-gauntlet-entry" },
     { repository: "another-owner/gauntlet" },
-    { commit: candidateCommit },
+    { files: [source().files[0], { ...licenseEntry, sha256: hash("Other terms") }] },
+    { files: source().files },
   ]) {
     const unapproved = { ...approved, ...overrides };
     assert.throws(

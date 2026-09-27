@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { checkCriteriaConsistency, parseReportCriteria, parseReportResult, salvageReportResult, validateToolArgs } from "../vendor/gauntlet/src/agent/validators.ts";
-import { parseEvidenceIndex, readEvidenceFile, readWorkspaceFile, validateEvidenceIndex } from "../vendor/gauntlet/src/context/scoped-read.ts";
+import { parseEvidenceIndex, readEvidenceFile, readEvidenceRange, readWorkspaceFile, searchEvidence, validateEvidenceIndex } from "../vendor/gauntlet/src/context/scoped-read.ts";
 import { RESULT_SCHEMA_VERSION, snapshotRunConfig } from "../vendor/gauntlet/src/types.ts";
 import { validateTerminalReport } from "../admission.mjs";
 import { createEvidenceReader } from "../evidence.mjs";
@@ -118,4 +118,51 @@ test("unadopted Gauntlet run-config helpers remain distinct from Copilot usage a
   const config = { target: "fixture", model: "fixture-only", adapter: "cli", budgetMs: 100 };
   assert.equal(snapshotRunConfig(config, undefined).chrome, undefined);
   assert.deepEqual(snapshotRunConfig({ ...config, chrome: { host: "localhost", port: 1 } }, { width: 80, height: 24 }), { ...config, chrome: "localhost:1", viewport: { width: 80, height: 24 } });
+});
+
+test("unadopted bounded evidence readers are only characterized", () => {
+  const ranges = path.join(base, "ranges");
+  fs.mkdirSync(ranges);
+  const files = {
+    "lines.txt": "one\ntwo\nthree",
+    "pair.txt": "a\u{1F600}b\u{E000}c",
+    "long.txt": `${"a".repeat(70000)}\nz`,
+    "edge.txt": `${"a".repeat(65536)}\nz`,
+    "wide.txt": Array.from({ length: 120 }, () => "\u20AC".repeat(600)).join("\n"),
+  };
+  for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(ranges, name), text);
+  fs.writeFileSync(path.join(ranges, "invalid.txt"), Buffer.from([0x61, 0xff]));
+  const all = { files: Object.keys(files) };
+
+  assert.throws(() => readEvidenceFile(ranges, { files: ["invalid.txt"] }, "invalid.txt"));
+  assert.deepEqual(readEvidenceRange(ranges, all, { path: "lines.txt" }), { path: "lines.txt", startLine: 1, endLine: 3, totalLines: 3, text: "one\ntwo\nthree", truncated: false, nextLine: null });
+  assert.deepEqual(readEvidenceRange(ranges, all, { path: "lines.txt", startLine: 2, maxLines: 1, startColumn: 2 }), { path: "lines.txt", startLine: 2, endLine: 2, totalLines: 3, text: "wo", truncated: true, nextLine: 3 });
+  for (const request of [{ startLine: 1.5 }, { startLine: 0 }, { startLine: 4 }, { maxLines: 1.5 }, { maxLines: 0 }, { maxLines: 1001 }, { startColumn: 1.5 }, { startColumn: 0 }, { startColumn: 5 }]) {
+    assert.throws(() => readEvidenceRange(ranges, all, { path: "lines.txt", ...request }), { message: "invalid evidence range" });
+  }
+  assert.throws(() => readEvidenceRange(ranges, all, { path: "pair.txt", startColumn: 3 }), /splits a Unicode code point/u);
+  assert.equal(readEvidenceRange(ranges, all, { path: "pair.txt", startColumn: 4 }).text, "b\u{E000}c");
+  assert.equal(readEvidenceRange(ranges, all, { path: "pair.txt", startColumn: 6 }).text, "c");
+  const partial = readEvidenceRange(ranges, all, { path: "long.txt" });
+  assert.deepEqual([partial.text.length, partial.endLine, partial.truncated, partial.nextLine, partial.nextColumn], [65536, 1, true, 1, 65537]);
+  const edge = readEvidenceRange(ranges, all, { path: "edge.txt" });
+  assert.deepEqual([edge.text.length, edge.truncated, edge.nextLine, "nextColumn" in edge], [65536, true, 2, false]);
+
+  for (const request of [{ query: 1 }, { query: "" }, { query: "a", maxMatches: 1.5 }, { query: "a", maxMatches: 0 }, { query: "a", maxMatches: 101 }]) {
+    assert.throws(() => searchEvidence(ranges, all, request), { message: "invalid evidence search" });
+  }
+  assert.deepEqual(searchEvidence(ranges, all, { query: "t", path: "lines.txt" }), { matches: [{ path: "lines.txt", line: 2, text: "two" }, { path: "lines.txt", line: 3, text: "three" }], truncated: false, unavailable: [] });
+  assert.deepEqual(searchEvidence(ranges, all, { query: "t", maxMatches: 1 }), { matches: [{ path: "lines.txt", line: 2, text: "two" }], truncated: true, unavailable: [] });
+  const clipped = searchEvidence(ranges, all, { query: "z", path: "long.txt" });
+  assert.deepEqual(clipped, { matches: [{ path: "long.txt", line: 2, text: "z" }], truncated: false, unavailable: [] });
+  const longLine = searchEvidence(ranges, all, { query: "aaa", path: "long.txt" });
+  assert.deepEqual([longLine.matches[0].text.length, longLine.truncated], [512, true]);
+  const capped = searchEvidence(ranges, all, { query: "\u20AC", path: "wide.txt", maxMatches: 100 });
+  assert.ok(capped.truncated && capped.matches.length > 0 && capped.matches.length < 100);
+  const missing = searchEvidence(ranges, { files: ["lines.txt", "gone.txt"] }, { query: "t" });
+  assert.deepEqual([missing.matches.length, missing.unavailable.map((entry) => entry.path)], [0, ["lines.txt", "gone.txt"]]);
+  const oversized = searchEvidence(ranges, all, { query: "t", path: "x".repeat(70000) });
+  assert.deepEqual([oversized.unavailable.length, oversized.truncated], [0, true]);
+  const thrower = { get files() { throw "not an error"; } };
+  assert.deepEqual(searchEvidence(ranges, thrower, { query: "t", path: "lines.txt" }).unavailable, [{ path: "lines.txt", reason: "not an error" }]);
 });

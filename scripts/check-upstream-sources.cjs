@@ -8,6 +8,8 @@ const { spawnSync } = require("node:child_process");
 
 const repoRoot = path.resolve(__dirname, "..");
 const ancestryStates = new Set(["identical", "ahead", "behind", "diverged"]);
+// SHA-256 of the Gauntlet LICENSE (Apache-2.0) reviewed for the evaluation leaves exception.
+const APPROVED_GAUNTLET_LICENSE_SHA256 = "bab74adbfbcdc79e08e43573584ef6e0bc067354e8306aa4128c245967ee549f";
 
 function sha256(content) {
   return crypto.createHash("sha256").update(content).digest("hex");
@@ -105,11 +107,12 @@ function inspectSource(source, github) {
   if (!Array.isArray(source.files) || source.files.length === 0) {
     throw new Error(`source ${source.id} has no selected files`);
   }
-  // Provenance evidence, not a dependency: the Apache-2.0 exception was approved for the Gauntlet files vendored
-  // from this one reviewed commit, so a lock that moves to another commit needs a new license review.
+  // The Apache-2.0 exception was approved for the Gauntlet files under the license text reviewed at commit
+  // 187a9af979a7cf096c0890d0eeb998cc3008343a, so it follows those LICENSE bytes rather than one commit: an upstream
+  // move that leaves the license alone keeps the approval, and one that changes it lists LICENSE as a changed path.
   const approvedGauntlet = source.id === "prime-radiant-inc-gauntlet-evaluation-leaves"
     && source.repository === "prime-radiant-inc/gauntlet"
-    && source.commit === "187a9af979a7cf096c0890d0eeb998cc3008343a";
+    && source.files.some((file) => file.sourcePath === "LICENSE" && file.sha256 === APPROVED_GAUNTLET_LICENSE_SHA256);
   if (approvedGauntlet && source.license !== "Apache-2.0") {
     throw new Error(`approved Gauntlet source must lock Apache-2.0: got ${source.license ?? "missing"}`);
   }
