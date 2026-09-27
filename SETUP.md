@@ -6,6 +6,14 @@
 
 The setup installs three plugins from the `ourostack` marketplace in this repository, `ourostack/desk`: Desk (durable work state and authority), Superpowers (the engineering method) and Plain Language (prose policy). It binds the operator's desk, a Git repository that holds their durable context, and it leaves the host's own config directory as a thin pointer to that desk.
 
+**Claude config directory:** every Claude Code step below reads and writes the directory Claude Code itself uses: `$CLAUDE_CONFIG_DIR` when that variable is set, otherwise `~/.claude`. Resolve it once and use it in every step, so a throwaway or alternate profile never touches the operator's real `~/.claude`:
+
+```bash
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+```
+
+On Windows PowerShell, use `$CLAUDE_DIR = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { "$HOME\.claude" }`. The steps below write this directory as `$CLAUDE_DIR`. Run the `claude` commands in the same environment, because the CLI reads the same variable to find its own directory.
+
 ## Claude Code
 
 ### 1. Check prerequisites
@@ -28,11 +36,11 @@ claude plugin list
 
 Installing Desk pulls in Superpowers and Plain Language. Expect `desk@ourostack`, `superpowers@ourostack` and `plain-language@ourostack` enabled. Desk makes `desk:worker` the default agent for new sessions.
 
-Turn on automatic updates for this marketplace: in `~/.claude/settings.json`, add `"autoUpdate": true` to `extraKnownMarketplaces.ourostack` (the install just created that entry). Leave every other key as it is.
+Turn on automatic updates for this marketplace: in `$CLAUDE_DIR/settings.json`, add `"autoUpdate": true` to `extraKnownMarketplaces.ourostack` (the install just created that entry). Leave every other key as it is.
 
 ### 3. Set the host defaults
 
-Merge these keys into `~/.claude/settings.json`, preserving everything already there (other tools may own hooks and settings in that file):
+Merge these keys into `$CLAUDE_DIR/settings.json`, preserving everything already there (other tools may own hooks and settings in that file):
 
 ```json
 {
@@ -44,7 +52,7 @@ Merge these keys into `~/.claude/settings.json`, preserving everything already t
 - `autoMemoryEnabled: false` keeps durable context out of Claude's machine-local memory, so it lives in the desk and syncs across machines and harnesses.
 - `attribution` removes the AI attribution Claude Code adds to commits and pull requests.
 
-### 4. Make `~/.claude/CLAUDE.md` a thin pointer
+### 4. Make `$CLAUDE_DIR/CLAUDE.md` a thin pointer
 
 The file must contain only this, byte for byte:
 
@@ -57,13 +65,13 @@ Durable context — instructions, preferences, task state and memory — lives i
 - Never add AI attribution: no `Co-Authored-By` trailers, no "Generated with" lines and no AI credit in commits, pull requests, code comments or documents.
 ```
 
-If the file already has other content, or `~/.claude/agents/`, `~/.claude/skills/`, `~/.claude/hooks/` or `~/.claude/projects/*/memory/` hold anything the operator wrote:
+If the file already has other content, or `$CLAUDE_DIR/agents/`, `$CLAUDE_DIR/skills/`, `$CLAUDE_DIR/hooks/` or `$CLAUDE_DIR/projects/*/memory/` hold anything the operator wrote:
 
-1. Copy all of it to a dated backup outside `~/.claude` first.
+1. Copy all of it to a dated backup outside `$CLAUDE_DIR` first.
 2. **Ask** the operator whether anything there is still live. Once the desk is bound (step 5), move live rules into the desk's `AGENTS.md` or `_meta/`, and put historical material under the desk's `_archive/`.
 3. Remove what was moved or declared obsolete. Leave anything another tool installed (for example hooks pointing at a local service) and say so.
 
-Never delete Claude's own runtime state: session transcripts under `~/.claude/projects/`, history, caches or credentials.
+Never delete Claude's own runtime state: session transcripts under `$CLAUDE_DIR/projects/`, history, caches or credentials.
 
 ### 5. Find or create the desk
 
@@ -75,7 +83,7 @@ Bind the chosen desk by writing this file, with the absolute desk path:
 { "schema_version": 1, "desk": { "root": "<absolute desk path>" } }
 ```
 
-to `~/.claude/plugins/data/desk-ourostack/desk.activation.json`, creating the directory if needed. If the operator uses `CLAUDE_CONFIG_DIR`, the path is relative to that directory instead of `~/.claude`. The binding survives plugin updates.
+to `$CLAUDE_DIR/plugins/data/desk-ourostack/desk.activation.json`, creating the directory if needed. The binding survives plugin updates.
 
 ### 6. Start a new session and verify
 
