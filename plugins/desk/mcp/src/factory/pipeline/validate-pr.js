@@ -1,6 +1,21 @@
+// The store's intake gate. A pull request may add or modify two kinds of
+// data file, and nothing else:
+//   - published facts at `facts/<host>-<session id>.json`, and
+//   - published labels at `labels/<job>/<session id>.json` (`label-schema.js`),
+//     each checked against that session's facts file, which the caller reads
+//     from the tree the merge would leave (see `scripts/factory.js`) and passes
+//     in as `facts: [{ path, bytes }]`. A modified labels file also needs its
+//     `previousBytes`: a replacement must come from an evaluator whose plugin
+//     version and rubric are both no lower (else `evaluator_downgrade`).
+// Every value arrives as bytes and is only parsed as JSON, never loaded or
+// run, and errors carry only stable codes and safe paths.
+import { checkLabelsAgainstFacts, evaluatorDowngrade, validateLabelsBytes } from "../label-schema.js"
 import { validatePublishedBytes } from "../published-schema.js"
 
-const FACT_PATH = /^facts\/(claude-code|copilot-cli)-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json$/u
+const FACT_HOSTS = Object.freeze(["claude-code", "copilot-cli"])
+const SESSION_ID = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+const FACT_PATH = new RegExp(`^facts/(${FACT_HOSTS.join("|")})-(${SESSION_ID})\\.json$`, "u")
+const LABEL_PATH = new RegExp(`^labels/([0-9a-f]{32})/(${SESSION_ID})\\.json$`, "u")
 const STATUSES = new Set(["added", "modified"])
 const MAX_CHANGES = 500
 
@@ -8,9 +23,9 @@ function error(code, path) {
   return { code, path }
 }
 
-function parsePublished(bytes) {
+function parseBytes(bytes, validateBytes) {
   try {
-    const validation = validatePublishedBytes(bytes)
+    const validation = validateBytes(bytes)
     if (!validation.ok) return { validation }
     const text = typeof bytes === "string" ? bytes : bytes.toString("utf8")
     return { validation, value: JSON.parse(text) }
@@ -19,8 +34,59 @@ function parsePublished(bytes) {
   }
 }
 
+const parsePublished = (bytes) => parseBytes(bytes, validatePublishedBytes)
+
 export function isFactsPath(value) {
   return typeof value === "string" && FACT_PATH.test(value)
+}
+
+/** `{ job, session }` from an exact `labels/<job>/<session id>.json` path, else `null`. */
+export function labelsPathParts(value) {
+  const match = typeof value === "string" ? LABEL_PATH.exec(value) : null
+  return match === null ? null : { job: match[1], session: match[2] }
+}
+
+export function isLabelsPath(value) {
+  return labelsPathParts(value) !== null
+}
+
+/** Every path a session's published facts file may have, one per host. */
+export function factsPathsForSession(sessionId) {
+  return FACT_HOSTS.map((host) => `facts/${host}-${sessionId}.json`)
+}
+
+// A labels file: its own gate, its path identity, the replacement rule, then
+// exactly one sound facts file for its session, then the evidence against
+// that file. Labels that declare `facts_missing` carry no stretches, so they
+// need no facts file; when one exists it is still checked.
+function validateLabelsChange(change, parts, safePath) {
+  const current = parseBytes(change.bytes, validateLabelsBytes)
+  if (!current.validation.ok) return current.validation.errors.map((item) => error(item.code, safePath))
+  const errors = []
+  if (current.value.job !== parts.job) errors.push(error("job_mismatch", safePath))
+  if (current.value.session !== parts.session) errors.push(error("session_mismatch", safePath))
+  if (errors.length > 0) return errors
+
+  if (change.status === "modified") {
+    if (change.previousBytes === undefined) return [error("previous_missing", safePath)]
+    const previous = parseBytes(change.previousBytes, validateLabelsBytes)
+    if (!previous.validation.ok) return [error("previous_invalid", safePath)]
+    if (evaluatorDowngrade(previous.value, current.value)) return [error("evaluator_downgrade", safePath)]
+  }
+
+  const facts = change.facts
+  const allowed = new Set(factsPathsForSession(parts.session))
+  if (!Array.isArray(facts) || facts.some((entry) => entry === null || typeof entry !== "object" || !allowed.has(entry.path))) {
+    return [error("type", safePath)]
+  }
+  if (facts.length === 0) return current.value.unavailable.includes("facts_missing") ? [] : [error("facts_missing", safePath)]
+  if (facts.length > 1) return [error("facts_ambiguous", safePath)]
+  const factsMatch = FACT_PATH.exec(facts[0].path)
+  const parsed = parsePublished(facts[0].bytes)
+  if (!parsed.validation.ok || parsed.value.session.host !== factsMatch[1] || parsed.value.session.id !== factsMatch[2]) {
+    return [error("facts_invalid", safePath)]
+  }
+  return checkLabelsAgainstFacts(current.value, parsed.value).errors.map((item) => error(item.code, safePath))
 }
 
 export function validatePr(input) {
@@ -37,7 +103,8 @@ export function validatePr(input) {
     }
 
     const match = typeof change.path === "string" ? FACT_PATH.exec(change.path) : null
-    if (match === null) {
+    const labels = labelsPathParts(change.path)
+    if (match === null && labels === null) {
       errors.push(error("path", `changes.${index}`))
       continue
     }
@@ -48,6 +115,11 @@ export function validatePr(input) {
     }
     if (!STATUSES.has(change.status)) {
       errors.push(error("status", safePath))
+      continue
+    }
+
+    if (labels !== null) {
+      errors.push(...validateLabelsChange(change, labels, safePath))
       continue
     }
 

@@ -11,12 +11,15 @@
 // Every subcommand prints one JSON value on success. Validation failures print
 // their stable JSON result and exit 1; usage errors print one line to stderr.
 // Candidate revisions are inspected through Git as bytes and are never loaded.
+// `validate-pr` accepts published facts (`facts/<host>-<session id>.json`) and
+// published labels (`labels/<job>/<session id>.json`) from anyone; anything
+// else is maintenance.
 import { execFileSync } from "node:child_process"
 import { pathToFileURL } from "node:url"
 
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { build, jobLink } from "../src/factory/pipeline/build.js"
-import { isFactsPath, validatePr } from "../src/factory/pipeline/validate-pr.js"
+import { factsPathsForSession, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 
 export const SUPPORTED_COMMANDS = Object.freeze(["consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
@@ -107,6 +110,26 @@ function revisionBytes({ revision, filePath, cwd, git }) {
   return git(["show", `${revision}:${filePath}`], { cwd, encoding: null })
 }
 
+// The facts files a labeled session would have once this pull request
+// merged: a facts path the pull request adds or modifies is read at head, a
+// path it removes is gone, and any other path is read at the base tip, where
+// Git lists it only if it exists. The base tip, not the merge base, so labels
+// pass once their facts reach `main` even if their branch is older.
+function labeledSessionFacts({ session, listed, base, head, cwd, git }) {
+  const candidates = factsPathsForSession(session)
+  const inPullRequest = new Map(listed.filter((change) => candidates.includes(change.path)).map((change) => [change.path, change.status]))
+  const outside = candidates.filter((candidate) => !inPullRequest.has(candidate))
+  const onBase = new Set(outside.length === 0
+    ? []
+    : git(["ls-tree", "-z", "--name-only", base, "--", ...outside], { cwd }).split("\0").filter((name) => outside.includes(name)))
+  return candidates.flatMap((candidate) => {
+    const status = inPullRequest.get(candidate)
+    if (status === "added" || status === "modified") return [{ path: candidate, bytes: revisionBytes({ revision: head, filePath: candidate, cwd, git }) }]
+    if (onBase.has(candidate)) return [{ path: candidate, bytes: revisionBytes({ revision: base, filePath: candidate, cwd, git }) }]
+    return []
+  })
+}
+
 export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = runGit }) {
   const options = parseOptions(argv)
   const base = options?.get("base")
@@ -125,9 +148,9 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
     const result = validatePr({ changes: Array.from({ length: 501 }) })
     return { ...result, maintenance: false }
   }
-  // Anything but a published facts file, including a non-fact file under
-  // `facts/`, and a maintainer's removal of a facts file are maintenance: the
-  // store's merge workflow never merges them.
+  // Anything but a published facts or labels file, including a non-fact file
+  // under `facts/` or `labels/`, and a maintainer's removal of a facts or
+  // labels file are maintenance: the store's merge workflow never merges them.
   let maintenance = false
   let mergeBase = null
   const previousRevision = () => {
@@ -139,7 +162,8 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
   }
   const errors = []
   listed.forEach((change, index) => {
-    if (!isFactsPath(change.path)) {
+    const labels = labelsPathParts(change.path)
+    if (!isFactsPath(change.path) && labels === null) {
       maintenance = true
       if (!trustedMaintainer) errors.push({ code: "path", path: `changes.${index}` })
       return
@@ -152,11 +176,19 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
       errors.push(...validatePr({ changes: [change] }).errors)
       return
     }
-    const current = {
-      ...change,
-      bytes: revisionBytes({ revision: head, filePath: change.path, cwd, git }),
-      ...(change.status === "modified" ? { previousBytes: revisionBytes({ revision: previousRevision(), filePath: change.path, cwd, git }) } : {}),
-    }
+    const bytes = revisionBytes({ revision: head, filePath: change.path, cwd, git })
+    const current = labels === null
+      ? {
+          ...change,
+          bytes,
+          ...(change.status === "modified" ? { previousBytes: revisionBytes({ revision: previousRevision(), filePath: change.path, cwd, git }) } : {}),
+        }
+      : {
+          ...change,
+          bytes,
+          ...(change.status === "modified" ? { previousBytes: revisionBytes({ revision: previousRevision(), filePath: change.path, cwd, git }) } : {}),
+          facts: labeledSessionFacts({ session: labels.session, listed, base, head, cwd, git }),
+        }
     errors.push(...validatePr({ changes: [current] }).errors)
   })
   const result = { ok: errors.length === 0, errors }

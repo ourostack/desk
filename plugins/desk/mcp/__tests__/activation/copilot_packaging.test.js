@@ -18,6 +18,9 @@ const repoRoot = path.resolve(
 )
 const activationManifestPath = "plugins/desk/activation/desk.activation.json"
 const copilotBundlePath = "plugins/desk/activation/copilot-root.flattened-bundle.json"
+// The shipped Superpowers version moves with every upstream refresh, so it is read from the activation lock.
+const lockedSuperpowersVersion = JSON.parse(readFileSync(path.join(repoRoot, activationManifestPath), "utf8"))
+  .dependencies.find((dependency) => dependency.id === "superpowers").lock.version
 const evidencePath = "plugins/desk/activation/host-capability-evidence.md"
 const supportMatrixPath = "plugins/desk/activation/support-matrix.json"
 const copilotWorkerSource = "agents/worker.agent.md"
@@ -405,14 +408,14 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.0-alpha.63"],
+    ["Copilot root Desk version must match activation version 3.2.0-alpha.71"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())
   staleWorkSuiteVersion.superpowersPlugin.version = "1.4.8"
   assert.deepEqual(
     validateCopilotPackagingContract(staleWorkSuiteVersion),
-    ["Copilot root Superpowers version must match activation lock 6.3.0"],
+    [`Copilot root Superpowers version must match activation lock ${lockedSuperpowersVersion}`],
   )
 
   const stalePlainLanguageVersion = clone(currentCopilotPackagingInput())
@@ -446,7 +449,7 @@ test("Copilot packaging validation rejects incomplete flattened dependency closu
   delete missingWorkSuitePlugin.superpowersPlugin
   assert.deepEqual(
     validateCopilotPackagingContract(missingWorkSuitePlugin),
-    ["Copilot root Superpowers version must match activation lock 6.3.0"],
+    [`Copilot root Superpowers version must match activation lock ${lockedSuperpowersVersion}`],
   )
 
   const missingBundle = clone(currentCopilotPackagingInput())

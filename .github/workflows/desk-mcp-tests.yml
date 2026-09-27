@@ -113,6 +113,9 @@ on:
       - "scripts/*.cjs"
       - "scripts/test-desk-docs.cjs"
       - ".github/workflows/desk-mcp-tests.yml"
+  # The scheduled Superpowers refresh dispatches this workflow on its branch, because pull request events raised by
+  # the workflow token start no runs. A dispatched run has no base, so the coverage gate falls back to origin/main.
+  workflow_dispatch:
 
 jobs:
   desk-mcp-tests:
