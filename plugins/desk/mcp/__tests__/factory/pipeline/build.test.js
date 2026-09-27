@@ -11,6 +11,8 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, "..", "fixtures")
 const STORE = path.join(FIXTURES, "store")
 const EXPECTED = path.join(FIXTURES, "store-expected")
+const ROLLUP_STORE = path.join(FIXTURES, "rollup-store")
+const ROLLUP_EXPECTED = path.join(FIXTURES, "rollup-store-expected")
 const SENTINEL = "SENTINEL-STORE-FREE-TEXT"
 
 function files(root, relative = "") {
@@ -43,19 +45,60 @@ test("build matches every golden output byte for byte and returns exact counts",
   for (const relative of Object.keys(expected)) assert.equal(Buffer.compare(actual[relative], expected[relative]), 0, relative)
 }))
 
-test("build ignores labels, even malformed ones, until the reports consume them", () => scratch((root) => {
-  const store = path.join(root, "store")
+test("build turns the golden rollup store's facts and labels into every golden output byte for byte", () => scratch((root) => {
   const out = path.join(root, "out")
-  cpSync(STORE, store, { recursive: true })
-  assert.equal(existsSync(path.join(store, "labels", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "11111111-1111-4111-8111-111111111111.json")), true)
-  mkdirSync(path.join(store, "labels", "nested", "deeper"), { recursive: true })
-  writeFileSync(path.join(store, "labels", "nested", "deeper", "junk.json"), `{"${SENTINEL}":`)
-  writeFileSync(path.join(store, "labels", SENTINEL), SENTINEL)
-  assert.deepEqual(build({ storeDir: store, outDir: out }), { jobs: 2, sessions: 4 })
+  assert.deepEqual(build({ storeDir: ROLLUP_STORE, outDir: out }), { jobs: 6, sessions: 10 })
   const actual = bytesByPath(out)
-  const expected = bytesByPath(EXPECTED)
+  const expected = bytesByPath(ROLLUP_EXPECTED)
   assert.deepEqual(Object.keys(actual), Object.keys(expected))
   for (const relative of Object.keys(expected)) assert.equal(Buffer.compare(actual[relative], expected[relative]), 0, relative)
+  assert.deepEqual(Object.keys(actual).filter((relative) => relative.startsWith("rollups/")), [
+    "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/tool-kinds.json",
+  ])
+}))
+
+test("build reads labels as data only: dotfiles are ignored, and malformed or unexpected entries stop the build", () => scratch((root) => {
+  const store = path.join(root, "store")
+  const out = path.join(root, "out")
+  const reset = () => {
+    rmSync(store, { recursive: true, force: true })
+    cpSync(ROLLUP_STORE, store, { recursive: true })
+  }
+  const golden = bytesByPath(ROLLUP_EXPECTED)
+  const labelsDir = path.join(store, "labels")
+  const jobDir = path.join(labelsDir, "11111111111111111111111111111111")
+  const labelsFile = path.join(jobDir, "10000000-0000-4000-8000-000000000001.json")
+
+  reset()
+  writeFileSync(path.join(labelsDir, ".gitkeep"), SENTINEL)
+  writeFileSync(path.join(jobDir, ".notes"), SENTINEL)
+  mkdirSync(path.join(labelsDir, ".hidden"))
+  build({ storeDir: store, outDir: out })
+  for (const [relative, bytes] of Object.entries(bytesByPath(out))) assert.equal(Buffer.compare(bytes, golden[relative]), 0, relative)
+
+  const refusals = [
+    [() => writeFileSync(labelsFile, `{"${SENTINEL}":`), "invalid_published_labels"],
+    [() => {
+      const value = JSON.parse(readFileSync(labelsFile, "utf8"))
+      value.job = "22222222222222222222222222222222"
+      writeFileSync(labelsFile, JSON.stringify(value))
+    }, "invalid_published_labels"],
+    [() => writeFileSync(path.join(labelsDir, "README.md"), SENTINEL), "invalid_labels_entry"],
+    [() => mkdirSync(path.join(labelsDir, "not-a-job")), "invalid_labels_entry"],
+    [() => writeFileSync(path.join(jobDir, "notes.txt"), SENTINEL), "invalid_labels_entry"],
+    [() => mkdirSync(path.join(jobDir, "nested")), "invalid_labels_entry"],
+    [() => symlinkSync(labelsFile, path.join(jobDir, "10000000-0000-4000-8000-000000000099.json")), "invalid_labels_entry"],
+    [() => symlinkSync(jobDir, path.join(labelsDir, "99999999999999999999999999999999")), "invalid_labels_entry"],
+    [() => {
+      rmSync(labelsDir, { recursive: true })
+      writeFileSync(labelsDir, SENTINEL)
+    }, "labels_not_directory"],
+  ]
+  for (const [plant, code] of refusals) {
+    reset()
+    plant()
+    assert.throws(() => build({ storeDir: store, outDir: out }), (error) => error.code === code && !error.message.includes(SENTINEL), code)
+  }
 }))
 
 test("two builds over identical input are byte-identical", () => scratch((root) => {
@@ -87,7 +130,18 @@ test("generated output contains no date, time of day, absolute path, or planted 
   assert.ok(readFileSync(path.join(store, "README.md"), "utf8").includes(SENTINEL))
   const out = path.join(root, "out")
   assert.deepEqual(build({ storeDir: store, outDir: out }), { jobs: 2, sessions: 4 })
-  for (const [relative, contents] of Object.entries(bytesByPath(out))) {
+  // The rollup store adds labels, whose evaluator model is a free token.
+  const rollupStore = path.join(root, "rollup-store")
+  cpSync(ROLLUP_STORE, rollupStore, { recursive: true })
+  const labelsPath = path.join(rollupStore, "labels", "11111111111111111111111111111111", "10000000-0000-4000-8000-000000000001.json")
+  const labels = JSON.parse(readFileSync(labelsPath, "utf8"))
+  labels.evaluator.model = SENTINEL
+  writeFileSync(labelsPath, JSON.stringify(labels))
+  assert.ok(readFileSync(path.join(rollupStore, "README.md"), "utf8").includes(SENTINEL))
+  const rollupOut = path.join(root, "rollup-out")
+  assert.deepEqual(build({ storeDir: rollupStore, outDir: rollupOut }), { jobs: 6, sessions: 10 })
+  const outputs = [...Object.entries(bytesByPath(out)), ...Object.entries(bytesByPath(rollupOut)).map(([relative, contents]) => [`rollup/${relative}`, contents])]
+  for (const [relative, contents] of outputs) {
     const text = contents.toString("utf8")
     assert.doesNotMatch(text, /\d{4}-\d{2}-\d{2}/u, relative)
     assert.doesNotMatch(text, /\d{2}:\d{2}/u, relative)
@@ -102,14 +156,20 @@ test("a store with no facts directory, or only dotfiles in it, publishes an empt
   const out = path.join(root, "out")
   assert.deepEqual(build({ storeDir: store, outDir: out }), { jobs: 0, sessions: 0 })
   const empty = bytesByPath(out)
-  assert.deepEqual(Object.keys(empty), ["README.md", "index.md"])
+  assert.deepEqual(Object.keys(empty), ["README.md", "index.md", "rollups/coverage.json", "rollups/index.md", "rollups/measures.json", "rollups/muda.json", "rollups/tool-kinds.json"])
   assert.match(empty["index.md"].toString("utf8"), /No job has published facts yet\./u)
+  assert.match(empty["rollups/index.md"].toString("utf8"), /No job has published facts yet\./u)
+  assert.equal(JSON.parse(empty["rollups/coverage.json"]).jobs, 0)
 
   mkdirSync(path.join(store, "facts"))
   writeFileSync(path.join(store, "facts", ".gitkeep"), "")
   mkdirSync(path.join(store, "facts", ".hidden"))
   assert.deepEqual(build({ storeDir: store, outDir: out }), { jobs: 0, sessions: 0 })
   assert.equal(Buffer.compare(bytesByPath(out)["index.md"], empty["index.md"]), 0)
+  mkdirSync(path.join(store, "labels"))
+  writeFileSync(path.join(store, "labels", ".gitkeep"), "")
+  build({ storeDir: store, outDir: out })
+  for (const [relative, bytes] of Object.entries(bytesByPath(out))) assert.equal(Buffer.compare(bytes, empty[relative]), 0, relative)
 }))
 
 test("build reads facts as data only and rejects unexpected entries, invalid bytes, symlinks, and unsafe output paths", () => scratch((root) => {
