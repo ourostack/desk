@@ -2,15 +2,15 @@
 
 Totals and distributions across jobs, grouped by plugin version, host, job class and waste type; tool kinds are summed per session. They name no person, machine, date or time of day.
 
-Only complete values count: a measure a job could not supply, could supply only for some sessions (partial), or cannot have yet (censored, an open job) is excluded and listed with its reason, never counted as zero. Medians and p75 use the nearest-rank method: the value at rank ceil(p × n) of the counted values sorted ascending.
+Only finished jobs count: every measure of a job that is not done or cancelled, or whose lead time is censored, is excluded as open_job. Only complete values count: a measure a finished job could not supply, or could supply only for some sessions (partial), is excluded and listed with its reason, never counted as zero. Medians and p75 use the nearest-rank method: the value at rank ceil(p × n) of the counted values sorted ascending.
 
 ## Waste by type
 
-Muda time from the independent evaluator's labels, largest first; ties are broken by waste name. A job counts only when every one of its sessions is labeled.
+Muda time from the independent evaluator's labels, largest first; ties are broken by waste name. A job counts only when it is finished and every one of its sessions is labeled. Each session's waste counts once in a total, even when several jobs share the session.
 
 ### All jobs
 
-Muda time: 14000 ms across 4 of 6 jobs fully labeled; excluded: not_labeled 1, partial 1.
+Muda time: 14000 ms across 4 of 6 jobs fully labeled; excluded: open_job 1, partial 1. Sessions summed: 6, each once; shared by several jobs: 0.
 
 | Waste | Muda time | Share | Cumulative | Jobs |
 | --- | ---: | ---: | ---: | ---: |
@@ -25,7 +25,7 @@ Muda time: 14000 ms across 4 of 6 jobs fully labeled; excluded: not_labeled 1, p
 
 ### By job class: other
 
-Muda time: 14000 ms across 4 of 6 jobs fully labeled; excluded: not_labeled 1, partial 1.
+Muda time: 14000 ms across 4 of 6 jobs fully labeled; excluded: open_job 1, partial 1. Sessions summed: 6, each once; shared by several jobs: 0.
 
 | Waste | Muda time | Share | Cumulative | Jobs |
 | --- | ---: | ---: | ---: | ---: |
@@ -40,7 +40,7 @@ Muda time: 14000 ms across 4 of 6 jobs fully labeled; excluded: not_labeled 1, p
 
 ### By plugin version: 3.1.0
 
-Muda time: 9000 ms across 2 of 2 jobs fully labeled; excluded: none.
+Muda time: 9000 ms across 2 of 2 jobs fully labeled; excluded: none. Sessions summed: 2, each once; shared by several jobs: 0.
 
 | Waste | Muda time | Share | Cumulative | Jobs |
 | --- | ---: | ---: | ---: | ---: |
@@ -55,7 +55,7 @@ Muda time: 9000 ms across 2 of 2 jobs fully labeled; excluded: none.
 
 ### By plugin version: 3.1.1
 
-Muda time: 4000 ms across 1 of 3 jobs fully labeled; excluded: not_labeled 1, partial 1.
+Muda time: 4000 ms across 1 of 3 jobs fully labeled; excluded: open_job 1, partial 1. Sessions summed: 2, each once; shared by several jobs: 0.
 
 | Waste | Muda time | Share | Cumulative | Jobs |
 | --- | ---: | ---: | ---: | ---: |
@@ -70,7 +70,7 @@ Muda time: 4000 ms across 1 of 3 jobs fully labeled; excluded: not_labeled 1, pa
 
 ### By plugin version: mixed
 
-Muda time: 1000 ms across 1 of 1 jobs fully labeled; excluded: none.
+Muda time: 1000 ms across 1 of 1 jobs fully labeled; excluded: none. Sessions summed: 2, each once; shared by several jobs: 0.
 
 | Waste | Muda time | Share | Cumulative | Jobs |
 | --- | ---: | ---: | ---: | ---: |
@@ -89,36 +89,36 @@ Quality measures, which andon watches first, are marked (quality).
 
 ### All jobs
 
-Jobs: 6.
+Jobs: 6; open, and so left out of every measure: 1.
 
 | Measure | Jobs counted | Median | p75 | Excluded |
 | --- | ---: | ---: | ---: | --- |
-| lead_time | 4 | 10000 ms | 18000 ms | cancelled 1, censored 1 |
-| queue_before_start | 6 | 0 ms | 1000 ms | none |
-| active_time | 6 | 8000 ms | 12000 ms | none |
-| flow_efficiency | 4 | 68.00% | 70.00% | cancelled 1, censored 1 |
-| human_wait | 3 | 2000 ms | 2000 ms | host_does_not_record 2, partial 1 |
-| permission_wait | 2 | 0 ms | 2000 ms | host_does_not_record 3, partial 1 |
-| api_retry_wait | 6 | 0 ms | 1000 ms | none |
-| tool_failures (quality) | 6 | 0 | 1 | none |
-| tool_retries (quality) | 6 | 0 | 1 | none |
-| api_retries (quality) | 6 | 0 | 1 | none |
-| compactions | 6 | 0 | 0 | none |
-| retouches (quality) | 6 | 0 | 1 | none |
-| muda_time | 4 | 4000 ms | 4000 ms | not_labeled 1, partial 1 |
-| muda_time.defects (quality) | 4 | 0 ms | 2000 ms | not_labeled 1, partial 1 |
-| muda_time.overproduction | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.waiting | 4 | 2000 ms | 2000 ms | not_labeled 1, partial 1 |
-| muda_time.non_utilized_talent | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.transportation | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.inventory | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.motion | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.extra_processing | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| search_waste | 0 | unavailable | unavailable | not_in_published_facts 6 |
+| lead_time | 4 | 10000 ms | 18000 ms | cancelled 1, open_job 1 |
+| queue_before_start | 5 | 0 ms | 0 ms | open_job 1 |
+| active_time | 5 | 8000 ms | 12000 ms | open_job 1 |
+| flow_efficiency | 4 | 68.00% | 70.00% | cancelled 1, open_job 1 |
+| human_wait | 2 | 2000 ms | 2000 ms | host_does_not_record 2, open_job 1, partial 1 |
+| permission_wait | 2 | 0 ms | 2000 ms | host_does_not_record 2, open_job 1, partial 1 |
+| api_retry_wait | 5 | 0 ms | 1000 ms | open_job 1 |
+| tool_failures (quality) | 5 | 1 | 1 | open_job 1 |
+| tool_retries (quality) | 5 | 1 | 1 | open_job 1 |
+| api_retries (quality) | 5 | 0 | 1 | open_job 1 |
+| compactions | 5 | 0 | 0 | open_job 1 |
+| retouches (quality) | 5 | 1 | 1 | open_job 1 |
+| muda_time | 4 | 4000 ms | 4000 ms | open_job 1, partial 1 |
+| muda_time.defects (quality) | 4 | 0 ms | 2000 ms | open_job 1, partial 1 |
+| muda_time.overproduction | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.waiting | 4 | 2000 ms | 2000 ms | open_job 1, partial 1 |
+| muda_time.non_utilized_talent | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.transportation | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.inventory | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.motion | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.extra_processing | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| search_waste | 0 | unavailable | unavailable | not_in_published_facts 5, open_job 1 |
 
 ### By plugin version: 3.1.0
 
-Jobs: 2.
+Jobs: 2; open, and so left out of every measure: 0.
 
 | Measure | Jobs counted | Median | p75 | Excluded |
 | --- | ---: | ---: | ---: | --- |
@@ -147,36 +147,36 @@ Jobs: 2.
 
 ### By plugin version: 3.1.1
 
-Jobs: 3.
+Jobs: 3; open, and so left out of every measure: 1.
 
 | Measure | Jobs counted | Median | p75 | Excluded |
 | --- | ---: | ---: | ---: | --- |
-| lead_time | 1 | 18000 ms | 18000 ms | cancelled 1, censored 1 |
-| queue_before_start | 3 | 0 ms | 1000 ms | none |
-| active_time | 3 | 8000 ms | 12000 ms | none |
-| flow_efficiency | 1 | 66.67% | 66.67% | cancelled 1, censored 1 |
-| human_wait | 2 | 0 ms | 2000 ms | host_does_not_record 1 |
-| permission_wait | 1 | 0 ms | 0 ms | host_does_not_record 2 |
-| api_retry_wait | 3 | 0 ms | 0 ms | none |
-| tool_failures (quality) | 3 | 0 | 1 | none |
-| tool_retries (quality) | 3 | 0 | 1 | none |
-| api_retries (quality) | 3 | 0 | 0 | none |
-| compactions | 3 | 0 | 1 | none |
-| retouches (quality) | 3 | 1 | 1 | none |
-| muda_time | 1 | 4000 ms | 4000 ms | not_labeled 1, partial 1 |
-| muda_time.defects (quality) | 1 | 2000 ms | 2000 ms | not_labeled 1, partial 1 |
-| muda_time.overproduction | 1 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.waiting | 1 | 2000 ms | 2000 ms | not_labeled 1, partial 1 |
-| muda_time.non_utilized_talent | 1 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.transportation | 1 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.inventory | 1 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.motion | 1 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.extra_processing | 1 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| search_waste | 0 | unavailable | unavailable | not_in_published_facts 3 |
+| lead_time | 1 | 18000 ms | 18000 ms | cancelled 1, open_job 1 |
+| queue_before_start | 2 | 0 ms | 0 ms | open_job 1 |
+| active_time | 2 | 8000 ms | 12000 ms | open_job 1 |
+| flow_efficiency | 1 | 66.67% | 66.67% | cancelled 1, open_job 1 |
+| human_wait | 1 | 2000 ms | 2000 ms | host_does_not_record 1, open_job 1 |
+| permission_wait | 1 | 0 ms | 0 ms | host_does_not_record 1, open_job 1 |
+| api_retry_wait | 2 | 0 ms | 0 ms | open_job 1 |
+| tool_failures (quality) | 2 | 0 | 1 | open_job 1 |
+| tool_retries (quality) | 2 | 0 | 1 | open_job 1 |
+| api_retries (quality) | 2 | 0 | 0 | open_job 1 |
+| compactions | 2 | 0 | 1 | open_job 1 |
+| retouches (quality) | 2 | 1 | 1 | open_job 1 |
+| muda_time | 1 | 4000 ms | 4000 ms | open_job 1, partial 1 |
+| muda_time.defects (quality) | 1 | 2000 ms | 2000 ms | open_job 1, partial 1 |
+| muda_time.overproduction | 1 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.waiting | 1 | 2000 ms | 2000 ms | open_job 1, partial 1 |
+| muda_time.non_utilized_talent | 1 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.transportation | 1 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.inventory | 1 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.motion | 1 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.extra_processing | 1 | 0 ms | 0 ms | open_job 1, partial 1 |
+| search_waste | 0 | unavailable | unavailable | not_in_published_facts 2, open_job 1 |
 
 ### By plugin version: mixed
 
-Jobs: 1.
+Jobs: 1; open, and so left out of every measure: 0.
 
 | Measure | Jobs counted | Median | p75 | Excluded |
 | --- | ---: | ---: | ---: | --- |
@@ -205,36 +205,36 @@ Jobs: 1.
 
 ### By host: claude-code
 
-Jobs: 3.
+Jobs: 3; open, and so left out of every measure: 1.
 
 | Measure | Jobs counted | Median | p75 | Excluded |
 | --- | ---: | ---: | ---: | --- |
-| lead_time | 2 | 10000 ms | 18000 ms | censored 1 |
-| queue_before_start | 3 | 0 ms | 1000 ms | none |
-| active_time | 3 | 8000 ms | 12000 ms | none |
-| flow_efficiency | 2 | 66.67% | 80.00% | censored 1 |
-| human_wait | 3 | 2000 ms | 2000 ms | none |
-| permission_wait | 0 | unavailable | unavailable | host_does_not_record 3 |
-| api_retry_wait | 3 | 0 ms | 0 ms | none |
-| tool_failures (quality) | 3 | 1 | 1 | none |
-| tool_retries (quality) | 3 | 1 | 1 | none |
-| api_retries (quality) | 3 | 0 | 0 | none |
-| compactions | 3 | 0 | 1 | none |
-| retouches (quality) | 3 | 0 | 1 | none |
-| muda_time | 2 | 4000 ms | 4000 ms | not_labeled 1 |
-| muda_time.defects (quality) | 2 | 2000 ms | 2000 ms | not_labeled 1 |
-| muda_time.overproduction | 2 | 0 ms | 0 ms | not_labeled 1 |
-| muda_time.waiting | 2 | 2000 ms | 2000 ms | not_labeled 1 |
-| muda_time.non_utilized_talent | 2 | 0 ms | 0 ms | not_labeled 1 |
-| muda_time.transportation | 2 | 0 ms | 0 ms | not_labeled 1 |
-| muda_time.inventory | 2 | 0 ms | 0 ms | not_labeled 1 |
-| muda_time.motion | 2 | 0 ms | 0 ms | not_labeled 1 |
-| muda_time.extra_processing | 2 | 0 ms | 0 ms | not_labeled 1 |
-| search_waste | 0 | unavailable | unavailable | not_in_published_facts 3 |
+| lead_time | 2 | 10000 ms | 18000 ms | open_job 1 |
+| queue_before_start | 2 | 0 ms | 0 ms | open_job 1 |
+| active_time | 2 | 8000 ms | 12000 ms | open_job 1 |
+| flow_efficiency | 2 | 66.67% | 80.00% | open_job 1 |
+| human_wait | 2 | 2000 ms | 2000 ms | open_job 1 |
+| permission_wait | 0 | unavailable | unavailable | host_does_not_record 2, open_job 1 |
+| api_retry_wait | 2 | 0 ms | 0 ms | open_job 1 |
+| tool_failures (quality) | 2 | 1 | 1 | open_job 1 |
+| tool_retries (quality) | 2 | 1 | 1 | open_job 1 |
+| api_retries (quality) | 2 | 0 | 0 | open_job 1 |
+| compactions | 2 | 0 | 1 | open_job 1 |
+| retouches (quality) | 2 | 0 | 1 | open_job 1 |
+| muda_time | 2 | 4000 ms | 4000 ms | open_job 1 |
+| muda_time.defects (quality) | 2 | 2000 ms | 2000 ms | open_job 1 |
+| muda_time.overproduction | 2 | 0 ms | 0 ms | open_job 1 |
+| muda_time.waiting | 2 | 2000 ms | 2000 ms | open_job 1 |
+| muda_time.non_utilized_talent | 2 | 0 ms | 0 ms | open_job 1 |
+| muda_time.transportation | 2 | 0 ms | 0 ms | open_job 1 |
+| muda_time.inventory | 2 | 0 ms | 0 ms | open_job 1 |
+| muda_time.motion | 2 | 0 ms | 0 ms | open_job 1 |
+| muda_time.extra_processing | 2 | 0 ms | 0 ms | open_job 1 |
+| search_waste | 0 | unavailable | unavailable | not_in_published_facts 2, open_job 1 |
 
 ### By host: copilot-cli
 
-Jobs: 2.
+Jobs: 2; open, and so left out of every measure: 0.
 
 | Measure | Jobs counted | Median | p75 | Excluded |
 | --- | ---: | ---: | ---: | --- |
@@ -263,7 +263,7 @@ Jobs: 2.
 
 ### By host: mixed
 
-Jobs: 1.
+Jobs: 1; open, and so left out of every measure: 0.
 
 | Measure | Jobs counted | Median | p75 | Excluded |
 | --- | ---: | ---: | ---: | --- |
@@ -292,32 +292,32 @@ Jobs: 1.
 
 ### By job class: other
 
-Jobs: 6.
+Jobs: 6; open, and so left out of every measure: 1.
 
 | Measure | Jobs counted | Median | p75 | Excluded |
 | --- | ---: | ---: | ---: | --- |
-| lead_time | 4 | 10000 ms | 18000 ms | cancelled 1, censored 1 |
-| queue_before_start | 6 | 0 ms | 1000 ms | none |
-| active_time | 6 | 8000 ms | 12000 ms | none |
-| flow_efficiency | 4 | 68.00% | 70.00% | cancelled 1, censored 1 |
-| human_wait | 3 | 2000 ms | 2000 ms | host_does_not_record 2, partial 1 |
-| permission_wait | 2 | 0 ms | 2000 ms | host_does_not_record 3, partial 1 |
-| api_retry_wait | 6 | 0 ms | 1000 ms | none |
-| tool_failures (quality) | 6 | 0 | 1 | none |
-| tool_retries (quality) | 6 | 0 | 1 | none |
-| api_retries (quality) | 6 | 0 | 1 | none |
-| compactions | 6 | 0 | 0 | none |
-| retouches (quality) | 6 | 0 | 1 | none |
-| muda_time | 4 | 4000 ms | 4000 ms | not_labeled 1, partial 1 |
-| muda_time.defects (quality) | 4 | 0 ms | 2000 ms | not_labeled 1, partial 1 |
-| muda_time.overproduction | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.waiting | 4 | 2000 ms | 2000 ms | not_labeled 1, partial 1 |
-| muda_time.non_utilized_talent | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.transportation | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.inventory | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.motion | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| muda_time.extra_processing | 4 | 0 ms | 0 ms | not_labeled 1, partial 1 |
-| search_waste | 0 | unavailable | unavailable | not_in_published_facts 6 |
+| lead_time | 4 | 10000 ms | 18000 ms | cancelled 1, open_job 1 |
+| queue_before_start | 5 | 0 ms | 0 ms | open_job 1 |
+| active_time | 5 | 8000 ms | 12000 ms | open_job 1 |
+| flow_efficiency | 4 | 68.00% | 70.00% | cancelled 1, open_job 1 |
+| human_wait | 2 | 2000 ms | 2000 ms | host_does_not_record 2, open_job 1, partial 1 |
+| permission_wait | 2 | 0 ms | 2000 ms | host_does_not_record 2, open_job 1, partial 1 |
+| api_retry_wait | 5 | 0 ms | 1000 ms | open_job 1 |
+| tool_failures (quality) | 5 | 1 | 1 | open_job 1 |
+| tool_retries (quality) | 5 | 1 | 1 | open_job 1 |
+| api_retries (quality) | 5 | 0 | 1 | open_job 1 |
+| compactions | 5 | 0 | 0 | open_job 1 |
+| retouches (quality) | 5 | 1 | 1 | open_job 1 |
+| muda_time | 4 | 4000 ms | 4000 ms | open_job 1, partial 1 |
+| muda_time.defects (quality) | 4 | 0 ms | 2000 ms | open_job 1, partial 1 |
+| muda_time.overproduction | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.waiting | 4 | 2000 ms | 2000 ms | open_job 1, partial 1 |
+| muda_time.non_utilized_talent | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.transportation | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.inventory | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.motion | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| muda_time.extra_processing | 4 | 0 ms | 0 ms | open_job 1, partial 1 |
+| search_waste | 0 | unavailable | unavailable | not_in_published_facts 5, open_job 1 |
 
 ## Tool kinds
 
@@ -332,9 +332,9 @@ Calls and failures summed over 10 sessions with facts, each session counted once
 
 ## Coverage
 
-- Jobs: 6.
+- Jobs: 6; open: 1.
 - Unattributed sessions: 1 of 10 (3000 ms of 70000 ms session time).
-- Jobs fully labeled: 4; partially labeled: 1; unlabeled: 1.
+- Jobs fully labeled: 4; partially labeled: 1; unlabeled: 0.
 - Labels files: 9; used: 7; unused: evidence_unmatched 1, facts_missing 1.
 - Job class: every job is other; published facts do not carry the task card's kind.
 - Search waste: unavailable; published facts do not carry the organization signal.
