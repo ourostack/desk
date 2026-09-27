@@ -995,6 +995,12 @@ contract("session-start asks the factory contribution question once, in plain wo
   assert.match(step, /`no` is a decision too[\s\S]+recorded/u);
   assert.match(step, /[Nn]oninteractive[\s\S]+do not ask and do not record anything/u);
   assert.doesNotMatch(step, /consent\.json/u, "the skill records consent only through factory.js");
+  // Review M3-11 D1 and D3: the boot line and desk_status agree, and the account is chosen by asking GitHub, never assumed.
+  assert.match(step, /`held` means no store is resolved[^\n]+nothing to ask[^\n]+boot line does not ask/u);
+  assert.match(step, /Never assume gh's active account/u);
+  assert.match(step, /factory\.js account --store <store>/u);
+  assert.match(step, /`no_account_can_deliver`, do not ask/u);
+  assert.doesNotMatch(step, /gh api user/u, "the active account is never assumed");
 });
 contract("session-start never skips Step 2.7", () => {
   assert.match(text(sessionStart).split("## Never skip, never route around", 2)[1] ?? "", /2\.7/u);

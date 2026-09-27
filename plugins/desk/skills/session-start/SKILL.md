@@ -200,9 +200,15 @@ now that the workspace is synced and this session's own desk is known, run the `
 
 Desk can contribute measurement data about finished tasks to a factory store, which builds a report for each finished job. Each desk reports to one store, and this machine records one decision per store.
 
-Check `factory` in the `desk_status` result. Ask only when `factory.consent` is `undecided`; the startup hook's `Desk boot:` line then also says the desk hasn't decided. A recorded decision is never asked again: for `yes` or `no`, say nothing. `held` means no store is resolved for this desk, so there is nothing to ask. `unreadable` is a `desk_doctor` finding to report, not a question.
+Check `factory` in the `desk_status` result. Ask only when `factory.consent` is `undecided`; the startup hook's `Desk boot:` line says the desk hasn't decided in exactly that case, because both read the decision with the same code. A recorded decision is never asked again: for `yes` or `no`, say nothing. `held` means no store is resolved for this desk, so there is nothing to ask, and the boot line does not ask either. `unreadable` is a `desk_doctor` finding to report, not a question.
 
-Before asking, find the GitHub account that would open the intake pull requests: `gh api user --jq .login`, or, when several accounts are signed in, the one that belongs to the store's organization. Then ask once, as its own decision group in the Step 5 message, naming the store from `factory.store`:
+Before asking, find the GitHub account that would open the intake pull requests. Never assume gh's active account: it may be a work account that cannot open pull requests on the store. Run the Desk factory CLI (the same one the recording commands below use), which asks GitHub about the store with each signed-in account's own token:
+
+```bash
+node <Desk plugin folder>/mcp/scripts/factory.js account --store <store>
+```
+
+With `result: account_found`, `account` is the `<login>` to name. With `no_account_can_deliver`, do not ask: tell the operator in one line that no signed-in GitHub account can open pull requests on `<store>`, with each account's `reason` (`managed_account` is an Enterprise Managed User account, which cannot open pull requests outside its enterprise; `store_not_visible`, `auth_failed`, `forking_disabled`), and that signing in a personal account with `gh auth login` lets the next session ask. Any other `result` is a GitHub or `gh` problem to report the same way; ask in a later session. Then ask once, as its own decision group in the Step 5 message, naming the store from `factory.store`:
 
 > Desk can contribute measurement data about your finished tasks to `<store>`, which builds a report for each finished job. What it publishes: durations, counts, tool kinds, plugin and model versions, and references to public repositories. What it never publishes: prompt, assistant or tool content, names, or dates and times of day. `<store>` is a public repository, and your GitHub account `<login>` appears as the author of the intake pull requests that deliver the data. Contribute? (yes or no)
 
