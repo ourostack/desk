@@ -34,6 +34,24 @@ test("a running Node that satisfies the MCP's range is used as it is, with no se
   assert.equal(compatibleNode().node, process.execPath, "the defaults describe this process")
 })
 
+test("a plain >= floor is checked without loading the bootstrap; any other range uses the bootstrap's own check", async () => {
+  const root = await mkTempRoot("desk-compatible-range-")
+  const noSearch = () => { throw new Error("no search when the running Node fits") }
+  const range = async (engines) => {
+    const dir = await fs.mkdtemp(path.join(root, "mcp-"))
+    if (engines !== undefined) await fs.writeFile(path.join(dir, "package.json"), JSON.stringify({ engines: { node: engines } }))
+    return dir
+  }
+  const at = (version) => ({ path: `/node/${version}`, version, abi: "127" })
+  assert.equal(compatibleNode({ mcpRoot: await range(">=20.1.0"), current: at("v20.1.0"), select: noSearch }).node, "/node/v20.1.0")
+  assert.equal(compatibleNode({ mcpRoot: await range(">= 20.1.0"), current: at("v22.0.0"), select: noSearch }).node, "/node/v22.0.0")
+  const tooOld = { node: null, range: ">=20.1.0" }
+  assert.deepEqual(compatibleNode({ mcpRoot: await range(">=20.1.0"), current: at("v20.0.9"), select: () => tooOld }), { node: null, range: ">=20.1.0" })
+  assert.deepEqual(compatibleNode({ mcpRoot: await range("^22.0.0 || >=24.0.0"), current: at("v22.5.0"), select: noSearch }), { node: "/node/v22.5.0", range: "^22.0.0 || >=24.0.0" })
+  assert.equal(compatibleNode({ mcpRoot: await range("^22.0.0 || >=24.0.0"), current: at("v23.1.0"), select: () => tooOld }).node, null)
+  assert.deepEqual(compatibleNode({ mcpRoot: await range(undefined), current: at("v22.0.0"), select: noSearch }), { node: "/node/v22.0.0", range: ">=20.0.0" }, "no package.json: the bootstrap's default range")
+})
+
 test("an old running Node searches with the bootstrap's selection and a hook-sized probe budget", () => {
   const calls = []
   const select = (options) => { calls.push(options); return { node: { path: "/nvm/v22/bin/node" }, range: ">=20.0.0" } }

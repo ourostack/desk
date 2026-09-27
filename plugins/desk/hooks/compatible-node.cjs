@@ -10,7 +10,10 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const bootstrap = require("../mcp/bootstrap.cjs");
+// The bootstrap is loaded only when the running Node might not fit: hooks
+// run on every session start and turn, and most hosts need no search.
+let loaded;
+const bootstrap = () => (loaded ??= require("../mcp/bootstrap.cjs"));
 
 const MCP_ROOT = path.join(__dirname, "..", "mcp");
 
@@ -22,14 +25,34 @@ const MCP_ROOT = path.join(__dirname, "..", "mcp");
 // selection: the answer from discovery also serves the final check.
 const PROBE_BUDGET_MS = 250;
 
+// The engines range as a plain `>=X.Y.Z` floor, or null for any other form,
+// which the bootstrap's own range check then handles.
+function engineFloor(mcpRoot) {
+  try {
+    const range = JSON.parse(fs.readFileSync(path.join(mcpRoot, "package.json"), "utf8")).engines.node;
+    const match = /^>=\s*v?(\d+)\.(\d+)\.(\d+)$/.exec(String(range).trim());
+    return match ? { range, floor: match.slice(1).map(Number) } : null;
+  } catch {
+    return null;
+  }
+}
+
+function atLeast(version, floor) {
+  const parts = String(version).replace(/^v/, "").split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (parts[index] !== floor[index]) return parts[index] > floor[index];
+  }
+  return true;
+}
+
 function hookProbe(env) {
   const answers = new Map();
   return (file, timeoutMs) => {
     if (answers.has(file)) return answers.get(file);
     let real = file;
     try { real = fs.realpathSync(file); } catch { /* probed below */ }
-    const version = bootstrap.versionFromPath(real);
-    const answer = version ? { version, abi: null } : bootstrap.probeNode(file, env, timeoutMs);
+    const version = bootstrap().versionFromPath(real);
+    const answer = version ? { version, abi: null } : bootstrap().probeNode(file, env, timeoutMs);
     answers.set(file, answer);
     return answer;
   };
@@ -46,10 +69,12 @@ function compatibleNode({
   env = process.env,
   current = { path: process.execPath, version: process.version, abi: process.versions.modules },
   mcpRoot = MCP_ROOT,
-  select = bootstrap.selectNode,
+  select = (options) => bootstrap().selectNode(options),
 } = {}) {
-  const { range } = bootstrap.readPackage(mcpRoot);
-  if (bootstrap.satisfies(current.version, range)) return { node: current.path, range };
+  const plain = engineFloor(mcpRoot);
+  if (plain !== null && atLeast(current.version, plain.floor)) return { node: current.path, range: plain.range };
+  const { range } = bootstrap().readPackage(mcpRoot);
+  if (bootstrap().satisfies(current.version, range)) return { node: current.path, range };
   const selection = select({
     env,
     platform: process.platform,
