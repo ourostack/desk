@@ -371,3 +371,23 @@ test("readDeskRemote shares one deadline across its Git calls and throws on reac
     rmSync(desk, { recursive: true, force: true })
   }
 })
+
+test("readDeskRemote never reads a Git call killed by its time limit or a signal as no remote, whatever it printed", () => {
+  const killed = [
+    { status: null, signal: "SIGTERM", stdout: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) },
+    { status: null, signal: "SIGKILL", stdout: "" },
+    { status: 0, signal: null, stdout: "\n", error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }) },
+  ]
+  for (const answer of killed) {
+    for (const call of [0, 1]) {
+      let calls = 0
+      const spawn = () => (calls++ === call ? answer : { status: 0, signal: null, stdout: call === 1 && calls === 1 ? "\n" : "https://github.com/acme/desk.git\n" })
+      assert.throws(() => readDeskRemote({ deskRoot: "/desk", spawn }), { code: "git_deadline" }, `${JSON.stringify(answer)} at call ${call}`)
+      assert.throws(() => readDeskRemote({ deskRoot: "/desk", spawn: () => answer, deadline: Infinity }), { code: "git_deadline" })
+    }
+  }
+  const ordinary = (outputs) => { let calls = 0; return () => outputs[calls++] }
+  assert.equal(readDeskRemote({ deskRoot: "/desk", spawn: ordinary([{ status: 0, signal: null, stdout: "\n" }, { status: 0, signal: null, stdout: "https://github.com/acme/desk.git\n" }]) }), "https://github.com/acme/desk.git")
+  assert.equal(readDeskRemote({ deskRoot: "/desk", spawn: ordinary([{ status: 0, signal: null, stdout: "\n" }, { status: 1, signal: null, stdout: "" }]) }), null, "an ordinary failure is still no remote")
+  assert.equal(readDeskRemote({ deskRoot: "/desk", spawn: ordinary([{ status: 128, signal: null, stdout: "" }]) }), null)
+})

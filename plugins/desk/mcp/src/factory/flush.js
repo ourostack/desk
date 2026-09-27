@@ -29,9 +29,11 @@
 //      (`github-actions[bot]`) commented a first line `factory-rejected:
 //      <code>`, every file of that PR, all pages of up to 500, is quarantined
 //      with that code: the comment names no file, so good files in a rejected
-//      PR are quarantined too. `merge_conflict` and `unexpected_merge` say the
-//      branch was stale, not the facts bad: nothing is quarantined, and the
-//      files go out again on a branch rebuilt from the current default branch.
+//      PR are quarantined too; with several codes, the first data code. When
+//      every code is `merge_conflict` or `unexpected_merge`, the branch was
+//      stale, not the facts bad: nothing is quarantined, the files go out
+//      again on a branch rebuilt from the current default branch, and the
+//      result is `intake_stale_retried` with the number of stale PRs read.
 //   5. A file whose exact published blob already sits at `facts/<name>` on
 //      the store's default branch is marked delivered.
 //   6. The rest (at most 500 files and 24 MiB per flush) becomes one tree on
@@ -98,7 +100,7 @@ import { PATTERNS, isPlainObject } from "./schema.js"
 
 /** Every result `flush` can return. */
 export const FLUSH_CODES = Object.freeze([
-  "delivered_pr_open", "nothing_pending", "not_opted_in", "no_account", "gh_missing", "gh_too_old", "auth_failed",
+  "delivered_pr_open", "intake_stale_retried", "nothing_pending", "not_opted_in", "no_account", "gh_missing", "gh_too_old", "auth_failed",
   "store_missing", "fork_pending", "rate_limited", "offline", "locked", "deadline", "unexpected",
 ])
 
@@ -121,6 +123,8 @@ const INTAKE_ID = /^[0-9a-f]{16}$/u
 const SHA = /^[0-9a-f]{40}$/u
 const BRANCH = /^[A-Za-z0-9._-]{1,100}$/u
 const REJECTED = /^factory-rejected: ([a-z][a-z0-9_]{0,63})$/u
+// A PR is open for delivery after either result.
+const DELIVERED_OPEN = new Set(["delivered_pr_open", "intake_stale_retried"])
 const FACTS_NAME = /^(?:claude-code|copilot-cli)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/u
 const FACTS_PATH = /^facts\/((?:claude-code|copilot-cli)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json)$/u
 const HTTP_STATUS = /\(HTTP (\d{3})\)/u
@@ -440,6 +444,7 @@ async function readPages(client, route, { perPage, maxItems, stopAt = () => fals
 
 async function readRejections(env, client, { store, head, through }) {
   const rejected = new Set()
+  let stale = 0
   let highest = through
   // Newest first; PR numbers grow with creation, so the listing stops at the first PR already read.
   const closed = await readPages(client, `repos/${store}/pulls?state=closed&head=${encodeURIComponent(head.label)}&sort=created&direction=desc`, {
@@ -450,13 +455,26 @@ async function readRejections(env, client, { store, head, through }) {
     highest = Math.max(highest, pr.number)
     if (pr.merged_at !== null && pr.merged_at !== undefined) continue
     const comments = await readPages(client, `repos/${store}/issues/${pr.number}/comments`, { perPage: 100, maxItems: MAX_COMMENTS })
-    let code = null
+    // The automation's comment starts with a `factory-rejected: <code>` line and may carry one such line per code.
+    let codes = []
     for (const comment of comments) {
       if (comment?.user?.login !== REJECTION_AUTHOR || typeof comment.body !== "string") continue
-      code = REJECTED.exec(comment.body.split(/\r?\n/u)[0])?.[1] ?? null
-      if (code !== null) break
+      const lines = comment.body.split(/\r?\n/u)
+      if (!REJECTED.test(lines[0])) continue
+      for (const line of lines) {
+        const match = REJECTED.exec(line)
+        if (match === null) break
+        codes.push(match[1])
+      }
+      break
     }
-    if (code === null || STALE_INTAKE_CODES.has(code)) continue
+    if (codes.length === 0) continue
+    // Stale only when every code says so; any data code rejects the files, and quarantine names the first one.
+    const code = codes.find((candidate) => !STALE_INTAKE_CODES.has(candidate))
+    if (code === undefined) {
+      stale += 1
+      continue
+    }
     // A batch holds up to MAX_FILES files; GitHub pages them 100 at a time.
     for (const file of await readPages(client, `repos/${store}/pulls/${pr.number}/files`, { perPage: 100, maxItems: MAX_FILES })) {
       const name = FACTS_PATH.exec(String(file?.filename))?.[1]
@@ -465,7 +483,7 @@ async function readRejections(env, client, { store, head, through }) {
       rejected.add(name)
     }
   }
-  return { rejected, through: highest }
+  return { rejected, stale, through: highest }
 }
 
 function treeEntries(json) {
@@ -600,6 +618,8 @@ async function deliver(env, context) {
   const batch = takeBatch(remaining, { maxFiles, maxBytes })
   await pushBatch(client, { target, branch, base, batch })
   const pr = await openPr(client, { store, head, base: target.branch, count: batch.length })
+  // A stale refusal is not a delivery failure, but it is not a plain delivery either: say so, with how many stale PRs this flush read.
+  if (rejections.stale > 0) return { result: "intake_stale_retried", pr, stale_retries: rejections.stale }
   return { result: "delivered_pr_open", pr }
 }
 
@@ -635,6 +655,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
           at: new Date(now()).toISOString(),
           result: outcome.result,
           ...(outcome.pr ? { pr: outcome.pr.number } : {}),
+          ...(outcome.stale_retries ? { stale_retries: outcome.stale_retries } : {}),
           ...(through !== null ? { rejections_through: through } : {}),
         },
       },
@@ -644,14 +665,15 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
   } finally {
     await releaseLock(lock)
   }
-  const pending = outcome.result === "nothing_pending" ? [] : outcome.result === "delivered_pr_open" ? progress.pending : null
+  const pending = outcome.result === "nothing_pending" ? [] : DELIVERED_OPEN.has(outcome.result) ? progress.pending : null
   return { ...outcome, pending }
 }
 
 /**
- * `flush(env, { store, runner, deadlineMs = 120000 }) -> { result, pr? }`,
- * `result` one of `FLUSH_CODES`, `pr` `{ number, url }` with
- * `delivered_pr_open`. Also takes `now` (a millisecond clock), `transform`
+ * `flush(env, { store, runner, deadlineMs = 120000 }) -> { result, pr?,
+ * stale_retries? }`, `result` one of `FLUSH_CODES`, `pr` `{ number, url }`
+ * with `delivered_pr_open` and `intake_stale_retried`, which also gives how
+ * many stale-refused intake PRs this flush read before opening a new one. Also takes `now` (a millisecond clock), `transform`
  * (the publishing transform) and the batch caps `maxFiles`/`maxBytes`.
  */
 export async function flush(env, options = {}) {
@@ -774,7 +796,7 @@ export async function finalize(env, {
       if (outcome.result === "locked") await sleep(Math.min(1000, Math.max(0, deadline - now())))
     } while (outcome.result === "locked")
     flushes[store] = outcome.result
-    const done = (outcome.result === "nothing_pending" || outcome.result === "delivered_pr_open") && Array.isArray(outcome.pending)
+    const done = (outcome.result === "nothing_pending" || DELIVERED_OPEN.has(outcome.result)) && Array.isArray(outcome.pending)
       && files.every((name) => !outcome.pending.includes(name))
     if (!done) delivered = false
   }

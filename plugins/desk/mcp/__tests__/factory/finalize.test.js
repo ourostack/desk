@@ -118,6 +118,9 @@ test("finalize clears the request once the job's files are delivered or quaranti
   assert.equal(await pendingRequest(ctx.env), false)
   await requested(ctx)
   assert.equal((await finalize(ctx.env, { job: JOB, now: clockAt(REQUESTED), derive: async () => ({ result: "skipped" }), flush: async () => ({ result: "nothing_pending", pending: [] }) })).result, "cleared")
+  await requested(ctx)
+  const retried = await finalize(ctx.env, { job: JOB, now: clockAt(REQUESTED), derive: async () => ({ result: "skipped" }), flush: async () => ({ result: "intake_stale_retried", pr: { number: 2, url: "u" }, stale_retries: 1, pending: [name] }) })
+  assert.deepEqual(retried, { result: "retained", flushes: { [STORE]: "intake_stale_retried" } }, "a stale retry still has the job's file in its new PR")
   assert.ok(name)
 }))
 

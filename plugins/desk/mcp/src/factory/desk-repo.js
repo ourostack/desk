@@ -64,14 +64,16 @@ export function gitEnv() {
   return env
 }
 
-function runGit({ git, deskRoot, timeoutMs }, args) {
-  const result = spawnSync(git, ["-C", deskRoot, "-c", "core.quotePath=false", "-c", "log.showSignature=false", ...args], {
+// `strict`: a call that timed out or was killed by a signal throws `git_deadline` whatever it printed, instead of reading as "nothing found".
+function runGit({ git, deskRoot, timeoutMs, spawn = spawnSync, strict = false }, args) {
+  const result = spawn(git, ["-C", deskRoot, "-c", "core.quotePath=false", "-c", "log.showSignature=false", ...args], {
     encoding: "utf8",
     env: gitEnv(),
     timeout: timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "ignore"],
   })
+  if (strict && (result.error?.code === "ETIMEDOUT" || result.signal)) throw gitDeadline()
   return result.status === 0 ? result.stdout : null
 }
 
@@ -227,16 +229,18 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
  * to `performance.now`), both Git calls share it: each gets at most the time
  * left, and a call that reaches the deadline, or none left to start one,
  * throws an error whose code is `git_deadline` instead of reading as "no
- * remote", so a caller never mistakes a timeout for a desk without one.
+ * remote", so a caller never mistakes a timeout for a desk without one. A
+ * call killed by its own time limit, or by any signal, throws the same way
+ * with or without a deadline. `spawn` replaces `spawnSync` in tests.
  */
-export function readDeskRemote({ deskRoot, git = "git", timeoutMs = DEFAULT_TIMEOUT_MS, deadline = null, clock = () => performance.now() }) {
+export function readDeskRemote({ deskRoot, git = "git", timeoutMs = DEFAULT_TIMEOUT_MS, deadline = null, clock = () => performance.now(), spawn = spawnSync }) {
   const run = (args) => {
     let limit = timeoutMs
     if (deadline !== null) {
       limit = Math.min(timeoutMs, Math.floor(deadline - clock()))
       if (limit < 1) throw gitDeadline()
     }
-    const output = runGit({ git, deskRoot, timeoutMs: limit }, args)
+    const output = runGit({ git, deskRoot, timeoutMs: limit, spawn, strict: true }, args)
     if (deadline !== null && clock() >= deadline) throw gitDeadline()
     return output
   }

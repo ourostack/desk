@@ -76,7 +76,7 @@ async function publishedFor(env, facts, { deskVisibility = "unknown", visibility
 
 test("flush without consent, with a declined store or without an account records a stable code and never runs gh", () => scratch(async ({ env }) => {
   const { flush, FLUSH_CODES } = await load()
-  assert.deepEqual([...FLUSH_CODES].sort(), ["auth_failed", "deadline", "delivered_pr_open", "fork_pending", "gh_missing", "gh_too_old", "locked", "no_account", "not_opted_in", "nothing_pending", "offline", "rate_limited", "store_missing", "unexpected"])
+  assert.deepEqual([...FLUSH_CODES].sort(), ["auth_failed", "deadline", "delivered_pr_open", "fork_pending", "gh_missing", "gh_too_old", "intake_stale_retried", "locked", "no_account", "not_opted_in", "nothing_pending", "offline", "rate_limited", "store_missing", "unexpected"])
   const github = fakeGitHub()
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "not_opted_in" })
   assert.equal(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory")), false, "flushing never creates factory state")
@@ -989,8 +989,10 @@ for (const code of ["merge_conflict", "unexpected_merge"]) {
     github.rejectOpenPr(`factory-rejected: ${code}`)
     github.advanceMain()
     const result = await flush(env, { store: STORE, runner: github.runner })
-    assert.equal(result.result, "delivered_pr_open")
-    assert.equal(result.pr.number, 102, "a new PR is opened")
+    assert.deepEqual(result, { result: "intake_stale_retried", pr: { number: 102, url: `https://github.com/${STORE}/pull/102` }, stale_retries: 1 }, "a new PR is opened and the retry is reported as one")
+    const recorded = (await readStatus(env)).last_flush[STORE]
+    assert.equal(recorded.result, "intake_stale_retried")
+    assert.equal(recorded.stale_retries, 1)
     assert.equal(existsSync(path.join(await factoryStateRoot(env), "quarantine")), false)
     const head = github.ref(STORE, branch)
     assert.notEqual(head, staleHead)
@@ -999,3 +1001,32 @@ for (const code of ["merge_conflict", "unexpected_merge"]) {
     assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 101)
   }))
 }
+
+test("a comment that mixes a stale code with a data code is a data rejection: the files are quarantined with the data code", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const name = await put(env, localFacts(1))
+  const github = fakeGitHub()
+  await flush(env, { store: STORE, runner: github.runner })
+  github.rejectOpenPr("factory-rejected: merge_conflict\nfactory-rejected: path\nnot a code line\nfactory-rejected: date")
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "nothing_pending" })
+  const record = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(env), "quarantine", "ourostack__factory", name), "utf8"))
+  assert.equal(record.reason, "path")
+  assert.equal((await readStatus(env)).last_flush[STORE].stale_retries, undefined)
+}))
+
+test("two stale-refused PRs read in one flush are counted, and a stale PR whose files are all on main reports nothing pending", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const name = await put(env, localFacts(1))
+  const branch = await intakeBranch(env)
+  const github = fakeGitHub()
+  github.addClosedPr({ comment: "factory-rejected: merge_conflict", fileNames: [name], headLabel: `ourostack:${branch}` })
+  github.addClosedPr({ comment: "factory-rejected: unexpected_merge\nfactory-rejected: merge_conflict", fileNames: [name], headLabel: `ourostack:${branch}` })
+  const result = await flush(env, { store: STORE, runner: github.runner })
+  assert.equal(result.result, "intake_stale_retried")
+  assert.equal(result.stale_retries, 2)
+  github.mergeOpenPr()
+  github.addClosedPr({ comment: "factory-rejected: merge_conflict", fileNames: [name], headLabel: `ourostack:${branch}` })
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "nothing_pending" })
+}))
