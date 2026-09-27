@@ -183,6 +183,25 @@ test("jobRecord marks a job with no Desk plugin entry as unknown and one whose s
   assert.equal(jobRecord({ timeline: partlyKnown, formulas: calculateFormulas(partlyKnown) }, new Map()).plugin_version, "unknown")
 })
 
+test("jobRecord gives each plugin's lowest and highest version across the job's sessions, or null when a session lacks it", () => {
+  const sessions = fixtureSessions()
+  const one = sessions.filter((session) => session.session.id === S(1))
+  const [plain] = buildTimelines(one)
+  assert.deepEqual(jobRecord({ timeline: plain, formulas: calculateFormulas(plain) }, new Map()).plugins, { desk: { min: "3.1.0", max: "3.1.0" } })
+  assert.deepEqual(jobRecord({ timeline: plain, formulas: calculateFormulas(plain) }, new Map()).sessions, [S(1)])
+  const pair = sessions.filter((session) => session.session.id === S(3) || session.session.id === S(4))
+  const spread = [
+    { ...pair[0], plugins: [{ name: "desk", version: "3.2.0-alpha.10" }, { name: "desk", version: "3.2.0-alpha.9" }, { name: "plain-language", version: "1.0.0" }] },
+    { ...pair[1], plugins: [{ name: "desk", version: "3.2.0" }] },
+  ]
+  const [timeline] = buildTimelines(spread)
+  assert.deepEqual(jobRecord({ timeline, formulas: calculateFormulas(timeline) }, new Map()).plugins, {
+    desk: { min: "3.2.0-alpha.9", max: "3.2.0" },
+    "plain-language": null,
+  })
+  assert.deepEqual(jobRecord({ timeline, formulas: calculateFormulas(timeline) }, new Map()).sessions, [S(3), S(4)].sort(), "each session id once, sorted")
+})
+
 test("jobRecord leaves compactions unavailable when no session records turns, and excludes them as partial when some do not", () => {
   const sessions = fixtureSessions().filter((session) => session.session.id === S(3) || session.session.id === S(4))
   const noTurns = (session) => ({ ...session, unavailable: [...session.unavailable, { field: "turns", reason: "log_truncated" }] })
@@ -323,11 +342,11 @@ test("the fixture's rollups keep their bytes when sessions, labels and records a
 })
 
 test("the page lists plugin versions in version order, a release after its prereleases, then mixed and unknown", () => {
-  const versions = ["unknown", "3.2.0-alpha.100", "3.2.0", "mixed", "3.2.0-alpha.70", "3.10.0", "3.2.0-beta.1", "3.9.0"]
+  const versions = ["unknown", "3.1.0-alpha.100", "3.2.0", "mixed", "3.1.0-alpha.70", "3.10.0", "3.2.0-beta.1", "3.9.0"]
   const labels = { files: 0, byJobSession: new Map(), unused: [] }
   const text = renderRollupsMarkdown(computeRollups({ records: versions.map((version, index) => record(String(index).repeat(32), { plugin_version: version })), sessions: [], labels }))
   const order = [...text.matchAll(/^### By plugin version: (.+)$/gmu)].map((match) => match[1])
-  const expected = ["3.2.0-alpha.70", "3.2.0-alpha.100", "3.2.0-beta.1", "3.2.0", "3.9.0", "3.10.0", "mixed", "unknown"]
+  const expected = ["3.1.0-alpha.70", "3.1.0-alpha.100", "3.2.0-beta.1", "3.2.0", "3.9.0", "3.10.0", "mixed", "unknown"]
   assert.deepEqual(order, [...expected, ...expected], "the Pareto and the catalog both use version order")
 })
 
