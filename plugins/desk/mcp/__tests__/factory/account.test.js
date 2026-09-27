@@ -135,3 +135,22 @@ test("a flush whose recorded account cannot fork the store stops with account_ca
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "account_cannot_deliver" })
   assert.equal(forks(github), 0, "no fork is attempted")
 }))
+
+test("gh failures while choosing are one stable result each", async () => {
+  const base = fakeGh({ accounts: [{ login: "personal", active: true }], repos: { personal: PUBLIC_READ } })
+  const failing = (override) => async (args, options) => override(args) ?? base.runner(args, options)
+  assert.deepEqual(await chooseAccount({ store: STORE, runner: failing((args) => (args[0] === "api" ? { code: 1, stdout: "", stderr: "gh: Server Error (HTTP 500)\n" } : undefined)) }), { result: "unexpected" })
+  assert.deepEqual(await chooseAccount({ store: STORE, runner: failing((args) => (args[0] === "--version" ? { code: 0, stdout: "gh version 2.20.0 (2022-11-01)\n", stderr: "" } : undefined)) }), { result: "gh_too_old" })
+  assert.deepEqual(await chooseAccount({ store: STORE, runner: failing((args) => (args[1] === "status" ? { code: 0, stdout: Symbol("not text"), stderr: "" } : undefined)) }), { result: "unexpected" })
+  await assert.rejects(chooseAccount({ store: "not a store", runner: base.runner }), /store must be/u)
+})
+
+test("factory.js account refuses a malformed store and, with the real runner and no gh on PATH, reports gh_missing", () => scratch(async ({ env, base }) => {
+  let error = ""
+  assert.equal(await factoryCli({ argv: ["account", "--store", "nope"], env, write: () => {}, logError: (text) => { error += text } }), 1)
+  assert.match(error, /Usage: factory\.js account --store/u)
+  let out = ""
+  const code = await factoryCli({ argv: ["account", "--store", STORE], env: { ...env, PATH: base }, write: (text) => { out += text }, logError: () => {} })
+  assert.equal(code, 1)
+  assert.deepEqual(JSON.parse(out), { result: "gh_missing" })
+}))

@@ -886,7 +886,6 @@ export async function chooseAccount({ store, runner, deadlineMs = 60000, now = D
     const chosen = accounts.find((entry) => entry.route === "direct") ?? accounts.find((entry) => entry.route === "fork")
     return chosen ? { result: "account_found", account: chosen.account, route: chosen.route, accounts } : { result: "no_account_can_deliver", accounts }
   } catch (error) {
-    if (error instanceof Stop) return { result: error.code }
-    throw error
+    return { result: error instanceof Stop ? error.code : "unexpected" }
   }
 }

@@ -226,3 +226,17 @@ test("the boot line asks exactly when desk_status reports undecided, in every ro
     assert.equal(boot.line === FACTORY_NO_CONSENT_LINE, status.consent === "undecided", `${entry.name}: the boot line asks only when desk_status says undecided`)
   }
 }))
+
+test("an unparseable status or delivery record reads as no last flush and nothing delivered", () => scratch(async ({ desk, env }) => {
+  const { factoryLocalStatus } = await load()
+  const { factoryStateDir } = await import("../../src/factory/boot-check.js")
+  await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
+  const name = await outboxFile(env, STORE, 7)
+  const dir = factoryStateDir(env)
+  await fs.writeFile(path.join(dir, "status.json"), "{ broken")
+  await fs.mkdir(path.join(dir, "delivered"), { recursive: true })
+  await fs.writeFile(path.join(dir, "delivered", "ourostack__factory.json"), "[]")
+  const entry = factoryLocalStatus({ env, deskRoot: desk }).stores[0]
+  assert.equal(entry.last_flush, null)
+  assert.equal(entry.pending, 1, `${name} counts as pending`)
+}))
