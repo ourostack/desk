@@ -485,3 +485,16 @@ test("real shards each cover part of a file, and only their merged coverage pass
   assert.equal(command(["--merge", shards]), 1)
   assert.match(output.stderr, /covered\.js (?:branches|lines|statements) coverage \d+(?:\.\d+)? is below 100/u)
 })
+
+test("CI runs the merge after a failed shard, so the aggregate check fails instead of being skipped", () => {
+  const workflow = readFileSync(path.join(realRepoRoot, ".github", "workflows", "desk-mcp-tests.yml"), "utf8")
+  // A job's block runs from its two-space key to the next two-space key; a step's block from its "- name:" line to the next.
+  const job = (name) => workflow.match(new RegExp(`^  ${name}:\\n(?:(?!  \\S).*\\n)*`, "mu"))?.[0] ?? ""
+  const step = (block, name) => block.match(new RegExp(`^      - name: ${name}\\n(?:(?!      - ).*\\n)*`, "mu"))?.[0] ?? ""
+  const merge = job("desk-mcp-tests")
+  assert.match(merge, /^    needs: desk-mcp-coverage-shards$/mu)
+  assert.match(merge, /^    if: \$\{\{ !cancelled\(\) \}\}$/mu, "a skipped merge job counts as passing for a required check")
+  const upload = step(job("desk-mcp-coverage-shards"), "Retain the shard's raw coverage")
+  assert.match(upload, /uses: actions\/upload-artifact@/u)
+  assert.match(upload, /^        if: \$\{\{ !cancelled\(\) \}\}$/mu, "a failed shard must still hand its manifest to the merge")
+})

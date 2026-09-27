@@ -157,7 +157,9 @@ jobs:
           SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: npm run test:coverage -- --shard "$SHARD" --output "$RUNNER_TEMP/desk-coverage-shard"
 
+      # A failed shard still writes its manifest with its status, so it is uploaded too and the merge names it.
       - name: Retain the shard's raw coverage
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: desk-coverage-shard-${{ matrix.shard }}
@@ -169,6 +171,9 @@ jobs:
   desk-mcp-tests:
     name: desk MCP test suite
     needs: desk-mcp-coverage-shards
+    # Runs even when a shard failed, so this check fails with the merge's refusal naming the shard. Without it the
+    # job would be skipped, and a skipped job counts as passing for a required status check.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # Public, read-only and credential-free. This job carries no secret, no Microsoft or private Desk record and no
     # model access, so it can publish a relevant-revision request and status but can never mint a scored evaluation.
