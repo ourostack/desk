@@ -292,13 +292,14 @@ test("A3b: PowerShell unknown values follow the same rule", async (t) => {
   for (const [command, reason] of [
     ["$wt = New-Item -ItemType Directory x; Set-Location $wt; git checkout main", /which checkout/u],
     ["Pop-Location; git stash", /which checkout/u], [`pushd ${psq(f.shared)}; git stash`, /^Desk protected checkout /u],
-    // Round 4 ruling: Git named anywhere but a plain form is denied, whatever evaluates it.
+    // Round 4 ruling: Git named as an argument outside a plain form is denied.
     ["$g = (Get-Command git).Source; & $g checkout main", /^Desk allows Git in PowerShell only/u], ["& $(Get-Command git) status", /^Desk allows Git in PowerShell only/u],
-    ["& (Get-Command git) checkout main", /^Desk allows Git in PowerShell only/u], ["iex 'git status'", /^Desk allows Git in PowerShell only/u],
-    [`iex "git -C ${psq(f.shared)} checkout topic"`, /^Desk allows Git in PowerShell only/u], ["$script = Get-Content x; iex $script", /evaluates/u],
+    ["& (Get-Command git) checkout main", /^Desk allows Git in PowerShell only/u],
+    // Replay ruling, 2026-09-27: a script Desk can read is inspected; one it cannot read is allowed.
+    [`iex "git -C ${psq(f.shared)} checkout topic"`, /^Desk protected checkout .+ this would move HEAD off/u], ["iex 'git status'", /^allowed$/u],
+    ["$script = Get-Content x; iex $script", /^allowed$/u], ["Invoke-Expression $(Get-Content x)", /^allowed$/u], [". $(Get-Item x)", /^allowed$/u],
+    ["$script = Get-Content x; pwsh -Command $script", /^allowed$/u], ["$script = Get-Content x; bash -c $script", /^allowed$/u],
     ["$g = -join ('g', 'i', 't'); & $g checkout topic", /^Desk protected checkout /u],
-    ["Invoke-Expression $(Get-Content x)", /evaluates/u], [". $(Get-Item x)", /dot-sources/u], ["$script = Get-Content x; pwsh -Command $script", /evaluates/u],
-    ["$script = Get-Content x; bash -c $script", /evaluates/u],
   ]) {
     const result = await f.guard(command, { cwd: f.shared, powershell: true })
     assert.match(result.reason ?? "allowed", reason, command)

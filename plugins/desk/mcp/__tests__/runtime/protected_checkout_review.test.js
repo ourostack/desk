@@ -473,7 +473,8 @@ test("A3-I06 round 2: multiline and empty case forms remain non-applicable in ei
   assertDirectCheckout(t, f, mutation)
 })
 
-// Round 4 ruling: a string that names Git is outside the plain forms, whether or not its interpolation runs Git.
+// Round 4 ruling: a string that names Git outside an interpolation is outside the plain forms. Replay ruling
+// (2026-09-27): an interpolation `$( … )` runs as its own statement, so its Git is judged by the policy.
 test("A3-R1-I01: quoted PowerShell results that name Git are denied, and their executable interpolation would run", async (t) => {
   const f = fixture(t)
   const forms = new RegExp(`^${POWERSHELL_GIT_FORMS.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`, "u")
@@ -482,7 +483,7 @@ test("A3-R1-I01: quoted PowerShell results that name Git are denied, and their e
     `"prefix$(git -C ${psq(f.shared)} checkout --detach HEAD)suffix"`,
   ]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
-    assertHookDecision(f, command, true, { powershell: true, reason: forms })
+    assertHookDecision(f, command, true, { powershell: true, reason: /this would move HEAD off/u })
     assertDirectCheckout(t, f, command, { powershell: true })
   }
   for (const command of ['"git checkout HEAD"', psq(`$(git -C ${psq(f.shared)} checkout HEAD)`), '"`$(git checkout HEAD)"']) {

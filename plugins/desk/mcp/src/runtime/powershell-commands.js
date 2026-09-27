@@ -239,7 +239,7 @@ function literalInput(element) {
   const [word] = element.words
   if (element.words.length !== 1 || element.redirects.length || !word.parts) return null
   const parts = word.parts.filter((part) => part.text !== "")
-  return parts.length === 1 && parts[0].quoted && (!parts[0].expand || !parts[0].text.includes("$")) ? parts[0].text : null
+  return parts.length === 1 && parts[0].quoted ? word : null
 }
 
 export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, budget = inspectionBudget() }) {
@@ -513,6 +513,8 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     if (/^\[scriptblock\]::create$/iu.test(keyword) && words[1] === "(" && words[3] === ")" && words[2].parts) {
       const script = await expand(words[2])
       await loop(() => evaluated(script))
+      status = null
+      return
     }
     if (!words.every((word) => word.parts)) {
       // A statement that starts with a group is an expression; `& (…)` or `& { … }` calls what it yields.
@@ -581,7 +583,8 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     if (SHELLS.has(name)) {
       const script = shellScript(name, args)
       if (script.encoded) throw unresolved("an encoded script this command runs")
-      const piped = script.stdin && input ? literalInput(input) ?? UNKNOWN : undefined
+      const literal = script.stdin && input ? literalInput(input) : null
+      const piped = script.stdin && input ? (literal ? await expand(literal) : UNKNOWN) : undefined
       const source = script.command ?? piped
       // A script with an unknown part is inspected only when the part Desk can read names Git or runs code.
       if (source !== undefined && !(source.includes(UNKNOWN) && !mayInvokeGit(known(source)))) {

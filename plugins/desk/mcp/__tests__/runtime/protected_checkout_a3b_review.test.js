@@ -168,7 +168,7 @@ function rows(f) {
     // PowerShell.
     ["ps-push-head-other", "pwsh", "own", "allow", `Set-Location ${psq(P)}; git push -q origin HEAD:other`],
     ["ps-push-fwl", "pwsh", "own", "deny", `git -C ${psq(P)} push -q --force-with-lease`],
-    ["ps-pull-other", "pwsh", "own", "deny", `& git -C ${psq(P)} pull -q origin other`],
+    ["ps-pull-other", "pwsh", "own", "allow", `& git -C ${psq(P)} pull -q origin other`], // & git is git (replay ruling); a merge-mode pull moves no HEAD
     ["ps-merge", "pwsh", "prot", "allow", "git merge -q --no-edit origin/other"],
     ["ps-alias", "pwsh", "prot", "deny", "git -c alias.co='checkout -q --detach HEAD' co"],
     ["ps-alias-upper", "pwsh", "prot", "deny", "git -c alias.CO='checkout -q --detach HEAD' co"],
@@ -406,11 +406,11 @@ test("A3b re-review: every PowerShell assignment form runs the command it captur
     "$x = foreach ($i in 1) { git stash }", "$h = @{}; $h.x = git stash", "$h = @{}; $h['x'] = git stash",
     "$x = git stash; $x", "if (Test-Path x) { git stash; echo hi }", "$x = while ($false) { git stash }",
     "& (Get-Command git) checkout main", "& (Get-Command x) stash", "$x = @(git stash)", `$x = "$(git stash)"`,
-    // Round 4 ruling: typed, scoped and expression forms that name Git are outside the allowlist, even when read-only.
-    "[string]$b = git rev-parse --abbrev-ref HEAD", "$script:b = git rev-parse HEAD", "(git log).Count", "@(git status --short)", "$x = 'git stash'",
   ]
   for (const command of deny) assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
   const allow = [
+    // Replay ruling, 2026-09-27: typed, scoped and expression forms run the Git they capture under the same rules.
+    "[string]$b = git rev-parse --abbrev-ref HEAD", "$script:b = git rev-parse HEAD", "(git log).Count", "@(git status --short)", "$x = 'git stash'",
     "$x = git status", "$x=git status", "$x =git status", "$x= git status",
     "$s = git status --porcelain; if ($s) { 'dirty' }", "$files = git diff --name-only; foreach ($f in $files) { Write-Output $f }",
     "$out = git push -q origin main 2>&1", "$null = git fetch", "& (Get-Command node) --version",
@@ -536,9 +536,10 @@ test("A3b re-review 2: every PowerShell group is its own command sequence and st
     ["& (Get-Command git) status", f.prot],
     ["$x = (Get-Content x | Where-Object { git stash })", f.prot],
   ]
-  // Round 4 ruling: Git inside a group, subexpression, script block, function or control statement is denied, even when
-  // read-only; each has a plain rewrite.
-  for (const [command, cwd] of [
+  for (const [command, cwd] of deny) assert.equal((await f.guard(command, { cwd, powershell: true })).deny, true, command)
+  const allow = [
+    // Replay ruling, 2026-09-27 (reverses the round 4 allowlist for these): Git inside a group, subexpression, script
+    // block, function or control statement runs as its own statement under the same rules, so read-only uses pass.
     ["cd (git rev-parse --show-toplevel); git pull -q --rebase origin main", path.join(f.prot, "sub")],
     ["git push -q origin (git branch --show-current)", f.prot],
     ['Write-Host "Branch: $(git branch --show-current)"', f.prot],
@@ -547,9 +548,6 @@ test("A3b re-review 2: every PowerShell group is its own command sequence and st
     ["function Get-Br { git branch --show-current }; Get-Br", f.prot],
     ["$h = @{ a = 'git stash'; b = 2 }", f.prot],
     ["foreach ($f in (git diff --name-only)) { Write-Output $f }", f.prot],
-  ]) deny.push([command, cwd])
-  for (const [command, cwd] of deny) assert.equal((await f.guard(command, { cwd, powershell: true })).deny, true, command)
-  const allow = [
     ["$top = git rev-parse --show-toplevel; cd $top; git pull -q --rebase origin main", path.join(f.prot, "sub")],
     ["$b = git branch --show-current; git push -q origin $b", f.prot],
     ["$b = git rev-parse --abbrev-ref HEAD; git push -q origin $b", f.prot],

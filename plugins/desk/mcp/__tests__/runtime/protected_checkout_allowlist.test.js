@@ -80,22 +80,29 @@ test("round 4: PowerShell Git runs only as git <args>, $name = git <args> or git
     const result = await f.guard(command)
     assert.equal(result.deny, false, `${command}: ${result.reason}`)
   }
-  const forms = [
-    "& git status", ". git status", "(git status)", "$(git status)", "@(git status)", "{ git status }", "$a = @('status'); git @a",
-    "git status | bash", "git diff | Out-File patch.diff", "git log | ForEach-Object { git show $_ }", "git status | ForEach-Object { 'git' }",
-    "if ($x) { git status }", "foreach ($f in 1) { git status }", "while ($false) { git status }", "try { git status } catch { }",
-    "switch (1) { 1 { git status } }", "function g { git status }", "$b = { git status }", "Invoke-Command { git status }",
-    "Start-Process git -ArgumentList 'status'", "Invoke-Expression 'git status'", "iex 'git status'", "[scriptblock]::Create('git status')",
+  // Replay ruling, 2026-09-27: Git inside groups, subexpressions, script blocks, control statements, functions, `& git`,
+  // assignments of any form and scripts handed to Invoke-Expression, [scriptblock]::Create or a shell runs as its own
+  // statement under the same rules, so these read-only uses pass.
+  for (const command of [
+    "& git status", "(git status)", "$(git status)", "@(git status)", "{ git status }", "if ($x) { git status }", "foreach ($f in 1) { git status }",
+    "while ($false) { git status }", "try { git status } catch { }", "switch (1) { 1 { git status } }", "function g { git status }", "$b = { git status }",
+    "Invoke-Command { git status }", "Invoke-Expression 'git status'", "iex 'git status'", "[scriptblock]::Create('git status')",
     "'git status' | pwsh -NoProfile -Command -", "$env:X = git status", "[string]$x = git status", "$script:x = git status", "${x} = git status",
-    "$x.y = git status", "$x += git status", "$a, $b = git status", 'git commit -m "wip $(Get-Date)"', "git log '%h'x", "git --% status",
+    "$x.y = git status", "$x += git status", "$a, $b = git status", 'git commit -m "wip $(Get-Date)"', "git -C (Get-Location) status", "git log `$(x)",
+  ]) assert.equal((await f.guard(command)).deny, false, command)
+  const forms = [
+    ". git status", "$a = @('status'); git @a", "git status | bash", "git diff | Out-File patch.diff", "git log | ForEach-Object { git show $_ }",
+    "git status | ForEach-Object { 'git' }", "Start-Process git -ArgumentList 'status'", "git log '%h'x", "git --% status",
     "git push origin 'main'--force", "Write-Host 'git'", "git status &", "| git status", "git status |", "gIt status | Out-File x", "pwsh -c git status",
-    "git -C (Get-Location) status", "git -C $pwd.Path status", "git status $x[0]", "git show HEAD@{1}", "git log `$(x)",
+    "git -C $pwd.Path status", "git status $x[0]", "git show HEAD@{1}",
   ]
   for (const command of forms) assert.equal((await f.guard(command)).reason, POWERSHELL_GIT_FORMS, command)
   // Narrowed 2026-09-27: an unprotected checkout never gets the allowlist denial, unless the text could reach another checkout.
   assert.equal((await f.guard("(git status)", { cwd: f.own })).deny, false)
-  assert.equal((await f.guard(`(git -C ${psq(f.prot)} status)`, { cwd: f.own })).reason, POWERSHELL_GIT_FORMS)
-  assert.equal((await f.guard("(git --git-dir x status)", { cwd: f.own })).reason, POWERSHELL_GIT_FORMS)
+  // A group runs its Git as a statement of its own, so reaching the protected checkout is judged by the policy.
+  assert.equal((await f.guard(`(git -C ${psq(f.prot)} status)`, { cwd: f.own })).deny, false)
+  assert.equal((await f.guard(`(git -C ${psq(f.prot)} stash)`, { cwd: f.own })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`)
+  assert.equal((await f.guard(`git -C ${psq(f.prot)} status | Out-File y`, { cwd: f.own })).reason, POWERSHELL_GIT_FORMS)
   assert.equal(namesGit("Write-Output 'g`it'"), true)
   assert.equal(namesGit("Get-Content .git/config; cd github"), false)
 })
@@ -110,7 +117,8 @@ test("round 4 S1: @( ) arguments and attribute script blocks cannot carry Git pa
     ["[ValidateScript({ $true })][string]$x = git stash", f.prot],
     [`$script:a = @('stash'); git @script:a`, f.prot],
   ]
-  for (const [command, cwd] of rows) assert.equal((await f.guard(command, { cwd })).reason, POWERSHELL_GIT_FORMS, command)
+  // Each group runs as its own statement and stands for one unknown value, which the policy reads at its most dangerous.
+  for (const [command, cwd] of rows) assert.equal((await f.guard(command, { cwd })).deny, true, command)
   // Outside Git, @( ) is one unknown value (PowerShell itself rejects an array as a location).
   assert.match((await f.guard(`Set-Location @(${psq(f.prot)}); git stash`, { cwd: f.own })).reason, /could not resolve which checkout/u)
   // A non-Git statement's attribute script block still runs its location change.
@@ -149,12 +157,16 @@ test("round 4 S5: subexpressions, background jobs, loops, launchers and opaque s
     assert.match((await f.guard(command)).reason, /could not resolve which checkout/u, command)
   }
   for (const [command, reason] of [
-    ["Start-Process $x", /could not resolve the program this command runs/u], ["[scriptblock]::Create($x)", /evaluates/u],
-    ["pwsh -EncodedCommand ZQBjAGgAbwA=", /encoded script/u], ["Get-Content s.ps1 | pwsh", /reads from its input/u],
-    ["Get-Content s.sh | bash", /reads from its input/u], ["Write-Output 'echo hi' | bash", /reads from its input/u],
-    ['"echo $x" | bash', /reads from its input/u], ["[scriptblock]::Create('Set-' + 'Location x')", /evaluates/u],
-    ["& (eval x) status", /could not resolve the program this command runs/u], ["& $p iex", /could not resolve the program this command runs/u],
+    ["pwsh -EncodedCommand ZQBjAGgAbwA=", /encoded script/u], ["Start-Process \"git $x\"", /Desk allows Git in PowerShell/u],
+    ["& $p iex", /could not resolve the program this command runs/u],
+    ["iex \"git stash $x\"", /^Desk protected checkout /u], ['"git stash $x" | pwsh -Command -', /^Desk protected checkout /u],
   ]) assert.match((await f.guard(command)).reason, reason, command)
+  // Replay ruling, 2026-09-27: code Desk cannot read (a computed program, file or script whose readable text names no
+  // Git) is allowed; only inline text Desk can read is inspected.
+  for (const command of [
+    "Start-Process $x", "[scriptblock]::Create($x)", "Get-Content s.ps1 | pwsh", "Get-Content s.sh | bash", "Write-Output 'echo hi' | bash",
+    '"echo $x" | bash', "[scriptblock]::Create('Set-' + 'Location x')", ". $script", "iex (Get-Content x.ps1 -Raw)", "& (eval x) status",
+  ]) assert.equal((await f.guard(command)).deny, false, command)
   // A hashtable entry's value runs, and a prefix increment changes its variable.
   assert.equal((await f.guard(`$h = @{ a = $(Set-Location ${psq(f.prot)}); b=1; c= 2 }; git stash`, { cwd: f.own })).reason, `Desk protected checkout ${f.prot}: ${MESSAGES.stash}`)
   assert.equal((await f.guard(`$r = ${psq(f.own)}; ++$r; git -C $r stash`, { cwd: f.own })).deny, true)
@@ -396,21 +408,22 @@ test("round 4: ordinary desk writes pass on the state branch, and only HEAD move
 test("round 4, 2026-09-27: the PowerShell allowlist never fires where the statement can only reach an unprotected checkout", async (t) => {
   const f = await fixture(t)
   const own = (command, extra = {}) => f.guard(command, { cwd: f.own, ...extra })
-  // Every assignment form in an unmodeled statement leaves its variable unknown, and later Git use of it is judged as such.
-  for (const command of ["${a} = (git status); git status", "$b += (git status); git status", "[void](++$c + (git log -1))", "[void](++${d} + (git log -1))"]) {
+  // A statement outside the forms (here, Git piped to Out-File) is unmodeled. Every assignment form in it leaves its
+  // variable unknown, and later Git use of it is judged as such.
+  for (const command of ["Write-Host 'git' (${a} = 1); git status", "Write-Host 'git' ($b += 1); git status", "Write-Host 'git' (++$c); git status", "Write-Host 'git' (++${d}); git status"]) {
     assert.equal((await own(command)).deny, false, command)
   }
-  assert.equal((await own("$b = (git branch --show-current); git -C $b stash")).deny, true, "the unmodeled assignment leaves $b unknown")
+  assert.equal((await own("git branch --show-current | Out-File ($b = 'x'); git -C $b stash")).deny, true, "the unmodeled assignment leaves $b unknown")
   // Anything that could move where Git runs keeps the allowlist denial, even from an unprotected checkout.
-  for (const command of [`(git -C ${psq(f.prot)} status)`, "(git --git-dir x status)", `(git worktree list)`, `Set-Location ${psq(f.prot)}; (git status)`, "$env:GIT_DIR = 'x'; (git status)"]) {
+  for (const command of [`git -C ${psq(f.prot)} status | Out-File y`, "git --git-dir x status | Out-File y", "git worktree list | Out-File y", `Set-Location ${psq(f.prot)}; git status | Out-File y`, "$env:GIT_DIR = 'x'; git status | Out-File y"]) {
     assert.equal((await own(command)).reason, POWERSHELL_GIT_FORMS, command)
   }
-  assert.equal((await own("(git status)", { env: { ...f.env, GIT_WORK_TREE: f.prot } })).reason, POWERSHELL_GIT_FORMS)
+  assert.equal((await own("git status | Out-File y", { env: { ...f.env, GIT_WORK_TREE: f.prot } })).reason, POWERSHELL_GIT_FORMS)
   // A checkout whose protection cannot be read is treated as protected.
   const broken = path.join(f.root, "broken")
   execFileSync("git", ["init", "-q", broken], { env: f.env })
   writeFileSync(path.join(broken, ".git", "config"), "[core\n\tbroken = \n")
-  assert.equal((await f.guard("(git status)", { cwd: broken })).deny, true)
+  assert.equal((await f.guard("git status | Out-File y", { cwd: broken })).deny, true)
   // A caller that does not answer the question gets the allowlist denial.
-  await assert.rejects(inspectPowerShell({ command: "(git status)", cwd: f.own, env: f.env, visit() {} }), (error) => error.reason === POWERSHELL_GIT_FORMS)
+  await assert.rejects(inspectPowerShell({ command: "git status | Out-File y", cwd: f.own, env: f.env, visit() {} }), (error) => error.reason === POWERSHELL_GIT_FORMS)
 })
