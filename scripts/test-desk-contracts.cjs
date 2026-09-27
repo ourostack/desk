@@ -852,21 +852,21 @@ requires(
   "friction-management logs what the operator teaches",
   /operator teaches[\s\S]+even offhand[\s\S]+no-write/iu,
 );
-// The kaizen loop: system friction becomes a public, generic kaizen card; the kaizen worker ships, checks and closes it.
+// The kaizen loop: system friction becomes a kaizen candidate; the curator files it after signoff, public cards carry structured fields only, and the kaizen worker ships, checks and closes it.
 requires(
   "plugins/desk/skills/friction-management/SKILL.md",
-  "friction-management files system friction as a generic kaizen card",
-  /### About the system, or about this desk.s setup[\s\S]+\*\*`system`\*\*[\s\S]+kaizen card[\s\S]+only the card's URL[\s\S]+setup[\s\S]+stays on the desk[\s\S]+kaizen card is public[\s\S]+generically/iu,
+  "friction-management records system friction as a kaizen candidate the curator files, with no free text in a public store",
+  /### About the system, or about this desk.s setup[\s\S]+\*\*`system`\*\*[\s\S]+kaizen candidate and sends nothing[\s\S]+setup[\s\S]+stays on the desk[\s\S]+only the kaizen worker \(`curator`\) files a candidate as a card, after its signoff step[\s\S]+same route as the desk's facts[\s\S]+route_unknown[\s\S]+work desk files only to its work store[\s\S]+free text never goes to a public store[\s\S]+structured fields[\s\S]+plugin_not_public[\s\S]+evidence_jobs_local[\s\S]+generically/iu,
 );
 requires(
   "plugins/desk/skills/lesson-capture/SKILL.md",
-  "lesson-capture opens kaizen cards from the evaluator's waste",
-  /## Waste the evaluator found[\s\S]+not a private note[\s\S]+kaizen card[\s\S]+signal[\s\S]+evidence_jobs/iu,
+  "lesson-capture proposes kaizen cards from the evaluator's waste and never files them",
+  /## Waste the evaluator found[\s\S]+not a private note[\s\S]+kaizen candidate[\s\S]+signal[\s\S]+evidence_jobs[\s\S]+never files a card itself[\s\S]+after its signoff step/iu,
 );
 requires(
   "plugins/desk/skills/curator/SKILL.md",
   "curator works kaizen cards from filing to verdict",
-  /## The kaizen worker[\s\S]+file the system friction[\s\S]+PR flow[\s\S]+fill `version` when the release lands[\s\S]+confirmed[\s\S]+close[\s\S]+not-confirmed[\s\S]+revert[\s\S]+re-plan[\s\S]+never close a card because the data is thin[\s\S]+andon/iu,
+  /## The kaizen worker[\s\S]+andon first[\s\S]+andon-dismissed[\s\S]+file the system friction, after signoff[\s\S]+file_card: true[\s\S]+at most five per pass[\s\S]+never files to a public store[\s\S]+PR flow[\s\S]+fill `version` when the release lands[\s\S]+confirmed[\s\S]+close[\s\S]+not-confirmed[\s\S]+moved clearly the wrong way[\s\S]+revert[\s\S]+re-plan[\s\S]+never close a card because the data is thin[\s\S]+## Process[\s\S]+file them only after the signoff/iu,
 );
 
 // The observer agent: worker's sibling, named for Lean's process observer, who watches the work, times it and
