@@ -173,7 +173,7 @@ test("validatePr rejects modifications that change host or session identity or r
 })
 
 test("validatePr rejects malformed calls without throwing or echoing values", () => {
-  for (const input of [null, {}, { changes: null }, { changes: [null] }, { changes: [[]] }, { changes: [{ path: 42, status: "added", bytes: GOLDEN_BYTES }] }, { changes: [{ path: VALID_PATH, status: "added", bytes: 42 }] }]) {
+  for (const input of [null, {}, { changes: null }, { changes: new Array(1) }, { changes: [null] }, { changes: [[]] }, { changes: [{ path: 42, status: "added", bytes: GOLDEN_BYTES }] }, { changes: [{ path: VALID_PATH, status: "added", bytes: 42 }] }]) {
     const result = validatePr(input)
     assert.equal(result.ok, false)
     assert.equal(Array.isArray(result.errors), true)

@@ -29,50 +29,51 @@ export function validatePr(input) {
   if (changes.length > MAX_CHANGES) return { ok: false, errors: [error("too_many_changes", "changes")] }
 
   const errors = []
-  changes.forEach((change, index) => {
+  for (let index = 0; index < changes.length; index += 1) {
+    const change = changes[index]
     if (change === null || typeof change !== "object" || Array.isArray(change)) {
       errors.push(error("type", `changes.${index}`))
-      return
+      continue
     }
 
     const match = typeof change.path === "string" ? FACT_PATH.exec(change.path) : null
     if (match === null) {
       errors.push(error("path", `changes.${index}`))
-      return
+      continue
     }
     const safePath = change.path
     if (change.status === "removed") {
       errors.push(error("removal", safePath))
-      return
+      continue
     }
     if (!STATUSES.has(change.status)) {
       errors.push(error("status", safePath))
-      return
+      continue
     }
 
     const current = parsePublished(change.bytes)
     if (!current.validation.ok) {
       for (const item of current.validation.errors) errors.push(error(item.code, safePath))
-      return
+      continue
     }
     if (current.value.session.host !== match[1]) errors.push(error("host_mismatch", safePath))
     if (current.value.session.id !== match[2]) errors.push(error("session_mismatch", safePath))
 
-    if (change.status !== "modified") return
+    if (change.status !== "modified") continue
     if (change.previousBytes === undefined) {
       errors.push(error("previous_missing", safePath))
-      return
+      continue
     }
     const previous = parsePublished(change.previousBytes)
     if (!previous.validation.ok) {
       errors.push(error("previous_invalid", safePath))
-      return
+      continue
     }
     if (current.value.session.host !== previous.value.session.host || current.value.session.id !== previous.value.session.id) {
       errors.push(error("identity_changed", safePath))
     } else if (current.value.session.duration_ms < previous.value.session.duration_ms) {
       errors.push(error("duration_decreased", safePath))
     }
-  })
+  }
   return { ok: errors.length === 0, errors }
 }
