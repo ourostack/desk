@@ -55,8 +55,58 @@ async function launch(script, args, env, resolveNode = compatibleNode) {
   });
 }
 
+const MAX_SOURCE_ENTRIES = 256;
+
+// The one GitHub repository a plugin was installed from, as `owner/repo`, or null when that is unknown or ambiguous.
+const githubRepo = (value, PATTERNS) => (typeof value === "string" && PATTERNS.prRepo.test(value) ? value : null);
+const objectOf = (value) => (value !== null && typeof value === "object" && !Array.isArray(value) ? value : null);
+const parseSmall = (readSmallText, file, limit) => {
+  try {
+    return objectOf(JSON.parse(readSmallText(file, limit)));
+  } catch {
+    return null;
+  }
+};
+
+// Claude Code: `installed_plugins.json` keys are `name@marketplace`, and `known_marketplaces.json` says where each marketplace came from. Only a GitHub marketplace names a repository.
+function claudeMarketplaces(configDir, readSmallText, PATTERNS) {
+  const known = parseSmall(readSmallText, path.join(configDir, "plugins", "known_marketplaces.json"), MAX_INPUT) ?? {};
+  return (key) => {
+    const at = key.indexOf("@");
+    const marketplace = at < 0 ? null : key.slice(at + 1);
+    const source = marketplace !== null && Object.hasOwn(known, marketplace) ? objectOf(objectOf(known[marketplace])?.source) : null;
+    return source?.source === "github" ? githubRepo(source.repo, PATTERNS) : null;
+  };
+}
+
+// Copilot under Agency: each session copies its plugins from Agency's cache, whose index maps a spec such as `copilot:github:owner/repo:plugins/x@ref` to a cached folder. A plugin's name and version pick its repository; a plugin the cache holds from two repositories, with no version to tell them apart, has no source.
+function agencySources(home, readSmallText, PATTERNS, late) {
+  const cache = path.join(home, ".local", "agency", "plugins", "cache");
+  const entries = objectOf(parseSmall(readSmallText, path.join(cache, "cache_index.json"), MAX_INPUT)?.entries) ?? {};
+  const byVersion = new Map();
+  const byName = new Map();
+  const note = (map, key, repo) => map.set(key, (map.get(key) ?? new Set()).add(repo));
+  for (const [spec, entry] of Object.entries(entries).slice(0, MAX_SOURCE_ENTRIES)) {
+    if (late()) break;
+    const repo = githubRepo(/^[a-z-]+:github:([^:]+):/u.exec(spec)?.[1], PATTERNS);
+    const dir = objectOf(entry)?.dir_name;
+    if (repo === null || typeof dir !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/u.test(dir)) continue;
+    for (const file of ["plugin.json", "agency.json"]) {
+      const manifest = parseSmall(readSmallText, path.join(cache, "entries", dir, file));
+      if (typeof manifest?.name !== "string") continue;
+      note(byName, manifest.name, repo);
+      if (typeof manifest.version === "string") note(byVersion, `${manifest.name}@${manifest.version}`, repo);
+    }
+  }
+  return (name, version) => {
+    const repos = byVersion.get(`${name}@${version}`) ?? byName.get(name);
+    return repos?.size === 1 ? [...repos][0] : null;
+  };
+}
+
 // `deadline` (a `performance.now()` value, optional) stops the scan early for the session-start boot check; the result is then incomplete and `timedOut`.
-function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadline = Infinity }) {
+// `sources: false` skips the install-source lookup, for callers that need only the plugin folders.
+function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadline = Infinity, sources = true }) {
   const plugins = [];
   const dirs = [];
   let incomplete = false;
@@ -67,10 +117,12 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
     incomplete = true;
     return true;
   };
-  const add = (name, version) => {
+  // Each plugin records where it was installed from (`source`), which decides whether a public store may name it.
+  const add = (name, version, source) => {
     if (typeof name === "string" && PATTERNS.pluginName.test(name) && typeof version === "string" && PATTERNS.semver.test(version)
-      && plugins.length < 64 && !plugins.some((p) => p.name === name && p.version === version)) plugins.push({ name, version });
+      && plugins.length < 64 && !plugins.some((p) => p.name === name && p.version === version)) plugins.push({ name, version, source: source(name, version) });
   };
+  const unknown = () => null;
   if (host === "copilot") {
     // opendir bounds the enumeration as well as the number of file reads.
     const dir = fs.opendirSync(path.dirname(pluginRoot));
@@ -82,27 +134,33 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
         if (entry.isDirectory()) dirs.push(path.join(path.dirname(pluginRoot), entry.name));
       }
     } finally { dir.closeSync(); }
+    // Plain Copilot records only a marketplace name, never a repository, so only Agency's cache gives a source.
+    const agency = path.join(home, ".local", "agency", "plugins", "sessions") + path.sep;
+    const source = sources && path.resolve(pluginRoot).startsWith(agency) ? agencySources(home, readSmallText, PATTERNS, late) : unknown;
     for (const folder of dirs) {
       if (late()) break;
       try {
         const plugin = JSON.parse(readSmallText(path.join(folder, "plugin.json")));
-        add(plugin.name, plugin.version);
+        add(plugin.name, plugin.version, source);
       } catch {
         // resolveStore records unreadable manifests as local status warnings.
       }
     }
   } else {
     try {
-      const installed = JSON.parse(readSmallText(path.join(env.CLAUDE_CONFIG_DIR || path.join(home, ".claude"), "plugins", "installed_plugins.json"), MAX_INPUT));
+      const configDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
+      const installed = JSON.parse(readSmallText(path.join(configDir, "plugins", "installed_plugins.json"), MAX_INPUT));
       if (!installed.plugins || typeof installed.plugins !== "object" || Array.isArray(installed.plugins)) throw new Error("registry_unreadable");
       incomplete = Object.keys(installed.plugins).length > 64;
+      const marketplaceOf = sources ? claudeMarketplaces(configDir, readSmallText, PATTERNS) : unknown;
       for (const [key, records] of Object.entries(installed.plugins).slice(0, 64)) {
+        const source = () => marketplaceOf(key);
         if (late()) break;
         if (!Array.isArray(records)) { incomplete = true; continue; }
         if (records.length > 64) incomplete = true;
         for (const record of records.slice(0, 64)) {
           if (!record || typeof record !== "object") { incomplete = true; continue; }
-          add(key.split("@")[0], record.version);
+          add(key.split("@")[0], record.version, source);
           if (typeof record.installPath !== "string" || !path.isAbsolute(record.installPath)) { incomplete = true; continue; }
           if (dirs.includes(record.installPath)) continue;
           if (dirs.length === 64) incomplete = true;

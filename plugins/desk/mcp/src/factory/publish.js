@@ -1,7 +1,8 @@
 // The publishing transform: the only code that produces what leaves this
 // machine for a factory store.
 //
-// `toPublished(local, { visibility, deskVisibility, machineSecret })` turns
+// `toPublished(local, { visibility, deskVisibility, storeVisibility,
+// machineSecret })` turns
 // one valid local facts file (`desk.factory.local/1`, `schema.js`) into
 // published facts (`desk.factory.published/1`, `published-schema.js`). The
 // stores are public, so the published form carries no who and no when, just
@@ -64,6 +65,14 @@
 //     (`refs.unresolved`); the same totals are returned as `dropped`.
 //     `visibility` is asked once per repository and never for a date-shaped
 //     one. A reference repeated in the local file is published once.
+//   - Public plugins only, unless the store is not public (controller
+//     ruling, M3-12). A plugin is named when its install `source`, the GitHub
+//     repository it was installed from, is public by `visibility`, or when
+//     `storeVisibility` is `"private"` or `"internal"` (a work store). Any
+//     other plugin, including one with no known source, and every plugin
+//     when the store's visibility is unknown, is counted in
+//     `refs.private.plugins` and in `dropped.plugins`. The source itself is
+//     never published.
 //   - No date or time shapes. A model ID or plugin name holding an ISO date
 //     (such as `gpt-4o-2024-08-06`) loses that date's hyphens
 //     (`gpt-4o-20240806`), and a model ID holding a time of day loses its
@@ -108,6 +117,10 @@ export const EARLIEST_SESSION_START = "2025-01-01T00:00:00.000Z"
 
 // Desks whose remote is known not to be public keep their job timing.
 const PRIVATE_DESKS = new Set(["private", "internal"])
+
+// Stores known not to be public (a work store) keep every plugin's name.
+const PRIVATE_STORES = PRIVATE_DESKS
+
 const MIN_SECRET_BYTES = 32
 
 // The `unavailable` field an interval kind's data belongs to.
@@ -167,13 +180,17 @@ function publishIntervals(intervals, startedMs, durationMs, flag) {
   return kept
 }
 
-function publishRefs(refs, visibility) {
+// `visibility` asked once per repository, for references and plugin sources alike.
+function publicRepos(visibility) {
   const answers = new Map()
-  const isPublic = (repo) => {
-    if (repo === null || DATE_SHAPE.test(repo)) return false
+  return (repo) => {
     if (!answers.has(repo)) answers.set(repo, visibility(repo) === "public")
     return answers.get(repo)
   }
+}
+
+function publishRefs(refs, askPublic) {
+  const isPublic = (repo) => repo !== null && !DATE_SHAPE.test(repo) && askPublic(repo)
   const dropped = { prs: refs.unresolved.prs, commits: refs.unresolved.commits }
   // Keeps each public reference once (by `keyOf`) and counts the others.
   const keep = (list, kind, keyOf, copy) => {
@@ -191,6 +208,20 @@ function publishRefs(refs, visibility) {
   const prs = keep(refs.prs, "prs", (pr) => `${pr.repo}#${pr.number}`, (pr) => ({ repo: pr.repo, number: pr.number }))
   const commits = keep(refs.commits, "commits", (commit) => commit.sha, (commit) => ({ repo: commit.repo, sha: commit.sha }))
   return { prs, commits, dropped }
+}
+
+// A plugin is named in a public store only when it was installed from a public
+// repository; the rest are counted. A store known not to be public names them all.
+function publishPlugins(plugins, isPublic, storeVisibility) {
+  if (PRIVATE_STORES.has(storeVisibility)) return { plugins: plugins.map((plugin) => ({ name: scrub(plugin.name), version: plugin.version })), hidden: 0 }
+  const kept = []
+  let hidden = 0
+  for (const plugin of plugins) {
+    const source = plugin.source ?? null
+    if (source !== null && isPublic(source)) kept.push({ name: scrub(plugin.name), version: plugin.version })
+    else hidden += 1
+  }
+  return { plugins: kept, hidden }
 }
 
 // The per-machine keyed form of a job ID, for a desk that is not known to be private.
@@ -253,8 +284,9 @@ function publishJob(job, startedMs, flag) {
 }
 
 /**
- * `toPublished(local, { visibility, deskVisibility, machineSecret }) ->
- * { published, dropped: { prs, commits } }`, or `{ published: null,
+ * `toPublished(local, { visibility, deskVisibility, storeVisibility,
+ * machineSecret }) -> { published, dropped: { prs, commits, plugins } }`,
+ * or `{ published: null,
  * dropped: null, reason }` with a reason from `REFUSALS` when the session
  * cannot be published at all.
  *
@@ -262,11 +294,14 @@ function publishJob(job, startedMs, flag) {
  * `"public"`, `"private"` or `"unknown"` for an `owner/repo` name;
  * `deskVisibility` is the same answer for the desk's own remote (`"private"`
  * or `"internal"` keep job timing; anything else, including a missing
- * value, withholds it); `machineSecret` (at least 32 bytes) keys the job IDs
+ * value, withholds it); `storeVisibility` is the same answer for the store
+ * the file goes to (`"private"` or `"internal"` name every plugin; anything
+ * else, including a missing value, names only plugins whose `source`
+ * repository is public); `machineSecret` (at least 32 bytes) keys the job IDs
  * of a desk that withholds its timing and is required then. These are
  * caller contracts: a violation throws a `TypeError` that names no value.
  */
-export function toPublished(local, { visibility, deskVisibility, machineSecret } = {}) {
+export function toPublished(local, { visibility, deskVisibility, storeVisibility, machineSecret } = {}) {
   if (typeof visibility !== "function") throw new TypeError("toPublished: visibility must be a function")
   if (!validateLocalFacts(local).ok) throw new TypeError("toPublished: local facts must pass validateLocalFacts")
   const deskPrivate = deskIsPrivate(deskVisibility, machineSecret, "toPublished")
@@ -288,7 +323,10 @@ export function toPublished(local, { visibility, deskVisibility, machineSecret }
   }
 
   const intervals = publishIntervals(local.intervals, startedMs, durationMs, flag)
-  const refs = publishRefs(local.refs, visibility)
+  const isPublic = publicRepos(visibility)
+  const refs = publishRefs(local.refs, isPublic)
+  const plugins = publishPlugins(local.plugins, isPublic, storeVisibility)
+  const dropped = { ...refs.dropped, plugins: plugins.hidden }
   const jobs = deskPrivate
     ? local.jobs.map((job) => publishJob(job, startedMs, flag))
     : local.jobs.map((job) => protectedJob(job, machineSecret)).sort((a, b) => (a.job < b.job ? -1 : 1))
@@ -297,7 +335,7 @@ export function toPublished(local, { visibility, deskVisibility, machineSecret }
   const published = {
     schema: PUBLISHED_SCHEMA,
     session: publishSession(local.session, durationMs),
-    plugins: local.plugins.map((plugin) => ({ name: scrub(plugin.name), version: plugin.version })),
+    plugins: plugins.plugins,
     models: local.models.map((model) => ({
       id: scrub(model.id),
       requests: model.requests,
@@ -318,11 +356,11 @@ export function toPublished(local, { visibility, deskVisibility, machineSecret }
       api_retries: local.counts.api_retries,
       compactions: local.counts.compactions,
     },
-    refs: { prs: refs.prs, commits: refs.commits, private: { ...refs.dropped } },
+    refs: { prs: refs.prs, commits: refs.commits, private: { ...dropped } },
     jobs,
     unavailable: [...localEntries.filter((entry) => !has(own, entry.field, entry.reason)).slice(0, LIMITS.unavailable - own.length), ...own],
   }
-  return { published, dropped: { ...refs.dropped } }
+  return { published, dropped: { ...dropped } }
 }
 
 /** The bytes a store receives: canonical JSON and one trailing newline. */

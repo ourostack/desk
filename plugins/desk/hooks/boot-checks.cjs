@@ -286,7 +286,7 @@ const factoryCheck = {
     const pluginRoot = ctx.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
     let plugins = { dirs: [], incomplete: true };
     try {
-      plugins = metadata({ host: ctx.host === "copilot" ? "copilot" : "claude", pluginRoot, home, env: ctx.env, readSmallText, PATTERNS, deadline: ctx.deadline });
+      plugins = metadata({ host: ctx.host === "copilot" ? "copilot" : "claude", pluginRoot, home, env: ctx.env, readSmallText, PATTERNS, deadline: ctx.deadline, sources: false });
     } catch {
       // An unreadable plugin set leaves only the desk's own declaration.
     }
