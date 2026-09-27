@@ -31,6 +31,10 @@ foundation=$(cat "$FOUNDATION_SKILL" 2>/dev/null) || {
 # compose the startup line, so the hook and the server can never disagree. It
 # honours the Claude project folder when it is a desk, the saved binding, $DESK
 # and the home fallbacks, names where the root came from, and always exits 0.
+# With --boot-checks it runs the boot-check registry (hooks/boot-checks.cjs),
+# which adds one "Desk boot:" line only when a check has something to say, and
+# then starts factory delivery (hooks/factory-start.cjs) detached with ignored
+# stdio, after that output is built.
 direction=""
 if command -v node >/dev/null 2>&1; then
   direction=$(node "$PLUGIN_ROOT/mcp/scripts/resolve-desk-root.js" --startup-line --boot-checks 2>/dev/null)
