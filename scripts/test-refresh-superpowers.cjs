@@ -39,10 +39,11 @@ function trackedFiles() {
   return execFileSync("git", ["ls-files", "-z"], { cwd: repoRoot, encoding: "utf8" }).split("\0").filter(Boolean);
 }
 
+// A release surface names the shipped version; a stated minimum ("3.2.0-alpha.58 or later") is a floor that stays.
 function filesNaming(version, files) {
   return files.filter((file) => {
     const text = fs.readFileSync(path.join(repoRoot, file), "utf8");
-    return versionToken(version).test(text);
+    return versionToken(version).test(text.replaceAll(`${version} or later`, ""));
   });
 }
 
