@@ -347,6 +347,28 @@ test("the repair launcher runs the repair in a compatible Node, and with none re
   assert.match(await bootLine({ host: "claude", env: f.env, launch: async () => {} }), /repair Node status unreadable; deferred/)
 })
 
+test("the --compatible launcher runs a script in the Node the resolver picks, and starts nothing without one", async () => {
+  const f = await fixture()
+  const script = path.join(f.root, "work.cjs")
+  const proof = path.join(f.root, "ran.txt")
+  await fs.writeFile(script, `require("node:fs").writeFileSync(${JSON.stringify(proof)}, process.argv.slice(2).join(" "))\n`)
+  assert.deepEqual(boot.compatibleCommand(script, "a", "b"), [process.execPath, fileURLToPath(hookPath), "--compatible", script, "a", "b"])
+  const budgets = []
+  assert.deepEqual(await boot.runCompatible(script, ["a"], { env: f.env, resolveNode: (options) => { budgets.push(options.probeBudgetMs); return { node: null, range: ">=20.0.0" } } }), { started: false, reason: "no Node >=20.0.0 found" })
+  assert.deepEqual(budgets, [3000])
+  await assert.rejects(fs.lstat(proof), { code: "ENOENT" }, "nothing started")
+  assert.deepEqual(await boot.runCompatible(script, ["a", "b"], { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=20.0.0" }) }), { started: true, node: process.execPath, code: 0 })
+  assert.equal(await fs.readFile(proof, "utf8"), "a b")
+  const failing = () => ({ once: (event, handler) => { if (event === "error") setImmediate(() => handler(new Error("spawn ENOENT"))) } })
+  await assert.rejects(boot.runCompatible(script, [], { env: f.env, resolveNode: () => ({ node: "/missing/node", range: ">=20.0.0" }), spawnChild: failing }), /ENOENT/)
+
+  // The real CLI, from this process's Node, which fits.
+  await fs.rm(proof)
+  const run = spawnSync(process.execPath, [fileURLToPath(hookPath), "--compatible", script, "via-cli"], { env: f.env, encoding: "utf8" })
+  assert.equal(run.status, 0, run.stderr)
+  assert.equal(await fs.readFile(proof, "utf8"), "via-cli")
+})
+
 test("a Copilot session folder that is a symlink alias of the bound desk is not ambiguous", async () => {
   const f = await fixture()
   const alias = path.join(f.root, "desk-alias")
