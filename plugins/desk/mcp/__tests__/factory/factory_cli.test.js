@@ -89,6 +89,9 @@ test("build writes the deterministic report tree and job-link returns the accept
   assert.deepEqual(await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--person-prefix", "", "--track", "factory", "--slug", "store-pipeline"] }), {
     link: "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md",
   })
+  assert.deepEqual(await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--track", "factory", "--slug", "store-pipeline"] }), {
+    link: "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md",
+  })
   await assert.rejects(runBuildCommand({ argv: ["--store", store] }), /Usage: factory\.js build/u)
   await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory"] }), /Usage: factory\.js job-link/u)
 }))
@@ -137,8 +140,71 @@ test("validate-pr reads base and head as Git data, enforces facts for contributo
   assert.equal(existsSync(marker), false)
 }))
 
+test("validate-pr handles added, removed, unknown, invalid-path, malformed, oversized, and Git-error inputs without loading unsafe paths", async () => {
+  const shaA = "a".repeat(40)
+  const shaB = "b".repeat(40)
+  const validPath = "facts/claude-code-11111111-1111-4111-8111-111111111111.json"
+  const validBytes = readFileSync(path.join(FIXTURE_STORE, validPath), "utf8")
+  const args = ["--base", shaA, "--head", shaB, "--author-association", "NONE"]
+
+  let calls = 0
+  let result = await runValidatePrCommand({
+    argv: args,
+    git: (gitArgs, options) => {
+      calls += 1
+      if (gitArgs[0] === "diff") return `A\0${validPath}\0`
+      assert.equal(options.encoding, null)
+      return Buffer.from(validBytes)
+    },
+  })
+  assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
+  assert.equal(calls, 2)
+
+  for (const [status, code] of [["D", "removal"], ["X", "status"]]) {
+    result = await runValidatePrCommand({ argv: args, git: () => `${status}\0${validPath}\0` })
+    assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code, path: validPath }] })
+  }
+
+  calls = 0
+  result = await runValidatePrCommand({
+    argv: args,
+    git: (gitArgs) => {
+      calls += 1
+      assert.equal(gitArgs[0], "diff")
+      return "A\0facts/nested/SENTINEL.js\0"
+    },
+  })
+  assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "path", path: "changes.0" }] })
+  assert.equal(calls, 1)
+
+  await assert.rejects(
+    runValidatePrCommand({ argv: args, git: () => "A\0" }),
+    /change list is malformed/u,
+  )
+  const many = Array.from({ length: 501 }, (_, index) => `A\0outside-${index}\0`).join("")
+  assert.deepEqual(await runValidatePrCommand({ argv: args, git: () => many }), {
+    ok: false,
+    maintenance: false,
+    errors: [{ code: "too_many_changes", path: "changes" }],
+  })
+  await assert.rejects(
+    runValidatePrCommand({ argv: [...args, "--extra", "x"], git: () => "" }),
+    /unknown option/u,
+  )
+  await assert.rejects(
+    runValidatePrCommand({ argv: args, cwd: os.tmpdir() }),
+    /Git data could not be read/u,
+  )
+})
+
 test("validate-pr rejects malformed options and main exits one while still printing stable validation JSON", () => scratch(async (env) => {
-  await assert.rejects(runValidatePrCommand({ argv: ["--base", "x"] }), /Usage: factory\.js validate-pr/u)
+  for (const argv of [
+    ["--base", "x"],
+    ["--base", "x".repeat(40), "--head", "y", "--author-association", "NONE"],
+    ["--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "bad"],
+  ]) {
+    await assert.rejects(runValidatePrCommand({ argv }), /Usage: factory\.js validate-pr/u)
+  }
   let output = ""
   let logged = ""
   const code = await main({
@@ -150,6 +216,20 @@ test("validate-pr rejects malformed options and main exits one while still print
   assert.equal(code, 1)
   assert.equal(output, "")
   assert.match(logged, /base and head/u)
+
+  output = ""
+  logged = ""
+  const validPath = "facts/claude-code-11111111-1111-4111-8111-111111111111.json"
+  const invalidCode = await main({
+    argv: ["validate-pr", "--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "NONE"],
+    env,
+    git: () => `D\0${validPath}\0`,
+    write: (text) => { output += text },
+    logError: (text) => { logged += text },
+  })
+  assert.equal(invalidCode, 1)
+  assert.deepEqual(JSON.parse(output), { ok: false, maintenance: false, errors: [{ code: "removal", path: validPath }] })
+  assert.equal(logged, "")
 }))
 
 // ---------------------------------------------------------------------------

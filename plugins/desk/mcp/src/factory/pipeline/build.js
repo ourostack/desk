@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { jobId } from "../binding.js"
@@ -7,20 +7,24 @@ import { calculateFormulas } from "./formulas.js"
 import { normalizePublished, stableStringify } from "./normalize.js"
 import { buildCoverage, renderIndexMarkdown, renderJobMarkdown, renderReadme } from "./report.js"
 import { buildTimelines } from "./timeline.js"
-import { validatePr } from "./validate-pr.js"
+import { isFactsPath, validatePr } from "./validate-pr.js"
 
 function compareText(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0
+  return Number(left > right) - Number(left < right)
 }
 
 function requireDirectory(directory, label) {
   const stat = lstatSync(directory)
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`factory build: ${label} must be a real directory`)
+  if (!stat.isDirectory()) throw new Error(`factory build: ${label} must be a real directory`)
+}
+
+function existingEntry(filePath) {
+  return lstatSync(filePath, { throwIfNoEntry: false }) ?? null
 }
 
 function replaceDirectory(source, destination) {
-  if (existsSync(destination)) {
-    const stat = lstatSync(destination)
+  const stat = existingEntry(destination)
+  if (stat !== null) {
     if (stat.isSymbolicLink()) throw new Error("factory build: outDir must not be a symlink")
     rmSync(destination, { recursive: true })
   }
@@ -44,13 +48,10 @@ function readSessions(storeDir) {
   for (const entry of readdirSync(factsDir, { withFileTypes: true }).sort((left, right) => compareText(left.name, right.name))) {
     if (!entry.isFile()) throw new Error("factory build: facts entries must be regular files")
     const relative = `facts/${entry.name}`
-    if (!/^facts\/(?:claude-code|copilot-cli)-[0-9a-f-]+\.json$/u.test(relative)) throw new Error("factory build: invalid facts entry")
+    if (!isFactsPath(relative)) throw new Error("factory build: invalid facts entry")
     const bytes = readFileSync(path.join(factsDir, entry.name))
     const validation = validatePr({ changes: [{ path: relative, status: "added", bytes }] })
-    if (!validation.ok) {
-      if (validation.errors.some((item) => item.code === "path")) throw new Error("factory build: invalid facts entry")
-      throw new Error(`factory build: invalid published facts (${validation.errors.map((item) => item.code).join(",")})`)
-    }
+    if (!validation.ok) throw new Error(`factory build: invalid published facts (${validation.errors.map((item) => item.code).join(",")})`)
     sessions.push(normalizePublished(JSON.parse(bytes.toString("utf8"))))
   }
   sessions.sort((left, right) => compareText(left.session.host, right.session.host) || compareText(left.session.id, right.session.id))

@@ -103,3 +103,68 @@ test("a done declaration without a usable job offset is unavailable rather than 
   assert.deepEqual(formulas.status, { class: "declared", value: "done" })
   assert.deepEqual(formulas.lead_time_ms, { class: "unavailable", value: null, reason: "job_offsets_unavailable" })
 })
+
+test("cancelled observation, nonterminal transition, and absent status retain their evidence classes", () => {
+  let one = structuredClone(sessions[0])
+  one.jobs[0].transitions = []
+  one.jobs[0].observed = { status: "cancelled", offset_ms: 9000 }
+  assert.deepEqual(calculateFormulas(buildJobTimeline(CLOSED, [one])).status, { class: "declared", value: "cancelled" })
+
+  one = structuredClone(sessions[0])
+  one.jobs[0].transitions = [{ to: "paused", offset_ms: 5000 }]
+  one.jobs[0].observed = null
+  assert.deepEqual(calculateFormulas(buildJobTimeline(CLOSED, [one])).status, { class: "measured", value: "paused" })
+
+  one.jobs[0].transitions = []
+  assert.deepEqual(calculateFormulas(buildJobTimeline(CLOSED, [one])).status, { class: "unavailable", value: null, reason: "status_unavailable" })
+})
+
+test("zero active time and zero lead time stay explicit", () => {
+  let one = structuredClone(sessions[0])
+  one.intervals = one.intervals.filter((entry) => entry.kind === "human_wait")
+  let formulas = calculateFormulas(buildJobTimeline(CLOSED, [one]))
+  assert.deepEqual(formulas.active_time_ms, { class: "measured", value: 0 })
+  assert.deepEqual(formulas.parallelism, { class: "unavailable", value: null, reason: "no_active_intervals" })
+  assert.deepEqual(formulas.concurrent_sessions, { class: "unavailable", value: null, reason: "no_active_intervals" })
+  assert.deepEqual(formulas.concurrent_agents, { class: "unavailable", value: null, reason: "no_active_intervals" })
+
+  one = structuredClone(sessions[0])
+  one.jobs[0].transitions = [{ to: "done", offset_ms: 0 }]
+  formulas = calculateFormulas(buildJobTimeline(CLOSED, [one]))
+  assert.deepEqual(formulas.flow_efficiency, { class: "unavailable", value: null, reason: "zero_lead_time" })
+})
+
+test("a timed job with no waits reports the absence rather than inventing zero-duration evidence", () => {
+  const one = structuredClone(sessions[0])
+  one.intervals = one.intervals.filter((entry) => !entry.kind.endsWith("_wait"))
+  const formulas = calculateFormulas(buildJobTimeline(CLOSED, [one]))
+  assert.deepEqual(formulas.longest_wait, { class: "unavailable", value: null, reason: "no_wait_intervals" })
+})
+
+test("disjoint activity and tied waits use deterministic interval ordering", () => {
+  const one = structuredClone(sessions[0])
+  one.intervals = [
+    { kind: "turn", agent: 0, start_ms: 0, end_ms: 1000 },
+    { kind: "subagent", agent: 1, start_ms: 0, end_ms: 500 },
+    { kind: "tool", agent: 0, tool: "shell", outcome: "ok", start_ms: 2000, end_ms: 3000 },
+    { kind: "permission_wait", agent: 0, start_ms: 0, end_ms: 1000 },
+    { kind: "human_wait", agent: 0, start_ms: 1000, end_ms: 2000 },
+    { kind: "human_wait", agent: 0, start_ms: 0, end_ms: 1000 },
+  ]
+  one.unavailable.push({ field: "permission_waits", reason: "capped" })
+  const formulas = calculateFormulas(buildJobTimeline(CLOSED, [one]))
+  assert.equal(formulas.active_time_ms.value, 2000)
+  assert.deepEqual(formulas.longest_wait.value, { kind: "human_wait", duration_ms: 1000, start_ms: -1000, end_ms: 0 })
+  assert.deepEqual(formulas.unavailable.value.filter((entry) => entry.field === "permission_waits"), [
+    { field: "permission_waits", reason: "capped", count: 1 },
+    { field: "permission_waits", reason: "host_does_not_record", count: 1 },
+  ])
+})
+
+test("a done transition before the job clock starts clamps lead time to zero", () => {
+  const one = structuredClone(sessions[0])
+  one.jobs[0].transitions = [{ to: "done", offset_ms: -1 }]
+  const formulas = calculateFormulas(buildJobTimeline(CLOSED, [one]))
+  assert.deepEqual(formulas.lead_time_ms, { class: "measured", value: 0, censored: false, basis: "first_done_transition" })
+  assert.deepEqual(formulas.flow_efficiency, { class: "unavailable", value: null, reason: "zero_lead_time" })
+})

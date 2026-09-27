@@ -51,7 +51,7 @@ export async function runStatusCommand({ argv, env }) {
   return { ...await readStatus(env), markers: (await listMarkers(env)).length, finalize: (await listFinalizeRequests(env)).length }
 }
 
-function runGit(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 } = {}) {
+function runGit(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 }) {
   try {
     return execFileSync("git", args, { cwd, encoding, maxBuffer, stdio: ["ignore", "pipe", "pipe"] })
   } catch {
@@ -59,7 +59,7 @@ function runGit(args, { cwd, encoding = "utf8", maxBuffer = 32 * 1024 * 1024 } =
   }
 }
 
-function changedPaths({ base, head, cwd, git = runGit }) {
+function changedPaths({ base, head, cwd, git }) {
   const output = git(["diff", "--name-status", "-z", "--no-renames", `${base}...${head}`], { cwd })
   const fields = output.split("\0").filter((field) => field !== "")
   const changes = []
@@ -75,7 +75,7 @@ function changedPaths({ base, head, cwd, git = runGit }) {
   return changes
 }
 
-function revisionBytes({ revision, filePath, cwd, git = runGit }) {
+function revisionBytes({ revision, filePath, cwd, git }) {
   return git(["show", `${revision}:${filePath}`], { cwd, encoding: null })
 }
 
@@ -84,7 +84,7 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
   const base = options?.get("base")
   const head = options?.get("head")
   const association = options?.get("author-association")
-  if (options === null || !GIT_REF.test(base ?? "") || !GIT_REF.test(head ?? "") || !AUTHOR_ASSOCIATION.test(association ?? "")) {
+  if (options === null || !GIT_REF.test(base) || !GIT_REF.test(head) || !AUTHOR_ASSOCIATION.test(association)) {
     throw new Error("Usage: factory.js validate-pr --base <base sha> --head <head sha> --author-association <value>; base and head must be full commit SHAs")
   }
   if ([...options.keys()].some((key) => !["base", "head", "author-association"].includes(key))) {
@@ -161,7 +161,7 @@ export async function runConsentCommand({ argv, env }) {
 }
 
 /** Dispatches `argv[0]` to its subcommand and writes the JSON result with `write`. Returns the process exit code. */
-export async function main({ argv = process.argv.slice(2), env = process.env, write = (text) => process.stdout.write(text), logError = (text) => process.stderr.write(text) } = {}) {
+export async function main({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd(), git = runGit, write = (text) => process.stdout.write(text), logError = (text) => process.stderr.write(text) } = {}) {
   const [subcommand, ...rest] = argv
   try {
     if (!SUPPORTED_COMMANDS.includes(subcommand)) {
@@ -175,7 +175,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, wr
       build: runBuildCommand,
       "job-link": runJobLinkCommand,
     }[subcommand]
-    const result = await command({ argv: rest, env })
+    const result = await command({ argv: rest, env, cwd, git })
     write(`${JSON.stringify(result)}\n`)
     return subcommand === "validate-pr" && result.ok === false ? 1 : 0
   } catch (error) {

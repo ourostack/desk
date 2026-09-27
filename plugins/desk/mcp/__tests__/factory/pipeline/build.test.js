@@ -52,6 +52,9 @@ test("two builds over identical input are byte-identical", () => scratch((root) 
   const right = bytesByPath(second)
   assert.deepEqual(Object.keys(left), Object.keys(right))
   for (const relative of Object.keys(left)) assert.equal(Buffer.compare(left[relative], right[relative]), 0, relative)
+  build({ storeDir: STORE, outDir: first })
+  const replaced = bytesByPath(first)
+  for (const relative of Object.keys(left)) assert.equal(Buffer.compare(left[relative], replaced[relative]), 0, relative)
 }))
 
 test("generated output contains no date, time of day, absolute path, or planted free-text sentinel", () => scratch((root) => {
@@ -88,6 +91,17 @@ test("build reads facts as data only and rejects unexpected entries, invalid byt
   assert.equal(lstatSync(link).isSymbolicLink(), true)
   assert.throws(() => build({ storeDir: store, outDir: path.join(root, "out") }), /regular files/u)
   assert.throws(() => build({ storeDir: store, outDir: store }), /outDir/u)
+  assert.throws(() => build({ storeDir: store, outDir: root }), /outDir/u)
+
+  rmSync(link)
+  const outLink = path.join(root, "out-link")
+  symlinkSync(path.join(root, "elsewhere"), outLink)
+  assert.throws(() => build({ storeDir: store, outDir: outLink }), /outDir must not be a symlink/u)
+
+  const storeFile = path.join(root, "store-file")
+  writeFileSync(storeFile, "not a directory")
+  assert.throws(() => build({ storeDir: storeFile, outDir: path.join(root, "unused") }), /store must be a real directory/u)
+  assert.throws(() => build({ storeDir: store, outDir: null }), /storeDir and outDir/u)
 }))
 
 test("jobLink reuses the accepted job identity and validates the public store name", () => {
@@ -99,4 +113,5 @@ test("jobLink reuses the accepted job identity and validates the public store na
     slug: "store-pipeline",
   }), "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md")
   assert.throws(() => jobLink({ store: "not a store", deskRemote: "https://github.com/ourostack/desk", personPrefix: "", track: "factory", slug: "store-pipeline" }), /store/u)
+  assert.throws(() => jobLink({ store: null, deskRemote: "https://github.com/ourostack/desk", personPrefix: "", track: "factory", slug: "store-pipeline" }), /store/u)
 })

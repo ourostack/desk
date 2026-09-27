@@ -21,11 +21,16 @@ test("normalizePublished sorts every collection and stableStringify sorts every 
   input.refs.prs.reverse()
   input.jobs.reverse()
   input.unavailable.reverse()
+  input.refs.prs.push({ repo: "ourostack/desk", number: 9 })
+  input.refs.commits.push({ repo: "ourostack/desk", sha: "3333333333333333333333333333333333333333" })
+  input.intervals.push(structuredClone(input.intervals[0]))
   const before = structuredClone(input)
   const normalized = normalizePublished(input)
   assert.deepEqual(normalized.plugins.map((item) => item.name), ["desk", "plain-language"])
   assert.deepEqual(normalized.agents.map((item) => item.n), [0, 1])
-  assert.deepEqual(normalized.intervals.map((item) => item.start_ms), [0, 1000, 2000, 2500, 4000])
+  assert.deepEqual(normalized.intervals.map((item) => item.start_ms), [0, 1000, 2000, 2500, 4000, 4000])
+  assert.deepEqual(normalized.refs.prs.map((item) => item.number), [8, 9])
+  assert.deepEqual(normalized.refs.commits.map((item) => item.sha), ["2222222222222222222222222222222222222222", "3333333333333333333333333333333333333333"])
   assert.deepEqual(normalized.jobs.map((item) => item.job), [CLOSED, OPEN])
   assert.equal(stableStringify({ z: 1, a: { z: 2, a: 3 } }), "{\"a\":{\"a\":3,\"z\":2},\"z\":1}")
   assert.deepEqual(input, before, "normalization must not mutate the caller")
@@ -70,9 +75,32 @@ test("buildTimelines returns jobs in job-ID order and does not invent an unattri
 
 test("timeline observations and duplicate transitions are normalized deterministically", () => {
   const duplicated = sessions.map((session) => structuredClone(session))
-  duplicated[2].jobs[0].transitions = [{ to: "processing", offset_ms: 2500 }]
-  duplicated[2].jobs[0].session_offset_ms = 4000
+  duplicated[1].jobs[0].transitions = [{ to: "processing", offset_ms: 2500 }]
+  duplicated[1].jobs[0].session_offset_ms = 4000
   const timeline = buildJobTimeline(OPEN, duplicated)
   assert.deepEqual(timeline.transitions, [{ to: "processing", offset_ms: 2500 }])
   assert.deepEqual(timeline.observations, [{ status: "processing", offset_ms: null }])
+})
+
+test("timeline handles empty inputs and null observations without inventing records", () => {
+  assert.deepEqual(buildTimelines([]), [])
+  const one = structuredClone(sessions[0])
+  one.jobs[0].observed = null
+  const timeline = buildJobTimeline(CLOSED, [one])
+  assert.deepEqual(timeline.observations, [])
+
+  const same = buildJobTimeline(CLOSED, [one, structuredClone(one)])
+  assert.equal(same.sessions.length, 2)
+  assert.deepEqual(same.transitions, one.jobs[0].transitions)
+
+  const nullOffsets = [structuredClone(sessions[1]), structuredClone(sessions[2])]
+  nullOffsets[1].jobs = [structuredClone(nullOffsets[0].jobs[0])]
+  nullOffsets[1].jobs[0].observed = { status: "paused", offset_ms: null }
+  const nullTimeline = buildJobTimeline(OPEN, nullOffsets)
+  assert.deepEqual(nullTimeline.observations, [
+    { status: "processing", offset_ms: null },
+    { status: "paused", offset_ms: null },
+  ])
+
+  assert.deepEqual(buildJobTimeline(OPEN, [sessions[2], sessions[1]]).sessions.map((entry) => entry.offset_ms), [2000, null])
 })

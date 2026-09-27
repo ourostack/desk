@@ -1,7 +1,7 @@
 import { ENUMS } from "../schema.js"
 
 function compareText(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0
+  return Number(left > right) - Number(left < right)
 }
 
 function compareValues(...values) {
@@ -12,8 +12,7 @@ function compareValues(...values) {
 }
 
 function enumIndex(values, value) {
-  const index = values.indexOf(value)
-  return index === -1 ? values.length : index
+  return values.indexOf(value)
 }
 
 function sortedObject(value) {

@@ -102,3 +102,35 @@ test("fixed report prose contains no date, time-of-day, path, or planted free te
     assert.equal(output.includes(SENTINEL), false)
   }
 })
+
+test("reports render unavailable timing, no transitions, no tool calls, and empty-store coverage explicitly", () => {
+  const one = structuredClone(sessions[1])
+  one.counts.tool_calls = {}
+  one.jobs[0].observed = null
+  const timeline = buildJobTimeline("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", [one])
+  const report = renderJobMarkdown({ timeline, formulas: calculateFormulas(timeline) })
+  assert.match(report, /Status: unavailable \(status_unavailable\)/u)
+  assert.match(report, /Status transitions: none/u)
+  assert.match(report, /Tool calls: none/u)
+  assert.match(report, /Lead-time contributors unavailable/u)
+  assert.match(report, /Longest single wait: unavailable \(job_offsets_unavailable\)/u)
+  const coverage = buildCoverage([])
+  assert.deepEqual(coverage, {
+    sessions_seen: 0,
+    sessions_with_facts: 0,
+    bound_sessions: 0,
+    unattributed_sessions: 0,
+    hosts: [],
+    unavailable: [],
+    plugins: [],
+  })
+  const index = renderIndexMarkdown([{ timeline, formulas: calculateFormulas(timeline) }], coverage)
+  assert.match(index, /unavailable \(job_offsets_unavailable\)/u)
+
+  const sameField = structuredClone(sessions[0])
+  sameField.unavailable.push({ field: "permission_waits", reason: "capped" })
+  assert.deepEqual(buildCoverage([sameField]).unavailable, [
+    { field: "permission_waits", reason: "capped", sessions: 1, rate: 1 },
+    { field: "permission_waits", reason: "host_does_not_record", sessions: 1, rate: 1 },
+  ])
+})

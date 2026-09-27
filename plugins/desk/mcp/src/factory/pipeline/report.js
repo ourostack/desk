@@ -17,7 +17,7 @@ const LABELS = Object.freeze({
 })
 
 function compareText(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0
+  return Number(left > right) - Number(left < right)
 }
 
 function plural(count, singular, pluralForm = `${singular}s`) {
@@ -134,7 +134,7 @@ export function buildCoverage(sessions) {
     hosts: [...hostCounts.entries()].map(([host, count]) => ({ host, sessions: count })).sort((left, right) => compareText(left.host, right.host)),
     unavailable: [...unavailableCounts.entries()].map(([key, count]) => {
       const [field, reason] = key.split("\n")
-      return { field, reason, sessions: count, rate: total === 0 ? 0 : count / total }
+      return { field, reason, sessions: count, rate: count / total }
     }).sort((left, right) => compareText(left.field, right.field) || compareText(left.reason, right.reason)),
     plugins: [...pluginCounts.entries()].map(([key, count]) => {
       const [name, version] = key.split("\n")

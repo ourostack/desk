@@ -1,19 +1,16 @@
 const ACTIVE_KINDS = new Set(["turn", "tool", "subagent"])
 const WAIT_KINDS = Object.freeze(["human_wait", "permission_wait", "api_retry", "compaction"])
-const TERMINAL = new Set(["done", "cancelled"])
-
 const measured = (value, extra = {}) => ({ class: "measured", value, ...extra })
 const inferred = (value, extra = {}) => ({ class: "inferred", value, ...extra })
 const declared = (value, extra = {}) => ({ class: "declared", value, ...extra })
 const unavailable = (reason) => ({ class: "unavailable", value: null, reason })
 
 function compareText(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0
+  return Number(left > right) - Number(left < right)
 }
 
 function union(intervals) {
   const sorted = intervals
-    .filter((interval) => interval.end_ms >= interval.start_ms)
     .map((interval) => [interval.start_ms, interval.end_ms])
     .sort((left, right) => left[0] - right[0] || left[1] - right[1])
   const merged = []
@@ -44,7 +41,6 @@ function concurrency(activeUnion, groupedIntervals) {
   for (let index = 0; index < points.length - 1; index += 1) {
     const start = points[index]
     const end = points[index + 1]
-    if (end === start) continue
     const midpoint = start + (end - start) / 2
     if (!activeUnion.some(([left, right]) => midpoint >= left && midpoint < right)) continue
     const count = groups.filter((intervals) => intervals.some(([left, right]) => midpoint >= left && midpoint < right)).length
@@ -52,7 +48,7 @@ function concurrency(activeUnion, groupedIntervals) {
     weighted += count * (end - start)
   }
   const active = duration(activeUnion)
-  return { maximum, average: active === 0 ? 0 : weighted / active }
+  return { maximum, average: weighted / active }
 }
 
 function sumMap(sessions, field) {
@@ -111,10 +107,13 @@ function leadTime(timeline, status) {
 function longestWait(intervals) {
   const waits = intervals.filter((interval) => WAIT_KINDS.includes(interval.kind))
   if (waits.length === 0) return unavailable("no_wait_intervals")
-  waits.sort((left, right) => (right.end_ms - right.start_ms) - (left.end_ms - left.start_ms)
-    || WAIT_KINDS.indexOf(left.kind) - WAIT_KINDS.indexOf(right.kind)
-    || left.start_ms - right.start_ms
-    || left.end_ms - right.end_ms)
+  waits.sort((left, right) => {
+    const durationDifference = (right.end_ms - right.start_ms) - (left.end_ms - left.start_ms)
+    if (durationDifference !== 0) return durationDifference
+    const kindDifference = WAIT_KINDS.indexOf(left.kind) - WAIT_KINDS.indexOf(right.kind)
+    if (kindDifference !== 0) return kindDifference
+    return left.start_ms - right.start_ms
+  })
   const first = waits[0]
   return measured({ kind: first.kind, duration_ms: first.end_ms - first.start_ms, start_ms: first.start_ms, end_ms: first.end_ms })
 }
@@ -174,7 +173,6 @@ export function calculateFormulas(timeline) {
   let flowEfficiency
   if (status.value === "cancelled") flowEfficiency = unavailable("cancelled")
   else if (lead.class === "unavailable") flowEfficiency = unavailable(lead.reason)
-  else if (active.class === "unavailable") flowEfficiency = unavailable(active.reason)
   else if (lead.value === 0) flowEfficiency = unavailable("zero_lead_time")
   else flowEfficiency = inferred(active.value / lead.value, { censored: lead.censored, method: "active_time_ms/lead_time_ms" })
 

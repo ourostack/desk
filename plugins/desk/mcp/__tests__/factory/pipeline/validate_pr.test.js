@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { validatePr } from "../../../src/factory/pipeline/validate-pr.js"
+import { isFactsPath, validatePr } from "../../../src/factory/pipeline/validate-pr.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const GOLDEN_BYTES = readFileSync(path.join(here, "..", "fixtures", "published-golden.json"))
@@ -29,6 +29,15 @@ test("validatePr accepts one added canonical published facts file", () => {
   assert.deepEqual(validatePr({
     changes: [{ path: VALID_PATH, status: "added", bytes: GOLDEN_BYTES }],
   }), { ok: true, errors: [] })
+})
+
+test("validatePr accepts canonical string bytes and recognizes only exact fact paths", () => {
+  assert.deepEqual(validatePr({
+    changes: [{ path: VALID_PATH, status: "added", bytes: GOLDEN_BYTES.toString("utf8") }],
+  }), { ok: true, errors: [] })
+  assert.equal(isFactsPath(VALID_PATH), true)
+  assert.equal(isFactsPath(null), false)
+  assert.equal(isFactsPath(`facts/${SENTINEL}.json`), false)
 })
 
 test("validatePr accepts a modification that keeps identity and does not reduce duration", () => {
@@ -164,7 +173,7 @@ test("validatePr rejects modifications that change host or session identity or r
 })
 
 test("validatePr rejects malformed calls without throwing or echoing values", () => {
-  for (const input of [null, {}, { changes: null }, { changes: [null] }, { changes: [{ path: VALID_PATH, status: "added", bytes: 42 }] }]) {
+  for (const input of [null, {}, { changes: null }, { changes: [null] }, { changes: [[]] }, { changes: [{ path: 42, status: "added", bytes: GOLDEN_BYTES }] }, { changes: [{ path: VALID_PATH, status: "added", bytes: 42 }] }]) {
     const result = validatePr(input)
     assert.equal(result.ok, false)
     assert.equal(Array.isArray(result.errors), true)

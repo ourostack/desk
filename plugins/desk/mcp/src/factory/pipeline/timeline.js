@@ -2,7 +2,7 @@ import { ENUMS } from "../schema.js"
 import { normalizePublished } from "./normalize.js"
 
 function compareText(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0
+  return Number(left > right) - Number(left < right)
 }
 
 function compareNullableNumber(left, right) {
