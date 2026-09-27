@@ -69,15 +69,15 @@ test("malformed and oversized CLI stdin exits zero with no output within two sec
   }
 }))
 
-test("stop leaves finalize requests pending until the command is available", () => scratch(async (ctx) => {
+test("stop starts the advertised finalize command for each pending request and leaves the request for finalize to clear", () => scratch(async (ctx) => {
   const marker = await session(ctx)
   const job = "1".repeat(32)
   await requestFinalize(ctx.env, { job, deskRoot: ctx.desk })
   const calls = []
   const options = { host: "claude", payload: { session_id: ID, transcript_path: marker.log_path, cwd: ctx.desk, hook_event_name: "Stop" }, env: ctx.env, launch: async (...args) => calls.push(args) }
-  await hook().runHook(options)
+  await hook().runHook({ ...options, supportsFinalize: false })
   assert.deepEqual(calls, [])
-  await hook().runHook({ ...options, supportsFinalize: true })
+  await hook().runHook(options)
   assert.deepEqual(calls[0][1], ["finalize", "--job", job])
   assert.equal((await fs.readdir(path.join(await factoryStateRoot(ctx.env), "finalize"))).length, 1)
 }))

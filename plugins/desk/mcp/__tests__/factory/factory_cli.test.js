@@ -12,12 +12,15 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
+  SUPPORTED_COMMANDS,
   isMainModule,
   main,
   parseOptions,
   runBuildCommand,
   runConsentCommand,
   runDeriveCommand,
+  runFinalizeCommand,
+  runFlushCommand,
   runJobLinkCommand,
   runStatusCommand,
   runValidatePrCommand,
@@ -438,5 +441,38 @@ test("the real CLI exits non-zero and prints one line to stderr for a bad invoca
   } catch (error) {
     assert.equal(error.status, 1)
     assert.match(error.stderr.toString(), /Usage: factory\.js consent/u)
+  }
+}))
+
+// ---------------------------------------------------------------------------
+// flush and finalize.
+// ---------------------------------------------------------------------------
+
+test("flush and finalize are advertised, so the end-of-turn hook starts finalize", () => {
+  assert.ok(SUPPORTED_COMMANDS.includes("flush"))
+  assert.ok(SUPPORTED_COMMANDS.includes("finalize"))
+})
+
+test("flush --store runs one delivery attempt through the injected runner and prints its stable code", () => scratch(async (env) => {
+  let output = ""
+  const runner = () => assert.fail("no consent, no gh")
+  assert.equal(await main({ argv: ["flush", "--store", "ourostack/factory"], env, runner, write: (text) => { output += text }, logError: () => assert.fail("flush must succeed") }), 0)
+  assert.deepEqual(JSON.parse(output), { result: "not_opted_in" })
+  assert.deepEqual(await runFlushCommand({ argv: ["--store", "ourostack/factory"], env }), { result: "not_opted_in" })
+  for (const argv of [[], ["--store"], ["--store", "a/b", "--other", "x"], ["--other", "x"]]) {
+    await assert.rejects(runFlushCommand({ argv, env, runner }), /Usage: factory\.js flush/u)
+  }
+}))
+
+test("finalize takes one to eight distinct jobs and reports each job's outcome", () => scratch(async (env) => {
+  const a = "a".repeat(32)
+  const b = "b".repeat(32)
+  let output = ""
+  assert.equal(await main({ argv: ["finalize", "--job", a, "--job", b], env, runner: () => assert.fail("no state"), write: (text) => { output += text }, logError: () => assert.fail("finalize must succeed") }), 0)
+  assert.deepEqual(JSON.parse(output), { jobs: { [a]: { result: "retained", reason: "no_state" }, [b]: { result: "retained", reason: "no_state" } } })
+  assert.deepEqual(await runFinalizeCommand({ argv: ["--job", a], env }), { jobs: { [a]: { result: "retained", reason: "no_state" } } })
+  const nine = Array.from({ length: 9 }, (_, index) => ["--job", index.toString(16).repeat(32)]).flat()
+  for (const argv of [[], ["--job"], ["--job", "xyz"], ["--job", a, "--job", a], ["--other", a], nine]) {
+    await assert.rejects(runFinalizeCommand({ argv, env }), /Usage: factory\.js finalize/u)
   }
 }))

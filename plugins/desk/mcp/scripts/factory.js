@@ -2,6 +2,8 @@
 // The Desk factory CLI.
 //
 //   node scripts/factory.js consent --store <owner/repo> --contribute yes|no [--account <gh login>]
+//   node scripts/factory.js flush --store <owner/repo>
+//   node scripts/factory.js finalize --job <job> [--job <job> ...]
 //   node scripts/factory.js validate-pr --base <sha> --head <sha> --author-association <value>
 //   node scripts/factory.js build --store <directory> --out <directory>
 //   node scripts/factory.js job-link --store <owner/repo> --desk-remote <url> --person-prefix <prefix> --track <track> --slug <slug>
@@ -16,12 +18,14 @@ import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../sr
 import { build, jobLink } from "../src/factory/pipeline/build.js"
 import { isFactsPath, validatePr } from "../src/factory/pipeline/validate-pr.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["consent", "derive", "status", "validate-pr", "build", "job-link"])
+export const SUPPORTED_COMMANDS = Object.freeze(["consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
 const GIT_REF = /^[0-9a-f]{40}$/u
 const AUTHOR_ASSOCIATION = /^[A-Z_]{2,40}$/u
+const JOB = /^[0-9a-f]{32}$/u
+const MAX_FINALIZE_JOBS = 8
 
 /** `{ "store": "...", "contribute": "yes" }`-shaped options from `--flag value` pairs, or `null` for a malformed argv. */
 export function parseOptions(argv) {
@@ -44,6 +48,30 @@ export async function runDeriveCommand({ argv, env }) {
   if (!/^\d{1,6}$/u.test(raw) || Number(raw) > 30000) throw new Error("factory.js derive: wait-quiet must be 0..30000")
   const { deriveFile } = await import("../src/factory/derive-run.js")
   return deriveFile(env, options.get("marker"), { quietMs: Number(raw) })
+}
+
+/** `flush --store <owner/repo>`: one delivery attempt; prints `{ result, pr? }`. */
+export async function runFlushCommand({ argv, env, runner }) {
+  const options = parseOptions(argv)
+  if (options === null || options.size !== 1 || !options.has("store")) throw new Error("Usage: factory.js flush --store <owner/repo>")
+  const { flush, ghRunner } = await import("../src/factory/flush.js")
+  return flush(env, { store: options.get("store"), runner: runner ?? ghRunner({ env }) })
+}
+
+/** `finalize --job <job> [--job <job> ...]` (at most eight): finalizes each job in turn; prints `{ jobs: { <job>: result } }`. */
+export async function runFinalizeCommand({ argv, env, runner }) {
+  const jobs = []
+  let malformed = argv.length === 0
+  for (let index = 0; index < argv.length; index += 2) {
+    const value = argv[index + 1]
+    if (argv[index] !== "--job" || typeof value !== "string" || !JOB.test(value) || jobs.includes(value)) malformed = true
+    else jobs.push(value)
+  }
+  if (malformed || jobs.length > MAX_FINALIZE_JOBS) throw new Error(`Usage: factory.js finalize --job <32 hex> [--job <32 hex> ...] (at most ${MAX_FINALIZE_JOBS} distinct jobs)`)
+  const { finalize, ghRunner } = await import("../src/factory/flush.js")
+  const results = {}
+  for (const job of jobs) results[job] = await finalize(env, { job, runner: runner ?? ghRunner({ env }) })
+  return { jobs: results }
 }
 
 export async function runStatusCommand({ argv, env }) {
@@ -177,7 +205,7 @@ export async function runConsentCommand({ argv, env }) {
 }
 
 /** Dispatches `argv[0]` to its subcommand and writes the JSON result with `write`. Returns the process exit code. */
-export async function main({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd(), git = runGit, write = (text) => process.stdout.write(text), logError = (text) => process.stderr.write(text) } = {}) {
+export async function main({ argv = process.argv.slice(2), env = process.env, cwd = process.cwd(), git = runGit, runner = undefined, write = (text) => process.stdout.write(text), logError = (text) => process.stderr.write(text) } = {}) {
   const [subcommand, ...rest] = argv
   try {
     if (!SUPPORTED_COMMANDS.includes(subcommand)) {
@@ -187,11 +215,13 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
       consent: runConsentCommand,
       derive: runDeriveCommand,
       status: runStatusCommand,
+      flush: runFlushCommand,
+      finalize: runFinalizeCommand,
       "validate-pr": runValidatePrCommand,
       build: runBuildCommand,
       "job-link": runJobLinkCommand,
     }[subcommand]
-    const result = await command({ argv: rest, env, cwd, git })
+    const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
     return subcommand === "validate-pr" && result.ok === false ? 1 : 0
   } catch (error) {
