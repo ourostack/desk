@@ -76,9 +76,16 @@ export function buildJobTimeline(job, inputSessions) {
   }
   transitions.sort((left, right) => compareValues(left.offset_ms - right.offset_ms, ENUMS.jobStatus.indexOf(left.to) - ENUMS.jobStatus.indexOf(right.to)))
 
-  const observations = sessions
-    .flatMap(({ binding }) => binding.observed === null ? [] : [{ ...binding.observed }])
-    .sort((left, right) => compareValues(compareNullableNumber(left.offset_ms, right.offset_ms), ENUMS.jobStatus.indexOf(left.status) - ENUMS.jobStatus.indexOf(right.status)))
+  const observations = []
+  const seenObservations = new Set()
+  for (const { binding } of sessions) {
+    if (binding.observed === null) continue
+    const key = `${binding.observed.offset_ms}:${binding.observed.status}`
+    if (seenObservations.has(key)) continue
+    seenObservations.add(key)
+    observations.push({ ...binding.observed })
+  }
+  observations.sort((left, right) => compareValues(compareNullableNumber(left.offset_ms, right.offset_ms), ENUMS.jobStatus.indexOf(left.status) - ENUMS.jobStatus.indexOf(right.status)))
 
   return {
     job,

@@ -74,8 +74,5 @@ test("timeline observations and duplicate transitions are normalized determinist
   duplicated[2].jobs[0].session_offset_ms = 4000
   const timeline = buildJobTimeline(OPEN, duplicated)
   assert.deepEqual(timeline.transitions, [{ to: "processing", offset_ms: 2500 }])
-  assert.deepEqual(timeline.observations, [
-    { status: "processing", offset_ms: null },
-    { status: "processing", offset_ms: null },
-  ])
+  assert.deepEqual(timeline.observations, [{ status: "processing", offset_ms: null }])
 })

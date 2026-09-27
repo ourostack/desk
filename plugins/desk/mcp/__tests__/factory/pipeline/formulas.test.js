@@ -74,6 +74,15 @@ test("cancelled jobs have unavailable delivery lead time and flow efficiency", (
   assert.deepEqual(formulas.flow_efficiency, { class: "unavailable", value: null, reason: "cancelled" })
 })
 
+test("a current cancellation overrides an earlier done transition", () => {
+  const one = structuredClone(sessions[0])
+  one.jobs[0].transitions.push({ to: "cancelled", offset_ms: 15000 })
+  one.jobs[0].observed = { status: "cancelled", offset_ms: 15000 }
+  const formulas = calculateFormulas(buildJobTimeline(CLOSED, [one]))
+  assert.deepEqual(formulas.status, { class: "measured", value: "cancelled" })
+  assert.deepEqual(formulas.lead_time_ms, { class: "unavailable", value: null, reason: "cancelled" })
+})
+
 test("a job with no offsets retains coverage and signals but reports timeline formulas unavailable", () => {
   const one = structuredClone(sessions[1])
   const formulas = calculateFormulas(buildJobTimeline(OPEN, [one]))
@@ -85,4 +94,12 @@ test("a job with no offsets retains coverage and signals but reports timeline fo
     assert.deepEqual(wait, { class: "unavailable", value: null, reason: "job_offsets_unavailable" })
   }
   assert.equal(formulas.rework_signals.session_retouches.value, 0)
+})
+
+test("a done declaration without a usable job offset is unavailable rather than treated as open", () => {
+  const one = structuredClone(sessions[1])
+  one.jobs[0].observed = { status: "done", offset_ms: null }
+  const formulas = calculateFormulas(buildJobTimeline(OPEN, [one]))
+  assert.deepEqual(formulas.status, { class: "declared", value: "done" })
+  assert.deepEqual(formulas.lead_time_ms, { class: "unavailable", value: null, reason: "job_offsets_unavailable" })
 })

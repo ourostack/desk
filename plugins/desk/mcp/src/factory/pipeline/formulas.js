@@ -7,6 +7,10 @@ const inferred = (value, extra = {}) => ({ class: "inferred", value, ...extra })
 const declared = (value, extra = {}) => ({ class: "declared", value, ...extra })
 const unavailable = (reason) => ({ class: "unavailable", value: null, reason })
 
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
 function union(intervals) {
   const sorted = intervals
     .filter((interval) => interval.end_ms >= interval.start_ms)
@@ -56,7 +60,7 @@ function sumMap(sessions, field) {
   for (const session of sessions) {
     for (const [key, value] of Object.entries(session.counts[field])) totals[key] = (totals[key] ?? 0) + value
   }
-  return Object.fromEntries(Object.entries(totals).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0))
+  return Object.fromEntries(Object.entries(totals).sort(([left], [right]) => compareText(left, right)))
 }
 
 function sumField(sessions, field) {
@@ -76,12 +80,16 @@ function unavailableGroups(sessions) {
       const [field, reason] = key.split("\n")
       return { field, reason, count }
     })
-    .sort((left, right) => left.field.localeCompare(right.field) || left.reason.localeCompare(right.reason))
+    .sort((left, right) => compareText(left.field, right.field) || compareText(left.reason, right.reason))
 }
 
 function currentStatus(timeline) {
-  const terminalTransition = timeline.transitions.find((entry) => TERMINAL.has(entry.to))
-  if (terminalTransition) return measured(terminalTransition.to)
+  const cancelledTransition = timeline.transitions.find((entry) => entry.to === "cancelled")
+  const cancelledObservation = timeline.observations.find((entry) => entry.status === "cancelled")
+  if (cancelledTransition) return measured("cancelled")
+  if (cancelledObservation) return declared("cancelled")
+  const doneTransition = timeline.transitions.find((entry) => entry.to === "done")
+  if (doneTransition) return measured("done")
   const observed = timeline.observations.at(-1)
   if (observed) return declared(observed.status)
   const transition = timeline.transitions.at(-1)
@@ -94,6 +102,7 @@ function leadTime(timeline, status) {
   if (done) return measured(Math.max(0, done.offset_ms), { censored: false, basis: "first_done_transition" })
   const observedDone = timeline.observations.find((entry) => entry.status === "done" && entry.offset_ms !== null)
   if (observedDone) return declared(Math.max(0, observedDone.offset_ms), { censored: false, basis: "terminal_observation" })
+  if (status.value === "done") return unavailable("job_offsets_unavailable")
   const ends = timeline.sessions.flatMap((session) => session.end_ms === null ? [] : [session.end_ms])
   if (ends.length === 0) return unavailable("job_offsets_unavailable")
   return measured(Math.max(0, Math.max(...ends)), { censored: true, basis: "latest_session_end" })
@@ -179,7 +188,7 @@ export function calculateFormulas(timeline) {
   return {
     status,
     sessions,
-    sessions_by_host: measured(Object.fromEntries(Object.entries(hosts).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0))),
+    sessions_by_host: measured(Object.fromEntries(Object.entries(hosts).sort(([left], [right]) => compareText(left, right)))),
     lead_time_ms: lead,
     queue_before_start_ms: timingUnavailable ? unavailable("job_offsets_unavailable") : measured(Math.max(0, Math.min(...timedSessions.map((session) => session.offset_ms)))),
     active_time_ms: active,
