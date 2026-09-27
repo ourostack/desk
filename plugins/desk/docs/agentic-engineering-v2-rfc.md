@@ -84,7 +84,7 @@ This section is the contract for how V2 measures work and the public method it g
 
 **Every finished job answers four questions:** what happened, what mattered, what was waste, and what we could not see.
 
-**How the data flows.** When a session ends, its host hook derives facts for the work it touched: timings, tool use, waits, failures, retries, usage, plugin and model versions, and references to commits and reviews. The facts never include transcript text, prompts or file contents. Facts from every machine arrive as pull requests to a private factory store for their trust boundary; personal use and an organization's work each have their own store. There, CI enforces the privacy schema, normalizes the facts, rebuilds each job's timeline with the formulas above, regenerates its report, and merges. Contribution is opt-in, asked once at setup, and pseudonymous. Sessions that touch no task count as unattributed, not as missing work.
+**How the data flows.** When a session ends, its host hook derives facts for the work it touched: timings, tool use, waits, failures, retries, usage, plugin and model versions, and references to commits and reviews. The facts never include transcript text, prompts or file contents. Facts from every machine arrive as pull requests to the factory store for their trust boundary: personal use goes to the public store, [`ourostack/factory`](https://github.com/ourostack/factory), and an organization's work goes to its own store. There, CI enforces the privacy schema, normalizes the facts, rebuilds each job's timeline with the formulas above, regenerates its report, and merges. Contribution is opt-in and asked once at setup. Published facts carry no identity and no time of day: they hold durations and offsets instead of clock times, random session IDs, and, for a public desk, job IDs replaced by a keyed hash (HMAC) under a secret that stays on the machine ([publishing transform](../mcp/src/factory/publish.js)). Sessions that touch no task count as unattributed, not as missing work.
 
 **The loop closes.** Each job's waste feeds lesson capture, which turns repeated patterns into fixes to the skills and foundations that caused them, and every fact carries the versions that produced it, so each version can be compared with the last. The grading method is this section, public and open to review. We hold our agent system to the kind of review we would give a colleague's work, and “we could not tell” is an acceptable answer.
 
@@ -130,10 +130,32 @@ Public, generic policy lives here and in the layer foundations. Environment-spec
 
 ## 9. Status
 
-**As of 25 September 2026: opt-in alpha.**
+**As of 27 September 2026: opt-in alpha, ready for evaluation.** An engineer outside the team can now evaluate V2 with the [evaluation packet](evaluation-packet.md) ([#28](https://github.com/ourostack/desk/pull/28)). This section says what works today, what is built but not yet proven live end to end, and what is still open.
 
-**Works today.** Desk, Crew, Superpowers and Plain Language live in https://github.com/ourostack/desk, and V2 installs from its `main` branch on Claude Code and through a managed launcher with a company overlay. On both kinds of host, each layer's foundation loads exactly once at startup — Superpowers, Plain Language, Desk and the overlay's own — and the agent body carries identity only. The Desk foundation gives the agent this document's installed path, so an agent can open it from any repository. Alpha users who installed from the earlier repository move here automatically. Every plugin change bumps its version, and CI enforces it.
+**Works today.**
 
-**Being built.** Browser access for fresh installs by default; automatic refresh of vendored Superpowers from upstream; and the factory, starting with session facts, intake by pull request and the four-question report, then independent classification, lesson capture and rollups. No factory data is collected yet.
+- **Install from the channel.** Desk, Crew, Superpowers and Plain Language live in https://github.com/ourostack/desk, and V2 installs from its `main` branch on Claude Code ([setup](../../../SETUP.md)) and through a managed launcher with a company overlay ([#1](https://github.com/ourostack/desk/pull/1)). Alpha users who installed from the earlier repository move here automatically ([#3](https://github.com/ourostack/desk/pull/3)). Every plugin change bumps its version, and CI enforces it ([release check](../../../scripts/check-release-integrity.cjs)).
+- **Startup foundations.** On both kinds of host, each layer's foundation loads exactly once at startup (Superpowers, Plain Language, Desk and the overlay's own), and the agent body carries identity only ([#4](https://github.com/ourostack/desk/pull/4), [#5](https://github.com/ourostack/desk/pull/5), [#7](https://github.com/ourostack/desk/pull/7)).
+- **The RFC pointer.** The Desk foundation gives the agent this document's installed path, so an agent can open it from any repository ([#5](https://github.com/ourostack/desk/pull/5)). The repository root keeps a short [pointer](../../../AGENTIC-ENGINEERING-V2.md) to it.
+- **Channels, never commits.** Plugin dependencies track `main`, never an exact commit, and CI enforces it ([#1](https://github.com/ourostack/desk/pull/1), [dependency check](../../../scripts/check-dependency-channels.cjs)). The docs and skills say there is no frozen candidate ([#8](https://github.com/ourostack/desk/pull/8)).
+- **Always-on Desk.** The Desk server answers the host's handshake before any other work and never exits before it ([#14](https://github.com/ourostack/desk/pull/14), [#19](https://github.com/ourostack/desk/pull/19)). Hundreds of live launches have shown no handshake failure. The part of the live check that also requires a successful `desk_status` has not passed yet.
+- **The public factory store.** [`ourostack/factory`](https://github.com/ourostack/factory) is live. Using the store pipeline ([#27](https://github.com/ourostack/desk/pull/27)), its intake validated and merged a synthetic facts file and built its report ([factory#8](https://github.com/ourostack/factory/pull/8)), and rejected a file that carried a date ([factory#3](https://github.com/ourostack/factory/pull/3)).
+- **Session-end capture.** On Claude Code and Copilot CLI, the end of a session records its facts locally, outside any desk ([#26](https://github.com/ourostack/desk/pull/26), [local capture](factory-local-capture.md)). Contribution is opt-in ([#22](https://github.com/ourostack/desk/pull/22)), and the transform that produces published facts removes identity and time of day ([#18](https://github.com/ourostack/desk/pull/18)).
+- **Waste labels.** The store gates waste labels as a second data path beside facts ([#34](https://github.com/ourostack/desk/pull/34)).
+
+**Built, not yet live end to end.**
+
+- **Superpowers follows upstream.** A weekly workflow refreshes the vendored Superpowers and releases it ([#32](https://github.com/ourostack/desk/pull/32)). Its first live run refreshed the copy but failed while filing its fallback issue; the fix is in review ([#40](https://github.com/ourostack/desk/pull/40)).
+- **Delivery to the store.** Delivering facts from desks to the store, and finalizing a job when its task is done, is in review ([#36](https://github.com/ourostack/desk/pull/36)). Until it merges, no desk's facts reach the store.
+- **Desk organization.** The naming and layout rules and the one-time tidy are merged ([#20](https://github.com/ourostack/desk/pull/20), [#21](https://github.com/ourostack/desk/pull/21), [#25](https://github.com/ourostack/desk/pull/25)). The tidy is not yet proven on real desks, and a fix for tidying a shared team desk is in review ([#37](https://github.com/ourostack/desk/pull/37)).
+- **The evaluator and rollups.** The observer agent that evaluates work it did not do is merged ([#28](https://github.com/ourostack/desk/pull/28)). The evaluator that labels a finished job's waste ([#41](https://github.com/ourostack/desk/pull/41)) and rollups of waste across jobs ([#39](https://github.com/ourostack/desk/pull/39)) are built and in review.
+
+**Still open.**
+
+- The kaizen check, which turns repeated waste into a fix, and the andon, which stops the work when a problem keeps coming back (section 4, “The loop closes”).
+- Draining recorded friction into kaizen cards, the improvement tasks that fix it.
+- A separate factory store for work done under a company overlay, and the admin session that manages it (section 4, “How the data flows”).
+- Retiring the manual work-measurement ledger, which the factory replaces ([the ledger skill](../skills/work-measurement-ledger/SKILL.md)).
+- Browser access for fresh installs by default (section 3).
 
 **Next.** An evaluation by an engineer outside the team, then the maintainer's decision on promotion.
