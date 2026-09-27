@@ -229,6 +229,9 @@ test("R3/R2 CLI acknowledges exact canonical accounting and refuses wrong revoca
 
 test("boot reports absent bindings, malformed reports and repair launch failures explicitly", async () => {
   assert.match(await tidy(), /no bound desk/)
+  // A binding whose folder is gone is unavailable, not absent: the line agrees with the startup line above it.
+  const gone = path.join(await mkTempRoot("desk-boot-gone-"), "gone-desk")
+  assert.equal(await tidy({ host: "copilot", env: { DESK: gone } }), "Desk boot: workspace-tidy skipped; the bound desk is unavailable; see desk_status.")
   const f = await fixture()
   const common = git(f.desk, "rev-parse", "--absolute-git-dir")
   const file = boot.reportPath(f.desk, common)

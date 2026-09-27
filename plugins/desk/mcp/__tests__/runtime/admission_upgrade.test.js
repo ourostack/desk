@@ -39,6 +39,38 @@ test("a missing root recovers in place once the desk appears: ready, same tool l
   assert.equal(readLastStart(fixture).state, "ready")
 })
 
+test("a saved binding to a missing folder never binds a home-folder desk and recovers in place once the folder appears", async (t) => {
+  const fixture = await makeGitDesk()
+  // Personal and work desks in the home folder: neither may stand in for the binding.
+  for (const home of ["desk", "ms-desk"]) {
+    git(fixture.root, "clone", fixture.origin, path.join(fixture.home, home))
+  }
+  const pending = path.join(fixture.root, "moved-desk")
+  const configPath = writeActivation({ ...fixture, desk: pending })
+  const session = await startDesk(fixture, { args: ["--activation-config", configPath] })
+  t.after(() => session.close())
+  const degraded = await session.statusUntil(settled)
+  assert.equal(degraded.state, "degraded:root_unavailable")
+  assert.equal(degraded.root.path, pending)
+  assert.equal(degraded.root.source, "activation-config")
+  assert.equal(degraded.root.activation_config, configPath)
+  assert.match(degraded.fix, /desk:first-run-bootstrap/u)
+  const write = await session.call("task_create", { track: "ops", slug: "refused-write-check", title: "Refused" })
+  assert.equal(write.isError, true)
+  assert.equal(write.payload.code, "root_unavailable")
+  git(fixture.root, "clone", fixture.origin, pending)
+  const ready = await session.statusUntil((payload) => payload.state === "ready")
+  assert.equal(ready.root.path, pending)
+  assert.equal(ready.root.source, "activation-config")
+  const landed = await session.call("task_create", { track: "ops", slug: "recovered-binding-check", title: "After recovery" })
+  assert.equal(landed.isError, false, JSON.stringify(landed.payload))
+  assert.equal(existsSync(path.join(pending, "ops", "recovered-binding-check", "task.md")), true)
+  for (const home of ["desk", "ms-desk"]) {
+    assert.equal(existsSync(path.join(fixture.home, home, "ops", "refused-write-check")), false)
+    assert.equal(existsSync(path.join(fixture.home, home, "ops", "recovered-binding-check")), false)
+  }
+})
+
 test("a malformed activation config recovers in place once it is fixed", async (t) => {
   const fixture = await makeGitDesk()
   const configPath = path.join(fixture.root, "fixable.activation.json")
