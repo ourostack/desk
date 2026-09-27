@@ -231,17 +231,239 @@ function inspectSources(lock, github) {
   });
 }
 
+const REGULAR_FILE_MODES = new Map([["100644", 0o644], ["100755", 0o755]]);
+
+// Reads an upstream tree from the Git object store, not a working tree, so the vendored bytes are the committed
+// blobs: a checkout's end-of-line or attribute conversion can never leak into the pristine copy.
+function createGitTreeReader({ dir, ref = "HEAD", run = spawnSync }) {
+  function git(args, encoding = "utf8") {
+    const result = run("git", ["-C", dir, ...args], {
+      encoding,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (result.status !== 0) {
+      const error = String(result.stderr || result.error?.message || `exit ${result.status}`).trim();
+      throw new Error(`git ${args.join(" ")} failed: ${error}`);
+    }
+    return result.stdout;
+  }
+  const commit = git(["rev-parse", "--verify", `${ref}^{commit}`]).trim();
+  const tree = git(["rev-parse", "--verify", `${commit}^{tree}`]).trim();
+  const entries = new Map();
+  for (const record of git(["ls-tree", "-r", "-z", "--full-tree", commit]).split("\0")) {
+    if (record === "") continue;
+    const tab = record.indexOf("\t");
+    const [mode, type, object] = record.slice(0, tab).split(" ");
+    entries.set(record.slice(tab + 1), { mode, type, object });
+  }
+  return {
+    commit,
+    tree,
+    entries,
+    read(sourcePath) {
+      return git(["cat-file", "blob", entries.get(sourcePath).object], "buffer");
+    },
+  };
+}
+
+function skillDirectory(sourcePath) {
+  return /^skills\/[^/]+\//u.exec(sourcePath)?.[0] ?? null;
+}
+
+function generatedPrefix(source) {
+  const prefixes = new Set(source.files.map((file) => {
+    if (!file.generatedPath.endsWith(`/${file.sourcePath}`)) {
+      throw new Error(`${source.id}: ${file.generatedPath} does not mirror ${file.sourcePath}`);
+    }
+    return file.generatedPath.slice(0, -file.sourcePath.length);
+  }));
+  if (prefixes.size !== 1) {
+    throw new Error(`${source.id}: generated paths do not share one vendored root`);
+  }
+  return [...prefixes][0];
+}
+
+function selectedUpstreamPaths(source, upstream) {
+  const selectedSkills = new Set();
+  const explicit = [];
+  for (const file of source.files) {
+    const skill = skillDirectory(file.sourcePath);
+    if (skill) selectedSkills.add(skill);
+    else explicit.push(file.sourcePath);
+  }
+  const selected = new Set();
+  for (const sourcePath of explicit) {
+    if (!upstream.entries.has(sourcePath)) {
+      throw new Error(`selected upstream file was removed: ${sourcePath}`);
+    }
+    selected.add(sourcePath);
+  }
+  // A skill is vendored as its whole directory, so a file upstream adds to a selected skill (a script or reference
+  // its SKILL.md now names) arrives with it, and a file upstream deletes leaves with it. A new skill is never
+  // selected automatically; it is reported for a person or agent to decide.
+  for (const skill of selectedSkills) {
+    const files = [...upstream.entries.keys()].filter((sourcePath) => sourcePath.startsWith(skill));
+    if (files.length === 0) throw new Error(`selected upstream skill was removed: ${skill}`);
+    for (const sourcePath of files) selected.add(sourcePath);
+  }
+  for (const sourcePath of selected) {
+    const entry = upstream.entries.get(sourcePath);
+    if (entry.type !== "blob" || !REGULAR_FILE_MODES.has(entry.mode)) {
+      throw new Error(`selected upstream path is not a regular file: ${sourcePath} (${entry.mode} ${entry.type})`);
+    }
+  }
+  const unselectedSkills = [...new Set([...upstream.entries.keys()]
+    .map(skillDirectory)
+    .filter((skill) => skill && !selectedSkills.has(skill)))]
+    .map((skill) => skill.slice(0, -1))
+    .sort();
+  // Default sort orders by UTF-16 code unit, the byte order of these ASCII paths, which the checked-in lock uses.
+  return { selected: [...selected].sort(), unselectedSkills };
+}
+
+function formatFileEntry(file, compact) {
+  if (compact) {
+    return `{"sourcePath": ${JSON.stringify(file.sourcePath)}, "generatedPath": ${JSON.stringify(file.generatedPath)}, "sha256": ${JSON.stringify(file.sha256)}}`;
+  }
+  return JSON.stringify(file, null, 2).replace(/\n/gu, "\n        ");
+}
+
+function indentJson(value, indent) {
+  return JSON.stringify(value, null, 2).replace(/\n/gu, `\n${indent}`);
+}
+
+// Reproduces the checked-in lock layout exactly: each source keeps the file-entry style it already uses (one line per
+// file, or expanded), so a refresh diff shows only the entries that actually changed.
+function formatLock(lock, compactSourceIds) {
+  const sources = lock.sources.map((source) => {
+    const fields = Object.entries(source).map(([key, value]) => {
+      if (key !== "files") return `      ${JSON.stringify(key)}: ${indentJson(value, "      ")}`;
+      const compact = compactSourceIds.has(source.id);
+      const files = value.map((file) => `        ${formatFileEntry(file, compact)}`).join(",\n");
+      return `      "files": [\n${files}\n      ]`;
+    });
+    return `    {\n${fields.join(",\n")}\n    }`;
+  });
+  const top = Object.entries(lock).map(([key, value]) => (key === "sources"
+    ? `  "sources": [\n${sources.join(",\n")}\n  ]`
+    : `  ${JSON.stringify(key)}: ${indentJson(value, "  ")}`));
+  return `{\n${top.join(",\n")}\n}\n`;
+}
+
+function compactSources(lockText, lock) {
+  return new Set(lock.sources
+    .filter((source) => source.files.length > 0 && lockText.includes(formatFileEntry(source.files[0], true)))
+    .map((source) => source.id));
+}
+
+const defaultFsOps = {
+  read: (filePath) => fs.readFileSync(filePath),
+  exists: (filePath) => fs.existsSync(filePath),
+  write(filePath, content) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content);
+  },
+  mode: (filePath) => fs.statSync(filePath).mode & 0o777,
+  chmod: (filePath, mode) => fs.chmodSync(filePath, mode),
+  remove: (filePath) => fs.rmSync(filePath, { force: true }),
+  pruneEmptyParents(filePath, stopAt) {
+    let directory = path.dirname(filePath);
+    while (directory.startsWith(`${stopAt}${path.sep}`) && fs.readdirSync(directory).length === 0) {
+      fs.rmdirSync(directory);
+      directory = path.dirname(directory);
+    }
+  },
+};
+
+// Refreshes one locked source from an upstream tree: every selected file is copied byte for byte with its executable
+// bit, removed files are deleted, and the lock records the new commit and hashes. When no selected byte or mode
+// changed, nothing is written, so an upstream commit that touches only unselected files is not a refresh.
+function updateSource({ lockPath, sourceId, upstream, fsOps = defaultFsOps }) {
+  const lockText = fs.readFileSync(lockPath, "utf8");
+  const lock = JSON.parse(lockText);
+  const source = lock.sources.find((entry) => entry.id === sourceId);
+  if (!source) throw new Error(`upstream source lock has no source ${sourceId}`);
+  const root = path.dirname(lockPath);
+  const prefix = generatedPrefix(source);
+  const { selected, unselectedSkills } = selectedUpstreamPaths(source, upstream);
+  const locked = new Map(source.files.map((file) => [file.sourcePath, file]));
+  const report = {
+    source_id: source.id,
+    repository: source.repository,
+    previous_commit: source.commit,
+    commit: upstream.commit,
+    tree: upstream.tree,
+    changed: false,
+    added_paths: [],
+    updated_paths: [],
+    mode_changed_paths: [],
+    removed_paths: [],
+    unselected_skills: unselectedSkills,
+  };
+  const files = [];
+  const writes = [];
+  for (const sourcePath of selected) {
+    const content = upstream.read(sourcePath);
+    const file = { sourcePath, generatedPath: `${prefix}${sourcePath}`, sha256: sha256(content) };
+    files.push(file);
+    const target = path.join(root, file.generatedPath);
+    const mode = REGULAR_FILE_MODES.get(upstream.entries.get(sourcePath).mode);
+    const present = fsOps.exists(target);
+    if (!locked.has(sourcePath)) report.added_paths.push(sourcePath);
+    else if (locked.get(sourcePath).sha256 !== file.sha256 || !present || sha256(fsOps.read(target)) !== file.sha256) {
+      report.updated_paths.push(sourcePath);
+    } else if ((fsOps.mode(target) & 0o111) !== (mode & 0o111)) {
+      report.mode_changed_paths.push(sourcePath);
+    } else {
+      continue;
+    }
+    writes.push({ target, content, mode });
+  }
+  report.removed_paths = source.files
+    .map((file) => file.sourcePath)
+    .filter((sourcePath) => !selected.includes(sourcePath));
+  report.changed = writes.length > 0 || report.removed_paths.length > 0;
+  if (!report.changed) return report;
+
+  for (const { target, content, mode } of writes) {
+    fsOps.write(target, content);
+    fsOps.chmod(target, mode);
+  }
+  const vendoredRoot = path.join(root, prefix);
+  for (const sourcePath of report.removed_paths) {
+    const target = path.join(root, locked.get(sourcePath).generatedPath);
+    fsOps.remove(target);
+    fsOps.pruneEmptyParents(target, path.resolve(vendoredRoot));
+  }
+  const compact = compactSources(lockText, lock);
+  source.commit = upstream.commit;
+  source.files = files;
+  fs.writeFileSync(lockPath, formatLock(lock, compact));
+  return report;
+}
+
 function parseArgs(argv) {
-  let lockPath = path.join(repoRoot, "upstream-sources.lock.json");
+  const options = { lockPath: path.join(repoRoot, "upstream-sources.lock.json"), update: false };
+  const values = { "--lock": "lockPath", "--source": "sourceId", "--upstream-dir": "upstreamDir", "--ref": "ref" };
   for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === "--lock" && argv[index + 1]) {
-      lockPath = path.resolve(argv[index + 1]);
+    if (argv[index] === "--update") {
+      options.update = true;
+      continue;
+    }
+    const key = values[argv[index]];
+    if (key && argv[index + 1]) {
+      options[key] = argv[index] === "--lock" || argv[index] === "--upstream-dir"
+        ? path.resolve(argv[index + 1])
+        : argv[index + 1];
       index += 1;
       continue;
     }
     throw new Error(`unknown or incomplete argument: ${argv[index]}`);
   }
-  return { lockPath };
+  if (options.update && (!options.sourceId || !options.upstreamDir)) {
+    throw new Error("--update requires --source <id> and --upstream-dir <git checkout>");
+  }
+  return options;
 }
 
 function main(
@@ -250,9 +472,17 @@ function main(
     github = createGitHubClient(),
     now = () => new Date().toISOString(),
     stdout = process.stdout,
+    run = spawnSync,
   } = {},
 ) {
-  const { lockPath } = parseArgs(argv);
+  const options = parseArgs(argv);
+  if (options.update) {
+    const upstream = createGitTreeReader({ dir: options.upstreamDir, ref: options.ref, run });
+    const report = updateSource({ lockPath: options.lockPath, sourceId: options.sourceId, upstream });
+    stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return 0;
+  }
+  const { lockPath } = options;
   const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
   const sources = inspectSources(lock, github);
   const summary = sources.reduce((counts, source) => {
@@ -283,9 +513,13 @@ if (require.main === module) {
 
 module.exports = {
   createGitHubClient,
+  createGitTreeReader,
+  formatLock,
+  compactSources,
   inspectSource,
   inspectSources,
   main,
   selectedPayloadDigest,
   sha256,
+  updateSource,
 };
