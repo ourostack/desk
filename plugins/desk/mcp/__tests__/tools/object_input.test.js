@@ -111,7 +111,12 @@ test("desk_search parses a JSON-string filters object and refuses a non-object",
   assert.equal(Object.hasOwn(seen[1], "filters"), false)
   await assert.rejects(
     desk_search({ deskRoot: "/r", input: { query: "q", filters: "track=t" }, queryRouter }),
-    /desk_search: `filters` must be an object/,
+    (error) => {
+      assert.match(error.message, /desk_search: `filters` must be an object/)
+      assert.match(error.message, /nothing was searched\. Pass it as a JSON object, for example \{"track": "desk-plugin"/)
+      assert.doesNotMatch(error.message, /written|implementing"\}/, "a read's error never talks about a write")
+      return true
+    },
   )
   assert.equal(seen.length, 2)
 })

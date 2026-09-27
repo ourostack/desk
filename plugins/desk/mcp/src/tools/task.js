@@ -52,6 +52,8 @@ const OPTIONAL_RUNTIME_FIELDS = [
   "repos",
   "iterations",
   "predecessor",
+  "initiated_by",
+  "origin_note",
 ]
 
 function relPath(deskRoot, absPath) {

@@ -27,18 +27,22 @@ function describeParsed(value) {
   return `a JSON ${typeof value}`
 }
 
+const WRITE_EFFECT = "nothing was written"
+const WRITE_EXAMPLE = '{"status": "implementing"}'
+
 /**
- * objectInput(value, { tool, field }) -> object | undefined
+ * objectInput(value, { tool, field, effect?, example? }) -> object | undefined
  *
- * Throws `<tool>: \`<field>\` must be an object ...; nothing was written`
- * for anything that is not an object or a JSON-string object.
+ * Throws `<tool>: \`<field>\` must be an object ...; <effect>` for anything
+ * that is not an object or a JSON-string object. `effect` and `example`
+ * default to a card write's; a read passes its own (desk_search's filters).
  */
-export function objectInput(value, { tool, field }) {
+export function objectInput(value, { tool, field, effect = WRITE_EFFECT, example = WRITE_EXAMPLE }) {
   if (value === undefined || value === null) return undefined
   const reject = (got) => {
     throw new TypeError(
-      `${tool}: \`${field}\` must be an object of key/value pairs (got ${got}); nothing was written. ` +
-        `Pass it as a JSON object, for example {"status": "implementing"}.`,
+      `${tool}: \`${field}\` must be an object of key/value pairs (got ${got}); ${effect}. ` +
+        `Pass it as a JSON object, for example ${example}.`,
     )
   }
   if (typeof value === "string") {

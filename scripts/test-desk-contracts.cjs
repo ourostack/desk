@@ -1060,6 +1060,32 @@ contract("the evaluation packet prose is not hard-wrapped", () => {
   assert.deepEqual(proseUnits(evaluationPacket).filter((unit) => unit.length > 1).map((unit) => unit[0].number), []);
 });
 
+// Session start never prints a desk folder name it has not redacted (review of #51, B1 and S2): a folder another
+// machine created can carry a secret's value in its name, and a git diffstat or a glob would put it in the transcript.
+const sessionStart = "plugins/desk/skills/session-start/SKILL.md";
+contract("session start syncs the desk quietly and says why", () => {
+  const skill = text(sessionStart);
+  assert.match(skill, /cd \$DESK && git pull --rebase --quiet origin main/u);
+  assert.match(skill, /keep `--quiet`: without it the pull prints a diffstat and a `create mode` line/u);
+  for (const match of skill.matchAll(/git (?:-C \S+ )?(pull|fetch|log|diff|status|ls-files)\b[^\n`]*/gu)) {
+    if (match[1] === "pull" || match[1] === "fetch") assert.match(match[0], /--quiet|--no-stat/u, `a startup git ${match[1]} must be quiet: ${match[0]}`);
+  }
+});
+contract("session start and status list active tasks from desk_status, never a script or a glob", () => {
+  for (const file of [sessionStart, "plugins/desk/skills/status/SKILL.md"]) {
+    const skill = text(file);
+    assert.doesNotMatch(skill, /active-tasks\.js/u, `${file} still runs the listing script`);
+    assert.match(skill, /`active_tasks`/u, `${file} does not read desk_status active_tasks`);
+  }
+  assert.match(text(sessionStart), /do not fall back to globbing the desk/u);
+  assert.match(text(sessionStart), /`task_move` with `handle` and an outcome `to_slug`/u);
+});
+contract("the tidy renames a redacted folder by its handle, never by listing its parent", () => {
+  const tidy = text("plugins/desk/migrations/02-tidy-desk.md");
+  assert.doesNotMatch(tidy, /listing its parent yourself/u);
+  assert.match(tidy, /by the handle its finding shows: a task with task_move \(handle, to_slug\), a track with track_rename \(handle, to\)/u);
+});
+
 assert.equal(
   contractFailures.length,
   0,

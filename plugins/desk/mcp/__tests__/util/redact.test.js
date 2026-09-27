@@ -52,11 +52,29 @@ test("redactCredentialLikeText redacts each path segment or word on its own and 
   assert.equal(redactCredentialLikeText(""), "")
 })
 
+test("redactCredentialLikeText judges a whole path segment, spaces included (review of #51, S4)", () => {
+  assert.equal(
+    redactCredentialLikeText("Desk startup: $DESK is /tmp/x/set pw hunter2/y (env)."),
+    `Desk startup: $DESK is /tmp/x/${REDACTED_SEGMENT}/y (env).`,
+  )
+  assert.equal(redactCredentialLikeText("C:\\w\\set pw hunter2"), `C:\\w\\${REDACTED_SEGMENT}`)
+  assert.equal(redactCredentialLikeText("Desk boot: /w/set pw hunter2: branch retained"), `Desk boot: /w/${REDACTED_SEGMENT}: branch retained`)
+  // A segment's own surrounding spaces and a closing full stop stay outside the marker.
+  assert.equal(redactCredentialLikeText("left /w/ set pw hunter2 ."), `left /w/ ${REDACTED_SEGMENT} .`)
+  // A word that is credential-like on its own is replaced alone, and the sentence's full stop is kept.
+  assert.equal(redactCredentialLikeText(`see ${PASSWORD_FOLDER}. Next`), `see ${REDACTED_SEGMENT}. Next`)
+  assert.equal(redactCredentialLikeText(`ends at /w/${HEX_FOLDER}...`), `ends at /w/${REDACTED_SEGMENT}...`)
+  assert.equal(redactCredentialLikeText("rotate the api token. then pw"), "rotate the api token. then pw", "a topic word or a lone password word is not a value")
+})
+
 test("the startup line redacts a credential-like segment of the bound root", () => {
   const root = path.join("/home/a", PASSWORD_FOLDER, "desk")
   const line = deskStartupDirection({ root, source: "env:DESK" })
   assert.doesNotMatch(line, /hunter/)
   assert.match(line, new RegExp(`\\$DESK is /home/a/${REDACTED_SEGMENT}/desk \\(the DESK environment variable\\)`))
+  const spaced = deskStartupDirection({ root: "/tmp/x/set pw hunter2/y", source: "env:DESK" })
+  assert.doesNotMatch(spaced, /hunter/)
+  assert.ok(spaced.includes(`/tmp/x/${REDACTED_SEGMENT}/y`))
   const unavailable = deskStartupDirection({ root: null, unavailable: { source: "env:DESK", message: `desk-mcp: $DESK names ${root}, which does not exist.` } })
   assert.doesNotMatch(unavailable, /hunter/)
   assert.ok(unavailable.includes(REDACTED_SEGMENT))
@@ -70,11 +88,12 @@ test("the Desk boot line redacts every check's credential-like segments", async 
     checks: [
       { id: "a", budgetMs: 100, run: async () => ({ line: `Desk: degraded (desk checkout on ${HEX_FOLDER}; writes paused); run desk_doctor` }) },
       { id: "b", budgetMs: 100, run: async () => ({ line: `workspace-tidy Last repair: Tidied 0 stale worktrees; 1 left; /w/${PASSWORD_FOLDER}: branch retained` }) },
+      { id: "c", budgetMs: 100, run: async () => ({ line: "worktree /w/set pw hunter2 left" }) },
     ],
   })
   assert.equal(
     line,
-    `Desk boot: Desk: degraded (desk checkout on ${REDACTED_SEGMENT}; writes paused); run desk_doctor; workspace-tidy Last repair: Tidied 0 stale worktrees; 1 left; /w/${REDACTED_SEGMENT}: branch retained`,
+    `Desk boot: Desk: degraded (desk checkout on ${REDACTED_SEGMENT}; writes paused); run desk_doctor; workspace-tidy Last repair: Tidied 0 stale worktrees; 1 left; /w/${REDACTED_SEGMENT}: branch retained; worktree /w/${REDACTED_SEGMENT}`,
   )
 })
 

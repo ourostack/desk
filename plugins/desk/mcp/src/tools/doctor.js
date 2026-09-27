@@ -44,7 +44,8 @@ function organizationSection(findings) {
     if (items.length === 0) continue
     lines.push(`  ${code}: ${items.length}`)
     for (const item of items.slice(0, ORGANIZATION_PATHS_SHOWN)) {
-      lines.push(`    ${item.path} — ${item.hint}`)
+      const handle = item.handle === undefined ? "" : ` (handle ${item.handle})`
+      lines.push(`    ${item.path}${handle} — ${item.hint}`)
     }
     if (items.length > ORGANIZATION_PATHS_SHOWN) {
       lines.push(`    ... and ${items.length - ORGANIZATION_PATHS_SHOWN} more`)

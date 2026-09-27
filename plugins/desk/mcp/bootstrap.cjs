@@ -407,6 +407,7 @@ function answer(stdout, payload, line) {
       return {
         name: name,
         description: "Unavailable until Desk can start. Call desk_status for the reason and the fix.",
+        // Deliberately permissive: every call here answers with the reason and the fix, so a host must never refuse one over its arguments.
         inputSchema: { type: "object", properties: {}, additionalProperties: true }
       };
     }) } });

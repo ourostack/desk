@@ -7,6 +7,7 @@ import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { personPrefix } from "../util/paths.js"
 import { packageMetadata as packageJson } from "../package-metadata.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
+import { activeTasks } from "../desk/active-tasks.js"
 
 const DB_SCHEMA = { id: "desk-index", version: 1 }
 const EMBEDDING_SPEC = {
@@ -84,6 +85,8 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
     startup_fallback: startupFallback,
     degraded_modes: degradedModes,
     write_scope: writeScope,
+    // The redacted active-task listing session start and status render (./desk/active-tasks.js).
+    active_tasks: root.valid ? activeTasks(root.path) : null,
     summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
   }
 }

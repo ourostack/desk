@@ -19,10 +19,12 @@ import { isCredentialLike } from "../factory/credential.js"
 export const REDACTED_SEGMENT = "<redacted segment>"
 export const REDACTED_TITLE = "<redacted title>"
 
-// Path separators, whitespace and the punctuation that frames a path or a
-// value in a sentence. A `.`, `-` or `_` stays inside a token, so
+// Path separators and the punctuation that frames a path or a value in a
+// sentence. Whitespace is not one: a folder name can hold spaces
+// ("set pw hunter2"), so the text between two of these is judged whole as
+// well as word by word. A `.`, `-` or `_` stays inside a word, so
 // "set-pw.hunter2" and "ghp_..." are judged whole.
-const SEPARATORS = /([\s/\\;:,()[\]{}<>"'`=|]+)/u
+const SEPARATORS = /([/\\;:,()[\]{}<>"'`=|]+)/u
 
 // The folders of this machine's home and temporary directories are the
 // machine's, not names anyone chose: macOS puts a 30-character per-user ID in
@@ -60,10 +62,31 @@ export function redactTitle(title) {
   return isCredentialLike(title) ? REDACTED_TITLE : title
 }
 
-/** A line of text: each path segment or word that carries a secret's value becomes the redaction marker. */
+/**
+ * A line of text: each path segment, and each word, that carries a secret's
+ * value becomes the redaction marker. A segment is the text between two
+ * separators, spaces included. When a word in it is credential-like on its
+ * own, only that word is replaced; when only the segment as a whole is (a
+ * password word followed by its value, "set pw hunter2"), the segment is. A
+ * sentence's closing `.` is kept after the marker.
+ */
 export function redactCredentialLikeText(text) {
   return String(text)
     .split(SEPARATORS)
-    .map((part, index) => (index % 2 === 1 ? part : redactName(part)))
+    .map((part, index) => (index % 2 === 1 ? part : redactSegment(part)))
     .join("")
+}
+
+function redactSegment(segment) {
+  const words = segment.split(/(\s+)/u)
+  const judged = words.map((part, index) => (index % 2 === 1 ? part : redactWord(part)))
+  if (judged.some((part, index) => part !== words[index])) return judged.join("")
+  const [, lead, core, trail] = /^(\s*)(.*?)([\s.]*)$/su.exec(segment)
+  return redactName(core) === core ? segment : `${lead}${REDACTED_SEGMENT}${trail}`
+}
+
+function redactWord(word) {
+  const [, core, dots] = /^(.*?)(\.*)$/su.exec(word)
+  const shown = redactName(core)
+  return shown === core ? word : `${shown}${dots}`
 }

@@ -427,7 +427,12 @@ function firstChunkText(row) {
 export async function desk_search({ deskRoot, input, opts, readiness, queryRouter, signal }) {
   const request = { ...input }
   // A JSON-string `filters` would otherwise read as no filters at all.
-  if (request.filters != null) request.filters = objectInput(request.filters, { tool: "desk_search", field: "filters" })
+  if (request.filters != null) request.filters = objectInput(request.filters, {
+    tool: "desk_search",
+    field: "filters",
+    effect: "nothing was searched",
+    example: '{"track": "desk-plugin", "status": ["implementing", "blocked"]}',
+  })
   return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).lexical({
     ...request, deskRoot, now: opts?.now, opts, signal, kind: "lexical",
   })

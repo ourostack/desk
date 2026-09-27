@@ -4,14 +4,15 @@
 // `{ properties: {}, additionalProperties: true }`, so Claude Code had no
 // shape to build arguments from and sent task_update's `frontmatter` as a
 // JSON string, which corrupted the card. This test fails if a tool is
-// registered without declared properties or required fields.
+// registered without declared properties or required fields. The one
+// deliberate exception, the degraded server bootstrap.cjs runs when no
+// compatible Node is found, is covered in __tests__/launch/bootstrap.test.js.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { TOOL_NAMES } from "../src/tool-names.js"
 import { NO_INPUT_TOOLS, TOOL_INPUT_SCHEMAS } from "../src/tool-schemas.js"
 import { FRONT_DOOR_TOOLS } from "../src/runtime/front-door.js"
-import { LEDGER_ACTIONS } from "../src/measurement/actions.js"
 
 function assertDeclared(name, inputSchema) {
   assert.ok(inputSchema, `${name}: no input schema`)
@@ -57,9 +58,34 @@ test("object-valued card fields are declared as objects, so hosts send objects r
   assert.equal(TOOL_INPUT_SCHEMAS.desk_search.properties.filters.type, "object")
 })
 
-test("the work ledger schema declares every field any action accepts, and every action", () => {
-  const ledger = TOOL_INPUT_SCHEMAS.desk_work_ledger
-  assert.deepEqual(ledger.properties.action.enum, Object.keys(LEDGER_ACTIONS))
-  const accepted = new Set(Object.values(LEDGER_ACTIONS).flat())
-  assert.deepEqual([...accepted].sort(), Object.keys(ledger.properties).sort())
+// Only a field whose value is genuinely any JSON value may go untyped.
+const UNTYPED_BY_DESIGN = new Set(["desk_work_ledger.value"])
+
+function assertTyped(where, property) {
+  assert.ok(typeof property.type === "string" || Array.isArray(property.anyOf), `${where}: needs a type`)
+  if (property.type === "array") assertTyped(`${where}[]`, property.items)
+  for (const [field, nested] of Object.entries(property.properties ?? {})) assertTyped(`${where}.${field}`, nested)
+}
+
+test("every declared field has a type, so hosts need not guess an object's or a list's shape", () => {
+  for (const [name, inputSchema] of Object.entries(TOOL_INPUT_SCHEMAS)) {
+    for (const [field, property] of Object.entries(inputSchema.properties)) {
+      if (!UNTYPED_BY_DESIGN.has(`${name}.${field}`)) assertTyped(`${name}.${field}`, property)
+    }
+  }
+  const repos = TOOL_INPUT_SCHEMAS.task_create.properties.repos
+  assert.deepEqual(Object.keys(repos.items.properties), ["name", "local_path", "mode"])
+})
+
+test("task_create declares the fields start-task sends", () => {
+  const { properties } = TOOL_INPUT_SCHEMAS.task_create
+  assert.deepEqual(properties.initiated_by.enum, ["operator", "agent"])
+  assert.equal(properties.origin_note.type, "string")
+})
+
+test("task_move and track_rename take a handle in place of the folder name", () => {
+  assert.equal(TOOL_INPUT_SCHEMAS.task_move.properties.handle.type, "string")
+  assert.deepEqual(TOOL_INPUT_SCHEMAS.task_move.required, [])
+  assert.equal(TOOL_INPUT_SCHEMAS.track_rename.properties.handle.type, "string")
+  assert.deepEqual(TOOL_INPUT_SCHEMAS.track_rename.required, ["to"])
 })

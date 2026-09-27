@@ -597,7 +597,9 @@ test("--report lists this session's own findings, and gives one line for a desk 
   const result = cli(["--report", "--root", root], { env: { DESK: root } })
   assert.equal(result.code, 0)
   assert.match(result.stdout, new RegExp(`^Desk tools: ${root}\\nThis script: ${root}\\nThis session's own desk: ${root}\\nOrganization findings in it: \\d+\\n`))
-  assert.match(result.stdout, /^ {2}track_catch_all: inbox — /m)
+  assert.match(result.stdout, /^ {2}track_catch_all: inbox \(handle track-[0-9a-f]{10}\) — .*rename with track_rename \(handle, to\)/m)
+  assert.match(result.stdout, /^ {2}name_prompt_like: inbox\/hi-please-fix-this \(handle task-[0-9a-f]{10}\) — .*rename with task_move \(handle, to_slug\)/m)
+  assert.match(result.stdout, /^ {2}loose_file: scratch-notes.txt — /m, "a loose entry has no handle")
 
   const plain = soloDesk({ git: false })
   const refused = cli(["--report"], { env: { DESK: plain } })
