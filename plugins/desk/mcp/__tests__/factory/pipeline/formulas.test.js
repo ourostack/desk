@@ -226,7 +226,7 @@ test("a wait kind every timed session lacks is unavailable, one some sessions la
   assert.equal(withUntimed.active_time_ms.partial, undefined)
 })
 
-test("missing tool durations make active-time values partial or unavailable, never complete", () => {
+test("missing tool durations make active-time values partial, never complete and never unavailable", () => {
   const partial = structuredClone(sessions[0])
   partial.unavailable.push({ field: "tool_durations", reason: "log_truncated" })
   let formulas = calculateFormulas(buildJobTimeline(CLOSED, [partial, structuredClone(sessions[2])]))
@@ -239,13 +239,38 @@ test("missing tool durations make active-time values partial or unavailable, nev
   assert.deepEqual(formulas.flow_efficiency, { class: "inferred", value: 13 / 14, censored: false, method: "active_in_lead_ms/lead_time_ms", ...mark })
   assert.deepEqual(formulas.lead_contributors.value[0], { key: "active_in_lead_ms", value_ms: 13000, share: 13 / 14, ...mark })
 
+  // An open session with an unfinished tool call still has its turns, so its
+  // active time is partial, not unavailable.
+  const open = structuredClone(sessions[0])
+  open.session.ended = false
+  open.session.end_reason = null
+  open.unavailable.push({ field: "tool_durations", reason: "session_open" })
+  formulas = calculateFormulas(buildJobTimeline(CLOSED, [open]))
+  assert.deepEqual(formulas.active_time_ms, { class: "measured", value: 7000, ...mark })
+  assert.deepEqual(formulas.active_in_lead_ms, { class: "measured", value: 6000, ...mark })
+  assert.deepEqual(formulas.active_before_card_ms, { class: "measured", value: 1000, ...mark })
+  assert.deepEqual(formulas.busy_time_ms, { class: "measured", value: 11000, ...mark })
+  assert.deepEqual(formulas.parallelism, { class: "inferred", value: 11 / 7, method: "busy_time_ms/active_time_ms", ...mark })
+  assert.equal(formulas.concurrent_sessions.partial, true)
+  assert.equal(formulas.concurrent_agents.uncovered_sessions, 1)
+  assert.deepEqual(formulas.flow_efficiency, { class: "inferred", value: 6000 / 14000, censored: false, method: "active_in_lead_ms/lead_time_ms", ...mark })
+  assert.deepEqual(formulas.lead_contributors.value.find((entry) => entry.key === "active_in_lead_ms"), { key: "active_in_lead_ms", value_ms: 6000, share: 6000 / 14000, ...mark })
+})
+
+test("active time is unavailable only when every timed session lacks its turns, with the turns reason", () => {
   const lacking = structuredClone(sessions[0])
-  lacking.unavailable.push({ field: "tool_durations", reason: "capped" })
-  formulas = calculateFormulas(buildJobTimeline(CLOSED, [lacking]))
+  lacking.unavailable.push({ field: "turns", reason: "log_truncated" }, { field: "tool_durations", reason: "capped" })
+  const formulas = calculateFormulas(buildJobTimeline(CLOSED, [lacking]))
   for (const field of ["active_time_ms", "active_in_lead_ms", "active_before_card_ms", "busy_time_ms", "parallelism", "concurrent_sessions", "concurrent_agents", "flow_efficiency"]) {
-    assert.deepEqual(formulas[field], { class: "unavailable", value: null, reason: "capped" }, field)
+    assert.deepEqual(formulas[field], { class: "unavailable", value: null, reason: "log_truncated" }, field)
   }
   assert.equal(formulas.lead_contributors.value.some((entry) => entry.key === "active_in_lead_ms"), false)
+
+  // One session without turns and one with only a tool-duration gap: both are uncovered, neither decides alone.
+  const toolGap = structuredClone(sessions[2])
+  toolGap.unavailable.push({ field: "tool_durations", reason: "session_open" })
+  const mixed = calculateFormulas(buildJobTimeline(CLOSED, [lacking, toolGap]))
+  assert.deepEqual(mixed.active_time_ms, { class: "measured", value: 14000, partial: true, uncovered_sessions: 2 })
 })
 
 test("the API retry signal is unavailable when no session records retries and partial when some do not", () => {
@@ -309,6 +334,57 @@ test("the latest terminal transition decides status, so a reopened job reports i
   let formulas = calculateFormulas(buildJobTimeline(CLOSED, [reopened]))
   assert.deepEqual(formulas.status, { class: "measured", value: "done" })
   assert.deepEqual(formulas.lead_time_ms, { class: "measured", value: 14000, censored: false, basis: "first_done_transition" })
+
+  // Reopened after done: the job is open again, so lead time and flow
+  // efficiency are censored like any open job's, and the done stays in history.
+  reopened.jobs[0].transitions = [
+    { to: "processing", offset_ms: 0 },
+    { to: "done", offset_ms: 100 },
+    { to: "processing", offset_ms: 200 },
+  ]
+  const timeline = buildJobTimeline(CLOSED, [reopened])
+  formulas = calculateFormulas(timeline)
+  assert.deepEqual(formulas.status, { class: "measured", value: "processing" })
+  assert.deepEqual(formulas.lead_time_ms, { class: "measured", value: 15000, censored: true, basis: "latest_session_end" })
+  assert.deepEqual(formulas.flow_efficiency, { class: "inferred", value: 6000 / 15000, censored: true, method: "active_in_lead_ms/lead_time_ms" })
+  assert.equal(formulas.lead_contributors.censored, true)
+  assert.deepEqual(timeline.transitions.map((entry) => entry.to), ["processing", "done", "processing"])
+
+  // Reopened and closed again: lead time ends at the reclosing, the first
+  // done after the last reopen, not at the first close.
+  reopened.jobs[0].transitions = [
+    { to: "processing", offset_ms: 0 },
+    { to: "done", offset_ms: 100 },
+    { to: "processing", offset_ms: 200 },
+    { to: "done", offset_ms: 300 },
+  ]
+  formulas = calculateFormulas(buildJobTimeline(CLOSED, [reopened]))
+  assert.deepEqual(formulas.status, { class: "measured", value: "done" })
+  assert.deepEqual(formulas.lead_time_ms, { class: "measured", value: 300, censored: false, basis: "first_done_transition" })
+  assert.deepEqual(formulas.flow_efficiency, { class: "inferred", value: 300 / 300, censored: false, method: "active_in_lead_ms/lead_time_ms" })
+
+  // Consecutive terminal transitions after the last reopen: the first done of that stretch ends lead time.
+  reopened.jobs[0].transitions = [
+    { to: "processing", offset_ms: 0 },
+    { to: "done", offset_ms: 100 },
+    { to: "processing", offset_ms: 200 },
+    { to: "done", offset_ms: 4000 },
+    { to: "done", offset_ms: 9000 },
+  ]
+  formulas = calculateFormulas(buildJobTimeline(CLOSED, [reopened]))
+  assert.deepEqual(formulas.lead_time_ms, { class: "measured", value: 4000, censored: false, basis: "first_done_transition" })
+  assert.deepEqual(formulas.flow_efficiency, { class: "inferred", value: 4000 / 4000, censored: false, method: "active_in_lead_ms/lead_time_ms" })
+
+  reopened.jobs[0].transitions = [
+    { to: "processing", offset_ms: 0 },
+    { to: "done", offset_ms: 100 },
+    { to: "processing", offset_ms: 200 },
+  ]
+  // A done observation cannot close a job whose latest transition reopened it.
+  reopened.jobs[0].observed = { status: "done", offset_ms: 150 }
+  formulas = calculateFormulas(buildJobTimeline(CLOSED, [reopened]))
+  assert.deepEqual(formulas.status, { class: "measured", value: "processing" })
+  assert.equal(formulas.lead_time_ms.censored, true)
 
   reopened.jobs[0].transitions = [{ to: "cancelled", offset_ms: 100 }, { to: "processing", offset_ms: 200 }]
   reopened.jobs[0].observed = null

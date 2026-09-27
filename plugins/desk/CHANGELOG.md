@@ -1,8 +1,12 @@
 # desk plugin — changelog
 
-## 3.2.0-alpha.52 — 2026-09-27
+## 3.2.0-alpha.55 — 2026-09-27
 
 Adds `observer`, `worker`'s sibling agent named for Lean's process observer: it watches work it did not do, times it and classifies each step from evidence, and never does, fixes or certifies that work. Its identity-only bodies ([Claude](agents/observer.md), [Copilot](agents/observer.agent.md), [Codex](agents/observer.toml)) are registered beside `worker` in every host manifest and the [activation manifest](activation/desk.activation.json), never as the default. Its first skill, [`evaluate-release`](skills/evaluate-release/SKILL.md), works through a packet from a cold start on a named host, records each step with evidence and measured time, classifies every problem as a defect, a confusion or a gap, and reports without fixing anything. The [evaluation packet](docs/evaluation-packet.md) gives an outside evaluator setup from nothing on each host, seven scenarios with observable outcomes, and how to file findings as issues labeled `evaluation`; three scenarios are marked as landing by the evaluation. Everything under test is throwaway: the packet builds a new desk with a local remote, binds it through `DESK_ACTIVATION_CONFIG` and `DESK`, and stops the evaluation unless a preflight `desk_status` names that desk; `observer` runs from its own folder and profile and keeps its record in an evidence folder outside it. [Content contracts](../../scripts/test-desk-contracts.cjs) and the [host manifest verifier](../../scripts/test-desk-host-manifests.cjs) pin the bodies, the registrations, the skill and the packet. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
+## 3.2.0-alpha.53 — 2026-09-27
+
+Two [factory formula](mcp/src/factory/pipeline/formulas.js) edges are corrected. A job whose latest transition reopens it after `done` is open again: its lead time and flow efficiency are censored at the latest session end like any open job's, its status matches, and the earlier `done` stays in its transition history. When it closes again, lead time ends at the first `done` after the last reopen instead of the first close. A `tool_durations` gap, such as an open session's unfinished tool call, now marks the active-time family `partial` with the uncovered session count instead of `unavailable`; only sessions that lack their `turns` can make active time unavailable. Golden report outputs are unchanged. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
 
 ## 3.2.0-alpha.49 — 2026-09-27
 

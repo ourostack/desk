@@ -12,8 +12,12 @@ const CONTRIBUTOR_ORDER = Object.freeze([
 
 // The published `unavailable` fields whose absence leaves a value incomplete.
 // Interval kinds map to fields as in `publish.js`: turns and compactions are
-// `turns`, tools and subagents are `tool_durations`.
-const ACTIVE_FIELDS = Object.freeze(["turns", "tool_durations"])
+// `turns`, tools and subagents are `tool_durations`. Active time needs turns;
+// a `tool_durations` gap (an unfinished or dropped tool call) only means some
+// tool intervals are missing, so it makes active time partial, never
+// unavailable.
+const ACTIVE_FIELDS = Object.freeze(["turns"])
+const ACTIVE_PARTIAL_FIELDS = Object.freeze(["tool_durations"])
 const WAIT_FIELDS = Object.freeze({
   human_wait: Object.freeze(["human_waits"]),
   permission_wait: Object.freeze(["permission_waits"]),
@@ -110,17 +114,22 @@ function unavailableGroups(sessions) {
     .sort((left, right) => compareText(left.field, right.field) || compareText(left.reason, right.reason))
 }
 
-// How many of `sessions` declare any of `fields` unavailable, and why.
-function fieldCoverage(sessions, fields) {
+// How many of `sessions` declare any of `fields` (or `partialFields`)
+// unavailable, and why. Only `fields` can make a value wholly unavailable;
+// `partialFields` gaps leave it partial.
+function fieldCoverage(sessions, fields, partialFields = []) {
   const reasons = new Set()
   let uncovered = 0
+  let lacking = 0
   for (const session of sessions) {
     const missing = session.unavailable.filter((entry) => fields.includes(entry.field))
+    const incomplete = session.unavailable.some((entry) => partialFields.includes(entry.field))
+    if (missing.length > 0 || incomplete) uncovered += 1
     if (missing.length === 0) continue
-    uncovered += 1
+    lacking += 1
     for (const entry of missing) reasons.add(entry.reason)
   }
-  return { uncovered, none: uncovered === sessions.length, reasons: [...reasons].sort(compareText) }
+  return { uncovered, none: lacking === sessions.length, reasons: [...reasons].sort(compareText) }
 }
 
 function missingValue(coverage) {
@@ -157,11 +166,21 @@ function currentStatus(timeline) {
 
 function leadTime(timeline, status) {
   if (status.value === "cancelled") return unavailable("cancelled")
-  const done = timeline.transitions.find((entry) => entry.to === "done" && entry.offset_ms !== null)
-  if (done) return measured(Math.max(0, done.offset_ms), { censored: false, basis: "first_done_transition" })
-  const observedDone = timeline.observations.find((entry) => entry.status === "done" && entry.offset_ms !== null)
-  if (observedDone) return declared(Math.max(0, observedDone.offset_ms), { censored: false, basis: "terminal_observation" })
-  if (status.value === "done") return unavailable("job_offsets_unavailable")
+  if (status.value === "done") {
+    // Lead time ends at the `done` that begins the job's final terminal
+    // stretch: the first `done` after the last reopen. A job closed once is
+    // unaffected; a job reopened and closed again ends at its reclosing.
+    const timed = timeline.transitions.filter((entry) => entry.offset_ms !== null)
+    let finalStretch = timed.length
+    while (finalStretch > 0 && TERMINAL_STATUSES.has(timed[finalStretch - 1].to)) finalStretch -= 1
+    const done = timed.slice(finalStretch).find((entry) => entry.to === "done")
+    if (done) return measured(Math.max(0, done.offset_ms), { censored: false, basis: "first_done_transition" })
+    const observedDone = timeline.observations.find((entry) => entry.status === "done" && entry.offset_ms !== null)
+    if (observedDone) return declared(Math.max(0, observedDone.offset_ms), { censored: false, basis: "terminal_observation" })
+    return unavailable("job_offsets_unavailable")
+  }
+  // Every other status is open, including a job reopened after an earlier
+  // `done` (which stays in the transition history): its lead time is censored.
   const ends = timeline.sessions.flatMap((session) => session.end_ms === null ? [] : [session.end_ms])
   if (ends.length === 0) return unavailable("job_offsets_unavailable")
   return measured(Math.max(0, Math.max(...ends)), { censored: true, basis: "latest_session_end" })
@@ -246,7 +265,7 @@ export function calculateFormulas(timeline) {
     byAgent.get(agentKey).push(interval)
   }
 
-  const activeCoverage = fieldCoverage(timedSources, ACTIVE_FIELDS)
+  const activeCoverage = fieldCoverage(timedSources, ACTIVE_FIELDS, ACTIVE_PARTIAL_FIELDS)
   const activeValue = (compute) => timed(() => covered(activeCoverage, compute))
   const whenActive = (compute) => activeValue(() => activeMs === 0 ? unavailable("no_active_intervals") : compute())
   const active = activeValue(() => measured(activeMs))
