@@ -1,6 +1,6 @@
 # Factory local session capture
 
-Desk records local session facts without waiting for a network service. This release captures markers and derives facts; it does not publish them or claim installed-host qualification. The [hook](../hooks/factory-end.cjs), [runner](../mcp/src/factory/derive-run.js) and [synthetic lifecycle tests](../mcp/__tests__/factory/end_hook.test.js) define this boundary.
+Desk records local session facts without waiting for a network service and provides the deterministic pipeline a factory store uses to validate published facts and rebuild reports. This release does not transport facts, install store workflows or claim installed-host qualification. The [hook](../hooks/factory-end.cjs), [runner](../mcp/src/factory/derive-run.js), [pipeline](../mcp/src/factory/pipeline/) and [synthetic tests](../mcp/__tests__/factory/) define this boundary.
 
 ## Host events
 
@@ -23,9 +23,20 @@ Run commands from the installed Desk plugin root:
 node mcp/scripts/factory.js consent --store ourostack/factory --contribute yes --account <login>
 node mcp/scripts/factory.js derive --marker <protected-marker-file> --wait-quiet 30000
 node mcp/scripts/factory.js status
+node mcp/scripts/factory.js validate-pr --base <base-sha> --head <head-sha> --author-association <value>
+node mcp/scripts/factory.js build --store <store-directory> --out <output-directory>
+node mcp/scripts/factory.js job-link --store <owner/repo> --desk-remote <url> --person-prefix <prefix> --track <track> --slug <slug>
 ```
 
 The [CLI](../mcp/scripts/factory.js) returns one JSON result. `derive` accepts only a marker in the protected marker directory, waits for source quiet for up to five minutes, and then returns `written`, `held`, `skipped`, `not_opted_in`, `log_missing`, `source_unreadable` or `invalid`, with the selected store when known. Local `status` includes marker/finalize counts, derivation receipts and routing warnings; it is not a public report and must not be uploaded as facts. No command prints the machine secret.
+
+## Store-side validation and reports
+
+`validate-pr` reads the named base and head revisions through `git diff` and `git show`. It never checks out, imports or executes candidate-controlled files. Contributor changes are limited to at most 500 added or modified `facts/<host>-<session-id>.json` files. Each file must pass the canonical published-bytes gate, match its filename identity, preserve host/session identity when modified and never reduce `session.duration_ms`. Validation output contains only stable reason codes and safe paths. A change outside `facts/` is accepted only for GitHub author associations `OWNER`, `MEMBER` or `COLLABORATOR`, and is marked as maintenance for the store workflow to leave unmerged.
+
+`build` reads regular files directly under `facts/`, validates them again, sorts every key and collection explicitly, and replaces the output directory with deterministic `README.md`, `index.md`, `jobs/<job>.json` and `jobs/<job>.md` bytes. It reads no wall clock. Sessions with a job offset are placed on the job clock; sessions without one still count toward coverage and signals but do not enter the timeline. The classed formulas cover lead time, queue, active and busy time, parallelism, concurrent sessions and agents within a job, wait unions, flow efficiency, rework signals and unavailable first-pass yield.
+
+Each job Markdown report has exactly four second-level sections: `What happened`, `What mattered`, `What was waste` and `What we could not see`. The index includes bound and unattributed session counts, host counts, every unavailable field/reason rate and plugin-version session counts. Generated files contain no calendar dates, times of day, task names, local paths or transcript text. `job-link` reuses the binding module's accepted job-ID calculation and points to the job Markdown on the store's `reports` ref.
 
 The [runner](../mcp/src/factory/derive-run.js) combines the existing native derivers, job binder, store resolver and consent-aware outbox. Per-session locks prevent concurrent derivations from overwriting one another. Receipts retain source identity, size, modification time and the effective marker hash. [Lifetime reconciliation](../mcp/src/factory/session-lifetime.js) checks native resumes and later root activity before treating a marker as ended; unclassifiable or over-limit lifecycle records cannot certify closure. Sweep and file-based requests use only the protected marker reread under the derivation lock; an enumerated copy cannot override that read on timestamp grounds, and a missing file cannot fall back to the copy. Quietness and source identity are checked under the lock. `sweep(env, { quietMs: 600000 })` derives quiet changed logs and currently ended sessions, not busy resumed sessions with stale end markers. A requested `derive --wait-quiet` also rechecks quietness under the lock, including late shutdown writes. Markers remain available for retry and later resumes. Wiring sweep into startup belongs to the transport/boot-check slice.
 
