@@ -11,7 +11,7 @@ import { createRequire } from "node:module"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { factoryStateRoot, readStatus, requestEvaluation, requestFinalize, setConsent } from "../../src/factory/outbox.js"
+import { factoryStateRoot, quarantine, readStatus, requestEvaluation, requestFinalize, setConsent, updateJobsIndex } from "../../src/factory/outbox.js"
 import { jobId } from "../../src/factory/binding.js"
 import { resolveDeskStateDir, writeLastStart } from "../../src/runtime/last-start.js"
 import { copilotStartupDirection, claudeStartupDirection } from "../../src/util/startup-direction.js"
@@ -250,7 +250,17 @@ test("the labels check names how many finished tasks have no waste labels and st
   await requestEvaluation(env, { job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", deskRoot: desk })
   await fs.writeFile(path.join(await factoryStateRoot(env), "evaluate-requests", "notes.txt"), "x")
   assert.equal(await run(), "Desk boot: Factory: 2 finished tasks have no waste labels yet; run the evaluator for them in the background")
-  assert.deepEqual(repairs, [[process.execPath, path.join(PLUGIN, "mcp", "scripts", "factory.js"), "evaluate", "--pending"]])
+  assert.deepEqual(repairs, [[process.execPath, BOOT, "--compatible", path.join(PLUGIN, "mcp", "scripts", "factory.js"), "evaluate", "--pending"]], "evaluate --pending starts through the compatible-Node launcher")
+  // Labels quarantined with their facts are reported, and a job whose every session is held back is not counted as waiting.
+  const root = await factoryStateRoot(env)
+  await updateJobsIndex(env, "5e6f708192a3b4c5d6e7f8091a2b3c4d", "claude-code-00000001-0000-4000-8000-000000000001.json")
+  await quarantine(env, STORE, "labels/5e6f708192a3b4c5d6e7f8091a2b3c4d/00000001-0000-4000-8000-000000000001.json", "facts_quarantined", { facts: "claude-code-00000001-0000-4000-8000-000000000001.json" })
+  assert.equal(await run(), "Desk boot: Factory: 1 finished tasks have no waste labels yet; run the evaluator for them in the background; Factory: 1 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
+  // Quarantined labels alone are reported without a repair.
+  await fs.rm(path.join(root, "evaluate-requests", "9f2c4b1a7d3e5f60718293a4b5c6d7e8.json"))
+  repairs.length = 0
+  assert.equal(await run(), "Desk boot: Factory: 1 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
+  assert.deepEqual(repairs, [])
   // A declined store keeps the check silent.
   await setConsent(env, { store: STORE, contribute: false, account: "contributor" })
   assert.equal(await run(), "")

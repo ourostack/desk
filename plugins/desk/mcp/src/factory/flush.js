@@ -44,7 +44,10 @@
 //   rejected PR quarantines its labels with its facts; a stale one sends them
 //   again. Labels go only with their session's facts, on the default branch
 //   or in the same batch, since the store refuses labels without facts and
-//   that refusal would quarantine the whole PR.
+//   that refusal would quarantine the whole PR. Labels whose session's facts
+//   are quarantined, by this flush or an earlier one, can therefore never go:
+//   they are quarantined too (`holdLabels`), as `facts_quarantined` naming
+//   those facts, instead of waiting forever.
 //   6. The rest (at most 500 files and 24 MiB per flush) becomes one tree on
 //      top of the store's default branch and one commit titled `Factory
 //      intake`, and the task-owned branch `intake/<intake_id>` is
@@ -90,6 +93,7 @@ import {
   clearFinalize,
   factoryStateRoot,
   gitBlobSha,
+  holdLabels,
   listFinalizeRequests,
   listMarkers,
   markDelivered,
@@ -415,6 +419,8 @@ function publishOne(local, name, { transform, known, desk, secret }) {
 }
 
 // The facts file names a labels file's session can have, one per host.
+// A local labels key; `pendingLabels` lists only keys of this shape.
+const LABELS_KEY = /^labels\/([0-9a-f]{32})\/(.+)\.json$/u
 const factsNamesOf = (session) => HOSTS.map((host) => `${host}-${session}.json`)
 
 // A local labels file as the store receives it: the job keyed exactly as its
@@ -650,9 +656,16 @@ async function deliver(env, context) {
   const labelsPending = (await pendingLabels(env, store, { publishedBytesFor: (labels) => labelsByKey.get(`labels/${labels.job}/${labels.session}.json`).bytes }))
     .map(({ name }) => {
       const { path: published, bytes } = labelsByKey.get(name)
-      return { name, path: published, bytes, sha: gitBlobSha(bytes), labels: true, session: name.slice(-".json".length - 36, -".json".length) }
+      const [, job, session] = LABELS_KEY.exec(name)
+      return { name, path: published, bytes, sha: gitBlobSha(bytes), labels: true, job, session }
     })
-  let pending = [...factsPending, ...labelsPending]
+  // Labels whose facts are quarantined never go; `holdLabels` quarantines them instead. Checked again after rejections, which may quarantine facts.
+  const withoutHeld = async (items) => {
+    const kept = []
+    for (const item of items) if (!item.labels || (await holdLabels(env, store, { job: item.job, session: item.session })) === null) kept.push(item)
+    return kept
+  }
+  let pending = await withoutHeld([...factsPending, ...labelsPending])
   if (pending.length === 0) return { result: "nothing_pending" }
   progress.pending = pending.map((item) => item.name)
 
@@ -668,7 +681,7 @@ async function deliver(env, context) {
   const labelKeys = new Map(labelsPending.map((item) => [item.path, item.name]))
   const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys })
   progress.rejectionsThrough = rejections.through
-  pending = pending.filter((item) => !rejections.rejected.has(item.name))
+  pending = await withoutHeld(pending.filter((item) => !rejections.rejected.has(item.name)))
 
   const main = await client.need("GET", `repos/${store}/branches/${target.branch}`)
   const base = { sha: requireSha(main?.commit?.sha), tree: requireSha(main?.commit?.commit?.tree?.sha) }

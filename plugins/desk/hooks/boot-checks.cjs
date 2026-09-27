@@ -26,7 +26,9 @@
 //      delivered yet (mcp/src/factory/boot-check.js);
 //   2. labels: finished jobs whose waste labels are not complete yet, and a
 //      detached `factory.js evaluate --pending` that prepares their evaluator
-//      briefs again (mcp/src/factory/boot-check.js);
+//      briefs again, and finished jobs whose labels are quarantined and will
+//      not be delivered, reported without a repair
+//      (mcp/src/factory/boot-check.js);
 //   3. desk-health: the bound root's last Desk start, and a detached
 //      fast-forward of a clean state branch (mcp/src/runtime/desk-health.js);
 //   4. workspace-tidy: stale worktree listing with its own detached repair
@@ -301,10 +303,11 @@ const labelsCheck = {
   id: "labels",
   budgetMs: 40,
   async run(ctx) {
-    const { labelsBootCheck, labelsLine } = await runtime("factory/boot-check.js");
-    const { count } = labelsBootCheck({ env: ctx.env });
-    if (count === 0) return {};
-    return { line: labelsLine(count), repair: { command: [process.execPath, FACTORY_SCRIPT, "evaluate", "--pending"] } };
+    const { labelsBootCheck, labelsLine, labelsQuarantinedLine } = await runtime("factory/boot-check.js");
+    const { count, quarantined } = labelsBootCheck({ env: ctx.env });
+    const lines = [...(count > 0 ? [labelsLine(count)] : []), ...(quarantined > 0 ? [labelsQuarantinedLine(quarantined)] : [])];
+    if (lines.length === 0) return {};
+    return { line: lines.join("; "), repair: count > 0 ? { command: compatibleCommand(FACTORY_SCRIPT, "evaluate", "--pending") } : undefined };
   },
 };
 

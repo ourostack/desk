@@ -12,9 +12,10 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { flush } from "../../src/factory/flush.js"
+import { toPublished } from "../../src/factory/publish.js"
 import { checkLabelsAgainstFacts, validateLabelsBytes } from "../../src/factory/label-schema.js"
 import {
-  factoryStateRoot, gitBlobSha, quarantine, readConsent, readMachineSecret, setConsent, writeLocalFacts, writeLocalLabels, writeMarker,
+  factoryStateRoot, gitBlobSha, holdLabels, quarantine, readConsent, readMachineSecret, setConsent, writeLocalFacts, writeLocalLabels, writeMarker,
 } from "../../src/factory/outbox.js"
 import { validatePublishedBytes } from "../../src/factory/published-schema.js"
 import { fakeGitHub } from "./_fake_github.js"
@@ -198,4 +199,74 @@ test("quarantine accepts a labels key and refuses anything else", () => scratch(
   await assert.rejects(quarantine(env, STORE, `labels/${JOB}/../x.json`, "invalid"), /name/u)
   await assert.rejects(quarantine(env, STORE, undefined, "invalid"), /name/u)
   assert.equal(existsSync(path.join(await factoryStateRoot(env), "quarantine", "ourostack__factory", keyOf(1))), true)
+}))
+
+test("labels whose facts were quarantined by an earlier flush are quarantined too, naming the facts, instead of waiting forever", () => scratch(async ({ env }) => {
+  await setup(env)
+  await putFacts(env, 1)
+  const github = fakeGitHub()
+  assert.equal((await flush(env, { store: STORE, runner: github.runner })).result, "delivered_pr_open")
+  github.rejectOpenPr("factory-rejected: evidence_unmatched")
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "nothing_pending" })
+  // The facts are quarantined now; labels written afterwards can never go with them.
+  await putLabels(env, 1)
+  const pulls = github.pulls.length
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "nothing_pending" })
+  assert.equal(github.pulls.length, pulls)
+  const root = await factoryStateRoot(env)
+  const record = JSON.parse(await fs.readFile(path.join(root, "quarantine", "ourostack__factory", keyOf(1)), "utf8"))
+  assert.equal(record.reason, "facts_quarantined")
+  assert.equal(record.facts, nameOf(1))
+  assert.equal(Object.hasOwn(await delivered(env), keyOf(1)), false)
+}))
+
+test("labels whose facts the transform refuses in the same flush are quarantined with them; other labels still go", () => scratch(async ({ env }) => {
+  await setup(env)
+  await putFacts(env, 1)
+  await putFacts(env, 2)
+  await putLabels(env, 1)
+  await putLabels(env, 2)
+  const github = fakeGitHub()
+  const transform = (local, options) => {
+    if (local.session.id === sessionId(1)) throw Object.assign(new Error("refused"), { reason: "date" })
+    return toPublished(local, options)
+  }
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, transform })).result, "delivered_pr_open")
+  const job = await keyed(env)
+  assert.deepEqual([...github.headFiles(STORE, await branch(env)).keys()].sort(), [`facts/${nameOf(2)}`, `labels/${job}/${sessionId(2)}.json`])
+  const root = await factoryStateRoot(env)
+  const record = JSON.parse(await fs.readFile(path.join(root, "quarantine", "ourostack__factory", keyOf(1)), "utf8"))
+  assert.deepEqual([record.reason, record.facts], ["facts_quarantined", nameOf(1)])
+}))
+
+test("labels waiting behind a rejected PR that held only their facts are quarantined in the same flush", () => scratch(async ({ env }) => {
+  await setup(env)
+  await putFacts(env, 1)
+  await putLabels(env, 1)
+  const github = fakeGitHub()
+  // A one-file batch sends the facts alone; the labels wait for them.
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, maxFiles: 1 })).result, "delivered_pr_open")
+  github.rejectOpenPr("factory-rejected: evidence_unmatched")
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "nothing_pending" })
+  const root = await factoryStateRoot(env)
+  const reason = async (key) => JSON.parse(await fs.readFile(path.join(root, "quarantine", "ourostack__factory", key), "utf8"))
+  assert.equal((await reason(nameOf(1))).reason, "evidence_unmatched")
+  assert.deepEqual(await reason(keyOf(1)), { reason: "facts_quarantined", facts: nameOf(1), at: (await reason(keyOf(1))).at })
+}))
+
+test("holdLabels answers the quarantined facts, keeps an earlier labels record and checks its arguments", () => scratch(async ({ env }) => {
+  await setup(env)
+  assert.equal(await holdLabels(env, STORE, { job: JOB, session: sessionId(1) }), null)
+  await quarantine(env, STORE, `copilot-cli-${sessionId(1)}.json`, "date")
+  assert.equal(await holdLabels(env, STORE, { job: JOB, session: sessionId(1) }), `copilot-cli-${sessionId(1)}.json`)
+  const root = await factoryStateRoot(env)
+  assert.equal(JSON.parse(await fs.readFile(path.join(root, "quarantine", "ourostack__factory", keyOf(1)), "utf8")).facts, `copilot-cli-${sessionId(1)}.json`)
+  // Labels already quarantined for their own reason keep it.
+  await quarantine(env, STORE, keyOf(2), "too_large")
+  await quarantine(env, STORE, nameOf(2), "date")
+  assert.equal(await holdLabels(env, STORE, { job: JOB, session: sessionId(2) }), nameOf(2))
+  assert.equal(JSON.parse(await fs.readFile(path.join(root, "quarantine", "ourostack__factory", keyOf(2)), "utf8")).reason, "too_large")
+  await assert.rejects(holdLabels(env, STORE, { job: "nope", session: sessionId(1) }), /job/u)
+  await assert.rejects(holdLabels(env, STORE, { job: JOB, session: "../x" }), /session/u)
+  await assert.rejects(quarantine(env, STORE, keyOf(3), "facts_quarantined", { facts: "../x.json" }), /facts/u)
 }))
