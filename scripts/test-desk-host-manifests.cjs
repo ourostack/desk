@@ -366,6 +366,47 @@ function checkWorkerSources({ repoRoot, errors, checked }) {
   }
 }
 
+// observer is worker's sibling: registered on every host worker is, never the default, identity only.
+const observerSources = Object.freeze({
+  claude: "agents/observer.md",
+  codex: "agents/observer.toml",
+  copilot: "agents/observer.agent.md",
+});
+
+function checkObserverSources({ repoRoot, errors, checked }) {
+  checked.push("observer-sources");
+  for (const [host, source] of Object.entries(observerSources)) {
+    const file = `plugins/desk/${source}`;
+    const body = fs.existsSync(path.join(repoRoot, file)) ? readText(repoRoot, file) : "";
+    const name = host === "codex" ? tomlStringValue(body, "name") : parseFrontmatter(body).name;
+    if (name !== "observer") {
+      errors.push(`observer-sources ${host} observer name drift`);
+    }
+    if (!body.includes("I'm **observer**") || !body.includes("using-desk")) {
+      errors.push(`observer-sources ${host} body drift`);
+    }
+  }
+  const claudePlugin = readJson(repoRoot, "plugins/desk/.claude-plugin/plugin.json");
+  if (!Array.isArray(claudePlugin.agents) || !claudePlugin.agents.includes(`./${observerSources.claude}`)) {
+    errors.push("observer-sources claude exposure drift");
+  }
+  const activation = readJson(repoRoot, activationManifestPath);
+  const target = activation.provides?.activation_targets?.find((entry) => entry.id === "desk:observer");
+  if (!sameJson(target?.entrypoints, observerSources) || target?.default === true) {
+    errors.push("observer-sources activation target drift");
+  }
+  for (const [host, targets] of [
+    ["claude", activation.host_activation?.claude?.targets],
+    ["codex", readJson(repoRoot, "plugins/desk/.codex-plugin/plugin.json").activation?.codex?.targets],
+    ["copilot", readJson(repoRoot, "plugins/desk/plugin.json").activation?.copilot?.targets],
+  ]) {
+    const observer = targets?.["desk:observer"];
+    if (observer?.source !== observerSources[host] || observer?.default !== false) {
+      errors.push(`observer-sources ${host} activation target drift`);
+    }
+  }
+}
+
 function checkHumanizePackaging({ repoRoot, errors, checked }) {
   checked.push("humanize-skill");
   const deskSkillRoot = path.join(repoRoot, "plugins", "desk", "skills", "humanize");
@@ -614,6 +655,7 @@ async function verifyDeskHostManifests(options = {}) {
     checked.push("factory-hooks");
     errors.push(...validateFactoryHooks(readJson(repoRoot, "plugins/desk/hooks/hooks.json"), readJson(repoRoot, "plugins/desk/hooks/copilot-hooks.json")));
     checkWorkerSources({ repoRoot, errors, checked });
+    checkObserverSources({ repoRoot, errors, checked });
     checkHumanizePackaging({ repoRoot, errors, checked });
     await checkStartupComposition({ repoRoot, mcpRoot, errors, checked });
     await checkCodexFixtures({ repoRoot, mcpRoot, errors, checked });

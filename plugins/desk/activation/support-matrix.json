@@ -13,6 +13,7 @@
         "plugins/desk/.claude-plugin/plugin.json",
         "plugins/desk/.mcp.json",
         "plugins/desk/agents/worker.md",
+        "plugins/desk/agents/observer.md",
         "plugins/superpowers/.claude-plugin/plugin.json",
         "plugins/plain-language/.claude-plugin/plugin.json"
       ],
@@ -33,6 +34,7 @@
         "plugins/desk/mcp/src/activation/codex-smoke.js",
         "plugins/desk/mcp/__tests__/activation/codex_smoke.test.js",
         "plugins/desk/agents/worker.toml",
+        "plugins/desk/agents/observer.toml",
         "plugins/superpowers/.codex-plugin/plugin.json",
         "plugins/plain-language/.codex-plugin/plugin.json"
       ],
@@ -49,6 +51,7 @@
       "source_paths": [
         "plugins/desk/plugin.json",
         "plugins/desk/agents/worker.agent.md",
+        "plugins/desk/agents/observer.agent.md",
         "plugins/desk/hooks/copilot-hooks.json",
         "plugins/desk/hooks/copilot-session-start.cjs",
         "plugins/desk/.mcp.copilot.json",
