@@ -6,7 +6,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
-const { compatibleNode } = require("./compatible-node.cjs");
+// Loaded only when a worker starts: the Stop hook runs after every turn.
+const compatibleNode = (options) => require("./compatible-node.cjs").compatibleNode(options);
 const ownRoot = path.resolve(__dirname, "..");
 const runtime = (file) => import(pathToFileURL(path.join(ownRoot, "mcp", file)).href);
 const MAX_INPUT = 1024 * 1024;

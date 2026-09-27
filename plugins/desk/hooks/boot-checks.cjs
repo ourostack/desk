@@ -6,7 +6,7 @@ const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
-const { compatibleNode } = require("./compatible-node.cjs");
+const compatibleNode = (options) => require("./compatible-node.cjs").compatibleNode(options);
 const runtime = (name) => import(pathToFileURL(path.join(__dirname, "..", "mcp", "src", name)).href);
 const oneLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ").slice(0, 480);
 
