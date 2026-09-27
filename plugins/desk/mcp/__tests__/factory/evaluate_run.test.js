@@ -27,6 +27,7 @@ import {
   clearEvaluationRequest,
   factoryStateRoot,
   listEvaluationRequests,
+  quarantine,
   requestEvaluation,
   setConsent,
   updateJobsIndex,
@@ -496,4 +497,36 @@ test("a session of another job in the index, or one that can never publish, is n
   await updateJobsIndex(env, JOB, NAME)
   assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).result, "no_sessions")
   assert.deepEqual(await acceptEvaluations(env, { job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", pluginVersion: VERSION }), { job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", sessions: [], request: "kept" })
+}))
+
+test("a session whose facts are quarantined is not briefed: its labels are quarantined naming the facts, and the request is settled", () => scratch(async (env, base) => {
+  const deskRoot = path.join(base, "desk")
+  await seed(env)
+  await quarantine(env, STORE, NAME, "evidence_unmatched")
+  // A name that is not an outbox file name holds nothing back and is not a session.
+  await updateJobsIndex(env, JOB, "bogus")
+  assert.deepEqual(await evaluateTask(env, { job: JOB, deskRoot, pluginVersion: VERSION }), { result: "complete", job: JOB, briefs: [] })
+  assert.deepEqual(await listEvaluationRequests(env), [])
+  const root = await factoryStateRoot(env)
+  const record = JSON.parse(await fs.readFile(path.join(root, "quarantine", "ourostack__factory", "labels", JOB, `${SESSION}.json`), "utf8"))
+  assert.deepEqual([record.reason, record.facts], ["facts_quarantined", NAME])
+  await assert.rejects(fs.stat(path.join(root, "evaluations", JOB)), { code: "ENOENT" })
+
+  // Facts too broken to read, but quarantined, hold their labels back too.
+  const broken = "copilot-cli-00000009-0000-4000-8000-000000000009.json"
+  await fs.writeFile(path.join(root, "outbox", "ourostack__factory", broken), "not json", { mode: 0o600 })
+  await quarantine(env, STORE, broken, "invalid")
+  await updateJobsIndex(env, JOB, broken)
+  await requestEvaluation(env, { job: JOB, deskRoot })
+  assert.deepEqual((await evaluatePending(env, { pluginVersion: VERSION })).jobs, [{ result: "complete", job: JOB, briefs: [] }])
+  assert.equal(JSON.parse(await fs.readFile(path.join(root, "quarantine", "ourostack__factory", "labels", JOB, "00000009-0000-4000-8000-000000000009.json"), "utf8")).facts, broken)
+}))
+
+test("facts quarantined after a brief was written settle the request when answers are accepted", () => scratch(async (env, base) => {
+  await seed(env)
+  await requestEvaluation(env, { job: JOB, deskRoot: path.join(base, "desk") })
+  assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).result, "ready")
+  await quarantine(env, STORE, NAME, "evidence_unmatched")
+  assert.deepEqual(await acceptEvaluations(env, { job: JOB, pluginVersion: VERSION }), { job: JOB, sessions: [{ session: SESSION, result: "missing" }], request: "cleared" })
+  assert.deepEqual(await listEvaluationRequests(env), [])
 }))

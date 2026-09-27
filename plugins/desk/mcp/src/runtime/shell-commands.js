@@ -371,19 +371,21 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
         if (s.status !== node.until) out.push(...await run(node.body, s))
         else out.push(s)
       }
-      return out
+      return unique(out)
     }
     if (node.kind === "if") {
       const states = await run(node.condition, state)
       return (await Promise.all(states.map((s) => run(s.status ? node.yes : node.no, s)))).flat()
     }
     if (node.kind === "for") {
+      // Identical states after an iteration are merged before the next one, so a loop costs steps in
+      // proportion to its length instead of doubling them per iteration.
       let states = [state]
       for (const word of node.values) {
         const value = await expand(word, state)
-        states = (await Promise.all(states.map((s) => run(node.body, { ...s, vars: { ...s.vars, [node.variable]: value } })))).flat()
+        states = unique((await Promise.all(states.map((s) => run(node.body, { ...s, vars: { ...s.vars, [node.variable]: value } })))).flat())
       }
-      return unique(states)
+      return states
     }
     if (node.kind === "not") return (await run(node.body, state)).map((s) => ({ ...s, status: !s.status }))
     if (node.kind === "background") { await run(node.body, state); return [{ ...state, status: true }] }
