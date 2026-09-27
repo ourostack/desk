@@ -33,8 +33,62 @@ const ASSIGNED = /\$(?:\{([^}]+)\}|((?:[A-Za-z]\w*:)?[A-Za-z_?][\w?]*))(?:\.\w+|
 const VARIABLE_SETTERS = /(?<![\w-])(?:(?:set|new|clear|remove)-variable|sv|nv|clv|rv)(?![\w-])|(?<![\w-])-(?:outvariable|ov|errorvariable|ev|warningvariable|wv|informationvariable|iv|pipelinevariable|pv)(?![\w-])|\[ref\]|variable:|psvariable/iu
 const ENVIRONMENT_SETTERS = /(?<!\$\{?)env:|setenvironmentvariable/iu
 
+// The part of a computed value Desk can read: unknown pieces become a space.
+const known = (value) => value.replaceAll(UNKNOWN_GIT, " ").replaceAll(UNKNOWN, " ")
 const wordText = (word) => word.parts?.map((part) => part.text).join("") ?? word
 const tokensText = (tokens) => tokens.map(wordText).join(" ")
+
+// The end of the `$( … )` subexpression that starts at `start` in `text`, or -1 when it is not closed.
+function subexpressionEnd(text, start) {
+  let nesting = 1, quote = ""
+  for (let end = start + 2; end < text.length; end++) {
+    const c = text[end]
+    if (c === "`") { end++; continue }
+    if (quote) { if (c === quote) quote = ""; continue }
+    if (c === "'" || c === '"') { quote = c; continue }
+    if (c === "(") nesting++
+    if (c === ")" && --nesting === 0) return end
+  }
+  return -1
+}
+
+// `text` without its `$( … )` subexpressions, or null when one is not closed.
+function withoutSubexpressions(text) {
+  let result = ""
+  for (let i = 0; i < text.length; i++) {
+    if (!text.startsWith("$(", i)) { result += text[i]; continue }
+    const end = subexpressionEnd(text, i)
+    if (end < 0) return null
+    i = end
+  }
+  return result
+}
+
+// Commands that run a string argument as code, which the walker inspects.
+const EVALUATORS = new Set([...SHELLS, "iex", "invoke-expression", "[scriptblock]::create"])
+const programName = (word) => (word?.parts ? wordText(word).split(/[\\/]/u).at(-1).replace(/\.exe$/iu, "").toLowerCase() : "")
+
+// A statement's own text: what is left outside its ( ) and { } groups and its $( ) subexpressions, and outside the
+// quoted scripts it hands to a shell, Invoke-Expression or [scriptblock]::Create. Git named only there runs as a
+// statement of its own, where the same rules apply.
+function outerText(words) {
+  const kept = []
+  const elements = pipeline(words)
+  for (const [index, { words: element }] of elements.entries()) {
+    const evaluates = EVALUATORS.has(programName(element[0]))
+    // A lone string piped into a shell is that shell's script.
+    const script = element.length === 1 && element[0].quoted && SHELLS.has(programName(elements[index + 1]?.words[0]))
+    let depth = 0
+    for (const word of element) {
+      if (word === "(" || word === "{") depth++
+      else if (word === ")" || word === "}") depth--
+      else if (depth === 0 && !(word.quoted && (evaluates || script))) {
+        kept.push(word.parts ? word.parts.map((part) => (part.expand ? withoutSubexpressions(part.text) ?? part.text : part.text)).join("") : word)
+      }
+    }
+  }
+  return kept.join(" ")
+}
 
 function variable(map, name) {
   const key = Object.keys(map).find((key) => key.toLowerCase() === name.toLowerCase())
@@ -113,7 +167,8 @@ function entryValue(words) {
   return rest.parts.length ? [rest, ...words.slice(1)] : words.slice(1)
 }
 
-// A Git argument Desk can read: literal text, or a plain variable, possibly inside a double-quoted string.
+// A Git argument Desk can read: literal text, or a plain variable, possibly inside a double-quoted string, where
+// any `$( … )` subexpression runs as its own statement first.
 function plainArgument(word) {
   if (!word.parts) return false
   if (!word.quoted && SIMPLE_VARIABLE.test(wordText(word))) return true
@@ -121,8 +176,37 @@ function plainArgument(word) {
   // A token that starts with a quote ends at its closing quote: PowerShell passes what follows as another argument.
   if (parts[0]?.quoted && parts.length > 1) return false
   if (wordText(word) === "--%") return false
-  return parts.every((part, index) => !part.expand
-    || (part.quoted ? !DOUBLE_QUOTED_CODE.test(part.text) : !part.text.includes("$") && !(index === 0 && part.text.startsWith("@"))))
+  return parts.every((part, index) => {
+    if (!part.expand) return true
+    const text = withoutSubexpressions(part.text)
+    if (text === null) return false
+    return part.quoted ? !DOUBLE_QUOTED_CODE.test(text) : !text.includes("$") && !(index === 0 && text.startsWith("@"))
+  })
+}
+
+// A Git call's arguments as spans: one readable word, or a ( ) or @( ) group standing for one value. Null when any
+// argument is something else, such as a script block, a hashtable or member access on a group.
+function argumentSpans(words) {
+  const spans = []
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]
+    const array = word.parts && !word.quoted && wordText(word) === "@" && words[i + 1] === "("
+    if (word === "(" || array) {
+      let nesting = 0, end = array ? i + 1 : i
+      do {
+        if (end === words.length) return null
+        if (words[end] === "(" || words[end] === "{") nesting++
+        if (words[end] === ")" || words[end] === "}") nesting--
+        end++
+      } while (nesting)
+      // `(…).Name` and `(…)[0]` are expressions on the group's value, which Desk does not follow.
+      if (words[end]?.parts && /^[.[]/u.test(wordText(words[end]))) return null
+      spans.push(words.slice(i, end))
+      i = end - 1
+    } else if (plainArgument(word)) spans.push(word)
+    else return null
+  }
+  return spans
 }
 
 // One of the allowed Git forms, or null: `git <args>`, `$name = git <args>`, then only read-only cmdlets without Git.
@@ -139,9 +223,12 @@ function gitForm(words) {
       call = wordText(call[1]) === "=" ? call.slice(2) : [dropCharacters(call[1], 1), ...call.slice(2)]
     } else return null
   }
-  const [program, ...args] = call
-  if (!program?.parts || program.quoted || !GIT_PROGRAM.test(wordText(program)) || wordText(program).includes("$")) return null
-  if (![...args, ...first.redirects].every(plainArgument)) return null
+  // `& git …` calls Git by a literal name, quoted or not.
+  const called = call[0] === "&"
+  const [program, ...operands] = called ? call.slice(1) : call
+  if (!program?.parts || (program.quoted && !called) || !GIT_PROGRAM.test(wordText(program)) || wordText(program).includes("$")) return null
+  const args = argumentSpans(operands)
+  if (!args || !first.redirects.every(plainArgument)) return null
   const readOnly = (element) => element.words[0]?.parts && !element.words[0].quoted && READ_ONLY.has(wordText(element.words[0]).toLowerCase())
   if (!rest.every((element) => readOnly(element) && !namesGit(tokensText([...element.words, ...element.redirects])))) return null
   return { target, args, rest }
@@ -165,6 +252,8 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
   let directory = physicalDirectory(cwd, ".") ?? cwd
   let status = true, terminated = false
   const aliases = new Set()
+  // Function and filter bodies by name: a call runs the body again where it is called.
+  const functions = new Map()
 
   // A variable's value; null for $null, which PowerShell passes to a program as no argument at all.
   function lookup(name) {
@@ -220,20 +309,14 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       if (!part.expand) { result += part.text; continue }
       for (let i = 0; i < part.text.length; i++) {
         if (part.text.startsWith("$(", i)) {
-          let end = i + 2, nesting = 1, quote = ""
-          for (; end < part.text.length; end++) {
-            const c = part.text[end]
-            if (c === "`") { end++; continue }
-            if (quote) { if (c === quote) quote = ""; continue }
-            if (c === "'" || c === '"') { quote = c; continue }
-            if (c === "(") nesting++
-            if (c === ")" && --nesting === 0) break
-          }
-          if (nesting) throw new Error("unresolved PowerShell subexpression")
+          const end = subexpressionEnd(part.text, i)
+          if (end < 0) throw new Error("unresolved PowerShell subexpression")
           const inner = part.text.slice(i + 2, end)
           // A subexpression runs in the caller's scope: its location and variable changes stay.
-          await sequence(tokenizeShell(inner, true))
-          result += /^(?:get-location|pwd)$/iu.test(inner.trim()) ? directory : unknownOutput(inner)
+          const tokens = tokenizeShell(inner, true)
+          const known = staticValue(tokens)
+          await sequence(tokens)
+          result += /^(?:get-location|pwd)$/iu.test(inner.trim()) ? directory : known ?? unknownOutput(inner)
           i = end
         } else {
           const match = /^\$(?:\{((?:\w+:)?[A-Za-z_]\w*)\}|((?:\w+:)?[A-Za-z_]\w*))/iu.exec(part.text.slice(i))
@@ -263,6 +346,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       const previous = result.at(-1)
       const prefixed = Boolean(previous?.parts) && !previous.quoted && wordText(previous).endsWith("@")
       if (prefixed && wordText(previous) === "@") result.pop()
+      const known = words[i] === "(" ? staticValue(inner) : null
       if (words[i] === "(") await sequence(inner)
       else if (!prefixed) await loop(() => sequence(inner))
       else {
@@ -272,7 +356,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
           else await statementOf(statement.words)
         }
       }
-      result.push({ parts: [{ text: unknownOutput(tokensText(inner)), expand: false, quoted: false }], quoted: false })
+      result.push({ parts: [{ text: known ?? unknownOutput(tokensText(inner)), expand: false, quoted: false }], quoted: false })
       i = end - 1
     }
     return result
@@ -287,20 +371,38 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       if (word.quoted && word.parts.every((part) => part.quoted || part.text === "")) return expand(word)
       if (/^[-+]?\d+$/u.test(wordText(word))) return wordText(word)
     }
-    await run(words, [], null)
+    // The value is a statement of its own, so Git in it is held to the same forms.
+    await statementOf(words)
     return unknownOutput(tokensText(words))
   }
 
-  async function gitCall({ target, args: words, rest }) {
+  const gitEnvironment = () => (opaqueEnvironment ? { ...environment, GIT_DIR: UNKNOWN } : environment)
+
+  // What a group or subexpression yields when it is one plain Git command whose output Desk knows without running
+  // anything (the top level or the current branch); null otherwise.
+  function staticValue(tokens) {
+    let list
+    try { list = statements(tokens) } catch { return null }
+    const form = list.length === 1 ? gitForm(list[0].words) : null
+    if (!form || form.target || form.rest.length) return null
+    const literal = form.args.every((word) => word.parts?.every((part) => !part.expand || !part.text.includes("$")))
+    return literal ? staticGitOutput(["git", ...form.args.map(wordText)], directory, gitEnvironment()) : null
+  }
+
+  async function gitCall({ target, args: spans, rest }) {
     const args = []
-    for (const word of words) {
+    for (const span of spans) {
+      // A group runs first, as its own statements, and stands for one value.
+      const word = Array.isArray(span) ? (await groups(span))[0] : span
       const simple = !word.quoted && SIMPLE_VARIABLE.exec(wordText(word))
       const value = simple ? lookup(simple[1] ?? simple[2]) : await expand(word)
       if (value !== null) args.push(value)
     }
     // An environment changed in ways Desk does not model leaves Git's location unknown.
-    const gitEnv = opaqueEnvironment ? { ...environment, GIT_DIR: UNKNOWN } : environment
-    await visit({ name: "git", args, cwd: directory, env: gitEnv, powershell: true })
+    const gitEnv = gitEnvironment()
+    // `worktree add` only creates: a computed path there is one operand, not any options (replay ruling, 2026-09-27).
+    const adds = args.some((arg, index) => arg === "worktree" && args[index + 1] === "add")
+    await visit({ name: "git", args, cwd: directory, env: gitEnv, powershell: !adds })
     status = null
     if (target) set(target, rest.length ? UNKNOWN_GIT : staticGitOutput(["git", ...args], directory, gitEnv) ?? UNKNOWN_GIT)
     for (const element of rest) await run(element.words, element.redirects, null)
@@ -308,9 +410,18 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
 
   async function statementOf(words) {
     const text = tokensText(words)
+    // A foreach header `$item in <pipeline>`: the pipeline runs, and the item takes values Desk does not know.
+    const header = words.length > 2 && words[0].parts && !words[0].quoted && SIMPLE_VARIABLE.exec(wordText(words[0]))
+    if (header && words[1].parts && wordText(words[1]).toLowerCase() === "in") {
+      set(header[1] ?? header[2], UNKNOWN)
+      return statementOf(words.slice(2))
+    }
     if (namesGit(text)) {
       const form = gitForm(words)
       if (form) return gitCall(form)
+      // Git named only inside groups and subexpressions, or in an assigned value, runs as statements of its own
+      // under these same forms when the statement is walked.
+      if (!namesGit(outerText(words)) || assignment(words)) return walk(words)
       // The allowlist protects protected checkouts only: `visit.unmodeled` answers whether this statement can reach
       // one. When it cannot, the statement runs unchecked, and what it may assign becomes unknown.
       if (!await visit.unmodeled?.({ text, cwd: directory, env: environment })) throw new GuardDenial(POWERSHELL_GIT_FORMS)
@@ -318,6 +429,10 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       status = null
       return
     }
+    await walk(words)
+  }
+
+  async function walk(words) {
     const elements = pipeline(words)
     for (const [index, element] of elements.entries()) await run(element.words, element.redirects, index ? elements[index - 1] : null)
     if (elements.length > 1) status = null
@@ -338,9 +453,19 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
 
   // A program whose name is unknown fails closed when its text names Git or runs code, and is judged as
   // Git when its arguments read like a checked Git command.
+  // A program whose name is computed is code Desk cannot read: it passes unless the command's own text names Git or
+  // runs code, where it fails closed in a checkout that could be protected. Its arguments are judged as Git when they
+  // read like a checked Git command.
   async function unknownProgram(text, args) {
-    if (args.some((arg) => arg.includes(UNKNOWN_GIT)) || mayInvokeGit(text)) throw unresolved("the program this command runs")
+    if (mayInvokeGit(text) && !await visit.unmodeled?.({ text, cwd: directory, env: environment })) throw unresolved("the program this command runs")
     await visit({ name: "git", args: args.slice(1), cwd: directory, env: environment, computed: true, powershell: true })
+  }
+
+  // Code built from text at run time. Text with an unknown part is inspected only when the part Desk can read names
+  // Git or runs code; otherwise it is unreadable code, which is allowed (replay ruling, 2026-09-27).
+  async function evaluated(script) {
+    if (script.includes(UNKNOWN) && !mayInvokeGit(known(script))) return
+    await sequence(tokenizeShell(script, true))
   }
 
   // One pipeline element without Git. `input` is the element before it, for a shell reading its script from stdin.
@@ -369,19 +494,29 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       if (header >= 0) for (const match of tokensText(words.slice(header, words.indexOf(")", header))).matchAll(NAMES)) set(match[1] ?? match[2], UNKNOWN)
     }
     if (!call && CONTROL.has(keyword)) {
+      const open = words.indexOf("{")
+      if (["function", "filter"].includes(keyword) && words[1]?.parts && open > 0) {
+        let nesting = 0, end = open
+        do {
+          if (words[end] === "(" || words[end] === "{") nesting++
+          if (words[end] === ")" || words[end] === "}") nesting--
+          end++
+        } while (nesting)
+        functions.set(wordText(words[1]).toLowerCase(), words.slice(open + 1, end - 1))
+      }
       await loop(() => groups(words))
       status = null
       return
     }
-    // [scriptblock]::Create('…') builds code from a literal, or from text Desk cannot read.
-    if (/^\[scriptblock\]::create$/iu.test(keyword)) {
-      const literal = words[1] === "(" && words[3] === ")" && words[2].parts ? literalInput({ words: [words[2]], redirects: [] }) : null
-      if (literal === null) throw unresolved("a script this command evaluates")
-      await loop(() => sequence(tokenizeShell(literal, true)))
+    // [scriptblock]::Create("…") builds code from a string, which is inspected like Invoke-Expression's. Code built
+    // from anything else (a file's contents, a computed value) is not readable, and is allowed (replay ruling, 2026-09-27).
+    if (/^\[scriptblock\]::create$/iu.test(keyword) && words[1] === "(" && words[3] === ")" && words[2].parts) {
+      const script = await expand(words[2])
+      await loop(() => evaluated(script))
     }
     if (!words.every((word) => word.parts)) {
       // A statement that starts with a group is an expression; `& (…)` or `& { … }` calls what it yields.
-      const expression = !words[0].parts
+      const expression = !words[0].parts || (!words[0].quoted && wordText(words[0]) === "@" && !words[1].parts)
       words = await groups(words)
       if (expression && !call) { status = null; return }
     }
@@ -401,6 +536,11 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
     if (["set-alias", "new-alias", "sal", "nal"].includes(name)) {
       for (const arg of args.slice(1)) if (!arg.startsWith("-")) aliases.add(arg.toLowerCase())
       status = true
+      return
+    }
+    if (functions.has(name)) {
+      await loop(() => sequence(functions.get(name)))
+      status = null
       return
     }
     if (aliases.has(name)) {
@@ -429,21 +569,22 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       return
     }
     if (["iex", "invoke-expression"].includes(name)) {
-      if (args.slice(1).some((arg) => arg.includes(UNKNOWN))) throw unresolved("a script this command evaluates")
       // Invoke-Expression runs in the caller's scope.
-      await sequence(tokenizeShell(args.slice(1).join(" "), true))
+      await evaluated(args.slice(1).join(" "))
       status = null
       return
     }
-    if (name === "." && args.slice(1).some((arg) => arg.includes(UNKNOWN))) throw unresolved("the file this command dot-sources")
-    if (["start-process", "saps", "start"].includes(name) && args.slice(1).some((arg) => arg.includes(UNKNOWN))) throw unresolved("the program this command runs")
+    // A computed file or program is code Desk cannot read, and is allowed unless the text Desk can read names Git.
+    if ((name === "." || ["start-process", "saps", "start"].includes(name)) && args.slice(1).some((arg) => arg.includes(UNKNOWN)) && mayInvokeGit(known(args.slice(1).join(" ")))) {
+      throw unresolved(name === "." ? "the file this command dot-sources" : "the program this command runs")
+    }
     if (SHELLS.has(name)) {
       const script = shellScript(name, args)
       if (script.encoded) throw unresolved("an encoded script this command runs")
       const piped = script.stdin && input ? literalInput(input) ?? UNKNOWN : undefined
       const source = script.command ?? piped
-      if (source !== undefined) {
-        if (source.includes(UNKNOWN)) throw unresolved(script.command === undefined ? "the script this shell reads from its input" : "a script this command evaluates")
+      // A script with an unknown part is inspected only when the part Desk can read names Git or runs code.
+      if (source !== undefined && !(source.includes(UNKNOWN) && !mayInvokeGit(known(source)))) {
         const where = script.directory === undefined ? directory : physicalDirectory(directory, script.directory) ?? UNKNOWN
         await inspectShell({ command: source, cwd: where, env: environment, visit, depth: depth + 1, budget, powershell: name === "pwsh" || name === "powershell" })
       }
