@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.51 — 2026-09-27
+
+Flaky-test hardening: tests that failed full coverage runs and CI only when the machine was loaded now wait for the event they check instead of a fixed sleep or a tight wall-clock race, use mocked timers where the behaviour is budget logic, and record their measured times in the test output. Covered: the detached end-hook derivation, the workspace-tidy boot check, the bootstrap's Node selection and Windows fixture cleanup, the truncated-index rebuild, controller re-election and restart, the stand-in Windows ACL provider, and the browser-context broker's lock, timeout and readiness waits. Product bounds stay asserted with stated headroom: the hosts' 3 s end-hook timeout, the 500 ms whole-check boot budget (exactly, under mocked time), and the broker's 5 s lock and 10 s request timeouts. The one product change is that the [boot check](hooks/boot-checks.cjs) accepts an `inspectionBudgetMs` option, with the 200 ms default unchanged, so detail tests can let inspection finish. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
 ## 3.2.0-alpha.48 — 2026-09-26
 
 M3-7 affected re-review correction: [marker reads](mcp/src/factory/marker.js) now compare the opened descriptor with both the post-read descriptor and current pathname. [Enumeration](mcp/src/factory/outbox.js) retains the protected directory's identity across repair, reading, return and pruning, and defers leaf protection until the read is bound to that directory and leaf. A swap to an external directory followed by restoration cannot supply a marker or trigger repair/pruning of that external record.
