@@ -237,7 +237,7 @@ test("inspection trust is independent of candidate runtime search and fails expl
   assert.throws(() => resolveInspectionGit({ platform: "win32", env: {} }), /trusted Git is unavailable/u)
   assert.throws(() => resolveInspectionGit({ platform: "linux", accessible: () => false }), /trusted Git is unavailable/u)
   await assert.rejects(readInspectionGit(f.root + "/absent", ["status"], {}), /ENOENT/u)
-  await assert.rejects(readInspectionGit(f.ordinary, ["hash-object", "--stdin"], {}), /^Error: Git did not answer within 5 s: git hash-object --stdin$/u)
+  await assert.rejects(readInspectionGit(f.ordinary, ["hash-object", "--stdin"], {}), /^Error: Git did not answer in time: git hash-object --stdin$/u)
   // A missing value is an answer (exit 1 with no output), not an inspection failure.
   assert.deepEqual(await readInspectionGit(f.ordinary, ["config", "--get", "alias.log"], {}), { ok: false, stdout: "", stderr: "", code: 1 })
 })

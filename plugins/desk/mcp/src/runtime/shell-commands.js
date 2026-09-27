@@ -70,7 +70,8 @@ export function tokenizeShell(text, powershell = false) {
       while (i < text.length && text[i] !== "\n") i++
       i--
     } else if (c === "\n") {
-      word(); tokens.push("\n")
+      word()
+      // A here-document belongs to the command before this newline: it is that command's stdin.
       for (const here of heredocs.splice(0)) {
         let body = ""
         while (++i < text.length) {
@@ -81,8 +82,9 @@ export function tokenizeShell(text, powershell = false) {
           if ((here.tabs ? line.replace(/^\t+/u, "") : line) === here.delimiter) break
           body += `${line}\n`
         }
-        if (here.expand) tokens.push({ heredoc: body })
+        tokens.push({ heredoc: body, literal: !here.expand })
       }
+      tokens.push("\n")
     } else if (/\s/u.test(c)) {
       word()
     } else if ("<>".includes(c)) {
@@ -254,15 +256,22 @@ function parse(tokens) {
       return { kind: "group", scoped, body }
     }
     const words = [], redirects = []
+    let stdin = null
     while (i < tokens.length && typeof tokens[i] !== "string") {
       const token = tokens[i++]
       if (token.redirect) {
-        if (tokens[i]?.parts) redirects.push(tokens[i++])
-      } else if (token.heredoc !== undefined) redirects.push({ parts: [{ text: token.heredoc, expand: true }] })
-      else words.push(token)
+        if (tokens[i]?.parts) {
+          redirects.push(tokens[i])
+          if (token.redirect === "<<<") stdin = tokens[i]
+          i++
+        }
+      } else if (token.heredoc !== undefined) {
+        stdin = { parts: [{ text: token.heredoc, expand: !token.literal }] }
+        redirects.push(stdin)
+      } else words.push(token)
     }
     if (!words.length && !redirects.length) throw new Error(`unexpected shell operator ${tokens[i]}`)
-    return { kind: "command", words, redirects }
+    return { kind: "command", words, redirects, stdin }
   }
   return list()
 }
@@ -299,8 +308,9 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
   if (depth > 16) throw new Error("shell wrapper nesting exceeds 16")
   const tree = parse(tokenizeShell(command))
   let steps = 0, serial = 0
-  async function nested(text, state, shell = "bash") {
-    if (text.includes(UNKNOWN)) throw unresolved("a script this command evaluates")
+  async function nested(text, state, shell = "bash", partial = false) {
+    // An eval or -c script must be known; a here-document or piped literal may hold unknown words, judged in place.
+    if (!partial && text.includes(UNKNOWN)) throw unresolved("a script this command evaluates")
     return inspectShell({ command: text, cwd: state.cwd, env: state.vars, powershell: shell === "powershell", visit, depth: depth + 1 })
   }
   async function expand(word, state, split = false) {
@@ -337,6 +347,10 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
   async function literalOutput(text, state) {
     const tokens = tokenizeShell(text)
     if (!tokens.every((token) => token.parts)) return unknownOutput(text)
+    return outputOf(tokens, text, state)
+  }
+  // The output of a literal pwd, echo, printf '%s' or mktemp, without running it; otherwise unknown.
+  async function outputOf(tokens, text, state) {
     const words = []
     for (const token of tokens) words.push(await expand(token, state))
     if (words[0] === "pwd" && words.length === 1) return state.cwd
@@ -420,7 +434,14 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       return node.scoped ? result.map((s) => ({ ...state, status: s.status })) : result
     }
     if (node.kind === "pipe") {
-      for (const item of node.nodes) await run(item, { ...state, vars: { ...state.vars } })
+      // A literal echo or printf piped into a shell is that shell's script.
+      let input = null
+      for (const item of node.nodes) {
+        await run(item, { ...state, vars: { ...state.vars }, stdin: input })
+        const output = item.kind === "command" && !item.redirects.length ? await outputOf(item.words, wordText(item.words), state) : UNKNOWN
+        // Wholly computed input, such as `cat script | bash`, is a script file: outside the boundary like `bash script`.
+        input = output === UNKNOWN || output === UNKNOWN_GIT ? null : output
+      }
       return [{ ...state, status: true }, { ...state, status: false }]
     }
     for (const redirect of node.redirects) await expand(redirect, state)
@@ -462,8 +483,10 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     }
     const unknown = [{ ...state, status: true }, { ...state, status: false }]
     if (args[0]?.includes(UNKNOWN)) {
-      // An unknown program is Git only if its own text, or the text that computed it, names Git or runs code.
+      // An unknown program fails closed when its text, or the text that computed it, names Git or runs code;
+      // otherwise it is judged as Git if its arguments read like a checked Git command.
       if (args.some((arg) => arg.includes(UNKNOWN_GIT)) || mayInvokeGit(wordText(node.words))) throw unresolved("the program this command runs")
+      await visit({ name: "git", args: args.slice(1), cwd: local.cwd, env: local.vars, computed: true })
       return unknown
     }
     if (name === "export") {
@@ -504,6 +527,11 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     if (["sh", "bash", "zsh", "dash", "ksh", "pwsh", "powershell"].includes(name)) {
       const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/u.test(arg) || /^-command$/iu.test(arg))
       if (flag > 0 && args[flag + 1] !== undefined) await nested(args[flag + 1], positional(local, args.slice(flag + 2), 0), ["pwsh", "powershell"].includes(name) ? "powershell" : "bash")
+      else if (!["pwsh", "powershell"].includes(name) && args.slice(1).every((arg) => arg.startsWith("-"))) {
+        // With no script operand, a POSIX shell reads its script from stdin: a here-document or a piped literal.
+        const script = node.stdin ? await expand(node.stdin, local) : state.stdin
+        if (script !== null && script !== undefined) await nested(script, local, "bash", true)
+      }
     } else if (name === "eval") await nested(args.slice(1).join(" "), local)
     else await visit({ name, args: args.slice(1), cwd: local.cwd, env: local.vars })
     if (["true", ":", "echo", "printf"].includes(name)) return [{ ...state, status: true }]

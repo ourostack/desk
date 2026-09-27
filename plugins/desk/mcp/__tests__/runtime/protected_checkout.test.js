@@ -38,10 +38,10 @@ test("HEAD-moving and work-discarding operations alone are denied in a locally p
   const deny = [
     "checkout HEAD", "switch topic", "reset --hard", "rebase topic", "merge topic", "stash", "clean -nd",
     "restore --source HEAD file", "restore --source=HEAD file", "restore -s HEAD file", "restore -sHEAD file",
-    "restore --staged file", "branch -M renamed", "branch -m renamed",
+    "restore --staged file", "branch -M renamed", "branch -m renamed", "pull", "reset",
   ]
   const allow = [
-    "status", "diff", "log -1", "show HEAD", "fetch", "add file", "commit -m checkout", "push", "pull", "stash list",
+    "status", "diff", "log -1", "show HEAD", "fetch", "add file", "commit -m checkout", "push", "stash list",
     "restore file", "restore -- --source", "branch", "branch --list", "branch -f topic HEAD", "branch --force topic",
     "branch -fD topic", "branch -d topic", "branch -- topic-f", "worktree list", "worktree add --detach /tmp/new HEAD",
   ]

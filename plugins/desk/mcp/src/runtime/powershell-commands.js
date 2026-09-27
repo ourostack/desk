@@ -81,6 +81,28 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
     return result
   }
 
+  // The value of `$x = ...`: a literal, a variable or a string is data; anything else is a command
+  // whose output is assigned, so it runs through the same statement path as `...` alone.
+  async function assignedValue(words) {
+    if (words[0] === "(" && words.at(-1) === ")") words = words.slice(1, -1)
+    const text = words.map((word) => word.parts?.map((part) => part.text).join("") ?? word).join(" ")
+    const data = words.length === 1 && words[0].parts && (words[0].quoted || /^(?:\$|[-+]?\d)/u.test(words[0].parts[0].text))
+    if (data) return expand(words[0])
+    if (words.length && words.every((word) => word.parts || word === "&")) await run(words)
+    else {
+      // An expression runs the commands in its parenthesized groups, such as (git stash).Length.
+      const open = []
+      for (let i = 0; i < words.length; i++) {
+        if (words[i] === "(") open.push(i)
+        else if (words[i] === ")" && open.length) {
+          const inner = words.slice(open.pop() + 1, i).filter((word) => word.parts)
+          if (inner.length) await run(inner)
+        }
+      }
+    }
+    return unknownOutput(text)
+  }
+
   async function run(words) {
     if (!words.length || terminated) return
     const execute = previous !== "&&" || status !== false
@@ -97,8 +119,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
       const valueWords = assignment
         ? [{ ...words[0], parts: words[0].parts.map((p, i) => i === 0 ? { ...p, text: p.text.slice(assignment[0].length) } : p) }, ...words.slice(1)]
         : words.slice(2)
-      const value = valueWords.length === 1 && valueWords[0].parts ? await expand(valueWords[0])
-        : unknownOutput(valueWords.map((word) => word.parts?.map((part) => part.text).join("") ?? word).join(" "))
+      const value = await assignedValue(valueWords)
       if (/^env:/iu.test(name)) assign(environment, name.slice(4), value)
       else assign(variables, name, value)
       status = true
@@ -113,6 +134,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
     if (args[0].includes(UNKNOWN)) {
       const text = words.map((word) => word.parts.map((part) => part.text).join("")).join(" ")
       if (args.some((arg) => arg.includes(UNKNOWN_GIT)) || mayInvokeGit(text)) throw unresolved("the program this command runs")
+      await visit({ name: "git", args: args.slice(1), cwd: directory, env: environment, computed: true })
       status = null
       return
     }

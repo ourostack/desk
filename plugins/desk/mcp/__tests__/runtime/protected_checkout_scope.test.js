@@ -89,8 +89,8 @@ test("A3b: the desk write protocol and read-only Git pass in a protected checkou
     "worktree lock ../wt", "worktree prune --dry-run", "stash list", "stash show",
     "checkout", "switch", "checkout main", "switch main", "checkout -- file.txt", "checkout .", "checkout missing-path", "restore file.txt",
     "restore --worktree file.txt", "restore --source=HEAD --no-source file.txt",
-    "reset", "reset HEAD", "reset -- file.txt", "reset HEAD file.txt", "reset HEAD~1 file.txt", "reset HEAD~1 -- file.txt",
-    "reset --soft HEAD", "reset --hard --mixed", "reset -p", "reset missing-path", "reset --pathspec-from-file=list",
+    "reset --soft HEAD", "reset --soft", "fetch origin main", "fetch origin main:refs/remotes/origin/main", "config user.name Fixture",
+    "config --get remote.origin.url", "config get remote.origin.url", "config --list", "config remote.origin.url",
     "branch newbranch", "branch -d topic", "branch -D topic", "branch -f topic HEAD", "branch -m topic renamed", "branch -m",
     "branch -c copy", "branch -C topic copy", "branch -u origin/main", "branch -r -d origin/main",
     "bisect log", "merge -h", "clean -h", "stash --help", "--version", "help",
@@ -111,6 +111,9 @@ test("A3b: every operation that moves HEAD, rewinds the branch or discards other
     ["switch --discard-changes main", MESSAGES.discard],
     ["reset --hard", MESSAGES.discard], ["reset --hard HEAD", MESSAGES.discard], ["reset --merge", MESSAGES.discard],
     ["reset --keep HEAD", MESSAGES.discard], ["reset --soft --hard", MESSAGES.discard], ["reset --har", MESSAGES.discard],
+    ["reset", MESSAGES.unstage], ["reset HEAD", MESSAGES.unstage], ["reset -- file.txt", MESSAGES.unstage],
+    ["reset HEAD file.txt", MESSAGES.unstage], ["reset HEAD~1 file.txt", MESSAGES.unstage], ["reset --hard --mixed", MESSAGES.unstage],
+    ["reset -p", MESSAGES.unstage], ["reset missing-path", MESSAGES.unstage], ["reset --pathspec-from-file=list", MESSAGES.unstage],
     ["reset HEAD~1", MESSAGES.rewind], ["reset --soft HEAD~1", MESSAGES.rewind], ["reset topic", MESSAGES.rewind], ["reset HEAD~1 --", MESSAGES.rewind],
     ["restore --source HEAD file.txt", MESSAGES.restore], ["restore -s HEAD~1 file.txt", MESSAGES.restore],
     ["restore --staged file.txt", MESSAGES.restore], ["restore -S file.txt", MESSAGES.restore], ["restore --sta file.txt", MESSAGES.restore],
@@ -160,7 +163,9 @@ test("A3b: pull, rebase and amend depend on the state branch and on what is alre
   // An operator-set marker without a recorded state branch treats the current branch as the state branch.
   await protectCheckout({ root: f.shared })
   assert.equal(spawnSync("git", ["-C", f.shared, "config", "--includes", "--get", "desk.stateBranch"], { env: f.env }).status, 1)
-  for (const args of ["pull", "rebase"]) assert.equal((await at(args)).deny, false, args)
+  // topic has no upstream, so there is nothing of its own to pull or rebase onto.
+  assert.equal((await at("pull")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.pull}`)
+  assert.equal((await at("rebase")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.rebase}`)
   assert.equal((await at("rebase origin/main")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.rebase}`, "topic has no upstream")
   assert.equal((await at("pull origin topic")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.pull}`, "topic has no upstream")
   // A detached protected checkout pulls, rebases and pushes nothing by name.
@@ -224,7 +229,7 @@ test("A3b: commands with no path to Git pass even when a value is unknown", asyn
   const allow = [
     'echo "$(date)"', "echo `date`", 'echo "$(printf x)"', 'cd "$(date; hostname)" && git status', 'x=$(date); echo "$x"', 'wt=$(mktemp -d); cd "$wt" && node x.js', 'cd "$wt" && node x.js',
     "jq . a.json | grep x", '"$(npm bin)/tsc" --build', 'cd "$(pick)" && git commit -m x', 'cd "$(pick)" && git status',
-    'cd "$(pick)"; git push origin HEAD', 'git log --since="$(date)"', 'git commit -m "$(cat msg)"', 'D=$(date +%F); git commit -m "$D"',
+    'git log --since="$(date)"', 'git commit -m "$(cat msg)"', 'D=$(date +%F); git commit -m "$D"',
     'wt=$(mktemp -d) && git worktree add --detach "$wt" HEAD && cd "$wt" && git switch -c fix && git reset --hard',
     'wt="$(mktemp -d -t desk)/"; cd "$wt"; git checkout -b x', 'pushd "$(pick)" && npm test && popd', "popd; git status",
     "pushd; ls", "! grep -q x file.txt && echo absent", "git frobnicate", "git -c alias.stage=stash stage", "echo 'unterminated", "(echo", "case x in x) echo;",
@@ -251,7 +256,7 @@ test("A3b: commands with no path to Git pass even when a value is unknown", asyn
     [`TMPDIR=${q(f.shared)}; wt=$(mktemp -d); cd "$wt" && git stash`, /^Desk protected checkout /u],
     [`wt=$(mktemp -d ${q(f.shared)}/x.XXXX); cd "$wt" && git stash`, /^Desk protected checkout /u],
     ["git status 'unterminated", /could not inspect this shell command \(unterminated shell quote\)/u],
-    ['cd "$(date; hostname)" && git stash', /which checkout/u], ['cd "$(mktemp -d -p /definitely-missing)" && git stash', /which checkout/u],
+    ['cd "$(date; hostname)" && git stash', /which checkout/u], ['cd "$(pick)"; git push origin HEAD', /which checkout/u], ['cd "$(mktemp -d -p /definitely-missing)" && git stash', /which checkout/u],
     ["git co topic", /^Desk protected checkout .+: this would move HEAD off/u], ['$(cd x; command -v git) status', /the program/u],
   ]
   for (const [command, reason] of deny) {
