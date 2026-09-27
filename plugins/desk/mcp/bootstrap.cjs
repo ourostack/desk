@@ -601,6 +601,7 @@ module.exports = {
   packAbis: packAbis,
   probeNode: probeNode,
   readPackage: readPackage,
+  reexec: reexec,
   run: run,
   satisfies: satisfies,
   selectNode: selectNode,
