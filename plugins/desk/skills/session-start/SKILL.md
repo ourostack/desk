@@ -161,7 +161,7 @@ after sync, check whether this workspace carries a committed desk registry: `$DE
 test -f "$DESK/_meta/desks.md" && cat "$DESK/_meta/desks.md"
 ```
 
-when present, it tells the agent two things:
+the file makes this a crew workspace only when it holds the crew roster: the table below, whose header names both `alias` and `identity`. then the roster tells the agent two things:
 
 1. **the desk-set** — every desk this workspace knows about (the operator's own, plus any peers' desks in a shared crew repo). surface the count in the Step 5 status block ("crew workspace: N desks — alex, bob, …").
 2. **"which desk am I"** — resolve the session's home desk by matching the operator's **identity** (not a re-derived handle) against the registry rows. derive the identity once (cheap, deterministic — for org-backed crews, the SSO account `login`), find the row whose `identity` column equals it, and **that row's `alias` is the home desk** — its `write_subtree` is where this session's writes land (`desks/<alias>/`), and that alias is what the desk MCP's `--person` should be set to. **Match on identity, not on a handle re-derived from the identity** — the chosen handle (`alex`) need not be a transform of the identity (`agarcia_corp`), so re-deriving a handle each session can disagree with the registry and silently bind to the wrong desk. if no `--person` is set (OFF mode), the agent writes at the workspace root as today, and the registry is read-only context.
@@ -184,9 +184,9 @@ one table, one row per desk. keep it human-readable — a non-agent teammate mus
 - **path** — the desk's subtree within this workspace repo (`desks/<alias>`), OR an absolute/`~`-tilde path for a desk that lives in a *different* repo (a multi-desk operator whose personal desk is a separate clone).
 - **repo** — the git repo the desk lives in (so a personal `worker` can route "that lives in the crew repo" and read the right clone).
 - **worker_variant** — which worker overlay is bound to this desk (`worker` for a plain personal desk, `crew` / a crew variant for a shared crew desk).
-- **write_subtree** — the path prefix this desk's agent scopes its writes to. equals `path` for an in-repo person desk; for a single-desk OFF-mode workspace there is no registry, so this column never describes the workspace root.
+- **write_subtree** — the path prefix this desk's agent scopes its writes to. equals `path` for an in-repo person desk; for a single-desk OFF-mode workspace there is no crew roster, so this column never describes the workspace root.
 
-a workspace with a single OFF-mode desk simply has **no `_meta/desks.md`** — its absence *is* the "single-desk, behave as today" signal. don't synthesize a registry; don't warn about its absence.
+a single-owner OFF-mode desk has **no crew roster**: either no `_meta/desks.md` at all, or one that holds something else, such as a hub's cross-desk routing registry (its own "Solo desks" and "Crew desks" tables) or a spoke desk's pointer to its hub. either way, when the workspace has no `desks/` folder, it is a single desk: behave as today, and read a hub's registry as routing context only. don't synthesize a roster; don't warn about its absence. the exception fails closed: a `desks/` folder with no roster, or a `_meta/desks.md` that cannot be read, is treated as a crew workspace whose person cannot be resolved, so nothing is written at the workspace root until a roster names this session's desk.
 
 ### remap-tolerance note
 
@@ -198,7 +198,7 @@ now that the workspace is synced and this session's own desk is known, run the `
 
 ## Step 3 — Scan for active tasks
 
-glob `$DESK/**/task.md` excluding `_archive/`. parse each card's YAML frontmatter. filter to non-terminal status (NOT `done`, NOT `cancelled`). group by track, sort by `updated` descending. this is the look across the drawers to see what's still open. **in a shared crew workspace** (registry present from Step 2.6), the glob naturally spans every `desks/<alias>/` subtree — surface peers' open tasks as theirs (attributed by desk), and this session's own desk first.
+glob `$DESK/**/task.md` excluding `_archive/`. parse each card's YAML frontmatter. filter to non-terminal status (NOT `done`, NOT `cancelled`). group by track, sort by `updated` descending. this is the look across the drawers to see what's still open. **in a shared crew workspace** (crew roster present from Step 2.6), the glob naturally spans every `desks/<alias>/` subtree — surface peers' open tasks as theirs (attributed by desk), and this session's own desk first.
 
 ## Step 4 — Scan code repos
 
@@ -252,7 +252,7 @@ resume one, or start new?
 crew workspace: P desks (you: <alias> → desks/<alias>) · peers: <a>, <b>
 ```
 
-omit this line entirely in single-desk (OFF) mode — no registry, no banner, byte-identical to today's output.
+omit this line entirely in single-desk (OFF) mode — no crew roster, no banner, byte-identical to today's output.
 
 if the operator picks a task to resume → hand off to the `session-resumption` skill. if the operator says "start new" → follow the `dual-input` skill. if the operator wants the fuller dashboard → invoke the `status` skill.
 

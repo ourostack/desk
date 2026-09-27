@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
   "id": "desk",
-  "version": "3.2.0-alpha.89",
+  "version": "3.2.0-alpha.93",
   "dependencies": [
     {
       "id": "desk",
       "kind": "substrate",
-      "version": "3.2.0-alpha.89",
+      "version": "3.2.0-alpha.93",
       "provenance": {
         "source": "plugins/desk/.codex-plugin/plugin.json",
         "package": "ourostack/desk"
       },
       "lock": {
-        "version": "3.2.0-alpha.89",
+        "version": "3.2.0-alpha.93",
         "integrity": "sha256-desk-activation-manifest-v1"
       }
     },
@@ -25,7 +25,7 @@
         "package": "obra/superpowers"
       },
       "lock": {
-        "version": "6.3.0",
+        "version": "6.4.2",
         "integrity": "sha256-a6ce3a2accf90ec523f7f35be2a76142b94b7178dcbf688d10b756a45f1a2fd0"
       }
     },
@@ -216,7 +216,7 @@
       "dependencies": {
         "superpowers": {
           "path": "../superpowers",
-          "version": "6.3.0",
+          "version": "6.4.2",
           "resolution": "native"
         },
         "plain-language": {

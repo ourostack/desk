@@ -37,32 +37,51 @@
 // `startFactory` starts factory-start.cjs (sweep, then flush every consented
 // store) detached; the hooks call it after their output is built, and only
 // when a store has `contribute: true`.
+//
+// The hook runs in whatever `node` the host puts first on PATH, so all of
+// this keeps to what Node 16 has, and the boot path never searches for a
+// Node. Every detached child that loads Desk's MCP code starts in the hook's
+// own Node as a Node 16-safe launcher in this file: `--repair`
+// (`startRepair`) for the workspace tidy, and `--compatible <script> ...`
+// (`runCompatible`) for the rest. The launcher finds a Node that satisfies
+// the MCP's engines range and runs the real work there.
 
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
+// Loaded only by the detached launchers, never on the boot path.
+const compatibleNode = (options) => require("./compatible-node.cjs").compatibleNode(options);
 const runtime = (name) => import(pathToFileURL(path.join(__dirname, "..", "mcp", "src", name)).href);
+// Set on the repair a launcher re-executes in a compatible Node, so it runs the repair itself.
+const REPAIR_NODE_ENV = "DESK_TIDY_REPAIR_NODE";
+// The launcher may spend the bootstrap's full probe budget: nothing waits on it.
+const LAUNCHER_PROBE_BUDGET_MS = 3000;
+const NODE_STATUS_MAX_BYTES = 4096;
 const oneLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ").slice(0, 480);
 const TOTAL_BUDGET_MS = 300;
 const TIDY_SOFT_MARGIN_MS = 20;
 const FACTORY_SCRIPT = path.join(__dirname, "..", "mcp", "scripts", "factory.js");
 const PERSON = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 
+// `root` is the bound desk's canonical identity, its real path, so every
+// spelling of one desk (a symlink alias, its real path) shares one report and
+// one lock.
 function reportPath(root, common) {
   const key = createHash("sha256").update(root).digest("hex").slice(0, 16);
   return path.join(common, `desk-workspace-tidy-${key}.json`);
 }
 
 async function location(root) {
+  const canonical = await fs.realpath(root);
   const { readInspectionGit } = await runtime("runtime/git-inspection.js");
   const { TIDY_GIT_TIMEOUT_MS } = await runtime("runtime/workspace-tidy.js");
   // The report location serves the detached repair and the CLI, never the boot check's budget.
-  const result = await readInspectionGit(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS });
+  const result = await readInspectionGit(canonical, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS });
   if (!result.ok) throw new Error("bound desk is not an inspectable repository");
   const common = await fs.realpath(result.stdout);
-  return reportPath(await fs.realpath(root), common);
+  return { canonical, file: reportPath(canonical, common) };
 }
 
 async function readReport(file) {
@@ -81,8 +100,60 @@ async function launchCommand(command, env, spawnImpl = spawn) {
   });
 }
 
-async function launchRepair(root, env) {
-  await launchCommand([process.execPath, __filename, "--repair", root], env);
+// The no-Node status the repair launcher leaves beside the report when it
+// found no compatible Node, so the next boot line can say so.
+function nodeStatusPath(file) {
+  return `${file}.node.json`;
+}
+
+async function readNodeStatus(file) {
+  const info = await fs.lstat(nodeStatusPath(file));
+  if (!info.isFile() || info.nlink !== 1 || info.size > NODE_STATUS_MAX_BYTES) throw new Error("unsafe workspace-tidy node status");
+  const status = JSON.parse(await fs.readFile(nodeStatusPath(file), "utf8"));
+  if (typeof status?.range !== "string") throw new Error("invalid workspace-tidy node status");
+  return status;
+}
+
+// Written like the report: a new private temporary file renamed into place,
+// so no symlink at the path is followed and no reader sees a partial file.
+async function writeNodeStatus(file, status) {
+  const target = nodeStatusPath(file);
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  const output = await fs.open(temporary, "wx", 0o600);
+  try { await output.writeFile(`${JSON.stringify(status)}\n`); await output.sync(); } finally { await output.close(); }
+  try {
+    await fs.rename(temporary, target);
+  } catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw new Error(`could not record the workspace-tidy Node status at ${target}: ${error.code ?? error.message}`);
+  }
+}
+
+// Removes a recorded no-Node status. Anything else at that path, such as a
+// directory, is left alone: the repair still runs, and the boot line names
+// the path as unreadable.
+async function clearNodeStatus(file) {
+  const target = nodeStatusPath(file);
+  let info;
+  try { info = await fs.lstat(target); } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  if (info.isFile() || info.isSymbolicLink()) await fs.unlink(target);
+}
+
+// The boot path does no Node search: the detached child starts in the hook's
+// own Node, which may be old, as the Node 16-safe repair launcher
+// (`startRepair`). The launcher finds a compatible Node and re-executes the
+// repair in it.
+async function launchRepair(root, env, spawnImpl = spawn) {
+  await launchCommand([process.execPath, __filename, "--repair", root], env, spawnImpl);
+}
+
+// A command that runs `script` and its arguments in a compatible Node,
+// through the `--compatible` launcher started in this (possibly old) Node.
+function compatibleCommand(script, ...args) {
+  return [process.execPath, __filename, "--compatible", script, ...args];
 }
 
 async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair, inspectionBudgetMs }, expired, signal) {
@@ -95,34 +166,45 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
       hostProjectRoot: host === "claude" ? env.CLAUDE_PROJECT_DIR : undefined,
     });
     if (bound.error) return "workspace-tidy deferred; binding configuration unreadable; resolve with desk_status.";
-    if (host === "copilot" && isDeskWorkspace(sessionFolder) && path.resolve(sessionFolder) !== bound.root) {
+    const { inspectWorkspace, tidyLine, canonicalDeskRoot } = await runtime("runtime/workspace-tidy.js");
+    // One identity for the bound desk, resolved once: a symlink alias and its
+    // real path are the same desk for the inventory, the report and the lock.
+    const root = bound.root ? await canonicalDeskRoot(bound.root) : null;
+    if (host === "copilot" && isDeskWorkspace(sessionFolder) && await canonicalDeskRoot(path.resolve(sessionFolder)) !== root) {
       return "workspace-tidy deferred; binding is ambiguous; use desk_status root before requesting repair.";
     }
     if (bound.unavailable) return "workspace-tidy skipped; the bound desk is unavailable; see desk_status.";
-    if (!bound.root) return "workspace-tidy skipped; no bound desk.";
-    const { inspectWorkspace, tidyLine } = await runtime("runtime/workspace-tidy.js");
-    const inventory = await inspectWorkspace({ deskRoot: bound.root, signal, budgetMs: inspectionBudgetMs });
+    if (!root) return "workspace-tidy skipped; no bound desk.";
+    const inventory = await inspectWorkspace({ deskRoot: root, signal, budgetMs: inspectionBudgetMs });
     if (expired()) return "";
     let previous = "";
     if (inventory.commonDirectory) {
       try {
-        const file = reportPath(bound.root, inventory.commonDirectory);
+        const file = reportPath(root, inventory.commonDirectory);
         const report = await readReport(file);
-        if (report.root === bound.root) previous = `Last repair: ${tidyLine(report)}; `;
+        // A report written before roots were canonical may carry the alias.
+        if (await canonicalDeskRoot(report.root) === root) previous = `Last repair: ${tidyLine(report)}; `;
       } catch (error) {
         if (error.code !== "ENOENT") previous = "Previous workspace-tidy report unreadable; ";
       }
       try {
-        const file = reportPath(bound.root, inventory.commonDirectory);
+        const file = reportPath(root, inventory.commonDirectory);
         await fs.lstat(`${file}.lock`);
         previous += `repair lock ${path.basename(file)}.lock; reconcile exact owner if stale; `;
       } catch (error) {
         if (error.code !== "ENOENT") previous += "repair lock unreadable; ";
       }
+      try {
+        const status = await readNodeStatus(reportPath(root, inventory.commonDirectory));
+        previous += `last repair not started: it needs Node ${oneLine(status.range)} and none was found; `;
+      } catch (error) {
+        if (error.code !== "ENOENT") previous += "repair Node status unreadable; ";
+      }
     }
     // No status, ancestry, network or removal in the hook. Detailed checks and
     // mutations run after launch in the detached process, with fresh evidence.
     if (expired()) return "";
+    // The repair gets the binding's own spelling and resolves it again itself.
     await launch(bound.root, env);
     return `workspace-tidy ${oneLine(`${previous}deferred (${inventory.worktrees.length} listed)${inventory.issues.length ? `; ${inventory.issues.join("; ")}` : ""}`)}`;
   } catch (error) {
@@ -210,7 +292,7 @@ const factoryCheck = {
     const result = factoryBootCheck({
       env: ctx.env, deskRoot: root, personPrefix: personPrefix(ctx.env), pluginDirs: plugins.dirs, pluginScanIncomplete: plugins.incomplete, deadline: ctx.deadline,
     });
-    const repair = result.jobs?.length ? { command: [process.execPath, FACTORY_SCRIPT, "finalize", ...result.jobs.flatMap((job) => ["--job", job])] } : undefined;
+    const repair = result.jobs?.length ? { command: compatibleCommand(FACTORY_SCRIPT, "finalize", ...result.jobs.flatMap((job) => ["--job", job])) } : undefined;
     return { line: result.line, repair };
   },
 };
@@ -238,7 +320,7 @@ const deskHealthCheck = {
     for (const root of roots) {
       const result = check({ env: ctx.env, root });
       if (result.line) return { line: result.line };
-      if (result.fastForward) return { repair: { command: [process.execPath, __filename, "--fast-forward", root] } };
+      if (result.fastForward) return { repair: { command: compatibleCommand(__filename, "--fast-forward", root) } };
     }
     return {};
   },
@@ -334,7 +416,7 @@ async function startFactory({ env = process.env, launch = launchCommand } = {}) 
   try {
     const { hasContributingStore } = await runtime("factory/boot-check.js");
     if (!hasContributingStore(env)) return false;
-    await launch([process.execPath, path.join(__dirname, "factory-start.cjs")], env);
+    await launch(compatibleCommand(path.join(__dirname, "factory-start.cjs")), env);
     return true;
   } catch {
     return false;
@@ -342,7 +424,7 @@ async function startFactory({ env = process.env, launch = launchCommand } = {}) 
 }
 
 async function updateReport(root, operation) {
-  const file = await location(root);
+  const { canonical, file } = await location(root);
   const lock = `${file}.lock`;
   const token = randomUUID();
   let handle;
@@ -361,7 +443,7 @@ async function updateReport(root, operation) {
     try { previous = await readReport(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
     const prepare = (result) => {
       result.line = tidyLine(result);
-      result.root = root;
+      result.root = canonical;
       result.updated = new Date().toISOString();
       return encodeTidyReport(result);
     };
@@ -373,7 +455,7 @@ async function updateReport(root, operation) {
       await fs.rename(temporary, file);
       return result;
     };
-    return await operation(previous, persist, prepare);
+    return await operation(previous, persist, prepare, canonical);
   } finally {
     await handle.close();
     if (JSON.parse(await fs.readFile(lock, "utf8")).token === token) await fs.unlink(lock);
@@ -381,11 +463,11 @@ async function updateReport(root, operation) {
 }
 
 async function runRepair(root) {
-  return updateReport(root, async (previous, persist, prepare) => {
+  return updateReport(root, async (previous, persist, prepare, canonical) => {
     const { repairWorkspace } = await runtime("runtime/workspace-tidy.js");
     const { dispositionRecord, mergeTidyEvidence } = await runtime("runtime/workspace-evidence.js");
     let evidence = previous;
-    const result = await repairWorkspace({ deskRoot: root, onDisposition: async (entry) => {
+    const result = await repairWorkspace({ deskRoot: canonical, onDisposition: async (entry) => {
       const next = mergeTidyEvidence(evidence, {}, entry);
       if (entry.state === "cleanup_pending") {
         for (const branchRemoved of [false, true]) {
@@ -406,26 +488,74 @@ async function acknowledgeRepair(root, acknowledgement) {
   });
 }
 
+/**
+ * The repair launcher: `--repair` runs here first, in whatever Node started
+ * it, so it keeps to what Node 16 has. It finds a Node that satisfies the
+ * MCP's engines range and runs the repair there: in this process when this
+ * Node fits, otherwise by re-executing itself in that Node and waiting for
+ * it. With none installed it records the no-Node status beside the report,
+ * starts nothing, and the next boot line says so. `resolveNode`,
+ * `spawnChild` and `repair` are test seams.
+ */
+async function startRepair(root, { env = process.env, resolveNode = compatibleNode, spawnChild = spawn, repair = runRepair } = {}) {
+  const { file } = await location(root);
+  if (env[REPAIR_NODE_ENV] === "1") return repair(root);
+  const { node, range } = resolveNode({ env, probeBudgetMs: LAUNCHER_PROBE_BUDGET_MS });
+  if (!node) {
+    await writeNodeStatus(file, { range, recorded: new Date().toISOString() });
+    return { started: false, reason: `no Node ${range} found` };
+  }
+  await clearNodeStatus(file);
+  if (node === process.execPath) return repair(root);
+  const code = await new Promise((resolve, reject) => {
+    const child = spawnChild(node, [__filename, "--repair", root], { stdio: "inherit", windowsHide: true, env: { ...env, [REPAIR_NODE_ENV]: "1" } });
+    child.once("error", reject);
+    child.once("close", (exit) => resolve(exit));
+  });
+  if (code !== 0) throw new Error(`repair in ${node} exited with ${code}`);
+  return { started: true, node };
+}
+
+/**
+ * The general launcher: `--compatible <script> [args]` runs here first, in
+ * whatever Node started it, and runs `script` in a Node that satisfies the
+ * MCP's engines range, waiting for it. With none installed it starts nothing,
+ * and the work is retried at a later session start. `resolveNode` and
+ * `spawnChild` are test seams.
+ */
+async function runCompatible(script, args, { env = process.env, resolveNode = compatibleNode, spawnChild = spawn } = {}) {
+  const { node, range } = resolveNode({ env, probeBudgetMs: LAUNCHER_PROBE_BUDGET_MS });
+  if (!node) return { started: false, reason: `no Node ${range} found` };
+  const code = await new Promise((resolve, reject) => {
+    const child = spawnChild(node, [script, ...args], { stdio: "inherit", windowsHide: true, env });
+    child.once("error", reject);
+    child.once("close", (exit) => resolve(exit));
+  });
+  return { started: true, node, code };
+}
+
 module.exports = {
   checks: [factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck],
   factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck,
   runBootChecks, startFactory, launchCommand, recordSkipped,
-  runRepair, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS,
+  runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
 };
 
 if (require.main === module) {
   const [command, root, id, digest, canonicalEvidence] = process.argv.slice(2);
-  const run = command === "--fast-forward" && root
+  const run = command === "--compatible" && root
+    ? runCompatible(root, process.argv.slice(4))
+    : command === "--fast-forward" && root
     ? runtime("runtime/desk-health.js").then(({ fastForwardStateBranch }) => fastForwardStateBranch({ env: process.env, root }))
     : command === "--repair" && root
-    ? runRepair(root)
+    ? startRepair(root)
     : command === "--ack" && root && id && digest && canonicalEvidence
       ? acknowledgeRepair(root, { id, digest, canonicalEvidence })
       : command === "--revoke" && root && id && digest && canonicalEvidence
         ? runtime("runtime/workspace-tidy.js").then(({ revokeWorkspaceRelease }) => revokeWorkspaceRelease({
           repository: root, worktree: id, branch: digest, owner: canonicalEvidence,
         }))
-        : Promise.reject(new Error("usage: boot-checks.cjs --fast-forward <desk> | --repair <desk> | --ack <desk> <id> <digest> <canonical-evidence> | --revoke <common-git-dir> <worktree> <branch-ref> <owner>"));
+        : Promise.reject(new Error("usage: boot-checks.cjs --compatible <script> [args] | --fast-forward <desk> | --repair <desk> | --ack <desk> <id> <digest> <canonical-evidence> | --revoke <common-git-dir> <worktree> <branch-ref> <owner>"));
   run.then((result) => process.stdout.write(`${JSON.stringify(result)}\n`)).catch((error) => {
     process.stderr.write(`workspace-tidy: ${oneLine(error.message)}\n`);
     process.exitCode = 1;

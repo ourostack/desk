@@ -15,7 +15,7 @@
   "dependency_closure": [
     {
       "id": "desk",
-      "version": "3.2.0-alpha.89",
+      "version": "3.2.0-alpha.93",
       "plugin": "plugins/desk/plugin.json",
       "skills": "plugins/desk/skills/",
       "agents": "plugins/desk/agents/",
@@ -23,7 +23,7 @@
     },
     {
       "id": "superpowers",
-      "version": "6.3.0",
+      "version": "6.4.2",
       "plugin": "plugins/superpowers/plugin.json",
       "skills": "plugins/superpowers/skills/"
     },

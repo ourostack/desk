@@ -266,7 +266,8 @@ function selectNode(options) {
   var pkg = readPackage(options.mcpRoot);
   var abis = packAbis(options.mcpRoot, pkg.version, options.platform, options.arch);
   var now = either(options.now, Date.now);
-  var deadline = now() + PROBE_BUDGET_MS;
+  // A hook that selects a Node for its own background child passes a smaller budget, since a probe blocks the hook.
+  var deadline = now() + either(options.probeBudgetMs, PROBE_BUDGET_MS);
   var runProbe = either(options.probe, function (file, timeoutMs) {
     return probeNode(file, options.env, timeoutMs);
   });
@@ -603,7 +604,8 @@ module.exports = {
   run: run,
   satisfies: satisfies,
   selectNode: selectNode,
-  serveDegraded: serveDegraded
+  serveDegraded: serveDegraded,
+  versionFromPath: versionFromPath
 };
 
 // Started directly by a host (the Copilot config). The Claude config requires this file and calls run() itself. Spawned tests cover this line; the in-process coverage run cannot be the main module.

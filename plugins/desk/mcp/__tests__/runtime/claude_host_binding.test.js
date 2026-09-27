@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -338,6 +338,31 @@ test("an empty ~/desk is not a desk: with no binding, main serves setup mode ins
     assert.deepEqual(payload.paths_tried.map((entry) => entry.path), [path.join(fixture.home, "desk"), path.join(fixture.home, "worker-workspace")])
   } finally {
     await desk.close()
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("resolve-desk-root runs when its path goes through a symlink, as under the macOS $TMPDIR or a symlinked ~/.claude", async () => {
+  const fixture = makeFixture()
+  try {
+    const link = path.join(fixture.root, "linked-plugin")
+    symlinkSync(path.dirname(mcpRoot), link, process.platform === "win32" ? "junction" : "dir")
+    const linkedScript = path.join(link, "mcp", "scripts", "resolve-desk-root.js")
+    const root = execFileSync(process.execPath, [linkedScript, "--root-only"], {
+      encoding: "utf8",
+      env: childEnv({ HOME: fixture.home, DESK: fixture.envRoot }),
+    })
+    assert.equal(root, fixture.envRoot, "the symlinked spelling still runs the script")
+
+    const { isEntrypoint } = await import(pathToFileURL(resolveRootScript))
+    const scriptUrl = pathToFileURL(resolveRootScript).href
+    assert.equal(isEntrypoint(linkedScript, scriptUrl), true)
+    assert.equal(isEntrypoint(resolveRootScript, scriptUrl), true)
+    assert.equal(isEntrypoint(path.join(mcpRoot, "index.js"), scriptUrl), false, "another script is not this one")
+    assert.equal(isEntrypoint(path.join(fixture.root, "missing.js"), scriptUrl), false)
+    assert.equal(isEntrypoint(undefined, scriptUrl), false)
+    assert.equal(isEntrypoint(), false, "under the test runner this module is not the entrypoint")
+  } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }
 })
