@@ -19,7 +19,7 @@ import {
 } from '../src/leases.mjs';
 import { readRegistry, writeRegistry } from '../src/registry.mjs';
 import { startFakeCdpServer } from './fixtures/fake-cdp-server.mjs';
-import { settlesWithin, SETTLE_LIMIT_MS } from './fixtures/settle.mjs';
+import { REQUEST_TIMEOUT_LIMIT_MS, settlesWithin } from './fixtures/settle.mjs';
 
 const scratchRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '.lease-state');
 const holdLeaseLockFixture = new URL('./fixtures/hold-lease-lock.mjs', import.meta.url);
@@ -795,7 +795,7 @@ test('release records a silent close as failed and releases its operation lock f
     leaseId: lease.id,
     declaration,
     providerInvoker: attestingProvider,
-    cdpClientOptions: { commandTimeoutMs: SETTLE_LIMIT_MS },
+    cdpClientOptions: { commandTimeoutMs: REQUEST_TIMEOUT_LIMIT_MS },
   }));
 
   assert.equal(retried.released, true);
@@ -993,7 +993,7 @@ test('stale cleanup records a silent close as failed and releases its operation 
     leaseId: lease.id,
     declaration,
     providerInvoker: attestingProvider,
-    cdpClientOptions: { commandTimeoutMs: SETTLE_LIMIT_MS },
+    cdpClientOptions: { commandTimeoutMs: REQUEST_TIMEOUT_LIMIT_MS },
   }));
 
   assert.equal(retried.released, true);

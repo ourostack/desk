@@ -600,14 +600,13 @@ test('partial CLI release fails, proxy cannot renew it, and exact retry deletes 
     await waitForChildExit(child);
   });
 
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      await readFile(readyPath, 'utf8');
-      break;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
+  // The proxy renews the lease when it starts, before it publishes readiness; the snapshot below must come after that renewal.
+  const started = performance.now();
+  await waitUntil(async () => {
+    assert.equal(child.exitCode, null, 'the proxy exited before it was ready');
+    return readFile(readyPath, 'utf8').then(() => true, () => false);
+  }, 'the proxy did not publish its readiness file', { limitMs: PROXY_READY_LIMIT_MS, intervalMs: 10 });
+  t.diagnostic(`the proxy published its readiness file ${Math.round(performance.now() - started)} ms after it was spawned`);
 
   const beforeRelease = (await readRegistry(directory)).leases[lease.id];
   const partial = await run([
@@ -685,14 +684,11 @@ test('proxy exits and releases its listener when ready-file publication fails', 
     '--json-ready', readyPath,
   ], { cwd: packageRoot, stdio: ['ignore', 'pipe', 'pipe'] });
 
-  let listener;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const listener = await waitUntil(async () => {
     const current = await readRegistry(directory);
-    listener = current.leases[lease.id]?.proxy?.listener;
-    if (listener) break;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  const exit = await waitForChildExit(child);
+    return current.leases[lease.id]?.proxy?.listener;
+  }, 'the proxy never recorded its listener', { limitMs: PROXY_READY_LIMIT_MS, intervalMs: 10 });
+  const exit = await waitForChildExit(child, PROXY_READY_LIMIT_MS);
   if (!exit.exited) {
     child.kill('SIGTERM');
     await waitForChildExit(child);

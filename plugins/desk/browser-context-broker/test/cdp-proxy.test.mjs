@@ -12,7 +12,7 @@ import { createLease, releaseLease } from '../src/leases.mjs';
 import { withBrokerLock } from '../src/lock.mjs';
 import { readRegistry, writeRegistry } from '../src/registry.mjs';
 import { startFakeCdpServer } from './fixtures/fake-cdp-server.mjs';
-import { settlesWithin, SETTLE_LIMIT_MS, waitUntil } from './fixtures/settle.mjs';
+import { REQUEST_TIMEOUT_LIMIT_MS, settlesWithin, waitUntil } from './fixtures/settle.mjs';
 
 const scratchRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '.proxy-state');
 const cleanups = [];
@@ -612,7 +612,7 @@ test('proxy remaps colliding downstream IDs without stranding internal target cr
     declaration,
     providerInvoker: attestingProvider,
     // Target creation is held until both colliding responses arrive, which a loaded machine can take far longer than 200 ms to deliver; the internal request must not time out while it is held.
-    internalRequestTimeoutMs: SETTLE_LIMIT_MS,
+    internalRequestTimeoutMs: REQUEST_TIMEOUT_LIMIT_MS,
   });
   t.after(() => proxy.close());
   const socket = await openSocket(proxy.webSocketEndpoint);
@@ -1360,7 +1360,7 @@ test('internal upstream create timeout releases the lock but preserves marker ev
 
   const response = await settlesWithin(t, 'internal request did not time out promptly', cdp.send('Target.createTarget', {
     url: 'https://timeout.example.test',
-  }));
+  }), REQUEST_TIMEOUT_LIMIT_MS);
   assert.equal(response.error.code, -32005);
   await assert.rejects(
     settlesWithin(t, 'release remained blocked after request timeout', releaseLease({
