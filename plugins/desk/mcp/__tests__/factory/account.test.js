@@ -54,6 +54,8 @@ const PUBLIC_PUSH = { ...PUBLIC_READ, permissions: { push: true, pull: true } }
 test("gh auth status gives every github.com login, the active one first, and no other host's", () => {
   assert.deepEqual(signedInAccounts(authStatus([{ login: "work_corp", active: false }, { login: "personal", active: true }])), ["personal", "work_corp"])
   assert.deepEqual(signedInAccounts(""), [])
+  // gh lists a login once per stored credential; a repeated login is one account.
+  assert.deepEqual(signedInAccounts(authStatus([{ login: "personal", active: false }, { login: "personal", active: true }])), ["personal"])
 })
 
 test("a store's delivery route: push, then a fork, never a managed account or a store that disallows forks", () => {

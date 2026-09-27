@@ -366,8 +366,8 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    if (subcommand === "validate-pr") return result.ok === false ? 1 : 0
-    return subcommand === "account" && result.result !== "account_found" ? 1 : 0
+    const failed = (subcommand === "validate-pr" && result.ok === false) || (subcommand === "account" && result.result !== "account_found")
+    return failed ? 1 : 0
   } catch (error) {
     logError(`${error.message}\n`)
     return 1
