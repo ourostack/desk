@@ -18,6 +18,8 @@ import {
   main,
   parseOptions,
   runBuildCommand,
+  runKaizenCheckCommand,
+  runAndonCommand,
   runConsentCommand,
   runDeriveCommand,
   runFinalizeCommand,
@@ -781,4 +783,68 @@ test("evaluate-accept checks the evaluator's answer and moves accepted labels in
   for (const argv of [[], ["--job", "SENTINEL"], ["--other", "x"], ["--job", job, "--extra", "x"]]) {
     await assert.rejects(runEvaluateAcceptCommand({ argv, env }), (error) => /Usage: factory\.js evaluate-accept/u.test(error.message) && !error.message.includes("SENTINEL"))
   }
+}))
+
+test("kaizen-check reads the store's jobs, checks each open card through gh with GH_TOKEN and prints each card's status", () => scratch(async (env) => {
+  const store = path.join(env.HOME, "store")
+  cpSync(FIXTURE_STORE, store, { recursive: true })
+  const card = "```yaml\nkaizen: 1\nsignal: tool_retries\njob_class: any\nplugin: desk\nversion: 3.2.0\nhypothesis: { measure: tool_retries, direction: down }\n```\n"
+  const calls = []
+  const runner = async (args, options) => {
+    calls.push({ args, token: options.token, input: options.input })
+    const route = args[args.indexOf("X-GitHub-Api-Version: 2022-11-28") + 1]
+    if (route.startsWith("repos/ourostack/factory/issues?")) return { code: 0, stdout: JSON.stringify([{ number: 4, title: "Card", body: card, labels: [{ name: "kaizen" }], state: "open", user: { login: "someone" } }]), stderr: "" }
+    if (route.startsWith("repos/ourostack/factory/issues/4/comments?")) return { code: 0, stdout: "[]", stderr: "" }
+    return { code: 0, stdout: "{}", stderr: "" }
+  }
+  const tokenEnv = { ...env, GH_TOKEN: "ghs_SENTINEL" }
+  const result = await runKaizenCheckCommand({ argv: ["--store", store, "--repo", "ourostack/factory"], env: tokenEnv, runner })
+  assert.deepEqual(result, { cards: [{ number: 4, status: "too_few_jobs", comment: "created", labels: [] }], failed: 0 })
+  assert.ok(calls.every((call) => call.token === "ghs_SENTINEL" && !call.args.includes("ghs_SENTINEL")))
+  assert.match(JSON.parse(calls.at(-1).input).body, /Kaizen check: not enough independent jobs yet/u)
+  const withAuthor = await runKaizenCheckCommand({ argv: ["--store", store, "--repo", "ourostack/factory", "--author", "someone"], env: tokenEnv, runner })
+  assert.equal(withAuthor.cards[0].number, 4)
+  await assert.rejects(runKaizenCheckCommand({ argv: ["--store", store], env: tokenEnv, runner }), /Usage: factory\.js kaizen-check/u)
+  await assert.rejects(runKaizenCheckCommand({ argv: ["--store", store, "--repo", "ourostack/factory", "--extra", "x"], env: tokenEnv, runner }), /Usage: factory\.js kaizen-check/u)
+  await assert.rejects(runKaizenCheckCommand({ argv: ["--store", store, "--repo", "ourostack/factory"], env, runner }), /GH_TOKEN must hold/u)
+  assert.ok(SUPPORTED_COMMANDS.includes("kaizen-check"))
+  // A card whose calls fail is reported, and the command exits 1 after checking the rest.
+  const failing = async (args, options) => {
+    const route = args[args.indexOf("X-GitHub-Api-Version: 2022-11-28") + 1]
+    if (route.startsWith("repos/ourostack/factory/issues/4/comments?")) return { code: 1, stdout: "", stderr: "gh: Server Error (HTTP 502)" }
+    return runner(args, options)
+  }
+  let output = ""
+  const code = await main({ argv: ["kaizen-check", "--store", store, "--repo", "ourostack/factory"], env: tokenEnv, runner: failing, write: (text) => { output += text }, logError: () => assert.fail("a failed card is a result, not an error") })
+  assert.equal(code, 1)
+  assert.deepEqual(JSON.parse(output), { cards: [{ number: 4, status: "failed", code: "http_502" }], failed: 1 })
+}))
+
+test("kaizen-check uses the real gh runner when none is injected", () => scratch(async (env) => {
+  const store = path.join(env.HOME, "store")
+  cpSync(FIXTURE_STORE, store, { recursive: true })
+  // An empty PATH means gh cannot start: the stable code, not a crash.
+  await assert.rejects(runKaizenCheckCommand({ argv: ["--store", store, "--repo", "ourostack/factory"], env: { ...env, GH_TOKEN: "ghs_SENTINEL", PATH: "" } }), (error) => error.code === "gh_missing")
+}))
+
+test("andon reads the store's jobs and syncs its alarms through gh with GH_TOKEN", () => scratch(async (env) => {
+  const store = path.join(env.HOME, "store")
+  cpSync(FIXTURE_STORE, store, { recursive: true })
+  const routes = []
+  const runner = async (args, options) => {
+    assert.equal(options.token, "ghs_SENTINEL")
+    routes.push(args[args.indexOf("X-GitHub-Api-Version: 2022-11-28") + 1])
+    return { code: 0, stdout: "[]", stderr: "" }
+  }
+  const argv = ["--store", store, "--repo", "ourostack/factory"]
+  const tokenEnv = { ...env, GH_TOKEN: "ghs_SENTINEL" }
+  // A store without factory.json tracks no plugin.
+  assert.deepEqual(await runAndonCommand({ argv, env: tokenEnv, runner }), { tracked: [], alarms: [], failed: 0 })
+  assert.deepEqual(routes, ["repos/ourostack/factory/issues?state=all&labels=andon&per_page=100&page=1"])
+  await fs.writeFile(path.join(store, "factory.json"), '{"andon":{"plugins":["desk"]}}\n')
+  assert.deepEqual(await runAndonCommand({ argv, env: tokenEnv, runner }), { tracked: ["desk"], alarms: [], failed: 0 })
+  await fs.writeFile(path.join(store, "factory.json"), '{"andon":{"plugins":"desk"}}\n')
+  await assert.rejects(runAndonCommand({ argv, env: tokenEnv, runner }), /the store's factory\.json is not valid \(invalid_config\)/u)
+  await assert.rejects(runAndonCommand({ argv: ["--repo", "ourostack/factory"], env: { ...env, GH_TOKEN: "x" }, runner }), /Usage: factory\.js andon/u)
+  assert.ok(SUPPORTED_COMMANDS.includes("andon"))
 }))
