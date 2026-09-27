@@ -343,3 +343,25 @@ test("A3b: Desk admission records the host's state branch beside the protection 
   }
   assert.deepEqual(calls, [{ root, stateBranch: "main" }, { root, stateBranch: null }])
 })
+
+test("A3b: a command aimed at an unprotected worktree from a protected cwd is judged by that worktree", async (t) => {
+  const f = desk(t)
+  await protectCheckout({ root: f.shared, stateBranch: "main" })
+  const worktree = path.join(f.root, "worktree")
+  f.git(f.shared, "worktree", "add", "-q", "--detach", worktree, "HEAD")
+  const out = path.join(f.root, "out.txt")
+  for (const [command, extra] of [
+    [`cd ${q(worktree)} && { git log --oneline -3; git diff --stat HEAD~1; } > ${q(out)}`, {}],
+    [`cd ${q(worktree)} && git switch -c fix && git reset --hard HEAD~1 && git frobnicate`, {}],
+    [`git -C ${q(worktree)} stash && git -C ${q(worktree)} checkout topic`, {}],
+    [`Set-Location ${psq(worktree)}; git stash; git checkout topic`, { powershell: true }],
+  ]) {
+    const result = await f.guard(command, { cwd: f.shared, ...extra })
+    assert.equal(result.deny, false, `${command} -> ${result.reason}`)
+  }
+  // The same commands aimed at the protected cwd itself are still judged by it.
+  assert.equal((await f.guard("git stash", { cwd: f.shared })).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.stash}`)
+  assert.equal((await f.guard(`cd ${q(worktree)}; cd ${q(f.shared)} && git stash`, { cwd: f.shared })).deny, true)
+  // A missing alias in the target is "no alias": `git log` and an unknown command both pass.
+  assert.equal((await f.guard("{ git log -1; git frobnicate; } > /dev/null", { cwd: f.shared })).deny, false)
+})

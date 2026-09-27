@@ -6,6 +6,7 @@ import * as path from "node:path"
 // particular PATH, executable search paths and loader variables are not input.
 const HOST_ENV = { ...process.env }
 const LOCATION_KEYS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_NAMESPACE"]
+const TIMEOUT_MS = 5000
 let trustedGit
 
 export function resolveInspectionGit({ platform = process.platform, env = HOST_ENV, accessible = (file) => {
@@ -40,12 +41,14 @@ export function readInspectionGit(cwd, args, modeled, { signal } = {}) {
     let outcome
     // Abort can call the callback before the process and pipes are closed.
     // Settle only after close; this exact child never runs repository hooks.
-    const child = execFile(trustedGit, args, { cwd, env, signal, killSignal: "SIGKILL", encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+    const child = execFile(trustedGit, args, { cwd, env, signal, killSignal: "SIGKILL", encoding: "utf8", timeout: TIMEOUT_MS, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       outcome = { error, stdout, stderr }
     })
     child.once("close", () => {
       const { error, stdout, stderr } = outcome
-      if (error && (error.killed || typeof error.code !== "number")) { reject(error); return }
+      // A Git exit status, including 1 for "no such value", is an answer; only a timeout or a spawn failure is not.
+      if (error?.killed) { reject(new Error(`Git did not answer within ${TIMEOUT_MS / 1000} s: git ${args.join(" ")}`)); return }
+      if (error && typeof error.code !== "number") { reject(error); return }
       resolve({ ok: !error, stdout: stdout.trim(), stderr: stderr.trim(), code: error?.code })
     })
   })
