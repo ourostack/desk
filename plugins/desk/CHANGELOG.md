@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.53 — 2026-09-27
+
+Two [factory formula](mcp/src/factory/pipeline/formulas.js) edges are corrected. A job whose latest transition reopens it after `done` is open again: its lead time and flow efficiency are censored at the latest session end like any open job's, its status matches, and the earlier `done` stays in its transition history. A `tool_durations` gap, such as an open session's unfinished tool call, now marks the active-time family `partial` with the uncovered session count instead of `unavailable`; only sessions that lack their `turns` can make active time unavailable. Golden report outputs are unchanged. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
 ## 3.2.0-alpha.49 — 2026-09-27
 
 The factory now includes a deterministic store-side pipeline. [`validate-pr`](mcp/src/factory/pipeline/validate-pr.js) accepts only added or monotonic updates to canonical published facts, keeps error output content-free, and lets the CLI inspect pull-request revisions through Git without checking out or executing candidate files. [`build`](mcp/src/factory/pipeline/build.js) normalizes validated facts, places sessions on each hashed job clock, computes classed lead, queue, active, busy, parallelism, within-job concurrency, waits, flow-efficiency and rework values, and emits byte-stable JSON plus the exact four-question Markdown report.
