@@ -287,16 +287,26 @@ test("malformed, inaccessible and oversized cards fail closed without broadening
   const original = await fs.readFile(f.card, "utf8")
   for (const [body, reason] of [
     ["---\nrepos: []\n---", /status/],
-    ['---\nstatus: processing\nrepos: [{mode: local}]\n---', /block list/],
-    ['---\nstatus: processing\nrepos:\n  - local_path: "/x"\n---', /mode/],
-    ['---\nstatus: processing\nrepos:\n  - mode: local\n---', /path missing/],
-    ['---\nstatus: processing\nrepos:\n  - mode: local\n    local_path: ./relative\n---', /unresolved/],
     ["x".repeat(65537), /oversized/],
   ]) {
     await fs.writeFile(f.card, body)
     const result = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
     assert.equal(result.complete, false)
     assert.match(result.issues.join(" "), reason)
+  }
+  // A card whose repos Desk cannot read is one card's issue, never the whole desk's, and it authorizes nothing.
+  for (const body of [
+    '---\nstatus: processing\nrepos: [{mode: local}]\n---',
+    '---\nstatus: processing\nrepos:\n  - local_path: "/x"\n---',
+    '---\nstatus: processing\nrepos:\n  - mode: local\n---',
+    '---\nstatus: processing\nrepos:\n  - mode: local\n    local_path: ./relative\n---',
+    '---\nstatus: processing\nrepos:\n  - mode: local\n    local_path: /no/such/repository\n---',
+  ]) {
+    await fs.writeFile(f.card, body)
+    const result = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
+    assert.equal(result.complete, true, body)
+    assert.deepEqual(result.issues, ["1 task card with unreadable repos; their repositories were not inspected"])
+    assert.deepEqual(result.cardRecords[f.card].repositories, [])
   }
   await fs.writeFile(f.card, original)
   const open = fs.open.bind(fs)
@@ -723,6 +733,114 @@ test("R3 two repairs preserve squash branch and removed-resource evidence until 
   assert.equal(git(f.repo, "rev-parse", "topic"), w.record.head)
 })
 
+test("cards with no repos, or repos Desk cannot read, among valid ones never stop the tidy for the desk", async () => {
+  const f = await fixture()
+  const plain = path.join(f.desk, "track", "no-repos-field", "task.md")
+  const broken = path.join(f.desk, "track", "unreadable-repos", "task.md")
+  const other = path.join(f.desk, "track", "unreadable-too", "task.md")
+  for (const [file, body] of [
+    [plain, "---\nstatus: processing\n---\n"],
+    [broken, "---\nstatus: processing\nrepos: [{mode: local}]\n---\n"],
+    [other, "---\nstatus: processing\nrepos:\n  - mode: local\n    local_path: ./relative\n---\n"],
+  ]) {
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, body)
+  }
+  const inventory = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
+  assert.equal(inventory.complete, true)
+  assert.deepEqual(inventory.issues, ["2 task cards with unreadable repos; their repositories were not inspected"])
+  assert.deepEqual(inventory.cardRecords[plain].repositories, [f.desk], "no repos field: the desk only")
+  assert.ok(inventory.repositories.includes(await fs.realpath(f.repo)), "the valid card's repository is still inspected")
+
+  const w = await worktree(f, "still-tidied")
+  const result = await tidy.repairWorkspace({ deskRoot: f.desk })
+  assert.deepEqual(result.removed.map((entry) => entry.path), [w.directory])
+})
+
+test("R8 a desk bound through a symlink alias is the same desk: task lookup, report, lock and next boot agree", async () => {
+  const f = await fixture()
+  const alias = path.join(f.root, "desk-alias")
+  await fs.symlink(f.desk, alias)
+  const direct = await worktree(f, "direct")
+  const result = await tidy.repairWorkspace({ deskRoot: alias })
+  assert.deepEqual(result.left, [], "the receipt's task resolves under the alias exactly as under the real path")
+  assert.equal(result.removed[0].path, direct.directory)
+
+  const viaHook = await worktree(f, "via-hook")
+  const repaired = await boot.runRepair(alias)
+  assert.equal(repaired.removed[0].path, viaHook.directory)
+  assert.equal(repaired.root, f.desk, "the report's identity is the real path")
+  const file = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
+  const persisted = await boot.readReport(file)
+  assert.equal(persisted.root, f.desk)
+  assert.equal("bound" in persisted, false, "the report stores one identity, the real path")
+  assert.equal((await boot.runRepair(f.desk)).root, f.desk, "the real path reaches the same report")
+
+  const env = { ...process.env, DESK: alias, DESK_ACTIVATION_CONFIG: "", HOME: f.root }
+  const boots = async () => {
+    let line
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      line = await boot.runBootChecks({ host: "claude", env, launch: async () => {} })
+      if (!line.includes("budget exceeded")) break
+    }
+    return line
+  }
+  assert.match(await boots(), /Last repair: Tidied 1 stale worktrees/, "the next boot through the alias finds the repair's report")
+  await fs.writeFile(`${file}.lock`, "another-owner")
+  assert.match(await boots(), /repair lock/, "and the lock the repair holds")
+  assert.deepEqual(await boot.runRepair(alias), { busy: true, lock: `${file}.lock` })
+  await fs.unlink(`${file}.lock`)
+
+  // A report written before roots were canonical names the alias; it still belongs to this desk.
+  await fs.writeFile(file, JSON.stringify({ ...persisted, root: alias }))
+  assert.match(await boots(), /Last repair:/)
+})
+
+test("inspection combines its cancellation signals without AbortSignal.any, and releases its listeners", async (t) => {
+  const original = AbortSignal.any
+  t.after(() => { AbortSignal.any = original })
+  AbortSignal.any = undefined
+  const f = await fixture()
+  const outer = new AbortController()
+  const blocked = []
+  const stalled = (cwd, args, options) => new Promise((resolve) => {
+    blocked.push(options.signal)
+    options.signal.addEventListener("abort", () => resolve({ ok: false, stdout: "", code: 1 }))
+  })
+  const pending = tidy.inspectWorkspace({ deskRoot: f.desk, git: stalled, budgetMs: 5_000, signal: outer.signal })
+  while (blocked.length === 0) await new Promise((resolve) => setImmediate(resolve))
+  outer.abort(new Error("host deadline"))
+  const inventory = await pending
+  assert.equal(inventory.complete, false)
+  assert.equal(blocked[0].aborted, true, "the caller's abort reaches the running Git inspection")
+  assert.equal(blocked[0].reason.message, "host deadline")
+
+  const early = new AbortController()
+  early.abort("already")
+  const combined = tidy.anySignal([undefined, early.signal, new AbortController().signal])
+  assert.equal(combined.signal.aborted, true)
+  assert.equal(combined.signal.reason, "already")
+
+  const first = new AbortController()
+  const second = new AbortController()
+  const removed = []
+  const watch = (controller) => {
+    const remove = controller.signal.removeEventListener.bind(controller.signal)
+    controller.signal.removeEventListener = (type, listener) => { removed.push(type); remove(type, listener) }
+  }
+  watch(first)
+  watch(second)
+  const live = tidy.anySignal([first.signal, second.signal])
+  assert.equal(live.signal.aborted, false)
+  second.abort("second")
+  assert.equal(live.signal.reason, "second")
+  assert.deepEqual(removed, ["abort", "abort"], "both listeners are removed once one signal aborts")
+  const idle = tidy.anySignal([new AbortController().signal])
+  idle.cleanup()
+  idle.cleanup()
+  assert.equal(idle.signal.aborted, false)
+})
+
 test("R3 cleanup requires persisted pending evidence before destructive removal", async () => {
   const f = await fixture()
   const w = await worktree(f)
@@ -769,7 +887,7 @@ test("R2 late changed receipt and failed revocation absence are explicit refusal
   mock.mock.restore()
 })
 
-test("R6 canonical nested paths alone work and malformed repository indentation refuses", async () => {
+test("R6 canonical nested paths alone work and malformed repository indentation leaves that card's repositories uninspected", async () => {
   const f = await fixture()
   await fs.writeFile(f.card, serializeMarkdown({
     status: "processing", repos: [{ name: "repo", local_path: "~/repo", mode: "local", paths: ["src/**"] }],
@@ -781,7 +899,9 @@ test("R6 canonical nested paths alone work and malformed repository indentation 
     "---\nstatus: processing\nrepos:\n  - mode: remote\n bad-indent: x\n---",
   ]) {
     await fs.writeFile(f.card, body)
-    assert.equal((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).complete, false)
+    const result = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
+    assert.deepEqual(result.cardRecords[f.card].repositories, [], "the malformed card authorizes nothing")
+    assert.match(result.issues.join(" "), /1 task card with unreadable repos/)
   }
   await fs.writeFile(f.card, "---\nstatus: processing\nrepos:\n  - mode: remote\n\n\n---")
   assert.equal((await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })).complete, true)

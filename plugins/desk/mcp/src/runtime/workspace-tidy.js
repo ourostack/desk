@@ -65,6 +65,60 @@ function cardRepositories(matter) {
   }).filter(Boolean)
 }
 
+// One signal that aborts when any of `signals` does, with that signal's
+// reason. Hooks run in whatever Node the host puts first on PATH, and Node 16
+// has no AbortSignal.any, so the listeners are wired here and removed by
+// `cleanup` once the caller is done.
+export function anySignal(signals) {
+  const controller = new AbortController()
+  const listeners = []
+  const cleanup = () => {
+    for (const [signal, listener] of listeners.splice(0)) signal.removeEventListener("abort", listener)
+  }
+  for (const signal of signals.filter(Boolean)) {
+    if (signal.aborted) {
+      controller.abort(signal.reason)
+      break
+    }
+    const listener = () => {
+      controller.abort(signal.reason)
+      cleanup()
+    }
+    signal.addEventListener("abort", listener, { once: true })
+    listeners.push([signal, listener])
+  }
+  if (controller.signal.aborted) cleanup()
+  return { signal: controller.signal, cleanup }
+}
+
+// The bound desk's one identity: its real path. Task lookup, report storage,
+// report lookup and locking all key off it, so a desk bound through a symlink
+// alias is the same desk as its real path. A root that cannot be resolved is
+// returned as given; the inventory then reports it.
+export async function canonicalDeskRoot(deskRoot) {
+  try {
+    return await fs.realpath(deskRoot)
+  } catch {
+    return deskRoot
+  }
+}
+
+// A card's repositories, as real paths. A card with no `repos:` has none
+// besides the desk. One whose `repos:` Desk cannot read (another YAML shape,
+// a relative or missing path) throws here; the inventory then counts it in
+// one issue and gives that card no repositories at all, so it authorizes no
+// removal, while every other card still counts.
+async function resolveCardRepositories(matter, homeDir) {
+  if (!/^repos:/mu.test(matter)) return []
+  const resolved = []
+  for (const value of cardRepositories(matter)) {
+    const repo = value.startsWith("~/") ? path.join(homeDir, value.slice(2)) : value
+    if (!path.isAbsolute(repo)) throw new Error("unresolved repo path")
+    resolved.push(await fs.realpath(repo))
+  }
+  return resolved
+}
+
 export function parseWorktrees(output, repository) {
   return output.split("\0\0").filter(Boolean).map((block) => {
     const item = { repository }
@@ -87,7 +141,8 @@ export async function inspectWorkspace({
   const result = { repositories: [], cards: [], cardRecords: {}, worktrees: [], issues: [], complete: true }
   let expired = false
   const cancellation = new AbortController()
-  const stopSignal = signal ? AbortSignal.any([signal, cancellation.signal]) : cancellation.signal
+  const combined = anySignal([signal, cancellation.signal])
+  const stopSignal = combined.signal
   let timer
   const stop = () => { if (expired || stopSignal.aborted) throw new Error("workspace-tidy budget exceeded") }
   const inventory = async () => {
@@ -97,6 +152,7 @@ export async function inspectWorkspace({
     const queue = [{ dir: root, depth: 0 }]
     let directories = 0
     let entryCount = 0
+    let unreadableRepos = 0
     while (queue.length) {
       stop()
       if (++directories > maxDirectories) throw new Error("workspace-tidy directory budget exceeded")
@@ -119,13 +175,16 @@ export async function inspectWorkspace({
         const updated = Date.parse(data.updated)
         if (!terminal || !Number.isFinite(updated) || now - updated <= RECENT_MS) {
           result.cards.push(file)
-          const cardRepos = [root]
-          for (const value of cardRepositories(matter)) {
-            const repo = value.startsWith("~/") ? path.join(homeDir, value.slice(2)) : value
-            if (!path.isAbsolute(repo)) throw new Error(`unresolved repo path: ${file}`)
-            const canonical = await fs.realpath(repo)
+          let cardRepos
+          try {
+            cardRepos = [root, ...await resolveCardRepositories(matter, homeDir)]
+          } catch {
+            unreadableRepos += 1
+            cardRepos = []
+          }
+          stop()
+          for (const canonical of cardRepos) {
             repositories.add(canonical)
-            cardRepos.push(canonical)
             if (repositories.size > maxRepositories) throw new Error("workspace-tidy repository budget exceeded")
           }
           result.cardRecords[file] = { body, repositories: cardRepos }
@@ -141,6 +200,7 @@ export async function inspectWorkspace({
         queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 })
       }
     }
+    if (unreadableRepos) result.issues.push(`${unreadableRepos} task card${unreadableRepos === 1 ? "" : "s"} with unreadable repos; their repositories were not inspected`)
     result.repositories = [...repositories]
     const commonDirs = new Set()
     for (const repo of repositories) {
@@ -172,6 +232,7 @@ export async function inspectWorkspace({
     return await Promise.race([inventory().catch((error) => ({ ...result, complete: false, issues: [...result.issues, error.message] })), deadline])
   } finally {
     clearTimeout(timer)
+    combined.cleanup()
   }
 }
 
@@ -293,7 +354,10 @@ export async function revokeWorkspaceRelease(resource) {
   })
 }
 
-export async function repairWorkspace({ deskRoot, git = gitDefault, processStart = readProcessStart, signal = process.kill, onDisposition = async () => {}, ...inspection } = {}) {
+export async function repairWorkspace({ deskRoot: boundRoot, git = gitDefault, processStart = readProcessStart, signal = process.kill, onDisposition = async () => {}, ...inspection } = {}) {
+  // Resolved once: the inventory's card keys and each receipt's task lookup
+  // use the same real path, whichever spelling bound the desk.
+  const deskRoot = await canonicalDeskRoot(boundRoot)
   const inventory = await inspectWorkspace({ ...inspection, deskRoot, git, budgetMs: 30_000 })
   const result = { removed: [], left: [], issues: inventory.issues }
   if (!inventory.complete) {

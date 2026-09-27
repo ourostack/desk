@@ -228,7 +228,7 @@ test("the factory check starts one detached finalize for finished jobs whose fac
   const repairs = []
   const line = await runBootChecks({ ...quiet, host: "claude", env, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command) })
   assert.equal(line, "")
-  assert.deepEqual(repairs, [[process.execPath, path.join(PLUGIN, "mcp", "scripts", "factory.js"), "finalize", "--job", job]])
+  assert.deepEqual(repairs, [[process.execPath, BOOT, "--compatible", path.join(PLUGIN, "mcp", "scripts", "factory.js"), "finalize", "--job", job]], "finalize starts through the compatible-Node launcher")
   const person = []
   await runBootChecks({ ...quiet, host: "claude", env: { ...env, DESK_PERSON: "../bad" }, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => person.push(command) })
   assert.equal(person.length, 1, "an invalid person alias falls back to the desk's own tracks")
@@ -249,7 +249,7 @@ test("the desk-health check reports a degraded last start and otherwise asks for
   writeLastStart({ stateDir, root: real, snapshot: { state: "ready", code: null, repair: null, fix: null } })
   const repairs = []
   assert.equal(await run({ host: "claude", env, launchRepair: async (command) => repairs.push(command) }), "")
-  assert.deepEqual(repairs, [[process.execPath, BOOT, "--fast-forward", desk]])
+  assert.deepEqual(repairs, [[process.execPath, BOOT, "--compatible", BOOT, "--fast-forward", desk]], "the fast-forward starts through the compatible-Node launcher")
   const crew = path.join(base, "crew")
   await fs.mkdir(path.join(crew, "_meta"), { recursive: true })
   await fs.mkdir(path.join(crew, "desks"), { recursive: true })
@@ -282,7 +282,7 @@ test("startFactory starts factory-start.cjs detached only when a store has contr
   assert.equal(await startFactory({ env, launch }), false)
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   assert.equal(await startFactory({ env, launch }), true)
-  assert.deepEqual(launched.map((entry) => entry.command), [[process.execPath, START]])
+  assert.deepEqual(launched.map((entry) => entry.command), [[process.execPath, BOOT, "--compatible", START]], "delivery starts through the compatible-Node launcher")
   assert.equal(launched[0].childEnv, env)
   assert.equal(await startFactory({ env, launch: async () => { throw new Error("spawn failed") } }), false)
 }))
