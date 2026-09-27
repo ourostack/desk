@@ -790,9 +790,10 @@ Desk picks the store for a desk in this order:
 
 3. Otherwise `ourostack/factory`.
 
-A declaration that is present but malformed holds the desk's facts locally instead of falling through to a later source, so a desk meant for a private store never reports to a public one by mistake. Each machine then opts in once:
+A declaration that is present but malformed holds the desk's facts locally instead of falling through to a later source, so a desk meant for a private store never reports to a public one by mistake. Each machine then opts in once, with the account `factory.js account` names (it asks GitHub which signed-in account can open pull requests on the store, and never assumes gh's active account):
 
 ```sh
+node <desk plugin root>/mcp/scripts/factory.js account --store <owner>/<repository>
 node <desk plugin root>/mcp/scripts/factory.js consent --store <owner>/<repository> --contribute yes --account <login>
 ```
 
