@@ -97,8 +97,10 @@ export function createDeskSession(deps) {
   let disposed = false
   let unwatchController = null
   let hungOwner = null
-  // The latest runtime status detail, served (and marked cached) when a fresh one does not arrive within desk_status's budget.
+  // The latest runtime status detail, served (and marked cached) when a fresh one does not arrive within desk_status's budget. `at` is when its computation started.
   let lastStatusDetail = null
+  // The one runtime status computation allowed at a time, so repeated desk_status calls on a slow machine never pile up work.
+  let statusRun = null
 
   const log = (line) => stderr.write(`[desk-mcp] ${line}\n`)
 
@@ -550,20 +552,38 @@ export function createDeskSession(deps) {
     if (snapshot.state === "ready") backgroundControllerCheck()
     let payload = baseDiagnostic(snapshot)
     if (context.runtimeServer && context.root && launcher?.mode !== "refuse") {
-      const outcome = await raceWithTimer(Promise.resolve().then(() => runtimeCall("desk_status", input, signal)), Math.max(0, Math.min(STATUS_DETAIL_MS, deadline - Date.now())))
+      // A computation already running started before this call, so this call does not wait for it or report it as fresh; it serves the last detail instead.
+      const outcome = statusRun !== null
+        ? { timedOut: true }
+        : await raceWithTimer(startStatusRun(input, signal), Math.max(0, Math.min(STATUS_DETAIL_MS, deadline - Date.now())))
       if (outcome.timedOut && lastStatusDetail !== null) {
-        payload = { ...lastStatusDetail.payload, status_detail: `cached: the runtime status (index, readiness controller) did not answer in time; this detail is from ${lastStatusDetail.at}. Call desk_status again for a fresh one.` }
+        payload = { ...lastStatusDetail.payload, status_detail: `cached: the runtime status (index, readiness controller) did not answer in time; this detail is from ${lastStatusDetail.at}. Call desk_status again for a fresh one.`, status_detail_from: lastStatusDetail.at }
       } else if (outcome.timedOut) {
         payload = { ...payload, status_detail: "unavailable: the runtime status (index, readiness controller) did not answer in time; call desk_status again" }
-      } else if (outcome.error !== undefined) {
-        const error = outcome.error
+      } else if (outcome.value.error !== undefined) {
+        const error = outcome.value.error
         payload = { ...payload, status_error: error instanceof Error ? error.message : String(error) }
       } else {
-        payload = JSON.parse(outcome.value.content[0].text)
-        lastStatusDetail = { payload, at: new Date().toISOString() }
+        payload = outcome.value.payload
       }
     }
     return jsonResult(withAdmission(payload, admission.snapshot()))
+  }
+
+  // Starts the runtime status computation. Its detail is kept even when it arrives after the call that started it has answered, so the next call serves it, marked cached with when it was computed.
+  function startStatusRun(input, signal) {
+    const at = new Date().toISOString()
+    const run = Promise.resolve()
+      .then(() => runtimeCall("desk_status", input, signal))
+      .then((value) => {
+        const payload = JSON.parse(value.content[0].text)
+        lastStatusDetail = { payload, at }
+        return { payload }
+      })
+      .catch((error) => ({ error }))
+      .finally(() => { statusRun = null })
+    statusRun = run
+    return run
   }
 
   function raceWithTimer(promise, ms) {

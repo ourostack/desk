@@ -1213,6 +1213,16 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n")
     return session
   }
+  // desk_status answers within a fixed budget, so on a busy machine its runtime detail (lexical, semantic) can be missing or cached from earlier.
+  // This returns the first detail whose computation started after `since`: one is always running or next to start, and it is kept when it finishes late.
+  async function statusAfter(session, since = new Date().toISOString()) {
+    for (;;) {
+      const status = await session.call("desk_status")
+      assert.equal(status.status_error, undefined, status.status_error)
+      if (status.lexical && (status.status_detail === undefined || status.status_detail_from >= since)) return status
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
   const first = await launch()
   await t.test("immediate startup query returns canonical fixture during convergence", async () => {
     const result = await first.call("desk_search", { query: "startupquartz" })
@@ -1224,7 +1234,7 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
   await t.test("second process searches while the controller owns embedding work", async () => {
     const result = await second.call("desk_search", { query: "startupquartz" })
     assert.equal(result.results[0].snippet, "startupquartz")
-    const status = await second.call("desk_status")
+    const status = await statusAfter(second)
     assert.equal(status.lexical.serving_path, "direct")
     assert.equal(status.lexical.current_automatic_action, "reconciling")
     assert.ok(status.runtime.source_mirror_path.startsWith(runtimeCache))
@@ -1259,7 +1269,7 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
     const result = await first.call("desk_search", { query: "uncertainquartz" })
     assert.equal(result.results[0].snippet, "uncertainquartz")
     assert.ok(result.readiness_diagnostic)
-    assert.equal((await first.call("desk_status")).lexical.serving_path, "direct")
+    assert.equal((await statusAfter(first)).lexical.serving_path, "direct")
   })
   held.resolve()
   await second.call("desk_reindex", { force: true })
@@ -1278,8 +1288,8 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
   })
   await t.test("status reports its serving path without changing controller or generation state", async () => {
     const before = await observer.status()
-    const one = await first.call("desk_status")
-    const two = await first.call("desk_status")
+    const one = await statusAfter(first)
+    const two = await statusAfter(first)
     const after = await observer.status()
     assert.deepEqual(two.lexical, one.lexical)
     assert.deepEqual(after, before)
@@ -1298,7 +1308,7 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
     const result = await restarted.call("desk_search", { query: "restartquartz" })
     assert.equal(result.results[0].snippet, "restartquartz")
     assert.ok(result.readiness_diagnostic)
-    assert.equal((await restarted.call("desk_status")).lexical.serving_path, "direct")
+    assert.equal((await statusAfter(restarted)).lexical.serving_path, "direct")
   })
   held.resolve()
   await restarted.call("desk_reindex")
