@@ -190,7 +190,7 @@ test("binding marks only the bound checkout, preserves Git layout and leaves new
 test("Desk admission marks launcher-bound roots before activation, and marks a newly bound root too", async () => {
   const { createDeskSession } = await import("../../src/runtime/desk-session.js")
   const roots = [path.join(root, "session-a"), path.join(root, "session-b")]
-  for (const dir of roots) { mkdirSync(dir); git(dir, "init", "-q") }
+  for (const dir of roots) { mkdirSync(dir); git(dir, "init", "-q"); for (const child of ["_meta", "_archive"]) mkdirSync(path.join(dir, child)) }
   let bound = roots[0]
   const session = createDeskSession({
     args: {}, deskStateDir: path.join(root, "session-state"), stderr: { write() {} },

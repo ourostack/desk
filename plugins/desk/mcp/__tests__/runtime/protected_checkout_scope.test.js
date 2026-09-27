@@ -4,7 +4,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -347,6 +347,7 @@ test("A3b: Desk admission records the host's state branch beside the protection 
   const { createDeskSession } = await import("../../src/runtime/desk-session.js")
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-admission-")))
   t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  for (const child of ["_meta", "_archive"]) mkdirSync(path.join(root, child))
   const calls = []
   for (const activation of [{ stateBranch: "main" }, undefined]) {
     const session = createDeskSession({
