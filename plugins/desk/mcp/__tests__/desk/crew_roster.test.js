@@ -128,3 +128,29 @@ test("crewWorkspace fails closed when a crew workspace cannot be ruled out", asy
   assert.deepEqual(crewWorkspace(null), { crew: false, roster: null })
   assert.deepEqual(crewWorkspace(""), { crew: false, roster: null })
 })
+
+test("crewWorkspace counts a roster path it cannot check, or desks/ without a roster file, as crew", { skip: process.platform === "win32" && "symlinks and permission bits differ on Windows" }, async () => {
+  const dangling = await deskWith(null)
+  await fs.mkdir(path.join(dangling, "_meta"), { recursive: true })
+  await fs.symlink(path.join(dangling, "nowhere.md"), path.join(dangling, CREW_ROSTER_FILE))
+  await fs.mkdir(path.join(dangling, "desks", "alex"), { recursive: true })
+  assert.deepEqual(crewWorkspace(dangling), { crew: true, roster: [] }, "a dangling symlink beside desks/")
+
+  const danglingSolo = await deskWith(null)
+  await fs.mkdir(path.join(danglingSolo, "_meta"), { recursive: true })
+  await fs.symlink(path.join(danglingSolo, "nowhere.md"), path.join(danglingSolo, CREW_ROSTER_FILE))
+  assert.deepEqual(crewWorkspace(danglingSolo), { crew: true, roster: [] }, "a roster path that exists but cannot be read")
+
+  const noFile = await deskWith(null)
+  await fs.mkdir(path.join(noFile, "desks", "alex"), { recursive: true })
+  assert.deepEqual(crewWorkspace(noFile), { crew: true, roster: [] }, "desks/ with no roster file")
+
+  const sealed = await deskWith(ROSTER)
+  await fs.mkdir(path.join(sealed, "desks"), { recursive: true })
+  await fs.chmod(path.join(sealed, "_meta"), 0o000)
+  try {
+    if (process.getuid?.() !== 0) assert.deepEqual(crewWorkspace(sealed), { crew: true, roster: [] }, "an unsearchable _meta/")
+  } finally {
+    await fs.chmod(path.join(sealed, "_meta"), 0o755)
+  }
+})

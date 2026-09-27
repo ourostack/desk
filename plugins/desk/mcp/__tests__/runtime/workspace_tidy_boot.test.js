@@ -310,6 +310,30 @@ test("the repair launcher runs the repair in a compatible Node, and with none re
   // The re-executed repair runs itself, with no second search.
   assert.deepEqual(await boot.startRepair(f.desk, { env: { ...f.env, [boot.REPAIR_NODE_ENV]: "1" }, resolveNode: () => { throw new Error("no second search") }, repair }), { repaired: f.desk })
 
+  // The status is written like the report: never through a symlink, never over a hard link, and a directory there is named.
+  if (process.platform !== "win32") {
+    const victim = path.join(f.root, "victim.txt")
+    await fs.writeFile(victim, "untouched\n")
+    await fs.symlink(victim, `${file}.node.json`)
+    await boot.startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: null, range: ">=20.0.0" }), repair })
+    assert.equal(await fs.readFile(victim, "utf8"), "untouched\n")
+    assert.equal((await fs.lstat(`${file}.node.json`)).isFile(), true)
+    await fs.rm(`${file}.node.json`)
+    await fs.symlink(victim, `${file}.node.json`)
+    await boot.startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=20.0.0" }), repair })
+    await assert.rejects(fs.lstat(`${file}.node.json`), { code: "ENOENT" }, "clearing removes the link, not its target")
+    assert.equal(await fs.readFile(victim, "utf8"), "untouched\n")
+    await fs.link(victim, `${file}.node.json`)
+    assert.match(await bootLine({ host: "claude", env: f.env, launch: async () => {} }), /repair Node status unreadable; deferred/, "a hard-linked status is refused")
+    await fs.rm(`${file}.node.json`)
+  }
+  await fs.mkdir(`${file}.node.json`)
+  await assert.rejects(boot.startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: null, range: ">=20.0.0" }), repair }), /could not record the workspace-tidy Node status/)
+  assert.equal((await fs.readdir(path.dirname(file))).some((name) => name.endsWith(".tmp")), false, "no temporary file is left behind")
+  repaired.length = 0
+  assert.deepEqual(await boot.startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=20.0.0" }), repair }), { repaired: f.desk }, "a directory there never stops the repair")
+  await fs.rm(`${file}.node.json`, { recursive: true })
+
   // An unreadable status is named, never fatal.
   await fs.writeFile(`${file}.node.json`, "{")
   assert.match(await bootLine({ host: "claude", env: f.env, launch: async () => {} }), /repair Node status unreadable; deferred/)

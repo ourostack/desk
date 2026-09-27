@@ -186,7 +186,7 @@ one table, one row per desk. keep it human-readable — a non-agent teammate mus
 - **worker_variant** — which worker overlay is bound to this desk (`worker` for a plain personal desk, `crew` / a crew variant for a shared crew desk).
 - **write_subtree** — the path prefix this desk's agent scopes its writes to. equals `path` for an in-repo person desk; for a single-desk OFF-mode workspace there is no crew roster, so this column never describes the workspace root.
 
-a single-owner OFF-mode desk has **no crew roster**: either no `_meta/desks.md` at all, or one that holds something else, such as a hub's cross-desk routing registry (its own "Solo desks" and "Crew desks" tables) or a spoke desk's pointer to its hub. either way it is a single desk: behave as today, and read a hub's registry as routing context only. don't synthesize a roster; don't warn about its absence.
+a single-owner OFF-mode desk has **no crew roster**: either no `_meta/desks.md` at all, or one that holds something else, such as a hub's cross-desk routing registry (its own "Solo desks" and "Crew desks" tables) or a spoke desk's pointer to its hub. either way, when the workspace has no `desks/` folder, it is a single desk: behave as today, and read a hub's registry as routing context only. don't synthesize a roster; don't warn about its absence. the exception fails closed: a `desks/` folder with no roster, or a `_meta/desks.md` that cannot be read, is treated as a crew workspace whose person cannot be resolved, so nothing is written at the workspace root until a roster names this session's desk.
 
 ### remap-tolerance note
 
@@ -252,7 +252,7 @@ resume one, or start new?
 crew workspace: P desks (you: <alias> → desks/<alias>) · peers: <a>, <b>
 ```
 
-omit this line entirely in single-desk (OFF) mode — no registry, no banner, byte-identical to today's output.
+omit this line entirely in single-desk (OFF) mode — no crew roster, no banner, byte-identical to today's output.
 
 if the operator picks a task to resume → hand off to the `session-resumption` skill. if the operator says "start new" → follow the `dual-input` skill. if the operator wants the fuller dashboard → invoke the `status` skill.
 

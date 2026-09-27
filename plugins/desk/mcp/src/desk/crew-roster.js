@@ -19,7 +19,7 @@
 // Dependency-free: `scripts/tidy-status.js` runs this straight from the
 // installed plugin, and hooks may run it on an old Node.
 
-import { existsSync, readFileSync, statSync } from "node:fs"
+import { lstatSync, readFileSync, statSync } from "node:fs"
 import * as path from "node:path"
 
 export const CREW_ROSTER_FILE = path.join("_meta", "desks.md")
@@ -96,16 +96,26 @@ function isDirectory(file) {
  * crewWorkspace(deskRoot) -> { crew, roster }
  *
  * Whether the desk is a crew workspace, and its roster rows. It fails closed:
- * a `_meta/desks.md` that exists but cannot be read, or one without a roster
- * next to a `desks/` folder (an older alias-only roster, say), makes a crew
- * workspace with no rows, so no person resolves and nothing is tidied at the
- * crew root. Only a desk with no file, or a file without a roster and no
- * `desks/` folder (a hub's registry, a spoke's pointer), is single-owner.
+ * a `_meta/desks.md` that cannot be checked or read (a dangling symlink, an
+ * unsearchable `_meta/`), a `desks/` folder with no roster file, or a file
+ * without a roster next to a `desks/` folder (an older alias-only roster, say)
+ * makes a crew workspace with no rows, so no person resolves and nothing is
+ * tidied at the crew root. Only a desk with no `desks/` folder and either no
+ * file or a file without a roster (a hub's registry, a spoke's pointer) is
+ * single-owner.
  */
 export function crewWorkspace(deskRoot) {
   if (typeof deskRoot !== "string" || deskRoot === "") return { crew: false, roster: null }
   const file = path.join(deskRoot, CREW_ROSTER_FILE)
-  if (!existsSync(file)) return { crew: false, roster: null }
+  const desks = isDirectory(path.join(deskRoot, "desks"))
+  try {
+    lstatSync(file)
+  } catch (error) {
+    // Missing: single-owner unless a `desks/` folder says otherwise. A path
+    // that cannot be checked at all (an unsearchable `_meta/`) is crew.
+    if (error.code === "ENOENT" && !desks) return { crew: false, roster: null }
+    return { crew: true, roster: [] }
+  }
   let raw
   try {
     raw = readFileSync(file, "utf8")
@@ -114,5 +124,5 @@ export function crewWorkspace(deskRoot) {
   }
   const roster = parseCrewRoster(raw)
   if (roster !== null) return { crew: true, roster }
-  return isDirectory(path.join(deskRoot, "desks")) ? { crew: true, roster: [] } : { crew: false, roster: null }
+  return desks ? { crew: true, roster: [] } : { crew: false, roster: null }
 }

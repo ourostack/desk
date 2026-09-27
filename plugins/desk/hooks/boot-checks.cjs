@@ -50,10 +50,38 @@ function nodeStatusPath(file) {
 
 async function readNodeStatus(file) {
   const info = await fs.lstat(nodeStatusPath(file));
-  if (!info.isFile() || info.size > NODE_STATUS_MAX_BYTES) throw new Error("unsafe workspace-tidy node status");
+  if (!info.isFile() || info.nlink !== 1 || info.size > NODE_STATUS_MAX_BYTES) throw new Error("unsafe workspace-tidy node status");
   const status = JSON.parse(await fs.readFile(nodeStatusPath(file), "utf8"));
   if (typeof status?.range !== "string") throw new Error("invalid workspace-tidy node status");
   return status;
+}
+
+// Written like the report: a new private temporary file renamed into place,
+// so no symlink at the path is followed and no reader sees a partial file.
+async function writeNodeStatus(file, status) {
+  const target = nodeStatusPath(file);
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  const output = await fs.open(temporary, "wx", 0o600);
+  try { await output.writeFile(`${JSON.stringify(status)}\n`); await output.sync(); } finally { await output.close(); }
+  try {
+    await fs.rename(temporary, target);
+  } catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw new Error(`could not record the workspace-tidy Node status at ${target}: ${error.code ?? error.message}`);
+  }
+}
+
+// Removes a recorded no-Node status. Anything else at that path, such as a
+// directory, is left alone: the repair still runs, and the boot line names
+// the path as unreadable.
+async function clearNodeStatus(file) {
+  const target = nodeStatusPath(file);
+  let info;
+  try { info = await fs.lstat(target); } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  if (info.isFile() || info.isSymbolicLink()) await fs.unlink(target);
 }
 
 // The boot path does no Node search: the detached child starts in the hook's
@@ -222,14 +250,13 @@ async function acknowledgeRepair(root, acknowledgement) {
  */
 async function startRepair(root, { env = process.env, resolveNode = compatibleNode, spawnChild = spawn, repair = runRepair } = {}) {
   const { file } = await location(root);
-  const status = nodeStatusPath(file);
   if (env[REPAIR_NODE_ENV] === "1") return repair(root);
   const { node, range } = resolveNode({ env, probeBudgetMs: LAUNCHER_PROBE_BUDGET_MS });
   if (!node) {
-    await fs.writeFile(status, `${JSON.stringify({ range, recorded: new Date().toISOString() })}\n`, { mode: 0o600 });
+    await writeNodeStatus(file, { range, recorded: new Date().toISOString() });
     return { started: false, reason: `no Node ${range} found` };
   }
-  await fs.rm(status, { force: true });
+  await clearNodeStatus(file);
   if (node === process.execPath) return repair(root);
   const code = await new Promise((resolve, reject) => {
     const child = spawnChild(node, [__filename, "--repair", root], { stdio: "inherit", windowsHide: true, env: { ...env, [REPAIR_NODE_ENV]: "1" } });
