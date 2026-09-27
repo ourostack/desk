@@ -7,8 +7,8 @@
 
 import { test, after } from "node:test"
 import { strict as assert } from "node:assert"
-import { execFileSync, spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { execFileSync, spawn, spawnSync } from "node:child_process"
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -683,6 +683,9 @@ test("--write-record writes the record in this session's own subtree and turns D
 // ── One tidy at a time, and no repeated instruction when it cannot finish ──
 
 const iso = (ms) => new Date(ms).toISOString()
+// Every claim-related file in a Git folder, and one claim generation's content.
+const claimFiles = (gitDir) => readdirSync(gitDir).filter((name) => name.startsWith("desk-tidy-claim")).sort()
+const claimIn = (gitDir, generation) => JSON.parse(readFileSync(path.join(gitDir, `desk-tidy-claim.${generation}.json`), "utf8"))
 
 test("only one session tidies a desk at a time: the claim holds off a second report, Detect, the record and a deferral until it goes stale", () => {
   const root = soloDesk()
@@ -711,19 +714,90 @@ test("only one session tidies a desk at a time: the claim holds off a second rep
   assert.equal(second.code, 0)
   assert.notEqual(claimOf(second), token)
   assert.equal(cli(["--write-record", "--claim", claimOf(second)], { env, now: stale }).code, 0)
-  assert.throws(() => readFileSync(path.join(root, ".git", "desk-tidy-claim.json")), { code: "ENOENT" }, "the record releases the claim")
+  const gitDir = path.join(root, ".git")
+  assert.deepEqual(claimFiles(gitDir), ["desk-tidy-claim.2.json"], "the takeover is the next generation, and the older one is pruned")
+  assert.deepEqual(claimIn(gitDir, 2), { token: claimOf(second), claimed_at: 0 }, "the record releases the claim")
   assert.equal(cli(["--detect"], { env, now: stale }).code, 1)
 })
 
-test("a claim is exclusive: a corrupt claim is replaced, and a claim that cannot be created counts as held", () => {
+test("releasing leaves another session's claim alone, and replaces an unreadable one", () => {
+  const root = soloDesk()
+  const gitDir = path.join(root, ".git")
+  const env = { DESK: root }
+  // Nothing to release when no session ever claimed the desk.
+  assert.equal(cli(["--defer", "nothing claimed"], { env }).code, 0)
+  assert.deepEqual(claimFiles(gitDir), [])
+  // A stale claim of another session's stays as it is.
+  writeFileSync(path.join(gitDir, "desk-tidy-claim.4.json"), JSON.stringify({ token: "theirs", claimed_at: NOW - CLAIM_STALE_MS }))
+  assert.equal(cli(["--defer", "still stale", "--claim", "mine"], { env }).code, 0)
+  assert.deepEqual(claimIn(gitDir, 4), { token: "theirs", claimed_at: NOW - CLAIM_STALE_MS })
+  // An unreadable current claim counts as nobody's, and releasing replaces it.
+  writeFileSync(path.join(gitDir, "desk-tidy-claim.5.json"), "{")
+  assert.equal(cli(["--write-record"], { env }).code, 0)
+  assert.deepEqual(claimIn(gitDir, 5), { claimed_at: 0 })
+})
+
+test("a claim is exclusive: an unreadable claim is taken over, a racing session that links first wins, and no temporary file is left", () => {
   const gitDir = tempDir()
-  writeFileSync(path.join(gitDir, "desk-tidy-claim.json"), "not json")
-  const taken = takeClaim(gitDir, { now: NOW, token: "mine" })
-  assert.deepEqual(taken, { token: "mine" })
-  assert.deepEqual(JSON.parse(readFileSync(path.join(gitDir, "desk-tidy-claim.json"), "utf8")), { token: "mine", claimed_at: NOW })
+  writeFileSync(path.join(gitDir, "desk-tidy-claim.3.json"), "not json")
+  assert.deepEqual(takeClaim(gitDir, { now: NOW, token: "mine" }), { token: "mine" })
+  assert.deepEqual(claimFiles(gitDir), ["desk-tidy-claim.4.json"])
+  assert.deepEqual(claimIn(gitDir, 4), { token: "mine", claimed_at: NOW })
   assert.deepEqual(takeClaim(gitDir, { now: NOW + 1 }), { held: { token: "mine", claimed_at: NOW } })
   assert.deepEqual(takeClaim(path.join(gitDir, "missing"), { now: NOW }), { held: { claimed_at: NOW } })
-  assert.match(takeClaim(tempDir(), { now: NOW }).token, /^[0-9a-f-]{36}$/u)
+  const fresh = tempDir()
+  assert.match(takeClaim(fresh, { now: NOW }).token, /^[0-9a-f-]{36}$/u)
+  assert.deepEqual(claimFiles(fresh), ["desk-tidy-claim.1.json"])
+
+  // Two sessions see the same stale claim and race for the next generation:
+  // the one that links first holds it, and the other's link fails.
+  const racer = { token: "racer", claimed_at: NOW }
+  const stale = tempDir()
+  writeFileSync(path.join(stale, "desk-tidy-claim.1.json"), JSON.stringify({ token: "gone", claimed_at: NOW - CLAIM_STALE_MS }))
+  const linkedFirst = (from, to) => {
+    writeFileSync(to, JSON.stringify(racer))
+    linkSync(from, to)
+  }
+  assert.deepEqual(takeClaim(stale, { now: NOW, token: "mine", link: linkedFirst }), { held: racer })
+  assert.deepEqual(claimFiles(stale), ["desk-tidy-claim.1.json", "desk-tidy-claim.2.json"])
+  assert.deepEqual(claimIn(stale, 2), racer)
+
+  // A session that started from an older view links a newer generation
+  // before this one checks: this one withdraws its claim.
+  const behind = tempDir()
+  const overtaken = (from, to) => {
+    linkSync(from, to)
+    writeFileSync(path.join(behind, "desk-tidy-claim.2.json"), JSON.stringify(racer))
+  }
+  assert.deepEqual(takeClaim(behind, { now: NOW, token: "mine", link: overtaken }), { held: racer })
+  assert.deepEqual(claimFiles(behind), ["desk-tidy-claim.2.json"])
+  // A newer generation that is unreadable still wins.
+  const unreadable = tempDir()
+  const overtakenBadly = (from, to) => {
+    linkSync(from, to)
+    writeFileSync(path.join(unreadable, "desk-tidy-claim.2.json"), "{")
+  }
+  assert.deepEqual(takeClaim(unreadable, { now: NOW, token: "mine", link: overtakenBadly }), { held: { claimed_at: NOW } })
+})
+
+test("many sessions taking the claim at once: exactly one holds it", async () => {
+  const gitDir = tempDir()
+  writeFileSync(path.join(gitDir, "desk-tidy-claim.7.json"), JSON.stringify({ token: "crashed", claimed_at: NOW - CLAIM_STALE_MS }))
+  const url = new URL("../../src/desk/tidy.js", import.meta.url).href
+  const script = `import { takeClaim } from ${JSON.stringify(url)}; process.stdout.write(JSON.stringify(takeClaim(${JSON.stringify(gitDir)}, { now: ${NOW} })))`
+  const runs = Array.from({ length: 12 }, () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "inherit"] })
+    let out = ""
+    child.stdout.on("data", (chunk) => { out += chunk })
+    child.on("error", reject)
+    child.on("close", () => resolve(JSON.parse(out)))
+  }))
+  const results = await Promise.all(runs)
+  const winners = results.filter((result) => result.token !== undefined)
+  assert.equal(winners.length, 1, JSON.stringify(results))
+  const current = claimFiles(gitDir).filter((name) => name.endsWith(".json")).at(-1)
+  assert.equal(JSON.parse(readFileSync(path.join(gitDir, current), "utf8")).token, winners[0].token)
+  assert.deepEqual(claimFiles(gitDir).filter((name) => name.endsWith(".tmp")), [])
 })
 
 test("a tidy that stops is held with its reason until the state that stopped it changes", () => {
@@ -744,6 +818,9 @@ test("a tidy that stops is held with its reason until the state that stopped it 
   assert.equal(cli(["--detect"], { env: nobody, now: NOW - 1 }).code, 0, "a hold from the future does not count")
   write(crew, "_meta/desks.md", `${readFileSync(path.join(crew, "_meta/desks.md"), "utf8")}| carol | carol-login | desks/carol |\n`)
   assert.equal(cli(["--detect"], { env: nobody }).code, 0, "a changed roster lifts the hold")
+  assert.equal(cli(["--report"], { env: nobody }).code, 1)
+  assert.equal(cli(["--detect"], { env: nobody }).code, 1)
+  assert.equal(cli(["--detect"], { env: { DESK: crew, DESK_IDENTITY: "Bob-Login" } }).code, 0, "a person resolving lifts the hold")
 
   // The tools and the script disagree about the person.
   const bob = { DESK: crew, DESK_IDENTITY: "alice-login" }
@@ -763,7 +840,7 @@ test("the agent defers a tidy it cannot finish, and it returns once the desk's c
     stdout: "The tidy is on hold: tidy paths hold another session's changes. Session start names it until this desk's latest commit or its uncommitted changes differ, and then the tidy runs again.\n",
     stderr: "",
   })
-  assert.throws(() => readFileSync(path.join(root, ".git", "desk-tidy-claim.json")), { code: "ENOENT" }, "deferring releases the claim")
+  assert.deepEqual(claimIn(path.join(root, ".git"), 1), { token, claimed_at: 0 }, "deferring releases the claim")
   assert.deepEqual(cli(["--detect"], { env }), { code: 1, stdout: "held: tidy paths hold another session's changes\n", stderr: "" })
   write(root, "another-loose-file.txt", "new\n")
   assert.equal(cli(["--detect"], { env }).code, 0)

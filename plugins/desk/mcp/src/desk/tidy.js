@@ -39,7 +39,12 @@
 //   before it prints the steps, and the steps carry its token to
 //   `--write-record` and `--defer`. While another session's claim is fresh
 //   (CLAIM_STALE_MS), `--report` prints one line instead of the steps and
-//   Detect reports the tidy as held.
+//   Detect reports the tidy as held. Claims are numbered generations
+//   (`desk-tidy-claim.<n>.json`), and the newest is the current one. A
+//   session takes over by linking a fully written file to the next number,
+//   which fails when another session got there first, and then checks that
+//   no newer generation appeared; nothing ever deletes or rewrites another
+//   session's claim, so two sessions can never both hold one.
 // - A hold. When the tidy stops (no person resolves, the tools and the script
 //   disagree about the desk, Git is mid-merge, or the agent stops it with
 //   `--defer <reason>`), a hold records the reason and a fingerprint of the
@@ -51,7 +56,7 @@
 //   not fire this time, so a slow `gh` never holds up session start and the
 //   next session start has the identity.
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync, writeSync } from "node:fs"
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
 import { spawn as spawnChild, spawnSync } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import * as os from "node:os"
@@ -95,7 +100,7 @@ export const CLAIM_STALE_MS = 30 * 60 * 1000
 // A hold lapses after this even when nothing changed, so the tidy is tried
 // again now and then.
 export const HOLD_MAX_MS = 7 * 24 * 60 * 60 * 1000
-const CLAIM_FILE = "desk-tidy-claim.json"
+const CLAIM_NAME = /^desk-tidy-claim\.(\d+)\.json$/u
 const HOLD_FILE = "desk-tidy-hold.json"
 const TIDY_STATUS_SCRIPT = fileURLToPath(new URL("../../scripts/tidy-status.js", import.meta.url))
 
@@ -433,36 +438,85 @@ function freshClaim(claim, now) {
     now - claim.claimed_at >= 0 && now - claim.claimed_at < CLAIM_STALE_MS
 }
 
-/**
- * takeClaim(gitDir, { now, token? }) -> { token } | { held: { claimed_at } }
- *
- * The exclusive claim on tidying this desk. A stale or unreadable claim is
- * replaced; a fresh one is another session's.
- */
-export function takeClaim(gitDir, { now, token = randomUUID() }) {
-  const file = path.join(gitDir, CLAIM_FILE)
-  const current = readJson(file)
-  if (freshClaim(current, now)) return { held: current }
-  if (existsSync(file)) removeFile(file)
-  let fd
+const claimFile = (gitDir, generation) => path.join(gitDir, `desk-tidy-claim.${generation}.json`)
+
+// The claim generations in the Git folder, newest first.
+function claimGenerations(gitDir) {
+  let names
   try {
-    fd = openSync(file, "wx", 0o600)
+    names = readdirSync(gitDir)
   } catch {
-    // Another session created it between the check and here.
-    return { held: readJson(file) ?? { claimed_at: now } }
+    return []
   }
+  return names.flatMap((name) => {
+    const match = CLAIM_NAME.exec(name)
+    return match === null ? [] : [Number(match[1])]
+  }).sort((a, b) => b - a)
+}
+
+// The current (newest) claim and its generation, or null when there is none.
+// `claim` is null when the file is unreadable, which counts as stale.
+function currentClaim(gitDir) {
+  const [generation] = claimGenerations(gitDir)
+  return generation === undefined ? null : { generation, claim: readJson(claimFile(gitDir, generation)) }
+}
+
+// Writes a claim to a private file beside the generations, so a generation
+// only ever appears fully written.
+function stagedClaim(gitDir, claim) {
+  const file = path.join(gitDir, `desk-tidy-claim-${randomUUID()}.tmp`)
+  writeFileSync(file, `${JSON.stringify(claim)}\n`, { mode: 0o600 })
+  return file
+}
+
+/**
+ * takeClaim(gitDir, { now, token?, link? }) -> { token } | { held: { claimed_at } }
+ *
+ * The exclusive claim on tidying this desk. A fresh current claim is another
+ * session's. Otherwise this session links its claim to the next generation:
+ * the link fails when a racing session took that generation first, and a
+ * generation newer than ours means a racing session that started from an
+ * older view won, so ours is withdrawn. Older generations are then pruned.
+ * `link` is `fs.linkSync`, injectable so tests can stage a race.
+ */
+export function takeClaim(gitDir, { now, token = randomUUID(), link = linkSync }) {
+  const current = currentClaim(gitDir)
+  if (current !== null && freshClaim(current.claim, now)) return { held: current.claim }
+  const generation = (current?.generation ?? 0) + 1
+  const mine = claimFile(gitDir, generation)
+  let staged = null
   try {
-    writeSync(fd, `${JSON.stringify({ token, claimed_at: now })}\n`)
+    staged = stagedClaim(gitDir, { token, claimed_at: now })
+    link(staged, mine)
+  } catch {
+    return { held: readJson(mine) ?? { claimed_at: now } }
   } finally {
-    closeSync(fd)
+    if (staged !== null) removeFile(staged)
   }
+  const [newest, ...older] = claimGenerations(gitDir)
+  if (newest !== generation) {
+    removeFile(mine)
+    return { held: readJson(claimFile(gitDir, newest)) ?? { claimed_at: now } }
+  }
+  for (const stale of older) removeFile(claimFile(gitDir, stale))
   return { token }
 }
 
 // Another session's fresh claim, or null when `token` may act.
 function otherClaim(gitDir, token, now) {
-  const current = readJson(path.join(gitDir, CLAIM_FILE))
-  return freshClaim(current, now) && current.token !== token ? current : null
+  const current = currentClaim(gitDir)
+  return current !== null && freshClaim(current.claim, now) && current.claim.token !== token ? current.claim : null
+}
+
+// Releases the current claim when it is `token`'s, by replacing it with one
+// claimed at the epoch, so the next session may take over at once. The
+// generation stays, so the numbering only ever grows; a newer generation, or
+// another session's claim, is left alone.
+function releaseClaim(gitDir, token) {
+  const current = currentClaim(gitDir)
+  if (current !== null && current.claim?.token === token) {
+    renameSync(stagedClaim(gitDir, { token, claimed_at: 0 }), claimFile(gitDir, current.generation))
+  }
 }
 
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16)
@@ -501,7 +555,7 @@ function writeHold(gitDir, status, { kind, reason }, { spawnGit, now }) {
 export function heldReason(status, { spawnGit = spawnSync, now = Date.now() } = {}) {
   const gitDir = gitCommonDir(status.root, spawnGit)
   if (gitDir === null) return null
-  const claim = readJson(path.join(gitDir, CLAIM_FILE))
+  const claim = currentClaim(gitDir)?.claim ?? null
   if (freshClaim(claim, now)) return `another session has been tidying this desk since ${new Date(claim.claimed_at).toISOString()}`
   const hold = readJson(path.join(gitDir, HOLD_FILE))
   if (hold === null || !["who", "busy", "agent"].includes(hold.kind) || typeof hold.held_at !== "number" || !hasText(hold.reason)) return null
@@ -627,7 +681,7 @@ export function runTidyStatusCli({
   }
 
   // Past this check the claim is this session's, stale or absent, so both
-  // modes below may remove it.
+  // modes below may release it.
   const other = otherClaim(gitDir, args.claim, clock)
   if (other !== null) {
     io.stdout.write(`Another session has been tidying this desk since ${new Date(other.claimed_at).toISOString()}, so I changed nothing.\n`)
@@ -637,13 +691,13 @@ export function runTidyStatusCli({
   if (args.mode === "defer") {
     const reason = args.reason.replace(/[\x00-\x1f\x7f]+/gu, " ").trim()
     writeHold(gitDir, status, { kind: "agent", reason }, { spawnGit, now: clock })
-    removeFile(path.join(gitDir, CLAIM_FILE))
+    releaseClaim(gitDir, args.claim)
     io.stdout.write(`The tidy is on hold: ${reason}. Session start names it until this desk's latest commit or its uncommitted changes differ, and then the tidy runs again.\n`)
     return 0
   }
 
   const file = writeOrganizationRecord(status.subtree, now === undefined ? undefined : new Date(now))
-  removeFile(path.join(gitDir, CLAIM_FILE))
+  releaseClaim(gitDir, args.claim)
   removeFile(path.join(gitDir, HOLD_FILE))
   io.stdout.write(`${path.relative(status.root, file)}\n`)
   return 0

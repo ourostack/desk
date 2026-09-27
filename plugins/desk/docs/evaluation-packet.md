@@ -185,7 +185,7 @@ Scenarios marked **(lands by the evaluation)** exercise features that reach the 
 
 ### 4. A desk that needs tidying (lands by the evaluation)
 
-**Do:** end the session. Right before this scenario, make the throwaway desk messy and clear its tidy record and any `desk-tidy-claim.json` or `desk-tidy-hold.json` in its `.git` folder, so the one-time tidy's check fires ([the one-time tidy](../migrations/02-tidy-desk.md)). The block stops if the desk has no `git config user.name`; set one there first.
+**Do:** end the session. Right before this scenario, make the throwaway desk messy and clear its tidy record and any `desk-tidy-claim.*.json` or `desk-tidy-hold.json` in its `.git` folder, so the one-time tidy's check fires ([the one-time tidy](../migrations/02-tidy-desk.md)). The block stops if the desk has no `git config user.name`; set one there first.
 
 ```sh
 ( set -eu
