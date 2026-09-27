@@ -1,4 +1,3 @@
-// Offline comparison of candidate and baseline evaluation runs.
 import path from "node:path";
 import alphaDataset from "./cases/v2-alpha-v1/dataset.json" with { type: "json" };
 import { canonicalJson, exactKeys, hashString, nonblank, parseRawJson, plainObject, readRawReference, relativeName, requireCondition, sha256 } from "./core.mjs";
