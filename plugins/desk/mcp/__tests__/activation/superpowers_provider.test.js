@@ -20,7 +20,9 @@ test("Superpowers provider is pinned, licensed, and byte-bound through the exist
   const source = readJson("upstream-sources.lock.json").sources.find((entry) => entry.repository === "obra/superpowers")
   assert.ok(source, "the existing lock must include the Superpowers provider")
   // Provenance of the vendored upstream payload (evidence of where the bytes came from); installs track the channel.
-  assert.equal(source.commit, "b36e0829c6d0140e93cfef2ca599b1b07d4a7797")
+  // The weekly upstream refresh moves the commit, so the lock, the README and every manifest must agree on it instead.
+  assert.match(source.commit, /^[0-9a-f]{40}$/u)
+  assert.match(readFileSync(path.join(pluginRoot, "README.md"), "utf8"), new RegExp(`commit \`${source.commit}\``, "u"))
   assert.equal(source.license, "MIT")
   assert.ok(source.files.some((file) => file.sourcePath === "LICENSE"))
   for (const file of source.files) {
@@ -30,10 +32,13 @@ test("Superpowers provider is pinned, licensed, and byte-bound through the exist
       file.generatedPath,
     )
   }
+  const lockedVersion = readJson("plugins/desk/activation/desk.activation.json").dependencies
+    .find((dependency) => dependency.id === "superpowers").lock.version
+  assert.equal(readJson(".claude-plugin/marketplace.json").plugins.find((plugin) => plugin.name === "superpowers").version, lockedVersion)
   for (const relativePath of ["plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json"]) {
     const manifest = JSON.parse(readFileSync(path.join(pluginRoot, relativePath), "utf8"))
     assert.equal(manifest.name, "superpowers")
-    assert.equal(manifest.version, "6.3.0")
+    assert.equal(manifest.version, lockedVersion)
   }
 })
 
