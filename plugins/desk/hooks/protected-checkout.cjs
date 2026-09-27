@@ -6,53 +6,51 @@
 // Threat model (controller ruling, fix round 1). The guard stops well-intentioned agents from
 // accidentally moving a shared checkout off its state branch or discarding other sessions'
 // work. It is not a sandbox against a determined adversary. It must deny every spelling an
-// agent would plausibly produce, fail closed only where it cannot tell which program runs, and
-// always answer within the hosts' 10 s hook deadline: inspection has one 7 s budget and one
-// 20,000-step budget across all Bash and PowerShell inspection and its Git reads (denying, with
-// a reason that names the budget, when either runs out), it yields to the event loop as it
-// goes, and this entry point answers "deny" at 9 s whatever happens.
+// agent would plausibly produce, fail closed only where a value it cannot compute decides a
+// checked Git operation, and always answer within the hosts' 10 s hook deadline: inspection has
+// one 7 s budget and one 20,000-step budget across all Bash and PowerShell inspection and its
+// Git reads (denying, with a reason that names the budget, when either runs out), it yields to
+// the event loop as it goes, and this entry point answers "deny" at 9 s whatever happens.
 //
-// Purpose. A checkout whose local Git config has desk.protected=true is shared by sessions.
-// The guard keeps its HEAD on its state branch and keeps other sessions' work in place. It
-// does not stop the desk's normal write protocol: committing and pushing the state branch.
+// Purpose (narrowed on 2026-09-27). A checkout whose local Git config has desk.protected=true is
+// shared by sessions. The guard denies only what moves its HEAD off its state branch, rewrites
+// pushed history, or discards other sessions' work. Everything else is allowed, and no denial
+// sends an agent to a worktree for an ordinary desk write.
 //
-// Allowed in a protected checkout: read-only Git (status, log, diff, show, fetch, rev-parse,
-// ls-files, branch listing, remote -v, config --get ...), add, rm, mv, commit, commit --amend
-// of an unpushed commit, push of the current branch (or tags) without force, mirror, delete
-// or prune, pull and rebase onto the branch's own upstream while on the state branch,
-// merge --ff-only, merge/rebase --continue/--abort, worktree add and worktree list.
+// Allowed in a protected checkout: read-only Git and plumbing, add, rm, mv, commit, commit
+// --amend of an unpushed commit, unstaging or restoring named paths, non-force pushes of any
+// branch or tag, deleting another branch on the remote, every merge, pull and rebase onto the
+// state branch's own upstream (with or without --autostash), config writes to another file,
+// worktree add, list and prune.
 //
-// Denied: checkout/switch to another branch or a detached commit; reset --hard, --merge,
-// --keep, a reset that moves HEAD, and mixed resets that unstage (like restore --staged);
-// restore --source or --staged; clean; stash (except list and show); branch -f, -D, -m, -C
-// or -u of the current or state branch; other rebases and merges; pulls from another
-// repository or branch; --autostash; force, mirror, delete, prune and other-branch pushes,
-// including through saved remote.<name>.mirror/push or push.default=matching; fetches into
-// the checkout's branch; commit --amend of a pushed commit; worktree remove --force of a
-// protected checkout; worktree prune; bisect; git config writes to the desk, alias, include,
+// Denied: checkout/switch to another branch or a detached commit; reset --hard, --merge, --keep
+// and a reset that moves HEAD; unstaging or restoring the whole tree (no path, ., :/, *, a magic
+// pathspec or --pathspec-from-file); clean; stash (except list and show); branch -f, -D, -m, -C
+// or -u of the current or state branch; other rebases; pulls with --rebase from another
+// repository or branch; force, mirror and prune pushes and deleting the state branch on the
+// remote, including through saved remote.<name>.mirror/push or push.default=matching; fetches
+// into the checkout's branch; commit --amend of a pushed commit; worktree remove --force of a
+// protected checkout; bisect; git config writes to the checkout's own desk, alias, include,
 // remote, push, branch, rebase, pull, merge, fetch and url sections; and push, pull, rebase,
 // fetch or merge under a -c, --config-env or GIT_CONFIG_* override of the configuration those
-// rules trust. Aliases from any of those sources are expanded, case-insensitively, with the
-// issuing command's options. The deny message says what is protected and what to do instead.
+// rules trust (an insteadOf that only adds credentials to the same URL is not an override).
+// Aliases from any of those sources are expanded, case-insensitively, with the issuing
+// command's options. The deny message says what is protected and what to do instead, and
+// credentials in URLs are redacted from it.
 //
 // Commands the guard cannot fully resolve. The inspector never runs the command. A value it
 // cannot compute (a $(...) or backtick substitution other than literal pwd, echo, printf '%s'
-// or mktemp) is unknown. The guard fails closed only when an unknown value could decide a Git
-// operation:
-// - an unknown program whose own text, or the substitution that computed it, names `git`
-//   (quotes and escapes removed) or evaluates code (eval, source, ., iex, Invoke-Expression);
-//   an unknown program whose arguments read like Git (-C, -c, --git-dir, --work-tree,
-//   --config-env, or a checked subcommand such as checkout) is judged as Git;
-// - an unknown eval, source/. or shell -c script;
-// - an unknown directory, Git subcommand or operand for a Git operation the policy must check
-//   (for example `cd "$(pick)" && git checkout main`; `cd "$(pick)" && git commit` passes).
-// A program whose name is unknown is judged as Git when its arguments read like Git; a computed
-// directory with a known name ("$(npm bin)/nx") is that program. `git rev-parse --show-toplevel`
-// resolves to the checkout containing the directory, and a tag an earlier `git tag` creates counts.
-// A here-document (attached to the command that opened it), here-string or literal echo/printf
-// piped into a shell is inspected as that shell's script; a script piped or redirected into a
-// shell that Desk cannot read literally fails closed. A tag an earlier `git tag` creates counts
-// unless a local branch has its name.
+// or mktemp) is unknown. The guard fails closed only when an unknown directory, Git
+// subcommand or operand decides a Git operation the policy must check (for example
+// `cd "$(pick)" && git checkout main`; `cd "$(pick)" && git commit` passes), or when an
+// unknown worktree to force-remove could be a protected one. An unknown program is judged as
+// Git only when its arguments read like Git (-C, -c, --git-dir, --work-tree, --config-env, or a
+// checked subcommand such as checkout). Code Desk cannot read passes (a script file, source,
+// `cat x | bash`, `curl ... | sh`, `eval "$(...)"`); inline code it can read (`bash -c "..."`, a
+// here-document or literal echo piped into a shell) is inspected like any other command.
+// `git rev-parse --show-toplevel` resolves to the checkout containing the directory, and a tag an
+// earlier `git tag` creates counts unless a local branch has its name. Brace expansion, process
+// substitution, set -e, and directories the command itself creates are modeled.
 //
 // PowerShell (fix round 4 ruling) is a closed allowlist. A command that names `git` (git.exe, or
 // a path ending in either) passes only when each statement naming it is `git <args>`,
@@ -62,9 +60,9 @@
 // reading). Anything else that names Git is denied with a request for separate plain git commands.
 // Statements without Git are walked for their location, variables and environment; whatever may
 // or may not run leaves what it could change unknown.
-// When the shell text cannot be parsed at all, it is denied only if it mentions `git` or
-// evaluates code in the same sense. Everything else, such as `echo "$(date)"`,
-// `cd "$wt" && node x.js` or `jq . f.json | grep x`, is allowed.
+// When the shell text cannot be parsed at all, it is denied only if it names a Git operation
+// whose rule could deny it there and does not run in a known unprotected checkout. Everything
+// else, such as `echo "$(date)"`, `cd "$wt" && node x.js` or `jq . f.json | grep x`, is allowed.
 //
 // Inspection runs Git only from a trusted system location, never the command's PATH or
 // loader settings. Policy: ../mcp/src/runtime/git-guard-policy.js; shell model:

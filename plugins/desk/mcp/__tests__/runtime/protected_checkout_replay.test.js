@@ -10,6 +10,8 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fallbackOperation, guardShellCommand, protectCheckout, redact } from "../../src/runtime/protected-checkout.js"
 import { classifyGit, MESSAGES } from "../../src/runtime/git-guard-policy.js"
+import { readInspectionGit } from "../../src/runtime/git-inspection.js"
+import { expandBraces } from "../../src/runtime/shell-commands.js"
 
 const q = (text) => `'${text.replaceAll("'", "'\\''")}'`
 const SECRET = "ghs_replaySecretValue0123456789"
@@ -178,4 +180,33 @@ test("replay: the parse fallback reads only Git operations whose rule could deny
   assert.equal(classifyGit("merge-tree", ["--write-tree", "a", "b"]), null)
   assert.equal(classifyGit("commit-tree", ["HEAD^{tree}"]), null)
   assert.equal(MESSAGES.restore.includes("worktree"), false, "the restore denial never sends an agent to a worktree")
+})
+
+test("replay: the shell forms added for the replay classes, edge by edge", async (t) => {
+  const f = await fixture(t)
+  const dir = q(path.join(f.root, "made"))
+  await expectAllowed(f, [
+    // A brace with a blank or an unterminated quote inside is a literal word, not an expansion.
+    "echo {a,b c}", "echo {a,'b}",
+    // Here-documents inside $( ): tab-stripped delimiters, and a body that runs to the end of the text.
+    "x=$(cat <<-EOF\n\tbody (it's)\n\tEOF\n); git status", "x=$(cat <<EOF\nno end (",
+    // mkdir of an unknown or moded directory, a plain mkdir that may fail, and set flags other than errexit.
+    'mkdir -p "$(pick)" && echo ok', `mkdir -m 755 ${dir} && cd ${dir} && git init -q && git checkout -q -b x`, `mkdir ${dir}2; cd ${dir}2 && git status`,
+    "set -u; set -o pipefail; set +o errexit; echo ok",
+  ])
+  await expectDenied(f, [["git reset -- .", /unstaging everything/u], ["git reset HEAD :/", /unstaging everything/u], ["set -e; set +o errexit; false; git stash", /git stash/u]])
+  assert.deepEqual(expandBraces("{1..3..0}"), ["1", "2", "3"])
+  // Unparseable text naming a denied operation passes in a known checkout that is not protected.
+  await expectAllowed(f, ["git stash; echo 'unterminated"], { cwd: f.plain })
+})
+
+test("replay: an alias named after a builtin of the installed Git is that builtin", async (t) => {
+  const f = await fixture(t)
+  // An installed Git newer than Desk's list may add a builtin; an alias of that name never runs.
+  const readGit = (cwd, args, modeled, options) => {
+    if (args.at(-1) === "alias.newbuiltin") return { ok: true, code: 0, stdout: "stash", stderr: "" }
+    if (args[0] === "--list-cmds=builtins") return { ok: true, code: 0, stdout: "status\nnewbuiltin\n", stderr: "" }
+    return readInspectionGit(cwd, args, modeled, options)
+  }
+  assert.equal((await guardShellCommand({ command: "git newbuiltin", cwd: f.prot, env: f.env, readGit })).deny, false)
 })
