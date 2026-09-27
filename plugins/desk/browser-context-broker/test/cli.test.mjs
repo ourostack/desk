@@ -10,6 +10,7 @@ import test from 'node:test';
 import { createLease } from '../src/leases.mjs';
 import { readRegistry, writeRegistry } from '../src/registry.mjs';
 import { startFakeCdpServer } from './fixtures/fake-cdp-server.mjs';
+import { waitUntil } from './fixtures/settle.mjs';
 
 const execFileAsync = promisify(execFile);
 const packageRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -509,7 +510,10 @@ test('cleanup removes a stale lease after proving its owner generation is absent
   });
 });
 
-test('proxy publishes exact readiness metadata for a lease', async () => {
+// A spawned proxy CLI publishes its readiness file within about a second on an idle machine; a loaded one can take several seconds just to start Node.
+const PROXY_READY_LIMIT_MS = 20_000;
+
+test('proxy publishes exact readiness metadata for a lease', async (t) => {
   const fake = await startFakeCdpServer();
   const directory = await stateDir();
   const configPath = await writeConfig(directory, fake.endpoint);
@@ -533,18 +537,28 @@ test('proxy publishes exact readiness metadata for a lease', async () => {
     '--json-ready', readyPath,
   ], { cwd: packageRoot, stdio: ['ignore', 'pipe', 'pipe'] });
 
+  let stderr = '';
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const started = performance.now();
   let ready;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      ready = JSON.parse(await readFile(readyPath, 'utf8'));
-      break;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+  try {
+    ready = await waitUntil(async () => {
+      assert.equal(child.exitCode, null, `the proxy exited before it was ready: ${stderr}`);
+      try {
+        return JSON.parse(await readFile(readyPath, 'utf8'));
+      } catch {
+        return null;
+      }
+    }, 'the proxy did not publish its readiness file', { limitMs: PROXY_READY_LIMIT_MS, intervalMs: 10 });
+    t.diagnostic(`the proxy published its readiness file ${Math.round(performance.now() - started)} ms after it was spawned`);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise((resolve) => child.once('exit', resolve));
+      child.kill('SIGTERM');
+      await exited;
     }
+    await fake.close();
   }
-  child.kill('SIGTERM');
-  await new Promise((resolve) => child.once('exit', resolve));
-  await fake.close();
 
   assert.ok(ready?.endpoint);
   assert.equal(ready.pid, child.pid);
@@ -586,14 +600,13 @@ test('partial CLI release fails, proxy cannot renew it, and exact retry deletes 
     await waitForChildExit(child);
   });
 
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      await readFile(readyPath, 'utf8');
-      break;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
+  // The proxy renews the lease when it starts, before it publishes readiness; the snapshot below must come after that renewal.
+  const started = performance.now();
+  await waitUntil(async () => {
+    assert.equal(child.exitCode, null, 'the proxy exited before it was ready');
+    return readFile(readyPath, 'utf8').then(() => true, () => false);
+  }, 'the proxy did not publish its readiness file', { limitMs: PROXY_READY_LIMIT_MS, intervalMs: 10 });
+  t.diagnostic(`the proxy published its readiness file ${Math.round(performance.now() - started)} ms after it was spawned`);
 
   const beforeRelease = (await readRegistry(directory)).leases[lease.id];
   const partial = await run([
@@ -671,14 +684,11 @@ test('proxy exits and releases its listener when ready-file publication fails', 
     '--json-ready', readyPath,
   ], { cwd: packageRoot, stdio: ['ignore', 'pipe', 'pipe'] });
 
-  let listener;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const listener = await waitUntil(async () => {
     const current = await readRegistry(directory);
-    listener = current.leases[lease.id]?.proxy?.listener;
-    if (listener) break;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  const exit = await waitForChildExit(child);
+    return current.leases[lease.id]?.proxy?.listener;
+  }, 'the proxy never recorded its listener', { limitMs: PROXY_READY_LIMIT_MS, intervalMs: 10 });
+  const exit = await waitForChildExit(child, PROXY_READY_LIMIT_MS);
   if (!exit.exited) {
     child.kill('SIGTERM');
     await waitForChildExit(child);
