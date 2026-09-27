@@ -941,7 +941,9 @@ test("root host verifier selects an explicit legacy configuration across all thr
   const verifier = loadHostManifestVerifier()
   await withHostFreshnessFixture(async (root) => {
     // A temporary, explicitly declared legacy packaging configuration, not the shipped alpha or a native session.
-    const legacyText = (text) => text.replaceAll("superpowers", "work-suite").replaceAll("Superpowers", "Work Suite").replaceAll("6.3.0", "4.0.0-alpha.2")
+    // The shipped Superpowers version moves with every upstream refresh, so the legacy rewrite reads it.
+    const shippedSuperpowersVersion = JSON.parse(loadText("plugins", "superpowers", ".claude-plugin", "plugin.json")).version
+    const legacyText = (text) => text.replaceAll("superpowers", "work-suite").replaceAll("Superpowers", "Work Suite").replaceAll(shippedSuperpowersVersion, "4.0.0-alpha.2")
     const manifestPath = "plugins/desk/activation/desk.activation.json"
     const manifest = JSON.parse(legacyText(loadText(...manifestPath.split("/"))))
     const declaration = {
@@ -1225,11 +1227,11 @@ test("CI workflow YAML parses before its commands are inspected", () => {
   }
 })
 
-test("mechanical CI tests pushes to main and every pull request", () => {
+test("mechanical CI tests pushes to main, every pull request and a dispatched refresh branch", () => {
   for (const filename of ["desk-mcp-tests.yml", "validate-skills.yml"]) {
     const source = loadText(".github", "workflows", filename)
     const { data } = matter(`---\n${source}\n---\n`)
-    assert.deepEqual(Object.keys(data.on).sort(), ["pull_request", "push"], filename)
+    assert.deepEqual(Object.keys(data.on).sort(), ["pull_request", "push", "workflow_dispatch"], filename)
     assert.deepEqual(data.on.push.branches, ["main"], filename)
     assert.equal(Object.hasOwn(data.on, "pull_request"), true, filename)
     for (const job of Object.values(data.jobs)) {
