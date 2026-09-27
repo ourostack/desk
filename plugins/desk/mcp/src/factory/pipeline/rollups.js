@@ -50,12 +50,16 @@
 
 import { LABEL_WASTES, checkLabelsAgainstFacts } from "../label-schema.js"
 import { covered, fieldCoverage } from "./formulas.js"
+import { compareVersions } from "./versions.js"
 
 export const ROLLUPS_SCHEMA = "desk.factory.rollups/1"
 
 export const JOB_CLASSES = Object.freeze(["engineering", "review", "investigation", "operations", "other"])
 
 const DEFAULT_JOB_CLASS = "other"
+// The job classes a store can fill today: published facts do not carry a
+// task's kind, so every job is `other`. The kaizen check offers only these.
+export const PUBLISHED_JOB_CLASSES = Object.freeze([DEFAULT_JOB_CLASS])
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const OPEN_JOB = "open_job"
 const DESK_PLUGIN = "desk"
@@ -174,6 +178,19 @@ function pluginVersion(sources) {
   return perSession.includes("unknown") ? "unknown" : oneOrMixed(perSession)
 }
 
+// Each plugin any session reports, with the lowest and highest version
+// across every session of the job, or `null` when some session does not
+// report it. The kaizen check and andon compare versions with these.
+function pluginRanges(sources) {
+  const names = [...new Set(sources.flatMap((session) => session.plugins.map((plugin) => plugin.name)))].sort(compareText)
+  return Object.fromEntries(names.map((name) => {
+    const perSession = sources.map((session) => session.plugins.filter((plugin) => plugin.name === name).map((plugin) => plugin.version))
+    if (perSession.some((versions) => versions.length === 0)) return [name, null]
+    const versions = perSession.flat().sort(compareVersions)
+    return [name, { min: versions[0], max: versions.at(-1) }]
+  }))
+}
+
 // Compactions are counted with turns, so a session without turns cannot say.
 function compactions(sources) {
   const coverage = fieldCoverage(sources, ["turns"])
@@ -216,7 +233,8 @@ function finished(formulas) {
 
 /**
  * `jobRecord({ timeline, formulas }, labelsByJobSession) -> record`: one
- * job's grouping keys, whether it is finished, its catalog values (each
+ * job's grouping keys, each plugin's version range (`plugins`), its session
+ * ids (`sessions`, which the comparisons group by), whether it is finished, its catalog values (each
  * `{ value }` or `{ excluded: reason }`), and, when it is finished and fully
  * labeled, each session's waste totals (`muda_sessions`) for the Pareto.
  */
@@ -246,6 +264,8 @@ export function jobRecord({ timeline, formulas }, labelsByJobSession) {
     job: timeline.job,
     job_class: DEFAULT_JOB_CLASS,
     plugin_version: pluginVersion(sources),
+    plugins: pluginRanges(sources),
+    sessions: [...new Set(sources.map((session) => session.session.id))].sort(compareText),
     host: oneOrMixed(sources.map((session) => session.session.host)),
     finished: done,
     measures,
@@ -389,7 +409,8 @@ function percentage(value) {
   return value === null ? "n/a" : `${(value * 100).toFixed(2)}%`
 }
 
-function measureValue(id, value) {
+/** `formatMeasure(id, value) -> string`: a measure's value as the pages print it (`ms` for durations, a percentage for ratios). */
+export function formatMeasure(id, value) {
   if (value === null) return "unavailable"
   if (RATIO_MEASURES.has(id)) return percentage(value)
   return DURATION_MEASURES.has(id) ? `${value} ms` : `${value}`
@@ -424,7 +445,7 @@ function measureLines(summary, quality) {
     ...MEASURE_IDS.map((id) => {
       const stats = summary.measures[id]
       const name = quality.has(id) ? `${id} (quality)` : id
-      return `| ${name} | ${stats.jobs_counted} | ${measureValue(id, stats.median)} | ${measureValue(id, stats.p75)} | ${reasonsText(stats.jobs_excluded, "jobs")} |`
+      return `| ${name} | ${stats.jobs_counted} | ${formatMeasure(id, stats.median)} | ${formatMeasure(id, stats.p75)} | ${reasonsText(stats.jobs_excluded, "jobs")} |`
     }),
   ]
 }
