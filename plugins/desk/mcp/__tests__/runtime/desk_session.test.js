@@ -96,7 +96,7 @@ test("setup, missing roots and activation errors are named degraded states, from
   let result
   const { session, root } = await makeSession(t, { resolveInputs: async () => result })
   const cases = [
-    [{ rootError: { name: "Error", message: "no desk", code: "DESK_ROOT_NOT_FOUND", tried: [{ source: "fallback:desk" }] } }, "degraded:no_desk_root", /bootstrap/u],
+    [{ rootError: { name: "Error", message: "no desk", code: "DESK_ROOT_NOT_FOUND", tried: [{ source: "home_fallback" }] } }, "degraded:no_desk_root", /bootstrap/u],
     [{ rootError: { name: "Error", message: "bad config", code: "ACTIVATION_CONFIG_INVALID" } }, "degraded:activation_config_invalid", /activation config/u],
     [{ rootError: Object.assign(new Error("--root path does not exist: /x"), { code: "DESK_ROOT_UNAVAILABLE", path: "/x" }) }, "degraded:root_unavailable", /at \/x/u],
     [{ rootError: "a thrown string" }, "degraded:root_unavailable", /at the desk root/u],

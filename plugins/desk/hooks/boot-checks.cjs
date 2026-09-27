@@ -87,6 +87,7 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     if (host === "copilot" && isDeskWorkspace(sessionFolder) && await canonicalDeskRoot(path.resolve(sessionFolder)) !== root) {
       return "Desk boot: workspace-tidy deferred; binding is ambiguous; use desk_status root before requesting repair.";
     }
+    if (bound.unavailable) return "Desk boot: workspace-tidy skipped; the bound desk is unavailable; see desk_status.";
     if (!root) return "Desk boot: workspace-tidy skipped; no bound desk.";
     const inventory = await inspectWorkspace({ deskRoot: root, signal, budgetMs: inspectionBudgetMs });
     if (expired()) return "";
