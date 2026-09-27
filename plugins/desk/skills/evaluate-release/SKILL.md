@@ -10,7 +10,7 @@ Work through an evaluation packet, such as the [V2 evaluation packet](../../docs
 ## When to use it
 
 - A human evaluator asks you to work through a packet with them on a named host. They drive the steps; you watch, time and record.
-- An agent dry run of a packet: you drive the steps a human evaluator would take, in a separate session under test on a throwaway profile, and the agent in that session does the work. You type what the packet says to type and run what it says to run; you never do the part the agent under test is being evaluated on. See [Drive a dry run](#drive-a-dry-run).
+- An agent dry run of a packet: a separate driver takes the human evaluator's place and runs the packet's steps against a session under test on a throwaway profile, and you observe exactly as you would beside a person. See [Observe a dry run](#observe-a-dry-run).
 
 ## When not to use it
 
@@ -82,13 +82,14 @@ The release call is the evaluator's. Your report never says the release is ready
 
 File one issue per finding in `ourostack/desk`, labeled `evaluation`, or in the work equivalent when the host run used a company overlay: that overlay's own tracker, with its equivalent label, since public issues carry no work context. An issue is posted from the evaluator's account, so draft each one and follow `desk:operator-voice-comments`: the evaluator approves the exact content before it is filed. Each issue carries the host, the scenario and step, the class, expected and observed, evidence links, the elapsed time and the commit observed. Public issues follow `desk:content-routing`: no private names, no secrets, private evidence by pointer only, and durations, never times of day.
 
-## Drive a dry run
+## Observe a dry run
 
-In a dry run no human watches, so you also play the evaluator's hands. The rules above still hold.
+In a dry run no human evaluator is present, so a separate driver takes their place. You only observe; every rule above still holds, and you still never write to the desk under test.
 
-- Run the session under test as its own process, in the throwaway area with the packet's environment: a terminal multiplexer session you type into (for example `tmux send-keys`), or the host's non-interactive mode resumed turn by turn (for example `claude -p` with `--resume`). Read its replies from the terminal and its host log.
-- Human gates stay human. The host's sign-in must be done by a person before you start, in the throwaway profile. When a step reaches a gate no person has passed, record it as `blocked`.
-- File nothing. Draft each issue into the evidence folder instead. A person approves the exact text of each one later, following `desk:operator-voice-comments`, before anything is filed.
+- **The driver runs the packet, not you.** The driver is a person or a separate agent session briefed only with the packet and the paths. It runs the packet's command blocks, including the ones that change the desk under test, and types the packet's prompts into the session under test, for example through a terminal multiplexer (`tmux send-keys`) or the host's non-interactive mode resumed turn by turn (`claude -p --resume`). You never run those commands or type those prompts yourself.
+- **You read what happened.** Read the session under test's replies from its terminal and its host log, and the driver's commands and output from the driver's terminal or transcript, and record them as you would for a person.
+- **Human gates stay human.** The host's sign-in must be done by a person before the dry run starts, in the throwaway profile. When a step reaches a gate no person has passed, record it as `blocked`.
+- **File nothing.** Draft each issue into the evidence folder instead. A person approves the exact text of each one later, following `desk:operator-voice-comments`, before anything is filed.
 
 ## Clean up
 

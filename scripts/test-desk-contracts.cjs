@@ -934,8 +934,8 @@ requires(evaluateRelease, "evaluate-release runs observer outside the desk under
   /## Start cold on the named host[\s\S]+own working folder with its own profile, outside the throwaway area and the desk under test[\s\S]+never write to it[\s\S]+evidence folder[\s\S]+outside the desk under test/u);
 requires(evaluateRelease, "evaluate-release stops the evaluation when the preflight names another desk",
   /Hold the preflight[\s\S]+`desk_status`[\s\S]+throwaway desk[\s\S]+any other desk, the evaluation stops[\s\S]+defect/u);
-requires(evaluateRelease, "evaluate-release says how a dry run drives a session, handles gates and files nothing",
-  /## Drive a dry run[\s\S]+tmux send-keys[\s\S]+sign-in[\s\S]+`blocked`[\s\S]+File nothing[\s\S]+`desk:operator-voice-comments`/u);
+requires(evaluateRelease, "evaluate-release has a separate driver run a dry run while observer only observes, handles gates and files nothing",
+  /## Observe a dry run[\s\S]+separate driver[\s\S]+never write to the desk under test[\s\S]+The driver runs the packet, not you[\s\S]+tmux send-keys[\s\S]+You never run those commands[\s\S]+sign-in[\s\S]+`blocked`[\s\S]+File nothing[\s\S]+`desk:operator-voice-comments`/u);
 contract("evaluate-release keeps public findings free of times of day and private content", () => {
   const skill = text(evaluateRelease);
   assert.match(skill, /durations?, never (?:a )?times? of day/u);
@@ -979,11 +979,17 @@ contract("the evaluation packet covers who it is for, V2, setup, scenarios and r
 contract("the evaluation packet isolates the desk under test and proves it before any scenario", () => {
   const packet = text(evaluationPacket);
   const setup = packet.split("## Set up from nothing", 2)[1].split("\n## The scenarios", 1)[0];
-  assert.match(setup, /### Make the throwaway desk[\s\S]+mktemp -d[\s\S]+_meta[\s\S]+_archive[\s\S]+git -C "\$EVAL\/desk" init[\s\S]+export DESK_ACTIVATION_CONFIG=[^\n]+ DESK=/u);
-  assert.match(setup, /### Preflight: the session uses the throwaway desk[\s\S]+`desk_status`[\s\S]+exactly `\$EVAL\/desk`[\s\S]+`activation-config`[\s\S]+stop the evaluation[\s\S]+defect/u);
+  assert.match(setup, /### Make the throwaway desk[\s\S]+mktemp -d[\s\S]+_meta[\s\S]+_archive[\s\S]+git -C "\$EVAL\/desk" init/u);
+  // Review fix round 2: the throwaway sessions get their own Desk state and cache, and every variable lives in env.sh.
+  for (const variable of ["EVAL", "DESK_ACTIVATION_CONFIG", "DESK", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CLAUDE_CONFIG_DIR", "COPILOT_HOME"]) {
+    assert.match(setup, new RegExp(`printf "export ${variable}='%s'\\\\n" "\\$EVAL`, "u"), `env.sh exports ${variable} inside $EVAL`);
+  }
+  assert.match(setup, /### Preflight: the session uses the throwaway desk[\s\S]+resolve-desk-root\.js[\s\S]+read-only first prompt[\s\S]+exactly `\$EVAL\/desk` with `"source":"activation-config"`[\s\S]+stop the evaluation[\s\S]+defect[\s\S]+What this cannot prevent/u);
+  assert.doesNotMatch(setup, /reports the declared plugin chain/u, "desk_status has no chain for an env-bound desk; the launcher listing is the channel check");
   assert.ok(setup.indexOf("### Preflight") < setup.indexOf("### Start `observer`"), "the preflight comes before observer and the scenarios");
   assert.match(setup, /### Start `observer`[\s\S]+own working folder and its own profile, never from `\$EVAL`[\s\S]+evidence folder outside `\$EVAL`/u);
-  assert.match(setup, /requires Desk 3\.2\.0-alpha\.54 or later[\s\S]+back up your whole `~\/\.claude` folder/u);
+  assert.match(setup, /requires Desk 3\.2\.0-alpha\.54 or later[\s\S]+backs up your whole `~\/\.claude` folder to `\$EVAL\/claude-backup` whatever version/u);
+  assert.match(setup, /If V2 is not installed in your normal profile, give `observer` a throwaway setup of its own[\s\S]+same preflight/u);
   assert.match(setup, /### A managed launcher with a company overlay[\s\S]+COPILOT_HOME[\s\S]+crew install[\s\S]+from its channel branch/u);
 });
 contract("the evaluation packet's scenarios run against the throwaway desk with reachable outcomes", () => {
@@ -991,11 +997,25 @@ contract("the evaluation packet's scenarios run against the throwaway desk with 
   const scenario = (number) => packet.split(`\n### ${number}. `, 2)[1].split(/\n### \d\. |\n## /u, 1)[0];
   assert.match(scenario(4), /organization\.json[\s\S]+hi-can-you-fix-the-login[\s\S]+status-notes\.md[\s\S]+`track_person_name`[\s\S]+`tidy_version: 1`/u);
   assert.match(scenario(5), /state_branch|state branch/u);
-  assert.match(scenario(5), /switch --detach[\s\S]+repaired: detached HEAD → main[\s\S]+`state_branch_detached`[\s\S]+switch_state_branch[\s\S]+`ready` in the same session/u);
+  assert.match(scenario(5), /status --porcelain[\s\S]+push -q origin main[\s\S]+switch -q --detach[\s\S]+another terminal[\s\S]+repaired: detached HEAD → main[\s\S]+`state_branch_detached`[\s\S]+switch_state_branch[\s\S]+`ready` in the same session/u);
   assert.doesNotMatch(scenario(5), /root_unavailable|#L\d/u);
   assert.match(scenario(6), /`ourostack\/factory`[\s\S]+`reports` branch[\s\S]+`jobs\/<job>\.md`[\s\S]+factory\.js job-link/u);
   assert.match(scenario(7), /V2 design's section 6, "Kaizen"[\s\S]+not yet public/u);
   assert.doesNotMatch(scenario(7), /RFC §4/u);
+});
+// Review fix round 2: every command block that writes fails closed and stays inside $EVAL.
+contract("every writing command block in the evaluation packet fails closed inside $EVAL", () => {
+  const blocks = [...text(evaluationPacket).matchAll(/^\s*```sh\n([\s\S]*?)^\s*```$/gmu)].map((match) => match[1]);
+  const writes = /git (?:-C "[^"]+" )?(?:commit|push|switch|rm|add|init)|mkdir|rm -[rf]|cp -R|> "|-exec rm/u;
+  const writing = blocks.filter((block) => writes.test(block));
+  assert.ok(writing.length >= 5, `expected the setup, tidy, two detach and clean-up blocks; found ${writing.length}`);
+  for (const block of writing) {
+    assert.match(block, /^[ \t]*\(\s*set -eu/mu, `block does not start a fail-closed subshell:\n${block}`);
+    assert.match(block, /stopping\./u, `block has no guard that stops:\n${block}`);
+    for (const target of block.matchAll(/(?:> |mkdir -p |cp -R "[^"]+" |--bare |-C )"([^"]+)"/gu)) {
+      assert.match(target[1], /^\$EVAL\//u, `writes outside $EVAL: ${target[1]}`);
+    }
+  }
 });
 contract("the evaluation packet prose is not hard-wrapped", () => {
   assert.deepEqual(proseUnits(evaluationPacket).filter((unit) => unit.length > 1).map((unit) => unit[0].number), []);
