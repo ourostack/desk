@@ -508,7 +508,8 @@ test("a truncated index database never breaks desk_status and is rebuilt in the 
   const configPath = writeActivation(fixture)
   writeFile(path.join(fixture.desk, ".state", "desk-index.sqlite"), "SQLite format 3\u0000truncated")
   await withDesk(t, fixture, { args: ["--activation-config", configPath] }, async (session) => {
-    const status = await session.statusUntil((payload) => payload.state === "ready" && payload.local_db?.state === "available")
+    // The rebuild runs in the background: desk_status answers throughout, and the rebuilt lexical index can land a poll after the database reports available.
+    const status = await session.statusUntil((payload) => payload.state === "ready" && payload.local_db?.state === "available" && payload.lexical_index?.available === true)
     assert.equal(status.lexical_index.available, true)
     await assertReadsServeDirectly(session)
   })

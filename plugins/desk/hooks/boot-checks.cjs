@@ -39,7 +39,7 @@ async function launchRepair(root, env) {
   });
 }
 
-async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair }, expired, signal) {
+async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair, inspectionBudgetMs }, expired, signal) {
   try {
     const [{ resolveStartupRoot }, { resolveActivationConfigPath, isDeskWorkspace }] = await Promise.all([
       runtime("util/startup-direction.js"), runtime("util/paths.js"),
@@ -54,7 +54,7 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     }
     if (!bound.root) return "Desk boot: workspace-tidy skipped; no bound desk.";
     const { inspectWorkspace, tidyLine } = await runtime("runtime/workspace-tidy.js");
-    const inventory = await inspectWorkspace({ deskRoot: bound.root, signal });
+    const inventory = await inspectWorkspace({ deskRoot: bound.root, signal, budgetMs: inspectionBudgetMs });
     if (expired()) return "";
     let previous = "";
     if (inventory.commonDirectory) {
