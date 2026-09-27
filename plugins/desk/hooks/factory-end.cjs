@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
+const { compatibleNode } = require("./compatible-node.cjs");
 const ownRoot = path.resolve(__dirname, "..");
 const runtime = (file) => import(pathToFileURL(path.join(ownRoot, "mcp", file)).href);
 const MAX_INPUT = 1024 * 1024;
@@ -40,9 +41,14 @@ async function readInput(stream, timeoutMs = 150) {
   });
 }
 
-async function launch(script, args, env) {
+// factory.js loads Desk's MCP code, so it runs in a Node that satisfies the
+// MCP's engines range, never simply in the hook's own Node. With none
+// installed nothing starts, and the retained marker is the retry path.
+async function launch(script, args, env, resolveNode = compatibleNode) {
+  const { node } = resolveNode({ env });
+  if (!node) return;
   await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [script, ...args], { detached: true, stdio: "ignore", windowsHide: true, env });
+    const child = spawn(node, [script, ...args], { detached: true, stdio: "ignore", windowsHide: true, env });
     child.once("error", reject);
     child.once("spawn", () => { child.unref(); resolve(); });
   });

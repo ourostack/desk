@@ -6,20 +6,25 @@ const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
+const { compatibleNode } = require("./compatible-node.cjs");
 const runtime = (name) => import(pathToFileURL(path.join(__dirname, "..", "mcp", "src", name)).href);
 const oneLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ").slice(0, 480);
 
+// `root` is the bound desk's canonical identity, its real path, so every
+// spelling of one desk (a symlink alias, its real path) shares one report and
+// one lock.
 function reportPath(root, common) {
   const key = createHash("sha256").update(root).digest("hex").slice(0, 16);
   return path.join(common, `desk-workspace-tidy-${key}.json`);
 }
 
 async function location(root) {
+  const canonical = await fs.realpath(root);
   const { readInspectionGit } = await runtime("runtime/git-inspection.js");
-  const result = await readInspectionGit(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {});
+  const result = await readInspectionGit(canonical, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {});
   if (!result.ok) throw new Error("bound desk is not an inspectable repository");
   const common = await fs.realpath(result.stdout);
-  return reportPath(await fs.realpath(root), common);
+  return { canonical, file: reportPath(canonical, common) };
 }
 
 async function readReport(file) {
@@ -29,9 +34,11 @@ async function readReport(file) {
   return decodeTidyReport(await fs.readFile(file, "utf8"));
 }
 
-async function launchRepair(root, env) {
+// The repair loads Desk's MCP code, so it runs in `node`, a Node that
+// satisfies the MCP's engines range, never simply in the hook's own Node.
+async function launchRepair(root, env, node) {
   await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [__filename, "--repair", root], {
+    const child = spawn(node, [__filename, "--repair", root], {
       detached: true, stdio: "ignore", windowsHide: true, env,
     });
     child.once("error", reject);
@@ -39,7 +46,7 @@ async function launchRepair(root, env) {
   });
 }
 
-async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair }, expired, signal) {
+async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair, resolveNode = compatibleNode }, expired, signal) {
   try {
     const [{ resolveStartupRoot }, { resolveActivationConfigPath, isDeskWorkspace }] = await Promise.all([
       runtime("util/startup-direction.js"), runtime("util/paths.js"),
@@ -49,24 +56,28 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
       hostProjectRoot: host === "claude" ? env.CLAUDE_PROJECT_DIR : undefined,
     });
     if (bound.error) return "Desk boot: workspace-tidy deferred; binding configuration unreadable; resolve with desk_status.";
-    if (host === "copilot" && isDeskWorkspace(sessionFolder) && path.resolve(sessionFolder) !== bound.root) {
+    const { inspectWorkspace, tidyLine, canonicalDeskRoot } = await runtime("runtime/workspace-tidy.js");
+    // One identity for the bound desk, resolved once: a symlink alias and its
+    // real path are the same desk for the inventory, the report and the lock.
+    const root = bound.root ? await canonicalDeskRoot(bound.root) : null;
+    if (host === "copilot" && isDeskWorkspace(sessionFolder) && await canonicalDeskRoot(path.resolve(sessionFolder)) !== root) {
       return "Desk boot: workspace-tidy deferred; binding is ambiguous; use desk_status root before requesting repair.";
     }
-    if (!bound.root) return "Desk boot: workspace-tidy skipped; no bound desk.";
-    const { inspectWorkspace, tidyLine } = await runtime("runtime/workspace-tidy.js");
-    const inventory = await inspectWorkspace({ deskRoot: bound.root, signal });
+    if (!root) return "Desk boot: workspace-tidy skipped; no bound desk.";
+    const inventory = await inspectWorkspace({ deskRoot: root, signal });
     if (expired()) return "";
     let previous = "";
     if (inventory.commonDirectory) {
       try {
-        const file = reportPath(bound.root, inventory.commonDirectory);
+        const file = reportPath(root, inventory.commonDirectory);
         const report = await readReport(file);
-        if (report.root === bound.root) previous = `Last repair: ${tidyLine(report)}; `;
+        // A report written before roots were canonical may carry the alias.
+        if (await canonicalDeskRoot(report.root) === root) previous = `Last repair: ${tidyLine(report)}; `;
       } catch (error) {
         if (error.code !== "ENOENT") previous = "Previous workspace-tidy report unreadable; ";
       }
       try {
-        const file = reportPath(bound.root, inventory.commonDirectory);
+        const file = reportPath(root, inventory.commonDirectory);
         await fs.lstat(`${file}.lock`);
         previous += `repair lock ${path.basename(file)}.lock; reconcile exact owner if stale; `;
       } catch (error) {
@@ -76,8 +87,12 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     // No status, ancestry, network or removal in the hook. Detailed checks and
     // mutations run after launch in the detached process, with fresh evidence.
     if (expired()) return "";
-    await launch(bound.root, env);
-    return `Desk boot: workspace-tidy ${oneLine(`${previous}deferred (${inventory.worktrees.length} listed)${inventory.issues.length ? `; ${inventory.issues.join("; ")}` : ""}`)}`;
+    const listed = `deferred (${inventory.worktrees.length} listed)${inventory.issues.length ? `; ${inventory.issues.join("; ")}` : ""}`;
+    const { node, range } = resolveNode({ env });
+    if (!node) return `Desk boot: workspace-tidy ${oneLine(`${previous}${listed}; repair not started: it needs Node ${range} and none was found`)}`;
+    // The repair gets the binding's own spelling and resolves it again itself.
+    await launch(bound.root, env, node);
+    return `Desk boot: workspace-tidy ${oneLine(`${previous}${listed}`)}`;
   } catch (error) {
     return `Desk boot: workspace-tidy deferred; ${oneLine(error.message)}`;
   }
@@ -104,7 +119,7 @@ async function runBootChecks(options = {}) {
 }
 
 async function updateReport(root, operation) {
-  const file = await location(root);
+  const { canonical, file } = await location(root);
   const lock = `${file}.lock`;
   const token = randomUUID();
   let handle;
@@ -123,7 +138,9 @@ async function updateReport(root, operation) {
     try { previous = await readReport(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
     const prepare = (result) => {
       result.line = tidyLine(result);
-      result.root = root;
+      result.root = canonical;
+      // The spelling the repair was asked for, kept for display only.
+      result.bound = path.resolve(root);
       result.updated = new Date().toISOString();
       return encodeTidyReport(result);
     };
@@ -135,7 +152,7 @@ async function updateReport(root, operation) {
       await fs.rename(temporary, file);
       return result;
     };
-    return await operation(previous, persist, prepare);
+    return await operation(previous, persist, prepare, canonical);
   } finally {
     await handle.close();
     if (JSON.parse(await fs.readFile(lock, "utf8")).token === token) await fs.unlink(lock);
@@ -143,11 +160,11 @@ async function updateReport(root, operation) {
 }
 
 async function runRepair(root) {
-  return updateReport(root, async (previous, persist, prepare) => {
+  return updateReport(root, async (previous, persist, prepare, canonical) => {
     const { repairWorkspace } = await runtime("runtime/workspace-tidy.js");
     const { dispositionRecord, mergeTidyEvidence } = await runtime("runtime/workspace-evidence.js");
     let evidence = previous;
-    const result = await repairWorkspace({ deskRoot: root, onDisposition: async (entry) => {
+    const result = await repairWorkspace({ deskRoot: canonical, onDisposition: async (entry) => {
       const next = mergeTidyEvidence(evidence, {}, entry);
       if (entry.state === "cleanup_pending") {
         for (const branchRemoved of [false, true]) {

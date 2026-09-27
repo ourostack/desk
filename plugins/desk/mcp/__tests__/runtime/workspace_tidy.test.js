@@ -720,6 +720,91 @@ test("R3 two repairs preserve squash branch and removed-resource evidence until 
   assert.equal(git(f.repo, "rev-parse", "topic"), w.record.head)
 })
 
+test("R8 a desk bound through a symlink alias is the same desk: task lookup, report, lock and next boot agree", async () => {
+  const f = await fixture()
+  const alias = path.join(f.root, "desk-alias")
+  await fs.symlink(f.desk, alias)
+  const direct = await worktree(f, "direct")
+  const result = await tidy.repairWorkspace({ deskRoot: alias })
+  assert.deepEqual(result.left, [], "the receipt's task resolves under the alias exactly as under the real path")
+  assert.equal(result.removed[0].path, direct.directory)
+
+  const viaHook = await worktree(f, "via-hook")
+  const repaired = await boot.runRepair(alias)
+  assert.equal(repaired.removed[0].path, viaHook.directory)
+  assert.equal(repaired.root, f.desk, "the report's identity is the real path")
+  assert.equal(repaired.bound, alias, "the spelling that bound the desk is kept for display")
+  const file = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
+  const persisted = await boot.readReport(file)
+  assert.equal(persisted.root, f.desk)
+  assert.equal(persisted.bound, alias)
+  assert.equal((await boot.runRepair(f.desk)).root, f.desk, "the real path reaches the same report")
+
+  const env = { ...process.env, DESK: alias, DESK_ACTIVATION_CONFIG: "", HOME: f.root }
+  const boots = async () => {
+    let line
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      line = await boot.runBootChecks({ host: "claude", env, launch: async () => {} })
+      if (!line.includes("budget exceeded")) break
+    }
+    return line
+  }
+  assert.match(await boots(), /Last repair: Tidied 1 stale worktrees/, "the next boot through the alias finds the repair's report")
+  await fs.writeFile(`${file}.lock`, "another-owner")
+  assert.match(await boots(), /repair lock/, "and the lock the repair holds")
+  assert.deepEqual(await boot.runRepair(alias), { busy: true, lock: `${file}.lock` })
+  await fs.unlink(`${file}.lock`)
+
+  // A report written before roots were canonical names the alias; it still belongs to this desk.
+  await fs.writeFile(file, JSON.stringify({ ...persisted, root: alias }))
+  assert.match(await boots(), /Last repair:/)
+})
+
+test("inspection combines its cancellation signals without AbortSignal.any, and releases its listeners", async (t) => {
+  const original = AbortSignal.any
+  t.after(() => { AbortSignal.any = original })
+  AbortSignal.any = undefined
+  const f = await fixture()
+  const outer = new AbortController()
+  const blocked = []
+  const stalled = (cwd, args, options) => new Promise((resolve) => {
+    blocked.push(options.signal)
+    options.signal.addEventListener("abort", () => resolve({ ok: false, stdout: "", code: 1 }))
+  })
+  const pending = tidy.inspectWorkspace({ deskRoot: f.desk, git: stalled, budgetMs: 5_000, signal: outer.signal })
+  while (blocked.length === 0) await new Promise((resolve) => setImmediate(resolve))
+  outer.abort(new Error("host deadline"))
+  const inventory = await pending
+  assert.equal(inventory.complete, false)
+  assert.equal(blocked[0].aborted, true, "the caller's abort reaches the running Git inspection")
+  assert.equal(blocked[0].reason.message, "host deadline")
+
+  const early = new AbortController()
+  early.abort("already")
+  const combined = tidy.anySignal([undefined, early.signal, new AbortController().signal])
+  assert.equal(combined.signal.aborted, true)
+  assert.equal(combined.signal.reason, "already")
+
+  const first = new AbortController()
+  const second = new AbortController()
+  const removed = []
+  const watch = (controller) => {
+    const remove = controller.signal.removeEventListener.bind(controller.signal)
+    controller.signal.removeEventListener = (type, listener) => { removed.push(type); remove(type, listener) }
+  }
+  watch(first)
+  watch(second)
+  const live = tidy.anySignal([first.signal, second.signal])
+  assert.equal(live.signal.aborted, false)
+  second.abort("second")
+  assert.equal(live.signal.reason, "second")
+  assert.deepEqual(removed, ["abort", "abort"], "both listeners are removed once one signal aborts")
+  const idle = tidy.anySignal([new AbortController().signal])
+  idle.cleanup()
+  idle.cleanup()
+  assert.equal(idle.signal.aborted, false)
+})
+
 test("R3 cleanup requires persisted pending evidence before destructive removal", async () => {
   const f = await fixture()
   const w = await worktree(f)

@@ -193,6 +193,49 @@ test("boot reports absent bindings, malformed reports and repair launch failures
   await assert.rejects(boot.readReport(file), /unsafe/)
 })
 
+test("with no compatible Node the boot check names it in its one line, never crashes, and starts no repair", async () => {
+  const f = await fixture()
+  const launched = []
+  const launch = async (...args) => { launched.push(args) }
+  const none = () => ({ node: null, range: ">=20.0.0" })
+  let line
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    line = await boot.runBootChecks({ host: "claude", env: f.env, launch, resolveNode: none })
+    if (!line.includes("budget exceeded")) break
+  }
+  assert.equal(line, "Desk boot: workspace-tidy deferred (0 listed); repair not started: it needs Node >=20.0.0 and none was found")
+  assert.deepEqual(launched, [])
+
+  // The real resolver, forced to find nothing: an old running Node, and no other Node on PATH or under any manager.
+  const empty = await mkTempRoot("desk-no-node-")
+  const { compatibleNode } = require("../../../hooks/compatible-node.cjs")
+  const resolveNode = ({ env }) => compatibleNode({ env, current: { path: path.join(empty, "node"), version: "v16.20.2", abi: "93" } })
+  const bare = { ...f.env, PATH: empty, HOME: empty, DESK_NODE_SYSTEM_PREFIX: empty, NVM_DIR: "", FNM_DIR: "", VOLTA_HOME: "", ASDF_DATA_DIR: "", MISE_DATA_DIR: "", XDG_DATA_HOME: "", USERPROFILE: empty, APPDATA: empty, LOCALAPPDATA: empty, NVM_HOME: "", NVM_SYMLINK: "", ProgramFiles: empty, "ProgramFiles(x86)": empty }
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    line = await boot.runBootChecks({ host: "claude", env: bare, launch, resolveNode })
+    if (!line.includes("budget exceeded")) break
+  }
+  assert.match(line, /^Desk boot: workspace-tidy deferred \(0 listed\); repair not started: it needs Node >=20\.0\.0 and none was found$/)
+  assert.deepEqual(launched, [])
+})
+
+test("the repair is launched in the Node the resolver picks, with the binding's own spelling", async () => {
+  const f = await fixture()
+  const alias = path.join(f.root, "desk-alias")
+  await fs.symlink(f.desk, alias)
+  const launched = []
+  let line
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    launched.length = 0
+    line = await boot.runBootChecks({ host: "claude", env: { ...f.env, DESK: alias }, launch: async (...args) => { launched.push(args) }, resolveNode: () => ({ node: "/compatible/node", range: ">=20.0.0" }) })
+    if (!line.includes("budget exceeded")) break
+  }
+  assert.equal(line, "Desk boot: workspace-tidy deferred (0 listed)")
+  assert.equal(launched.length, 1)
+  assert.equal(launched[0][0], alias)
+  assert.equal(launched[0][2], "/compatible/node")
+})
+
 test("boot lock I/O failures and a slow report read do not authorize late launch", async (t) => {
   const f = await fixture()
   const common = git(f.desk, "rev-parse", "--absolute-git-dir")

@@ -62,6 +62,44 @@ function cardRepositories(matter) {
   }).filter(Boolean)
 }
 
+// One signal that aborts when any of `signals` does, with that signal's
+// reason. Hooks run in whatever Node the host puts first on PATH, and Node 16
+// has no AbortSignal.any, so the listeners are wired here and removed by
+// `cleanup` once the caller is done.
+export function anySignal(signals) {
+  const controller = new AbortController()
+  const listeners = []
+  const cleanup = () => {
+    for (const [signal, listener] of listeners.splice(0)) signal.removeEventListener("abort", listener)
+  }
+  for (const signal of signals.filter(Boolean)) {
+    if (signal.aborted) {
+      controller.abort(signal.reason)
+      break
+    }
+    const listener = () => {
+      controller.abort(signal.reason)
+      cleanup()
+    }
+    signal.addEventListener("abort", listener, { once: true })
+    listeners.push([signal, listener])
+  }
+  if (controller.signal.aborted) cleanup()
+  return { signal: controller.signal, cleanup }
+}
+
+// The bound desk's one identity: its real path. Task lookup, report storage,
+// report lookup and locking all key off it, so a desk bound through a symlink
+// alias is the same desk as its real path. A root that cannot be resolved is
+// returned as given; the inventory then reports it.
+export async function canonicalDeskRoot(deskRoot) {
+  try {
+    return await fs.realpath(deskRoot)
+  } catch {
+    return deskRoot
+  }
+}
+
 export function parseWorktrees(output, repository) {
   return output.split("\0\0").filter(Boolean).map((block) => {
     const item = { repository }
@@ -84,7 +122,8 @@ export async function inspectWorkspace({
   const result = { repositories: [], cards: [], cardRecords: {}, worktrees: [], issues: [], complete: true }
   let expired = false
   const cancellation = new AbortController()
-  const stopSignal = signal ? AbortSignal.any([signal, cancellation.signal]) : cancellation.signal
+  const combined = anySignal([signal, cancellation.signal])
+  const stopSignal = combined.signal
   let timer
   const stop = () => { if (expired || stopSignal.aborted) throw new Error("workspace-tidy budget exceeded") }
   const inventory = async () => {
@@ -169,6 +208,7 @@ export async function inspectWorkspace({
     return await Promise.race([inventory().catch((error) => ({ ...result, complete: false, issues: [...result.issues, error.message] })), deadline])
   } finally {
     clearTimeout(timer)
+    combined.cleanup()
   }
 }
 
@@ -290,7 +330,10 @@ export async function revokeWorkspaceRelease(resource) {
   })
 }
 
-export async function repairWorkspace({ deskRoot, git = gitDefault, processStart = readProcessStart, signal = process.kill, onDisposition = async () => {}, ...inspection } = {}) {
+export async function repairWorkspace({ deskRoot: boundRoot, git = gitDefault, processStart = readProcessStart, signal = process.kill, onDisposition = async () => {}, ...inspection } = {}) {
+  // Resolved once: the inventory's card keys and each receipt's task lookup
+  // use the same real path, whichever spelling bound the desk.
+  const deskRoot = await canonicalDeskRoot(boundRoot)
   const inventory = await inspectWorkspace({ ...inspection, deskRoot, git, budgetMs: 30_000 })
   const result = { removed: [], left: [], issues: inventory.issues }
   if (!inventory.complete) {
