@@ -182,7 +182,7 @@ one table, one row per desk. keep it human-readable — a non-agent teammate mus
 - **path** — the desk's subtree within this workspace repo (`desks/<alias>`), OR an absolute/`~`-tilde path for a desk that lives in a *different* repo (a multi-desk operator whose personal desk is a separate clone).
 - **repo** — the git repo the desk lives in (so a personal `worker` can route "that lives in the crew repo" and read the right clone).
 - **worker_variant** — which worker overlay is bound to this desk (`worker` for a plain personal desk, `crew` / a crew variant for a shared crew desk).
-- **write_subtree** — the path prefix this desk's agent scopes its writes to. equals `path` for an in-repo person desk; for a single-desk OFF-mode workspace there is no registry, so this column never describes the workspace root.
+- **write_subtree** — the path prefix this desk's agent scopes its writes to. equals `path` for an in-repo person desk; for a single-desk OFF-mode workspace there is no crew roster, so this column never describes the workspace root.
 
 a single-owner OFF-mode desk has **no crew roster**: either no `_meta/desks.md` at all, or one that holds something else, such as a hub's cross-desk routing registry (its own "Solo desks" and "Crew desks" tables) or a spoke desk's pointer to its hub. either way it is a single desk: behave as today, and read a hub's registry as routing context only. don't synthesize a roster; don't warn about its absence.
 

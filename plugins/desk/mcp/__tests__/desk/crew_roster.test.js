@@ -11,6 +11,7 @@ import { mkTempRoot } from "../_temp_roots.js"
 import {
   CREW_ROSTER_FILE,
   CREW_ROSTER_KEY_COLUMNS,
+  crewWorkspace,
   markdownTables,
   parseCrewRoster,
   readCrewRoster,
@@ -104,4 +105,26 @@ test("readCrewRoster reads the desk's roster and is null for every desk without 
   assert.equal(readCrewRoster(unreadable), null, "a directory in the file's place")
   assert.equal(readCrewRoster(null), null)
   assert.equal(readCrewRoster(""), null)
+})
+
+test("crewWorkspace fails closed when a crew workspace cannot be ruled out", async () => {
+  assert.deepEqual(crewWorkspace(await deskWith(null)), { crew: false, roster: null }, "no file: single owner")
+  assert.deepEqual(crewWorkspace(await deskWith(HUB)), { crew: false, roster: null }, "a hub: single owner")
+  assert.deepEqual(crewWorkspace(await deskWith(SPOKE)), { crew: false, roster: null }, "a spoke: single owner")
+  assert.deepEqual(crewWorkspace(await deskWith(ROSTER)).roster.map((row) => row.alias), ["alex", "bob"])
+  assert.equal(crewWorkspace(await deskWith(ROSTER)).crew, true)
+
+  const unreadable = await deskWith(null)
+  await fs.mkdir(path.join(unreadable, CREW_ROSTER_FILE), { recursive: true })
+  assert.deepEqual(crewWorkspace(unreadable), { crew: true, roster: [] }, "a file that exists but cannot be read")
+
+  const aliasOnly = await deskWith("| alias | path |\n|---|---|\n| alex | desks/alex |\n")
+  await fs.mkdir(path.join(aliasOnly, "desks", "alex"), { recursive: true })
+  assert.deepEqual(crewWorkspace(aliasOnly), { crew: true, roster: [] }, "no roster, but a desks/ folder")
+  const hubWithFile = await deskWith(HUB)
+  await fs.writeFile(path.join(hubWithFile, "desks"), "not a folder\n")
+  assert.deepEqual(crewWorkspace(hubWithFile), { crew: false, roster: null }, "a desks file is not a crew container")
+
+  assert.deepEqual(crewWorkspace(null), { crew: false, roster: null })
+  assert.deepEqual(crewWorkspace(""), { crew: false, roster: null })
 })

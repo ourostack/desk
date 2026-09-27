@@ -379,6 +379,20 @@ test("a single-owner hub whose desks.md is a routing registry is tidied at its r
   }
 })
 
+test("a desks.md the tidy cannot read, or an alias-only roster beside desks/, stops the tidy instead of tidying the crew root", () => {
+  const unreadable = registryDesk(HUB_REGISTRY)
+  rmSync(path.join(unreadable, "_meta", "desks.md"))
+  mkdirSync(path.join(unreadable, "_meta", "desks.md"))
+  const aliasOnly = registryDesk("| alias | path |\n|---|---|\n| alice | desks/alice |\n")
+  cleanTrack(aliasOnly, "desks/alice/")
+  for (const root of [unreadable, aliasOnly]) {
+    const result = status(root, { spawnGh: noGh })
+    assert.equal(result.unresolved_person, true)
+    assert.equal(result.needed, true)
+    assert.equal(result.applicable, false)
+  }
+})
+
 test("the crew roster, not the file, makes a crew desk: a roster after a hub-style table still counts", () => {
   const root = registryDesk(`${HUB_REGISTRY}\n## Crew roster\n\n| path | identity | alias |\n|---|---|---|\n| desks/bob | bob-login | bob |\n`)
   const unresolved = status(root, { spawnGh: () => ({ status: 1, stdout: "" }) })

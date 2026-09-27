@@ -36,7 +36,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { organizationFindings, redactedRelPath } from "./organization.js"
 import { operatorNames } from "./naming.js"
-import { parseCrewRoster, readCrewRoster } from "./crew-roster.js"
+import { crewWorkspace, parseCrewRoster, readCrewRoster } from "./crew-roster.js"
 import {
   expandHome,
   personPrefix,
@@ -191,7 +191,7 @@ export function resolvePerson(root, { env, spawnGh = spawnSync, homeDir = os.hom
   if (hasText(env.DESK_PERSON)) return env.DESK_PERSON.trim()
   if (root === null) return null
   const rows = (roster === undefined ? readCrewRoster(root) : roster)?.filter((row) => row.alias !== "")
-  if (rows === undefined) return null
+  if (rows === undefined || rows.length === 0) return null
   const identity = hasText(env.DESK_IDENTITY)
     ? env.DESK_IDENTITY.trim()
     : ghIdentity(root, { env, spawnGh, homeDir, now })
@@ -226,9 +226,10 @@ export function tidyStatus({
   const resolvedRoot = resolveRoot({ env, cwd, homeDir })
   const bound = hasText(root)
   const deskRoot = bound ? path.resolve(root) : resolvedRoot
-  // Parsed once: the roster decides crew mode and resolves the person.
-  const roster = readCrewRoster(deskRoot)
-  const resolvedPerson = resolvePerson(deskRoot, { env, spawnGh, homeDir, now: now ?? Date.now(), roster })
+  // Read once: the crew workspace check decides crew mode, and its roster
+  // resolves the person.
+  const workspace = crewWorkspace(deskRoot)
+  const resolvedPerson = resolvePerson(deskRoot, { env, spawnGh, homeDir, now: now ?? Date.now(), roster: workspace.roster })
   const alias = bound ? (hasText(person) ? person.trim() : null) : resolvedPerson
   const resolved = { root: resolvedRoot, person: resolvedPerson }
   // "root" when the script finds another desk (or none), "person" when it
@@ -239,10 +240,11 @@ export function tidyStatus({
   const fields = { root: deskRoot, person: alias, subtree: null, resolved, mismatch }
 
   if (deskRoot === null) return base(fields, "no desk is bound")
-  // A crew workspace is one whose `_meta/desks.md` holds the crew roster. A
-  // hub's routing registry or a spoke's pointer in that file is not one: that
-  // desk is tidied at its root like any single-owner desk.
-  const crew = roster !== null
+  // A crew workspace is one whose `_meta/desks.md` holds the crew roster, or
+  // one it cannot rule out (see `crewWorkspace`). A hub's routing registry or
+  // a spoke's pointer in that file is not one: that desk is tidied at its
+  // root like any single-owner desk.
+  const crew = workspace.crew
   if (crew && alias === null) {
     return { ...base(fields, "this is a crew desk and no person names this session's own desk"), needed: true, unresolved_person: true }
   }

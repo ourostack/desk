@@ -14,7 +14,9 @@
 // "api-key-rotation" or "token-budget-report" are not credential_like.
 
 import { spawnSync } from "node:child_process"
+import * as os from "node:os"
 import { readCrewRoster } from "./crew-roster.js"
+import { ghLogins } from "./gh-logins.js"
 
 // `^[a-z0-9]+(-[a-z0-9]+){1,5}$` — lowercase kebab-case, 2-6 words.
 const SHAPE_RE = /^[a-z0-9]+(-[a-z0-9]+){1,5}$/
@@ -308,23 +310,19 @@ function readGitUserName(deskRoot, spawnGitConfig) {
 }
 
 /**
- * operatorNames(deskRoot, { spawnGitConfig? }) -> string[]
+ * operatorNames(deskRoot, { spawnGitConfig?, env?, platform?, homeDir? }) -> string[]
  *
  * Lowercase, kebab-cased names the operator is known by on this desk:
  * every `alias` and `identity` in `_meta/desks.md`'s crew roster (when the
- * desk has one), plus the
- * desk's own `git config user.name`. `spawnGitConfig` is an injectable seam
- * over `node:child_process`'s `spawnSync`, for tests only — real callers
- * never pass it.
- *
- * Desk's activation data does not currently record a GitHub login anywhere
- * (checked `src/activation/schema.js` and friends) — there is no field to
- * read, so none is included here. If activation ever gains one, it belongs
- * in this list.
+ * desk has one), the desk's own `git config user.name`, and every GitHub
+ * login in gh's local hosts config (`gh-logins.js`: read locally, never over
+ * the network). `spawnGitConfig`, `env`, `platform` and `homeDir` are test
+ * seams — real callers never pass them.
  */
-export function operatorNames(deskRoot, { spawnGitConfig = spawnSync } = {}) {
+export function operatorNames(deskRoot, { spawnGitConfig = spawnSync, env = process.env, platform = process.platform, homeDir = os.homedir() } = {}) {
   const names = [...readDesksRegistryNames(deskRoot)]
   const gitUserName = readGitUserName(deskRoot, spawnGitConfig)
   if (gitUserName) names.push(gitUserName)
+  names.push(...ghLogins({ env, platform, homeDir }))
   return [...new Set(names.map(kebabCase).filter((name) => name !== ""))]
 }
