@@ -619,6 +619,15 @@ test("the deadline is enforced at every runner boundary", () => scratch(async ({
   }
 }))
 
+test("a deadline already spent before a gh call makes no call at all", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  await put(env, localFacts(1))
+  const github = fakeGitHub()
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, now: () => 5, deadlineMs: 0 }), { result: "deadline" })
+  assert.equal(github.calls.length, 0)
+}))
+
 test("a runner that never answers is cut off at the deadline", () => scratch(async ({ env }) => {
   const { flush } = await load()
   await optIn(env)
