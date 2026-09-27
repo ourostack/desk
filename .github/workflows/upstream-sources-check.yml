@@ -1,0 +1,93 @@
+name: Upstream sources check
+
+# Compares every vendored public source against upstream-sources.lock.json once a day (scripts/check-upstream-sources.cjs).
+# The check is a report, not a pull request gate: exit 2 means an upstream change needs a person (a payload change, or
+# a license notice the lock does not vendor), and exit 1 means a source is blocked. Either keeps one open issue current,
+# so nobody has to run the check by hand to learn that a vendored copy has fallen behind. The next clean run closes it.
+
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: upstream-sources-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check vendored upstream sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Only to open, update and close the "Upstream sources need attention" issue.
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_TITLE: Upstream sources need attention
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Compare vendored sources with upstream
+        id: check
+        run: |
+          set +e
+          node scripts/check-upstream-sources.cjs > "$RUNNER_TEMP/upstream-report.json" 2> "$RUNNER_TEMP/upstream-error.txt"
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Upstream sources check: exit $code"
+            echo
+            node -e '
+              const fs = require("node:fs");
+              let report;
+              try { report = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { report = null; }
+              if (!report) {
+                console.log("The check wrote no report: " + fs.readFileSync(process.argv[2], "utf8").trim());
+                process.exit(0);
+              }
+              console.log("| Source | Classification | Reason |");
+              console.log("|---|---|---|");
+              for (const source of report.sources) {
+                console.log(`| ${source.id} | ${source.classification} | ${String(source.reason).replace(/\|/gu, "\\|")} |`);
+              }
+            ' "$RUNNER_TEMP/upstream-report.json" "$RUNNER_TEMP/upstream-error.txt"
+          } > "$RUNNER_TEMP/upstream-summary.md"
+          cat "$RUNNER_TEMP/upstream-summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # One open issue at a time: a later failing run rewrites its body with the current report instead of adding another.
+      - name: Open or update the upstream sources issue
+        if: ${{ steps.check.outputs.code != '0' }}
+        run: |
+          body="$(cat "$RUNNER_TEMP/upstream-summary.md")
+
+          Latest run: $RUN_URL. Exit 2 means an upstream change needs a person's review before \`node scripts/check-upstream-sources.cjs --update --source <id> --upstream-dir <clone>\` refreshes the copy; exit 1 means a source is blocked. This issue closes after a run that finds no source needing attention."
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number,title --jq "map(select(.title == env.ISSUE_TITLE)) | .[0].number // empty")"
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "$body"
+          fi
+          echo "::error::The upstream sources check exited ${{ steps.check.outputs.code }}; see the \"$ISSUE_TITLE\" issue."
+          exit 1
+
+      - name: Close the upstream sources issue after a clean run
+        if: ${{ steps.check.outputs.code == '0' }}
+        run: |
+          for number in $(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number,title --jq "map(select(.title == env.ISSUE_TITLE)) | .[].number"); do
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "Resolved: $RUN_URL found no vendored source that needs attention."
+          done

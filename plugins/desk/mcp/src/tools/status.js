@@ -7,6 +7,7 @@ import { ACTIVE_EMBEDDING_SPEC } from "../indexer/spec.js"
 import { personPrefix } from "../util/paths.js"
 import { packageMetadata as packageJson } from "../package-metadata.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
+import { factoryStatus } from "./factory-context.js"
 
 const DB_SCHEMA = { id: "desk-index", version: 1 }
 const EMBEDDING_SPEC = {
@@ -20,7 +21,7 @@ const EMBEDDING_SPEC = {
   normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
 }
 
-export async function desk_status({ deskRoot, person, statusContext = {}, queryRouter, signal }) {
+export async function desk_status({ deskRoot, person, statusContext = {}, queryRouter, signal, env = process.env }) {
   const effectiveRoot = personPrefix(deskRoot, person)
   const writeScope = effectiveRoot === deskRoot
     ? { mode: "workspace", person: null, relative_path: "." }
@@ -84,6 +85,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
     startup_fallback: startupFallback,
     degraded_modes: degradedModes,
     write_scope: writeScope,
+    factory: factoryStatus({ env, deskRoot: root.valid ? root.path : null }),
     summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
   }
 }
