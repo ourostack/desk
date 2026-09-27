@@ -39,7 +39,10 @@
 // finished the job is usually not derived yet. `evaluatePending` prepares
 // retained requests again; a request is cleared only once every session of
 // the job has ended and has accepted labels, and quarantined with a stable
-// code when it expires or its stores lose consent.
+// code when it expires or its stores lose consent. A session whose facts are
+// quarantined can never deliver labels, so it is not briefed: its labels key
+// is quarantined instead (`holdLabels`, `facts_quarantined` naming the
+// facts), and it counts as settled rather than keeping the request pending.
 //
 // `prepareEvaluation(env, { job, pluginVersion })` writes a brief for each
 // of the job's sessions (from the jobs index) that a store with consent
@@ -64,6 +67,7 @@ import {
   evaluationPaths,
   factoryStateRoot,
   hasLocalLabels,
+  holdLabels,
   listEvaluationBriefs,
   listEvaluationRequests,
   readConsent,
@@ -84,6 +88,8 @@ export const EVALUATOR_SKILL = "desk:factory-evaluator"
 export const RUBRIC_VERSION = "1"
 
 const DESK_VERSION = /^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:-(?:alpha|beta|rc)\.[0-9]{1,4})?$/u
+// The session ID an outbox file name (`<host>-<session_id>.json`) carries.
+const SESSION_OF = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/u
 
 function contract(ok, detail) {
   if (!ok) throw new TypeError(`buildEvaluatorBrief: ${detail}`)
@@ -199,6 +205,12 @@ async function labelableFacts(env, store, name, job) {
   return publishedClock(localFacts).reason === "session_id_not_v4" ? null : localFacts
 }
 
+// Whether the session of outbox file `name` has its labels held back because its facts are quarantined, even facts too broken to read.
+async function heldBack(env, store, job, name) {
+  const session = SESSION_OF.exec(name)?.[1]
+  return session !== undefined && (await holdLabels(env, store, { job, session })) !== null
+}
+
 async function consentedStores(env) {
   const consent = await readConsent(env)
   return Object.keys(consent.stores).filter((store) => consent.stores[store].contribute === true).sort()
@@ -209,8 +221,9 @@ async function consentedStores(env) {
  * `result` is `ready` with the brief paths, `not_opted_in` when no store has
  * consent, `no_sessions` when no consented store holds a session of the job
  * that could be published, or `complete` when every such session already
- * has local labels and has ended. A session that has labels but is still
- * open is briefed again, so its labels follow the finished session.
+ * has local labels and has ended, or has its labels held back because its
+ * facts are quarantined (`holdLabels`). A session that has labels but is
+ * still open is briefed again, so its labels follow the finished session.
  */
 export async function prepareEvaluation(env, { job, pluginVersion }) {
   if (typeof job !== "string" || !PATTERNS.jobId.test(job)) throw new TypeError("prepareEvaluation: job must be a job ID")
@@ -222,6 +235,10 @@ export async function prepareEvaluation(env, { job, pluginVersion }) {
   let sessions = 0
   for (const store of stores) {
     for (const name of names) {
+      if (await heldBack(env, store, job, name)) {
+        sessions += 1
+        continue
+      }
       const localFacts = await labelableFacts(env, store, name, job)
       if (localFacts === null) continue
       sessions += 1
@@ -312,6 +329,10 @@ async function labelStatus(env, job) {
   let sessions = 0
   for (const store of stores) {
     for (const name of names) {
+      if (await heldBack(env, store, job, name)) {
+        sessions += 1
+        continue
+      }
       const localFacts = await labelableFacts(env, store, name, job)
       if (localFacts === null) continue
       sessions += 1
