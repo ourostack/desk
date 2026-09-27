@@ -7,10 +7,13 @@
 // with it set the scan reads Claude's plugin registry, and without it the
 // folders beside Desk's plugin root (`DESK_PLUGIN_ROOT`, which the launcher
 // sets on both hosts, else this checkout's own plugin folder). The scan is
-// the end hook's own `metadata`, so the tools, the hooks and the boot check
-// route a desk to the same store. A scan that fails is incomplete, which
-// holds routing unless the desk declares its own store.
+// the end hook's own `metadata`, loaded from that plugin root because an
+// installed server runs from a source mirror without `hooks/`, so the tools,
+// the hooks and the boot check route a desk to the same store. A scan that
+// fails is incomplete, which holds routing unless the desk declares its own
+// store.
 
+import { existsSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as os from "node:os"
 import * as path from "node:path"
@@ -29,8 +32,11 @@ const text = (value) => (typeof value === "string" && value.trim() !== "" ? valu
 export function factoryPluginScan(env) {
   const claudeRoot = text(env.CLAUDE_PLUGIN_ROOT)
   const pluginRoot = path.resolve(text(env.DESK_PLUGIN_ROOT) ?? claudeRoot ?? OWN_PLUGIN_ROOT)
+  // An installed server runs from a source mirror in the cache, where `hooks/` is not beside this file, so the end hook
+  // comes from the plugin root the launcher names; a checkout run without one uses its own.
+  const hook = [pluginRoot, OWN_PLUGIN_ROOT].map((root) => path.join(root, "hooks", "factory-end.cjs")).find((file) => existsSync(file))
   try {
-    const { metadata } = require(path.join(OWN_PLUGIN_ROOT, "hooks", "factory-end.cjs"))
+    const { metadata } = require(hook)
     const { dirs, incomplete } = metadata({ host: claudeRoot === null ? "copilot" : "claude", pluginRoot, home: text(env.HOME) ?? os.homedir(), env, readSmallText, PATTERNS })
     return { dirs, incomplete }
   } catch {
