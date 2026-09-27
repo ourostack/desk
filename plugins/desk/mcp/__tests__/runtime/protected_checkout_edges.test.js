@@ -145,6 +145,11 @@ test("long loops over commands with unknown exit statuses stay within the inspec
   assert.equal((await guard(`for f in ${values}; do wc -l "$f"; done; git checkout HEAD`)).deny, true)
   assert.equal((await guard(`for f in ${values}; do if test -f "$f"; then git -C '${root}' checkout HEAD; fi; done`)).deny, true)
   assert.equal((await guard(`for f in ${values}; do while read line; do wc -l "$line"; done < "$f"; done`)).deny, false)
+
+  // A while loop merges identical exit states too: the command after `||` is walked once for the one failed state, not once per path that failed.
+  const visited = []
+  await inspectShell({ command: "while read line; do wc -l \"$line\"; done || touch marker", cwd: tmpdir(), env: {}, visit({ name }) { visited.push(name) } })
+  assert.deepEqual(visited.filter((name) => name === "touch"), ["touch"])
 })
 
 test("home expansion respects quoting and inline alias cache keys include alias definitions", async (t) => {
