@@ -818,14 +818,35 @@ function rootOutcome(error, deps) {
     }
   }
   if (error?.code === "ACTIVATION_CONFIG_INVALID") return activationOutcome(error)
-  const missing = typeof error?.path === "string" ? error.path : "the desk root"
   return {
     state: "degraded",
     code: "root_unavailable",
-    summary: `The desk root does not exist: ${describe(error)}`,
-    fix: `Create or clone the desk at ${missing} (or correct the root the host passes), then call desk_status: Desk rechecks the root in place.`,
-    diagnostic: { mode: "degraded", observed: observed(error) },
+    summary: `The bound desk root is unavailable, and Desk does not fall back to another desk: ${describe(error)}`,
+    fix: rootUnavailableFix(error),
+    diagnostic: { mode: "degraded", observed: observed(error), root: boundRoot(error) },
   }
+}
+
+// The explicit binding that named the missing root, so desk_status names the configured path and where it came from.
+function boundRoot(error) {
+  return {
+    path: typeof error?.path === "string" ? error.path : null,
+    source: typeof error?.source === "string" ? error.source : null,
+    problem: typeof error?.problem === "string" ? error.problem : null,
+    activation_config: typeof error?.activation_config === "string" ? error.activation_config : null,
+  }
+}
+
+function rootUnavailableFix(error) {
+  const missing = typeof error?.path === "string" ? error.path : "the desk root"
+  const recheck = "then call desk_status: Desk rechecks the root in place, with no restart."
+  if (error?.source === "activation-config") {
+    return `The saved desk binding ${error.activation_config} names ${missing}. Restore or clone the desk at ${missing}, or rebind: run desk:first-run-bootstrap, which finds an existing desk or creates one and rewrites the binding; ${recheck}`
+  }
+  if (error?.source === "env:DESK") {
+    return `The DESK environment variable names ${missing}. Restore or clone the desk there, or correct or unset DESK in the environment that launches Desk and reconnect the Desk MCP server; ${recheck}`
+  }
+  return `Create or clone the desk at ${missing} (or correct the root the host passes), ${recheck}`
 }
 
 function activationOutcome(error) {
