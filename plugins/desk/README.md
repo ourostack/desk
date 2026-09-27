@@ -151,7 +151,8 @@ a furnished room, ready to settle into. the layout, the lifecycle, the small cer
 
 ### friction / learning
 - `friction-management` — pin a card to the corkboard, then encode the pattern
-- `lesson-capture` (post-task) — mine a finished task for patterns and propose what's earned a place on the reference shelf
+- `lesson-capture` (post-task) — mine a finished task for patterns and propose what's earned a place on the reference shelf; waste the evaluator found in the shared system becomes a kaizen card
+- `curator` — process the friction backlog and work the kaizen cards: file system friction as cards in the factory store, ship each countermeasure, fill in its version at release and close the cards the store's build confirms
 
 ## convention: the `$DESK` placeholder
 
