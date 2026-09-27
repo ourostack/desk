@@ -8,6 +8,7 @@ import { personPrefix } from "../util/paths.js"
 import { packageMetadata as packageJson } from "../package-metadata.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { activeTasks } from "../desk/active-tasks.js"
+import { factoryStatus } from "./factory-context.js"
 
 const DB_SCHEMA = { id: "desk-index", version: 1 }
 const EMBEDDING_SPEC = {
@@ -21,7 +22,7 @@ const EMBEDDING_SPEC = {
   normalization_id: ACTIVE_EMBEDDING_SPEC.normalization_id,
 }
 
-export async function desk_status({ deskRoot, person, statusContext = {}, queryRouter, signal }) {
+export async function desk_status({ deskRoot, person, statusContext = {}, queryRouter, signal, env = process.env }) {
   const effectiveRoot = personPrefix(deskRoot, person)
   const writeScope = effectiveRoot === deskRoot
     ? { mode: "workspace", person: null, relative_path: "." }
@@ -87,6 +88,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
     write_scope: writeScope,
     // The redacted active-task listing session start and status render (./desk/active-tasks.js).
     active_tasks: root.valid ? activeTasks(root.path) : null,
+    factory: factoryStatus({ env, deskRoot: root.valid ? root.path : null }),
     summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
   }
 }
