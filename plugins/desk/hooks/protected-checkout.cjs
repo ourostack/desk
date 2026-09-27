@@ -52,6 +52,9 @@
 // piped into sh/bash is inspected as that shell's script. Every PowerShell assignment form (casts,
 // scopes, ${name}, member/index and multiple targets, every operator, statement values) runs its
 // right-hand side through the same statement path, and control statements run all their blocks.
+// Every PowerShell ( ), $( ) and { } group runs as its own command sequence wherever it appears and,
+// as an argument, stands for one unknown value; splatting a Git call is unparseable. A tag counts only
+// when its `git tag` is reached unconditionally and no local branch has its name.
 // When the shell text cannot be parsed at all, it is denied only if it mentions `git` or
 // evaluates code in the same sense. Everything else, such as `echo "$(date)"`,
 // `cd "$wt" && node x.js` or `jq . f.json | grep x`, is allowed.

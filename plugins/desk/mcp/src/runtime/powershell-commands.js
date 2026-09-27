@@ -1,5 +1,5 @@
 import * as path from "node:path"
-import { physicalDirectory } from "./shell-paths.js"
+import { physicalDirectory, staticGitOutput } from "./shell-paths.js"
 import { inspectShell, tokenizeShell } from "./shell-commands.js"
 import { mayInvokeGit, UNKNOWN, UNKNOWN_GIT, unknownOutput, unresolved } from "./guard-unknowns.js"
 
@@ -60,8 +60,9 @@ function dropCharacters(word, count) {
 
 // `targets op value` when the statement is an assignment: the operator may touch either side.
 function assignment(words) {
+  // Attribute arguments such as [ValidateNotNull()] put parentheses inside the leading casts.
   const lead = []
-  for (const word of words) { if (!word.parts) break; lead.push(word) }
+  for (const word of words) { if (!word.parts && word !== "(" && word !== ")") break; lead.push(word) }
   const match = ASSIGNMENT.exec(lead.map(wordText).join(" "))
   if (!match) return null
   let start = 0, index = 0
@@ -70,16 +71,27 @@ function assignment(words) {
   return { targets: match[1].trim(), compound: match[2] !== undefined, value }
 }
 
+// A hashtable entry `key = value`: the value, or null when the statement is not an entry.
+function entryValue(words) {
+  if (words[1]?.parts && wordText(words[1]) === "=") return words.slice(2)
+  const at = words[0]?.parts ? wordText(words[0]).indexOf("=") : -1
+  if (at <= 0) return null
+  const rest = dropCharacters(words[0], at + 1)
+  return rest.parts.length ? [rest, ...words.slice(1)] : words.slice(1)
+}
+
+const SPLAT = /^@[A-Za-z_]\w*$/u
 // PowerShell has case-insensitive variables and location commands, no POSIX field
 // splitting, and "$name = value" assignments rather than shell environment prefixes. A
 // statement that starts with a variable is an expression, never a call; `&` calls.
-export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, locals = {} }) {
+export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, locals = {}, certain = true }) {
   if (depth > 16) throw new Error("PowerShell wrapper nesting exceeds 16")
   const tokens = tokenizeShell(command, true)
   let variables = { home: env.HOME ?? env.USERPROFILE, pwd: cwd, ...locals }
   let environment = { ...env }
   let directory = physicalDirectory(cwd, ".") ?? cwd
-  let status = null, terminated = false, forks = []
+  // Commands inside groups, blocks and subexpressions, or after `||`, are not reached unconditionally.
+  let status = null, terminated = false, forks = [], conditional = certain ? 0 : 1
   let states = [snapshot()]
 
   function snapshot() {
@@ -123,8 +135,8 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
           }
           if (nesting) throw new Error("unresolved PowerShell subexpression")
           const text = part.text.slice(i + 2, end)
-          await inspectPowerShell({ command: text, cwd: directory, env: environment, visit, depth: depth + 1, locals: variables })
-          result += /^(?:get-location|pwd)$/iu.test(text.trim()) ? directory : unknownOutput(text)
+          await inspectPowerShell({ command: text, cwd: directory, env: environment, visit, depth: depth + 1, locals: variables, certain: false })
+          result += /^(?:get-location|pwd)$/iu.test(text.trim()) ? directory : staticGitOutput(text.trim().split(/\s+/u), directory, environment) ?? unknownOutput(text)
           i = end
         } else {
           const match = /^\$(?:\{((?:\w+:)?[A-Za-z_]\w*)\}|((?:\w+:)?[A-Za-z_]\w*))/iu.exec(part.text.slice(i))
@@ -139,20 +151,34 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
     return result
   }
 
-  // Run the statements inside each top-level ( ) or { } group of `words`; return the words outside them.
-  async function groups(words) {
-    const outside = []
+  // Run each top-level ( ) or { } group of `words` as its own statements, and return `words` with each
+  // group replaced by one argument standing for its value. A hashtable's entries run their values, and a
+  // foreach header runs the pipeline after `in`.
+  async function groups(words, header = null) {
+    const result = []
     for (let i = 0; i < words.length; i++) {
-      if (words[i] !== "(" && words[i] !== "{") { outside.push(words[i]); continue }
+      if (words[i] !== "(" && words[i] !== "{") { result.push(words[i]); continue }
       let nesting = 1, end = i + 1
       for (; nesting; end++) {
         if (words[end] === "(" || words[end] === "{") nesting++
         if (words[end] === ")" || words[end] === "}") nesting--
       }
-      for (const inner of statements(words.slice(i + 1, end - 1))) await run(inner.words, inner.redirects, inner.previous)
+      const inner = words.slice(i + 1, end - 1)
+      const hashtable = words[i] === "{" && Boolean(words[i - 1]?.parts) && wordText(words[i - 1]).endsWith("@")
+      const inHeader = header === "foreach" && words[i] === "(" && !result.some((word) => word.group)
+      conditional++
+      for (const statement of statements(inner)) {
+        const keyword = statement.words.findIndex((word) => word.parts && wordText(word).toLowerCase() === "in")
+        if (hashtable && entryValue(statement.words)) await assignedValue(entryValue(statement.words))
+        else if (inHeader && keyword > 0) await assignedValue(statement.words.slice(keyword + 1))
+        else await run(statement.words, statement.redirects, statement.previous)
+      }
+      conditional--
+      const answered = inner.every((word) => word.parts) ? staticGitOutput(inner.map(wordText), directory, environment) : null
+      result.push({ parts: [{ text: answered ?? unknownOutput(tokensText(inner)), expand: false, quoted: false }], quoted: false, group: true })
       i = end - 1
     }
-    return outside
+    return result
   }
 
   // The value of an assignment: a literal, a variable or a string is data; anything else is a
@@ -161,14 +187,15 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
     const data = words.length === 1 && words[0].parts && (words[0].quoted || /^(?:\$|[-+]?\d)/u.test(words[0].parts[0].text))
     if (data) return expand(words[0])
     await run(words, [], null)
-    return unknownOutput(tokensText(words))
+    const answered = words.every((word) => word.parts) ? staticGitOutput(words.map(wordText), directory, environment) : null
+    return answered ?? unknownOutput(tokensText(words))
   }
 
   // A program whose name is unknown fails closed when its text names Git or runs code, and is judged as
   // Git when its arguments read like a checked Git command.
   async function unknownProgram(text, args) {
     if (args.some((arg) => arg.includes(UNKNOWN_GIT)) || mayInvokeGit(text)) throw unresolved("the program this command runs")
-    await visit({ name: "git", args: args.slice(1), cwd: directory, env: environment, computed: true })
+    await visit({ name: "git", args: args.slice(1), cwd: directory, env: environment, computed: true, certain: false })
   }
 
   async function run(words, redirects, previous) {
@@ -192,22 +219,19 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
       status = true
       return
     }
-    if (CONTROL.has(String(wordText(words[0])).toLowerCase())) {
+    const keyword = String(wordText(words[0])).toLowerCase()
+    if (CONTROL.has(keyword)) {
       // Either branch may run: keep the state from before the blocks as well.
       forks.push(snapshot())
-      await groups(words)
+      await groups(words, keyword === "foreach" ? "foreach" : null)
       status = null
       return
     }
     if (!words.every((word) => word.parts)) {
-      const outside = await groups(words)
-      if (!words[0].parts) {
-        // `& (expression) args` calls whatever the expression yields: a program Desk cannot name.
-        if (callOperator) await unknownProgram(tokensText(words), [UNKNOWN, ...await Promise.all(outside.map(expand))])
-        status = null
-        return
-      }
-      words = outside
+      // A statement that starts with a group is an expression; `& (expression)` calls what it yields.
+      const expression = !words[0].parts
+      words = await groups(words)
+      if (expression && !callOperator) { status = null; return }
     }
     for (const redirect of redirects) await expand(redirect)
     const args = []
@@ -215,12 +239,15 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
     const text = tokensText(words)
     // The resulting string is data, but interpolation has already executed; so is a variable expression.
     if (!callOperator && (words[0].quoted || wordText(words[0]).startsWith("$"))) { status = true; return }
-    if (path.basename(args[0]).includes(UNKNOWN) || args[0] === "") {
+    const name = path.basename(args[0]).replace(/\.exe$/iu, "").toLowerCase()
+    const unknown = path.basename(args[0]).includes(UNKNOWN) || args[0] === ""
+    // Splatting passes arguments Desk does not track, so a Git call with one cannot be judged.
+    if ((unknown || name === "git") && words.slice(1).some((word) => SPLAT.test(wordText(word)))) throw new Error("unresolved PowerShell splatting")
+    if (unknown) {
       await unknownProgram(text, args)
       status = null
       return
     }
-    const name = path.basename(args[0]).replace(/\.exe$/iu, "").toLowerCase()
     if (name === "exit") { terminated = true; return }
     if (["popd", "pop-location"].includes(name)) { directory = UNKNOWN; variables.pwd = UNKNOWN; status = null; return }
     if (["cd", "chdir", "sl", "set-location", "pushd", "push-location"].includes(name)) {
@@ -249,7 +276,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
       }
     } else if (name === "iex" || name === "invoke-expression") {
       await inspectPowerShell({ command: args.slice(1).join(" "), cwd: directory, env: environment, visit, depth: depth + 1, locals: variables })
-    } else await visit({ name, args: args.slice(1), cwd: directory, env: environment })
+    } else await visit({ name, args: args.slice(1), cwd: directory, env: environment, certain: conditional === 0 && previous !== "||" })
     status = ["echo", "write-host", "write-output"].includes(name) ? true : null
   }
 

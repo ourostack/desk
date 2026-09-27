@@ -477,3 +477,100 @@ test("A3b re-review: ordinary chained work the guard can resolve soundly passes"
   const real = spawnSync("bash", ["--noprofile", "--norc", "-c", "git tag v2 && git push -q origin v2"], { cwd: f.prot, env: f.env, encoding: "utf8" })
   assert.equal(real.status, 0, real.stderr)
 })
+
+// Re-review 2 (task-A3b-rereview-2-evidence/rr2-probes.mjs and rr2-extra.mjs).
+test("A3b re-review 2: every PowerShell group is its own command sequence and stands for an unknown value", async (t) => {
+  const f = await fixture(t)
+  const pwt = path.join(f.root, "pwt")
+  f.git(f.own, "worktree", "add", "-q", "--detach", pwt, "HEAD")
+  await protectCheckout({ root: pwt })
+  writeFileSync(path.join(f.root, "b.txt"), "topic\n")
+  mkdirSync(path.join(f.prot, "sub"))
+  const deny = [
+    ["Set-Location (git rev-parse --show-toplevel); git stash", path.join(f.prot, "sub")],
+    ["cd (git rev-parse --show-toplevel); git checkout -q topic", f.prot],
+    [`Set-Location (Join-Path ${psq(f.root)} 'prot'); git stash`, f.own],
+    ["git checkout -q (git rev-parse HEAD~1)", f.prot],
+    [`git checkout -q (Get-Content ${psq(f.root + "/b.txt")})`, f.prot],
+    ["git (Write-Output stash)", f.prot],
+    [`git -C (Join-Path ${psq(f.root)} 'prot') stash`, f.own],
+    ["$a = @('stash'); git @a", f.prot],
+    ["$a = 'checkout', '-q', 'topic'; git @a", f.prot],
+    ["$h = @{ a = git stash }", f.prot],
+    ["[pscustomobject]@{ Out = git stash }", f.prot],
+    ["$h = @{ a = 1; b=git stash }", f.prot],
+    ["$h = @{ a= git stash }", f.prot],
+    ["foreach ($l in git stash) { $l }", f.prot],
+    ["[ValidateNotNull()][string]$x = git stash", f.prot],
+    ["[ValidateSet('a', 'b')][string]$x = git stash", f.prot],
+    ["git switch -q (Write-Output topic)", f.prot],
+    [`git worktree remove --force (Join-Path ${psq(f.root)} 'pwt')`, f.own],
+    ["git reset -q --hard (git rev-parse HEAD~1)", f.prot],
+    ["git switch -q topic; git branch -D (Write-Output main)", f.prot],
+    ["& (Get-Command git) status", f.prot],
+    ["$x = (Get-Content x | Where-Object { git stash })", f.prot],
+  ]
+  for (const [command, cwd] of deny) assert.equal((await f.guard(command, { cwd, powershell: true })).deny, true, command)
+  const allow = [
+    ["cd (git rev-parse --show-toplevel); git pull -q --rebase origin main", path.join(f.prot, "sub")],
+    ["git push -q origin (git branch --show-current)", f.prot],
+    ["$b = git branch --show-current; git push -q origin $b", f.prot],
+    ["$b = git rev-parse --abbrev-ref HEAD; git push -q origin $b", f.prot],
+    ['Write-Host "Branch: $(git branch --show-current)"', f.prot],
+    [`git commit -q --allow-empty -m (Get-Content ${psq(f.root + "/b.txt")} -Raw)`, f.prot],
+    ["if (git status --porcelain) { git add -A; git commit -q -m x }", f.prot],
+    ["git status --porcelain | ForEach-Object { $_.Substring(3) }", f.prot],
+    ["function Get-Br { git branch --show-current }; Get-Br", f.prot],
+    ["$a = @('status'); Write-Output @a", f.prot],
+    ["$h = @{ a = 'git stash'; b = 2 }", f.prot],
+    ["$h = @{}; $h.x = 1; $e = @{ (1) = 2 }", f.prot],
+    ["foreach ($f in (git diff --name-only)) { Write-Output $f }", f.prot],
+  ]
+  for (const [command, cwd] of allow) {
+    const result = await f.guard(command, { cwd, powershell: true })
+    assert.equal(result.deny, false, `${command}: ${result.reason}`)
+  }
+  assert.match((await f.guard("$a = @('stash'); git @a", { powershell: true })).reason, /could not inspect this shell command \(unresolved PowerShell splatting\)/u)
+  if (!pwsh) { t.diagnostic("native PowerShell unavailable; decisions still checked"); return }
+  // Real PowerShell: the checkout, stash and worktree-removal forms change the protected state.
+  const checkout = await fixture(t)
+  spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "git checkout -q (git rev-parse HEAD~1)"], { cwd: checkout.prot, env: checkout.env })
+  assert.equal(checkout.state().branch, "", "HEAD detached")
+  const stash = await fixture(t)
+  writeFileSync(path.join(stash.prot, "file.txt"), "another session's edit\n")
+  spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$h = @{ a = git stash }"], { cwd: stash.prot, env: stash.env })
+  assert.notEqual(stash.git(stash.prot, "stash", "list"), "")
+  writeFileSync(path.join(pwt, "unsaved.txt"), "unsaved\n")
+  spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `git worktree remove --force (Join-Path ${psq(f.root)} 'pwt')`], { cwd: f.own, env: f.env })
+  assert.equal((await import("node:fs")).existsSync(pwt), false, "the protected worktree and its unsaved file are gone")
+})
+
+test("A3b re-review 2: tags count only when created unconditionally, and here-documents piped into shells are scripts", async (t) => {
+  const f = await fixture(t)
+  for (const command of [
+    'test -n "$NOPE" && git tag topic; git push -q origin topic', "git tag topic no-such-rev; git push -q origin topic",
+    "if true; then git tag v5; fi; git push -q origin v5", "false || git tag v6; git push -q origin v6", "[ -f x ]; git tag v7; git push -q origin v7",
+    "cat <<'EOF' | bash\ngit stash\nEOF", "bash -s -- x <<'EOF'\ngit stash\nEOF", "cat <<< 'git stash' | sh",
+  ]) assert.equal((await f.guard(command)).deny, true, command)
+  for (const command of [
+    "git tag v2 && git push -q origin v2", "git add -A && git tag v3; git push -q origin v3", "bash -c 'git tag v4'; git push -q origin v4",
+    'git push -q origin "$(git branch --show-current)"', 'git push -q origin "$(git rev-parse --abbrev-ref HEAD)"',
+    "cat <<'EOF' | bash\necho harmless\nEOF", "bash -s -- x <<'EOF'\necho \"$1\"\nEOF",
+  ]) {
+    const result = await f.guard(command)
+    assert.equal(result.deny, false, `${command}: ${result.reason}`)
+  }
+  // A detached HEAD has no current branch to push by name; a worktree's HEAD is read through its .git file.
+  const wt = path.join(f.root, "wt")
+  f.git(f.prot, "worktree", "add", "-q", "-b", "wt-branch", wt, "HEAD")
+  await protectCheckout({ root: wt })
+  assert.equal((await f.guard('git push -q origin "$(git branch --show-current)"', { cwd: wt })).deny, false)
+  writeFileSync(path.join(wt, ".git"), "not a gitdir line\n")
+  assert.equal((await f.guard('git push -q origin "$(git branch --show-current)"', { cwd: wt })).deny, true, "an unreadable .git file leaves the branch unknown")
+  assert.equal((await f.guard('cd / && git push -q origin "$(git branch --show-current)"')).deny, false, "outside any checkout nothing is protected")
+  f.git(f.prot, "switch", "-q", "--detach", "HEAD")
+  assert.match((await f.guard('git push -q origin "$(git branch --show-current)"')).reason, /pushes only its own branch/u)
+  assert.equal((await f.guard('git push -q origin "$(git rev-parse --abbrev-ref HEAD)"')).deny, false, "pushing HEAD while detached fails in Git itself")
+  const real = spawnSync("bash", ["--noprofile", "--norc", "-c", "git tag topic no-such-rev; git push -q origin topic"], { cwd: f.prot, env: f.env, encoding: "utf8" })
+  assert.equal(real.status, 0, "without the guard, the failed tag leaves the branch push")
+})

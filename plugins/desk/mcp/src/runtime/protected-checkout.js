@@ -78,8 +78,10 @@ function checkoutContext(read, cwd, options, env, policy, branch, created) {
     head: () => value("head", ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]),
     commit: (rev) => value(`commit ${known(rev, "a Git revision")}`, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`]),
     fullName: (rev) => value(`name ${known(rev, "a Git revision")}`, ["rev-parse", "--symbolic-full-name", rev.startsWith("-") ? "--" : rev]),
-    // A tag an earlier `git tag <name>` in the same command creates in this checkout counts as a tag.
-    tag: async (name) => created.has(`${cwd}\0${name}`) || await value(`tag ${name}`, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]) !== null,
+    // A tag an earlier, unconditional `git tag <name>` creates in this checkout counts as a tag, unless a local
+    // branch has that name: then a failed `git tag` would leave the push pushing the branch.
+    tag: async (name) => await value(`tag ${name}`, ["rev-parse", "--verify", "--quiet", `refs/tags/${name}`]) !== null
+      || (created.has(`${cwd}\0${name}`) && await value(`branch ${name}`, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]) === null),
     remoteBranch: async (name) => await value(`remote ${name}`, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${name}`]) !== null,
     pushed: async () => await value("pushed", ["for-each-ref", "--count=1", "--contains=HEAD", "--format=%(refname)", "refs/remotes"]) !== null,
     // The upstream from saved configuration, with its remote-tracking ref under the default fetch layout.
@@ -152,7 +154,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     if (timeoutMs <= 0) throw Object.assign(new Error(`protected-checkout inspection budget of ${budgetMs} ms is spent`), { code: "ETIMEDOUT" })
     return readGit(dir, args, variables, { timeoutMs })
   }
-  async function visit({ name, args, cwd: directory, env: variables, computed = false }) {
+  async function visit({ name, args, cwd: directory, env: variables, computed = false, certain = true }) {
     if (name !== "git") return
     const invocation = gitInvocation(args, directory, variables)
     if (!invocation || invocation.name === undefined) return
@@ -196,7 +198,8 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
       await inspectShell({ command: `${alias.slice(1)} ${rest}`, cwd: top.ok ? top.stdout : target, env: exported, powershell: false, visit })
       return
     }
-    const tag = operation === "tag" && target !== null ? createdTag(operands) : undefined
+    // Only a `git tag` reached unconditionally counts; one that might be skipped leaves the name a branch push.
+    const tag = operation === "tag" && target !== null && certain ? createdTag(operands) : undefined
     if (tag !== undefined) created.add(`${target}\0${tag}`)
     const rule = classifyGit(operation, operands, overrides)
     if (!rule) return

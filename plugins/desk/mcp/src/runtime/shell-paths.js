@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, statSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import * as path from "node:path"
 import { UNKNOWN } from "./guard-unknowns.js"
 
@@ -58,4 +58,31 @@ export function gitToplevel(dir) {
     if (existsSync(path.join(current, ".git"))) return current
     if (path.dirname(current) === current) return UNKNOWN
   }
+}
+
+// The branch HEAD names in the checkout containing `dir`, read from its HEAD file without running Git.
+function currentBranch(dir, abbreviated) {
+  const top = gitToplevel(dir)
+  if (top === UNKNOWN) return UNKNOWN
+  let gitDir = path.join(top, ".git")
+  try {
+    if (statSync(gitDir).isFile()) gitDir = path.resolve(top, /^gitdir: (.+)$/mu.exec(readFileSync(gitDir, "utf8"))[1].trim())
+    const head = /^ref: refs\/heads\/(.+)$/u.exec(readFileSync(path.join(gitDir, "HEAD"), "utf8").trim())
+    return head ? head[1] : abbreviated ? "HEAD" : ""
+  } catch {
+    return UNKNOWN
+  }
+}
+
+/**
+ * The output of a read-only Git command Desk can answer from the file system: `git rev-parse --show-toplevel`,
+ * `git branch --show-current` and `git rev-parse --abbrev-ref HEAD`. null for any other command, and unknown
+ * when a Git location variable is set.
+ */
+export function staticGitOutput(words, cwd, env) {
+  const text = words.join(" ")
+  const known = ["git rev-parse --show-toplevel", "git branch --show-current", "git rev-parse --abbrev-ref HEAD"]
+  if (!known.includes(text)) return null
+  if (Object.keys(env).some((key) => /^GIT_(?:DIR|WORK_TREE)$/iu.test(key))) return UNKNOWN
+  return text === known[0] ? gitToplevel(cwd) : currentBranch(cwd, text === known[2])
 }

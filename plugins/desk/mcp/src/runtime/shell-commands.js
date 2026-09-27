@@ -5,7 +5,7 @@
 // an unknown directory is carried forward, and only an unknown program, script or Git
 // target that could reach Git ends inspection with a denial.
 import * as path from "node:path"
-import { gitToplevel, mktempPath, physicalDirectory } from "./shell-paths.js"
+import { mktempPath, physicalDirectory, staticGitOutput } from "./shell-paths.js"
 import { inspectPowerShell } from "./powershell-commands.js"
 import { mayInvokeGit, UNKNOWN, UNKNOWN_GIT, unknownOutput, unresolved } from "./guard-unknowns.js"
 
@@ -308,7 +308,9 @@ function wordText(words) {
   return words.map((word) => word.parts.map((part) => part.text).join("")).join(" ")
 }
 
-export async function inspectShell({ command, cwd, env, powershell = false, visit, depth = 0 }) {
+// `certain` marks commands reached unconditionally from the start: joined only by `;`, newlines and `&&`,
+// outside conditionals, loops, `case`, pipelines and background jobs, and after no test command.
+export async function inspectShell({ command, cwd, env, powershell = false, visit, depth = 0, certain = true }) {
   if (powershell) return inspectPowerShell({ command, cwd, env, visit, depth })
   if (depth > 16) throw new Error("shell wrapper nesting exceeds 16")
   const tree = parse(tokenizeShell(command))
@@ -316,7 +318,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
   async function nested(text, state, shell = "bash", partial = false) {
     // An eval or -c script must be known; a here-document or piped literal may hold unknown words, judged in place.
     if (!partial && text.includes(UNKNOWN)) throw unresolved("a script this command evaluates")
-    return inspectShell({ command: text, cwd: state.cwd, env: state.vars, powershell: shell === "powershell", visit, depth: depth + 1 })
+    return inspectShell({ command: text, cwd: state.cwd, env: state.vars, powershell: shell === "powershell", visit, depth: depth + 1, certain: state.certain })
   }
   async function expand(word, state, split = false) {
     const fields = [""]
@@ -359,8 +361,9 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     const words = []
     for (const token of tokens) words.push(await expand(token, state))
     if (words[0] === "pwd" && words.length === 1) return state.cwd
-    // `git rev-parse --show-toplevel` is read-only and names the checkout that contains the directory.
-    if (words.join(" ") === "git rev-parse --show-toplevel" && state.vars.GIT_DIR === undefined && state.vars.GIT_WORK_TREE === undefined) return gitToplevel(state.cwd)
+    // Read-only Git that names the checkout or its branch is answered from the file system.
+    const answered = staticGitOutput(words, state.cwd, state.vars)
+    if (answered !== null) return answered
     if (words[0] === "echo") {
       let i = 1, escapes = false
       for (; /^-[neE]+$/u.test(words[i] ?? ""); i++) escapes = /e[^E]*$/u.test(words[i])
@@ -385,9 +388,12 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     for (let i = 0; i < values.length; i++) vars[i + start] = values[i]
     return { ...state, vars }
   }
+  const conditional = (state) => ({ ...state, certain: false })
+  const resume = (states, state) => states.map((s) => ({ ...s, certain: state.certain }))
   async function run(node, state) {
     if (++steps > 5000) throw new Error("shell inspection budget exceeded")
     if (state.terminated) return [state]
+    if (["case", "while", "if", "for", "background", "pipe"].includes(node.kind) && state.certain) return resume(await run(node, conditional(state)), state)
     if (node.kind === "case") {
       const value = await expand(node.value, state)
       let states = [{ ...state, status: true }], fallthrough = false
@@ -445,7 +451,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     if (node.kind === "&&" || node.kind === "||") {
       const left = await run(node.left, state), out = []
       for (const s of left) {
-        if (s.status === (node.kind === "&&" ? true : false)) out.push(...await run(node.right, s))
+        if (s.status === (node.kind === "&&" ? true : false)) out.push(...await run(node.right, node.kind === "||" ? conditional(s) : s))
         else out.push(s)
       }
       return out
@@ -459,7 +465,10 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       let input = null
       for (const item of node.nodes) {
         await run(item, { ...state, vars: { ...state.vars }, stdin: input })
-        const output = item.kind === "command" && !item.redirects.length ? await outputOf(item.words, wordText(item.words), state) : UNKNOWN
+        // `cat` of a here-document or here-string outputs that literal body.
+        const catBody = item.kind === "command" && wordText(item.words) === "cat" && item.stdin && item.redirects.length === 1
+        const output = catBody ? await expand(item.stdin, state)
+          : item.kind === "command" && !item.redirects.length ? await outputOf(item.words, wordText(item.words), state) : UNKNOWN
         // Wholly computed input, such as `cat script | bash`, is a script file: outside the boundary like `bash script`,
         // unless the command that produces it names Git.
         input = output === UNKNOWN ? null : output
@@ -550,17 +559,20 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     if (["sh", "bash", "zsh", "dash", "ksh", "pwsh", "powershell"].includes(name)) {
       const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/u.test(arg) || /^-command$/iu.test(arg))
       if (flag > 0 && args[flag + 1] !== undefined) await nested(args[flag + 1], positional(local, args.slice(flag + 2), 0), ["pwsh", "powershell"].includes(name) ? "powershell" : "bash")
-      else if (!["pwsh", "powershell"].includes(name) && args.slice(1).every((arg) => arg.startsWith("-"))) {
-        // With no script operand, a POSIX shell reads its script from stdin: a here-document or a piped literal.
+      else if (!["pwsh", "powershell"].includes(name) && (args.slice(1).every((arg) => arg.startsWith("-")) || args.slice(1).some((arg) => /^-[a-z]*s[a-z]*$/u.test(arg)))) {
+        // With no script operand, or with -s (the rest are positional arguments), a POSIX shell reads its
+        // script from stdin: a here-document, a here-string or a piped literal.
         const script = node.stdin ? await expand(node.stdin, local) : state.stdin
         if (script !== null && script !== undefined) await nested(script, local, "bash", true)
       }
     } else if (name === "eval") await nested(args.slice(1).join(" "), local)
-    else await visit({ name, args: args.slice(1), cwd: local.cwd, env: local.vars })
+    else await visit({ name, args: args.slice(1), cwd: local.cwd, env: local.vars, certain: local.certain })
     if (["true", ":", "echo", "printf"].includes(name)) return [{ ...state, status: true }]
     if (name === "false") return [{ ...state, status: false }]
+    // A test is a condition: what follows it is no longer reached unconditionally.
+    if (["test", "[", "[["].includes(name)) return [{ ...state, status: true, certain: false }, { ...state, status: false, certain: false }]
     return unknown
   }
   const physicalCwd = physicalDirectory(cwd, ".") ?? cwd
-  await run(tree, { cwd: physicalCwd, logicalCwd: cwd, vars: { ...env, PWD: cwd }, functions: {}, status: true })
+  await run(tree, { cwd: physicalCwd, logicalCwd: cwd, vars: { ...env, PWD: cwd }, functions: {}, status: true, certain })
 }
