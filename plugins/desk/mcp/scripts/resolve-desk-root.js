@@ -2,8 +2,10 @@
 // Print the desk root Desk's MCP server would bind for this environment, as
 // JSON. Startup hooks call this so they can never disagree with the server.
 // `--root-only` prints just the root (empty when none); `--startup-line` prints
-// the `Desk startup:` line the Claude hook appends. Always exits 0: a hook must
-// not block session start.
+// the `Desk startup:` line the Claude hook appends; `--boot-checks` appends the
+// one `Desk boot:` line when a boot check has something to say, then starts
+// factory delivery detached. Always exits 0: a hook must not block session
+// start.
 import process from "node:process"
 import * as os from "node:os"
 import { realpathSync } from "node:fs"
@@ -31,14 +33,18 @@ export function resolveHookDeskRoot({ env = process.env, cwd = process.cwd() } =
   }
 }
 
-export async function main({ argv = process.argv.slice(2), env = process.env, write = (text) => process.stdout.write(text) } = {}) {
+export async function main({ argv = process.argv.slice(2), env = process.env, write = (text) => process.stdout.write(text), loadBoot = () => import("../../hooks/boot-checks.cjs") } = {}) {
   const result = resolveHookDeskRoot({ env })
   let output = `${JSON.stringify(result)}\n`
   if (argv.includes("--root-only")) output = result.root ?? ""
   if (argv.includes("--startup-line")) output = claudeStartupDirection({ env })
   if (argv.includes("--boot-checks")) {
-    const { default: boot } = await import("../../hooks/boot-checks.cjs")
-    output += `\n\n${await boot.runBootChecks({ host: "claude", env })}`
+    const { default: boot } = await loadBoot()
+    // One agent line only when a boot check has something to say; otherwise the output is unchanged.
+    const line = await boot.runBootChecks({ host: "claude", env })
+    if (line) output += `\n\n${line}`
+    // Factory delivery starts detached only once the output is built.
+    await boot.startFactory({ env })
   }
   write(output)
 }

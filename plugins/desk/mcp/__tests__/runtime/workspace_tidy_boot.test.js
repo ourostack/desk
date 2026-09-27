@@ -28,12 +28,19 @@ async function fixture() {
 
 // Tests that read what the boot line reports (last repair, locks, launch failures) are not timing tests: they lift both the whole-check budget and the inspection budget so a loaded machine cannot turn the line into "budget exceeded". The budgets themselves are asserted by the deadline and cancellation tests below.
 const DETAIL_BUDGET_MS = 30_000
-// runBootChecks' default whole-check budget.
-const BOOT_BUDGET_MS = 500
+// The registry's total budget, which also bounds the workspace-tidy check's own soft deadline.
+const BOOT_BUDGET_MS = boot.TOTAL_BUDGET_MS
 // A check whose launch never resolves can return only through its timer; this limit fails a check that waits on the launch without mistaking a loaded machine for one.
 const STALLED_LAUNCH_LIMIT_MS = 5_000
+// The workspace-tidy check alone, through the shared registry. `budgetMs` is the check's own soft deadline (by default its registry budget less the 20 ms margin); the registry's budgets are lifted so only that deadline is under test.
+function tidy({ budgetMs, ...options } = {}) {
+  return boot.runBootChecks({
+    checks: [boot.workspaceTidyCheck], totalBudgetMs: 10 * DETAIL_BUDGET_MS, checkBudgets: { "workspace-tidy": 10 * DETAIL_BUDGET_MS }, record: async () => {},
+    ...options, tidyBudgetMs: budgetMs ?? boot.workspaceTidyCheck.budgetMs - 20,
+  })
+}
 function readBootDetails(options) {
-  return boot.runBootChecks({ budgetMs: DETAIL_BUDGET_MS, inspectionBudgetMs: DETAIL_BUDGET_MS, ...options })
+  return tidy({ budgetMs: DETAIL_BUDGET_MS, inspectionBudgetMs: DETAIL_BUDGET_MS, ...options })
 }
 // The detached repair writes its report once it has inspected the fixture; the wait watches for the report and leaves a loaded machine ample room.
 const REPAIR_REPORT_WAIT_MS = 30_000
@@ -47,7 +54,7 @@ test("boot check queues a detached repair, returns without waiting, and records 
   const w = path.join(f.root, "unowned")
   git(f.desk, "worktree", "add", "-b", "unowned", w)
   const started = performance.now()
-  const line = await boot.runBootChecks({ host: "copilot", env: f.env, sessionFolder: f.desk })
+  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: f.desk })
   const elapsed = performance.now() - started
   t.diagnostic(`boot check returned in ${Math.round(elapsed)} ms (whole-check budget ${BOOT_BUDGET_MS} ms)`)
   // The whole-check budget is what keeps session start from waiting on the repair. The bound is that budget plus the same again for a loaded event loop, still far below the repair's own run time.
@@ -93,7 +100,7 @@ test("ambiguous Copilot binding never launches cleanup against a guessed desk", 
   const other = path.join(f.root, "other")
   await fs.mkdir(path.join(other, "_meta"), { recursive: true })
   await fs.mkdir(path.join(other, "_archive"))
-  const line = await boot.runBootChecks({ host: "copilot", env: f.env, sessionFolder: other })
+  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: other })
   assert.match(line, /binding.*ambiguous/)
   assert.equal((await fs.readdir(path.join(f.desk, ".git"))).some((name) => name.startsWith("desk-workspace")), false)
 })
@@ -102,7 +109,7 @@ test("boot failure degrades in one bounded line and never blocks session start",
   const f = await fixture()
   const bad = path.join(f.root, "bad.json")
   await fs.writeFile(bad, "{")
-  const line = await boot.runBootChecks({ host: "claude", env: { ...f.env, DESK_ACTIVATION_CONFIG: bad } })
+  const line = await tidy({ host: "claude", env: { ...f.env, DESK_ACTIVATION_CONFIG: bad } })
   assert.match(line, /^Desk boot:/)
   assert.match(line, /binding|configuration/)
   assert.ok(line.length <= 512)
@@ -111,7 +118,10 @@ test("boot failure degrades in one bounded line and never blocks session start",
 test("both actual startup hooks include exactly one boot line without changing their host envelope", async () => {
   const f = await fixture()
   const plugin = path.resolve(hookPath.pathname, "../..")
-  const env = { ...f.env, PLUGIN_ROOT: plugin, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: f.desk }
+  // Generous budgets: this test is about the envelope and the single line, not about a loaded host's timing.
+  const preload = path.join(f.root, "relax-budgets.cjs")
+  await fs.writeFile(preload, `const boot = require(${JSON.stringify(fileURLToPath(hookPath))}); const run = boot.runBootChecks; boot.runBootChecks = (options) => run({ ...options, totalBudgetMs: 5000, checkBudgets: { factory: 2000, "desk-health": 2000, "workspace-tidy": 2000 } });\n`)
+  const env = { ...f.env, PLUGIN_ROOT: plugin, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: f.desk, NODE_OPTIONS: `${f.env.NODE_OPTIONS ?? ""} --require=${preload}`.trim() }
   for (const host of ["copilot", "claude"]) {
     const result = host === "copilot"
       ? execFileSync(process.execPath, [path.join(plugin, "hooks", "copilot-session-start.cjs")], { env, input: JSON.stringify({ cwd: f.desk }), encoding: "utf8" })
@@ -129,7 +139,7 @@ test("the complete boot check has a deadline even when launching repair stalls",
   const f = await fixture()
   // Real time: a stalled launch never resolves, so the check returns only through its own timer. The bound is generous for a loaded machine and still fails a check that waits on the launch.
   const started = performance.now()
-  const line = await boot.runBootChecks({ host: "copilot", env: f.env, sessionFolder: f.desk, budgetMs: 60, launch: () => new Promise(() => {}) })
+  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: f.desk, budgetMs: 60, launch: () => new Promise(() => {}) })
   const elapsed = performance.now() - started
   t.diagnostic(`a 60 ms budget returned in ${Math.round(elapsed)} ms with the launch stalled`)
   assert.ok(elapsed < STALLED_LAUNCH_LIMIT_MS, `the boot check took ${Math.round(elapsed)} ms`)
@@ -140,7 +150,7 @@ test("the complete boot check has a deadline even when launching repair stalls",
   let launching
   const launched = new Promise((resolve) => { launching = resolve })
   let result
-  const pending = boot.runBootChecks({ host: "copilot", env: f.env, sessionFolder: f.desk, budgetMs: 60, inspectionBudgetMs: DETAIL_BUDGET_MS, launch: () => { launching(); return new Promise(() => {}) } })
+  const pending = tidy({ host: "copilot", env: f.env, sessionFolder: f.desk, budgetMs: 60, inspectionBudgetMs: DETAIL_BUDGET_MS, launch: () => { launching(); return new Promise(() => {}) } })
     .then((value) => { result = value })
   await launched
   t.mock.timers.tick(59)
@@ -218,10 +228,10 @@ test("R3/R2 CLI acknowledges exact canonical accounting and refuses wrong revoca
 })
 
 test("boot reports absent bindings, malformed reports and repair launch failures explicitly", async () => {
-  assert.match(await boot.runBootChecks(), /no bound desk/)
+  assert.match(await tidy(), /no bound desk/)
   // A binding whose folder is gone is unavailable, not absent: the line agrees with the startup line above it.
   const gone = path.join(await mkTempRoot("desk-boot-gone-"), "gone-desk")
-  assert.equal(await boot.runBootChecks({ host: "copilot", env: { DESK: gone } }), "Desk boot: workspace-tidy skipped; the bound desk is unavailable; see desk_status.")
+  assert.equal(await tidy({ host: "copilot", env: { DESK: gone } }), "Desk boot: workspace-tidy skipped; the bound desk is unavailable; see desk_status.")
   const f = await fixture()
   const common = git(f.desk, "rev-parse", "--absolute-git-dir")
   const file = boot.reportPath(f.desk, common)
@@ -240,15 +250,8 @@ test("boot reports absent bindings, malformed reports and repair launch failures
   await assert.rejects(boot.readReport(file), /unsafe/)
 })
 
-// Generous deadlines: these tests are about what the boot check says and starts, not its timing.
-async function bootLine(options) {
-  let line
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    line = await boot.runBootChecks({ budgetMs: 10_000, inspectionBudgetMs: 5_000, ...options })
-    if (!line.includes("budget exceeded")) break
-  }
-  return line
-}
+// These tests are about what the boot check says and starts, not its timing.
+const bootLine = readBootDetails
 
 test("the boot path does no Node search: it starts the repair launcher in the hook's own Node", async (t) => {
   const f = await fixture()
@@ -380,7 +383,7 @@ test("boot lock I/O failures and a slow report read do not authorize late launch
   let launched = false
   // Mocked time: the whole-check budget expires while the report read is held, however long a loaded machine takes to reach that read.
   t.mock.timers.enable({ apis: ["setTimeout"] })
-  const pending = boot.runBootChecks({ host: "claude", env: f.env, budgetMs: 500, inspectionBudgetMs: DETAIL_BUDGET_MS, launch: async () => { launched = true } })
+  const pending = tidy({ host: "claude", env: f.env, budgetMs: 500, inspectionBudgetMs: DETAIL_BUDGET_MS, launch: async () => { launched = true } })
   await entered
   t.mock.timers.tick(500)
   assert.match(await pending, /budget/)
@@ -415,7 +418,7 @@ test("whole-check cancellation suppresses launch when inventory resolves late", 
   let launched = false
   // Mocked time: the whole-check budget expires while inventory is held, however long a loaded machine takes to reach it.
   t.mock.timers.enable({ apis: ["setTimeout"] })
-  const check = boot.runBootChecks({ host: "claude", env: f.env, budgetMs: 50, launch: async () => { launched = true } })
+  const check = tidy({ host: "claude", env: f.env, budgetMs: 50, launch: async () => { launched = true } })
   await ready
   t.mock.timers.tick(50)
   assert.match(await check, /budget/)

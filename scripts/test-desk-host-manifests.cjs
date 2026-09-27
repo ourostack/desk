@@ -426,6 +426,13 @@ function checkHumanizePackaging({ repoRoot, errors, checked }) {
   }
 }
 
+// The startup hooks read Desk and factory state under HOME and XDG_STATE_HOME and may start detached work, so each run gets its own throwaway home and never touches the operator's.
+function isolatedHome(scratch) {
+  const home = path.join(scratch, "home");
+  fs.mkdirSync(home, { recursive: true });
+  return { HOME: home, USERPROFILE: home, XDG_STATE_HOME: path.join(home, ".local", "state"), XDG_CACHE_HOME: path.join(home, ".cache"), XDG_CONFIG_HOME: path.join(home, ".config") };
+}
+
 function effectiveClaudeStartup(repoRoot) {
   const deskRoot = fs.mkdtempSync(path.join(os.tmpdir(), "desk-claude-startup-"));
   try {
@@ -437,6 +444,7 @@ function effectiveClaudeStartup(repoRoot) {
         encoding: "utf8",
         env: {
           ...process.env,
+          ...isolatedHome(deskRoot),
           CLAUDE_PLUGIN_ROOT: path.join(repoRoot, "plugins", "desk"),
           DESK: deskRoot,
         },
@@ -481,6 +489,7 @@ function effectiveCopilotStartup(repoRoot) {
       encoding: "utf8",
       env: {
         ...process.env,
+        ...isolatedHome(pluginData),
         COPILOT_PLUGIN_DATA: pluginData,
         DESK: path.join(pluginData, "desk"),
         PLUGIN_ROOT: pluginRoot,

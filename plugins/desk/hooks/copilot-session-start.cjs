@@ -48,10 +48,20 @@ async function startupDirection() {
     const { copilotStartupDirection } = await import(pathToFileURL(modulePath).href);
     const sessionFolder = await readSessionFolder();
     const direction = copilotStartupDirection({ env: process.env, sessionFolder });
+    // The boot checks add one agent line only when one of them has something to say.
     const { runBootChecks } = require("./boot-checks.cjs");
-    return `${direction}\n\n${await runBootChecks({ host: "copilot", env: process.env, sessionFolder })}`;
+    const boot = await runBootChecks({ host: "copilot", env: process.env, sessionFolder });
+    return boot ? `${direction}\n\n${boot}` : direction;
   } catch {
     return "Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound.";
+  }
+}
+
+async function startFactory() {
+  try {
+    await require("./boot-checks.cjs").startFactory({ env: process.env });
+  } catch {
+    // Delivery retries at the next session start.
   }
 }
 
@@ -63,7 +73,10 @@ function emit(additionalContext) {
   try {
     const foundation = fs.readFileSync(foundationPath, "utf8").trimEnd();
     const direction = await startupDirection();
-    emit(`${foundation}\n\nDesk RFC: ${rfcPath}\n\n${direction}`);
+    const output = `${foundation}\n\nDesk RFC: ${rfcPath}\n\n${direction}`;
+    // Factory delivery starts detached only once the output is built; it never delays or changes it.
+    await startFactory();
+    emit(output);
   } catch {
     emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. Invoke desk:session-start before other work; it remains the authoritative workspace scan.`);
   }
