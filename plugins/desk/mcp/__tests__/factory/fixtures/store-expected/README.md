@@ -6,4 +6,4 @@ These files are generated deterministically from validated published session fac
 - `jobs/<job>.md` answers the four factory questions.
 - `jobs/<job>.json` carries the normalized timeline and classed formulas.
 
-Published facts contain durations and offsets only. Missing evidence stays unavailable with its reason.
+Published facts contain durations and offsets only. Missing evidence stays unavailable with its reason, and a value only some sessions could supply is marked partial with the count of uncovered sessions.

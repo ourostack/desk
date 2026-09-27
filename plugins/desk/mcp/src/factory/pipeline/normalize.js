@@ -11,6 +11,13 @@ function compareValues(...values) {
   return 0
 }
 
+// Unknown (null) offsets sort after every known one.
+function compareNullableNumber(left, right) {
+  if (left === null) return right === null ? 0 : 1
+  if (right === null) return -1
+  return left - right
+}
+
 function enumIndex(values, value) {
   return values.indexOf(value)
 }
@@ -46,7 +53,7 @@ export function normalizePublished(value) {
   normalized.refs.commits.sort((left, right) => compareValues(compareText(left.sha, right.sha), compareText(left.repo, right.repo)))
   normalized.jobs.forEach((job) => {
     job.basis.sort((left, right) => enumIndex(ENUMS.jobBasis, left) - enumIndex(ENUMS.jobBasis, right))
-    job.transitions.sort((left, right) => compareValues(left.offset_ms - right.offset_ms, enumIndex(ENUMS.jobStatus, left.to) - enumIndex(ENUMS.jobStatus, right.to)))
+    job.transitions.sort((left, right) => compareValues(compareNullableNumber(left.offset_ms, right.offset_ms), enumIndex(ENUMS.jobStatus, left.to) - enumIndex(ENUMS.jobStatus, right.to)))
   })
   normalized.jobs.sort((left, right) => compareText(left.job, right.job))
   normalized.unavailable.sort((left, right) => compareValues(compareText(left.field, right.field), compareText(left.reason, right.reason)))

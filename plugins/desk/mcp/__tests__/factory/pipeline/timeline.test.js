@@ -104,3 +104,29 @@ test("timeline handles empty inputs and null observations without inventing reco
 
   assert.deepEqual(buildJobTimeline(OPEN, [sessions[2], sessions[1]]).sessions.map((entry) => entry.offset_ms), [2000, null])
 })
+
+test("transitions with unknown offsets sort after every known one instead of posing as zero", () => {
+  const one = structuredClone(sessions[0])
+  one.jobs[0].transitions = [
+    { to: "done", offset_ms: null },
+    { to: "paused", offset_ms: null },
+    { to: "processing", offset_ms: 500 },
+    { to: "validating", offset_ms: -200 },
+  ]
+  assert.deepEqual(normalizePublished(one).jobs[0].transitions, [
+    { to: "validating", offset_ms: -200 },
+    { to: "processing", offset_ms: 500 },
+    { to: "paused", offset_ms: null },
+    { to: "done", offset_ms: null },
+  ])
+  const reversed = structuredClone(one)
+  reversed.jobs[0].transitions.reverse()
+  const expected = [
+    { to: "validating", offset_ms: -200 },
+    { to: "processing", offset_ms: 500 },
+    { to: "paused", offset_ms: null },
+    { to: "done", offset_ms: null },
+  ]
+  assert.deepEqual(buildJobTimeline(CLOSED, [one]).transitions, expected)
+  assert.deepEqual(buildJobTimeline(CLOSED, [reversed]).transitions, expected)
+})

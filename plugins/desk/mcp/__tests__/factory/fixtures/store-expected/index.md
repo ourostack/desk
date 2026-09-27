@@ -2,14 +2,16 @@
 
 ## Jobs
 
-| Job | Lead time | Active time | Flow efficiency |
-| --- | ---: | ---: | ---: |
-| aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 14000 ms | 14000 ms | 100.00% |
-| bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb | 12000 ms (censored) | 8000 ms | 66.67% (censored) |
+| Job | Lead time | Active time | Active before card | Flow efficiency |
+| --- | ---: | ---: | ---: | ---: |
+| aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | 14000 ms (measured) | 14000 ms (measured) | 1000 ms (measured) | 92.86% (inferred) |
+| bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb | 12000 ms (measured, censored) | 8000 ms (measured) | 0 ms (measured) | 66.67% (inferred, censored) |
+
+Flow efficiency divides active time inside the lead-time window by lead time. Active before card is work before the task card existed; it is outside lead time.
 
 ## Coverage
 
-- Sessions seen: 4.
+- Sessions seen: unavailable (not_reported_to_store).
 - Sessions with facts: 4.
 - Bound sessions: 3.
 - Unattributed sessions: 1.

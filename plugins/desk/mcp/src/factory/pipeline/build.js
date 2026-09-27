@@ -41,17 +41,29 @@ function outputTimeline(timeline) {
   }
 }
 
+function buildError(code, message) {
+  const error = new Error(`factory build: ${code}: ${message}`)
+  error.code = code
+  return error
+}
+
+// A store with no `facts/` has published nothing yet. Dotfiles such as
+// `.gitkeep` are ignored; any other entry that is not a published facts file
+// stops the build, because `validate-pr` never lets one merge unreviewed.
 function readSessions(storeDir) {
   const factsDir = path.join(storeDir, "facts")
-  requireDirectory(factsDir, "facts")
+  const stat = existingEntry(factsDir)
+  if (stat === null) return []
+  if (!stat.isDirectory()) throw buildError("facts_not_directory", "facts must be a real directory")
   const sessions = []
   for (const entry of readdirSync(factsDir, { withFileTypes: true }).sort((left, right) => compareText(left.name, right.name))) {
-    if (!entry.isFile()) throw new Error("factory build: facts entries must be regular files")
+    if (entry.name.startsWith(".")) continue
+    if (!entry.isFile()) throw buildError("facts_entry_not_regular_file", "facts entries must be regular files")
     const relative = `facts/${entry.name}`
-    if (!isFactsPath(relative)) throw new Error("factory build: invalid facts entry")
+    if (!isFactsPath(relative)) throw buildError("invalid_facts_entry", "facts entries must be published facts files")
     const bytes = readFileSync(path.join(factsDir, entry.name))
     const validation = validatePr({ changes: [{ path: relative, status: "added", bytes }] })
-    if (!validation.ok) throw new Error(`factory build: invalid published facts (${validation.errors.map((item) => item.code).join(",")})`)
+    if (!validation.ok) throw buildError("invalid_published_facts", validation.errors.map((item) => item.code).join(","))
     sessions.push(normalizePublished(JSON.parse(bytes.toString("utf8"))))
   }
   sessions.sort((left, right) => compareText(left.session.host, right.session.host) || compareText(left.session.id, right.session.id))

@@ -1,14 +1,5 @@
-const CONTRIBUTOR_ORDER = Object.freeze([
-  "active_time_ms",
-  "queue_before_start_ms",
-  "human_wait_ms",
-  "permission_wait_ms",
-  "api_retry_ms",
-  "compaction_ms",
-])
-
 const LABELS = Object.freeze({
-  active_time_ms: "Active time",
+  active_in_lead_ms: "Active time inside the lead-time window",
   queue_before_start_ms: "Queue before start",
   human_wait_ms: "Human wait",
   permission_wait_ms: "Permission wait",
@@ -24,13 +15,39 @@ function plural(count, singular, pluralForm = `${singular}s`) {
   return `${count} ${count === 1 ? singular : pluralForm}`
 }
 
-function metric(metricValue, suffix = " ms") {
-  if (metricValue.class === "unavailable") return `unavailable (${metricValue.reason})`
-  return `${metricValue.value}${suffix}${metricValue.censored ? " (censored)" : ""}`
+// The evidence class plus any qualifier a reader needs to weigh the number.
+function qualifiers(value) {
+  const parts = [value.class]
+  if (value.censored) parts.push("censored")
+  if (value.partial) parts.push(`partial: ${plural(value.uncovered_sessions, "session")} uncovered`)
+  return parts.join(", ")
+}
+
+function unavailableText(value) {
+  return value.reasons === undefined ? `unavailable (${value.reason})` : `unavailable (${value.reason}: ${value.reasons.join(", ")})`
+}
+
+function metric(value, suffix = " ms") {
+  if (value.class === "unavailable") return unavailableText(value)
+  return `${value.value}${suffix} (${qualifiers(value)})`
 }
 
 function percentage(value) {
   return `${(value * 100).toFixed(2)}%`
+}
+
+function flowText(value) {
+  return value.class === "unavailable" ? unavailableText(value) : `${percentage(value.value)} (${qualifiers(value)})`
+}
+
+function concurrencyText(value) {
+  if (value.class === "unavailable") return unavailableText(value)
+  return `maximum ${value.value.maximum}, average ${value.value.average.toFixed(2)} (${qualifiers(value)})`
+}
+
+function signalText(value, singular, pluralForm) {
+  if (value.class === "unavailable") return `${pluralForm} ${unavailableText(value)}`
+  return value.partial ? `${plural(value.value, singular, pluralForm)} (partial: ${plural(value.uncovered_sessions, "session")} uncovered)` : plural(value.value, singular, pluralForm)
 }
 
 function listedCounts(value, order = Object.keys(value).sort()) {
@@ -46,61 +63,66 @@ function unavailableLines(formulas) {
 }
 
 function contributorLines(formulas) {
-  const lead = formulas.lead_time_ms
-  if (lead.class === "unavailable" || lead.value === 0) {
-    return ["- Lead-time contributors unavailable."]
-  }
-  const candidates = [
-    { key: "active_time_ms", metric: formulas.active_time_ms },
-    { key: "queue_before_start_ms", metric: formulas.queue_before_start_ms },
-    ...Object.entries(formulas.waits).map(([key, value]) => ({ key, metric: value })),
-  ].filter((entry) => entry.metric.class !== "unavailable")
-  candidates.sort((left, right) => right.metric.value - left.metric.value || CONTRIBUTOR_ORDER.indexOf(left.key) - CONTRIBUTOR_ORDER.indexOf(right.key))
-  return candidates.slice(0, 2).map((entry) =>
-    `- ${LABELS[entry.key]}: ${entry.metric.value} ms (${percentage(entry.metric.value / lead.value)} of lead time).`)
+  const contributors = formulas.lead_contributors
+  if (contributors.class === "unavailable") return [`- Lead-time contributors: ${unavailableText(contributors)}.`]
+  return contributors.value.slice(0, 2).map((entry) => {
+    const detail = qualifiers({ class: contributors.class, censored: contributors.censored, partial: entry.partial, uncovered_sessions: entry.uncovered_sessions })
+    return `- ${LABELS[entry.key]}: ${entry.value_ms} ms (${percentage(entry.share)} of lead time; ${detail}).`
+  })
+}
+
+function waitsText(waits) {
+  return `human ${metric(waits.human_wait_ms)}, permission ${metric(waits.permission_wait_ms)}, API retry ${metric(waits.api_retry_ms)}, compaction ${metric(waits.compaction_ms)}`
+}
+
+function transitionText(entry) {
+  return entry.offset_ms === null ? `${entry.to} at an unknown offset` : `${entry.to} at ${entry.offset_ms} ms`
 }
 
 export function renderJobMarkdown({ timeline, formulas }) {
   const hostCounts = formulas.sessions_by_host.value
-  const shared = formulas.sessions.value.shared
-  const waits = formulas.waits
-  const transitions = timeline.transitions.length === 0
-    ? "none"
-    : timeline.transitions.map((entry) => `${entry.to} at ${entry.offset_ms} ms`).join(", ")
+  const sessions = formulas.sessions.value
+  const transitions = timeline.transitions.length === 0 ? "none" : timeline.transitions.map(transitionText).join(", ")
   const references = formulas.references.value
+  const pullRequests = references.public_pull_requests.length === 0
+    ? "none"
+    : references.public_pull_requests.map((entry) => `${entry.repo}#${entry.number}`).join(", ")
   const longest = formulas.longest_wait.class === "unavailable"
-    ? `- Longest single wait: unavailable (${formulas.longest_wait.reason}).`
-    : `- Longest single wait: ${LABELS[`${formulas.longest_wait.value.kind}_ms`].toLowerCase()}, ${formulas.longest_wait.value.duration_ms} ms.`
-  const contributors = contributorLines(formulas)
+    ? `- Longest single wait: ${unavailableText(formulas.longest_wait)}.`
+    : `- Longest single wait: ${LABELS[`${formulas.longest_wait.value.kind}_ms`].toLowerCase()}, ${formulas.longest_wait.value.duration_ms} ms (${qualifiers(formulas.longest_wait)}).`
+  const signals = formulas.rework_signals
 
   return [
     `# Job ${timeline.job}`,
     "",
     "## What happened",
     "",
-    `- Status: ${formulas.status.class === "unavailable" ? `unavailable (${formulas.status.reason})` : `${formulas.status.value} (${formulas.status.class})`}.`,
-    `- Sessions: ${formulas.sessions.value.bound}; ${listedCounts(hostCounts)}; ${formulas.sessions.value.timeline} on the job clock.`,
-    `- Shared work: ${plural(shared, "session")} shared with ${plural(timeline.sessions.reduce((total, session) => total + session.shared_with, 0), "other job")}.`,
+    `- Status: ${formulas.status.class === "unavailable" ? unavailableText(formulas.status) : `${formulas.status.value} (${formulas.status.class})`}.`,
+    `- Sessions: ${sessions.bound}; ${listedCounts(hostCounts)}; ${sessions.timeline} on the job clock.`,
+    `- Shared work: ${plural(sessions.shared, "session")} shared with ${plural(sessions.shared_with_jobs, "other job")}.`,
     `- Lead time: ${metric(formulas.lead_time_ms)}.`,
     `- Queue before start: ${metric(formulas.queue_before_start_ms)}.`,
-    `- Active time: ${metric(formulas.active_time_ms)}; busy time: ${metric(formulas.busy_time_ms)}; parallelism: ${metric(formulas.parallelism, "")}.`,
-    `- Concurrent sessions: ${formulas.concurrent_sessions.class === "unavailable" ? metric(formulas.concurrent_sessions, "") : `maximum ${formulas.concurrent_sessions.value.maximum}, average ${formulas.concurrent_sessions.value.average.toFixed(2)}`}.`,
-    `- Concurrent agents: ${formulas.concurrent_agents.class === "unavailable" ? metric(formulas.concurrent_agents, "") : `maximum ${formulas.concurrent_agents.value.maximum}, average ${formulas.concurrent_agents.value.average.toFixed(2)}`}.`,
-    `- Waits: human ${metric(waits.human_wait_ms)}, permission ${metric(waits.permission_wait_ms)}, API retry ${metric(waits.api_retry_ms)}, compaction ${metric(waits.compaction_ms)}.`,
+    `- Active time: ${metric(formulas.active_time_ms)} in total; inside the lead-time window: ${metric(formulas.active_in_lead_ms)}.`,
+    `- Active before card (work before the task card existed, outside lead time): ${metric(formulas.active_before_card_ms)}.`,
+    `- Busy time: ${metric(formulas.busy_time_ms)}; parallelism: ${metric(formulas.parallelism, "")}.`,
+    `- Flow efficiency: ${flowText(formulas.flow_efficiency)}.`,
+    `- Concurrent sessions: ${concurrencyText(formulas.concurrent_sessions)}.`,
+    `- Concurrent agents: ${concurrencyText(formulas.concurrent_agents)}.`,
+    `- Waits: ${waitsText(formulas.waits)}.`,
     `- Tool calls: ${listedCounts(formulas.tool_calls_by_kind.value)}.`,
-    `- Public references: ${plural(references.public_prs, "pull request")} and ${plural(references.public_commits, "commit")}; private references counted: ${plural(references.private_prs, "pull request")} and ${plural(references.private_commits, "commit")}.`,
+    `- Public pull requests: ${pullRequests}; public commits: ${references.public_commits}; private references counted: ${plural(references.private_prs, "pull request")} and ${plural(references.private_commits, "commit")}.`,
     `- Status transitions: ${transitions}.`,
     "",
     "## What mattered",
     "",
-    ...contributors,
+    ...contributorLines(formulas),
     longest,
     "",
     "## What was waste",
     "",
     "Not classified yet: the independent evaluator arrives in slice 2.",
-    `- Candidate signals only: ${plural(formulas.rework_signals.tool_failures.value, "tool failure")}, ${plural(formulas.rework_signals.tool_retries.value, "tool retry", "tool retries")}, ${plural(formulas.rework_signals.api_retries.value, "API retry", "API retries")}, ${plural(formulas.rework_signals.session_retouches.value, "session re-touch")}.`,
-    `- Wait signals: human ${metric(waits.human_wait_ms)}, permission ${metric(waits.permission_wait_ms)}, API retry ${metric(waits.api_retry_ms)}, compaction ${metric(waits.compaction_ms)}.`,
+    `- Candidate signals only (inferred): ${signalText(signals.tool_failures, "tool failure", "tool failures")}, ${signalText(signals.tool_retries, "tool retry", "tool retries")}, ${signalText(signals.api_retries, "API retry", "API retries")}, ${signalText(signals.session_retouches, "session re-touch", "session re-touches")}.`,
+    `- Wait signals: ${waitsText(formulas.waits)}.`,
     "",
     "## What we could not see",
     "",
@@ -127,7 +149,9 @@ export function buildCoverage(sessions) {
   }
   const total = sessions.length
   return {
-    sessions_seen: total,
+    // The store only receives published facts, so it cannot count sessions
+    // that never published any.
+    sessions_seen: { class: "unavailable", value: null, reason: "not_reported_to_store" },
     sessions_with_facts: total,
     bound_sessions: bound,
     unattributed_sessions: total - bound,
@@ -145,18 +169,27 @@ export function buildCoverage(sessions) {
 
 export function renderIndexMarkdown(reports, coverage) {
   const sorted = [...reports].sort((left, right) => compareText(left.timeline.job, right.timeline.job))
+  const jobs = sorted.length === 0
+    ? ["No job has published facts yet."]
+    : [
+        "| Job | Lead time | Active time | Active before card | Flow efficiency |",
+        "| --- | ---: | ---: | ---: | ---: |",
+        ...sorted.map(({ timeline, formulas }) => `| ${timeline.job} | ${metric(formulas.lead_time_ms)} | ${metric(formulas.active_time_ms)} | ${metric(formulas.active_before_card_ms)} | ${flowText(formulas.flow_efficiency)} |`),
+      ]
+  const unavailableEntries = coverage.unavailable.map((entry) => `- ${entry.field} / ${entry.reason}: ${entry.sessions} of ${coverage.sessions_with_facts} sessions (${percentage(entry.rate)}).`)
+  const pluginEntries = coverage.plugins.map((entry) => `- ${entry.name} ${entry.version}: ${plural(entry.sessions, "session")}.`)
   return [
     "# Factory report index",
     "",
     "## Jobs",
     "",
-    "| Job | Lead time | Active time | Flow efficiency |",
-    "| --- | ---: | ---: | ---: |",
-    ...sorted.map(({ timeline, formulas }) => `| ${timeline.job} | ${metric(formulas.lead_time_ms)} | ${metric(formulas.active_time_ms)} | ${formulas.flow_efficiency.class === "unavailable" ? metric(formulas.flow_efficiency, "") : `${percentage(formulas.flow_efficiency.value)}${formulas.flow_efficiency.censored ? " (censored)" : ""}`} |`),
+    ...jobs,
+    "",
+    "Flow efficiency divides active time inside the lead-time window by lead time. Active before card is work before the task card existed; it is outside lead time.",
     "",
     "## Coverage",
     "",
-    `- Sessions seen: ${coverage.sessions_seen}.`,
+    `- Sessions seen: ${unavailableText(coverage.sessions_seen)}.`,
     `- Sessions with facts: ${coverage.sessions_with_facts}.`,
     `- Bound sessions: ${coverage.bound_sessions}.`,
     `- Unattributed sessions: ${coverage.unattributed_sessions}.`,
@@ -164,11 +197,11 @@ export function renderIndexMarkdown(reports, coverage) {
     "",
     "### Unavailable evidence",
     "",
-    ...coverage.unavailable.map((entry) => `- ${entry.field} / ${entry.reason}: ${entry.sessions} of ${coverage.sessions_with_facts} sessions (${percentage(entry.rate)}).`),
+    ...(unavailableEntries.length === 0 ? ["- None."] : unavailableEntries),
     "",
     "### Plugin versions",
     "",
-    ...coverage.plugins.map((entry) => `- ${entry.name} ${entry.version}: ${plural(entry.sessions, "session")}.`),
+    ...(pluginEntries.length === 0 ? ["- None."] : pluginEntries),
     "",
   ].join("\n")
 }
@@ -183,7 +216,7 @@ export function renderReadme() {
     "- `jobs/<job>.md` answers the four factory questions.",
     "- `jobs/<job>.json` carries the normalized timeline and classed formulas.",
     "",
-    "Published facts contain durations and offsets only. Missing evidence stays unavailable with its reason.",
+    "Published facts contain durations and offsets only. Missing evidence stays unavailable with its reason, and a value only some sessions could supply is marked partial with the count of uncovered sessions.",
     "",
   ].join("\n")
 }

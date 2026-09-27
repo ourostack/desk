@@ -92,16 +92,32 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
   }
 
   const listed = changedPaths({ base, head, cwd, git })
-  const maintenance = listed.some((change) => !change.path.startsWith("facts/"))
   const trustedMaintainer = MAINTAINER_ASSOCIATIONS.has(association)
   if (listed.length > 500) {
     const result = validatePr({ changes: Array.from({ length: 501 }) })
     return { ...result, maintenance: false }
   }
+  // Anything but a published facts file, including a non-fact file under
+  // `facts/`, and a maintainer's removal of a facts file are maintenance: the
+  // store's merge workflow never merges them.
+  let maintenance = false
+  let mergeBase = null
+  const previousRevision = () => {
+    // The change list is taken from the merge base (`base...head`), so the
+    // previous bytes are read there too, not at the base tip.
+    mergeBase ??= git(["merge-base", base, head], { cwd }).trim()
+    if (!GIT_REF.test(mergeBase)) throw new Error("factory.js validate-pr: Git data could not be read")
+    return mergeBase
+  }
   const errors = []
   listed.forEach((change, index) => {
     if (!isFactsPath(change.path)) {
+      maintenance = true
       if (!trustedMaintainer) errors.push({ code: "path", path: `changes.${index}` })
+      return
+    }
+    if (change.status === "removed" && trustedMaintainer) {
+      maintenance = true
       return
     }
     if (change.status === "removed" || change.status === "unknown") {
@@ -111,7 +127,7 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
     const current = {
       ...change,
       bytes: revisionBytes({ revision: head, filePath: change.path, cwd, git }),
-      ...(change.status === "modified" ? { previousBytes: revisionBytes({ revision: base, filePath: change.path, cwd, git }) } : {}),
+      ...(change.status === "modified" ? { previousBytes: revisionBytes({ revision: previousRevision(), filePath: change.path, cwd, git }) } : {}),
     }
     errors.push(...validatePr({ changes: [current] }).errors)
   })

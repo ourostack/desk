@@ -74,7 +74,7 @@ export function buildJobTimeline(job, inputSessions) {
       transitions.push({ to: transition.to, offset_ms: transition.offset_ms })
     }
   }
-  transitions.sort((left, right) => compareValues(left.offset_ms - right.offset_ms, ENUMS.jobStatus.indexOf(left.to) - ENUMS.jobStatus.indexOf(right.to)))
+  transitions.sort((left, right) => compareValues(compareNullableNumber(left.offset_ms, right.offset_ms), ENUMS.jobStatus.indexOf(left.to) - ENUMS.jobStatus.indexOf(right.to)))
 
   const observations = []
   const seenObservations = new Set()

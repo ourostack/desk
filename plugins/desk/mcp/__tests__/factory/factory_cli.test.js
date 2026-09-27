@@ -140,6 +140,108 @@ test("validate-pr reads base and head as Git data, enforces facts for contributo
   assert.equal(existsSync(marker), false)
 }))
 
+test("validate-pr marks non-fact files under facts/ and maintainer removals as maintenance, and reads previous bytes at the merge base", () => scratch(async (env) => {
+  const repo = path.join(env.HOME, "store")
+  const facts = path.join(repo, "facts")
+  await fs.mkdir(facts, { recursive: true })
+  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim()
+  const names = ["claude-code-11111111-1111-4111-8111-111111111111.json", "copilot-cli-22222222-2222-4222-8222-222222222222.json"]
+  for (const name of names) await fs.writeFile(path.join(facts, name), readFileSync(path.join(FIXTURE_STORE, "facts", name), "utf8"))
+  git("init", "-q", "-b", "main")
+  git("config", "user.name", "Fixture")
+  git("config", "user.email", "fixture@example.invalid")
+  git("add", "facts")
+  git("commit", "-q", "-m", "base")
+  const forkPoint = git("rev-parse", "HEAD")
+
+  // A pull request updates the first facts file...
+  git("checkout", "-q", "-b", "update")
+  const updated = JSON.parse(readFileSync(path.join(facts, names[0]), "utf8"))
+  updated.session.duration_ms += 1
+  await fs.writeFile(path.join(facts, names[0]), `${JSON.stringify(updated)}\n`)
+  git("commit", "-q", "-am", "update")
+  const updateHead = git("rev-parse", "HEAD")
+  // ...while main has since removed it, so its previous bytes exist only at the merge base.
+  git("checkout", "-q", "main")
+  git("rm", "-q", path.join("facts", names[0]))
+  git("commit", "-q", "-m", "remove on main")
+  const movedBase = git("rev-parse", "HEAD")
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", movedBase, "--head", updateHead, "--author-association", "NONE"], cwd: repo }), {
+    ok: true,
+    maintenance: false,
+    errors: [],
+  })
+
+  git("checkout", "-q", "-b", "notes", forkPoint)
+  await fs.writeFile(path.join(facts, "notes.txt"), "maintainer notes")
+  git("add", "facts")
+  git("commit", "-q", "-m", "notes")
+  const notesHead = git("rev-parse", "HEAD")
+  for (const association of ["OWNER", "MEMBER", "COLLABORATOR"]) {
+    assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", notesHead, "--author-association", association], cwd: repo }), {
+      ok: true,
+      maintenance: true,
+      errors: [],
+    })
+  }
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", notesHead, "--author-association", "CONTRIBUTOR"], cwd: repo }), {
+    ok: false,
+    maintenance: false,
+    errors: [{ code: "path", path: "changes.0" }],
+  })
+
+  git("checkout", "-q", "-b", "cleanup", forkPoint)
+  git("rm", "-q", path.join("facts", names[1]))
+  git("commit", "-q", "-m", "cleanup")
+  const cleanupHead = git("rev-parse", "HEAD")
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", "OWNER"], cwd: repo }), {
+    ok: true,
+    maintenance: true,
+    errors: [],
+  })
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", "NONE"], cwd: repo }), {
+    ok: false,
+    maintenance: false,
+    errors: [{ code: "removal", path: `facts/${names[1]}` }],
+  })
+}))
+
+test("validate-pr asks Git for the merge base once and refuses a malformed one", async () => {
+  const shaA = "a".repeat(40)
+  const shaB = "b".repeat(40)
+  const shaC = "c".repeat(40)
+  const names = ["claude-code-11111111-1111-4111-8111-111111111111.json", "copilot-cli-22222222-2222-4222-8222-222222222222.json"]
+  const bytes = Object.fromEntries(names.map((name) => [`facts/${name}`, readFileSync(path.join(FIXTURE_STORE, "facts", name))]))
+  const args = ["--base", shaA, "--head", shaB, "--author-association", "NONE"]
+  const revisions = []
+  let mergeBases = 0
+  const result = await runValidatePrCommand({
+    argv: args,
+    git: (gitArgs) => {
+      if (gitArgs[0] === "diff") return names.map((name) => `M\0facts/${name}\0`).join("")
+      if (gitArgs[0] === "merge-base") {
+        mergeBases += 1
+        assert.deepEqual(gitArgs, ["merge-base", shaA, shaB])
+        return `${shaC}\n`
+      }
+      const [revision, filePath] = gitArgs[1].split(":")
+      revisions.push(revision)
+      return bytes[filePath]
+    },
+  })
+  assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
+  assert.equal(mergeBases, 1)
+  assert.deepEqual(revisions, [shaB, shaC, shaB, shaC])
+
+  await assert.rejects(
+    runValidatePrCommand({
+      argv: args,
+      git: (gitArgs) => gitArgs[0] === "diff" ? `M\0facts/${names[0]}\0` : gitArgs[0] === "merge-base" ? "not a sha\n" : bytes[`facts/${names[0]}`],
+    }),
+    /Git data could not be read/u,
+  )
+})
+
 test("validate-pr handles added, removed, unknown, invalid-path, malformed, oversized, and Git-error inputs without loading unsafe paths", async () => {
   const shaA = "a".repeat(40)
   const shaB = "b".repeat(40)
