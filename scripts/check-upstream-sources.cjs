@@ -86,8 +86,21 @@ function createGitHubClient(run = spawnSync) {
     return Buffer.from(response.content.replace(/\s/gu, ""), "base64");
   }
 
-  return { repository, latestRelease, commit, compare, file };
+  // The names at the top of a commit's tree, where a repository keeps its NOTICE or COPYING file.
+  function topLevel(repository, ref) {
+    const response = get(`repos/${repository}/git/trees/${encodeURIComponent(ref)}`);
+    if (!Array.isArray(response.tree) || response.truncated === true) {
+      throw new Error(`${repository}@${ref} did not return a complete top-level tree`);
+    }
+    return response.tree.map((entry) => entry.path);
+  }
+
+  return { repository, latestRelease, commit, compare, file, topLevel };
 }
+
+// Apache-2.0 section 4(d) makes a NOTICE file's contents part of what a redistributor must carry, and a COPYING file can
+// add terms, so one that the lock does not vendor needs a person's review even when LICENSE itself is unchanged.
+const LICENSE_NOTICE = /^(?:NOTICE|COPYING)(?:\.|$)/iu;
 
 function compareAncestry(github, repository, base, head) {
   const status = github.compare(repository, base, head).status;
@@ -171,6 +184,10 @@ function inspectSource(source, github) {
     };
   });
   const changedPaths = selectedFiles.filter((file) => file.changed).map((file) => file.source_path);
+  const vendored = new Set(source.files.map((file) => file.sourcePath));
+  const unvendoredNotices = approvedGauntlet
+    ? github.topLevel(source.repository, candidateCommit).filter((name) => LICENSE_NOTICE.test(name) && !vendored.has(name)).sort()
+    : [];
 
   let classification;
   let reason;
@@ -189,6 +206,10 @@ function inspectSource(source, github) {
   } else {
     classification = "needs-human-approval";
     reason = "forward candidate changes selected payload";
+  }
+  if (classification !== "blocked" && unvendoredNotices.length > 0) {
+    classification = "needs-human-approval";
+    reason = `upstream has license notice files the lock does not vendor (${unvendoredNotices.join(", ")}); review them and add them to the lock`;
   }
 
   return {
@@ -209,6 +230,7 @@ function inspectSource(source, github) {
     ancestry,
     selected_payload_digest: selectedPayloadDigest(selectedFiles),
     changed_paths: changedPaths,
+    unvendored_license_notices: unvendoredNotices,
     classification,
     reason,
     selected_files: selectedFiles,

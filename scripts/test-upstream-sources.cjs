@@ -67,6 +67,7 @@ function github({
   release = null,
   failure = null,
   files = {},
+  topLevel = null,
 } = {}) {
   return {
     repository() {
@@ -90,6 +91,12 @@ function github({
       if (release && head === releaseCandidate) return { status: releaseCompareStatus };
       assert.equal(head, candidate);
       return { status: compareStatus };
+    },
+    topLevel(_repository, ref) {
+      // Only the approved Gauntlet source reads its tree; every other source must not.
+      assert.notEqual(topLevel, null, "topLevel was not expected for this source");
+      assert.equal(ref, candidate);
+      return topLevel;
     },
     file(_repository, sourcePath, ref) {
       assert.equal(ref, candidate);
@@ -148,6 +155,14 @@ function github({
   assert.match(client.compare("owner/repo", lockedCommit, candidateCommit).endpoint, /compare/u);
   assert.equal(client.file("owner/repo", "path with space/file.md", candidateCommit).toString(), "content");
   assert.equal(endpoints.length, 5);
+  const tree = createGitHubClient((_command, args) => ({
+    status: 0, stderr: "",
+    stdout: JSON.stringify(args[1].endsWith("/git/trees/complete") ? { tree: [{ path: "LICENSE" }, { path: "NOTICE" }] } : { tree: [], truncated: true }),
+  }));
+  assert.deepEqual(tree.topLevel("owner/repo", "complete"), ["LICENSE", "NOTICE"]);
+  assert.throws(() => tree.topLevel("owner/repo", "partial"), /did not return a complete top-level tree/u);
+  const noTree = createGitHubClient(() => ({ status: 0, stdout: "{}", stderr: "" }));
+  assert.throws(() => noTree.topLevel("owner/repo", "x"), /complete top-level tree/u);
 
   const noReleases = createGitHubClient(() => ({
     status: 0,
@@ -522,6 +537,7 @@ process.stdout.write(JSON.stringify(value));
     candidate: approved.commit,
     license: "Apache-2.0",
     files: { LICENSE: licenseText },
+    topLevel: ["LICENSE", "README.md", "src"],
     ...overrides,
   });
 
@@ -549,6 +565,22 @@ process.stdout.write(JSON.stringify(value));
   const relicensed = inspectSource(approved, remote({ candidate: candidateCommit, files: { LICENSE: "Other terms" } }));
   assert.equal(relicensed.classification, "needs-human-approval");
   assert.deepEqual(relicensed.changed_paths, ["LICENSE"]);
+  assert.deepEqual(current.unvendored_license_notices, []);
+
+  // A NOTICE or COPYING file upstream adds is part of the license terms, so it needs a person even when LICENSE is unchanged.
+  const noticed = inspectSource(approved, remote({ candidate: candidateCommit, topLevel: ["LICENSE", "NOTICE", "src"] }));
+  assert.equal(noticed.classification, "needs-human-approval");
+  assert.deepEqual(noticed.changed_paths, []);
+  assert.deepEqual(noticed.unvendored_license_notices, ["NOTICE"]);
+  assert.match(noticed.reason, /license notice files the lock does not vendor \(NOTICE\)/u);
+  const copying = inspectSource(approved, remote({ topLevel: ["notice.txt", "COPYING.md", "NOTICES", "src"] }));
+  assert.equal(copying.classification, "needs-human-approval", "also at the locked commit");
+  assert.deepEqual(copying.unvendored_license_notices, ["COPYING.md", "notice.txt"]);
+  const vendoredNotice = { ...approved, files: [...approved.files, { sourcePath: "NOTICE", generatedPath: "plugins/example/NOTICE", sha256: hash("Attribution") }] };
+  const withNotice = inspectSource(vendoredNotice, remote({ topLevel: ["LICENSE", "NOTICE"], files: { LICENSE: licenseText, NOTICE: "Attribution" } }));
+  assert.equal(withNotice.classification, "current", "a NOTICE the lock vendors is covered by its hash");
+  const blockedNotice = inspectSource(approved, remote({ compareStatus: "behind", candidate: candidateCommit, topLevel: ["NOTICE"] }));
+  assert.equal(blockedNotice.classification, "blocked", "a blocked source stays blocked");
 
   for (const overrides of [
     { id: "unapproved-gauntlet-entry" },
@@ -828,4 +860,15 @@ function writeFixtureRoot(root, lock) {
   assert.throws(() => main(["--ref"], { stdout: { write() {} } }), /unknown or incomplete argument: --ref/u);
 }
 
+
+{
+  // The check only helps if something runs it: a daily workflow keeps one issue open while it exits 1 or 2.
+  const workflow = fs.readFileSync(path.join(repoRoot, ".github/workflows/upstream-sources-check.yml"), "utf8");
+  assert.match(workflow, /^on:\n  schedule:\n    - cron: "[^"]+"\n  workflow_dispatch:\n/mu);
+  assert.match(workflow, /node scripts\/check-upstream-sources\.cjs > /u);
+  assert.match(workflow, /^      issues: write$/mu);
+  assert.match(workflow, /if: \$\{\{ steps\.check\.outputs\.code != '0' \}\}/u);
+  assert.match(workflow, /gh issue edit "\$number"/u, "a later failure updates the open issue instead of adding one");
+  assert.match(workflow, /if: \$\{\{ steps\.check\.outputs\.code == '0' \}\}\n[\s\S]*gh issue close/u);
+}
 console.log("upstream source steward tests passed.");
