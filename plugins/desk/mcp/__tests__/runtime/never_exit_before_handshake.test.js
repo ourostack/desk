@@ -18,6 +18,10 @@ import {
   toolPayload,
 } from "../launch/_mcp_handshake.js"
 import { openSession } from "../launch/_mcp_session.js"
+import { mkTempRoot } from "../_temp_roots.js"
+
+// In-process admission protects the Git checkout of whatever desk root it binds, so these tests bind a temporary folder, never this repository's own checkout.
+const temporaryDesk = () => mkTempRoot("desk-never-exit-root-")
 
 const entrypoint = await import(pathToFileURL(path.join(mcpRoot, "index.js")).href)
 const { TOOL_NAMES } = await import(pathToFileURL(path.join(mcpRoot, "src", "tool-names.js")).href)
@@ -306,7 +310,7 @@ test("background convergence that throws synchronously is reported, never turned
   const { admitInProcess } = await import("./_in_process_desk.js")
   const started = await admitInProcess({
     argv: [],
-    env: { DESK: mcpRoot },
+    env: { DESK: await temporaryDesk() },
     mcpRoot,
     runtimeInspector: null,
     readinessPolicy: {},
@@ -451,7 +455,7 @@ test("a controller election that times out is retried in the background: degrade
   let attempts = 0
   const desk = await startInProcess({
     argv: [],
-    env: { DESK: mcpRoot },
+    env: { DESK: await temporaryDesk() },
     mcpRoot,
     runtimeInspector: null,
     readinessPolicy: {},
@@ -481,7 +485,7 @@ test("an unexpected error thrown inside admission becomes degraded:admission_exc
   let attempts = 0
   const desk = await startInProcess({
     argv: [],
-    env: { DESK: mcpRoot },
+    env: { DESK: await temporaryDesk() },
     mcpRoot,
     runtimeInspector: null,
     readinessPolicy: {},
