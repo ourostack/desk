@@ -63,6 +63,15 @@ function asText(value) {
   return typeof value === "string" ? value : null
 }
 
+// Newest `updated` first; a task with no `updated` sorts last.
+function byUpdatedDesc(a, b) {
+  return updatedKey(b).localeCompare(updatedKey(a))
+}
+
+function updatedKey(task) {
+  return task.updated ?? ""
+}
+
 function scanDesk(scanRoot, desk, counts) {
   const tracks = []
   for (const trackName of listDirs(scanRoot)) {
@@ -81,7 +90,7 @@ function scanDesk(scanRoot, desk, counts) {
       tasks.push({ ...(desk === null ? {} : { desk }), slug, title: shownTitle, status: status === null ? null : redactName(status), updated: asText(data.updated) })
     }
     if (tasks.length === 0) continue
-    tasks.sort((a, b) => (b.updated ?? "").localeCompare(a.updated ?? ""))
+    tasks.sort(byUpdatedDesc)
     const track = redactName(trackName)
     if (track === REDACTED_SEGMENT) counts.names += 1
     tracks.push({ ...(desk === null ? {} : { desk }), track, tasks })
@@ -103,7 +112,7 @@ export function activeTasks(deskRoot) {
     if (desk === REDACTED_SEGMENT) counts.names += 1
     tracks.push(...scanDesk(path.join(deskRoot, "desks", alias), desk, counts))
   }
-  tracks.sort((a, b) => (b.tasks[0].updated ?? "").localeCompare(a.tasks[0].updated ?? ""))
+  tracks.sort((a, b) => byUpdatedDesc(a.tasks[0], b.tasks[0]))
   return {
     tracks,
     task_count: tracks.reduce((sum, track) => sum + track.tasks.length, 0),
