@@ -117,7 +117,7 @@ function unavailableGroups(sessions) {
 // How many of `sessions` declare any of `fields` (or `partialFields`)
 // unavailable, and why. Only `fields` can make a value wholly unavailable;
 // `partialFields` gaps leave it partial.
-function fieldCoverage(sessions, fields, partialFields = []) {
+export function fieldCoverage(sessions, fields, partialFields = []) {
   const reasons = new Set()
   let uncovered = 0
   let lacking = 0
@@ -143,7 +143,7 @@ function withCoverage(value, coverage) {
 
 // Missing data is never a measured zero: a value no covering session could
 // supply is unavailable, and one only some sessions supply is partial.
-function covered(coverage, compute) {
+export function covered(coverage, compute) {
   return coverage.none ? missingValue(coverage) : withCoverage(compute(), coverage)
 }
 
