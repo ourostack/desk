@@ -221,11 +221,32 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
   return { readTask, deskCommitsBetween, gitCommitTaskPaths }
 }
 
-/** `readDeskRemote({ deskRoot, git })`: the desk's `origin` URL, or `null`. */
-export function readDeskRemote({ deskRoot, git = "git", timeoutMs = DEFAULT_TIMEOUT_MS }) {
-  const options = { git, deskRoot, timeoutMs }
-  if (!isOwnRepository(options)) return null
-  const output = runGit(options, ["config", "--get", "remote.origin.url"])
+/**
+ * `readDeskRemote({ deskRoot, git, timeoutMs, deadline, clock })`: the desk's
+ * `origin` URL, or `null`. With `deadline` (a value of `clock`, which defaults
+ * to `performance.now`), both Git calls share it: each gets at most the time
+ * left, and a call that reaches the deadline, or none left to start one,
+ * throws an error whose code is `git_deadline` instead of reading as "no
+ * remote", so a caller never mistakes a timeout for a desk without one.
+ */
+export function readDeskRemote({ deskRoot, git = "git", timeoutMs = DEFAULT_TIMEOUT_MS, deadline = null, clock = () => performance.now() }) {
+  const run = (args) => {
+    let limit = timeoutMs
+    if (deadline !== null) {
+      limit = Math.min(timeoutMs, Math.floor(deadline - clock()))
+      if (limit < 1) throw gitDeadline()
+    }
+    const output = runGit({ git, deskRoot, timeoutMs: limit }, args)
+    if (deadline !== null && clock() >= deadline) throw gitDeadline()
+    return output
+  }
+  const prefix = run(["rev-parse", "--show-prefix"])
+  if (prefix === null || prefix.trim() !== "") return null
+  const output = run(["config", "--get", "remote.origin.url"])
   const remote = output === null ? "" : output.trim()
   return remote === "" ? null : remote
+}
+
+function gitDeadline() {
+  return Object.assign(new Error("git_deadline"), { code: "git_deadline" })
 }

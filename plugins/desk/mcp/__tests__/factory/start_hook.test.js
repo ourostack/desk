@@ -93,7 +93,56 @@ test("a check that overruns its budget or throws is skipped for this start and r
   assert.equal(line, "Desk boot: fine")
   assert.ok(performance.now() - started < 300)
   assert.ok(aborted, "the overrunning check is told to stop")
-  assert.deepEqual(recorded, [{ id: "slow", reason: "budget" }, { id: "self-stopped", reason: "budget" }, { id: "broken", reason: "error" }])
+  assert.deepEqual(recorded.map(({ id, reason }) => ({ id, reason })), [{ id: "slow", reason: "budget" }, { id: "self-stopped", reason: "budget" }, { id: "broken", reason: "error" }])
+  assert.ok(recorded.every((entry) => Number.isSafeInteger(entry.elapsed_ms) && entry.elapsed_ms >= 0))
+})
+
+const block = (ms) => {
+  const until = performance.now() + ms
+  while (performance.now() < until) { /* a check that never yields */ }
+}
+
+test("checks that block synchronously past their budgets are skipped with their real time, and that time counts against the total", async () => {
+  const { runBootChecks } = boot()
+  const recorded = []
+  const repairs = []
+  const started = performance.now()
+  const line = await runBootChecks({
+    ...quiet,
+    record: async (_env, skipped) => { recorded.push(...skipped) },
+    launchRepair: async (command) => repairs.push(command),
+    checks: [
+      check("a", () => { block(250); return { line: "a-late", repair: { command: ["node", "a.js"] } } }, 100),
+      check("b", () => { block(40); return { line: "b", repair: { command: ["node", "b.js"] } } }, 50),
+      check("c", () => { block(140); return { line: "c" } }, 260),
+    ],
+  })
+  assert.equal(line, "Desk boot: b", "a overran its own budget; c overran the 10 ms the total had left after a's real 250 ms")
+  assert.deepEqual(repairs, [["node", "b.js"]], "an overrunning check's repair never starts")
+  const byId = Object.fromEntries(recorded.map((entry) => [entry.id, entry]))
+  assert.equal(byId.a.reason, "budget")
+  assert.ok(byId.a.elapsed_ms >= 250, JSON.stringify(byId.a))
+  assert.equal(byId.c.reason, "budget")
+  assert.ok(byId.c.elapsed_ms >= 140, JSON.stringify(byId.c))
+  assert.equal(byId.b, undefined, JSON.stringify(recorded))
+  assert.ok(performance.now() - started >= 430)
+})
+
+test("the real elapsed time of each check is charged, so a total spent by blocking skips the rest without running them", async () => {
+  const { runBootChecks } = boot()
+  const recorded = []
+  let ran = false
+  const line = await runBootChecks({
+    ...quiet,
+    totalBudgetMs: 100,
+    record: async (_env, skipped) => { recorded.push(...skipped) },
+    checks: [check("first", () => { block(60); return { line: "first" } }, 80), check("second", () => { block(60); return { line: "second" } }, 80), check("third", () => { ran = true; return { line: "third" } }, 80)],
+  })
+  assert.equal(line, "Desk boot: first")
+  assert.equal(recorded[0].id, "second")
+  assert.equal(recorded[0].reason, "budget")
+  assert.deepEqual(recorded.slice(1).map(({ id, reason }) => ({ id, reason })), [{ id: "third", reason: "total_budget" }])
+  assert.equal(ran, false)
 })
 
 test("the total budget caps every check, and checks after it are skipped", async () => {
@@ -124,7 +173,8 @@ test("skips are recorded in the protected factory status only when factory state
   await setConsent(env, { store: STORE, contribute: false })
   await runBootChecks({ env, launchRepair: async () => {}, checks: [check("stalled", () => new Promise(() => {}), 10)] })
   const status = await readStatus(env)
-  assert.deepEqual(status.boot_checks.skipped, [{ id: "stalled", reason: "budget" }])
+  assert.deepEqual(status.boot_checks.skipped.map(({ id, reason }) => ({ id, reason })), [{ id: "stalled", reason: "budget" }])
+  assert.ok(status.boot_checks.skipped[0].elapsed_ms >= 9)
   assert.match(status.boot_checks.at, /^\d{4}-\d{2}-\d{2}T/u)
 }))
 
@@ -184,7 +234,7 @@ test("the factory check starts one detached finalize for finished jobs whose fac
   assert.equal(person.length, 1, "an invalid person alias falls back to the desk's own tracks")
   const none = []
   await runBootChecks({ ...quiet, host: "claude", env: { ...env, DESK_PERSON: "sam" }, checks: [factoryCheck], checkBudgets: { factory: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => none.push(command) })
-  assert.deepEqual(none, [], "a person's desk has no finished cards here")
+  assert.deepEqual(none, repairs, "a pending request is finalized whatever person prefix the task tools bound it under")
 }))
 
 test("the desk-health check reports a degraded last start and otherwise asks for the fast-forward", () => scratch(async ({ env, desk, base }) => {
@@ -342,3 +392,24 @@ test("the Claude resolver appends the boot line only when there is one and start
   await main({ argv: ["--startup-line", "--boot-checks"], env: { HOME: "/nonexistent-home" }, write: (text) => { output = text }, loadBoot: speaking })
   assert.match(output, /\n\nDesk boot: x$/u)
 })
+
+test("the plugin scan stops at the check's deadline and the factory check is then skipped, never guessed", () => scratch(async ({ env, desk }) => {
+  const { metadata } = require(path.join(HOOKS, "factory-end.cjs"))
+  const { readSmallText } = await import(pathToFileURL(path.join(PLUGIN, "mcp", "src", "factory", "marker.js")).href)
+  const { PATTERNS } = await import(pathToFileURL(path.join(PLUGIN, "mcp", "src", "factory", "schema.js")).href)
+  const home = env.HOME
+  await fs.mkdir(path.join(home, ".claude", "plugins"), { recursive: true })
+  await fs.writeFile(path.join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ plugins: { "desk@x": [{ version: "1.0.0", installPath: desk }] } }))
+  for (const host of ["claude", "copilot"]) {
+    const late = metadata({ host, pluginRoot: path.join(PLUGIN), home, env, readSmallText, PATTERNS, deadline: 0 })
+    assert.equal(late.timedOut, true)
+    assert.equal(late.incomplete, true)
+    const fine = metadata({ host, pluginRoot: path.join(PLUGIN), home, env, readSmallText, PATTERNS })
+    assert.equal(fine.timedOut, false)
+  }
+  const { runBootChecks, factoryCheck } = boot()
+  const recorded = []
+  const line = await runBootChecks({ ...quiet, host: "claude", env, checks: [{ ...factoryCheck, run: (ctx) => factoryCheck.run({ ...ctx, deadline: 0 }) }], record: async (_env, skipped) => recorded.push(...skipped) })
+  assert.equal(line, "")
+  assert.equal(recorded[0].reason, "budget")
+}))

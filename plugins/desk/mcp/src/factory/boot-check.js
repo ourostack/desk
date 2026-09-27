@@ -10,10 +10,11 @@
 //
 //   - `{ line: FACTORY_NO_CONSENT_LINE }` when the store has no consent
 //     decision at all, so the agent asks the operator once;
-//   - `{ jobs }` otherwise: up to eight finished jobs (a card whose status is
-//     `done` or `cancelled` and whose `updated` time is within 30 days) that
-//     have an outbox file not yet delivered or quarantined, or a finalize
-//     request still pending. The caller starts one detached `factory.js
+//   - `{ jobs }` otherwise: up to eight jobs, sorted, each with a pending
+//     finalize request (whatever person prefix the task tools bound it
+//     under) or finished (a card whose status is `done` or `cancelled` and
+//     whose `updated` time is within 30 days) with an outbox file not yet
+//     delivered or quarantined. The caller starts one detached `factory.js
 //     finalize` for them. A declined store, an invalid store declaration, no
 //     bound desk or unreadable state return `{ jobs: [] }`.
 //
@@ -24,7 +25,8 @@
 // other files. The job ID is computed exactly as the task tools compute it.
 // Every file read is regular-file-only, no-follow and size-capped; every
 // directory listing is capped. `deadline` (a `performance.now()` value) stops
-// the scan with a thrown `boot_check_budget` error.
+// the scan, and bounds the desk remote's Git calls together, with a thrown
+// `boot_check_budget` error.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -191,19 +193,23 @@ export function factoryBootCheck({
   if (!isPlainObject(record)) return { line: FACTORY_NO_CONSENT_LINE }
   if (record.contribute !== true) return { jobs: [] }
 
+  // Every pending finalize request is a job the task tools finished, whatever person prefix they bound it under.
+  const jobs = new Set(listNames(path.join(dir, "finalize")).filter((name) => FINALIZE_NAME.test(name)).map((name) => name.slice(0, -5)))
   const finished = finishedTasks({ deskRoot, personPrefix, now, deadline, clock })
-  if (finished.length === 0) return { jobs: [] }
-  // The task tools compute job IDs from the desk's real path.
+  if (finished.length === 0) return { jobs: [...jobs].sort().slice(0, MAX_FINALIZE_JOBS) }
+  // The task tools compute job IDs from the desk's real path. The remote read shares the check's deadline; a read cut off by it is an overrun, never "no remote".
   const root = realpathSync(deskRoot)
-  const remote = readRemote({ deskRoot: root, timeoutMs: Math.max(1, Math.min(2000, Math.floor(deadline - clock()))) }) || `local:${root}`
-  if (clock() > deadline) throw new BudgetExceeded()
+  let remote
+  try {
+    remote = readRemote({ deskRoot: root, timeoutMs: 2000, deadline, clock }) || `local:${root}`
+  } catch {
+    throw new BudgetExceeded()
+  }
   const slug = route.store.replace("/", "__")
   const index = readState(path.join(dir, "jobs-index.json"), {}) ?? {}
   const delivered = readState(path.join(dir, "delivered", `${slug}.json`), {}) ?? {}
   const outbox = new Set(listNames(path.join(dir, "outbox", slug)))
   const quarantined = new Set(listNames(path.join(dir, "quarantine", slug)))
-  const requested = new Set(listNames(path.join(dir, "finalize")).filter((name) => FINALIZE_NAME.test(name)).map((name) => name.slice(0, -5)))
-  const jobs = new Set()
   for (const { track, slug: task } of finished) {
     let job
     try {
@@ -212,8 +218,7 @@ export function factoryBootCheck({
       continue
     }
     const files = Array.isArray(index[job]) ? index[job] : []
-    const undelivered = files.some((name) => typeof name === "string" && outbox.has(name) && !Object.hasOwn(delivered, name) && !quarantined.has(name))
-    if (undelivered || requested.has(job)) jobs.add(job)
+    if (files.some((name) => typeof name === "string" && outbox.has(name) && !Object.hasOwn(delivered, name) && !quarantined.has(name))) jobs.add(job)
   }
   return { jobs: [...jobs].sort().slice(0, MAX_FINALIZE_JOBS) }
 }

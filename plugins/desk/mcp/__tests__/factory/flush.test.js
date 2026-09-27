@@ -79,6 +79,7 @@ test("flush without consent, with a declined store or without an account records
   assert.deepEqual([...FLUSH_CODES].sort(), ["auth_failed", "deadline", "delivered_pr_open", "fork_pending", "gh_missing", "gh_too_old", "locked", "no_account", "not_opted_in", "nothing_pending", "offline", "rate_limited", "store_missing", "unexpected"])
   const github = fakeGitHub()
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "not_opted_in" })
+  assert.equal(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory")), false, "flushing never creates factory state")
   await setConsent(env, { store: STORE, contribute: false, account: ACCOUNT })
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "not_opted_in" })
   await setConsent(env, { store: STORE, contribute: true, account: null })
@@ -874,3 +875,104 @@ test("the real runner keeps output bounded and names a spawn failure without a c
   const broken = ghRunner({ spawn: child(({ handlers }) => handlers.error(new Error("no code"))) })
   assert.deepEqual(await broken(["x"]), { code: null, stdout: "", stderr: "", spawnError: "spawn_failed" })
 })
+
+// ---------------------------------------------------------------------------
+// Fix round 1: paging, stale-lock takeover and deadlines outside gh.
+// ---------------------------------------------------------------------------
+
+const manyNames = (count, from = 1000) => Array.from({ length: count }, (_, index) => nameOf(from + index))
+
+test("every page of a rejected PR's files is read: all 500 files of a full batch are quarantined", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const name = await put(env, localFacts(1))
+  const branch = await intakeBranch(env)
+  const github = fakeGitHub()
+  const names = [...manyNames(499), name]
+  github.addClosedPr({ comment: "factory-rejected: date", fileNames: names, headLabel: `ourostack:${branch}` })
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "nothing_pending" })
+  const quarantined = await fs.readdir(path.join(await factoryStateRoot(env), "quarantine", "ourostack__factory"))
+  assert.equal(quarantined.length, 500)
+  assert.ok(quarantined.includes(names[100]) && quarantined.includes(names[499]), "files 101 to 500 are quarantined")
+  const pages = apiCalls(github, "GET", /\/files\?/u).map((call) => new URLSearchParams(routeOf(call).split("?")[1]).get("page"))
+  assert.deepEqual(pages, ["1", "2", "3", "4", "5"])
+}))
+
+test("a page that fails leaves the read marker where it was, so the PR is read again", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  await put(env, localFacts(1))
+  const branch = await intakeBranch(env)
+  let failing = true
+  const github = fakeGitHub({ intercept: (call) => (failing && isApi(call, "GET", /\/files\?/u) && routeOf(call).includes("page=2") ? httpError(502, "Bad Gateway") : undefined) })
+  github.addClosedPr({ comment: "factory-rejected: date", fileNames: manyNames(150), headLabel: `ourostack:${branch}` })
+  await writeStatus(env, { last_flush: { [STORE]: { at: "x", result: "offline", rejections_through: 7 } } })
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "unexpected" })
+  assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 7)
+  failing = false
+  assert.equal((await flush(env, { store: STORE, runner: github.runner })).result, "delivered_pr_open")
+  assert.equal((await fs.readdir(path.join(await factoryStateRoot(env), "quarantine", "ourostack__factory"))).length, 150)
+  assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 101)
+}))
+
+test("closed PRs are read newest first across pages and stop at the last PR already read", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  await put(env, localFacts(1))
+  const branch = await intakeBranch(env)
+  const github = fakeGitHub()
+  for (let n = 0; n < 45; n += 1) github.addClosedPr({ merged: true, headLabel: `ourostack:${branch}` })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner })).result, "delivered_pr_open")
+  assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 145)
+  const listed = apiCalls(github, "GET", /\/pulls\?state=closed/u)
+  assert.equal(listed.length, 2, "45 closed PRs take two pages of 30")
+  github.addClosedPr({ comment: "factory-rejected: date", fileNames: [nameOf(1)], headLabel: `ourostack:${branch}` })
+  const before = github.calls.length
+  await flush(env, { store: STORE, runner: github.runner })
+  const later = github.calls.slice(before)
+  assert.equal(later.filter((call) => isApi(call, "GET", /\/pulls\?state=closed/u)).length, 1, "the listing stops at the first PR already read")
+  assert.equal(later.filter((call) => isApi(call, "GET", /\/comments\?/u)).length, 1)
+  assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 147)
+}))
+
+test("a stale lock replaced by another flush between its two reads is left to that flush", (t) => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  await put(env, localFacts(1))
+  const lock = path.join(await factoryStateRoot(env), "flush.lock")
+  await fs.writeFile(lock, "{}", { mode: 0o600 })
+  const old = new Date(Date.now() - 11 * 60 * 1000)
+  await fs.utimes(lock, old, old)
+  const stat = fs.stat
+  let reads = 0
+  t.mock.method(fs, "stat", async (file, ...rest) => {
+    const value = await stat(file, ...rest)
+    if (file === lock && ++reads === 2) return { ...value, ino: value.ino + 1, mtimeMs: Date.now() }
+    return value
+  })
+  assert.deepEqual(await flush(env, { store: STORE, runner: fakeGitHub().runner }), { result: "locked" })
+  assert.equal(existsSync(lock), true, "the replacement lock is not removed")
+}))
+
+test("reading the desk's remote counts against the flush deadline", () => scratch(async ({ base, env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const desk = await deskRepository(base, "https://github.com/acme/desk.git")
+  await markerFor(env, desk, 1)
+  await put(env, localFacts(1))
+  let calls = 0
+  const now = () => (++calls === 1 ? 0 : 10_000_000)
+  const github = fakeGitHub()
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, now }), { result: "deadline" })
+  assert.equal(github.calls.length, 0)
+}))
+
+test("closed-PR entries that are not PRs of this machine's intake branch are skipped as data", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  await put(env, localFacts(1))
+  const github = fakeGitHub({ intercept: (call) => (isApi(call, "GET", /\/pulls\?state=closed/u) ? answer(["junk", { number: "7" }, { number: 300, head: { ref: "intake/0000000000000000" } }]) : undefined) })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner })).result, "delivered_pr_open")
+  assert.equal(apiCalls(github, "GET", /\/comments\?/u).length, 0)
+  assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 0)
+}))

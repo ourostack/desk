@@ -23,10 +23,13 @@
 //      store; otherwise in the account's default-branch-only fork, created on
 //      first use and brought up to date with `merge-upstream` (a fork that is
 //      not ready yet returns `fork_pending`).
-//   4. Read closed intake PRs of this machine's branch. When the store's
-//      automation (`github-actions[bot]`) commented a first line
-//      `factory-rejected: <code>`, the files of that PR are quarantined with
-//      that code. PRs already read are remembered as a number in status.
+//   4. Read closed intake PRs of this machine's branch, newest first and page
+//      by page, down to the last PR already read (a number kept in status,
+//      moved only once every page has been read). When the store's automation
+//      (`github-actions[bot]`) commented a first line `factory-rejected:
+//      <code>`, every file of that PR, all pages of up to 500, is quarantined
+//      with that code: the comment names no file, so good files in a rejected
+//      PR are quarantined too.
 //   5. A file whose exact published blob already sits at `facts/<name>` on
 //      the store's default branch is marked delivered.
 //   6. The rest (at most 500 files and 24 MiB per flush) becomes one tree on
@@ -105,6 +108,8 @@ export const FINALIZE_QUIET_MS = 5000
 
 const LOCK_STALE_MS = 10 * 60 * 1000
 const MAX_FILES = 500
+const MAX_CLOSED_PRS = 300
+const MAX_COMMENTS = 300
 const MAX_BYTES = 24 * 1024 * 1024
 const MAX_OUTPUT = 64 * 1024 * 1024
 const FINALIZE_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -206,6 +211,9 @@ async function acquireLock(root) {
       // Staleness comes from the file's own time, never its content.
       const stat = await fsp.stat(file).catch(() => null)
       if (stat !== null && Date.now() - stat.mtimeMs <= LOCK_STALE_MS) return null
+      // Another flush may have replaced the stale lock since it was read: remove only the same file.
+      const again = await fsp.stat(file).catch(() => null)
+      if (stat !== null && (again === null || again.ino !== stat.ino || again.mtimeMs !== stat.mtimeMs)) return null
       await fsp.unlink(file).catch(() => {})
     }
   }
@@ -317,13 +325,21 @@ const sameRepo = (left, right) => typeof left === "string" && left.toLowerCase()
 // `readDeskRemote` answers a non-empty URL or `null`; only a GitHub remote has a visibility to ask about.
 const githubRepoOfRemote = (remote) => (remote === null ? null : GITHUB_REMOTE.exec(normalizeRemote(remote))?.[1] ?? null)
 
-async function deskRepositories(env) {
+async function deskRepositories(env, { deadline, now }) {
   const byName = new Map()
   const remotes = new Map()
   for (const marker of await listMarkers(env)) {
     const root = marker.desk_root
     if (root === null) continue
-    if (!remotes.has(root)) remotes.set(root, githubRepoOfRemote(readDeskRemote({ deskRoot: root, timeoutMs: 5000 })))
+    if (!remotes.has(root)) {
+      let remote
+      try {
+        remote = readDeskRemote({ deskRoot: root, timeoutMs: 5000, deadline, clock: now })
+      } catch {
+        stop("deadline")
+      }
+      remotes.set(root, githubRepoOfRemote(remote))
+    }
     byName.set(`${marker.host}-${marker.session_id}.json`, remotes.get(root))
   }
   return byName
@@ -399,24 +415,46 @@ async function resolveTarget(client, { store, account, info }) {
   return { repo: fork, owner: fork.split("/")[0], branch }
 }
 
+/**
+ * Every item of a paged GitHub list, `perPage` at a time, until a short page or
+ * `maxItems`. `stopAt(item)` ends the listing at the first item it accepts
+ * (that item excluded). A page that fails stops the flush, so a caller that
+ * records progress only after this returns never records a partial read.
+ */
+async function readPages(client, route, { perPage, maxItems, stopAt = () => false }) {
+  const items = []
+  for (let page = 1; items.length < maxItems; page += 1) {
+    const answer = list(await client.need("GET", `${route}${route.includes("?") ? "&" : "?"}per_page=${perPage}&page=${page}`))
+    for (const item of answer) {
+      if (stopAt(item)) return items
+      items.push(item)
+    }
+    if (answer.length < perPage) break
+  }
+  return items.slice(0, maxItems)
+}
+
 async function readRejections(env, client, { store, head, through }) {
   const rejected = new Set()
   let highest = through
-  const closed = await client.need("GET", `repos/${store}/pulls?state=closed&head=${encodeURIComponent(head.label)}&per_page=30`)
-  for (const pr of list(closed)) {
-    if (!isPlainObject(pr) || !Number.isSafeInteger(pr.number) || pr.number <= through || pr.head?.ref !== head.ref) continue
+  // Newest first; PR numbers grow with creation, so the listing stops at the first PR already read.
+  const closed = await readPages(client, `repos/${store}/pulls?state=closed&head=${encodeURIComponent(head.label)}&sort=created&direction=desc`, {
+    perPage: 30, maxItems: MAX_CLOSED_PRS, stopAt: (pr) => Number.isSafeInteger(pr?.number) && pr.number <= through,
+  })
+  for (const pr of closed) {
+    if (!isPlainObject(pr) || !Number.isSafeInteger(pr.number) || pr.head?.ref !== head.ref) continue
     highest = Math.max(highest, pr.number)
     if (pr.merged_at !== null && pr.merged_at !== undefined) continue
-    const comments = await client.need("GET", `repos/${store}/issues/${pr.number}/comments?per_page=100`)
+    const comments = await readPages(client, `repos/${store}/issues/${pr.number}/comments`, { perPage: 100, maxItems: MAX_COMMENTS })
     let code = null
-    for (const comment of list(comments)) {
+    for (const comment of comments) {
       if (comment?.user?.login !== REJECTION_AUTHOR || typeof comment.body !== "string") continue
       code = REJECTED.exec(comment.body.split(/\r?\n/u)[0])?.[1] ?? null
       if (code !== null) break
     }
     if (code === null) continue
-    const files = await client.need("GET", `repos/${store}/pulls/${pr.number}/files?per_page=100`)
-    for (const file of list(files)) {
+    // A batch holds up to MAX_FILES files; GitHub pages them 100 at a time.
+    for (const file of await readPages(client, `repos/${store}/pulls/${pr.number}/files`, { perPage: 100, maxItems: MAX_FILES })) {
       const name = FACTS_PATH.exec(String(file?.filename))?.[1]
       if (name === undefined) continue
       await quarantine(env, store, name, code)
@@ -500,7 +538,7 @@ async function openPr(client, { store, head, base, count }) {
 // ---------------------------------------------------------------------------
 
 async function deliver(env, context) {
-  const { store, client, now, transform, maxFiles, maxBytes, progress } = context
+  const { store, client, now, deadline, transform, maxFiles, maxBytes, progress } = context
   const nowIso = () => new Date(now()).toISOString()
   const record = (await readConsent(env)).stores[store]
   if (record?.contribute !== true) return { result: "not_opted_in" }
@@ -513,7 +551,7 @@ async function deliver(env, context) {
 
   // `pendingFiles` already quarantined every file that does not parse.
   const parsed = candidates.map(({ name, localBytes }) => ({ name, local: JSON.parse(localBytes.toString("utf8")) }))
-  const desks = await deskRepositories(env)
+  const desks = await deskRepositories(env, { deadline, now })
   const repos = parsed.flatMap(({ local }) => referencedRepos(local))
   for (const { name } of parsed) if (desks.get(name)) repos.push(desks.get(name))
   const known = await resolveVisibility(env, client, account, repos, nowIso)
@@ -567,7 +605,10 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
   if (!isRepo(store)) return { result: "unexpected", pending: null }
   let lock
   try {
-    lock = await acquireLock(await factoryStateRoot(env))
+    // A machine without factory state has decided nothing; flushing must not create the state that turns on finalize requests.
+    const root = await factoryStateRoot(env, { create: false })
+    if (root === null) return { result: "not_opted_in", pending: null }
+    lock = await acquireLock(root)
   } catch {
     // An unsafe state folder or an unusable lock file: nothing is sent.
     return { result: "unexpected", pending: null }
@@ -577,7 +618,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
   let outcome
   try {
     const client = createClient({ runner, deadline, now })
-    outcome = await deliver(env, { store, client, now, transform, maxFiles, maxBytes, progress })
+    outcome = await deliver(env, { store, client, now, deadline, transform, maxFiles, maxBytes, progress })
   } catch (error) {
     outcome = { result: error instanceof Stop ? error.code : "unexpected" }
   }
@@ -700,7 +741,7 @@ export async function finalize(env, {
   for (const marker of await listMarkers(env)) {
     const name = `${marker.host}-${marker.session_id}.json`
     if (!indexed.has(name) && !(requestedAt !== null && marker.updated_at >= requestedAt)) continue
-    const { result } = await derive(env, path.join(root, "markers", name), { quietMs, maxWaitMs: maxQuietWaitMs })
+    const { result } = await derive(env, path.join(root, "markers", name), { quietMs, maxWaitMs: Math.max(0, Math.min(maxQuietWaitMs, deadline - now())) })
     if (result === "source_unreadable" || (result === "skipped" && !(await logIsQuiet(marker, quietMs)))) settled = false
   }
 

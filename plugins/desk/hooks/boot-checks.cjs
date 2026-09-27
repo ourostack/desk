@@ -7,11 +7,14 @@
 //
 // Each check is `{ id, budgetMs, run(ctx) -> { line?, repair?: { command } } }`
 // and they run in order under one 300 ms total budget; a check gets the
-// smaller of its own budget and what is left. A check still running when its
-// budget timer fires is skipped for this start, and so is one that throws; a
-// check doing synchronous work stops itself at `ctx.deadline` by throwing an
-// error whose code is `boot_check_budget`. When factory state exists the skip
-// is recorded in its protected status.json (`boot_checks`). Repairs start detached with
+// smaller of its own budget and what is left, and the real time each check
+// takes is charged against the total. A check is skipped for this start, its
+// line and repair discarded, when its budget timer fires, when it took longer
+// than its budget (a check that blocks synchronously settles before its timer
+// can fire), when it throws, or when it stops itself at `ctx.deadline` by
+// throwing an error whose code is `boot_check_budget`. When factory state
+// exists the skip and its elapsed milliseconds are recorded in the protected
+// status.json (`boot_checks`). Repairs start detached with
 // ignored stdio after every check has run. The hook appends exactly one line,
 // `Desk boot: <line>; <line>`, addressed to the agent, and nothing at all when
 // no check has a line, so its output is then byte-identical to the output it
@@ -195,10 +198,11 @@ const factoryCheck = {
     const pluginRoot = ctx.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
     let plugins = { dirs: [], incomplete: true };
     try {
-      plugins = metadata({ host: ctx.host === "copilot" ? "copilot" : "claude", pluginRoot, home, env: ctx.env, readSmallText, PATTERNS });
+      plugins = metadata({ host: ctx.host === "copilot" ? "copilot" : "claude", pluginRoot, home, env: ctx.env, readSmallText, PATTERNS, deadline: ctx.deadline });
     } catch {
       // An unreadable plugin set leaves only the desk's own declaration.
     }
+    if (plugins.timedOut) throw Object.assign(new Error("plugin scan past the check's deadline"), { code: "boot_check_budget" });
     const result = factoryBootCheck({
       env: ctx.env, deskRoot: root, personPrefix: personPrefix(ctx.env), pluginDirs: plugins.dirs, pluginScanIncomplete: plugins.incomplete, deadline: ctx.deadline,
     });
@@ -253,7 +257,7 @@ async function runBootChecks(options = {}) {
     checks = module.exports.checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand, record = recordSkipped,
   } = options;
   const env = options.env ?? process.env;
-  // Time charged to the total budget: a skipped check is charged its whole budget, so what is left never depends on timer jitter.
+  // The real time every check took, charged against the total budget.
   let used = 0;
   const shared = {};
   const lines = [];
@@ -277,14 +281,16 @@ async function runBootChecks(options = {}) {
       new Promise((resolve) => { timer = setTimeout(resolve, Math.ceil(budget), { overrun: true }); }),
     ]);
     clearTimeout(timer);
-    used += outcome.overrun ? budget : Math.min(budget, performance.now() - checkStarted);
-    if (outcome.overrun) {
+    // A check that blocks synchronously settles before its timer can fire, so the real elapsed time decides: past the budget, its line and repair are discarded like a timed-out check's.
+    const elapsed = performance.now() - checkStarted;
+    used += elapsed;
+    if (outcome.overrun || elapsed > budget) {
       cancellation.abort();
-      skipped.push({ id: check.id, reason: "budget" });
+      skipped.push({ id: check.id, reason: "budget", elapsed_ms: Math.round(elapsed) });
       continue;
     }
     if (outcome.failed) {
-      skipped.push({ id: check.id, reason: "error" });
+      skipped.push({ id: check.id, reason: "error", elapsed_ms: Math.round(elapsed) });
       continue;
     }
     const { line, repair } = outcome.value ?? {};

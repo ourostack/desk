@@ -48,10 +48,18 @@ async function launch(script, args, env) {
   });
 }
 
-function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS }) {
+// `deadline` (a `performance.now()` value, optional) stops the scan early for the session-start boot check; the result is then incomplete and `timedOut`.
+function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadline = Infinity }) {
   const plugins = [];
   const dirs = [];
   let incomplete = false;
+  let timedOut = false;
+  const late = () => {
+    if (performance.now() <= deadline) return false;
+    timedOut = true;
+    incomplete = true;
+    return true;
+  };
   const add = (name, version) => {
     if (typeof name === "string" && PATTERNS.pluginName.test(name) && typeof version === "string" && PATTERNS.semver.test(version)
       && plugins.length < 64 && !plugins.some((p) => p.name === name && p.version === version)) plugins.push({ name, version });
@@ -68,6 +76,7 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS }) {
       }
     } finally { dir.closeSync(); }
     for (const folder of dirs) {
+      if (late()) break;
       try {
         const plugin = JSON.parse(readSmallText(path.join(folder, "plugin.json")));
         add(plugin.name, plugin.version);
@@ -81,6 +90,7 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS }) {
       if (!installed.plugins || typeof installed.plugins !== "object" || Array.isArray(installed.plugins)) throw new Error("registry_unreadable");
       incomplete = Object.keys(installed.plugins).length > 64;
       for (const [key, records] of Object.entries(installed.plugins).slice(0, 64)) {
+        if (late()) break;
         if (!Array.isArray(records)) { incomplete = true; continue; }
         if (records.length > 64) incomplete = true;
         for (const record of records.slice(0, 64)) {
@@ -97,7 +107,8 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS }) {
       incomplete = error.code !== "ENOENT";
     }
   }
-  return { plugins, dirs, incomplete };
+  late();
+  return { plugins, dirs, incomplete, timedOut };
 }
 
 async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot, launch: start = launch, supportsFinalize } = {}) {

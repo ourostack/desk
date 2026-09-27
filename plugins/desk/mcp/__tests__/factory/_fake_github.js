@@ -89,6 +89,12 @@ export function fakeGitHub({
   function api(method, route, body) {
     const [pathPart, query = ""] = route.split("?")
     const params = new URLSearchParams(query)
+    // GitHub's paging: `per_page` (default 30, at most 100) items of page `page` (default 1).
+    const paged = (items) => {
+      const perPage = Math.min(100, Number(params.get("per_page") ?? 30))
+      const page = Number(params.get("page") ?? 1)
+      return ok(items.slice((page - 1) * perPage, page * perPage))
+    }
     let m
     if (method === "GET" && (m = /^repos\/([^/]+\/[^/]+)$/u.exec(pathPart))) {
       const wanted = m[1]
@@ -163,7 +169,9 @@ export function fakeGitHub({
     if (method === "GET" && pathPart === `repos/${store}/pulls`) {
       const state = params.get("state")
       const head = params.get("head")
-      return ok(pulls.filter((pr) => pr.state === state && pr.head.label === head).map(publicPr))
+      const matching = pulls.filter((pr) => pr.state === state && pr.head.label === head)
+      if (params.get("direction") === "desc") matching.sort((a, b) => b.number - a.number)
+      return paged(matching.map(publicPr))
     }
     if (method === "POST" && pathPart === `repos/${store}/pulls`) {
       const [owner, ref] = body.head.includes(":") ? body.head.split(":") : [storeOwner, body.head]
@@ -182,10 +190,10 @@ export function fakeGitHub({
       return ok(publicPr(pr))
     }
     if (method === "GET" && (m = new RegExp(`^repos/${store}/issues/(\\d+)/comments$`, "u").exec(pathPart))) {
-      return ok(comments.get(Number(m[1])) ?? [])
+      return paged(comments.get(Number(m[1])) ?? [])
     }
     if (method === "GET" && (m = new RegExp(`^repos/${store}/pulls/(\\d+)/files$`, "u").exec(pathPart))) {
-      return ok(files.get(Number(m[1])) ?? [])
+      return paged(files.get(Number(m[1])) ?? [])
     }
     return httpError(404, `unmodelled ${method} ${route}`)
   }

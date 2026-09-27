@@ -102,7 +102,7 @@ test("a finished job with an undelivered outbox file or a pending finalize reque
   await requestFinalize(env, { job: requested, deskRoot: desk })
   await requestFinalize(env, { job: open, deskRoot: desk })
   const result = factoryBootCheck({ env, deskRoot: desk, now: NOW })
-  assert.deepEqual(result, { jobs: [undelivered, requested].sort() })
+  assert.deepEqual(result, { jobs: [undelivered, requested, open].sort() }, "every pending request counts, even one whose card was reopened")
 }))
 
 test("cards are read only in the desk layout: tracks, their archives, archived tracks and a person's own desk", () => scratch(async ({ env, desk }) => {
@@ -156,8 +156,11 @@ test("the check stops at its deadline", () => scratch(async ({ env, desk }) => {
   await card(path.join(desk, "alpha", "one"))
   let now = 0
   assert.throws(() => factoryBootCheck({ env, deskRoot: desk, now: NOW, deadline: 10, clock: () => { now += 20; return now } }), { code: "boot_check_budget" })
-  let calls = 0
-  assert.throws(() => factoryBootCheck({ env, deskRoot: desk, now: NOW, deadline: 10, clock: () => (++calls > 1 ? 50 : 0), readRemote: () => null }), { code: "boot_check_budget" })
+  const cutOff = () => { throw Object.assign(new Error("git_deadline"), { code: "git_deadline" }) }
+  assert.throws(() => factoryBootCheck({ env, deskRoot: desk, now: NOW, deadline: Infinity, clock: () => 0, readRemote: cutOff }), { code: "boot_check_budget" }, "a remote read cut off by the deadline is an overrun, never a desk without a remote")
+  const seen = []
+  factoryBootCheck({ env, deskRoot: desk, now: NOW, deadline: 99, clock: () => 0, readRemote: (options) => { seen.push(options); return null } })
+  assert.equal(seen[0].deadline, 99, "the remote read shares the check's own deadline")
 }))
 
 test("a desk with a known remote computes the task tools' job IDs, and a folder the job ID refuses is skipped", () => scratch(async ({ env, desk }) => {
@@ -241,4 +244,15 @@ test("unsafe state files are never followed: a symlinked consent is silent, and 
   const recentDesk = path.join(base, "recent-desk")
   await card(path.join(recentDesk, "alpha", "today"), { updated: new Date().toISOString() })
   assert.deepEqual(finishedTasks({ deskRoot: recentDesk }).map(({ slug }) => slug), ["today"], "the default clock is now")
+}))
+
+test("a crew person's finished job is found through its pending request even when DESK_PERSON is not set", () => scratch(async ({ env, base }) => {
+  const { factoryBootCheck } = await load()
+  const crew = path.join(base, "crew")
+  await fs.mkdir(path.join(crew, "_meta"), { recursive: true })
+  await card(path.join(crew, "desks", "sam", "beta", "shipped"))
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  const job = await jobOf(crew, "beta", "shipped", "desks/sam")
+  await requestFinalize(env, { job, deskRoot: crew })
+  assert.deepEqual(factoryBootCheck({ env, deskRoot: crew, now: NOW }), { jobs: [job] })
 }))

@@ -356,3 +356,20 @@ test("end to end, same clone: two sessions whose git commit calls overlap one co
   assert.deepEqual(first.map(({ job }) => job), [id("other-task")])
   assert.deepEqual(second.map(({ job }) => job), [id("other-task")])
 })
+
+test("readDeskRemote shares one deadline across its Git calls and throws on reaching it", () => {
+  const desk = mkdtempSync(path.join(os.tmpdir(), "desk-repo-deadline-"))
+  try {
+    spawnSync("git", ["init", "-q", desk])
+    spawnSync("git", ["-C", desk, "remote", "add", "origin", "https://github.com/acme/desk.git"])
+    assert.equal(readDeskRemote({ deskRoot: desk, deadline: performance.now() + 60_000 }), "https://github.com/acme/desk.git")
+    assert.throws(() => readDeskRemote({ deskRoot: desk, deadline: 0.5, clock: () => 0 }), { code: "git_deadline" }, "less than a millisecond left starts nothing")
+    const slow = path.join(desk, "slow-git.sh")
+    writeFileSync(slow, "#!/bin/sh\nsleep 5\n", { mode: 0o755 })
+    const started = performance.now()
+    assert.throws(() => readDeskRemote({ deskRoot: desk, git: slow, deadline: started + 150 }), { code: "git_deadline" })
+    assert.ok(performance.now() - started < 3000, "the Git call is cut off at the deadline")
+  } finally {
+    rmSync(desk, { recursive: true, force: true })
+  }
+})
