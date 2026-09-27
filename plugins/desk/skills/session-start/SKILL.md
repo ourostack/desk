@@ -234,6 +234,24 @@ the substrate's contribution at this step is just the slot: every session, check
 
 if the runtime does not support walked-up workspace MCP discovery, this step is a no-op.
 
+## Step 4.8 — Factory boot lines
+
+the session-start hook appends at most one `Desk boot:` line, addressed to you; its clauses are separated by `; `. this step owns what the `Factory:` clauses about waste labels ask, and how to handle an answer from the waste evaluator's `evaluate` command, whether it ran here or from `desk:task-lifecycle`'s done step. no such clause → nothing to do.
+
+`<Desk plugin folder>` below is two levels above this skill's folder; run the commands from it.
+
+- **`Factory: N finished tasks have no waste labels yet; run the evaluator for them in the background`** → the hook has already started a detached `evaluate --pending` that prepares briefs, but only you can start evaluators. run `node <Desk plugin folder>/mcp/scripts/factory.js evaluate --pending` and handle each job in its `jobs` answer as below. don't wait for the evaluators before continuing.
+- **`Factory: N finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)`** → say so in one line of the Step 5 status block. there is nothing to run: labels are quarantined when the factory store refused them or when their session's facts were quarantined (a `facts_quarantined` record names those facts), under `quarantine/<store-slug>/labels/` in the protected factory state.
+
+**handling an `evaluate` answer**, per job:
+
+- `ready` → start a fresh `desk:observer` subagent in the background whose whole prompt is: "Label the waste in these evaluator briefs with `desk:factory-evaluator`: <that job's `briefs` paths>." give it nothing else from this conversation; the evaluator must not see the working agent's context. one observer per job, with only that job's paths.
+- `no_sessions` → the finishing session is not derived yet. the request stays, and a later `evaluate --pending` picks it up.
+- `complete` → every session has labels, or has them held back because its facts are quarantined. nothing to do.
+- `not_opted_in` or `expired` → no evaluator.
+
+a missing or failed evaluation never reopens a task, and `done` never waits for it.
+
 ## Step 5 — Emit status + ask
 
 concise status block, then an open prompt:
@@ -272,6 +290,6 @@ these prompts are one decision group each, per `interaction-style`. if both fire
 
 ## Never skip, never route around
 
-every step in this skill — Step 0 plus the Step 1 through Step 5 chain (including the `.x` sub-steps for 2.5, 2.6, 4.5, 4.6, 4.7) — runs every session. Step 2.6 (desk-registry awareness) is a cheap existence-check that is silent on the single-desk happy path (no `_meta/desks.md` → no-op). the host-identity probe (Step 0) is cheap and silent on the single-host happy path; the prereq probe (Step 1) is load-bearing — most mid-session failures trace back to a missing tool, an old `gh`, or stale auth that wasn't caught at start.
+every step in this skill — Step 0 plus the Step 1 through Step 5 chain (including the `.x` sub-steps for 2.5, 2.6, 4.5, 4.6, 4.7, 4.8) — runs every session. Step 2.6 (desk-registry awareness) is a cheap existence-check that is silent on the single-desk happy path (no `_meta/desks.md` → no-op). the host-identity probe (Step 0) is cheap and silent on the single-host happy path; the prereq probe (Step 1) is load-bearing — most mid-session failures trace back to a missing tool, an old `gh`, or stale auth that wasn't caught at start.
 
 **auto-mode is license for action, not for skipping safety checks.** a prereq-probe failure is like a compile error: fix it, don't proceed. if the operator insists on proceeding with broken prereqs, surface the specific risk (e.g., "no gh = can't push to the workspace state repo = state won't sync across machines") and require an explicit override.
