@@ -19,6 +19,7 @@ import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestFinalize } from "../factory/outbox.js"
 import { jobId } from "../factory/binding.js"
 import { readDeskRemote } from "../factory/desk-repo.js"
+import { objectInput } from "../util/object-input.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 
@@ -257,7 +258,9 @@ export async function task_create({ deskRoot, input, person = null, readiness })
  *   {
  *     track: string,
  *     slug: string,
- *     frontmatter?: object,   // shallow-merged into existing frontmatter
+ *     frontmatter?: object,   // shallow-merged into existing frontmatter; a
+ *                             // JSON-string object is parsed, anything else
+ *                             // is refused before the card is touched
  *     body_append?: string,   // appended to existing body (blank line sep)
  *   }
  *
@@ -271,13 +274,16 @@ export async function task_create({ deskRoot, input, person = null, readiness })
  */
 export async function task_update({ deskRoot, input, person = null, readiness, env = process.env }) {
   const values = input ?? {}
-  const { track, slug, frontmatter, body_append } = values
+  const { track, slug, body_append } = values
   if (
     !Object.hasOwn(values, "track") ||
     !Object.hasOwn(values, "slug")
   ) {
     throw new Error("task_update: `track` and `slug` are required")
   }
+  // Checked before anything is read or written: a string spread into the
+  // card would write one key per character.
+  const frontmatter = objectInput(values.frontmatter, { tool: "task_update", field: "frontmatter" })
 
   const filePath = await resolveWriteTarget({
     deskRoot,

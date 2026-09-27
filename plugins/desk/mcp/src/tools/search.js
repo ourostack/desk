@@ -18,6 +18,7 @@ import * as sqliteVec from "sqlite-vec"
 import { indexDbPath, closeDb } from "../db/init.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { embedQuery } from "../util/embed-query.js"
+import { objectInput } from "../util/object-input.js"
 import {
   clipCosine,
   combineScore,
@@ -424,8 +425,11 @@ function firstChunkText(row) {
  *     query: string }
  */
 export async function desk_search({ deskRoot, input, opts, readiness, queryRouter, signal }) {
+  const request = { ...input }
+  // A JSON-string `filters` would otherwise read as no filters at all.
+  if (request.filters != null) request.filters = objectInput(request.filters, { tool: "desk_search", field: "filters" })
   return (queryRouter ?? createDeskQueryRouter({ controller: readiness })).lexical({
-    ...input, deskRoot, now: opts?.now, opts, signal, kind: "lexical",
+    ...request, deskRoot, now: opts?.now, opts, signal, kind: "lexical",
   })
 }
 

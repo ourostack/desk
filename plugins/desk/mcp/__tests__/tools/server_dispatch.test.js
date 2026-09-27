@@ -7,6 +7,7 @@ import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../src/server.js"
+import { TOOL_INPUT_SCHEMAS } from "../../src/tool-schemas.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 import { withPrivateStore } from "../../src/feedback/store.js"
 import { cleanup, mkFeedbackFixture, useStateHome } from "../feedback/_helpers.js"
@@ -326,6 +327,8 @@ test("server.startServer registers list/call handlers and forwards status contex
   assert.equal(handlers.length, 2)
   const listed = await handlers[0].handler()
   assert.ok(listed.tools.some((tool) => tool.name === "desk_status"))
+  // Every listed tool carries its declared schema, never the empty permissive one.
+  for (const tool of listed.tools) assert.equal(tool.inputSchema, TOOL_INPUT_SCHEMAS[tool.name])
 
   const called = await handlers[1].handler({
     params: {
