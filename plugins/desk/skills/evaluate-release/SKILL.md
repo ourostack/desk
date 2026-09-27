@@ -14,7 +14,7 @@ Work through an evaluation packet, such as the [V2 evaluation packet](../../docs
 
 ## When not to use it
 
-- Labeling a finished job's stretches as value-adding, necessary support or waste: that is the factory evaluator's job, not a release evaluation.
+- Labeling a finished job's stretches as value-adding, necessary support or waste: use `desk:factory-evaluator`.
 - Reviewing a pull request or a change: use `superpowers:requesting-code-review` or `desk:peer-pr-review`.
 - Any work you did or helped with, including an earlier fix to something you are now evaluating. Say so and ask for another observer.
 
