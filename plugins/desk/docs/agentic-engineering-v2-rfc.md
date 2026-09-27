@@ -116,7 +116,7 @@ Upstream providers such as Superpowers are vendored from their own default branc
 
 **On a managed launcher** that installs plugins from repository branches (for example the GitHub Copilot CLI through a company launcher), install the top-most plugin you use; its dependencies bring the rest of the stack from their channels. Some launchers refresh only the plugin you name, not its dependencies; if yours does, install the Desk plugins explicitly with the same refresh policy so their updates arrive right away.
 
-**Updates reach everyone.** Claude Code updates a plugin when its version string changes; a launcher that installs from branches updates when the branch's contents change. V2 serves both: every plugin change ships on its channel and bumps its version, and CI enforces the bump.
+**Updates reach everyone.** Claude Code updates a plugin when its version string changes; a launcher that installs from branches updates when the branch's contents change. V2 serves both: every plugin change ships on its channel as a new version, and CI enforces it. Desk takes its new version on `main` after the merge, from the changelog fragment the pull request adds, so parallel pull requests do not conflict.
 
 **Your first job.** After setup, start a session and describe the outcome you want and why, not the steps. Your agent talks it through with you, records it as a task in your desk, and asks for go. After go, leave it to work: it comes back for a real decision, for authority it lacks, or with the result and its evidence. If you catch yourself relaying output, re-explaining context or narrating steps, expect your agent to suggest a reset, and take it.
 

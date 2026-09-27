@@ -12,6 +12,7 @@ const fs = require("node:fs");
 const LABEL = "upstream-refresh";
 const ISSUE_TITLE = "Superpowers upstream refresh needs attention";
 const TITLE_PREFIX = "Refresh Superpowers from upstream";
+const RELEASE_WORKFLOW = "desk-release.yml";
 
 // gh never prints a token, but a diagnostic may echo a credential it was handed; mask anything shaped like one.
 function redact(text) {
@@ -49,36 +50,6 @@ function createGh({ run, env }) {
   return { call, json };
 }
 
-function alphaNumber(version, core) {
-  const match = /^(\d+\.\d+\.\d+)-alpha\.(\d+)$/u.exec(String(version));
-  return match && match[1] === core ? Number(match[2]) : null;
-}
-
-// The next Desk alpha that neither main nor any other open pull request has claimed, so a refresh cannot collide
-// with a release that is already in review.
-function nextDeskVersion({ gh, repo, current, branch }) {
-  const core = current.split("-")[0];
-  const claimed = [alphaNumber(current, core)];
-  if (claimed[0] === null) throw new Error(`Desk version ${current} is not an alpha release`);
-  const pulls = gh.json(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "headRefName,headRefOid"], { list: true });
-  for (const pull of pulls) {
-    if (pull.headRefName === branch) continue;
-    const manifest = gh.call([
-      "api", `repos/${repo}/contents/plugins/desk/.claude-plugin/plugin.json?ref=${pull.headRefOid}`, "--jq", ".content",
-    ], { allowFailure: true });
-    if (!manifest.ok || manifest.stdout.trim() === "") continue;
-    let version;
-    try {
-      ({ version } = JSON.parse(Buffer.from(manifest.stdout, "base64").toString("utf8")));
-    } catch {
-      continue;
-    }
-    const number = alphaNumber(version, core);
-    if (number !== null) claimed.push(number);
-  }
-  return `${core}-alpha.${Math.max(...claimed) + 1}`;
-}
-
 function list(paths) {
   return paths.length === 0 ? "none" : paths.map((file) => `\`${file}\``).join(", ");
 }
@@ -88,7 +59,7 @@ function pullRequestBody({ report, runUrl }) {
   return [
     `This refresh vendors [obra/superpowers@${report.commit.slice(0, 12)}](https://github.com/${report.repository}/commit/${report.commit}) (upstream version ${release.superpowers.upstream}) into \`plugins/superpowers/\`. The selected files are byte-identical to upstream, and \`upstream-sources.lock.json\` records each path and SHA-256.`,
     "",
-    `- Superpowers ${release.superpowers.from} → ${release.superpowers.to}; Desk ${release.desk.from} → ${release.desk.to}.`,
+    `- Superpowers ${release.superpowers.from} → ${release.superpowers.to}. Desk gains the changelog fragment \`${release.fragment}\`, and the release workflow takes its next version when this merges.`,
     `- Changed: ${list(report.updated_paths)}.`,
     `- Added: ${list(report.added_paths)}.`,
     `- Removed: ${list(report.removed_paths)}.`,
@@ -230,7 +201,12 @@ function publish({ gh, repo, branch, base, sha, report, workflows, runUrl, sleep
     return { outcome: "merge-blocked", pull: pull.url, issue: null, jobs, message };
   }
   closeIssues({ gh, repo, pullUrl: pull.url });
-  return { outcome: "merged", pull: pull.url, issue: null, jobs, message: "Every check passed and the refresh merged." };
+  // A merge made with the workflow token starts no push-triggered run, so the Desk release is dispatched on main.
+  const released = gh.call(["workflow", "run", RELEASE_WORKFLOW, "--repo", repo, "--ref", base], { allowFailure: true });
+  const message = released.ok
+    ? "Every check passed, the refresh merged and the Desk release was dispatched."
+    : `Every check passed and the refresh merged, but the Desk release could not be dispatched: ${released.error}. Dispatch ${RELEASE_WORKFLOW} on ${base}.`;
+  return { outcome: "merged", pull: pull.url, issue: null, jobs, message };
 }
 
 function summaryMarkdown(result) {
@@ -256,10 +232,9 @@ function parseArgs(argv) {
     options[rest[index].slice(2)] = rest[index + 1];
   }
   const required = {
-    "next-desk-version": ["repo", "current", "branch"],
     publish: ["repo", "branch", "base", "sha", "report", "workflows", "run-url"],
   }[command];
-  if (!required) throw new Error("usage: superpowers-upstream-pr.cjs <next-desk-version|publish> --option value ...");
+  if (!required) throw new Error("usage: superpowers-upstream-pr.cjs publish --option value ...");
   const missing = required.filter((key) => options[key] === undefined);
   if (missing.length > 0) throw new Error(`${command} requires --${missing.join(", --")}`);
   return { command, options };
@@ -276,12 +251,8 @@ function main(argv = process.argv.slice(2), {
   sleep = sleepSync,
   now = Date.now,
 } = {}) {
-  const { command, options } = parseArgs(argv);
+  const { options } = parseArgs(argv);
   const gh = createGh({ run, env });
-  if (command === "next-desk-version") {
-    stdout.write(`${nextDeskVersion({ gh, repo: options.repo, current: options.current, branch: options.branch })}\n`);
-    return 0;
-  }
   const result = publish({
     gh,
     repo: options.repo,
@@ -311,4 +282,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { createGh, main, nextDeskVersion, parseArgs, publish, pullRequestBody, sleepSync };
+module.exports = { createGh, main, parseArgs, publish, pullRequestBody, sleepSync };

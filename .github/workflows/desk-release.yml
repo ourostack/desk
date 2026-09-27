@@ -1,0 +1,117 @@
+name: Desk release
+
+# Releases Desk from the changelog fragments merged pull requests leave in plugins/desk/changelog.d/. Pull requests
+# never bump Desk's version or edit the head of its changelog, so they do not conflict with each other; this workflow
+# takes the next alpha on every release surface, folds the pending fragments into one changelog entry and commits the
+# release straight to main (scripts/release-desk.cjs). Runs one at a time; a run that finds no fragment, because an
+# earlier run already released them, does nothing.
+#
+# The commit is pushed with the workflow token, which main accepts because it has no branch protection or ruleset.
+# If main is ever protected, allow this workflow's token to bypass the rule for this push, or give the push a
+# deploy key or GitHub App token that may; nothing else here changes. A push made with the workflow token starts no
+# other workflow, so the release commit itself is checked here before it is pushed.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "plugins/desk/changelog.d/**"
+  # The Superpowers refresh merges with the workflow token, which starts no push-triggered run, so it dispatches this.
+  workflow_dispatch:
+  # A failed release leaves its fragments pending on main. The daily run releases whatever is still pending, so a fix
+  # merged without a fragment, or a transient failure, does not strand them until the next fragment merge.
+  schedule:
+    - cron: "23 6 * * *"
+
+permissions: {}
+
+concurrency:
+  group: desk-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release Desk from changelog fragments
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      # Only to open, comment on and close the "Desk release needs attention" issue.
+      issues: write
+    env:
+      ISSUE_TITLE: Desk release needs attention
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+
+      - name: Install Desk MCP dependencies
+        working-directory: plugins/desk/mcp
+        run: npm ci
+
+      # Another merge can land while this runs. The release is then rebuilt on the new main, which folds that merge's
+      # fragment too, and pushed again; a push never overwrites main.
+      - name: Release and push to main
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3 4 5; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            node scripts/release-desk.cjs --date "$(date -u +%F)" > "$RUNNER_TEMP/release.json"
+            if [ "$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").released')" != "true" ]; then
+              echo "No changelog fragment is pending; nothing to release." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            node scripts/check-release-integrity.cjs
+            (cd plugins/desk/mcp && node --import ./__tests__/_isolated_env.mjs --test __tests__/release/release_coupling.test.js __tests__/activation/copilot_packaging.test.js)
+            summary="$(node -p 'const r = require(process.env.RUNNER_TEMP + "/release.json"); `Desk ${r.to} from ${r.fragments.length} changelog fragment(s): ${r.fragments.map((f) => f.split("/").pop()).join(", ")}`')"
+            version="$(node -p 'require(process.env.RUNNER_TEMP + "/release.json").to')"
+            git add --all -- .claude-plugin plugins/desk
+            git commit --quiet --message "Release Desk $version" --message "$summary. Released by $RUN_URL."
+            if push_error="$(git push --quiet origin HEAD:main 2>&1)"; then
+              echo "Released $summary." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Push attempt $attempt was refused: $push_error"
+            echo "Rebuilding the release on the current main."
+          done
+          echo "::error::The release was not pushed after 5 attempts. The last refusal was: $push_error. If main kept moving, the next run releases the pending fragments; if main now refuses this workflow's pushes (for example a new branch rule), allow them."
+          exit 1
+
+      # One open issue per problem: a new failure comments on it, and the next successful run closes it.
+      - name: Report the failed release
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          body="The Desk release failed in $RUN_URL. The changelog fragments on main stay unreleased, and the Desk changes they describe ship without a new version, until a release succeeds. Read the failed step, fix the cause on main (a fragment the release rejects, a failing release check or a refused push), then dispatch desk-release.yml or wait for the daily run."
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number,title --jq "map(select(.title == env.ISSUE_TITLE)) | .[0].number // empty")"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "$body"
+          fi
+
+      - name: Close the release issue after a successful run
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for number in $(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number,title --jq "map(select(.title == env.ISSUE_TITLE)) | .[].number"); do
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "Resolved: $RUN_URL finished without a pending fragment left unreleased."
+          done
