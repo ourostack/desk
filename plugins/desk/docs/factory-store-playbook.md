@@ -84,7 +84,7 @@ label not-confirmed bfd4f2 "A kaizen or andon finding that review did not confir
 gh api "repos/$STORE/labels?per_page=100" --jq '[.[].name]'
 ```
 
-`factory-merge` adds `maintenance` to maintenance pull requests and skips every pull request that carries it. Kaizen cards carry `kaizen`; the build's kaizen check adds `confirmed` or `not-confirmed` to a card and removes them when the data no longer supports them; andon issues carry `andon`.
+`factory-merge` adds `maintenance` to maintenance pull requests and skips every pull request that carries it. Kaizen cards carry `kaizen`; the build's kaizen check adds `confirmed` or `not-confirmed` to a card and removes them when the data no longer supports them; andon issues carry `andon`, and a reviewer adds `not-confirmed` to an andon issue that is not a real regression so the build leaves it alone.
 
 ## 4. Actions settings
 

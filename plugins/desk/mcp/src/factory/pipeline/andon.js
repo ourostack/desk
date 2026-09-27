@@ -19,7 +19,9 @@
 //     that baseline; or
 //   - the data no longer shows the alarm's version clearly worse than its
 //     baseline in any class.
-// Only issues the build's own account opened are read or changed. Quality
+// An andon issue a reviewer labeled `not-confirmed` has been judged not to be
+// a real regression: the build leaves it as it is, open or closed, and
+// reports it as `dismissed`. Only issues the build's own account opened are read or changed. Quality
 // comes first: andon watches quality measures only, so no flow gain can
 // offset a quality regression. There is no fixed percentage or job count
 // beyond the comparison's own two jobs a side. Nothing here names a person,
@@ -35,6 +37,7 @@ import { compareVersions, isVersion } from "./versions.js"
 
 export const ANDON_LABEL = "andon"
 export const ANDON_MARKER = "<!-- desk-andon -->"
+export const DISMISSED_LABEL = "not-confirmed"
 const BOT_LOGIN = "github-actions[bot]"
 const WORSE = "up"
 
@@ -158,7 +161,7 @@ function reviewAlarm(records, { plugin, version, measure }) {
  * `syncAndon({ client, records, author }) -> { alarms }`: opens, updates,
  * reopens and closes the build's andon issues through `client`
  * (`store-issues.js`). Each entry is `{ number, title, action }` with
- * `action` one of `opened`, `updated`, `reopened`, `closed` or `unchanged`,
+ * `action` one of `opened`, `updated`, `reopened`, `closed`, `dismissed` or `unchanged`,
  * ordered by issue number. Issues not opened by `author`, pull requests
  * and titles that do not parse are left alone.
  */
@@ -173,7 +176,9 @@ export async function syncAndon({ client, records, author = BOT_LOGIN }) {
   for (const alarm of planAndon(records)) {
     raised.add(alarm.title)
     const issue = byTitle.get(alarm.title)
-    if (issue === undefined) {
+    if (issue !== undefined && issue.labels.includes(DISMISSED_LABEL)) {
+      results.push({ number: issue.number, title: alarm.title, action: "dismissed" })
+    } else if (issue === undefined) {
       const created = await client.createIssue({ title: alarm.title, body: alarm.body, labels: [ANDON_LABEL] })
       results.push({ number: created.number, title: alarm.title, action: "opened" })
     } else if (issue.state === "closed") {
@@ -188,6 +193,10 @@ export async function syncAndon({ client, records, author = BOT_LOGIN }) {
   }
   for (const issue of byTitle.values()) {
     if (issue.state !== "open" || raised.has(issue.title)) continue
+    if (issue.labels.includes(DISMISSED_LABEL)) {
+      results.push({ number: issue.number, title: issue.title, action: "dismissed" })
+      continue
+    }
     const review = reviewAlarm(records, parseAndonTitle(issue.title))
     if (review.close !== undefined) {
       await client.createComment(issue.number, review.close)

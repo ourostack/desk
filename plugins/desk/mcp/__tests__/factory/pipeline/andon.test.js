@@ -112,6 +112,13 @@ test("syncAndon closes its issue when a later version brings the measure back, a
   assert.equal((await syncAndon({ client: github.client, records: regressed })).alarms[0].action, "reopened")
   assert.equal(github.issue(1).state, "open")
   assert.equal(github.issues().length, 1)
+  // A reviewer who finds the alarm is not a real regression labels it not-confirmed and closes it:
+  // the build then leaves it closed and unchanged, and never opens a second issue for it.
+  await github.client.addLabels(1, ["not-confirmed"])
+  await github.client.updateIssue(1, { state: "closed", state_reason: "not_planned" })
+  assert.deepEqual((await syncAndon({ client: github.client, records: regressed })).alarms, [{ number: 1, title: "Andon: desk 1.1.0 tool_retries", action: "dismissed" }])
+  assert.equal(github.issue(1).state, "closed")
+  assert.equal(github.issues().length, 1)
 })
 
 test("syncAndon closes an alarm the data no longer shows, and ignores pull requests and titles it cannot read", async () => {
@@ -123,6 +130,7 @@ test("syncAndon closes an alarm the data no longer shows, and ignores pull reque
       { number: 4, title: "Andon: desk 0.9.0 tool_failures", body: "old", labels: ["andon"] },
       { number: 5, title: "Andon: other-plugin 1.0.0 tool_failures", body: "old", labels: ["andon"] },
       { number: 6, title: "Andon: desk 1.1.0 tool_retries", body: "a second copy", labels: ["andon"] },
+      { number: 7, title: "Andon: desk 1.1.0 api_retries", body: "old", labels: ["andon", "not-confirmed"] },
     ],
   })
   const calm = [...jobs("1.0.0", [1, 2, 1]), ...jobs("1.1.0", [1, 2, 2])]
@@ -131,7 +139,9 @@ test("syncAndon closes an alarm the data no longer shows, and ignores pull reque
     { number: 1, title: "Andon: desk 1.1.0 tool_retries", action: "closed" },
     { number: 4, title: "Andon: desk 0.9.0 tool_failures", action: "closed" },
     { number: 5, title: "Andon: other-plugin 1.0.0 tool_failures", action: "closed" },
+    { number: 7, title: "Andon: desk 1.1.0 api_retries", action: "dismissed" },
   ])
+  assert.equal(github.issue(7).state, "open", "a dismissed alarm is the reviewer's to close")
   assert.match(github.botComments(1).at(-1).body, /no longer clearly worse than 1\.0\.0/u)
   assert.match(github.botComments(4).at(-1).body, /no longer clearly worse than the version before it/u)
   assert.equal(github.issue(2).state, "open")
