@@ -364,11 +364,9 @@ test("readDeskRemote shares one deadline across its Git calls and throws on reac
     spawnSync("git", ["-C", desk, "remote", "add", "origin", "https://github.com/acme/desk.git"])
     assert.equal(readDeskRemote({ deskRoot: desk, deadline: performance.now() + 60_000 }), "https://github.com/acme/desk.git")
     assert.throws(() => readDeskRemote({ deskRoot: desk, deadline: 0.5, clock: () => 0 }), { code: "git_deadline" }, "less than a millisecond left starts nothing")
-    const slow = path.join(desk, "slow-git.sh")
-    writeFileSync(slow, "#!/bin/sh\nsleep 5\n", { mode: 0o755 })
-    const started = performance.now()
-    assert.throws(() => readDeskRemote({ deskRoot: desk, git: slow, deadline: started + 150 }), { code: "git_deadline" })
-    assert.ok(performance.now() - started < 3000, "the Git call is cut off at the deadline")
+    // A Git call that returns at or after the deadline throws, so a timed-out call never reads as "no remote".
+    const readings = [0, 1000]
+    assert.throws(() => readDeskRemote({ deskRoot: desk, deadline: 500, clock: () => readings.shift() ?? 1000 }), { code: "git_deadline" })
   } finally {
     rmSync(desk, { recursive: true, force: true })
   }

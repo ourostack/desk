@@ -242,6 +242,13 @@ export function fakeGitHub({
       target.pending = false
       target.refs.set("heads/main", storeRepo().refs.get("heads/main"))
     },
+    /** Moves the store's main on with an unrelated commit, as another merge would. */
+    advanceMain() {
+      const main = storeRepo().refs.get("heads/main")
+      const root = new Map(trees.get(commits.get(main).tree))
+      root.set(`NOTE-${commits.size}.md`, { type: "blob", sha: "b".repeat(40) })
+      storeRepo().refs.set("heads/main", putCommit(putTree([...root]), [main], "other"))
+    },
     /** Merges the open intake PR into the store's main, as the store's merge workflow would. */
     mergeOpenPr() {
       const pr = pulls.find((item) => item.state === "open")

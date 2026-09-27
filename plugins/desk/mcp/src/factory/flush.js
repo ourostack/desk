@@ -29,7 +29,9 @@
 //      (`github-actions[bot]`) commented a first line `factory-rejected:
 //      <code>`, every file of that PR, all pages of up to 500, is quarantined
 //      with that code: the comment names no file, so good files in a rejected
-//      PR are quarantined too.
+//      PR are quarantined too. `merge_conflict` and `unexpected_merge` say the
+//      branch was stale, not the facts bad: nothing is quarantined, and the
+//      files go out again on a branch rebuilt from the current default branch.
 //   5. A file whose exact published blob already sits at `facts/<name>` on
 //      the store's default branch is marked delivered.
 //   6. The rest (at most 500 files and 24 MiB per flush) becomes one tree on
@@ -109,6 +111,8 @@ export const FINALIZE_QUIET_MS = 5000
 const LOCK_STALE_MS = 10 * 60 * 1000
 const MAX_FILES = 500
 const MAX_CLOSED_PRS = 300
+// Refusals that mean the intake branch was stale, not that its facts are bad: the files stay pending, and the next batch is rebuilt on the store's current default branch.
+const STALE_INTAKE_CODES = new Set(["merge_conflict", "unexpected_merge"])
 const MAX_COMMENTS = 300
 const MAX_BYTES = 24 * 1024 * 1024
 const MAX_OUTPUT = 64 * 1024 * 1024
@@ -452,7 +456,7 @@ async function readRejections(env, client, { store, head, through }) {
       code = REJECTED.exec(comment.body.split(/\r?\n/u)[0])?.[1] ?? null
       if (code !== null) break
     }
-    if (code === null) continue
+    if (code === null || STALE_INTAKE_CODES.has(code)) continue
     // A batch holds up to MAX_FILES files; GitHub pages them 100 at a time.
     for (const file of await readPages(client, `repos/${store}/pulls/${pr.number}/files`, { perPage: 100, maxItems: MAX_FILES })) {
       const name = FACTS_PATH.exec(String(file?.filename))?.[1]

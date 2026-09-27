@@ -976,3 +976,26 @@ test("closed-PR entries that are not PRs of this machine's intake branch are ski
   assert.equal(apiCalls(github, "GET", /\/comments\?/u).length, 0)
   assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 0)
 }))
+
+for (const code of ["merge_conflict", "unexpected_merge"]) {
+  test(`a PR closed with ${code} is stale, not bad: nothing is quarantined and the files go out again rebuilt on the current main`, () => scratch(async ({ env }) => {
+    const { flush } = await load()
+    await optIn(env)
+    const name = await put(env, localFacts(1))
+    const github = fakeGitHub()
+    await flush(env, { store: STORE, runner: github.runner })
+    const branch = await intakeBranch(env)
+    const staleHead = github.ref(STORE, branch)
+    github.rejectOpenPr(`factory-rejected: ${code}`)
+    github.advanceMain()
+    const result = await flush(env, { store: STORE, runner: github.runner })
+    assert.equal(result.result, "delivered_pr_open")
+    assert.equal(result.pr.number, 102, "a new PR is opened")
+    assert.equal(existsSync(path.join(await factoryStateRoot(env), "quarantine")), false)
+    const head = github.ref(STORE, branch)
+    assert.notEqual(head, staleHead)
+    assert.deepEqual(github.commit(head).parents, [github.storeMain()], "the branch is rebuilt on the store's current main")
+    assert.deepEqual([...github.headFacts(STORE, branch).keys()], [name])
+    assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 101)
+  }))
+}
