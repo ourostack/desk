@@ -101,6 +101,7 @@ const requiredHostManifestChecks = [
   "claude-plugin",
   "factory-hooks",
   "worker-sources",
+  "observer-sources",
   "humanize-skill",
   "startup-composition",
   "codex-fixtures",
@@ -120,6 +121,9 @@ const hostManifestFixtureFiles = [
   "plugins/desk/agents/worker.agent.md",
   "plugins/desk/agents/worker.md",
   "plugins/desk/agents/worker.toml",
+  "plugins/desk/agents/observer.agent.md",
+  "plugins/desk/agents/observer.md",
+  "plugins/desk/agents/observer.toml",
   "plugins/desk/docs/agentic-engineering-v2-rfc.md",
   "plugins/desk/hooks/hooks.json",
   "plugins/desk/hooks/copilot-hooks.json",
@@ -1478,6 +1482,39 @@ test("root host verifier rejects absent worker metadata and each authored invari
       "claude session-start prompt drift", "plain-language no-hard-wrap rule drift", "retired principles file present",
       "codex activation Plain Language pointer drift", "codex activation Superpowers pointer drift",
     ]) assert.ok(result.errors.includes(`worker-sources ${message}`), result.errors.join("\n"))
+  })
+})
+
+test("root host verifier catches observer registration and body drift on every host", async () => {
+  const verifier = loadHostManifestVerifier()
+  await withHostFreshnessFixture(async (root) => {
+    const claudePlugin = loadJson("plugins", "desk", ".claude-plugin", "plugin.json")
+    claudePlugin.agents = claudePlugin.agents.filter((agent) => agent !== "./agents/observer.md")
+    writeJson(root, "plugins/desk/.claude-plugin/plugin.json", claudePlugin)
+    const activation = loadJson("plugins", "desk", "activation", "desk.activation.json")
+    activation.provides.activation_targets.find((target) => target.id === "desk:observer").entrypoints.codex = "agents/worker.toml"
+    activation.host_activation.claude.targets["desk:observer"].default = true
+    writeJson(root, "plugins/desk/activation/desk.activation.json", activation)
+    const codexPlugin = loadJson("plugins", "desk", ".codex-plugin", "plugin.json")
+    delete codexPlugin.activation.codex.targets["desk:observer"]
+    writeJson(root, "plugins/desk/.codex-plugin/plugin.json", codexPlugin)
+    const copilotPlugin = loadJson("plugins", "desk", "plugin.json")
+    copilotPlugin.activation.copilot.targets["desk:observer"].source = "agents/observer.md"
+    writeJson(root, "plugins/desk/plugin.json", copilotPlugin)
+    writeText(root, "plugins/desk/agents/observer.md", "fixture without observer metadata\n")
+    writeText(root, "plugins/desk/agents/observer.toml", loadText("plugins", "desk", "agents", "observer.toml").replace('name = "observer"', 'name = "watcher"'))
+    rmSync(path.join(root, "plugins", "desk", "agents", "observer.agent.md"))
+    const result = await verifier.verifyDeskHostManifests({
+      repoRoot: root, mcpRoot, io: { stdout: { write() {} }, stderr: { write() {} } },
+    })
+    assert.equal(result.ok, false)
+    for (const message of [
+      "claude observer name drift", "claude body drift", "codex observer name drift",
+      "copilot observer name drift", "copilot body drift",
+      "claude exposure drift", "activation target drift",
+      "claude activation target drift", "codex activation target drift", "copilot activation target drift",
+    ]) assert.ok(result.errors.includes(`observer-sources ${message}`), result.errors.join("\n"))
+    assert.equal(result.errors.includes("observer-sources codex body drift"), false, result.errors.join("\n"))
   })
 })
 
