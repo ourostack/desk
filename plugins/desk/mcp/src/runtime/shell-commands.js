@@ -1,9 +1,13 @@
 // Inspect shell syntax without executing it. Quoted data stays data; substitutions and
 // literal shell/eval wrappers are walked as commands. Unknown program exit statuses
 // fork the &&/|| paths, and subshells/pipelines cannot change their parent's cwd.
+// A value computed by a program the inspector does not model is unknown (guard-unknowns.js):
+// an unknown directory is carried forward, and only an unknown program, script or Git
+// target that could reach Git ends inspection with a denial.
 import * as path from "node:path"
-import { physicalDirectory } from "./shell-paths.js"
+import { mktempPath, physicalDirectory } from "./shell-paths.js"
 import { inspectPowerShell } from "./powershell-commands.js"
+import { mayInvokeGit, UNKNOWN, UNKNOWN_GIT, unknownOutput, unresolved } from "./guard-unknowns.js"
 
 const separators = new Set([";", "\n", "&", "&&", "||", "|", "(", ")", "{", "}"])
 
@@ -286,12 +290,17 @@ function globPattern(text) {
   return result
 }
 
+function wordText(words) {
+  return words.map((word) => word.parts.map((part) => part.text).join("")).join(" ")
+}
+
 export async function inspectShell({ command, cwd, env, powershell = false, visit, depth = 0 }) {
   if (powershell) return inspectPowerShell({ command, cwd, env, visit, depth })
   if (depth > 16) throw new Error("shell wrapper nesting exceeds 16")
   const tree = parse(tokenizeShell(command))
-  let steps = 0
+  let steps = 0, serial = 0
   async function nested(text, state, shell = "bash") {
+    if (text.includes(UNKNOWN)) throw unresolved("a script this command evaluates")
     return inspectShell({ command: text, cwd: state.cwd, env: state.vars, powershell: shell === "powershell", visit, depth: depth + 1 })
   }
   async function expand(word, state, split = false) {
@@ -327,13 +336,14 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
   }
   async function literalOutput(text, state) {
     const tokens = tokenizeShell(text)
-    if (!tokens.every((token) => token.parts)) return "\0"
+    if (!tokens.every((token) => token.parts)) return unknownOutput(text)
     const words = []
     for (const token of tokens) words.push(await expand(token, state))
     if (words[0] === "pwd" && words.length === 1) return state.cwd
     if (words[0] === "echo") return words.slice(1).join(" ").replace(/\n+$/u, "")
     if (words[0] === "printf" && words[1] === "%s") return words.slice(2).join("").replace(/\n+$/u, "")
-    return "\0"
+    if (words[0] === "mktemp") return mktempPath(words.slice(1), state.cwd, state.vars, ++serial) ?? UNKNOWN
+    return unknownOutput(text)
   }
   function positional(state, values, start) {
     const vars = Object.fromEntries(Object.entries(state.vars).filter(([key]) => !/^\d+$/u.test(key)))
@@ -341,7 +351,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     return { ...state, vars }
   }
   async function run(node, state) {
-    if (++steps > 1000) throw new Error("shell inspection budget exceeded")
+    if (++steps > 5000) throw new Error("shell inspection budget exceeded")
     if (state.terminated) return [state]
     if (node.kind === "case") {
       const value = await expand(node.value, state)
@@ -381,15 +391,20 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       let states = [state]
       for (const word of node.values) {
         const value = await expand(word, state)
-        states = (await Promise.all(states.map((s) => run(node.body, { ...s, vars: { ...s.vars, [node.variable]: value } })))).flat()
+        states = unique((await Promise.all(states.map((s) => run(node.body, { ...s, vars: { ...s.vars, [node.variable]: value } })))).flat())
       }
-      return unique(states)
+      return states
     }
     if (node.kind === "not") return (await run(node.body, state)).map((s) => ({ ...s, status: !s.status }))
     if (node.kind === "background") { await run(node.body, state); return [{ ...state, status: true }] }
     if (node.kind === "list") {
       let states = [state]
-      for (const item of node.nodes) states = unique((await Promise.all(states.map((s) => run(item, s)))).flat())
+      for (const [index, item] of node.nodes.entries()) {
+        states = (await Promise.all(states.map((s) => run(item, s)))).flat()
+        // Only the last item's status reaches the list's caller ($? is not modeled).
+        if (index < node.nodes.length - 1) states = states.map((s) => ({ ...s, status: true }))
+        states = unique(states)
+      }
       return states
     }
     if (node.kind === "&&" || node.kind === "||") {
@@ -423,7 +438,6 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       args.push(...(split ? await expand(word, state, true) : [await expand(word, state)]))
     }
     if (!args.length) return [{ ...local, status: true }]
-    if (args[0].includes("\0")) throw new Error("unresolved shell command")
     let name = path.basename(args[0]).replace(/\.exe$/iu, "").toLowerCase()
     while (["command", "exec", "env", "builtin", "nohup", "time", "timeout", "nice", "sudo"].includes(name)) {
       const wrapper = name
@@ -446,6 +460,12 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       }
       name = path.basename(args[0] ?? "").replace(/\.exe$/iu, "").toLowerCase()
     }
+    const unknown = [{ ...state, status: true }, { ...state, status: false }]
+    if (args[0]?.includes(UNKNOWN)) {
+      // An unknown program is Git only if its own text, or the text that computed it, names Git or runs code.
+      if (args.some((arg) => arg.includes(UNKNOWN_GIT)) || mayInvokeGit(wordText(node.words))) throw unresolved("the program this command runs")
+      return unknown
+    }
     if (name === "export") {
       for (const arg of args.slice(1)) {
         const at = arg.indexOf("=")
@@ -454,7 +474,10 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       return [{ ...local, status: true }]
     }
     if (name === "exit") return [{ ...state, terminated: true, status: args[1] === undefined || args[1] === "0" }]
-    if (name === "cd") {
+    const unknownDirectory = [{ ...local, cwd: UNKNOWN, logicalCwd: UNKNOWN, vars: { ...local.vars, OLDPWD: state.logicalCwd, PWD: UNKNOWN }, status: true }, { ...state, status: false }]
+    // pushd DIR changes directory like cd; the directory stack itself is not modeled.
+    if (name === "popd" || (name === "pushd" && !/^[^+-]/u.test(args[1] ?? ""))) return unknownDirectory
+    if (name === "cd" || name === "pushd") {
       let physical = false, operand
       for (let i = 1; i < args.length; i++) {
         if (args[i] === "--") { operand = args[i + 1]; break }
@@ -462,7 +485,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
         operand = args[i]; break
       }
       const target = operand === "-" ? local.vars.OLDPWD : operand ?? local.vars.HOME
-      if (target?.includes("\0")) throw new Error("unresolved shell directory")
+      if (target?.includes(UNKNOWN) || (target && !path.isAbsolute(target) && local.cwd === UNKNOWN)) return unknownDirectory
       const prefixes = target && !path.isAbsolute(target) && !/^\.{1,2}(?:\/|$)/u.test(target) && local.vars.CDPATH
         ? [...local.vars.CDPATH.split(":"), ""] : [""]
       for (const prefix of prefixes) {
@@ -476,6 +499,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       }
       return [{ ...state, status: false }]
     }
+    if ((name === "source" || name === ".") && args.some((arg) => arg.includes(UNKNOWN))) throw unresolved("the file this command sources")
     if (local.functions[name]) return run(local.functions[name], positional(local, args.slice(1), 1))
     if (["sh", "bash", "zsh", "dash", "ksh", "pwsh", "powershell"].includes(name)) {
       const flag = args.findIndex((arg) => /^-[a-z]*c[a-z]*$/u.test(arg) || /^-command$/iu.test(arg))
@@ -484,7 +508,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     else await visit({ name, args: args.slice(1), cwd: local.cwd, env: local.vars })
     if (["true", ":", "echo", "printf"].includes(name)) return [{ ...state, status: true }]
     if (name === "false") return [{ ...state, status: false }]
-    return [{ ...state, status: true }, { ...state, status: false }]
+    return unknown
   }
   const physicalCwd = physicalDirectory(cwd, ".") ?? cwd
   await run(tree, { cwd: physicalCwd, logicalCwd: cwd, vars: { ...env, PWD: cwd }, functions: {}, status: true })

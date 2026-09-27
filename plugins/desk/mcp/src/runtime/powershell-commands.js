@@ -1,6 +1,7 @@
 import * as path from "node:path"
 import { physicalDirectory } from "./shell-paths.js"
 import { inspectShell, tokenizeShell } from "./shell-commands.js"
+import { mayInvokeGit, UNKNOWN, UNKNOWN_GIT, unknownOutput, unresolved } from "./guard-unknowns.js"
 
 function variable(map, name) {
   const key = Object.keys(map).find((key) => key.toLowerCase() === name.toLowerCase())
@@ -65,7 +66,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
           if (nesting) throw new Error("unresolved PowerShell subexpression")
           const text = part.text.slice(i + 2, end)
           await inspectPowerShell({ command: text, cwd: directory, env: environment, visit, depth: depth + 1, locals: variables })
-          result += /^(?:get-location|pwd)$/iu.test(text.trim()) ? directory : "\0"
+          result += /^(?:get-location|pwd)$/iu.test(text.trim()) ? directory : unknownOutput(text)
           i = end
         } else {
           const match = /^\$(?:\{((?:env:)?[A-Za-z_]\w*)\}|((?:env:)?[A-Za-z_]\w*))/iu.exec(part.text.slice(i))
@@ -96,7 +97,8 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
       const valueWords = assignment
         ? [{ ...words[0], parts: words[0].parts.map((p, i) => i === 0 ? { ...p, text: p.text.slice(assignment[0].length) } : p) }, ...words.slice(1)]
         : words.slice(2)
-      const value = valueWords.length === 1 && valueWords[0].parts ? await expand(valueWords[0]) : "\0"
+      const value = valueWords.length === 1 && valueWords[0].parts ? await expand(valueWords[0])
+        : unknownOutput(valueWords.map((word) => word.parts?.map((part) => part.text).join("") ?? word).join(" "))
       if (/^env:/iu.test(name)) assign(environment, name.slice(4), value)
       else assign(variables, name, value)
       status = true
@@ -108,10 +110,16 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
     for (const word of words) args.push(await expand(word))
     // The resulting string is data, but interpolation has already executed.
     if (words[0].quoted && !callOperator) { status = true; return }
-    if (args[0].includes("\0")) throw new Error("unresolved PowerShell command")
+    if (args[0].includes(UNKNOWN)) {
+      const text = words.map((word) => word.parts.map((part) => part.text).join("")).join(" ")
+      if (args.some((arg) => arg.includes(UNKNOWN_GIT)) || mayInvokeGit(text)) throw unresolved("the program this command runs")
+      status = null
+      return
+    }
     const name = path.basename(args[0]).replace(/\.exe$/iu, "").toLowerCase()
     if (name === "exit") { terminated = true; return }
-    if (["cd", "chdir", "sl", "set-location"].includes(name)) {
+    if (["popd", "pop-location"].includes(name)) { directory = UNKNOWN; variables.pwd = UNKNOWN; status = null; return }
+    if (["cd", "chdir", "sl", "set-location", "pushd", "push-location"].includes(name)) {
       const positional = []
       for (let i = 1; i < args.length; i++) {
         const arg = args[i]
@@ -120,16 +128,23 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, l
         positional.push(arg)
       }
       const target = positional[0] ?? variables.home
-      if (target?.includes("\0")) throw new Error("unresolved PowerShell directory")
       if (!target) { status = false; return }
       const dir = physicalDirectory(directory, target.replace(/^~(?=$|[/\\])/u, variables.home ?? "~"))
       if (!dir) { status = false; return }
-      directory = dir; variables.pwd = dir; status = true
+      directory = dir; variables.pwd = dir; status = dir === UNKNOWN ? null : true
       return
+    }
+    if (["iex", "invoke-expression", "."].includes(name) && args.slice(1).some((arg) => arg.includes(UNKNOWN))) {
+      throw unresolved(name === "." ? "the file this command dot-sources" : "a script this command evaluates")
     }
     if (["pwsh", "powershell", "bash", "sh"].includes(name)) {
       const at = args.findIndex((arg) => /^-(?:command|c)$/iu.test(arg))
-      if (at > 0 && args[at + 1] !== undefined) await inspectShell({ command: args[at + 1], cwd: directory, env: environment, visit, depth: depth + 1, powershell: name === "pwsh" || name === "powershell" })
+      if (at > 0 && args[at + 1] !== undefined) {
+        if (args[at + 1].includes(UNKNOWN)) throw unresolved("a script this command evaluates")
+        await inspectShell({ command: args[at + 1], cwd: directory, env: environment, visit, depth: depth + 1, powershell: name === "pwsh" || name === "powershell" })
+      }
+    } else if (name === "iex" || name === "invoke-expression") {
+      await inspectPowerShell({ command: args.slice(1).join(" "), cwd: directory, env: environment, visit, depth: depth + 1, locals: variables })
     } else await visit({ name, args: args.slice(1), cwd: directory, env: environment })
     status = ["echo", "write-host", "write-output"].includes(name) ? true : null
   }

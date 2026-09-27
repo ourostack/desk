@@ -22,7 +22,7 @@ For the on-demand design rationale behind the V2 foundation, layered toolshop, c
 
 ## Activation
 
-Desk-bound Git checkouts receive a local protection marker. Claude and Copilot shell hooks redirect the named destructive or ref-changing Git operations to an owned worktree, for parent agents and subagents alike; direct human terminal commands remain unaffected. See [Protected checkouts](docs/protected-checkouts.md) for the command list, target resolution, marker scope and shell boundary.
+Desk-bound Git checkouts receive a local protection marker. Claude and Copilot shell hooks keep a protected checkout's HEAD on its state branch and keep other sessions' work in place, for parent agents and subagents alike: committing, pulling and pushing the state branch pass, while leaving the branch, discarding work or rewriting pushed history is redirected to an owned worktree. Direct human terminal commands remain unaffected. See [Protected checkouts](docs/protected-checkouts.md) for the command table, target resolution, marker scope and shell boundary.
 
 ### Under Copilot CLI
 

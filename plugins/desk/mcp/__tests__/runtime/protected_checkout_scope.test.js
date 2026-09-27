@@ -1,0 +1,339 @@
+// A3b: the protected-checkout guard keeps HEAD on the state branch and keeps other sessions'
+// work, but never blocks the desk's own write protocol (add, commit, pull, push on main), and
+// fails closed on an unresolvable command only when that command could reach Git.
+import { test } from "node:test"
+import { strict as assert } from "node:assert"
+import { execFileSync, spawnSync } from "node:child_process"
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
+import { guardShellCommand, protectCheckout, protectedCheckoutHook } from "../../src/runtime/protected-checkout.js"
+import { classifyGit, MESSAGES } from "../../src/runtime/git-guard-policy.js"
+import { hasOption, parseGitOptions, SPECS } from "../../src/runtime/git-guard-options.js"
+import { mayInvokeGit } from "../../src/runtime/guard-unknowns.js"
+import { existingDirectory, mktempPath, physicalDirectory } from "../../src/runtime/shell-paths.js"
+
+const plugin = fileURLToPath(new URL("../../../", import.meta.url))
+const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
+const q = (text) => `'${text.replaceAll("'", "'\\''")}'`
+const psq = (text) => `'${text.replaceAll("'", "''")}'`
+const pwsh = !spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]).error
+
+// A bare origin, a protected desk clone on main whose state branch is recorded, and an ordinary clone.
+function desk(t) {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-scope-")))
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" }
+  for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_(?:COUNT|KEY_|VALUE_))/u.test(key)) delete env[key]
+  const git = (dir, ...args) => execFileSync("git", ["-C", dir, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+  const origin = path.join(root, "origin.git"), shared = path.join(root, "desk"), own = path.join(root, "own")
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env })
+  execFileSync("git", ["init", "-q", "-b", "main", shared], { env })
+  writeFileSync(path.join(shared, "file.txt"), "base\n")
+  git(shared, "add", "file.txt")
+  git(shared, "commit", "-qm", "first")
+  git(shared, "branch", "topic")
+  writeFileSync(path.join(shared, "file.txt"), "second\n")
+  git(shared, "commit", "-qam", "second")
+  git(shared, "tag", "v1")
+  git(shared, "remote", "add", "origin", origin)
+  git(shared, "push", "-q", "-u", "origin", "main")
+  execFileSync("git", ["clone", "-q", origin, own], { env })
+  return {
+    root, origin, shared, own, env, git,
+    guard: (command, extra = {}) => guardShellCommand({ command, cwd: own, env, ...extra }),
+  }
+}
+
+// Each Git argument list is checked in three spellings that target the protected checkout.
+function forms(f, args) {
+  return [
+    [`cd ${q(f.shared)} && git ${args}`, {}],
+    [`git -C ${q(f.shared)} ${args}`, {}],
+    [`Set-Location ${psq(f.shared)}; git ${args}`, { powershell: true }],
+  ]
+}
+
+async function expectTable(f, rows) {
+  for (const [args, expected] of rows) {
+    for (const [command, extra] of forms(f, args)) {
+      const result = await f.guard(command, extra)
+      const message = `${extra.powershell ? "PowerShell" : "Bash"}: ${command} -> ${result.reason ?? "allowed"}`
+      if (expected === false) assert.equal(result.deny, false, message)
+      else assert.equal(result.reason, `Desk protected checkout ${f.shared}: ${expected}`, message)
+    }
+    // Unprotected checkouts are never affected.
+    assert.equal((await f.guard(`git ${args}`)).deny, false, `unprotected: ${args}`)
+  }
+}
+
+test("A3b: the desk write protocol and read-only Git pass in a protected checkout on its state branch", async (t) => {
+  const f = desk(t)
+  await protectCheckout({ root: f.shared, stateBranch: "main" })
+  assert.equal(f.git(f.shared, "config", "--includes", "--get", "desk.stateBranch"), "main")
+  await expectTable(f, [
+    "status", "status --short", "log -1", "diff", "diff --cached", "show HEAD", "fetch", "fetch origin", "rev-parse HEAD",
+    "ls-files", "branch", "branch -a", "branch --list", "branch -vv", "remote -v", "config --get user.name", "tag v2",
+    "add file.txt", "add -A", "rm --cached file.txt", "mv file.txt moved.txt", "commit -m note", "commit -am note",
+    "commit --allow-empty -m 'checkpoint'", "cherry-pick topic", "revert --no-edit HEAD",
+    "push", "push origin", "push origin main", "push -u origin main", "push origin HEAD", "push origin @", "push origin HEAD:main",
+    "push origin main:refs/heads/main", "push origin v1", "push origin refs/tags/v1", "push origin tag v1", "push --tags",
+    "push --follow-tags origin main", "push --no-force origin main",
+    "pull", "pull --rebase", "pull --ff-only", "pull -r", "pull --no-rebase", "pull origin", "pull origin main",
+    "pull --rebase origin main", "pull origin refs/heads/main", "pull origin +main",
+    "merge --ff-only origin/main", "merge --ff-only topic", "merge --no-ff --ff-only topic", "merge --abort", "merge --continue", "merge --quit",
+    "rebase", "rebase origin/main", "rebase '@{u}'", "rebase --keep-base origin/main", "rebase -i origin/main", "rebase origin/main main",
+    "rebase --continue", "rebase --abort", "rebase --skip",
+    "worktree add --detach ../wt HEAD", "worktree add -b feature ../wt2", "worktree add -B feature ../wt3", "worktree list",
+    "worktree lock ../wt", "worktree prune --dry-run", "stash list", "stash show",
+    "checkout", "checkout main", "switch main", "checkout -- file.txt", "checkout .", "checkout missing-path", "restore file.txt",
+    "restore --worktree file.txt", "restore --source=HEAD --no-source file.txt",
+    "reset", "reset HEAD", "reset -- file.txt", "reset HEAD file.txt", "reset HEAD~1 file.txt", "reset HEAD~1 -- file.txt",
+    "reset --soft HEAD", "reset --hard --mixed", "reset -p", "reset missing-path", "reset --pathspec-from-file=list",
+    "branch newbranch", "branch -d topic", "branch -D topic", "branch -f topic HEAD", "branch -m topic renamed", "branch -m",
+    "branch -c copy", "branch -C topic copy", "branch -u origin/main", "branch -r -d origin/main",
+    "bisect log", "merge -h", "clean -h", "stash --help", "--version", "help",
+  ].map((args) => [args, false]))
+})
+
+test("A3b: every operation that moves HEAD, rewinds the branch or discards others' work is denied with its reason", async (t) => {
+  const f = desk(t)
+  await protectCheckout({ root: f.shared, stateBranch: "main" })
+  await expectTable(f, [
+    ["checkout topic", MESSAGES.leave], ["checkout v1", MESSAGES.leave], ["checkout HEAD~1", MESSAGES.leave],
+    ["checkout --detach", MESSAGES.leave], ["checkout -b new", MESSAGES.leave], ["checkout -B main", MESSAGES.leave],
+    ["checkout --orphan new", MESSAGES.leave], ["checkout -", MESSAGES.leave], ["checkout origin/main", MESSAGES.leave],
+    ["checkout HEAD -- file.txt", MESSAGES.restore], ["checkout topic file.txt", MESSAGES.restore],
+    ["checkout --pathspec-from-file=list HEAD", MESSAGES.restore], ["checkout -f", MESSAGES.discard], ["checkout -f main", MESSAGES.discard],
+    ["switch topic", MESSAGES.leave], ["switch -c new", MESSAGES.leave], ["switch -C main", MESSAGES.leave], ["switch --detach HEAD", MESSAGES.leave],
+    ["switch -", MESSAGES.leave], ["switch --orphan new", MESSAGES.leave], ["switch -f main", MESSAGES.discard],
+    ["switch --discard-changes main", MESSAGES.discard],
+    ["reset --hard", MESSAGES.discard], ["reset --hard HEAD", MESSAGES.discard], ["reset --merge", MESSAGES.discard],
+    ["reset --keep HEAD", MESSAGES.discard], ["reset --soft --hard", MESSAGES.discard], ["reset --har", MESSAGES.discard],
+    ["reset HEAD~1", MESSAGES.rewind], ["reset --soft HEAD~1", MESSAGES.rewind], ["reset topic", MESSAGES.rewind], ["reset HEAD~1 --", MESSAGES.rewind],
+    ["restore --source HEAD file.txt", MESSAGES.restore], ["restore -s HEAD~1 file.txt", MESSAGES.restore],
+    ["restore --staged file.txt", MESSAGES.restore], ["restore -S file.txt", MESSAGES.restore], ["restore --sta file.txt", MESSAGES.restore],
+    ["clean -n", MESSAGES.clean], ["clean -fd", MESSAGES.clean], ["clean -fdx", MESSAGES.clean],
+    ["stash", MESSAGES.stash], ["stash push", MESSAGES.stash], ["stash -u", MESSAGES.stash], ["stash pop", MESSAGES.stash],
+    ["stash apply", MESSAGES.stash], ["stash drop", MESSAGES.stash], ["stash clear", MESSAGES.stash], ["stash save note", MESSAGES.stash],
+    ["branch -f main HEAD~1", MESSAGES.branch], ["branch --force refs/heads/main", MESSAGES.branch], ["branch -D main", MESSAGES.branch],
+    ["branch -d main", MESSAGES.branch], ["branch --delete main", MESSAGES.branch], ["branch -m renamed", MESSAGES.branch],
+    ["branch -M main other", MESSAGES.branch], ["branch -M topic main", MESSAGES.branch], ["branch -C topic main", MESSAGES.branch],
+    ["branch -c main", MESSAGES.branch],
+    ["rebase topic", MESSAGES.rebase], ["rebase HEAD~1", MESSAGES.rebase], ["rebase --onto topic main", MESSAGES.rebase],
+    ["rebase --root", MESSAGES.rebase], ["rebase -x true", MESSAGES.rebase], ["rebase --exec=true", MESSAGES.rebase],
+    ["rebase --quit", MESSAGES.rebase], ["rebase --autostash", MESSAGES.autostash], ["rebase origin/main topic", MESSAGES.leave],
+    ["pull origin topic", MESSAGES.pull], ["pull upstream main", MESSAGES.pull], ["pull origin main:main", MESSAGES.pull],
+    ["pull --autostash", MESSAGES.autostash], ["pull --rebase --autost", MESSAGES.autostash],
+    ["merge topic", MESSAGES.merge], ["merge origin/main", MESSAGES.merge], ["merge --no-ff origin/main", MESSAGES.merge],
+    ["merge --ff-only --no-ff topic", MESSAGES.merge], ["merge --ff-only --autostash topic", MESSAGES.autostash],
+    ["push --force", MESSAGES.pushForce], ["push -f", MESSAGES.pushForce], ["push --force-w", MESSAGES.pushForce],
+    ["push --force-with-lease", MESSAGES.pushForce], ["push --force-with-lease=main", MESSAGES.pushForce],
+    ["push --force-if-includes", MESSAGES.pushForce], ["push --mirror", MESSAGES.pushForce], ["push --delete origin topic", MESSAGES.pushForce],
+    ["push -d origin topic", MESSAGES.pushForce], ["push --prune origin", MESSAGES.pushForce], ["push origin +main", MESSAGES.pushForce],
+    ["push origin :topic", MESSAGES.pushForce], ["push origin :", MESSAGES.pushTarget], ["push -uf origin main", MESSAGES.pushForce],
+    ["push --all", MESSAGES.pushTarget], ["push --branches", MESSAGES.pushTarget], ["push origin topic", MESSAGES.pushTarget],
+    ["push origin HEAD:topic", MESSAGES.pushTarget], ["push origin main:topic", MESSAGES.pushTarget],
+    ["push origin 'refs/heads/*:refs/heads/*'", MESSAGES.pushTarget],
+    ["commit --amend -m note", MESSAGES.amend], ["commit --amend --no-edit", MESSAGES.amend],
+    ["worktree prune", MESSAGES.prune], ["worktree add -B main ../wt3", MESSAGES.branch],
+    ["bisect start", MESSAGES.leave], ["bisect reset", MESSAGES.leave],
+  ])
+})
+
+test("A3b: pull, rebase and amend depend on the state branch and on what is already pushed", async (t) => {
+  const f = desk(t)
+  await protectCheckout({ root: f.shared, stateBranch: "main" })
+  const at = (args) => f.guard(`git -C ${q(f.shared)} ${args}`)
+  // An unpushed commit may be amended; a pushed one may not.
+  f.git(f.shared, "commit", "-q", "--allow-empty", "-m", "local")
+  assert.equal((await at("commit --amend -m local")).deny, false)
+  f.git(f.shared, "reset", "-q", "--hard", "origin/main")
+  assert.equal((await at("commit --amend -m pushed")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.amend}`)
+  // Off the state branch, pull and rebase are denied, but returning to the state branch is not.
+  f.git(f.shared, "switch", "-q", "topic")
+  for (const [args, reason] of [["pull", MESSAGES.pullBranch], ["pull --rebase", MESSAGES.pullBranch], ["rebase", MESSAGES.rebaseBranch], ["checkout topic", null], ["switch main", null], ["checkout main", null], ["push origin topic", null], ["branch -f topic HEAD", MESSAGES.branch]]) {
+    const result = await at(args)
+    assert.equal(result.reason, reason === null ? undefined : `Desk protected checkout ${f.shared}: ${reason}`, args)
+  }
+  // An operator-set marker without a recorded state branch treats the current branch as the state branch.
+  await protectCheckout({ root: f.shared })
+  assert.equal(spawnSync("git", ["-C", f.shared, "config", "--includes", "--get", "desk.stateBranch"], { env: f.env }).status, 1)
+  for (const args of ["pull", "rebase"]) assert.equal((await at(args)).deny, false, args)
+  assert.equal((await at("rebase origin/main")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.rebase}`, "topic has no upstream")
+  assert.equal((await at("pull origin topic")).reason, `Desk protected checkout ${f.shared}: ${MESSAGES.pull}`, "topic has no upstream")
+  // A detached protected checkout pulls, rebases and pushes nothing by name.
+  f.git(f.shared, "switch", "-q", "--detach", "HEAD")
+  for (const [args, reason] of [["pull", MESSAGES.pullBranch], ["rebase", MESSAGES.rebaseBranch], ["push origin HEAD:main", MESSAGES.pushTarget], ["push origin HEAD", null], ["checkout HEAD", MESSAGES.leave]]) {
+    const result = await at(args)
+    assert.equal(result.reason, reason === null ? undefined : `Desk protected checkout ${f.shared}: ${reason}`, args)
+  }
+})
+
+test("A3b: the reported desk commands pass the registered hooks and then run for real on main", async (t) => {
+  const f = desk(t)
+  await protectCheckout({ root: f.shared, stateBranch: "main" })
+  // Another session pushes first, so pull --rebase has work to do.
+  writeFileSync(path.join(f.own, "other.txt"), "other session\n")
+  f.git(f.own, "add", "other.txt")
+  f.git(f.own, "commit", "-qm", "other session")
+  f.git(f.own, "push", "-q", "origin", "main")
+  const bash = [
+    `git add file.txt && git commit -qm 'desk state' && git pull -q --rebase && git push -q`,
+    `git add -A; git commit -qm "stamp $(date +%s)"; git pull -q --rebase origin main; git push -q origin main`,
+  ]
+  const powershell = [`git add file.txt; git commit -qm 'desk state (pwsh)'; git pull -q --rebase; git push -q`]
+  const run = (command, shell) => {
+    for (const host of ["claude", "copilot"]) {
+      for (const child of [false, true]) {
+        const tool = shell === "pwsh" ? (host === "claude" ? "PowerShell" : "powershell") : (host === "claude" ? "Bash" : "bash")
+        const input = host === "claude" ? { tool_name: tool, tool_input: { command }, cwd: f.shared, agent_id: child ? "child" : undefined }
+          : { toolName: tool, toolArgs: { command }, cwd: f.shared, agentId: child ? "child" : undefined }
+        const result = spawnSync(process.execPath, [hook, host], { cwd: f.shared, env: f.env, input: JSON.stringify(input), encoding: "utf8" })
+        assert.equal(result.status, 0, result.stderr)
+        assert.deepEqual(JSON.parse(result.stdout), {}, `${host}: ${command}`)
+      }
+    }
+    const args = shell === "pwsh" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command] : ["--noprofile", "--norc", "-c", command]
+    const actual = spawnSync(shell, args, { cwd: f.shared, env: f.env, encoding: "utf8" })
+    assert.equal(actual.status, 0, actual.stderr)
+    assert.equal(f.git(f.shared, "symbolic-ref", "--short", "HEAD"), "main")
+    assert.equal(f.git(f.shared, "rev-parse", "HEAD"), f.git(f.origin, "rev-parse", "main"))
+  }
+  for (const [index, command] of bash.entries()) {
+    writeFileSync(path.join(f.shared, "file.txt"), `bash ${index}\n`)
+    run(command, "bash")
+  }
+  if (pwsh) {
+    writeFileSync(path.join(f.shared, "file.txt"), "pwsh\n")
+    run(powershell[0], "pwsh")
+  } else t.diagnostic("native PowerShell unavailable; the PowerShell hook payloads were still inspected below")
+  for (const command of powershell) assert.deepEqual(await protectedCheckoutHook({ tool_name: "PowerShell", tool_input: { command }, cwd: f.shared }, "claude"), {})
+  assert.match(readFileSync(path.join(f.shared, "other.txt"), "utf8"), /other session/u)
+})
+
+test("A3b: commands with no path to Git pass even when a value is unknown", async (t) => {
+  const f = desk(t)
+  await protectCheckout({ root: f.shared, stateBranch: "main" })
+  const env = { ...f.env, TMPDIR: f.root }
+  const allow = [
+    'echo "$(date)"', "echo `date`", 'x=$(date); echo "$x"', 'wt=$(mktemp -d); cd "$wt" && node x.js', 'cd "$wt" && node x.js',
+    "jq . a.json | grep x", '"$(npm bin)/tsc" --build', 'cd "$(pick)" && git commit -m x', 'cd "$(pick)" && git status',
+    'cd "$(pick)"; git push origin HEAD', 'git log --since="$(date)"', 'git commit -m "$(cat msg)"', 'D=$(date +%F); git commit -m "$D"',
+    'wt=$(mktemp -d) && git worktree add --detach "$wt" HEAD && cd "$wt" && git switch -c fix && git reset --hard',
+    'wt="$(mktemp -d -t desk)/"; cd "$wt"; git checkout -b x', 'pushd "$(pick)" && npm test && popd', "popd; git status",
+    "pushd; ls", "echo 'unterminated", "(echo", "case x in x) echo;",
+    'source ~/.nvm/nvm.sh && nvm use 22', '. venv/bin/activate', 'bash -c "echo ok"', "eval 'echo ok'",
+    "for f in a b c d e f g h i j k l m n o; do [ -x $f ] && $f --version; git status | grep x; done",
+  ]
+  for (const command of allow) {
+    const result = await f.guard(command, { cwd: f.shared, env })
+    assert.equal(result.deny, false, `${command} -> ${result.reason}`)
+  }
+  const unresolved = /^Desk could not resolve .+, and it could run Git in a protected checkout\. Resolve the value in a separate command first, or work in your own worktree: git worktree add --detach "\$\(mktemp -d\)" <ref>$/u
+  const deny = [
+    ['cd "$(pick)" && git checkout main', /which checkout/u], ['cd "$(pick)"; git stash', /which checkout/u],
+    ['git -C "$(pick)" reset --hard', /which checkout/u], ['GIT_DIR="$(pick)" git reset --hard', /could not inspect a Git command.*unresolved Git location/u],
+    ['git --git-dir="$(pick)" reset --hard', /which checkout/u], ['popd; git checkout main', /which checkout/u], ["pushd +1 && git stash", /which checkout/u],
+    ['cd "$(pick)" && git frobnicate', /which checkout/u],
+    ["$(command -v git) checkout main", /the program/u], ["g=$(which git); $g status", /the program/u], ['"$(pick)" git status', /the program/u],
+    ["`which git` stash", /the program/u], ['command "$(which git)" stash', /the program/u],
+    ['eval "$(cat script)"', /evaluates/u], ['bash -c "$(cat script)"', /evaluates/u], ['source "$(pick)"', /sources/u], ['. "$(pick)"', /sources/u],
+    ['git "$(pick)" main', /which Git command/u], ['git checkout "$(cat branch)"', /a Git revision/u], ['git branch -D "$(cat b)"', /a branch name/u],
+    ['git push origin "$(cat r)"', /a push refspec/u], ['git rebase "$(cat base)"', /a Git revision/u], ['git reset "$(cat base)"', /a Git revision/u],
+    ['git worktree remove --force "$(pick)"', /which worktree/u],
+    [`wt=$(mktemp -d -p ${q(f.shared)}); cd "$wt"; git checkout topic`, /^Desk protected checkout /u],
+    [`TMPDIR=${q(f.shared)}; wt=$(mktemp -d); cd "$wt" && git stash`, /^Desk protected checkout /u],
+    [`wt=$(mktemp -d ${q(f.shared)}/x.XXXX); cd "$wt" && git stash`, /^Desk protected checkout /u],
+    ["git status 'unterminated", /could not inspect this shell command \(unterminated shell quote\)/u],
+  ]
+  for (const [command, reason] of deny) {
+    const result = await f.guard(command, { cwd: f.shared, env })
+    assert.equal(result.deny, true, command)
+    assert.match(result.reason, reason, command)
+    if (reason.source !== "^Desk protected checkout " && !reason.source.startsWith("could not inspect")) assert.match(result.reason, unresolved, command)
+  }
+})
+
+test("A3b: PowerShell unknown values follow the same rule", async (t) => {
+  const f = desk(t)
+  await protectCheckout({ root: f.shared, stateBranch: "main" })
+  const allow = [
+    '$d = Get-Date; Write-Output "$d"', 'Write-Output "$(Get-Date)"', "$wt = New-Item -ItemType Directory x; Set-Location $wt; node x.js",
+    "$wt = New-Item -ItemType Directory x; Set-Location $wt; git commit -m x", "Pop-Location; git status", "popd; Write-Output ok",
+    "Invoke-Expression 'Write-Output ok'", "iex 'git status'", `pushd ${psq(f.own)}; git checkout topic`, "(opaque)",
+    "$x = 1 + 2; & $x", "& $(Get-Date)",
+  ]
+  for (const command of allow) {
+    const result = await f.guard(command, { cwd: f.shared, powershell: true })
+    assert.equal(result.deny, false, `${command} -> ${result.reason}`)
+  }
+  for (const [command, reason] of [
+    ["$wt = New-Item -ItemType Directory x; Set-Location $wt; git checkout main", /which checkout/u],
+    ["Pop-Location; git stash", /which checkout/u], [`pushd ${psq(f.shared)}; git stash`, /^Desk protected checkout /u],
+    ["$g = (Get-Command git).Source; & $g checkout main", /the program/u], ["& $(Get-Command git) status", /the program/u],
+    ["& (Get-Command git) checkout main", /could not inspect this shell command/u],
+    [`iex "git -C ${psq(f.shared)} checkout topic"`, /^Desk protected checkout /u], ["$script = Get-Content x; iex $script", /evaluates/u],
+    ["Invoke-Expression $(Get-Content x)", /evaluates/u], [". $(Get-Item x)", /dot-sources/u], ["$script = Get-Content x; pwsh -Command $script", /evaluates/u],
+    ["$script = Get-Content x; bash -c $script", /evaluates/u],
+  ]) {
+    const result = await f.guard(command, { cwd: f.shared, powershell: true })
+    assert.match(result.reason ?? "allowed", reason, command)
+  }
+})
+
+test("A3b: the Git-reach rule, option parser and mktemp model", () => {
+  for (const text of ["git status", "/usr/bin/git log", "g''it checkout", "g\\it", "Git.exe status", "git-lfs pull", "eval x", "source x", "x; . y", "iex $x", "Invoke-Expression $x"]) {
+    assert.equal(mayInvokeGit(text), true, text)
+  }
+  for (const text of ["echo $(date)", "cat .git/config", "digit", "mygit", "--source", "find . -name x", "ls ./x", "GIT_DIR=x node y"]) {
+    assert.equal(mayInvokeGit(text), false, text)
+  }
+  const parse = (operation, args) => parseGitOptions(SPECS[operation], args)
+  assert.deepEqual(parse("push", ["--end-of-options", "--force"]).operands, ["--force"])
+  assert.equal(hasOption(parse("push", ["--force=yes"]), "force"), false, "a flag given a value is rejected by Git")
+  assert.equal(hasOption(parse("push", ["--no-force=x"]), "force"), false)
+  assert.equal(hasOption(parse("push", ["--f"]), "force"), false, "ambiguous prefix")
+  assert.equal(hasOption(parse("push", ["--repo"]), "repo"), false, "missing value")
+  assert.equal(hasOption(parse("push", ["-o"]), "push-option"), false, "missing short value")
+  assert.equal(parse("push", ["-ofoo", "-f"]).set.get("push-option").value, "foo")
+  assert.equal(hasOption(parse("push", ["-Zf"]), "force"), true, "unknown short letters are skipped")
+  assert.equal(parse("commit", ["-S", "-m", "x"]).set.get("gpg-sign").value, true)
+  assert.equal(parse("commit", ["--gpg-sign=key"]).set.get("gpg-sign").value, "key")
+  assert.equal(parse("branch", ["--contains", "-f"]).set.get("contains").value, true)
+  assert.equal(classifyGit("status", []), null)
+  assert.equal(classifyGit("merge", ["-h"]), null)
+  assert.notEqual(classifyGit("merge", ["--", "-h"]), null)
+  assert.equal(classifyGit("worktree", ["remove", "--force"]), null, "no worktree named")
+  assert.equal(classifyGit("worktree", ["repair"]), null)
+  const cwd = realpathSync(tmpdir())
+  assert.equal(mktempPath([], cwd, {}, 1), path.join(realpathSync("/tmp"), ".desk-guard-mktemp-1"))
+  assert.equal(mktempPath(["-d", "-t", "x"], cwd, { TMPDIR: cwd }, 2), path.join(cwd, ".desk-guard-mktemp-2"))
+  assert.equal(mktempPath(["-d", "x.XXXX"], cwd, { TMPDIR: "/tmp" }, 3), path.join(cwd, ".desk-guard-mktemp-3"), "a bare template is created in the current directory")
+  assert.equal(mktempPath(["-p"], cwd, { TMPDIR: cwd }, 4), path.join(cwd, ".desk-guard-mktemp-4"))
+  assert.equal(mktempPath(["--tmpdir=/definitely-missing"], cwd, {}, 5), null)
+  assert.ok(mktempPath(["-p", "rel"], "\0", {}, 6).includes("\0"))
+  const pending = mktempPath([], cwd, { TMPDIR: cwd }, 7)
+  assert.equal(physicalDirectory(pending, "."), pending)
+  assert.equal(physicalDirectory(pending, "sub"), null)
+  assert.equal(physicalDirectory(path.join(cwd, "definitely-missing"), ".desk-guard-mktemp-1"), null)
+  assert.equal(existingDirectory(pending), cwd)
+  assert.equal(existingDirectory(cwd), cwd)
+})
+
+test("A3b: Desk admission records the host's state branch beside the protection marker", async (t) => {
+  const { createDeskSession } = await import("../../src/runtime/desk-session.js")
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-admission-")))
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  const calls = []
+  for (const activation of [{ stateBranch: "main" }, undefined]) {
+    const session = createDeskSession({
+      args: {}, deskStateDir: path.join(root, "state"), stderr: { write() {} },
+      protect: async (request) => { calls.push(request); return { protected: true } },
+      resolveInputs: async () => ({ root: { root }, activation, activationError: { message: "fixture activation fails" } }),
+    })
+    try { await session.admission.refresh({ force: true }) } finally { await session.dispose() }
+  }
+  assert.deepEqual(calls, [{ root, stateBranch: "main" }, { root, stateBranch: null }])
+})

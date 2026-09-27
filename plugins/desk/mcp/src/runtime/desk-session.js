@@ -199,7 +199,7 @@ export function createDeskSession(deps) {
     // The root's own start record begins with the state it is in now (admitting, on the first attempt), not only with the next change.
     if (newRoot) recordLastStart(admission.snapshot())
     const deskRoot = inputs.root.root
-    await protect({ root: deskRoot })
+    await protect({ root: deskRoot, stateBranch: inputs.activation?.stateBranch ?? null })
     if (inputs.activationError) return activationOutcome(inputs.activationError)
     const activation = inputs.activation
     const policyKey = JSON.stringify(activation.readinessPolicy)

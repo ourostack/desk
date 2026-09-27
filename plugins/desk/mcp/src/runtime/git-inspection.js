@@ -40,7 +40,7 @@ export function readInspectionGit(cwd, args, modeled, { signal } = {}) {
     let outcome
     // Abort can call the callback before the process and pipes are closed.
     // Settle only after close; this exact child never runs repository hooks.
-    const child = execFile(trustedGit, args, { cwd, env, signal, killSignal: "SIGKILL", encoding: "utf8", timeout: 2000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+    const child = execFile(trustedGit, args, { cwd, env, signal, killSignal: "SIGKILL", encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       outcome = { error, stdout, stderr }
     })
     child.once("close", () => {

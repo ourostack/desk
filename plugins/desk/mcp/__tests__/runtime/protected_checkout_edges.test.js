@@ -20,7 +20,7 @@ function fixture(t) {
 test("Git option operands, default environment, empty -C and bare control flags keep the actual target", async (t) => {
   const { root, guard } = fixture(t)
   const denies = [
-    "git -C '' checkout HEAD", "git -- checkout HEAD", "git -cdesk.protected=false reset",
+    "git -C '' checkout HEAD", "git -- checkout HEAD", "git -cdesk.protected=false reset --hard",
     `git --git-dir "${root}/.git" --work-tree "${root}" --namespace test checkout HEAD`,
     "git --namespace=test checkout HEAD", "git --config-env=desk.protected=X checkout HEAD",
     "git --no-optional-locks checkout HEAD", "git -c checkout", "git worktree remove -f",
@@ -37,7 +37,7 @@ test("Git option operands, default environment, empty -C and bare control flags 
   addWorktree(root, removed)
   assert.equal((await guard("git worktree remove -f removable")).deny, true)
   assert.equal((await guard("git worktree remove -f does-not-exist")).deny, false)
-  await assert.rejects(guard(`git worktree remove -f ${"a".repeat(1000)}`), /ENAMETOOLONG/u)
+  assert.match((await guard(`git worktree remove -f ${"a".repeat(1000)}`)).reason, /could not inspect a Git command.*ENAMETOOLONG/u)
 })
 
 function addWorktree(root, destination) {
@@ -47,8 +47,9 @@ function addWorktree(root, destination) {
 test("invalid saved policy and marker failures produce explicit errors independent of candidate PATH", async (t) => {
   const { guard, git, root } = fixture(t)
   git("config", "desk.protected", "not-a-boolean")
-  await assert.rejects(guard("git checkout HEAD"), /cannot read checkout protection/u)
-  await assert.rejects(guard("git checkout HEAD", { env: { PATH: "" } }), /cannot read checkout protection/u)
+  assert.match((await guard("git checkout HEAD")).reason, /cannot read checkout protection/u)
+  assert.match((await guard("git checkout HEAD", { env: { PATH: "" } })).reason, /cannot read checkout protection/u)
+  assert.equal((await guard("git status")).deny, false, "an allowed operation needs no policy read")
   await assert.rejects(protectCheckout({ root, git: async ({ args }) => args[0] === "rev-parse"
     ? { ok: true, stdout: path.join(root, ".git") }
     : { ok: false, stderr: "configuration is read-only" } }), /could not protect checkout.*configuration is read-only/u)
@@ -90,10 +91,12 @@ test("literal shell forms exercise expansion without running any interpolated pr
     "for ref in; do git checkout HEAD; done", "false && git checkout HEAD",
   ]
   for (const command of allow) assert.equal((await guard(command, { env })).deny, false, command)
-  await assert.rejects(guard('cd "$(date)" && git checkout HEAD', { env }), /unresolved shell directory/u)
+  assert.match((await guard('cd "$(date)" && git checkout HEAD', { env })).reason, /could not resolve which checkout/u)
+  assert.equal((await guard('cd "$(date)" && git status', { env })).deny, false)
   assert.equal((await guard("cd && git checkout HEAD", { env: {} })).deny, false)
   assert.equal((await guard("cd - && git checkout HEAD", { env: { OLDPWD: "" } })).deny, false)
-  await assert.rejects(guard(`cd ${"a".repeat(1000)} && git checkout HEAD`), /ENAMETOOLONG/u)
+  assert.match((await guard(`cd ${"a".repeat(1000)} && git checkout HEAD`)).reason, /could not inspect this shell command \(ENAMETOOLONG/u)
+  assert.equal((await guard(`cd ${"a".repeat(1000)} && echo ok`)).deny, false)
 })
 
 test("malformed shell syntax is reported without ever executing text", async () => {
@@ -132,7 +135,8 @@ test("shell wrappers and positional arguments preserve Git's target", async (t) 
     `move() { git -C "$1" checkout HEAD; }; move '${root}'`,
     `git -C "$(printf '%s' '${root}')" checkout HEAD`,
   ]) assert.equal((await guard(command)).deny, true, command)
-  await assert.rejects(guard("again() { again; }; again"), /inspection budget/u)
+  assert.equal((await guard("again() { again; }; again")).deny, false, "over-complex text without Git is allowed")
+  assert.match((await guard("again() { again; git status; }; again")).reason, /inspection budget/u)
 })
 
 test("home expansion respects quoting and inline alias cache keys include alias definitions", async (t) => {
@@ -144,5 +148,5 @@ test("home expansion respects quoting and inline alias cache keys include alias 
   for (const command of ["git -C '~' checkout HEAD", 'git -C "~" checkout HEAD', "cd '~' && git checkout HEAD"]) {
     assert.equal((await guard(command, { env })).deny, false, command)
   }
-  assert.equal((await guard("git -c alias.act=status act; git -c alias.act=checkout act")).deny, true)
+  assert.equal((await guard("git -c alias.act=status act; git -c 'alias.act=checkout HEAD' act")).deny, true)
 })
