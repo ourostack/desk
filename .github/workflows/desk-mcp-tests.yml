@@ -118,8 +118,57 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The instrumented suite runs as parallel shards, each on its own runner so no timing-sensitive test competes with
+  # another shard for CPU. Every shard records raw coverage; the desk-mcp-tests job below merges it and applies the
+  # coverage gate once, over the combined result.
+  desk-mcp-coverage-shards:
+    name: desk MCP tests (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # The split size is strategy.job-total, so adding or removing a shard here is the only change needed. Twelve
+        # shards bring every shard down to about the longest single test file (config/coverage-shards.json).
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: plugins/desk/mcp/package-lock.json
+
+      - name: Install dependencies
+        working-directory: plugins/desk/mcp
+        run: npm ci
+
+      - name: Run desk MCP coverage shard
+        working-directory: plugins/desk/mcp
+        env:
+          DESK_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: npm run test:coverage -- --shard "$SHARD" --output "$RUNNER_TEMP/desk-coverage-shard"
+
+      - name: Retain the shard's raw coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-coverage-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/desk-coverage-shard
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
   desk-mcp-tests:
     name: desk MCP test suite
+    needs: desk-mcp-coverage-shards
     runs-on: ubuntu-latest
     # Public, read-only and credential-free. This job carries no secret, no Microsoft or private Desk record and no
     # model access, so it can publish a relevant-revision request and status but can never mint a scored evaluation.
@@ -145,11 +194,19 @@ jobs:
         working-directory: plugins/desk/mcp
         run: npm ci
 
+      - name: Collect the coverage shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desk-coverage-shard-*
+          path: ${{ runner.temp }}/desk-coverage-shards
+
+      # Admits the combined shards: all of one split, each passed, the same changed files, and together exactly the
+      # test files of one whole-suite run. Then the 100% line, branch, function and statement gate runs once.
       - name: Run desk MCP coverage gate
         working-directory: plugins/desk/mcp
         env:
           DESK_COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: npm run test:coverage
+        run: npm run test:coverage -- --merge "$RUNNER_TEMP/desk-coverage-shards"
 
       - name: Verify committed generated artifacts
         run: node scripts/test-desk-generated-artifacts.cjs
@@ -439,13 +496,25 @@ jobs:
           fetch-depth: 0
 
       - name: Set up the shipped Windows Node ABI
+        id: node
         uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: "npm"
           cache-dependency-path: plugins/desk/mcp/package-lock.json
 
+      # With the coverage suite sharded, `npm ci` on Windows (about two to three and a half minutes) became the
+      # longest step of the whole workflow. The installed tree is restored whole when the Node version and the
+      # committed lock are unchanged, and installed from the lock otherwise.
+      - name: Restore installed test dependencies
+        id: node-modules
+        uses: actions/cache@v4
+        with:
+          path: plugins/desk/mcp/node_modules
+          key: desk-mcp-node-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('plugins/desk/mcp/package-lock.json') }}
+
       - name: Install test dependencies
+        if: steps.node-modules.outputs.cache-hit != 'true'
         working-directory: plugins/desk/mcp
         run: npm ci
 
