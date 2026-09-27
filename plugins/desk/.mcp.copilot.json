@@ -6,7 +6,7 @@
       "args": ["${COPILOT_PLUGIN_ROOT}/mcp/bootstrap.cjs"],
       "env": {}
     },
-    "playwright": {
+    "desk-browser": {
       "type": "stdio",
       "command": "node",
       "args": ["${COPILOT_PLUGIN_ROOT}/mcp/browser.cjs"],

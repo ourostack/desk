@@ -24,7 +24,7 @@ claude --version && node --version && git --version && gh --version
 
 - Claude Code 2.1.277 or later. If older, run `claude update`. The desktop app bundles its own Claude Code; this check is for the `claude` CLI the setup commands use, which can lag behind the app.
 - Node 22 on macOS arm64 or Linux x64, or Node 24 on Windows x64. It does not need to be the default `node`: Desk finds a compatible installed Node on its own. If none is installed, install it yourself (for example `nvm install 22`, or the platform's package manager), and change the default `node` if that helps other tools; involve the operator only for something only they can do, such as a password prompt. Desk ships its native runtime for exactly these platforms; others are unsupported.
-- Google Chrome or Edge for the browser Desk ships. Windows always has Edge. If neither is installed, install one, or run `npx -y @playwright/mcp@latest install-browser chrome`.
+- Google Chrome or Edge for the browser Desk ships. Windows always has Edge. If neither is installed, install one, or run `npx -y @playwright/mcp@latest install-browser chrome`, which installs Google Chrome system-wide and needs an administrator password on macOS and Linux. Desk's first session downloads its browser server from npm once, so the machine must reach the npm registry that time. Desk's browser is signed out; for signed-in pages see `desk:cdp-headed-browser`.
 - `gh auth status` should be healthy so desk discovery can find the operator's desk repository. If it is not, give the repair (`gh auth login`) and continue; local discovery still works.
 
 ### 2. Install the plugins
@@ -93,7 +93,7 @@ Plugins and their MCP servers load when a session starts, so ask the operator to
 - the session runs as `desk:worker`, and the Desk foundation appears at startup;
 - `desk_status` reports the bound desk root and its source;
 - `desk:session-start` runs normally and offers work to resume or start;
-- the `playwright` browser tools that Desk ships are listed (for example `browser_navigate`), and navigating to `https://example.com` returns the page title "Example Domain".
+- the `desk-browser` tools that Desk ships are listed (for example `browser_navigate`), and navigating to `https://example.com` returns the page title "Example Domain".
 
 If any of these fail, `desk_doctor` explains why. Desk never ends setup by being unavailable: with no desk bound it runs in setup mode and routes back to step 5.
 

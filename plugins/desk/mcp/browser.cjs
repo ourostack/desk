@@ -1,9 +1,11 @@
-// Desk's default browser: starts the Playwright MCP server from its npm channel, so every fresh Desk install has a working browser with no setup.
+// Desk's default browser: starts the Playwright MCP server from a copy installed in Desk's per-user state folder, and keeps that copy on the `@playwright/mcp@latest` channel, so every fresh Desk install has a working browser with no setup.
 //
-// - The package follows its channel: `@playwright/mcp@latest`, resolved by npx at each launch. There is no pinned version or commit.
-// - It runs under the same compatible Node that Desk's bootstrap picks, never whatever `node` a host puts first on PATH. It uses the npx that ships next to that Node and puts that Node first on the child's PATH, so the package's own `node` shebang resolves to it too.
-// - The browser is headless, so agents never take the operator's focus, and isolated, so concurrent sessions never fight over one profile. Options passed after the script (the Copilot entry point) go to Playwright MCP after these defaults.
-// - Playwright MCP defaults to Google Chrome. When Chrome is not installed but Edge is (always the case on Windows), it uses Edge. With neither, page tools fail with Playwright's own message until one is installed, for example with `npx -y @playwright/mcp@latest install-browser chrome`.
+// - Session start never waits on the network once a copy is installed. The launcher starts the installed copy at once and then starts a detached refresher, which asks npm for the channel's current release and, when it differs, installs it into a new folder and switches the `current.json` pointer with an atomic rename. The next launch uses the new release, so a session is at most one launch behind the channel. There is no pinned version or commit.
+// - The first launch on a machine installs the copy in the foreground, with a time limit below the host's connection timeout. Every npm call runs with no fetch retries and a short fetch timeout, so an unreachable registry fails in seconds with a message naming the registry, instead of after minutes.
+// - Installs and refreshes run under one lock file, so sessions that start together never race: one installs while the others wait for it or, with a copy already installed, skip the refresh.
+// - It runs under the same compatible Node that Desk's bootstrap picks, never whatever `node` a host puts first on PATH. It uses the npm that ships next to that Node and puts that Node first on the child's PATH.
+// - Desk's own browser is headless, so agents never take the operator's focus, and isolated, so concurrent sessions never fight over one profile. Playwright MCP writes its snapshots and screenshots to an `output` folder in Desk's state folder, never into the session's project. Options passed after the script go to Playwright MCP after these defaults. A caller that connects to an existing browser (`--cdp-endpoint`, `--extension` or `--endpoint`, as the managed-Edge overlay does) gets no headless or isolated defaults.
+// - Playwright MCP defaults to Google Chrome. When Chrome is only in ~/Applications on macOS, where Playwright does not look, the launcher passes its path. When Chrome is not installed but Edge is (always the case on Windows), it uses Edge. With neither, page tools fail with Playwright's own message until one is installed, for example with `npx -y @playwright/mcp@latest install-browser chrome`.
 // - Authenticated or persistent browser contexts are not this file's job: they go through the claims-based browser context broker (desk:cdp-headed-browser).
 //
 // Like bootstrap.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins.
@@ -16,10 +18,31 @@ var os = require("os");
 var path = require("path");
 var bootstrap = require("./bootstrap.cjs");
 
-var PACKAGE = "@playwright/mcp@latest";
+var PACKAGE_NAME = "@playwright/mcp";
+var PACKAGE = PACKAGE_NAME + "@latest";
 var DEFAULT_ARGS = ["--headless", "--isolated"];
+// Options that connect to a browser that already runs; with any of them Desk's headless and isolated defaults do not apply.
+var CONNECT = ["--cdp-endpoint", "--extension", "--endpoint"];
 // Options that already say which browser to drive or connect to; with any of them the launcher adds no browser choice of its own.
-var BROWSER_CHOICE = ["--browser", "--executable-path", "--cdp-endpoint", "--extension", "--endpoint"];
+var BROWSER_CHOICE = ["--browser", "--executable-path"].concat(CONNECT);
+var REFRESH_FLAG = "--desk-browser-refresh";
+// npm without retries and with a short fetch timeout: an unreachable registry fails in seconds, not minutes.
+var NPM_ENV = {
+  npm_config_fetch_retries: "0",
+  npm_config_fetch_timeout: "10000",
+  npm_config_audit: "false",
+  npm_config_fund: "false",
+  npm_config_update_notifier: "false",
+  npm_config_loglevel: "error"
+};
+// The first install must finish before the host gives up on the server (Claude Code waits 30 seconds).
+var FIRST_INSTALL_MS = 25000;
+var REFRESH_MS = 180000;
+var REGISTRY_MS = 5000;
+var WAIT_STEP_MS = 250;
+var LOCK_STALE_MS = 10 * 60 * 1000;
+// Older installs stay this long, so a long-running session never loses the files it started from.
+var KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
 function either(value, fallback) {
   return value === undefined || value === null ? fallback : value;
@@ -41,7 +64,38 @@ function realpath(file) {
   }
 }
 
-// Where each browser is installed by default, per platform. These are the locations Playwright itself checks for the chrome and msedge channels.
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (error) {
+    return null;
+  }
+}
+
+function describe(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// The file-system calls below need Node 14.14 or later, which every supported host runs; on an older host run() reports the failure in one line.
+function mkdirp(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function removeTree(target) {
+  fs.rmSync(target, { recursive: true, force: true });
+}
+
+function hasOption(args, names) {
+  return args.some(function (arg) {
+    return names.some(function (name) {
+      return arg === name || arg.indexOf(name + "=") === 0;
+    });
+  });
+}
+
+// ---- which browser ----
+
+// Where Playwright itself looks for the chrome and msedge channels, per platform.
 function browserPaths(browser, platform, env) {
   if (platform === "win32") {
     var roots = [env.LOCALAPPDATA, env.PROGRAMFILES, env["PROGRAMFILES(X86)"]].filter(Boolean);
@@ -50,37 +104,56 @@ function browserPaths(browser, platform, env) {
       return path.win32.join.apply(path.win32, [root].concat(tail));
     });
   }
-  if (platform === "darwin") {
-    var app = browser === "chrome" ? "Google Chrome" : "Microsoft Edge";
-    var bundle = app + ".app/Contents/MacOS/" + app;
-    return ["/Applications/" + bundle, path.join(either(env.HOME, ""), "Applications", bundle)];
-  }
+  if (platform === "darwin") return ["/Applications/" + macBundle(browser)];
   return browser === "chrome" ? ["/opt/google/chrome/chrome"] : ["/opt/microsoft/msedge/msedge"];
 }
 
-// The browser options to add: none when the caller chose a browser or Chrome is installed, Edge when only Edge is, and none otherwise.
-function browserArgs(args, platform, env, fileExists) {
-  var chosen = args.some(function (arg) {
-    return BROWSER_CHOICE.some(function (option) {
-      return arg === option || arg.indexOf(option + "=") === 0;
-    });
-  });
-  if (chosen || browserPaths("chrome", platform, env).some(fileExists)) return [];
-  return browserPaths("msedge", platform, env).some(fileExists) ? ["--browser", "msedge"] : [];
+function macBundle(browser) {
+  var app = browser === "chrome" ? "Google Chrome" : "Microsoft Edge";
+  return app + ".app/Contents/MacOS/" + app;
 }
 
-// The npx that ships with a Node install: lib/node_modules/npm next to bin/node on macOS and Linux, node_modules\npm beside node.exe on Windows. Both the path as found and its real path are tried, because a version manager or Homebrew may link node from elsewhere.
-function npxCli(node, platform, fileExists) {
-  var candidates = [];
-  [node, realpath(node)].forEach(function (file) {
-    candidates.push(platform === "win32"
-      ? path.win32.join(path.win32.dirname(file), "node_modules", "npm", "bin", "npx-cli.js")
-      : path.join(path.dirname(file), "..", "lib", "node_modules", "npm", "bin", "npx-cli.js"));
-  });
-  for (var index = 0; index < candidates.length; index += 1) {
-    if (fileExists(candidates[index])) return candidates[index];
+// Per-user install locations Playwright does not look in; a browser found only there is passed by path.
+function userBrowserPaths(browser, platform, env) {
+  if (platform !== "darwin" || !env.HOME) return [];
+  return [path.join(env.HOME, "Applications", macBundle(browser))];
+}
+
+function firstExisting(files, fileExists) {
+  for (var index = 0; index < files.length; index += 1) {
+    if (fileExists(files[index])) return files[index];
   }
   return null;
+}
+
+// The browser options to add: none when the caller chose a browser or Chrome is where Playwright looks; Chrome's path when it is only in ~/Applications; Edge when only Edge is installed; none otherwise.
+function browserArgs(args, platform, env, fileExists) {
+  if (hasOption(args, BROWSER_CHOICE)) return [];
+  if (firstExisting(browserPaths("chrome", platform, env), fileExists)) return [];
+  var chrome = firstExisting(userBrowserPaths("chrome", platform, env), fileExists);
+  if (chrome) return ["--executable-path", chrome];
+  if (firstExisting(browserPaths("msedge", platform, env), fileExists)) return ["--browser", "msedge"];
+  var edge = firstExisting(userBrowserPaths("msedge", platform, env), fileExists);
+  return edge ? ["--browser", "msedge", "--executable-path", edge] : [];
+}
+
+// Everything passed to Playwright MCP: Desk's defaults (unless the caller connects to a running browser), the output folder in Desk's state folder (unless the caller chose one), then the caller's own options.
+function launchArgs(args, platform, env, fileExists, root) {
+  var base = hasOption(args, CONNECT) ? [] : DEFAULT_ARGS.concat(browserArgs(args, platform, env, fileExists));
+  var output = hasOption(args, ["--output-dir"]) ? [] : ["--output-dir", path.join(root, "output")];
+  return base.concat(output, args);
+}
+
+// ---- which npm and which Node ----
+
+// The npm that ships with a Node install: lib/node_modules/npm next to bin/node on macOS and Linux, node_modules\npm beside node.exe on Windows. Both the path as found and its real path are tried, because a version manager or Homebrew may link node from elsewhere.
+function npmCli(node, platform, fileExists) {
+  var candidates = [node, realpath(node)].map(function (file) {
+    return platform === "win32"
+      ? path.win32.join(path.win32.dirname(file), "node_modules", "npm", "bin", "npm-cli.js")
+      : path.join(path.dirname(file), "..", "lib", "node_modules", "npm", "bin", "npm-cli.js");
+  });
+  return firstExisting(candidates, fileExists);
 }
 
 // A copy of env with the chosen Node's folder first on PATH, keeping the variable's own spelling (Windows uses Path).
@@ -98,9 +171,279 @@ function withNodeFirst(env, node, platform) {
   return copy;
 }
 
-function describe(error) {
-  return error instanceof Error ? error.message : String(error);
+function npmEnv(env, node, platform) {
+  var copy = withNodeFirst(env, node, platform);
+  Object.keys(NPM_ENV).forEach(function (key) {
+    copy[key] = NPM_ENV[key];
+  });
+  return copy;
 }
+
+// Run npm with the chosen Node; resolves { code, stdout, stderr } and never rejects. A call that outlives its time limit is killed and resolves with code null.
+function npm(tools, args, timeoutMs) {
+  return new Promise(function (resolve) {
+    var out = "";
+    var err = "";
+    var done = false;
+    var timer = null;
+    function finish(code) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ code: code, stdout: out, stderr: err });
+    }
+    var child;
+    try {
+      child = tools.spawn(tools.node, [tools.npmCli].concat(args), { env: tools.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    } catch (error) {
+      err = describe(error);
+      finish(null);
+      return;
+    }
+    timer = setTimeout(function () {
+      err = "npm " + args[0] + " timed out after " + timeoutMs / 1000 + " seconds\n";
+      child.kill("SIGKILL");
+      finish(null);
+    }, timeoutMs);
+    child.stdout.on("data", function (chunk) {
+      out += chunk;
+    });
+    child.stderr.on("data", function (chunk) {
+      err += chunk;
+    });
+    child.on("error", function (error) {
+      err += describe(error) + "\n";
+      finish(null);
+    });
+    child.on("close", function (code) {
+      finish(code);
+    });
+  });
+}
+
+// The useful part of npm's error output: its error code and first message line, without the syscall, errno, stack and log-file lines.
+function npmError(result, what) {
+  var code = null;
+  var detail = null;
+  String(result.stderr).split("\n").forEach(function (raw) {
+    var body = raw.trim().replace(/^npm (error|ERR!)\s*/, "");
+    var match = /^code (\S+)$/.exec(body);
+    if (match) {
+      code = either(code, match[1]);
+      return;
+    }
+    if (!body || /^(syscall|errno) |^at |complete log of this run|^\d+$/.test(body)) return;
+    detail = either(detail, body);
+  });
+  if (detail === null) return code === null ? what + " exited with code " + result.code : code;
+  return code === null ? detail : code + ": " + detail;
+}
+
+function lastLine(text) {
+  var lines = String(text).split("\n").map(function (line) {
+    return line.trim();
+  }).filter(Boolean);
+  return lines.length ? lines[lines.length - 1] : "";
+}
+
+// ---- the installed copy ----
+
+// Desk's state folder for the browser: $DESK_BROWSER_STATE_DIR, else $XDG_STATE_HOME/ouroboros-skills/desk/browser, else ~/.local/state/ouroboros-skills/desk/browser.
+function stateDir(env, homeDir) {
+  if (env.DESK_BROWSER_STATE_DIR) return env.DESK_BROWSER_STATE_DIR;
+  return path.join(either(env.XDG_STATE_HOME, path.join(homeDir, ".local", "state")), "ouroboros-skills", "desk", "browser");
+}
+
+// The install a folder holds: its version, playwright-core version and entry script, or null when it is incomplete.
+function readInstall(root, dir) {
+  var modules = path.join(root, dir, "node_modules");
+  var pkg = readJson(path.join(modules, "@playwright", "mcp", "package.json"));
+  if (!pkg || typeof pkg.version !== "string") return null;
+  var bin = typeof pkg.bin === "string" ? pkg.bin : either(pkg.bin, {})["playwright-mcp"];
+  if (typeof bin !== "string") return null;
+  var cli = path.join(modules, "@playwright", "mcp", bin);
+  if (!exists(cli)) return null;
+  var core = readJson(path.join(modules, "playwright-core", "package.json"));
+  return { version: pkg.version, core: core && typeof core.version === "string" ? core.version : null, cli: cli, dir: path.join(root, dir) };
+}
+
+// The install current.json points at, or null.
+function readInstalled(root) {
+  var pointer = readJson(path.join(root, "current.json"));
+  return pointer && typeof pointer.dir === "string" ? readInstall(root, pointer.dir) : null;
+}
+
+// Replace a file atomically: write a sibling, then rename it over the target.
+function writeAtomic(file, text) {
+  var temp = file + "." + process.pid + "." + Math.random().toString(36).slice(2) + ".tmp";
+  fs.writeFileSync(temp, text);
+  fs.renameSync(temp, file);
+}
+
+// Remove installs other than the ones to keep, once they are older than KEEP_MS.
+function prune(root, keep, clock) {
+  var installs = path.join(root, "installs");
+  fs.readdirSync(installs).forEach(function (entry) {
+    if (keep.indexOf("installs/" + entry) !== -1) return;
+    var dir = path.join(installs, entry);
+    try {
+      if (clock() - fs.statSync(dir).mtime.getTime() > KEEP_MS) removeTree(dir);
+    } catch (error) {
+      // An install that cannot be removed now is tried again at the next refresh.
+    }
+  });
+}
+
+// Install the channel's current release into a new folder, then point current.json at it. The caller holds the lock.
+function install(tools, root, timeoutMs) {
+  var id = "installs/" + tools.clock() + "-" + process.pid + "-" + Math.random().toString(36).slice(2, 8);
+  var dir = path.join(root, id);
+  mkdirp(dir);
+  fs.writeFileSync(path.join(dir, "package.json"), "{\"private\":true}\n");
+  return npm(tools, ["install", "--prefix", dir, "--no-save", "--no-package-lock", PACKAGE], timeoutMs).then(function (result) {
+    var installed = result.code === 0 ? readInstall(root, id) : null;
+    if (installed === null) {
+      removeTree(dir);
+      return { ok: false, error: npmError(result, "npm install") };
+    }
+    var previous = readJson(path.join(root, "current.json"));
+    var previousDir = previous && typeof previous.dir === "string" ? previous.dir : null;
+    writeAtomic(path.join(root, "current.json"), JSON.stringify({ version: installed.version, dir: id, previous: previousDir }, null, 2) + "\n");
+    prune(root, [id, previousDir], tools.clock);
+    return { ok: true, installed: installed };
+  });
+}
+
+// ---- the lock ----
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+function stale(file, clock) {
+  var now = clock();
+  var stat;
+  try {
+    stat = fs.statSync(file);
+  } catch (error) {
+    // Its owner released it a moment ago.
+    return true;
+  }
+  if (now - stat.mtime.getTime() > LOCK_STALE_MS) return true;
+  var owner = readJson(file);
+  return owner !== null && typeof owner.pid === "number" && !alive(owner.pid);
+}
+
+function createLock(file, clock) {
+  try {
+    var fd = fs.openSync(file, "wx");
+    fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: clock() }));
+    fs.closeSync(fd);
+    return true;
+  } catch (error) {
+    if (error.code === "EEXIST") return false;
+    throw error;
+  }
+}
+
+// Take the lock, replacing one whose owner died or that is older than LOCK_STALE_MS. False when another process holds it.
+function takeLock(file, clock) {
+  if (createLock(file, clock)) return true;
+  if (!stale(file, clock)) return false;
+  try {
+    fs.unlinkSync(file);
+  } catch (error) {
+    // Another process removed it first; the create below decides who wins.
+  }
+  return createLock(file, clock);
+}
+
+function releaseLock(file) {
+  var owner = readJson(file);
+  if (owner !== null && owner.pid === process.pid) fs.unlinkSync(file);
+}
+
+function wait(ms) {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, ms);
+  });
+}
+
+// The installed copy, installing it first when there is none. Resolves { installed, fresh } or { error }.
+function ensureInstalled(tools, root, deadline) {
+  var installed = readInstalled(root);
+  if (installed !== null) return Promise.resolve({ installed: installed, fresh: false });
+  var lock = path.join(root, "refresh.lock");
+  if (takeLock(lock, tools.clock)) {
+    return Promise.resolve().then(function () {
+      return install(tools, root, Math.max(deadline - tools.clock(), 1000));
+    }).then(function (result) {
+      releaseLock(lock);
+      return result.ok ? { installed: result.installed, fresh: true } : { error: result.error };
+    }, function (error) {
+      releaseLock(lock);
+      throw error;
+    });
+  }
+  if (tools.clock() >= deadline) return Promise.resolve({ error: "another Desk session was still installing it" });
+  return wait(WAIT_STEP_MS).then(function () {
+    return ensureInstalled(tools, root, deadline);
+  });
+}
+
+// ---- the background refresh ----
+
+// Bring the installed copy up to the channel's current release. Runs detached after a launch; never throws, and records its outcome in last-refresh.json.
+function refresh(o) {
+  var env = either(o.env, process.env);
+  var platform = either(o.platform, process.platform);
+  var node = either(o.node, process.execPath);
+  var clock = either(o.clock, Date.now);
+  var root = stateDir(env, either(o.homeDir, either(either(env.HOME, env.USERPROFILE), os.homedir())));
+  var lock = path.join(root, "refresh.lock");
+  var tools = { spawn: either(o.spawn, childProcess.spawn), node: node, npmCli: o.npmCli, env: npmEnv(env, node, platform), clock: clock };
+  var held = false;
+  function record(result) {
+    try {
+      writeAtomic(path.join(root, "last-refresh.json"), JSON.stringify({ at: new Date(clock()).toISOString(), result: result }, null, 2) + "\n");
+    } catch (error) {
+      // Losing the record never keeps the lock.
+    }
+    if (held) releaseLock(lock);
+    return result;
+  }
+  return Promise.resolve().then(function () {
+    mkdirp(root);
+    held = takeLock(lock, clock);
+    if (!held) return { ok: true, skipped: "another Desk session holds the refresh lock" };
+    return npm(tools, ["view", PACKAGE, "version"], REFRESH_MS).then(function (view) {
+      var latest = view.code === 0 ? lastLine(view.stdout) : "";
+      if (!latest) return { ok: false, error: npmError(view, "npm view") };
+      var installed = readInstalled(root);
+      if (installed !== null && installed.version === latest) return { ok: true, version: latest, changed: false };
+      return install(tools, root, REFRESH_MS).then(function (result) {
+        return result.ok ? { ok: true, version: result.installed.version, changed: true } : result;
+      });
+    });
+  }).then(record, function (error) {
+    return record({ ok: false, error: describe(error) });
+  });
+}
+
+// Start the refresh in a detached process, so it outlives neither the launch nor blocks it.
+function startRefresh(o) {
+  var child = childProcess.spawn(o.node, [__filename, REFRESH_FLAG, o.npmCli], { detached: true, stdio: "ignore", env: o.env, windowsHide: true });
+  child.on("error", function () {});
+  child.unref();
+  return child;
+}
+
+// ---- run ----
 
 function fail(stderr, exit, message) {
   stderr.write("[desk-browser] " + message + "\n");
@@ -113,12 +456,14 @@ function start(o, stderr, exit) {
   var platform = either(o.platform, process.platform);
   var fileExists = either(o.exists, exists);
   var args = either(o.args, process.argv.slice(2));
+  var homeDir = o.homeDir !== undefined ? o.homeDir : either(either(env.HOME, env.USERPROFILE), os.homedir());
   var current = either(o.current, { path: process.execPath, version: process.version, abi: process.versions.modules });
+  var clock = either(o.clock, Date.now);
   var selection = bootstrap.selectNode({
     env: env,
     platform: platform,
     arch: either(o.arch, process.arch),
-    homeDir: o.homeDir !== undefined ? o.homeDir : either(either(env.HOME, env.USERPROFILE), os.homedir()),
+    homeDir: homeDir,
     mcpRoot: either(o.mcpRoot, __dirname),
     current: current,
     systemPrefix: o.systemPrefix !== undefined ? o.systemPrefix : either(env.DESK_NODE_SYSTEM_PREFIX, ""),
@@ -126,50 +471,80 @@ function start(o, stderr, exit) {
     now: o.now
   });
   if (selection.node === null) {
-    return fail(stderr, exit, "no Node satisfies " + selection.range + " (this one is " + current.version + "), so the browser cannot start. Install Node " + selection.range + " and reconnect the playwright MCP server.");
+    return fail(stderr, exit, "no Node satisfies " + selection.range + " (this one is " + current.version + "), so the browser cannot start. Install Node " + selection.range + " and reconnect the desk-browser MCP server.");
   }
   var node = selection.node.path;
-  var cli = npxCli(node, platform, fileExists);
+  var cli = npmCli(node, platform, fileExists);
   if (cli === null) {
-    return fail(stderr, exit, "Node " + selection.node.version + " at " + node + " has no npx beside it, so the browser cannot start. Reinstall that Node with its bundled npm and reconnect the playwright MCP server.");
+    return fail(stderr, exit, "Node " + selection.node.version + " at " + node + " has no npm beside it, so the browser cannot start. Reinstall that Node with its bundled npm and reconnect the desk-browser MCP server.");
   }
-  return bootstrap.reexec({
-    node: node,
-    indexFile: cli,
-    args: ["-y", PACKAGE].concat(DEFAULT_ARGS, browserArgs(args, platform, env, fileExists), args),
-    env: withNodeFirst(env, node, platform),
-    stderr: stderr,
-    spawn: either(o.spawn, childProcess.spawn),
-    signals: either(o.signals, process),
-    exit: exit,
-    kill: either(o.kill, process.kill),
-    onSpawnError: function (error) {
-      return fail(stderr, exit, "could not start Node " + node + ": " + describe(error));
+  var root = stateDir(env, homeDir);
+  mkdirp(root);
+  var tools = { spawn: either(o.npmSpawn, childProcess.spawn), node: node, npmCli: cli, env: npmEnv(env, node, platform), clock: clock };
+  return ensureInstalled(tools, root, clock() + either(o.firstInstallMs, FIRST_INSTALL_MS)).then(function (got) {
+    if (!got.installed) {
+      return npm(tools, ["config", "get", "registry"], REGISTRY_MS).then(function (answer) {
+        var registry = answer.code === 0 && lastLine(answer.stdout) ? lastLine(answer.stdout) : "the configured npm registry";
+        return fail(stderr, exit, "could not install " + PACKAGE + " from " + registry + " (" + got.error + "). Check that this machine can reach that registry, or point npm at one it can reach (npm config set registry <url>), then reconnect the desk-browser MCP server.");
+      });
     }
+    var installed = got.installed;
+    stderr.write("[desk-browser] " + PACKAGE_NAME + " " + installed.version + (installed.core ? " (playwright-core " + installed.core + ")" : "") + " from " + installed.dir + "\n");
+    // A copy installed just now is already the channel's current release.
+    if (!got.fresh) either(o.startRefresh, startRefresh)({ node: node, npmCli: cli, env: env });
+    return bootstrap.reexec({
+      node: node,
+      indexFile: installed.cli,
+      args: launchArgs(args, platform, env, fileExists, root),
+      env: withNodeFirst(env, node, platform),
+      stderr: stderr,
+      spawn: either(o.spawn, childProcess.spawn),
+      signals: either(o.signals, process),
+      exit: exit,
+      kill: either(o.kill, process.kill),
+      onSpawnError: function (error) {
+        return fail(stderr, exit, "could not start Node " + node + ": " + describe(error));
+      }
+    });
   });
 }
 
-// Never throws: anything that goes wrong is one stderr line and exit code 1, which the host reports as a failed server. Every option defaults to the real process.
+// Never throws or rejects: anything that goes wrong is one stderr line and exit code 1, which the host reports as a failed server. Every option defaults to the real process.
 function run(o) {
   var stderr = either(o.stderr, process.stderr);
   var exit = either(o.exit, process.exit);
-  try {
-    return start(o, stderr, exit);
-  } catch (error) {
+  function failed(error) {
     return fail(stderr, exit, "could not start the browser: " + describe(error));
+  }
+  try {
+    return start(o, stderr, exit).then(null, failed);
+  } catch (error) {
+    return failed(error);
   }
 }
 
 module.exports = {
   DEFAULT_ARGS: DEFAULT_ARGS,
+  NPM_ENV: NPM_ENV,
   PACKAGE: PACKAGE,
+  REFRESH_FLAG: REFRESH_FLAG,
   browserArgs: browserArgs,
   browserPaths: browserPaths,
-  npxCli: npxCli,
+  launchArgs: launchArgs,
+  npmCli: npmCli,
+  npmError: npmError,
+  readInstalled: readInstalled,
+  refresh: refresh,
   run: run,
+  startRefresh: startRefresh,
+  stateDir: stateDir,
+  takeLock: takeLock,
   withNodeFirst: withNodeFirst
 };
 
-// Started directly by a host (the Copilot config). The Claude config requires this file and calls run() itself. Spawned tests cover this line; the in-process coverage run cannot be the main module.
+// Started directly by a host (the Copilot config, the managed-Edge overlay) or as the detached refresher. The Claude config requires this file and calls run() itself. Spawned tests cover these lines; the in-process coverage run cannot be the main module.
 /* istanbul ignore next */
-if (require.main === module) run({});
+if (require.main === module) {
+  if (process.argv[2] === REFRESH_FLAG) refresh({ npmCli: process.argv[3] });
+  else run({});
+}
