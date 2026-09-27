@@ -5,6 +5,8 @@ description: How worker keeps an owner-private record of its own work items — 
 
 # The work measurement ledger
 
+**Being retired.** The factory replaces this manual ledger: it derives the same facts from what the work already produces instead of asking the working agent to keep a second record ([RFC section 4](../../docs/agentic-engineering-v2-rfc.md#4-the-factory-measuring-and-designing-the-work)). Until the retirement lands, the `desk_work_ledger` tool keeps working as described here, but do not start new measurement on it.
+
 there is a drawer in the desk that nobody else opens. inside it is a ledger of the work itself — one line per thing the operator actually asked for, what it turned out to cost, and, written plainly beside every number, where that number came from. the ledger is private by construction: it lives outside git, in an owner-only store, and it exists so the operator can answer "what did this take?" about their own work without anyone building a productivity dashboard on top of them.
 
 the ledger is deliberately small. it is not a second lifecycle, not an evaluation engine, and not a finance system. the task cards in git remain the canonical record of *what the work is*; this drawer holds the operational facts about *how it went*, which don't belong in a repository at all.

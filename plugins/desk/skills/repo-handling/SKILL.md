@@ -224,9 +224,9 @@ Only content that is truly specific to that repo and that the agent would otherw
 
 Content must be engine-agnostic (REST API names, not harness MCP tool names) — repo-knowledge is loaded into every session regardless of the active harness.
 
-## Pre-work hygiene (before work-doer runs)
+## Pre-work hygiene (before implementation starts)
 
-Before invoking work-doer on a repo, ensure the local state is clean:
+Before implementation starts on a repo, ensure the local state is clean:
 
 1. `cd <repo-local-path>`
 2. `git fetch origin`

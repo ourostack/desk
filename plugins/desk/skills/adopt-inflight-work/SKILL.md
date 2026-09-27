@@ -171,7 +171,7 @@ For each task identified during adoption, create `<track>/<task-slug>/task.md` w
 
 ```yaml
 status: drafting
-planning_complete: true   # skip work-ideator + work-planner; jump to work-doer on resume
+planning_complete: true   # skip brainstorming and planning; resume at implementation
 adopted_at: 2026-04-16T14:30:00Z
 ```
 

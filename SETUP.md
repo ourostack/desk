@@ -108,7 +108,7 @@ Claude Code keys its plugin cache on the version string, so a change reaches ins
 
 ## Other hosts
 
-- **Codex:** see `plugins/desk/README.md` ("Under Codex") and `desk:codex-onboarding`; the activation adapter binds the desk and owns the instruction block.
+- **Codex:** Codex can still run Desk, but it is not a supported target ([RFC section 8](plugins/desk/docs/agentic-engineering-v2-rfc.md#8-limits)). To try it anyway, see `plugins/desk/README.md` ("Under Codex") and `desk:codex-onboarding`; the activation adapter binds the desk and owns the instruction block.
 - **Copilot CLI and Ouroboros:** see `plugins/desk/README.md` for the admitted compositions.
 
 The host defaults and the no-attribution rule above apply on every host; set them wherever that host keeps its user configuration.
