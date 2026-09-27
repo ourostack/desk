@@ -5,8 +5,9 @@
 // The host is the one that started this server. Claude Code sets
 // `CLAUDE_PLUGIN_ROOT` for a plugin's MCP server and Copilot does not, so
 // with it set the scan reads Claude's plugin registry, and without it the
-// folders beside Desk's plugin root (`DESK_PLUGIN_ROOT`, which the launcher
-// sets on both hosts, else this checkout's own plugin folder). The scan is
+// folders beside Desk's plugin root (`DESK_PLUGIN_ROOT`: Claude's launcher
+// sets it, and on every other host the server's entrypoint, `mcp/index.js`,
+// sets it to its own installed plugin folder; else this checkout's own). The scan is
 // the end hook's own `metadata`, loaded from that plugin root because an
 // installed server runs from a source mirror without `hooks/`, so the tools,
 // the hooks and the boot check route a desk to the same store. A scan that
