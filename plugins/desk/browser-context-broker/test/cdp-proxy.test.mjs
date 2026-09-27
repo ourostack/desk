@@ -12,6 +12,7 @@ import { createLease, releaseLease } from '../src/leases.mjs';
 import { withBrokerLock } from '../src/lock.mjs';
 import { readRegistry, writeRegistry } from '../src/registry.mjs';
 import { startFakeCdpServer } from './fixtures/fake-cdp-server.mjs';
+import { settlesWithin, SETTLE_LIMIT_MS, waitUntil } from './fixtures/settle.mjs';
 
 const scratchRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '.proxy-state');
 const cleanups = [];
@@ -132,11 +133,7 @@ function exchange(socket) {
 }
 
 async function waitFor(condition, message) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error(message);
+  await waitUntil(condition, message);
 }
 
 test.afterEach(async () => {
@@ -614,7 +611,8 @@ test('proxy remaps colliding downstream IDs without stranding internal target cr
     leaseId: lease.id,
     declaration,
     providerInvoker: attestingProvider,
-    internalRequestTimeoutMs: 200,
+    // Target creation is held until both colliding responses arrive, which a loaded machine can take far longer than 200 ms to deliver; the internal request must not time out while it is held.
+    internalRequestTimeoutMs: SETTLE_LIMIT_MS,
   });
   t.after(() => proxy.close());
   const socket = await openSocket(proxy.webSocketEndpoint);
@@ -649,7 +647,7 @@ test('proxy remaps colliding downstream IDs without stranding internal target cr
   } finally {
     releaseCreate();
   }
-  await new Promise((resolve) => setTimeout(resolve, 250));
+  await waitFor(() => responses.has(77), 'internal target creation did not settle');
 
   assert.equal(responses.get(1_000_000_001).id, 1_000_000_001);
   assert.equal(responses.get(-1).id, -1);
@@ -664,18 +662,12 @@ test('proxy remaps colliding downstream IDs without stranding internal target cr
   assert.ok(!forwardedIds.includes(77));
   assert.ok(!forwardedIds.includes(1_000_000_001));
   assert.ok(!forwardedIds.includes(-1));
-  await Promise.race([
-    releaseLease({
-      stateDir: directory,
-      leaseId: lease.id,
-      declaration,
-      providerInvoker: attestingProvider,
-    }),
-    new Promise((_, reject) => setTimeout(
-      () => reject(new Error('lease lock remained held after colliding IDs')),
-      500,
-    )),
-  ]);
+  await settlesWithin(t, 'lease lock remained held after colliding IDs', releaseLease({
+    stateDir: directory,
+    leaseId: lease.id,
+    declaration,
+    providerInvoker: attestingProvider,
+  }));
 });
 
 test('proxy inherits popup descendants of owned targets', async () => {
@@ -1317,28 +1309,16 @@ test('upstream disconnect rejects pending createTarget and preserves indetermina
   fake.disconnectClients();
 
   await assert.rejects(
-    Promise.race([
-      creating,
-      new Promise((_, reject) => setTimeout(
-        () => reject(new Error('pending createTarget did not reject promptly')),
-        500,
-      )),
-    ]),
+    settlesWithin(t, 'pending createTarget did not reject promptly', creating),
     /CDP proxy connection closed/u,
   );
   await assert.rejects(
-    Promise.race([
-      releaseLease({
-        stateDir: directory,
-        leaseId: lease.id,
-        declaration,
-        providerInvoker: attestingProvider,
-      }),
-      new Promise((_, reject) => setTimeout(
-        () => reject(new Error('release remained blocked by createTarget')),
-        500,
-      )),
-    ]),
+    settlesWithin(t, 'release remained blocked by createTarget', releaseLease({
+      stateDir: directory,
+      leaseId: lease.id,
+      declaration,
+      providerInvoker: attestingProvider,
+    })),
     (error) =>
       error.code === 'PARTIAL_RELEASE' &&
       error.details.pendingTargetCreates[0].diagnostic.status === 'ZERO_MARKER_MATCHES',
@@ -1378,29 +1358,17 @@ test('internal upstream create timeout releases the lock but preserves marker ev
   t.after(() => socket.close());
   const cdp = exchange(socket);
 
-  const response = await Promise.race([
-    cdp.send('Target.createTarget', {
-      url: 'https://timeout.example.test',
-    }),
-    new Promise((_, reject) => setTimeout(
-      () => reject(new Error('internal request did not time out promptly')),
-      500,
-    )),
-  ]);
+  const response = await settlesWithin(t, 'internal request did not time out promptly', cdp.send('Target.createTarget', {
+    url: 'https://timeout.example.test',
+  }));
   assert.equal(response.error.code, -32005);
   await assert.rejects(
-    Promise.race([
-      releaseLease({
-        stateDir: directory,
-        leaseId: lease.id,
-        declaration,
-        providerInvoker: attestingProvider,
-      }),
-      new Promise((_, reject) => setTimeout(
-        () => reject(new Error('release remained blocked after request timeout')),
-        500,
-      )),
-    ]),
+    settlesWithin(t, 'release remained blocked after request timeout', releaseLease({
+      stateDir: directory,
+      leaseId: lease.id,
+      declaration,
+      providerInvoker: attestingProvider,
+    })),
     (error) =>
       error.code === 'PARTIAL_RELEASE' &&
       error.details.pendingTargetCreates[0].diagnostic.status === 'ZERO_MARKER_MATCHES',
