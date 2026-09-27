@@ -802,6 +802,22 @@ const HOST_BINDING_VARS = ["CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_P
 // (headings and columns) follows a real hub.
 const HUB_REGISTRY = "# Desks — this operator's desk registry\n\n## Solo desks\n\n| desk | local path | repo | account | launch |\n|---|---|---|---|---|\n| work-desk | ~/work-desk | example-org/work-desk | example-login | desk-work |\n\n## Crew desks\n\n| crew | local path | repo | your alias | launch |\n|---|---|---|---|---|\n| example-crew | ~/crews/example | example-org/crew | alex | crew-example |\n";
 
+// Removes a fixture the startup hooks ran on. The hooks start detached repairs (workspace-tidy writes its report into
+// the desk's .git when it finishes), and under load one can finish well after the hook returns, so a removal that
+// finds a new file is retried for up to two minutes.
+function removeSettled(root) {
+  const deadline = Date.now() + 120_000;
+  for (;;) {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (error.code !== "ENOTEMPTY" || Date.now() > deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+    }
+  }
+}
+
 function withTidyDesk({ build = messyDesk, crew = false, registry = null, git = true, record = null, pluginRoot = "installed" } = {}, body) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "desk-tidy-migration-")));
   try {
@@ -833,7 +849,7 @@ function withTidyDesk({ build = messyDesk, crew = false, registry = null, git = 
     const tidy = { root, desk, own, env, run: (script, extraEnv = {}) => spawnSync(BASH, ["-c", script], { cwd: home, env: { ...env, ...extraEnv }, encoding: "utf8" }) };
     body(tidy);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    removeSettled(root);
   }
 }
 
