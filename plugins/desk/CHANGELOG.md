@@ -1,5 +1,9 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.74 — 2026-09-27
+
+The Superpowers refresh driver no longer fails when `gh` prints nothing. On its first live run GitHub Actions was not allowed to open the pull request, and the fallback's `gh label list --search` printed no output at all (not `[]`) because the `upstream-refresh` label did not exist yet, so [`superpowers-upstream-pr.cjs`](../../scripts/superpowers-upstream-pr.cjs) stopped with a bare "Unexpected end of JSON input" before filing its issue. Every `gh` JSON read now treats an empty list as empty and reports any other empty or malformed output as a named error with `gh`'s stderr (tokens masked); label creation is idempotent. A scripted `gh` replays the live failure and now reaches the issue. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
 ## 3.2.0-alpha.67 — 2026-09-27
 
 Superpowers now follows upstream automatically. A weekly [refresh workflow](../../.github/workflows/superpowers-upstream.yml) (also run on demand) reads `obra/superpowers` at its default branch, copies the selected files byte for byte with the new `--update` mode of [`check-upstream-sources.cjs`](../../scripts/check-upstream-sources.cjs), and records every path and SHA-256 in `upstream-sources.lock.json`. A selected skill is vendored as its whole folder, so files upstream adds to it arrive and files it deletes leave; a new upstream skill is reported, not selected. When anything changed, [`refresh-superpowers.cjs`](../../scripts/refresh-superpowers.cjs) releases Superpowers at upstream's version (or the next patch) and Desk at the next unclaimed alpha, pushes `superpowers-upstream`, opens or updates its pull request, dispatches both CI workflows on it, and merges when every check passes; a failing check leaves the pull request open and files an `upstream-refresh` issue. Both CI workflows now accept `workflow_dispatch`, and a dispatched run checks version bumps against `origin/main`.
