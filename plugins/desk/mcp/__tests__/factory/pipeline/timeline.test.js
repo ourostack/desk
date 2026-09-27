@@ -1,0 +1,81 @@
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { readFileSync, readdirSync } from "node:fs"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
+
+import { normalizePublished, stableStringify } from "../../../src/factory/pipeline/normalize.js"
+import { buildJobTimeline, buildTimelines } from "../../../src/factory/pipeline/timeline.js"
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+const FACTS = path.join(here, "..", "fixtures", "store", "facts")
+const sessions = readdirSync(FACTS).sort().map((name) => JSON.parse(readFileSync(path.join(FACTS, name), "utf8")))
+const CLOSED = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const OPEN = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+test("normalizePublished sorts every collection and stableStringify sorts every object key", () => {
+  const input = structuredClone(sessions[2])
+  input.plugins.reverse()
+  input.agents.reverse()
+  input.intervals.reverse()
+  input.refs.prs.reverse()
+  input.jobs.reverse()
+  input.unavailable.reverse()
+  const before = structuredClone(input)
+  const normalized = normalizePublished(input)
+  assert.deepEqual(normalized.plugins.map((item) => item.name), ["desk", "plain-language"])
+  assert.deepEqual(normalized.agents.map((item) => item.n), [0, 1])
+  assert.deepEqual(normalized.intervals.map((item) => item.start_ms), [0, 1000, 2000, 2500, 4000])
+  assert.deepEqual(normalized.jobs.map((item) => item.job), [CLOSED, OPEN])
+  assert.equal(stableStringify({ z: 1, a: { z: 2, a: 3 } }), "{\"a\":{\"a\":3,\"z\":2},\"z\":1}")
+  assert.deepEqual(input, before, "normalization must not mutate the caller")
+})
+
+test("buildJobTimeline places intervals on the job clock and labels shared sessions", () => {
+  const timeline = buildJobTimeline(CLOSED, sessions)
+  assert.equal(timeline.job, CLOSED)
+  assert.equal(timeline.sessions.length, 2)
+  assert.deepEqual(timeline.sessions.map((item) => ({
+    host: item.host,
+    offset_ms: item.offset_ms,
+    end_ms: item.end_ms,
+    shared_with: item.shared_with,
+  })), [
+    { host: "claude-code", offset_ms: -1000, end_ms: 15000, shared_with: 0 },
+    { host: "copilot-cli", offset_ms: 5000, end_ms: 15000, shared_with: 1 },
+  ])
+  assert.deepEqual(timeline.intervals.slice(0, 3), [
+    { host: "claude-code", session_id: "11111111-1111-4111-8111-111111111111", kind: "turn", agent: 0, start_ms: -1000, end_ms: 3000 },
+    { host: "claude-code", session_id: "11111111-1111-4111-8111-111111111111", kind: "tool", agent: 0, start_ms: 0, end_ms: 2000, tool: "shell", outcome: "error" },
+    { host: "claude-code", session_id: "11111111-1111-4111-8111-111111111111", kind: "subagent", agent: 1, start_ms: 1000, end_ms: 6000 },
+  ])
+  assert.deepEqual(timeline.transitions, [
+    { to: "processing", offset_ms: 0 },
+    { to: "validating", offset_ms: 7000 },
+    { to: "done", offset_ms: 14000 },
+  ])
+})
+
+test("sessions without offsets count toward totals but do not enter the timeline", () => {
+  const timeline = buildJobTimeline(OPEN, sessions)
+  assert.equal(timeline.sessions.length, 2)
+  assert.equal(timeline.sessions.filter((item) => item.offset_ms !== null).length, 1)
+  assert.equal(timeline.sessions.find((item) => item.host === "claude-code").end_ms, null)
+  assert.equal(timeline.intervals.every((item) => item.session_id !== "33333333-3333-4333-8333-333333333333"), true)
+})
+
+test("buildTimelines returns jobs in job-ID order and does not invent an unattributed job", () => {
+  assert.deepEqual(buildTimelines(sessions).map((timeline) => timeline.job), [CLOSED, OPEN])
+})
+
+test("timeline observations and duplicate transitions are normalized deterministically", () => {
+  const duplicated = sessions.map((session) => structuredClone(session))
+  duplicated[2].jobs[0].transitions = [{ to: "processing", offset_ms: 2500 }]
+  duplicated[2].jobs[0].session_offset_ms = 4000
+  const timeline = buildJobTimeline(OPEN, duplicated)
+  assert.deepEqual(timeline.transitions, [{ to: "processing", offset_ms: 2500 }])
+  assert.deepEqual(timeline.observations, [
+    { status: "processing", offset_ms: null },
+    { status: "processing", offset_ms: null },
+  ])
+})
