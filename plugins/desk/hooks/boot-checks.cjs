@@ -16,7 +16,9 @@ function reportPath(root, common) {
 
 async function location(root) {
   const { readInspectionGit } = await runtime("runtime/git-inspection.js");
-  const result = await readInspectionGit(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {});
+  const { TIDY_GIT_TIMEOUT_MS } = await runtime("runtime/workspace-tidy.js");
+  // The report location serves the detached repair and the CLI, never the boot check's budget.
+  const result = await readInspectionGit(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"], {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS });
   if (!result.ok) throw new Error("bound desk is not an inspectable repository");
   const common = await fs.realpath(result.stdout);
   return reportPath(await fs.realpath(root), common);

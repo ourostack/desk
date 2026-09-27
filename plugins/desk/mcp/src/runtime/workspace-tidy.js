@@ -15,7 +15,10 @@ const REF = /^refs\/(?:heads|remotes)\/[^\s~^:?*[\\]+$/u
 const text = (value) => typeof value === "string" && value.length > 0
 const inside = (root, target) => target === root || target.startsWith(`${root}${path.sep}`)
 const cleanLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ")
-const gitDefault = (cwd, args, options) => readInspectionGit(cwd, ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], {}, options)
+// Workspace tidy's Git calls run in the detached repair, the CLI and the boot check's inspection. Only the boot check answers a host, and its whole-check budget aborts its calls through their signal, so each call may take far longer than a hook's 2 s: under load the 2 s limit killed repairs' ls-remote and rev-parse calls and left worktrees retained.
+export const TIDY_GIT_TIMEOUT_MS = 20_000
+export const tidyGit = (cwd, args, options) => readInspectionGit(cwd, ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS, ...options })
+const gitDefault = tidyGit
 
 async function smallFile(file) {
   const info = await fs.lstat(file)
