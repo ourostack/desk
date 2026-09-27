@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.98 — 2026-09-27
+
+The checkout guard now handles much longer shell loops before it gives up. Before a shell command runs, the guard walks its syntax to find Git calls that would move a protected checkout. A `for` loop whose body ran a command with an unknown exit status used to double the paths it walked on every iteration, so a loop over about ten values ran past the guard's 1,000-step budget and the guard blocked the whole command, which the host records as a failed tool call. The walk now merges identical states after each loop iteration (and after a `while` loop), so a loop costs steps in proportion to its length, and Git inspection stops once one Git call is denied ([shell-commands.js](mcp/src/runtime/shell-commands.js), [protected-checkout.js](mcp/src/runtime/protected-checkout.js)). The step budget itself is unchanged, so a loop still fails closed when its length times the steps per iteration passes 1,000: about 150 to 250 values, depending on the body. This is the countermeasure for kaizen card [ourostack/factory#39](https://github.com/ourostack/factory/issues/39), whose hypothesis is fewer tool failures per job.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.97 — 2026-09-27
 
 Pull requests that change the offline evaluation suite pass the coverage gate again. The offline coverage hook resolved the vendored gauntlet TypeScript files as plain JavaScript modules so the coverage instrumenter would pick them up, which only works when those files are instrumented. When a change did not touch them, Node parsed raw TypeScript as JavaScript, and every offline test that imports one failed with `SyntaxError: Unexpected token '{'` (11 of 12 shards in run 36348056164). The [hook](../../evals/offline/__tests__/helpers/coverage-format.mjs) now loads an uninstrumented TypeScript file as TypeScript, so Node strips its types, and a producer test covers a change that leaves those files alone. The coverage shards also gained measured weights for the 75 offline test files ([coverage-shards.json](mcp/config/coverage-shards.json)): an offline-scope run is now bounded by its slowest file, `controller-publication.test.mjs` at about 392 s, with the other shards at about 129 s instead of piling onto it.
