@@ -20,6 +20,7 @@ All factory state lives at `$XDG_STATE_HOME/ouroboros-skills/desk/factory`, or `
 Run commands from the installed Desk plugin root:
 
 ```sh
+node mcp/scripts/factory.js account --store ourostack/factory
 node mcp/scripts/factory.js consent --store ourostack/factory --contribute yes --account <login>
 node mcp/scripts/factory.js derive --marker <protected-marker-file> --wait-quiet 30000
 node mcp/scripts/factory.js status
