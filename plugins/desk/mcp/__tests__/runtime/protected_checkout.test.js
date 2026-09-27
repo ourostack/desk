@@ -37,8 +37,8 @@ async function guard(command, cwd = ordinary, extra = {}) {
 test("HEAD-moving and work-discarding operations alone are denied in a locally protected checkout", async () => {
   const deny = [
     "checkout HEAD", "switch topic", "reset --hard", "rebase topic", "stash", "clean -nd",
-    "restore --source HEAD file", "restore --source=HEAD file", "restore -s HEAD file", "restore -sHEAD file",
-    "restore --staged --worktree file", "branch -M renamed", "branch -m renamed", "reset",
+    "restore --source HEAD .", "restore --source=HEAD .", "restore -s HEAD :/", "restore -sHEAD .", "checkout .",
+    "restore --staged --worktree .", "branch -M renamed", "branch -m renamed", "reset",
   ]
   const allow = [
     "status", "diff", "log -1", "show HEAD", "fetch", "add file", "commit -m checkout", "push", "stash list",
@@ -46,6 +46,8 @@ test("HEAD-moving and work-discarding operations alone are denied in a locally p
     "branch -fD topic", "branch -d topic", "branch -- topic-f", "worktree list", "worktree add --detach /tmp/new HEAD",
     // Merges add history and move nothing off the branch; path-limited unstaging leaves HEAD alone (2026-09-27 ruling).
     "merge topic", "pull", "restore --staged file", "reset -- file", "reset HEAD file",
+    // Named paths are the agent's own files, whatever the source; prune only drops records of vanished worktrees.
+    "restore --source HEAD file", "restore -s HEAD file", "restore --staged --worktree file", "checkout HEAD -- file", "worktree prune",
   ]
   for (const args of deny) {
     assert.match((await guard(`git ${args}`, protectedRoot)).reason, /^Desk protected checkout /u, args)
@@ -217,7 +219,7 @@ test("shell control flow, command substitutions and PowerShell invocation cannot
       [`cd ${p} & git checkout HEAD`, false],
       [`! git -C ${p} checkout HEAD`, true],
       [`git -C ${p} -c alias.status=checkout status`, false],
-      [`git -C ${p} restore --source HEAD -- file`, true],
+      [`git -C ${p} restore --source HEAD -- .`, true],
       [`git -C ${p} branch --format=-f`, false],
       [`git -C ${p} --config-env desk.protected=IGNORED checkout HEAD`, true],
       [`git -C ${p} --help`, false],

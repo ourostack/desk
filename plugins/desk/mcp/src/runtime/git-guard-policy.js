@@ -1,8 +1,9 @@
 // What Git may do in a protected checkout (Desk 3.2 ruling for task A3b, narrowed on 2026-09-27).
 // The guard denies only what moves a protected checkout's HEAD off its state branch, rewrites
-// pushed history, or discards work; everything else passes: status, log, diff, fetch, add, rm,
-// mv, commit, path-limited unstaging, non-force pushes, merges, pulls and rebases onto the
-// branch's own upstream, and worktree add. `classifyGit` needs no Git reads; it returns
+// pushed history, or discards other sessions' work; everything else passes: status, log, diff,
+// fetch, add, rm, mv, commit, unstaging or restoring named paths, non-force pushes, deleting
+// another branch on the remote, merges, pulls and rebases onto the branch's own upstream (with or
+// without --autostash, which re-applies within the same command), worktree add and prune. `classifyGit` needs no Git reads; it returns
 // null (allowed anywhere), or a check that reads the target checkout through `ctx`.
 // Rules that trust Git's configuration (push, pull, rebase, fetch, merge) are denied when a
 // command-line or environment override changes that configuration, and `git config` or
@@ -15,19 +16,17 @@ export const MESSAGES = {
   leave: `this would move HEAD off the checkout's branch. To leave the state branch, ${WORKTREE}`,
   discard: `this would discard other sessions' uncommitted work. Commit your own changes instead, or ${WORKTREE}`,
   rewind: `this would move the checkout's branch to another commit. Add a new commit (for example git revert) instead, or ${WORKTREE}`,
-  restore: `restoring from another commit or into the index overwrites other sessions' changes. Restore files in ${WORKTREE.replace("use ", "")}`,
+  restore: "this would discard uncommitted changes in every file, including other sessions' work. Restore only your own files by name (git restore <paths>)",
   clean: "git clean deletes untracked files other sessions may own. Delete only files you created, by name",
-  stash: "git stash hides other sessions' work; commit or leave it",
+  stash: "git stash takes other sessions' uncommitted work out of the shared checkout. Commit only your own paths (git commit <paths>), and pull with git pull --rebase --autostash",
   branch: `this would force-move, rename or delete the checkout's current or state branch. Create a new branch instead, or ${WORKTREE}`,
   rebase: `a rebase onto anything but the branch's own upstream can rewrite pushed commits. Rebase onto the upstream (git rebase, or git pull --rebase), or for --onto, --root, --exec, --quit or another base, ${WORKTREE}`,
   pull: `git pull --rebase from anything but the branch's own upstream can rewrite pushed commits. Pull the upstream (git pull --rebase), merge the other branch instead (git pull --no-rebase <remote> <branch>), or ${WORKTREE}`,
   noUpstream: "this rebase has no upstream of the branch's own name (<remote>/<branch>) to replay onto, so it could rewrite pushed commits. If HEAD is detached, switch back first (git switch <state branch>); otherwise set the upstream (git branch -u <remote>/<branch>), or merge instead (git pull --no-rebase)",
-  autostash: "--autostash stashes, which hides other sessions' work; commit or leave it",
-  pushForce: "force, mirror, delete and prune pushes can discard work on the remote. Fetch, rebase onto the upstream (git pull --rebase) and push without them",
+  pushForce: "force, mirror and prune pushes, and deleting the state branch on the remote, can discard pushed work. Fetch, rebase onto the upstream (git pull --rebase) and push without them",
   amend: "the commit you would amend is already pushed; make a new commit instead",
   worktreeRemove: "git worktree remove --force would delete a protected checkout and its uncommitted work. Remove only worktrees you created, without --force",
-  prune: "git worktree prune can drop other sessions' worktree records; leave them, or run it with --dry-run",
-  unstage: `unstaging changes the shared index, which can hold other sessions' staged work. Unstage only your own paths (git restore --staged <paths>), or commit only your own paths (git commit <paths>)`,
+  unstage: "unstaging everything changes the shared index, which can hold other sessions' staged work. Unstage only your own paths (git restore --staged <paths>), or commit only your own paths (git commit <paths>)",
   fetch: "fetching into the checkout's own branch rewrites it like a reset; fetch into remote-tracking refs (git fetch origin) instead",
   upstream: "this would point the checkout's branch at an upstream of another name, so a later git pull --rebase could rewrite pushed commits. Keep <remote>/<branch> (git branch -u <remote>/<branch>)",
   config: (key) => `this would change ${key}, which decides what push, pull, rebase, aliases or this guard do in the shared checkout. Leave it`,
@@ -59,6 +58,11 @@ const anywhere = (check) => Object.assign(check, { anywhere: true })
 const lastOf = (parsed, names) => parsed.sequence.filter((entry) => names.includes(entry.name)).at(-1)
 const beforeDashDash = (parsed) => parsed.dashdash < 0 ? parsed.operands : parsed.operands.slice(0, parsed.dashdash)
 
+// A pathspec that covers the whole tree (or cannot be read) rather than naming paths: `.`, `:/`, `*`, `..`, a magic
+// pathspec, or a list read from a file. Named paths are the agent's own files; the whole tree holds other sessions' work.
+const WHOLE_TREE = /^(?:(?:\.\.?\/?)+\*?|:\/?\*?|\*|:\(.*|\.\/\*)$/u
+const wholeTree = (paths) => !paths.length || paths.some((path) => path.includes("\0") || WHOLE_TREE.test(path))
+
 // The checkout's current branch or its state branch. Switching to either keeps HEAD where it belongs.
 async function ownBranch(ctx, name) {
   return name === await ctx.branch() || name === await ctx.stateBranch()
@@ -79,15 +83,18 @@ function checkout(args) {
   const parsed = parseGitOptions(SPECS.checkout, args)
   if (any(parsed, ["-b", "-B", "orphan", "detach"])) return fixed(MESSAGES.leave)
   const refs = beforeDashDash(parsed), force = hasOption(parsed, "force")
-  // `checkout -- <paths>` restores from the index like plain `git restore`.
-  if (parsed.dashdash >= 0 || hasOption(parsed, "pathspec-from-file")) return refs.length ? fixed(MESSAGES.restore) : null
+  // `checkout [<tree-ish>] -- <paths>` restores those paths like `git restore`: named paths pass, the whole tree does not.
+  if (hasOption(parsed, "pathspec-from-file")) return fixed(MESSAGES.restore)
+  if (parsed.dashdash >= 0) return wholeTree(parsed.operands.slice(parsed.dashdash)) ? fixed(MESSAGES.restore) : null
   if (!refs.length) return force ? fixed(MESSAGES.discard) : null
   return async (ctx) => {
     const [target] = refs
     if (refs.length === 1 && await ownBranch(ctx, target)) return force ? MESSAGES.discard : null
-    // Git takes the first operand as a commit when it names one, or a remote branch it can guess.
-    if (target === "-" || await ctx.commit(target) || await ctx.remoteBranch(target)) return refs.length > 1 ? MESSAGES.restore : MESSAGES.leave
-    return null
+    // Git takes the first operand as a commit when it names one, or a remote branch it can guess; the rest are paths.
+    if (target === "-" || await ctx.commit(target) || await ctx.remoteBranch(target)) {
+      return refs.length === 1 ? MESSAGES.leave : wholeTree(refs.slice(1)) ? MESSAGES.restore : null
+    }
+    return wholeTree(refs) ? MESSAGES.restore : null
   }
 }
 
@@ -105,15 +112,19 @@ function reset(args) {
   const mode = lastOf(parsed, ["mixed", "soft", "hard", "merge", "keep"])?.name
   if (["hard", "merge", "keep"].includes(mode)) return fixed(MESSAGES.discard)
   const refs = beforeDashDash(parsed)
-  // Path-limited unstaging (`git reset [<commit>] -- <paths>`) changes only those index entries and leaves HEAD alone.
-  if (hasOption(parsed, "pathspec-from-file") || parsed.operands.length > refs.length) return null
+  // Unstaging named paths (`git reset [<commit>] [--] <paths>`) changes only those index entries and leaves HEAD alone;
+  // the whole tree is the whole index.
+  const paths = (list) => wholeTree(list) ? MESSAGES.unstage : null
+  if (hasOption(parsed, "pathspec-from-file")) return null
+  if (parsed.operands.length > refs.length) return fixed(paths(parsed.operands.slice(refs.length)))
   // A whole mixed reset rewrites the shared index, which can hold other sessions' staged work; a soft reset to HEAD changes nothing.
   const unstage = mode !== "soft"
   if (hasOption(parsed, "patch") || !refs.length) return unstage ? fixed(MESSAGES.unstage) : null
   return async (ctx) => {
     const commit = await ctx.commit(refs[0])
     // Without --, Git reads the first operand as a commit when it names one, and the rest as paths.
-    if (!commit || refs.length > 1) return null
+    if (!commit) return paths(refs)
+    if (refs.length > 1) return paths(refs.slice(1))
     if (commit !== await ctx.head()) return MESSAGES.rewind
     return unstage ? MESSAGES.unstage : null
   }
@@ -147,7 +158,7 @@ function rebase(args) {
   const parsed = parseGitOptions(SPECS.rebase, args)
   if (any(parsed, ["continue", "skip", "abort", "edit-todo", "show-current-patch"])) return null
   if (any(parsed, ["onto", "root", "exec", "quit"])) return fixed(MESSAGES.rebase)
-  if (hasOption(parsed, "autostash")) return fixed(MESSAGES.autostash)
+  // --autostash re-applies the stash at the end of the same command (and keeps it if that conflicts), so it hides nothing.
   const [upstream, other] = parsed.operands
   const check = async (ctx) => {
     // `git rebase <upstream> <branch>` switches to <branch> first.
@@ -169,7 +180,6 @@ function pullRebases(parsed, ctx, branch) {
 
 function pull(args) {
   const parsed = parseGitOptions(SPECS.pull, args)
-  if (hasOption(parsed, "autostash")) return fixed(MESSAGES.autostash)
   const [remote, ...refspecs] = parsed.operands
   const check = async (ctx) => {
     // A merge adds history and moves nothing off the branch; only a rebase onto another base rewrites pushed commits.
@@ -185,25 +195,26 @@ function pull(args) {
   return remote === undefined ? anywhere(check) : check
 }
 
-function merge(args) {
-  const parsed = parseGitOptions(SPECS.merge, args)
-  if (any(parsed, ["abort", "continue", "quit"])) return null
-  // A merge adds history and moves nothing off the branch; Git refuses to overwrite uncommitted work.
-  return hasOption(parsed, "autostash") ? fixed(MESSAGES.autostash) : null
-}
 
-// A non-force push only fast-forwards the remote, so it rewrites and discards nothing. A leading "+" forces, and an
-// empty source (":" or ":<ref>") deletes.
-const forcedRefspec = (spec) => spec.startsWith("+") || spec.startsWith(":")
+// A non-force push only fast-forwards the remote, so it rewrites and discards nothing. A leading "+" forces.
+const forcedRefspec = (spec) => spec.startsWith("+")
+// The remote branch a delete push (`--delete <ref>`, or `:<ref>`) removes.
+const deleted = (spec) => spec.replace(/^:/u, "").replace(/^refs\/heads\//u, "")
 
 function push(args) {
   const parsed = parseGitOptions(SPECS.push, args)
-  if (any(parsed, ["force", "force-with-lease", "force-if-includes", "mirror", "delete", "prune"])) return fixed(MESSAGES.pushForce)
+  if (any(parsed, ["force", "force-with-lease", "force-if-includes", "mirror", "prune"])) return fixed(MESSAGES.pushForce)
   const [remote, ...refspecs] = parsed.operands
   if (refspecs.some(forcedRefspec)) return fixed(MESSAGES.pushForce)
   // A refspec whose start Desk cannot compute could force (+) or delete (:), in any checkout.
   const unknown = refspecs.find((spec) => spec.startsWith("\0"))
   if (unknown !== undefined) return async (ctx) => ctx.known(unknown, "a push refspec")
+  // Deleting another branch on the remote is ordinary cleanup; deleting the checkout's own branch discards pushed work.
+  const deletes = hasOption(parsed, "delete") ? refspecs : refspecs.filter((spec) => spec.startsWith(":") && spec !== ":")
+  if (deletes.length) return async (ctx) => {
+    for (const spec of deletes) if (await ownBranch(ctx, deleted(spec))) return MESSAGES.pushForce
+    return null
+  }
   // Saved configuration can turn a plain push into a mirror or forced push; a target Desk cannot read is not checked.
   return anywhere(async (ctx) => {
     const name = remote === undefined ? (await ctx.upstream())?.remote ?? "origin" : ctx.known(remote, "a push repository")
@@ -242,6 +253,8 @@ function config(args) {
   if (["get", "list"].includes(key)) return null
   if (["set", "unset", "rename-section", "remove-section", "edit"].includes(key)) { write = true; key = rest[0] }
   if ((read && !write) || (!write && operands.length < 2)) return null
+  // --file and --blob name another file, not the checkout's configuration.
+  if (args.some((arg) => /^(?:-f|--file|--blob)(?:=|$)/u.test(arg))) return null
   if (key === undefined) return fixed(MESSAGES.config("the configuration file"))
   // Whole sections are judged, so section renames and removals are covered too.
   return async (ctx) => CONFIG_SECTIONS.has(ctx.known(key, "a configuration key").split(".")[0].toLowerCase()) ? MESSAGES.config(key) : null
@@ -257,7 +270,7 @@ function worktree([subcommand, ...args]) {
     const parsed = parseGitOptions(SPECS["worktree remove"], args)
     return hasOption(parsed, "force") && parsed.operands.length ? { victim: parsed.operands[0] } : null
   }
-  if (subcommand === "prune") return hasOption(parseGitOptions(SPECS["worktree prune"], args), "dry-run") ? null : fixed(MESSAGES.prune)
+  // prune only drops records of worktrees whose directory is already gone, and keeps locked ones.
   if (subcommand !== "add") return null
   const reset = parseGitOptions(SPECS["worktree add"], args).set.get("-B")?.value
   return reset === undefined ? null : async (ctx) => await protectedBranch(ctx, reset) ? MESSAGES.branch : null
@@ -267,18 +280,21 @@ const RULES = {
   checkout,
   switch: switchBranch,
   reset,
-  // `restore --staged <paths>` only unstages those paths; restoring from another commit, or the index and the files
-  // together, overwrites work.
+  // Restoring named paths (from any source, into the index, the files or both) touches only those paths; the whole tree
+  // discards other sessions' work, or unstages the whole shared index.
   restore: (args) => {
     const parsed = parseGitOptions(SPECS.restore, args)
-    return hasOption(parsed, "source") || (hasOption(parsed, "staged") && hasOption(parsed, "worktree")) ? fixed(MESSAGES.restore) : null
+    if (!hasOption(parsed, "pathspec-from-file") && !wholeTree(parsed.operands)) return null
+    return fixed(hasOption(parsed, "staged") && !hasOption(parsed, "worktree") ? MESSAGES.unstage : MESSAGES.restore)
   },
   clean: () => fixed(MESSAGES.clean),
   stash: ([subcommand]) => ["list", "show"].includes(subcommand) ? null : fixed(MESSAGES.stash),
   branch,
   rebase,
   pull,
-  merge,
+  // A merge adds history and moves nothing off the branch; Git refuses to overwrite uncommitted work, and --autostash
+  // re-applies within the same command.
+  merge: () => null,
   push,
   fetch,
   config,
@@ -287,15 +303,26 @@ const RULES = {
   bisect: ([subcommand]) => ALLOWED_BISECT.has(subcommand) ? null : fixed(MESSAGES.leave),
 }
 
-// Git never lets an alias replace one of its own commands, so these names need no alias lookup.
+// Git never lets an alias replace one of its own commands, so these names need no alias lookup (Git 2.54's
+// `git --list-cmds=builtins`).
 export const BUILTINS = new Set([
-  ...Object.keys(RULES), "add", "am", "apply", "archive", "blame", "bundle", "cat-file", "check-attr", "check-ignore",
-  "cherry", "cherry-pick", "clone", "count-objects", "describe", "diff", "diff-files", "diff-index",
-  "diff-tree", "for-each-ref", "format-patch", "fsck", "gc", "grep", "hash-object", "help", "init", "log",
-  "ls-files", "ls-remote", "ls-tree", "maintenance", "merge-base", "mv", "notes", "range-diff", "reflog", "remote",
-  "repack", "rerere", "rev-list", "rev-parse", "revert", "rm", "shortlog", "show", "show-branch", "show-ref",
-  "sparse-checkout", "status", "submodule", "symbolic-ref", "tag", "update-index", "update-ref", "var",
-  "verify-commit", "verify-tag", "version", "write-tree",
+  ...Object.keys(RULES), "add", "am", "annotate", "apply", "archive", "backfill", "blame", "bugreport", "bundle",
+  "cat-file", "check-attr", "check-ignore", "check-mailmap", "check-ref-format", "checkout--worker", "checkout-index",
+  "cherry", "cherry-pick", "clone", "column", "commit-graph", "commit-tree", "count-objects", "credential",
+  "credential-cache", "credential-cache--daemon", "credential-store", "describe", "diagnose", "diff", "diff-files",
+  "diff-index", "diff-pairs", "diff-tree", "difftool", "fast-export", "fast-import", "fetch-pack", "fmt-merge-msg",
+  "for-each-ref", "for-each-repo", "format-patch", "fsck", "fsck-objects", "fsmonitor--daemon", "gc",
+  "get-tar-commit-id", "grep", "hash-object", "help", "history", "hook", "index-pack", "init", "init-db",
+  "interpret-trailers", "last-modified", "log", "ls-files", "ls-remote", "ls-tree", "mailinfo", "mailsplit",
+  "maintenance", "merge-base", "merge-file", "merge-index", "merge-ours", "merge-recursive", "merge-recursive-ours",
+  "merge-recursive-theirs", "merge-subtree", "merge-tree", "mktag", "mktree", "multi-pack-index", "mv", "name-rev",
+  "notes", "pack-objects", "pack-redundant", "pack-refs", "patch-id", "pickaxe", "prune", "prune-packed",
+  "range-diff", "read-tree", "receive-pack", "reflog", "refs", "remote", "remote-ext", "remote-fd", "repack",
+  "replace", "replay", "repo", "rerere", "rev-list", "rev-parse", "revert", "rm", "send-pack", "shortlog", "show",
+  "show-branch", "show-index", "show-ref", "sparse-checkout", "stage", "status", "stripspace", "submodule", "submodule--helper",
+  "symbolic-ref", "tag", "unpack-file", "unpack-objects", "update-index", "update-ref", "update-server-info",
+  "upload-archive", "upload-archive--writer", "upload-pack", "var", "verify-commit", "verify-pack", "verify-tag",
+  "version", "whatchanged", "write-tree",
 ])
 
 /** Whether `git <operation>` has a rule; an unknown program whose first operand is one could be Git. */
@@ -316,6 +343,14 @@ function unknownArgument(operation, args) {
   return options.some(unknown) || list.some((arg) => arg.startsWith("-") && unknown(arg.split("=")[0]))
 }
 
+// `-c url.https://user:token@host/.insteadOf=https://host/` only adds credentials to the same URL, so the operation
+// reaches the same remote and does the same thing.
+const USERINFO = /^([a-z][\w+.-]*:\/\/)[^/@]*@/iu
+function credentialsOnly(key, value) {
+  const match = /^url\.(.+)\.(?:insteadof|pushinsteadof)$/iu.exec(key)
+  return match !== null && typeof value === "string" && USERINFO.test(match[1]) && match[1].replace(USERINFO, "$1") === value
+}
+
 /**
  * null when `git <operation> <args>` is allowed in any checkout; otherwise a check of the target checkout.
  * `overrides` are the command's -c, --config-env and GIT_CONFIG_* entries as [key, value] pairs. With `variables`
@@ -331,7 +366,7 @@ export function classifyGit(operation, args, overrides = [], { variables = false
     return operation === "worktree" && !["add", "list"].includes(args[0]) ? { victim: "\0" } : fixed(MESSAGES.variable)
   }
   if (OVERRIDE_OPERATIONS.has(operation)) {
-    const override = overrides.find(([key]) => OVERRIDDEN.test(canonicalKey(key)))
+    const override = overrides.find(([key, value]) => OVERRIDDEN.test(canonicalKey(key)) && !credentialsOnly(key, value))
     if (override) return fixed(MESSAGES.override(override[0], operation))
   }
   return RULES[operation](args)

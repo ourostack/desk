@@ -7,13 +7,13 @@
 import * as path from "node:path"
 import { mktempPath, physicalDirectory, staticGitOutput } from "./shell-paths.js"
 import { inspectPowerShell } from "./powershell-commands.js"
-import { inspectionBudget, mayInvokeGit, mergedValue, UNKNOWN, UNKNOWN_GIT, unknownOutput, unresolved } from "./guard-unknowns.js"
+import { inspectionBudget, mayInvokeGit, mergedValue, UNKNOWN, UNKNOWN_GIT, unknownOutput } from "./guard-unknowns.js"
 
 const separators = new Set([";", "\n", "&", "&&", "||", "|", "(", ")", "{", "}"])
 
 export function tokenizeShell(text, powershell = false) {
   const tokens = []
-  let parts = [], value = "", active = false, quote = "", pendingHere = null, quoted = false
+  let parts = [], value = "", active = false, quote = "", pendingHere = null, quoted = false, braced = false
   const heredocs = []
   const part = (expand) => {
     parts.push({ text: value, expand, quoted: Boolean(quote) })
@@ -22,6 +22,13 @@ export function tokenizeShell(text, powershell = false) {
   const word = () => {
     if (!active) return
     part(quote !== "'")
+    if (braced) {
+      // Bash expands `{a,b}` and `{1..3}` into several words before anything else, from the text alone.
+      if (parts.some((p) => p.text !== "" && (p.quoted || !p.expand)) || /\$[({]|`/u.test(parts.map((p) => p.text).join(""))) throw new Error("unresolved brace expansion")
+      for (const text of expandBraces(parts.map((p) => p.text).join(""))) tokens.push({ parts: [{ text, expand: true, quoted: false }], quoted: false })
+      parts = []; active = false; quoted = false; braced = false
+      return
+    }
     const token = { parts, quoted }
     tokens.push(token)
     if (pendingHere) {
@@ -88,6 +95,11 @@ export function tokenizeShell(text, powershell = false) {
       tokens.push("\n")
     } else if (/\s/u.test(c)) {
       word()
+    } else if (!powershell && "<>".includes(c) && next === "(" && !active) {
+      // Process substitution runs its command and stands for a path, like $( ) stands for its output.
+      active = true
+      const sub = substitution(text, i + 2)
+      value += `$(${sub.text})`; i = sub.end
     } else if ("<>".includes(c)) {
       // Redirection paths are operands, never commands. Keep substitutions in them.
       if (active && /^\d+$/u.test(value) && parts.length === 0) { value = ""; active = false }
@@ -104,10 +116,9 @@ export function tokenizeShell(text, powershell = false) {
         if (end >= 0) { value += text.slice(i, end + 1); i = end; continue }
       }
       // Bash's { and } are reserved words only as whole words, so `@{upstream}` and `HEAD@{1}` are one word. A brace
-      // expansion such as `{main,topic}` makes several words Desk does not compute.
+      // expansion such as `{main,topic}` makes several words (expandBraces).
       if (!powershell && (c === "{" || c === "}") && (active || !(next === undefined || (c === "{" ? /\s/u : /[\s;&|)<>]/u).test(next)))) {
-        const close = c === "{" ? text.indexOf("}", i) : -1
-        if (close > 0 && /,|\.\./u.test(text.slice(i, close))) throw new Error("unresolved brace expansion")
+        if (c === "{" && !quote && braceEnd(text, i) > 0) braced = true
         active = true; value += c
         continue
       }
@@ -125,6 +136,53 @@ export function tokenizeShell(text, powershell = false) {
   if (quote) throw new Error("unterminated shell quote")
   word()
   return tokens
+}
+
+// The index of the `}` that closes a brace expansion opened at `start` (a top-level `,` or a `x..y` sequence), or -1.
+function braceEnd(text, start) {
+  let depth = 0, comma = false
+  for (let i = start; i < text.length; i++) {
+    const c = text[i]
+    if (/[\s;&|<>()'"`$\\]/u.test(c)) return -1
+    if (c === "{") depth++
+    else if (c === "}" && --depth === 0) return comma || /^\{(?:-?\d+\.\.-?\d+|[A-Za-z]\.\.[A-Za-z])(?:\.\.-?\d+)?\}$/u.test(text.slice(start, i + 1)) ? i : -1
+    else if (c === "," && depth === 1) comma = true
+  }
+  return -1
+}
+
+const BRACE_WORDS = 4096
+/** Bash brace expansion of an unquoted word: `a{b,c}d`, nesting, and `{1..3}`/`{a..c}` sequences with an optional step. */
+export function expandBraces(word) {
+  let out = [""], i = 0
+  while (i < word.length) {
+    const end = word[i] === "{" ? braceEnd(word, i) : -1
+    if (end < 0) { out = out.map((w) => w + word[i]); i++; continue }
+    const inner = word.slice(i + 1, end)
+    let items = []
+    const sequence = /^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(?:\.\.(-?\d+))?$/u.exec(inner)
+    if (sequence && /^-?\d/u.test(sequence[1]) === /^-?\d/u.test(sequence[2])) {
+      const numeric = /^-?\d/u.test(sequence[1])
+      const from = numeric ? Number(sequence[1]) : sequence[1].charCodeAt(0), to = numeric ? Number(sequence[2]) : sequence[2].charCodeAt(0)
+      const step = Math.abs(Number(sequence[3] ?? 1)) || 1
+      const width = numeric && /^-?0\d/u.test(sequence[1] + sequence[2]) ? Math.max(sequence[1].length, sequence[2].length) : 0
+      if (Math.abs(to - from) / step >= BRACE_WORDS) throw new Error("brace expansion too large")
+      for (let n = from; from <= to ? n <= to : n >= to; n += from <= to ? step : -step) {
+        items.push(numeric ? String(n).padStart(width, "0") : String.fromCharCode(n))
+      }
+    } else {
+      let depth = 0, startItem = 0
+      for (let j = 0; j <= inner.length; j++) {
+        if (j === inner.length || (inner[j] === "," && depth === 0)) { items.push(...expandBraces(inner.slice(startItem, j))); startItem = j + 1 }
+        else if (inner[j] === "{") depth++
+        else if (inner[j] === "}") depth--
+      }
+    }
+    out = out.flatMap((w) => items.map((item) => w + item))
+    if (out.length > BRACE_WORDS) throw new Error("brace expansion too large")
+    i = end + 1
+  }
+  return out
 }
 
 function ansiQuoted(text, start) {
@@ -154,10 +212,25 @@ function ansiQuoted(text, start) {
 
 function substitution(text, start) {
   let depth = 1, quote = ""
+  const pending = []
   for (let i = start; i < text.length; i++) {
     const c = text[i]
     if (c === "\\" && quote !== "'") { i++; continue }
     if (quote) { if (c === quote) quote = ""; continue }
+    // A here-document's body is raw text up to its delimiter line; quotes and parentheses in it do not count.
+    const here = !quote && c === "<" && /^<<(-?)[ \t]*(['"]?)([\w.-]+)\2/u.exec(text.slice(i))
+    if (here && text[i + 2] !== "<") { pending.push({ delimiter: here[3], tabs: here[1] === "-" }); i += here[0].length - 1; continue }
+    if (c === "\n" && pending.length) {
+      for (const { delimiter, tabs } of pending.splice(0)) {
+        while (i < text.length) {
+          const end = text.indexOf("\n", i + 1)
+          const line = text.slice(i + 1, end < 0 ? text.length : end)
+          i = end < 0 ? text.length : end
+          if ((tabs ? line.replace(/^\t+/u, "") : line) === delimiter) break
+        }
+      }
+      continue
+    }
     if (c === "'" || c === '"') { quote = c; continue }
     if (c === "(") depth++
     if (c === ")" && --depth === 0) return { text: text.slice(start, i), end: i }
@@ -198,13 +271,18 @@ function parse(tokens) {
     let node = pipeline()
     while (tokens[i] === "&&" || tokens[i] === "||") {
       const op = tokens[i++]
+      while (tokens[i] === "\n") i++
       node = { kind: op, left: node, right: pipeline() }
     }
     return node
   }
   function pipeline() {
     const nodes = [command()]
-    while (tokens[i] === "|") { i++; nodes.push(command()) }
+    while (tokens[i] === "|") {
+      i++
+      while (tokens[i] === "\n") i++
+      nodes.push(command())
+    }
     return nodes.length === 1 ? nodes[0] : { kind: "pipe", nodes }
   }
   function command() {
@@ -375,8 +453,9 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
   const tree = parse(tokenizeShell(command))
   let serial = 0
   async function nested(text, state, shell = "bash") {
-    // An eval, -c or stdin script must be known literally.
-    if (text.includes(UNKNOWN)) throw unresolved("a script this command evaluates")
+    // An eval, -c or stdin script Desk cannot read is not judged (the guard is not a sandbox): text with no Git in
+    // what is known passes, and readable Git text is inspected with its unknown parts as unknown values.
+    if (text.includes(UNKNOWN) && !mayInvokeGit(text.replaceAll(UNKNOWN_GIT, "").replaceAll(UNKNOWN, " "))) return
     return inspectShell({ command: text, cwd: state.cwd, env: state.vars, powershell: shell === "powershell", visit, depth: depth + 1, budget })
   }
   async function expand(word, state, split = false) {
@@ -442,6 +521,15 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     if (words[0] === "mktemp") return mktempPath(words.slice(1), state.cwd, state.vars, ++serial) ?? UNKNOWN
     return unknownOutput(text)
   }
+  // An if or while condition never ends the script under `set -e`.
+  async function condition(node, state) {
+    return (await run(node, { ...state, errexit: false })).map((s) => ({ ...s, errexit: state.errexit }))
+  }
+  // A directory this command creates (mkdir, git worktree add) can be entered later in the same command.
+  function created(state, operand) {
+    if (operand === undefined || operand.includes(UNKNOWN) || state.logicalCwd.includes(UNKNOWN)) return state
+    return { ...state, made: [...state.made ?? [], path.resolve(state.logicalCwd, operand)] }
+  }
   function positional(state, values, start) {
     const vars = Object.fromEntries(Object.entries(state.vars).filter(([key]) => !/^\d+$/u.test(key)))
     for (let i = 0; i < values.length; i++) vars[i + start] = values[i]
@@ -473,7 +561,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     }
     if (node.kind === "define") return [{ ...state, functions: { ...state.functions, [node.name]: node.body }, status: true }]
     if (node.kind === "while") {
-      const states = await run(node.condition, state), out = []
+      const states = await condition(node.condition, state), out = []
       for (const s of states) {
         if (s.status !== node.until) out.push(...await run(node.body, s))
         else out.push(s)
@@ -481,7 +569,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       return out
     }
     if (node.kind === "if") {
-      const states = await run(node.condition, state)
+      const states = await condition(node.condition, state)
       return (await Promise.all(states.map((s) => run(s.status ? node.yes : node.no, s)))).flat()
     }
     if (node.kind === "for") {
@@ -492,12 +580,14 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       }
       return states
     }
-    if (node.kind === "not") return (await run(node.body, state)).map((s) => ({ ...s, status: !s.status }))
+    if (node.kind === "not") return (await run(node.body, state)).map((s) => ({ ...s, status: !s.status, exempt: true }))
     if (node.kind === "background") { await run(node.body, state); return [{ ...state, status: true }] }
     if (node.kind === "list") {
       let states = [state]
       for (const [index, item] of node.nodes.entries()) {
         states = (await Promise.all(states.map((s) => run(item, s)))).flat()
+        // Under `set -e`, a failed command ends the script, unless it failed on the left of && or || or under !.
+        states = states.map(({ exempt, ...s }) => s.errexit && !s.status && !exempt ? { ...s, terminated: true } : s)
         // Only the last item's status reaches the list's caller ($? is not modeled).
         if (index < node.nodes.length - 1) states = states.map((s) => ({ ...s, status: true }))
         states = unique(states)
@@ -508,7 +598,7 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
       const left = await run(node.left, state), out = []
       for (const s of left) {
         if (s.status === (node.kind === "&&" ? true : false)) out.push(...await run(node.right, s))
-        else out.push(s)
+        else out.push({ ...s, exempt: true })
       }
       return out
     }
@@ -567,10 +657,8 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
     }
     const unknown = [{ ...state, status: true }, { ...state, status: false }]
     if (path.basename(args[0] ?? "").includes(UNKNOWN)) {
-      // A program whose name is unknown fails closed when its text, or the text that computed it, names Git or runs
-      // code; otherwise it is judged as Git if its arguments read like a checked Git command. A computed directory
-      // with a known name, such as "$(npm bin)/nx", is that program.
-      if (args.some((arg) => arg.includes(UNKNOWN_GIT)) || mayInvokeGit(wordText(node.words))) throw unresolved("the program this command runs")
+      // A program whose name is unknown is judged as Git when its arguments read like a checked Git command. A computed
+      // directory with a known name, such as "$(npm bin)/nx", is that program.
       await visit({ name: "git", args: args.slice(1), cwd: local.cwd, env: local.vars, computed: true })
       return unknown
     }
@@ -605,26 +693,56 @@ export async function inspectShell({ command, cwd, env, powershell = false, visi
           return [{ ...local, cwd: dir, logicalCwd, vars: { ...local.vars, OLDPWD: state.logicalCwd, PWD: logicalCwd }, status: true }]
         }
       }
+      const made = target && !target.includes(UNKNOWN) ? path.resolve(local.logicalCwd, target) : null
+      if (made !== null && local.made?.includes(made)) {
+        return [{ ...local, cwd: made, logicalCwd: made, vars: { ...local.vars, OLDPWD: state.logicalCwd, PWD: made }, status: true }]
+      }
       return [{ ...state, status: false }]
     }
-    if ((name === "source" || name === ".") && args.some((arg) => arg.includes(UNKNOWN))) throw unresolved("the file this command sources")
+    if (name === "set") {
+      const flags = args.slice(1)
+      const errexit = flags.some((flag, i) => /^-[a-z]*e/u.test(flag) || (flag === "-o" && flags[i + 1] === "errexit"))
+        ? true : flags.some((flag, i) => /^\+[a-z]*e/u.test(flag) || (flag === "+o" && flags[i + 1] === "errexit")) ? false : local.errexit
+      return [{ ...local, errexit, status: true }]
+    }
+    if (name === "mkdir") {
+      let made = local
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === "-m" || args[i] === "--mode") i++
+        else if (!args[i].startsWith("-")) made = created(made, args[i])
+      }
+      // `mkdir -p` succeeds when the directory already exists, so only its success is modeled.
+      return args.some((arg) => /^-[a-z]*p/u.test(arg) || arg === "--parents") ? [{ ...made, status: true }] : [{ ...made, status: true }, { ...state, status: false }]
+    }
+    // `rm -f` succeeds when the file is missing, so only its success is modeled.
+    if (name === "rm" && args.some((arg) => /^-[a-z]*f/iu.test(arg) || arg === "--force")) return [{ ...local, status: true }]
+    // A sourced file is not read, known or not.
     if (local.functions[name]) return run(local.functions[name], positional(local, args.slice(1), 1))
     if (SHELLS.has(name)) {
       const shell = ["pwsh", "powershell"].includes(name) ? "powershell" : "bash"
       const script = shellScript(name, args)
-      if (script.encoded) throw unresolved("an encoded script this command runs")
+      // An encoded script is not decoded: unreadable code passes.
+      if (script.encoded) return unknown
       const directory = script.directory === undefined ? local.cwd : physicalDirectory(local.cwd, script.directory) ?? UNKNOWN
       if (script.command !== undefined) await nested(script.command, shell === "bash" ? positional(local, script.positional, 0) : { ...local, cwd: directory }, shell)
       else if (script.stdin) {
-        // A here-document, here-string, input file or piped output is the script; one Desk cannot read literally fails closed.
+        // A here-document, here-string, input file or piped output is the script; one Desk cannot read passes (nested).
         const input = node.stdin ? await expand(node.stdin, local) : state.stdin
-        if (input !== undefined) {
-          if (input.includes(UNKNOWN)) throw unresolved("the script this shell reads from its input")
-          await nested(input, { ...local, cwd: directory }, shell)
-        }
+        if (input !== undefined) await nested(input, { ...local, cwd: directory }, shell)
       }
     } else if (name === "eval") await nested(args.slice(1).join(" "), local)
-    else await visit({ name, args: args.slice(1), cwd: local.cwd, env: local.vars })
+    else {
+      await visit({ name, args: args.slice(1), cwd: local.cwd, env: local.vars })
+      const add = name === "git" ? args.indexOf("add") : -1
+      if (add > 0 && args[add - 1] === "worktree") {
+        let operand
+        for (let i = add + 1; i < args.length && operand === undefined; i++) {
+          if (["-b", "-B", "--reason"].includes(args[i])) i++
+          else if (!args[i].startsWith("-")) operand = args[i]
+        }
+        return [{ ...created(local, operand), status: true }, { ...state, status: false }]
+      }
+    }
     if (["true", ":", "echo", "printf"].includes(name)) return [{ ...state, status: true }]
     if (name === "false") return [{ ...state, status: false }]
     return unknown

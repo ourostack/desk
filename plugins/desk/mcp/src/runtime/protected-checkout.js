@@ -6,7 +6,7 @@ import { runGit } from "./state-branch.js"
 import { readInspectionGit } from "./git-inspection.js"
 import { existingDirectory, physicalDirectory } from "./shell-paths.js"
 import { BUILTINS, canonicalKey, classifyGit, hasRule, MESSAGES } from "./git-guard-policy.js"
-import { GuardDenial, inspectionBudget, mayInvokeGit, namesGit, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
+import { GuardDenial, inspectionBudget, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
 
 export { WORKTREE_COMMAND }
 
@@ -47,6 +47,8 @@ async function readPolicy(read, cwd, options, env) {
   // -z keeps an empty value ("key\n\0", false) apart from a key with no value ("key\0", true).
   const result = await read(cwd, [...options, "config", "-z", "--show-scope", "--get-regexp", POLICY_KEYS], env)
   // Outside a checkout, or with a location that is not one, Git reports no value (exit 1) and there is no local policy.
+  // A directory Git cannot open as a repository at all (a removed worktree's leftover .git file) runs no Git either.
+  if (!result.ok && result.code === 128 && /not a git repository/iu.test(result.stderr)) return { protected: false, entries: [] }
   if (!result.ok && result.code !== 1) throw new Error(`cannot read checkout protection: ${result.stderr}`)
   const entries = [], fields = result.stdout.split("\0")
   for (let i = 0; i + 1 < fields.length; i += 2) {
@@ -214,7 +216,13 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
       const worktrees = await read(target, [...location, "worktree", "list", "--porcelain"], variables)
       const paths = worktrees.stdout.split(/\r?\n/u).filter((line) => line.startsWith("worktree ")).map((line) => line.slice(9))
       const victim = rule.victim
-      if (victim.includes(UNKNOWN)) throw unresolved("which worktree this removes")
+      if (victim.includes(UNKNOWN)) {
+        // An unknown victim is checked against every worktree of the repository: it passes when none is protected.
+        for (const candidate of paths) {
+          if ((await readPolicy(read, candidate, [], {})).protected) throw new GuardDenial(`Desk protected checkout ${candidate}: ${MESSAGES.worktreeRemove}`)
+        }
+        return
+      }
       let resolved = path.resolve(target, victim)
       try { resolved = realpathSync(resolved) } catch (error) { if (error.code !== "ENOENT") throw error }
       const found = paths.find((p) => p === resolved) ?? paths.find((p) => path.basename(p) === victim)
@@ -248,12 +256,34 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
   try {
     await inspectShell({ command, cwd, env, powershell, visit: guardedVisit, budget })
   } catch (error) {
-    if (error instanceof GuardDenial) return { deny: true, reason: error.reason }
-    // Text Desk cannot parse is allowed unless it could reach Git (guard-unknowns.js), including a Windows path to git.exe.
-    if (!mayInvokeGit(command) && !namesGit(command)) return { deny: false }
-    return { deny: true, reason: `Desk could not inspect this shell command (${error.message}), and it could run Git in a protected checkout. Split it into simpler commands.` }
+    if (error instanceof GuardDenial) return { deny: true, reason: redact(error.reason) }
+    // Text Desk cannot parse is judged from its words: it is denied only when it names a Git operation that a rule
+    // would check anywhere but in a known unprotected checkout (fallbackOperation).
+    const operation = fallbackOperation(command)
+    if (operation === null) return { deny: false }
+    if (await guardedVisit.unmodeled({ text: command, cwd, env })) return { deny: false }
+    return { deny: true, reason: redact(`Desk could not inspect this shell command (${error.message}), and its git ${operation} could change a protected checkout. Split it into simpler commands.`) }
   }
   return { deny: false }
+}
+
+// The first Git operation named in shell text Desk could not parse that a rule could deny in a protected checkout,
+// or null. Quotes are dropped and the words after `git <operation>` up to a separator are its arguments; an
+// operation safe in any checkout (a plain commit, pull, push or rebase onto the upstream) does not count.
+const FALLBACK_GIT = /(?<![\w.-])git(?:\.exe)?((?:\s+(?:-[Cc]\s+\S+|--?[\w-]+(?:=\S+)?))*)\s+([A-Za-z][\w-]*)([^\n;&|()`]*)/gu
+export function fallbackOperation(command) {
+  for (const match of command.replace(/["'\\]/gu, "").matchAll(FALLBACK_GIT)) {
+    const operation = match[2]
+    if (!hasRule(operation)) continue
+    const rule = classifyGit(operation, match[3].split(/\s+/u).filter(Boolean))
+    if (rule && !rule.anywhere) return operation
+  }
+  return null
+}
+
+// Credentials in a URL's user information (https://user:token@host) never reach a denial message.
+export function redact(text) {
+  return text.replace(/([a-z][\w+.-]*:\/\/)[^\s/@'"]+@/giu, "$1<redacted>@")
 }
 
 export async function protectedCheckoutHook(input, host) {
