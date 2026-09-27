@@ -6,7 +6,13 @@ const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
+// Loaded only by the detached repair launcher, never on the boot path.
 const compatibleNode = (options) => require("./compatible-node.cjs").compatibleNode(options);
+// Set on the repair a launcher re-executes in a compatible Node, so it runs the repair itself.
+const REPAIR_NODE_ENV = "DESK_TIDY_REPAIR_NODE";
+// The launcher may spend the bootstrap's full probe budget: nothing waits on it.
+const LAUNCHER_PROBE_BUDGET_MS = 3000;
+const NODE_STATUS_MAX_BYTES = 4096;
 const runtime = (name) => import(pathToFileURL(path.join(__dirname, "..", "mcp", "src", name)).href);
 const oneLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ").slice(0, 480);
 
@@ -36,11 +42,27 @@ async function readReport(file) {
   return decodeTidyReport(await fs.readFile(file, "utf8"));
 }
 
-// The repair loads Desk's MCP code, so it runs in `node`, a Node that
-// satisfies the MCP's engines range, never simply in the hook's own Node.
-async function launchRepair(root, env, node) {
+// The no-Node status the repair launcher leaves beside the report when it
+// found no compatible Node, so the next boot line can say so.
+function nodeStatusPath(file) {
+  return `${file}.node.json`;
+}
+
+async function readNodeStatus(file) {
+  const info = await fs.lstat(nodeStatusPath(file));
+  if (!info.isFile() || info.size > NODE_STATUS_MAX_BYTES) throw new Error("unsafe workspace-tidy node status");
+  const status = JSON.parse(await fs.readFile(nodeStatusPath(file), "utf8"));
+  if (typeof status?.range !== "string") throw new Error("invalid workspace-tidy node status");
+  return status;
+}
+
+// The boot path does no Node search: the detached child starts in the hook's
+// own Node, which may be old, as the Node 16-safe repair launcher
+// (`startRepair`). The launcher finds a compatible Node and re-executes the
+// repair in it.
+async function launchRepair(root, env, spawnChild = spawn) {
   await new Promise((resolve, reject) => {
-    const child = spawn(node, [__filename, "--repair", root], {
+    const child = spawnChild(process.execPath, [__filename, "--repair", root], {
       detached: true, stdio: "ignore", windowsHide: true, env,
     });
     child.once("error", reject);
@@ -48,7 +70,7 @@ async function launchRepair(root, env, node) {
   });
 }
 
-async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair, resolveNode = compatibleNode, inspectionBudgetMs }, expired, signal) {
+async function checkWorkspace({ host, env = process.env, sessionFolder, launch = launchRepair, inspectionBudgetMs }, expired, signal) {
   try {
     const [{ resolveStartupRoot }, { resolveActivationConfigPath, isDeskWorkspace }] = await Promise.all([
       runtime("util/startup-direction.js"), runtime("util/paths.js"),
@@ -85,16 +107,19 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
       } catch (error) {
         if (error.code !== "ENOENT") previous += "repair lock unreadable; ";
       }
+      try {
+        const status = await readNodeStatus(reportPath(root, inventory.commonDirectory));
+        previous += `last repair not started: it needs Node ${oneLine(status.range)} and none was found; `;
+      } catch (error) {
+        if (error.code !== "ENOENT") previous += "repair Node status unreadable; ";
+      }
     }
     // No status, ancestry, network or removal in the hook. Detailed checks and
     // mutations run after launch in the detached process, with fresh evidence.
     if (expired()) return "";
-    const listed = `deferred (${inventory.worktrees.length} listed)${inventory.issues.length ? `; ${inventory.issues.join("; ")}` : ""}`;
-    const { node, range } = resolveNode({ env });
-    if (!node) return `Desk boot: workspace-tidy ${oneLine(`${previous}${listed}; repair not started: it needs Node ${range} and none was found`)}`;
     // The repair gets the binding's own spelling and resolves it again itself.
-    await launch(bound.root, env, node);
-    return `Desk boot: workspace-tidy ${oneLine(`${previous}${listed}`)}`;
+    await launch(bound.root, env);
+    return `Desk boot: workspace-tidy ${oneLine(`${previous}deferred (${inventory.worktrees.length} listed)${inventory.issues.length ? `; ${inventory.issues.join("; ")}` : ""}`)}`;
   } catch (error) {
     return `Desk boot: workspace-tidy deferred; ${oneLine(error.message)}`;
   }
@@ -141,8 +166,6 @@ async function updateReport(root, operation) {
     const prepare = (result) => {
       result.line = tidyLine(result);
       result.root = canonical;
-      // The spelling the repair was asked for, kept for display only.
-      result.bound = path.resolve(root);
       result.updated = new Date().toISOString();
       return encodeTidyReport(result);
     };
@@ -187,12 +210,41 @@ async function acknowledgeRepair(root, acknowledgement) {
   });
 }
 
-module.exports = { runBootChecks, runRepair, acknowledgeRepair, reportPath, readReport };
+/**
+ * The repair launcher: `--repair` runs here first, in whatever Node started
+ * it, so it keeps to what Node 16 has. It finds a Node that satisfies the
+ * MCP's engines range and runs the repair there: in this process when this
+ * Node fits, otherwise by re-executing itself in that Node and waiting for
+ * it. With none installed it records the no-Node status beside the report,
+ * starts nothing, and the next boot line says so. `resolveNode`,
+ * `spawnChild` and `repair` are test seams.
+ */
+async function startRepair(root, { env = process.env, resolveNode = compatibleNode, spawnChild = spawn, repair = runRepair } = {}) {
+  const { file } = await location(root);
+  const status = nodeStatusPath(file);
+  if (env[REPAIR_NODE_ENV] === "1") return repair(root);
+  const { node, range } = resolveNode({ env, probeBudgetMs: LAUNCHER_PROBE_BUDGET_MS });
+  if (!node) {
+    await fs.writeFile(status, `${JSON.stringify({ range, recorded: new Date().toISOString() })}\n`, { mode: 0o600 });
+    return { started: false, reason: `no Node ${range} found` };
+  }
+  await fs.rm(status, { force: true });
+  if (node === process.execPath) return repair(root);
+  const code = await new Promise((resolve, reject) => {
+    const child = spawnChild(node, [__filename, "--repair", root], { stdio: "inherit", windowsHide: true, env: { ...env, [REPAIR_NODE_ENV]: "1" } });
+    child.once("error", reject);
+    child.once("close", (exit) => resolve(exit));
+  });
+  if (code !== 0) throw new Error(`repair in ${node} exited with ${code}`);
+  return { started: true, node };
+}
+
+module.exports = { runBootChecks, runRepair, startRepair, launchRepair, acknowledgeRepair, reportPath, readReport, REPAIR_NODE_ENV };
 
 if (require.main === module) {
   const [command, root, id, digest, canonicalEvidence] = process.argv.slice(2);
   const run = command === "--repair" && root
-    ? runRepair(root)
+    ? startRepair(root)
     : command === "--ack" && root && id && digest && canonicalEvidence
       ? acknowledgeRepair(root, { id, digest, canonicalEvidence })
       : command === "--revoke" && root && id && digest && canonicalEvidence

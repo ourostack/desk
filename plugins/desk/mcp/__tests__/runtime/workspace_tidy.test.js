@@ -736,11 +736,10 @@ test("R8 a desk bound through a symlink alias is the same desk: task lookup, rep
   const repaired = await boot.runRepair(alias)
   assert.equal(repaired.removed[0].path, viaHook.directory)
   assert.equal(repaired.root, f.desk, "the report's identity is the real path")
-  assert.equal(repaired.bound, alias, "the spelling that bound the desk is kept for display")
   const file = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
   const persisted = await boot.readReport(file)
   assert.equal(persisted.root, f.desk)
-  assert.equal(persisted.bound, alias)
+  assert.equal("bound" in persisted, false, "the report stores one identity, the real path")
   assert.equal((await boot.runRepair(f.desk)).root, f.desk, "the real path reaches the same report")
 
   const env = { ...process.env, DESK: alias, DESK_ACTIVATION_CONFIG: "", HOME: f.root }

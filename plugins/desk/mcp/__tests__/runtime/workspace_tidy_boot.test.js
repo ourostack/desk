@@ -237,47 +237,93 @@ test("boot reports absent bindings, malformed reports and repair launch failures
   await assert.rejects(boot.readReport(file), /unsafe/)
 })
 
-test("with no compatible Node the boot check names it in its one line, never crashes, and starts no repair", async () => {
-  const f = await fixture()
-  const launched = []
-  const launch = async (...args) => { launched.push(args) }
-  const none = () => ({ node: null, range: ">=20.0.0" })
+async function bootLine(options) {
   let line
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    line = await boot.runBootChecks({ host: "claude", env: f.env, launch, resolveNode: none })
+    line = await boot.runBootChecks(options)
     if (!line.includes("budget exceeded")) break
   }
-  assert.equal(line, "Desk boot: workspace-tidy deferred (0 listed); repair not started: it needs Node >=20.0.0 and none was found")
-  assert.deepEqual(launched, [])
+  return line
+}
 
-  // The real resolver, forced to find nothing: an old running Node, and no other Node on PATH or under any manager.
-  const empty = await mkTempRoot("desk-no-node-")
-  const { compatibleNode } = require("../../../hooks/compatible-node.cjs")
-  const resolveNode = ({ env }) => compatibleNode({ env, current: { path: path.join(empty, "node"), version: "v16.20.2", abi: "93" } })
-  const bare = { ...f.env, PATH: empty, HOME: empty, DESK_NODE_SYSTEM_PREFIX: empty, NVM_DIR: "", FNM_DIR: "", VOLTA_HOME: "", ASDF_DATA_DIR: "", MISE_DATA_DIR: "", XDG_DATA_HOME: "", USERPROFILE: empty, APPDATA: empty, LOCALAPPDATA: empty, NVM_HOME: "", NVM_SYMLINK: "", ProgramFiles: empty, "ProgramFiles(x86)": empty }
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    line = await boot.runBootChecks({ host: "claude", env: bare, launch, resolveNode })
-    if (!line.includes("budget exceeded")) break
-  }
-  assert.match(line, /^Desk boot: workspace-tidy deferred \(0 listed\); repair not started: it needs Node >=20\.0\.0 and none was found$/)
-  assert.deepEqual(launched, [])
+test("the boot path does no Node search: it starts the repair launcher in the hook's own Node", async (t) => {
+  const f = await fixture()
+  const alias = path.join(f.root, "desk-alias")
+  await fs.symlink(f.desk, alias)
+  const resolver = require("../../../hooks/compatible-node.cjs")
+  const original = resolver.compatibleNode
+  let searches = 0
+  resolver.compatibleNode = () => { searches += 1; throw new Error("no Node search on the boot path") }
+  t.after(() => { resolver.compatibleNode = original })
+  const launched = []
+  const line = await bootLine({ host: "claude", env: { ...f.env, DESK: alias }, launch: async (...args) => { launched.push(args) } })
+  assert.equal(line, "Desk boot: workspace-tidy deferred (0 listed)")
+  assert.equal(searches, 0)
+  assert.deepEqual(launched.map(([root]) => root), [alias], "the launcher gets the binding's own spelling")
+
+  const spawned = []
+  const fakeChild = { once: (event, handler) => { if (event === "spawn") setImmediate(handler) }, unref: () => {} }
+  await boot.launchRepair(alias, f.env, (command, args, options) => { spawned.push({ command, args, detached: options.detached }); return fakeChild })
+  assert.deepEqual(spawned, [{ command: process.execPath, args: [fileURLToPath(hookPath), "--repair", alias], detached: true }])
+  assert.equal(searches, 0)
 })
 
-test("the repair is launched in the Node the resolver picks, with the binding's own spelling", async () => {
+test("the repair launcher runs the repair in a compatible Node, and with none records it for the next boot line", async () => {
+  const f = await fixture()
+  const file = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
+  const repaired = []
+  const repair = async (root) => { repaired.push(root); return { repaired: root } }
+
+  // The real resolver forced to find nothing: an old running Node, and no other Node anywhere.
+  const empty = await mkTempRoot("desk-no-node-")
+  const { compatibleNode } = require("../../../hooks/compatible-node.cjs")
+  const bare = { ...f.env, PATH: empty, HOME: empty, DESK_NODE_SYSTEM_PREFIX: empty, NVM_DIR: "", FNM_DIR: "", VOLTA_HOME: "", ASDF_DATA_DIR: "", MISE_DATA_DIR: "", XDG_DATA_HOME: "", USERPROFILE: empty, APPDATA: empty, LOCALAPPDATA: empty, NVM_HOME: "", NVM_SYMLINK: "", ProgramFiles: empty, "ProgramFiles(x86)": empty }
+  const probeBudgets = []
+  const noNode = (options) => { probeBudgets.push(options.probeBudgetMs); return compatibleNode({ ...options, env: bare, current: { path: path.join(empty, "node"), version: "v16.20.2", abi: "93" } }) }
+  assert.deepEqual(await boot.startRepair(f.desk, { env: f.env, resolveNode: noNode, repair }), { started: false, reason: "no Node >=20.0.0 found" })
+  assert.deepEqual(probeBudgets, [3000], "nothing waits on the launcher, so it may probe for longer than the hook could")
+  assert.deepEqual(repaired, [])
+  assert.equal(JSON.parse(await fs.readFile(`${file}.node.json`, "utf8")).range, ">=20.0.0")
+  assert.equal(await bootLine({ host: "claude", env: f.env, launch: async () => {} }), "Desk boot: workspace-tidy last repair not started: it needs Node >=20.0.0 and none was found; deferred (0 listed)")
+
+  // This Node fits: the repair runs here, and the stale no-Node status goes.
+  assert.deepEqual(await boot.startRepair(f.desk, { env: f.env, resolveNode: () => ({ node: process.execPath, range: ">=20.0.0" }), repair }), { repaired: f.desk })
+  await assert.rejects(fs.lstat(`${file}.node.json`), { code: "ENOENT" })
+
+  // Another Node fits: the launcher re-executes itself there and waits.
+  const spawned = []
+  const child = (code) => (command, args, options) => {
+    spawned.push({ command, args, marked: options.env[boot.REPAIR_NODE_ENV] })
+    return { once: (event, handler) => { if (event === "close") setImmediate(() => handler(code)) } }
+  }
+  const other = { node: "/other/node", range: ">=20.0.0" }
+  assert.deepEqual(await boot.startRepair(f.desk, { env: f.env, resolveNode: () => other, spawnChild: child(0), repair }), { started: true, node: "/other/node" })
+  assert.deepEqual(spawned[0], { command: "/other/node", args: [fileURLToPath(hookPath), "--repair", f.desk], marked: "1" })
+  await assert.rejects(boot.startRepair(f.desk, { env: f.env, resolveNode: () => other, spawnChild: child(3), repair }), /exited with 3/)
+  const failing = () => ({ once: (event, handler) => { if (event === "error") setImmediate(() => handler(new Error("spawn ENOENT"))) } })
+  await assert.rejects(boot.startRepair(f.desk, { env: f.env, resolveNode: () => other, spawnChild: failing, repair }), /ENOENT/)
+
+  // The re-executed repair runs itself, with no second search.
+  assert.deepEqual(await boot.startRepair(f.desk, { env: { ...f.env, [boot.REPAIR_NODE_ENV]: "1" }, resolveNode: () => { throw new Error("no second search") }, repair }), { repaired: f.desk })
+
+  // An unreadable status is named, never fatal.
+  await fs.writeFile(`${file}.node.json`, "{")
+  assert.match(await bootLine({ host: "claude", env: f.env, launch: async () => {} }), /repair Node status unreadable; deferred/)
+  await fs.writeFile(`${file}.node.json`, JSON.stringify({ range: 20 }))
+  assert.match(await bootLine({ host: "claude", env: f.env, launch: async () => {} }), /repair Node status unreadable; deferred/)
+  await fs.rm(`${file}.node.json`)
+  await fs.mkdir(`${file}.node.json`)
+  assert.match(await bootLine({ host: "claude", env: f.env, launch: async () => {} }), /repair Node status unreadable; deferred/)
+})
+
+test("a Copilot session folder that is a symlink alias of the bound desk is not ambiguous", async () => {
   const f = await fixture()
   const alias = path.join(f.root, "desk-alias")
   await fs.symlink(f.desk, alias)
   const launched = []
-  let line
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    launched.length = 0
-    line = await boot.runBootChecks({ host: "claude", env: { ...f.env, DESK: alias }, launch: async (...args) => { launched.push(args) }, resolveNode: () => ({ node: "/compatible/node", range: ">=20.0.0" }) })
-    if (!line.includes("budget exceeded")) break
-  }
+  const line = await bootLine({ host: "copilot", env: f.env, sessionFolder: alias, launch: async (...args) => { launched.push(args) } })
   assert.equal(line, "Desk boot: workspace-tidy deferred (0 listed)")
   assert.equal(launched.length, 1)
-  assert.equal(launched[0][0], alias)
-  assert.equal(launched[0][2], "/compatible/node")
 })
 
 test("boot lock I/O failures and a slow report read do not authorize late launch", async (t) => {

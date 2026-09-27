@@ -144,11 +144,14 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     if (!validMarker(marker)) return "invalid";
     await outbox.writeMarker(env, marker);
     const script = path.join(ownRoot, "mcp", "scripts", "factory.js");
+    // One Node search per hook run, however many jobs it starts.
+    let resolved;
+    const resolveOnce = (options) => (resolved ??= compatibleNode(options));
     if (ended) {
       const root = await outbox.factoryStateRoot(env);
-      await start(script, ["derive", "--marker", path.join(root, "markers", `${marker.host}-${id}.json`), "--wait-quiet", "30000"], env);
+      await start(script, ["derive", "--marker", path.join(root, "markers", `${marker.host}-${id}.json`), "--wait-quiet", "30000"], env, resolveOnce);
     } else if (supportsFinalize ?? cli.SUPPORTED_COMMANDS.includes("finalize")) {
-      for (const job of await outbox.listFinalizeJobs(env)) await start(script, ["finalize", "--job", job], env);
+      for (const job of await outbox.listFinalizeJobs(env)) await start(script, ["finalize", "--job", job], env, resolveOnce);
     }
     return "written";
   } catch {

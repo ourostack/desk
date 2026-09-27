@@ -63,13 +63,16 @@ function hookProbe(env) {
  *
  * `node` is the path of a Node that satisfies `range` (the MCP's engines
  * range), or null when none is installed. The running Node is used when it
- * satisfies the range, with no search. `current` and `select` are test seams.
+ * satisfies the range, with no search. `probeBudgetMs` caps the time spent
+ * running unknown Nodes; a caller that nothing waits on, such as the detached
+ * repair launcher, passes more. `current` and `select` are test seams.
  */
 function compatibleNode({
   env = process.env,
   current = { path: process.execPath, version: process.version, abi: process.versions.modules },
   mcpRoot = MCP_ROOT,
   select = (options) => bootstrap().selectNode(options),
+  probeBudgetMs = PROBE_BUDGET_MS,
 } = {}) {
   const plain = engineFloor(mcpRoot);
   if (plain !== null && atLeast(current.version, plain.floor)) return { node: current.path, range: plain.range };
@@ -83,7 +86,7 @@ function compatibleNode({
     mcpRoot,
     current,
     systemPrefix: env.DESK_NODE_SYSTEM_PREFIX || "",
-    probeBudgetMs: PROBE_BUDGET_MS,
+    probeBudgetMs,
     probe: hookProbe(env),
   });
   return { node: selection.node ? selection.node.path : null, range };

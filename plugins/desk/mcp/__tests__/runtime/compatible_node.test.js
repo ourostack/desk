@@ -66,8 +66,9 @@ test("an old running Node searches with the bootstrap's selection and a hook-siz
   compatibleNode({ env: { USERPROFILE: "C:\\Users\\a" }, current: OLD, select })
   assert.equal(calls[1].homeDir, "C:\\Users\\a")
   assert.equal(calls[1].systemPrefix, "")
-  compatibleNode({ env: {}, current: OLD, select })
+  compatibleNode({ env: {}, current: OLD, select, probeBudgetMs: 3000 })
   assert.equal(typeof calls[2].homeDir, "string")
+  assert.equal(calls[2].probeBudgetMs, 3000, "a caller nothing waits on may probe for longer")
 
   assert.deepEqual(compatibleNode({ env: {}, current: OLD, select: () => ({ node: null, range: ">=20.0.0" }) }).node, null)
 })

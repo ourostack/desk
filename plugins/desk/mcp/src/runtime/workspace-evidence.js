@@ -22,7 +22,6 @@ export function encodeTidyReport(report) {
     resources: report.resources,
     issues: report.issues,
     root: report.root,
-    bound: report.bound,
     updated: report.updated,
     line: report.line,
   })}\n`
