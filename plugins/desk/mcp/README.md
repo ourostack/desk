@@ -20,9 +20,9 @@ Or via environment:
 DESK=~/<your-workspace> node ./index.js
 ```
 
-## Factory local capture
+## Factory capture and store pipeline
 
-Claude and Copilot end/stop hooks now write protected local markers; detached derivation binds native session evidence to jobs and writes consent-gated local facts. `node scripts/factory.js derive --marker <file> [--wait-quiet <milliseconds>]` and `node scripts/factory.js status` expose the local runner. Task completion queues finalization when factory state exists, but transport and installed-host qualification remain pending. See [the local capture contract](../docs/factory-local-capture.md) for privacy, commands and recovery boundaries.
+Claude and Copilot end/stop hooks write protected local markers; detached derivation binds native session evidence to jobs and writes consent-gated local facts. The factory CLI exposes the local runner with `derive` and `status`, validates store intake with `validate-pr`, builds deterministic reports with `build`, and derives a hashed report URL with `job-link`. Task completion queues finalization when factory state exists, but transport, store workflows and installed-host qualification remain separate milestone work. See [the factory capture and pipeline contract](../docs/factory-local-capture.md) for privacy, commands, formulas and recovery boundaries.
 
 ## Tools exposed (18)
 

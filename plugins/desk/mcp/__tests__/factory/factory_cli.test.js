@@ -6,15 +6,26 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, promises as fs, rmSync } from "node:fs"
+import { cpSync, existsSync, mkdtempSync, promises as fs, readFileSync, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { isMainModule, main, parseOptions, runConsentCommand, runDeriveCommand, runStatusCommand } from "../../scripts/factory.js"
+import {
+  isMainModule,
+  main,
+  parseOptions,
+  runBuildCommand,
+  runConsentCommand,
+  runDeriveCommand,
+  runJobLinkCommand,
+  runStatusCommand,
+  runValidatePrCommand,
+} from "../../scripts/factory.js"
 import { readConsent } from "../../src/factory/outbox.js"
 
 const SCRIPT = fileURLToPath(new URL("../../scripts/factory.js", import.meta.url))
+const FIXTURE_STORE = fileURLToPath(new URL("fixtures/store", import.meta.url))
 
 async function scratch(run) {
   const rawBase = mkdtempSync(path.join(os.tmpdir(), "desk-factory-cli-"))
@@ -67,6 +78,260 @@ test("derive and status reject malformed options and out-of-budget quiet waits",
   }
   assert.deepEqual(await runDeriveCommand({ argv: ["--marker", "x", "--wait-quiet", "0"], env }), { result: "invalid", store: null })
   await assert.rejects(runStatusCommand({ argv: ["extra"], env }), /Usage:/u)
+}))
+
+test("build writes the deterministic report tree and job-link returns the accepted URL", () => scratch(async (env) => {
+  const store = path.join(env.HOME, "store")
+  const out = path.join(store, "_out")
+  cpSync(FIXTURE_STORE, store, { recursive: true })
+  assert.deepEqual(await runBuildCommand({ argv: ["--store", store, "--out", out] }), { jobs: 2, sessions: 4 })
+  assert.equal(JSON.parse(readFileSync(path.join(out, "jobs", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"), "utf8")).job, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+  assert.deepEqual(await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--person-prefix", "", "--track", "factory", "--slug", "store-pipeline"] }), {
+    link: "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md",
+  })
+  assert.deepEqual(await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", "git@github.com:OuroStack/Desk.git", "--track", "factory", "--slug", "store-pipeline"] }), {
+    link: "https://github.com/ourostack/factory/blob/reports/jobs/3e7101c7c7d8774223be31b99495dd7f.md",
+  })
+  await assert.rejects(runBuildCommand({ argv: ["--store", store] }), /Usage: factory\.js build/u)
+  await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory"] }), /Usage: factory\.js job-link/u)
+}))
+
+test("validate-pr reads base and head as Git data, enforces facts for contributors, and marks maintainer changes", () => scratch(async (env) => {
+  const repo = path.join(env.HOME, "store")
+  const facts = path.join(repo, "facts")
+  await fs.mkdir(facts, { recursive: true })
+  const fixtureName = "claude-code-11111111-1111-4111-8111-111111111111.json"
+  const fixture = readFileSync(path.join(FIXTURE_STORE, "facts", fixtureName), "utf8")
+  await fs.writeFile(path.join(facts, fixtureName), fixture)
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo })
+  execFileSync("git", ["config", "user.name", "Fixture"], { cwd: repo })
+  execFileSync("git", ["config", "user.email", "fixture@example.invalid"], { cwd: repo })
+  execFileSync("git", ["add", "facts"], { cwd: repo })
+  execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: repo })
+  const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim()
+
+  const updated = JSON.parse(fixture)
+  updated.session.duration_ms += 1
+  await fs.writeFile(path.join(facts, fixtureName), `${JSON.stringify(updated)}\n`)
+  execFileSync("git", ["add", "facts"], { cwd: repo })
+  execFileSync("git", ["commit", "-q", "-m", "facts"], { cwd: repo })
+  const factsHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim()
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", base, "--head", factsHead, "--author-association", "CONTRIBUTOR"], cwd: repo }), {
+    ok: true,
+    maintenance: false,
+    errors: [],
+  })
+
+  const marker = path.join(env.HOME, "executed")
+  await fs.writeFile(path.join(repo, "candidate.js"), `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran")`)
+  execFileSync("git", ["add", "candidate.js"], { cwd: repo })
+  execFileSync("git", ["commit", "-q", "-m", "candidate"], { cwd: repo })
+  const maintenanceHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim()
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", factsHead, "--head", maintenanceHead, "--author-association", "OWNER"], cwd: repo }), {
+    ok: true,
+    maintenance: true,
+    errors: [],
+  })
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", factsHead, "--head", maintenanceHead, "--author-association", "NONE"], cwd: repo }), {
+    ok: false,
+    maintenance: false,
+    errors: [{ code: "path", path: "changes.0" }],
+  })
+  assert.equal(existsSync(marker), false)
+}))
+
+test("validate-pr marks non-fact files under facts/ and maintainer removals as maintenance, and reads previous bytes at the merge base", () => scratch(async (env) => {
+  const repo = path.join(env.HOME, "store")
+  const facts = path.join(repo, "facts")
+  await fs.mkdir(facts, { recursive: true })
+  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim()
+  const names = ["claude-code-11111111-1111-4111-8111-111111111111.json", "copilot-cli-22222222-2222-4222-8222-222222222222.json"]
+  for (const name of names) await fs.writeFile(path.join(facts, name), readFileSync(path.join(FIXTURE_STORE, "facts", name), "utf8"))
+  git("init", "-q", "-b", "main")
+  git("config", "user.name", "Fixture")
+  git("config", "user.email", "fixture@example.invalid")
+  git("add", "facts")
+  git("commit", "-q", "-m", "base")
+  const forkPoint = git("rev-parse", "HEAD")
+
+  // A pull request updates the first facts file...
+  git("checkout", "-q", "-b", "update")
+  const updated = JSON.parse(readFileSync(path.join(facts, names[0]), "utf8"))
+  updated.session.duration_ms += 1
+  await fs.writeFile(path.join(facts, names[0]), `${JSON.stringify(updated)}\n`)
+  git("commit", "-q", "-am", "update")
+  const updateHead = git("rev-parse", "HEAD")
+  // ...while main has since removed it, so its previous bytes exist only at the merge base.
+  git("checkout", "-q", "main")
+  git("rm", "-q", path.join("facts", names[0]))
+  git("commit", "-q", "-m", "remove on main")
+  const movedBase = git("rev-parse", "HEAD")
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", movedBase, "--head", updateHead, "--author-association", "NONE"], cwd: repo }), {
+    ok: true,
+    maintenance: false,
+    errors: [],
+  })
+
+  git("checkout", "-q", "-b", "notes", forkPoint)
+  await fs.writeFile(path.join(facts, "notes.txt"), "maintainer notes")
+  git("add", "facts")
+  git("commit", "-q", "-m", "notes")
+  const notesHead = git("rev-parse", "HEAD")
+  for (const association of ["OWNER", "MEMBER", "COLLABORATOR"]) {
+    assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", notesHead, "--author-association", association], cwd: repo }), {
+      ok: true,
+      maintenance: true,
+      errors: [],
+    })
+  }
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", notesHead, "--author-association", "CONTRIBUTOR"], cwd: repo }), {
+    ok: false,
+    maintenance: false,
+    errors: [{ code: "path", path: "changes.0" }],
+  })
+
+  git("checkout", "-q", "-b", "cleanup", forkPoint)
+  git("rm", "-q", path.join("facts", names[1]))
+  git("commit", "-q", "-m", "cleanup")
+  const cleanupHead = git("rev-parse", "HEAD")
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", "OWNER"], cwd: repo }), {
+    ok: true,
+    maintenance: true,
+    errors: [],
+  })
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", "NONE"], cwd: repo }), {
+    ok: false,
+    maintenance: false,
+    errors: [{ code: "removal", path: `facts/${names[1]}` }],
+  })
+}))
+
+test("validate-pr asks Git for the merge base once and refuses a malformed one", async () => {
+  const shaA = "a".repeat(40)
+  const shaB = "b".repeat(40)
+  const shaC = "c".repeat(40)
+  const names = ["claude-code-11111111-1111-4111-8111-111111111111.json", "copilot-cli-22222222-2222-4222-8222-222222222222.json"]
+  const bytes = Object.fromEntries(names.map((name) => [`facts/${name}`, readFileSync(path.join(FIXTURE_STORE, "facts", name))]))
+  const args = ["--base", shaA, "--head", shaB, "--author-association", "NONE"]
+  const revisions = []
+  let mergeBases = 0
+  const result = await runValidatePrCommand({
+    argv: args,
+    git: (gitArgs) => {
+      if (gitArgs[0] === "diff") return names.map((name) => `M\0facts/${name}\0`).join("")
+      if (gitArgs[0] === "merge-base") {
+        mergeBases += 1
+        assert.deepEqual(gitArgs, ["merge-base", shaA, shaB])
+        return `${shaC}\n`
+      }
+      const [revision, filePath] = gitArgs[1].split(":")
+      revisions.push(revision)
+      return bytes[filePath]
+    },
+  })
+  assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
+  assert.equal(mergeBases, 1)
+  assert.deepEqual(revisions, [shaB, shaC, shaB, shaC])
+
+  await assert.rejects(
+    runValidatePrCommand({
+      argv: args,
+      git: (gitArgs) => gitArgs[0] === "diff" ? `M\0facts/${names[0]}\0` : gitArgs[0] === "merge-base" ? "not a sha\n" : bytes[`facts/${names[0]}`],
+    }),
+    /Git data could not be read/u,
+  )
+})
+
+test("validate-pr handles added, removed, unknown, invalid-path, malformed, oversized, and Git-error inputs without loading unsafe paths", async () => {
+  const shaA = "a".repeat(40)
+  const shaB = "b".repeat(40)
+  const validPath = "facts/claude-code-11111111-1111-4111-8111-111111111111.json"
+  const validBytes = readFileSync(path.join(FIXTURE_STORE, validPath), "utf8")
+  const args = ["--base", shaA, "--head", shaB, "--author-association", "NONE"]
+
+  let calls = 0
+  let result = await runValidatePrCommand({
+    argv: args,
+    git: (gitArgs, options) => {
+      calls += 1
+      if (gitArgs[0] === "diff") return `A\0${validPath}\0`
+      assert.equal(options.encoding, null)
+      return Buffer.from(validBytes)
+    },
+  })
+  assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
+  assert.equal(calls, 2)
+
+  for (const [status, code] of [["D", "removal"], ["X", "status"]]) {
+    result = await runValidatePrCommand({ argv: args, git: () => `${status}\0${validPath}\0` })
+    assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code, path: validPath }] })
+  }
+
+  calls = 0
+  result = await runValidatePrCommand({
+    argv: args,
+    git: (gitArgs) => {
+      calls += 1
+      assert.equal(gitArgs[0], "diff")
+      return "A\0facts/nested/SENTINEL.js\0"
+    },
+  })
+  assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "path", path: "changes.0" }] })
+  assert.equal(calls, 1)
+
+  await assert.rejects(
+    runValidatePrCommand({ argv: args, git: () => "A\0" }),
+    /change list is malformed/u,
+  )
+  const many = Array.from({ length: 501 }, (_, index) => `A\0outside-${index}\0`).join("")
+  assert.deepEqual(await runValidatePrCommand({ argv: args, git: () => many }), {
+    ok: false,
+    maintenance: false,
+    errors: [{ code: "too_many_changes", path: "changes" }],
+  })
+  await assert.rejects(
+    runValidatePrCommand({ argv: [...args, "--extra", "x"], git: () => "" }),
+    /unknown option/u,
+  )
+  await assert.rejects(
+    runValidatePrCommand({ argv: args, cwd: os.tmpdir() }),
+    /Git data could not be read/u,
+  )
+})
+
+test("validate-pr rejects malformed options and main exits one while still printing stable validation JSON", () => scratch(async (env) => {
+  for (const argv of [
+    ["--base", "x"],
+    ["--base", "x".repeat(40), "--head", "y", "--author-association", "NONE"],
+    ["--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "bad"],
+  ]) {
+    await assert.rejects(runValidatePrCommand({ argv }), /Usage: factory\.js validate-pr/u)
+  }
+  let output = ""
+  let logged = ""
+  const code = await main({
+    argv: ["validate-pr", "--base", "x", "--head", "y", "--author-association", "NONE"],
+    env,
+    write: (text) => { output += text },
+    logError: (text) => { logged += text },
+  })
+  assert.equal(code, 1)
+  assert.equal(output, "")
+  assert.match(logged, /base and head/u)
+
+  output = ""
+  logged = ""
+  const validPath = "facts/claude-code-11111111-1111-4111-8111-111111111111.json"
+  const invalidCode = await main({
+    argv: ["validate-pr", "--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "NONE"],
+    env,
+    git: () => `D\0${validPath}\0`,
+    write: (text) => { output += text },
+    logError: (text) => { logged += text },
+  })
+  assert.equal(invalidCode, 1)
+  assert.deepEqual(JSON.parse(output), { ok: false, maintenance: false, errors: [{ code: "removal", path: validPath }] })
+  assert.equal(logged, "")
 }))
 
 // ---------------------------------------------------------------------------
