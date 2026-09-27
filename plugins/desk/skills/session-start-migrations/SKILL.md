@@ -85,7 +85,7 @@ splitting these out means the driver can run Detect cheaply against every migrat
 1. **discover migrations across every enabled plugin.**
    - walk every plugin root. the skill is engine-agnostic — it queries the filesystem rather than asking the harness — so the same logic works under Claude Code, Copilot CLI, and any future engine.
    - **canonical plugin roots to walk (in order):**
-     - `~/.claude/plugins/` — Claude Code's user-level plugin install dir
+     - `${CLAUDE_CONFIG_DIR:-~/.claude}/plugins/` — Claude Code's user-level plugin install dir, under the Claude config directory (`$CLAUDE_CONFIG_DIR` when set, otherwise `~/.claude`)
      - `~/.claude-plugin/plugins/` — older Claude Code convention; check if present
      - `~/.copilot/plugins/` — Copilot CLI's user-level plugin install dir
      - `~/.ouro-cli/plugins/` — ouro daemon's per-machine plugin install dir (relevant when this skill runs in an ouro-agent context)

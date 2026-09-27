@@ -1,0 +1,115 @@
+name: Superpowers upstream refresh
+
+# Keeps the vendored Superpowers payload following obra/superpowers. Each run rebuilds the refresh from main: it
+# copies the selected upstream files byte for byte, updates upstream-sources.lock.json, releases new Superpowers and
+# Desk versions, pushes the superpowers-upstream branch, opens or updates its pull request, dispatches CI on it and
+# merges when every check passes. A failing check leaves the pull request open and files an upstream-refresh issue.
+
+on:
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: superpowers-upstream
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh Superpowers from upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      BRANCH: superpowers-upstream
+      BASE: main
+      UPSTREAM: obra/superpowers
+      # Every CI workflow that gates a pull request; each also accepts workflow_dispatch.
+      CI_WORKFLOWS: desk-mcp-tests.yml,validate-skills.yml
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Fetch upstream at its default branch
+        run: |
+          set -euo pipefail
+          locked_license="$(node -p 'require("./upstream-sources.lock.json").sources.find((s) => s.id === "obra-superpowers").license')"
+          upstream_license="$(gh api "repos/$UPSTREAM" --jq .license.spdx_id)"
+          if [ "$upstream_license" != "$locked_license" ]; then
+            echo "::error::$UPSTREAM is now licensed $upstream_license, not $locked_license; a person must review the license before refreshing."
+            exit 1
+          fi
+          git clone --quiet --no-checkout "https://github.com/$UPSTREAM.git" "$RUNNER_TEMP/upstream"
+          locked="$(node -p 'require("./upstream-sources.lock.json").sources.find((s) => s.id === "obra-superpowers").commit')"
+          if ! git -C "$RUNNER_TEMP/upstream" merge-base --is-ancestor "$locked" HEAD; then
+            echo "::error::The upstream default branch no longer contains the locked commit $locked; a person must review the history before refreshing."
+            exit 1
+          fi
+
+      - name: Refresh the vendored payload and release surfaces
+        id: refresh
+        run: |
+          set -euo pipefail
+          current="$(node -p 'require("./plugins/desk/.claude-plugin/plugin.json").version')"
+          desk_version="$(node scripts/superpowers-upstream-pr.cjs next-desk-version --repo "$REPO" --current "$current" --branch "$BRANCH")"
+          node scripts/refresh-superpowers.cjs --upstream-dir "$RUNNER_TEMP/upstream" --date "$(date -u +%F)" --desk-version "$desk_version" > "$RUNNER_TEMP/refresh-report.json"
+          changed="$(node -p 'require(process.env.RUNNER_TEMP + "/refresh-report.json").changed')"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          if [ "$changed" != "true" ]; then
+            echo "## Superpowers upstream refresh: no upstream change" >> "$GITHUB_STEP_SUMMARY"
+            echo "The selected Superpowers files already match the upstream default branch." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Commit and push the refresh branch
+        if: steps.refresh.outputs.changed == 'true'
+        id: push
+        run: |
+          set -euo pipefail
+          commit="$(node -p 'require(process.env.RUNNER_TEMP + "/refresh-report.json").commit')"
+          versions="$(node -p 'const r = require(process.env.RUNNER_TEMP + "/refresh-report.json").release; `Superpowers ${r.superpowers.to}, Desk ${r.desk.to}`')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create "$BRANCH"
+          git add --all -- .claude-plugin plugins/superpowers plugins/desk upstream-sources.lock.json
+          git commit --quiet --message "Refresh Superpowers from upstream ${commit:0:12}" --message "Vendors $UPSTREAM@$commit byte for byte and releases $versions. Opened by $RUN_URL."
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Open the pull request, run CI and merge on green
+        if: steps.refresh.outputs.changed == 'true'
+        run: |
+          node scripts/superpowers-upstream-pr.cjs publish \
+            --repo "$REPO" --branch "$BRANCH" --base "$BASE" --sha "${{ steps.push.outputs.sha }}" \
+            --report "$RUNNER_TEMP/refresh-report.json" --workflows "$CI_WORKFLOWS" --run-url "$RUN_URL"
+
+      - name: File an issue when the refresh itself fails
+        if: failure()
+        run: |
+          set -euo pipefail
+          if ! gh label list --repo "$REPO" --search upstream-refresh --json name --jq '.[].name' | grep -qx upstream-refresh; then
+            gh label create upstream-refresh --repo "$REPO" --color 5319E7 --description "The scheduled Superpowers upstream refresh needs an agent"
+          fi
+          body="The [scheduled Superpowers refresh]($RUN_URL) failed before it could finish. Read the failed step's log, fix the cause in Desk, and dispatch the workflow again."
+          open="$(gh issue list --repo "$REPO" --label upstream-refresh --state open --limit 1 --json number --jq '.[0].number // empty')"
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "Superpowers upstream refresh needs attention" --label upstream-refresh --body "$body"
+          fi
