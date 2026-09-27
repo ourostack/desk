@@ -271,7 +271,8 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
   ]) {
     assert.throws(() => createGh({ run: () => result }).json(["pr", "list"]), pattern);
   }
-  assert.deepEqual(createGh({ run: () => fail("nope") }).call(["x"], { allowFailure: true }), { ok: false, stdout: "", error: "nope" });
+  assert.deepEqual(createGh({ run: () => fail("nope") }).call(["x"], { allowFailure: true }), { ok: false, stdout: "", stderr: "nope", error: "nope" });
+  assert.equal(createGh({ run: () => fail("nope") }).json(["x"], { allowFailure: true }), null);
   assert.match(pullRequestBody({ report, runUrl }), /Superpowers 6\.3\.0 → 6\.4\.2; Desk 3\.2\.0-alpha\.49 → 3\.2\.0-alpha\.54\./u);
   const started = Date.now();
   sleepSync(5);
@@ -358,6 +359,73 @@ const labelExists = [`label list --repo ${repo} --search upstream-refresh`, ok([
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+}
+
+{
+  // Live regression (run 36324891964): Actions may not create pull requests, and `gh label list --search` printed
+  // nothing at all, not `[]`, when the label did not exist yet. The fallback must still push through to an issue.
+  const empty = { status: 0, stdout: "", stderr: "" };
+  const { result, calls } = publishWith([
+    [`pr list --repo ${repo} --head ${branch}`, empty],
+    ["pr create", fail("pull request create failed: GraphQL: GitHub Actions is not permitted to create or approve pull requests (createPullRequest)")],
+    [`label list --repo ${repo} --search upstream-refresh`, empty],
+    [`label create upstream-refresh --repo ${repo} --force`, ok("")],
+    [`issue list --repo ${repo} --label upstream-refresh --state open --limit 1`, empty],
+    ["issue create", ok("https://github.com/owner/desk/issues/38\n")],
+  ]);
+  assert.equal(result.outcome, "pull-request-blocked");
+  assert.equal(result.issue, "https://github.com/owner/desk/issues/38");
+  assert.match(result.message, /GitHub Actions is not permitted to create or approve pull requests/u);
+  assert.ok(calls.some((call) => call.line.startsWith("label create upstream-refresh")));
+}
+
+{
+  // Empty or malformed output where JSON is required is a named error that carries gh's stderr, never a token.
+  const token = `ghs_${"A".repeat(36)}`;
+  const reply = (stdout, stderr) => createGh({ run: () => ({ status: 0, stdout, stderr }) });
+  assert.throws(() => reply("", "").json(["api", "repos/o/r/actions/runs/1/jobs"]), /^Error: gh api repos\/o\/r\/actions\/runs\/1\/jobs returned no JSON \(no stderr\)$/u);
+  assert.throws(() => reply("  \n", "rate limited").json(["api", "x"]), /gh api x returned no JSON \(stderr: rate limited\)/u);
+  assert.throws(() => reply("{", `warning for ${token}`).json(["api", "x"]), (error) => {
+    assert.match(error.message, /gh api x returned invalid JSON: .+ \(stderr: warning for \[redacted\]\)/u);
+    assert.equal(error.message.includes(token), false);
+    return true;
+  });
+  assert.throws(() => createGh({ run: () => fail(`bad credentials ${token}`) }).json(["pr", "list"]), (error) => {
+    assert.match(error.message, /gh pr list failed: bad credentials \[redacted\]/u);
+    return true;
+  });
+  assert.deepEqual(reply("", "no labels").json(["label", "list"], { list: true }), []);
+  assert.deepEqual(createGh({ run: () => ({ status: 0, stdout: "[1]" }) }).json(["x"]), [1]);
+  assert.deepEqual(createGh({ run: () => ({ status: 0 }) }).json(["x"], { list: true }), []);
+}
+
+{
+  // A ruleset read that prints nothing adds no required check, but malformed output stops the merge.
+  const base = [
+    existingPull,
+    ["pr edit 7", ok("")],
+    ["workflow run", ok("")],
+    runsRoute("ci.yml", completed(71)),
+    runsRoute("lint.yml", completed(72)),
+    jobs(71, [{ name: "a", conclusion: "success", html_url: "https://job/71" }]),
+    jobs(72, [{ name: "b", conclusion: "success", html_url: "https://job/72" }]),
+  ];
+  const quiet = publishWith([...base, [`api repos/${repo}/rules/branches/main`, { status: 0, stdout: "", stderr: "" }], ["pr merge 7", ok("")], ["issue list", ok([])]]);
+  assert.equal(quiet.result.outcome, "merged");
+  assert.throws(
+    () => publishWith([...base, [`api repos/${repo}/rules/branches/main`, { status: 0, stdout: "<html>", stderr: "" }]]),
+    /gh api repos\/owner\/desk\/rules\/branches\/main returned invalid JSON/u,
+  );
+}
+
+{
+  // An open pull request whose manifest read is empty or not JSON claims no version.
+  const { gh } = fakeGh([
+    [`pr list --repo ${repo} --state open`, ok([{ headRefName: "a", headRefOid: "1" }, { headRefName: "b", headRefOid: "2" }])],
+    [/ref=1 /u, ok("\n")],
+    [/ref=2 /u, ok(Buffer.from("not json").toString("base64"))],
+  ]);
+  assert.equal(nextDeskVersion({ gh, repo, current: "3.2.0-alpha.67", branch }), "3.2.0-alpha.68");
 }
 
 console.log("Superpowers upstream pull request tests passed.");

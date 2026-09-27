@@ -13,18 +13,40 @@ const LABEL = "upstream-refresh";
 const ISSUE_TITLE = "Superpowers upstream refresh needs attention";
 const TITLE_PREFIX = "Refresh Superpowers from upstream";
 
+// gh never prints a token, but a diagnostic may echo a credential it was handed; mask anything shaped like one.
+function redact(text) {
+  return text.replace(/\b(?:gh[opsur]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/gu, "[redacted]");
+}
+
 function createGh({ run, env }) {
   function call(args, { input, allowFailure = false } = {}) {
     const result = run("gh", args, { encoding: "utf8", input, env, maxBuffer: 20 * 1024 * 1024 });
     const ok = result.status === 0;
-    const error = ok ? "" : String(result.stderr || result.error?.message || `exit ${result.status}`).trim();
+    const stderr = redact(String(result.stderr ?? "").trim());
+    const error = ok ? "" : redact(String(result.stderr || result.error?.message || `exit ${result.status}`).trim());
     if (!ok && !allowFailure) throw new Error(`gh ${args.slice(0, 2).join(" ")} failed: ${error}`);
-    return { ok, stdout: ok ? result.stdout : "", error };
+    return { ok, stdout: ok ? String(result.stdout ?? "") : "", stderr, error };
   }
-  return {
-    call,
-    json: (args) => JSON.parse(call(args).stdout),
-  };
+  // Some gh list commands print nothing at all, not `[]`, when nothing matches (for example `gh label list
+  // --search` with no match), so a list read treats empty output as an empty list. Any other empty or malformed
+  // output is a named error that carries gh's own stderr.
+  // With allowFailure, a refused call returns null instead of throwing.
+  function json(args, { list = false, allowFailure = false } = {}) {
+    const { ok, stdout, stderr } = call(args, { allowFailure });
+    if (!ok) return null;
+    const command = `gh ${args.slice(0, 2).join(" ")}`;
+    const context = stderr === "" ? "no stderr" : `stderr: ${stderr}`;
+    if (stdout.trim() === "") {
+      if (list) return [];
+      throw new Error(`${command} returned no JSON (${context})`);
+    }
+    try {
+      return JSON.parse(stdout);
+    } catch (error) {
+      throw new Error(`${command} returned invalid JSON: ${error.message} (${context})`);
+    }
+  }
+  return { call, json };
 }
 
 function alphaNumber(version, core) {
@@ -38,14 +60,19 @@ function nextDeskVersion({ gh, repo, current, branch }) {
   const core = current.split("-")[0];
   const claimed = [alphaNumber(current, core)];
   if (claimed[0] === null) throw new Error(`Desk version ${current} is not an alpha release`);
-  const pulls = gh.json(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "headRefName,headRefOid"]);
+  const pulls = gh.json(["pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", "headRefName,headRefOid"], { list: true });
   for (const pull of pulls) {
     if (pull.headRefName === branch) continue;
     const manifest = gh.call([
       "api", `repos/${repo}/contents/plugins/desk/.claude-plugin/plugin.json?ref=${pull.headRefOid}`, "--jq", ".content",
     ], { allowFailure: true });
-    if (!manifest.ok) continue;
-    const version = JSON.parse(Buffer.from(manifest.stdout, "base64").toString("utf8")).version;
+    if (!manifest.ok || manifest.stdout.trim() === "") continue;
+    let version;
+    try {
+      ({ version } = JSON.parse(Buffer.from(manifest.stdout, "base64").toString("utf8")));
+    } catch {
+      continue;
+    }
     const number = alphaNumber(version, core);
     if (number !== null) claimed.push(number);
   }
@@ -73,7 +100,7 @@ function pullRequestBody({ report, runUrl }) {
 }
 
 function findPullRequest({ gh, repo, branch, base }) {
-  const pulls = gh.json(["pr", "list", "--repo", repo, "--head", branch, "--base", base, "--state", "open", "--json", "number,url"]);
+  const pulls = gh.json(["pr", "list", "--repo", repo, "--head", branch, "--base", base, "--state", "open", "--json", "number,url"], { list: true });
   return pulls[0] ?? null;
 }
 
@@ -92,9 +119,10 @@ function openOrUpdatePullRequest({ gh, repo, branch, base, title, body }) {
 }
 
 function requiredContexts({ gh, repo, base }) {
-  const rules = gh.call(["api", `repos/${repo}/rules/branches/${base}`], { allowFailure: true });
-  if (!rules.ok) return [];
-  return JSON.parse(rules.stdout)
+  // Without read access to rulesets there is nothing extra to require; malformed output still stops the merge.
+  const rules = gh.json(["api", `repos/${repo}/rules/branches/${base}`], { list: true, allowFailure: true });
+  if (rules === null) return [];
+  return rules
     .filter((rule) => rule.type === "required_status_checks")
     .flatMap((rule) => rule.parameters.required_status_checks.map((check) => check.context));
 }
@@ -131,11 +159,11 @@ function collectJobs({ gh, repo, runs }) {
 }
 
 function fileIssue({ gh, repo, body }) {
-  const labels = gh.json(["label", "list", "--repo", repo, "--search", LABEL, "--json", "name"]);
+  const labels = gh.json(["label", "list", "--repo", repo, "--search", LABEL, "--json", "name"], { list: true });
   if (!labels.some((label) => label.name === LABEL)) {
-    gh.call(["label", "create", LABEL, "--repo", repo, "--color", "5319E7", "--description", "The scheduled Superpowers upstream refresh needs an agent"]);
+    gh.call(["label", "create", LABEL, "--repo", repo, "--force", "--color", "5319E7", "--description", "The scheduled Superpowers upstream refresh needs an agent"]);
   }
-  const [open] = gh.json(["issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--limit", "1", "--json", "number,url"]);
+  const [open] = gh.json(["issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--limit", "1", "--json", "number,url"], { list: true });
   if (open) {
     gh.call(["issue", "comment", String(open.number), "--repo", repo, "--body-file", "-"], { input: body });
     return open.url;
@@ -147,7 +175,7 @@ function fileIssue({ gh, repo, body }) {
 }
 
 function closeIssues({ gh, repo, pullUrl }) {
-  const open = gh.json(["issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--limit", "20", "--json", "number"]);
+  const open = gh.json(["issue", "list", "--repo", repo, "--label", LABEL, "--state", "open", "--limit", "20", "--json", "number"], { list: true });
   for (const issue of open) {
     gh.call(["issue", "close", String(issue.number), "--repo", repo, "--comment", `Resolved: ${pullUrl} passed every check and merged.`]);
   }

@@ -1,8 +1,12 @@
 # desk plugin — changelog
 
-## 3.2.0-alpha.75 — 2026-09-27
+## 3.2.0-alpha.82 — 2026-09-27
 
 The docs now agree with the [RFC](docs/agentic-engineering-v2-rfc.md). Section 9 is dated 27 September 2026 and says V2 is ready for evaluation, split into what works today, what is built but not yet live end to end, and what is still open, with each claim linked to its pull request. Section 4 now says what published factory facts carry: no identity and no time of day, only durations and offsets, random session IDs and, for a public desk, keyed-hash job IDs. The [work-measurement-ledger](skills/work-measurement-ledger/SKILL.md) skill says it is being retired in favor of the factory. Retired Work Suite names are gone from [repo-handling](skills/repo-handling/SKILL.md), [adopt-inflight-work](skills/adopt-inflight-work/SKILL.md), [task-card-format](skills/task-card-format/SKILL.md) and the [Crew README](../crew/README.md) (Crew 0.2.3), and the [dependency-activation stories](docs/dependency-activation-stories-and-criteria.md) are marked historical. The [root README](../../README.md) says vendored Superpowers follows upstream and the lock is evidence, not a pin, and [`SETUP.md`](../../SETUP.md) says Codex is not a supported target. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
+
+## 3.2.0-alpha.74 — 2026-09-27
+
+The Superpowers refresh driver no longer fails when `gh` prints nothing. On its first live run GitHub Actions was not allowed to open the pull request, and the fallback's `gh label list --search` printed no output at all (not `[]`) because the `upstream-refresh` label did not exist yet, so [`superpowers-upstream-pr.cjs`](../../scripts/superpowers-upstream-pr.cjs) stopped with a bare "Unexpected end of JSON input" before filing its issue. Every `gh` JSON read now treats an empty list as empty and reports any other empty or malformed output as a named error with `gh`'s stderr (tokens masked); label creation is idempotent. A scripted `gh` replays the live failure and now reaches the issue. Ships `desk-mcp@1.4.0-alpha.6`; native dependency payload unchanged.
 
 ## 3.2.0-alpha.68 — 2026-09-27
 
