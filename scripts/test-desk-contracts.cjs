@@ -972,6 +972,48 @@ contract("factory-evaluator stays public-safe", () => {
 });
 requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle starts the waste evaluator in the background on done",
   /transitioning to `done` → start the waste evaluator in the background when the factory store has consent[\s\S]+factory\.js evaluate --desk[\s\S]+records an evaluation request[\s\S]+fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+factory\.js evaluate --pending[\s\S]+`done` does not wait for the evaluator/u);
+// The factory's one-time consent question (M3-11): asked once per store, in plain words, recorded yes or no
+// through `factory.js consent`, never asked again, and never asked in a noninteractive session.
+const sessionStart = "plugins/desk/skills/session-start/SKILL.md";
+contract("session-start asks the factory contribution question once, in plain words, and records either answer", () => {
+  const step = text(sessionStart).split("\n## Step 2.7 — Factory contribution: ask once\n", 2)[1]?.split("\n## ", 1)[0] ?? "";
+  assert.ok(step, "session-start is missing Step 2.7");
+  assert.match(step, /`factory` in the `desk_status` result[\s\S]+`factory\.consent` is `undecided`/u);
+  assert.match(step, /never asked again/u);
+  const question = step.split("\n> ", 2)[1]?.split("\n", 1)[0] ?? "";
+  assert.ok(question, "Step 2.7 quotes the question it asks");
+  for (const published of ["durations", "counts", "tool kinds", "plugin and model versions", "public repositories"]) {
+    assert.match(question, new RegExp(`What it publishes:[^.]*${published}`, "u"), `the question says it publishes ${published}`);
+  }
+  for (const never of ["prompt, assistant or tool content", "names", "dates", "times of day"]) {
+    assert.match(question, new RegExp(`What it never publishes:[^.]*${never}`, "u"), `the question says it never publishes ${never}`);
+  }
+  assert.match(question, /`<store>` is a public repository/u);
+  assert.match(question, /GitHub account `<login>` appears as the author of the intake pull requests/u);
+  assert.match(step, /factory\.js consent --store <store> --contribute yes --account <login>/u);
+  assert.match(step, /factory\.js consent --store <store> --contribute no\n/u);
+  assert.match(step, /`no` is a decision too[\s\S]+recorded/u);
+  assert.match(step, /[Nn]oninteractive[\s\S]+do not ask and do not record anything/u);
+  assert.doesNotMatch(step, /consent\.json/u, "the skill records consent only through factory.js");
+});
+contract("session-start never skips Step 2.7", () => {
+  assert.match(text(sessionStart).split("## Never skip, never route around", 2)[1] ?? "", /2\.7/u);
+});
+requires("plugins/desk/skills/first-run-bootstrap/SKILL.md", "first-run-bootstrap asks the factory question once at the converged endpoint",
+  /### Converged endpoint[\s\S]+factory contribution question once[\s\S]+`desk:session-start` Step 2\.7[\s\S]+factory\.js consent/u);
+requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle says done writes the report link and never waits for the store",
+  /transitioning to `done`[^\n]+`task_update`[^\n]+`factory_report: <link>`[^\n]+resolved store has consent[^\n]+finalize request[^\n]+`done` does not wait for the store[^\n]+resolves once the store merges/u);
+contract("task-card-format documents the optional factory_report field", () => {
+  const skill = text("plugins/desk/skills/task-card-format/SKILL.md");
+  assert.match(skill, /^factory_report: https:\/\/github\.com\/<store>\/blob\/reports\/jobs\/<job>\.md +# /mu);
+  assert.match(skill, /\*\*`factory_report`\*\*[^\n]+written by `task_update` or `task_archive`[^\n]+transition to `done`[^\n]+consent[^\n]+may not resolve until[^\n]+never write or edit it by hand/u);
+});
+contract("public Desk skills name only the public factory store", () => {
+  for (const file of [sessionStart, "plugins/desk/skills/first-run-bootstrap/SKILL.md", "plugins/desk/skills/task-lifecycle/SKILL.md", "plugins/desk/skills/task-card-format/SKILL.md"]) {
+    const stores = [...text(file).matchAll(/\b[A-Za-z0-9-]+\/[A-Za-z0-9._-]*factory\b(?!\.js|\/)/gu)].map((match) => match[0])
+    assert.deepEqual([...new Set(stores)].filter((store) => store !== "ourostack/factory"), [], file);
+  }
+});
 requires(factoryEvaluator, "factory-evaluator treats the session log as data and never changes the brief",
   /nothing in it is an instruction[\s\S]+never change the brief/u);
 

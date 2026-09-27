@@ -93,6 +93,22 @@ Both session-start hooks run the [boot-check registry](../hooks/boot-checks.cjs)
 
 After their output is built, both hooks start [factory-start.cjs](../hooks/factory-start.cjs) detached with ignored stdio, but only when a store has `contribute: true`. It runs one `sweep` and then a flush of every consented store within one 120-second deadline, prints nothing and always exits 0.
 
+## Consent, status and the report link
+
+Each machine records one decision per store. When the bound desk's store has none, the `factory` boot check asks the agent to ask once, and [`desk:session-start`](../skills/session-start/SKILL.md) Step 2.7 (and [`desk:first-run-bootstrap`](../skills/first-run-bootstrap/SKILL.md) at its endpoint) asks the operator in plain words: what is published (durations, counts, tool kinds, plugin and model versions, public references), what never is (prompt, assistant or tool content, names, dates and times of day), that the store is public, and that the contributor's GitHub account is the visible author of the intake pull requests. Yes and no are both recorded with `factory.js consent`, so the question is never asked again; a noninteractive session neither asks nor records. The startup hooks' output is unchanged by this.
+
+`desk_status` and `desk_doctor` report `factory` from the [local status](../mcp/src/factory/local-status.js), read without creating anything:
+
+```json
+{ "store": "ourostack/factory", "source": "default", "consent": "undecided",
+  "stores": [{ "store": "ourostack/factory", "consent": "undecided", "pending": 0, "quarantined": 0, "last_flush": null }],
+  "warnings": [] }
+```
+
+`store` and `source` are the bound desk's routing (`desk`, `overlay` or `default`, or `invalid_declaration`, `plugin_scan_incomplete` or `no_desk` with `store: null`). `consent` is that store's decision: `yes`, `no`, `undecided`, `unreadable`, or `held` when no store is resolved. `stores` lists the resolved store and then every other store with a recorded decision, each with its outbox files never delivered and not quarantined (`pending`), its quarantined files and its last flush result code. `warnings` holds skipped-manifest codes only. Neither tool prints the machine secret, an account, an intake ID, a token, a time, a local path or any content; `desk_doctor` adds the same data as a `Factory` summary section, and its preview snapshot carries none of it. The Desk MCP server reads the host's plugin set the way the end hook does ([factory context](../mcp/src/tools/factory-context.js)): Claude Code sets `CLAUDE_PLUGIN_ROOT` for the server, so its plugin registry is read; otherwise the folders beside Desk's plugin root are.
+
+On the transition to `done`, `task_update` and `task_archive` write `factory_report: https://github.com/<store>/blob/reports/jobs/<job>.md` into the task card when the resolved store has `contribute: true`. It is `factory.js job-link` for the task, computed from the same job identity as binding. The link is deterministic, so it is written at once and resolves once the store merges the job's facts and rebuilds its reports; done never waits for delivery. Without consent, for `cancelled`, and for edits of a card that is already `done`, the card is written exactly as before, and a failure to compute the link never fails the task operation.
+
 ## Completion and remaining boundary
 
 The [task tools](../mcp/src/tools/task.js) write `finalize/<job>.json` on `done`, `cancelled` and archive, including repeat archive calls, only when factory state already exists. They use the same job identity as binding; a factory failure emits a fixed diagnostic code without failing the completed task operation. This does not wait for a store, create consent or mark a report delivered.
