@@ -43,6 +43,26 @@ test("derivation honors consent and holds invalid routing without reading the lo
   assert.deepEqual(await deriveMarker(ctx.env, { ...marker, session_id: "../escape" }), { result: "invalid", store: null })
 }))
 
+test("a deriver older than the session's declared Desk holds instead of binding with superseded logic", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0-alpha.999", source: "ourostack/desk" }] }
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.deepEqual(await deriveMarker(ctx.env, marker, { ownVersion: () => "3.2.0-alpha.1" }), { result: "held", store: null })
+  const file = path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", `${marker.host}-${ID}.json`)
+  assert.equal(existsSync(file), false)
+}))
+
+test("a deriver at or ahead of the session's declared Desk still derives, and a marker without a desk entry is unaffected", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const atParity = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0-alpha.5", source: "ourostack/desk" }] }
+  assert.equal((await deriveMarker(ctx.env, atParity, { ownVersion: () => "3.2.0-alpha.5" })).result, "written")
+  const ahead = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0-alpha.1", source: "ourostack/desk" }] }
+  assert.equal((await deriveMarker(ctx.env, ahead, { ownVersion: () => "3.2.0-alpha.5" })).result, "written")
+  const noDeskEntry = { ...await session(ctx), plugins: [{ name: "other-plugin", version: "1.0.0", source: "example/other" }] }
+  assert.equal((await deriveMarker(ctx.env, noDeskEntry, { ownVersion: () => { throw new Error("must not be read") } })).result, "written")
+}))
+
 test("missing, unreadable and mismatched logs have explicit outcomes", () => scratch(async (ctx) => {
   const { deriveMarker } = await runner()
   const marker = await session(ctx)
