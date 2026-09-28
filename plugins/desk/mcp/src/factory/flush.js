@@ -108,6 +108,7 @@ import {
   writeStatus,
   writeVisibilityCache,
 } from "./outbox.js"
+import { refreshAndon } from "./andon-watch.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
 import { validatePublishedBytes } from "./published-schema.js"
@@ -375,6 +376,8 @@ function referencedRepos(facts) {
   for (const refs of [facts?.refs?.prs, facts?.refs?.commits]) {
     for (const ref of list(refs)) if (isRepo(ref?.repo)) repos.push(ref.repo)
   }
+  // A plugin's install source decides whether a public store may name it.
+  for (const plugin of list(facts?.plugins)) if (isRepo(plugin?.source)) repos.push(plugin.source)
   return repos
 }
 
@@ -398,7 +401,7 @@ async function resolveVisibility(env, client, account, repos, nowIso) {
   return known
 }
 
-function publishOne(local, name, { transform, known, desk, secret }) {
+function publishOne(local, name, { transform, known, desk, store, secret }) {
   if (`${local?.session?.host}-${local?.session?.id}.json` !== name) return { reason: "invalid" }
   let out
   try {
@@ -406,6 +409,8 @@ function publishOne(local, name, { transform, known, desk, secret }) {
       visibility: (repo) => known.get(repo.toLowerCase()) ?? "unknown",
       // Every GitHub desk remote was resolved with the references; anything else is unknown.
       deskVisibility: desk ? known.get(desk.toLowerCase()) : "unknown",
+      // The store was resolved with them too; an unknown store is treated as public.
+      storeVisibility: known.get(store.toLowerCase()) ?? "unknown",
       machineSecret: secret,
     })
   } catch {
@@ -652,6 +657,8 @@ async function deliver(env, context) {
   const parsedLabels = labelCandidates.map(({ name, localBytes }) => ({ key: name, local: JSON.parse(localBytes.toString("utf8")) }))
   const desks = await deskRepositories(env, { deadline, now })
   const repos = parsed.flatMap(({ local }) => referencedRepos(local))
+  // Only a store known not to be public may name a plugin from a private or unknown source.
+  if (parsed.some(({ local }) => list(local?.plugins).length > 0)) repos.push(store)
   for (const { name } of parsed) if (desks.get(name)) repos.push(desks.get(name))
   for (const { local } of parsedLabels) for (const name of factsNamesOf(local?.session)) if (desks.get(name)) repos.push(desks.get(name))
   const known = await resolveVisibility(env, client, account, repos, nowIso)
@@ -659,7 +666,7 @@ async function deliver(env, context) {
 
   const bytesByName = new Map()
   for (const { name, local } of parsed) {
-    const out = publishOne(local, name, { transform, known, desk: desks.get(name), secret })
+    const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
     if (out.bytes) bytesByName.set(name, out.bytes)
     else await quarantine(env, store, name, out.reason)
   }
@@ -788,8 +795,13 @@ export async function flush(env, options = {}) {
 // Start-time delivery.
 // ---------------------------------------------------------------------------
 
-/** One sweep, then a flush of every store with `contribute: true`, within one deadline. Never throws. */
-export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, sweep = sweepMarkers, flush: flushStore = flush } = {}) {
+/**
+ * One sweep, then, for every store with `contribute: true`, a flush and a
+ * refresh of its open andon issues (`andon-watch.js`), within one deadline.
+ * Resolves `{ swept, stores, andon }` with each store's results. Never
+ * throws.
+ */
+export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, sweep = sweepMarkers, flush: flushStore = flush, andon: watch = refreshAndon } = {}) {
   const deadline = now() + deadlineMs
   try {
     if (await factoryStateRoot(env, { create: false }) === null) return { stores: {} }
@@ -803,6 +815,7 @@ export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DE
       // A failed sweep leaves markers for the next start; delivery still runs.
     }
     const results = {}
+    const andon = {}
     for (const store of stores) {
       const remaining = deadline - now()
       if (remaining <= 0) {
@@ -814,8 +827,17 @@ export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DE
       } catch {
         results[store] = { result: "unexpected" }
       }
+      if (deadline - now() <= 0) {
+        andon[store] = { result: "deadline" }
+        continue
+      }
+      try {
+        andon[store] = await watch(env, { store, runner, now })
+      } catch {
+        andon[store] = { result: "unexpected" }
+      }
     }
-    return { swept, stores: results }
+    return { swept, stores: results, andon }
   } catch {
     return { stores: {} }
   }

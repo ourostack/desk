@@ -5,7 +5,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { build, jobLink, storeRecords } from "../../../src/factory/pipeline/build.js"
+import { build, jobLink, storePublicPlugins, storeRecords } from "../../../src/factory/pipeline/build.js"
+import { serializePublished } from "../../../src/factory/publish.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, "..", "fixtures")
@@ -236,3 +237,22 @@ test("storeRecords gives every job's rollup record exactly as the build reads th
   assert.throws(() => storeRecords(5), /storeDir must be a path/u)
   assert.throws(() => storeRecords(path.join(ROLLUP_STORE, "facts", readdirSync(path.join(ROLLUP_STORE, "facts"))[0])), /store must be a real directory/u)
 })
+
+test("storePublicPlugins names only plugins that facts carrying the private-plugin count publish", () => scratch((root) => {
+  const store = path.join(root, "store")
+  cpSync(ROLLUP_STORE, store, { recursive: true })
+  assert.deepEqual(storePublicPlugins(store), [], "facts from before the rule name no plugin as public")
+  const names = readdirSync(path.join(store, "facts")).sort()
+  const ruled = path.join(store, "facts", names[0])
+  const value = JSON.parse(readFileSync(ruled, "utf8"))
+  value.refs.private.plugins = 2
+  value.plugins = [{ name: "superpowers", version: "6.4.1" }, ...value.plugins]
+  writeFileSync(ruled, serializePublished(value))
+  const legacy = path.join(store, "facts", names[1])
+  const old = JSON.parse(readFileSync(legacy, "utf8"))
+  old.plugins = [...old.plugins, { name: "ms-desk", version: "2.29.11" }]
+  writeFileSync(legacy, serializePublished(old))
+  assert.deepEqual(storePublicPlugins(store), ["desk", "superpowers"])
+  assert.throws(() => storePublicPlugins(5), /storeDir must be a path/u)
+  assert.throws(() => storePublicPlugins(ruled), /store must be a real directory/u)
+}))

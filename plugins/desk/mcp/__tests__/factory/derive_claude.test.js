@@ -26,7 +26,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const fixturesDir = path.join(here, "fixtures", "claude")
 const transcriptPath = (sessionId) => path.join(fixturesDir, `${sessionId}.jsonl`)
 
-const PLUGINS = [{ name: "desk", version: "3.2.0-alpha.21" }]
+const PLUGINS = [{ name: "desk", version: "3.2.0-alpha.21", source: "ourostack/desk" }]
 
 function deriveFull(overrides = {}) {
   return deriveClaudeSession({
@@ -603,12 +603,19 @@ test("plugin entries that fail the schema are dropped with plugins/source_unread
     { name: `${SENTINEL} Bad Name`, version: "1.0.0" },
     { name: "desk", version: ["1.0.0"] },
     { name: "desk", version: `${SENTINEL}` },
+    { name: "desk", version: "3.2.0-alpha.21", source: `${SENTINEL} not a repo` },
     { name: "desk", version: "3.2.0-alpha.21", extra: SENTINEL },
   ])
-  assert.deepEqual(messy.facts.plugins, [{ name: "desk", version: "3.2.0-alpha.21" }])
+  assert.deepEqual(messy.facts.plugins, [{ name: "desk", version: "3.2.0-alpha.21", source: null }], "an unknown key is dropped; an invalid source drops the entry")
   assert.deepEqual(pluginsUnavailable(messy.facts), [{ field: "plugins", reason: "source_unreadable" }])
   assert.equal(JSON.stringify(messy.facts).includes(SENTINEL), false)
   assert.equal(validateLocalFacts(messy.facts).ok, true)
+
+  // A marker written before sources were recorded carries none; its plugins read as having no known source.
+  const old = await derive([{ name: "desk", version: "3.2.0-alpha.21" }, { name: "notes", version: "1.0.0", source: null }])
+  assert.deepEqual(old.facts.plugins, [{ name: "desk", version: "3.2.0-alpha.21", source: null }, { name: "notes", version: "1.0.0", source: null }])
+  assert.deepEqual(pluginsUnavailable(old.facts), [])
+  assert.equal(validateFacts(old.facts).ok, true)
 
   const missing = await derive(undefined)
   assert.deepEqual(missing.facts.plugins, [])

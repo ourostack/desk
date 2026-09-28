@@ -29,16 +29,19 @@
 //      briefs again, and finished jobs whose labels are quarantined and will
 //      not be delivered, reported without a repair
 //      (mcp/src/factory/boot-check.js);
-//   3. desk-health: the bound root's last Desk start, and a detached
+//   3. andon: the open andon issues the last start-time refresh recorded for
+//      each contributing store, one line per store, without a repair
+//      (mcp/src/factory/boot-check.js, mcp/src/factory/andon-watch.js);
+//   4. desk-health: the bound root's last Desk start, and a detached
 //      fast-forward of a clean state branch (mcp/src/runtime/desk-health.js);
-//   4. workspace-tidy: stale worktree listing with its own detached repair
+//   5. workspace-tidy: stale worktree listing with its own detached repair
 //      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself so
 //      its line can say whether the launch happened, and keeps a soft deadline
 //      inside its budget so an unfinished inspection still reports "deferred".
 //
-// `startFactory` starts factory-start.cjs (sweep, then flush every consented
-// store) detached; the hooks call it after their output is built, and only
-// when a store has `contribute: true`.
+// `startFactory` starts factory-start.cjs (sweep, then flush and refresh andon
+// for every consented store) detached; the hooks call it after their output
+// is built, and only when a store has `contribute: true`.
 //
 // The hook runs in whatever `node` the host puts first on PATH, so all of
 // this keeps to what Node 16 has, and the boot path never searches for a
@@ -286,7 +289,7 @@ const factoryCheck = {
     const pluginRoot = ctx.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
     let plugins = { dirs: [], incomplete: true };
     try {
-      plugins = metadata({ host: ctx.host === "copilot" ? "copilot" : "claude", pluginRoot, home, env: ctx.env, readSmallText, PATTERNS, deadline: ctx.deadline });
+      plugins = metadata({ host: ctx.host === "copilot" ? "copilot" : "claude", pluginRoot, home, env: ctx.env, readSmallText, PATTERNS, deadline: ctx.deadline, sources: false });
     } catch {
       // An unreadable plugin set leaves only the desk's own declaration.
     }
@@ -308,6 +311,16 @@ const labelsCheck = {
     const lines = [...(count > 0 ? [labelsLine(count)] : []), ...(quarantined > 0 ? [labelsQuarantinedLine(quarantined)] : [])];
     if (lines.length === 0) return {};
     return { line: lines.join("; "), repair: count > 0 ? { command: compatibleCommand(FACTORY_SCRIPT, "evaluate", "--pending") } : undefined };
+  },
+};
+
+const andonCheck = {
+  id: "andon",
+  budgetMs: 20,
+  async run(ctx) {
+    const { andonBootCheck, andonLine } = await runtime("factory/boot-check.js");
+    const found = andonBootCheck({ env: ctx.env });
+    return found.length === 0 ? {} : { line: found.map(({ store, issues }) => andonLine(store, issues)).join("; ") };
   },
 };
 
@@ -548,8 +561,8 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
 }
 
 module.exports = {
-  checks: [factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck],
-  factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck,
+  checks: [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck],
+  factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck,
   runBootChecks, startFactory, launchCommand, recordSkipped,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
 };

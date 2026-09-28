@@ -39,6 +39,16 @@ then write the result to durable state. persistence precedence:
 
 applies to ANY agent using this skill — worker, ccatester, investigator, triage, future fleet agents. single-host setups still benefit (the probe is fast and silent on the happy path), but the cost-of-omission climbs as host count grows.
 
+## Step 0.25 — Read the desk's AGENTS.md
+
+right after the host probe, read `AGENTS.md` at the root of the bound desk: the root the `Desk startup:` line names, or the root `desk_status` reports when they differ. do it before the first question to the operator or action on the desk, including the migrations in Step 0.5. that file is the desk's own interaction contract (for example, which question formats to avoid, which calls the agent makes itself, and what counts as a human gate), and it binds the session from its first move, not from whenever a later step happens to open it. treat its rules as binding for the whole session, alongside this plugin's skills. when the file is absent, or no desk is bound, stay silent and go on.
+
+say so in one line, in the first message to the operator:
+
+> Read `$DESK/AGENTS.md`; its rules bind this session.
+
+if Step 2's sync changed it, read it again before Step 2.7 or any later question.
+
 ## Step 0.5 — Auto-heal migrations
 
 before any path-dependent work — before the prereq probe, before sync, before scans — hand off to the `session-start-migrations` skill. it walks every enabled plugin's `migrations/` dir, runs each migration's Detect predicate, and (for the ones that fire) runs Safety/Migrate/Announce. if any migration with `needs_restart: true` runs successfully, the skill hard-stops the session with a "please restart" message; the operator restarts and the next session opens against canonical paths.
@@ -263,12 +273,13 @@ if the runtime does not support walked-up workspace MCP discovery, this step is 
 
 ## Step 4.8 — Factory boot lines
 
-the session-start hook appends at most one `Desk boot:` line, addressed to you; its clauses are separated by `; `. this step owns what the `Factory:` clauses about waste labels ask, and how to handle an answer from the waste evaluator's `evaluate` command, whether it ran here or from `desk:task-lifecycle`'s done step. no such clause → nothing to do.
+the session-start hook appends at most one `Desk boot:` line, addressed to you; its clauses are separated by `; `. this step owns what the `Factory:` clauses about waste labels and andon ask, and how to handle an answer from the waste evaluator's `evaluate` command, whether it ran here or from `desk:task-lifecycle`'s done step. no such clause → nothing to do.
 
 `<Desk plugin folder>` below is two levels above this skill's folder; run the commands from it.
 
 - **`Factory: N finished tasks have no waste labels yet; run the evaluator for them in the background`** → the hook has already started a detached `evaluate --pending` that prepares briefs, but only you can start evaluators. run `node <Desk plugin folder>/mcp/scripts/factory.js evaluate --pending` and handle each job in its `jobs` answer as below. don't wait for the evaluators before continuing.
 - **`Factory: N finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)`** → say so in one line of the Step 5 status block. there is nothing to run: labels are quarantined when the factory store refused them or when their session's facts were quarantined (a `facts_quarantined` record names those facts), under `quarantine/<store-slug>/labels/` in the protected factory state.
+- **`Factory: N open andon issues in <store> (#…); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)`** → the start-time refresh found open andon issues for plugins that store tracks. say so in one line of the Step 5 status block and offer a `curator` pass, which handles them first. nothing runs on its own.
 
 **handling an `evaluate` answer**, per job:
 
@@ -317,6 +328,6 @@ these prompts are one decision group each, per `interaction-style`. if both fire
 
 ## Never skip, never route around
 
-every step in this skill — Step 0 plus the Step 1 through Step 5 chain (including the `.x` sub-steps for 2.5, 2.6, 2.7, 4.5, 4.6, 4.7, 4.8) — runs every session. Step 2.6 (desk-registry awareness) is a cheap existence-check that is silent on the single-desk happy path (no `_meta/desks.md` → no-op). the host-identity probe (Step 0) is cheap and silent on the single-host happy path; the prereq probe (Step 1) is load-bearing — most mid-session failures trace back to a missing tool, an old `gh`, or stale auth that wasn't caught at start.
+every step in this skill — Step 0 and Step 0.25 plus the Step 1 through Step 5 chain (including the `.x` sub-steps for 2.5, 2.6, 2.7, 4.5, 4.6, 4.7, 4.8) — runs every session. Step 2.6 (desk-registry awareness) is a cheap existence-check that is silent on the single-desk happy path (no `_meta/desks.md` → no-op). the host-identity probe (Step 0) is cheap and silent on the single-host happy path; the prereq probe (Step 1) is load-bearing — most mid-session failures trace back to a missing tool, an old `gh`, or stale auth that wasn't caught at start.
 
 **auto-mode is license for action, not for skipping safety checks.** a prereq-probe failure is like a compile error: fix it, don't proceed. if the operator insists on proceeding with broken prereqs, surface the specific risk (e.g., "no gh = can't push to the workspace state repo = state won't sync across machines") and require an explicit override.
