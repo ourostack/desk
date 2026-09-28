@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.113 — 2026-09-28
+
+**Facts a store refused from an older Desk for naming every plugin are sent again.** The public store refuses a newly added or modified facts file that has no `refs.private.plugins` with `private_plugins_missing`, and an older Desk then quarantined those files for good, with any waste labels that travel with them. This Desk always writes the field, so each flush now removes those quarantine records, and the labels quarantined with those facts or held back behind them, and publishes the files again with private plugin names withheld ([local capture](docs/factory-local-capture.md)). Every other quarantine record stays.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.112 — 2026-09-28
 
 The one-time desk tidy no longer depends on the agent choosing to follow a skill step. A normal session skipped it on a desk where it was due, because running it was left to the session-start skill's migration step. Both startup hooks now run the Detect block of each of Desk's own migrations themselves ([pending-migrations.js](mcp/src/runtime/pending-migrations.js)) and add one `Desk migrations:` line to the startup context when one is pending. For the tidy, the line gives the exact command that prints the work, `node <desk plugin>/mcp/scripts/migrations.js run 02-tidy-desk --tools-root <root.path> --tools-person <person>`, and that command prints the tidy's full steps however long the desk's report is. A safe migration that needs no restart and no agent work runs in the hook itself; a migration that needs a restart is named with its command. With nothing pending, the hooks add nothing. [session-start](skills/session-start/SKILL.md) and [session-start-migrations](skills/session-start-migrations/SKILL.md) now point at that line.
