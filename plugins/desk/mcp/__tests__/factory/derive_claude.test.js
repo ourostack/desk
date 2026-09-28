@@ -615,7 +615,7 @@ test("plugin entries that fail the schema are dropped with plugins/source_unread
   const old = await derive([{ name: "desk", version: "3.2.0-alpha.21" }, { name: "notes", version: "1.0.0", source: null }])
   assert.deepEqual(old.facts.plugins, [{ name: "desk", version: "3.2.0-alpha.21", source: null }, { name: "notes", version: "1.0.0", source: null }])
   assert.deepEqual(pluginsUnavailable(old.facts), [])
-  assert.equal(validateFacts(old.facts).ok, true)
+  assert.equal(validateLocalFacts(old.facts).ok, true)
 
   const missing = await derive(undefined)
   assert.deepEqual(missing.facts.plugins, [])
