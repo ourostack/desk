@@ -33,9 +33,11 @@ With healthy auth, find the operator's desk repository: probe any overlay-suppli
 
 #### A3. Ask once
 
-Present one decision group listing what you actually found, most likely first:
+**Ask:** before presenting anything below, check whether a human can actually answer. A noninteractive session — one with no human able to answer, for example `claude -p` — stops right here instead of asking: report the question verbatim plus everything A1 and A2 found, and go no further. It never picks an option on the operator's behalf, never binds a desk, never writes `desk.activation.json`, and never reports bootstrap or this step as complete. Reporting the question and stopping *is* the completed step for a session like this — it is not a deferral, a blocker, or a reason to keep going and finish some other way; treating the guide as "run everything except where it says Ask" means treating this Ask as exactly that stopping point, not as a sentence to read past on the way to binding something anyway. This is the one place this rule lives for Desk bootstrap; SETUP.md step 5, and any other entrance into this ask, point back to it instead of restating it. This gate exists because A3 asks the session to make a consequential, irreversible choice among candidate desks; a session-start migration carries no such choice, which is why `session-start-migrations`' `needs_restart: true` rule runs its one deterministic, idempotent script regardless of who is watching instead of stopping the way this step does.
 
-- use the local desk found at a path from A1;
+With a human able to answer, present one decision group listing what you actually found, most likely first:
+
+- use the local desk found at a path from A1 — a working directory that is itself desk-shaped is one candidate here, never an automatic bind, even when A1 found nothing else;
 - clone or fresh-create: clone the remote desk found in A2 (default destination `~/desk`), or create a fresh desk repository;
 - use an operator-provided path or URL;
 - skip workspace persistence for this session.
