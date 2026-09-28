@@ -16,7 +16,7 @@ import {
 import { isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
-import { factoryStateRoot, requestFinalize } from "../factory/outbox.js"
+import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
 import { jobId } from "../factory/binding.js"
 import { readDeskRemote } from "../factory/desk-repo.js"
 import { objectInput } from "../util/object-input.js"
@@ -32,14 +32,50 @@ async function taskJob({ deskRoot, person, track, slug }) {
   return { root, prefix, deskRemote, job: jobId({ deskRemote, personPrefix: prefix, track, slug }) }
 }
 
-async function requestTaskFinalize({ deskRoot, person, track, slug, env }) {
+async function requestTaskFinalize({ deskRoot, env, identity }) {
   try {
     if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return
-    const { root, job } = await taskJob({ deskRoot, person, track, slug })
-    await requestFinalize(env, { job, deskRoot: root })
+    await requestFinalize(env, { job: identity.job, deskRoot: identity.root })
   } catch {
     console.error("desk_factory: finalize_request_deferred")
   }
+}
+
+// Records the job's waste-evaluator request (`evaluate-requests/<job>.json`),
+// like a finalize request: same opt-in gate (no factory state yet => no-op,
+// and never creates it just to check), and any failure is swallowed so it
+// can never block or reopen the task. `done` never waits for it, and briefs
+// are prepared later, off this path, by the session-start hook's
+// `evaluate --pending` (`evaluatePending` in factory/evaluate-run.js).
+async function requestTaskEvaluation({ deskRoot, env, identity }) {
+  try {
+    if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return
+    await requestEvaluation(env, { job: identity.job, deskRoot: identity.root })
+  } catch {
+    console.error("desk_factory: evaluation_request_deferred")
+  }
+}
+
+// The terminal-status sync a Desk task tool runs alongside the status write:
+// a finalize request for every terminal status (`done`/`cancelled`, matching
+// `requestFinalize`'s own contract), and, on either terminal status, an
+// evaluation request too — `docs/factory-local-capture.md` treats `done` and
+// `cancelled` alike as a finished job, and the waste in a cancelled job is
+// exactly what the waste evaluator needs to see. The job identity is
+// resolved once here (it never differs between the two calls) and handed to
+// both; if resolving it throws, both calls still degrade the same way each
+// would have on its own, so both deferred messages are logged below.
+async function requestTaskTerminalSync({ deskRoot, person, track, slug, env, status }) {
+  let identity = null
+  try {
+    identity = await taskJob({ deskRoot, person, track, slug })
+  } catch {
+    // Left null: requestTaskFinalize/requestTaskEvaluation each fail the
+    // same way reading `identity.job`/`identity.root`, and each logs its
+    // own deferred message via its own try/catch below.
+  }
+  await requestTaskFinalize({ deskRoot, env, identity })
+  if (TERMINAL_STATUSES.has(status)) await requestTaskEvaluation({ deskRoot, env, identity })
 }
 
 // The `factory_report` link written on the transition to `done`, or `null`
@@ -343,8 +379,25 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
 
   await writeMarkdown(filePath, merged, newBody)
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
-  if (TERMINAL_STATUSES.has(merged.status)) await requestTaskFinalize({ deskRoot, person, track, slug, env })
+  if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
   return { status: "updated", path: relPath(deskRoot, filePath) }
+}
+
+// The already-archived card's status, read fail-safe: a missing file reads
+// as no status (as before), and corrupted frontmatter (bad YAML from hand
+// editing or a partial write) degrades the same way rather than throwing
+// out of `task_archive` — the idempotent already-archived branch must keep
+// returning `already_archived`, not break, on a card it doesn't control the
+// shape of. A `null` status skips the evaluation request further down
+// (`requestTaskTerminalSync` only requests one for a terminal status), but
+// the finalize request still fires.
+async function archivedTaskStatus(archivedFile) {
+  if (!(await pathExists(archivedFile))) return null
+  try {
+    return (await readMarkdown(archivedFile)).data.status
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -381,7 +434,8 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   const dstExists = await pathExists(archiveDir)
 
   if (!srcExists && dstExists) {
-    await requestTaskFinalize({ deskRoot, person, track, slug, env })
+    const archivedStatus = await archivedTaskStatus(archivedFile)
+    await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: archivedStatus })
     return {
       status: "already_archived",
       path: relPath(deskRoot, archivedFile),
@@ -419,9 +473,11 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   // Bump task status to `done` (and refresh `updated`) if not already terminal.
   await target([track, "_archive", slug])
   const filePath = await target([track, "_archive", slug, "task.md"])
+  let finalStatus = null
   if (await pathExists(filePath)) {
     const existing = await readMarkdown(filePath)
     const currentStatus = existing.data.status
+    finalStatus = currentStatus
     if (!TERMINAL_STATUSES.has(currentStatus)) {
       const merged = {
         ...existing.data,
@@ -432,9 +488,10 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       if (link !== null) merged.factory_report = link
       await writeMarkdown(filePath, merged, existing.content)
       await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
+      finalStatus = "done"
     }
   }
 
-  await requestTaskFinalize({ deskRoot, person, track, slug, env })
+  await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
   return { status: "archived", path: relPath(deskRoot, filePath) }
 }
