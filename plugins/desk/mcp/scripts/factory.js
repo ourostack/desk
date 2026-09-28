@@ -7,7 +7,7 @@
 //   node scripts/factory.js finalize --job <job> [--job <job> ...]
 //   node scripts/factory.js validate-pr --base <sha> --head <sha> --author-association <value>
 //   node scripts/factory.js build --store <directory> --out <directory>
-//   node scripts/factory.js job-link --store <owner/repo> --desk-remote <url> --person-prefix <prefix> --track <track> --slug <slug>
+//   node scripts/factory.js job-link --store <owner/repo> --desk-remote <url> [--person-prefix <prefix>] [--desk <desk root>] --track <track> --slug <slug>
 //   node scripts/factory.js evaluate --desk <desk root> --task [desks/<alias>/]<track>/<slug>
 //   node scripts/factory.js evaluate --pending
 //   node scripts/factory.js evaluate-accept --job <job>
@@ -42,7 +42,7 @@ import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { jobId } from "../src/factory/binding.js"
-import { readDeskRemote } from "../src/factory/desk-repo.js"
+import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
@@ -269,19 +269,44 @@ export async function runBuildCommand({ argv }) {
   return build({ storeDir: options.get("store"), outDir: options.get("out") })
 }
 
+const JOB_LINK_USAGE = "Usage: factory.js job-link --store <owner/repo> --desk-remote <url> [--person-prefix <prefix>] [--desk <desk root>] --track <track> --slug <slug>"
+
+/**
+ * `job-link`: the card's report URL. Without `--desk` this hashes the given
+ * `--track`/`--slug` as-is, so a renamed or moved card's report will not be
+ * found there; pass `--desk <desk root>` (the same value the task tools see)
+ * to resolve the card's birth path first, exactly as the task tools and the
+ * boot check do, so the link matches the job they already agree on.
+ */
 export async function runJobLinkCommand({ argv }) {
   const options = parseOptions(argv)
   const required = ["store", "desk-remote", "track", "slug"]
-  if (options === null || required.some((key) => !options.has(key)) || [...options.keys()].some((key) => ![...required, "person-prefix"].includes(key))) {
-    throw new Error("Usage: factory.js job-link --store <owner/repo> --desk-remote <url> [--person-prefix <prefix>] --track <track> --slug <slug>")
+  const allowed = [...required, "person-prefix", "desk"]
+  if (options === null || required.some((key) => !options.has(key)) || [...options.keys()].some((key) => !allowed.includes(key))) {
+    throw new Error(JOB_LINK_USAGE)
+  }
+  const personPrefix = options.get("person-prefix") ?? ""
+  let track = options.get("track")
+  let slug = options.get("slug")
+  if (options.has("desk")) {
+    if (!path.isAbsolute(options.get("desk"))) throw new Error(JOB_LINK_USAGE)
+    let root
+    try {
+      root = realpathSync(options.get("desk"))
+    } catch {
+      throw new Error("factory.js job-link: the desk folder could not be read")
+    }
+    const birth = resolveJobIdentity({ deskRoot: root, personPrefix, track, slug })
+    track = birth.track
+    slug = birth.slug
   }
   return {
     link: jobLink({
       store: options.get("store"),
       deskRemote: options.get("desk-remote"),
-      personPrefix: options.get("person-prefix") ?? "",
-      track: options.get("track"),
-      slug: options.get("slug"),
+      personPrefix,
+      track,
+      slug,
     }),
   }
 }
@@ -316,8 +341,10 @@ export async function runEvaluateCommand({ argv, env, pluginVersion = deskVersio
   }
   let job
   try {
+    const personPrefix = crew ? `desks/${segments[1].trim()}` : ""
     const deskRemote = readDeskRemote({ deskRoot: root }) || `local:${root}`
-    job = jobId({ deskRemote, personPrefix: crew ? `desks/${segments[1].trim()}` : "", track: segments.at(-2), slug: segments.at(-1) })
+    const birth = resolveJobIdentity({ deskRoot: root, personPrefix, track: segments.at(-2), slug: segments.at(-1) })
+    job = jobId({ deskRemote, personPrefix, track: birth.track, slug: birth.slug })
   } catch {
     throw new Error(EVALUATE_USAGE)
   }

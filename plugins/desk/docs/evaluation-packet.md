@@ -265,7 +265,7 @@ This scenario depends on the public factory store `ourostack/factory` and on the
 - contribution is opt-in and asked once;
 - a pull request with the job's facts arrives in `ourostack/factory`, passes the store's validation and merges;
 - the store's `reports` branch has the job's report at `jobs/<job>.md`, and it answers four questions: what happened, what mattered, what was waste, what could not be seen;
-- the task card links to that report; to check the link yourself, run `node mcp/scripts/factory.js job-link --store ourostack/factory --desk-remote "$(git -C "$EVAL/desk" remote get-url origin)" --track <track> --slug <task>` from the installed Desk plugin folder (on Claude Code, under `$CLAUDE_CONFIG_DIR/plugins/cache/ourostack/desk/`) ([factory CLI](../mcp/scripts/factory.js));
+- the task card links to that report; to check the link yourself, run `node mcp/scripts/factory.js job-link --store ourostack/factory --desk-remote "$(git -C "$EVAL/desk" remote get-url origin)" --desk "$EVAL/desk" --track <track> --slug <task>` from the installed Desk plugin folder (on Claude Code, under `$CLAUDE_CONFIG_DIR/plugins/cache/ourostack/desk/`) ([factory CLI](../mcp/scripts/factory.js)); pass `--desk` so a card that was renamed or moved after it was created still resolves to the same job as the card's own link;
 - the published facts file carries no names and no dates or times of day, only durations.
 
 ### 7. A kaizen card's check (lands by the evaluation)

@@ -118,6 +118,37 @@ test("build writes the deterministic report tree and job-link returns the accept
   await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory"] }), /Usage: factory\.js job-link/u)
 }))
 
+test("job-link resolves the card's birth path first when --desk is given, so a renamed card's link matches the job the task tools already agree on (ourostack/desk#76)", () => scratch(async (env) => {
+  const desk = path.join(env.HOME, "job-link-desk")
+  const git = (...args) => execFileSync("git", args, { cwd: desk, encoding: "utf8" })
+  await fs.mkdir(path.join(desk, "track", "origin-slug"), { recursive: true })
+  await fs.writeFile(path.join(desk, "track", "origin-slug", "task.md"), "---\nstatus: drafting\n---\n\n# A task\n")
+  git("init", "-q", "-b", "main")
+  git("config", "user.name", "Fixture")
+  git("config", "user.email", "fixture@example.invalid")
+  git("add", "-A")
+  git("commit", "-q", "-m", "create")
+  await fs.rm(path.join(desk, "track", "origin-slug"), { recursive: true })
+  await fs.mkdir(path.join(desk, "track", "new-slug"), { recursive: true })
+  await fs.writeFile(path.join(desk, "track", "new-slug", "task.md"), "---\nstatus: drafting\n---\n\n# A task\n")
+  git("add", "-A")
+  git("commit", "-q", "-m", "rename the slug")
+
+  const remote = "git@github.com:OuroStack/Desk.git"
+  const birthJob = jobId({ deskRemote: remote, personPrefix: "", track: "track", slug: "origin-slug" })
+  const currentJob = jobId({ deskRemote: remote, personPrefix: "", track: "track", slug: "new-slug" })
+  assert.notEqual(birthJob, currentJob)
+
+  const withoutDesk = await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--track", "track", "--slug", "new-slug"] })
+  assert.equal(withoutDesk.link, `https://github.com/ourostack/factory/blob/reports/jobs/${currentJob}.md`, "without --desk, the given (current) path is hashed as-is")
+
+  const withDesk = await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", desk, "--track", "track", "--slug", "new-slug"] })
+  assert.equal(withDesk.link, `https://github.com/ourostack/factory/blob/reports/jobs/${birthJob}.md`, "with --desk, the card's birth path is resolved and hashed instead")
+
+  await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", "relative", "--track", "track", "--slug", "new-slug"] }), /Usage: factory\.js job-link/u, "--desk must be absolute")
+  await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", path.join(env.HOME, "no-such-desk"), "--track", "track", "--slug", "new-slug"] }), /the desk folder could not be read/u)
+}))
+
 test("validate-pr reads base and head as Git data, enforces facts for contributors, and marks maintainer changes", () => scratch(async (env) => {
   const repo = path.join(env.HOME, "store")
   const facts = path.join(repo, "facts")
@@ -731,6 +762,24 @@ test("evaluate computes the task's job as the task tools do and prepares its bri
   assert.equal((await runEvaluateCommand({ argv: ["--desk", desk, "--task", "desks/ari/factory/evaluator"], env })).job, crew)
   assert.equal((await runEvaluateCommand({ argv: ["--desk", desk, "--task", "desks/ ari /factory/evaluator"], env })).job, crew)
   assert.deepEqual((await runEvaluateCommand({ argv: ["--pending"], env })).jobs.map((entry) => entry.job).sort(), [crew, job].sort())
+}))
+
+test("evaluate computes the task's job from its birth path, not its current one (ourostack/desk#76)", () => scratch(async (env) => {
+  const desk = path.join(env.HOME, "desk")
+  const git = (...args) => execFileSync("git", args, { cwd: desk, encoding: "utf8" }).trim()
+  await fs.mkdir(path.join(desk, "factory", "origin-evaluator"), { recursive: true })
+  await fs.writeFile(path.join(desk, "factory", "origin-evaluator", "task.md"), "---\nstatus: drafting\n---\n\n# Evaluator task, unique body for the birth-path CLI fixture.\n")
+  git("init", "-q", "-b", "main")
+  git("config", "user.name", "Fixture")
+  git("config", "user.email", "fixture@example.invalid")
+  git("add", "-A")
+  git("commit", "-q", "-m", "create the evaluator task")
+  await fs.rename(path.join(desk, "factory", "origin-evaluator"), path.join(desk, "factory", "renamed-evaluator"))
+  git("add", "-A")
+  git("commit", "-q", "-m", "rename the evaluator task")
+  const birthJob = jobId({ deskRemote: `local:${desk}`, personPrefix: "", track: "factory", slug: "origin-evaluator" })
+  const result = await runEvaluateCommand({ argv: ["--desk", desk, "--task", "factory/renamed-evaluator"], env, pluginVersion: "3.2.0-alpha.40" })
+  assert.equal(result.job, birthJob, "the CLI's evaluate subcommand hashes the birth path, agreeing with the task tools")
 }))
 
 test("evaluate uses the desk's origin remote when it has one", () => scratch(async (env) => {

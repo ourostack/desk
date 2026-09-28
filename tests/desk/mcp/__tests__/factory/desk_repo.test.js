@@ -8,7 +8,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync 
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { createDeskReaders, readDeskRemote } from "../../../../../plugins/desk/mcp/src/factory/desk-repo.js"
+import { createDeskReaders, readDeskRemote, resolveJobIdentity } from "../../../../../plugins/desk/mcp/src/factory/desk-repo.js"
 import { bindSession, jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 
 let scratch
@@ -19,6 +19,11 @@ let shas
 
 const card = (fields, body = "# A task") => `---\n${fields.join("\n")}\n---\n\n${body}\n`
 const LIVE_CARD = ["title: A live task", "status: processing", "created: \"2026-09-20T10:00:00Z\"", "updated: '2026-09-25T09:00:00Z'"]
+
+// A card whose body is unique to `label`, so Git's content-based rename
+// detection never pairs it with an unrelated fixture by accident (see the
+// resolveJobIdentity fixtures below and in `before`).
+const fixtureCard = (label, status, extra = []) => card([`status: ${status}`, ...extra], `# ${label}\n\nUnique fixture content for ${label}, never reused elsewhere.`)
 
 // Runs Git in `repo`; `at` stamps the commit and every reflog entry it makes.
 function gitIn(repo, args, at) {
@@ -154,8 +159,12 @@ before(() => {
 
   // A commit later rebased onto another clone's work keeps its own entry.
   // It also touches a non-card file, so it is a real work signal, not just a
-  // card edit: see "the bare card never binds" in binding.test.js.
-  write("track/other-task/task.md", card(["status: blocked"]))
+  // card edit: see "the bare card never binds" in binding.test.js. Its body
+  // is its own (not byte-identical to track/fetched-task's, another
+  // `status: blocked` card): resolveJobIdentity's own Git rename detection
+  // is content-based, and two unrelated cards with identical bytes are
+  // indistinguishable rename candidates to it.
+  write("track/other-task/task.md", card(["status: blocked"], "# A task\n\nother-task's own body, distinct from every other fixture."))
   write("track/other-task/notes.md", "notes\n")
   shas.preRebase = commitAt("2026-09-25T09:30:00Z", "before rebase")
   gitIn(other, ["pull", "-q", "--ff-only", "origin", "main"], "2026-09-25T09:50:00Z")
@@ -192,6 +201,123 @@ before(() => {
   git(["commit", "-q", "-m", "resolved"], "2026-09-25T12:30:30Z")
   shas.conflictMerge = git(["rev-parse", "HEAD"])
 
+  // --- Fixtures for resolveJobIdentity (ourostack/desk#76): the task's
+  // birth path, from real Git history. Every track here is prefixed
+  // `birth-` so its history never shares a literal path with a fixture
+  // above. Git's rename detection is content-based, so every card below
+  // gets its own unique body text: two byte-identical cards for otherwise
+  // unrelated tasks can make Git's own `--follow` pair them by accident
+  // (confirmed empirically against this same fixture set), and that
+  // accident is not what any of these tests are about.
+  // A plain rename: the slug changes, the track does not. Removing the old
+  // path and writing the new one with byte-identical content, in one
+  // commit, is what makes Git's own rename detection pair them (the same
+  // technique the movable-task fixture above uses).
+  write("birth-rename/origin-slug/task.md", fixtureCard("birth-rename task", "drafting"))
+  shas.birthRenameCreate = commitAt("2026-09-26T08:00:00Z", "birth-rename: create")
+  remove("birth-rename/origin-slug/task.md")
+  write("birth-rename/new-slug/task.md", fixtureCard("birth-rename task", "drafting"))
+  shas.birthRenameMove = commitAt("2026-09-26T08:00:10Z", "birth-rename: rename the slug")
+  // Real, non-card work after the rename, so the end-to-end binding test
+  // below has something at the new (current) path to bind.
+  write("birth-rename/new-slug/notes.md", "notes\n")
+  shas.birthRenameNotes = commitAt("2026-09-26T08:00:20Z", "birth-rename: add notes after the rename")
+
+  // An archive move: the card moves from live to `_archive` with the same
+  // track and slug either side, so its birth is unchanged.
+  write("birth-archive/task-m/task.md", fixtureCard("birth-archive task", "processing"))
+  commitAt("2026-09-26T08:01:00Z", "birth-archive: create")
+  remove("birth-archive/task-m/task.md")
+  write("birth-archive/_archive/task-m/task.md", fixtureCard("birth-archive task", "processing"))
+  commitAt("2026-09-26T08:01:10Z", "birth-archive: move to _archive")
+
+  // A track rename followed by a revert: two hops back to the same origin.
+  write("birth-revert-a/task-r/task.md", fixtureCard("birth-revert task", "drafting"))
+  commitAt("2026-09-26T08:02:00Z", "birth-revert: create in track a")
+  remove("birth-revert-a/task-r/task.md")
+  write("birth-revert-b/task-r/task.md", fixtureCard("birth-revert task", "drafting"))
+  commitAt("2026-09-26T08:02:10Z", "birth-revert: rename track a to b")
+  remove("birth-revert-b/task-r/task.md")
+  write("birth-revert-a/task-r/task.md", fixtureCard("birth-revert task", "drafting"))
+  commitAt("2026-09-26T08:02:20Z", "birth-revert: rename track b back to a")
+
+  // A card deleted and re-created at the same literal path (Finding: Git's
+  // `--diff-filter=A` can list more than one add for one current name; the
+  // newest is kept). task-origin is born, moves away to task-elsewhere,
+  // and only later does an unrelated task reuse the freed task-origin name.
+  write("birth-reborn/task-origin/task.md", fixtureCard("birth-reborn task A", "processing"))
+  commitAt("2026-09-26T08:03:00Z", "birth-reborn: create task A at task-origin")
+  remove("birth-reborn/task-origin/task.md")
+  write("birth-reborn/task-elsewhere/task.md", fixtureCard("birth-reborn task A", "processing"))
+  commitAt("2026-09-26T08:03:10Z", "birth-reborn: task A moves away to task-elsewhere")
+  write("birth-reborn/task-origin/task.md", fixtureCard("birth-reborn task Z", "drafting"))
+  commitAt("2026-09-26T08:03:20Z", "birth-reborn: an unrelated task reuses task-origin")
+
+  // Two tasks that swap slugs in the same commit: Git sees a path present
+  // on both sides of a commit as a modification, never a rename candidate,
+  // so this must not read as either task changing identity.
+  write("birth-swap/task-p/task.md", fixtureCard("birth-swap task P", "processing"))
+  write("birth-swap/task-q/task.md", fixtureCard("birth-swap task Q", "drafting"))
+  commitAt("2026-09-26T08:04:00Z", "birth-swap: create task-p and task-q")
+  write("birth-swap/task-p/task.md", fixtureCard("birth-swap task Q", "drafting"))
+  write("birth-swap/task-q/task.md", fixtureCard("birth-swap task P", "processing"))
+  commitAt("2026-09-26T08:04:10Z", "birth-swap: swap task-p and task-q's contents")
+
+  // A plain rename kept isolated from every other resolveJobIdentity test,
+  // so the caching test below is the very first call to resolve it.
+  write("birth-cache/task-cache-origin/task.md", fixtureCard("birth-cache task", "drafting"))
+  commitAt("2026-09-26T08:05:00Z", "birth-cache: create")
+  remove("birth-cache/task-cache-origin/task.md")
+  write("birth-cache/task-cache-new/task.md", fixtureCard("birth-cache task", "drafting"))
+  commitAt("2026-09-26T08:05:10Z", "birth-cache: rename the slug")
+
+  // A plain rename resolved only through a broken git below, so that test
+  // observes a real fallback rather than an already-cached answer.
+  write("birth-gitfail/origin-slug/task.md", fixtureCard("birth-gitfail task", "drafting"))
+  commitAt("2026-09-26T08:07:00Z", "birth-gitfail: create")
+  remove("birth-gitfail/origin-slug/task.md")
+  write("birth-gitfail/new-slug/task.md", fixtureCard("birth-gitfail task", "drafting"))
+  commitAt("2026-09-26T08:07:10Z", "birth-gitfail: rename the slug")
+
+  // A committed, renamed card under a person prefix, so resolveJobIdentity's
+  // person-prefix handling is exercised through real Git history too, not
+  // only the fallback path an uncommitted card would take.
+  write("desks/ari/birth-person/origin-slug/task.md", fixtureCard("birth-person task", "drafting"))
+  commitAt("2026-09-26T08:06:00Z", "birth-person: create")
+  remove("desks/ari/birth-person/origin-slug/task.md")
+  write("desks/ari/birth-person/new-slug/task.md", fixtureCard("birth-person task", "drafting"))
+  commitAt("2026-09-26T08:06:10Z", "birth-person: rename the slug")
+
+  // A whole track archived: findCard (readTask and resolveJobIdentity alike)
+  // must also look at `_archive/<track>/<slug>/task.md`, the shape
+  // boot-check's finishedTasks already scans for an archived track, not
+  // only `<track>/_archive/<slug>/task.md`. The task is renamed before the
+  // track archives, so a findCard miss here (falling back to the given,
+  // current track/slug) is distinguishable from a real resolution: they
+  // would otherwise both name the same track/slug and the bug would hide.
+  write("birth-whole-track/task-origin/task.md", fixtureCard("birth-whole-track task", "drafting"))
+  commitAt("2026-09-27T08:10:00Z", "birth-whole-track: create")
+  remove("birth-whole-track/task-origin/task.md")
+  write("birth-whole-track/task-w/task.md", fixtureCard("birth-whole-track task", "drafting"))
+  commitAt("2026-09-27T08:10:10Z", "birth-whole-track: rename the slug")
+  remove("birth-whole-track/task-w/task.md")
+  write("_archive/birth-whole-track/task-w/task.md", fixtureCard("birth-whole-track task", "drafting"))
+  commitAt("2026-09-27T08:10:20Z", "birth-whole-track: archive the whole track")
+
+  // A task archived within an already-archived track:
+  // `_archive/<track>/_archive/<slug>/task.md`.
+  write("birth-doubly-archived/task-origin/task.md", fixtureCard("birth-doubly-archived task", "drafting"))
+  commitAt("2026-09-27T08:11:00Z", "birth-doubly-archived: create")
+  remove("birth-doubly-archived/task-origin/task.md")
+  write("birth-doubly-archived/task-d/task.md", fixtureCard("birth-doubly-archived task", "drafting"))
+  commitAt("2026-09-27T08:11:10Z", "birth-doubly-archived: rename the slug")
+  remove("birth-doubly-archived/task-d/task.md")
+  write("_archive/birth-doubly-archived/task-d/task.md", fixtureCard("birth-doubly-archived task", "drafting"))
+  commitAt("2026-09-27T08:11:20Z", "birth-doubly-archived: archive the whole track")
+  remove("_archive/birth-doubly-archived/task-d/task.md")
+  write("_archive/birth-doubly-archived/_archive/task-d/task.md", fixtureCard("birth-doubly-archived task", "drafting"))
+  commitAt("2026-09-27T08:11:30Z", "birth-doubly-archived: archive the task within the archived track too")
+
   // Cards that are not committed, for the reader's edge cases.
   write("track/no-frontmatter/task.md", "# Just a heading\nstatus: done\n")
   write("track/bad-values/task.md", card(["status: finished", "created: 2026-09-20", "updated: soon"]))
@@ -200,6 +326,8 @@ before(() => {
   write("track/indented/task.md", card(["repos:", "  status: done", "status: validating"]))
   mkdirSync(path.join(desk, "track/dir-card/task.md"), { recursive: true })
   write("desks/ari/track/person-task/task.md", card(["status: collaborating", "created: 2026-09-21T00:00:00.000Z"]))
+  // A brand-new, never-committed card: no Git history at all yet.
+  write("birth-uncommitted/task-fresh/task.md", card(["status: drafting"]))
 })
 
 after(() => {
@@ -217,6 +345,12 @@ test("readTask falls back to the _archive card, drops trailing comments and norm
   const { readTask } = createDeskReaders({ deskRoot: desk })
   // The working tree's current content, after the later housekeeping-only edit to `updated:`.
   assert.deepEqual(readTask("track", "old-task"), { status: "done", created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-05T10:30:00.000Z" })
+})
+
+test("readTask finds a card under a whole archived track, and one archived a second time within that archived track", () => {
+  const { readTask } = createDeskReaders({ deskRoot: desk })
+  assert.deepEqual(readTask("birth-whole-track", "task-w"), { status: "drafting", created_at: null, updated_at: null })
+  assert.deepEqual(readTask("birth-doubly-archived", "task-d"), { status: "drafting", created_at: null, updated_at: null })
 })
 
 test("readTask returns null when no card exists, live or archived, or when the names are unsafe", () => {
@@ -459,6 +593,205 @@ test("isCardHousekeeping is false when Git's list of the commit's changes is tru
   assert.equal(createDeskReaders({ deskRoot: desk, git: fakeGit }).isCardHousekeeping(shas.first, "track/live-task/task.md"), false)
 })
 
+// --- resolveJobIdentity (ourostack/desk#76): the birth path ------------------------------
+
+const birth = (track, slug, options = {}) => resolveJobIdentity({ deskRoot: desk, track, slug, ...options })
+
+test("resolveJobIdentity follows a plain rename back to the slug the card was first added at", () => {
+  assert.deepEqual(birth("birth-rename", "new-slug"), { track: "birth-rename", slug: "origin-slug" })
+})
+
+test("resolveJobIdentity is unchanged across an archive move: the track and slug are the same either side", () => {
+  assert.deepEqual(birth("birth-archive", "task-m"), { track: "birth-archive", slug: "task-m" })
+})
+
+test("resolveJobIdentity follows a track rename back through a later revert to the same original track", () => {
+  assert.deepEqual(birth("birth-revert-a", "task-r"), { track: "birth-revert-a", slug: "task-r" })
+})
+
+test("resolveJobIdentity: a card deleted and re-created at the same slug keeps the newest occupant's own birth, never an unrelated predecessor's", () => {
+  // task-origin is now an unrelated task (Z) that only reused the freed
+  // slug; its own birth is where it landed, not task A's old history.
+  assert.deepEqual(birth("birth-reborn", "task-origin"), { track: "birth-reborn", slug: "task-origin" })
+  // task-elsewhere is task A, which really did move there; its birth is
+  // correctly the original slug, not tangled up with task Z's later reuse.
+  assert.deepEqual(birth("birth-reborn", "task-elsewhere"), { track: "birth-reborn", slug: "task-origin" })
+})
+
+test("resolveJobIdentity: two tasks that swap slugs in one commit each keep their own birth, documenting Git's own behavior here", () => {
+  // Finding: a path Git sees on both sides of one commit is a
+  // modification, never a rename candidate, so the swap is not read as
+  // either task changing identity.
+  assert.deepEqual(birth("birth-swap", "task-p"), { track: "birth-swap", slug: "task-p" })
+  assert.deepEqual(birth("birth-swap", "task-q"), { track: "birth-swap", slug: "task-q" })
+})
+
+test("resolveJobIdentity falls back to the current path for a brand-new, uncommitted card: it has no Git history yet", () => {
+  assert.deepEqual(birth("birth-uncommitted", "task-fresh"), { track: "birth-uncommitted", slug: "task-fresh" })
+})
+
+test("resolveJobIdentity falls back to the current path when the card is found neither live nor archived", () => {
+  assert.deepEqual(birth("birth-track-missing", "no-such-task"), { track: "birth-track-missing", slug: "no-such-task" })
+})
+
+test("resolveJobIdentity falls back to the current path for a desk that is not a Git repository of its own", () => {
+  const outside = mkdtempSync(path.join(os.tmpdir(), "desk-repo-not-git-"))
+  try {
+    writeIn(outside, "a-track/a-slug/task.md", card(["status: drafting"]))
+    assert.deepEqual(resolveJobIdentity({ deskRoot: outside, track: "a-track", slug: "a-slug" }), { track: "a-track", slug: "a-slug" })
+  } finally {
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test("resolveJobIdentity falls back to the current path when the desk root is not its repository's own top level", () => {
+  // Git would otherwise walk up past `desk` into whatever repository
+  // contains it, so a card found here must still not be birth-resolved.
+  write("birth-nested-root/inner-track/inner-slug/task.md", card(["status: drafting"]))
+  assert.deepEqual(
+    resolveJobIdentity({ deskRoot: path.join(desk, "birth-nested-root"), track: "inner-track", slug: "inner-slug" }),
+    { track: "inner-track", slug: "inner-slug" },
+  )
+})
+
+test("resolveJobIdentity follows a rename under a person prefix too", () => {
+  assert.deepEqual(birth("birth-person", "new-slug", { personPrefix: "desks/ari" }), { track: "birth-person", slug: "origin-slug" })
+})
+
+test("resolveJobIdentity refuses a bad deskRoot or personPrefix, and returns the given path outright for unsafe track/slug names", () => {
+  assert.throws(() => resolveJobIdentity({ deskRoot: "relative", track: "t", slug: "s" }), TypeError)
+  assert.throws(() => birth("t", "s", { personPrefix: "people/ari" }), TypeError)
+  assert.deepEqual(birth("_meta", "s"), { track: "_meta", slug: "s" })
+  assert.deepEqual(birth("t", "../s"), { track: "t", slug: "../s" })
+})
+
+test("resolveJobIdentity never throws for a Git failure: a broken git executable falls back to the current path", () => {
+  assert.deepEqual(birth("birth-gitfail", "new-slug", { git: path.join(desk, "no-such-git") }), { track: "birth-gitfail", slug: "new-slug" })
+})
+
+test("resolveJobIdentity falls back to the current path when Git's own log output for the birth query has no header separator", () => {
+  write("birth-malformed-git-1/origin-slug/task.md", card(["status: drafting"]))
+  const fakeGit = path.join(scratch, "fake-git-no-header.sh")
+  writeFileSync(fakeGit, "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = --diff-filter=A ] && { printf '\\036abcdefabcdefabcdefabcdefabcdefabcdefab'; exit 0; }; done\nexec git \"$@\"\n", { mode: 0o755 })
+  assert.deepEqual(birth("birth-malformed-git-1", "origin-slug", { git: fakeGit }), { track: "birth-malformed-git-1", slug: "origin-slug" }, "a record with no NUL separator after the commit hash is unparseable, so the current path stands")
+})
+
+test("resolveJobIdentity falls back to the current path when Git's own log output for the birth query names no paths", () => {
+  write("birth-malformed-git-2/origin-slug/task.md", card(["status: drafting"]))
+  const fakeGit = path.join(scratch, "fake-git-no-paths.sh")
+  writeFileSync(fakeGit, "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = --diff-filter=A ] && { printf '\\036abcdefabcdefabcdefabcdefabcdefabcdefab\\000'; exit 0; }; done\nexec git \"$@\"\n", { mode: 0o755 })
+  assert.deepEqual(birth("birth-malformed-git-2", "origin-slug", { git: fakeGit }), { track: "birth-malformed-git-2", slug: "origin-slug" }, "a header with no path after it names no birth, so the current path stands")
+})
+
+test("resolveJobIdentity finds and follows the rename of a card under a whole archived track, and one archived a second time within it", () => {
+  assert.deepEqual(birth("birth-whole-track", "task-w"), { track: "birth-whole-track", slug: "task-origin" }, "found at _archive/<track>/<slug>, not only <track>/_archive/<slug>")
+  assert.deepEqual(birth("birth-doubly-archived", "task-d"), { track: "birth-doubly-archived", slug: "task-origin" }, "found at _archive/<track>/_archive/<slug>")
+})
+
+test("createDeskReaders's resolveJobIdentity wrapper agrees with the standalone function", () => {
+  const { resolveJobIdentity: fromReaders } = createDeskReaders({ deskRoot: desk })
+  assert.deepEqual(fromReaders("birth-rename", "new-slug"), birth("birth-rename", "new-slug"))
+})
+
+test("resolveJobIdentity caches a birth path per process: a later call for the same desk root and card returns the cached answer without needing Git again", () => {
+  const first = birth("birth-cache", "task-cache-new")
+  assert.deepEqual(first, { track: "birth-cache", slug: "task-cache-origin" }, "resolved correctly on the first, real call")
+  const second = birth("birth-cache", "task-cache-new", { git: path.join(desk, "no-such-git-cache-test") })
+  assert.deepEqual(second, first, "a broken git still returns the cached birth, so it was never invoked again")
+})
+
+test("resolveJobIdentity invalidates its birth-path cache when HEAD moves: a card path vacated and later reoccupied by a different task, within one process, gets the new occupant's own birth, not the old occupant's cached one", () => {
+  // task-a is born at task-origin and renamed into task-slot: its own birth,
+  // once resolved, is task-origin, not task-slot itself.
+  write("birth-vacate/task-origin/task.md", fixtureCard("birth-vacate task A", "drafting"))
+  commitAt("2026-09-27T08:12:00Z", "birth-vacate: create task A at task-origin")
+  remove("birth-vacate/task-origin/task.md")
+  write("birth-vacate/task-slot/task.md", fixtureCard("birth-vacate task A", "drafting"))
+  commitAt("2026-09-27T08:12:10Z", "birth-vacate: task A moves into task-slot")
+
+  const beforeVacate = birth("birth-vacate", "task-slot")
+  assert.deepEqual(beforeVacate, { track: "birth-vacate", slug: "task-origin" }, "task A's own birth is task-origin, resolved and cached under the task-slot cache key")
+
+  // task-a moves away, vacating task-slot; an unrelated task Z is then
+  // freshly created there. If the cached answer above were reused as-is, a
+  // later resolution would wrongly hand task Z task A's own birth.
+  remove("birth-vacate/task-slot/task.md")
+  write("birth-vacate/task-elsewhere/task.md", fixtureCard("birth-vacate task A", "drafting"))
+  commitAt("2026-09-27T08:12:20Z", "birth-vacate: task A moves away to task-elsewhere, vacating task-slot")
+  write("birth-vacate/task-slot/task.md", fixtureCard("birth-vacate task Z", "processing"))
+  commitAt("2026-09-27T08:12:30Z", "birth-vacate: an unrelated task Z reoccupies task-slot")
+
+  const afterReoccupy = birth("birth-vacate", "task-slot")
+  assert.deepEqual(afterReoccupy, { track: "birth-vacate", slug: "task-slot" }, "task Z's own birth is task-slot itself: HEAD moved, so the stale cache entry was dropped rather than reused")
+})
+
+test("resolveJobIdentity shares one deadline across its Git calls and throws on reaching it, exactly as readDeskRemote does", () => {
+  const deadlineDesk = mkdtempSync(path.join(os.tmpdir(), "desk-repo-birth-deadline-"))
+  try {
+    spawnSync("git", ["init", "-q", "-b", "main", deadlineDesk])
+    writeIn(deadlineDesk, "t/s/task.md", card(["status: drafting"]))
+    commitIn(deadlineDesk, "2026-09-27T08:13:00Z", "create")
+    assert.deepEqual(
+      resolveJobIdentity({ deskRoot: deadlineDesk, track: "t", slug: "s", deadline: performance.now() + 60_000 }),
+      { track: "t", slug: "s" },
+      "plenty of deadline left resolves normally",
+    )
+    assert.throws(
+      () => resolveJobIdentity({ deskRoot: deadlineDesk, track: "t", slug: "s", deadline: 0.5, clock: () => 0 }),
+      { code: "git_deadline" },
+      "less than a millisecond left starts nothing",
+    )
+    // A Git call that returns at or after the deadline throws too, so a timed-out call never silently falls back to the current path.
+    const readings = [0, 1000]
+    assert.throws(
+      () => resolveJobIdentity({ deskRoot: deadlineDesk, track: "t", slug: "s", deadline: 500, clock: () => readings.shift() ?? 1000 }),
+      { code: "git_deadline" },
+    )
+  } finally {
+    rmSync(deadlineDesk, { recursive: true, force: true })
+  }
+})
+
+test("resolveJobIdentity never reads a Git call killed by its time limit or a signal as no birth, whatever it printed", () => {
+  const killedDesk = mkdtempSync(path.join(os.tmpdir(), "desk-repo-birth-killed-"))
+  try {
+    // A real card must be found first (findCard has no Git of its own), so
+    // this reaches the deadline-aware Git calls the fake spawn intercepts.
+    writeIn(killedDesk, "t/s/task.md", card(["status: drafting"]))
+    const killed = { status: null, signal: "SIGTERM", stdout: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) }
+    const spawn = () => killed
+    assert.throws(
+      () => resolveJobIdentity({ deskRoot: killedDesk, track: "t", slug: "s", spawn, deadline: Infinity }),
+      { code: "git_deadline" },
+    )
+  } finally {
+    rmSync(killedDesk, { recursive: true, force: true })
+  }
+})
+
+// A real Windows host's own path separators and drive letters, exercised
+// through the same real Git history resolveJobIdentity's other tests use.
+// Skipped everywhere but a real Windows host; nothing on another platform
+// substitutes for it, since `path.sep`, `path.join` and `path.relative` are
+// this process's own platform's, not injectable.
+test("native: resolveJobIdentity follows a rename back to its birth slug on a real Windows checkout, backslashes and a drive letter included", {
+  skip: process.platform === "win32" ? false : "requires a native Windows host",
+}, () => {
+  const winDesk = mkdtempSync(path.join(os.tmpdir(), "desk-repo-win-"))
+  try {
+    assert.ok(path.isAbsolute(winDesk) && /^[A-Za-z]:\\/u.test(winDesk), "a real Windows temp path is a drive letter followed by a backslash")
+    spawnSync("git", ["init", "-q", "-b", "main", winDesk])
+    writeIn(winDesk, "birth-win\\origin-slug\\task.md", fixtureCard("birth-win task", "drafting"))
+    commitIn(winDesk, "2026-09-27T08:14:00Z", "birth-win: create")
+    removeIn(winDesk, "birth-win\\origin-slug\\task.md")
+    writeIn(winDesk, "birth-win\\new-slug\\task.md", fixtureCard("birth-win task", "drafting"))
+    commitIn(winDesk, "2026-09-27T08:14:10Z", "birth-win: rename the slug")
+    assert.deepEqual(resolveJobIdentity({ deskRoot: winDesk, track: "birth-win", slug: "new-slug" }), { track: "birth-win", slug: "origin-slug" })
+  } finally {
+    rmSync(winDesk, { recursive: true, force: true })
+  }
+})
+
 // --- readDeskRemote ---------------------------------------------------------------------
 
 test("readDeskRemote reads origin's URL, and is null with no origin or no repository", () => {
@@ -485,7 +818,8 @@ function bindWith(windows) {
     ...createDeskReaders({ deskRoot: desk }),
   }).jobs
 }
-const id = (slug) => jobId({ deskRemote: `local:${realpathSync(desk)}`, personPrefix: "", track: "track", slug })
+const idOf = (track, slug) => jobId({ deskRemote: `local:${realpathSync(desk)}`, personPrefix: "", track, slug })
+const id = (slug) => idOf("track", slug)
 const byJob = (a, b) => (a.job < b.job ? -1 : 1)
 
 test("end to end: a session's git commit call in the desk binds the tasks its own commit changed", () => {
@@ -519,6 +853,12 @@ test("end to end, same clone: two sessions whose git commit calls overlap one co
   const second = bindWith([["2026-09-25T09:29:59.500Z", "2026-09-25T09:30:03.000Z"]])
   assert.deepEqual(first.map(({ job }) => job), [id("other-task")])
   assert.deepEqual(second.map(({ job }) => job), [id("other-task")])
+})
+
+test("end to end: a real rename's job ID, through the real Git readers and bindSession together, is the birth path's, not the current path's (ourostack/desk#76)", () => {
+  const jobs = bindWith([["2026-09-26T08:00:19.000Z", "2026-09-26T08:00:20.500Z"]])
+  assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: idOf("birth-rename", "origin-slug"), basis: ["desk_commit"] }])
+  assert.notEqual(jobs[0].job, idOf("birth-rename", "new-slug"), "not the current (post-rename) path's own ID")
 })
 
 test("readDeskRemote shares one deadline across its Git calls and throws on reaching it", () => {

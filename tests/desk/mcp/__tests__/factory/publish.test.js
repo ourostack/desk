@@ -577,6 +577,7 @@ function bindFixture(facts, events) {
     deskCommitsBetween: () => [],
     gitCommitTaskPaths: () => ({ exists: false }),
     isCardHousekeeping: () => false,
+    resolveJobIdentity: (track, slug) => ({ track, slug }),
   })
   return { ...facts, jobs }
 }

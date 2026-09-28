@@ -18,18 +18,25 @@ import { recordCanonicalChanges } from "../readiness/journal.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
 import { jobId } from "../factory/binding.js"
-import { readDeskRemote } from "../factory/desk-repo.js"
+import { readDeskRemote, resolveJobIdentity } from "../factory/desk-repo.js"
 import { objectInput } from "../util/object-input.js"
 import { reportLink } from "./factory-context.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 
-/** The task's job identity as binding computes it: the desk's real path, its remote (else `local:<path>`) and the person prefix. */
+/**
+ * The task's job identity as binding computes it: the desk's real path, its
+ * remote (else `local:<path>`), the person prefix and the task's birth
+ * track/slug (`resolveJobIdentity`, ourostack/desk#76) — the same one
+ * `jobId` was hashed over, so a caller building a link or a request from
+ * this task uses that birth track/slug too, not the one it was asked about.
+ */
 async function taskJob({ deskRoot, person, track, slug }) {
   const root = await fs.realpath(deskRoot)
   const prefix = path.relative(deskRoot, personPrefix(deskRoot, person)).split(path.sep).join("/")
   const deskRemote = readDeskRemote({ deskRoot: root }) || `local:${root}`
-  return { root, prefix, deskRemote, job: jobId({ deskRemote, personPrefix: prefix, track, slug }) }
+  const birth = resolveJobIdentity({ deskRoot: root, personPrefix: prefix, track, slug })
+  return { root, prefix, deskRemote, track: birth.track, slug: birth.slug, job: jobId({ deskRemote, personPrefix: prefix, track: birth.track, slug: birth.slug }) }
 }
 
 async function requestTaskFinalize({ deskRoot, env, identity }) {
@@ -84,8 +91,8 @@ async function requestTaskTerminalSync({ deskRoot, person, track, slug, env, sta
 // and nothing here can fail the task update.
 async function factoryReportFor({ deskRoot, person, track, slug, env }) {
   try {
-    const { root, prefix, deskRemote } = await taskJob({ deskRoot, person, track, slug })
-    return reportLink({ env, deskRoot: root, deskRemote, personPrefix: prefix, track, slug })
+    const { root, prefix, deskRemote, track: birthTrack, slug: birthSlug } = await taskJob({ deskRoot, person, track, slug })
+    return reportLink({ env, deskRoot: root, deskRemote, personPrefix: prefix, track: birthTrack, slug: birthSlug })
   } catch {
     return null
   }
