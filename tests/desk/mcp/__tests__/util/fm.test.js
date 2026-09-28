@@ -499,6 +499,19 @@ test("patchFrontmatterFields still drops a block scalar's own blank continuation
   )
 })
 
+test("patchFrontmatterFields looks past blank lines under an otherwise-empty value: an indented list after them is that field's own, a top-level key after them is not", () => {
+  const nestedAfterBlank = ["---", "repos:", "", "  - name: alpha", "track: t", "---", "", "Body.", ""].join("\n")
+  assert.equal(
+    patchFrontmatterFields(nestedAfterBlank, { repos: "none" }),
+    ["---", "repos: none", "track: t", "---", "", "Body.", ""].join("\n"),
+  )
+  const keyAfterBlank = ["---", "note:", "", "track: t", "---", "", "Body.", ""].join("\n")
+  assert.equal(
+    patchFrontmatterFields(keyAfterBlank, { note: "set" }),
+    ["---", "note: set", "", "track: t", "---", "", "Body.", ""].join("\n"),
+  )
+})
+
 test("patchFrontmatterFields preserves a patched field's trailing inline comment", () => {
   const card = ["---", "status: drafting # keep me", "track: t", "---", "", "Body.", ""].join("\n")
   const patched = patchFrontmatterFields(card, { status: "done" })
