@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.108 — 2026-09-28
+
+Session start now reads the bound desk's `AGENTS.md` right after the host probe, before the first question or action, treats its rules as binding for the session and says so in one line. Archiving a task, an iteration or a track now stages and commits only the paths it moved, as `git-hygiene`'s targeted staging requires, so an archive commit in a shared desk no longer sweeps in another session's edits.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.107 — 2026-09-28
 
 A public factory store now names only plugins installed from a public repository. The session-end hook records where each plugin was installed from, and records nothing unless that is certain. On Claude Code, the source is the GitHub marketplace whose cached manifest lists the plugin. On Copilot under Agency, it is the one GitHub repository of every cache entry at the plugin's exact version, from a complete scan. On plain Copilot, it is the GitHub marketplace of the plugin's one install record. The store's andon issues name another plugin only when it is public by the same rule and every compared job reports it. Before publishing, the flush checks each source's visibility, and the store's own, with the references it already checks. A public store, or one whose visibility is unknown, gets the name and version of each plugin from a public source and a count of the rest in the new optional `refs.private.plugins`; an organization's private or internal store keeps every name. Markers, local facts and published files written before this change stay valid ([publishing transform](mcp/src/factory/publish.js), [published schema](mcp/src/factory/published-schema.js), [end hook](hooks/factory-end.cjs), [factory capture](docs/factory-local-capture.md)).
