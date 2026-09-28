@@ -46,12 +46,12 @@ Merge these keys into `$CLAUDE_DIR/settings.json`, preserving everything already
 ```json
 {
   "autoMemoryEnabled": false,
-  "attribution": { "commit": "", "pr": "" }
+  "attribution": { "commit": "", "pr": "", "sessionUrl": false }
 }
 ```
 
 - `autoMemoryEnabled: false` keeps durable context out of Claude's machine-local memory, so it lives in the desk and syncs across machines and harnesses.
-- `attribution` removes the AI attribution Claude Code adds to commits and pull requests.
+- `attribution` removes the AI attribution Claude Code adds to commits and pull requests, including the claude.ai session link cloud and Remote Control sessions otherwise add.
 
 ### 4. Make `$CLAUDE_DIR/CLAUDE.md` a thin pointer
 
