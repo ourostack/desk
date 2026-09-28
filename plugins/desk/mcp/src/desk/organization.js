@@ -273,6 +273,29 @@ function processTaskDir({ taskDirAbs, deskRoot, archived, findings, liveTaskCard
   }
 }
 
+// A track is empty only when it holds no file anywhere under it besides its
+// own `track.md` — a `_meta`/`_planning` file (or any other nested content,
+// live or archived) means the track is not empty even when it has no live or
+// archived tasks (fix round, 2026-09-28: a track holding only `_meta`/
+// `_planning` files, such as a who's-who layer's charter and notes, was
+// wrongly reported as empty and archived). A symlink counts as content too,
+// whatever it points to or whether that target exists (review fix round,
+// 2026-09-28b) — it is never resolved, only counted. Dotfiles (`.gitkeep`
+// and the like) never count as content, matching how a dotfile is treated
+// everywhere else in this module.
+function trackHasContent(trackDirAbs, atRoot = true) {
+  for (const entry of safeReaddir(trackDirAbs)) {
+    if (isDotfile(entry.name)) continue
+    if (entry.isSymbolicLink()) return true
+    if (entry.isFile()) {
+      if (atRoot && entry.name === "track.md") continue
+      return true
+    }
+    if (entry.isDirectory() && trackHasContent(path.join(trackDirAbs, entry.name), false)) return true
+  }
+  return false
+}
+
 function walkTrackRoot({ trackDirAbs, deskRoot, findings, liveTaskCards, now }) {
   let liveTaskCount = 0
   let archivedTaskCount = 0
@@ -367,7 +390,7 @@ function processTrackDir({ trackDirAbs, deskRoot, operatorNames, findings, liveT
     now,
   })
 
-  if (liveTaskCount === 0 && archivedTaskCount === 0) {
+  if (liveTaskCount === 0 && archivedTaskCount === 0 && !trackHasContent(trackDirAbs)) {
     findings.push({
       code: "track_empty",
       path: trackDirRel,

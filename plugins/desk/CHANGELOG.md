@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.118 — 2026-09-28
+
+A live tidy run on a weaker model exposed several ways the one-time organization tidy could damage a desk: `track_empty` counted a track holding only `_meta`/`_planning` files as empty (it archived `friends`, a who's-who layer, on exactly that basis) and ignored a track's own symlinks as content too; `name_shape` forced a rename of an already-good one-word track name such as `clippy` or `spoonjoy`, and a weak session then invented a worse name to satisfy it; `--write-record` wrote the tidy record even when the session skipped the printed procedure's own step 7 checks, or refused a correct one because an untouched track held someone else's mess, or missed a raw `git mv` bypass whose only card was archived or had no `track:` field at all; and the printed procedure told the agent never to raw `git mv` a track folder while its own later steps told it to raw `git mv` an emptied or stale track into `_archive/`.
+
+`track_empty` now walks the whole track directory: any file or symlink anywhere under it besides `track.md` itself — including inside `_meta/` or `_planning/` — means the track is not empty. `name_shape` now accepts 1-6 lowercase kebab-case words instead of requiring a second one, so an established one-word name is valid shape on its own; a name that actually looks like a secret's value, such as a 16-plus character hex or base64-ish run, is still caught by the separate credential check on its own, with no second word needed. `--write-record` now runs step 7's own checks in code before it writes anything: it refuses when nothing at all is staged, or when a top-level entry this run staged something under — a track, `_meta`, or a loose file — still has an unstaged or untracked change, but leaves an untouched track's own mess alone, matching step 7. It also refuses when a track this run's own staged renames moved a folder into now holds a task card, live or archived, whose `track:` field doesn't name it — the mark a raw `git mv` leaves behind instead of going through `track_rename` — while a track this run never renamed is never scanned, so pre-existing bad data elsewhere never blocks an unrelated, correctly checked tidy. The printed procedure now says plainly, in its own step, that a raw `git mv`, a bare `git add -A` or folder/pattern add, and deleting `.git/index.lock` are forbidden, that a track or task only ever moves through `track_rename` or `task_move`, and that step 5 and step 6's own raw move of an emptied or stale track into `_archive/` is the one exception, since no track-archive tool exists yet.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.117 — 2026-09-28
 
 ### First-run bootstrap tells a noninteractive session to stop at the desk ask

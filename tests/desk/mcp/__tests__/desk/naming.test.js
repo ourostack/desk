@@ -5,6 +5,10 @@
 // track names additionally reject catch-all and person names; track.md
 // gains a required one-line `scope:`. Existing (possibly bad) names are
 // never rejected on read — only creation and renaming call these.
+//
+// Fix round, 2026-09-28: the shape rule is 1-6 words, not 2-6 — a single
+// established word (clippy, desk, spoonjoy, friends) is a valid outcome name
+// on its own; nothing about "kebab-case" ever implied a second word.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -48,11 +52,20 @@ test("validateName accepts the 6-word upper bound", () => {
 
 // ── validateName: shape ─────────────────────────────────────────────────
 
-test("validateName rejects a single word as shape", () => {
-  const result = validateName("misc")
-  assert.equal(result.ok, false)
-  assert.equal(result.code, "shape")
-  assert.match(result.hint, /2.6/)
+test("validateName accepts a single established word as shape", () => {
+  assert.deepEqual(validateName("clippy"), { ok: true })
+  assert.deepEqual(validateName("misc"), { ok: true })
+})
+
+test("validateName rejects a leading or trailing hyphen as shape", () => {
+  assert.equal(validateName("-oauth-fix").code, "shape")
+  assert.equal(validateName("oauth-fix-").code, "shape")
+  const result = validateName("-oauth-fix")
+  assert.match(result.hint, /1.6/)
+})
+
+test("validateName rejects a double hyphen (an empty word) as shape", () => {
+  assert.equal(validateName("oauth--fix").code, "shape")
 })
 
 test("validateName rejects a 7-word name as shape", () => {
@@ -176,6 +189,19 @@ test("validateName rejects a long hex-looking word as credential_like", () => {
 test("validateName rejects a long mixed alnum token word as credential_like", () => {
   const result = validateName("deploy-x9k2m7q1p4z8r3n6")
   assert.equal(result.code, "credential_like")
+})
+
+// Review fix round, 2026-09-28b: SHAPE_RE alone accepting a single word
+// (fix round, 2026-09-28) does not weaken this — a short, readable one-word
+// name like "hunter2" is not itself flagged (isCredentialLike is value-only
+// by design, not a password blocklist), but a one-word run that actually
+// looks like a secret's value is still caught on its own, with no second
+// word needed to trip the check.
+test("validateName rejects a one-word hex or base64-ish run of 16+ characters as credential_like, even alone", () => {
+  const hex = validateName("a1b2c3d4e5f6a7b8")
+  assert.equal(hex.code, "credential_like")
+  const mixed = validateName("x9k2m7q1p4z8r3n6")
+  assert.equal(mixed.code, "credential_like")
 })
 
 test("validateName does not flag a long pure-alphabetic word as credential_like", () => {
@@ -325,8 +351,13 @@ test("validateTrackName falls through to base validateName rules for an ordinary
   assert.deepEqual(validateTrackName("billing-disputes", { operatorNames: ["ari"] }), { ok: true })
 })
 
+test("validateTrackName accepts an established one-word name that is not catch-all or person", () => {
+  assert.deepEqual(validateTrackName("clippy", { operatorNames: [] }), { ok: true })
+  assert.deepEqual(validateTrackName("oneword", { operatorNames: [] }), { ok: true })
+})
+
 test("validateTrackName still rejects a shape-invalid name that is not catch-all or person", () => {
-  const result = validateTrackName("oneword", { operatorNames: [] })
+  const result = validateTrackName("Oneword", { operatorNames: [] })
   assert.equal(result.code, "shape")
 })
 
