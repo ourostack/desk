@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.120 — 2026-09-28
+
+**A desk commit whose only change to a task's folder is housekeeping on its card no longer creates or joins that task's job.** Binding treated any desk commit landing inside a task's folder as work on that task, including one that changed nothing but `task.md` itself in a way that carried no real content: a pure rename or move of the card with no content change (an archive move, say), or a change to only its frontmatter `title:`, `track:` or `updated:` field. That let a tidy pass, a scope-line or title edit, an archive move, or their reverts manufacture spurious jobs, one per task folder whose card they merely touched, with no working session behind any of them. A desk commit whose only change inside a task's folder is such a housekeeping edit to the card now binds nothing there; a commit whose change to the card touches its `status`, its body (so a checkbox toggle or a progress note still binds), or any other frontmatter field still binds, and so does a commit that changes anything else in the folder alongside the card. A `task_update`, `task_create` or `task_archive` call still binds exactly as before, since it never went through this path. A file write cannot be judged this way, since its content never reaches the binder, so a bare-card file write still binds exactly as it always has — this is how a hand-edited card (a checkbox toggled, a progress note added, since `task_update` cannot do either) keeps counting as work. Renaming or moving a task's whole folder — a track rename, a slug change — is a separate, still-open problem: it still produces a second, disconnected job under the new path, tracked as desk#76; this fix only stops a card housekeeping touch from manufacturing a job on its own.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.119 — 2026-09-28
 
 ### A mechanical gate now backs the noninteractive ask, instead of prose alone

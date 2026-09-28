@@ -39,6 +39,11 @@ function writeIn(repo, relative, text) {
 }
 const write = (relative, text) => writeIn(desk, relative, text)
 
+function removeIn(repo, relative) {
+  rmSync(path.join(repo, relative), { force: true })
+}
+const remove = (relative) => removeIn(desk, relative)
+
 function commitIn(repo, at, message, extra = []) {
   gitIn(repo, ["add", "-A"])
   gitIn(repo, ["commit", "-q", "-m", message, ...extra], at)
@@ -61,7 +66,14 @@ before(() => {
   write("track/live-task/task.md", card(LIVE_CARD))
   shas.first = commitAt("2026-09-25T08:00:00Z", "first")
 
+  // old-task also gets a real, non-card file in this same commit, so it
+  // keeps end-to-end coverage through the real readers regardless of what
+  // its card's own diff classifies as (Finding 2): a task with only a
+  // freshly-added card is not the interesting case for the housekeeping
+  // rule (a first add is real content, not identity/placement), so a
+  // dedicated housekeeping-only edit to this same card is added below.
   write("track/_archive/old-task/task.md", card(["status: done # finished", "created: 2026-09-01T00:00:00Z", "updated: 2026-09-02T12:30:00+02:00"]))
+  write("track/_archive/old-task/notes.md", "notes\n")
   write("track/live-task/notes with space.md", "notes\n")
   shas.second = commitAt("2026-09-25T08:20:01Z", "second")
   git(["push", "-q", "origin", "main"], "2026-09-25T08:20:02Z")
@@ -73,6 +85,67 @@ before(() => {
   gitIn(other, ["push", "-q", "origin", "main"], "2026-09-25T08:40:01Z")
   git(["pull", "-q", "--ff-only", "origin", "main"], "2026-09-25T08:45:00Z")
 
+  // A housekeeping-only edit to an already-existing archived card: only its
+  // `updated:` field changes (the body and every other field stay the
+  // same), so this commit's only change to old-task must not bind it
+  // (Finding 2 / the desk_commit housekeeping rule).
+  write("track/_archive/old-task/task.md", card(["status: done # finished", "created: 2026-09-01T00:00:00Z", "updated: 2026-09-05T12:30:00+02:00"]))
+  shas.oldTaskHousekeeping = commitAt("2026-09-25T08:50:00Z", "touch old-task's updated field")
+
+  // Fixtures for isCardHousekeeping's other branches.
+  write("track/edit-cases-task/task.md", card(["status: drafting"]))
+  write("track/edit-cases-task/notes.md", "notes\n")
+  shas.editCasesCreated = commitAt("2026-09-25T08:51:00Z", "edit-cases: create")
+
+  // A body-only change: the frontmatter is untouched, only the body
+  // differs. Real content (a progress note), never housekeeping.
+  write("track/edit-cases-task/task.md", card(["status: drafting"], "# A task\n\n- did the thing"))
+  shas.editCasesBody = commitAt("2026-09-25T08:52:00Z", "edit-cases: body")
+
+  // A status-only change: frontmatter differs, but not a housekeeping
+  // field. Real content, never housekeeping.
+  write("track/edit-cases-task/task.md", card(["status: done"], "# A task\n\n- did the thing"))
+  shas.editCasesStatus = commitAt("2026-09-25T08:53:00Z", "edit-cases: status")
+
+  // The card alone is deleted, nothing else in the folder changes: a pure
+  // delete has no new version to compare, so it is never housekeeping.
+  remove("track/edit-cases-task/task.md")
+  shas.editCasesDeleted = commitAt("2026-09-25T08:54:00Z", "edit-cases: delete card")
+
+  // A card moved with byte-identical content (an archive move): Git's own
+  // rename detection pairs the old and new paths, and the content compares
+  // equal, so this is housekeeping on both sides of the move.
+  write("track/movable-task/task.md", card(["status: drafting"]))
+  write("track/movable-task/notes.md", "notes\n")
+  shas.movableCreated = commitAt("2026-09-25T08:55:00Z", "movable: create")
+  remove("track/movable-task/task.md")
+  write("track/_archive/movable-task/task.md", card(["status: drafting"]))
+  shas.movableArchived = commitAt("2026-09-25T08:56:00Z", "movable: archive move")
+
+  // A card with no frontmatter at all, on both sides of an edit: splitCard
+  // must not mistake this for a housekeeping-eligible card.
+  write("track/no-frontmatter-edit/task.md", "# Just a heading\nstatus: drafting\n")
+  shas.noFrontmatterCreated = commitAt("2026-09-25T08:57:00Z", "no-frontmatter: create")
+  write("track/no-frontmatter-edit/task.md", "# Just a heading\nstatus: done\n")
+  shas.noFrontmatterEdited = commitAt("2026-09-25T08:57:30Z", "no-frontmatter: edit")
+
+  // A card whose frontmatter opens with `---` but is never closed, on both
+  // sides of an edit: splitCard's other early return.
+  write("track/unclosed-frontmatter-edit/task.md", "---\nstatus: drafting\n")
+  shas.unclosedCreated = commitAt("2026-09-25T08:58:00Z", "unclosed: create")
+  write("track/unclosed-frontmatter-edit/task.md", "---\nstatus: done\n")
+  shas.unclosedEdited = commitAt("2026-09-25T08:58:30Z", "unclosed: edit")
+
+  // A nested frontmatter value changes (a repos: entry's branch_base) while
+  // every top-level field stays the same text: a field map keyed only by
+  // each line's own top-level key would see `repos:`'s own captured value
+  // ("", nothing follows the colon on that line) as unchanged and miss
+  // this; the line comparison must not.
+  write("track/nested-repos-task/task.md", card(["title: Nested repos", "repos:", "  - name: alpha", "    branch_base: main", "status: drafting", "updated: '2026-09-25T09:00:00Z'"]))
+  shas.nestedReposCreated = commitAt("2026-09-25T08:59:00Z", "nested-repos: create")
+  write("track/nested-repos-task/task.md", card(["title: Nested repos", "repos:", "  - name: alpha", "    branch_base: develop", "status: drafting", "updated: '2026-09-25T09:00:00Z'"]))
+  shas.nestedReposEdited = commitAt("2026-09-25T08:59:30Z", "nested-repos: change branch_base")
+
   // A commit, then its amend: both are this clone's.
   write("track/amended-task/task.md", card(["status: drafting"]))
   shas.beforeAmend = commitAt("2026-09-25T09:00:00Z", "draft")
@@ -80,7 +153,10 @@ before(() => {
   shas.amended = commitAt("2026-09-25T09:05:00Z", "drafted", ["--amend"])
 
   // A commit later rebased onto another clone's work keeps its own entry.
+  // It also touches a non-card file, so it is a real work signal, not just a
+  // card edit: see "the bare card never binds" in binding.test.js.
   write("track/other-task/task.md", card(["status: blocked"]))
+  write("track/other-task/notes.md", "notes\n")
   shas.preRebase = commitAt("2026-09-25T09:30:00Z", "before rebase")
   gitIn(other, ["pull", "-q", "--ff-only", "origin", "main"], "2026-09-25T09:50:00Z")
   writeIn(other, "_meta/log.md", "log\n")
@@ -139,7 +215,8 @@ test("readTask reads status, created and updated from a live card's frontmatter,
 
 test("readTask falls back to the _archive card, drops trailing comments and normalizes offsets to UTC", () => {
   const { readTask } = createDeskReaders({ deskRoot: desk })
-  assert.deepEqual(readTask("track", "old-task"), { status: "done", created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-02T10:30:00.000Z" })
+  // The working tree's current content, after the later housekeeping-only edit to `updated:`.
+  assert.deepEqual(readTask("track", "old-task"), { status: "done", created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-05T10:30:00.000Z" })
 })
 
 test("readTask returns null when no card exists, live or archived, or when the names are unsafe", () => {
@@ -190,7 +267,7 @@ test("deskCommitsBetween lists this clone's commit made in the window, once, wit
   assert.deepEqual(between("2026-09-25T08:20:01.000Z", "2026-09-25T08:20:02.500Z"), [{
     sha: shas.second,
     committed_at: "2026-09-25T08:20:01.000Z",
-    taskPaths: ["track/_archive/old-task/task.md", "track/live-task/notes with space.md"],
+    taskPaths: ["track/_archive/old-task/notes.md", "track/_archive/old-task/task.md", "track/live-task/notes with space.md"],
   }])
   assert.deepEqual(between("2026-09-25T08:20:02.000Z", "2026-09-25T08:25:00.000Z"), [], "the window's end bounds it")
 })
@@ -206,7 +283,7 @@ test("deskCommitsBetween lists a commit and its amend, and a commit later rebase
     { sha: shas.beforeAmend, taskPaths: ["track/amended-task/task.md"] },
   ])
   assert.deepEqual(between("2026-09-25T09:29:59.000Z", "2026-09-25T09:30:05.000Z"), [
-    { sha: shas.preRebase, committed_at: "2026-09-25T09:30:00.000Z", taskPaths: ["track/other-task/task.md"] },
+    { sha: shas.preRebase, committed_at: "2026-09-25T09:30:00.000Z", taskPaths: ["track/other-task/notes.md", "track/other-task/task.md"] },
   ])
   assert.deepEqual(between("2026-09-25T10:59:59.000Z", "2026-09-25T11:00:05.000Z"), [], "the rebase's own entries are not commits")
 })
@@ -307,6 +384,81 @@ test("gitCommitTaskPaths says a commit that is not in the desk, or is not a SHA,
   assert.deepEqual(gitCommitTaskPaths(shas.first.toUpperCase()), { exists: false, taskPaths: [] })
 })
 
+// --- isCardHousekeeping ------------------------------------------------------------------
+
+const housekeeping = (sha, filePath) => createDeskReaders({ deskRoot: desk }).isCardHousekeeping(sha, filePath)
+
+test("isCardHousekeeping is true for a card modified in place with only an exempt frontmatter field changed", () => {
+  assert.equal(housekeeping(shas.oldTaskHousekeeping, "track/_archive/old-task/task.md"), true)
+})
+
+test("isCardHousekeeping is true on both sides of a move with byte-identical content, found through Git's rename detection", () => {
+  assert.equal(housekeeping(shas.movableArchived, "track/movable-task/task.md"), true, "the old path")
+  assert.equal(housekeeping(shas.movableArchived, "track/_archive/movable-task/task.md"), true, "the new path")
+})
+
+test("isCardHousekeeping is false for a card's body change, even with the frontmatter untouched", () => {
+  assert.equal(housekeeping(shas.editCasesBody, "track/edit-cases-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false for a non-exempt frontmatter field change, even with the body untouched", () => {
+  assert.equal(housekeeping(shas.editCasesStatus, "track/edit-cases-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false for a path this commit only added or only removed: no prior or no new version to compare", () => {
+  assert.equal(housekeeping(shas.editCasesCreated, "track/edit-cases-task/task.md"), false, "a pure add")
+  assert.equal(housekeeping(shas.editCasesDeleted, "track/edit-cases-task/task.md"), false, "a pure delete")
+})
+
+test("isCardHousekeeping is false when the path was not part of the commit at all", () => {
+  assert.equal(housekeeping(shas.first, "track/live-task/notes.md"), false)
+})
+
+test("isCardHousekeeping is false for a bad path, a bad or missing SHA, or a desk root that is not its repository's top level", () => {
+  assert.equal(housekeeping(shas.first, ""), false)
+  assert.equal(housekeeping(shas.first, 7), false)
+  assert.equal(housekeeping("0".repeat(40), "track/live-task/task.md"), false)
+  assert.equal(housekeeping("not-a-sha", "track/live-task/task.md"), false)
+  const inner = createDeskReaders({ deskRoot: path.join(desk, "track") })
+  assert.equal(inner.isCardHousekeeping(shas.first, "track/live-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false when Git cannot list the commit's changes", () => {
+  const fakeGit = path.join(scratch, "fake-git-no-diff-tree.sh")
+  writeFileSync(fakeGit, `#!/bin/sh\nfor arg in "$@"; do [ "$arg" = diff-tree ] && exit 1; done\nexec git "$@"\n`, { mode: 0o755 })
+  assert.equal(createDeskReaders({ deskRoot: desk, git: fakeGit }).isCardHousekeeping(shas.oldTaskHousekeeping, "track/_archive/old-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false when Git lists the change but cannot read the old or new content", () => {
+  const fakeGit = path.join(scratch, "fake-git-no-show.sh")
+  writeFileSync(fakeGit, `#!/bin/sh\nfor arg in "$@"; do [ "$arg" = show ] && exit 1; done\nexec git "$@"\n`, { mode: 0o755 })
+  assert.equal(createDeskReaders({ deskRoot: desk, git: fakeGit }).isCardHousekeeping(shas.oldTaskHousekeeping, "track/_archive/old-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false for a card with no frontmatter at all, on either side of the edit", () => {
+  assert.equal(housekeeping(shas.noFrontmatterEdited, "track/no-frontmatter-edit/task.md"), false)
+})
+
+test("isCardHousekeeping is false for a card whose frontmatter is opened but never closed, on either side of the edit", () => {
+  assert.equal(housekeeping(shas.unclosedEdited, "track/unclosed-frontmatter-edit/task.md"), false)
+})
+
+test("isCardHousekeeping is false when only a nested frontmatter value changes, such as a repos: entry's branch_base, even though no exempt field differs", () => {
+  assert.equal(housekeeping(shas.nestedReposEdited, "track/nested-repos-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false when Git's list of the commit's changes is truncated right after a status, with no path to go with it", () => {
+  const fakeGit = path.join(scratch, "fake-git-truncated-status.sh")
+  writeFileSync(fakeGit, "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = diff-tree ] && { printf 'M\\000'; exit 0; }; done\nexec git \"$@\"\n", { mode: 0o755 })
+  assert.equal(createDeskReaders({ deskRoot: desk, git: fakeGit }).isCardHousekeeping(shas.first, "track/live-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false when Git's list of the commit's changes is truncated after a rename's old path, with no new path to go with it", () => {
+  const fakeGit = path.join(scratch, "fake-git-truncated-rename.sh")
+  writeFileSync(fakeGit, "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = diff-tree ] && { printf 'R100\\000onlypath\\000'; exit 0; }; done\nexec git \"$@\"\n", { mode: 0o755 })
+  assert.equal(createDeskReaders({ deskRoot: desk, git: fakeGit }).isCardHousekeeping(shas.first, "track/live-task/task.md"), false)
+})
+
 // --- readDeskRemote ---------------------------------------------------------------------
 
 test("readDeskRemote reads origin's URL, and is null with no origin or no repository", () => {
@@ -337,11 +489,23 @@ const id = (slug) => jobId({ deskRemote: `local:${realpathSync(desk)}`, personPr
 const byJob = (a, b) => (a.job < b.job ? -1 : 1)
 
 test("end to end: a session's git commit call in the desk binds the tasks its own commit changed", () => {
+  // shas.second touches live-task/notes with space.md and old-task/notes.md
+  // (real work on each), and old-task/task.md too, but that card is a
+  // brand-new add here, not identity/placement, so it is real content and
+  // would bind old-task on its own regardless: see isCardHousekeeping.
   const jobs = bindWith([["2026-09-25T08:20:01.300Z", "2026-09-25T08:20:01.900Z"]])
   assert.deepEqual(jobs.map(({ job, basis, observed }) => ({ job, basis, observed })).sort(byJob), [
     { job: id("live-task"), basis: ["desk_commit"], observed: { status: "processing", at: null } },
-    { job: id("old-task"), basis: ["desk_commit"], observed: { status: "done", at: "2026-09-02T10:30:00.000Z" } },
+    { job: id("old-task"), basis: ["desk_commit"], observed: { status: "done", at: "2026-09-05T10:30:00.000Z" } },
   ].sort(byJob))
+})
+
+test("end to end: a real-git commit whose only change to an archived card is housekeeping (only `updated:` differs) binds nothing", () => {
+  // Finding 2: shas.oldTaskHousekeeping only bumps old-task's card's
+  // `updated:` field; the body and every other field stay the same, so
+  // isCardHousekeeping must call it housekeeping and this window binds no job.
+  const jobs = bindWith([["2026-09-25T08:49:59.000Z", "2026-09-25T08:50:00.500Z"]])
+  assert.deepEqual(jobs, [])
 })
 
 test("end to end, two clones: a session in this clone never binds the other clone's commit, fetched here during its call", () => {
