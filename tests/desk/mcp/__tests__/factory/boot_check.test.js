@@ -194,6 +194,53 @@ test("a job ID is computed from the resolved birth path, not the card's current 
   assert.deepEqual(seen, ["alpha/renamed-task"], "the resolver is asked about the card's current track/slug")
 }))
 
+test("the finalize-repair loop shares its own deadline and clock with resolveIdentity", () => scratch(async ({ env, desk }) => {
+  const { factoryBootCheck } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await card(path.join(desk, "alpha", "task"))
+  const remote = "https://github.com/acme/desk.git"
+  const seen = []
+  const clock = () => 42
+  const resolveIdentity = (options) => { seen.push(options); return { track: options.track, slug: options.slug } }
+  factoryBootCheck({ env, deskRoot: desk, now: NOW, deadline: 999, clock, readRemote: () => remote, resolveIdentity })
+  assert.equal(seen[0].deadline, 999, "the loop's own deadline reaches resolveIdentity")
+  assert.equal(seen[0].clock, clock, "the loop's own clock reaches resolveIdentity")
+}))
+
+test("the finalize-repair loop stops at its deadline before resolving a later task's birth path", () => scratch(async ({ env, desk }) => {
+  const { factoryBootCheck } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await card(path.join(desk, "alpha", "first"))
+  await card(path.join(desk, "alpha", "second"))
+  const remote = "https://github.com/acme/desk.git"
+  const seen = []
+  let now = 0
+  // The first task's own resolution "spends" the whole remaining budget, so the loop's `clock() > deadline` check must catch this before the second task ever reaches resolveIdentity.
+  const resolveIdentity = ({ track, slug }) => {
+    seen.push(`${track}/${slug}`)
+    now = 200
+    return { track, slug }
+  }
+  assert.throws(
+    () => factoryBootCheck({ env, deskRoot: desk, now: NOW, deadline: 100, clock: () => now, readRemote: () => remote, resolveIdentity }),
+    { code: "boot_check_budget" },
+  )
+  assert.equal(seen.length, 1, "only the first task was ever asked for its birth path")
+}))
+
+test("resolveJobIdentity's own deadline overrun inside the finalize-repair loop is the check's budget error, not a silently skipped task", () => scratch(async ({ env, desk }) => {
+  const { factoryBootCheck } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await card(path.join(desk, "alpha", "slow"))
+  const remote = "https://github.com/acme/desk.git"
+  const resolveIdentity = () => { throw Object.assign(new Error("git_deadline"), { code: "git_deadline" }) }
+  assert.throws(
+    () => factoryBootCheck({ env, deskRoot: desk, now: NOW, deadline: Infinity, clock: () => 0, readRemote: () => remote, resolveIdentity }),
+    { code: "boot_check_budget" },
+    "a single task's own git_deadline is an overrun of the whole check, never just that one task's",
+  )
+}))
+
 test("at most eight jobs, sorted, and a hundred cards stay within the check's budget", () => scratch(async ({ env, desk }) => {
   const { factoryBootCheck, MAX_FINALIZE_JOBS } = await load()
   assert.equal(MAX_FINALIZE_JOBS, 8)

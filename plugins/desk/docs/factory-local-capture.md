@@ -34,7 +34,7 @@ node mcp/scripts/factory.js flush --store ourostack/factory
 node mcp/scripts/factory.js finalize --job <job> [--job <job> ...]
 node mcp/scripts/factory.js validate-pr --base <base-sha> --head <head-sha> --author-association <value>
 node mcp/scripts/factory.js build --store <store-directory> --out <output-directory>
-node mcp/scripts/factory.js job-link --store <owner/repo> --desk-remote <url> --person-prefix <prefix> --track <track> --slug <slug>
+node mcp/scripts/factory.js job-link --store <owner/repo> --desk-remote <url> [--person-prefix <prefix>] [--desk <desk-root>] --track <track> --slug <slug>
 node mcp/scripts/factory.js evaluate --desk <desk-root> --task [desks/<alias>/]<track>/<slug>
 node mcp/scripts/factory.js evaluate-accept --job <job>
 ```

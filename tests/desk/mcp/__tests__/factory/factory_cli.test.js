@@ -118,6 +118,37 @@ test("build writes the deterministic report tree and job-link returns the accept
   await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory"] }), /Usage: factory\.js job-link/u)
 }))
 
+test("job-link resolves the card's birth path first when --desk is given, so a renamed card's link matches the job the task tools already agree on (ourostack/desk#76)", () => scratch(async (env) => {
+  const desk = path.join(env.HOME, "job-link-desk")
+  const git = (...args) => execFileSync("git", args, { cwd: desk, encoding: "utf8" })
+  await fs.mkdir(path.join(desk, "track", "origin-slug"), { recursive: true })
+  await fs.writeFile(path.join(desk, "track", "origin-slug", "task.md"), "---\nstatus: drafting\n---\n\n# A task\n")
+  git("init", "-q", "-b", "main")
+  git("config", "user.name", "Fixture")
+  git("config", "user.email", "fixture@example.invalid")
+  git("add", "-A")
+  git("commit", "-q", "-m", "create")
+  await fs.rm(path.join(desk, "track", "origin-slug"), { recursive: true })
+  await fs.mkdir(path.join(desk, "track", "new-slug"), { recursive: true })
+  await fs.writeFile(path.join(desk, "track", "new-slug", "task.md"), "---\nstatus: drafting\n---\n\n# A task\n")
+  git("add", "-A")
+  git("commit", "-q", "-m", "rename the slug")
+
+  const remote = "git@github.com:OuroStack/Desk.git"
+  const birthJob = jobId({ deskRemote: remote, personPrefix: "", track: "track", slug: "origin-slug" })
+  const currentJob = jobId({ deskRemote: remote, personPrefix: "", track: "track", slug: "new-slug" })
+  assert.notEqual(birthJob, currentJob)
+
+  const withoutDesk = await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--track", "track", "--slug", "new-slug"] })
+  assert.equal(withoutDesk.link, `https://github.com/ourostack/factory/blob/reports/jobs/${currentJob}.md`, "without --desk, the given (current) path is hashed as-is")
+
+  const withDesk = await runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", desk, "--track", "track", "--slug", "new-slug"] })
+  assert.equal(withDesk.link, `https://github.com/ourostack/factory/blob/reports/jobs/${birthJob}.md`, "with --desk, the card's birth path is resolved and hashed instead")
+
+  await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", "relative", "--track", "track", "--slug", "new-slug"] }), /Usage: factory\.js job-link/u, "--desk must be absolute")
+  await assert.rejects(runJobLinkCommand({ argv: ["--store", "ourostack/factory", "--desk-remote", remote, "--desk", path.join(env.HOME, "no-such-desk"), "--track", "track", "--slug", "new-slug"] }), /the desk folder could not be read/u)
+}))
+
 test("validate-pr reads base and head as Git data, enforces facts for contributors, and marks maintainer changes", () => scratch(async (env) => {
   const repo = path.join(env.HOME, "store")
   const facts = path.join(repo, "facts")

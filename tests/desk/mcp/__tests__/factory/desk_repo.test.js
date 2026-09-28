@@ -20,6 +20,11 @@ let shas
 const card = (fields, body = "# A task") => `---\n${fields.join("\n")}\n---\n\n${body}\n`
 const LIVE_CARD = ["title: A live task", "status: processing", "created: \"2026-09-20T10:00:00Z\"", "updated: '2026-09-25T09:00:00Z'"]
 
+// A card whose body is unique to `label`, so Git's content-based rename
+// detection never pairs it with an unrelated fixture by accident (see the
+// resolveJobIdentity fixtures below and in `before`).
+const fixtureCard = (label, status, extra = []) => card([`status: ${status}`, ...extra], `# ${label}\n\nUnique fixture content for ${label}, never reused elsewhere.`)
+
 // Runs Git in `repo`; `at` stamps the commit and every reflog entry it makes.
 function gitIn(repo, args, at) {
   const dates = at === undefined ? {} : { GIT_COMMITTER_DATE: at, GIT_AUTHOR_DATE: at }
@@ -204,8 +209,6 @@ before(() => {
   // unrelated tasks can make Git's own `--follow` pair them by accident
   // (confirmed empirically against this same fixture set), and that
   // accident is not what any of these tests are about.
-  const fixtureCard = (label, status, extra = []) => card([`status: ${status}`, ...extra], `# ${label}\n\nUnique fixture content for ${label}, never reused elsewhere.`)
-
   // A plain rename: the slug changes, the track does not. Removing the old
   // path and writing the new one with byte-identical content, in one
   // commit, is what makes Git's own rename detection pair them (the same
@@ -285,6 +288,36 @@ before(() => {
   write("desks/ari/birth-person/new-slug/task.md", fixtureCard("birth-person task", "drafting"))
   commitAt("2026-09-26T08:06:10Z", "birth-person: rename the slug")
 
+  // A whole track archived: findCard (readTask and resolveJobIdentity alike)
+  // must also look at `_archive/<track>/<slug>/task.md`, the shape
+  // boot-check's finishedTasks already scans for an archived track, not
+  // only `<track>/_archive/<slug>/task.md`. The task is renamed before the
+  // track archives, so a findCard miss here (falling back to the given,
+  // current track/slug) is distinguishable from a real resolution: they
+  // would otherwise both name the same track/slug and the bug would hide.
+  write("birth-whole-track/task-origin/task.md", fixtureCard("birth-whole-track task", "drafting"))
+  commitAt("2026-09-27T08:10:00Z", "birth-whole-track: create")
+  remove("birth-whole-track/task-origin/task.md")
+  write("birth-whole-track/task-w/task.md", fixtureCard("birth-whole-track task", "drafting"))
+  commitAt("2026-09-27T08:10:10Z", "birth-whole-track: rename the slug")
+  remove("birth-whole-track/task-w/task.md")
+  write("_archive/birth-whole-track/task-w/task.md", fixtureCard("birth-whole-track task", "drafting"))
+  commitAt("2026-09-27T08:10:20Z", "birth-whole-track: archive the whole track")
+
+  // A task archived within an already-archived track:
+  // `_archive/<track>/_archive/<slug>/task.md`.
+  write("birth-doubly-archived/task-origin/task.md", fixtureCard("birth-doubly-archived task", "drafting"))
+  commitAt("2026-09-27T08:11:00Z", "birth-doubly-archived: create")
+  remove("birth-doubly-archived/task-origin/task.md")
+  write("birth-doubly-archived/task-d/task.md", fixtureCard("birth-doubly-archived task", "drafting"))
+  commitAt("2026-09-27T08:11:10Z", "birth-doubly-archived: rename the slug")
+  remove("birth-doubly-archived/task-d/task.md")
+  write("_archive/birth-doubly-archived/task-d/task.md", fixtureCard("birth-doubly-archived task", "drafting"))
+  commitAt("2026-09-27T08:11:20Z", "birth-doubly-archived: archive the whole track")
+  remove("_archive/birth-doubly-archived/task-d/task.md")
+  write("_archive/birth-doubly-archived/_archive/task-d/task.md", fixtureCard("birth-doubly-archived task", "drafting"))
+  commitAt("2026-09-27T08:11:30Z", "birth-doubly-archived: archive the task within the archived track too")
+
   // Cards that are not committed, for the reader's edge cases.
   write("track/no-frontmatter/task.md", "# Just a heading\nstatus: done\n")
   write("track/bad-values/task.md", card(["status: finished", "created: 2026-09-20", "updated: soon"]))
@@ -312,6 +345,12 @@ test("readTask falls back to the _archive card, drops trailing comments and norm
   const { readTask } = createDeskReaders({ deskRoot: desk })
   // The working tree's current content, after the later housekeeping-only edit to `updated:`.
   assert.deepEqual(readTask("track", "old-task"), { status: "done", created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-05T10:30:00.000Z" })
+})
+
+test("readTask finds a card under a whole archived track, and one archived a second time within that archived track", () => {
+  const { readTask } = createDeskReaders({ deskRoot: desk })
+  assert.deepEqual(readTask("birth-whole-track", "task-w"), { status: "drafting", created_at: null, updated_at: null })
+  assert.deepEqual(readTask("birth-doubly-archived", "task-d"), { status: "drafting", created_at: null, updated_at: null })
 })
 
 test("readTask returns null when no card exists, live or archived, or when the names are unsafe", () => {
@@ -644,6 +683,11 @@ test("resolveJobIdentity falls back to the current path when Git's own log outpu
   assert.deepEqual(birth("birth-malformed-git-2", "origin-slug", { git: fakeGit }), { track: "birth-malformed-git-2", slug: "origin-slug" }, "a header with no path after it names no birth, so the current path stands")
 })
 
+test("resolveJobIdentity finds and follows the rename of a card under a whole archived track, and one archived a second time within it", () => {
+  assert.deepEqual(birth("birth-whole-track", "task-w"), { track: "birth-whole-track", slug: "task-origin" }, "found at _archive/<track>/<slug>, not only <track>/_archive/<slug>")
+  assert.deepEqual(birth("birth-doubly-archived", "task-d"), { track: "birth-doubly-archived", slug: "task-origin" }, "found at _archive/<track>/_archive/<slug>")
+})
+
 test("createDeskReaders's resolveJobIdentity wrapper agrees with the standalone function", () => {
   const { resolveJobIdentity: fromReaders } = createDeskReaders({ deskRoot: desk })
   assert.deepEqual(fromReaders("birth-rename", "new-slug"), birth("birth-rename", "new-slug"))
@@ -654,6 +698,98 @@ test("resolveJobIdentity caches a birth path per process: a later call for the s
   assert.deepEqual(first, { track: "birth-cache", slug: "task-cache-origin" }, "resolved correctly on the first, real call")
   const second = birth("birth-cache", "task-cache-new", { git: path.join(desk, "no-such-git-cache-test") })
   assert.deepEqual(second, first, "a broken git still returns the cached birth, so it was never invoked again")
+})
+
+test("resolveJobIdentity invalidates its birth-path cache when HEAD moves: a card path vacated and later reoccupied by a different task, within one process, gets the new occupant's own birth, not the old occupant's cached one", () => {
+  // task-a is born at task-origin and renamed into task-slot: its own birth,
+  // once resolved, is task-origin, not task-slot itself.
+  write("birth-vacate/task-origin/task.md", fixtureCard("birth-vacate task A", "drafting"))
+  commitAt("2026-09-27T08:12:00Z", "birth-vacate: create task A at task-origin")
+  remove("birth-vacate/task-origin/task.md")
+  write("birth-vacate/task-slot/task.md", fixtureCard("birth-vacate task A", "drafting"))
+  commitAt("2026-09-27T08:12:10Z", "birth-vacate: task A moves into task-slot")
+
+  const beforeVacate = birth("birth-vacate", "task-slot")
+  assert.deepEqual(beforeVacate, { track: "birth-vacate", slug: "task-origin" }, "task A's own birth is task-origin, resolved and cached under the task-slot cache key")
+
+  // task-a moves away, vacating task-slot; an unrelated task Z is then
+  // freshly created there. If the cached answer above were reused as-is, a
+  // later resolution would wrongly hand task Z task A's own birth.
+  remove("birth-vacate/task-slot/task.md")
+  write("birth-vacate/task-elsewhere/task.md", fixtureCard("birth-vacate task A", "drafting"))
+  commitAt("2026-09-27T08:12:20Z", "birth-vacate: task A moves away to task-elsewhere, vacating task-slot")
+  write("birth-vacate/task-slot/task.md", fixtureCard("birth-vacate task Z", "processing"))
+  commitAt("2026-09-27T08:12:30Z", "birth-vacate: an unrelated task Z reoccupies task-slot")
+
+  const afterReoccupy = birth("birth-vacate", "task-slot")
+  assert.deepEqual(afterReoccupy, { track: "birth-vacate", slug: "task-slot" }, "task Z's own birth is task-slot itself: HEAD moved, so the stale cache entry was dropped rather than reused")
+})
+
+test("resolveJobIdentity shares one deadline across its Git calls and throws on reaching it, exactly as readDeskRemote does", () => {
+  const deadlineDesk = mkdtempSync(path.join(os.tmpdir(), "desk-repo-birth-deadline-"))
+  try {
+    spawnSync("git", ["init", "-q", "-b", "main", deadlineDesk])
+    writeIn(deadlineDesk, "t/s/task.md", card(["status: drafting"]))
+    commitIn(deadlineDesk, "2026-09-27T08:13:00Z", "create")
+    assert.deepEqual(
+      resolveJobIdentity({ deskRoot: deadlineDesk, track: "t", slug: "s", deadline: performance.now() + 60_000 }),
+      { track: "t", slug: "s" },
+      "plenty of deadline left resolves normally",
+    )
+    assert.throws(
+      () => resolveJobIdentity({ deskRoot: deadlineDesk, track: "t", slug: "s", deadline: 0.5, clock: () => 0 }),
+      { code: "git_deadline" },
+      "less than a millisecond left starts nothing",
+    )
+    // A Git call that returns at or after the deadline throws too, so a timed-out call never silently falls back to the current path.
+    const readings = [0, 1000]
+    assert.throws(
+      () => resolveJobIdentity({ deskRoot: deadlineDesk, track: "t", slug: "s", deadline: 500, clock: () => readings.shift() ?? 1000 }),
+      { code: "git_deadline" },
+    )
+  } finally {
+    rmSync(deadlineDesk, { recursive: true, force: true })
+  }
+})
+
+test("resolveJobIdentity never reads a Git call killed by its time limit or a signal as no birth, whatever it printed", () => {
+  const killedDesk = mkdtempSync(path.join(os.tmpdir(), "desk-repo-birth-killed-"))
+  try {
+    // A real card must be found first (findCard has no Git of its own), so
+    // this reaches the deadline-aware Git calls the fake spawn intercepts.
+    writeIn(killedDesk, "t/s/task.md", card(["status: drafting"]))
+    const killed = { status: null, signal: "SIGTERM", stdout: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) }
+    const spawn = () => killed
+    assert.throws(
+      () => resolveJobIdentity({ deskRoot: killedDesk, track: "t", slug: "s", spawn, deadline: Infinity }),
+      { code: "git_deadline" },
+    )
+  } finally {
+    rmSync(killedDesk, { recursive: true, force: true })
+  }
+})
+
+// A real Windows host's own path separators and drive letters, exercised
+// through the same real Git history resolveJobIdentity's other tests use.
+// Skipped everywhere but a real Windows host; nothing on another platform
+// substitutes for it, since `path.sep`, `path.join` and `path.relative` are
+// this process's own platform's, not injectable.
+test("native: resolveJobIdentity follows a rename back to its birth slug on a real Windows checkout, backslashes and a drive letter included", {
+  skip: process.platform === "win32" ? false : "requires a native Windows host",
+}, () => {
+  const winDesk = mkdtempSync(path.join(os.tmpdir(), "desk-repo-win-"))
+  try {
+    assert.ok(path.isAbsolute(winDesk) && /^[A-Za-z]:\\/u.test(winDesk), "a real Windows temp path is a drive letter followed by a backslash")
+    spawnSync("git", ["init", "-q", "-b", "main", winDesk])
+    writeIn(winDesk, "birth-win\\origin-slug\\task.md", fixtureCard("birth-win task", "drafting"))
+    commitIn(winDesk, "2026-09-27T08:14:00Z", "birth-win: create")
+    removeIn(winDesk, "birth-win\\origin-slug\\task.md")
+    writeIn(winDesk, "birth-win\\new-slug\\task.md", fixtureCard("birth-win task", "drafting"))
+    commitIn(winDesk, "2026-09-27T08:14:10Z", "birth-win: rename the slug")
+    assert.deepEqual(resolveJobIdentity({ deskRoot: winDesk, track: "birth-win", slug: "new-slug" }), { track: "birth-win", slug: "origin-slug" })
+  } finally {
+    rmSync(winDesk, { recursive: true, force: true })
+  }
 })
 
 // --- readDeskRemote ---------------------------------------------------------------------

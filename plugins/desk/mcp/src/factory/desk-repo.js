@@ -2,10 +2,12 @@
 // desk's Git history. Both are read-only.
 //
 // `readTask(track, slug)` reads `<deskRoot>/[<personPrefix>/]<track>/<slug>/
-// task.md`, else `<track>/_archive/<slug>/task.md`, and returns `{ status,
+// task.md`, else `<track>/_archive/<slug>/task.md`, else, for a whole
+// archived track, `_archive/<track>/<slug>/task.md` or
+// `_archive/<track>/_archive/<slug>/task.md`, and returns `{ status,
 // created_at, updated_at }` from its frontmatter (the YAML between the first
-// two `---` lines, searched in the first 40 lines only), or `null` when
-// neither card exists. Only top-level `key: value` lines are read, quotes and
+// two `---` lines, searched in the first 40 lines only), or `null` when none
+// of the four exist. Only top-level `key: value` lines are read, quotes and
 // a trailing ` # comment` stripped. A status outside `ENUMS.jobStatus`, or a
 // time `normalizeTimestamp` refuses (a bare date, say), is `null`, never a
 // guess; an unreadable card gives all three `null`.
@@ -46,21 +48,33 @@
 // it elsewhere), no prompts, and a timeout. Any failure reads as "nothing
 // found", never a throw.
 //
-// `resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs
-// }) -> { track, slug }` is a job's identity (ourostack/desk#76): the birth
-// path — the `track/slug` the task's card, `task.md`, was first added at —
-// found by following its *current* path's rename history with Git's own
-// `--follow` (`git log --follow --diff-filter=A`, chasing through
-// `-M`-equivalent rename detection, so a track rename, a task move and an
-// archive move all keep the same birth path; a reverted rename walks back
-// through both hops to the same original). No card field is read or written
-// for this — it works retroactively, from history alone — and it falls back
-// to the given `{ track, slug }`, unchanged, whenever Git cannot settle the
-// question: the card is found neither live nor archived, the desk is not a
-// Git repository of its own, the card has no Git history yet (new and
-// uncommitted), or any Git call fails. It never throws for a Git reason,
-// only for a bad `personPrefix` (`checkPersonPrefix`'s own contract) or a
-// `deskRoot` that is not an absolute path.
+// `resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs,
+// deadline, clock }) -> { track, slug }` is a job's identity
+// (ourostack/desk#76): the birth path — the `track/slug` the task's card,
+// `task.md`, was first added at — found by following its *current* path's
+// rename history with Git's own `--follow` (`git log --follow
+// --diff-filter=A`, chasing through `-M`-equivalent rename detection, so a
+// track rename, a task move and an archive move all keep the same birth
+// path; a reverted rename walks back through both hops to the same
+// original). No card field is read or written for this — it works
+// retroactively, from history alone — and it falls back to the given `{
+// track, slug }`, unchanged, whenever Git cannot settle the question: the
+// card is found neither live nor archived (in a live track, an archived
+// task within a live track, a whole archived track, or an archived task
+// within an archived track — the same four shapes `finishedTasks` scans),
+// the desk is not a Git repository of its own, the card has no Git history
+// yet (new and uncommitted), or any ordinary Git call fails. A card just
+// moved but not yet committed (right after `task_move`, before the agent's
+// own commit) resolves to the *current* path until that commit lands: this
+// is expected, not a bug, and is expected to become rare once Desk tools
+// commit their own writes. With `deadline` (a value of `clock`, same
+// contract as `readDeskRemote`'s), every Git call this makes shares it, and
+// a call that reaches the deadline, or finds none left to start one, throws
+// an error whose code is `git_deadline` instead of falling back — the one
+// exception to "never throws for a Git reason". Without a `deadline` it
+// never throws for a Git reason, only for a bad `personPrefix`
+// (`checkPersonPrefix`'s own contract) or a `deskRoot` that is not an
+// absolute path.
 //
 // Git's `--diff-filter=A` can list more than one add for the same current
 // name: a card deleted and later re-created at the same path is one
@@ -74,8 +88,17 @@
 // so nothing here reads a same-commit swap as an identity change.
 //
 // Cached for this process — the desk's own-repository check, and the birth
-// path for one desk root and one card path — since neither can change while
-// the process runs, and binding may resolve many tasks in one call.
+// path for one desk root and one card path — since binding may resolve many
+// tasks in one call. The birth-path cache is keyed on path alone, so it is
+// invalidated whenever the desk's `HEAD` moves: a card path that is vacated
+// (its task renamed or moved away) and later reoccupied by a different task
+// within the same long-lived process must not return the first task's
+// birth just because the path matches, so every call records `HEAD` and
+// clears every cached birth path for the desk root when it differs from
+// what an earlier call last saw. The own-repository check is not treated
+// the same way: whether the desk root is Git's top level is a fact about
+// the repository's structure, not its history, so it is not a function of
+// `HEAD` and a commit landing does not make a cached answer stale.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -93,11 +116,14 @@ const READ_BYTES = 16 * 1024
 const DEFAULT_TIMEOUT_MS = 20_000
 
 // `resolveJobIdentity`'s process-lifetime caches: a desk root's real path ->
-// is it its own Git repository, and "<that real path>\u0000<repo-relative
-// card path>" -> the birth `{ track, slug }` already found for it. Neither
-// answer can change while this process runs.
+// is it its own Git repository (never invalidated: see the header); "<that
+// real path>\u0000<repo-relative card path>" -> the birth `{ track, slug }`
+// already found for it (invalidated per root when `HEAD` moves); and a desk
+// root's real path -> the `HEAD` commit its birth-path cache entries were
+// last validated against.
 const REPO_CHECK_CACHE = new Map()
 const BIRTH_PATH_CACHE = new Map()
+const REPO_HEAD_CACHE = new Map()
 
 export function gitEnv() {
   const env = {}
@@ -173,11 +199,20 @@ function cardFields(text) {
   }
 }
 
-// The card's absolute folder — live, else archived — and its raw text, or
-// null when neither exists. The one place `readTask` and job-identity
-// resolution both look a card up, so they always agree on where it lives.
+// The card's absolute folder — live, an archived task within a live track,
+// a whole archived track, or an archived task within an archived track —
+// and its raw text, or null when none of the four exist. The one place
+// `readTask` and job-identity resolution both look a card up, so they
+// always agree on where it lives; `finishedTasks` (`boot-check.js`) walks
+// the same four shapes on its own, since it must enumerate every track,
+// live and archived, rather than look one up.
 function findCard(base, track, slug) {
-  for (const folder of [path.join(base, track, slug), path.join(base, track, "_archive", slug)]) {
+  for (const folder of [
+    path.join(base, track, slug),
+    path.join(base, track, "_archive", slug),
+    path.join(base, "_archive", track, slug),
+    path.join(base, "_archive", track, "_archive", slug),
+  ]) {
     const text = readHead(path.join(folder, "task.md"))
     if (text !== null) return { folder, text }
   }
@@ -290,9 +325,10 @@ function parseReflog(output) {
 // `--show-prefix` is the desk root's path below its top level, so it is
 // empty exactly when the top level is the desk root's real path (it
 // resolves symlinks, and letter case on a case-insensitive disk, as Git
-// does).
-function isOwnRepository(options) {
-  const prefix = runGit(options, ["rev-parse", "--show-prefix"])
+// does). `runFn` calls `runGit` directly by default; a deadline-aware
+// caller passes its own, so this one call stays inside its shared budget.
+function isOwnRepository(options, runFn = runGit) {
+  const prefix = runFn(options, ["rev-parse", "--show-prefix"])
   return prefix !== null && prefix.trim() === ""
 }
 
@@ -304,8 +340,9 @@ function isOwnRepository(options) {
 // literal path can have more than one across an unrelated delete and
 // re-create, and only the newest is this path's own current lineage (see
 // the header for why, and for the same-commit swap this also keeps out).
-function gitBirthPathSegments(options, relativePath) {
-  const output = runGit(options, ["log", "--follow", "--diff-filter=A", "-z", "--format=%x1e%H", "--name-only", "--", relativePath])
+// `runFn` calls `runGit` directly by default; see `isOwnRepository`.
+function gitBirthPathSegments(options, relativePath, runFn = runGit) {
+  const output = runFn(options, ["log", "--follow", "--diff-filter=A", "-z", "--format=%x1e%H", "--name-only", "--", relativePath])
   if (output === null) return null
   const records = output.split("\x1e").filter((record) => record !== "")
   if (records.length === 0) return null
@@ -398,10 +435,15 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
 }
 
 /**
- * `resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs
- * })` -> `{ track, slug }`: the task's birth path. See the header.
+ * `resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs,
+ * deadline, clock, spawn })` -> `{ track, slug }`: the task's birth path.
+ * See the header, including the `deadline`/`git_deadline` contract shared
+ * with `readDeskRemote`. `spawn` replaces `spawnSync` in tests.
  */
-export function resolveJobIdentity({ deskRoot, personPrefix = "", track, slug, git = "git", timeoutMs = DEFAULT_TIMEOUT_MS }) {
+export function resolveJobIdentity({
+  deskRoot, personPrefix = "", track, slug, git = "git", timeoutMs = DEFAULT_TIMEOUT_MS,
+  deadline = null, clock = () => performance.now(), spawn = spawnSync,
+}) {
   const current = { track, slug }
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("resolveJobIdentity: deskRoot must be an absolute path")
   const alias = checkPersonPrefix(personPrefix, "resolveJobIdentity")
@@ -410,20 +452,52 @@ export function resolveJobIdentity({ deskRoot, personPrefix = "", track, slug, g
   const found = findCard(path.join(deskRoot, personPrefix), track, slug)
   if (found === null) return current
 
-  const options = { git, deskRoot, timeoutMs }
+  const options = { git, deskRoot, timeoutMs, spawn }
   const root = path.resolve(deskRoot)
+
+  // Mirrors `readDeskRemote`'s own `run`, in `isOwnRepository`/
+  // `gitBirthPathSegments`'s `runFn(options, args)` shape so it can replace
+  // their default `runGit` directly: with no deadline this is exactly
+  // `runGit(options, args)` (never throws), and with one it caps each call
+  // to the time left, throwing `git_deadline` before starting a call the
+  // deadline has no room for, and after one that reached it anyway.
+  const run = (_options, args) => {
+    let limit = timeoutMs
+    if (deadline !== null) {
+      limit = Math.min(timeoutMs, Math.floor(deadline - clock()))
+      if (limit < 1) throw gitDeadline()
+    }
+    const output = runGit({ ...options, timeoutMs: limit, strict: deadline !== null }, args)
+    if (deadline !== null && clock() >= deadline) throw gitDeadline()
+    return output
+  }
+
   let ownRepo = REPO_CHECK_CACHE.get(root)
   if (ownRepo === undefined) {
-    ownRepo = isOwnRepository(options)
+    ownRepo = isOwnRepository(options, run)
     REPO_CHECK_CACHE.set(root, ownRepo)
   }
   if (!ownRepo) return current
+
+  // A path vacated by one task and later reoccupied by another, within this
+  // same process, must not hand back the first task's cached birth just
+  // because the path matches: a commit landing is the only way that can
+  // happen, so every call checks `HEAD` and drops every cached birth path
+  // for this root the moment it differs from what an earlier call saw.
+  const head = run(options, ["rev-parse", "HEAD"])
+  const stamp = head === null ? null : head.trim()
+  if (stamp !== null && REPO_HEAD_CACHE.get(root) !== stamp) {
+    for (const key of BIRTH_PATH_CACHE.keys()) {
+      if (key.startsWith(`${root}\u0000`)) BIRTH_PATH_CACHE.delete(key)
+    }
+    REPO_HEAD_CACHE.set(root, stamp)
+  }
 
   const relative = path.relative(deskRoot, path.join(found.folder, "task.md")).split(path.sep).join("/")
   const cacheKey = `${root}\u0000${relative}`
   if (BIRTH_PATH_CACHE.has(cacheKey)) return BIRTH_PATH_CACHE.get(cacheKey)
 
-  const segments = gitBirthPathSegments(options, relative)
+  const segments = gitBirthPathSegments(options, relative, run)
   const parsed = segments === null ? null : taskOfSegments(segments, alias)
   const result = parsed === null ? current : { track: parsed.track, slug: parsed.slug }
   BIRTH_PATH_CACHE.set(cacheKey, result)
