@@ -1,6 +1,6 @@
 // desk MCP server registration.
 //
-// Registers all 18 tools as stdio MCP handlers. Units 3 + 5 + 6 wire every
+// Registers all 17 tools as stdio MCP handlers. Units 3 + 5 + 6 wire every
 // tool to a real implementation:
 //   - Unit 3: task_create, task_update, task_archive, track_create,
 //             track_update, friction_add, lesson_add
@@ -9,7 +9,6 @@
 //   - Unit 6: desk_thread (refs_graph provenance walk)
 //   - Index mgmt: desk_reindex (requests shared controller convergence)
 //   - Health/status: desk_status and desk_doctor (session-start-safe, non-mutating)
-//   - Private work measurement: desk_work_ledger (OS-user-private work-item ledger)
 //
 // There is no qualitative feedback tool here. Preview feedback a participant
 // chooses to offer is written as Markdown in their own desk
@@ -36,7 +35,6 @@ import { track_create, track_update } from "./tools/track.js"
 import { task_move, track_rename } from "./tools/move.js"
 import { friction_add } from "./tools/friction.js"
 import { lesson_add } from "./tools/lesson.js"
-import { desk_work_ledger } from "./tools/work-ledger.js"
 import {
   desk_search,
   desk_recall,
@@ -215,7 +213,6 @@ export const TOOL_IMPLS = {
   track_rename,
   friction_add,
   lesson_add,
-  desk_work_ledger,
   desk_search,
   desk_recall,
   desk_similar,

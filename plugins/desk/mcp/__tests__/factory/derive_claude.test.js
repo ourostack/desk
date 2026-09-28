@@ -12,7 +12,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { deriveClaudeSession, __internals__ } from "../../src/factory/derive-claude.js"
-import { validateLocalFacts as validateFacts } from "../../src/factory/schema.js"
+import { validateLocalFacts } from "../../src/factory/schema.js"
 import {
   SENTINEL,
   COMMIT_SHA,
@@ -88,7 +88,7 @@ test("the deriver writes local facts: the local schema value, no contributor, no
   assert.deepEqual(facts.refs.commits, [])
 })
 
-test("the derived facts pass validateFacts and carry no sentinel, for every fixture variant", async () => {
+test("the derived facts pass validateLocalFacts and carry no sentinel, for every fixture variant", async () => {
   const variants = [
     { transcriptPath: transcriptPath(SESSION_IDS.full), endReason: "prompt_input_exit" },
     { transcriptPath: transcriptPath(SESSION_IDS.full), endReason: null },
@@ -101,7 +101,7 @@ test("the derived facts pass validateFacts and carry no sentinel, for every fixt
   ]
   for (const variant of variants) {
     const { facts } = await deriveClaudeSession({ plugins: PLUGINS, ...variant })
-    const result = validateFacts(facts)
+    const result = validateLocalFacts(facts)
     assert.deepEqual(result.errors, [], variant.transcriptPath)
     assert.equal(result.ok, true, variant.transcriptPath)
     assert.equal(JSON.stringify(facts).includes(SENTINEL), false, variant.transcriptPath)
@@ -129,7 +129,7 @@ test("odd but parseable shapes (non-object lines, non-numeric usage, missing inp
     plugins: PLUGINS,
     endReason: null,
   })
-  assert.deepEqual(validateFacts(facts).errors, [])
+  assert.deepEqual(validateLocalFacts(facts).errors, [])
   assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
   // Back-to-back prompts: the first turn has no activity and ends where it starts.
   const turns = findInterval(facts.intervals, (iv) => iv.kind === "turn")
@@ -490,7 +490,7 @@ test("only a successful Bash git commit call becomes a shellGitCommits event, wi
     span("27", "28", base),
   ], "a failed, no-op or interrupted call gives none")
   assert.deepEqual(events.nativeCommitShas, [], "Claude Code records no native commit refs")
-  assert.equal(validateFacts(facts).ok, true)
+  assert.equal(validateLocalFacts(facts).ok, true)
 })
 
 test("sentinel: a git commit command's text (message, options, other arguments) never reaches facts or events", async () => {
@@ -571,7 +571,7 @@ test("a truncated last line (ignoring a blank line in between) is reported as tu
   assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "turns"), [{ field: "turns", reason: "log_truncated" }])
   assert.equal(facts.counts.api_retries, 1)
   assert.deepEqual(findInterval(facts.intervals, (iv) => iv.kind === "api_retry"), [])
-  assert.equal(validateFacts(facts).ok, true)
+  assert.equal(validateLocalFacts(facts).ok, true)
 })
 
 test("a tool result stamped before its own tool_use drops that interval with tool_durations/source_unreadable, and started_at is the earliest timestamp", async () => {
@@ -609,13 +609,13 @@ test("plugin entries that fail the schema are dropped with plugins/source_unread
   assert.deepEqual(messy.facts.plugins, [{ name: "desk", version: "3.2.0-alpha.21", source: null }], "an unknown key is dropped; an invalid source drops the entry")
   assert.deepEqual(pluginsUnavailable(messy.facts), [{ field: "plugins", reason: "source_unreadable" }])
   assert.equal(JSON.stringify(messy.facts).includes(SENTINEL), false)
-  assert.equal(validateFacts(messy.facts).ok, true)
+  assert.equal(validateLocalFacts(messy.facts).ok, true)
 
   // A marker written before sources were recorded carries none; its plugins read as having no known source.
   const old = await derive([{ name: "desk", version: "3.2.0-alpha.21" }, { name: "notes", version: "1.0.0", source: null }])
   assert.deepEqual(old.facts.plugins, [{ name: "desk", version: "3.2.0-alpha.21", source: null }, { name: "notes", version: "1.0.0", source: null }])
   assert.deepEqual(pluginsUnavailable(old.facts), [])
-  assert.equal(validateFacts(old.facts).ok, true)
+  assert.equal(validateLocalFacts(old.facts).ok, true)
 
   const missing = await derive(undefined)
   assert.deepEqual(missing.facts.plugins, [])
@@ -624,7 +624,7 @@ test("plugin entries that fail the schema are dropped with plugins/source_unread
   const tooMany = await derive(Array.from({ length: 65 }, (_, index) => ({ name: `p${index}`, version: "1.0.0" })))
   assert.equal(tooMany.facts.plugins.length, 64)
   assert.deepEqual(pluginsUnavailable(tooMany.facts), [{ field: "plugins", reason: "capped" }])
-  assert.equal(validateFacts(tooMany.facts).ok, true)
+  assert.equal(validateLocalFacts(tooMany.facts).ok, true)
 
   const tooManyAndBad = await derive([null, ...Array.from({ length: 65 }, (_, index) => ({ name: `p${index}`, version: "1.0.0" }))])
   assert.equal(tooManyAndBad.facts.plugins.length, 64)
@@ -647,7 +647,7 @@ test("a non-final malformed line with no assistant lines yields models: [] and m
   assert.equal(facts.counts.compactions, 1)
   // A tool_result for a tool_use id never seen is dropped, not crashed on.
   assert.deepEqual(facts.counts.tool_calls, {})
-  assert.equal(validateFacts(facts).ok, true)
+  assert.equal(validateLocalFacts(facts).ok, true)
 })
 
 // --- Comparators, tested directly since a real session's own ordering
@@ -671,7 +671,7 @@ test("comparePrRefs orders by number within a repo, and by repo name across repo
   assert.equal(comparePrRefs({ repo: "b/b", number: 1 }, { repo: "a/a", number: 1 }) > 0, true)
 })
 
-// --- applyLimits: every capped array trimmed to what validateFacts accepts ----
+// --- applyLimits: every capped array trimmed to what validateLocalFacts accepts ----
 
 const at = (second) => `2026-09-25T08:00:${String(second).padStart(2, "0")}.000Z`
 

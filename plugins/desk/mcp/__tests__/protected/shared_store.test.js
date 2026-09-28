@@ -1,10 +1,10 @@
 // The shared protected-store primitive.
 //
-// Two private stores now live in the operating-system user's own state
-// directory: the participant's qualitative feedback and the operator's work
-// ledger. They share one set of protections — owner-only permissions, refusal
+// Every private store in the operating-system user's own state directory
+// (today the participant's qualitative feedback; these cases add a synthetic
+// second store to prove separation) shares one set of protections — owner-only permissions, refusal
 // to sit inside a Git checkout, refusal to follow a symlink or a hard link,
-// DELETE journalling and secure_delete — and they share nothing else. The
+// DELETE journalling and secure_delete — and nothing else. The
 // primitive exists to keep those protections in one place; it must not become
 // a way to address a store the caller was never bound to.
 
@@ -16,7 +16,7 @@ import * as path from "node:path"
 
 import { resolvePrivateStore, withPrivateStore } from "../../src/feedback/store.js"
 import { resolveProtectedStore, withProtectedStore } from "../../src/protected/store.js"
-import { mkLedgerFixture, cleanup } from "../measurement/_helpers.js"
+import { cleanup, mkFeedbackFixture as mkStoreFixture } from "../feedback/_helpers.js"
 
 // These cases are about POSIX store layout, refusals, journalling and message
 // parity — not about macOS extended-ACL mechanics, which no assertion here
@@ -31,19 +31,20 @@ const POSIX_PLATFORM = process.platform === "win32" ? "linux" : process.platform
 
 // A store descriptor. `label` prefixes a message; `subject` names the thing in
 // its body. Both are module-internal constants in production — never tool input
-// — and both must be parameterised, because a prefix alone would leave the work
-// ledger reporting a compromised *feedback* database.
+// — and both must be parameterised, because a prefix alone would leave a second
+// store reporting a compromised *feedback* database.
 const FEEDBACK = {
   namespace: "feedback",
   filename: "feedback.sqlite",
   label: "desk_feedback",
   subject: "feedback",
 }
-const LEDGER = {
-  namespace: "work-measurement",
-  filename: "work-measurement.sqlite",
-  label: "desk_work_ledger",
-  subject: "work measurement",
+// A synthetic second store: no production caller, only the separation proof.
+const SECOND = {
+  namespace: "second-store",
+  filename: "second-store.sqlite",
+  label: "desk_second_store",
+  subject: "second-store records",
 }
 
 function expectedPartition(realDeskRoot, alias) {
@@ -54,7 +55,7 @@ function expectedPartition(realDeskRoot, alias) {
 }
 
 test("the extracted primitive keeps the feedback store exactly where it already was", async () => {
-  const fixture = await mkLedgerFixture()
+  const fixture = await mkStoreFixture()
   try {
     const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
     const viaFeedback = await resolvePrivateStore({
@@ -90,28 +91,28 @@ test("the extracted primitive keeps the feedback store exactly where it already 
   }
 })
 
-test("the work ledger gets its own namespace, never the feedback database", async () => {
-  const fixture = await mkLedgerFixture()
+test("a second store gets its own namespace, never the feedback database", async () => {
+  const fixture = await mkStoreFixture()
   try {
     const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
     const binding = { deskRoot: fixture.deskRoot, person: "rowan", env, platform: POSIX_PLATFORM }
     const feedback = await resolveProtectedStore({ ...binding, ...FEEDBACK })
-    const ledger = await resolveProtectedStore({ ...binding, ...LEDGER })
+    const second = await resolveProtectedStore({ ...binding, ...SECOND })
 
-    assert.notEqual(ledger.storeDir, feedback.storeDir)
-    assert.notEqual(ledger.dbPath, feedback.dbPath)
-    assert.ok(ledger.storeDir.includes(`${path.sep}work-measurement${path.sep}`))
-    assert.equal(path.basename(ledger.dbPath), "work-measurement.sqlite")
+    assert.notEqual(second.storeDir, feedback.storeDir)
+    assert.notEqual(second.dbPath, feedback.dbPath)
+    assert.ok(second.storeDir.includes(`${path.sep}second-store${path.sep}`))
+    assert.equal(path.basename(second.dbPath), "second-store.sqlite")
   } finally {
     await cleanup(fixture.base)
   }
 })
 
 test("each binding gets its own partition and one binding cannot address another", async () => {
-  const fixture = await mkLedgerFixture()
+  const fixture = await mkStoreFixture()
   try {
     const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
-    const base = { deskRoot: fixture.deskRoot, env, platform: POSIX_PLATFORM, ...LEDGER }
+    const base = { deskRoot: fixture.deskRoot, env, platform: POSIX_PLATFORM, ...SECOND }
     const rowan = await resolveProtectedStore({ ...base, person: "rowan" })
     const quinn = await resolveProtectedStore({ ...base, person: "quinn" })
     const unbound = await resolveProtectedStore({ ...base, person: null })
@@ -129,12 +130,12 @@ test("each binding gets its own partition and one binding cannot address another
 })
 
 test("the primitive creates owner-only directories and an owner-only database", async () => {
-  const fixture = await mkLedgerFixture()
+  const fixture = await mkStoreFixture()
   try {
     const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
     const binding = { deskRoot: fixture.deskRoot, person: "rowan", env, platform: process.platform }
     const opened = await withProtectedStore(
-      { ...binding, ...LEDGER, schemaSql: "CREATE TABLE IF NOT EXISTS probe (id TEXT PRIMARY KEY);" },
+      { ...binding, ...SECOND, schemaSql: "CREATE TABLE IF NOT EXISTS probe (id TEXT PRIMARY KEY);" },
       (store) => {
         store.db.prepare("INSERT INTO probe (id) VALUES (?)").run("one")
         return store.db.prepare("SELECT COUNT(*) AS total FROM probe").get().total
@@ -142,17 +143,17 @@ test("the primitive creates owner-only directories and an owner-only database", 
     )
     assert.equal(opened, 1)
 
-    const { storeDir, dbPath } = await resolveProtectedStore({ ...binding, ...LEDGER })
+    const { storeDir, dbPath } = await resolveProtectedStore({ ...binding, ...SECOND })
     assert.equal((await fs.stat(storeDir)).mode & 0o777, 0o700)
     assert.equal((await fs.stat(dbPath)).mode & 0o777, 0o600)
-    assert.equal(await fs.readdir(storeDir).then((names) => names.join(",")), "work-measurement.sqlite")
+    assert.equal(await fs.readdir(storeDir).then((names) => names.join(",")), "second-store.sqlite")
   } finally {
     await cleanup(fixture.base)
   }
 })
 
 test("the primitive refuses a state home inside a Git checkout", async () => {
-  const fixture = await mkLedgerFixture()
+  const fixture = await mkStoreFixture()
   try {
     await fs.mkdir(path.join(fixture.stateHome), { recursive: true })
     await fs.mkdir(path.join(fixture.base, ".git"), { recursive: true })
@@ -163,17 +164,17 @@ test("the primitive refuses a state home inside a Git checkout", async () => {
           person: "rowan",
           env: { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome },
           platform: POSIX_PLATFORM,
-          ...LEDGER,
+          ...SECOND,
         }),
-      /desk_work_ledger: refusing to write private work measurement inside the Git checkout/u,
+      /desk_second_store: refusing to write private second-store records inside the Git checkout/u,
     )
   } finally {
     await cleanup(fixture.base)
   }
 })
 
-test("the primitive refuses to write the private ledger inside the desk workspace", async () => {
-  const fixture = await mkLedgerFixture()
+test("the primitive refuses to write a private store inside the desk workspace", async () => {
+  const fixture = await mkStoreFixture()
   try {
     await assert.rejects(
       () =>
@@ -182,9 +183,9 @@ test("the primitive refuses to write the private ledger inside the desk workspac
           person: "rowan",
           env: { HOME: fixture.base, XDG_STATE_HOME: path.join(fixture.deskRoot, "state") },
           platform: POSIX_PLATFORM,
-          ...LEDGER,
+          ...SECOND,
         }),
-      /desk_work_ledger: refusing to write private work measurement inside the desk workspace/u,
+      /desk_second_store: refusing to write private second-store records inside the desk workspace/u,
     )
   } finally {
     await cleanup(fixture.base)
@@ -192,10 +193,10 @@ test("the primitive refuses to write the private ledger inside the desk workspac
 })
 
 test("the primitive refuses a symlinked path component and a hard-linked database", async () => {
-  const fixture = await mkLedgerFixture()
+  const fixture = await mkStoreFixture()
   try {
     const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
-    const binding = { deskRoot: fixture.deskRoot, person: "rowan", env, platform: POSIX_PLATFORM, ...LEDGER }
+    const binding = { deskRoot: fixture.deskRoot, person: "rowan", env, platform: POSIX_PLATFORM, ...SECOND }
     const { storeDir, dbPath } = await resolveProtectedStore(binding)
 
     const decoy = path.join(fixture.base, "decoy.sqlite")
@@ -204,14 +205,14 @@ test("the primitive refuses a symlinked path component and a hard-linked databas
     await fs.symlink(decoy, dbPath)
     await assert.rejects(
       () => withProtectedStore({ ...binding, schemaSql: "" }, () => null),
-      /desk_work_ledger: private work measurement DB path is a symlink and will not be used/u,
+      /desk_second_store: private second-store records DB path is a symlink and will not be used/u,
     )
 
     await fs.rm(dbPath, { force: true })
     await fs.link(decoy, dbPath)
     await assert.rejects(
       () => withProtectedStore({ ...binding, schemaSql: "" }, () => null),
-      /desk_work_ledger: private work measurement DB is hard-linked and will not be used/u,
+      /desk_second_store: private second-store records DB is hard-linked and will not be used/u,
     )
 
     await fs.rm(dbPath, { force: true })
@@ -219,7 +220,7 @@ test("the primitive refuses a symlinked path component and a hard-linked databas
     await fs.symlink(fixture.base, storeDir)
     await assert.rejects(
       () => resolveProtectedStore(binding),
-      /desk_work_ledger: private work measurement path component is a symlink and will not be used/u,
+      /desk_second_store: private second-store records path component is a symlink and will not be used/u,
     )
   } finally {
     await cleanup(fixture.base)
@@ -227,7 +228,7 @@ test("the primitive refuses a symlinked path component and a hard-linked databas
 })
 
 test("the primitive opens the database with DELETE journalling and secure_delete", async () => {
-  const fixture = await mkLedgerFixture()
+  const fixture = await mkStoreFixture()
   try {
     const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
     const pragmas = await withProtectedStore(
@@ -236,7 +237,7 @@ test("the primitive opens the database with DELETE journalling and secure_delete
         person: "rowan",
         env,
         platform: process.platform,
-        ...LEDGER,
+        ...SECOND,
         schemaSql: "CREATE TABLE IF NOT EXISTS probe (id TEXT PRIMARY KEY);",
       },
       (store) => ({
@@ -252,7 +253,7 @@ test("the primitive opens the database with DELETE journalling and secure_delete
       person: "rowan",
       env,
       platform: process.platform,
-      ...LEDGER,
+      ...SECOND,
     })
     const sidecars = (await fs.readdir(storeDir)).filter((name) => name.endsWith("-wal"))
     assert.deepEqual(sidecars, [], "a WAL sidecar would leave private rows in a second file")
@@ -262,14 +263,14 @@ test("the primitive opens the database with DELETE journalling and secure_delete
 })
 
 test("the primitive closes the database even when the body throws", async () => {
-  const fixture = await mkLedgerFixture()
+  const fixture = await mkStoreFixture()
   try {
     const binding = {
       deskRoot: fixture.deskRoot,
       person: "rowan",
       env: { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome },
       platform: process.platform,
-      ...LEDGER,
+      ...SECOND,
       schemaSql: "CREATE TABLE IF NOT EXISTS probe (id TEXT PRIMARY KEY);",
     }
     let leaked = null
@@ -306,7 +307,7 @@ const FEEDBACK_MESSAGES = {
 }
 
 test("extraction leaves every desk_feedback protection message byte-for-byte unchanged", async () => {
-  const fixture = await mkLedgerFixture()
+  const fixture = await mkStoreFixture()
   try {
     const env = { HOME: fixture.base, XDG_STATE_HOME: fixture.stateHome }
     const binding = { deskRoot: fixture.deskRoot, person: "rowan", env, platform: POSIX_PLATFORM }
@@ -351,7 +352,7 @@ test("extraction leaves every desk_feedback protection message byte-for-byte unc
 })
 
 test("extraction leaves the desk_feedback Git and workspace refusals byte-for-byte unchanged", async () => {
-  const fixture = await mkLedgerFixture()
+  const fixture = await mkStoreFixture()
   try {
     const insideWorkspace = path.join(fixture.deskRoot, "state")
     const realDeskRoot = await fs.realpath(fixture.deskRoot)
@@ -371,7 +372,7 @@ test("extraction leaves the desk_feedback Git and workspace refusals byte-for-by
       },
     )
 
-    const gitFixture = await mkLedgerFixture()
+    const gitFixture = await mkStoreFixture()
     try {
       await fs.mkdir(gitFixture.stateHome, { recursive: true })
       await fs.mkdir(path.join(gitFixture.base, ".git"), { recursive: true })

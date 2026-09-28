@@ -1,6 +1,6 @@
 // The shared path-protection primitives behind both of this machine's
 // private state roots: `src/protected/store.js` (the SQLite-backed feedback
-// and work-ledger stores) and `factory/outbox.js` (the flat JSON-file
+// store) and `factory/outbox.js` (the flat JSON-file
 // factory outbox). There is exactly one implementation of "owner-only,
 // never inside a Git checkout, never through a symlink or a hard link, no
 // surviving macOS extended ACL" on this machine; `store.js` delegates its

@@ -3,6 +3,7 @@ import { diagnosticFormat, previewRuntimeSnapshot } from "../runtime/preview-sna
 import { organizationFindings } from "../desk/organization.js"
 import { operatorNames } from "../desk/naming.js"
 import { personPrefix } from "../util/paths.js"
+import { legacyLedgerPartitions, legacyLedgerSummary } from "../protected/legacy-ledger.js"
 import { factoryStatus, factorySummary } from "./factory-context.js"
 
 // Every code `organizationFindings` can return — printed in this fixed
@@ -81,9 +82,14 @@ export function doctorRuntime({ input, statusContext = {}, deskRoot, person = nu
   const organization = organizationResult ?? []
   // The factory section, like the organization one, needs a bound desk.
   const factory = organizationResult === null ? null : factoryStatus({ env, deskRoot })
-  const summary = organizationResult === null
-    ? "Desk MCP runtime dependencies are ready."
-    : `Desk MCP runtime dependencies are ready.\n\n${organizationSection(organization)}\n\n${factorySummary(factory)}`
+  // The retired manual ledger's leftover private partitions, counted and never opened (M3-12).
+  const legacyLedger = legacyLedgerPartitions({ env })
+  const sections = [
+    "Desk MCP runtime dependencies are ready.",
+    ...(organizationResult === null ? [] : [organizationSection(organization), factorySummary(factory)]),
+    legacyLedgerSummary(legacyLedger),
+  ].filter((section) => section !== null)
+  const summary = sections.join("\n\n")
 
   return {
     status: "ok",
@@ -100,6 +106,7 @@ export function doctorRuntime({ input, statusContext = {}, deskRoot, person = nu
     },
     organization,
     ...(factory === null ? {} : { factory }),
+    legacy_work_ledger: legacyLedger,
     remediation: [],
   }
 }

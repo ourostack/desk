@@ -1,4 +1,4 @@
-// Single source of truth for the 18 MCP tools desk-mcp exposes.
+// Single source of truth for the 17 MCP tools desk-mcp exposes.
 //
 // Imported by both server.js (registers them) and the tests (asserts the
 // list is canonical). Kept in a no-deps file so tests can import without
@@ -15,8 +15,6 @@ export const TOOL_NAMES = [
   "track_rename",
   "friction_add",
   "lesson_add",
-  // Private, non-Git work measurement the owner keeps about their own work
-  "desk_work_ledger",
   // Search (Units 5 + 6)
   "desk_search",
   "desk_recall",
@@ -49,8 +47,6 @@ export const TOOL_DESCRIPTIONS = {
     "Append a friction entry — cross-cutting to <root>/_meta/friction.md, or track-local to <root>/<track>/_friction/<date>-<theme>.md. `about` is \"setup\" (default: this desk's own setup, kept on the desk) or \"system\" (Desk, its skills or the factory): system friction needs a one-line `title` and may carry `plugin` (default \"desk\"), `friction_class` (guard, hook, mcp_tool, skill, factory, release, ci, docs or other; default other), `signal` (a rollups measure) and `evidence_jobs`; it is recorded on the desk as a kaizen candidate and sends nothing (result `kaizen: \"candidate\"`). `file_card: true` is for the curator after its signoff step only: it files the card in the desk's factory store (the facts route; nothing when the route is unknown; structured fields only in a public store; deduplicated; at most five a day) and records the outcome on the desk: status \"filed\" with the `url` and `kaizen` \"filed\" or \"duplicate\", or status \"added\" with the reason code in `kaizen`.",
   lesson_add:
     "Write or append a lesson under <root>/_meta/tips/<topic>.md. Existing file gets an `## Update <date>` section.",
-  desk_work_ledger:
-    "Private work-item measurement about the caller's own work, stored in the OS user's own state directory — never in the desk Git workspace, the search index, or telemetry. A work item is one request for one specific independently assessable outcome; identity is taken at intake before any commitment. Records commitment, size features (before execution), phases, scope changes, links, completion and closure; and records an exact file/directory scope envelope plus a one-ruling-per-cycle work-design loop through `run_contract`, `cycle`, and `work_design_ruling`. Detects repeated boundary rejection, stalled findings without new learning, write-set escape, and declared architecture expansion; blocks a new cycle while a pivot is unresolved; leaves the ruling model-owned; keeps the stored discriminator strict; canonicalizes legacy comparison on read without rewriting history; imports minimal usage facts with provenance from the host's own local session records; and reports every field as measured, declared, inferred, estimated or unavailable. Actions: `capabilities`, `intake`, `commit`, `size`, `phase`, `scope_change`, `link`, `complete`, `close`, `correct`, `delete`, `inspect`, `report`, `run_contract`, `cycle`, `work_design_ruling`, `import_usage`, `cost_basis`, `set_recording`, `link_evaluation_receipt`. Scoped to the session's desk root and --person binding; it cannot read or write another participant's ledger. Results return to this caller only — there is no share or export action. It measures work, not people: no ranking, no scoring, no transcripts, and no universal credit-to-money conversion.",
   desk_search:
     "Hybrid lexical+semantic search across desk. Filters: track, status, kind, since, until. Returns ranked chunks with score_breakdown. Soft-fails to FTS-only when Ollama is unreachable. `scope` (optional): 'active' (default), 'archived', or 'all' — desk_search defaults to active because day-to-day signal beats archive noise; pass 'all' to search history too.",
   desk_recall:
@@ -66,5 +62,5 @@ export const TOOL_DESCRIPTIONS = {
   desk_status:
     "Fast session-start health/status report for the resolved desk root, runtime cache, plugin version, local DB, lexical index, document-vector coverage, snapshots, and vector packs. Reports the admission `state` (`ready` or `degraded:<code>`) with a `fix` the agent can act on in this session, and retries admission at once when Desk is not ready. Does not run expensive repair work or probe live embedding endpoints.",
   desk_doctor:
-    "Report whether Desk MCP started in healthy runtime mode and describe the active runtime target. In diagnostic mode, reports the precise startup failure and offline remediation. Optional format:'preview' returns only a local-on-demand, nine-field package/process snapshot with no task or feedback records. Optional repair:'switch_state_branch' switches the desk checkout back to its state branch when that is safe (clean tracked tree, no Git operation in progress, no local-only commits); repair:'reclaim_controller' reports a readiness controller that accepts connections but does not answer, naming its owner process, and stops nothing (the controller runs inside another session's Desk MCP server); repair:'prune_readiness_state' removes leftover readiness-controller folders whose owner process is dead and whose root no longer exists.",
+    "Report whether Desk MCP started in healthy runtime mode and describe the active runtime target. In diagnostic mode, reports the precise startup failure and offline remediation. Optional format:'preview' returns only a local-on-demand, nine-field package/process snapshot with no task or feedback records. Optional repair:'switch_state_branch' switches the desk checkout back to its state branch when that is safe (clean tracked tree, no Git operation in progress, no local-only commits); repair:'reclaim_controller' reports a readiness controller that accepts connections but does not answer, naming its owner process, and stops nothing (the controller runs inside another session's Desk MCP server); repair:'prune_readiness_state' removes leftover readiness-controller folders whose owner process is dead and whose root no longer exists. It also counts the private partitions the retired manual measurement ledger left in the state directory, without opening, moving or deleting them.",
 }

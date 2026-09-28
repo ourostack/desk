@@ -58,9 +58,6 @@ test("object-valued card fields are declared as objects, so hosts send objects r
   assert.equal(TOOL_INPUT_SCHEMAS.desk_search.properties.filters.type, "object")
 })
 
-// Only a field whose value is genuinely any JSON value may go untyped.
-const UNTYPED_BY_DESIGN = new Set(["desk_work_ledger.value"])
-
 function assertTyped(where, property) {
   assert.ok(typeof property.type === "string" || Array.isArray(property.anyOf), `${where}: needs a type`)
   if (property.type === "array") assertTyped(`${where}[]`, property.items)
@@ -70,7 +67,7 @@ function assertTyped(where, property) {
 test("every declared field has a type, so hosts need not guess an object's or a list's shape", () => {
   for (const [name, inputSchema] of Object.entries(TOOL_INPUT_SCHEMAS)) {
     for (const [field, property] of Object.entries(inputSchema.properties)) {
-      if (!UNTYPED_BY_DESIGN.has(`${name}.${field}`)) assertTyped(`${name}.${field}`, property)
+      assertTyped(`${name}.${field}`, property)
     }
   }
   const repos = TOOL_INPUT_SCHEMAS.task_create.properties.repos

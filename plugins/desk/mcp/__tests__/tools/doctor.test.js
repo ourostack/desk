@@ -63,6 +63,7 @@ test("healthy desk_doctor uses the same dependency-free diagnostic vocabulary", 
 
     assert.deepEqual(Object.keys(body).sort(), [
       "factory",
+      "legacy_work_ledger",
       "mode",
       "organization",
       "reason",
@@ -268,7 +269,8 @@ function findByCode(findings, code) {
 }
 
 test("desk_doctor treats a blank deskRoot the same as no deskRoot at all", async () => {
-  const body = doctorRuntime({ input: {}, deskRoot: "   " })
+  // An empty state home keeps this exact summary independent of the machine's own retired-ledger partitions.
+  const body = doctorRuntime({ input: {}, deskRoot: "   ", env: { HOME: tmpdir(), XDG_STATE_HOME: path.join(tmpdir(), "desk-doctor-no-state-" + process.pid) } })
   assert.deepEqual(body.organization, [])
   assert.equal(body.summary, "Desk MCP runtime dependencies are ready.")
 })

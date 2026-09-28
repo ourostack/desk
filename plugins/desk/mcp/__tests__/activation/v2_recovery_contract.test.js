@@ -39,19 +39,20 @@ test("resumption preserves actual source and unfinished work before a handoff", 
   ]) assert.match(source, requirement)
 })
 
-test("resumption binds the explicit provider map and continuous task/ledger identity", () => {
+test("resumption binds the explicit provider map and continuous task/job identity", () => {
   const source = read("skills/session-resumption/SKILL.md")
   for (const requirement of [
     /mapped `progressPath`.*`rulingsPath`/u,
     /explicit provider progress.*not.*universal `doing\.md`/u,
     /--progress-path.*existing `doing\.md`.*`task\.md`/u,
-    /canonical task.*work-ledger identity/u,
+    /canonical task.*factory job identity/u,
     /exact source and unfinished-file hashes/u,
     /step\/attempt.*findings.*active writers.*unresolved.*next expected step/u,
     /new attempt.*preserve.*earlier/u,
     /private measurement, customer data\) stays outside Git/u,
   ]) assert.match(source, requirement)
   assert.doesNotMatch(source, /same work-item identity, task card and existing doing record|canonical doing record/u)
+  assert.doesNotMatch(source, /work-ledger|work-measurement-ledger/u)
 })
 
 test("recovery admission distinguishes owner release from stale process labels", () => {

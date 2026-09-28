@@ -5,7 +5,7 @@
 // Each tool needs part of that context:
 // - desk_status and desk_doctor always answer, and each desk_status retries admission when Desk is not ready;
 // - reads (search, recall, similar, timeline, thread) need the runtime and a root; without a readiness controller, lexical search and timeline read the files directly;
-// - desk_work_ledger also needs admitted authority, and desk_reindex a readiness controller;
+// - desk_reindex also needs a readiness controller;
 // - writes (task_*, track_*, friction_add, lesson_add) need admitted authority and the checkout on its state branch, checked again right before each write. They never need the readiness controller: with one, the change is journaled; without one, it goes straight to the file and the next controller's watcher or scan picks it up.
 // A tool whose needs are not met answers `{ status: "degraded", code, fix }` with a fix the agent can act on in this session, and a tool that throws answers the same way instead of failing the call.
 //
@@ -44,11 +44,10 @@ export const LAUNCHER_READ_ONLY_CODES = Object.freeze([
   "identity_unavailable", "identity_not_emu", "identity_unregistered", "identity_ambiguous",
 ])
 
-/** What a tool needs from admission: "status", "doctor", "read", "authority", "controller" or "write". */
+/** What a tool needs from admission: "status", "doctor", "read", "controller" or "write". */
 export function toolRequirement(name) {
   if (name === "desk_status" || name === "desk_doctor") return name.slice(5)
   if (READ_TOOLS.has(name)) return "read"
-  if (name === "desk_work_ledger") return "authority"
   if (name === "desk_reindex") return "controller"
   return "write"
 }
@@ -747,7 +746,6 @@ export function createDeskSession(deps) {
 const STATUS_BY_STATE = { no_desk_root: "setup_required" }
 const REQUIREMENT_TEXT = {
   read: "the desk root and the Desk runtime",
-  authority: "admitted write authority",
   controller: "the shared readiness controller",
   write: "admitted write authority and the checkout on its state branch",
 }
