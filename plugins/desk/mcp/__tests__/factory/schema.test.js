@@ -17,8 +17,6 @@ import { fileURLToPath } from "node:url"
 import {
   validateLocalFacts,
   validateLocalFactsBytes,
-  validateFacts,
-  validateFactsBytes,
   ENUMS,
   PATTERNS,
   LIMITS,
@@ -247,9 +245,10 @@ test("LOCAL_SCHEMA is the local schema value the golden fixture carries", () => 
   assert.ok(PATTERNS.schema.test(LOCAL_SCHEMA))
 })
 
-test("the M3-1 names stay as aliases of the local validators until M3-12", () => {
-  assert.equal(validateFacts, validateLocalFacts)
-  assert.equal(validateFactsBytes, validateLocalFactsBytes)
+test("the retired M3-1 alias names are no longer exported (M3-12)", async () => {
+  const schema = await import("../../src/factory/schema.js")
+  assert.equal(Object.hasOwn(schema, "validateFacts"), false)
+  assert.equal(Object.hasOwn(schema, "validateFactsBytes"), false)
 })
 
 test("refs.commits[].repo may be null (a commit whose repository is unknown)", () => {
@@ -639,15 +638,15 @@ test("jobs[].observed of the wrong non-null type fails with type", () => {
   assertNoLeak(result)
 })
 
-// --- validateFactsBytes ------------------------------------------------------
+// --- validateLocalFactsBytes ------------------------------------------------------
 
-test("validateFactsBytes rejects a buffer over the 16 MiB cap without parsing it", () => {
+test("validateLocalFactsBytes rejects a buffer over the 16 MiB cap without parsing it", () => {
   const buffer = Buffer.alloc(LIMITS.maxBytes + 1)
   const result = validateLocalFactsBytes(buffer)
   assert.deepEqual(result, { ok: false, errors: [{ code: "too_large", path: "" }] })
 })
 
-test("validateFactsBytes measures the cap in bytes, not characters: a string of multi-byte characters under the char count but over the byte cap fails with too_large", () => {
+test("validateLocalFactsBytes measures the cap in bytes, not characters: a string of multi-byte characters under the char count but over the byte cap fails with too_large", () => {
   // "€" is 1 UTF-16 code unit (so `.length` counts it as 1) but 3 UTF-8 bytes.
   // At maxBytes/2 characters the byte length (3x) is well over the cap while
   // the character length is well under it — this is exactly what a naive
@@ -658,12 +657,12 @@ test("validateFactsBytes measures the cap in bytes, not characters: a string of 
   assert.deepEqual(result, { ok: false, errors: [{ code: "too_large", path: "" }] })
 })
 
-test("validateFactsBytes rejects bytes that are not valid JSON", () => {
+test("validateLocalFactsBytes rejects bytes that are not valid JSON", () => {
   const result = validateLocalFactsBytes(Buffer.from("{not json", "utf8"))
   assert.deepEqual(result, { ok: false, errors: [{ code: "json", path: "" }] })
 })
 
-test("validateFactsBytes rejects bytes with a duplicate JSON key even though the parsed value looks valid (I1: canonical bytes)", () => {
+test("validateLocalFactsBytes rejects bytes with a duplicate JSON key even though the parsed value looks valid (I1: canonical bytes)", () => {
   const raw = `{"schema":"${SENTINEL} the customer password is hunter2","schema":"desk.factory.local/1"}`
   // JSON.parse silently keeps only the last "schema" — the value it sees is valid — but the
   // raw bytes still carry the sentence.
@@ -673,29 +672,29 @@ test("validateFactsBytes rejects bytes with a duplicate JSON key even though the
   assertNoLeak(result)
 })
 
-test("validateFactsBytes accepts canonical bytes with exactly one trailing newline", () => {
+test("validateLocalFactsBytes accepts canonical bytes with exactly one trailing newline", () => {
   const text = `${JSON.stringify(golden())}\n`
   const result = validateLocalFactsBytes(Buffer.from(text, "utf8"))
   assert.deepEqual(result, { ok: true, errors: [] })
 })
 
-test("validateFactsBytes rejects non-canonical whitespace padding (more than one trailing newline)", () => {
+test("validateLocalFactsBytes rejects non-canonical whitespace padding (more than one trailing newline)", () => {
   const text = `${JSON.stringify(golden())}\n\n`
   const result = validateLocalFactsBytes(Buffer.from(text, "utf8"))
   assert.deepEqual(result, { ok: false, errors: [{ code: "canonical", path: "" }] })
 })
 
-test("validateFactsBytes also accepts a plain string (not just a Buffer) under the cap", () => {
+test("validateLocalFactsBytes also accepts a plain string (not just a Buffer) under the cap", () => {
   const result = validateLocalFactsBytes(JSON.stringify(golden()))
   assert.deepEqual(result, { ok: true, errors: [] })
 })
 
-test("validateFactsBytes accepts valid JSON bytes carrying the golden fixture", () => {
+test("validateLocalFactsBytes accepts valid JSON bytes carrying the golden fixture", () => {
   const result = validateLocalFactsBytes(Buffer.from(JSON.stringify(golden()), "utf8"))
   assert.deepEqual(result, { ok: true, errors: [] })
 })
 
-test("validateFactsBytes delegates to validateFacts for valid JSON with an invalid shape", () => {
+test("validateLocalFactsBytes delegates to validateLocalFacts for valid JSON with an invalid shape", () => {
   const result = validateLocalFactsBytes(Buffer.from(JSON.stringify(setPath(golden(), ["session", "id"], "bad")), "utf8"))
   assertSingle(result, "pattern", "session.id")
 })

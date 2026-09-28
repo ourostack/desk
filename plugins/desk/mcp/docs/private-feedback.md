@@ -41,9 +41,9 @@ Linux uses owner-only POSIX modes. On macOS, extended ACL grants can survive `ch
 
 Windows uses the built-in Windows PowerShell/.NET ACL provider under `%SystemRoot%`, not a PATH-selected replacement or a POSIX-mode claim. The fixed program receives paths as UTF-8 JSON data. It rejects reparse points and existing objects owned by another identity; a newly created object with default Administrators-group ownership may be assigned to its actual creator SID. It applies and reads back the protected owner-only DACL before SQLite opens.
 
-An unavailable provider is rejected before state creation. Any failed or incomplete protection stops the operation without writing anything or falling back to an unprotected store. There is no policy bypass, elevation, dependency installation, or host-permission configuration change. A protection failure here is scoped to this store; the Desk tools — including the private work ledger, which keeps its own separate namespace through the same protected-storage primitive — are unaffected.
+An unavailable provider is rejected before state creation. Any failed or incomplete protection stops the operation without writing anything or falling back to an unprotected store. There is no policy bypass, elevation, dependency installation, or host-permission configuration change. A protection failure here is scoped to this store; the other Desk tools are unaffected.
 
-Adapter tests and repacked Windows binaries do not qualify NTFS behavior. The native Windows CI job exercises real directory/file DACLs, Unicode paths, junction rejection, foreign-owner rejection and new-object owner reassignment, the private store's own record/reopen/correct/delete path, the work ledger's namespace, and the actual offline source mirror. Native macOS tests separately cover inherited and later-added ACL grants.
+Adapter tests and repacked Windows binaries do not qualify NTFS behavior. The native Windows CI job exercises real directory/file DACLs, Unicode paths, junction rejection, foreign-owner rejection and new-object owner reassignment, the private store's own record/reopen/correct/delete path, and the actual offline source mirror. Native macOS tests separately cover inherited and later-added ACL grants.
 
 ## Preserved records
 

@@ -95,9 +95,9 @@ Embeddings and snapshots are derivative data and may carry privacy risk even whe
 
 See `desk:codex-onboarding` for the repair checklist and verification steps.
 
-### Explicit batch work profile
+### Work accounting
 
-The [bounded batch profiler](docs/batch-work-profile.md) reports one rooted agent job from an explicitly supplied normalized snapshot: `node plugins/desk/mcp/scripts/profile-work.js --input snapshot.json --format json|markdown`. It reads no live sources, follows no references, writes no reports or ledger rows, and adds no automatic MCP path. Its output distinguishes observed operations, selected native usage, declared episodes and unknown acceptance.
+Desk accounts for work automatically. When a session ends, the factory records its facts on the machine, outside any desk, and a finished job gets a report in its factory store ([local capture](docs/factory-local-capture.md)). There is no manual ledger to keep. The manual work-measurement ledger, its tool and its batch profiler are retired; records it left in your state directory stay where they are, and `desk_doctor` counts them without opening, moving or deleting them.
 
 ## Invocation — the default `worker` agent
 
