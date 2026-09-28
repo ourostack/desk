@@ -360,7 +360,8 @@ function reportText(status, dirty) {
   ]
   for (const finding of status.findings) {
     const note = REPORT_ONLY_CODES.has(finding.code) ? " (reported only; the tidy leaves it alone)" : ""
-    lines.push(`  ${finding.code}: ${finding.path} — ${finding.hint}${note}`)
+    const handle = finding.handle === undefined ? "" : ` (handle ${finding.handle})`
+    lines.push(`  ${finding.code}: ${finding.path}${handle} — ${finding.hint}${note}`)
   }
   lines.push(`Uncommitted changes in it: ${dirty.length}`)
   for (const entry of dirty) lines.push(`  ${entry}`)

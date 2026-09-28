@@ -76,6 +76,17 @@ test("task_create accepts optional runtime fields and passes them through", asyn
   assert.match(content, /Reminder body/)
 })
 
+test("task_create keeps the initiated_by and origin_note start-task sends (review of #51, S3)", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "infra", slug: "flaky-login-test", title: "T", initiated_by: "agent", origin_note: "spawned from the login investigation" },
+  })
+  const { data } = await readFront(path.join(root, "infra", "flaky-login-test", "task.md"))
+  assert.equal(data.initiated_by, "agent")
+  assert.equal(data.origin_note, "spawned from the login investigation")
+})
+
 test("task_create rejects missing required fields", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(

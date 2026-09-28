@@ -12,6 +12,7 @@ import * as path from "node:path"
 import matter from "gray-matter"
 import { loadFrontmatterParser, organizationFindings } from "../../src/desk/organization.js"
 import { parseFrontmatterLite } from "../../src/desk/frontmatter-lite.js"
+import { resolveTaskHandle } from "../../src/desk/handles.js"
 
 const tempRoots = new Set()
 after(() => Promise.all([...tempRoots].map((root) => fs.rm(root, { recursive: true, force: true }))))
@@ -297,6 +298,9 @@ test("name_credential_like redacts the offending segment instead of echoing it",
   const findings = organizationFindings(root, { now: NOW, operatorNames: ["ari-mendelow"] })
   const [finding] = findByCode(findings, "name_credential_like")
   assert.equal(finding.path, "normal-track/<redacted segment>")
+  assert.match(finding.hint, /rename with task_move \(handle, to_slug\)/)
+  // The finding's handle is all a rename needs: it resolves to the real folder.
+  assert.equal(resolveTaskHandle(root, root, finding.handle).track, "normal-track")
   assert.doesNotMatch(finding.path, /a1b2c3d4e5f6a7b8c9d0/)
   assert.doesNotMatch(finding.hint, /a1b2c3d4e5f6a7b8c9d0/)
   for (const f of findings) {

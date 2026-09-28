@@ -852,6 +852,33 @@ requires(
   "friction-management logs what the operator teaches",
   /operator teaches[\s\S]+even offhand[\s\S]+no-write/iu,
 );
+// The kaizen loop: system friction becomes a kaizen candidate; the curator files it after signoff, public cards carry structured fields only, and the kaizen worker ships, checks and closes it.
+requires(
+  "plugins/desk/skills/friction-management/SKILL.md",
+  "friction-management records system friction as a kaizen candidate the curator files, with no free text in a public store",
+  /### About the system, or about this desk.s setup[\s\S]+\*\*`system`\*\*[\s\S]+kaizen candidate and sends nothing[\s\S]+setup[\s\S]+stays on the desk[\s\S]+only the kaizen worker \(`curator`\) files a candidate as a card, after its signoff step[\s\S]+same route as the desk's facts[\s\S]+route_unknown[\s\S]+work desk files only to its work store[\s\S]+free text never goes to a public store[\s\S]+structured fields[\s\S]+plugin_not_public[\s\S]+evidence_jobs_local[\s\S]+generically/iu,
+);
+requires(
+  "plugins/desk/skills/lesson-capture/SKILL.md",
+  "lesson-capture proposes kaizen cards from the evaluator's waste and never files them",
+  /## Waste the evaluator found[\s\S]+not a private note[\s\S]+kaizen candidate[\s\S]+signal[\s\S]+evidence_jobs[\s\S]+never files a card itself[\s\S]+after its signoff step/iu,
+);
+requires(
+  "plugins/desk/skills/curator/SKILL.md",
+  "curator works kaizen cards from filing to verdict",
+  /## The kaizen worker[\s\S]+andon first[\s\S]+andon-dismissed[\s\S]+file the system friction, after signoff[\s\S]+file_card: true[\s\S]+at most five per pass[\s\S]+never files to a public store[\s\S]+PR flow[\s\S]+fill `version` when the release lands[\s\S]+confirmed[\s\S]+close[\s\S]+not-confirmed[\s\S]+moved clearly the wrong way[\s\S]+revert[\s\S]+re-plan[\s\S]+never close a card because the data is thin[\s\S]+## Process[\s\S]+file them only after the signoff/iu,
+);
+
+requires(
+  "plugins/desk/skills/session-start/SKILL.md",
+  "session-start surfaces open andon issues and offers the curator",
+  /## Step 4\.8 — Factory boot lines[\s\S]+waste labels and andon[\s\S]+open andon issues in <store>[\s\S]+Step 5 status block[\s\S]+`curator` pass, which handles them first/u,
+);
+requires(
+  "plugins/desk/docs/agentic-engineering-v2-rfc.md",
+  "the RFC states the kaizen and andon rules the store's build applies",
+  /\*\*The loop closes\.\*\*[\s\S]+structured fields only[\s\S]+after the operator signs off[\s\S]+at least 6 groups[\s\S]+computed from the confidence level[\s\S]+not-confirmed ones[\s\S]+\*\*Andon stops the line\.\*\*[\s\S]+`factory\.json`[\s\S]+latest version with enough independent jobs[\s\S]+`andon-dismissed`[\s\S]+session start lists[\s\S]+\*\*Still open\.\*\*[\s\S]+Draining recorded friction into kaizen cards/u,
+);
 
 // The observer agent: worker's sibling, named for Lean's process observer, who watches the work, times it and
 // classifies each step, and never does the work. Its three bodies carry identity only, like worker's.
@@ -1106,6 +1133,31 @@ contract("every writing command block in the evaluation packet fails closed insi
 });
 contract("the evaluation packet prose is not hard-wrapped", () => {
   assert.deepEqual(proseUnits(evaluationPacket).filter((unit) => unit.length > 1).map((unit) => unit[0].number), []);
+});
+
+// Session start never prints a desk folder name it has not redacted (review of #51, B1 and S2): a folder another
+// machine created can carry a secret's value in its name, and a git diffstat or a glob would put it in the transcript.
+contract("session start syncs the desk quietly and says why", () => {
+  const skill = text(sessionStart);
+  assert.match(skill, /cd \$DESK && git pull --rebase --quiet origin main/u);
+  assert.match(skill, /keep `--quiet`: without it the pull prints a diffstat and a `create mode` line/u);
+  for (const match of skill.matchAll(/git (?:-C \S+ )?(pull|fetch|log|diff|status|ls-files)\b[^\n`]*/gu)) {
+    if (match[1] === "pull" || match[1] === "fetch") assert.match(match[0], /--quiet|--no-stat/u, `a startup git ${match[1]} must be quiet: ${match[0]}`);
+  }
+});
+contract("session start and status list active tasks from desk_status, never a script or a glob", () => {
+  for (const file of [sessionStart, "plugins/desk/skills/status/SKILL.md"]) {
+    const skill = text(file);
+    assert.doesNotMatch(skill, /active-tasks\.js/u, `${file} still runs the listing script`);
+    assert.match(skill, /`active_tasks`/u, `${file} does not read desk_status active_tasks`);
+  }
+  assert.match(text(sessionStart), /do not fall back to globbing the desk/u);
+  assert.match(text(sessionStart), /`task_move` with `handle` and an outcome `to_slug`/u);
+});
+contract("the tidy renames a redacted folder by its handle, never by listing its parent", () => {
+  const tidy = text("plugins/desk/migrations/02-tidy-desk.md");
+  assert.doesNotMatch(tidy, /listing its parent yourself/u);
+  assert.match(tidy, /by the handle its finding shows: a task with task_move \(handle, to_slug\), a track with track_rename \(handle, to\)/u);
 });
 
 assert.equal(

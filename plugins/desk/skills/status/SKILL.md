@@ -69,9 +69,9 @@ Resume one (`<track>/<task>`), start new, or run another command?
 
 | Section | Source | How to fetch |
 |---------|--------|--------------|
-| Active tracks | `$DESK/<track>/track.md` | Read frontmatter; filter `status: active` |
-| Active tasks | `$DESK/<track>/<task>/task.md` | Glob non-archived task.md, filter status not `done`/`cancelled` |
-| Code repo state | each `repos[].local_path` from active task cards | `git -C <path> status --porcelain` + `rev-list @{u}..` |
+| Active tracks | `desk_status` → `active_tasks.tracks` | the tracks that hold active tasks, with secret-shaped names already redacted; never glob or list the desk for them |
+| Active tasks | `desk_status` → `active_tasks` | non-archived, status not `done`/`cancelled`, with secret-shaped names already redacted and a `handle` on each; never recover or quote a `<redacted segment>` name (see `desk:session-start` Step 3) |
+| Code repo state | each `repos[].local_path` in `active_tasks` | `git -C <path> status --porcelain` + `rev-list @{u}..` |
 | Attention required | task.md `status` field == `collaborating` or `blocked` | filter step from active tasks |
 | Recent friction | `$DESK/_meta/friction.md` | Parse `## YYYY-MM-DD — <title>` headers, take last 3 |
 

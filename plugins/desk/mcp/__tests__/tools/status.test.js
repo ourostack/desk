@@ -300,6 +300,10 @@ test("desk_status reports root, runtime, missing DB, and deferred repair state w
     assert.equal(body.vector_packs.import_state, "not_checked")
     assert.equal(body.vector_packs.module_state, "available")
     assert.match(body.summary, /activation-config/iu)
+    assert.equal(body.active_tasks.task_count, 1, "desk_status serves the redacted active-task listing session start renders")
+    assert.equal(body.active_tasks.tracks[0].track, "ops")
+    assert.equal(body.active_tasks.tracks[0].tasks[0].slug, "status-check")
+    assert.match(body.active_tasks.tracks[0].tasks[0].handle, /^task-[0-9a-f]{10}$/u)
     assert.equal(existsSync(dbPath), false, "status must not create the local index DB")
     assert.equal(existsSync(path.dirname(dbPath)), false, "status must not create .state during first-run checks")
   } finally {
@@ -518,6 +522,7 @@ test("desk_status reports no desk root without trying to inspect a local DB", as
   assert.equal(body.root.diagnostic, "missing_desk_root")
   assert.equal(body.local_db.path, null)
   assert.equal(body.local_db.state, "root_unavailable")
+  assert.equal(body.active_tasks, null, "no listing without a valid root")
   assert.equal(body.lexical_index.state, "root_unavailable")
   assert.equal(body.document_vectors.state, "root_unavailable")
   assert.match(body.summary, /missing_desk_root/u)

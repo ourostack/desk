@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url"
 
 const source = new URL("../../src/runtime/protected-checkout.js", import.meta.url)
 const plugin = fileURLToPath(new URL("../../../", import.meta.url))
-const guidance = 'shared checkout: use git worktree add --detach "$(mktemp -d)" <ref>'
+const guidance = /^Desk protected checkout .+: .*git worktree add --detach "\$HOME\/<new directory>" <ref>/u
 let root, protectedRoot, ordinary, child
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`
@@ -34,31 +34,38 @@ async function guard(command, cwd = ordinary, extra = {}) {
   return guardShellCommand({ command, cwd, env: process.env, ...extra })
 }
 
-test("named operations alone are denied in a locally protected checkout", async () => {
+test("HEAD-moving and work-discarding operations alone are denied in a locally protected checkout", async () => {
   const deny = [
-    "checkout HEAD", "switch main", "reset --hard", "rebase main", "pull", "merge main", "stash list", "clean -nd",
-    "restore --source HEAD file", "restore --source=HEAD file", "restore -s HEAD file", "restore -sHEAD file",
-    "branch -f topic HEAD", "branch --force topic", "branch -fD topic",
+    "checkout HEAD", "switch topic", "reset --hard", "rebase topic", "stash", "clean -nd",
+    "restore --source HEAD .", "restore --source=HEAD .", "restore -s HEAD :/", "restore -sHEAD .", "checkout .",
+    "restore --staged --worktree .", "branch -M renamed", "branch -m renamed", "reset",
   ]
   const allow = [
-    "status", "diff", "log -1", "show HEAD", "fetch", "add file", "commit -m checkout", "push",
-    "restore file", "restore --staged file", "restore -- --source", "branch", "branch --list",
-    "branch -d topic", "branch -- topic-f", "worktree list", "worktree add --detach /tmp/new HEAD",
+    "status", "diff", "log -1", "show HEAD", "fetch", "add file", "commit -m checkout", "push", "stash list",
+    "restore file", "restore -- --source", "branch", "branch --list", "branch -f topic HEAD", "branch --force topic",
+    "branch -fD topic", "branch -d topic", "branch -- topic-f", "worktree list", "worktree add --detach /tmp/new HEAD",
+    // Merges add history and move nothing off the branch; path-limited unstaging leaves HEAD alone (2026-09-27 ruling).
+    "merge topic", "pull", "restore --staged file", "reset -- file", "reset HEAD file",
+    // Named paths are the agent's own files, whatever the source; prune only drops records of vanished worktrees.
+    "restore --source HEAD file", "restore -s HEAD file", "restore --staged --worktree file", "checkout HEAD -- file", "worktree prune",
   ]
   for (const args of deny) {
-    assert.equal((await guard(`git ${args}`, protectedRoot)).reason, guidance, args)
+    assert.match((await guard(`git ${args}`, protectedRoot)).reason, /^Desk protected checkout /u, args)
     assert.equal((await guard(`git ${args}`, ordinary)).deny, false, `unprotected: ${args}`)
   }
-  for (const args of allow) assert.equal((await guard(`git ${args}`, protectedRoot)).deny, false, args)
+  for (const args of allow) {
+    const result = await guard(`git ${args}`, protectedRoot)
+    assert.equal(result.deny, false, `${args}: ${result.reason}`)
+  }
 })
 
 test("command table follows quoting, chained directories, wrappers and Git location options", async () => {
   const p = quote(protectedRoot), o = quote(ordinary)
   const cases = [
     [`cd ${p} && git checkout HEAD`, true],
-    [`cd ${p}; git switch main`, true],
+    [`cd ${p}; git switch topic`, true],
     [`cd ${p}\ngit reset --hard`, true],
-    [`cd ${p} && cd nested && git rebase main`, true],
+    [`cd ${p} && cd nested && git rebase topic`, true],
     [`cd ${p} && cd ${o} && git checkout HEAD`, false],
     [`git -C ${p} checkout HEAD`, true],
     [`git -C ${p} -C nested reset --hard`, true],
@@ -149,7 +156,7 @@ test("both plugin hook registrations deny parent and child payloads without movi
       const output = JSON.parse(result.stdout)
       const decision = host === "claude" ? output.hookSpecificOutput : output
       assert.equal(decision.permissionDecision, "deny")
-      assert.equal(decision.permissionDecisionReason, guidance)
+      assert.match(decision.permissionDecisionReason, guidance)
     }
   }
   assert.equal(git(protectedRoot, "rev-parse", "HEAD"), beforeHead)
@@ -183,7 +190,7 @@ test("binding marks only the bound checkout, preserves Git layout and leaves new
 test("Desk admission marks launcher-bound roots before activation, and marks a newly bound root too", async () => {
   const { createDeskSession } = await import("../../src/runtime/desk-session.js")
   const roots = [path.join(root, "session-a"), path.join(root, "session-b")]
-  for (const dir of roots) { mkdirSync(dir); git(dir, "init", "-q") }
+  for (const dir of roots) { mkdirSync(dir); git(dir, "init", "-q"); for (const child of ["_meta", "_archive"]) mkdirSync(path.join(dir, child)) }
   let bound = roots[0]
   const session = createDeskSession({
     args: {}, deskStateDir: path.join(root, "session-state"), stderr: { write() {} },
@@ -192,8 +199,9 @@ test("Desk admission marks launcher-bound roots before activation, and marks a n
   try {
     for (const dir of roots) {
       bound = dir
-      await session.admission.refresh({ force: true })
-      assert.equal((await guard("git checkout HEAD", dir)).deny, true, "even a degraded bound root stays protected")
+      // A loaded machine can take longer than refresh's default 3 s wait to finish marking.
+      await session.admission.refresh({ force: true, waitMs: 60000 })
+      assert.equal((await guard("git stash", dir)).deny, true, "even a degraded bound root stays protected")
     }
   } finally { await session.dispose() }
 })
@@ -211,7 +219,7 @@ test("shell control flow, command substitutions and PowerShell invocation cannot
       [`cd ${p} & git checkout HEAD`, false],
       [`! git -C ${p} checkout HEAD`, true],
       [`git -C ${p} -c alias.status=checkout status`, false],
-      [`git -C ${p} restore --source HEAD -- file`, true],
+      [`git -C ${p} restore --source HEAD -- .`, true],
       [`git -C ${p} branch --format=-f`, false],
       [`git -C ${p} --config-env desk.protected=IGNORED checkout HEAD`, true],
       [`git -C ${p} --help`, false],

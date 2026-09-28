@@ -108,6 +108,7 @@ import {
   writeStatus,
   writeVisibilityCache,
 } from "./outbox.js"
+import { refreshAndon } from "./andon-watch.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
 import { validatePublishedBytes } from "./published-schema.js"
@@ -794,8 +795,13 @@ export async function flush(env, options = {}) {
 // Start-time delivery.
 // ---------------------------------------------------------------------------
 
-/** One sweep, then a flush of every store with `contribute: true`, within one deadline. Never throws. */
-export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, sweep = sweepMarkers, flush: flushStore = flush } = {}) {
+/**
+ * One sweep, then, for every store with `contribute: true`, a flush and a
+ * refresh of its open andon issues (`andon-watch.js`), within one deadline.
+ * Resolves `{ swept, stores, andon }` with each store's results. Never
+ * throws.
+ */
+export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, sweep = sweepMarkers, flush: flushStore = flush, andon: watch = refreshAndon } = {}) {
   const deadline = now() + deadlineMs
   try {
     if (await factoryStateRoot(env, { create: false }) === null) return { stores: {} }
@@ -809,6 +815,7 @@ export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DE
       // A failed sweep leaves markers for the next start; delivery still runs.
     }
     const results = {}
+    const andon = {}
     for (const store of stores) {
       const remaining = deadline - now()
       if (remaining <= 0) {
@@ -820,8 +827,17 @@ export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DE
       } catch {
         results[store] = { result: "unexpected" }
       }
+      if (deadline - now() <= 0) {
+        andon[store] = { result: "deadline" }
+        continue
+      }
+      try {
+        andon[store] = await watch(env, { store, runner, now })
+      } catch {
+        andon[store] = { result: "unexpected" }
+      }
     }
-    return { swept, stores: results }
+    return { swept, stores: results, andon }
   } catch {
     return { stores: {} }
   }

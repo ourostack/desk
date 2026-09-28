@@ -43,7 +43,7 @@ applies to ANY agent using this skill — worker, ccatester, investigator, triag
 
 before any path-dependent work — before the prereq probe, before sync, before scans — hand off to the `session-start-migrations` skill. it walks every enabled plugin's `migrations/` dir, runs each migration's Detect predicate, and (for the ones that fire) runs Safety/Migrate/Announce. if any migration with `needs_restart: true` runs successfully, the skill hard-stops the session with a "please restart" message; the operator restarts and the next session opens against canonical paths.
 
-why here, not later: most later steps assume `$DESK/` already points at the right place. if the machine is still on a pre-migration name (an old workspace dir that's since been renamed), running Step 1's prereq probe or Step 2's `cd $DESK && git pull` first would either fail confusingly or — worse — quietly operate against stale state. migrations run first, restart, everything downstream resolves cleanly.
+why here, not later: most later steps assume `$DESK/` already points at the right place. if the machine is still on a pre-migration name (an old workspace dir that's since been renamed), running Step 1's prereq probe or Step 2's desk sync first would either fail confusingly or — worse — quietly operate against stale state. migrations run first, restart, everything downstream resolves cleanly.
 
 on a machine with no pending migrations (the common case) this step is a few cheap Detect bash exits and returns immediately.
 
@@ -147,11 +147,11 @@ if no desk is bound (`$DESK/` doesn't exist, or `desk_status` reports setup mode
 
 If `$DESK/` already exists and the workspace still shows V1 evidence instead of an already-migrated V2 Desk, do not continue straight into ordinary sync and resumption. Ground that decision in existing Desk layout and activation evidence: durable Desk state is already present in the documented workspace layout (for example task cards or system directories such as `_meta/`, `_archive/`, or `artifacts/`), but the V2 startup foundations and activation-owned worker surface described in `plugins/desk/README.md` and `desk:codex-onboarding` are not yet in place. In that case, hand off to `first-run-bootstrap` Entrance B so it inventories and upgrades the same workspace in place, preserves the same workspace, and avoids cloning or creating a parallel Desk. Once that same workspace has completed the V1-to-V2 upgrade, later session-start runs skip this branch and continue with ordinary sync + scan.
 
-if it exists, pull the latest:
+if it exists, pull the latest, quietly:
 ```bash
-cd $DESK && git pull --rebase origin main
+cd $DESK && git pull --rebase --quiet origin main
 ```
-if the pull fails (conflict, no remote), warn the operator but proceed — don't block.
+keep `--quiet`: without it the pull prints a diffstat and a `create mode` line for every file it brings in, so a folder another machine created with a secret's value in its name would land in this session's output before Step 3 can hide it. errors still print. if the pull fails (conflict, no remote), warn the operator but proceed — don't block. to see what changed, use the Step 3 listing, never `git log --stat` or `git diff --stat` on the desk.
 
 ## Step 2.6 — Desk-registry awareness (shared-workspace mode)
 
@@ -225,15 +225,17 @@ In a noninteractive session, such as `claude -p`, a scheduled run or a subagent 
 
 ## Step 3 — Scan for active tasks
 
-glob `$DESK/**/task.md` excluding `_archive/`. parse each card's YAML frontmatter. filter to non-terminal status (NOT `done`, NOT `cancelled`). group by track, sort by `updated` descending. this is the look across the drawers to see what's still open. **in a shared crew workspace** (crew roster present from Step 2.6), the glob naturally spans every `desks/<alias>/` subtree — surface peers' open tasks as theirs (attributed by desk), and this session's own desk first.
+build the status block from the `active_tasks` field of the `desk_status` answer (Step 1 already called it; call it again if the tasks may have changed since), never from a glob or a folder listing. it lists the non-terminal tasks (NOT `done`, NOT `cancelled`), grouped by track, newest `updated` first, skipping `_archive/`. this is the look across the drawers to see what's still open. **in a shared crew workspace** (crew roster present from Step 2.6), it also lists every `desks/<alias>/` subtree with each task's `desk` — surface peers' open tasks as theirs, and this session's own desk first. every task and track carries a `handle`.
+
+**never repeat a redacted name.** a folder name can carry a secret's value (a task folder named after a prompt that held a password), and the status block reaches the chat and the transcript. the listing shows such a track, task or desk name as `<redacted segment>` and such a title as `<redacted title>`, and counts them under `redacted`. show the marker as it is, with the task's `handle` so the operator can tell two redacted tasks apart; do not open the card or list the folder to recover the name, and do not quote it in any later step. to resume or rename such a task, act on it by its handle: `task_move` with `handle` and an outcome `to_slug` (a track: `track_rename` with `handle` and `to`), then use the new name. when `redacted` is non-zero, rename those in your own desk that way as ordinary tidying (build the new name from the task's status, repos and the work you know about, never from the old name), and add one line after the status block: "N names hidden because they looked like they contained a secret's value; I renamed them to outcome names." when `active_tasks` is missing or `null` (Desk is still starting, or the root is not valid), say the listing is unavailable and why in one line; do not fall back to globbing the desk.
 
 ## Step 4 — Scan code repos
 
-for each active task card's locally-cloned repo, run `git fetch origin` and note current branch + dirty state. don't block on this — it just informs the status output.
+for each locally-cloned repo in the `repos` of an `active_tasks` entry, run `git fetch --quiet origin` and note current branch + dirty state. don't block on this — it just informs the status output.
 
 ## Step 4.5 — Fan PR lookups across every `repos[]` on every non-terminal task
 
-for every non-terminal task card, iterate every entry in `repos[]` — not just the entry whose PR ID is already cached in the task's frontmatter. a task that lists `OrderService` + `OrderUI` in `repos[]` may have an active PR on either; session-start needs to surface both.
+for every non-terminal task in `active_tasks`, iterate every entry in its `repos` — not just the entry whose PR ID is already cached in the task's frontmatter. a task that lists `OrderService` + `OrderUI` in `repos[]` may have an active PR on either; session-start needs to surface both.
 
 for each GitHub repo entry:
 
@@ -261,12 +263,13 @@ if the runtime does not support walked-up workspace MCP discovery, this step is 
 
 ## Step 4.8 — Factory boot lines
 
-the session-start hook appends at most one `Desk boot:` line, addressed to you; its clauses are separated by `; `. this step owns what the `Factory:` clauses about waste labels ask, and how to handle an answer from the waste evaluator's `evaluate` command, whether it ran here or from `desk:task-lifecycle`'s done step. no such clause → nothing to do.
+the session-start hook appends at most one `Desk boot:` line, addressed to you; its clauses are separated by `; `. this step owns what the `Factory:` clauses about waste labels and andon ask, and how to handle an answer from the waste evaluator's `evaluate` command, whether it ran here or from `desk:task-lifecycle`'s done step. no such clause → nothing to do.
 
 `<Desk plugin folder>` below is two levels above this skill's folder; run the commands from it.
 
 - **`Factory: N finished tasks have no waste labels yet; run the evaluator for them in the background`** → the hook has already started a detached `evaluate --pending` that prepares briefs, but only you can start evaluators. run `node <Desk plugin folder>/mcp/scripts/factory.js evaluate --pending` and handle each job in its `jobs` answer as below. don't wait for the evaluators before continuing.
 - **`Factory: N finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)`** → say so in one line of the Step 5 status block. there is nothing to run: labels are quarantined when the factory store refused them or when their session's facts were quarantined (a `facts_quarantined` record names those facts), under `quarantine/<store-slug>/labels/` in the protected factory state.
+- **`Factory: N open andon issues in <store> (#…); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)`** → the start-time refresh found open andon issues for plugins that store tracks. say so in one line of the Step 5 status block and offer a `curator` pass, which handles them first. nothing runs on its own.
 
 **handling an `evaluate` answer**, per job:
 

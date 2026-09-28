@@ -29,16 +29,19 @@
 //      briefs again, and finished jobs whose labels are quarantined and will
 //      not be delivered, reported without a repair
 //      (mcp/src/factory/boot-check.js);
-//   3. desk-health: the bound root's last Desk start, and a detached
+//   3. andon: the open andon issues the last start-time refresh recorded for
+//      each contributing store, one line per store, without a repair
+//      (mcp/src/factory/boot-check.js, mcp/src/factory/andon-watch.js);
+//   4. desk-health: the bound root's last Desk start, and a detached
 //      fast-forward of a clean state branch (mcp/src/runtime/desk-health.js);
-//   4. workspace-tidy: stale worktree listing with its own detached repair
+//   5. workspace-tidy: stale worktree listing with its own detached repair
 //      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself so
 //      its line can say whether the launch happened, and keeps a soft deadline
 //      inside its budget so an unfinished inspection still reports "deferred".
 //
-// `startFactory` starts factory-start.cjs (sweep, then flush every consented
-// store) detached; the hooks call it after their output is built, and only
-// when a store has `contribute: true`.
+// `startFactory` starts factory-start.cjs (sweep, then flush and refresh andon
+// for every consented store) detached; the hooks call it after their output
+// is built, and only when a store has `contribute: true`.
 //
 // The hook runs in whatever `node` the host puts first on PATH, so all of
 // this keeps to what Node 16 has, and the boot path never searches for a
@@ -311,6 +314,16 @@ const labelsCheck = {
   },
 };
 
+const andonCheck = {
+  id: "andon",
+  budgetMs: 20,
+  async run(ctx) {
+    const { andonBootCheck, andonLine } = await runtime("factory/boot-check.js");
+    const found = andonBootCheck({ env: ctx.env });
+    return found.length === 0 ? {} : { line: found.map(({ store, issues }) => andonLine(store, issues)).join("; ") };
+  },
+};
+
 const deskHealthCheck = {
   id: "desk-health",
   budgetMs: 50,
@@ -348,13 +361,17 @@ const validRepair = (repair) => Array.isArray(repair?.command) && repair.command
 /**
  * Runs the registry (see the header). Options: `host`, `env`, `sessionFolder`,
  * plus for tests `checks`, `totalBudgetMs`, `checkBudgets` ({ id: ms }),
- * `launchRepair(command, env)`, `record(env, skipped)` and `launch` (the
- * workspace-tidy repair launcher). Resolves `""` or one `Desk boot:` line;
- * never rejects.
+ * `launchRepair(command, env)`, `record(env, skipped)`, `launch` (the
+ * workspace-tidy repair launcher) and `loadRedaction`. Resolves `""` or one
+ * `Desk boot:` line; never rejects. The line names worktree paths, branches
+ * and error messages, so each path segment or word that carries a secret's
+ * value is redacted (mcp/src/util/redact.js); if the redaction cannot load,
+ * the line is withheld rather than shown unredacted.
  */
 async function runBootChecks(options = {}) {
   const {
     checks = module.exports.checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand, record = recordSkipped,
+    loadRedaction = () => runtime("util/redact.js"),
   } = options;
   const env = options.env ?? process.env;
   // The real time every check took, charged against the total budget.
@@ -411,7 +428,13 @@ async function runBootChecks(options = {}) {
       // Recording a skip never changes the startup output.
     }
   }
-  return lines.length > 0 ? `Desk boot: ${lines.join("; ")}` : "";
+  if (lines.length === 0) return "";
+  try {
+    const { redactCredentialLikeText } = await loadRedaction();
+    return redactCredentialLikeText(`Desk boot: ${lines.join("; ")}`);
+  } catch {
+    return "";
+  }
 }
 
 /** Starts factory-start.cjs detached when a store has `contribute: true`; resolves whether it started. Never rejects. */
@@ -538,8 +561,8 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
 }
 
 module.exports = {
-  checks: [factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck],
-  factoryCheck, labelsCheck, deskHealthCheck, workspaceTidyCheck,
+  checks: [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck],
+  factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck,
   runBootChecks, startFactory, launchCommand, recordSkipped,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
 };

@@ -22,7 +22,7 @@ For the on-demand design rationale behind the V2 foundation, layered toolshop, c
 
 ## Activation
 
-Desk-bound Git checkouts receive a local protection marker. Claude and Copilot shell hooks redirect the named destructive or ref-changing Git operations to an owned worktree, for parent agents and subagents alike; direct human terminal commands remain unaffected. See [Protected checkouts](docs/protected-checkouts.md) for the command list, target resolution, marker scope and shell boundary.
+A bound desk's Git checkout receives a local protection marker (a root that is not a desk is never marked). Claude and Copilot shell hooks keep a protected checkout's HEAD on its state branch and keep other sessions' work in place, for parent agents and subagents alike: ordinary Git, including committing, pulling and pushing, passes, while leaving the branch, discarding other sessions' work or rewriting pushed history is denied with the alternative to use. Direct human terminal commands remain unaffected. See [Protected checkouts](docs/protected-checkouts.md) for the command table, target resolution, marker scope and shell boundary.
 
 ### Under Copilot CLI
 
@@ -158,7 +158,8 @@ a furnished room, ready to settle into. the layout, the lifecycle, the small cer
 
 ### friction / learning
 - `friction-management` — pin a card to the corkboard, then encode the pattern
-- `lesson-capture` (post-task) — mine a finished task for patterns and propose what's earned a place on the reference shelf
+- `lesson-capture` (post-task) — mine a finished task for patterns and propose what's earned a place on the reference shelf; waste the evaluator found in the shared system becomes a kaizen card
+- `curator` — on the operator's request, process the friction backlog and work the kaizen cards: handle open andon issues first, file system friction as cards in the factory store after signoff, ship each countermeasure, fill in its version at release and close the cards the store's build confirms
 
 ## convention: the `$DESK` placeholder
 
