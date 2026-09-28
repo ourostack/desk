@@ -46,13 +46,14 @@ Triggers: "start a new task: …", "work on …", "I need to add X to Y", "let's
 
 1. **Check it is a new task**, as above.
 2. **Name the task and route it**, as above.
-3. **Create the task** with `task_create` at `$DESK/<track>/<slug>/`, per `desk:task-card-format`:
+3. **Create the task** with `task_create` at `$DESK/<track>/<slug>/`, per `desk:task-card-format`, passing these fields:
    - `title: <slug>`
    - `status: drafting`
-   - `created` / `updated`: now (UTC ISO-8601)
    - `track: <track-slug>`
    - `initiated_by: operator`
    - `repos: []` — populate only if the description names code repos; otherwise leave empty for non-coding tasks.
+
+   Do not pass `created`, `updated` or `schema_version`: `task_create` sets them itself.
 4. **Add the task's row** to the track's `## Tasks` table, then **commit and push** the task card and track card to the workspace repo.
 5. Hand off through `desk:using-superpowers-with-desk` at its `start` entry. Consume the existing approval or use `superpowers:brainstorming` to resolve missing agreement. Already-approved work can transition directly to `processing`; keep any required plan and doing record at the existing Desk paths.
 
@@ -73,8 +74,8 @@ Triggers: the agent notices mid-conversation that it's doing something worth tra
 ---
 title: <slug>
 status: drafting
-created: <UTC-ISO-8601>
-updated: <UTC-ISO-8601>
+created: <UTC-ISO-8601>        # set by task_create
+updated: <UTC-ISO-8601>        # set by task_create
 track: <track-slug>
 initiated_by: operator | agent
 # origin_note: "<context>"   # Path B only

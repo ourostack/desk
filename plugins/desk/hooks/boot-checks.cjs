@@ -354,13 +354,17 @@ const validRepair = (repair) => Array.isArray(repair?.command) && repair.command
 /**
  * Runs the registry (see the header). Options: `host`, `env`, `sessionFolder`,
  * plus for tests `checks`, `totalBudgetMs`, `checkBudgets` ({ id: ms }),
- * `launchRepair(command, env)`, `record(env, skipped)` and `launch` (the
- * workspace-tidy repair launcher). Resolves `""` or one `Desk boot:` line;
- * never rejects.
+ * `launchRepair(command, env)`, `record(env, skipped)`, `launch` (the
+ * workspace-tidy repair launcher) and `loadRedaction`. Resolves `""` or one
+ * `Desk boot:` line; never rejects. The line names worktree paths, branches
+ * and error messages, so each path segment or word that carries a secret's
+ * value is redacted (mcp/src/util/redact.js); if the redaction cannot load,
+ * the line is withheld rather than shown unredacted.
  */
 async function runBootChecks(options = {}) {
   const {
     checks = module.exports.checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand, record = recordSkipped,
+    loadRedaction = () => runtime("util/redact.js"),
   } = options;
   const env = options.env ?? process.env;
   // The real time every check took, charged against the total budget.
@@ -417,7 +421,13 @@ async function runBootChecks(options = {}) {
       // Recording a skip never changes the startup output.
     }
   }
-  return lines.length > 0 ? `Desk boot: ${lines.join("; ")}` : "";
+  if (lines.length === 0) return "";
+  try {
+    const { redactCredentialLikeText } = await loadRedaction();
+    return redactCredentialLikeText(`Desk boot: ${lines.join("; ")}`);
+  } catch {
+    return "";
+  }
 }
 
 /**
