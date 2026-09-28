@@ -10,7 +10,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --import ../../../tests/desk/link-dependencies.mjs --test \"../../../tests/desk/browser-context-broker/test/*.test.mjs\""
   },
   "dependencies": {
     "ws": "^8.18.3"

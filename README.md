@@ -28,6 +28,7 @@ plugins/desk/                     # Desk plugin, MCP server, activation and brow
 plugins/superpowers/              # Vendored Superpowers; upstream-sources.lock.json records the upstream commit as evidence
 plugins/plain-language/           # Plain Language plugin
 plugins/crew/                     # Crew plugin
+tests/desk/                       # Desk tests and fixtures, mirroring plugins/desk; kept out of the plugin so installs never download them
 evals/                            # Offline evaluation contracts
 scripts/                          # Validation and release checks run in CI
 ```

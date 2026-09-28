@@ -67,6 +67,12 @@ jobs:
       - name: Validate Desk session-start migrations
         run: node scripts/test-desk-migrations.cjs
 
+      - name: Keep test files out of the shipped Desk plugin
+        run: node scripts/test-desk-tests-location.cjs
+
+      - name: Check the Desk release commits every file it bumps
+        run: node scripts/test-desk-release-staging.cjs
+
       - name: Install browser context broker dependencies
         working-directory: plugins/desk/browser-context-broker
         run: npm ci

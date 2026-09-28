@@ -24,6 +24,8 @@ import {
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const defaultMcpRoot = path.resolve(moduleDir, "..", "..")
 const defaultRepoRoot = path.resolve(defaultMcpRoot, "..", "..", "..")
+// The tests live outside the shipped plugin folder, in tests/desk/mcp, which mirrors plugins/desk/mcp.
+const defaultTestRoot = path.join(defaultRepoRoot, "tests", "desk", "mcp", "__tests__")
 const require = createRequire(import.meta.url)
 
 export function runCoverageCommand(options = {}) {
@@ -216,11 +218,11 @@ export function parseCoverageArguments(argv) {
 }
 
 /**
- * The test files one whole-suite run executes, as sorted repository-relative paths: every `plugins/desk/mcp/__tests__/**\/*.test.js`, plus the offline evaluation tests and CLI contract when the offline scope is selected.
+ * The test files one whole-suite run executes, as sorted repository-relative paths: every `tests/desk/mcp/__tests__/**\/*.test.js`, plus the offline evaluation tests and CLI contract when the offline scope is selected.
  * It follows the whole-suite glob's rules: dot entries and node_modules are never entered.
  */
 export function collectCoverageTestFiles({ repoRoot, offline }) {
-  const testRoot = path.join(repoRoot, "plugins", "desk", "mcp", "__tests__")
+  const testRoot = path.join(repoRoot, "tests", "desk", "mcp", "__tests__")
   const files = walkTestFiles(testRoot).filter((file) => file.endsWith(".test.js"))
   if (offline.selected) {
     const offlineTests = path.join(repoRoot, "evals", "offline", "__tests__")
@@ -387,7 +389,7 @@ function writeProducerConfig({ repoRoot, requiredFiles, offline, reportDirectory
     all: true,
     include: requiredFiles,
     exclude: requiredFiles.length ? [
-      "plugins/desk/mcp/__tests__/**",
+      "tests/desk/mcp/__tests__/**",
       "plugins/desk/mcp/node_modules/**",
       ...(offline.selected ? ["evals/offline/__tests__/**"] : []),
     ] : ["**"],
@@ -431,17 +433,17 @@ function runInstrumentedTests({
     process.execPath,
     "--import", registrationUrl,
     // The global test setup: a temporary HOME and XDG folders for every test process, and a guard against writes under the real home.
-    "--import", pathToFileURL(path.join(defaultMcpRoot, "__tests__", "_isolated_env.mjs")).href,
+    "--import", pathToFileURL(path.join(defaultTestRoot, "_isolated_env.mjs")).href,
     "--test",
     // Instrumented fixture children must not compete with other test files for their unchanged startup deadlines.
     "--test-concurrency=1",
     // A shard keeps the TAP output and also records each file's duration for rebalancing the shards.
     ...(timingsPath ? [
       "--test-reporter=tap", "--test-reporter-destination=stdout",
-      `--test-reporter=${path.join(defaultMcpRoot, "__tests__", "_file_timing_reporter.mjs")}`, `--test-reporter-destination=${timingsPath}`,
+      `--test-reporter=${path.join(defaultTestRoot, "_file_timing_reporter.mjs")}`, `--test-reporter-destination=${timingsPath}`,
     ] : []),
     // A shard names its own files; the whole suite is the glob plus, as separate path arguments that run as separate test workers, the offline suite and the CLI contract with their own hooks.
-    ...(testFiles ?? [path.join(repoRoot, "plugins/desk/mcp/__tests__/**/*.test.js"), ...offline.testTargets]),
+    ...(testFiles ?? [path.join(repoRoot, "tests/desk/mcp/__tests__/**/*.test.js"), ...offline.testTargets]),
   ]
   return spawn(process.execPath, args, {
     cwd: defaultMcpRoot,

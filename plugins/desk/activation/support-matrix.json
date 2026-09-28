@@ -17,7 +17,7 @@
         "plugins/superpowers/.claude-plugin/plugin.json",
         "plugins/plain-language/.claude-plugin/plugin.json"
       ],
-      "evidence_command_or_doc": "node --test plugins/desk/mcp/__tests__/activation/claude_packaging.test.js; node --test plugins/desk/mcp/__tests__/activation/superpowers_host_consumers.test.js; alpha runtime qualification required",
+      "evidence_command_or_doc": "node --test tests/desk/mcp/__tests__/activation/claude_packaging.test.js; node --test tests/desk/mcp/__tests__/activation/superpowers_host_consumers.test.js; alpha runtime qualification required",
       "unsupported_primitives": [
         "agent-view-dispatch",
         "background-session-inheritance"
@@ -32,13 +32,13 @@
         "plugins/desk/.codex-plugin/plugin.json",
         "plugins/desk/mcp/src/activation/adapters/codex.js",
         "plugins/desk/mcp/src/activation/codex-smoke.js",
-        "plugins/desk/mcp/__tests__/activation/codex_smoke.test.js",
+        "tests/desk/mcp/__tests__/activation/codex_smoke.test.js",
         "plugins/desk/agents/worker.toml",
         "plugins/desk/agents/observer.toml",
         "plugins/superpowers/.codex-plugin/plugin.json",
         "plugins/plain-language/.codex-plugin/plugin.json"
       ],
-      "evidence_command_or_doc": "node --test plugins/desk/mcp/__tests__/activation/codex_activation.test.js; node --test plugins/desk/mcp/__tests__/activation/codex_smoke.test.js; alpha runtime qualification required",
+      "evidence_command_or_doc": "node --test tests/desk/mcp/__tests__/activation/codex_activation.test.js; node --test tests/desk/mcp/__tests__/activation/codex_smoke.test.js; alpha runtime qualification required",
       "unsupported_primitives": [
         "codex-desktop-scriptable-activation-smoke"
       ],
@@ -60,7 +60,7 @@
         "plugins/plain-language/plugin.json",
         "plugins/desk/activation/copilot-root.flattened-bundle.json"
       ],
-      "evidence_command_or_doc": "npm --prefix plugins/desk/mcp run activation:copilot-bundle:generate; node --test plugins/desk/mcp/__tests__/activation/copilot_packaging.test.js; alpha runtime qualification required",
+      "evidence_command_or_doc": "npm --prefix plugins/desk/mcp run activation:copilot-bundle:generate; node --test tests/desk/mcp/__tests__/activation/copilot_packaging.test.js; alpha runtime qualification required",
       "unsupported_primitives": [
         "transitive-dependency-resolution"
       ],
@@ -78,7 +78,7 @@
         "plugins/superpowers/plugin.json",
         "plugins/plain-language/plugin.json"
       ],
-      "evidence_command_or_doc": "node --test plugins/desk/mcp/__tests__/activation/ouroboros_stdio_packaging.test.js; plugins/desk/README.md#under-ouroboros; plugins/desk/activation/README.md#ouroboros-autonomous-agent; alpha runtime qualification required",
+      "evidence_command_or_doc": "node --test tests/desk/mcp/__tests__/activation/ouroboros_stdio_packaging.test.js; plugins/desk/README.md#under-ouroboros; plugins/desk/activation/README.md#ouroboros-autonomous-agent; alpha runtime qualification required",
       "unsupported_primitives": [
         "host-native-plugin-install"
       ],
@@ -93,7 +93,7 @@
         "plugins/desk/mcp/README.md",
         "plugins/desk/activation/README.md"
       ],
-      "evidence_command_or_doc": "node --test plugins/desk/mcp/__tests__/activation/ouroboros_stdio_packaging.test.js; plugins/desk/mcp/README.md#generic-stdio-mcp-launch; plugins/desk/activation/README.md#generic-stdio",
+      "evidence_command_or_doc": "node --test tests/desk/mcp/__tests__/activation/ouroboros_stdio_packaging.test.js; plugins/desk/mcp/README.md#generic-stdio-mcp-launch; plugins/desk/activation/README.md#generic-stdio",
       "unsupported_primitives": [
         "agent-defaults",
         "plugin-dependency-resolution"

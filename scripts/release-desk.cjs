@@ -15,7 +15,7 @@ const FRAGMENT_DIR = "plugins/desk/changelog.d";
 const FRAGMENT_README = "README.md";
 const CHANGELOG = "plugins/desk/CHANGELOG.md";
 const CHANGELOG_HEADER = "# desk plugin — changelog\n\n";
-const RELEASE_COUPLING_TEST = "plugins/desk/mcp/__tests__/release/release_coupling.test.js";
+const RELEASE_COUPLING_TEST = "tests/desk/mcp/__tests__/release/release_coupling.test.js";
 const DESK_MANIFEST = "plugins/desk/.claude-plugin/plugin.json";
 const MCP_PACKAGE = "plugins/desk/mcp/package.json";
 
@@ -28,13 +28,13 @@ const DESK_VERSION_FILES = [
   "plugins/desk/agency.json",
   "plugins/desk/activation/desk.activation.json",
   "plugins/desk/activation/copilot-root.flattened-bundle.json",
-  "plugins/desk/mcp/__tests__/activation/copilot_packaging.test.js",
-  "plugins/desk/mcp/__tests__/release/release_coupling.test.js",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-instructions.md",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/manual-only/generated-config.toml",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-config.toml",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md",
+  "tests/desk/mcp/__tests__/activation/copilot_packaging.test.js",
+  "tests/desk/mcp/__tests__/release/release_coupling.test.js",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-instructions.md",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/manual-only/generated-config.toml",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-config.toml",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md",
 ];
 
 function escapeRegExp(text) {
