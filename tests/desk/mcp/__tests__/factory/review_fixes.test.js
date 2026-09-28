@@ -121,7 +121,7 @@ for (const alias of ["none", "state", "desk", "equal"]) {
     const messages = []
     t.mock.method(console, "error", (message) => messages.push(message))
     assert.equal((await task_update({ deskRoot: desk, env, input: { track: "track", slug: "completed-work", frontmatter: { status: "done" } } })).status, "updated")
-    assert.deepEqual(messages, ["desk_factory: finalize_request_deferred"])
+    assert.deepEqual(messages, ["desk_factory: finalize_request_deferred", "desk_factory: evaluation_request_deferred"])
     await assert.rejects(fs.stat(path.join(root, "finalize")), { code: "ENOENT" })
   }))
 }

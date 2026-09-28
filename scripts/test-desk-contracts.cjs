@@ -997,8 +997,8 @@ contract("factory-evaluator stays public-safe", () => {
   assert.doesNotMatch(skill, /\b(?:microsoft|azure devops|ado)\b/iu);
   assert.ok(Buffer.byteLength(skill) <= 8192, `rubric is ${Buffer.byteLength(skill)} bytes; keep it concise`);
 });
-requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle starts the waste evaluator in the background on done and hands its answer to session-start",
-  /transitioning to `done` → start the waste evaluator in the background when the factory store has consent[\s\S]+factory\.js evaluate --desk[\s\S]+records an evaluation request[\s\S]+as `desk:session-start` Step 4\.8 says[\s\S]+`done` does not wait for the evaluator/u);
+requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle records the evaluation request itself on done, not cancelled, and hands its answer to session-start",
+  /transitioning to `done` → the same `task_update` \(or `task_archive`\) call already records the job's evaluation request[\s\S]+kept in protected factory state[\s\S]+evaluate --pending[\s\S]+as `desk:session-start` Step 4\.8 says[\s\S]+`done` does not wait for the evaluator, and `cancelled` requests no evaluation/u);
 // One owner for the evaluator answer and the Factory label lines: session-start, which every session loads first.
 requires("plugins/desk/skills/session-start/SKILL.md", "session-start owns the Factory label lines and the evaluator answer",
   /## Step 4\.8 — Factory boot lines[\s\S]+finished tasks have no waste labels yet[\s\S]+factory\.js evaluate --pending[\s\S]+quarantined waste labels that will not be delivered[\s\S]+`ready` → start a fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`no_sessions`[\s\S]+never reopens a task/u);
