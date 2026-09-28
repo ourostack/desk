@@ -389,17 +389,32 @@ export function writeOrganizationRecord(subtree, now = new Date()) {
   return file
 }
 
-// ── The `--write-record` gate (fix round, 2026-09-28) ─────────────────────
+// ── The `--write-record` gate (fix round, 2026-09-28; review fix round,
+// 2026-09-28b) ──────────────────────────────────────────────────────────
 //
 // Step 7 of the printed procedure tells the agent to check, before it ever
-// runs `--write-record`, that `git diff --name-only` and `git ls-files
-// --others --exclude-standard` (both scoped to this session's own desk) print
-// nothing, and that something is actually staged. A session that skips
-// reading the steps — or reads them and skips running them — used to get the
-// record written anyway, with no way to tell later that the checks never
-// ran. `--write-record` now runs the same checks itself and refuses when
-// they don't pass, so the record can never lag behind what the desk actually
-// looks like.
+// runs `--write-record`, that Git shows nothing left over under the tidy
+// paths — the old and new path of every move and rename, and the files it
+// fixed by hand — and that something is actually staged. A session that
+// skips reading the steps — or reads them and skips running them — used to
+// get the record written anyway, with no way to tell later that the checks
+// never ran. `--write-record` now runs the same checks itself and refuses
+// when they don't pass, so the record can never lag behind what the desk
+// actually looks like.
+//
+// Review fix round, 2026-09-28b: the clean-tree check first shipped scoped
+// to this session's *entire* desk subtree, so a correct, fully-checked tidy
+// was refused whenever an untouched track held someone else's dirty or
+// untracked file — exactly what step 7 itself says to leave alone. It now
+// scopes to the top-level entries (a whole track, `_meta`, a loose file)
+// this run staged something under. And the raw-`git mv` detector first
+// shipped keyed off of any staged path under a track, which both flagged a
+// track with pre-existing bad `track:` data on an unrelated, rename-free
+// change, and missed archived cards and cards with no `track:` field at
+// all. It now keys off of Git's own rename detection instead: a track is
+// only ever a candidate when this run staged a rename that changed its
+// top-level directory, `_archive/` (the one raw move the procedure itself
+// makes, in steps 5 and 6) excepted.
 
 function relSubtreeArg(root, subtree) {
   const rel = path.relative(root, subtree)
@@ -412,6 +427,26 @@ function stagedPaths(root, relSubtree, spawnGit) {
   return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "")
 }
 
+// `staged` (paths relative to `root`) reduced to the one top-level entry
+// each sits under, inside `subtree` — a whole track, `_meta`, or a loose
+// file — as paths relative to `root`, ready to scope a Git command to. This
+// is what step 7's own clean-tree check means by "the tidy paths": not this
+// session's whole desk, and not each staged path individually, but every
+// top-level thing the run touched. `staged` only ever holds paths Git itself
+// already matched against the `-- relSubtree` pathspec `stagedPaths` ran
+// with, so every one of them is already under `subtree` — there is nothing
+// here left to guard against, and a real blob path can never resolve to
+// `subtree` itself, so its first segment is never empty either.
+function touchedTopLevelPaths(root, subtree, staged) {
+  const relSubtree = relSubtreeArg(root, subtree)
+  const names = new Set()
+  for (const relFromRoot of staged) {
+    const [top] = path.relative(subtree, path.resolve(root, relFromRoot)).split(path.sep)
+    names.add(top)
+  }
+  return [...names].sort().map((name) => (relSubtree === "." ? name : path.join(relSubtree, name)))
+}
+
 function safeReaddirEntries(dir) {
   try {
     return readdirSync(dir, { withFileTypes: true })
@@ -421,7 +456,8 @@ function safeReaddirEntries(dir) {
 }
 
 // The `track:` field of `taskMd`'s frontmatter, or null when the file is
-// missing, unreadable, or has no string `track` field.
+// missing, unreadable, unparsable, or has no string `track` field — every
+// one of those is equally not a confirmed match to a given track name.
 function taskTrackField(taskMd) {
   try {
     const data = parseFrontmatter(readFileSync(taskMd, "utf8")).data
@@ -431,36 +467,82 @@ function taskTrackField(taskMd) {
   }
 }
 
-// The track names among `staged` (paths relative to `root`) that fall inside
-// `subtree` — the only tracks this tidy run could plausibly have renamed.
-function stagedTrackNames(root, subtree, staged) {
-  const names = new Set()
-  for (const relFromRoot of staged) {
-    const relFromSubtree = path.relative(subtree, path.resolve(root, relFromRoot))
-    if (relFromSubtree.startsWith("..") || path.isAbsolute(relFromSubtree)) continue
-    const [trackName] = relFromSubtree.split(path.sep)
-    if (trackName && !trackName.startsWith("_") && !trackName.startsWith(".")) names.add(trackName)
+// Every `task.md`, live or archived, under `trackDirAbs` — the same reach
+// `track_rename` itself has: `findTaskCards` in `tools/move.js` walks every
+// subdirectory looking for `task.md`, `_archive/` included, and
+// unconditionally rewrites `track:` on each one it finds. A directory this
+// can't list contributes nothing rather than throwing.
+function allTaskCards(trackDirAbs) {
+  const found = []
+  const walk = (dir) => {
+    for (const entry of safeReaddirEntries(dir)) {
+      if (entry.isDirectory()) {
+        walk(path.join(dir, entry.name))
+        continue
+      }
+      if (entry.name === "task.md") found.push(path.join(dir, entry.name))
+    }
   }
-  return [...names].sort()
+  walk(trackDirAbs)
+  return found
 }
 
-// Track directories, among `candidateTracks`, that hold a task card whose
-// `track:` field still names a different track. Only `track_rename` rewrites
-// that field on every card it moves (`tools/move.js`), so a mismatch here is
-// what a track folder renamed by a raw `git mv` leaves behind, whatever
-// staged it. This never reads Git history — the mismatch alone is enough.
-function tracksRenamedWithoutTrackRename(subtree, candidateTracks) {
+// `git diff --cached -M --name-status` output, parsed into `{ status, from,
+// to }` records. `to` repeats `from` for a non-rename line, so a caller that
+// only wants renames can filter on `status[0] === "R"` and use both paths.
+function parseNameStatus(stdout) {
+  const records = []
+  for (const line of stdout.split("\n")) {
+    if (line.trim() === "") continue
+    const fields = line.split("\t")
+    if (fields[0].startsWith("R") || fields[0].startsWith("C")) {
+      records.push({ status: fields[0], from: fields[1], to: fields[2] })
+    } else {
+      records.push({ status: fields[0], from: fields[1], to: fields[1] })
+    }
+  }
+  return records
+}
+
+// The new top-level directory of every staged rename (`-M`, so a `git mv`
+// with unchanged or near-unchanged content still pairs up) whose top-level
+// directory actually changed, `_archive/` destinations excepted — the
+// procedure's one permitted raw move, steps 5 and 6 filing an emptied or
+// stale track there. A rename that stays inside one track (a task moved by
+// `task_move`, a loose file filed by hand) never shows a top-level change,
+// so only an actual track-folder move is a candidate here, and a track this
+// run never renamed is never one, however stale its own `track:` data is.
+// Both sides of an `R` record are always under `subtree` already: run with
+// the same `-- relSubtree` pathspec `stagedPaths` uses, Git only pairs a
+// rename when both its old and new path match, and reports an unpaired side
+// as a plain add or delete instead — never a rename crossing out of scope.
+function stagedTrackRenameTargets(root, subtree, relSubtree, spawnGit) {
+  const result = run(spawnGit, "git", ["-C", root, "diff", "--cached", "-M", "--name-status", "--", relSubtree])
+  if (result.status !== 0) return []
+  const targets = new Set()
+  for (const record of parseNameStatus(result.stdout)) {
+    if (!record.status.startsWith("R")) continue
+    const [fromTop] = path.relative(subtree, path.resolve(root, record.from)).split(path.sep)
+    const [toTop] = path.relative(subtree, path.resolve(root, record.to)).split(path.sep)
+    if (!fromTop || !toTop || fromTop === toTop || toTop === "_archive") continue
+    targets.add(toTop)
+  }
+  return [...targets].sort()
+}
+
+// Among the tracks this run's staged renames moved a folder into, the ones
+// that now hold a task card — live or archived — whose `track:` field
+// doesn't name the track exactly. Only `track_rename` writes that field,
+// unconditionally, on every card it finds under the destination, so a
+// missing field is exactly as telling as a wrong one: either way, a genuine
+// `track_rename` would have left `track: <the new name>` behind, and a raw
+// `git mv` leaves whatever the card already had, or nothing.
+function renamedTracksWithoutTrackRename(root, subtree, relSubtree, spawnGit) {
   const mismatched = []
-  for (const trackName of candidateTracks) {
+  for (const trackName of stagedTrackRenameTargets(root, subtree, relSubtree, spawnGit)) {
     const trackDir = path.join(subtree, trackName)
     if (!existsSync(path.join(trackDir, "track.md"))) continue
-    const hasMismatch = safeReaddirEntries(trackDir).some((entry) => {
-      if (!entry.isDirectory() || entry.name.startsWith("_") || entry.name.startsWith(".")) return false
-      const taskMd = path.join(trackDir, entry.name, "task.md")
-      if (!existsSync(taskMd)) return false
-      const track = taskTrackField(taskMd)
-      return track !== null && track !== trackName
-    })
+    const hasMismatch = allTaskCards(trackDir).some((taskMd) => taskTrackField(taskMd) !== trackName)
     if (hasMismatch) mismatched.push(trackName)
   }
   return mismatched
@@ -469,29 +551,31 @@ function tracksRenamedWithoutTrackRename(subtree, candidateTracks) {
 /**
  * Why `--write-record` must refuse right now, or null when step 7's own
  * checks pass and it may proceed:
- *   - an unstaged change to a tracked file, or an untracked file that is not
- *     ignored, anywhere in this session's own desk — the tidy stages
- *     everything it changes, so one left over means either a skipped step or
- *     someone else's work still sitting there;
  *   - nothing at all staged in this session's own desk — there is no tidy to
  *     record;
- *   - a track directory (among the ones this run touched) holding a task card
- *     whose `track:` field still names a different track — a raw `git mv` of
- *     a track folder instead of `track_rename`.
+ *   - an unstaged change to a tracked file, or an untracked file that is not
+ *     ignored, under one of the top-level entries (a track, `_meta`, a loose
+ *     file) this run staged something under — the tidy stages everything it
+ *     changes, so one left over there means either a skipped step or this
+ *     run's own work still sitting unstaged, and an untouched track's mess
+ *     is someone else's, left alone as step 7 says to;
+ *   - a track this run's own staged renames moved a folder into, now holding
+ *     a task card whose `track:` field doesn't name it — a raw `git mv` of a
+ *     track folder instead of `track_rename`.
  */
 export function writeRecordProblem(root, subtree, { spawnGit = spawnSync } = {}) {
   const relSubtree = relSubtreeArg(root, subtree)
-  if (hasUnstagedWork(root, [relSubtree], spawnGit)) {
-    return "the tidy's own step 7 checks did not pass: this session's own desk still has an unstaged change to a tracked file, or an untracked file that is not ignored. Stage exactly what the tidy changed (never a folder, a pattern or -A), or run --defer if it isn't the tidy's own work, then run --write-record again."
-  }
   const staged = stagedPaths(root, relSubtree, spawnGit)
   if (staged.length === 0) {
     return "the tidy's own step 7 checks did not pass: nothing is staged in this session's own desk, so there is no tidy to record."
   }
-  const bypassed = tracksRenamedWithoutTrackRename(subtree, stagedTrackNames(root, subtree, staged))
+  if (hasUnstagedWork(root, touchedTopLevelPaths(root, subtree, staged), spawnGit)) {
+    return "the tidy's own step 7 checks did not pass: this session's own desk still has an unstaged change to a tracked file, or an untracked file that is not ignored, under something this run touched. Stage exactly what the tidy changed (never a folder, a pattern or -A), or run --defer if it isn't the tidy's own work, then run --write-record again."
+  }
+  const bypassed = renamedTracksWithoutTrackRename(root, subtree, relSubtree, spawnGit)
   if (bypassed.length > 0) {
     const plural = bypassed.length === 1
-    return `the tidy's own step 7 checks did not pass: ${bypassed.join(", ")} ${plural ? "has" : "have"} a task card whose track: field still names a different track — only track_rename keeps that in sync, so this looks like a track folder moved by a raw git mv. Fix the field (or redo the move with track_rename) and run --write-record again.`
+    return `the tidy's own step 7 checks did not pass: ${bypassed.join(", ")} ${plural ? "has" : "have"} a task card whose track: field doesn't name it — only track_rename keeps that in sync, so this looks like a track folder moved by a raw git mv. Fix the field (or redo the move with track_rename) and run --write-record again.`
   }
   return null
 }

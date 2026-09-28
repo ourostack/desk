@@ -191,6 +191,19 @@ test("validateName rejects a long mixed alnum token word as credential_like", ()
   assert.equal(result.code, "credential_like")
 })
 
+// Review fix round, 2026-09-28b: SHAPE_RE alone accepting a single word
+// (fix round, 2026-09-28) does not weaken this — a short, readable one-word
+// name like "hunter2" is not itself flagged (isCredentialLike is value-only
+// by design, not a password blocklist), but a one-word run that actually
+// looks like a secret's value is still caught on its own, with no second
+// word needed to trip the check.
+test("validateName rejects a one-word hex or base64-ish run of 16+ characters as credential_like, even alone", () => {
+  const hex = validateName("a1b2c3d4e5f6a7b8")
+  assert.equal(hex.code, "credential_like")
+  const mixed = validateName("x9k2m7q1p4z8r3n6")
+  assert.equal(mixed.code, "credential_like")
+})
+
 test("validateName does not flag a long pure-alphabetic word as credential_like", () => {
   const result = validateName("internationalization-effort")
   assert.equal(result.ok, true)

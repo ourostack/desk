@@ -894,6 +894,34 @@ test("track_empty still fires for a track holding only a dotfile", async () => {
   assert.equal(findByCode(findings, "track_empty").length, 1)
 })
 
+test("track_empty accept: a track holding only a symlink never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "friends/track.md", {
+    schema_version: 1,
+    title: "friends",
+    status: "active",
+    scope: "who's who; not anything else",
+  })
+  // Counted as content whatever it points to, and never resolved (review fix
+  // round, 2026-09-28b) — a dangling target must not make it invisible.
+  await fs.symlink("/does/not/exist", path.join(root, "friends", "external-notes"))
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "track_empty"), [])
+})
+
+test("track_empty still fires for a track holding only an empty _meta directory", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "no-tasks-yet/track.md", {
+    schema_version: 1,
+    title: "no-tasks-yet",
+    status: "active",
+    scope: "an outcome that has no tasks filed under it yet; not anything else",
+  })
+  await fs.mkdir(path.join(root, "no-tasks-yet", "_meta"), { recursive: true })
+  const findings = organizationFindings(root, { now: NOW })
+  assert.equal(findByCode(findings, "track_empty").length, 1)
+})
+
 test("name_prompt_like accept: a task name that doesn't start with a blocked word never fires", async () => {
   const root = await mkTempRoot()
   await writeCard(root, "billing-disputes/track.md", {
