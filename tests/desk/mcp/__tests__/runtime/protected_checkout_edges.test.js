@@ -217,6 +217,60 @@ test("a loop over many distinct repositories costs reads proportional to its dis
   assert.match(tooSlow.reason, /split it into fewer targets|run it as a script file/u)
 })
 
+// Review of the ourostack/factory#39 fix found this pre-existing gap: target resolution used only the
+// modeled cwd plus -C, never GIT_DIR/GIT_WORK_TREE, so a nonexistent modeled directory hid a real target
+// those variables named. Repro from review: a cwd the guard cannot find on disk, with GIT_DIR/GIT_WORK_TREE
+// naming a real, protected checkout.
+test("GIT_DIR/GIT_WORK_TREE name the real target even when the modeled cwd does not exist", async (t) => {
+  const { root, guard } = fixture(t)
+  const missing = path.join(root, "does-not-exist-at-all")
+  const result = await guard("git reset --hard", { cwd: missing, env: { ...process.env, GIT_DIR: path.join(root, ".git"), GIT_WORK_TREE: root } })
+  assert.equal(result.deny, true, "GIT_DIR/GIT_WORK_TREE name a real, protected checkout; a nonexistent cwd must not hide it")
+  assert.match(result.reason, /this would discard other sessions' uncommitted work/u)
+})
+
+// GIT_DIR alone, without GIT_WORK_TREE, must still name the checkout: its parent directory for a plain ".git",
+// or the directory itself for a bare repository. Neither the command line nor the ambient cwd names anywhere
+// protected, so only GIT_DIR finding the target proves the command is still checked.
+test("GIT_DIR alone names the checkout, non-bare or bare", async (t) => {
+  const { root } = fixture(t)
+  const elsewhere = mkdtempSync(path.join(tmpdir(), "desk-guard-edges-elsewhere-"))
+  t.after(() => rmSync(elsewhere, { recursive: true, force: true, maxRetries: 5 }))
+
+  const nonBare = await guardShellCommand({ command: "git reset --hard", cwd: elsewhere, env: { ...process.env, GIT_DIR: path.join(root, ".git") } })
+  assert.equal(nonBare.deny, true, "a plain .git GIT_DIR names its parent directory as the checkout")
+  assert.match(nonBare.reason, /this would discard other sessions' uncommitted work/u)
+
+  const bareRoot = mkdtempSync(path.join(tmpdir(), "desk-guard-edges-bare-"))
+  t.after(() => rmSync(bareRoot, { recursive: true, force: true, maxRetries: 5 }))
+  execFileSync("git", ["init", "-q", "--bare", bareRoot], { stdio: "ignore" })
+  execFileSync("git", ["-C", bareRoot, "config", "desk.protected", "true"], { stdio: "ignore" })
+  const bare = await guardShellCommand({ command: "git reset --hard", cwd: elsewhere, env: { ...process.env, GIT_DIR: bareRoot } })
+  assert.equal(bare.deny, true, "a bare GIT_DIR names itself as the checkout")
+  assert.match(bare.reason, /this would discard other sessions' uncommitted work/u)
+})
+
+// Mutation check named in review: replacing the cache key's environment filter with one that always returns
+// {} still passed every existing guard test, because no test proved a GIT_DIR/GIT_WORK_TREE difference forces
+// a fresh Git read rather than reusing an unrelated iteration's cached answer. The loop's own command text and
+// modeled cwd never change here - only the location its environment names does - so this test only passes when
+// the guard's cache key actually depends on that environment.
+test("a loop that only changes GIT_DIR/GIT_WORK_TREE is checked once per distinct location, not merged into one cached answer", async (t) => {
+  const { root: danger, guard } = fixture(t)
+  const safe = mkdtempSync(path.join(tmpdir(), "desk-guard-edges-safe-"))
+  t.after(() => rmSync(safe, { recursive: true, force: true, maxRetries: 5 }))
+  execFileSync("git", ["-C", safe, "init", "-q"], { stdio: "ignore" })
+  execFileSync("git", ["-C", safe, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "initial"], { stdio: "ignore" })
+
+  let reads = 0
+  const countingGit = (cwd, args, env, options) => { reads++; return readInspectionGit(cwd, args, env, options) }
+  const command = `for d in "${safe}" "${danger}"; do GIT_DIR="$d/.git" GIT_WORK_TREE="$d" git reset --hard; done`
+  const result = await guard(command, { cwd: safe, readGit: countingGit })
+  assert.equal(result.deny, true, "the protected checkout's own GIT_DIR/GIT_WORK_TREE must still be checked, even though an earlier iteration's Git call looked identical")
+  assert.match(result.reason, /this would discard other sessions' uncommitted work/u)
+  assert.equal(reads, 4, "two distinct GIT_DIR/GIT_WORK_TREE locations, two Git reads each: caching by target, not by iteration count")
+})
+
 test("home expansion respects quoting and inline alias cache keys include alias definitions", async (t) => {
   const { root, guard } = fixture(t)
   const env = { ...process.env, HOME: root }

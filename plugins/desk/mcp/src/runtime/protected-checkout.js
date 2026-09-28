@@ -160,6 +160,22 @@ function gitRelevantEnv(variables) {
   return Object.fromEntries(Object.entries(variables).filter(([key]) => /^GIT_/u.test(key)))
 }
 
+// GIT_WORK_TREE, or the parent directory of a plain ".git" GIT_DIR, is the checkout Git will actually act in
+// when the command line does not already say so with -C, --git-dir or --work-tree; `readGit` already forwards
+// both variables to the real Git process (git-inspection.js's LOCATION_KEYS). The target the guard checks for
+// existence and reads policy from must follow them too, or a checkout reachable only through the environment
+// is invisible to that check, and an unrelated or nonexistent modeled directory hides it - a false allow found
+// in review of the fix for ourostack/factory#39, independent of the cache-key defect that issue named.
+function gitEnvTarget(location, variables) {
+  if (location.length > 0) return undefined
+  const workTree = variables.GIT_WORK_TREE
+  if (workTree !== undefined) return workTree
+  const gitDir = variables.GIT_DIR
+  if (gitDir === undefined) return undefined
+  if (gitDir.includes(UNKNOWN)) return gitDir
+  return path.basename(gitDir) === ".git" ? path.dirname(gitDir) : gitDir
+}
+
 // Words that could run Git somewhere other than the statement's own directory.
 const RELOCATES = /(?<![\w-])(?:set-location|sl|cd|chdir|push-location|pushd|pop-location|popd|start-process|saps|start|invoke-command|icm|start-job|sajb|start-threadjob|enter-pssession|ssh|wsl|docker|worktree|submodule)(?![\w-])|--git-dir|--work-tree|git_dir|git_work_tree|git_common_dir|currentdirectory|-workingdirectory|(?<![\w-])-wd(?![\w-])/iu
 
@@ -185,7 +201,12 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     // A computed program is judged as Git only when its arguments read like a Git command the policy checks.
     if (computed && !GIT_LIKE.test(args[0]) && !hasRule(operation)) return
     if (operation.includes(UNKNOWN)) throw unresolved("which Git command this runs")
-    const target = invocation.cwd === UNKNOWN ? null : existingDirectory(invocation.cwd)
+    // An environment value the guard cannot compute (GIT_DIR="$(pick)") is left for the real Git read to reject:
+    // `readGit` already forwards it (git-inspection.js's LOCATION_KEYS) and fails closed there. Resolving it into
+    // `target` here instead would let an operation safe in any checkout, or the wrong denial message, bypass that.
+    const envTarget = gitEnvTarget(location, variables)
+    const knownEnvTarget = envTarget !== undefined && !envTarget.includes(UNKNOWN) ? envTarget : undefined
+    const target = invocation.cwd === UNKNOWN ? null : existingDirectory(knownEnvTarget ?? invocation.cwd)
     const where = "which checkout this Git command runs in"
     if (target !== null && !existsSync(target)) return
     const key = JSON.stringify([invocation, gitRelevantEnv(variables)])
