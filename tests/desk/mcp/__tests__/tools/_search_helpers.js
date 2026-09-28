@@ -5,6 +5,10 @@
 // from a topic string — tests can verify cosine ordering by choosing topics
 // that align (or anti-align) with each doc's text.
 
+// Imported first so a test file run on its own (`node --test <file>`, not
+// through `npm test`) also gets the temporary HOME and XDG folders and the
+// real-home write guard.
+import "../_isolated_env.mjs"
 import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
