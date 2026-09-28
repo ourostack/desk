@@ -42,7 +42,7 @@ Present one decision group listing what you actually found, most likely first:
 
 If nothing was found, lead with creating a fresh desk. Never offer "continue without Desk" as an option here.
 
-A session with no human able to answer — a headless run such as `claude -p`, a scheduled run, or a subagent with no operator in the conversation — stops here instead of asking: report the question verbatim plus everything A1 and A2 found, and go no further. It never picks an option on the operator's behalf, never binds a desk, never writes `desk.activation.json`, and never reports bootstrap or this step as complete. This is the one place this rule lives for Desk bootstrap; SETUP.md step 5, and any other entrance into this ask, point back to it instead of restating it.
+A noninteractive session — one with no human able to answer, for example `claude -p` — stops here instead of asking: report the question verbatim plus everything A1 and A2 found, and go no further. It never picks an option on the operator's behalf, never binds a desk, never writes `desk.activation.json`, and never reports bootstrap or this step as complete. This is the one place this rule lives for Desk bootstrap; SETUP.md step 5, and any other entrance into this ask, point back to it instead of restating it. This gate exists because A3 asks the session to make a consequential, irreversible choice among candidate desks; a session-start migration carries no such choice, which is why `session-start-migrations`' `needs_restart: true` rule runs its one deterministic, idempotent script regardless of who is watching instead of stopping the way this step does.
 
 #### A4. Execute the choice
 

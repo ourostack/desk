@@ -344,15 +344,18 @@ test("scripts/migrations.js runs Desk's own tidy migration and prints its steps 
 
 // ── The real 01-move-to-ourostack-desk migration, against a temp CLAUDE_CONFIG_DIR ──
 //
-// Reproduces the "old channel never swaps the enabled plugin" defect
-// (eng-workflow-v2 fresh-setup dry run, finding 3): a real `claude` CLI, run
-// by hand against fixtures built the same way, was directly observed to
-// complete this exact migration's Migrate block in one shot; the friction was
-// never the shell logic. This test locks that logic down with a fake `claude`
-// that understands only the handful of `plugin`/`plugin marketplace`
-// subcommands the Migrate block calls, backed by JSON files under a temp
-// `CLAUDE_CONFIG_DIR` — no network, no real Claude Code install, nothing
-// outside the fixture's own temp folders.
+// Regression coverage for the migration script's shell logic, not a test of
+// the wording fix above: it never calls migrationLine, so it would pass
+// unchanged on the old wording too. It exists because, during the
+// eng-workflow-v2 fresh-setup dry run (finding 3), a real `claude` CLI run by
+// hand against fixtures built the same way was directly observed to complete
+// this exact migration's Migrate block in one shot; the friction was never
+// the shell logic, only the startup text's wording (fixed above, in
+// migrationLine's assertion). This test locks the shell logic down against
+// regressions with a fake `claude` that understands only the handful of
+// `plugin`/`plugin marketplace` subcommands the Migrate block calls, backed
+// by JSON files under a temp `CLAUDE_CONFIG_DIR` — no network, no real Claude
+// Code install, nothing outside the fixture's own temp folders.
 
 function hasCommand(name) {
   return spawnSync("bash", ["-c", `command -v ${name}`]).status === 0
