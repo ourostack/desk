@@ -79,7 +79,53 @@ function transitionText(entry) {
   return entry.offset_ms === null ? `${entry.to} at an unknown offset` : `${entry.to} at ${entry.offset_ms} ms`
 }
 
-export function renderJobMarkdown({ timeline, formulas }) {
+// The evaluator's labels for this job's sessions, or "not classified yet"
+// when none of them has accepted labels. Labels come from the store's
+// `labels/` entries that passed the build's checks against the facts.
+function wasteLines(timeline, labelsByJobSession) {
+  const total = timeline.sessions.length
+  const labeled = timeline.sessions.flatMap((session) => {
+    const entry = labelsByJobSession.get(`${timeline.job}/${session.id}`)
+    return entry === undefined ? [] : [entry]
+  })
+  if (labeled.length === 0) return ["Not classified yet: no session of this job has labels from the independent evaluator."]
+  const byClass = { value: 0, support: 0, muda: 0 }
+  const byWaste = new Map()
+  let mura = 0
+  let muri = 0
+  for (const stretch of labeled.flatMap((entry) => entry.stretches)) {
+    const duration = stretch.end_ms - stretch.start_ms
+    byClass[stretch.class] += duration
+    if (stretch.class === "muda") {
+      const current = byWaste.get(stretch.waste) ?? { ms: 0, stretches: 0 }
+      byWaste.set(stretch.waste, { ms: current.ms + duration, stretches: current.stretches + 1 })
+    }
+    if (stretch.mura) mura += 1
+    if (stretch.muri) muri += 1
+  }
+  const classified = byClass.value + byClass.support + byClass.muda
+  const coverage = labeled.length === total
+    ? `Classified by the independent evaluator: ${plural(total, "session")} labeled.`
+    : `Classified by the independent evaluator: ${labeled.length} of ${plural(total, "session")} labeled; not classified yet: ${plural(total - labeled.length, "session")}.`
+  const wastes = [...byWaste.entries()]
+    .sort((left, right) => right[1].ms - left[1].ms || compareText(left[0], right[0]))
+    .map(([waste, entry]) => `${waste} ${entry.ms} ms (${plural(entry.stretches, "stretch", "stretches")})`)
+  const share = classified === 0 ? "" : ` (${percentage(byClass.muda / classified)} of labeled time)`
+  const lines = [
+    `- ${coverage}`,
+    wastes.length === 0 ? "- Muda: none in the labeled stretches." : `- Muda: ${byClass.muda} ms${share}: ${wastes.join(", ")}.`,
+    `- Value ${byClass.value} ms; support ${byClass.support} ms.`,
+    `- Mura (unevenness) flagged on ${plural(mura, "stretch", "stretches")}; muri (overburden) on ${plural(muri, "stretch", "stretches")}.`,
+  ]
+  const unreadable = new Map()
+  for (const code of labeled.flatMap((entry) => entry.unavailable)) unreadable.set(code, (unreadable.get(code) ?? 0) + 1)
+  if (unreadable.size > 0) {
+    lines.push(`- The evaluator could not read: ${[...unreadable.entries()].sort((left, right) => compareText(left[0], right[0])).map(([code, count]) => `${code} (${plural(count, "session")})`).join(", ")}.`)
+  }
+  return lines
+}
+
+export function renderJobMarkdown({ timeline, formulas, labels = new Map() }) {
   const hostCounts = formulas.sessions_by_host.value
   const sessions = formulas.sessions.value
   const transitions = timeline.transitions.length === 0 ? "none" : timeline.transitions.map(transitionText).join(", ")
@@ -120,7 +166,7 @@ export function renderJobMarkdown({ timeline, formulas }) {
     "",
     "## What was waste",
     "",
-    "Not classified yet: the independent evaluator arrives in slice 2.",
+    ...wasteLines(timeline, labels),
     `- Candidate signals only (inferred): ${signalText(signals.tool_failures, "tool failure", "tool failures")}, ${signalText(signals.tool_retries, "tool retry", "tool retries")}, ${signalText(signals.api_retries, "API retry", "API retries")}, ${signalText(signals.session_retouches, "session re-touch", "session re-touches")}.`,
     `- Wait signals: ${waitsText(formulas.waits)}.`,
     "",

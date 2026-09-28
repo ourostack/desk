@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.114 — 2026-09-28
+
+The factory job report's "What was waste" section now shows the independent evaluator's labels for the job: how many sessions are labeled, muda time by waste, value and support time, mura and muri flags, and what the evaluator could not read. It says "Not classified yet" only when no session of the job has labels, instead of always saying so.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.113 — 2026-09-28
 
 **Facts a store refused from an older Desk for naming every plugin are sent again.** The public store refuses a newly added or modified facts file that has no `refs.private.plugins` with `private_plugins_missing`, and an older Desk then quarantined those files for good, with any waste labels that travel with them. This Desk always writes the field, so each flush now removes those quarantine records, and the labels quarantined with those facts or held back behind them, and publishes the files again with private plugin names withheld ([local capture](docs/factory-local-capture.md)). Every other quarantine record stays.

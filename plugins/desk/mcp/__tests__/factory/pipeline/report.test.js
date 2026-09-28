@@ -38,13 +38,58 @@ test("what mattered deterministically names the two largest contributors and lon
   ].join("\n"))
 })
 
-test("what was waste begins with the approved disclaimer and labels only candidate signals", () => {
+function wasteSection(labels) {
   const timeline = buildJobTimeline(CLOSED, sessions)
-  const report = renderJobMarkdown({ timeline, formulas: calculateFormulas(timeline) })
-  const section = report.split("## What was waste\n\n")[1].split("\n## What we could not see")[0]
-  assert.ok(section.startsWith("Not classified yet: the independent evaluator arrives in slice 2.\n"))
+  const report = renderJobMarkdown({ timeline, formulas: calculateFormulas(timeline), labels })
+  return report.split("## What was waste\n\n")[1].split("\n## What we could not see")[0]
+}
+
+function stretch(start, end, cls, waste = null, flags = {}) {
+  return { start_ms: start, end_ms: end, class: cls, waste, mura: flags.mura ?? false, muri: flags.muri ?? false, evidence: [[start, end]] }
+}
+
+const FIRST = "11111111-1111-4111-8111-111111111111"
+const SECOND = "22222222-2222-4222-8222-222222222222"
+
+test("what was waste says not classified yet only when no session of the job has labels", () => {
+  for (const section of [wasteSection(undefined), wasteSection(new Map()), wasteSection(new Map([[`other/${FIRST}`, { stretches: [stretch(0, 5, "muda", "waiting")], unavailable: [] }]]))]) {
+    assert.ok(section.startsWith("Not classified yet: no session of this job has labels from the independent evaluator.\n"))
+    assert.match(section, /Candidate signals only \(inferred\):/u)
+    assert.doesNotMatch(section, /slice 2|Classified by|wasted|waste verdict|productivity/u)
+  }
+})
+
+test("what was waste renders the evaluator's classified waste when every session is labeled", () => {
+  const labels = new Map([
+    [`${CLOSED}/${FIRST}`, { stretches: [stretch(0, 4000, "value"), stretch(4000, 6000, "muda", "waiting", { mura: true }), stretch(6000, 7000, "support")], unavailable: [] }],
+    [`${CLOSED}/${SECOND}`, { stretches: [stretch(0, 2000, "muda", "defects", { muri: true }), stretch(2000, 3000, "muda", "waiting")], unavailable: [] }],
+  ])
+  const section = wasteSection(labels)
+  assert.equal(section.split("\n- Candidate signals")[0], [
+    "- Classified by the independent evaluator: 2 sessions labeled.",
+    "- Muda: 5000 ms (50.00% of labeled time): waiting 3000 ms (2 stretches), defects 2000 ms (1 stretch).",
+    "- Value 4000 ms; support 1000 ms.",
+    "- Mura (unevenness) flagged on 1 stretch; muri (overburden) on 1 stretch.",
+  ].join("\n"))
+  assert.doesNotMatch(section, /Not classified yet/u)
   assert.match(section, /Candidate signals only \(inferred\):/u)
-  assert.doesNotMatch(section, /wasted|waste verdict|productivity/u)
+})
+
+test("what was waste names unlabeled sessions, labels with no muda and what the evaluator could not read", () => {
+  const section = wasteSection(new Map([[`${CLOSED}/${SECOND}`, { stretches: [stretch(0, 3000, "value")], unavailable: ["session_log_missing"] }]]))
+  assert.equal(section.split("\n- Candidate signals")[0], [
+    "- Classified by the independent evaluator: 1 of 2 sessions labeled; not classified yet: 1 session.",
+    "- Muda: none in the labeled stretches.",
+    "- Value 3000 ms; support 0 ms.",
+    "- Mura (unevenness) flagged on 0 stretches; muri (overburden) on 0 stretches.",
+    "- The evaluator could not read: session_log_missing (1 session).",
+  ].join("\n"))
+  const empty = wasteSection(new Map([
+    [`${CLOSED}/${SECOND}`, { stretches: [], unavailable: ["session_log_missing"] }],
+    [`${CLOSED}/${FIRST}`, { stretches: [], unavailable: ["facts_missing"] }],
+  ]))
+  assert.match(empty, /- Muda: none in the labeled stretches\.\n- Value 0 ms; support 0 ms\./u)
+  assert.match(empty, /could not read: facts_missing \(1 session\), session_log_missing \(1 session\)\./u)
 })
 
 test("the report labels a shared session and groups every unavailable field plus first-pass yield", () => {
