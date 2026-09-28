@@ -1,9 +1,11 @@
-// On the transition to `done`, the task tools also record the job's waste-
-// evaluator request (`evaluate-requests/<job>.json`), the same way and on
-// the same opt-in gate as the finalize request they already write (issue
-// #77): a failure here must never fail the task update, and `cancelled`
-// requests no evaluation (evaluate-run.js's brief and request are
-// consistently the "done step"; only `done` has a finished job to label).
+// On the transition to `done` or `cancelled`, the task tools also record the
+// job's waste-evaluator request (`evaluate-requests/<job>.json`), the same
+// way and on the same opt-in gate as the finalize request they already
+// write (issue #77): a failure here must never fail the task update.
+// `docs/factory-local-capture.md` treats `done` and `cancelled` alike as a
+// finished job, and the waste in a cancelled job is exactly what the waste
+// evaluator needs to see, so both queue the request; only a non-terminal
+// status leaves nothing to label.
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -26,12 +28,14 @@ test("task_update to done queues an evaluation request alongside the finalize re
   assert.equal((await listFinalizeRequests(env)).length, 1, "the finalize request still fires too")
 }))
 
-test("task_update to cancelled queues no evaluation request, but still queues the finalize request", () => scratch(async ({ desk, env }) => {
+test("task_update to cancelled queues an evaluation request alongside the finalize request", () => scratch(async ({ desk, env }) => {
   await factoryStateRoot(env)
   await task_create({ deskRoot: desk, input: { track: "track", slug: "abandoned-work", title: "fixture" } })
   const result = await task_update({ deskRoot: desk, env, input: { track: "track", slug: "abandoned-work", frontmatter: { status: "cancelled" } } })
   assert.equal(result.status, "updated")
-  assert.equal((await listEvaluationRequests(env)).length, 0, "cancelled must not queue an evaluation request")
+  const [request] = await listEvaluationRequests(env)
+  assert.ok(request, "cancelled must leave an evaluation request too")
+  assert.equal(request.job, jobId({ deskRemote: `local:${desk}`, personPrefix: "", track: "track", slug: "abandoned-work" }))
   assert.equal((await listFinalizeRequests(env)).length, 1, "cancelled still queues the finalize request")
 }))
 
@@ -57,11 +61,11 @@ test("archiving an in-flight task forces it to done and queues one evaluation re
   }
 }))
 
-test("archiving an already-cancelled task queues no evaluation request, but still queues the finalize request", () => scratch(async ({ desk, env }) => {
+test("archiving an already-cancelled task queues an evaluation request and the finalize request", () => scratch(async ({ desk, env }) => {
   await factoryStateRoot(env)
   await task_create({ deskRoot: desk, input: { track: "track", slug: "abandoned-work", title: "fixture", status: "cancelled" } })
   assert.equal((await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "abandoned-work" } })).status, "archived")
-  assert.equal((await listEvaluationRequests(env)).length, 0)
+  assert.equal((await listEvaluationRequests(env)).length, 1)
   assert.equal((await listFinalizeRequests(env)).length, 1)
 }))
 
@@ -74,6 +78,21 @@ test("re-archiving with the archived task.md gone requests no evaluation and doe
   const result = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work" } })
   assert.equal(result.status, "already_archived")
   assert.equal((await listEvaluationRequests(env)).length, 0, "an unreadable archived status must not be treated as done")
+}))
+
+test("re-archiving over a corrupted archived task.md requests no evaluation, still queues the finalize request, and does not throw", () => scratch(async ({ desk, env }) => {
+  await factoryStateRoot(env)
+  await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
+  assert.equal((await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work" } })).status, "archived")
+  const archivedFile = path.join(desk, "track", "_archive", "finished-work", "task.md")
+  await fs.writeFile(archivedFile, "---\nstatus: [done\nupdated: 2026-01-01\n---\nbody\n")
+  const factoryRoot = path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory")
+  await fs.rm(path.join(factoryRoot, "evaluate-requests"), { recursive: true, force: true })
+  await fs.rm(path.join(factoryRoot, "finalize"), { recursive: true, force: true })
+  const result = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work" } })
+  assert.equal(result.status, "already_archived", "corrupted archived frontmatter must not break already_archived idempotency")
+  assert.equal((await listEvaluationRequests(env)).length, 0, "corrupted archived frontmatter must not be treated as a terminal status")
+  assert.equal((await listFinalizeRequests(env)).length, 1, "the finalize request still fires even when the archived card can't be read")
 }))
 
 test("no factory state is created by completion; unavailable factory state never fails an evaluation request", () => scratch(async ({ desk, env }) => {

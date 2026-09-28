@@ -32,11 +32,10 @@ async function taskJob({ deskRoot, person, track, slug }) {
   return { root, prefix, deskRemote, job: jobId({ deskRemote, personPrefix: prefix, track, slug }) }
 }
 
-async function requestTaskFinalize({ deskRoot, person, track, slug, env }) {
+async function requestTaskFinalize({ deskRoot, env, identity }) {
   try {
     if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return
-    const { root, job } = await taskJob({ deskRoot, person, track, slug })
-    await requestFinalize(env, { job, deskRoot: root })
+    await requestFinalize(env, { job: identity.job, deskRoot: identity.root })
   } catch {
     console.error("desk_factory: finalize_request_deferred")
   }
@@ -48,11 +47,10 @@ async function requestTaskFinalize({ deskRoot, person, track, slug, env }) {
 // can never block or reopen the task. `done` never waits for it, and briefs
 // are prepared later, off this path, by the session-start hook's
 // `evaluate --pending` (`evaluatePending` in factory/evaluate-run.js).
-async function requestTaskEvaluation({ deskRoot, person, track, slug, env }) {
+async function requestTaskEvaluation({ deskRoot, env, identity }) {
   try {
     if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return
-    const { root, job } = await taskJob({ deskRoot, person, track, slug })
-    await requestEvaluation(env, { job, deskRoot: root })
+    await requestEvaluation(env, { job: identity.job, deskRoot: identity.root })
   } catch {
     console.error("desk_factory: evaluation_request_deferred")
   }
@@ -60,13 +58,24 @@ async function requestTaskEvaluation({ deskRoot, person, track, slug, env }) {
 
 // The terminal-status sync a Desk task tool runs alongside the status write:
 // a finalize request for every terminal status (`done`/`cancelled`, matching
-// `requestFinalize`'s own contract), and an evaluation request only for
-// `done` — evaluate-run.js's brief and request are consistently described as
-// the "done step"; a cancelled task has no finished job for the waste
-// evaluator to label.
+// `requestFinalize`'s own contract), and, on either terminal status, an
+// evaluation request too — `docs/factory-local-capture.md` treats `done` and
+// `cancelled` alike as a finished job, and the waste in a cancelled job is
+// exactly what the waste evaluator needs to see. The job identity is
+// resolved once here (it never differs between the two calls) and handed to
+// both; if resolving it throws, both calls still degrade the same way each
+// would have on its own, so both deferred messages are logged below.
 async function requestTaskTerminalSync({ deskRoot, person, track, slug, env, status }) {
-  await requestTaskFinalize({ deskRoot, person, track, slug, env })
-  if (status === "done") await requestTaskEvaluation({ deskRoot, person, track, slug, env })
+  let identity = null
+  try {
+    identity = await taskJob({ deskRoot, person, track, slug })
+  } catch {
+    // Left null: requestTaskFinalize/requestTaskEvaluation each fail the
+    // same way reading `identity.job`/`identity.root`, and each logs its
+    // own deferred message via its own try/catch below.
+  }
+  await requestTaskFinalize({ deskRoot, env, identity })
+  if (TERMINAL_STATUSES.has(status)) await requestTaskEvaluation({ deskRoot, env, identity })
 }
 
 // The `factory_report` link written on the transition to `done`, or `null`
@@ -374,6 +383,23 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   return { status: "updated", path: relPath(deskRoot, filePath) }
 }
 
+// The already-archived card's status, read fail-safe: a missing file reads
+// as no status (as before), and corrupted frontmatter (bad YAML from hand
+// editing or a partial write) degrades the same way rather than throwing
+// out of `task_archive` — the idempotent already-archived branch must keep
+// returning `already_archived`, not break, on a card it doesn't control the
+// shape of. A `null` status skips the evaluation request further down
+// (`requestTaskTerminalSync` only requests one for a terminal status), but
+// the finalize request still fires.
+async function archivedTaskStatus(archivedFile) {
+  if (!(await pathExists(archivedFile))) return null
+  try {
+    return (await readMarkdown(archivedFile)).data.status
+  } catch {
+    return null
+  }
+}
+
 /**
  * task_archive
  *
@@ -408,7 +434,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   const dstExists = await pathExists(archiveDir)
 
   if (!srcExists && dstExists) {
-    const archivedStatus = (await pathExists(archivedFile)) ? (await readMarkdown(archivedFile)).data.status : null
+    const archivedStatus = await archivedTaskStatus(archivedFile)
     await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: archivedStatus })
     return {
       status: "already_archived",
