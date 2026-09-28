@@ -155,26 +155,77 @@ test("the CLI takes --date and --root, prints the result and reports errors on s
   assert.ok(existsSync(path.join(repoRoot, fragmentDir, "README.md")))
 })
 
+const releaseWorkflow = () => {
+  const text = readRepo(".github/workflows/desk-release.yml")
+  return { text, workflow: require("js-yaml").load(text) }
+}
+const stepNamed = (job, name) => {
+  const found = job.steps.find((step) => step.name === name)
+  assert.ok(found, `missing step: ${name}`)
+  return found
+}
+
 test("the release workflow runs on main one at a time and daily, checks the release, pushes it and reports a failure", () => {
-  const workflow = readRepo(".github/workflows/desk-release.yml")
-  for (const required of [
-    /\n {2}push:\n {4}branches:\n {6}- main\n {4}paths:\n {6}- "plugins\/desk\/changelog\.d\/\*\*"\n/u,
-    /\n {2}workflow_dispatch:\n/u,
-    /\npermissions: \{\}\n/u,
-    /\nconcurrency:\n {2}group: desk-release\n {2}cancel-in-progress: false\n/u,
-    /\n {6}contents: write\n/u,
-    /node scripts\/release-desk\.cjs --date/u,
-    /node scripts\/check-release-integrity\.cjs/u,
-    /__tests__\/release\/release_coupling\.test\.js/u,
-    /git push --quiet origin HEAD:main 2>&1/u,
-    /\n {2}schedule:\n {4}- cron: "[^"]+"\n/u,
-    /\n {6}issues: write\n/u,
-    /\n {6}- name: Report the failed release\n {8}if: failure\(\)\n/u,
-    /gh issue create --repo "\$GITHUB_REPOSITORY" --title "\$ISSUE_TITLE"/u,
-    /\n {6}- name: Close the release issue after a successful run\n {8}if: success\(\)\n/u,
-  ]) {
-    assert.match(workflow, required)
+  const { text, workflow } = releaseWorkflow()
+  assert.deepEqual(workflow.on.push, { branches: ["main"], paths: ["plugins/desk/changelog.d/**"] })
+  assert.ok("workflow_dispatch" in workflow.on)
+  assert.match(workflow.on.schedule[0].cron, /\S/u)
+  assert.deepEqual(workflow.permissions, {})
+  assert.deepEqual(workflow.concurrency, { group: "desk-release", "cancel-in-progress": false })
+  assert.deepEqual(Object.keys(workflow.jobs), ["build", "push", "report"])
+  const build = stepNamed(workflow.jobs.build, "Build and check the release").run
+  assert.match(build, /node scripts\/release-desk\.cjs --date/u)
+  assert.match(build, /node scripts\/check-release-integrity\.cjs/u)
+  assert.match(build, /"__tests__\/release\/\*\*\/\*\.test\.js"/u)
+  const report = workflow.jobs.report
+  assert.deepEqual(report.needs, ["build", "push"])
+  assert.deepEqual(report.permissions, { issues: "write" })
+  assert.equal(stepNamed(report, "Report the failed release").if, "needs.build.result == 'failure' || needs.push.result == 'failure'")
+  assert.match(stepNamed(report, "Report the failed release").run, /gh issue create --repo "\$GITHUB_REPOSITORY" --title "\$ISSUE_TITLE"/u)
+  // A run that handed its release to a new run leaves the issue open: its fragments are still pending.
+  assert.match(stepNamed(report, "Close the release issue after a successful run").if, /needs\.push\.outputs\.handed_off != 'true'/u)
+  assert.doesNotMatch(text, /pull_request/u, "the release never runs for an unmerged pull request")
+  assert.doesNotMatch(text, /--force/u, "a release never overwrites main")
+})
+
+test("the release workflow checks every release surface in a read-only job and pushes the checked commit from a job that runs no dependency or repository code", () => {
+  const { workflow } = releaseWorkflow()
+  const { build, push, report } = workflow.jobs
+  // Steps in one job share a runner, so the job that installs dependencies holds only a read token.
+  assert.deepEqual(build.permissions, { contents: "read" })
+  assert.deepEqual(push.permissions, { contents: "write", actions: "write" })
+  assert.doesNotMatch(JSON.stringify(build), /github\.token|secrets\./u, "the build job never receives a write credential")
+  for (const job of [build, push]) assert.equal(stepNamed(job, "Check out main").with["persist-credentials"], false)
+  const checks = stepNamed(build, "Build and check the release").run
+  for (const check of ["check-release-integrity", "validate-skills", "test-desk-docs", "test-desk-host-manifests", "test-desk-generated-artifacts", "test-desk-contracts"]) {
+    assert.match(checks, new RegExp(check, "u"), check)
   }
-  assert.doesNotMatch(workflow, /pull_request/u, "the release never runs for an unmerged pull request")
-  assert.doesNotMatch(workflow, /--force/u, "a release never overwrites main")
+  for (const folder of ["release", "activation", "artifacts", "docs", "scripts"]) {
+    assert.ok(checks.includes(`"__tests__/${folder}/**/*.test.js"`), folder)
+  }
+  assert.match(checks, /git bundle create "\$RUNNER_TEMP\/desk-release\/release\.bundle" refs\/heads\/main "\^\$base"/u)
+  assert.match(checks, /echo "sha=\$sha"; echo "base=\$base"/u)
+  // The push job uses only actions and git: no npm, no node and no script from the repository.
+  assert.equal(push.needs, "build")
+  assert.equal(push.if, "needs.build.outputs.released == 'true'")
+  for (const step of push.steps) {
+    assert.ok(step.uses === undefined || /^actions\/(checkout|download-artifact)@v4$/u.test(step.uses), step.uses)
+    assert.doesNotMatch(step.run ?? "", /\bnpm\b|\bnode\b|\bnpx\b|\b(?:ba)?sh scripts\/|\.\/[\w./-]+/u, step.name)
+  }
+  const verify = stepNamed(push, "Verify and push the release")
+  assert.equal(verify.env.SHA, "${{ needs.build.outputs.sha }}")
+  assert.match(verify.run, /\[ "\$\(git rev-list --parents -n 1 "\$SHA"\)" = "\$SHA \$BASE" \]/u, "the pushed commit is one commit on the base build checked")
+  assert.match(verify.run, /git diff --no-renames --name-status "\$BASE" "\$SHA"/u, "the pushed commit changes only release surfaces and fragments")
+  assert.match(verify.run, /git -c core\.hooksPath=\/dev\/null push --porcelain --no-verify origin "\$SHA:refs\/heads\/main"/u, "the push sends the recorded commit with hooks disabled")
+  assert.doesNotMatch(verify.run, /HEAD:main/u)
+  assert.match(verify.run, /::add-mask::\$credential/u)
+  assert.match(verify.run, /grep -qE \$'\^!\\t\[0-9a-f\]\{40\}:refs\/heads\/main\\t.*\(fetch first\|non-fast-forward\)/u, "only git's porcelain refusal line for main counts as main having moved")
+  assert.match(verify.run, /non-fast-forward[\s\S]*gh workflow run desk-release\.yml --repo "\$GITHUB_REPOSITORY" --ref main\n\s*echo "handed_off=true"/u, "a refusal because main moved starts a release on the new main")
+  // The allowlist is read, not run, from the release script, so it can never drift from the surfaces the release bumps.
+  const release = require(script)
+  const allowed = [...verify.run.matchAll(/sed -n '([^']+)' scripts\/release-desk\.cjs/gu)]
+  assert.equal(allowed.length, 1)
+  const listed = spawnSync("sed", ["-n", allowed[0][1], path.join(repoRoot, "scripts", "release-desk.cjs")], { encoding: "utf8" }).stdout.trim().split("\n")
+  assert.deepEqual(listed.sort(), [...release.DESK_VERSION_FILES, release.CHANGELOG].sort())
+  assert.equal(report.permissions.issues, "write")
 })
