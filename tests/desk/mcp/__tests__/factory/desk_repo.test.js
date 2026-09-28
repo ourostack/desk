@@ -80,7 +80,10 @@ before(() => {
   shas.amended = commitAt("2026-09-25T09:05:00Z", "drafted", ["--amend"])
 
   // A commit later rebased onto another clone's work keeps its own entry.
+  // It also touches a non-card file, so it is a real work signal, not just a
+  // card edit: see "the bare card never binds" in binding.test.js.
   write("track/other-task/task.md", card(["status: blocked"]))
+  write("track/other-task/notes.md", "notes\n")
   shas.preRebase = commitAt("2026-09-25T09:30:00Z", "before rebase")
   gitIn(other, ["pull", "-q", "--ff-only", "origin", "main"], "2026-09-25T09:50:00Z")
   writeIn(other, "_meta/log.md", "log\n")
@@ -206,7 +209,7 @@ test("deskCommitsBetween lists a commit and its amend, and a commit later rebase
     { sha: shas.beforeAmend, taskPaths: ["track/amended-task/task.md"] },
   ])
   assert.deepEqual(between("2026-09-25T09:29:59.000Z", "2026-09-25T09:30:05.000Z"), [
-    { sha: shas.preRebase, committed_at: "2026-09-25T09:30:00.000Z", taskPaths: ["track/other-task/task.md"] },
+    { sha: shas.preRebase, committed_at: "2026-09-25T09:30:00.000Z", taskPaths: ["track/other-task/notes.md", "track/other-task/task.md"] },
   ])
   assert.deepEqual(between("2026-09-25T10:59:59.000Z", "2026-09-25T11:00:05.000Z"), [], "the rebase's own entries are not commits")
 })
@@ -336,11 +339,13 @@ function bindWith(windows) {
 const id = (slug) => jobId({ deskRemote: `local:${realpathSync(desk)}`, personPrefix: "", track: "track", slug })
 const byJob = (a, b) => (a.job < b.job ? -1 : 1)
 
-test("end to end: a session's git commit call in the desk binds the tasks its own commit changed", () => {
+test("end to end: a session's git commit call in the desk binds the tasks its own commit changed, but not a task whose only change is its bare card", () => {
+  // shas.second touches live-task/notes with space.md (real work) and only
+  // old-task/task.md (the card alone, old-task's whole fixture): see "the
+  // bare card never binds" in binding.test.js.
   const jobs = bindWith([["2026-09-25T08:20:01.300Z", "2026-09-25T08:20:01.900Z"]])
   assert.deepEqual(jobs.map(({ job, basis, observed }) => ({ job, basis, observed })).sort(byJob), [
     { job: id("live-task"), basis: ["desk_commit"], observed: { status: "processing", at: null } },
-    { job: id("old-task"), basis: ["desk_commit"], observed: { status: "done", at: "2026-09-02T10:30:00.000Z" } },
   ].sort(byJob))
 })
 

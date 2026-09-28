@@ -35,8 +35,16 @@
 // Reads never bind (no deriver emits them). Paths outside the desk, relative
 // paths, and paths under `_meta/`, `_friction/`, `_planning/`, the top-level
 // `_archive/`, a dot folder, or directly in a track (such as `track.md`) bind
-// nothing. A task whose card is found neither live nor archived is not a
-// job. A session with no jobs gets `jobs: []`.
+// nothing. Nor does a `file_write` or `desk_commit` that touches only the
+// task's own `task.md`, with no other file inside the task folder: a card
+// carries organization (a rename, a scope-line pass, an archive move, a
+// revert of one), not evidence that the session worked the task, and one
+// commit that reorganizes many task cards must not read as work on all of
+// them. `task_update`, `task_create` and `task_archive` still bind their
+// task precisely through `desk_tool`, whatever else touched the card; only
+// the file-shaped fallbacks lose the bare card as a signal. A task whose
+// card is found neither live nor archived is not a job. A session with no
+// jobs gets `jobs: []`.
 //
 // Output. `{ jobs: LocalJob[] }`, sorted by job ID, where `LocalJob` is
 // `{ job, basis, task_created_at, transitions, observed }`: the hashed job
@@ -131,7 +139,15 @@ export function jobId({ deskRemote, personPrefix, track, slug }) {
 // Paths to tasks.
 // ---------------------------------------------------------------------------
 
-/** `{ track, slug }` for desk-relative path segments, or null. */
+const CARD_FILE = "task.md"
+
+/**
+ * `{ track, slug }` for desk-relative path segments naming a work signal
+ * inside a task folder, or null. A path is inside the task's folder but not
+ * a work signal when the only segment past `<track>/<slug>` (or
+ * `<track>/_archive/<slug>`) is the card itself, `task.md`: see the header
+ * for why the bare card never binds through this path.
+ */
 function taskOfSegments(segments, alias) {
   let rest = segments
   if (alias !== null) {
@@ -143,8 +159,9 @@ function taskOfSegments(segments, alias) {
   const [track, second, third] = rest
   const archived = second === "_archive"
   const slug = archived ? third : second
-  const inside = rest.length - (archived ? 3 : 2)
-  if (!isTaskSegment(track) || !isTaskSegment(slug) || inside < 1) return null
+  const inner = rest.slice(archived ? 3 : 2)
+  if (!isTaskSegment(track) || !isTaskSegment(slug) || inner.length < 1) return null
+  if (inner.length === 1 && inner[0] === CARD_FILE) return null
   return { track, slug }
 }
 

@@ -123,7 +123,7 @@ test("a successful file write alone binds the task folder it lands in", () => {
 })
 
 test("a desk commit matched to the session's own git commit call alone binds the tasks it changed", () => {
-  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`, "_meta/log.md"] }
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/notes.md`, "_meta/log.md"] }
   const { jobs, calls } = bind(
     { shellGitCommits: [{ start: "2026-09-25T08:20:01.400Z", end: "2026-09-25T08:20:02.100Z", cwd: DESK }] },
     { commitsBetween: [commit] },
@@ -133,7 +133,7 @@ test("a desk commit matched to the session's own git commit call alone binds the
 })
 
 test("desk history is read once per session over the span of its calls, and a commit binds only inside a call", () => {
-  const at = (time, slug) => ({ sha: SHA_A, committed_at: time, taskPaths: [`${TRACK}/${slug}/task.md`] })
+  const at = (time, slug) => ({ sha: SHA_A, committed_at: time, taskPaths: [`${TRACK}/${slug}/notes.md`] })
   const { jobs, calls } = bind({ shellGitCommits: [
     { start: "2026-09-25T08:45:00.000Z", end: "2026-09-25T08:45:01.000Z", cwd: DESK },
     { start: "2026-09-25T09:00:00.700Z", end: "2026-09-25T09:00:02.000Z", cwd: DESK },
@@ -147,7 +147,7 @@ test("desk history is read once per session over the span of its calls, and a co
 test("a commit from the session's native refs alone binds the tasks it changed; one missing from the desk binds nothing", () => {
   const { jobs, calls } = bind(
     { nativeCommitShas: [SHA_A, SHA_B, "not-a-sha", SHA_A.toUpperCase(), 7] },
-    { nativeCommits: { [SHA_A]: { exists: true, taskPaths: [`${TRACK}/_archive/${SLUG}/task.md`] }, [SHA_B]: { exists: false, taskPaths: [`${TRACK}/${OTHER}/x.md`] } } },
+    { nativeCommits: { [SHA_A]: { exists: true, taskPaths: [`${TRACK}/_archive/${SLUG}/notes.md`] }, [SHA_B]: { exists: false, taskPaths: [`${TRACK}/${OTHER}/x.md`] } } },
   )
   assert.deepEqual(calls.native, [SHA_A, SHA_B])
   assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["desk_commit"] }])
@@ -159,10 +159,71 @@ test("hashes scraped from tool output (events.commitShas) never bind: only nativ
   assert.deepEqual(calls.native, [])
 })
 
+// --- The bare card never binds file_write or desk_commit ---------------------
+//
+// task_update/task_create/task_archive stay a precise, deliberate signal
+// (desk_tool, unaffected below). A write or a commit whose only change inside
+// a task's folder is the card itself, task.md, is what housekeeping (tidy,
+// renames, scope-line and title edits, and their reverts) touches without
+// anyone doing the task's work, so it must not join or create that job.
+
+test("a file write to the bare task card alone binds nothing, live or archived", () => {
+  const live = bind({ fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/${SLUG}/task.md` }] })
+  assert.deepEqual(live.jobs, [])
+  assert.deepEqual(live.calls.readTask, [])
+  const archived = bind({ fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/_archive/${SLUG}/task.md` }] })
+  assert.deepEqual(archived.jobs, [])
+  assert.deepEqual(archived.calls.readTask, [])
+})
+
+test("a file write alongside the bare card still binds: the card just contributes nothing by itself", () => {
+  const { jobs } = bind({ fileWrites: [
+    { at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/${SLUG}/task.md` },
+    { at: "2026-09-25T08:00:01.000Z", path: `${DESK}/${TRACK}/${SLUG}/notes.md` },
+  ] })
+  assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["file_write"] }])
+})
+
+test("a native commit touching only the bare card, live or archived, binds nothing", () => {
+  const { jobs, calls } = bind(
+    { nativeCommitShas: [SHA_A, SHA_B] },
+    { nativeCommits: {
+      [SHA_A]: { exists: true, taskPaths: [`${TRACK}/${SLUG}/task.md`] },
+      [SHA_B]: { exists: true, taskPaths: [`${TRACK}/_archive/${OTHER}/task.md`] },
+    } },
+  )
+  assert.deepEqual(calls.native, [SHA_A, SHA_B])
+  assert.deepEqual(jobs, [])
+})
+
+test("a desk commit whose only change to one task is the bare card binds nothing there, but still binds a task it actually changed", () => {
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`, `${TRACK}/${OTHER}/notes.md`] }
+  const { jobs } = bind({ shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] }, { commitsBetween: [commit] })
+  assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, OTHER), basis: ["desk_commit"] }])
+})
+
+test("a bulk commit that only touches card files across many tasks, live and archived, binds none of them: the housekeeping case", () => {
+  const commit = {
+    sha: SHA_A,
+    committed_at: "2026-09-25T08:20:01.000Z",
+    taskPaths: [`${TRACK}/${SLUG}/task.md`, `${TRACK}/${OTHER}/task.md`, `${TRACK}/_archive/${SLUG}/task.md`],
+  }
+  const { jobs } = bind({ shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] }, { commitsBetween: [commit] })
+  assert.deepEqual(jobs, [])
+})
+
+test("a Desk task tool call still binds on its own even when the only other touch to the task is its bare card", () => {
+  const { jobs } = bind({
+    deskToolCalls: [deskCall({ status: "done" })],
+    fileWrites: [{ at: "2026-09-25T08:10:01.000Z", path: `${DESK}/${TRACK}/${SLUG}/task.md` }],
+  })
+  assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["desk_tool"] }])
+})
+
 // --- Where the git commit ran -----------------------------------------------
 
 test("a git commit call binds only when it ran in the desk: inside it, below it or at $DESK, never elsewhere or unknown", () => {
-  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`] }
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/notes.md`] }
   const window = { start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z" }
   for (const cwd of [DESK, `${DESK}/${TRACK}`, DESK_MARKER, `${DESK_MARKER}/${TRACK}`]) {
     const { jobs } = bind({ shellGitCommits: [{ ...window, cwd }] }, { commitsBetween: [commit] })
@@ -201,8 +262,8 @@ test("the desk root is matched through a symlink, so a transcript that recorded 
 // --- Paths -------------------------------------------------------------------
 
 test("an _archive path maps to the same job as the live path", () => {
-  const live = bind({ fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/${SLUG}/task.md` }] }).jobs
-  const archived = bind({ fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/_archive/${SLUG}/task.md` }] }).jobs
+  const live = bind({ fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/${SLUG}/notes.md` }] }).jobs
+  const archived = bind({ fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/_archive/${SLUG}/notes.md` }] }).jobs
   assert.equal(live.length, 1)
   assert.equal(archived[0].job, live[0].job)
 })
@@ -306,7 +367,7 @@ test("a task with no card, live or archived, is not a job", () => {
 // --- Several tasks, transitions, observations --------------------------------
 
 test("two tasks bound by one session both appear, each with its own bases, and bases merge per task", () => {
-  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`] }
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/notes.md`] }
   const { jobs, calls } = bind({
     deskToolCalls: [deskCall()],
     fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/${OTHER}/x.md` }, { at: "2026-09-25T08:00:01.000Z", path: `${DESK}/${TRACK}/${SLUG}/y.md` }],
