@@ -884,6 +884,44 @@ test("a hold that cannot be written only means Detect fires again, and Detect su
   assert.deepEqual(cli(["--detect"], { env: { DESK: crew }, spawnBackground: failing }), { code: 1, stdout: "", stderr: "" })
 })
 
+// An agent's Bash shell has no CLAUDE_PROJECT_DIR (M4-7 live rerun): the tidy
+// resolved no desk there, stopped, and wrote a hold whose fingerprint recorded
+// that; the session-start hook, which has CLAUDE_PROJECT_DIR, resolved the desk,
+// saw another fingerprint and fired again at every start.
+test("an agent's shell resolves the desk from its working folder, so a hold it writes is honored at session start", () => {
+  const crew = crewDesk()
+  const home = tempDir()
+  const shell = { env: { DESK_IDENTITY: "nobody" }, cwd: crew, homeDir: home }
+  const hook = { env: { CLAUDE_PROJECT_DIR: crew, DESK_IDENTITY: "nobody" }, cwd: home, homeDir: home }
+
+  // Both environments resolve the same desk and person, with no mismatch.
+  const fromShell = tidyStatus({ root: crew, ...shell, now: NOW })
+  const fromHook = tidyStatus({ root: crew, ...hook, now: NOW })
+  assert.equal(fromShell.resolved.root, realpathSync(crew))
+  assert.deepEqual(fromShell.resolved, fromHook.resolved)
+  assert.equal(fromShell.mismatch, false)
+  assert.equal(fromHook.mismatch, false)
+
+  // The shell's report stops (no person resolves) and writes the hold; the hook's
+  // Detect reads the same fingerprint and reports it held instead of pending.
+  assert.equal(cli(["--report", "--root", crew], shell).code, 1)
+  const hold = JSON.parse(readFileSync(path.join(crew, ".git", "desk-tidy-hold.json"), "utf8"))
+  assert.equal(hold.reason, "no person in this crew workspace's roster matches this session")
+  assert.deepEqual(cli(["--detect"], hook), { code: 1, stdout: `held: ${hold.reason}\n`, stderr: "" })
+  assert.deepEqual(cli(["--detect", "--root", crew], shell), { code: 1, stdout: `held: ${hold.reason}\n`, stderr: "" })
+
+  // A working folder counts only when it is a desk, and only when the host names
+  // no project.
+  assert.equal(tidyStatus({ ...shell, cwd: home, now: NOW }).resolved.root, null)
+  assert.equal(tidyStatus({ env: { CLAUDE_PROJECT_DIR: home, DESK_IDENTITY: "nobody" }, cwd: crew, homeDir: home, now: NOW }).resolved.root, null)
+
+  // A personal desk tidies from the shell: the report prints the steps and a claim.
+  const solo = soloDesk()
+  const report = cli(["--report", "--root", solo], { env: {}, cwd: solo, homeDir: home })
+  assert.equal(report.code, 0, report.stdout)
+  assert.match(report.stdout, /^Tidy claim: /mu)
+})
+
 test("--defer needs a reason and --refresh-identity needs a root", () => {
   assert.deepEqual(cli(["--defer"]), { code: 2, stdout: "", stderr: "tidy-status: --defer needs a one-line reason\n" })
   assert.deepEqual(cli(["--refresh-identity"]), { code: 2, stdout: "", stderr: "tidy-status: --refresh-identity needs --root\n" })
