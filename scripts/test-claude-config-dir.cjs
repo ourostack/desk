@@ -69,6 +69,12 @@ assert.deepEqual(violations, [], `hard-coded Claude config directory without the
   for (const target of ["settings.json", "CLAUDE.md", "agents/", "projects/", "plugins/data/desk-ourostack/desk.activation.json"]) {
     assert.ok(setup.includes(`$CLAUDE_DIR/${target}`), `SETUP.md must reach ${target} through $CLAUDE_DIR`);
   }
+  // Desk forbids AI attribution (using-desk's "Durable context and attribution"), so the settings step must turn
+  // it off in the profile SETUP.md produces, not rely on the operator noticing later.
+  assert.ok(
+    setup.includes('"attribution": { "commit": "", "pr": "" }'),
+    "SETUP.md step 3 must merge an empty attribution into $CLAUDE_DIR/settings.json, so a profile it sets up never adds AI attribution to commits or pull requests",
+  );
 }
 
 console.log("Claude config directory contract passed.");
