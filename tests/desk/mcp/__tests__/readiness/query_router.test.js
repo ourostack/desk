@@ -1,14 +1,14 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import * as path from "node:path"
-import { createQueryRouter } from "../../src/readiness/query-router.js"
-import { connectOrStartController } from "../../src/readiness/controller-client.js"
-import { rebuildIndex } from "../../src/indexer/index.js"
-import { indexedRecall, indexedSearch, indexedSimilar, indexedTimeline } from "../../src/tools/search.js"
-import { indexedThread } from "../../src/tools/thread.js"
-import { directLexicalSearch } from "../../src/readiness/direct-lexical.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
-import { getSemanticCoverage } from "../../src/server-helpers.js"
+import { createQueryRouter } from "../../../../../plugins/desk/mcp/src/readiness/query-router.js"
+import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
+import { indexedRecall, indexedSearch, indexedSimilar, indexedTimeline } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { indexedThread } from "../../../../../plugins/desk/mcp/src/tools/thread.js"
+import { directLexicalSearch } from "../../../../../plugins/desk/mcp/src/readiness/direct-lexical.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
+import { getSemanticCoverage } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
 import { mkTempDeskRoot, writeFile, makeEmbedFetch } from "../tools/_search_helpers.js"
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
@@ -19,9 +19,9 @@ import { fileURLToPath } from "node:url"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { createHash } from "node:crypto"
-import { configureRuntimeArtifacts } from "../../src/server-helpers.js"
-import { desk_status } from "../../src/tools/status.js"
-import { callTool } from "../../src/server.js"
+import { configureRuntimeArtifacts } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
+import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
+import { callTool } from "../../../../../plugins/desk/mcp/src/server.js"
 
 function deferred() {
   let resolve
@@ -1159,7 +1159,7 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
   })
   async function launch() {
     const child = spawn(process.execPath, [
-      fileURLToPath(new URL("../../index.js", import.meta.url)),
+      fileURLToPath(new URL("../../../../../plugins/desk/mcp/index.js", import.meta.url)),
       "--root", deskRoot, "--activation-config", config,
     ], { env, stdio: ["pipe", "pipe", "pipe"] })
     const pending = new Map()

@@ -8,12 +8,12 @@ import assert from "node:assert/strict"
 import { existsSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 
-import { desk_status } from "../../src/tools/status.js"
-import { doctorRuntime } from "../../src/tools/doctor.js"
-import { setConsent, writeLocalFacts, writeStatus, readMachineSecret } from "../../src/factory/outbox.js"
+import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
+import { doctorRuntime } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
+import { setConsent, writeLocalFacts, writeStatus, readMachineSecret } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { STORE, json, scratch } from "../factory/_session_helpers.js"
 
-const contextUrl = new URL("../../src/tools/factory-context.js", import.meta.url)
+const contextUrl = new URL("../../../../../plugins/desk/mcp/src/tools/factory-context.js", import.meta.url)
 async function load() {
   assert.ok(existsSync(contextUrl), "the tools' factory context must exist")
   return import(contextUrl)

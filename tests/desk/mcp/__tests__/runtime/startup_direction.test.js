@@ -10,9 +10,9 @@ import {
   copilotStartupDirection,
   deskStartupDirection,
   resolveStartupRoot,
-} from "../../src/util/startup-direction.js"
+} from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
 
-const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 const script = path.join(mcpRoot, "scripts", "resolve-desk-root.js")
 
 // A temporary HOME with a ~/desk fallback that has the desk layout, a solo desk, a crew-shaped workspace and a plain repository.

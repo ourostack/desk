@@ -8,9 +8,9 @@ import { execFileSync } from "node:child_process"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { mkTempRoot } from "../_temp_roots.js"
-import { MAX_HOSTS_BYTES, ghConfigDir, ghLogins, parseGhHostLogins } from "../../src/desk/gh-logins.js"
-import { operatorNames, validateTrackName } from "../../src/desk/naming.js"
-import { organizationFindings } from "../../src/desk/organization.js"
+import { MAX_HOSTS_BYTES, ghConfigDir, ghLogins, parseGhHostLogins } from "../../../../../plugins/desk/mcp/src/desk/gh-logins.js"
+import { operatorNames, validateTrackName } from "../../../../../plugins/desk/mcp/src/desk/naming.js"
+import { organizationFindings } from "../../../../../plugins/desk/mcp/src/desk/organization.js"
 
 const TOKEN = "gho_" + "x".repeat(36)
 const noGitIdentity = { spawnGitConfig: () => ({ status: 1, stdout: "" }) }

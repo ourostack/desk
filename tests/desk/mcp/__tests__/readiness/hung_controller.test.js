@@ -7,9 +7,9 @@ import { EventEmitter } from "node:events"
 import { lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import * as net from "node:net"
 import * as path from "node:path"
-import { readinessContracts } from "../../src/readiness/contracts.js"
-import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../../src/readiness/hung-controller.js"
-import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
+import { readinessContracts } from "../../../../../plugins/desk/mcp/src/readiness/contracts.js"
+import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../../../../../plugins/desk/mcp/src/readiness/hung-controller.js"
+import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const posixOnly = process.platform === "win32" ? "unix sockets and signals" : false

@@ -7,9 +7,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, it } from "node:test";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const mcpRoot = path.resolve(__dirname, "../..");
+const mcpRoot = path.resolve(__dirname, "../../../../../plugins/desk/mcp");
 const deskPluginRoot = path.resolve(mcpRoot, "..");
-const fixtureRoot = path.join(mcpRoot, "__tests__/fixtures/runtime");
+const fixtureRoot = path.join(mcpRoot, "../../../tests/desk/mcp/__tests__/fixtures/runtime");
 const runtimeArtifactNames = new Set([
   ".desk-runtime-cache.json",
   "node_modules",

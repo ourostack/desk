@@ -523,7 +523,7 @@ test("coverage runner discovers changed files from git state and falls back from
         return { status: 0, stdout: "plugins/desk/mcp/scripts/run-coverage.js\n", stderr: "" }
       }
       if (key === "ls-files --others --exclude-standard") {
-        return { status: 0, stdout: "plugins/desk/mcp/__tests__/coverage/coverage_gate.test.js\n", stderr: "" }
+        return { status: 0, stdout: "tests/desk/mcp/__tests__/coverage/coverage_gate.test.js\n", stderr: "" }
       }
       throw new Error(`unexpected git args: ${key}`)
     }
@@ -541,7 +541,7 @@ test("coverage runner discovers changed files from git state and falls back from
     assert.deepEqual(
       normalizePaths(collectChangedFiles({ repoRoot: fixtureRoot, spawn, env: {} })),
       [
-        "plugins/desk/mcp/__tests__/coverage/coverage_gate.test.js",
+        "tests/desk/mcp/__tests__/coverage/coverage_gate.test.js",
         "plugins/desk/mcp/index.js",
         "plugins/desk/mcp/scripts/run-coverage.js",
         "plugins/desk/mcp/src/coverage/gate.js",
@@ -1203,12 +1203,12 @@ test("coverage required-file discovery includes production targets and excludes 
       "scripts/validate-desk-activation.cjs",
     ]
     const excluded = [
-      "plugins/desk/mcp/__tests__/coverage/coverage_gate.test.js",
+      "tests/desk/mcp/__tests__/coverage/coverage_gate.test.js",
       "plugins/desk/mcp/src/activation/validate.test.js",
       "plugins/desk/mcp/scripts/activation-support-matrix.test.js",
       "plugins/desk/mcp/scripts/test-helper.js",
       "plugins/desk/mcp/test-bootstrap.cjs",
-      "plugins/desk/mcp/__tests__/fixture.cjs",
+      "tests/desk/mcp/__tests__/fixture.cjs",
       "scripts/test-desk-activation.cjs",
       "scripts/test-desk-generated-artifacts.test.cjs",
       "scripts/test-desk-host-manifests.test.cjs",

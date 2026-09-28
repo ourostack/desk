@@ -17,7 +17,7 @@ const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
 )
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
-const fixturesRoot = path.join(mcpRoot, "__tests__", "fixtures", "activation", "ownership")
+const fixturesRoot = path.join(mcpRoot, "../../../tests/desk/mcp/__tests__/fixtures/activation/ownership")
 const ledgerPath = ".codex/desk-activation-ledger.json"
 
 async function loadArtifactLedger() {

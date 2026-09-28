@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { expandRequest, matchContext } from '../src/claims.mjs';
+import { expandRequest, matchContext } from '../../../../plugins/desk/browser-context-broker/src/claims.mjs';
 
 const config = {
   aliases: {

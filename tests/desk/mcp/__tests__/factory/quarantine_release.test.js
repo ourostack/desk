@@ -11,10 +11,10 @@ import { promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { flush } from "../../src/factory/flush.js"
+import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
   factoryStateRoot, quarantine, readConsent, readMachineSecret, releaseRefusedPluginNames, setConsent, writeLocalFacts, writeLocalLabels,
-} from "../../src/factory/outbox.js"
+} from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
 

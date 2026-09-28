@@ -24,8 +24,8 @@ import {
   evaluatorDowngrade,
   validateLabels,
   validateLabelsBytes,
-} from "../../src/factory/label-schema.js"
-import { PUBLISHED_LIMITS, validatePublished } from "../../src/factory/published-schema.js"
+} from "../../../../../plugins/desk/mcp/src/factory/label-schema.js"
+import { PUBLISHED_LIMITS, validatePublished } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const GOLDEN_BYTES = readFileSync(path.join(here, "fixtures", "labels-golden.json"))

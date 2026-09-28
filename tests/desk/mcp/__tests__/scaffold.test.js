@@ -12,7 +12,7 @@ import * as path from "node:path"
 
 // Import from tool-names directly (not server.js) so the test doesn't pull
 // the @modelcontextprotocol/sdk dep. Tool list is the canonical source.
-import { TOOL_NAMES } from "../src/tool-names.js"
+import { TOOL_NAMES } from "../../../../plugins/desk/mcp/src/tool-names.js"
 
 const EXPECTED_TOOLS = [
   // Runtime CRUD (Unit 3)
@@ -59,7 +59,7 @@ test("server scaffolds all 17 expected tool names", () => {
 })
 
 test("path resolver expands ~ and rejects nonexistent roots", async () => {
-  const { resolveDeskRoot, expandHome } = await import("../src/util/paths.js")
+  const { resolveDeskRoot, expandHome } = await import("../../../../plugins/desk/mcp/src/util/paths.js")
   assert.equal(expandHome("~"), homedir())
   assert.ok(expandHome("~/foo").endsWith("/foo"))
   assert.equal(expandHome("/abs/path"), "/abs/path")
@@ -70,7 +70,7 @@ test("path resolver expands ~ and rejects nonexistent roots", async () => {
 })
 
 test("path resolver — explicit --root wins over env + fallbacks", async () => {
-  const { resolveDeskRoot } = await import("../src/util/paths.js")
+  const { resolveDeskRoot } = await import("../../../../plugins/desk/mcp/src/util/paths.js")
   const tmp = mkdtempSync(path.join(tmpdir(), "desk-paths-"))
   try {
     const explicit = path.join(tmp, "explicit")
@@ -89,7 +89,7 @@ test("path resolver — explicit --root wins over env + fallbacks", async () => 
 })
 
 test("path resolver — $DESK env var used when --root absent", async () => {
-  const { resolveDeskRoot } = await import("../src/util/paths.js")
+  const { resolveDeskRoot } = await import("../../../../plugins/desk/mcp/src/util/paths.js")
   const tmp = mkdtempSync(path.join(tmpdir(), "desk-paths-"))
   try {
     const envRoot = path.join(tmp, "env-root")
@@ -114,7 +114,7 @@ test("path resolver — $DESK env var used when --root absent", async () => {
 })
 
 test("path resolver — falls through $HOME canonical locations when env unset", async () => {
-  const { resolveDeskRoot } = await import("../src/util/paths.js")
+  const { resolveDeskRoot } = await import("../../../../plugins/desk/mcp/src/util/paths.js")
   const tmp = mkdtempSync(path.join(tmpdir(), "desk-paths-"))
   try {
     const fakeHome = path.join(tmp, "home")
@@ -137,7 +137,7 @@ test("path resolver — falls through $HOME canonical locations when env unset",
 })
 
 test("path resolver — prefers desk over worker-workspace and never binds a work overlay's ms-desk", async () => {
-  const { resolveDeskRoot } = await import("../src/util/paths.js")
+  const { resolveDeskRoot } = await import("../../../../plugins/desk/mcp/src/util/paths.js")
   const tmp = mkdtempSync(path.join(tmpdir(), "desk-paths-"))
   try {
     const fakeHome = path.join(tmp, "home")
@@ -162,7 +162,7 @@ test("path resolver — prefers desk over worker-workspace and never binds a wor
 })
 
 test("path resolver — falls back to worker-workspace as last resort", async () => {
-  const { resolveDeskRoot } = await import("../src/util/paths.js")
+  const { resolveDeskRoot } = await import("../../../../plugins/desk/mcp/src/util/paths.js")
   const tmp = mkdtempSync(path.join(tmpdir(), "desk-paths-"))
   try {
     const fakeHome = path.join(tmp, "home")
@@ -184,7 +184,7 @@ test("path resolver — falls back to worker-workspace as last resort", async ()
 })
 
 test("path resolver — fatal error lists every path tried", async () => {
-  const { resolveDeskRoot } = await import("../src/util/paths.js")
+  const { resolveDeskRoot } = await import("../../../../plugins/desk/mcp/src/util/paths.js")
   const tmp = mkdtempSync(path.join(tmpdir(), "desk-paths-"))
   try {
     const fakeHome = path.join(tmp, "home-empty")

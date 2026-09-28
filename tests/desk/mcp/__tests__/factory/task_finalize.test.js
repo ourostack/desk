@@ -2,9 +2,9 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
-import { task_create, task_update, task_archive } from "../../src/tools/task.js"
-import { factoryStateRoot, listFinalizeRequests } from "../../src/factory/outbox.js"
-import { jobId } from "../../src/factory/binding.js"
+import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { factoryStateRoot, listFinalizeRequests } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { scratch } from "./_session_helpers.js"
 
 for (const status of ["done", "cancelled"]) {

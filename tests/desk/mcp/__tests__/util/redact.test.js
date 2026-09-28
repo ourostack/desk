@@ -17,11 +17,11 @@ import {
   redactCredentialLikeText,
   redactName,
   redactTitle,
-} from "../../src/util/redact.js"
-import { deskStartupDirection } from "../../src/util/startup-direction.js"
+} from "../../../../../plugins/desk/mcp/src/util/redact.js"
+import { deskStartupDirection } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
 
 const require = createRequire(import.meta.url)
-const BOOT = fileURLToPath(new URL("../../../hooks/boot-checks.cjs", import.meta.url))
+const BOOT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/boot-checks.cjs", import.meta.url))
 
 // Fixture names shaped like the incident without carrying a real value.
 const PASSWORD_FOLDER = "setup-root-pw-hunter-two"

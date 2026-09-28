@@ -20,7 +20,7 @@ import {
   validateScope,
   operatorNames,
   describeNameRejection,
-} from "../../src/desk/naming.js"
+} from "../../../../../plugins/desk/mcp/src/desk/naming.js"
 
 const tempRoots = new Set()
 after(() => Promise.all([...tempRoots].map((root) => fs.rm(root, { recursive: true, force: true }))))

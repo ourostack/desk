@@ -6,7 +6,7 @@ import { strict as assert } from "node:assert"
 import { spawn } from "node:child_process"
 import {
   processStartReaders, readOwnProcessStart, readProcessStart, resetOwnProcessStart, runForText,
-} from "../../src/readiness/process-start.js"
+} from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 
 const nativeRead = process.platform === "linux" || process.platform === "darwin" ? false : "reads /proc or ps"
 

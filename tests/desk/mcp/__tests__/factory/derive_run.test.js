@@ -2,12 +2,12 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, promises as fs } from "node:fs"
 import * as path from "node:path"
-import { factoryStateRoot, listMarkers, readJobsIndex, readStatus, setConsent, writeMarker, writeStatus } from "../../src/factory/outbox.js"
-import { validateLocalFacts } from "../../src/factory/schema.js"
-import { deriveCopilotSession } from "../../src/factory/derive-copilot.js"
+import { factoryStateRoot, listMarkers, readJobsIndex, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { deriveCopilotSession } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
 import { END, ID, SENTINEL, START, STORE, json, scratch, session } from "./_session_helpers.js"
 
-const moduleUrl = new URL("../../src/factory/derive-run.js", import.meta.url)
+const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/derive-run.js", import.meta.url)
 async function runner() {
   assert.ok(existsSync(moduleUrl), "the detached derivation runner must exist")
   return import(moduleUrl)

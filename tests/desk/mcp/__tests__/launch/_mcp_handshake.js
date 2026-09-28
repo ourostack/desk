@@ -9,7 +9,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 
-export const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+export const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 export const pluginRoot = path.resolve(mcpRoot, "..")
 export const bootstrapPath = path.join(mcpRoot, "bootstrap.cjs")
 export const indexPath = path.join(mcpRoot, "index.js")

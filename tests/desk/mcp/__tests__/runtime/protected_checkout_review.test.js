@@ -5,13 +5,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout, protectedCheckoutHook } from "../../src/runtime/protected-checkout.js"
-import { inspectionEnvironment, readInspectionGit, resolveInspectionGit } from "../../src/runtime/git-inspection.js"
-import { hasOption, parseGitOptions, SPECS } from "../../src/runtime/git-guard-options.js"
-import { inspectShell } from "../../src/runtime/shell-commands.js"
-import { inspectPowerShell, POWERSHELL_GIT_FORMS } from "../../src/runtime/powershell-commands.js"
+import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout, protectedCheckoutHook } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
+import { inspectionEnvironment, readInspectionGit, resolveInspectionGit } from "../../../../../plugins/desk/mcp/src/runtime/git-inspection.js"
+import { hasOption, parseGitOptions, SPECS } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-options.js"
+import { inspectShell } from "../../../../../plugins/desk/mcp/src/runtime/shell-commands.js"
+import { inspectPowerShell, POWERSHELL_GIT_FORMS } from "../../../../../plugins/desk/mcp/src/runtime/powershell-commands.js"
 
-const plugin = fileURLToPath(new URL("../../../", import.meta.url))
+const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const LEAVE = /^Desk protected checkout .+: this would move HEAD off the checkout's branch\. To leave the state branch, use your own worktree: git worktree add --detach "\$HOME\/<new directory>" <ref>$/u
 const DENIED = /^Desk protected checkout .+: /u
 const enabled = (operation, args, name) => hasOption(parseGitOptions(SPECS[operation], args), name)

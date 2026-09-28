@@ -6,9 +6,9 @@ import { syncBuiltinESMExports } from "node:module"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { resolveSuperpowersContext } from "../../src/activation/superpowers-context.js"
+import { resolveSuperpowersContext } from "../../../../../plugins/desk/mcp/src/activation/superpowers-context.js"
 
-const cli = fileURLToPath(new URL("../../src/activation/superpowers-context.js", import.meta.url))
+const cli = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/activation/superpowers-context.js", import.meta.url))
 const input = { deskRoot: "/desk", taskPath: "/desk/task", iterationPath: "/desk/task/iteration", planPath: "/desk/task/iteration/planning.md", evidenceRoot: "/evidence", step: 1, attempt: 1 }
 for (const [args, expected] of [
   [["--step"], "value required for --step"],

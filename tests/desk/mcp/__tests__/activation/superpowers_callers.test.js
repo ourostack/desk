@@ -2,7 +2,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { createHash } from "node:crypto"
-import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
+import { materializeCodexActivation } from "../../../../../plugins/desk/mcp/src/activation/adapters/codex.js"
 
 const repoRoot = new URL("../../../../../", import.meta.url)
 const read = (relativePath) => readFileSync(new URL(relativePath, repoRoot), "utf8")
@@ -191,7 +191,7 @@ test("the retired integration name redirects to the adapter without becoming a s
 
 for (const mode of ["global-personal", "project-local"]) {
   test(`${mode} owned instructions contain no active retired lifecycle dispatch`, () => {
-    const golden = read(`plugins/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`)
+    const golden = read(`tests/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`)
     const owned = golden.split("# BEGIN desk activation:")[1]?.split("# END desk activation")[0]
     assert.ok(owned)
     assert.doesNotMatch(owned, /\b(?:use|invoke|run|dispatch to)\s+(?:the\s+)?(?:Work Suite(?: skills)?|`?work-(?:ideator|planner|doer|merger))/iu)
@@ -207,7 +207,7 @@ for (const mode of ["global-personal", "project-local"]) {
       runtimeCacheDir: mode === "project-local" ? ".codex/desk-runtime-cache" : "~/.cache/ouroboros-skills/desk",
     }
     const rendered = materializeCodexActivation(input).generatedInstructions
-    const golden = read(`plugins/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`)
+    const golden = read(`tests/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`)
     assert.equal(golden, rendered)
     // Method entry arrives once, through the injected using-desk foundation; the owned line adds no second copy.
     assert.doesNotMatch(golden, /Selected engineering lifecycle/u)

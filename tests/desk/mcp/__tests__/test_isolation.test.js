@@ -8,7 +8,7 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { REAL_HOME_WRITE, isRealHomeWrite, testRun } from "./_isolated_env.mjs"
 import { mkTempRoot } from "./_temp_roots.js"
-import { resolveDeskStateDir, resolveReadinessStateHome } from "../src/runtime/last-start.js"
+import { resolveDeskStateDir, resolveReadinessStateHome } from "../../../../plugins/desk/mcp/src/runtime/last-start.js"
 
 const inside = (child, parent) => !path.relative(parent, child).startsWith("..") && !path.isAbsolute(path.relative(parent, child))
 
@@ -50,7 +50,7 @@ test("writes under the temporary folders and reads anywhere still work", async (
 })
 
 test("npm test and the coverage runner both preload the setup, so a test file that never imports it is isolated too", async () => {
-  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../plugins/desk/mcp")
   const pkg = JSON.parse(await fsPromises.readFile(path.join(mcpRoot, "package.json"), "utf8"))
   assert.match(pkg.scripts.test, /^node --import \.\/__tests__\/_isolated_env\.mjs --test /u)
   assert.match(await fsPromises.readFile(path.join(mcpRoot, "src", "coverage", "runner.js"), "utf8"), /"__tests__", "_isolated_env\.mjs"/u)
@@ -59,7 +59,7 @@ test("npm test and the coverage runner both preload the setup, so a test file th
 test("a factory test file run on its own with node --test never reads the machine's recorded factory consent", async () => {
   // A machine that contributes to a factory store has consent.json under its real state folder. boot_check.test.js reads
   // the default environment on purpose, so run alone without the preload it must still see its own temporary state.
-  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../plugins/desk/mcp")
   const machine = await mkTempRoot("desk-machine-home-")
   const consent = path.join(machine, ".local", "state", "ouroboros-skills", "desk", "factory", "consent.json")
   mkdirSync(path.dirname(consent), { recursive: true })

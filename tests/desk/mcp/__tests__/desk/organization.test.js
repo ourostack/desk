@@ -10,9 +10,9 @@ import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import matter from "gray-matter"
-import { loadFrontmatterParser, organizationFindings } from "../../src/desk/organization.js"
-import { parseFrontmatterLite } from "../../src/desk/frontmatter-lite.js"
-import { resolveTaskHandle } from "../../src/desk/handles.js"
+import { loadFrontmatterParser, organizationFindings } from "../../../../../plugins/desk/mcp/src/desk/organization.js"
+import { parseFrontmatterLite } from "../../../../../plugins/desk/mcp/src/desk/frontmatter-lite.js"
+import { resolveTaskHandle } from "../../../../../plugins/desk/mcp/src/desk/handles.js"
 
 const tempRoots = new Set()
 after(() => Promise.all([...tempRoots].map((root) => fs.rm(root, { recursive: true, force: true }))))

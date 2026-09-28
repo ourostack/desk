@@ -15,11 +15,11 @@ import {
   resolveStartupDeskRoot,
   resolveStartupReadinessPolicy,
   resolveStartupRuntimeCacheDir,
-} from "../../index.js"
-import { createRuntimeDiagnostic, createSetupDiagnostic } from "../../src/runtime/diagnostics.js"
-import { claudeBindingPath, resolveActivationConfigPath } from "../../src/util/paths.js"
+} from "../../../../../plugins/desk/mcp/index.js"
+import { createRuntimeDiagnostic, createSetupDiagnostic } from "../../../../../plugins/desk/mcp/src/runtime/diagnostics.js"
+import { claudeBindingPath, resolveActivationConfigPath } from "../../../../../plugins/desk/mcp/src/util/paths.js"
 
-const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 const hostEnvKeys = ["DESK", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR"]
 
 // The startup helpers default to the live process environment. Pin the host

@@ -10,9 +10,9 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { TOOL_NAMES } from "../src/tool-names.js"
-import { NO_INPUT_TOOLS, TOOL_INPUT_SCHEMAS } from "../src/tool-schemas.js"
-import { FRONT_DOOR_TOOLS } from "../src/runtime/front-door.js"
+import { TOOL_NAMES } from "../../../../plugins/desk/mcp/src/tool-names.js"
+import { NO_INPUT_TOOLS, TOOL_INPUT_SCHEMAS } from "../../../../plugins/desk/mcp/src/tool-schemas.js"
+import { FRONT_DOOR_TOOLS } from "../../../../plugins/desk/mcp/src/runtime/front-door.js"
 
 function assertDeclared(name, inputSchema) {
   assert.ok(inputSchema, `${name}: no input schema`)

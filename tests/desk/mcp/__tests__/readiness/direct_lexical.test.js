@@ -4,11 +4,11 @@ import { existsSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { createHash } from "node:crypto"
 import Database from "better-sqlite3"
-import { tombstoneDecisionForDoc } from "../../src/artifacts/tombstones.js"
-import { configureRuntimeArtifacts } from "../../src/server-helpers.js"
-import { directLexicalSearch } from "../../src/readiness/direct-lexical.js"
-import { indexedSearch } from "../../src/tools/search.js"
-import { rebuildIndex } from "../../src/indexer/index.js"
+import { tombstoneDecisionForDoc } from "../../../../../plugins/desk/mcp/src/artifacts/tombstones.js"
+import { configureRuntimeArtifacts } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
+import { directLexicalSearch } from "../../../../../plugins/desk/mcp/src/readiness/direct-lexical.js"
+import { indexedSearch } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
 import { mkTempDeskRoot, writeFile, makeFailingFetch } from "../tools/_search_helpers.js"
 
 const now = Date.parse("2026-09-19T12:00:00Z")
@@ -210,7 +210,7 @@ test("lexical tie ordering and candidate limits do not depend on index insertion
 })
 
 test("direct lexical honors the same configured tombstone policy as controller indexing", async (t) => {
-  const { configureRuntimeArtifacts } = await import("../../src/server-helpers.js")
+  const { configureRuntimeArtifacts } = await import("../../../../../plugins/desk/mcp/src/server-helpers.js")
   const root = await mkTempDeskRoot()
   const pluginRoot = await mkTempDeskRoot()
   const body = "quartz redacted"

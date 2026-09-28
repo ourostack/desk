@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { chunkBody } from "../../src/indexer/chunk.js"
+import { chunkBody } from "../../../../../plugins/desk/mcp/src/indexer/chunk.js"
 
 test("empty / whitespace body yields zero chunks", () => {
   assert.deepEqual(chunkBody(), [])

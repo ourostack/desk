@@ -7,14 +7,14 @@ import { EventEmitter } from "node:events"
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { releaseRendezvous, startReadinessController } from "../../src/readiness/controller-server.js"
-import { createExitRelease } from "../../src/readiness/exit-release.js"
-import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
-import { readProcessStart } from "../../src/readiness/process-start.js"
+import { releaseRendezvous, startReadinessController } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
+import { createExitRelease } from "../../../../../plugins/desk/mcp/src/readiness/exit-release.js"
+import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
+import { readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const posixOnly = process.platform === "win32" ? "unix socket files" : false
-const serverModule = fileURLToPath(new URL("../../src/readiness/controller-server.js", import.meta.url))
+const serverModule = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/readiness/controller-server.js", import.meta.url))
 
 function fakeProcess() {
   const proc = new EventEmitter()

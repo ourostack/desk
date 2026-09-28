@@ -9,12 +9,12 @@ import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 
 // Keep legacy indexed ranking coverage separate from the alpha consumer contract.
-import { __searchInternalsForTests, desk_search as routedSearch, indexedSearch as desk_search, indexedTimeline } from "../../src/tools/search.js"
-import { connectOrStartController } from "../../src/readiness/controller-client.js"
-import { openDb, closeDb } from "../../src/db/init.js"
-import { rebuildIndex } from "../../src/indexer/index.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
-import { getSemanticCoverage } from "../../src/server-helpers.js"
+import { __searchInternalsForTests, desk_search as routedSearch, indexedSearch as desk_search, indexedTimeline } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
+import { getSemanticCoverage } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,
@@ -98,7 +98,7 @@ test("indexed search closes and propagates sqlite extension load failures", asyn
 })
 
 test("routed semantic tools serve the current semantic snapshot", async (t) => {
-  const { desk_recall, desk_similar } = await import("../../src/tools/search.js")
+  const { desk_recall, desk_similar } = await import("../../../../../plugins/desk/mcp/src/tools/search.js")
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/work/task.md", "---\nstatus: processing\nschema_version: 1\n---\nquartz rollout detail\n")
   await writeFile(root, "track/other/task.md", "---\nstatus: processing\nschema_version: 1\n---\nrollout plan near quartz\n")
@@ -119,7 +119,7 @@ test("routed semantic tools serve the current semantic snapshot", async (t) => {
 })
 
 test("routed timeline serves hybrid query results and temporal no-query results", async (t) => {
-  const { desk_timeline } = await import("../../src/tools/search.js")
+  const { desk_timeline } = await import("../../../../../plugins/desk/mcp/src/tools/search.js")
   const root = await mkTempDeskRoot()
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => { throw new Error("routed timeline must use the injected embedding fetch") }
@@ -188,9 +188,9 @@ test("routed search falls back to proven lexical ranking while semantic converge
 })
 
 test("alpha consumer concurrent startup search and reindex leave zero orphan vectors and one writer", async (t) => {
-  const { connectOrStartController } = await import("../../src/readiness/controller-client.js")
-  const { rebuildIndex } = await import("../../src/indexer/index.js")
-  const { desk_reindex } = await import("../../src/tools/reindex.js")
+  const { connectOrStartController } = await import("../../../../../plugins/desk/mcp/src/readiness/controller-client.js")
+  const { rebuildIndex } = await import("../../../../../plugins/desk/mcp/src/indexer/index.js")
+  const { desk_reindex } = await import("../../../../../plugins/desk/mcp/src/tools/reindex.js")
   const root = await fs.realpath(await mkTempDeskRoot())
   await writeFile(root, "track/work/task.md", "startupquartz")
   const stateHome = path.join(root, "controller-state")
@@ -549,7 +549,7 @@ test("indexed search reads vectors after explicit fixture repair, never repairs 
     "trackA/task-1/task.md",
     "---\nstatus: processing\nschema_version: 1\n---\nalpha semantic repair body\n",
   )
-  const { rebuildIndex } = await import("../../src/indexer/index.js")
+  const { rebuildIndex } = await import("../../../../../plugins/desk/mcp/src/indexer/index.js")
   await rebuildIndex(root, { embed: { fetch: makeFailingFetch() } })
   await rebuildIndex(root, { reembedMissing: true, embed: { fetch: makeEmbedFetch() } })
 

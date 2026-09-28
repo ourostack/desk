@@ -4,7 +4,7 @@ import "../_isolated_env.mjs"
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
-import { createExitRelease, exitRelease } from "../../src/readiness/exit-release.js"
+import { createExitRelease, exitRelease } from "../../../../../plugins/desk/mcp/src/readiness/exit-release.js"
 
 function fakeProcess() {
   const proc = new EventEmitter()

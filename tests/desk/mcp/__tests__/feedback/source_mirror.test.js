@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url"
 
 import { cleanup, mkFeedbackFixture } from "./_helpers.js"
 
-const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp")
 const mcpVersion = JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8")).version
 const target = `${process.platform}-${process.arch}-node-${process.versions.modules}`
 const matrix = JSON.parse(readFileSync(path.join(mcpRoot, "artifacts", "runtime-deps", mcpVersion, "support-matrix.json"), "utf8"))

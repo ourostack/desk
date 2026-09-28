@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process"
 import {
   assertWindowsAclAvailable,
   protectWindowsPaths,
-} from "../../src/feedback/windows-acl.js"
+} from "../../../../../plugins/desk/mcp/src/feedback/windows-acl.js"
 import { nativeProbe, writePosixNodeProvider } from "./_helpers.js"
 
 const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"]

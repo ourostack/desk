@@ -11,12 +11,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 
-import { withBrokerLock } from '../src/lock.mjs';
+import { withBrokerLock } from '../../../../plugins/desk/browser-context-broker/src/lock.mjs';
 import {
   readRegistry,
   reconcileContext,
   writeRegistry,
-} from '../src/registry.mjs';
+} from '../../../../plugins/desk/browser-context-broker/src/registry.mjs';
 
 const scratchRoot = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),

@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { assertCoverageCommandParity } from "../../src/coverage/gate.js"
+import { assertCoverageCommandParity } from "../../../../../plugins/desk/mcp/src/coverage/gate.js"
 
 test("another workflow event does not satisfy the required pull-request and push filters", t => {
   const root = mkdtempSync(path.join(tmpdir(), "desk-coverage-events-"))

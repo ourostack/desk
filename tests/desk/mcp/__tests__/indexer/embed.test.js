@@ -11,7 +11,7 @@ import {
   probeEmbeddingService,
   resolveEmbeddingEndpoints,
   resolveEmbeddingModel,
-} from "../../src/indexer/embed.js"
+} from "../../../../../plugins/desk/mcp/src/indexer/embed.js"
 
 function mockOkFetch(vec) {
   return async (_url, _opts) => ({

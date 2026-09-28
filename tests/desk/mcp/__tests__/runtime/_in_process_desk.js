@@ -5,8 +5,8 @@
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { main } from "../../index.js"
-import { runAdmissionJob } from "../../src/runtime/admission-worker.js"
+import { main } from "../../../../../plugins/desk/mcp/index.js"
+import { runAdmissionJob } from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 /** An MCP transport over a pair of streams: the client writes to `toServer` and reads `fromServer`. */
@@ -155,7 +155,7 @@ export function realRuntimeHarness(root, { stateHome = path.join(root, "controll
     starts,
     converged: () => convergence,
     async start(semantic) {
-      const server = await import("../../src/server.js")
+      const server = await import("../../../../../plugins/desk/mcp/src/server.js")
       const desk = await startInProcess({
         argv,
         env: {},

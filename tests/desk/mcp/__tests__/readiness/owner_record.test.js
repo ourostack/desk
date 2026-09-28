@@ -4,8 +4,8 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { mkdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { controllerIdentity } from "../../src/readiness/identity.js"
-import { ownerLiveness, ownerState, readOwnerRecord } from "../../src/readiness/owner-record.js"
+import { controllerIdentity } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
+import { ownerLiveness, ownerState, readOwnerRecord } from "../../../../../plugins/desk/mcp/src/readiness/owner-record.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const NOW = Date.parse("2026-09-26T12:00:00.000Z")

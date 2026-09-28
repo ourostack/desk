@@ -1,4 +1,4 @@
-import { withLeaseOperation } from '../../src/leases.mjs';
+import { withLeaseOperation } from '../../../../../plugins/desk/browser-context-broker/src/leases.mjs';
 
 const [stateDir, leaseId] = process.argv.slice(2);
 

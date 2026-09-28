@@ -10,11 +10,11 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { zstdCompressSync } from "node:zlib"
 
-import { indexDbPath } from "../../src/db/init.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
-import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
+import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../../../../plugins/desk/mcp/src/artifacts/source-scope.js"
 
-const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 const SOURCE_SCOPE_HASH = `sha256:${"a".repeat(64)}`
 const DOCUMENT_TREE_HASH = `sha256:${"b".repeat(64)}`
 const DB_SCHEMA = { id: "desk-index-sqlite-v1", version: 1 }

@@ -2,8 +2,8 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import path from "node:path"
-import { protectWindowsPaths } from "../../src/feedback/windows-acl.js"
-import { resolvePrivateStore, withPrivateStore } from "../../src/feedback/store.js"
+import { protectWindowsPaths } from "../../../../../plugins/desk/mcp/src/feedback/windows-acl.js"
+import { resolvePrivateStore, withPrivateStore } from "../../../../../plugins/desk/mcp/src/feedback/store.js"
 import { mkFeedbackFixture, writePosixNodeProvider, cleanup } from "./_helpers.js"
 
 const posix = { skip: process.platform === "win32" ? "POSIX stand-in and permission-race witnesses" : false }

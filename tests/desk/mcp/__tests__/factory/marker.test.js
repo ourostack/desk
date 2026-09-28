@@ -2,8 +2,8 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
 import * as path from "node:path"
-import { absolutePath, MAX_MARKER_BYTES, readSmallText, validMarker, validRouting } from "../../src/factory/marker.js"
-import { factoryStateRoot, listFinalizeJobs, readMarker, writeMarker } from "../../src/factory/outbox.js"
+import { absolutePath, MAX_MARKER_BYTES, readSmallText, validMarker, validRouting } from "../../../../../plugins/desk/mcp/src/factory/marker.js"
+import { factoryStateRoot, listFinalizeJobs, readMarker, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { scratch, session, SENTINEL, STORE, END } from "./_session_helpers.js"
 
 test("marker validation rejects unknown fields, path traversal, free-text metadata and malformed optional context", () => scratch(async (ctx) => {

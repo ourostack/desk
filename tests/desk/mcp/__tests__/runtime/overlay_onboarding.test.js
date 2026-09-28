@@ -4,8 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
-import { main, parseArgs } from "../../index.js"
-import { createSetupDiagnostic } from "../../src/runtime/diagnostics.js"
+import { main, parseArgs } from "../../../../../plugins/desk/mcp/index.js"
+import { createSetupDiagnostic } from "../../../../../plugins/desk/mcp/src/runtime/diagnostics.js"
 
 function makeHome() {
   const root = mkdtempSync(path.join(tmpdir(), "desk-overlay-onboarding-"))

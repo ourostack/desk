@@ -9,10 +9,10 @@ import * as path from "node:path"
 import { mkTempRoot } from "../_temp_roots.js"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
-import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../../../../plugins/desk/mcp/src/artifacts/source-scope.js"
 
-const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
 const SNAPSHOT_ID = "desk-base-20260615T000000Z"

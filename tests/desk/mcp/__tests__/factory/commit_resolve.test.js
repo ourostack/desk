@@ -8,7 +8,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync 
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { SHORT_SHA, createCommitResolver } from "../../src/factory/commit-resolve.js"
+import { SHORT_SHA, createCommitResolver } from "../../../../../plugins/desk/mcp/src/factory/commit-resolve.js"
 
 function git(repo, ...args) {
   const result = spawnSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { encoding: "utf8" })

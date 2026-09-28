@@ -4,7 +4,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
-import { friction_add } from "../../src/tools/friction.js"
+import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { mkTempDeskRoot, exists } from "./_helpers.js"
 
 test("friction_add (no track) writes to _meta/friction.md", async () => {

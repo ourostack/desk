@@ -7,7 +7,7 @@ import { strict as assert } from "node:assert"
 import { readdirSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import { monitorEventLoopDelay } from "node:perf_hooks"
 import * as path from "node:path"
-import { connectOrStartController } from "../../src/server.js"
+import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/server.js"
 import { makeGitDesk, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
 import { mkTempRoot } from "../_temp_roots.js"
 

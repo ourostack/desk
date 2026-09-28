@@ -9,9 +9,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { main as factoryCli } from "../../scripts/factory.js"
-import { chooseAccount, deliveryRoute, flush, signedInAccounts } from "../../src/factory/flush.js"
-import { setConsent, writeLocalFacts } from "../../src/factory/outbox.js"
+import { main as factoryCli } from "../../../../../plugins/desk/mcp/scripts/factory.js"
+import { chooseAccount, deliveryRoute, flush, signedInAccounts } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
+import { setConsent, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
 import { readFileSync } from "node:fs"

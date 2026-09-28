@@ -5,9 +5,9 @@ import { strict as assert } from "node:assert"
 import { EventEmitter } from "node:events"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { ActivationFailure } from "../../src/activation/failures.js"
-import { createDeskSession, requirementMet, toolRequirement } from "../../src/runtime/desk-session.js"
-import { lastStartRootKey } from "../../src/runtime/last-start.js"
+import { ActivationFailure } from "../../../../../plugins/desk/mcp/src/activation/failures.js"
+import { createDeskSession, requirementMet, toolRequirement } from "../../../../../plugins/desk/mcp/src/runtime/desk-session.js"
+import { lastStartRootKey } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const flush = () => new Promise((resolve) => setImmediate(resolve))
@@ -936,8 +936,8 @@ test("a local child exit triggers re-election without a status call and stale ex
 })
 
 test("desk_doctor uses the real supervisor to stop only a verified hung child and records the repair", { skip: process.platform === "win32" ? "POSIX stop signal" : false }, async (t) => {
-  const { connectOrStartController } = await import("../../src/server.js")
-  const { probeController } = await import("../../src/readiness/hung-controller.js")
+  const { connectOrStartController } = await import("../../../../../plugins/desk/mcp/src/server.js")
+  const { probeController } = await import("../../../../../plugins/desk/mcp/src/readiness/hung-controller.js")
   const runtime = fakeRuntime({ connectOrStartController: async () => { throw new Error("readiness controller did not answer") } })
   const { session, root, base, log } = await makeSession(t, { runtime, hung: { probe: probeController, probeMs: 20 } })
   const holder = await connectOrStartController({ deskRoot: root, policy: unsupported, stateHome: path.join(base, "readiness"), ephemeral: true })

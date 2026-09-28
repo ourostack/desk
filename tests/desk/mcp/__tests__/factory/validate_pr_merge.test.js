@@ -15,7 +15,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { runValidatePrCommand } from "../../scripts/factory.js"
+import { runValidatePrCommand } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 
 const FACTS = fileURLToPath(new URL("fixtures/store/facts", import.meta.url))
 const VICTIM = "claude-code-11111111-1111-4111-8111-111111111111.json"

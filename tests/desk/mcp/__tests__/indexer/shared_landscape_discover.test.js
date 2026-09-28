@@ -20,7 +20,7 @@ import {
   discover,
   classify,
   isIndexable,
-} from "../../src/indexer/discover.js"
+} from "../../../../../plugins/desk/mcp/src/indexer/discover.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 async function writeFile(root, rel, body) {

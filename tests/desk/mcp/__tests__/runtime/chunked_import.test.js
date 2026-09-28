@@ -5,7 +5,7 @@ import { strict as assert } from "node:assert"
 import { writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { pathToFileURL } from "node:url"
-import { importInChunks, localImports } from "../../src/runtime/chunked-import.js"
+import { importInChunks, localImports } from "../../../../../plugins/desk/mcp/src/runtime/chunked-import.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 test("local imports are found in source order, once each, including multi-line and re-export forms", () => {

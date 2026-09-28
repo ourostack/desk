@@ -5,7 +5,7 @@ import childProcess from "node:child_process"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
-import { resolvePrivateStore, withPrivateStore } from "../../src/feedback/store.js"
+import { resolvePrivateStore, withPrivateStore } from "../../../../../plugins/desk/mcp/src/feedback/store.js"
 import { mkFeedbackFixture, useStateHome, cleanup } from "./_helpers.js"
 
 const nativeMac = { skip: process.platform !== "darwin" }

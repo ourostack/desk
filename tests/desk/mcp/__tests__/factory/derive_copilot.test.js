@@ -12,10 +12,10 @@ import { fileURLToPath } from "node:url"
 import v8 from "node:v8"
 import vm from "node:vm"
 
-import { deriveCopilotSession, __internals__ } from "../../src/factory/derive-copilot.js"
-import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows, __internals__ as usageInternals } from "../../src/factory/copilot-usage.js"
+import { deriveCopilotSession, __internals__ } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
+import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows, __internals__ as usageInternals } from "../../../../../plugins/desk/mcp/src/factory/copilot-usage.js"
 import { spawnSync } from "node:child_process"
-import { validateLocalFacts, validateLocalFactsBytes } from "../../src/factory/schema.js"
+import { validateLocalFacts, validateLocalFactsBytes } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import {
   SENTINEL,
   SESSIONS,
@@ -857,7 +857,7 @@ test("the factory reader reports a missing, an unreadable or a driverless databa
 test("the factory reader's first load of node:sqlite prints nothing", () => {
   const home = makeHome({ sessions: [] })
   try {
-    const moduleUrl = new URL("../../src/factory/copilot-usage.js", import.meta.url).href
+    const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/copilot-usage.js", import.meta.url).href
     const script = `const m = await import(${JSON.stringify(moduleUrl)}); const r = m.readSessionRows({ sessionId: ${JSON.stringify(OTHER_SESSION)}, env: { COPILOT_HOME: ${JSON.stringify(home)} } }); await new Promise((resolve) => setTimeout(resolve, 20)); process.stdout.write(r.status + ":" + r.rows.length)`
     const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" })
     assert.equal(child.stdout, "ok:1")

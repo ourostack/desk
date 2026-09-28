@@ -1,9 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { ANDON_MARKER, DISMISSED_LABEL, andonTitle, parseAndonTitle, parseStoreConfig, planAndon, syncAndon } from "../../../src/factory/pipeline/andon.js"
-import { VERDICT_LABELS } from "../../../src/factory/pipeline/kaizen.js"
-import { MEASURE_IDS, QUALITY_MEASURES } from "../../../src/factory/pipeline/rollups.js"
+import { ANDON_MARKER, DISMISSED_LABEL, andonTitle, parseAndonTitle, parseStoreConfig, planAndon, syncAndon } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/andon.js"
+import { VERDICT_LABELS } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/kaizen.js"
+import { MEASURE_IDS, QUALITY_MEASURES } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/rollups.js"
 import { BOT, fakeIssues } from "./_fake_issues.js"
 
 const J = (n) => String(n).padStart(32, "0")

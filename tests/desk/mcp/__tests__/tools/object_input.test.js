@@ -10,9 +10,9 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
-import { task_create, task_update } from "../../src/tools/task.js"
-import { track_create, track_update } from "../../src/tools/track.js"
-import { objectInput } from "../../src/util/object-input.js"
+import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { track_create, track_update } from "../../../../../plugins/desk/mcp/src/tools/track.js"
+import { objectInput } from "../../../../../plugins/desk/mcp/src/util/object-input.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 
 const SCOPE = "desk plugin work; not personal errands"
@@ -102,7 +102,7 @@ test("objectInput accepts objects, parses JSON-string objects and rejects the re
 })
 
 test("desk_search parses a JSON-string filters object and refuses a non-object", async () => {
-  const { desk_search } = await import("../../src/tools/search.js")
+  const { desk_search } = await import("../../../../../plugins/desk/mcp/src/tools/search.js")
   const seen = []
   const queryRouter = { lexical: async (request) => { seen.push(request); return { ok: true } } }
   await desk_search({ deskRoot: "/r", input: { query: "q", filters: JSON.stringify({ track: "t" }) }, queryRouter })

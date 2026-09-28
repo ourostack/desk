@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { normalizeReadinessPolicy } from "../../src/activation/readiness-policy.js"
+import { normalizeReadinessPolicy } from "../../../../../plugins/desk/mcp/src/activation/readiness-policy.js"
 
 test("readiness policy accepts lexical-required background-semantic consumers", () => {
   const input = {

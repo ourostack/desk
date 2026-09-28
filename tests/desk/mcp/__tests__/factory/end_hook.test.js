@@ -6,10 +6,10 @@ import { existsSync, readFileSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Readable } from "node:stream"
-import { factoryStateRoot, listMarkers, requestFinalize, setConsent } from "../../src/factory/outbox.js"
+import { factoryStateRoot, listMarkers, requestFinalize, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { END, ID, SENTINEL, json, scratch, session } from "./_session_helpers.js"
 
-const SCRIPT = fileURLToPath(new URL("../../../hooks/factory-end.cjs", import.meta.url))
+const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url))
 const require = createRequire(import.meta.url)
 const hook = () => {
   assert.ok(existsSync(SCRIPT), "the bounded factory end hook must exist")
@@ -181,8 +181,8 @@ test("stop refuses a symlinked finalize directory rather than starting another d
 // ---------------------------------------------------------------------------
 
 async function scanFor(ctx, host, pluginRoot, extra = {}) {
-  const { readSmallText } = await import("../../src/factory/marker.js")
-  const { PATTERNS } = await import("../../src/factory/schema.js")
+  const { readSmallText } = await import("../../../../../plugins/desk/mcp/src/factory/marker.js")
+  const { PATTERNS } = await import("../../../../../plugins/desk/mcp/src/factory/schema.js")
   return hook().metadata({ host, pluginRoot, home: ctx.base, env: ctx.env, readSmallText, PATTERNS, ...extra })
 }
 
@@ -359,8 +359,8 @@ test("Copilot under Agency names nothing when the scan is cut short by the entry
   await json(path.join(cache, "entries/d/plugin.json"), { name: "desk", version: "1.0.0" })
   await json(path.join(cache, "entries/pub/plugin.json"), { name: "foo", version: "2.0.0" })
   assert.deepEqual(sourcesOf(await scanFor(ctx, "copilot", root)), { foo: "pub/tools", desk: "ourostack/desk" }, "the same cache, fully read, names both")
-  const { readSmallText } = await import("../../src/factory/marker.js")
-  const { PATTERNS } = await import("../../src/factory/schema.js")
+  const { readSmallText } = await import("../../../../../plugins/desk/mcp/src/factory/marker.js")
+  const { PATTERNS } = await import("../../../../../plugins/desk/mcp/src/factory/schema.js")
   let reads = 0
   const slow = (file, limit) => {
     // Each cached manifest takes longer than the whole source budget.

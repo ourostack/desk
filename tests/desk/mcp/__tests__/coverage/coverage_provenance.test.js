@@ -5,9 +5,9 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import TestExclude from "test-exclude"
-import { runCoverageCommand } from "../../src/coverage/runner.js"
+import { runCoverageCommand } from "../../../../../plugins/desk/mcp/src/coverage/runner.js"
 
-const mcpRoot = fileURLToPath(new URL("../../", import.meta.url))
+const mcpRoot = fileURLToPath(new URL("../../../../../plugins/desk/mcp/", import.meta.url))
 const sourceFile = "plugins/desk/mcp/src/covered.js"
 const nativeFileRow = `# ${sourceFile} | 100.00 | 100.00 | 100.00 |`
 const nativeOutput = [
@@ -217,11 +217,11 @@ test("the actual producer invocation binds the maintained loader, dependency cwd
   assert.equal(options.env.NODE_OPTIONS, `--import=${args[importIndex + 1]}`)
   assert.equal(options.env.NODE_PATH, path.join(mcpRoot, "node_modules"))
   // The second preload is the global test setup: a temporary HOME and XDG folders for every test process.
-  assert.deepEqual(args.slice(importIndex + 2, importIndex + 4), ["--import", pathToFileURL(path.join(mcpRoot, "__tests__", "_isolated_env.mjs")).href])
+  assert.deepEqual(args.slice(importIndex + 2, importIndex + 4), ["--import", pathToFileURL(path.join(mcpRoot, "../../../tests/desk/mcp/__tests__/_isolated_env.mjs")).href])
   assert.deepEqual(args.slice(importIndex + 4), [
     "--test",
     "--test-concurrency=1",
-    path.join(run.canonicalRepoRoot, "plugins/desk/mcp/__tests__/**/*.test.js"),
+    path.join(run.canonicalRepoRoot, "tests/desk/mcp/__tests__/**/*.test.js"),
   ])
 })
 
@@ -269,7 +269,7 @@ test("the maintained producer measures the selected files without owning coverag
   assert.deepEqual(run.producerConfig.include, [sourceFile])
   assert.deepEqual(run.producerConfig.extension, [".js", ".cjs"])
   assert.deepEqual(run.producerConfig.exclude, [
-    "plugins/desk/mcp/__tests__/**",
+    "tests/desk/mcp/__tests__/**",
     "plugins/desk/mcp/node_modules/**",
   ])
   assert.equal(run.producerConfig.all, true)
@@ -332,7 +332,7 @@ test("the reviewed test-exclude override honors the actual configured source sel
     assert.equal(selector.shouldInstrument(path.join(run.canonicalRepoRoot, file)), true, file)
   }
   for (const file of [
-    "plugins/desk/mcp/__tests__/covered.test.js",
+    "tests/desk/mcp/__tests__/covered.test.js",
     "plugins/desk/mcp/node_modules/dependency/index.js",
     "plugins/desk/mcp/src/covered.mjs",
     "scripts/unselected.cjs",

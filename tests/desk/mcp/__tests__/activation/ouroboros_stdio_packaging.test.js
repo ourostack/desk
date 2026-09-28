@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { validateOuroborosStdioPackagingContract } from "../../src/activation/ouroboros-stdio-packaging.js"
+import { validateOuroborosStdioPackagingContract } from "../../../../../plugins/desk/mcp/src/activation/ouroboros-stdio-packaging.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -12,7 +12,7 @@ const activationManifestPath = "plugins/desk/activation/desk.activation.json"
 const evidencePath = "plugins/desk/activation/host-capability-evidence.md"
 const supportMatrixPath = "plugins/desk/activation/support-matrix.json"
 const unitTestCommand =
-  "node --test plugins/desk/mcp/__tests__/activation/ouroboros_stdio_packaging.test.js"
+  "node --test tests/desk/mcp/__tests__/activation/ouroboros_stdio_packaging.test.js"
 
 function readText(...segments) {
   return readFileSync(path.join(repoRoot, ...segments), "utf8")

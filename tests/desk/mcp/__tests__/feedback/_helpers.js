@@ -8,7 +8,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { execFileSync } from "node:child_process"
 
-import { assertWindowsAclAvailable } from "../../src/factory/windows-acl.js"
+import { assertWindowsAclAvailable } from "../../../../../plugins/desk/mcp/src/factory/windows-acl.js"
 
 export async function mkFeedbackFixture() {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "desk-feedback-"))

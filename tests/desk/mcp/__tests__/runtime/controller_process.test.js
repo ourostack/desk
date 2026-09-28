@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
-import { openDb, closeDb, indexDbPath } from "../../src/db/init.js"
+import { openDb, closeDb, indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { makeGitDesk, startDesk, writeActivation, writeFile } from "./_admission_fixtures.js"
 
 const require = createRequire(import.meta.url)

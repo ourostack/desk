@@ -3,7 +3,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 
-import { invokeProvider } from '../src/provider.mjs';
+import { invokeProvider } from '../../../../plugins/desk/browser-context-broker/src/provider.mjs';
 
 const fixture = new URL('./fixtures/json-provider.mjs', import.meta.url);
 const scratchRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '.provider-state');

@@ -1,8 +1,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
-import { buildCopilotBundle, validateCopilotPackagingContract } from "../../src/activation/copilot-bundle.js"
-import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
+import { buildCopilotBundle, validateCopilotPackagingContract } from "../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js"
+import { materializeCodexActivation } from "../../../../../plugins/desk/mcp/src/activation/adapters/codex.js"
 
 const read = (file) => JSON.parse(readFileSync(new URL(`../../../../../${file}`, import.meta.url), "utf8"))
 // The legacy Work Suite provider ships from ourostack/ouroboros-skills; its manifest is kept as a fixture.
@@ -118,7 +118,7 @@ test("omitted desk:worker.depends_on producer builds the three-root closure with
 test("Desk declares no Ponytail dependency and the Copilot producer has no Ponytail route", () => {
   const activation = read("plugins/desk/activation/desk.activation.json")
   assert.equal(activation.dependencies.some((entry) => entry.id === "ponytail-upstream"), false)
-  const producer = readFileSync(new URL("../../src/activation/copilot-bundle.js", import.meta.url), "utf8")
+  const producer = readFileSync(new URL("../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js", import.meta.url), "utf8")
   assert.doesNotMatch(producer, /ponytail/iu)
 })
 

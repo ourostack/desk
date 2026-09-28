@@ -10,13 +10,13 @@ import { existsSync, promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { factoryStateRoot, markDelivered, quarantine, readMachineSecret, setConsent, writeLocalFacts, writeStatus } from "../../src/factory/outbox.js"
-import { factoryBootCheck, FACTORY_NO_CONSENT_LINE } from "../../src/factory/boot-check.js"
-import { jobLink } from "../../src/factory/pipeline/build.js"
-import { main as factoryCli } from "../../scripts/factory.js"
+import { factoryStateRoot, markDelivered, quarantine, readMachineSecret, setConsent, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryBootCheck, FACTORY_NO_CONSENT_LINE } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
+import { jobLink } from "../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
+import { main as factoryCli } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { STORE, json, scratch } from "./_session_helpers.js"
 
-const moduleUrl = new URL("../../src/factory/local-status.js", import.meta.url)
+const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/local-status.js", import.meta.url)
 async function load() {
   assert.ok(existsSync(moduleUrl), "the factory local status module must exist")
   return import(moduleUrl)
@@ -197,7 +197,7 @@ test("unsafe or malformed state files read as unreadable, never as a guess", () 
 // `undecided`; `held` (no store resolved), `unreadable`, `yes` and `no` mean there is nothing to ask.
 test("the boot line asks exactly when desk_status reports undecided, in every routing and consent state", () => scratch(async ({ desk, env }) => {
   const { factoryLocalStatus } = await load()
-  const { factoryStateDir } = await import("../../src/factory/boot-check.js")
+  const { factoryStateDir } = await import("../../../../../plugins/desk/mcp/src/factory/boot-check.js")
   const consentFile = path.join(factoryStateDir(env), "consent.json")
   const writeConsent = async (text) => {
     await fs.mkdir(path.dirname(consentFile), { recursive: true, mode: 0o700 })
@@ -229,7 +229,7 @@ test("the boot line asks exactly when desk_status reports undecided, in every ro
 
 test("an unparseable status or delivery record reads as no last flush and nothing delivered", () => scratch(async ({ desk, env }) => {
   const { factoryLocalStatus } = await load()
-  const { factoryStateDir } = await import("../../src/factory/boot-check.js")
+  const { factoryStateDir } = await import("../../../../../plugins/desk/mcp/src/factory/boot-check.js")
   await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
   const name = await outboxFile(env, STORE, 7)
   const dir = factoryStateDir(env)

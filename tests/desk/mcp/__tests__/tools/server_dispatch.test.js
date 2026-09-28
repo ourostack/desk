@@ -6,10 +6,10 @@ import { strict as assert } from "node:assert"
 import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../src/server.js"
-import { TOOL_INPUT_SCHEMAS } from "../../src/tool-schemas.js"
+import { callTool, createMcpServer, createMcpTransport, startServer, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
+import { TOOL_INPUT_SCHEMAS } from "../../../../../plugins/desk/mcp/src/tool-schemas.js"
 import { mkTempDeskRoot } from "./_helpers.js"
-import { withPrivateStore } from "../../src/feedback/store.js"
+import { withPrivateStore } from "../../../../../plugins/desk/mcp/src/feedback/store.js"
 import { cleanup, mkFeedbackFixture, useStateHome } from "../feedback/_helpers.js"
 
 // The surface as it was advertised while the private feedback API was still

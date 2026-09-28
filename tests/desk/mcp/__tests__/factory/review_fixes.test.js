@@ -4,13 +4,13 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import hook from "../../../hooks/factory-end.cjs"
-import { resolveHookDeskRoot } from "../../scripts/resolve-desk-root.js"
-import { factoryStateRoot, listMarkers, readMarker, requestFinalize, setConsent, writeMarker } from "../../src/factory/outbox.js"
-import { deriveFile, deriveMarker, sweep } from "../../src/factory/derive-run.js"
-import { deriveCopilotSession } from "../../src/factory/derive-copilot.js"
-import { task_create, task_update } from "../../src/tools/task.js"
-import { runStatusCommand } from "../../scripts/factory.js"
+import hook from "../../../../../plugins/desk/hooks/factory-end.cjs"
+import { resolveHookDeskRoot } from "../../../../../plugins/desk/mcp/scripts/resolve-desk-root.js"
+import { factoryStateRoot, listMarkers, readMarker, requestFinalize, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { deriveFile, deriveMarker, sweep } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
+import { deriveCopilotSession } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
+import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { runStatusCommand } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { END, ID, STORE, json, scratch, session } from "./_session_helpers.js"
 
 test("I1 direct, sweep and status refuse an external marker directory without reading or pruning its files", () => scratch(async (ctx) => {
@@ -131,7 +131,7 @@ test("I4 an actual activation FIFO cannot hold the end hook past its deadline", 
   const fifo = path.join(ctx.base, "activation-fifo")
   assert.equal(spawnSync("/usr/bin/mkfifo", [fifo]).status, 0)
   const start = performance.now()
-  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../../../hooks/factory-end.cjs", import.meta.url)), "claude"], {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url)), "claude"], {
     env: { ...ctx.env, DESK_ACTIVATION_CONFIG: fifo, NODE_OPTIONS: "" }, timeout: 2500, encoding: "utf8",
     input: JSON.stringify({ session_id: ID, cwd: ctx.desk, transcript_path: marker.log_path, hook_event_name: "Stop" }),
   })
@@ -164,7 +164,7 @@ test("I4 the hook terminates and reaps its exact worker even when that worker bl
   const receipt = path.join(ctx.base, "blocked-worker.pid")
   await fs.writeFile(preload, `import fs from "node:fs"; if (process.argv.includes("--factory-worker")) { fs.writeFileSync(${JSON.stringify(receipt)}, String(process.pid)); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10000); }\n`)
   const start = performance.now()
-  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../../../hooks/factory-end.cjs", import.meta.url)), "claude"], {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../../../../../plugins/desk/hooks/factory-end.cjs", import.meta.url)), "claude"], {
     env: { ...ctx.env, NODE_OPTIONS: `--import=${preload}` }, encoding: "utf8", timeout: 2500,
     input: JSON.stringify({ session_id: ID, cwd: ctx.desk, transcript_path: marker.log_path, hook_event_name: "Stop" }),
   })

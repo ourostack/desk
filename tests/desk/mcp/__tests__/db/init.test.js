@@ -13,7 +13,7 @@ import {
   runMigrations,
   getMeta,
   setMeta,
-} from "../../src/db/init.js"
+} from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 async function tmpRoot() {

@@ -9,8 +9,8 @@ import { fileURLToPath } from "node:url"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 
-import { deriveRuntimeDependencyPackPaths } from "../../src/runtime/runtime-deps.js"
-import { createMcpServer } from "../../src/server.js"
+import { deriveRuntimeDependencyPackPaths } from "../../../../../plugins/desk/mcp/src/runtime/runtime-deps.js"
+import { createMcpServer } from "../../../../../plugins/desk/mcp/src/server.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const pluginRoot = path.join(repoRoot, "plugins", "desk")
@@ -104,7 +104,7 @@ test("Desk 3.2.0-alpha.115 and MCP 1.4.0-alpha.6 candidate surfaces move togethe
   ]
   for (const fixturePath of codexFixturePaths) {
     const relativePath = path.join(
-      "plugins",
+      "tests",
       "desk",
       "mcp",
       "__tests__",

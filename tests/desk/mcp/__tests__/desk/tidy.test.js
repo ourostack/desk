@@ -29,9 +29,9 @@ import {
   tidyStatus,
   uncommittedPaths,
   writeOrganizationRecord,
-} from "../../src/desk/tidy.js"
+} from "../../../../../plugins/desk/mcp/src/desk/tidy.js"
 
-const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
+const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp")
 const SCRIPT = path.join(mcpRoot, "scripts", "tidy-status.js")
 const NOW = Date.parse("2026-09-25T00:00:00Z")
 const RECENT = "2026-09-20T00:00:00Z"
@@ -795,7 +795,7 @@ test("a claim is exclusive: an unreadable claim is taken over, a racing session 
 test("many sessions taking the claim at once: exactly one holds it", async () => {
   const gitDir = tempDir()
   writeFileSync(path.join(gitDir, "desk-tidy-claim.7.json"), JSON.stringify({ token: "crashed", claimed_at: NOW - CLAIM_STALE_MS }))
-  const url = new URL("../../src/desk/tidy.js", import.meta.url).href
+  const url = new URL("../../../../../plugins/desk/mcp/src/desk/tidy.js", import.meta.url).href
   const script = `import { takeClaim } from ${JSON.stringify(url)}; process.stdout.write(JSON.stringify(takeClaim(${JSON.stringify(gitDir)}, { now: ${NOW} })))`
   const runs = Array.from({ length: 12 }, () => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "inherit"] })

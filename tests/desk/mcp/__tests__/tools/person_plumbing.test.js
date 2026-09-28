@@ -10,8 +10,8 @@ import { strict as assert } from "node:assert"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { parseArgs, resolveStartupRuntimeCacheDir } from "../../index.js"
-import { callTool, TOOL_IMPLS } from "../../src/server.js"
+import { parseArgs, resolveStartupRuntimeCacheDir } from "../../../../../plugins/desk/mcp/index.js"
+import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
 import { mkTempDeskRoot } from "./_helpers.js"
 
 // ── arg-parse ───────────────────────────────────────────────────────────────

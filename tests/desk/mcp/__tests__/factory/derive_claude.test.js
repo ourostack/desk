@@ -11,8 +11,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { deriveClaudeSession, __internals__ } from "../../src/factory/derive-claude.js"
-import { validateLocalFacts } from "../../src/factory/schema.js"
+import { deriveClaudeSession, __internals__ } from "../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
+import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import {
   SENTINEL,
   COMMIT_SHA,

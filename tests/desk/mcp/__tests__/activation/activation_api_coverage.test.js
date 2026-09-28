@@ -1,10 +1,10 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
-import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
-import { orderActivationDependencies, resolveActivationChain, validateActivationManifest } from "../../src/activation/validate.js"
+import { materializeCodexActivation } from "../../../../../plugins/desk/mcp/src/activation/adapters/codex.js"
+import { orderActivationDependencies, resolveActivationChain, validateActivationManifest } from "../../../../../plugins/desk/mcp/src/activation/validate.js"
 
-const activation = () => JSON.parse(readFileSync(new URL("../../../activation/desk.activation.json", import.meta.url), "utf8"))
+const activation = () => JSON.parse(readFileSync(new URL("../../../../../plugins/desk/activation/desk.activation.json", import.meta.url), "utf8"))
 
 test("activation chain defaults to the actual Desk worker without changing its manifest", () => {
   const manifest = activation()

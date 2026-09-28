@@ -9,9 +9,9 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import matter from "gray-matter"
 
-import { task_archive, task_create, task_update } from "../../src/tools/task.js"
-import { listFinalizeRequests, setConsent } from "../../src/factory/outbox.js"
-import { jobLink } from "../../src/factory/pipeline/build.js"
+import { task_archive, task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { listFinalizeRequests, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { jobLink } from "../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { STORE, json, scratch } from "./_session_helpers.js"
 
 const OTHER = "example-org/team-factory"

@@ -4,9 +4,9 @@ import { readFileSync, readdirSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { calculateFormulas } from "../../../src/factory/pipeline/formulas.js"
-import { buildCoverage, renderIndexMarkdown, renderJobMarkdown, renderReadme } from "../../../src/factory/pipeline/report.js"
-import { buildJobTimeline, buildTimelines } from "../../../src/factory/pipeline/timeline.js"
+import { calculateFormulas } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/formulas.js"
+import { buildCoverage, renderIndexMarkdown, renderJobMarkdown, renderReadme } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/report.js"
+import { buildJobTimeline, buildTimelines } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const STORE = path.join(here, "..", "fixtures", "store")

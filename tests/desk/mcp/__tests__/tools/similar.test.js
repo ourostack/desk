@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { desk_similar, indexedSimilar } from "../../src/tools/search.js"
+import { desk_similar, indexedSimilar } from "../../../../../plugins/desk/mcp/src/tools/search.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,
@@ -122,7 +122,7 @@ test("indexedSimilar — seed without embeddings returns semantic_unavailable", 
     "---\nstatus: processing\nschema_version: 1\n---\nalpha body\n",
   )
   // Build the index with Ollama-down → no chunk_vecs rows.
-  const { rebuildIndex } = await import("../../src/indexer/index.js")
+  const { rebuildIndex } = await import("../../../../../plugins/desk/mcp/src/indexer/index.js")
   await rebuildIndex(root, { embed: { fetch: makeFailingFetch() } })
 
   const res = await indexedSimilar({

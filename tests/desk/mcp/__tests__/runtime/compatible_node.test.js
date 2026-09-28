@@ -12,11 +12,11 @@ import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const require = createRequire(import.meta.url)
-const { compatibleNode, hookProbe, PROBE_BUDGET_MS } = require("../../../hooks/compatible-node.cjs")
-const factoryEnd = require("../../../hooks/factory-end.cjs")
-const bootstrap = require("../../bootstrap.cjs")
+const { compatibleNode, hookProbe, PROBE_BUDGET_MS } = require("../../../../../plugins/desk/hooks/compatible-node.cjs")
+const factoryEnd = require("../../../../../plugins/desk/hooks/factory-end.cjs")
+const bootstrap = require("../../../../../plugins/desk/mcp/bootstrap.cjs")
 
-const MCP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
+const MCP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp")
 const OLD = { path: "/old/node", version: "v16.20.2", abi: "93" }
 
 // A fake `node` (a POSIX sh script) that answers the bootstrap's version probe.

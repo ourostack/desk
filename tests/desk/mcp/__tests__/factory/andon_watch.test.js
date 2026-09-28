@@ -4,8 +4,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { MAX_RECORDED, refreshAndon } from "../../src/factory/andon-watch.js"
-import { readStatus, setConsent, writeStatus } from "../../src/factory/outbox.js"
+import { MAX_RECORDED, refreshAndon } from "../../../../../plugins/desk/mcp/src/factory/andon-watch.js"
+import { readStatus, setConsent, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { STORE, scratch } from "./_session_helpers.js"
 
 const TOKEN = "ghs_SENTINEL"

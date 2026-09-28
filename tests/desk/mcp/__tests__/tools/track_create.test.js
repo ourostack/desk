@@ -4,7 +4,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
-import { track_create } from "../../src/tools/track.js"
+import { track_create } from "../../../../../plugins/desk/mcp/src/tools/track.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
 
 const SCOPE = "europe trip planning and bookings; not day-to-day expenses"

@@ -7,7 +7,7 @@ import * as path from "node:path"
 import {
   controllerIdentity,
   semanticPartitionIdentity,
-} from "../../src/readiness/identity.js"
+} from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 
 test("controller identity canonicalizes path aliases and compatibility contracts", () => {
   const root = mkdtempSync(path.join(tmpdir(), "desk-identity-"))

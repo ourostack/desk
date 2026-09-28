@@ -3,12 +3,12 @@ import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
-import { resolveStartupReadinessPolicy } from "../../index.js"
+import { materializeCodexActivation } from "../../../../../plugins/desk/mcp/src/activation/adapters/codex.js"
+import { resolveStartupReadinessPolicy } from "../../../../../plugins/desk/mcp/index.js"
 import { admitInProcess } from "../runtime/_in_process_desk.js"
-import { resolveWriteTarget } from "../../src/util/paths.js"
+import { resolveWriteTarget } from "../../../../../plugins/desk/mcp/src/util/paths.js"
 
-const manifest = JSON.parse(readFileSync(new URL("../../../activation/desk.activation.json", import.meta.url)))
+const manifest = JSON.parse(readFileSync(new URL("../../../../../plugins/desk/activation/desk.activation.json", import.meta.url)))
 
 function input(mode, desk_runtime, overrides = {}) {
   return {

@@ -15,15 +15,15 @@ import {
   parseCoverageArguments,
   partitionCoverageTestFiles,
   runCoverageCommand,
-} from "../../src/coverage/runner.js"
+} from "../../../../../plugins/desk/mcp/src/coverage/runner.js"
 
-const mcpRoot = fileURLToPath(new URL("../../", import.meta.url))
+const mcpRoot = fileURLToPath(new URL("../../../../../plugins/desk/mcp/", import.meta.url))
 const realRepoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const sourceFile = "plugins/desk/mcp/src/covered.js"
 const testFiles = [
-  "plugins/desk/mcp/__tests__/a.test.js",
-  "plugins/desk/mcp/__tests__/nested/b.test.js",
-  "plugins/desk/mcp/__tests__/nested/deeper/c.test.js",
+  "tests/desk/mcp/__tests__/a.test.js",
+  "tests/desk/mcp/__tests__/nested/b.test.js",
+  "tests/desk/mcp/__tests__/nested/deeper/c.test.js",
 ]
 
 function metrics(pct = 100) {
@@ -175,9 +175,9 @@ test("test-file discovery follows the whole-suite glob and adds the offline suit
   const root = makeRoot(t, "desk-coverage-discovery-")
   for (const file of [
     ...testFiles,
-    "plugins/desk/mcp/__tests__/helper.js",
-    "plugins/desk/mcp/__tests__/.hidden/d.test.js",
-    "plugins/desk/mcp/__tests__/node_modules/e.test.js",
+    "tests/desk/mcp/__tests__/helper.js",
+    "tests/desk/mcp/__tests__/.hidden/d.test.js",
+    "tests/desk/mcp/__tests__/node_modules/e.test.js",
     "evals/offline/__tests__/offline.test.mjs",
     "evals/offline/__tests__/helper.mjs",
     "scripts/test-skill-evals.cjs",
@@ -194,7 +194,7 @@ test("test-file discovery follows the whole-suite glob and adds the offline suit
 })
 
 test("test-file discovery finds exactly the files the whole-suite glob runs in this repository", () => {
-  const globbed = globSync("plugins/desk/mcp/__tests__/**/*.test.js", { cwd: realRepoRoot }).map((file) => file.replaceAll(path.sep, "/")).sort()
+  const globbed = globSync("tests/desk/mcp/__tests__/**/*.test.js", { cwd: realRepoRoot }).map((file) => file.replaceAll(path.sep, "/")).sort()
   assert.ok(globbed.length > 100, "the real suite must be found")
   assert.deepEqual(collectCoverageTestFiles({ repoRoot: realRepoRoot, offline: { selected: false } }), globbed)
 })
@@ -220,7 +220,7 @@ test("the committed shard weights are expected seconds per repository-relative t
   assert.equal(typeof weights.default_seconds, "number")
   assert.ok(Object.keys(weights.file_seconds).length > 100, "the weights must come from a real run")
   for (const [file, seconds] of Object.entries(weights.file_seconds)) {
-    assert.match(file, /^(?:plugins\/desk\/mcp\/__tests__\/.+\.test\.js|evals\/offline\/__tests__\/[^/]+\.test\.mjs|scripts\/test-skill-evals\.cjs)$/u, file)
+    assert.match(file, /^(?:tests\/desk\/mcp\/__tests__\/.+\.test\.js|evals\/offline\/__tests__\/[^/]+\.test\.mjs|scripts\/test-skill-evals\.cjs)$/u, file)
     assert.ok(typeof seconds === "number" && seconds >= 0, file)
   }
 })
@@ -237,7 +237,7 @@ test("a shard runs only its own files, serially, and records raw coverage, timin
   assert.ok(args.includes("--test-concurrency=1"), "instrumented files stay serial inside a shard")
   assert.ok(args.includes("--test-reporter=tap") && args.includes("--test-reporter-destination=stdout"), "the shard keeps its TAP log")
   assert.ok(args.includes(`--test-reporter-destination=${path.join(output, "timings.json")}`))
-  assert.ok(args.includes(`--test-reporter=${path.join(mcpRoot, "__tests__", "_file_timing_reporter.mjs")}`))
+  assert.ok(args.includes(`--test-reporter=${path.join(mcpRoot, "../../../tests/desk/mcp/__tests__/_file_timing_reporter.mjs")}`))
   assert.equal(config.tempDir, path.join(output, "raw"))
   assert.equal(config.silent, true, "a shard reports nothing on its own")
   assert.deepEqual(config.include, [sourceFile])
@@ -346,7 +346,7 @@ test("the merge refuses a split that is incomplete, repeated or mixed before rep
 test("the merge refuses a failed shard, a different changed-file set, and any test file run twice, never or unknown", (t) => {
   const fixture = fixtureRepo(t)
   const input = writeShards(fixture, [
-    { index: 1, total: 3, status: 1, test_files: [testFiles[0], "plugins/desk/mcp/__tests__/gone.test.js"] },
+    { index: 1, total: 3, status: 1, test_files: [testFiles[0], "tests/desk/mcp/__tests__/gone.test.js"] },
     { index: 2, total: 3, required_files: [], test_files: [testFiles[0]] },
     { index: 3, total: 3, test_files: undefined },
   ])
@@ -357,9 +357,9 @@ test("the merge refuses a failed shard, a different changed-file set, and any te
     /coverage shard 1\/3 finished with status 1/u,
     /coverage shard 2\/3 measured a different changed-file set than this merge/u,
     /coverage shard 3\/3 does not list its test files/u,
-    /test files ran in more than one shard: plugins\/desk\/mcp\/__tests__\/a\.test\.js/u,
-    /test files no shard ran: plugins\/desk\/mcp\/__tests__\/nested\/b\.test\.js, plugins\/desk\/mcp\/__tests__\/nested\/deeper\/c\.test\.js/u,
-    /shards ran test files this checkout does not have: plugins\/desk\/mcp\/__tests__\/gone\.test\.js/u,
+    /test files ran in more than one shard: tests\/desk\/mcp\/__tests__\/a\.test\.js/u,
+    /test files no shard ran: tests\/desk\/mcp\/__tests__\/nested\/b\.test\.js, tests\/desk\/mcp\/__tests__\/nested\/deeper\/c\.test\.js/u,
+    /shards ran test files this checkout does not have: tests\/desk\/mcp\/__tests__\/gone\.test\.js/u,
   ]) assert.match(output.stderr, expected)
 })
 
@@ -433,7 +433,7 @@ test("real shards each cover part of a file, and only their merged coverage pass
     "",
   ].join("\n"))
   for (const [name, flag, expected] of [["left", true, "left"], ["right", false, "right"]]) {
-    write(repoRoot, `plugins/desk/mcp/__tests__/${name}.test.js`, [
+    write(repoRoot, `tests/desk/mcp/__tests__/${name}.test.js`, [
       'import { test } from "node:test"',
       'import { strict as assert } from "node:assert"',
       'import { choose } from "../src/covered.js"',
@@ -467,11 +467,11 @@ test("real shards each cover part of a file, and only their merged coverage pass
   assert.equal(command(["--shard", "1/2", "--output", path.join(shards, "one")]), 0, output.stderr)
   assert.equal(command(["--shard", "2/2", "--output", path.join(shards, "two")]), 0, output.stderr)
   const ran = ["one", "two"].map((name) => JSON.parse(readFileSync(path.join(shards, name, "shard.json"), "utf8")).test_files)
-  assert.deepEqual(ran, [["plugins/desk/mcp/__tests__/left.test.js"], ["plugins/desk/mcp/__tests__/right.test.js"]])
+  assert.deepEqual(ran, [["tests/desk/mcp/__tests__/left.test.js"], ["tests/desk/mcp/__tests__/right.test.js"]])
   const timings = JSON.parse(readFileSync(path.join(shards, "one", "timings.json"), "utf8"))
   // The reporter keys files relative to this repository, so a fixture outside it shows up as a relative path that ends in the shard's one file.
   assert.equal(Object.keys(timings.file_seconds).length, 1)
-  assert.ok(Object.keys(timings.file_seconds)[0].endsWith("plugins/desk/mcp/__tests__/left.test.js"))
+  assert.ok(Object.keys(timings.file_seconds)[0].endsWith("tests/desk/mcp/__tests__/left.test.js"))
   assert.equal(typeof Object.values(timings.file_seconds)[0], "number")
   assert.match(output.stdout, /ok 1 - left arm/u, "a shard keeps its TAP log")
 

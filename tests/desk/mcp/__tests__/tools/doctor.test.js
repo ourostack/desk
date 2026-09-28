@@ -5,9 +5,9 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import matter from "gray-matter"
 
-import { callTool, TOOL_IMPLS } from "../../src/server.js"
-import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../src/tool-names.js"
-import { doctorRuntime } from "../../src/tools/doctor.js"
+import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
+import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
+import { doctorRuntime } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
 
 function makeRoot() {
   return mkdtempSync(path.join(tmpdir(), "desk-doctor-"))

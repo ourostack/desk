@@ -7,7 +7,7 @@ import { WebSocketServer } from 'ws';
 import {
   CdpClient,
   resolveBrowserWebSocket,
-} from '../src/cdp-client.mjs';
+} from '../../../../plugins/desk/browser-context-broker/src/cdp-client.mjs';
 
 async function listen(server) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

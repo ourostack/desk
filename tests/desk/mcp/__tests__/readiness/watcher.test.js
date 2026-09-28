@@ -3,9 +3,9 @@ import assert from "node:assert/strict"
 import * as fs from "node:fs"
 import * as path from "node:path"
 import * as net from "node:net"
-import { connectOrStartController } from "../../src/readiness/controller-client.js"
-import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
-import { createWorkspaceWatcher } from "../../src/readiness/workspace-watcher.js"
+import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
+import { createWorkspaceWatcher } from "../../../../../plugins/desk/mcp/src/readiness/workspace-watcher.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 function deferred() {
@@ -60,7 +60,7 @@ async function fixture(options = {}) {
 }
 
 async function fenceModule() {
-  const module = await import("../../src/readiness/watcher.js").catch((error) => {
+  const module = await import("../../../../../plugins/desk/mcp/src/readiness/watcher.js").catch((error) => {
     if (error.code !== "ERR_MODULE_NOT_FOUND") throw error
     return {}
   })

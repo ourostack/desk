@@ -4,9 +4,9 @@ import { mkdirSync, mkdtempSync, promises as fs, rmSync, writeFileSync } from "n
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { FRICTION_CLASSES, MAX_CARDS_PER_DAY, PUBLIC_PLUGINS, cardBlock, fileKaizenCard, normalizeTitle, privateCard, publicCard } from "../../src/factory/kaizen-file.js"
-import { readStatus, setConsent, updateJobsIndex, writeMarker, writeStatus } from "../../src/factory/outbox.js"
-import { parseCard } from "../../src/factory/pipeline/kaizen.js"
+import { FRICTION_CLASSES, MAX_CARDS_PER_DAY, PUBLIC_PLUGINS, cardBlock, fileKaizenCard, normalizeTitle, privateCard, publicCard } from "../../../../../plugins/desk/mcp/src/factory/kaizen-file.js"
+import { readStatus, setConsent, updateJobsIndex, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { parseCard } from "../../../../../plugins/desk/mcp/src/factory/pipeline/kaizen.js"
 
 const TOKEN = "ghs_SENTINEL"
 const JOB = "9f2c4b1a7d3e5f60718293a4b5c6d7e8"

@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { normalizeTimestamp, unionIntervals, intervalUnion } from "../../src/factory/time.js"
+import { normalizeTimestamp, unionIntervals, intervalUnion } from "../../../../../plugins/desk/mcp/src/factory/time.js"
 
 test("normalizeTimestamp accepts an instant carrying its own Z offset", () => {
   assert.equal(normalizeTimestamp("2026-09-08T18:00:00.000Z"), "2026-09-08T18:00:00.000Z")

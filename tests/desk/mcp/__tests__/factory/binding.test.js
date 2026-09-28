@@ -10,10 +10,10 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { bindSession, jobId, normalizeRemote } from "../../src/factory/binding.js"
-import { DESK_MARKER } from "../../src/factory/shell-git.js"
-import { LIMITS } from "../../src/factory/schema.js"
-import { deriveClaudeSession } from "../../src/factory/derive-claude.js"
+import { bindSession, jobId, normalizeRemote } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
+import { DESK_MARKER } from "../../../../../plugins/desk/mcp/src/factory/shell-git.js"
+import { LIMITS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { deriveClaudeSession } from "../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
 
 const SENTINEL = "SENTINEL-7f3a"
 const DESK = "/work/desk"

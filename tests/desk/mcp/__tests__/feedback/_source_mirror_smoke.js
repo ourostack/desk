@@ -3,9 +3,9 @@ import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { importRuntimeServer } from "../../src/runtime/bootstrap.js"
+import { importRuntimeServer } from "../../../../../plugins/desk/mcp/src/runtime/bootstrap.js"
 
-const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp")
 const mcpVersion = JSON.parse(readFileSync(path.join(mcpRoot, "package.json"), "utf8")).version
 const deskVersion = JSON.parse(readFileSync(path.join(mcpRoot, "..", "plugin.json"), "utf8")).version
 const fixture = JSON.parse(process.argv[2])

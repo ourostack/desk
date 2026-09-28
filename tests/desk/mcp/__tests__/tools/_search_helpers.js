@@ -111,7 +111,7 @@ export function makeFailingFetch() {
  * summary so tests can assert chunk counts.
  */
 export async function buildFixtureIndex(deskRoot, opts = {}) {
-  const { rebuildIndex } = await import("../../src/indexer/index.js")
+  const { rebuildIndex } = await import("../../../../../plugins/desk/mcp/src/indexer/index.js")
   return rebuildIndex(deskRoot, {
     embed: { fetch: opts.fetch ?? makeEmbedFetch() },
   })

@@ -2,11 +2,11 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 import cacheAudit from "../../../../../scripts/audit-codex-plugin-cache.cjs"
-import { validateClaudePackagingContract } from "../../src/activation/claude-packaging.js"
-import { validateOuroborosStdioPackagingContract } from "../../src/activation/ouroboros-stdio-packaging.js"
-import { buildCopilotBundle } from "../../src/activation/copilot-bundle.js"
-import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
-import { validateActivationManifest } from "../../src/activation/validate.js"
+import { validateClaudePackagingContract } from "../../../../../plugins/desk/mcp/src/activation/claude-packaging.js"
+import { validateOuroborosStdioPackagingContract } from "../../../../../plugins/desk/mcp/src/activation/ouroboros-stdio-packaging.js"
+import { buildCopilotBundle } from "../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js"
+import { materializeCodexActivation } from "../../../../../plugins/desk/mcp/src/activation/adapters/codex.js"
+import { validateActivationManifest } from "../../../../../plugins/desk/mcp/src/activation/validate.js"
 
 const read = (file) => JSON.parse(readFileSync(new URL(`../../../../../${file}`, import.meta.url), "utf8"))
 // The legacy Work Suite provider ships from ourostack/ouroboros-skills; its manifest is kept as a fixture.
@@ -100,7 +100,7 @@ test("shipped Copilot closure matches the actual selected worker rather than the
   assert.deepEqual(closure.map((entry) => entry.id), selected)
 })
 test("alpha onboarding selects the existing cache audit's Superpowers plugin set explicitly", () => {
-  const skill = readFileSync(new URL("../../../skills/codex-onboarding/SKILL.md", import.meta.url), "utf8")
+  const skill = readFileSync(new URL("../../../../../plugins/desk/skills/codex-onboarding/SKILL.md", import.meta.url), "utf8")
   assert.match(skill, /--plugins desk,superpowers,plain-language --strict/u)
 })
 test("cache audit CLI accepts the alpha set and defaults to the plugins this repository ships", () => {
@@ -182,13 +182,13 @@ test("generated Codex instructions send fresh sessions to the active adapter, no
 
   // The retired name keeps working for unchanged standing instructions; that is the redirect's job, not the
   // generated instruction's, so the redirect skill itself must still exist.
-  const redirect = readFileSync(new URL("../../../skills/superpowers-integration/SKILL.md", import.meta.url), "utf8")
+  const redirect = readFileSync(new URL("../../../../../plugins/desk/skills/superpowers-integration/SKILL.md", import.meta.url), "utf8")
   assert.match(redirect, /Retired/u)
   assert.match(redirect, /desk:using-superpowers-with-desk/u)
 })
 
 test("Codex onboarding restart instruction names the selected Superpowers composition exactly", () => {
-  const skill = readFileSync(new URL("../../../skills/codex-onboarding/SKILL.md", import.meta.url), "utf8")
+  const skill = readFileSync(new URL("../../../../../plugins/desk/skills/codex-onboarding/SKILL.md", import.meta.url), "utf8")
   assert.ok(skill.includes("The active Codex session will not gain new plugin skills retroactively. Restart Codex or open a fresh session to confirm that `desk`, `superpowers`, and `plain-language` appear in the available plugins/skills list."))
 })
 

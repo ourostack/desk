@@ -12,13 +12,13 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
 // Graph algorithm tests use an explicitly built index; alpha tests use the routed tool.
-import { desk_thread as routedThread, indexedThread as desk_thread, describeRefKind } from "../../src/tools/thread.js"
-import { openDb, closeDb } from "../../src/db/init.js"
-import { rebuildIndex } from "../../src/indexer/index.js"
+import { desk_thread as routedThread, indexedThread as desk_thread, describeRefKind } from "../../../../../plugins/desk/mcp/src/tools/thread.js"
+import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 test("alpha thread waits for controller convergence and never reads an unproven graph", async (t) => {
-  const { connectOrStartController } = await import("../../src/readiness/controller-client.js")
+  const { connectOrStartController } = await import("../../../../../plugins/desk/mcp/src/readiness/controller-client.js")
   const root = await mkTempDeskRoot()
   await writeFile(root, "track/work/task.md", "quartz")
   await writeFile(root, "track/work/planning.md", "plan")

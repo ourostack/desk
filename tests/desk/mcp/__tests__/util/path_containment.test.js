@@ -2,7 +2,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import * as paths from "../../src/util/paths.js"
+import * as paths from "../../../../../plugins/desk/mcp/src/util/paths.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 async function makeRoot(prefix = "desk-containment-") {

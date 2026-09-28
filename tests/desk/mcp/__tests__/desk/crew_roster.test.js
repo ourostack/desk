@@ -15,7 +15,7 @@ import {
   markdownTables,
   parseCrewRoster,
   readCrewRoster,
-} from "../../src/desk/crew-roster.js"
+} from "../../../../../plugins/desk/mcp/src/desk/crew-roster.js"
 
 const ROSTER = [
   "# Desks",

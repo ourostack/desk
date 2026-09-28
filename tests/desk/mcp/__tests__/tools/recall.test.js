@@ -3,7 +3,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { desk_recall, indexedRecall } from "../../src/tools/search.js"
+import { desk_recall, indexedRecall } from "../../../../../plugins/desk/mcp/src/tools/search.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,

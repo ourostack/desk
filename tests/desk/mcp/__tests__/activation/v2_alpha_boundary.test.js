@@ -1,15 +1,15 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
-import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
-import { buildCopilotBundle, validateCopilotPackagingContract } from "../../src/activation/copilot-bundle.js"
+import { materializeCodexActivation } from "../../../../../plugins/desk/mcp/src/activation/adapters/codex.js"
+import { buildCopilotBundle, validateCopilotPackagingContract } from "../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js"
 
 function readJson(relativePath) {
   return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), "utf8"))
 }
 
 function inputFor(existingConfig = "", mode = "global-personal") {
-  const manifest = JSON.parse(readFileSync(new URL("../../../activation/desk.activation.json", import.meta.url), "utf8"))
+  const manifest = JSON.parse(readFileSync(new URL("../../../../../plugins/desk/activation/desk.activation.json", import.meta.url), "utf8"))
   manifest.dependencies = manifest.dependencies.filter((dependency) => !["superpowers", "work-suite"].includes(dependency.id))
   manifest.dependencies.push({
     id: "superpowers",
@@ -95,7 +95,7 @@ test("manual-only keeps the existing no-worker boundary without rewriting ambien
 })
 
 test("authored V2 closure (boundary): the real producer builds and validates exactly desk, superpowers, plain-language", () => {
-  const activation = readJson("../../../activation/desk.activation.json")
+  const activation = readJson("../../../../../plugins/desk/activation/desk.activation.json")
   const freshBundle = buildCopilotBundle({ activation })
   const selectedNames = freshBundle.dependency_closure.map((entry) => entry.id)
   const expected = ["desk", "plain-language", "superpowers"]
@@ -103,9 +103,9 @@ test("authored V2 closure (boundary): the real producer builds and validates exa
   assert.equal(selectedNames.includes("ponytail-upstream"), false)
   assert.equal(selectedNames.includes("work-suite"), false)
 
-  const deskPlugin = readJson("../../../plugin.json")
-  const superpowersPlugin = readJson("../../../../superpowers/plugin.json")
-  const plainLanguagePlugin = readJson("../../../../plain-language/plugin.json")
+  const deskPlugin = readJson("../../../../../plugins/desk/plugin.json")
+  const superpowersPlugin = readJson("../../../../../plugins/superpowers/plugin.json")
+  const plainLanguagePlugin = readJson("../../../../../plugins/plain-language/plugin.json")
   assert.deepEqual(
     validateCopilotPackagingContract({
       activation, deskPlugin, bundle: freshBundle, superpowersPlugin, plainLanguagePlugin,
@@ -116,7 +116,7 @@ test("authored V2 closure (boundary): the real producer builds and validates exa
 })
 
 test("ordinary Agency declaration (boundary): desk/agency.json declares only the two generic V2 dependencies", () => {
-  const agency = JSON.parse(readFileSync(new URL("../../../agency.json", import.meta.url), "utf8"))
+  const agency = JSON.parse(readFileSync(new URL("../../../../../plugins/desk/agency.json", import.meta.url), "utf8"))
   assert.equal(agency.name, "desk")
   assert.deepEqual(agency.dependencies, [
     "github:ourostack/desk:plugins/superpowers@main",

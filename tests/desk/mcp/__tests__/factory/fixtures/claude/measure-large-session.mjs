@@ -12,7 +12,7 @@ import { createWriteStream, mkdtempSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
-import { deriveClaudeSession } from "../../../../src/factory/derive-claude.js"
+import { deriveClaudeSession } from "../../../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
 import { buildLargeSessionLines, LARGE_SESSION } from "./make.js"
 
 async function writeLarge(filePath) {

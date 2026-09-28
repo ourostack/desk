@@ -4,7 +4,7 @@ import { createRequire } from "node:module"
 import { readFileSync } from "node:fs"
 const require = createRequire(import.meta.url)
 const verifier = require("../../../../../scripts/test-desk-host-manifests.cjs")
-const read = (name) => JSON.parse(readFileSync(new URL(`../../../hooks/${name}`, import.meta.url), "utf8"))
+const read = (name) => JSON.parse(readFileSync(new URL(`../../../../../plugins/desk/hooks/${name}`, import.meta.url), "utf8"))
 
 test("host manifests register all four bounded factory events and detect drift", () => {
   assert.equal(typeof verifier.validateFactoryHooks, "function")

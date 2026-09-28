@@ -6,8 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 import WebSocket from 'ws';
 
-import { acquireContext } from '../src/broker.mjs';
-import { startLeaseProxy } from '../src/cdp-proxy.mjs';
+import { acquireContext } from '../../../../plugins/desk/browser-context-broker/src/broker.mjs';
+import { startLeaseProxy } from '../../../../plugins/desk/browser-context-broker/src/cdp-proxy.mjs';
 import {
   addOwnedTarget,
   cleanupStaleLease,
@@ -16,8 +16,8 @@ import {
   heartbeatLease,
   releaseLease,
   withLeaseOperation,
-} from '../src/leases.mjs';
-import { readRegistry, writeRegistry } from '../src/registry.mjs';
+} from '../../../../plugins/desk/browser-context-broker/src/leases.mjs';
+import { readRegistry, writeRegistry } from '../../../../plugins/desk/browser-context-broker/src/registry.mjs';
 import { startFakeCdpServer } from './fixtures/fake-cdp-server.mjs';
 import { REQUEST_TIMEOUT_LIMIT_MS, settlesWithin } from './fixtures/settle.mjs';
 

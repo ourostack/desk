@@ -3,8 +3,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { PassThrough } from "node:stream"
-import { DOCTOR_REPAIRS, FRONT_DOOR_TOOLS, startFrontDoor } from "../../src/runtime/front-door.js"
-import { TOOL_NAMES } from "../../src/tool-names.js"
+import { DOCTOR_REPAIRS, FRONT_DOOR_TOOLS, startFrontDoor } from "../../../../../plugins/desk/mcp/src/runtime/front-door.js"
+import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 
 function serve(options = {}) {
   const input = new PassThrough()

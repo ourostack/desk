@@ -1,8 +1,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
-import { buildCopilotBundle, validateCopilotPackagingContract } from "../../src/activation/copilot-bundle.js"
-import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
+import { buildCopilotBundle, validateCopilotPackagingContract } from "../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js"
+import { materializeCodexActivation } from "../../../../../plugins/desk/mcp/src/activation/adapters/codex.js"
 
 const repoRoot = new URL("../../../../../", import.meta.url)
 const readJson = (relativePath) => JSON.parse(readFileSync(new URL(relativePath, repoRoot), "utf8"))

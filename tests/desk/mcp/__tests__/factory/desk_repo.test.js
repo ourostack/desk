@@ -8,8 +8,8 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync 
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { createDeskReaders, readDeskRemote } from "../../src/factory/desk-repo.js"
-import { bindSession, jobId } from "../../src/factory/binding.js"
+import { createDeskReaders, readDeskRemote } from "../../../../../plugins/desk/mcp/src/factory/desk-repo.js"
+import { bindSession, jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 
 let scratch
 let desk

@@ -4,8 +4,8 @@ import { readFileSync, readdirSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { calculateFormulas } from "../../../src/factory/pipeline/formulas.js"
-import { normalizePublished, stableStringify } from "../../../src/factory/pipeline/normalize.js"
+import { calculateFormulas } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/formulas.js"
+import { normalizePublished, stableStringify } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/normalize.js"
 import {
   JOB_CLASSES,
   MEASURE_IDS,
@@ -15,9 +15,9 @@ import {
   quantile,
   renderRollupsMarkdown,
   resolveLabels,
-} from "../../../src/factory/pipeline/rollups.js"
-import { buildTimelines } from "../../../src/factory/pipeline/timeline.js"
-import { LABEL_WASTES } from "../../../src/factory/label-schema.js"
+} from "../../../../../../plugins/desk/mcp/src/factory/pipeline/rollups.js"
+import { buildTimelines } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
+import { LABEL_WASTES } from "../../../../../../plugins/desk/mcp/src/factory/label-schema.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const STORE = path.join(here, "..", "fixtures", "rollup-store")

@@ -14,7 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { runAndonCommand } from "../../scripts/factory.js"
+import { runAndonCommand } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 
 const REPO = "example/test-factory"
 const TOKEN = "ghs_SENTINEL"

@@ -2,7 +2,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 
-const pluginRoot = new URL("../../../", import.meta.url)
+const pluginRoot = new URL("../../../../../plugins/desk/", import.meta.url)
 const read = path => readFileSync(new URL(path, pluginRoot), "utf8")
 
 // Source-contract witnesses only; actual interruption/replacement proof belongs to the consuming host.

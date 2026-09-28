@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { validateClaudePackagingContract } from "../../src/activation/claude-packaging.js"
+import { validateClaudePackagingContract } from "../../../../../plugins/desk/mcp/src/activation/claude-packaging.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
@@ -365,7 +365,7 @@ test("Claude packaging metadata is backed by fresh evidence and support matrix r
   assert.match(evidenceRow.evidence_command_or_doc, /superpowers_host_consumers\.test\.js/u)
   assert.match(evidenceRow.evidence_command_or_doc, /alpha runtime qualification required/u)
   assert.doesNotMatch(evidenceRow.evidence_command_or_doc, /unit-4b-claude-help-evidence\.log/u)
-  assert.match(evidenceRow.evidence_command_or_doc, /node --test plugins\/desk\/mcp\/__tests__\/activation\/claude_packaging\.test\.js/u)
+  assert.match(evidenceRow.evidence_command_or_doc, /node --test tests\/desk\/mcp\/__tests__\/activation\/claude_packaging\.test\.js/u)
   assert.deepEqual({
     activationManifestClaudeSource: activationTarget.entrypoints.claude,
     evidenceDisposition: evidenceRow.disposition,

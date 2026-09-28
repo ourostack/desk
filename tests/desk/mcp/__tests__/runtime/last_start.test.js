@@ -7,7 +7,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import {
   appendRepairLog, LAST_START_FILE, LAST_START_ROOTS_DIR, lastStartPath, lastStartRootKey, REPAIR_LOG_FILE, resolveDeskStateDir, resolveReadinessStateHome, writeLastStart,
-} from "../../src/runtime/last-start.js"
+} from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { existsSync } from "node:fs"
 import { mkTempRoot } from "../_temp_roots.js"
 

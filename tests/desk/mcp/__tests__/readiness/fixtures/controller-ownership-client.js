@@ -1,6 +1,6 @@
 import { Server } from "node:net"
-import { connectOrStartController } from "../../../src/readiness/controller-client.js"
-import { rebuildIndex } from "../../../src/indexer/index.js"
+import { connectOrStartController } from "../../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { rebuildIndex } from "../../../../../../plugins/desk/mcp/src/indexer/index.js"
 
 const [root, stateHome, encodedContract] = process.argv.slice(2)
 const semanticContract = JSON.parse(encodedContract)

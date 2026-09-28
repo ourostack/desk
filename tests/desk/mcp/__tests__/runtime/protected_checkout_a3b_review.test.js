@@ -9,11 +9,11 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout } from "../../src/runtime/protected-checkout.js"
-import { MESSAGES } from "../../src/runtime/git-guard-policy.js"
-import { POWERSHELL_GIT_FORMS } from "../../src/runtime/powershell-commands.js"
+import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
+import { MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
+import { POWERSHELL_GIT_FORMS } from "../../../../../plugins/desk/mcp/src/runtime/powershell-commands.js"
 
-const plugin = fileURLToPath(new URL("../../../", import.meta.url))
+const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
 const q = (text) => `'${text.replaceAll("'", "'\\''")}'`
 const psq = (text) => `'${text.replaceAll("'", "''")}'`

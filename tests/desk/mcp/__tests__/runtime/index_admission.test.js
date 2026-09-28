@@ -5,7 +5,7 @@ import { strict as assert } from "node:assert"
 import { writeFileSync } from "node:fs"
 import { PassThrough } from "node:stream"
 import * as path from "node:path"
-import { main, parseArgs, resolveStartupStateBranch } from "../../index.js"
+import { main, parseArgs, resolveStartupStateBranch } from "../../../../../plugins/desk/mcp/index.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 test("--state-branch is parsed, and the activation config's desk.state_branch is the fallback", async () => {
@@ -132,9 +132,9 @@ test("with the real runtime inspector and importer, main restores the runtime af
 })
 
 test("the entrypoint gives main an onClosed that exits when the host closes stdin", async () => {
-  const { runIfEntrypoint } = await import("../../index.js")
+  const { runIfEntrypoint } = await import("../../../../../plugins/desk/mcp/index.js")
   const { pathToFileURL } = await import("node:url")
-  const indexPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..", "index.js")
+  const indexPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../../../plugins/desk/mcp/index.js")
   const exits = []
   let options
   await runIfEntrypoint({
@@ -148,7 +148,7 @@ test("the entrypoint gives main an onClosed that exits when the host closes stdi
 })
 
 test("--degraded: integrity codes refuse, read-only codes keep reads, and a crew-state code with --state-branch hands over to Desk", async () => {
-  const { launcherMode, parseArgs } = await import("../../index.js")
+  const { launcherMode, parseArgs } = await import("../../../../../plugins/desk/mcp/index.js")
   assert.equal(launcherMode({}), null)
   assert.deepEqual(parseArgs(["--degraded", "snapshot_missing", "--degraded-reason", "no snapshot"]), { root: null, person: null, degraded: "snapshot_missing", degradedReason: "no snapshot" })
   assert.deepEqual(launcherMode(parseArgs(["--degraded", "snapshot_missing", "--degraded-reason", "no snapshot"])), { code: "snapshot_missing", reason: "no snapshot", mode: "refuse", blocksWrites: true })
@@ -169,7 +169,7 @@ test("--degraded takes precedence over --onboarding", async () => {
 })
 
 test("DESK_READINESS_PROBE_MS tunes the hung-controller probe", async () => {
-  const { hungTuning } = await import("../../index.js")
+  const { hungTuning } = await import("../../../../../plugins/desk/mcp/index.js")
   assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "300" }), { probeMs: 300 })
   assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "0" }), {})
   assert.deepEqual(hungTuning({ DESK_READINESS_PROBE_MS: "soon" }), {})
@@ -177,7 +177,7 @@ test("DESK_READINESS_PROBE_MS tunes the hung-controller probe", async () => {
 })
 
 test("crash handlers hand uncaught errors and rejections to the session, and are removed on close", async () => {
-  const { installCrashHandlers } = await import("../../index.js")
+  const { installCrashHandlers } = await import("../../../../../plugins/desk/mcp/index.js")
   const { EventEmitter } = await import("node:events")
   const target = new EventEmitter()
   const recorded = []
@@ -205,8 +205,8 @@ test("crash handlers hand uncaught errors and rejections to the session, and are
 })
 
 test("the shipped importer runs inspection and restore through the admission job, and each failure names its state", async () => {
-  const { importPreparedRuntime } = await import("../../index.js")
-  const { importRuntimeServer, inspectRuntimeDependencyPack } = await import("../../src/runtime/bootstrap.js")
+  const { importPreparedRuntime } = await import("../../../../../plugins/desk/mcp/index.js")
+  const { importRuntimeServer, inspectRuntimeDependencyPack } = await import("../../../../../plugins/desk/mcp/src/runtime/bootstrap.js")
   const { admitInProcess } = await import("./_in_process_desk.js")
   const root = await mkTempRoot("desk-main-worker-runtime-")
   const jobs = []
@@ -216,7 +216,7 @@ test("the shipped importer runs inspection and restore through the admission job
     runtimeInspector: inspectRuntimeDependencyPack,
     offload: async (job) => {
       jobs.push(job.kind)
-      if (job.kind === "resolve") return (await import("../../src/runtime/admission-worker.js")).runAdmissionJob(job)
+      if (job.kind === "resolve") return (await import("../../../../../plugins/desk/mcp/src/runtime/admission-worker.js")).runAdmissionJob(job)
       assert.equal(job.input.inspect, extra.inspect ?? true)
       return reply
     },

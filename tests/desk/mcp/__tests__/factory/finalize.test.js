@@ -11,11 +11,11 @@ import { fileURLToPath } from "node:url"
 
 import {
   factoryStateRoot, listFinalizeRequests, requestFinalize, setConsent, updateJobsIndex, writeLocalFacts, writeMarker, writeStatus,
-} from "../../src/factory/outbox.js"
+} from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, scratch, session } from "./_session_helpers.js"
 
-const moduleUrl = new URL("../../src/factory/flush.js", import.meta.url)
+const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/flush.js", import.meta.url)
 async function load() {
   assert.ok(existsSync(moduleUrl), "the flush module must exist")
   return import(moduleUrl)
@@ -85,7 +85,7 @@ test("finalize waits for the current session log to go quiet before deriving it"
   await requestFinalize(ctx.env, { job: JOB, deskRoot: ctx.desk }, { now: () => new Date(Date.now() - 1000).toISOString() })
   await fs.appendFile(live.log_path, "")
   await fs.utimes(live.log_path, new Date(), new Date())
-  const { deriveFile } = await import("../../src/factory/derive-run.js")
+  const { deriveFile } = await import("../../../../../plugins/desk/mcp/src/factory/derive-run.js")
   const seen = []
   const derive = async (env, file, options) => {
     const waitedFrom = performance.now()

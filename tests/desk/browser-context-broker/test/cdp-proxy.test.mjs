@@ -7,10 +7,10 @@ import test from 'node:test';
 import { chromium } from 'playwright-core';
 import WebSocket from 'ws';
 
-import { startLeaseProxy } from '../src/cdp-proxy.mjs';
-import { createLease, releaseLease } from '../src/leases.mjs';
-import { withBrokerLock } from '../src/lock.mjs';
-import { readRegistry, writeRegistry } from '../src/registry.mjs';
+import { startLeaseProxy } from '../../../../plugins/desk/browser-context-broker/src/cdp-proxy.mjs';
+import { createLease, releaseLease } from '../../../../plugins/desk/browser-context-broker/src/leases.mjs';
+import { withBrokerLock } from '../../../../plugins/desk/browser-context-broker/src/lock.mjs';
+import { readRegistry, writeRegistry } from '../../../../plugins/desk/browser-context-broker/src/registry.mjs';
 import { startFakeCdpServer } from './fixtures/fake-cdp-server.mjs';
 import { REQUEST_TIMEOUT_LIMIT_MS, settlesWithin, waitUntil } from './fixtures/settle.mjs';
 
@@ -354,7 +354,7 @@ test('proxy publication rejects expiration during startup', async () => {
           registry.leases[lease.id].expiresAt = new Date(Date.now() - 1_000).toISOString();
           await writeRegistry(directory, registry);
         });
-        const { recordProxy } = await import('../src/leases.mjs');
+        const { recordProxy } = await import('../../../../plugins/desk/browser-context-broker/src/leases.mjs');
         return recordProxy(...args);
       },
     }),

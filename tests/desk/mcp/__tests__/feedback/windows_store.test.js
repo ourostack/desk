@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
-import { resolvePrivateStore, withPrivateStore } from "../../src/feedback/store.js"
+import { resolvePrivateStore, withPrivateStore } from "../../../../../plugins/desk/mcp/src/feedback/store.js"
 import { mkFeedbackFixture, useStateHome, cleanup, writePosixNodeProvider } from "./_helpers.js"
 
 const isWindows = process.platform === "win32"

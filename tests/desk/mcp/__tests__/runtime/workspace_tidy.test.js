@@ -6,19 +6,19 @@ import os from "node:os"
 import { execFileSync, spawn } from "node:child_process"
 import { once } from "node:events"
 import { mkTempRoot } from "../_temp_roots.js"
-import { readProcessStart } from "../../src/readiness/process-start.js"
-import { readInspectionGit } from "../../src/runtime/git-inspection.js"
-import { TIDY_GIT_TIMEOUT_MS } from "../../src/runtime/workspace-tidy.js"
+import { readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
+import { readInspectionGit } from "../../../../../plugins/desk/mcp/src/runtime/git-inspection.js"
+import { TIDY_GIT_TIMEOUT_MS } from "../../../../../plugins/desk/mcp/src/runtime/workspace-tidy.js"
 // Injected Git runners stand in for workspace tidy's own, so they keep its per-call limit rather than the hooks' 2 s default.
 const tidyInspectionGit = (cwd, args) => readInspectionGit(cwd, args, {}, { timeoutMs: TIDY_GIT_TIMEOUT_MS })
-import { serializeMarkdown } from "../../src/util/fm.js"
+import { serializeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { pathToFileURL } from "node:url"
 import { createRequire } from "node:module"
-import { dispositionRecord, mergeTidyEvidence } from "../../src/runtime/workspace-evidence.js"
-import { withWorkspaceClaim } from "../../src/runtime/workspace-claim.js"
-const boot = createRequire(import.meta.url)("../../../hooks/boot-checks.cjs")
+import { dispositionRecord, mergeTidyEvidence } from "../../../../../plugins/desk/mcp/src/runtime/workspace-evidence.js"
+import { withWorkspaceClaim } from "../../../../../plugins/desk/mcp/src/runtime/workspace-claim.js"
+const boot = createRequire(import.meta.url)("../../../../../plugins/desk/hooks/boot-checks.cjs")
 
-const moduleUrl = new URL("../../src/runtime/workspace-tidy.js", import.meta.url)
+const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/runtime/workspace-tidy.js", import.meta.url)
 const tidy = await import(moduleUrl).catch((error) => {
   if (error.code !== "ERR_MODULE_NOT_FOUND") throw error
   return {}

@@ -11,13 +11,13 @@ import { existsSync, promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { flush } from "../../src/factory/flush.js"
-import { toPublished } from "../../src/factory/publish.js"
-import { checkLabelsAgainstFacts, validateLabelsBytes } from "../../src/factory/label-schema.js"
+import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
+import { toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
+import { checkLabelsAgainstFacts, validateLabelsBytes } from "../../../../../plugins/desk/mcp/src/factory/label-schema.js"
 import {
   factoryStateRoot, gitBlobSha, holdLabels, quarantine, readConsent, readMachineSecret, setConsent, writeLocalFacts, writeLocalLabels, writeMarker,
-} from "../../src/factory/outbox.js"
-import { validatePublishedBytes } from "../../src/factory/published-schema.js"
+} from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
 

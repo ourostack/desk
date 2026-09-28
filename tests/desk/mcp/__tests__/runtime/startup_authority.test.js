@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { callTool } from "../../src/server.js"
+import { callTool } from "../../../../../plugins/desk/mcp/src/server.js"
 import { admitInProcess, startInProcess } from "./_in_process_desk.js"
 
 function tempRoot(prefix) {

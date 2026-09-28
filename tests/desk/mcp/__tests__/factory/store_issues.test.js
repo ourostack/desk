@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { issuesClient } from "../../src/factory/store-issues.js"
+import { issuesClient } from "../../../../../plugins/desk/mcp/src/factory/store-issues.js"
 
 const TOKEN = "ghs_SENTINEL"
 const ok = (json) => ({ code: 0, stdout: json === undefined ? "" : JSON.stringify(json), stderr: "" })

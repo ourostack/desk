@@ -134,13 +134,13 @@ const hostManifestFixtureFiles = [
   "plugins/desk/skills/session-start/SKILL.md",
   "plugins/desk/skills/using-desk/SKILL.md",
   "plugins/desk/mcp/src/activation/adapters/codex.js",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-activation-config.json",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-instructions.md",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/manual-only/generated-config.toml",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-activation-config.json",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-config.toml",
-  "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-activation-config.json",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-instructions.md",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/manual-only/generated-config.toml",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-activation-config.json",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-config.toml",
+  "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md",
   "plugins/desk/plugin.json",
   "plugins/superpowers/.claude-plugin/plugin.json",
   "plugins/superpowers/.codex-plugin/plugin.json",
@@ -900,9 +900,9 @@ test("root host-manifest verifier catches stale generated host-facing files", as
       mutate: (fixtureRoot) => {
         writeText(
           fixtureRoot,
-          "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml",
+          "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml",
           loadText(
-            "plugins",
+            "tests",
             "desk",
             "mcp",
             "__tests__",
@@ -935,9 +935,9 @@ test("root host-manifest verifier catches stale generated host-facing files", as
 })
 
 test("root host verifier selects an explicit legacy configuration across all three native metadata checks", async () => {
-  const { buildCopilotBundle } = await import("../../src/activation/copilot-bundle.js")
-  const { materializeCodexActivation } = await import("../../src/activation/adapters/codex.js")
-  const { validateActivationManifest } = await import("../../src/activation/validate.js")
+  const { buildCopilotBundle } = await import("../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js")
+  const { materializeCodexActivation } = await import("../../../../../plugins/desk/mcp/src/activation/adapters/codex.js")
+  const { validateActivationManifest } = await import("../../../../../plugins/desk/mcp/src/activation/validate.js")
   const verifier = loadHostManifestVerifier()
   await withHostFreshnessFixture(async (root) => {
     // A temporary, explicitly declared legacy packaging configuration, not the shipped alpha or a native session.
@@ -980,7 +980,7 @@ test("root host verifier selects an explicit legacy configuration across all thr
         existingConfig: '# user-authored Codex config\nmodel = "gpt-5.4"\napproval_policy = "on-request"\n',
         existingInstructions: "# user-authored Codex guidance\nKeep repo-local rules intact.\n",
       })
-      const directory = `plugins/desk/mcp/__tests__/fixtures/activation/codex/${mode}`
+      const directory = `tests/desk/mcp/__tests__/fixtures/activation/codex/${mode}`
       writeText(root, `${directory}/generated-config.toml`, result.generatedConfig)
       if (mode !== "manual-only") writeText(root, `${directory}/generated-instructions.md`, result.generatedInstructions)
     }

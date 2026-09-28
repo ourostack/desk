@@ -9,10 +9,10 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { fallbackOperation, guardShellCommand, protectCheckout, redact } from "../../src/runtime/protected-checkout.js"
-import { classifyGit, MESSAGES } from "../../src/runtime/git-guard-policy.js"
-import { readInspectionGit } from "../../src/runtime/git-inspection.js"
-import { expandBraces } from "../../src/runtime/shell-commands.js"
+import { fallbackOperation, guardShellCommand, protectCheckout, redact } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
+import { classifyGit, MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
+import { readInspectionGit } from "../../../../../plugins/desk/mcp/src/runtime/git-inspection.js"
+import { expandBraces } from "../../../../../plugins/desk/mcp/src/runtime/shell-commands.js"
 
 const q = (text) => `'${text.replaceAll("'", "'\\''")}'`
 const SECRET = "ghs_replaySecretValue0123456789"
@@ -223,7 +223,7 @@ test("replay: a PowerShell program whose known value is Git is judged as Git", a
 
 // Round 4 review (review-30-round4.md): credentials in every spelling the reviewer tried, whole-tree discard spelled
 // as a path, and plumbing that moves HEAD or discards work.
-const hook = fileURLToPath(new URL("../../../hooks/protected-checkout.cjs", import.meta.url))
+const hook = fileURLToPath(new URL("../../../../../plugins/desk/hooks/protected-checkout.cjs", import.meta.url))
 const FAKE = ["ghp_FAKE0000SECRET", "hunter2pass", "tok_FAKE_ENV_9999", "sk-FAKEFAKEFAKEFAKE1234"]
 
 test("review 4: no credential reaches a denial, in the guard or through the hook", async (t) => {

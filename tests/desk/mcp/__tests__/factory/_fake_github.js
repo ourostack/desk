@@ -8,7 +8,7 @@
 
 import { createHash } from "node:crypto"
 
-import { gitBlobSha } from "../../src/factory/outbox.js"
+import { gitBlobSha } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 export const TOKEN = "ghp_SENTINEL"
 export const BOT = "github-actions[bot]"

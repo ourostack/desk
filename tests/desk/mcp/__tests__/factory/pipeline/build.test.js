@@ -5,8 +5,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { build, jobLink, storePublicPlugins, storeRecords } from "../../../src/factory/pipeline/build.js"
-import { serializePublished } from "../../../src/factory/publish.js"
+import { build, jobLink, storePublicPlugins, storeRecords } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
+import { serializePublished } from "../../../../../../plugins/desk/mcp/src/factory/publish.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.join(here, "..", "fixtures")

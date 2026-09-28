@@ -3,10 +3,10 @@ import assert from "node:assert/strict"
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { spawn } from "node:child_process"
-import { openDb, closeDb, getMeta, runMigrations } from "../../src/db/init.js"
-import { connectOrStartController } from "../../src/server.js"
-import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
-import { openChangeJournal } from "../../src/readiness/journal.js"
+import { openDb, closeDb, getMeta, runMigrations } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/server.js"
+import { connectOrStartController as connectController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { openChangeJournal } from "../../../../../plugins/desk/mcp/src/readiness/journal.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const identities = {
@@ -26,7 +26,7 @@ function deferred() {
 }
 
 async function generationModule() {
-  const module = await import("../../src/readiness/generations.js").catch((error) => {
+  const module = await import("../../../../../plugins/desk/mcp/src/readiness/generations.js").catch((error) => {
     if (error.code !== "ERR_MODULE_NOT_FOUND") throw error
     return {}
   })
@@ -184,7 +184,7 @@ test("support smoke: process restart replays durable mutations and discovers ext
   const stateHome = path.join(directory, "state")
   fs.mkdirSync(root)
   const options = { deskRoot: root, stateHome, ephemeral: true, policy: { lexical: "required", semantic: "unsupported" } }
-  const serverUrl = new URL("../../src/server.js", import.meta.url).href
+  const serverUrl = new URL("../../../../../plugins/desk/mcp/src/server.js", import.meta.url).href
   const child = spawn(process.execPath, ["--input-type=module", "-e", `
     import { writeFileSync } from 'node:fs';
     import path from 'node:path';

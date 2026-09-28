@@ -3,8 +3,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { desk_timeline, indexedTimeline } from "../../src/tools/search.js"
-import { openDb, closeDb } from "../../src/db/init.js"
+import { desk_timeline, indexedTimeline } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,

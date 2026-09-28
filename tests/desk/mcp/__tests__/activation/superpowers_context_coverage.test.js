@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { resolveSuperpowersContext } from "../../src/activation/superpowers-context.js"
+import { resolveSuperpowersContext } from "../../../../../plugins/desk/mcp/src/activation/superpowers-context.js"
 
 test("context preserves a canonical task stat error after successful root validation without changing files", async (t) => {
   const base = await fs.mkdtemp(path.join(tmpdir(), "superpowers-canonical-stat-"))

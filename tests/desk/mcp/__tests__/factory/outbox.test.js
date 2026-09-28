@@ -41,7 +41,7 @@ import {
   writeStatus,
   writeVisibilityCache,
   withDerivationLock,
-} from "../../src/factory/outbox.js"
+} from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 const nativeMac = { skip: process.platform !== "darwin" }
 

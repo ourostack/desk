@@ -8,13 +8,13 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { guardShellCommand, protectCheckout, protectedCheckoutHook } from "../../src/runtime/protected-checkout.js"
-import { classifyGit, MESSAGES } from "../../src/runtime/git-guard-policy.js"
-import { hasOption, parseGitOptions, SPECS } from "../../src/runtime/git-guard-options.js"
-import { mayInvokeGit } from "../../src/runtime/guard-unknowns.js"
-import { existingDirectory, mktempPath, physicalDirectory } from "../../src/runtime/shell-paths.js"
+import { guardShellCommand, protectCheckout, protectedCheckoutHook } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
+import { classifyGit, MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
+import { hasOption, parseGitOptions, SPECS } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-options.js"
+import { mayInvokeGit } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
+import { existingDirectory, mktempPath, physicalDirectory } from "../../../../../plugins/desk/mcp/src/runtime/shell-paths.js"
 
-const plugin = fileURLToPath(new URL("../../../", import.meta.url))
+const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
 const q = (text) => `'${text.replaceAll("'", "'\\''")}'`
 const psq = (text) => `'${text.replaceAll("'", "''")}'`
@@ -347,7 +347,7 @@ test("A3b: the Git-reach rule, option parser and mktemp model", () => {
 })
 
 test("A3b: Desk admission records the host's state branch beside the protection marker", async (t) => {
-  const { createDeskSession } = await import("../../src/runtime/desk-session.js")
+  const { createDeskSession } = await import("../../../../../plugins/desk/mcp/src/runtime/desk-session.js")
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-admission-")))
   t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
   for (const child of ["_meta", "_archive"]) mkdirSync(path.join(root, child))

@@ -6,7 +6,7 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import {
   inspectStateBranch, isStateBranchName, repairStateBranch, runGit, stateBranchProblem, STATE_BRANCH_REPAIR,
-} from "../../src/runtime/state-branch.js"
+} from "../../../../../plugins/desk/mcp/src/runtime/state-branch.js"
 import { git, makeGitDesk, writeFile } from "./_admission_fixtures.js"
 
 test("state branch names follow Git's rules for a plain branch", () => {

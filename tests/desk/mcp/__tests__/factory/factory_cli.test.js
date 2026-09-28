@@ -29,11 +29,11 @@ import {
   runJobLinkCommand,
   runStatusCommand,
   runValidatePrCommand,
-} from "../../scripts/factory.js"
-import { jobId } from "../../src/factory/binding.js"
-import { factoryStateRoot, readConsent, setConsent, updateJobsIndex, writeLocalFacts } from "../../src/factory/outbox.js"
+} from "../../../../../plugins/desk/mcp/scripts/factory.js"
+import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
+import { factoryStateRoot, readConsent, setConsent, updateJobsIndex, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
-const SCRIPT = fileURLToPath(new URL("../../scripts/factory.js", import.meta.url))
+const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/factory.js", import.meta.url))
 const FIXTURE_STORE = fileURLToPath(new URL("fixtures/store", import.meta.url))
 
 async function scratch(run) {
@@ -708,7 +708,7 @@ async function seedJob(env, job) {
 }
 
 test("deskVersion is the installed plugin's version", () => {
-  assert.equal(deskVersion(), JSON.parse(readFileSync(fileURLToPath(new URL("../../../plugin.json", import.meta.url)), "utf8")).version)
+  assert.equal(deskVersion(), JSON.parse(readFileSync(fileURLToPath(new URL("../../../../../plugins/desk/plugin.json", import.meta.url)), "utf8")).version)
 })
 
 test("evaluate computes the task's job as the task tools do and prepares its briefs", () => scratch(async (env) => {
@@ -766,7 +766,7 @@ test("evaluate refuses malformed options, a relative or missing desk and a malfo
 test("evaluate-accept checks the evaluator's answer and moves accepted labels into the outbox", () => scratch(async (env) => {
   const job = LABELS_GOLDEN.job
   await seedJob(env, job)
-  const { prepareEvaluation } = await import("../../src/factory/evaluate-run.js")
+  const { prepareEvaluation } = await import("../../../../../plugins/desk/mcp/src/factory/evaluate-run.js")
   const [briefFile] = (await prepareEvaluation(env, { job, pluginVersion: LABELS_GOLDEN.evaluator.plugin_version })).briefs
   const brief = JSON.parse(readFileSync(briefFile, "utf8"))
   // No marker names this session's log, so the labels rest on the facts alone.

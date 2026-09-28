@@ -4,12 +4,12 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { indexDbPath } from "../../src/db/init.js"
-import { ensureIndexOrQuarantine } from "../../src/server.js"
-import { desk_status } from "../../src/tools/status.js"
+import { indexDbPath } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { ensureIndexOrQuarantine } from "../../../../../plugins/desk/mcp/src/server.js"
+import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
 import {
   admitControlPlane, resolveAdmittedPerson, validateAdmissionAuthority, verifyAdmissionAuthority,
-} from "../../src/activation/admit.js"
+} from "../../../../../plugins/desk/mcp/src/activation/admit.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 async function deskWithCorruptIndex() {

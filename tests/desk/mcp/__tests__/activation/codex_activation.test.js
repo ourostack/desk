@@ -14,7 +14,7 @@ const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),
 )
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")
-const fixturesRoot = path.join(mcpRoot, "__tests__", "fixtures", "activation", "codex")
+const fixturesRoot = path.join(mcpRoot, "../../../tests/desk/mcp/__tests__/fixtures/activation/codex")
 const ledgerPath = ".codex/desk-activation-ledger.json"
 const expectedDeskVersion = JSON.parse(
   readFileSync(path.join(repoRoot, "plugins", "desk", "activation", "desk.activation.json"), "utf8"),

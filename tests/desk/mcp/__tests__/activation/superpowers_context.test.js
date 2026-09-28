@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
-import { resolveWriteTarget } from "../../src/util/paths.js"
+import { resolveWriteTarget } from "../../../../../plugins/desk/mcp/src/util/paths.js"
 
 let fixtureRoot
 beforeEach(() => {
@@ -16,7 +16,7 @@ beforeEach(() => {
 afterEach(() => rmSync(fixtureRoot, { recursive: true, force: true }))
 
 async function loadResolver() {
-  const { resolveSuperpowersContext } = await import("../../src/activation/superpowers-context.js")
+  const { resolveSuperpowersContext } = await import("../../../../../plugins/desk/mcp/src/activation/superpowers-context.js")
   return resolveSuperpowersContext
 }
 
@@ -111,7 +111,7 @@ test("empty optional artifact paths are refused rather than silently rebound", a
 
 test("CLI refuses an option without its value before producing a context", () => {
   const result = spawnSync(process.execPath, [
-    fileURLToPath(new URL("../../src/activation/superpowers-context.js", import.meta.url)), "--desk-root",
+    fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/activation/superpowers-context.js", import.meta.url)), "--desk-root",
   ], { encoding: "utf8" })
   assert.equal(result.status, 1)
   assert.equal(result.stdout, "")
@@ -389,7 +389,7 @@ test("person-off context retains the ordinary Desk path authority", async () => 
 })
 
 function commandArgs(input) {
-  const helper = fileURLToPath(new URL("../../src/activation/superpowers-context.js", import.meta.url))
+  const helper = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/activation/superpowers-context.js", import.meta.url))
   const args = [
     helper,
     "--desk-root", input.deskRoot,

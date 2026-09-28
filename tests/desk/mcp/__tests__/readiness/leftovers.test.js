@@ -5,7 +5,7 @@ import { strict as assert } from "node:assert"
 import { existsSync, linkSync, lstatSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs"
 import * as net from "node:net"
 import * as path from "node:path"
-import { onUnmountedVolume, processIsAlive, pruneReadinessLeftovers, socketAccepts } from "../../src/readiness/leftovers.js"
+import { onUnmountedVolume, processIsAlive, pruneReadinessLeftovers, socketAccepts } from "../../../../../plugins/desk/mcp/src/readiness/leftovers.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const id = (digit) => digit.repeat(64)

@@ -9,8 +9,8 @@ import { strict as assert } from "node:assert"
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { activeTasks } from "../../src/desk/active-tasks.js"
-import { folderHandle, isHandle } from "../../src/desk/handles.js"
+import { activeTasks } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
+import { folderHandle, isHandle } from "../../../../../plugins/desk/mcp/src/desk/handles.js"
 const PASSWORD_FOLDER = "setup-root-pw-hunter-two"
 
 function card(root, rel, frontmatter) {

@@ -6,8 +6,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { isCredentialLike as deskIsCredentialLike } from "../../src/desk/naming.js"
-import { isCredentialLike } from "../../src/factory/credential.js"
+import { isCredentialLike as deskIsCredentialLike } from "../../../../../plugins/desk/mcp/src/desk/naming.js"
+import { isCredentialLike } from "../../../../../plugins/desk/mcp/src/factory/credential.js"
 
 const DESK_CASES = [
   "please-use-pw-hunter2",

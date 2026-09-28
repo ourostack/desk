@@ -6,9 +6,9 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
-import { closeDb, openDb, setMeta } from "../../src/db/init.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
-import { callTool } from "../../src/server.js"
+import { closeDb, openDb, setMeta } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
+import { callTool } from "../../../../../plugins/desk/mcp/src/server.js"
 
 function makeRoot() {
   return mkdtempSync(path.join(tmpdir(), "desk-status-artifacts-"))

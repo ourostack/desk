@@ -4,7 +4,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
-import { task_create } from "../../src/tools/task.js"
+import { task_create } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
 
 test("task_create writes a v1 task.md with required + default fields", async () => {
@@ -190,8 +190,8 @@ test("task_create rejects a 7-word name as shape", async () => {
 
 test("reading (updating) an existing badly named task still works — only creation validates", async () => {
   const root = await mkTempDeskRoot()
-  const { writeMarkdown } = await import("../../src/util/fm.js")
-  const { task_update } = await import("../../src/tools/task.js")
+  const { writeMarkdown } = await import("../../../../../plugins/desk/mcp/src/util/fm.js")
+  const { task_update } = await import("../../../../../plugins/desk/mcp/src/tools/task.js")
   const filePath = path.join(root, "engineering", "hi-do-the-thing", "task.md")
   await writeMarkdown(
     filePath,

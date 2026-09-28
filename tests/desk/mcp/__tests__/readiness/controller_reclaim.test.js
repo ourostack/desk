@@ -6,8 +6,8 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writ
 import * as net from "node:net"
 import * as path from "node:path"
 import { spawn } from "node:child_process"
-import { connectOrStartController, endpointIsAbandoned, endpointIsReclaimable, probeEndpoint, socketTakeoverGuards, unlinkIfUnchanged } from "../../src/readiness/controller-client.js"
-import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
+import { connectOrStartController, endpointIsAbandoned, endpointIsReclaimable, probeEndpoint, socketTakeoverGuards, unlinkIfUnchanged } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const posixOnly = process.platform === "win32" ? "POSIX sockets and modes" : false
@@ -130,7 +130,7 @@ test("a socket whose recorded owner runs is never taken over, even when it refus
 })
 
 test("a socket whose recorded owner PID now names a later process (its start time differs) is reclaimed, and that process is left alone", { skip: posixOnly }, async (t) => {
-  const { readProcessStart } = await import("../../src/readiness/process-start.js")
+  const { readProcessStart } = await import("../../../../../plugins/desk/mcp/src/readiness/process-start.js")
   const root = await mkTempRoot("desk-reclaim-reused-pid-")
   const stateHome = path.join(root, "state")
   const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
@@ -198,7 +198,7 @@ test("an owner that starts running between the two refused probes keeps its sock
 })
 
 test("a running owner that is only busy gets one longer handshake and is joined, never replaced", { skip: posixOnly }, async (t) => {
-  const { startReadinessController } = await import("../../src/readiness/controller-server.js")
+  const { startReadinessController } = await import("../../../../../plugins/desk/mcp/src/readiness/controller-server.js")
   const root = await mkTempRoot("desk-reclaim-busy-owner-")
   const stateHome = path.join(root, "state")
   const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
@@ -213,7 +213,7 @@ test("a running owner that is only busy gets one longer handshake and is joined,
   t.after(() => sleeper.kill("SIGKILL"))
   await new Promise((resolve) => sleeper.once("spawn", resolve))
   // With that process's own start time, so the record names it exactly, as its owner's own record would.
-  const { readProcessStart } = await import("../../src/readiness/process-start.js")
+  const { readProcessStart } = await import("../../../../../plugins/desk/mcp/src/readiness/process-start.js")
   writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({ ...record, owner: { ...record.owner, pid: sleeper.pid, process_start: await readProcessStart(sleeper.pid) } }))
   const listeners = running.server.listeners("connection")
   let delayed = false
@@ -271,7 +271,7 @@ test("a socket must refuse twice, and stay the same file, before it counts as ab
 })
 
 test("a session meets the controller at the endpoint its owner record names, when that one answers", { skip: posixOnly }, async (t) => {
-  const { startReadinessController } = await import("../../src/readiness/controller-server.js")
+  const { startReadinessController } = await import("../../../../../plugins/desk/mcp/src/readiness/controller-server.js")
   const root = await mkTempRoot("desk-rendezvous-")
   const stateHome = path.join(root, "state")
   const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
@@ -309,7 +309,7 @@ test("a recorded endpoint that does not answer is ignored", { skip: posixOnly },
 })
 
 test("a controller server error after it started is logged, never unhandled", { skip: posixOnly }, async (t) => {
-  const { startReadinessController } = await import("../../src/readiness/controller-server.js")
+  const { startReadinessController } = await import("../../../../../plugins/desk/mcp/src/readiness/controller-server.js")
   const root = await mkTempRoot("desk-server-error-")
   const identity = controllerIdentity({ root, protocolVersion: 1, lexicalContract: {} })
   const endpoint = deriveControllerEndpoint({ identity })

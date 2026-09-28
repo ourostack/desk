@@ -11,7 +11,7 @@ import {
   resolveBundleRepoRoot,
   runCopilotBundleGenerator,
   validateCopilotPackagingContract,
-} from "../../src/activation/copilot-bundle.js"
+} from "../../../../../plugins/desk/mcp/src/activation/copilot-bundle.js"
 
 const repoRoot = path.resolve(
   fileURLToPath(new URL("../../../../..", import.meta.url)),

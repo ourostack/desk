@@ -4,7 +4,7 @@ import { spawn } from "node:child_process"
 import { EventEmitter } from "node:events"
 import { writeFileSync, existsSync } from "node:fs"
 import * as path from "node:path"
-import { runControllerChild } from "../../src/readiness/controller-child.js"
+import { runControllerChild } from "../../../../../plugins/desk/mcp/src/readiness/controller-child.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const flush = () => new Promise((resolve) => setImmediate(resolve))
@@ -138,7 +138,7 @@ test("a child close blocked by an open connection has a bounded exit deadline", 
 })
 
 test("importing the child module without a CLI entry does not start a controller", async () => {
-  const entry = new URL("../../src/readiness/controller-child.js", import.meta.url).href
+  const entry = new URL("../../../../../plugins/desk/mcp/src/readiness/controller-child.js", import.meta.url).href
   const child = spawn(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(entry)}); console.log("imported")`], { stdio: ["ignore", "pipe", "pipe"] })
   let output = ""
   child.stdout.on("data", (chunk) => { output += chunk })

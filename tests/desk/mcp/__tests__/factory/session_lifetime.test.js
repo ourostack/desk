@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { reconcileMarker } from "../../src/factory/session-lifetime.js"
+import { reconcileMarker } from "../../../../../plugins/desk/mcp/src/factory/session-lifetime.js"
 import { END, ID, scratch, session } from "./_session_helpers.js"
 
 test("lifetime inspection retains a current end, ignores child/foreign activity and accepts a final line without newline", () => scratch(async (ctx) => {

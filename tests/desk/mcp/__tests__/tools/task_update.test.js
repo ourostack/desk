@@ -5,8 +5,8 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
-import { task_create, task_update } from "../../src/tools/task.js"
-import { writeMarkdown } from "../../src/util/fm.js"
+import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 
 test("task_update merges frontmatter and refreshes `updated`", async () => {

@@ -20,8 +20,8 @@ import {
   TIME_SHAPE,
   SESSION_ID_V4,
   __PUBLISHED_SPECS__,
-} from "../../src/factory/published-schema.js"
-import { LIMITS } from "../../src/factory/schema.js"
+} from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
+import { LIMITS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const GOLDEN_BYTES = readFileSync(path.join(here, "fixtures", "published-golden.json"))

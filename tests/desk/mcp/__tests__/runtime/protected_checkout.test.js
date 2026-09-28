@@ -6,8 +6,8 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-const source = new URL("../../src/runtime/protected-checkout.js", import.meta.url)
-const plugin = fileURLToPath(new URL("../../../", import.meta.url))
+const source = new URL("../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js", import.meta.url)
+const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const guidance = /^Desk protected checkout .+: .*git worktree add --detach "\$HOME\/<new directory>" <ref>/u
 let root, protectedRoot, ordinary, child
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -188,7 +188,7 @@ test("binding marks only the bound checkout, preserves Git layout and leaves new
 })
 
 test("Desk admission marks launcher-bound roots before activation, and marks a newly bound root too", async () => {
-  const { createDeskSession } = await import("../../src/runtime/desk-session.js")
+  const { createDeskSession } = await import("../../../../../plugins/desk/mcp/src/runtime/desk-session.js")
   const roots = [path.join(root, "session-a"), path.join(root, "session-b")]
   for (const dir of roots) { mkdirSync(dir); git(dir, "init", "-q"); for (const child of ["_meta", "_archive"]) mkdirSync(path.join(dir, child)) }
   let bound = roots[0]

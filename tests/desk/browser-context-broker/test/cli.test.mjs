@@ -7,16 +7,16 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 
-import { createLease } from '../src/leases.mjs';
-import { readRegistry, writeRegistry } from '../src/registry.mjs';
+import { createLease } from '../../../../plugins/desk/browser-context-broker/src/leases.mjs';
+import { readRegistry, writeRegistry } from '../../../../plugins/desk/browser-context-broker/src/registry.mjs';
 import { startFakeCdpServer } from './fixtures/fake-cdp-server.mjs';
 import { waitUntil } from './fixtures/settle.mjs';
 
 const execFileAsync = promisify(execFile);
-const packageRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+const packageRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../../plugins/desk/browser-context-broker');
 const cli = path.join(packageRoot, 'bin/browser-context-broker.mjs');
-const providerFixture = path.join(packageRoot, 'test/fixtures/fake-provider.mjs');
-const scratchRoot = path.join(packageRoot, 'test/.cli-state');
+const providerFixture = path.join(packageRoot, '../../../tests/desk/browser-context-broker/test/fixtures/fake-provider.mjs');
+const scratchRoot = path.join(packageRoot, '../../../tests/desk/browser-context-broker/test/.cli-state');
 const packageScratchRoot = path.resolve(packageRoot, '../../../..', '.browser-context-broker-package-test');
 
 async function stateDir() {

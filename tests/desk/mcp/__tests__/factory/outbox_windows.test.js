@@ -12,7 +12,7 @@ import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { listMarkers, readMachineSecret, setConsent, writeMarker } from "../../src/factory/outbox.js"
+import { listMarkers, readMachineSecret, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { nativeProbe } from "../feedback/_helpers.js"
 
 const isWindows = process.platform === "win32"

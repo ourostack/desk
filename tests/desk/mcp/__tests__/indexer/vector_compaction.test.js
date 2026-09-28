@@ -6,9 +6,9 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 
-import { desk_search, desk_timeline } from "../../src/tools/search.js"
-import { openDb, closeDb } from "../../src/db/init.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import { desk_search, desk_timeline } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 import {
   buildFixtureIndex,
   makeEmbedFetch,
@@ -18,7 +18,7 @@ import {
 } from "../tools/_search_helpers.js"
 
 async function loadCompactionModule() {
-  return import("../../src/indexer/vector-compaction.js")
+  return import("../../../../../plugins/desk/mcp/src/indexer/vector-compaction.js")
 }
 
 function vector(seed, dimension = ACTIVE_EMBEDDING_SPEC.dimension) {

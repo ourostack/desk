@@ -838,13 +838,13 @@ test("installed-profile Codex CLI smoke proof is machine-readable", () => {
 test("current Codex support matrix names alpha source contracts without promoting historical runtime proof", () => {
   const codex = codexMatrixRow()
 
-  assert.ok(codex.source_paths.includes("plugins/desk/mcp/__tests__/activation/codex_smoke.test.js"))
+  assert.ok(codex.source_paths.includes("tests/desk/mcp/__tests__/activation/codex_smoke.test.js"))
   assert.ok(
     codex.source_paths.includes(
       "plugins/superpowers/.codex-plugin/plugin.json",
     ),
   )
-  assert.match(codex.evidence_command_or_doc, /node --test plugins\/desk\/mcp\/__tests__\/activation\/codex_smoke\.test\.js/u)
+  assert.match(codex.evidence_command_or_doc, /node --test tests\/desk\/mcp\/__tests__\/activation\/codex_smoke\.test\.js/u)
   assert.doesNotMatch(codex.evidence_command_or_doc, /codex-smoke-evidence\.md/u)
   assert.match(codex.evidence_command_or_doc, /alpha runtime qualification required/u)
   assert.equal(
@@ -853,4 +853,4 @@ test("current Codex support matrix names alpha source contracts without promotin
     "Current alpha metadata must retain the unsupported Desktop primitive until independently qualified",
   )
 })
-import { parseHostCapabilityEvidence } from "../../src/activation/support-matrix.js"
+import { parseHostCapabilityEvidence } from "../../../../../plugins/desk/mcp/src/activation/support-matrix.js"

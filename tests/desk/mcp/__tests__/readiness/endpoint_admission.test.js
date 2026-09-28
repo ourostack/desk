@@ -6,7 +6,7 @@ import { createServer } from "node:http"
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { connectOrStartController, startControllerRuntime } from "../../src/server.js"
+import { connectOrStartController, startControllerRuntime } from "../../../../../plugins/desk/mcp/src/server.js"
 
 function fixture(t) {
   const root = mkdtempSync(path.join(realpathSync(tmpdir()), "desk-endpoints-"))

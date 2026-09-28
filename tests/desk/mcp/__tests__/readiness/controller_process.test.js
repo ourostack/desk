@@ -4,15 +4,15 @@ import { fork, spawn } from "node:child_process"
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import * as net from "node:net"
 import * as path from "node:path"
-import { startControllerProcess, reclaimControllerChild, verifyOwnedChild, supervisorEndpoint, releaseSupervisor } from "../../src/readiness/controller-process.js"
-import { controllerIdentity, deriveControllerEndpoint } from "../../src/readiness/identity.js"
-import { readinessContracts } from "../../src/readiness/contracts.js"
-import { probeController } from "../../src/readiness/hung-controller.js"
-import { request } from "../../src/readiness/controller-client.js"
-import { readProcessStart } from "../../src/readiness/process-start.js"
+import { startControllerProcess, reclaimControllerChild, verifyOwnedChild, supervisorEndpoint, releaseSupervisor } from "../../../../../plugins/desk/mcp/src/readiness/controller-process.js"
+import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
+import { readinessContracts } from "../../../../../plugins/desk/mcp/src/readiness/contracts.js"
+import { probeController } from "../../../../../plugins/desk/mcp/src/readiness/hung-controller.js"
+import { request } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
-import { connectOrStartController, startControllerRuntime } from "../../src/server.js"
-import { controllerSocketIdentity } from "../../src/readiness/controller-server.js"
+import { connectOrStartController, startControllerRuntime } from "../../../../../plugins/desk/mcp/src/server.js"
+import { controllerSocketIdentity } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
 
 const policy = { lexical: "required", semantic: "unsupported" }
 const posixOnly = process.platform === "win32" ? "POSIX sockets and stop signals" : false
@@ -389,7 +389,7 @@ test("a corrupted owner record during child startup rejects admission instead of
       process.send({ type: "ready", owner: { token: "fixture" } });
     });
   `)
-  const manager = new URL("../../src/readiness/controller-process.js", import.meta.url).href
+  const manager = new URL("../../../../../plugins/desk/mcp/src/readiness/controller-process.js", import.meta.url).href
   const parent = spawn(process.execPath, ["--input-type=module", "-e", `
     import { fork } from "node:child_process";
     import { startControllerProcess } from ${JSON.stringify(manager)};

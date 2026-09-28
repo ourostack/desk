@@ -4,7 +4,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import {
   ADMISSION_BACKOFF_MS, ADMISSION_STEADY_MS, admissionRetryDelay, createAdmission, exceptionOutcome,
-} from "../../src/runtime/admission.js"
+} from "../../../../../plugins/desk/mcp/src/runtime/admission.js"
 
 function fakeTimers() {
   let now = 0

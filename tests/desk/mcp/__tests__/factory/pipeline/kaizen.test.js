@@ -8,8 +8,8 @@ import {
   parseCard,
   planCard,
   syncKaizenCards,
-} from "../../../src/factory/pipeline/kaizen.js"
-import { MEASURE_IDS } from "../../../src/factory/pipeline/rollups.js"
+} from "../../../../../../plugins/desk/mcp/src/factory/pipeline/kaizen.js"
+import { MEASURE_IDS } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/rollups.js"
 import { fakeIssues } from "./_fake_issues.js"
 
 const J = (n) => String(n).padStart(32, "0")

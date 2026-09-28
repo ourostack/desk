@@ -4,8 +4,8 @@ import { spawn } from "node:child_process"
 import { mkdtempSync, rmSync, readFileSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { connectOrStartController } from "../../src/readiness/controller-client.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 
 function deferred() {
   let resolve

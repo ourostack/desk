@@ -11,7 +11,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
-import { personPrefix } from "../../src/util/paths.js"
+import { personPrefix } from "../../../../../plugins/desk/mcp/src/util/paths.js"
 
 const ROOT = path.join(path.sep, "tmp", "crew-repo")
 

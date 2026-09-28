@@ -8,13 +8,13 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { MessageChannel } from "node:worker_threads"
-import { ActivationFailure } from "../../src/activation/failures.js"
+import { ActivationFailure } from "../../../../../plugins/desk/mcp/src/activation/failures.js"
 import {
   attachAdmissionWorker, prepareRuntimeInputs, warmNativeModules, resolveAdmissionInputs, reviveError, runAdmissionJob, runInWorker, serializeError,
-} from "../../src/runtime/admission-worker.js"
+} from "../../../../../plugins/desk/mcp/src/runtime/admission-worker.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
-const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 
 test("resolve: root, activation and policy, or the error that stopped them, as plain data", async () => {
   const base = await mkTempRoot("desk-worker-resolve-")
@@ -167,7 +167,7 @@ test("runInWorker reports a worker that errors or exits before answering, and se
 })
 
 test("the readiness policy comes from desk_runtime, then desk.runtime, then the defaults", async () => {
-  const { resolveStartupReadinessPolicy } = await import("../../src/runtime/startup-resolve.js")
+  const { resolveStartupReadinessPolicy } = await import("../../../../../plugins/desk/mcp/src/runtime/startup-resolve.js")
   const base = await mkTempRoot("desk-worker-policy-")
   const write = (name, body) => {
     const file = path.join(base, name)

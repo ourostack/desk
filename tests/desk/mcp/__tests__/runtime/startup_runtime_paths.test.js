@@ -8,12 +8,12 @@ import {
   main,
   resolveMcpServerVersion,
   resolveRuntimeInspector,
-} from "../../index.js"
+} from "../../../../../plugins/desk/mcp/index.js"
 import { admitInProcess } from "./_in_process_desk.js"
 import {
   importRuntimeServer,
   inspectRuntimeDependencyPack,
-} from "../../src/runtime/bootstrap.js"
+} from "../../../../../plugins/desk/mcp/src/runtime/bootstrap.js"
 
 function makeRoot(prefix) {
   return mkdtempSync(path.join(tmpdir(), prefix))

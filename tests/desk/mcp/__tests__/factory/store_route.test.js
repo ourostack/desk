@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
-import { DEFAULT_STORE, resolveStore } from "../../src/factory/store-route.js"
+import { DEFAULT_STORE, resolveStore } from "../../../../../plugins/desk/mcp/src/factory/store-route.js"
 
 // The result without its warnings; the warning tests below check those.
 function route(args) {

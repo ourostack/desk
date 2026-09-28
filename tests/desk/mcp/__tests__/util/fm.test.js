@@ -11,13 +11,13 @@ import {
   serializeMarkdown,
   slugify,
   today,
-} from "../../src/util/fm.js"
-import { friction_add } from "../../src/tools/friction.js"
-import { lesson_add } from "../../src/tools/lesson.js"
+} from "../../../../../plugins/desk/mcp/src/util/fm.js"
+import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
+import { lesson_add } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
 import { mkTempDeskRoot } from "../tools/_helpers.js"
 
 test("vendored Unicode 16 category tables match their pinned source", async () => {
-  const root = fileURLToPath(new URL("../../src/util/unicode-16/", import.meta.url))
+  const root = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/util/unicode-16/", import.meta.url))
   const expected = {
     "letter.cjs": "57b42eb5efb05e70fd7378a7998cd4502516ecffaa6ab1119255e45a49077ad4",
     "mark.cjs": "bcd99fa2bda1cc7b38be4a6d3f4713c96701bb42bfd7066b91d305e11eb3b48d",

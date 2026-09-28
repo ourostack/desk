@@ -19,15 +19,15 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { readFileSync } from "node:fs"
 
-import { closeDb, indexDbPath, openDb } from "../../src/db/init.js"
-import { EMBEDDING_DIM } from "../../src/indexer/embed.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
-import { configureRuntimeArtifacts, ensureIndex } from "../../src/server-helpers.js"
-import { desk_search } from "../../src/tools/search.js"
-import { desk_thread } from "../../src/tools/thread.js"
+import { closeDb, indexDbPath, openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { EMBEDDING_DIM } from "../../../../../plugins/desk/mcp/src/indexer/embed.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
+import { configureRuntimeArtifacts, ensureIndex } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
+import { desk_search } from "../../../../../plugins/desk/mcp/src/tools/search.js"
+import { desk_thread } from "../../../../../plugins/desk/mcp/src/tools/thread.js"
 
 const require = createRequire(import.meta.url)
-const packageLock = require("../../package-lock.json")
+const packageLock = require("../../../../../plugins/desk/mcp/package-lock.json")
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const pluginRoot = path.join(repoRoot, "plugins", "desk")
 const productionDocPath = "tasks/dependency-activation/task.md"

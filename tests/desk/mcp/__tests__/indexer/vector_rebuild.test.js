@@ -7,20 +7,20 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import matter from "gray-matter"
 
-import { closeDb, getMeta, openDb } from "../../src/db/init.js"
-import { chunkBody } from "../../src/indexer/chunk.js"
-import { rebuildIndex } from "../../src/indexer/index.js"
-import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
+import { closeDb, getMeta, openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { chunkBody } from "../../../../../plugins/desk/mcp/src/indexer/chunk.js"
+import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../../../../plugins/desk/mcp/src/artifacts/source-scope.js"
 import {
   ACTIVE_EMBEDDING_SPEC,
   chunkIdentity,
-} from "../../src/indexer/spec.js"
+} from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 import {
   configureRuntimeArtifacts,
   ensureIndex,
   resolveEnsureIndexOptions,
-} from "../../src/server-helpers.js"
-import { desk_reindex } from "../../src/tools/reindex.js"
+} from "../../../../../plugins/desk/mcp/src/server-helpers.js"
+import { desk_reindex } from "../../../../../plugins/desk/mcp/src/tools/reindex.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 const NO_RELEASE_ARTIFACTS = { snapshots: false, vectorPacks: false }

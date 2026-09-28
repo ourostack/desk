@@ -7,12 +7,12 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
-import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
-import { ensureIndex } from "../../src/server-helpers.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../../../../plugins/desk/mcp/src/artifacts/source-scope.js"
+import { ensureIndex } from "../../../../../plugins/desk/mcp/src/server-helpers.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
-const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
 const policyPath = path.join(deskPluginRoot, "artifacts", "publication-policy.json")

@@ -10,7 +10,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { discover, classify } from "../../src/indexer/discover.js"
+import { discover, classify } from "../../../../../plugins/desk/mcp/src/indexer/discover.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 async function writeFile(root, rel, body) {

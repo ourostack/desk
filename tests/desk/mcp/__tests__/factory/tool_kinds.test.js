@@ -1,8 +1,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { toolKind } from "../../src/factory/tool-kinds.js"
-import { ENUMS } from "../../src/factory/schema.js"
+import { toolKind } from "../../../../../plugins/desk/mcp/src/factory/tool-kinds.js"
+import { ENUMS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 
 const CLAUDE_CASES = [
   ["Bash", "shell"], ["BashOutput", "shell"], ["KillShell", "shell"],

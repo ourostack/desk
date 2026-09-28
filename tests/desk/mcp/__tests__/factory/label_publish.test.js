@@ -11,7 +11,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { validateLabelsBytes } from "../../src/factory/label-schema.js"
+import { validateLabelsBytes } from "../../../../../plugins/desk/mcp/src/factory/label-schema.js"
 import {
   clearEvaluation,
   evaluationPaths,
@@ -26,8 +26,8 @@ import {
   writeEvaluationBrief,
   writeLocalFacts,
   writeLocalLabels,
-} from "../../src/factory/outbox.js"
-import { publishedClock, serializePublished, toPublished, toPublishedLabels } from "../../src/factory/publish.js"
+} from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { publishedClock, serializePublished, toPublished, toPublishedLabels } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const LOCAL = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))

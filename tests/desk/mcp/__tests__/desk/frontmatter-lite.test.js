@@ -4,7 +4,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import matter from "gray-matter"
-import { parseFrontmatterLite } from "../../src/desk/frontmatter-lite.js"
+import { parseFrontmatterLite } from "../../../../../plugins/desk/mcp/src/desk/frontmatter-lite.js"
 
 // gray-matter caches parses by content, so each call gets a fresh string.
 let salt = 0

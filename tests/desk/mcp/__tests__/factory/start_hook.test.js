@@ -11,14 +11,14 @@ import { createRequire } from "node:module"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { factoryStateRoot, quarantine, readStatus, requestEvaluation, requestFinalize, setConsent, updateJobsIndex, writeStatus } from "../../src/factory/outbox.js"
-import { jobId } from "../../src/factory/binding.js"
-import { resolveDeskStateDir, writeLastStart } from "../../src/runtime/last-start.js"
-import { copilotStartupDirection, claudeStartupDirection } from "../../src/util/startup-direction.js"
+import { factoryStateRoot, quarantine, readStatus, requestEvaluation, requestFinalize, setConsent, updateJobsIndex, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
+import { resolveDeskStateDir, writeLastStart } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
+import { copilotStartupDirection, claudeStartupDirection } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
 import { STORE, scratch } from "./_session_helpers.js"
 
 const require = createRequire(import.meta.url)
-const HOOKS = fileURLToPath(new URL("../../../hooks/", import.meta.url))
+const HOOKS = fileURLToPath(new URL("../../../../../plugins/desk/hooks/", import.meta.url))
 const PLUGIN = path.dirname(HOOKS)
 const BOOT = path.join(HOOKS, "boot-checks.cjs")
 const START = path.join(HOOKS, "factory-start.cjs")

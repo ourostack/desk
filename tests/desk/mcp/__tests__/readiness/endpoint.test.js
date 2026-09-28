@@ -4,9 +4,9 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { spawnSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import * as endpoints from "../../src/readiness/identity.js"
-import { connectOrStartController } from "../../src/readiness/controller-client.js"
-import { startReadinessController } from "../../src/readiness/controller-server.js"
+import * as endpoints from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
+import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { startReadinessController } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
 
 function filesystem(entries = {}) {
   const dirs = new Map(Object.entries({

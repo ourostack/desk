@@ -4,8 +4,8 @@ import { readFileSync, readdirSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { calculateFormulas } from "../../../src/factory/pipeline/formulas.js"
-import { buildJobTimeline } from "../../../src/factory/pipeline/timeline.js"
+import { calculateFormulas } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/formulas.js"
+import { buildJobTimeline } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/timeline.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const FACTS = path.join(here, "..", "fixtures", "store", "facts")

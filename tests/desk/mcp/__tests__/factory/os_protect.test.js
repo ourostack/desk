@@ -19,7 +19,7 @@ import {
   lstatIfPresent,
   protectLeafFile,
   realpathExistingPrefix,
-} from "../../src/factory/os-protect.js"
+} from "../../../../../plugins/desk/mcp/src/factory/os-protect.js"
 
 const NAMING = { label: "desk_test", subject: "test thing" }
 const nativeMac = { skip: process.platform !== "darwin" }

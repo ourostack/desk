@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { PassThrough } from "node:stream"
-import { startDiagnosticServer } from "../../src/runtime/diagnostic-server.js"
+import { startDiagnosticServer } from "../../../../../plugins/desk/mcp/src/runtime/diagnostic-server.js"
 
 test("diagnostic startup with omitted options uses ambient streams and releases their listeners", async (t) => {
   const input = new PassThrough()

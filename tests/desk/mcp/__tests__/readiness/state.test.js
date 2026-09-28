@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { transitionReadiness } from "../../src/readiness/state.js"
+import { transitionReadiness } from "../../../../../plugins/desk/mcp/src/readiness/state.js"
 
 test("CONTROL_READY can enter lexical convergence but not READY directly", () => {
   assert.equal(

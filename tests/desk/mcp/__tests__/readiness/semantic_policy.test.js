@@ -4,11 +4,11 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { startInProcess } from "../runtime/_in_process_desk.js"
-import { normalizeReadinessPolicy } from "../../src/activation/readiness-policy.js"
-import { controllerIdentity } from "../../src/readiness/identity.js"
-import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
-import { connectOrStartController, beginBackgroundConvergence, startControllerRuntime } from "../../src/server.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import { normalizeReadinessPolicy } from "../../../../../plugins/desk/mcp/src/activation/readiness-policy.js"
+import { controllerIdentity } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
+import { connectOrStartController as connectController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { connectOrStartController, beginBackgroundConvergence, startControllerRuntime } from "../../../../../plugins/desk/mcp/src/server.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 
 function deferred() {
   let resolve

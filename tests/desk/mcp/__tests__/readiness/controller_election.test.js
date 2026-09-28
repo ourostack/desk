@@ -11,9 +11,9 @@ import * as path from "node:path"
 import {
   connectOrStartController,
   createControllerResponseAccumulator,
-} from "../../src/readiness/controller-client.js"
-import { startReadinessController } from "../../src/readiness/controller-server.js"
-import * as endpoints from "../../src/readiness/identity.js"
+} from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { startReadinessController } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
+import * as endpoints from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 
 function tempFixture(prefix) {
   return mkdtempSync(path.join(realpathSync(tmpdir()), prefix))

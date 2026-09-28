@@ -6,7 +6,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { DESK_MARKER, gitCommitCwds } from "../../src/factory/shell-git.js"
+import { DESK_MARKER, gitCommitCwds } from "../../../../../plugins/desk/mcp/src/factory/shell-git.js"
 
 const BASE = "/base/repo"
 const HOME = "/home/someone"

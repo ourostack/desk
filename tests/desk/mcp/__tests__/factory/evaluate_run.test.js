@@ -22,7 +22,7 @@ import {
   evaluatePending,
   evaluateTask,
   prepareEvaluation,
-} from "../../src/factory/evaluate-run.js"
+} from "../../../../../plugins/desk/mcp/src/factory/evaluate-run.js"
 import {
   clearEvaluationRequest,
   factoryStateRoot,
@@ -33,13 +33,13 @@ import {
   updateJobsIndex,
   writeLocalFacts,
   writeMarker,
-} from "../../src/factory/outbox.js"
+} from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const LOCAL = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))
 const PUBLISHED = JSON.parse(readFileSync(path.join(here, "fixtures", "published-golden.json"), "utf8"))
 const LABELS = JSON.parse(readFileSync(path.join(here, "fixtures", "labels-golden.json"), "utf8"))
-const SKILL = readFileSync(path.join(here, "..", "..", "..", "skills", "factory-evaluator", "SKILL.md"), "utf8")
+const SKILL = readFileSync(path.join(here, "../../../../../plugins/desk/skills/factory-evaluator/SKILL.md"), "utf8")
 const STORE = "ourostack/factory"
 const JOB = LABELS.job
 const SESSION = LABELS.session

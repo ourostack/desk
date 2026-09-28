@@ -17,11 +17,11 @@ import {
   runMigrationCli,
   shellQuote,
   startupMigrationLine,
-} from "../../src/runtime/pending-migrations.js"
+} from "../../../../../plugins/desk/mcp/src/runtime/pending-migrations.js"
 
-const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..")
+const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp")
 const deskPluginRoot = path.resolve(mcpRoot, "..")
-const boot = createRequire(import.meta.url)("../../../hooks/boot-checks.cjs")
+const boot = createRequire(import.meta.url)("../../../../../plugins/desk/hooks/boot-checks.cjs")
 
 function migrationText({ id, safety = "safe", restart = false, agent = null, detect = "exit 0", check = "exit 0", migrate = "exit 0", announce = "Done.", description = "a test migration" }) {
   return [

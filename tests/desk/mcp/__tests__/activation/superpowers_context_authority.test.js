@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { tmpdir } from "node:os"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs"
-import { resolveWriteTarget } from "../../src/util/paths.js"
+import { resolveWriteTarget } from "../../../../../plugins/desk/mcp/src/util/paths.js"
 
 let fixtureRoot
 let deskRoot

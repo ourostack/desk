@@ -1,6 +1,6 @@
 import * as path from "node:path"
 import { startInProcess } from "../../runtime/_in_process_desk.js"
-import { connectOrStartController } from "../../../src/server.js"
+import { connectOrStartController } from "../../../../../../plugins/desk/mcp/src/server.js"
 
 const [root, stateHome, allowedEndpoint] = process.argv.slice(2)
 const originalFetch = globalThis.fetch

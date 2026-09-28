@@ -14,7 +14,7 @@ import {
   isHandle,
   resolveTaskHandle,
   resolveTrackHandle,
-} from "../../src/desk/handles.js"
+} from "../../../../../plugins/desk/mcp/src/desk/handles.js"
 
 const ORIGINAL_STATE_HOME = process.env.XDG_STATE_HOME
 

@@ -1,12 +1,12 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { resolveHookDeskRoot } from "../../scripts/resolve-desk-root.js"
+import { resolveHookDeskRoot } from "../../../../../plugins/desk/mcp/scripts/resolve-desk-root.js"
 import { scratch, json } from "./_session_helpers.js"
 import * as path from "node:path"
 
 test("importing the canonical hook resolver emits nothing and uses the host binding rather than cwd", () => scratch(async (ctx) => {
-  const module = new URL("../../scripts/resolve-desk-root.js", import.meta.url).href
+  const module = new URL("../../../../../plugins/desk/mcp/scripts/resolve-desk-root.js", import.meta.url).href
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(module)})`], { env: ctx.env, encoding: "utf8" })
   assert.equal(result.status, 0)
   assert.equal(result.stdout, "")

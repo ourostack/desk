@@ -7,7 +7,7 @@ import * as path from "node:path"
 import * as os from "node:os"
 import { promises as fs } from "node:fs"
 
-import { discover, classify, isIndexable, normalizeDate } from "../../src/indexer/discover.js"
+import { discover, classify, isIndexable, normalizeDate } from "../../../../../plugins/desk/mcp/src/indexer/discover.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 async function buildFixture() {

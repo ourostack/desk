@@ -1,10 +1,10 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
-import { materializeCodexActivation } from "../../src/activation/adapters/codex.js"
+import { materializeCodexActivation } from "../../../../../plugins/desk/mcp/src/activation/adapters/codex.js"
 
 test("selected alpha guidance preserves legacy preferences and leaves the compatibility mapping to its redirect skill", () => {
-  const manifest = JSON.parse(readFileSync(new URL("../../../activation/desk.activation.json", import.meta.url), "utf8"))
+  const manifest = JSON.parse(readFileSync(new URL("../../../../../plugins/desk/activation/desk.activation.json", import.meta.url), "utf8"))
   manifest.dependencies = manifest.dependencies.filter((dependency) => !["superpowers", "work-suite"].includes(dependency.id))
   manifest.dependencies.push({
     id: "superpowers",
@@ -40,6 +40,6 @@ test("selected alpha guidance preserves legacy preferences and leaves the compat
   // The legacy Work Suite mapping belongs to the retired-name redirect skill, which the host's skill listing
   // surfaces; the owned block does not restate it.
   assert.doesNotMatch(selectedInstructions, /legacy.*Work Suite|Work Suite.*legacy/iu)
-  const redirect = readFileSync(new URL("../../../skills/superpowers-integration/SKILL.md", import.meta.url), "utf8")
+  const redirect = readFileSync(new URL("../../../../../plugins/desk/skills/superpowers-integration/SKILL.md", import.meta.url), "utf8")
   assert.match(redirect.split("---", 3)[1], /Work Suite capability mapping for unchanged standing instructions/u)
 })

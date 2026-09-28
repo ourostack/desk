@@ -11,9 +11,9 @@ import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, s
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 
-import { doctorRuntime } from "../../src/tools/doctor.js"
-import { legacyLedgerPartitions, LEGACY_LEDGER_SEGMENTS } from "../../src/protected/legacy-ledger.js"
-import { resolveStateHome } from "../../src/util/paths.js"
+import { doctorRuntime } from "../../../../../plugins/desk/mcp/src/tools/doctor.js"
+import { legacyLedgerPartitions, LEGACY_LEDGER_SEGMENTS } from "../../../../../plugins/desk/mcp/src/protected/legacy-ledger.js"
+import { resolveStateHome } from "../../../../../plugins/desk/mcp/src/util/paths.js"
 
 function makeState() {
   const base = mkdtempSync(path.join(tmpdir(), "desk-legacy-ledger-"))

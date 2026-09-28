@@ -2,7 +2,7 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { readFileSync } from "node:fs"
 
-const pluginRoot = new URL("../../../", import.meta.url)
+const pluginRoot = new URL("../../../../../plugins/desk/", import.meta.url)
 const read = (relativePath) => readFileSync(new URL(relativePath, pluginRoot), "utf8")
 
 test("session-resumption and task-lifecycle own bounded process continuity and delivery", () => {

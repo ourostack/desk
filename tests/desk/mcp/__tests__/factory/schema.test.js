@@ -22,7 +22,7 @@ import {
   LIMITS,
   LOCAL_SCHEMA,
   __SPECS__,
-} from "../../src/factory/schema.js"
+} from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const GOLDEN = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))
@@ -246,7 +246,7 @@ test("LOCAL_SCHEMA is the local schema value the golden fixture carries", () => 
 })
 
 test("the retired M3-1 alias names are no longer exported (M3-12)", async () => {
-  const schema = await import("../../src/factory/schema.js")
+  const schema = await import("../../../../../plugins/desk/mcp/src/factory/schema.js")
   assert.equal(Object.hasOwn(schema, "validateFacts"), false)
   assert.equal(Object.hasOwn(schema, "validateFactsBytes"), false)
 })

@@ -15,12 +15,12 @@ import { fileURLToPath } from "node:url"
 
 import { createHmac } from "node:crypto"
 
-import { toPublished, serializePublished, publishedFileName, REFUSALS, EARLIEST_SESSION_START } from "../../src/factory/publish.js"
-import { validatePublished, validatePublishedBytes, PUBLISHED_LIMITS, DATE_SHAPE } from "../../src/factory/published-schema.js"
-import { validateLocalFacts, LIMITS, ENUMS } from "../../src/factory/schema.js"
-import { deriveClaudeSession } from "../../src/factory/derive-claude.js"
-import { deriveCopilotSession } from "../../src/factory/derive-copilot.js"
-import { bindSession } from "../../src/factory/binding.js"
+import { toPublished, serializePublished, publishedFileName, REFUSALS, EARLIEST_SESSION_START } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
+import { validatePublished, validatePublishedBytes, PUBLISHED_LIMITS, DATE_SHAPE } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
+import { validateLocalFacts, LIMITS, ENUMS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { deriveClaudeSession } from "../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
+import { deriveCopilotSession } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
+import { bindSession } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { SESSION_IDS } from "./fixtures/claude/make.js"
 import { SESSIONS, buildSessionStore, defaultStoreRows, fakeCommitResolver } from "./fixtures/copilot/make.js"
 

@@ -12,14 +12,14 @@ import * as path from "node:path"
 
 import {
   generateRuntimeSupportMatrixCli,
-} from "../../scripts/generate-runtime-support-matrix.js"
+} from "../../../../../plugins/desk/mcp/scripts/generate-runtime-support-matrix.js"
 import {
   validateArtifactsCli,
-} from "../../scripts/validate-artifacts.js"
+} from "../../../../../plugins/desk/mcp/scripts/validate-artifacts.js"
 import {
   runRuntimeSupportMatrixVerifier,
   verifyRuntimeSupportMatrixCli,
-} from "../../scripts/verify-runtime-support-matrix.js"
+} from "../../../../../plugins/desk/mcp/scripts/verify-runtime-support-matrix.js"
 
 function makeRuntimeFixture() {
   const mcpRoot = mkdtempSync(path.join(tmpdir(), "desk-runtime-cli-"))

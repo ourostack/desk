@@ -8,7 +8,7 @@ import { promises as fs } from "node:fs"
 import {
   task_create,
   task_archive,
-} from "../../src/tools/task.js"
+} from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
 
 test("task_archive moves the dir into _archive/ and marks status=done", async () => {

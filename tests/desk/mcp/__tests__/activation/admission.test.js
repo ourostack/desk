@@ -1,8 +1,8 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 
-import { admitControlPlane } from "../../src/activation/admit.js"
-import { normalizeReadinessPolicy } from "../../src/activation/readiness-policy.js"
+import { admitControlPlane } from "../../../../../plugins/desk/mcp/src/activation/admit.js"
+import { normalizeReadinessPolicy } from "../../../../../plugins/desk/mcp/src/activation/readiness-policy.js"
 
 test("warm admission reaches CONTROL_READY without workspace traversal", async () => {
   let discoveryCalls = 0

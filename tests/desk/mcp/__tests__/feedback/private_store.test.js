@@ -10,7 +10,7 @@ import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
-import { resolvePrivateStore, withPrivateStore } from "../../src/feedback/store.js"
+import { resolvePrivateStore, withPrivateStore } from "../../../../../plugins/desk/mcp/src/feedback/store.js"
 import { mkFeedbackFixture, useStateHome, useHome, cleanup } from "./_helpers.js"
 
 async function modeOf(target) {
@@ -325,7 +325,7 @@ test("private store stamps the installed Desk preview rather than the MCP compon
   const restore = useStateHome(fixture.stateHome)
   try {
     const packageVersion = JSON.parse(
-      await fs.readFile(new URL("../../../plugin.json", import.meta.url), "utf8"),
+      await fs.readFile(new URL("../../../../../plugins/desk/plugin.json", import.meta.url), "utf8"),
     ).version
     const captured = await withPrivateStore(
       { deskRoot: fixture.deskRoot, person: "rowan" },

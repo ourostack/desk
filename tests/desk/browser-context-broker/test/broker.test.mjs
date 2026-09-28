@@ -4,9 +4,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 
-import { acquireContext, acquireLease } from '../src/broker.mjs';
-import { invokeProvider } from '../src/provider.mjs';
-import { readRegistry, writeRegistry } from '../src/registry.mjs';
+import { acquireContext, acquireLease } from '../../../../plugins/desk/browser-context-broker/src/broker.mjs';
+import { invokeProvider } from '../../../../plugins/desk/browser-context-broker/src/provider.mjs';
+import { readRegistry, writeRegistry } from '../../../../plugins/desk/browser-context-broker/src/registry.mjs';
 
 const providerFixture = new URL('./fixtures/json-provider.mjs', import.meta.url);
 const scratchRoot = path.resolve(

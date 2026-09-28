@@ -10,10 +10,10 @@ import { existsSync, promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 
 import { mkTempRoot } from "../_temp_roots.js"
-import { lastStartPath, resolveDeskStateDir, writeLastStart } from "../../src/runtime/last-start.js"
-import { runGit } from "../../src/runtime/state-branch.js"
+import { lastStartPath, resolveDeskStateDir, writeLastStart } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
+import { runGit } from "../../../../../plugins/desk/mcp/src/runtime/state-branch.js"
 
-const moduleUrl = new URL("../../src/runtime/desk-health.js", import.meta.url)
+const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/runtime/desk-health.js", import.meta.url)
 async function load() {
   assert.ok(existsSync(moduleUrl), "the desk-health check must exist")
   return import(moduleUrl)

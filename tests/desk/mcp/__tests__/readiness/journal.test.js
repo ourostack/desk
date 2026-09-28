@@ -4,19 +4,19 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import Database from "better-sqlite3"
 import { mkTempRoot } from "../_temp_roots.js"
-import { task_create, task_update, task_archive } from "../../src/tools/task.js"
-import { track_create, track_update } from "../../src/tools/track.js"
-import { friction_add } from "../../src/tools/friction.js"
-import { lesson_add } from "../../src/tools/lesson.js"
-import { callTool, connectOrStartController } from "../../src/server.js"
+import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
+import { track_create, track_update } from "../../../../../plugins/desk/mcp/src/tools/track.js"
+import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
+import { lesson_add } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
+import { callTool, connectOrStartController } from "../../../../../plugins/desk/mcp/src/server.js"
 import { startInProcess } from "../runtime/_in_process_desk.js"
-import { openDb, closeDb } from "../../src/db/init.js"
-import { commitLexicalGeneration } from "../../src/readiness/generations.js"
+import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { commitLexicalGeneration } from "../../../../../plugins/desk/mcp/src/readiness/generations.js"
 
 async function fixture() {
   const root = await mkTempRoot("desk-journal-")
   const stateDir = path.join(root, "controller")
-  const module = await import("../../src/readiness/journal.js").catch((error) => {
+  const module = await import("../../../../../plugins/desk/mcp/src/readiness/journal.js").catch((error) => {
     if (error.code !== "ERR_MODULE_NOT_FOUND") throw error
     return {}
   })
@@ -29,7 +29,7 @@ const observedAt = "2026-09-19T16:00:00.000Z"
 test("Windows journal creation never publishes an unprotected final directory", async () => {
   const root = await mkTempRoot("desk-journal-windows-create-")
   const stateDir = path.join(root, "journal")
-  const module = await import("../../src/readiness/journal.js")
+  const module = await import("../../../../../plugins/desk/mcp/src/readiness/journal.js")
   assert.equal(typeof module.ensurePrivateJournalDirectory, "function")
   await assert.rejects(module.ensurePrivateJournalDirectory({
     stateDir,

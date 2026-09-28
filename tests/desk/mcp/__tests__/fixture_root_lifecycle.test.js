@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url"
 // passing test — and then an unambiguously clean run, or the exact declared
 // alternative for a consumer that is red for a separately owned reason.
 
-const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../plugins/desk/mcp")
 
 const FIXTURE_OWNERS = [
   ["__tests__/indexer/index.test.js", "desk-idx-"],

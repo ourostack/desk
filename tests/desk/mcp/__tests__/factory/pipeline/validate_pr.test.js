@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { factsPathsForSession, isFactsPath, isLabelsPath, validatePr } from "../../../src/factory/pipeline/validate-pr.js"
+import { factsPathsForSession, isFactsPath, isLabelsPath, validatePr } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const GOLDEN_BYTES = readFileSync(path.join(here, "..", "fixtures", "published-golden.json"))

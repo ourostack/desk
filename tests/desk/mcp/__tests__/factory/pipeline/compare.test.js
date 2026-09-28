@@ -9,8 +9,8 @@ import {
   compareMedians,
   minGroupsFor,
   seedFromText,
-} from "../../../src/factory/pipeline/compare.js"
-import { compareVersions, isVersion } from "../../../src/factory/pipeline/versions.js"
+} from "../../../../../../plugins/desk/mcp/src/factory/pipeline/compare.js"
+import { compareVersions, isVersion } from "../../../../../../plugins/desk/mcp/src/factory/pipeline/versions.js"
 
 test("versions order by semantic-version precedence, as Desk's release checks do", () => {
   const ordered = ["1.0.0-alpha.1", "1.0.0-alpha.2", "1.0.0-alpha.10", "1.0.0-alpha.beta", "1.0.0-beta.2", "1.0.0", "1.0.1", "1.2.0", "2.0.0"]

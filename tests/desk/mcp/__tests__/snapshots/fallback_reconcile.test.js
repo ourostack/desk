@@ -11,23 +11,23 @@ import { mkTempRoot } from "../_temp_roots.js"
 import { zstdCompressSync } from "node:zlib"
 import matter from "gray-matter"
 
-import { closeDb, getMeta, indexDbPath, openDb } from "../../src/db/init.js"
-import { chunkBody } from "../../src/indexer/chunk.js"
-import { rebuildIndex } from "../../src/indexer/index.js"
-import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../src/artifacts/source-scope.js"
+import { closeDb, getMeta, indexDbPath, openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { chunkBody } from "../../../../../plugins/desk/mcp/src/indexer/chunk.js"
+import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
+import { ARTIFACT_SOURCE_SCOPE_PATHS } from "../../../../../plugins/desk/mcp/src/artifacts/source-scope.js"
 import {
   ACTIVE_EMBEDDING_SPEC,
   chunkIdentity,
-} from "../../src/indexer/spec.js"
+} from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 import {
   configureRuntimeArtifacts,
   ensureIndex,
   resolveEnsureIndexOptions,
-} from "../../src/server-helpers.js"
-import { desk_reindex } from "../../src/tools/reindex.js"
+} from "../../../../../plugins/desk/mcp/src/server-helpers.js"
+import { desk_reindex } from "../../../../../plugins/desk/mcp/src/tools/reindex.js"
 
 const require = createRequire(import.meta.url)
-const packageLock = require("../../package-lock.json")
+const packageLock = require("../../../../../plugins/desk/mcp/package-lock.json")
 const SOURCE_SCOPE_HASH = `sha256:${"a".repeat(64)}`
 const STALE_SOURCE_SCOPE_HASH = `sha256:${"d".repeat(64)}`
 const CURRENT_DOCUMENT_TREE_HASH = `sha256:${"b".repeat(64)}`

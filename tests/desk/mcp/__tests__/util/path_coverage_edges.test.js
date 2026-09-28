@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { syncBuiltinESMExports } from "node:module"
-import { isPathContained, resolveDeskRootWithSource, resolveWriteTarget } from "../../src/util/paths.js"
+import { isPathContained, resolveDeskRootWithSource, resolveWriteTarget } from "../../../../../plugins/desk/mcp/src/util/paths.js"
 
 async function temporaryRoot(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "desk-path-coverage-"))

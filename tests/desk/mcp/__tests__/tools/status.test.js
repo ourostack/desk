@@ -16,14 +16,14 @@ import { fileURLToPath } from "node:url"
 import fsNative from "node:fs"
 import { syncBuiltinESMExports } from "node:module"
 
-import { closeDb, indexDbPath, openDb, setMeta } from "../../src/db/init.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
-import { callTool, TOOL_IMPLS } from "../../src/server.js"
-import { desk_status } from "../../src/tools/status.js"
-import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../src/tool-names.js"
+import { closeDb, indexDbPath, openDb, setMeta } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
+import { callTool, TOOL_IMPLS } from "../../../../../plugins/desk/mcp/src/server.js"
+import { desk_status } from "../../../../../plugins/desk/mcp/src/tools/status.js"
+import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 
 const packageJson = JSON.parse(
-  readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
+  readFileSync(fileURLToPath(new URL("../../../../../plugins/desk/mcp/package.json", import.meta.url)), "utf8"),
 )
 
 function makeRoot() {
@@ -69,8 +69,8 @@ test("alpha status never discovers files and does not infer freshness from mtime
 })
 
 test("alpha status reports indexed proof without fencing or changing the serving path", async (t) => {
-  const { connectOrStartController } = await import("../../src/readiness/controller-client.js")
-  const { rebuildIndex } = await import("../../src/indexer/index.js")
+  const { connectOrStartController } = await import("../../../../../plugins/desk/mcp/src/readiness/controller-client.js")
+  const { rebuildIndex } = await import("../../../../../plugins/desk/mcp/src/indexer/index.js")
   const root = fsNative.realpathSync(makeRoot())
   mkdirSync(path.join(root, "controller-state"), { recursive: true, mode: 0o700 })
   let fences = 0, runs = 0
@@ -103,7 +103,7 @@ test("alpha status reports indexed proof without fencing or changing the serving
 })
 
 test("alpha runtime diagnostic reports lexical service blocked rather than a direct path", async () => {
-  const { createRuntimeDiagnostic } = await import("../../src/runtime/diagnostics.js")
+  const { createRuntimeDiagnostic } = await import("../../../../../plugins/desk/mcp/src/runtime/diagnostics.js")
   const diagnostic = createRuntimeDiagnostic({ reason: "missing_pack" })
   assert.equal(diagnostic.lexical.serving_path, "blocked")
   assert.equal(diagnostic.lexical.certain, false)

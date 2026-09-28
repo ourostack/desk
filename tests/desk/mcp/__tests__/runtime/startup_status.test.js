@@ -5,9 +5,9 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import {
   beginBackgroundConvergence, callTool, connectOrStartController, ensureIndex, startControllerRuntime,
-} from "../../src/server.js"
+} from "../../../../../plugins/desk/mcp/src/server.js"
 import { startInProcess, statusContextOf } from "./_in_process_desk.js"
-import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
+import { connectOrStartController as connectController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 
 function deferred() {
   let resolve

@@ -29,20 +29,20 @@ import {
   runVectorPackBuildCli,
   validateArtifacts,
   verifySnapshotArtifact,
-} from "../../src/artifacts/artifact-scripts.js"
+} from "../../../../../plugins/desk/mcp/src/artifacts/artifact-scripts.js"
 import {
   assertCanonicalArtifactSourcePaths,
   artifactSourceScopeHash,
-} from "../../src/artifacts/source-scope.js"
+} from "../../../../../plugins/desk/mcp/src/artifacts/source-scope.js"
 import {
   __performanceBudgetInternalsForTests,
   assertBudgetAllowsStart,
   assertWithinBudget,
   budgetValue,
   loadPerformanceBudgets,
-} from "../../src/artifacts/performance-budgets.js"
-import { rebuildIndex } from "../../src/indexer/index.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+} from "../../../../../plugins/desk/mcp/src/artifacts/performance-budgets.js"
+import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../../../..", import.meta.url)))
 const mcpRoot = path.join(repoRoot, "plugins", "desk", "mcp")

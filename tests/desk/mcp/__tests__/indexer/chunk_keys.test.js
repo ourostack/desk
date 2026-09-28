@@ -5,10 +5,10 @@ import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { chunkBody } from "../../src/indexer/chunk.js"
+import { chunkBody } from "../../../../../plugins/desk/mcp/src/indexer/chunk.js"
 
 const mcpRoot = path.resolve(
-  fileURLToPath(new URL("../..", import.meta.url)),
+  fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)),
 )
 
 async function loadSpecModule() {

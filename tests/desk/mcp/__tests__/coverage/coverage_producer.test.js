@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import processOnSpawn from "process-on-spawn"
 import { fileURLToPath } from "node:url"
-import { runCoverageCommand } from "../../src/coverage/runner.js"
+import { runCoverageCommand } from "../../../../../plugins/desk/mcp/src/coverage/runner.js"
 
 const realRepoRoot = fileURLToPath(new URL("../../../../../", import.meta.url))
 
@@ -120,7 +120,7 @@ function runProducerFixture(t, { complete, includeUnexecuted = false, viaChild =
     'process.stdout.write("child assertions completed\\n")',
     "",
   ].join("\n"))
-  writeSource("plugins/desk/mcp/__tests__/subject.test.js", [
+  writeSource("tests/desk/mcp/__tests__/subject.test.js", [
     'import { test } from "node:test"',
     'import { strict as assert } from "node:assert"',
     ...(viaChild ? ['import { spawnSync } from "node:child_process"'] : subjectImports),
@@ -394,7 +394,7 @@ test("an existing offline implementation without its own tests is measured and f
 })
 
 // The exclusions the repository actually ships, read from the maintained configuration rather than restated, so removing or re-adding an entry there is felt here.
-const maintainedExclusions = JSON.parse(readFileSync(new URL("../../config/coverage-gate.json", import.meta.url), "utf8")).exclusions
+const maintainedExclusions = JSON.parse(readFileSync(new URL("../../../../../plugins/desk/mcp/config/coverage-gate.json", import.meta.url), "utf8")).exclusions
 // The entry this change made obsolete, retained verbatim as the demonstrated cause rather than as a live exclusion.
 const obsoleteBridgeExclusion = {
   path: "scripts/skill-evals.cjs",

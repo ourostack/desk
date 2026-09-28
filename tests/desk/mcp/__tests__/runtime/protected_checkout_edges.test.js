@@ -4,8 +4,8 @@ import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { guardShellCommand, protectedCheckoutHook, protectCheckout } from "../../src/runtime/protected-checkout.js"
-import { inspectShell, tokenizeShell } from "../../src/runtime/shell-commands.js"
+import { guardShellCommand, protectedCheckoutHook, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
+import { inspectShell, tokenizeShell } from "../../../../../plugins/desk/mcp/src/runtime/shell-commands.js"
 
 function fixture(t) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-guard-edges-"))

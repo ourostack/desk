@@ -10,13 +10,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { guardShellCommand, protectCheckout } from "../../src/runtime/protected-checkout.js"
-import { MESSAGES } from "../../src/runtime/git-guard-policy.js"
-import { inspectionBudget, INSPECTION_STEPS, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, WORKTREE_COMMAND } from "../../src/runtime/guard-unknowns.js"
-import { inspectPowerShell, POWERSHELL_GIT_FORMS } from "../../src/runtime/powershell-commands.js"
-import { expandBraces, inspectShell, shellScript } from "../../src/runtime/shell-commands.js"
+import { guardShellCommand, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
+import { MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
+import { inspectionBudget, INSPECTION_STEPS, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, WORKTREE_COMMAND } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
+import { inspectPowerShell, POWERSHELL_GIT_FORMS } from "../../../../../plugins/desk/mcp/src/runtime/powershell-commands.js"
+import { expandBraces, inspectShell, shellScript } from "../../../../../plugins/desk/mcp/src/runtime/shell-commands.js"
 
-const plugin = fileURLToPath(new URL("../../../", import.meta.url))
+const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
 const q = (text) => `'${text.replaceAll("'", "'\\''")}'`
 const psq = (text) => `'${text.replaceAll("'", "''")}'`

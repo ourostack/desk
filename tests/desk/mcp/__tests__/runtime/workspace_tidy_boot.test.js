@@ -7,10 +7,10 @@ import { once } from "node:events"
 import { fileURLToPath } from "node:url"
 import { createRequire } from "node:module"
 import { mkTempRoot } from "../_temp_roots.js"
-import { dispositionRecord, mergeTidyEvidence } from "../../src/runtime/workspace-evidence.js"
+import { dispositionRecord, mergeTidyEvidence } from "../../../../../plugins/desk/mcp/src/runtime/workspace-evidence.js"
 
 const require = createRequire(import.meta.url)
-const hookPath = new URL("../../../hooks/boot-checks.cjs", import.meta.url)
+const hookPath = new URL("../../../../../plugins/desk/hooks/boot-checks.cjs", import.meta.url)
 let boot = {}
 try { boot = require(hookPath.pathname) } catch (error) { if (error.code !== "MODULE_NOT_FOUND") throw error }
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -259,7 +259,7 @@ test("the boot path does no Node search: it starts the repair launcher in the ho
   const f = await fixture()
   const alias = path.join(f.root, "desk-alias")
   await fs.symlink(f.desk, alias)
-  const resolver = require("../../../hooks/compatible-node.cjs")
+  const resolver = require("../../../../../plugins/desk/hooks/compatible-node.cjs")
   const original = resolver.compatibleNode
   let searches = 0
   resolver.compatibleNode = () => { searches += 1; throw new Error("no Node search on the boot path") }
@@ -285,7 +285,7 @@ test("the repair launcher runs the repair in a compatible Node, and with none re
 
   // The real resolver forced to find nothing: an old running Node, and no other Node anywhere.
   const empty = await mkTempRoot("desk-no-node-")
-  const { compatibleNode } = require("../../../hooks/compatible-node.cjs")
+  const { compatibleNode } = require("../../../../../plugins/desk/hooks/compatible-node.cjs")
   const bare = { ...f.env, PATH: empty, HOME: empty, DESK_NODE_SYSTEM_PREFIX: empty, NVM_DIR: "", FNM_DIR: "", VOLTA_HOME: "", ASDF_DATA_DIR: "", MISE_DATA_DIR: "", XDG_DATA_HOME: "", USERPROFILE: empty, APPDATA: empty, LOCALAPPDATA: empty, NVM_HOME: "", NVM_SYMLINK: "", ProgramFiles: empty, "ProgramFiles(x86)": empty }
   const probeBudgets = []
   const noNode = (options) => { probeBudgets.push(options.probeBudgetMs); return compatibleNode({ ...options, env: bare, current: { path: path.join(empty, "node"), version: "v16.20.2", abi: "93" } }) }

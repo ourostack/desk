@@ -5,8 +5,8 @@ import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { createDeskSession } from "../../src/runtime/desk-session.js"
-import { guardShellCommand } from "../../src/runtime/protected-checkout.js"
+import { createDeskSession } from "../../../../../plugins/desk/mcp/src/runtime/desk-session.js"
+import { guardShellCommand } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 
 async function admit(root, source) {
   const calls = []

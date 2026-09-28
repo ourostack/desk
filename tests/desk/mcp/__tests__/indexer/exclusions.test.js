@@ -7,13 +7,13 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { closeDb, openDb } from "../../src/db/init.js"
-import { discover } from "../../src/indexer/discover.js"
-import { rebuildIndex } from "../../src/indexer/index.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
+import { closeDb, openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { discover } from "../../../../../plugins/desk/mcp/src/indexer/discover.js"
+import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
-const mcpRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)))
+const mcpRoot = path.resolve(fileURLToPath(new URL("../../../../../plugins/desk/mcp", import.meta.url)))
 const repoRoot = path.resolve(mcpRoot, "..", "..", "..")
 const deskPluginRoot = path.join(repoRoot, "plugins", "desk")
 const policySchemaPath = path.join(

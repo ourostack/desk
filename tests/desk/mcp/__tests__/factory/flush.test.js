@@ -13,14 +13,14 @@ import { fileURLToPath } from "node:url"
 
 import {
   factoryStateRoot, gitBlobSha, readConsent, readMachineSecret, readStatus, readVisibilityCache, setConsent, writeLocalFacts, writeMarker, writeStatus, writeVisibilityCache,
-} from "../../src/factory/outbox.js"
-import { serializePublished, toPublished } from "../../src/factory/publish.js"
-import { validatePublishedBytes } from "../../src/factory/published-schema.js"
-import { jobId } from "../../src/factory/binding.js"
+} from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { serializePublished, toPublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
+import { validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
+import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { BOT, TOKEN, fakeGitHub, httpError } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
 
-const moduleUrl = new URL("../../src/factory/flush.js", import.meta.url)
+const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/flush.js", import.meta.url)
 async function load() {
   assert.ok(existsSync(moduleUrl), "the flush module must exist")
   return import(moduleUrl)

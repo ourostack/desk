@@ -8,11 +8,11 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { factoryStateRoot, quarantine, requestFinalize, setConsent, updateJobsIndex, writeLocalFacts, markDelivered } from "../../src/factory/outbox.js"
-import { jobId } from "../../src/factory/binding.js"
+import { factoryStateRoot, quarantine, requestFinalize, setConsent, updateJobsIndex, writeLocalFacts, markDelivered } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { STORE, json, scratch } from "./_session_helpers.js"
 
-const moduleUrl = new URL("../../src/factory/boot-check.js", import.meta.url)
+const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/boot-check.js", import.meta.url)
 async function load() {
   assert.ok(existsSync(moduleUrl), "the factory boot check must exist")
   return import(moduleUrl)
@@ -266,7 +266,7 @@ test("labelsBootCheck counts retained evaluation requests only for a contributin
   assert.deepEqual(labelsBootCheck({}), { count: 0, quarantined: 0 })
   assert.deepEqual(labelsBootCheck({ env }), { count: 0, quarantined: 0 })
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
-  const { requestEvaluation } = await import("../../src/factory/outbox.js")
+  const { requestEvaluation } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
   await requestEvaluation(env, { job: "9f2c4b1a7d3e5f60718293a4b5c6d7e8", deskRoot: desk })
   assert.deepEqual(labelsBootCheck({ env }), { count: 1, quarantined: 0 })
   assert.equal(labelsLine(1), "Factory: 1 finished tasks have no waste labels yet; run the evaluator for them in the background")
@@ -274,7 +274,7 @@ test("labelsBootCheck counts retained evaluation requests only for a contributin
 
 test("labelsBootCheck reports quarantined labels, and a request whose every session is held back is not counted as waiting", () => scratch(async ({ env, desk }) => {
   const { labelsBootCheck, labelsQuarantinedLine } = await load()
-  const { requestEvaluation } = await import("../../src/factory/outbox.js")
+  const { requestEvaluation } = await import("../../../../../plugins/desk/mcp/src/factory/outbox.js")
   const OTHER_STORE = "ourostack/other"
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   await setConsent(env, { store: OTHER_STORE, contribute: true, account: "contributor" })

@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import * as paths from "../../src/util/paths.js"
+import * as paths from "../../../../../plugins/desk/mcp/src/util/paths.js"
 
 test("validateWriteSegment exports the existing pure segment-validation contract", () => {
   assert.equal(typeof paths.validateWriteSegment, "function", "the shared segment validator must be exported")

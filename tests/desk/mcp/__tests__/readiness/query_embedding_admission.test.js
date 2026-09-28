@@ -4,11 +4,11 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { realRuntimeHarness } from "../runtime/_in_process_desk.js"
-import { closeDb, getMeta, openDb } from "../../src/db/init.js"
-import { rebuildIndex } from "../../src/indexer/index.js"
-import { ACTIVE_EMBEDDING_SPEC } from "../../src/indexer/spec.js"
-import { connectOrStartController as connectController } from "../../src/readiness/controller-client.js"
-import { ensureIndex } from "../../src/server.js"
+import { closeDb, getMeta, openDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
+import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
+import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
+import { connectOrStartController as connectController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
+import { ensureIndex } from "../../../../../plugins/desk/mcp/src/server.js"
 
 function deferred() {
   let resolve

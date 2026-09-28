@@ -7,8 +7,8 @@ import * as path from "node:path"
 import { promises as fs } from "node:fs"
 import Database from "better-sqlite3"
 
-import { isIndexFresh, rebuildIndex } from "../../src/indexer/index.js"
-import { openDb, closeDb, getMeta, setMeta } from "../../src/db/init.js"
+import { isIndexFresh, rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
+import { openDb, closeDb, getMeta, setMeta } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
 async function mkRoot() {

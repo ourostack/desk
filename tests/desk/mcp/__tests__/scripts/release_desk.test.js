@@ -83,7 +83,7 @@ test("pending fragments become the next alpha on every surface and one changelog
     assert.doesNotMatch(text, release.versionToken(currentDesk), file)
     assert.match(text, release.versionToken(next), file)
   }
-  assert.match(readFileSync(path.join(root, "plugins/desk/mcp/__tests__/release/release_coupling.test.js"), "utf8"), /const expectedReleaseDate = "2026-10-01"/u)
+  assert.match(readFileSync(path.join(root, "tests/desk/mcp/__tests__/release/release_coupling.test.js"), "utf8"), /const expectedReleaseDate = "2026-10-01"/u)
   assert.equal(
     readFileSync(path.join(root, release.CHANGELOG), "utf8"),
     `# desk plugin — changelog\n\n## ${next} — 2026-10-01\n\nThe alpha feature, with a [link](docs/x.md).\n\nThe zebra fix.\n\nIts second paragraph.\n\nShips \`desk-mcp@${mcpVersion}\`.\n\n${previousChangelog.slice(release.CHANGELOG_HEADER.length)}`,
