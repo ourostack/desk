@@ -5,8 +5,8 @@
 // still did exactly that (`~/.local/state/desk-evidence/eng-workflow-v2/
 // wrapup/ask-gate/raw/NOTES.md`). This hook is the mechanical backstop: it
 // denies the specific write that performs the bind, but only when it can
-// positively confirm both that nobody can answer and that no desk is bound
-// yet, so it never has an opinion about an interactive session or a rebind.
+// positively confirm nobody can answer, so it never has an opinion about an
+// interactive session.
 //
 // The noninteractive signal is CLAUDE_CODE_SESSION_ATTENDED, an environment
 // variable Claude Code's own engine sets on itself (confirmed by inspecting
@@ -29,40 +29,50 @@
 // signal found; see the evidence trail linked from this change's changelog
 // fragment for the research that ruled the alternatives out.
 //
-// The path match covers more than this session's own computed binding path.
-// Live-proof evidence for this change (2026-09-28) had a haiku session under
-// a throwaway CLAUDE_CONFIG_DIR mis-resolve the env var, fall back to a
-// literal `~/...` path, and have the Write/Edit tools expand that `~` to the
-// real OS home directory -- landing on the operator's real, already-bound
-// `~/.claude` (its CLAUDE_CONFIG_DIR override was set for this session, but
-// the literal `~` bypassed it) copy of plugins/data/desk-ourostack/
-// desk.activation.json, instead of the throwaway profile's own file. An
-// exact match against only this session's own CLAUDE_PLUGIN_DATA would have
-// missed that path entirely, so Write/Edit also matches the general shape
-// any Claude config dir's plugin activation file has (`.../plugins/data/
-// <plugin-id>/desk.activation.json`), and "already bound" is checked against
-// the actual resolved path, not just the primary target -- so a real,
-// already-bound file is still never denied.
+// The gate denies every matching write while unattended, whether or not a
+// binding already exists, and does not special-case "already bound" as a
+// rebind a human is driving. Once the session is confirmed unattended
+// (line below), an existing target file cannot mean a human is at the
+// keyboard approving a rebind: a real interactive rebind never reaches this
+// branch at all (the attendance check above already let it through), and a
+// driver that needs to write this file itself runs from its own shell,
+// outside the model and outside this hook entirely. An earlier version of
+// this gate exempted an already-bound target; an independent review of this
+// change found that exemption allowed exactly the write that caused this
+// change's own live-proof incident (2026-09-28): a throwaway-profile
+// session's Write/Edit tool resolved a mis-typed `~`-relative path to the
+// operator's real, already-bound activation file. The gate now matches
+// purely on path shape for Write/Edit -- any `.../plugins/data/<plugin-id>/
+// desk.activation.json`, not only this session's own CLAUDE_PLUGIN_DATA --
+// with no existence check at all.
 
-import { existsSync } from "node:fs"
 import * as path from "node:path"
-import { claudeBindingPath } from "../util/paths.js"
 
 const ATTENDED_ENV = "CLAUDE_CODE_SESSION_ATTENDED"
 const CONFIRMED_UNATTENDED = "0"
 const GATED_TOOLS = new Set(["Write", "Edit", "Bash", "PowerShell"])
 const ACTIVATION_FILENAME = "desk.activation.json"
 
-// Best-effort only, unlike protected-checkout's real shell-command inspector:
-// a false negative here just leaves today's prose-only rule as the only
-// backstop, while a false positive would deny a legitimate write elsewhere,
-// so this only fires when the exact filename and a write-shaped pattern are
-// both present in the command text.
-const SHELL_WRITE_PATTERN = /(>>?(?!=)|\btee\b|\bcp\b|\bmv\b|\bdd\s+of=|Set-Content|Add-Content|Out-File|Copy-Item|Move-Item|New-Item)/iu
+// Best-effort only, unlike protected-checkout's real shell-command inspector.
+// Deny-by-default: once the filename appears in the command text, the
+// command is denied unless every `;`/`&&`/`||`/`|`-separated segment is
+// plainly one of a short read-only allowlist, with none of the tokens that
+// can still smuggle a write through a read-shaped command name (a redirect,
+// `-i`/`-c`/`-e` in-place-or-inline-code flags, `tee`, `of=`, or the
+// PowerShell write cmdlets). Denying a legitimate read is a minor cost (the
+// noninteractive session reports it cannot proceed and stops); allowing an
+// unrecognized write-shaped command through is the failure this hook exists
+// to prevent, so the default leans toward denying.
+const READ_ONLY_SEGMENT = /^(?:cat|head|tail|grep|jq|ls|stat|test\s+-f|\[\s+-f|Get-Content|Test-Path|Get-Item)\b/iu
+const RISKY_TOKEN_PATTERN = /(>>?(?!=)|(?:^|\s)-i\b|\btee\b|\bof=|(?:^|\s)-c\b|(?:^|\s)-e\b|Set-Content|Out-File|Add-Content)/iu
 
 function shellCommandTargets(command) {
   if (typeof command !== "string" || !command.includes(ACTIVATION_FILENAME)) return false
-  return SHELL_WRITE_PATTERN.test(command)
+  if (RISKY_TOKEN_PATTERN.test(command)) return true
+  // The filename check above guarantees at least one non-separator segment,
+  // so every() below always has something to evaluate.
+  const segments = command.split(/&&|\|\||[;|]/u).map((segment) => segment.trim()).filter(Boolean)
+  return !segments.every((segment) => READ_ONLY_SEGMENT.test(segment))
 }
 
 // Only called once the caller already knows the tool is Write or Edit.
@@ -108,20 +118,14 @@ export async function askGateHook(input, host, env = process.env) {
   if (name === "Write" || name === "Edit") {
     const resolved = writeTargetPath(args, input.cwd)
     if (resolved === null) return {}
-    const target = claudeBindingPath(env)
-    const matches = resolved === target || looksLikeClaudeActivationPath(resolved)
-    if (!matches) return {}
-    if (existsSync(resolved)) return {} // already bound: never block a rebind a human drives
+    if (!looksLikeClaudeActivationPath(resolved)) return {}
   } else {
-    const target = claudeBindingPath(env)
-    if (target === null) return {} // can't compute the real binding path: fail open
-    if (existsSync(target)) return {} // already bound: never block a rebind a human drives
     if (!shellCommandTargets(args.command)) return {}
   }
 
   const reason = "Desk ask-gate: this session reports nobody attending "
-    + `(${ATTENDED_ENV}=${CONFIRMED_UNATTENDED}) and no desk is bound yet. `
-    + "Binding a desk is the consequential, irreversible choice first-run-bootstrap's A3 step "
+    + `(${ATTENDED_ENV}=${CONFIRMED_UNATTENDED}). `
+    + "Binding or rebinding a desk is the consequential, irreversible choice first-run-bootstrap's A3 step "
     + "(and SETUP.md step 5) require asking a human about. Report that question, plus everything "
     + "A1 and A2 found, and stop -- do not retry around this gate, pick a desk on your own, or "
     + "report bootstrap as complete."
