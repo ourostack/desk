@@ -183,12 +183,17 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     const inventory = await inspectWorkspace({ deskRoot: root, signal, budgetMs: inspectionBudgetMs });
     if (expired()) return "";
     let previous = "";
+    // Issues the last repair's line already names are not repeated after it.
+    let named = [];
     if (inventory.commonDirectory) {
       try {
         const file = reportPath(root, inventory.commonDirectory);
         const report = await readReport(file);
         // A report written before roots were canonical may carry the alias.
-        if (await canonicalDeskRoot(report.root) === root) previous = `Last repair: ${tidyLine(report)}; `;
+        if (await canonicalDeskRoot(report.root) === root) {
+          previous = `Last repair: ${tidyLine(report)}; `;
+          named = Array.isArray(report.issues) ? report.issues : [];
+        }
       } catch (error) {
         if (error.code !== "ENOENT") previous = "Previous workspace-tidy report unreadable; ";
       }
@@ -211,7 +216,8 @@ async function checkWorkspace({ host, env = process.env, sessionFolder, launch =
     if (expired()) return "";
     // The repair gets the binding's own spelling and resolves it again itself.
     await launch(bound.root, env);
-    return `workspace-tidy ${oneLine(`${previous}deferred (${inventory.worktrees.length} listed)${inventory.issues.length ? `; ${inventory.issues.join("; ")}` : ""}`)}`;
+    const issues = inventory.issues.filter((issue) => !named.includes(issue));
+    return `workspace-tidy ${oneLine(`${previous}deferred (${inventory.worktrees.length} listed)${issues.length ? `; ${issues.join("; ")}` : ""}`)}`;
   } catch (error) {
     return `workspace-tidy deferred; ${oneLine(error.message)}`;
   }
@@ -437,6 +443,24 @@ async function runBootChecks(options = {}) {
   }
 }
 
+/**
+ * The `Desk migrations:` line for this session, or "" when none of Desk's own
+ * migrations is pending (mcp/src/runtime/pending-migrations.js). It runs every
+ * Detect block itself, alongside the registry and outside its budget, with its
+ * own limit, so a pending migration never depends on the agent choosing to run
+ * the session-start skill's migration step. `budgetMs` is a test seam. Never
+ * rejects.
+ */
+async function migrationLine({ host, env = process.env, sessionFolder, budgetMs } = {}) {
+  try {
+    const { startupMigrationLine } = await runtime("runtime/pending-migrations.js");
+    const cwd = host === "copilot" ? sessionFolder || process.cwd() : env.CLAUDE_PROJECT_DIR || process.cwd();
+    return await startupMigrationLine({ pluginRoot: path.resolve(__dirname, ".."), env, cwd, budgetMs });
+  } catch {
+    return "";
+  }
+}
+
 /** Starts factory-start.cjs detached when a store has `contribute: true`; resolves whether it started. Never rejects. */
 async function startFactory({ env = process.env, launch = launchCommand } = {}) {
   try {
@@ -563,7 +587,7 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
 module.exports = {
   checks: [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck],
   factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck,
-  runBootChecks, startFactory, launchCommand, recordSkipped,
+  runBootChecks, startFactory, migrationLine, launchCommand, recordSkipped,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
 };
 

@@ -97,7 +97,7 @@ splitting these out means the driver can run Detect cheaply against every migrat
 2. **for each migration in id-order across all plugins:**
    - parse the frontmatter and the four body code blocks.
    - run every block with `DESK_PLUGIN_ROOT` set to the root of the plugin that holds the migration file (the parent of its `migrations/` dir), and, once `desk_status` is callable, `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to the `root.path` and `write_scope.person` it reports (the desk MCP's own `--root` and `--person`; leave `DESK_TOOLS_PERSON` empty when it reports none).
-   - an `agent_work: true` migration writes to the desk, so it waits until the desk is synced and bound: `desk:session-start` runs it after Step 2.6, when this session's own desk is known, rather than at Step 0.5.
+   - an `agent_work: true` migration writes to the desk, so it waits until the desk is synced and bound: `desk:session-start` runs it after Step 2.6, when this session's own desk is known, rather than at Step 0.5. for Desk's own, the startup context's `Desk migrations:` line gives the command (see **Desk's own migrations at startup**).
    - run **Detect**. exit 0 = migration is needed; non-zero = skip silently.
    - run **Safety check**. exit 0 = safe. non-zero = surface the printed reason to the operator and **hard-stop** (do NOT run Migrate; do NOT continue to subsequent migrations — the operator needs to resolve the safety issue first).
    - run **Migrate**. if it exits non-zero, surface the stdout+stderr and **hard-stop** with a clear "Migration `<id>` failed mid-run; manual intervention needed" message.
@@ -105,6 +105,18 @@ splitting these out means the driver can run Detect cheaply against every migrat
    - if frontmatter `needs_restart: true`, **hard-stop the session** with a clean "please restart this session" message after the announcement.
 
 3. **after all applicable migrations applied (or none needed)**, continue with normal `desk:session-start` flow.
+
+## Desk's own migrations at startup
+
+Desk does not leave its own migrations to this skill being followed: a session that skipped the skill once skipped the one-time tidy with it. Both startup hooks run the Detect block of every migration in Desk's own `migrations/` folder themselves, in id order, within a 2-second budget, and add exactly one line to the startup context, addressed to the agent, when anything is pending. With nothing pending they add nothing. The code is `mcp/src/runtime/pending-migrations.js`.
+
+- **`agent_work: true`** (the tidy): the line names the migration and the command that prints its work, `node <desk plugin>/mcp/scripts/migrations.js run <id> --tools-root <root.path> --tools-person <write_scope.person>`, with both values from `desk_status` (leave `--tools-person` out when it reports none). Run it and do what it prints, in this session and without asking. The line returns at every session start until Detect stops firing.
+- **held**: a Detect that does not fire but prints `held: <reason>` names a migration that is pending but cannot make progress now. The line gives the reason and asks for nothing; mention it to the human in one line if it matters to them. For the tidy this means another session holds its claim (only one session tidies a desk at a time, and a claim lapses after 30 minutes), or the tidy stopped for a reason that has not changed: no person resolves on a crew desk, the Desk tools and the tidy resolve different desks, Git is mid-merge, or the agent ran the tidy's `--defer` command because it could not finish. That hold lifts when its state changes (the roster or identity, the merge, or the desk's latest commit and uncommitted changes) or after 7 days. The claim and the hold live in the desk repository's Git folder; the code is `mcp/src/desk/tidy.js`.
+- **`safety: safe`, `needs_restart: false`, no agent work**: the hook runs Safety check and Migrate itself, and the line gives the announcement to relay to the human in one line.
+- **`needs_restart: true`**: the hook cannot restart the session, so the line tells the agent to run the command, show the human what it prints and ask them to start a new session.
+- **anything else** (a safety other than `safe`, a Safety check that stops it, a Migrate that fails, a block that runs out of time): the line gives the command, so the agent runs it and sees why.
+
+`migrations.js run <id>` follows the driver flow below for that one migration, and prints everything the migration prints, however long: it prints that nothing is needed when Detect does not fire (or the hold's reason when it is held), the Safety check's reason when it stops, Migrate's output, and then the Announce text (as the template to fill in, after an agent-work migration's steps). The Detect blocks run in the hook without `DESK_TOOLS_ROOT` or `DESK_TOOLS_PERSON`: each resolves the desk and person the way the Desk MCP does. A host without `bash` gets no line, and this skill remains the way to run migrations there. Other plugins' migrations are still found and run only through this skill.
 
 ## Safety semantics
 
