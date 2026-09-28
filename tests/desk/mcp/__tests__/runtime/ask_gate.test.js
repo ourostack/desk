@@ -170,6 +170,33 @@ test("ignores tools outside Write/Edit/Bash/PowerShell", async () => {
   }
 })
 
+test("denies using the camelCase toolName/toolArgs shape as well as tool_name/tool_input", async () => {
+  const f = fixture()
+  try {
+    const input = {
+      session_id: "fixture-session",
+      cwd: f.pluginData,
+      toolName: "Write",
+      toolArgs: { file_path: f.bindingPath, content: "{}" },
+    }
+    const result = await askGateHook(input, "claude", { ...UNATTENDED, CLAUDE_PLUGIN_DATA: f.pluginData })
+    assertDenied(result)
+  } finally {
+    teardown(f.root)
+  }
+})
+
+test("ignores a call that names no tool at all", async () => {
+  const f = fixture()
+  try {
+    const input = { session_id: "fixture-session", cwd: f.pluginData }
+    const result = await askGateHook(input, "claude", { ...UNATTENDED, CLAUDE_PLUGIN_DATA: f.pluginData })
+    assertAllowed(result)
+  } finally {
+    teardown(f.root)
+  }
+})
+
 test("ignores a Write to an unrelated file", async () => {
   const f = fixture()
   try {
@@ -229,6 +256,17 @@ test("allows a Write to a different Claude config dir's activation file when tha
       toolName: "Write",
       toolInput: { file_path: other.otherBindingPath, content: "{}" },
     })
+    const result = await askGateHook(input, "claude", { ...UNATTENDED, CLAUDE_PLUGIN_DATA: f.pluginData })
+    assertAllowed(result)
+  } finally {
+    teardown(f.root)
+  }
+})
+
+test("allows a Write/Edit call whose tool_input carries no usable file_path (cannot resolve a target: fails open)", async () => {
+  const f = fixture()
+  try {
+    const input = writeInput({ pluginData: f.pluginData, toolName: "Write", toolInput: { content: "{}" } })
     const result = await askGateHook(input, "claude", { ...UNATTENDED, CLAUDE_PLUGIN_DATA: f.pluginData })
     assertAllowed(result)
   } finally {
@@ -304,6 +342,37 @@ test("allows a Bash command that writes an unrelated file", async () => {
       pluginData: f.pluginData,
       toolName: "Bash",
       toolInput: { command: `echo hi > "${path.join(f.pluginData, "other.txt")}"` },
+    })
+    const result = await askGateHook(input, "claude", { ...UNATTENDED, CLAUDE_PLUGIN_DATA: f.pluginData })
+    assertAllowed(result)
+  } finally {
+    teardown(f.root)
+  }
+})
+
+test("allows a Bash command when CLAUDE_PLUGIN_DATA is unset (cannot compute the real target: fails open)", async () => {
+  const f = fixture()
+  try {
+    const input = writeInput({
+      pluginData: f.pluginData,
+      toolName: "Bash",
+      toolInput: { command: `echo '{"schema_version":1}' > "${f.bindingPath}"` },
+    })
+    const result = await askGateHook(input, "claude", { ...UNATTENDED })
+    assertAllowed(result)
+  } finally {
+    teardown(f.root)
+  }
+})
+
+test("allows a Bash command that redirects into the binding path once it is already bound (never blocks a rebind a human drives)", async () => {
+  const f = fixture()
+  try {
+    writeFileSync(f.bindingPath, JSON.stringify({ schema_version: 1, desk: { root: "/somewhere" } }))
+    const input = writeInput({
+      pluginData: f.pluginData,
+      toolName: "Bash",
+      toolInput: { command: `echo '{"schema_version":1}' > "${f.bindingPath}"` },
     })
     const result = await askGateHook(input, "claude", { ...UNATTENDED, CLAUDE_PLUGIN_DATA: f.pluginData })
     assertAllowed(result)

@@ -65,8 +65,8 @@ function shellCommandTargets(command) {
   return SHELL_WRITE_PATTERN.test(command)
 }
 
-function writeTargetPath(toolName, toolInput, cwd) {
-  if (toolName !== "Write" && toolName !== "Edit") return null
+// Only called once the caller already knows the tool is Write or Edit.
+function writeTargetPath(toolInput, cwd) {
   if (typeof toolInput?.file_path !== "string") return null
   return path.resolve(cwd ?? process.cwd(), toolInput.file_path)
 }
@@ -106,7 +106,7 @@ export async function askGateHook(input, host, env = process.env) {
   if (!args || typeof args !== "object") return {}
 
   if (name === "Write" || name === "Edit") {
-    const resolved = writeTargetPath(name, args, input.cwd)
+    const resolved = writeTargetPath(args, input.cwd)
     if (resolved === null) return {}
     const target = claudeBindingPath(env)
     const matches = resolved === target || looksLikeClaudeActivationPath(resolved)
