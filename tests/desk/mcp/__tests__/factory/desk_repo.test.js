@@ -372,6 +372,50 @@ before(() => {
   write("newline-mismatch-task/task.md", card(["track: track-two", "status: drafting"], "# A task\n\nBody text\n\n"))
   shas.newlineMismatchEdited = commitAt("2026-09-25T09:19:58Z", "newline-mismatch: move the track and actually add a blank line to the body")
 
+  // A raw top-level line that isn't a `key: value` pair at all (a bare
+  // comment, unindented) groups as its own entry with a null key, compared
+  // only by its exact text: unchanged here, so it doesn't block the track
+  // patch from reading as housekeeping.
+  write("bare-line-task/task.md", card(["track: track-one", "# a note, not a key", "status: drafting"]))
+  shas.bareLineCreated = commitAt("2026-09-25T09:20:01Z", "bare-line: create")
+  write("bare-line-task/task.md", card(["track: track-two", "# a note, not a key", "status: drafting"]))
+  shas.bareLineEdited = commitAt("2026-09-25T09:20:02Z", "bare-line: move the track only; the bare comment line is untouched")
+
+  // A blank line before any top-level key at all: grouping sees it before
+  // any entry exists yet, and just skips it, same as it skips a blank line
+  // anywhere else in the frontmatter.
+  write("leading-blank-task/task.md", card(["", "track: track-one", "status: drafting"]))
+  shas.leadingBlankCreated = commitAt("2026-09-25T09:20:03Z", "leading-blank: create")
+  write("leading-blank-task/task.md", card(["", "track: track-two", "status: drafting"]))
+  shas.leadingBlankEdited = commitAt("2026-09-25T09:20:04Z", "leading-blank: move the track only; the leading blank line is untouched")
+
+  // A block-scalar header with no indented content at all (immediately
+  // followed by the next top-level key): its continuation is empty, so
+  // this can't be folded with confidence, and it binds against a real
+  // value the same way any other unparseable block scalar does.
+  write("block-empty-task/task.md", card(["track: track-one", "purpose: >-", "status: drafting"]))
+  shas.blockEmptyCreated = commitAt("2026-09-25T09:20:05Z", "block-empty: create")
+  write("block-empty-task/task.md", card(["track: track-two", "purpose: something else entirely", "status: drafting"]))
+  shas.blockEmptyEdited = commitAt("2026-09-25T09:20:06Z", "block-empty: move the track; purpose changes from an empty block scalar to a real value")
+
+  // A block scalar whose first continuation line is itself blank: there is
+  // no indentation on that line to read the block's own indent from, so
+  // this can't be folded with confidence and binds.
+  write("block-blank-first-task/task.md", card(["track: track-one", "purpose: >-", "", "  line one"]))
+  shas.blockBlankFirstCreated = commitAt("2026-09-25T09:20:07Z", "block-blank-first: create")
+  write("block-blank-first-task/task.md", card(["track: track-two", "purpose: line one"]))
+  shas.blockBlankFirstEdited = commitAt("2026-09-25T09:20:08Z", "block-blank-first: move the track (old writer unfolds purpose too, dropping the blank line)")
+
+  // The same track patch, but the tidy commit also adds a brand-new field
+  // that didn't exist before: entries are counted before they're compared
+  // position by position, and a real field addition changes that count, so
+  // this binds even though every field the two cards share reads as
+  // unchanged.
+  write("entry-count-task/task.md", card(["track: track-one", "status: drafting"]))
+  shas.entryCountCreated = commitAt("2026-09-25T09:20:09Z", "entry-count: create")
+  write("entry-count-task/task.md", card(["track: track-two", "status: drafting", "note: a brand-new field"]))
+  shas.entryCountEdited = commitAt("2026-09-25T09:20:10Z", "entry-count: move the track and add a genuinely new field")
+
   // A pathological commit's rename count must not be trusted at all: more
   // than RENAME_PAIR_CAP rename pairs makes the whole commit not
   // housekeeping, even for a card whose own edit is nothing but a quote
@@ -928,6 +972,34 @@ test("isCardHousekeeping is false for a bare > (clip) block scalar: only the str
 
 test("isCardHousekeeping is false when two untouched fields swap order: entries are compared position by position, so a reordered key is a real difference", () => {
   assert.equal(housekeeping(shas.keyOrderEdited, "key-order-task/task.md"), false)
+})
+
+test("isCardHousekeeping is true when a bare top-level line that isn't a key: value pair at all — a raw comment — is untouched alongside the track patch", () => {
+  assert.equal(housekeeping(shas.bareLineEdited, "bare-line-task/task.md"), true)
+})
+
+test("isCardHousekeeping is true when a blank line precedes every top-level key and is untouched alongside the track patch", () => {
+  assert.equal(housekeeping(shas.leadingBlankEdited, "leading-blank-task/task.md"), true)
+})
+
+test("isCardHousekeeping is false when a block scalar with no indented content at all (an empty fold) changes to a real value: unparseable, so it binds", () => {
+  assert.equal(housekeeping(shas.blockEmptyEdited, "block-empty-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false when a block scalar's first continuation line is itself blank: there is no indentation to read the block's own indent from, so it binds", () => {
+  assert.equal(housekeeping(shas.blockBlankFirstEdited, "block-blank-first-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false when the tidy commit also adds a genuinely new field: entry counts differ, so it binds even though every shared field reads as unchanged", () => {
+  assert.equal(housekeeping(shas.entryCountEdited, "entry-count-task/task.md"), false)
+})
+
+test("isCardHousekeeping caches a commit's diff-tree entries and derived substitutions per sha: a second call against the same sha and readers instance reuses them", () => {
+  const readers = createDeskReaders({ deskRoot: desk })
+  const first = readers.isCardHousekeeping(shas.blockEquivEdited, "block-equiv-task/task.md")
+  const second = readers.isCardHousekeeping(shas.blockEquivEdited, "block-equiv-task/task.md")
+  assert.equal(first, true)
+  assert.equal(second, true)
 })
 
 // --- resolveJobIdentity (ourostack/desk#76): the birth path ------------------------------
