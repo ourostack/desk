@@ -34,8 +34,21 @@
 // identical to its content before, or differs only in frontmatter `title:`,
 // `track:` or `updated:`; false for anything else, including a path this
 // commit only added or only removed, and including any git failure —
-// housekeeping is never a guess. `readDeskRemote` returns `origin`'s URL,
-// or `null`.
+// housekeeping is never a guess. Two more differences are absorbed before
+// that comparison, both aimed at what a real Desk tidy actually does to a
+// card it only moves or renames, never at a card someone edited by hand:
+// (1) a frontmatter scalar's surrounding quotes (`"value"`, `'value'` or
+// unquoted) are normalized before comparing, since a YAML re-serialization
+// can flip a value's quoting without changing it — a value whose quoted form
+// holds a backslash or the quote character itself is left exactly as
+// written instead, so an escape is never guessed at; (2) the commit's own
+// rename pairs (its `R` entries) are used to rewrite the old card's text —
+// full file-to-file, and directory-to-directory wherever the renamed file's
+// old and new paths share a trailing suffix — so a reference to a path this
+// same commit also moved reads as unchanged too. A pathological commit with
+// more rename pairs than `RENAME_PAIR_CAP` is never housekeeping, rather
+// than spend unbounded time deriving substitutions from it. `readDeskRemote`
+// returns `origin`'s URL, or `null`.
 //
 // The desk must be a repository of its own: Git's top level for the desk
 // root must be the desk root's real path (checked as an empty
@@ -259,17 +272,172 @@ function stripHousekeepingLines(frontmatterLines) {
   return kept
 }
 
+// A quoted frontmatter scalar's inner text, when its quoting is safe to
+// normalize away: matched surrounding `"…"` or `'…'` with no backslash and
+// no instance of that same quote character inside. Anything else — an
+// unquoted value, mismatched or unterminated quotes, or a quoted value that
+// itself holds a backslash or an embedded quote — is returned unchanged, so
+// a real YAML escape is never reinterpreted, only ever compared literally.
+function normalizedScalar(value) {
+  const doubled = /^"([^"\\]*)"$/u.exec(value)
+  if (doubled) return doubled[1]
+  const singled = /^'([^'\\]*)'$/u.exec(value)
+  if (singled) return singled[1]
+  return value
+}
+
+// One frontmatter line with its scalar value's quoting normalized, when the
+// line is a top-level or nested `key: value` entry or a `- value` list
+// item; every other line (a bare `key:`, a map-valued list item such as
+// `- name: alpha`, `---`, blank) is returned unchanged. Applied after
+// `stripHousekeepingLines`, so a YAML re-serialization that only changed a
+// scalar's quoting — `created: "…"` to `created: '…'`, `requester: "ari"`
+// to `requester: ari`, `  - "./a.md"` to `  - ./a.md` — compares equal.
+const SCALAR_LINE = /^(\s*[A-Za-z_][A-Za-z0-9_-]*:\s*)(.*)$/u
+const LIST_ITEM_LINE = /^(\s*-\s*)(.*)$/u
+function normalizeQuotingLine(line) {
+  const scalar = SCALAR_LINE.exec(line)
+  if (scalar) return scalar[1] + normalizedScalar(scalar[2])
+  const item = LIST_ITEM_LINE.exec(line)
+  if (item) return item[1] + normalizedScalar(item[2])
+  return line
+}
+
+// A pathological commit's rename count this module will derive path
+// substitutions from, so a commit with an unreasonable number of renames
+// costs bounded time instead of unbounded time: past the cap the commit is
+// never housekeeping (the fail-safe direction — any doubt binds).
+const RENAME_PAIR_CAP = 2000
+
+// A path segment character: substitutions only replace a path at a
+// boundary, so `a/x` never matches inside `a/xy`, but any non-path
+// character before the match — a `/`, whitespace, a quote, `~`, the start
+// of the text — is accepted, which is what lets a reference written with a
+// leading prefix (`~/desk/agentic-workflows/…`) still match a substitution
+// derived from the commit's own unprefixed rename pair.
+const PATH_BOUNDARY_CHAR = "[A-Za-z0-9_.-]"
+
+function escapeForPattern(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
+}
+
+// `text` with every substitution's old path replaced by its new path, in
+// one pass over the original text so a substitution's own replacement is
+// never itself rescanned by a shorter one (a file substituted into a newly
+// inserted subdirectory, say, must not have that subdirectory's own
+// directory-level substitution applied to it a second time). One combined
+// pattern alternates every old path, longest first, each matched only at a
+// path boundary on both sides (`a/x` never matches inside `a/xy`, but any
+// non-path character before it — `/`, whitespace, a quote, `~`, the start
+// of the text — is accepted, which is what lets a reference written with a
+// leading prefix, such as `~/desk/agentic-workflows/…`, still match a
+// substitution derived from the commit's own unprefixed rename pair).
+// Regex alternation tries the longest candidate at each position first and
+// backtracks to a shorter one only when the longer one's boundary check
+// fails, so the longest satisfying match always wins. `substitutions` is
+// keyed into a map by old path first, so two rename pairs that happen to
+// derive the same old path keep only the later one — never observed from a
+// real commit (see `directorySubstitution`), but harmless if it ever
+// happens: whichever substitution is kept either resolves the text, in
+// which case it was a fair reading of the commit's own renames, or it
+// doesn't, in which case the comparison still falls through to "different"
+// and the fail-safe direction holds regardless.
+function applyPathSubstitutions(text, substitutions) {
+  const byOldPath = new Map()
+  for (const { oldPath, newPath } of substitutions) byOldPath.set(oldPath, newPath)
+  const oldPaths = [...byOldPath.keys()].sort((left, right) => right.length - left.length)
+  if (oldPaths.length === 0) return text
+  const alternation = oldPaths.map(escapeForPattern).join("|")
+  const pattern = new RegExp(`(?<!${PATH_BOUNDARY_CHAR})(?:${alternation})(?!${PATH_BOUNDARY_CHAR})`, "gu")
+  return text.replace(pattern, (match) => byOldPath.get(match))
+}
+
+// The directory-level substitution one renamed file's old and new path
+// imply, when they share a trailing path suffix: `a/x-2026/task.md` ->
+// `a/x/task.md` shares the one segment `task.md`, so the directory that
+// held it renamed `a/x-2026` -> `a/x`. Restricted to a same-depth "peer"
+// rename — `oldPath` and `newPath` split into the same number of segments
+// — on purpose: a file moved one level deeper into its own parent (`a/f.md`
+// -> `a/planning/f.md`, say) shares that same trailing-suffix shape, but
+// deriving `a` -> `a/planning` from it would substitute every other,
+// unrelated mention of `a` throughout every other card's text too — a real
+// same-commit regression this module confirmed empirically against a live
+// tidy commit. A file moved a level deeper is still covered by its own
+// direct file-to-file substitution; it just never also widens into a
+// directory-level one.
+//
+// Also restricted to a derived pair whose paths keep at least two segments
+// each — `shared` never grows past two less than the (now shared) segment
+// count — so the substitution's old and new sides are never a single bare
+// word. A whole-track rename (`cxa-tester-build` -> `cca-tools`, say) still
+// shares every segment above the renamed one, which would otherwise derive
+// exactly that bare `cxa-tester-build` -> `cca-tools` pair; substituting a
+// single common word like that throughout every other card's text is
+// exactly as unsafe as the depth case above, and real same-commit evidence
+// confirmed it twice more: a track named after a person renamed to a
+// different name corrupted an unrelated card's plain-prose mention of that
+// person's own username in a filesystem path, and a track's bare old name
+// corrupted an unrelated card's own title and heading that merely happened
+// to read the same as that name. `directorySubstitution` now stops one
+// segment short of that in both cases, so the same evidence instead derives
+// `cxa-tester-build/_planning` -> `cca-tools/_planning` — specific enough
+// that only an actual reference into that subdirectory can match it. Null
+// for a depth change, when the paths share no trailing segment at all, or
+// when the shared suffix would otherwise consume all but one segment on
+// each side. Since whatever segment makes `oldPath` and `newPath` differ
+// can never itself be part of the matched trailing suffix, that segment
+// always survives into the returned pair, so it never comes back equal on
+// both sides either.
+function directorySubstitution(oldPath, newPath) {
+  const oldSegments = oldPath.split("/")
+  const newSegments = newPath.split("/")
+  if (oldSegments.length !== newSegments.length) return null
+  const limit = oldSegments.length - 2
+  let shared = 0
+  while (shared < limit && oldSegments[oldSegments.length - 1 - shared] === newSegments[newSegments.length - 1 - shared]) {
+    shared += 1
+  }
+  if (shared === 0) return null
+  return {
+    oldPath: oldSegments.slice(0, oldSegments.length - shared).join("/"),
+    newPath: newSegments.slice(0, newSegments.length - shared).join("/"),
+  }
+}
+
+// The path substitutions a commit's own rename pairs imply: each renamed
+// file, old path to new, plus the directory-level pair its rename implies
+// (see `directorySubstitution`), deduplicated. `renamePairs` past
+// `RENAME_PAIR_CAP` is refused outright (`null`), which the caller reads as
+// "not housekeeping" — deriving substitutions from an unbounded rename list
+// is exactly the runtime a pathological commit must not be allowed to cost.
+function deriveSubstitutions(renamePairs) {
+  if (renamePairs.length > RENAME_PAIR_CAP) return null
+  const byKey = new Map()
+  for (const { oldPath, newPath } of renamePairs) {
+    byKey.set(`${oldPath}\u0000${newPath}`, { oldPath, newPath })
+    const dir = directorySubstitution(oldPath, newPath)
+    if (dir) byKey.set(`${dir.oldPath}\u0000${dir.newPath}`, dir)
+  }
+  return [...byKey.values()]
+}
+
 // True when the only difference between the two card texts is identity or
-// placement: the body is byte-identical, and once every top-level `title:`,
-// `track:` and `updated:` line (and their continuation lines) is dropped
-// from both frontmatters, what is left is byte-identical too — a straight
-// line comparison, never a per-field guess, so a change inside a nested
-// value (a `repos:` entry's `branch_base:`, say) is never invisible to it.
-function isHousekeepingEdit(oldText, newText) {
-  const before = splitCard(oldText)
+// placement. `substitutions` (this commit's own rename pairs, file and
+// directory) are applied to `oldText` first, so a reference to a path this
+// same commit also moved — in frontmatter or body — reads as unchanged too.
+// The body must then be byte-identical; the frontmatter must be identical
+// once every top-level `title:`, `track:` and `updated:` line (and their
+// continuation lines) is dropped from both and each remaining line's scalar
+// quoting is normalized (`normalizeQuotingLine`) — a straight line
+// comparison, never a per-field guess, so a change inside a nested value (a
+// `repos:` entry's `branch_base:`, say) is never invisible to it.
+function isHousekeepingEdit(oldText, newText, substitutions) {
+  const before = splitCard(applyPathSubstitutions(oldText, substitutions))
   const after = splitCard(newText)
   if (before.body !== after.body) return false
-  return stripHousekeepingLines(before.frontmatter).join("\n") === stripHousekeepingLines(after.frontmatter).join("\n")
+  const beforeLines = stripHousekeepingLines(before.frontmatter).map(normalizeQuotingLine)
+  const afterLines = stripHousekeepingLines(after.frontmatter).map(normalizeQuotingLine)
+  return beforeLines.join("\n") === afterLines.join("\n")
 }
 
 // `git diff-tree --name-status -z` output: `status\0path` for an add,
@@ -415,19 +583,32 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
   // `--no-renames` path lists above (those must keep a rename as a delete
   // and an add, so the old and new task each get their own say). The
   // pairing only finds candidates; the verdict is always this module's own
-  // content comparison, never Git's similarity score.
+  // content comparison, never Git's similarity score. The same call's `R`
+  // entries — the commit's own rename pairs, whatever path is under
+  // judgment — are reused to derive the path substitutions `isHousekeepingEdit`
+  // applies to the old text before comparing; `deriveSubstitutions` returns
+  // `null` past `RENAME_PAIR_CAP`, which reads the same as any other doubt:
+  // not housekeeping.
   function isCardHousekeeping(sha, filePath) {
     if (typeof filePath !== "string" || filePath === "") return false
     if (typeof sha !== "string" || !PATTERNS.commitSha.test(sha) || !deskIsOwnRepository()) return false
     const output = runGit(options, ["diff-tree", "--root", "-M", "--no-commit-id", "--name-status", "-r", "-z", sha])
     if (output === null) return false
-    const match = parseNameStatus(output).find((entry) => entry.path === filePath || entry.oldPath === filePath)
+    const entries = parseNameStatus(output)
+    const match = entries.find((entry) => entry.path === filePath || entry.oldPath === filePath)
     if (!match || match.status === "A" || match.status === "D") return false
     const oldPath = match.oldPath ?? filePath
     const oldText = runGit(options, ["show", `${sha}~1:${oldPath}`])
     const newText = runGit(options, ["show", `${sha}:${match.path}`])
     if (oldText === null || newText === null) return false
-    return isHousekeepingEdit(oldText, newText)
+    // `parseNameStatus` only ever pushes an `R`/`C` entry once both sides of
+    // the pair parsed, so every `R` entry here already has its `oldPath`.
+    const renamePairs = entries
+      .filter((entry) => /^R/u.test(entry.status))
+      .map((entry) => ({ oldPath: entry.oldPath, newPath: entry.path }))
+    const substitutions = deriveSubstitutions(renamePairs)
+    if (substitutions === null) return false
+    return isHousekeepingEdit(oldText, newText, substitutions)
   }
 
   return {
