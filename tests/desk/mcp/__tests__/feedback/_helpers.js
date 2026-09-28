@@ -3,6 +3,11 @@
 // Every test gets its own temp desk root plus its own private state home so
 // no test ever touches the developer's real feedback store.
 
+// Imported first so a test file run on its own (`node --test <file>`, not
+// through `npm test`) starts from the temporary HOME and XDG folders and the
+// real-home write guard too, before `useHome`/`useStateHome` below narrow
+// further to that one test's own fixture.
+import "../_isolated_env.mjs"
 import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
