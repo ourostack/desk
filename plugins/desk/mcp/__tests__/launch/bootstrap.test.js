@@ -428,6 +428,15 @@ test("with no compatible Node the bootstrap serves the MCP handshake itself and 
   assert.deepEqual(ping.result, {})
   assert.equal(list.id, "three")
   assert.deepEqual(list.result.tools.map((tool) => tool.name), TOOL_NAMES)
+  // The degraded server (no compatible Node) is the one place a tool is listed
+  // without its declared schema (review of #51, N4): it cannot load the ESM
+  // schemas, and every call answers with the reason and the fix whatever its
+  // arguments, so each tool says it is unavailable and accepts any input, so a
+  // host never refuses the call that would show the fix.
+  for (const tool of list.result.tools) {
+    assert.deepEqual(tool.inputSchema, { type: "object", properties: {}, additionalProperties: true })
+    assert.match(tool.description, /^Unavailable until Desk can start\. Call desk_status for the reason and the fix\.$/u)
+  }
   for (const tool of list.result.tools) assert.equal(tool.inputSchema.type, "object")
   const payload = toolPayload(status)
   assert.equal(status.result.isError, false)

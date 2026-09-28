@@ -195,6 +195,10 @@ test("desk_doctor reports organization findings for the caller's own desk", asyn
     }
     assert.match(body.summary, /Organization/u)
     assert.match(body.summary, /track_catch_all/u)
+    const catchAll = body.organization.find((f) => f.code === "track_catch_all")
+    assert.match(catchAll.handle, /^track-[0-9a-f]{10}$/u)
+    assert.ok(body.summary.includes(`inbox (handle ${catchAll.handle}) — `), "the doctor text shows the handle a rename needs")
+    assert.equal(body.organization.find((f) => f.code === "track_missing_scope").handle, undefined)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

@@ -23,6 +23,8 @@ import {
 import { resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { isGitRepository, hasUnstagedWork, stagePaths } from "../util/git-stage.js"
+import { redactCredentialLikeText, redactName } from "../util/redact.js"
+import { resolveTaskHandle, resolveTrackHandle } from "../desk/handles.js"
 import {
   validateName,
   validateTrackName,
@@ -37,6 +39,18 @@ const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 
 function relPath(root, absPath) {
   return path.relative(root, absPath)
+}
+
+// A path the tool shows (in a result or an error): relative to the desk, with
+// forward slashes, and every segment that carries a secret's value replaced by
+// the redaction marker, so renaming a credential-like folder by its handle
+// never echoes the old name.
+function shownPath(relative) {
+  return relative.split(/[\\/]/u).map(redactName).join("/")
+}
+
+function shownRelPath(root, absPath) {
+  return shownPath(relPath(root, absPath))
 }
 
 /**
@@ -63,6 +77,50 @@ function rejectTraversalShapedInput(tool, field, value) {
       `${tool}: \`${field}\` must be a non-empty path segment with no ".." or path separators`,
     )
   }
+}
+
+// ── Handles ──────────────────────────────────────────────────────────────
+//
+// A handle (desk/handles.js) names a folder without its name, so a task or
+// track whose name carries a secret's value can be renamed without the caller
+// ever reading, passing or seeing the old name. It is resolved inside this
+// session's own desk only.
+
+function taskMoveSource(deskRoot, person, values) {
+  if (values.handle === undefined) {
+    if (!Object.hasOwn(values, "track") || !Object.hasOwn(values, "slug")) {
+      throw new Error("task_move: `track` and `slug` are required, or `handle` in their place")
+    }
+    return { track: values.track, slug: values.slug }
+  }
+  if (Object.hasOwn(values, "track") || Object.hasOwn(values, "slug")) {
+    throw new Error("task_move: pass `handle` or `track` and `slug`, not both")
+  }
+  const source = resolveTaskHandle(deskRoot, personPrefix(deskRoot, person), values.handle)
+  if (source === null) throw new Error(handleMiss("task_move", "task"))
+  return source
+}
+
+function trackRenameSource(deskRoot, person, values) {
+  if (values.handle === undefined) {
+    if (!Object.hasOwn(values, "track")) {
+      throw new Error("track_rename: `track` is required, or `handle` in its place")
+    }
+    return values.track
+  }
+  if (Object.hasOwn(values, "track")) {
+    throw new Error("track_rename: pass `handle` or `track`, not both")
+  }
+  const track = resolveTrackHandle(deskRoot, personPrefix(deskRoot, person), values.handle)
+  if (track === null) throw new Error(handleMiss("track_rename", "track"))
+  return track
+}
+
+function handleMiss(tool, kind) {
+  return (
+    `${tool}: no ${kind} in this session's desk has that handle. A handle is \`${kind}-\` and ten hex characters, ` +
+    "and it changes when the folder moves; take a fresh one from desk_status (active_tasks) or desk_doctor"
+  )
 }
 
 // ── Git plumbing ─────────────────────────────────────────────────────────
@@ -100,7 +158,7 @@ function stageWrites({ root, files, spawnGit }) {
   if (files.length === 0 || !isGitRepository(root, spawnGit)) return
   const result = stagePaths(root, files.map((p) => relPath(root, p)), spawnGit)
   if (!result.ok) {
-    throw new Error(`desk-mcp: git add failed staging the move's edits: ${result.stderr}`)
+    throw new Error(redactCredentialLikeText(`desk-mcp: git add failed staging the move's edits: ${result.stderr}`))
   }
 }
 
@@ -125,14 +183,14 @@ async function movePath({ root, from, to, spawnGit }) {
     encoding: "utf8",
   })
   if (addResult.status !== 0) {
-    throw new Error(`desk-mcp: git add failed staging ${relFrom}: ${addResult.stderr}`)
+    throw new Error(redactCredentialLikeText(`desk-mcp: git add failed staging ${shownPath(relFrom)}: ${addResult.stderr}`))
   }
 
   const mvResult = spawnGit("git", ["-C", root, "mv", relFrom, relTo], {
     encoding: "utf8",
   })
   if (mvResult.status !== 0) {
-    throw new Error(`desk-mcp: git mv failed moving ${relFrom} to ${relTo}: ${mvResult.stderr}`)
+    throw new Error(redactCredentialLikeText(`desk-mcp: git mv failed moving ${shownPath(relFrom)} to ${shownPath(relTo)}: ${mvResult.stderr}`))
   }
 }
 
@@ -318,10 +376,7 @@ function trueOrAbsent(tool, field, value) {
  */
 export async function task_move({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
   const values = input ?? {}
-  if (!Object.hasOwn(values, "track") || !Object.hasOwn(values, "slug")) {
-    throw new Error("task_move: `track` and `slug` are required")
-  }
-  const { track, slug } = values
+  const { track, slug } = taskMoveSource(deskRoot, person, values)
   rejectTraversalShapedInput("task_move", "track", track)
   rejectTraversalShapedInput("task_move", "slug", slug)
   const unarchive = trueOrAbsent("task_move", "unarchive", values.unarchive)
@@ -371,7 +426,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   if (unarchive) {
     if (!(await pathExists(archivedSrcFile))) {
       throw new Error(
-        `task_move: no archived task to unarchive at ${relPath(deskRoot, path.dirname(archivedSrcFile))}`,
+        `task_move: no archived task to unarchive at ${shownRelPath(deskRoot, path.dirname(archivedSrcFile))}`,
       )
     }
     archived = true
@@ -381,7 +436,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
     archived = true
   } else {
     throw new Error(
-      `task_move: task does not exist at ${relPath(deskRoot, path.dirname(liveSrcFile))}`,
+      `task_move: task does not exist at ${shownRelPath(deskRoot, path.dirname(liveSrcFile))}`,
     )
   }
 
@@ -393,7 +448,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   if (intoTask !== undefined) {
     if (!(await pathExists(await target([toTrack, intoTask, "task.md"])))) {
       throw new Error(
-        `task_move: the task to merge into doesn't exist at ${relPath(deskRoot, await target([toTrack, intoTask]))}`,
+        `task_move: the task to merge into doesn't exist at ${shownRelPath(deskRoot, await target([toTrack, intoTask]))}`,
       )
     }
     // Never hide a live task behind a finished one (M4-5 fix round 3).
@@ -413,7 +468,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   const destFile = await target([...destSegments, cardName])
 
   if (await pathExists(destDir)) {
-    throw new Error(`task_move: target already exists at ${relPath(deskRoot, destDir)}`)
+    throw new Error(`task_move: target already exists at ${shownRelPath(deskRoot, destDir)}`)
   }
 
   const srcTrackMd = await target([track, "track.md"])
@@ -513,10 +568,10 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
   })
 
   return {
-    from: relPath(deskRoot, srcDir),
-    to: relPath(deskRoot, destDir),
-    updated_files: updatedFiles,
-    mentions,
+    from: shownRelPath(deskRoot, srcDir),
+    to: shownRelPath(deskRoot, destDir),
+    updated_files: updatedFiles.map(shownPath),
+    mentions: mentions.map(shownPath),
   }
 }
 
@@ -537,10 +592,11 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
  */
 export async function track_rename({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
   const values = input ?? {}
-  if (!Object.hasOwn(values, "track") || !Object.hasOwn(values, "to")) {
-    throw new Error("track_rename: `track` and `to` are required")
+  if (!Object.hasOwn(values, "to")) {
+    throw new Error("track_rename: `to` is required, with `track` or `handle`")
   }
-  const { track, to } = values
+  const { to } = values
+  const track = trackRenameSource(deskRoot, person, values)
   rejectTraversalShapedInput("track_rename", "track", track)
   const allowDirty = trueOrAbsent("track_rename", "allow_dirty", values.allow_dirty)
 
@@ -555,10 +611,10 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
   const destDir = await target([to])
 
   if (!(await pathExists(srcTrackMd))) {
-    throw new Error(`track_rename: track does not exist at ${relPath(deskRoot, srcDir)}`)
+    throw new Error(`track_rename: track does not exist at ${shownRelPath(deskRoot, srcDir)}`)
   }
   if (await pathExists(destDir)) {
-    throw new Error(`track_rename: target already exists at ${relPath(deskRoot, destDir)}`)
+    throw new Error(`track_rename: target already exists at ${shownRelPath(deskRoot, destDir)}`)
   }
 
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
@@ -591,9 +647,9 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
   })
 
   return {
-    from: relPath(deskRoot, srcDir),
-    to: relPath(deskRoot, destDir),
-    updated_files: updatedFiles,
-    mentions,
+    from: shownRelPath(deskRoot, srcDir),
+    to: shownRelPath(deskRoot, destDir),
+    updated_files: updatedFiles.map(shownPath),
+    mentions: mentions.map(shownPath),
   }
 }
