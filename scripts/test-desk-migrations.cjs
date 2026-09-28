@@ -1149,6 +1149,34 @@ test("startup hooks tell the agent to tidy now, with the exact command, when the
   });
 });
 
+// An agent's Bash shell has neither DESK nor CLAUDE_PROJECT_DIR (M4-7 live rerun): the command the startup line names
+// must still find the desk from the shell's working folder and print the whole tidy, not "the tidy found no desk".
+test("the tidy command runs from an agent's shell with no DESK or CLAUDE_PROJECT_DIR, standing in the desk", () => {
+  // A desk looks like one on disk (`_meta/` and `_archive/`), as the live desk does; that is what lets a working folder
+  // count.
+  const build = (root) => {
+    messyDesk(root);
+    fs.mkdirSync(path.join(root, "_meta"), { recursive: true });
+    fs.mkdirSync(path.join(root, "_archive"), { recursive: true });
+  };
+  withTidyDesk({ build }, (tidy) => {
+    const env = { ...tidy.env };
+    delete env.DESK;
+    delete env.CLAUDE_PROJECT_DIR;
+    // Outside the desk, with nothing binding one, the same command still refuses.
+    const elsewhere = spawnSync(process.execPath, [path.join(deskRoot, "mcp", "scripts", "migrations.js"), "run", TIDY_ID, "--tools-root", tidy.desk], { cwd: path.join(tidy.root, "home"), env, encoding: "utf8" });
+    assert.match(elsewhere.stdout, /the tidy found no desk/u);
+    // That refusal held the tidy for a desk it could not see; standing in the desk resolves it, so the hold no longer
+    // matches and the tidy runs.
+    const run = spawnSync(process.execPath, [path.join(deskRoot, "mcp", "scripts", "migrations.js"), "run", TIDY_ID, "--tools-root", tidy.desk], { cwd: tidy.desk, env, encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+    assert.doesNotMatch(run.stdout, /found no desk/u);
+    assert.match(run.stdout, /^This script: /mu);
+    assert.match(run.stdout, /^Steps, in order:$/mu);
+    assert.match(run.stdout, /--write-record --root '[^']+' --claim '[0-9a-f-]{36}'/u);
+  });
+});
+
 test("startup hooks stay silent about migrations when none is pending", () => {
   const record = { schema_version: 1, tidy_version: 1, tidied_at: "2026-09-27T00:00:00.000Z" };
   withTidyDesk({ record }, (tidy) => {

@@ -155,7 +155,9 @@ function resolveRoot({ env, cwd, homeDir }) {
       env,
       cwd,
       homeDir,
-      hostProjectRoot: env.CLAUDE_PROJECT_DIR,
+      // An agent's shell has no CLAUDE_PROJECT_DIR; its working folder stands in, and
+      // like the host project it only counts when it is a desk.
+      hostProjectRoot: env.CLAUDE_PROJECT_DIR ?? cwd,
     }).root
   } catch {
     return null
