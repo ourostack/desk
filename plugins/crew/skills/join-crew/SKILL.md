@@ -43,7 +43,7 @@ Inspect the target local path first. If it contains a legacy Crew-v1 local works
 
 ## Step 2: offer once, then clone
 
-For an absent local workspace only, confirm the remote contains `_meta/desks.md`, `desks/`, and `_shared/`, prove authenticated read access, and ask once whether to clone it to the target path. On yes, run the overlay-supplied transport and verify origin; on no, stop without filesystem changes.
+For an absent local workspace only, confirm the remote contains `_meta/desks.md`, `desks/`, and `_shared/`, prove authenticated read access, and ask once whether to clone it to the target path. On yes, run the overlay-supplied transport and verify origin; on no, stop without filesystem changes. This ask carries the same risk a noninteractive session poses to `desk:first-run-bootstrap`'s A3: with no human able to answer, stop and report what was found instead of choosing yes or no on the operator's behalf.
 
 ## Step 3: choose the member phase
 
