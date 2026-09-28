@@ -25,6 +25,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 
 import { TOOL_NAMES, TOOL_DESCRIPTIONS } from "./tool-names.js"
+import { TOOL_INPUT_SCHEMAS } from "./tool-schemas.js"
 import { packageMetadata } from "./package-metadata.js"
 import {
   task_create,
@@ -329,7 +330,7 @@ export async function startServer({
     tools: TOOL_NAMES.map((name) => ({
       name,
       description: TOOL_DESCRIPTIONS[name],
-      inputSchema: { type: "object", properties: {}, additionalProperties: true },
+      inputSchema: TOOL_INPUT_SCHEMAS[name],
     })),
   }))
 
