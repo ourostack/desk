@@ -95,6 +95,71 @@ function encodeScalar(value) {
 
 const FRONTMATTER_TOP_LEVEL_KEY = /^([A-Za-z_][A-Za-z0-9_-]*):(?:\s|$)/u
 
+// A block scalar's own header value: `|` or `>`, plus an optional chomp
+// (`-`/`+`) and/or single-digit indent indicator in either order. Only
+// this shape's continuation lines are folded/literal body text that must
+// move with the field; every other value type's own line is the whole of
+// it, whatever comes after in the document.
+const BLOCK_SCALAR_VALUE = /^[|>][-+0-9]{0,2}$/u
+
+// The file's own line ending, taken from its first line break: CRLF only
+// when that break is literally `\r\n`, LF otherwise (including a file with
+// no line breaks at all). `patchFrontmatterFields` rejoins the whole file
+// with this, so a CRLF card's line endings survive a patch instead of
+// being silently normalized to bare `\n` by the split/join round trip.
+function detectEol(rawText) {
+  const index = rawText.indexOf("\n")
+  return index > 0 && rawText[index - 1] === "\r" ? "\r\n" : "\n"
+}
+
+// Splits a frontmatter value from a trailing ` # comment`, so a patched
+// line can carry that comment forward instead of silently dropping it. The
+// `#` only starts a comment outside a quoted string (an escaped `"` inside
+// a double-quoted value doesn't end it early) and, ordinarily, only when
+// whitespace precedes it — except when the whole value is nothing but a
+// comment (`key: # comment`, an otherwise-empty value), which needs no
+// whitespace of its own since the colon's own space already separates it.
+function splitTrailingComment(text) {
+  if (text.startsWith("#")) return { value: "", comment: text }
+  let quote = null
+  let escaped = false
+  for (let index = 0; index < text.length; index += 1) {
+    const ch = text[index]
+    if (quote) {
+      if (quote === "\"" && escaped) {
+        escaped = false
+        continue
+      }
+      if (quote === "\"" && ch === "\\") {
+        escaped = true
+        continue
+      }
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === "\"" || ch === "'") {
+      quote = ch
+      continue
+    }
+    if (ch === "#" && /\s/u.test(text[index - 1])) {
+      return { value: text.slice(0, index).replace(/\s+$/u, ""), comment: text.slice(index) }
+    }
+  }
+  return { value: text, comment: "" }
+}
+
+// Whether an indented (or blank-then-indented) run right after a patched
+// field's header line is that field's own nested map/list, for a field
+// whose header carries no inline value at all (`repos:`, not `repos: []`).
+// A blank line alone never counts — only an indented, non-blank line
+// actually reachable past it does, the same test a block scalar's own
+// continuation lines don't need because their header already says so.
+function collectionFollows(patched, from) {
+  let index = from
+  while (index < patched.length && patched[index] === "") index += 1
+  return index < patched.length && /^\s/u.test(patched[index])
+}
+
 /**
  * Rewrite only the named top-level frontmatter fields of `rawText`
  * (`{ key: value }`), leaving every other byte untouched: other fields'
@@ -102,12 +167,17 @@ const FRONTMATTER_TOP_LEVEL_KEY = /^([A-Za-z_][A-Za-z0-9_-]*):(?:\s|$)/u
  * body, survive exactly as written. A field not already present is
  * appended as a new plain-scalar line just before the closing fence; a
  * field that is present, however it was written (quoted, folded, a block
- * scalar), is replaced by one new plain-scalar line, dropping its own
- * continuation lines only.
+ * scalar, with a trailing comment), is replaced by one new plain-scalar
+ * line carrying that same trailing comment, dropping only that field's own
+ * continuation lines (a block scalar's body, or a nested map/list under an
+ * otherwise-empty value) — never a blank line that merely separates it
+ * from the next field. The file's own line ending (LF or CRLF) is kept.
  *
- * Returns `null` when `rawText` has no `---`-fenced frontmatter to patch —
- * the caller's cue to fall back to a full parse + re-dump, since there are
- * then no pre-existing bytes worth a surgical edit.
+ * Returns `null` — the caller's cue to fall back to a full parse + re-dump
+ * instead — when `rawText` has no `---`-fenced frontmatter to patch at
+ * all, or when a field this call means to patch appears more than once at
+ * top level: guessing which occurrence was meant risks silently patching
+ * the one YAML itself will then ignore, since the last one wins on parse.
  *
  * This exists so a mover/renamer never has to round-trip a card's whole
  * frontmatter through `serializeMarkdown`'s YAML dump just to change
@@ -116,6 +186,7 @@ const FRONTMATTER_TOP_LEVEL_KEY = /^([A-Za-z_][A-Za-z0-9_-]*):(?:\s|$)/u
  * into a `>-` block, even when every field's actual value is unchanged.
  */
 export function patchFrontmatterFields(rawText, fields) {
+  const eol = detectEol(rawText)
   const lines = rawText.split(/\r?\n/u)
   if (lines[0] !== "---") return null
   const end = lines.indexOf("---", 1)
@@ -123,18 +194,34 @@ export function patchFrontmatterFields(rawText, fields) {
 
   const remaining = new Map(Object.entries(fields))
   const patched = lines.slice(0, end)
+
+  const occurrences = new Map()
+  for (let index = 1; index < patched.length; index += 1) {
+    const line = patched[index]
+    if (line === "" || /^\s/u.test(line)) continue
+    const match = FRONTMATTER_TOP_LEVEL_KEY.exec(line)
+    if (match) occurrences.set(match[1], (occurrences.get(match[1]) ?? 0) + 1)
+  }
+  for (const key of remaining.keys()) {
+    if ((occurrences.get(key) ?? 0) > 1) return null
+  }
+
   for (let index = 1; index < patched.length; index += 1) {
     const line = patched[index]
     if (line === "" || /^\s/u.test(line)) continue
     const match = FRONTMATTER_TOP_LEVEL_KEY.exec(line)
     if (!match || !remaining.has(match[1])) continue
+    const { value, comment } = splitTrailingComment(line.slice(match[0].length).trim())
     let dropEnd = index + 1
-    while (dropEnd < patched.length && (patched[dropEnd] === "" || /^\s/u.test(patched[dropEnd]))) dropEnd += 1
-    patched.splice(index, dropEnd - index, `${match[1]}: ${encodeScalar(remaining.get(match[1]))}`)
+    if (BLOCK_SCALAR_VALUE.test(value) || (value === "" && collectionFollows(patched, index + 1))) {
+      while (dropEnd < patched.length && (patched[dropEnd] === "" || /^\s/u.test(patched[dropEnd]))) dropEnd += 1
+    }
+    const encoded = `${match[1]}: ${encodeScalar(remaining.get(match[1]))}`
+    patched.splice(index, dropEnd - index, comment ? `${encoded} ${comment}` : encoded)
     remaining.delete(match[1])
   }
   for (const [key, value] of remaining) patched.push(`${key}: ${encodeScalar(value)}`)
-  return [...patched, ...lines.slice(end)].join("\n")
+  return [...patched, ...lines.slice(end)].join(eol)
 }
 
 /**

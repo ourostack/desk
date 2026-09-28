@@ -410,7 +410,7 @@ test("patchFrontmatterFields changes only the named fields and leaves every othe
     "repos:",
     "  - name: alpha",
     "    branch_base: main",
-    "updated: \"2026-09-28T12:00:00Z\"",
+    "updated: \"2026-09-28T12:00:00Z\" # last touched by hand",
     "---",
     "",
     "# A task",
@@ -466,6 +466,90 @@ test("patchFrontmatterFields replaces a field that was itself a block scalar or 
 test("patchFrontmatterFields returns null when there is no closing frontmatter fence, so the caller can fall back rather than corrupt the file", () => {
   assert.equal(patchFrontmatterFields("no frontmatter here\n", { status: "done" }), null)
   assert.equal(patchFrontmatterFields("---\nstatus: drafting\n", { status: "done" }), null)
+  // No line break at all: the EOL sniff still has to run before the fence
+  // check bails, and must not throw on a string with no `\n` to find.
+  assert.equal(patchFrontmatterFields("no newline at all", { status: "done" }), null)
+})
+
+test("patchFrontmatterFields keeps the file's own CRLF line endings: only the patched line's value changes, every line break stays \\r\\n", () => {
+  const card = ["---", "status: drafting", "track: t", "---", "", "Body.", ""].join("\r\n")
+  const patched = patchFrontmatterFields(card, { track: "new-track" })
+  assert.equal(patched, ["---", "status: drafting", "track: new-track", "---", "", "Body.", ""].join("\r\n"))
+  // No bare \n slipped in anywhere: splitting on \r\n leaves no segment
+  // that still contains a line break of its own.
+  assert.equal(patched.split("\r\n").some((segment) => segment.includes("\n")), false)
+})
+
+test("patchFrontmatterFields never swallows a blank line that only separates two fields: it is not that field's own continuation", () => {
+  const card = ["---", "status: drafting", "", "track: t", "---", "", "Body.", ""].join("\n")
+  const patched = patchFrontmatterFields(card, { status: "done" })
+  assert.equal(patched, ["---", "status: done", "", "track: t", "---", "", "Body.", ""].join("\n"))
+})
+
+test("patchFrontmatterFields still drops a block scalar's own blank continuation lines, and a nested map/list under an otherwise-empty value", () => {
+  const blockCard = ["---", "status: drafting", "note: >-", "", "  folded text", "track: t", "---", "", "Body.", ""].join("\n")
+  assert.equal(
+    patchFrontmatterFields(blockCard, { note: "replaced" }),
+    ["---", "status: drafting", "note: replaced", "track: t", "---", "", "Body.", ""].join("\n"),
+  )
+  const nestedCard = ["---", "repos:", "  - name: alpha", "track: t", "---", "", "Body.", ""].join("\n")
+  assert.equal(
+    patchFrontmatterFields(nestedCard, { repos: "none" }),
+    ["---", "repos: none", "track: t", "---", "", "Body.", ""].join("\n"),
+  )
+})
+
+test("patchFrontmatterFields preserves a patched field's trailing inline comment", () => {
+  const card = ["---", "status: drafting # keep me", "track: t", "---", "", "Body.", ""].join("\n")
+  const patched = patchFrontmatterFields(card, { status: "done" })
+  assert.equal(patched, ["---", "status: done # keep me", "track: t", "---", "", "Body.", ""].join("\n"))
+})
+
+test("patchFrontmatterFields finds a trailing comment only outside quotes: a # inside the quoted value doesn't end the value early or get mistaken for the comment", () => {
+  const card = ["---", 'status: "a # b" # real comment', "track: t", "---", "", "Body.", ""].join("\n")
+  const patched = patchFrontmatterFields(card, { status: "done" })
+  assert.equal(patched, ["---", "status: done # real comment", "track: t", "---", "", "Body.", ""].join("\n"))
+})
+
+test("patchFrontmatterFields keeps tracking a trailing comment correctly across an escaped quote inside a double-quoted value", () => {
+  const card = ["---", 'status: "a \\"quoted\\" value" # note', "track: t", "---", "", "Body.", ""].join("\n")
+  const patched = patchFrontmatterFields(card, { status: "done" })
+  assert.equal(patched, ["---", "status: done # note", "track: t", "---", "", "Body.", ""].join("\n"))
+})
+
+test("patchFrontmatterFields treats an otherwise-empty value that is only a comment as having no value of its own", () => {
+  const card = ["---", "status: # to be decided", "track: t", "---", "", "Body.", ""].join("\n")
+  const patched = patchFrontmatterFields(card, { status: "done" })
+  assert.equal(patched, ["---", "status: done # to be decided", "track: t", "---", "", "Body.", ""].join("\n"))
+})
+
+test("patchFrontmatterFields also tracks a trailing comment correctly for a single-quoted value, not only a double-quoted one", () => {
+  const card = ["---", "status: 'a value' # single-quoted comment", "track: t", "---", "", "Body.", ""].join("\n")
+  const patched = patchFrontmatterFields(card, { status: "done" })
+  assert.equal(patched, ["---", "status: done # single-quoted comment", "track: t", "---", "", "Body.", ""].join("\n"))
+})
+
+test("patchFrontmatterFields leaves an empty-valued field with nothing after it (no collection, no comment, no next line at all) as just that one line", () => {
+  const card = ["---", "track: t", "note:", "---", "", "Body.", ""].join("\n")
+  const patched = patchFrontmatterFields(card, { note: "now-noted" })
+  assert.equal(patched, ["---", "track: t", "note: now-noted", "---", "", "Body.", ""].join("\n"))
+})
+
+test("patchFrontmatterFields skips a bare top-level line that isn't a key: value pair at all — a raw comment — leaving it untouched while still patching a real field", () => {
+  const card = ["---", "# a note, not a key", "track: t", "---", "", "Body.", ""].join("\n")
+  const patched = patchFrontmatterFields(card, { track: "new-track" })
+  assert.equal(patched, ["---", "# a note, not a key", "track: new-track", "---", "", "Body.", ""].join("\n"))
+})
+
+test("patchFrontmatterFields returns null when a field to patch appears more than once at top level, rather than guess which occurrence was meant", () => {
+  const card = ["---", "status: drafting", "track: t", "status: stale-duplicate", "---", "", "Body.", ""].join("\n")
+  assert.equal(patchFrontmatterFields(card, { status: "done" }), null)
+  // A duplicate of a field this call never touches doesn't block the patch.
+  const untouchedDuplicate = ["---", "title: one", "track: t", "title: two", "---", "", "Body.", ""].join("\n")
+  assert.equal(
+    patchFrontmatterFields(untouchedDuplicate, { track: "new-track" }),
+    ["---", "title: one", "track: new-track", "title: two", "---", "", "Body.", ""].join("\n"),
+  )
 })
 
 test("patchMarkdownFrontmatter writes only the patched bytes to disk, in place", async () => {
@@ -494,4 +578,18 @@ test("patchMarkdownFrontmatter falls back to a full write for a file with no fro
   // blank line between the newly added fence and the body (unrelated to
   // this patch: the same thing happens for any fenced card with a body).
   assert.equal(content, "\nJust a body, no frontmatter.\n")
+})
+
+test("patchMarkdownFrontmatter throws rather than guess when a field it means to patch is duplicated at top level, and leaves the file untouched", async () => {
+  const root = await mkTempDeskRoot()
+  const filePath = path.join(root, "task.md")
+  const original = ["---", "status: drafting", "track: t", "status: stale-duplicate", "---", "", "Body.", ""].join("\n")
+  await fs.writeFile(filePath, original, "utf8")
+  // patchFrontmatterFields declines (null) rather than guess which
+  // occurrence wins; the fallback then tries a full parse, and a document
+  // with a genuinely duplicated top-level key is invalid YAML gray-matter's
+  // own parser rejects, so the call throws instead of silently picking one
+  // occurrence over the other or writing a merged guess.
+  await assert.rejects(() => patchMarkdownFrontmatter(filePath, { status: "done" }))
+  assert.equal(await fs.readFile(filePath, "utf8"), original)
 })
