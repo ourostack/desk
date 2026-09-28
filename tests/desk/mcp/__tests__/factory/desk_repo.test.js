@@ -122,6 +122,30 @@ before(() => {
   write("track/_archive/movable-task/task.md", card(["status: drafting"]))
   shas.movableArchived = commitAt("2026-09-25T08:56:00Z", "movable: archive move")
 
+  // A card with no frontmatter at all, on both sides of an edit: splitCard
+  // must not mistake this for a housekeeping-eligible card.
+  write("track/no-frontmatter-edit/task.md", "# Just a heading\nstatus: drafting\n")
+  shas.noFrontmatterCreated = commitAt("2026-09-25T08:57:00Z", "no-frontmatter: create")
+  write("track/no-frontmatter-edit/task.md", "# Just a heading\nstatus: done\n")
+  shas.noFrontmatterEdited = commitAt("2026-09-25T08:57:30Z", "no-frontmatter: edit")
+
+  // A card whose frontmatter opens with `---` but is never closed, on both
+  // sides of an edit: splitCard's other early return.
+  write("track/unclosed-frontmatter-edit/task.md", "---\nstatus: drafting\n")
+  shas.unclosedCreated = commitAt("2026-09-25T08:58:00Z", "unclosed: create")
+  write("track/unclosed-frontmatter-edit/task.md", "---\nstatus: done\n")
+  shas.unclosedEdited = commitAt("2026-09-25T08:58:30Z", "unclosed: edit")
+
+  // A nested frontmatter value changes (a repos: entry's branch_base) while
+  // every top-level field stays the same text: a field map keyed only by
+  // each line's own top-level key would see `repos:`'s own captured value
+  // ("", nothing follows the colon on that line) as unchanged and miss
+  // this; the line comparison must not.
+  write("track/nested-repos-task/task.md", card(["title: Nested repos", "repos:", "  - name: alpha", "    branch_base: main", "status: drafting", "updated: '2026-09-25T09:00:00Z'"]))
+  shas.nestedReposCreated = commitAt("2026-09-25T08:59:00Z", "nested-repos: create")
+  write("track/nested-repos-task/task.md", card(["title: Nested repos", "repos:", "  - name: alpha", "    branch_base: develop", "status: drafting", "updated: '2026-09-25T09:00:00Z'"]))
+  shas.nestedReposEdited = commitAt("2026-09-25T08:59:30Z", "nested-repos: change branch_base")
+
   // A commit, then its amend: both are this clone's.
   write("track/amended-task/task.md", card(["status: drafting"]))
   shas.beforeAmend = commitAt("2026-09-25T09:00:00Z", "draft")
@@ -409,6 +433,30 @@ test("isCardHousekeeping is false when Git lists the change but cannot read the 
   const fakeGit = path.join(scratch, "fake-git-no-show.sh")
   writeFileSync(fakeGit, `#!/bin/sh\nfor arg in "$@"; do [ "$arg" = show ] && exit 1; done\nexec git "$@"\n`, { mode: 0o755 })
   assert.equal(createDeskReaders({ deskRoot: desk, git: fakeGit }).isCardHousekeeping(shas.oldTaskHousekeeping, "track/_archive/old-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false for a card with no frontmatter at all, on either side of the edit", () => {
+  assert.equal(housekeeping(shas.noFrontmatterEdited, "track/no-frontmatter-edit/task.md"), false)
+})
+
+test("isCardHousekeeping is false for a card whose frontmatter is opened but never closed, on either side of the edit", () => {
+  assert.equal(housekeeping(shas.unclosedEdited, "track/unclosed-frontmatter-edit/task.md"), false)
+})
+
+test("isCardHousekeeping is false when only a nested frontmatter value changes, such as a repos: entry's branch_base, even though no exempt field differs", () => {
+  assert.equal(housekeeping(shas.nestedReposEdited, "track/nested-repos-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false when Git's list of the commit's changes is truncated right after a status, with no path to go with it", () => {
+  const fakeGit = path.join(scratch, "fake-git-truncated-status.sh")
+  writeFileSync(fakeGit, "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = diff-tree ] && { printf 'M\\000'; exit 0; }; done\nexec git \"$@\"\n", { mode: 0o755 })
+  assert.equal(createDeskReaders({ deskRoot: desk, git: fakeGit }).isCardHousekeeping(shas.first, "track/live-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false when Git's list of the commit's changes is truncated after a rename's old path, with no new path to go with it", () => {
+  const fakeGit = path.join(scratch, "fake-git-truncated-rename.sh")
+  writeFileSync(fakeGit, "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = diff-tree ] && { printf 'R100\\000onlypath\\000'; exit 0; }; done\nexec git \"$@\"\n", { mode: 0o755 })
+  assert.equal(createDeskReaders({ deskRoot: desk, git: fakeGit }).isCardHousekeeping(shas.first, "track/live-task/task.md"), false)
 })
 
 // --- readDeskRemote ---------------------------------------------------------------------

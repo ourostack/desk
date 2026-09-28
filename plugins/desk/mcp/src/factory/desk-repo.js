@@ -139,36 +139,53 @@ function cardFields(text) {
 // Card housekeeping (identity/placement-only edits).
 // ---------------------------------------------------------------------------
 
-const HOUSEKEEPING_FIELDS = new Set(["title", "track", "updated"])
+const HOUSEKEEPING_KEY = /^(?:title|track|updated):/u
 
-// Every frontmatter field, unbounded (a commit diff can move real content
-// past line 40), plus the body, the text after the closing `---`.
+// The frontmatter's lines, unbounded (a commit diff can move real content
+// past line 40), and the body: the text after the closing `---`. Not a
+// field map — a line comparison can't afford to parse YAML, since a nested
+// value (a nested `repos:` entry, say) would then be invisible to it; every
+// frontmatter line is kept as written.
 function splitCard(text) {
   const lines = text.split(/\r?\n/u)
-  if (lines[0] !== "---") return { fields: {}, body: text }
+  if (lines[0] !== "---") return { frontmatter: [], body: text }
   const end = lines.indexOf("---", 1)
-  if (end === -1) return { fields: {}, body: text }
-  const fields = {}
-  for (const line of lines.slice(1, end)) {
-    const match = /^([A-Za-z_][A-Za-z0-9_-]*):(.*)$/u.exec(line)
-    if (match && !Object.hasOwn(fields, match[1])) fields[match[1]] = unquote(match[2])
+  if (end === -1) return { frontmatter: [], body: text }
+  return { frontmatter: lines.slice(1, end), body: lines.slice(end + 1).join("\n") }
+}
+
+// A line starts a new top-level `key: value` frontmatter entry when it is
+// non-blank and has no leading whitespace; a blank or indented line
+// continues the entry above it (a folded value or a nested list, say).
+function isTopLevelLine(line) {
+  return line !== "" && !/^\s/u.test(line)
+}
+
+// Drops every top-level `title:`, `track:` or `updated:` line, and every
+// line that continues one of them, from a frontmatter's lines. Nothing
+// else is touched: a field this doesn't name keeps every line it has,
+// nested content included.
+function stripHousekeepingLines(frontmatterLines) {
+  const kept = []
+  let skipping = false
+  for (const line of frontmatterLines) {
+    if (isTopLevelLine(line)) skipping = HOUSEKEEPING_KEY.test(line)
+    if (!skipping) kept.push(line)
   }
-  return { fields, body: lines.slice(end + 1).join("\n") }
+  return kept
 }
 
 // True when the only difference between the two card texts is identity or
-// placement: the body is byte-identical, and any frontmatter field that
-// differs (added, removed or changed) is `title`, `track` or `updated`.
+// placement: the body is byte-identical, and once every top-level `title:`,
+// `track:` and `updated:` line (and their continuation lines) is dropped
+// from both frontmatters, what is left is byte-identical too — a straight
+// line comparison, never a per-field guess, so a change inside a nested
+// value (a `repos:` entry's `branch_base:`, say) is never invisible to it.
 function isHousekeepingEdit(oldText, newText) {
   const before = splitCard(oldText)
   const after = splitCard(newText)
   if (before.body !== after.body) return false
-  const keys = new Set([...Object.keys(before.fields), ...Object.keys(after.fields)])
-  for (const key of keys) {
-    if (HOUSEKEEPING_FIELDS.has(key)) continue
-    if (before.fields[key] !== after.fields[key]) return false
-  }
-  return true
+  return stripHousekeepingLines(before.frontmatter).join("\n") === stripHousekeepingLines(after.frontmatter).join("\n")
 }
 
 // `git diff-tree --name-status -z` output: `status\0path` for an add,
