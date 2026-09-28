@@ -53,7 +53,8 @@ function commentView(raw) {
  * label, state })`, `listComments(number)`, `createComment(number, body)`,
  * `updateComment(id, body)`, `addLabels(number, labels)`,
  * `removeLabel(number, label)`, `createIssue({ title, body, labels }) -> {
- * number, url }`, `updateIssue(number, patch)` and `visibility() ->
+ * number, url }`, `updateIssue(number, patch)`, `readFile(file) -> text | null` (a file
+ * on the default branch, `null` when it does not exist) and `visibility() ->
  * "public" | "private" | "unknown"` (the repository's, where anything but
  * GitHub's explicit `private: true` or `private: false` is `unknown`) for
  * the store `repo`.
@@ -121,6 +122,18 @@ export function issuesClient({ runner, repo, token, timeoutMs = DEFAULT_TIMEOUT_
     },
     async updateIssue(number, patch) {
       await api("PATCH", `${base}/issues/${number}`, patch)
+    },
+    async readFile(file) {
+      if (typeof file !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/u.test(file)) throw new TypeError("readFile: file must be a relative path")
+      let answer
+      try {
+        answer = await api("GET", `${base}/contents/${file}`)
+      } catch (error) {
+        if (error.code === "http_404") return null
+        throw error
+      }
+      if (!isObject(answer) || answer.encoding !== "base64" || typeof answer.content !== "string") throw failure("unexpected_answer")
+      return Buffer.from(answer.content, "base64").toString("utf8")
     },
     async visibility() {
       const answer = await api("GET", base)

@@ -113,3 +113,19 @@ test("visibility reads the repository and says unknown unless GitHub says privat
   assert.equal(route(calls[0]), "repos/o/r")
   assert.equal(method(calls[0]), "GET")
 })
+
+test("readFile reads a file on the default branch, null when it does not exist", async () => {
+  const text = JSON.stringify({ andon: { plugins: ["desk"] } })
+  const answers = [ok({ encoding: "base64", content: Buffer.from(text).toString("base64") }), { code: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" }, ok({ encoding: "none", content: "" }), ok(), { code: 1, stdout: "", stderr: "gh: Forbidden (HTTP 403)" }]
+  const { calls, runner } = recorder(answers)
+  const client = issuesClient({ runner, repo: "o/r", token: TOKEN })
+  assert.equal(await client.readFile("factory.json"), text)
+  assert.equal(route(calls[0]), "repos/o/r/contents/factory.json")
+  assert.equal(method(calls[0]), "GET")
+  assert.equal(await client.readFile("dir/factory.json"), null)
+  await assert.rejects(client.readFile("factory.json"), (error) => error.code === "unexpected_answer")
+  await assert.rejects(client.readFile("factory.json"), (error) => error.code === "unexpected_answer")
+  await assert.rejects(client.readFile("factory.json"), (error) => error.code === "http_403")
+  for (const bad of ["../x", "/abs", "a//b", "", 5, "a b"]) await assert.rejects(client.readFile(bad), /relative path/u)
+  assert.equal(calls.length, 5)
+})

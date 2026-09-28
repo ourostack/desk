@@ -869,6 +869,17 @@ requires(
   /## The kaizen worker[\s\S]+andon first[\s\S]+andon-dismissed[\s\S]+file the system friction, after signoff[\s\S]+file_card: true[\s\S]+at most five per pass[\s\S]+never files to a public store[\s\S]+PR flow[\s\S]+fill `version` when the release lands[\s\S]+confirmed[\s\S]+close[\s\S]+not-confirmed[\s\S]+moved clearly the wrong way[\s\S]+revert[\s\S]+re-plan[\s\S]+never close a card because the data is thin[\s\S]+## Process[\s\S]+file them only after the signoff/iu,
 );
 
+requires(
+  "plugins/desk/skills/session-start/SKILL.md",
+  "session-start surfaces open andon issues and offers the curator",
+  /## Step 4\.8 — Factory boot lines[\s\S]+waste labels and andon[\s\S]+open andon issues in <store>[\s\S]+Step 5 status block[\s\S]+`curator` pass, which handles them first/u,
+);
+requires(
+  "plugins/desk/docs/agentic-engineering-v2-rfc.md",
+  "the RFC states the kaizen and andon rules the store's build applies",
+  /\*\*The loop closes\.\*\*[\s\S]+structured fields only[\s\S]+after the operator signs off[\s\S]+at least 6 groups[\s\S]+computed from the confidence level[\s\S]+not-confirmed ones[\s\S]+\*\*Andon stops the line\.\*\*[\s\S]+`factory\.json`[\s\S]+latest version with enough independent jobs[\s\S]+`andon-dismissed`[\s\S]+session start lists[\s\S]+\*\*Still open\.\*\*[\s\S]+Draining recorded friction into kaizen cards/u,
+);
+
 // The observer agent: worker's sibling, named for Lean's process observer, who watches the work, times it and
 // classifies each step, and never does the work. Its three bodies carry identity only, like worker's.
 const observerBodies = [

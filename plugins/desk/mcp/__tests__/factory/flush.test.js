@@ -713,14 +713,21 @@ test("start-time delivery sweeps once and flushes every consented store within o
     runner: () => assert.fail("injected flush"),
     sweep: async () => { swept.push(1); return { written: 0 } },
     flush: async (_env, options) => { flushed.push(options.store); assert.ok(options.deadlineMs <= 120000); return { result: "nothing_pending" } },
+    andon: async (_env, options) => { flushed.push(`andon ${options.store}`); assert.equal(typeof options.runner, "function"); return { result: "recorded", count: 0 } },
   })
-  assert.deepEqual(summary, { swept: { written: 0 }, stores: { "acme/second": { result: "nothing_pending" }, [STORE]: { result: "nothing_pending" } } })
-  assert.deepEqual(flushed, ["acme/second", STORE])
+  assert.deepEqual(summary, { swept: { written: 0 }, stores: { "acme/second": { result: "nothing_pending" }, [STORE]: { result: "nothing_pending" } }, andon: { "acme/second": { result: "recorded", count: 0 }, [STORE]: { result: "recorded", count: 0 } } })
+  // Each store's andon refresh follows its flush.
+  assert.deepEqual(flushed, ["acme/second", "andon acme/second", STORE, `andon ${STORE}`])
   let clock = 0
-  const late = await flushConsented(env, { now: () => clock, deadlineMs: 10, sweep: async () => { clock = 50; throw new Error("sweep failed") }, flush: async () => assert.fail("past the deadline") })
-  assert.deepEqual(late, { swept: null, stores: { "acme/second": { result: "deadline" }, [STORE]: { result: "deadline" } } })
-  const broken = await flushConsented(env, { sweep: async () => ({}), flush: async () => { throw new Error("boom") } })
+  const late = await flushConsented(env, { now: () => clock, deadlineMs: 10, sweep: async () => { clock = 50; throw new Error("sweep failed") }, flush: async () => assert.fail("past the deadline"), andon: async () => assert.fail("past the deadline") })
+  assert.deepEqual(late, { swept: null, stores: { "acme/second": { result: "deadline" }, [STORE]: { result: "deadline" } }, andon: {} })
+  // A flush that uses up the deadline leaves no time for andon.
+  clock = 0
+  const spent = await flushConsented(env, { now: () => clock, deadlineMs: 10, sweep: async () => ({}), flush: async () => { clock = 50; return { result: "nothing_pending" } }, andon: async () => assert.fail("past the deadline") })
+  assert.deepEqual(spent.andon, { "acme/second": { result: "deadline" } })
+  const broken = await flushConsented(env, { sweep: async () => ({}), flush: async () => { throw new Error("boom") }, andon: async () => { throw new Error("boom") } })
   assert.deepEqual(broken.stores[STORE], { result: "unexpected" })
+  assert.deepEqual(broken.andon[STORE], { result: "unexpected" })
 }))
 
 // ---------------------------------------------------------------------------
