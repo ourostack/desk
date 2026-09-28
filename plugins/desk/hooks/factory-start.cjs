@@ -3,9 +3,10 @@
 
 // Started detached, with ignored stdio, by both session-start hooks once their
 // output is built (boot-checks.cjs `startFactory`, only when a store has
-// `contribute: true`). It runs one sweep of pending session markers and then
-// a flush of every consented store (mcp/src/factory/flush.js
-// `flushConsented`), all within one 120-second deadline. It prints nothing and
+// `contribute: true`). It runs one sweep of pending session markers and then,
+// for every consented store, a flush and a refresh of its open andon issues
+// (mcp/src/factory/flush.js `flushConsented`), all within one 120-second
+// deadline. It prints nothing and
 // always exits 0; a hard stop 30 seconds after the deadline ends a process
 // held up outside the flush's own runner boundaries.
 

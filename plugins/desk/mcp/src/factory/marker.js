@@ -1,6 +1,6 @@
 import fs from "node:fs"
 import * as path from "node:path"
-import { ENUMS, LIMITS, PATTERNS, isPlainObject } from "./schema.js"
+import { ENUMS, LIMITS, PATTERNS, isPlainObject, validPluginSource } from "./schema.js"
 
 export const MAX_MARKER_BYTES = 64 * 1024
 const REQUIRED = ["schema_version", "host", "session_id", "log_path", "cwd", "desk_root", "end_reason", "ended_at", "plugins", "updated_at"]
@@ -28,9 +28,10 @@ export function validMarker(marker) {
     && (marker.end_reason === null || ENUMS.endReason.includes(marker.end_reason))
     && (marker.ended_at === null || time(marker.ended_at)) && time(marker.updated_at)
     && Array.isArray(marker.plugins) && marker.plugins.length <= LIMITS.plugins
-    && marker.plugins.every((plugin) => isPlainObject(plugin) && Object.keys(plugin).sort().join(",") === "name,version"
+    && marker.plugins.every((plugin) => isPlainObject(plugin) && ["name,version", "name,source,version"].includes(Object.keys(plugin).sort().join(","))
       && typeof plugin.name === "string" && PATTERNS.pluginName.test(plugin.name)
-      && typeof plugin.version === "string" && PATTERNS.semver.test(plugin.version))
+      && typeof plugin.version === "string" && PATTERNS.semver.test(plugin.version)
+      && validPluginSource(plugin))
     && (!Object.hasOwn(marker, "entrypoint") || ENUMS.entrypoint.includes(marker.entrypoint))
     && (!Object.hasOwn(marker, "person_prefix") || (typeof marker.person_prefix === "string" && /^(?:desks\/[A-Za-z0-9][A-Za-z0-9_-]{0,63})?$/u.test(marker.person_prefix)))
     && (!Object.hasOwn(marker, "routing") || validRouting(marker.routing))

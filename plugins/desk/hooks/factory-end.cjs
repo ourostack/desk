@@ -55,8 +55,126 @@ async function launch(script, args, env, resolveNode = compatibleNode) {
   });
 }
 
+const MAX_SOURCE_ENTRIES = 256;
+// How long the Stop hook may spend finding install sources before it names none.
+const SOURCE_BUDGET_MS = 400;
+
+// The one GitHub repository a plugin was installed from, as `owner/repo`, or null when that is unknown or ambiguous.
+// Every lookup below fails closed: anything it cannot read, reach or tell apart gives null, and a null source is never named in a public store.
+const githubRepo = (value, PATTERNS) => (typeof value === "string" && PATTERNS.prRepo.test(value) ? value : null);
+const objectOf = (value) => (value !== null && typeof value === "object" && !Array.isArray(value) ? value : null);
+const parseSmall = (readSmallText, file, limit) => {
+  try {
+    return objectOf(JSON.parse(readSmallText(file, limit)));
+  } catch {
+    return null;
+  }
+};
+// Copilot's config.json opens with `//` comment lines.
+const parseCommented = (readSmallText, file) => {
+  try {
+    return objectOf(JSON.parse(readSmallText(file, MAX_INPUT).replace(/^(?:\s*\/\/[^\n]*\n)+/u, "")));
+  } catch {
+    return null;
+  }
+};
+const githubSource = (value, PATTERNS) => {
+  const source = objectOf(value);
+  return source?.source === "github" ? githubRepo(source.repo, PATTERNS) : null;
+};
+
+// A marketplace manifest's plugins, as name -> the repository each is published from: the marketplace's own repository for a relative path inside it, the entry's own GitHub repository, and null for anything else or a name listed twice with different sources.
+function listedPlugins(manifest, marketplaceRepo, PATTERNS) {
+  const plugins = Array.isArray(manifest?.plugins) ? manifest.plugins : null;
+  if (plugins === null || plugins.length > MAX_SOURCE_ENTRIES) return null;
+  const listed = new Map();
+  for (const entry of plugins) {
+    const plugin = objectOf(entry);
+    if (typeof plugin?.name !== "string") continue;
+    const from = typeof plugin.source === "string"
+      ? plugin.source.startsWith("./") && !plugin.source.split("/").includes("..") ? marketplaceRepo : null
+      : githubSource(plugin.source, PATTERNS);
+    listed.set(plugin.name, listed.has(plugin.name) && listed.get(plugin.name) !== from ? null : from);
+  }
+  return listed;
+}
+
+// Claude Code: `installed_plugins.json` keys are `name@marketplace`, and `known_marketplaces.json` says where each marketplace came from and where its copy is cached. A plugin has a source only when a GitHub marketplace's cached manifest lists it; the source is then the repository that manifest says the plugin comes from.
+function claudeSources(configDir, readSmallText, PATTERNS, late) {
+  const known = parseSmall(readSmallText, path.join(configDir, "plugins", "known_marketplaces.json"), MAX_INPUT) ?? {};
+  const listings = new Map();
+  const listing = (marketplace) => {
+    if (!listings.has(marketplace)) {
+      const entry = Object.hasOwn(known, marketplace) ? objectOf(known[marketplace]) : null;
+      const repo = githubSource(entry?.source, PATTERNS);
+      const location = entry?.installLocation;
+      listings.set(marketplace, repo === null || typeof location !== "string" || !path.isAbsolute(location)
+        ? null
+        : listedPlugins(parseSmall(readSmallText, path.join(location, ".claude-plugin", "marketplace.json"), MAX_INPUT), repo, PATTERNS));
+    }
+    return listings.get(marketplace);
+  };
+  return (key) => {
+    const at = key.indexOf("@");
+    if (at < 1 || late()) return null;
+    return listing(key.slice(at + 1))?.get(key.slice(0, at)) ?? null;
+  };
+}
+
+// Plain Copilot: `config.json` `installedPlugins` records each plugin's marketplace, and `settings.json` `extraKnownMarketplaces` says which repository that marketplace is. A plugin has a source only when exactly one install record matches its name and version and that record's marketplace is a GitHub repository.
+function copilotSources(copilotHome, readSmallText, PATTERNS, late) {
+  const config = parseCommented(readSmallText, path.join(copilotHome, "config.json"));
+  const settings = parseCommented(readSmallText, path.join(copilotHome, "settings.json"));
+  const installed = Array.isArray(config?.installedPlugins) && config.installedPlugins.length <= MAX_SOURCE_ENTRIES ? config.installedPlugins : [];
+  const marketplaces = objectOf(settings?.extraKnownMarketplaces) ?? {};
+  return (name, version) => {
+    if (late()) return null;
+    const records = installed.map(objectOf).filter((record) => record?.name === name && record.version === version);
+    if (records.length !== 1 || typeof records[0].marketplace !== "string" || !Object.hasOwn(marketplaces, records[0].marketplace)) return null;
+    return githubSource(objectOf(marketplaces[records[0].marketplace])?.source, PATTERNS);
+  };
+}
+
+// Copilot under Agency: each session copies its plugins from Agency's cache, whose index maps a spec such as `copilot:github:owner/repo:plugins/x@ref` to a cached folder. Every entry counts, whatever its origin: a non-GitHub entry is an unknown source for its plugin name. A plugin has a source only when the scan read the whole index and every cached entry at the plugin's exact name and version came from one GitHub repository. A cut-short scan, an entry whose name cannot be read and a name-only match all give no source.
+const UNKNOWN_ORIGIN = Symbol("unknown origin");
+function agencySources(home, readSmallText, PATTERNS, late) {
+  const cache = path.join(home, ".local", "agency", "plugins", "cache");
+  const entries = Object.entries(objectOf(parseSmall(readSmallText, path.join(cache, "cache_index.json"), MAX_INPUT)?.entries) ?? {});
+  const none = () => null;
+  if (entries.length > MAX_SOURCE_ENTRIES) return none;
+  const byName = new Map();
+  for (const [spec, entry] of entries) {
+    if (late()) return none;
+    const origin = githubRepo(/^[a-z-]+:github:([^:]+):/u.exec(spec)?.[1], PATTERNS) ?? UNKNOWN_ORIGIN;
+    const dir = objectOf(entry)?.dir_name;
+    // An entry whose folder cannot be read could be any plugin, so the index says nothing for certain.
+    if (typeof dir !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/u.test(dir)) return none;
+    let named = false;
+    for (const file of ["plugin.json", "agency.json"]) {
+      const manifest = parseSmall(readSmallText, path.join(cache, "entries", dir, file));
+      if (typeof manifest?.name !== "string") continue;
+      named = true;
+      const versions = byName.get(manifest.name) ?? new Map();
+      byName.set(manifest.name, versions);
+      // An entry with no readable version could be any version of its plugin.
+      const key = typeof manifest.version === "string" ? manifest.version : null;
+      versions.set(key, (versions.get(key) ?? new Set()).add(origin));
+    }
+    if (!named) return none;
+  }
+  return (name, version) => {
+    const versions = byName.get(name);
+    const origins = new Set([...(versions?.get(version) ?? []), ...(versions?.get(null) ?? [])]);
+    if (versions?.get(version) === undefined || origins.size !== 1) return null;
+    const [origin] = origins;
+    return origin === UNKNOWN_ORIGIN ? null : origin;
+  };
+}
+
 // `deadline` (a `performance.now()` value, optional) stops the scan early for the session-start boot check; the result is then incomplete and `timedOut`.
-function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadline = Infinity }) {
+// `sources: false` skips the install-source lookup, for callers that need only the plugin folders.
+// `sourceDeadline` (a `performance.now()` value, optional) bounds the install-source lookup alone: past it every source is null, and the plugins are still recorded.
+function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadline = Infinity, sources = true, sourceDeadline = Infinity }) {
   const plugins = [];
   const dirs = [];
   let incomplete = false;
@@ -67,10 +185,13 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
     incomplete = true;
     return true;
   };
-  const add = (name, version) => {
+  // Each plugin records where it was installed from (`source`), which decides whether a public store may name it.
+  const add = (name, version, source) => {
     if (typeof name === "string" && PATTERNS.pluginName.test(name) && typeof version === "string" && PATTERNS.semver.test(version)
-      && plugins.length < 64 && !plugins.some((p) => p.name === name && p.version === version)) plugins.push({ name, version });
+      && plugins.length < 64 && !plugins.some((p) => p.name === name && p.version === version)) plugins.push({ name, version, source: source(name, version) });
   };
+  const unknown = () => null;
+  const sourceLate = () => performance.now() > sourceDeadline;
   if (host === "copilot") {
     // opendir bounds the enumeration as well as the number of file reads.
     const dir = fs.opendirSync(path.dirname(pluginRoot));
@@ -82,27 +203,37 @@ function metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, deadli
         if (entry.isDirectory()) dirs.push(path.join(path.dirname(pluginRoot), entry.name));
       }
     } finally { dir.closeSync(); }
+    // Agency sessions copy their plugins from Agency's cache; plain Copilot installs them from a marketplace.
+    const agency = path.join(home, ".local", "agency", "plugins", "sessions") + path.sep;
+    const underAgency = path.resolve(pluginRoot).startsWith(agency);
+    const copilotHome = env.COPILOT_HOME || path.join(home, ".copilot");
+    const source = !sources ? unknown
+      : underAgency ? agencySources(home, readSmallText, PATTERNS, sourceLate)
+        : copilotSources(copilotHome, readSmallText, PATTERNS, sourceLate);
     for (const folder of dirs) {
       if (late()) break;
       try {
         const plugin = JSON.parse(readSmallText(path.join(folder, "plugin.json")));
-        add(plugin.name, plugin.version);
+        add(plugin.name, plugin.version, source);
       } catch {
         // resolveStore records unreadable manifests as local status warnings.
       }
     }
   } else {
     try {
-      const installed = JSON.parse(readSmallText(path.join(env.CLAUDE_CONFIG_DIR || path.join(home, ".claude"), "plugins", "installed_plugins.json"), MAX_INPUT));
+      const configDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
+      const installed = JSON.parse(readSmallText(path.join(configDir, "plugins", "installed_plugins.json"), MAX_INPUT));
       if (!installed.plugins || typeof installed.plugins !== "object" || Array.isArray(installed.plugins)) throw new Error("registry_unreadable");
       incomplete = Object.keys(installed.plugins).length > 64;
+      const marketplaceOf = sources ? claudeSources(configDir, readSmallText, PATTERNS, sourceLate) : unknown;
       for (const [key, records] of Object.entries(installed.plugins).slice(0, 64)) {
+        const source = () => marketplaceOf(key);
         if (late()) break;
         if (!Array.isArray(records)) { incomplete = true; continue; }
         if (records.length > 64) incomplete = true;
         for (const record of records.slice(0, 64)) {
           if (!record || typeof record !== "object") { incomplete = true; continue; }
-          add(key.split("@")[0], record.version);
+          add(key.split("@")[0], record.version, source);
           if (typeof record.installPath !== "string" || !path.isAbsolute(record.installPath)) { incomplete = true; continue; }
           if (dirs.includes(record.installPath)) continue;
           if (dirs.length === 64) incomplete = true;
@@ -137,7 +268,7 @@ async function runHook({ host, payload, env = process.env, pluginRoot = ownRoot,
     ]);
     const { root: deskRoot } = resolveHookDeskRoot({ env, cwd: payload.cwd });
     if (deskRoot === null) return "unavailable";
-    const { plugins, dirs, incomplete } = metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS });
+    const { plugins, dirs, incomplete } = metadata({ host, pluginRoot, home, env, readSmallText, PATTERNS, sourceDeadline: performance.now() + SOURCE_BUDGET_MS });
     const ended = event === "SessionEnd" || event === "sessionEnd";
     const at = !claude && Number.isSafeInteger(payload.timestamp) && payload.timestamp >= 0 ? new Date(payload.timestamp).toISOString() : new Date().toISOString();
     const agency = path.join(home, ".local", "agency", "plugins", "sessions") + path.sep;

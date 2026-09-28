@@ -96,7 +96,7 @@ import { createInterface } from "node:readline"
 import * as path from "node:path"
 
 import { toolKind } from "./tool-kinds.js"
-import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
+import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
 import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 
@@ -591,10 +591,10 @@ function addUnavailable(unavailable, field, reason) {
 function sanitizePlugins(plugins, limits, unavailable) {
   const list = Array.isArray(plugins) ? plugins : []
   const valid = list.filter((entry) => typeof entry?.name === "string" && PATTERNS.pluginName.test(entry.name)
-    && typeof entry.version === "string" && PATTERNS.semver.test(entry.version))
+    && typeof entry.version === "string" && PATTERNS.semver.test(entry.version) && validPluginSource(entry))
   if (!Array.isArray(plugins) || valid.length !== list.length) addUnavailable(unavailable, "plugins", "source_unreadable")
   if (valid.length > limits.plugins) addUnavailable(unavailable, "plugins", "capped")
-  return valid.slice(0, limits.plugins).map(({ name, version }) => ({ name, version }))
+  return valid.slice(0, limits.plugins).map(({ name, version, source }) => ({ name, version, source: source ?? null }))
 }
 
 // Trims every derived array to what `validateLocalFacts` accepts: drops

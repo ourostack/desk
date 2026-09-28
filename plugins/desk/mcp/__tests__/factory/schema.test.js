@@ -409,6 +409,25 @@ test("exactly 64 plugins is accepted", () => {
   assert.equal(validateLocalFacts(value).ok, true)
 })
 
+test("a local plugin's install source is optional: absent, null or an owner/repo name", () => {
+  for (const plugin of [{ name: "desk", version: "1.0.0" }, { name: "desk", version: "1.0.0", source: null }, { name: "desk", version: "1.0.0", source: "ourostack/desk" }]) {
+    const value = golden()
+    value.plugins = [plugin]
+    assert.deepEqual(validateLocalFacts(value), { ok: true, errors: [] }, JSON.stringify(plugin))
+  }
+  for (const source of [SENTINEL, "", 7, ["ourostack/desk"]]) {
+    const value = golden()
+    value.plugins = [{ name: "desk", version: "1.0.0", source }]
+    const result = validateLocalFacts(value)
+    assert.equal(result.ok, false)
+    assert.equal(result.errors[0].path, "plugins.0.source")
+    assertNoLeak(result)
+  }
+  const value = golden()
+  value.plugins = [{ name: "desk", version: "1.0.0", source: null, origin: SENTINEL }]
+  assertSingle(validateLocalFacts(value), "unknown_key", "plugins.0")
+})
+
 test("more than 32 models fails with too_many (sentinel planted in the unread items, no leak)", () => {
   const value = golden()
   value.models = fillWithSentinel({ id: SENTINEL, requests: 1, tokens: { input: 1, output: 1, cache_read: 1, cache_write: 1, reasoning: null } }, LIMITS.models + 1)

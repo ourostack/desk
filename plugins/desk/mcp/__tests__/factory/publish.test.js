@@ -53,7 +53,7 @@ test("the golden local fixture is valid local facts", () => {
 test("the golden local fixture transforms to the golden published fixture byte for byte", () => {
   const { published, dropped } = publish(local())
   assert.equal(serializePublished(published), PUBLISHED_GOLDEN_TEXT)
-  assert.deepEqual(dropped, { prs: 3, commits: 3 })
+  assert.deepEqual(dropped, { prs: 3, commits: 3, plugins: 0 })
   assert.deepEqual(validatePublishedBytes(serializePublished(published)), { ok: true, errors: [] })
 })
 
@@ -210,9 +210,9 @@ test("private, unknown, repo-less and unresolved references are dropped and coun
   assert.deepEqual(published.refs, {
     prs: [{ repo: "ourostack/desk", number: 9 }],
     commits: [{ repo: "ourostack/desk", sha: "fc6ea8a0000000000000000000000000000000aa" }],
-    private: { prs: 3, commits: 3 },
+    private: { prs: 3, commits: 3, plugins: 0 },
   })
-  assert.deepEqual(dropped, { prs: 3, commits: 3 }, "two dropped here and one the deriver could not resolve, of each kind")
+  assert.deepEqual(dropped, { prs: 3, commits: 3, plugins: 0 }, "two dropped here and one the deriver could not resolve, of each kind")
 })
 
 test("only an exact \"public\" keeps a reference; the visibility check sees each repository once and never a null", () => {
@@ -224,7 +224,7 @@ test("only an exact \"public\" keeps a reference; the visibility check sees each
   assert.deepEqual(seen, ["ourostack/desk", "private-org/private-repo", "someone/unknown-repo"])
   assert.deepEqual(published.refs.prs, [{ repo: "private-org/private-repo", number: 3 }])
   assert.deepEqual(published.refs.commits, [{ repo: "private-org/private-repo", sha: "fc6ea8a0000000000000000000000000000000bb" }])
-  assert.deepEqual(dropped, { prs: 4, commits: 3 })
+  assert.deepEqual(dropped, { prs: 4, commits: 3, plugins: 1 }, "the desk plugin's source is ourostack/desk, which is not exactly public here")
 })
 
 test("a public reference whose repository name is date-shaped is withheld and counted with the dropped ones", () => {
@@ -234,9 +234,71 @@ test("a public reference whose repository name is date-shaped is withheld and co
   value.refs.unresolved = { prs: 0, commits: 0 }
   const seen = []
   const { published, dropped } = publish(value, { visibility: (repo) => { seen.push(repo); return "public" } })
-  assert.deepEqual(seen, [])
-  assert.deepEqual(published.refs, { prs: [], commits: [], private: { prs: 1, commits: 1 } })
-  assert.deepEqual(dropped, { prs: 1, commits: 1 })
+  assert.deepEqual(seen, ["ourostack/desk"], "only the plugin's source, which is not date-shaped, is asked about")
+  assert.deepEqual(published.refs, { prs: [], commits: [], private: { prs: 1, commits: 1, plugins: 0 } })
+  assert.deepEqual(dropped, { prs: 1, commits: 1, plugins: 0 })
+})
+
+// ---------------------------------------------------------------------------
+// Public plugins only, unless the store is a work store.
+// ---------------------------------------------------------------------------
+
+function withPlugins() {
+  const value = local()
+  value.plugins = [
+    { name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" },
+    { name: "work-tools", version: "1.0.0", source: "private-org/private-repo" },
+    { name: "mystery", version: "2.0.0", source: "someone/mystery" },
+    { name: "local-only", version: "0.1.0", source: null },
+    { name: "older", version: "0.2.0" },
+  ]
+  return value
+}
+
+test("a public store names only plugins installed from a public repository and counts the rest", () => {
+  for (const storeVisibility of ["public", undefined]) {
+    const { published, dropped } = publish(withPlugins(), { storeVisibility })
+    assert.deepEqual(published.plugins, [{ name: "desk", version: "3.2.0-alpha.24" }], String(storeVisibility))
+    assert.equal(published.refs.private.plugins, 4, "a private, an unknown and a missing source, and old facts with no source key")
+    assert.equal(dropped.plugins, 4)
+    assert.doesNotMatch(serializePublished(published), /work-tools|mystery|local-only|older|private-org|someone\/mystery/u)
+    assert.deepEqual(validatePublishedBytes(serializePublished(published)), { ok: true, errors: [] })
+  }
+})
+
+test("a store whose visibility is unknown is treated as public, so its private plugins collapse", () => {
+  for (const storeVisibility of ["unknown", "PRIVATE", null]) {
+    const { published } = publish(withPlugins(), { storeVisibility })
+    assert.deepEqual(published.plugins.map((plugin) => plugin.name), ["desk"], String(storeVisibility))
+    assert.equal(published.refs.private.plugins, 4)
+  }
+})
+
+test("a work store, private or internal, keeps every plugin's name and version but never its source", () => {
+  for (const storeVisibility of ["private", "internal"]) {
+    const seen = []
+    const { published, dropped } = publish(withPlugins(), { storeVisibility, visibility: (repo) => { seen.push(repo); return visibility(repo) } })
+    assert.deepEqual(published.plugins, [
+      { name: "desk", version: "3.2.0-alpha.24" },
+      { name: "work-tools", version: "1.0.0" },
+      { name: "mystery", version: "2.0.0" },
+      { name: "local-only", version: "0.1.0" },
+      { name: "older", version: "0.2.0" },
+    ], storeVisibility)
+    assert.equal(published.refs.private.plugins, 0)
+    assert.equal(dropped.plugins, 0)
+    assert.deepEqual([...new Set(seen)], seen, "references still ask once per repository")
+    assert.equal(seen.includes("someone/mystery"), false, "a work store never asks about a plugin's source")
+    assert.equal(validatePublished(published).ok, true)
+  }
+})
+
+test("a plugin whose source repository is also a reference asks visibility once", () => {
+  const seen = []
+  const { published } = publish(withPlugins(), { visibility: (repo) => { seen.push(repo); return visibility(repo) } })
+  assert.deepEqual([...new Set(seen)], seen, "each repository is asked about once")
+  assert.ok(seen.includes("private-org/private-repo") && seen.includes("someone/mystery"))
+  assert.equal(published.plugins.length, 1)
 })
 
 // ---------------------------------------------------------------------------
@@ -446,7 +508,7 @@ test("a reference repeated in the local file is published once and not counted a
   const { published, dropped } = publish(value)
   assert.deepEqual(published.refs.prs, [{ repo: "ourostack/desk", number: 9 }])
   assert.equal(published.refs.commits.length, 1)
-  assert.deepEqual(dropped, { prs: 3, commits: 3 })
+  assert.deepEqual(dropped, { prs: 3, commits: 3, plugins: 0 })
   assert.equal(validatePublished(published).ok, true)
 })
 
@@ -608,7 +670,10 @@ function randomLocal(random) {
       end_reason: random() < 0.5 ? null : pick(ENUMS.endReason),
       derived_through: iso(start + duration),
     },
-    plugins: [{ name: pick(["desk", "superpowers", "notes-2026-09-25"]), version: "3.2.0-alpha.29" }],
+    plugins: ["desk", "superpowers", "notes-2026-09-25"].slice(0, 1 + int(3)).map((name) => {
+      const source = pick(["ourostack/desk", "private-org/private-repo", `${SENTINEL}/secret`, null, undefined])
+      return source === undefined ? { name, version: "3.2.0-alpha.29" } : { name, version: "3.2.0-alpha.29", source }
+    }),
     models: [{ id: pick(["claude-opus-5-5", "gpt-4o-2024-08-06", "gpt-5.2"]), requests: int(1000), tokens: { input: int(1e6), output: int(1e6), cache_read: int(9e8), cache_write: null, reasoning: int(1e5) } }],
     intervals,
     agents: [{ n: 0, parent: null, model: pick(["claude-opus-5-5", "gpt-4o-2024-08-06"]) }],
@@ -641,7 +706,8 @@ test("property: 300 seeded random local files publish nothing that identifies a 
     const value = randomLocal(random)
     assert.deepEqual(validateLocalFacts(value).errors, [], `sample ${index}`)
     const deskVisibility = ["private", "internal", "public", "unknown"][index % 4]
-    const result = toPublished(value, { visibility: visible, deskVisibility, machineSecret: SECRET })
+    const storeVisibility = ["public", "private", "internal", "unknown", undefined][index % 5]
+    const result = toPublished(value, { visibility: visible, deskVisibility, storeVisibility, machineSecret: SECRET })
     const span = Date.parse(value.session.derived_through) - Date.parse(value.session.started_at)
     if (span > PUBLISHED_LIMITS.maxOffsetMs || Date.parse(value.session.started_at) < Date.parse(EARLIEST_SESSION_START)) {
       assert.deepEqual(result, { published: null, dropped: null, reason: "implausible_session_span" }, `sample ${index}`)
@@ -665,6 +731,11 @@ test("property: 300 seeded random local files publish nothing that identifies a 
     assert.equal(published.refs.prs.length + dropped.prs, value.refs.prs.length + value.refs.unresolved.prs)
     assert.equal(published.refs.commits.length + dropped.commits, value.refs.commits.length + value.refs.unresolved.commits)
     assert.deepEqual(published.refs.private, dropped)
+    assert.equal(published.plugins.length + dropped.plugins, value.plugins.length)
+    if (storeVisibility !== "private" && storeVisibility !== "internal") {
+      const publicNames = new Set(value.plugins.filter((plugin) => plugin.source === "ourostack/desk").map((plugin) => plugin.name.replace(/-(\d{4})-(\d{2})-(\d{2})/u, "-$1$2$3")))
+      for (const plugin of published.plugins) assert.ok(publicNames.has(plugin.name), `sample ${index}: a public store names only plugins from a public source`)
+    }
   }
   assert.ok(seen.refused > 10 && seen.published > 150 && seen.publicDesk > 50, JSON.stringify(seen))
 })
