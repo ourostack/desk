@@ -767,7 +767,9 @@ function messyDesk(root) {
   put(root, "normal-track/track.md", card({ schema_version: 1, title: "normal-track", status: "active", scope: "holds the task-level findings; not anything else" }));
   put(root, "normal-track/hi-please-fix-this/task.md", task("normal-track", "hi-please-fix-this"));
   put(root, `normal-track/rotate-${CARD_SECRET}/task.md`, task("normal-track", `rotate-${CARD_SECRET}`));
-  put(root, "normal-track/oneword/task.md", task("normal-track", "oneword"));
+  // Underscores, not kebab-case (fix round, 2026-09-28: a single word alone
+  // — "oneword" — is now valid shape, so it no longer belongs in this list).
+  put(root, "normal-track/under_score_slug/task.md", task("normal-track", "under_score_slug"));
   put(root, "normal-track/aging-cleanup-effort/task.md", task("normal-track", "aging-cleanup-effort", { created: STALE, updated: STALE }));
   put(root, "normal-track/finished-long-ago/task.md", task("normal-track", "finished-long-ago", { status: "done", created: STALE, updated: STALE }));
   put(root, "normal-track/ship-the-refactor/task.md", task("normal-track", "ship-the-refactor", { status: "validating", artifacts: ["https://github.com/ourostack/desk/pull/4242"] }));
@@ -794,6 +796,17 @@ function gitIn(root, ...args) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout;
+}
+
+// Step 1 of the printed procedure, done and staged exactly as the agent
+// would: fixes the messy fixture's one track_missing_scope finding
+// (no-scope-track) and `git add`s only that file. `--write-record` now runs
+// step 7's own checks in code, so a test that calls it must leave something
+// real staged first, the way a genuine tidy always does.
+function fixMissingScope(tidy) {
+  const rel = "no-scope-track/track.md";
+  put(tidy.own, rel, card({ schema_version: 1, title: "no-scope-track", status: "active", scope: "kept tidy by the fixture; not anything else" }));
+  gitIn(tidy.desk, "add", "--", path.relative(tidy.desk, path.join(tidy.own, rel)));
 }
 
 const HOST_BINDING_VARS = ["CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT", "DESK_ACTIVATION_CONFIG", "CODEX_HOME", "DESK", "DESK_PERSON", "DESK_IDENTITY", "DESK_TOOLS_ROOT", "DESK_TOOLS_PERSON", "DESK_PLUGIN_ROOT"];
@@ -982,6 +995,9 @@ test("tidy Migrate prints the findings and the steps, changes nothing, and never
     assert.equal(snapshot(tidy.desk), before, "Migrate itself changes nothing; the agent does the tidy");
     assert.equal(gitIn(tidy.desk, "status", "--porcelain"), "");
 
+    // Step 1, done and staged like the agent would: --write-record now runs
+    // step 7's own checks, so recording with nothing staged must refuse.
+    fixMissingScope(tidy);
     // Step 7 records the tidy; Detect then stays quiet even though findings remain.
     const recordCommand = /with: (node '[^']+' --write-record --claim '[^']+')\n/u.exec(migrate.stdout)[1];
     const record = tidy.run(recordCommand);
@@ -996,6 +1012,7 @@ test("tidy Migrate prints the findings and the steps, changes nothing, and never
     assert.equal(migrate.status, 0, migrate.stderr);
     assert.match(migrate.stdout, new RegExp(`^This session's own desk: ${path.join(tidy.desk, "desks", "bob")}$`, "mu"));
     assert.ok(!/desks\/alice/u.test(migrate.stdout), "a peer's desk never appears in the tidy");
+    fixMissingScope(tidy);
     // Run in the same environment, the printed command records bob's own desk.
     const recordCommand = /with: (node '[^']+' --write-record --claim '[^']+')\n/u.exec(migrate.stdout)[1];
     assert.equal(tidy.run(recordCommand).status, 0);

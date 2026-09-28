@@ -8,7 +8,7 @@
 import { test, after } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -29,6 +29,7 @@ import {
   tidyStatus,
   uncommittedPaths,
   writeOrganizationRecord,
+  writeRecordProblem,
 } from "../../../../../plugins/desk/mcp/src/desk/tidy.js"
 
 const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../plugins/desk/mcp")
@@ -429,6 +430,7 @@ test("a live spoke's prose pointer in desks.md is a single desk: the tidy runs a
   const report = cli(["--report", "--root", root], { env: { DESK: root }, spawnGh: noGh })
   assert.equal(report.code, 0)
   assert.doesNotMatch(report.stdout, /crew workspace/)
+  git(root, "add", "-A") // stand in for the tidy's own staged work — this test is about desk resolution, not step 7.
   assert.equal(cli(["--write-record", "--root", root, "--claim", claimOf(report)], { env: { DESK: root }, spawnGh: noGh }).code, 0)
   assert.equal(cli(["--detect", "--root", root], { env: { DESK: root }, spawnGh: noGh }).code, 1, "once tidied, Detect stops firing")
 })
@@ -679,6 +681,7 @@ test("--report lists this session's own findings, and gives one line for a desk 
 test("--write-record writes the record in this session's own subtree and turns Detect off", () => {
   const root = crewDesk()
   const env = { DESK: root, DESK_PERSON: "bob" }
+  git(root, "add", "-A") // stand in for the tidy's own staged work — this test is about the record, not step 7.
   const written = cli(["--write-record", "--root", root, "--person", "bob"], { env })
   assert.equal(written.code, 0)
   assert.equal(written.stdout, `${path.join("desks", "bob", "_meta", "organization.json")}\n`)
@@ -688,8 +691,379 @@ test("--write-record writes the record in this session's own subtree and turns D
 
   const now = Date.now()
   const solo = soloDesk()
+  git(solo, "add", "-A")
   assert.equal(runTidyStatusCli({ argv: ["--write-record"], env: { DESK: solo }, io: io().io, homeDir: tempDir(), cwd: tempDir() }), 0)
   assert.ok(Date.parse(readOrganizationRecord(solo).tidied_at) >= now - 1000)
+})
+
+// ── The --write-record gate: step 7's own checks, enforced in code ────────
+//
+// Fix round, 2026-09-28: a session that skipped step 7 (or read it and
+// skipped running it) used to get the record written anyway, with the same
+// exit code and shape as a real, checked tidy. `--write-record` now runs the
+// same checks step 7 tells the agent to run — nothing left unstaged or
+// untracked under anything this run touched, something actually staged, and
+// no track this run's own staged renames moved a folder into whose task
+// cards still name a different track (or none at all) — and refuses
+// otherwise.
+//
+// Review fix round, 2026-09-28b: the clean-tree check is scoped to the top-
+// level entries this run staged something under, not this session's whole
+// desk, so an untouched track's own mess never blocks a correct tidy. The
+// bypass check is keyed off Git's own rename detection, not "any staged path
+// under a track", so a track with pre-existing bad `track:` data is never a
+// candidate unless this run staged a rename of its folder, and every card
+// under a candidate is checked recursively, `_archive/` included.
+
+test("--write-record refuses when nothing at all is staged", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  const refused = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stdout, /nothing is staged/)
+  assert.equal(readOrganizationRecord(root), null)
+})
+
+test("--write-record refuses when a track this run touched still has an unstaged change", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: a freshly tidied scope; not anything else\n---\n")
+  git(root, "add", "billing-disputes/track.md")
+  // Left over in the same track this run staged something under.
+  write(
+    root,
+    "billing-disputes/refund-flow-cleanup/task.md",
+    `---\ntitle: refund-flow-cleanup\nstatus: processing\nupdated: '${RECENT}'\nextra: unstaged\n---\n`,
+  )
+  const refused = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stdout, /step 7/)
+  assert.equal(readOrganizationRecord(root), null)
+})
+
+test("--write-record refuses when a track this run touched still has an untracked file", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: a freshly tidied scope; not anything else\n---\n")
+  git(root, "add", "billing-disputes/track.md")
+  write(root, "billing-disputes/_planning/notes.md", "stray notes\n")
+  const refused = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stdout, /step 7/)
+  assert.equal(readOrganizationRecord(root), null)
+})
+
+// Review fix round, 2026-09-28b (finding 1): the clean-tree check used to
+// scan this session's entire desk subtree, so an untouched track's own
+// dirty or untracked file — exactly what step 7 says to leave alone —
+// refused an otherwise correct, fully staged tidy elsewhere.
+test("--write-record succeeds when an unrelated, untouched track has an unstaged and an untracked file", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  write(root, "unrelated-track/track.md", "---\ntitle: unrelated-track\nscope: work this run never touches; not anything else\n---\n")
+  write(
+    root,
+    "unrelated-track/some-task/task.md",
+    `---\ntitle: some-task\nstatus: processing\nupdated: '${RECENT}'\ntrack: unrelated-track\n---\n`,
+  )
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  // Someone else's mess, in a track this run never stages anything under.
+  write(
+    root,
+    "unrelated-track/some-task/task.md",
+    `---\ntitle: some-task\nstatus: processing\nupdated: '${RECENT}'\ntrack: unrelated-track\nextra: someone else's edit\n---\n`,
+  )
+  write(root, "unrelated-track/_planning/stray-notes.md", "someone else's stray notes\n")
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: a freshly tidied scope; not anything else\n---\n")
+  git(root, "add", "billing-disputes/track.md")
+  const written = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(written.code, 0)
+  assert.ok(readOrganizationRecord(root) !== null)
+})
+
+test("--write-record succeeds once everything the tidy changed under the touched track is staged and nothing is left over", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: a freshly tidied scope; not anything else\n---\n")
+  git(root, "add", "billing-disputes/track.md")
+  const written = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(written.code, 0)
+  assert.ok(readOrganizationRecord(root) !== null)
+})
+
+test("--write-record refuses a track folder moved by a raw git mv instead of track_rename", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  write(
+    root,
+    "billing-disputes/refund-flow-cleanup/task.md",
+    `---\ntitle: refund-flow-cleanup\nstatus: processing\nupdated: '${RECENT}'\ntrack: billing-disputes\n---\n`,
+  )
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  // track_rename would rewrite `track:` on every card it moves; a raw `git
+  // mv` of the folder carries the old value forward unchanged.
+  git(root, "mv", "billing-disputes", "billing-issues")
+  const refused = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stdout, /track_rename/)
+  assert.equal(readOrganizationRecord(root), null)
+})
+
+// Review fix round, 2026-09-28b (finding 2): the bypass check used to walk
+// only a track's direct, non-underscore children, so a raw `git mv` of a
+// track whose only work is already archived went undetected.
+test("--write-record refuses a raw git mv whose only card sits under _archive", () => {
+  const root = tempDir()
+  write(root, "old-track/track.md", "---\ntitle: old-track\nscope: an outcome with only archived work left; not anything else\n---\n")
+  write(
+    root,
+    "old-track/_archive/done-long-ago/task.md",
+    `---\ntitle: done-long-ago\nstatus: done\ncreated: '${RECENT}'\nupdated: '${RECENT}'\ntrack: old-track\n---\n`,
+  )
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  git(root, "mv", "old-track", "new-track")
+  const refused = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stdout, /track_rename/)
+  assert.equal(readOrganizationRecord(root), null)
+})
+
+// Review fix round, 2026-09-28b (finding 3): a card with no `track:` field
+// at all used to count as no evidence of a mismatch, but `track_rename`
+// writes that field unconditionally on every card it finds, so its absence
+// after a purported rename is exactly as telling as a wrong value.
+test("--write-record refuses a raw git mv whose card has no track: field, since track_rename would have written one", () => {
+  const root = tempDir()
+  write(root, "old-track/track.md", "---\ntitle: old-track\nscope: an outcome track_rename never touched; not anything else\n---\n")
+  write(root, "old-track/some-task/task.md", `---\ntitle: some-task\nstatus: processing\nupdated: '${RECENT}'\n---\n`)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  git(root, "mv", "old-track", "new-track")
+  const refused = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stdout, /track_rename/)
+  assert.equal(readOrganizationRecord(root), null)
+})
+
+test("--write-record does not flag a genuinely renamed track whose task cards already name it correctly", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  write(
+    root,
+    "billing-disputes/refund-flow-cleanup/task.md",
+    `---\ntitle: refund-flow-cleanup\nstatus: processing\nupdated: '${RECENT}'\ntrack: billing-disputes\n---\n`,
+  )
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  // What a genuine track_rename leaves behind: the folder moved, and every
+  // card's track: field rewritten to the new name.
+  git(root, "mv", "billing-disputes", "billing-issues")
+  write(
+    root,
+    "billing-issues/refund-flow-cleanup/task.md",
+    `---\ntitle: refund-flow-cleanup\nstatus: processing\nupdated: '${RECENT}'\ntrack: billing-issues\n---\n`,
+  )
+  git(root, "add", "billing-issues/refund-flow-cleanup/task.md")
+  const written = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(written.code, 0)
+  assert.ok(readOrganizationRecord(root) !== null)
+})
+
+// Review fix round, 2026-09-28b (finding 2, false positive): a track this
+// run never staged a rename of is never a candidate, so pre-existing bad
+// `track:` data sitting elsewhere never blocks a scope-line-only change.
+test("--write-record does not scan a track for a bypass unless this run staged a rename of its folder", () => {
+  const root = tempDir()
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: billing disputes; not payroll\n---\n")
+  write(
+    root,
+    "billing-disputes/refund-flow-cleanup/task.md",
+    `---\ntitle: refund-flow-cleanup\nstatus: processing\nupdated: '${RECENT}'\ntrack: some-other-track\n---\n`,
+  )
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: a freshly tidied scope; not anything else\n---\n")
+  git(root, "add", "billing-disputes/track.md")
+  const written = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(written.code, 0)
+  assert.ok(readOrganizationRecord(root) !== null)
+})
+
+// Review fix round, 2026-09-28b (finding 4): the procedure's own step 5 and
+// step 6 file an emptied or stale track into _archive/ with a raw git mv,
+// since no track-archive tool exists yet — the one raw move the detector
+// must never flag.
+test("--write-record allows the procedure's own raw git mv of a track into _archive", () => {
+  const root = tempDir()
+  write(root, "stale-track/track.md", "---\ntitle: stale-track\nscope: an outcome with nothing left to do; not anything else\n---\n")
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  mkdirSync(path.join(root, "_archive"), { recursive: true })
+  git(root, "mv", "stale-track", "_archive")
+  const written = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(written.code, 0)
+  assert.ok(readOrganizationRecord(root) !== null)
+})
+
+test("--write-record cannot list a candidate track's directory and finds no card to compare, so it does not flag it", () => {
+  const root = tempDir()
+  write(root, "old-track/track.md", "---\ntitle: old-track\nscope: an outcome whose directory listing will be blocked; not anything else\n---\n")
+  write(
+    root,
+    "old-track/some-task/task.md",
+    `---\ntitle: some-task\nstatus: processing\nupdated: '${RECENT}'\ntrack: old-track\n---\n`,
+  )
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  git(root, "mv", "old-track", "new-track")
+  const trackDir = path.join(root, "new-track")
+  // Execute-only: track.md can still be found by its known name, but the
+  // directory's own entries can't be listed — the same failure mode a racing
+  // delete or a restrictive filesystem could produce, and the bypass check
+  // must not crash on it.
+  chmodSync(trackDir, 0o111)
+  try {
+    const written = cli(["--write-record"], { env: { DESK: root } })
+    assert.equal(written.code, 0)
+  } finally {
+    chmodSync(trackDir, 0o755)
+  }
+})
+
+test("--write-record refuses when a candidate track's task card can't be read, since it can't be confirmed to match", () => {
+  const root = tempDir()
+  // Ignored, not merely untracked: an untracked task.md would itself trip
+  // the step 7 clean-tree check before the bypass check ever runs. Ignoring
+  // it keeps Git out of the picture entirely, so only the bypass check's own
+  // direct filesystem read sees the unreadable file.
+  write(root, ".gitignore", "**/some-task/task.md\n")
+  write(root, "old-track/track.md", "---\ntitle: old-track\nscope: an outcome with a card write-record can't read; not anything else\n---\n")
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  git(root, "mv", "old-track", "new-track")
+  write(
+    root,
+    "new-track/some-task/task.md",
+    `---\ntitle: some-task\nstatus: processing\nupdated: '${RECENT}'\ntrack: new-track\n---\n`,
+  )
+  const taskMd = path.join(root, "new-track", "some-task", "task.md")
+  chmodSync(taskMd, 0o000)
+  try {
+    const refused = cli(["--write-record"], { env: { DESK: root } })
+    assert.equal(refused.code, 1)
+    assert.match(refused.stdout, /track_rename/)
+    assert.equal(readOrganizationRecord(root), null)
+  } finally {
+    chmodSync(taskMd, 0o644)
+  }
+})
+
+// Review fix round, 2026-09-28b (finding 1, Git-failure branch): when Git
+// itself can't report what's staged, that's no different from nothing being
+// staged — there is nothing left to record.
+test("writeRecordProblem treats a failed git diff for staged paths as nothing staged", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: a freshly tidied scope; not anything else\n---\n")
+  git(root, "add", "billing-disputes/track.md")
+  const spawnGit = (command, args, opts) => {
+    if (args.includes("--name-only")) throw new Error("simulated git failure")
+    return spawnSync(command, args, opts)
+  }
+  assert.match(writeRecordProblem(root, root, { spawnGit }), /nothing is staged/)
+})
+
+// Review fix round, 2026-09-28b (finding 2+3, Git-failure branch): when
+// Git's own rename detection can't run, that's no evidence of a bypass —
+// the run is not blocked over a check that could not be made.
+test("writeRecordProblem treats a failed git rename-detection as no bypass found", () => {
+  const root = tempDir()
+  write(root, "old-track/track.md", "---\ntitle: old-track\nscope: an outcome git's own rename detection can't be reached for; not anything else\n---\n")
+  write(root, "old-track/some-task/task.md", `---\ntitle: some-task\nstatus: processing\nupdated: '${RECENT}'\ntrack: old-track\n---\n`)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  git(root, "mv", "old-track", "new-track")
+  write(root, "new-track/some-task/task.md", `---\ntitle: some-task\nstatus: processing\nupdated: '${RECENT}'\ntrack: new-track\n---\n`)
+  git(root, "add", "-A")
+  const spawnGit = (command, args, opts) => {
+    if (args.includes("--name-status")) throw new Error("simulated git failure")
+    return spawnSync(command, args, opts)
+  }
+  assert.equal(writeRecordProblem(root, root, { spawnGit }), null)
+})
+
+// Review fix round, 2026-09-28b (finding 2+3): a renamed top-level entry
+// that isn't a track at all — a loose file filed by hand, say — is never a
+// track-rename candidate, since it never has a track.md to hold a card.
+test("--write-record does not treat a renamed loose top-level file as a track-rename candidate", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  write(root, "notes.txt", "stray top-level notes\n")
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  git(root, "mv", "notes.txt", "notes-renamed.txt")
+  const written = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(written.code, 0)
+  assert.ok(readOrganizationRecord(root) !== null)
+})
+
+test("writeRecordProblem defaults to the real git binary when no spawnGit is given", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: a freshly tidied scope; not anything else\n---\n")
+  git(root, "add", "billing-disputes/track.md")
+  assert.equal(writeRecordProblem(root, root), null)
+})
+
+// Review fix round, 2026-09-28b (finding 2+3): the refusal names every
+// mismatched track and switches to plural phrasing once more than one turns up.
+test("--write-record's bypass refusal uses plural phrasing for more than one mismatched track", () => {
+  const root = tempDir()
+  write(root, "old-track-a/track.md", "---\ntitle: old-track-a\nscope: first outcome moved by a raw git mv; not anything else\n---\n")
+  write(root, "old-track-a/some-task/task.md", `---\ntitle: some-task\nstatus: processing\nupdated: '${RECENT}'\ntrack: old-track-a\n---\n`)
+  write(root, "old-track-b/track.md", "---\ntitle: old-track-b\nscope: second outcome moved by a raw git mv; not anything else\n---\n")
+  write(root, "old-track-b/some-task/task.md", `---\ntitle: some-task\nstatus: processing\nupdated: '${RECENT}'\ntrack: old-track-b\n---\n`)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  git(root, "mv", "old-track-a", "new-track-a")
+  git(root, "mv", "old-track-b", "new-track-b")
+  const refused = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stdout, /new-track-a, new-track-b have a task card/)
+  assert.equal(readOrganizationRecord(root), null)
 })
 
 // ── One tidy at a time, and no repeated instruction when it cannot finish ──
@@ -725,6 +1099,7 @@ test("only one session tidies a desk at a time: the claim holds off a second rep
   const second = cli(["--report"], { env, now: stale })
   assert.equal(second.code, 0)
   assert.notEqual(claimOf(second), token)
+  git(root, "add", "-A") // stand in for the tidy's own staged work — this test is about claim rotation, not step 7.
   assert.equal(cli(["--write-record", "--claim", claimOf(second)], { env, now: stale }).code, 0)
   const gitDir = path.join(root, ".git")
   assert.deepEqual(claimFiles(gitDir), ["desk-tidy-claim.2.json"], "the takeover is the next generation, and the older one is pruned")
@@ -745,6 +1120,7 @@ test("releasing leaves another session's claim alone, and replaces an unreadable
   assert.deepEqual(claimIn(gitDir, 4), { token: "theirs", claimed_at: NOW - CLAIM_STALE_MS })
   // An unreadable current claim counts as nobody's, and releasing replaces it.
   writeFileSync(path.join(gitDir, "desk-tidy-claim.5.json"), "{")
+  git(root, "add", "-A") // stand in for the tidy's own staged work — this test is about claim release, not step 7.
   assert.equal(cli(["--write-record"], { env }).code, 0)
   assert.deepEqual(claimIn(gitDir, 5), { claimed_at: 0 })
 })

@@ -18,8 +18,13 @@ import * as os from "node:os"
 import { readCrewRoster } from "./crew-roster.js"
 import { ghLogins } from "./gh-logins.js"
 
-// `^[a-z0-9]+(-[a-z0-9]+){1,5}$` — lowercase kebab-case, 2-6 words.
-const SHAPE_RE = /^[a-z0-9]+(-[a-z0-9]+){1,5}$/
+// `^[a-z0-9]+(-[a-z0-9]+){0,5}$` — lowercase kebab-case, 1-6 words. Fix
+// round, 2026-09-28: a single established word (e.g. "clippy", "desk",
+// "spoonjoy", "friends") is a valid outcome name on its own — the shape rule
+// only ever meant "lowercase kebab-case, at most 6 words", never "at least
+// two". Requiring a second word forced a rename of an already-good one-word
+// track name, and a weak model then invented a worse name to satisfy it.
+const SHAPE_RE = /^[a-z0-9]+(-[a-z0-9]+){0,5}$/
 const MAX_NAME_LENGTH = 48
 const MAX_SCOPE_LENGTH = 240
 
@@ -145,7 +150,7 @@ function shapeResult() {
   return {
     ok: false,
     code: "shape",
-    hint: "the name must be 2–6 lowercase kebab-case words, like `oauth-login-fix`",
+    hint: "the name must be 1–6 lowercase kebab-case words, like `oauth-login-fix`",
   }
 }
 
