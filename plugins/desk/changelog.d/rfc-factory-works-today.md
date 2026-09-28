@@ -1,0 +1,1 @@
+**The RFC's status now records the factory working end to end.** Facts and waste labels from an installed Desk reach the public store, merge and build reports, private plugin names stay out of it, and delivery to the store is no longer listed as not yet live ([RFC status](docs/agentic-engineering-v2-rfc.md)).
