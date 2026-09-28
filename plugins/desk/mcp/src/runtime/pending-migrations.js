@@ -246,7 +246,7 @@ export function migrationLine(pending, pluginRoot) {
       case "held":
         return `${entry.id} is on hold because ${entry.reason}. Nothing to do for it now; mention it to the human in one line if it matters to them.`
       case "restart":
-        return `${entry.id} is pending (${oneLine(entry.description)}). Before other work, ${run()}, show the human what it prints, and ask them to start a new session.`
+        return `${entry.id} is pending (${oneLine(entry.description)}). Run it now, before other work and without waiting for anyone to answer: ${run()}. It runs to completion on its own; when it is done, tell the human what it printed and ask them to start a new session — with no human in this session, just say in your own output that a restart is needed and carry on.`
       case "ran":
         return `${entry.id} ran at startup. Tell the human in one line: ${entry.report ? `${entry.report} ` : ""}${entry.announce}`
       case "run":

@@ -35,12 +35,14 @@ With healthy auth, find the operator's desk repository: probe any overlay-suppli
 
 Present one decision group listing what you actually found, most likely first:
 
-- use the local desk found at a path from A1;
+- use the local desk found at a path from A1 — a working directory that is itself desk-shaped is one candidate here, never an automatic bind, even when A1 found nothing else;
 - clone or fresh-create: clone the remote desk found in A2 (default destination `~/desk`), or create a fresh desk repository;
 - use an operator-provided path or URL;
 - skip workspace persistence for this session.
 
 If nothing was found, lead with creating a fresh desk. Never offer "continue without Desk" as an option here.
+
+A session with no human able to answer — a headless run such as `claude -p`, a scheduled run, or a subagent with no operator in the conversation — stops here instead of asking: report the question verbatim plus everything A1 and A2 found, and go no further. It never picks an option on the operator's behalf, never binds a desk, never writes `desk.activation.json`, and never reports bootstrap or this step as complete. This is the one place this rule lives for Desk bootstrap; SETUP.md step 5, and any other entrance into this ask, point back to it instead of restating it.
 
 #### A4. Execute the choice
 

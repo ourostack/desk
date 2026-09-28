@@ -76,7 +76,7 @@ Never delete Claude's own runtime state: session transcripts under `$CLAUDE_DIR/
 
 ### 5. Find or create the desk
 
-Follow `plugins/desk/skills/first-run-bootstrap/SKILL.md`, Entrance A, from this repository. It looks for an existing local desk, then the operator's desk repository on GitHub, and **asks** once with what it found; with nothing found it offers a fresh desk. If the operator already has a V1 desk, use Entrance B instead.
+Follow `plugins/desk/skills/first-run-bootstrap/SKILL.md`, Entrance A, from this repository. It looks for an existing local desk, then the operator's desk repository on GitHub, and **asks** once with what it found; with nothing found it offers a fresh desk. A working directory that already has the desk shape is one candidate in that ask, not an automatic bind, and a session with no human able to answer stops and reports the question and what it found instead of picking, binding, or reporting this step done — see the skill's A3 for the exact rule. If the operator already has a V1 desk, use Entrance B instead.
 
 Bind the chosen desk by writing this file, with the absolute desk path:
 

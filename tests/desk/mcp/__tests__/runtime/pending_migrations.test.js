@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -220,7 +220,7 @@ test("migrationLine says what to do for each state, with the exact command, and 
   assert.equal(line, [
     `Desk migrations: 02-tidy is pending. Do it now, before other work and without asking: call desk_status, then run \`${command} 02-tidy --tools-root <root.path> --tools-person <write_scope.person; leave out when none>\` and do what it prints.`,
     "02-held is on hold because the desk repository is in the middle of a merge. Nothing to do for it now; mention it to the human in one line if it matters to them.",
-    `03-move is pending (Move it). Before other work, run \`${command} 03-move\`, show the human what it prints, and ask them to start a new session.`,
+    `03-move is pending (Move it). Run it now, before other work and without waiting for anyone to answer: run \`${command} 03-move\`. It runs to completion on its own; when it is done, tell the human what it printed and ask them to start a new session — with no human in this session, just say in your own output that a restart is needed and carry on.`,
     "04-quiet ran at startup. Tell the human in one line: Fixed.",
     "05-loud ran at startup. Tell the human in one line: moved 2 Fixed.",
     `06-wait is pending but did not run at startup because its Migrate failed. Before other work, run \`${command} 06-wait\` and follow what it prints.`,
@@ -340,4 +340,85 @@ test("scripts/migrations.js runs Desk's own tidy migration and prints its steps 
   const tidy = await tidyDesk({ messy: false })
   const nothing = spawnSync(process.execPath, [script, "run", "02-tidy-desk", "--tools-root", tidy.desk], { env: tidy.env, cwd: tidy.home, encoding: "utf8" })
   assert.deepEqual([nothing.status, nothing.stdout], [0, "Migration 02-tidy-desk is not needed; nothing to do.\n"])
+})
+
+// ── The real 01-move-to-ourostack-desk migration, against a temp CLAUDE_CONFIG_DIR ──
+//
+// Reproduces the "old channel never swaps the enabled plugin" defect
+// (eng-workflow-v2 fresh-setup dry run, finding 3): a real `claude` CLI, run
+// by hand against fixtures built the same way, was directly observed to
+// complete this exact migration's Migrate block in one shot; the friction was
+// never the shell logic. This test locks that logic down with a fake `claude`
+// that understands only the handful of `plugin`/`plugin marketplace`
+// subcommands the Migrate block calls, backed by JSON files under a temp
+// `CLAUDE_CONFIG_DIR` — no network, no real Claude Code install, nothing
+// outside the fixture's own temp folders.
+
+function hasCommand(name) {
+  return spawnSync("bash", ["-c", `command -v ${name}`]).status === 0
+}
+
+function readCfgJson(cfg, ...segments) {
+  try {
+    return JSON.parse(readFileSync(path.join(cfg, ...segments), "utf8"))
+  } catch {
+    return null
+  }
+}
+
+async function oldChannelFixture() {
+  const cfg = realpathSync(await mkTempRoot("desk-channel-migration-cfg-"))
+  const bin = realpathSync(await mkTempRoot("desk-channel-migration-bin-"))
+  const fakeCli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../fixtures/runtime/fake-claude-plugin-cli.mjs")
+  const wrapper = path.join(bin, "claude")
+  writeFileSync(wrapper, `#!/usr/bin/env bash\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeCli)} "$@"\n`)
+  chmodSync(wrapper, 0o755)
+
+  // The state a machine still on the frozen ouroboros-skills v2-alpha channel
+  // is in: the old marketplace pinned to that ref, and desk/superpowers/
+  // plain-language all installed from it, each carrying an existing desk
+  // binding the migration is supposed to carry over untouched.
+  mkdirSync(path.join(cfg, "plugins"), { recursive: true })
+  writeFileSync(path.join(cfg, "plugins", "known_marketplaces.json"), `${JSON.stringify({ "ouroboros-skills": { source: { source: "github", repo: "ourostack/ouroboros-skills", ref: "v2-alpha" } } }, null, 2)}\n`)
+  writeFileSync(path.join(cfg, "fake-plugin-state.json"), `${JSON.stringify([
+    { id: "desk@ouroboros-skills", scope: "user", enabled: true, installPath: "", projectPath: "" },
+    { id: "superpowers@ouroboros-skills", scope: "user", enabled: true, installPath: "", projectPath: "" },
+    { id: "plain-language@ouroboros-skills", scope: "user", enabled: true, installPath: "", projectPath: "" },
+  ], null, 2)}\n`)
+  const binding = { schema_version: 1, desk: { root: "/home/operator/desk" } }
+  mkdirSync(path.join(cfg, "plugins", "data", "desk-ouroboros-skills"), { recursive: true })
+  writeFileSync(path.join(cfg, "plugins", "data", "desk-ouroboros-skills", "desk.activation.json"), `${JSON.stringify(binding)}\n`)
+
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: cfg, PATH: `${bin}${path.delimiter}${process.env.PATH}`, AGENCY_TOML: path.join(cfg, "agency.toml") }
+  return { cfg, bin, env, binding }
+}
+
+test("scripts/migrations.js runs the real channel migration against a temp CLAUDE_CONFIG_DIR fixture, swapping the enabled plugin exactly once", { skip: ["jq", "git", "gh", "bash"].some((name) => !hasCommand(name)) && "jq, git, gh and bash are required" }, async () => {
+  const fixture = await oldChannelFixture()
+  const script = path.join(mcpRoot, "scripts", "migrations.js")
+
+  const first = spawnSync(process.execPath, [script, "run", "01-move-to-ourostack-desk"], { env: fixture.env, cwd: fixture.cfg, encoding: "utf8" })
+  assert.equal(first.status, 0, first.stdout + first.stderr)
+  assert.match(first.stdout, /Desk moved to ourostack\/desk\./u)
+  assert.match(first.stdout, /Please start a new session so my preamble loads against the migrated paths\.\n$/u)
+
+  // The enabled plugin actually swapped: nothing is left on ouroboros-skills,
+  // and desk, superpowers and plain-language all now run from ourostack.
+  const ids = readCfgJson(fixture.cfg, "fake-plugin-state.json").map((entry) => entry.id).sort()
+  assert.deepEqual(ids, ["desk@ourostack", "plain-language@ourostack", "superpowers@ourostack"])
+
+  // The old marketplace is gone; the new one is declared with automatic updates on.
+  const markets = readCfgJson(fixture.cfg, "plugins", "known_marketplaces.json")
+  assert.equal(markets["ouroboros-skills"], undefined)
+  assert.equal(markets.ourostack.source.repo, "ourostack/desk")
+  assert.equal(readCfgJson(fixture.cfg, "settings.json").extraKnownMarketplaces.ourostack.autoUpdate, true)
+
+  // The desk binding carried over to the new install's data directory, unchanged.
+  assert.deepEqual(readCfgJson(fixture.cfg, "plugins", "data", "desk-ourostack", "desk.activation.json"), fixture.binding)
+
+  // Idempotent against a re-invocation once it has already converged: the next
+  // session's own run of this same command (the only thing the frozen channel
+  // ever has to trigger it with) finds nothing left to do.
+  const second = spawnSync(process.execPath, [script, "run", "01-move-to-ourostack-desk"], { env: fixture.env, cwd: fixture.cfg, encoding: "utf8" })
+  assert.deepEqual([second.status, second.stdout], [0, "Migration 01-move-to-ourostack-desk is not needed; nothing to do.\n"])
 })
