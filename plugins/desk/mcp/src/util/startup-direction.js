@@ -19,6 +19,7 @@ import {
   resolveActivationConfigPath,
   resolveDeskRootWithSource,
 } from "./paths.js"
+import { redactCredentialLikeText } from "./redact.js"
 
 const START = "Invoke desk:session-start now for the authoritative workspace scan before other work."
 
@@ -49,7 +50,14 @@ export function resolveStartupRoot(options) {
 
 // `bound` is what the Desk server binds without an overlay; `sessionDesk` is
 // the session folder when it is itself a desk and only an overlay binds it.
-export function deskStartupDirection(bound, { sessionDesk = null } = {}) {
+// The line reaches every session's context and transcript, so a path segment
+// that carries a secret's value is redacted; desk_status still reports the
+// real root to the agent that needs it.
+export function deskStartupDirection(bound, options) {
+  return redactCredentialLikeText(composeStartupDirection(bound, options))
+}
+
+function composeStartupDirection(bound, { sessionDesk = null } = {}) {
   const root = bound?.root ?? null
   if (bound?.error) {
     const overlay = sessionDesk

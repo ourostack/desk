@@ -19,19 +19,39 @@ import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestFinalize } from "../factory/outbox.js"
 import { jobId } from "../factory/binding.js"
 import { readDeskRemote } from "../factory/desk-repo.js"
+import { objectInput } from "../util/object-input.js"
+import { reportLink } from "./factory-context.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+
+/** The task's job identity as binding computes it: the desk's real path, its remote (else `local:<path>`) and the person prefix. */
+async function taskJob({ deskRoot, person, track, slug }) {
+  const root = await fs.realpath(deskRoot)
+  const prefix = path.relative(deskRoot, personPrefix(deskRoot, person)).split(path.sep).join("/")
+  const deskRemote = readDeskRemote({ deskRoot: root }) || `local:${root}`
+  return { root, prefix, deskRemote, job: jobId({ deskRemote, personPrefix: prefix, track, slug }) }
+}
 
 async function requestTaskFinalize({ deskRoot, person, track, slug, env }) {
   try {
     if (await factoryStateRoot(env, { create: false, deskRoot }) === null) return
-    const root = await fs.realpath(deskRoot)
-    const prefix = path.relative(deskRoot, personPrefix(deskRoot, person)).split(path.sep).join("/")
-    const deskRemote = readDeskRemote({ deskRoot: root }) || `local:${root}`
-    const job = jobId({ deskRemote, personPrefix: prefix, track, slug })
+    const { root, job } = await taskJob({ deskRoot, person, track, slug })
     await requestFinalize(env, { job, deskRoot: root })
   } catch {
     console.error("desk_factory: finalize_request_deferred")
+  }
+}
+
+// The `factory_report` link written on the transition to `done`, or `null`
+// when the desk's resolved store has no consent. It is deterministic and
+// resolves once the store merges the job's facts; done never waits for it,
+// and nothing here can fail the task update.
+async function factoryReportFor({ deskRoot, person, track, slug, env }) {
+  try {
+    const { root, prefix, deskRemote } = await taskJob({ deskRoot, person, track, slug })
+    return reportLink({ env, deskRoot: root, deskRemote, personPrefix: prefix, track, slug })
+  } catch {
+    return null
   }
 }
 
@@ -51,6 +71,8 @@ const OPTIONAL_RUNTIME_FIELDS = [
   "repos",
   "iterations",
   "predecessor",
+  "initiated_by",
+  "origin_note",
 ]
 
 function relPath(deskRoot, absPath) {
@@ -257,7 +279,9 @@ export async function task_create({ deskRoot, input, person = null, readiness })
  *   {
  *     track: string,
  *     slug: string,
- *     frontmatter?: object,   // shallow-merged into existing frontmatter
+ *     frontmatter?: object,   // shallow-merged into existing frontmatter; a
+ *                             // JSON-string object is parsed, anything else
+ *                             // is refused before the card is touched
  *     body_append?: string,   // appended to existing body (blank line sep)
  *   }
  *
@@ -271,13 +295,16 @@ export async function task_create({ deskRoot, input, person = null, readiness })
  */
 export async function task_update({ deskRoot, input, person = null, readiness, env = process.env }) {
   const values = input ?? {}
-  const { track, slug, frontmatter, body_append } = values
+  const { track, slug, body_append } = values
   if (
     !Object.hasOwn(values, "track") ||
     !Object.hasOwn(values, "slug")
   ) {
     throw new Error("task_update: `track` and `slug` are required")
   }
+  // Checked before anything is read or written: a string spread into the
+  // card would write one key per character.
+  const frontmatter = objectInput(values.frontmatter, { tool: "task_update", field: "frontmatter" })
 
   const filePath = await resolveWriteTarget({
     deskRoot,
@@ -303,6 +330,10 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     merged.created = existing.data.created
   }
   merged.updated = nowIso()
+  if (merged.status === "done" && existing.data.status !== "done") {
+    const link = await factoryReportFor({ deskRoot, person, track, slug, env })
+    if (link !== null) merged.factory_report = link
+  }
 
   let newBody = existing.content
   if (typeof body_append === "string" && body_append.length > 0) {
@@ -397,6 +428,8 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
         status: "done",
         updated: nowIso(),
       }
+      const link = await factoryReportFor({ deskRoot, person, track, slug, env })
+      if (link !== null) merged.factory_report = link
       await writeMarkdown(filePath, merged, existing.content)
       await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
     }

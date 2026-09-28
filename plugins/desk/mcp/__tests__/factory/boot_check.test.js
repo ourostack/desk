@@ -50,8 +50,11 @@ test("a store with no consent decision asks the agent to ask the operator once, 
   const root = await factoryStateRoot(env)
   await fs.writeFile(path.join(root, "consent.json"), "{ not json")
   assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] }, "unreadable consent stays silent")
+  // desk_status reads a consent file whose `stores` is not an object as unreadable, so the boot line stays silent too (review M3-11 D1).
   await fs.writeFile(path.join(root, "consent.json"), JSON.stringify({ schema_version: 1, stores: [] }))
-  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { line: FACTORY_NO_CONSENT_LINE })
+  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] }, "a malformed consent file is unreadable, as desk_status reports it")
+  await fs.writeFile(path.join(root, "consent.json"), JSON.stringify({ schema_version: 1, stores: { [STORE]: { contribute: "maybe" } } }))
+  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { line: FACTORY_NO_CONSENT_LINE }, "a record without a yes or no is undecided, as desk_status reports it")
 }))
 
 test("the check never creates or changes factory state", () => scratch(async ({ env, desk, base }) => {
@@ -306,4 +309,34 @@ test("labelsBootCheck reports quarantined labels, and a request whose every sess
   await fs.writeFile(path.join(root, "jobs-index.json"), "not json")
   assert.deepEqual(labelsBootCheck({ env, now: NOW }), { count: 3, quarantined: 2 })
   assert.equal(labelsQuarantinedLine(2), "Factory: 2 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
+}))
+
+test("andonBootCheck returns the recorded open andon issues of each contributing store, and andonLine names them", () => scratch(async ({ env }) => {
+  const { andonBootCheck, andonLine } = await load()
+  assert.deepEqual(andonBootCheck({ env }), [])
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await setConsent(env, { store: "acme/declined", contribute: false, account: "contributor" })
+  await setConsent(env, { store: "acme/work", contribute: true, account: "worker" })
+  // No status yet: nothing.
+  assert.deepEqual(andonBootCheck({ env }), [])
+  const root = await factoryStateRoot(env)
+  const issue = (number) => ({ number, title: `Andon: desk 3.4.0 tool_failures other` })
+  await fs.writeFile(path.join(root, "status.json"), JSON.stringify({
+    last_flush: {},
+    andon: {
+      [STORE]: { checked_at: iso(NOW), issues: [issue(12), { number: 0 }, "x", issue(15)] },
+      "acme/declined": { checked_at: iso(NOW), issues: [issue(3)] },
+      "acme/work": { checked_at: iso(NOW), issues: [] },
+    },
+  }))
+  assert.deepEqual(andonBootCheck({ env }), [{ store: STORE, issues: [issue(12), issue(15)] }])
+  assert.equal(andonLine(STORE, [issue(12), issue(15)]), "Factory: 2 open andon issues in ourostack/factory (#12, #15); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)")
+  assert.match(andonLine(STORE, [issue(12)]), /^Factory: 1 open andon issue in /u)
+  // A malformed record, a malformed andon map or unreadable status gives nothing.
+  await fs.writeFile(path.join(root, "status.json"), JSON.stringify({ last_flush: {}, andon: { [STORE]: { issues: "no" }, "acme/work": null } }))
+  assert.deepEqual(andonBootCheck({ env }), [])
+  await fs.writeFile(path.join(root, "status.json"), JSON.stringify({ last_flush: {}, andon: [] }))
+  assert.deepEqual(andonBootCheck({ env }), [])
+  await fs.writeFile(path.join(root, "status.json"), "{ not json")
+  assert.deepEqual(andonBootCheck({ env }), [])
 }))

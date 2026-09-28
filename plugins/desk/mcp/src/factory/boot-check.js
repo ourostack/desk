@@ -36,6 +36,11 @@
 // `labelsLine(count)` and `labelsQuarantinedLine(quarantined)` are the
 // agent lines for a number above zero.
 //
+// `andonBootCheck({ env })` reads, when a store has `contribute: true`,
+// `status.json`'s `andon` record, which the start-time delivery refreshes
+// (`andon-watch.js`), and returns the open andon issues for each such store;
+// `andonLine(store, issues)` is the agent line for one store.
+//
 // Task cards are found only in the desk layout: `<track>/<task>/task.md`,
 // `<track>/_archive/<task>/task.md` and the same under `_archive/<track>/`,
 // below `desks/<alias>/` when a person prefix is given. A crew root's
@@ -106,6 +111,20 @@ function readState(file, fallback) {
   } catch {
     return null
   }
+}
+
+/** The recorded consent map from `consent.json` in `dir`: `{}` when nothing is decided, `null` when it is unsafe, unreadable or malformed. */
+export function consentRecords(dir) {
+  const consent = readState(path.join(dir, "consent.json"), { stores: {} })
+  return consent === null || !isPlainObject(consent.stores) ? null : consent.stores
+}
+
+/** One store's decision from `consentRecords`: "yes", "no", "undecided" or "unreadable". The boot line, desk_status and the report link all use it. */
+export function consentDecision(records, store) {
+  if (records === null) return "unreadable"
+  const record = Object.hasOwn(records, store) ? records[store] : undefined
+  if (!isPlainObject(record) || typeof record.contribute !== "boolean") return "undecided"
+  return record.contribute ? "yes" : "no"
 }
 
 /** The entry names of a folder, capped; empty when it is absent or unreadable. Names are only compared, never opened. */
@@ -188,6 +207,33 @@ export function labelsQuarantinedLine(count) {
   return `Factory: ${count} finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)`
 }
 
+/** The agent line for the open andon issues `issues` (`[{ number }]`, at least one) recorded for `store`. */
+export function andonLine(store, issues) {
+  const count = issues.length
+  return `Factory: ${count} open andon ${count === 1 ? "issue" : "issues"} in ${store} (${issues.map(({ number }) => `#${number}`).join(", ")}); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)`
+}
+
+/**
+ * `andonBootCheck({ env }) -> [{ store, issues }]`: the open andon issues
+ * the last start-time refresh recorded (`andon-watch.js`) in `status.json`,
+ * for each store that still has `contribute: true`, sorted by store; stores
+ * with none are left out. Never writes; unreadable or misshapen state gives
+ * nothing.
+ */
+export function andonBootCheck({ env }) {
+  const stores = contributingStores(env).sort()
+  if (stores.length === 0) return []
+  const status = readState(path.join(factoryStateDir(env), "status.json"), {}) ?? {}
+  const andon = isPlainObject(status.andon) ? status.andon : {}
+  const found = []
+  for (const store of stores) {
+    const record = andon[store]
+    const issues = isPlainObject(record) && Array.isArray(record.issues) ? record.issues.filter((issue) => isPlainObject(issue) && Number.isSafeInteger(issue.number) && issue.number > 0) : []
+    if (issues.length > 0) found.push({ store, issues })
+  }
+  return found
+}
+
 /** See the header. Never writes and never opens a request or a quarantine record; every listing is capped. */
 export function labelsBootCheck({ env = process.env, now = Date.now() } = {}) {
   const stores = contributingStores(env)
@@ -255,11 +301,10 @@ export function factoryBootCheck({
   // As in the end hook: an incomplete plugin scan may have missed an overlay's declaration, so only the desk's own counts.
   if (route.store === null || (pluginScanIncomplete && route.source !== "desk")) return { jobs: [] }
   const dir = factoryStateDir(env)
-  const consent = readState(path.join(dir, "consent.json"), { stores: {} })
-  if (consent === null) return { jobs: [] }
-  const record = isPlainObject(consent.stores) ? consent.stores[route.store] : undefined
-  if (!isPlainObject(record)) return { line: FACTORY_NO_CONSENT_LINE }
-  if (record.contribute !== true) return { jobs: [] }
+  // The same decision desk_status reports, so the boot line asks exactly when desk_status says `undecided`.
+  const decided = consentDecision(consentRecords(dir), route.store)
+  if (decided === "undecided") return { line: FACTORY_NO_CONSENT_LINE }
+  if (decided !== "yes") return { jobs: [] }
 
   // Every pending finalize request is a job the task tools finished, whatever person prefix they bound it under.
   const jobs = new Set(listNames(path.join(dir, "finalize")).filter((name) => FINALIZE_NAME.test(name)).map((name) => name.slice(0, -5)))

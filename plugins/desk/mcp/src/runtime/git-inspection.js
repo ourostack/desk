@@ -33,7 +33,7 @@ export function inspectionEnvironment(modeled) {
   return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }
 }
 
-// A hook answers its host within seconds, so by default each inspection call gets 2 s. Callers off that path, such as the detached workspace repair, pass a longer limit.
+// A hook answers its host within seconds, so by default each inspection call gets 2 s. The protected-checkout guard passes what is left of its whole-command budget; callers off the hook path, such as the detached workspace repair, pass a longer limit.
 export const INSPECTION_TIMEOUT_MS = 2000
 
 export function readInspectionGit(cwd, args, modeled, { signal, timeoutMs = INSPECTION_TIMEOUT_MS } = {}) {
@@ -43,7 +43,7 @@ export function readInspectionGit(cwd, args, modeled, { signal, timeoutMs = INSP
     let outcome
     // Abort can call the callback before the process and pipes are closed.
     // Settle only after close; this exact child never runs repository hooks.
-    const child = execFile(trustedGit, args, { cwd, env, signal, killSignal: "SIGKILL", encoding: "utf8", timeout: timeoutMs, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+    const child = execFile(trustedGit, args, { cwd, env, signal, killSignal: "SIGKILL", encoding: "utf8", timeout: Math.max(1, Math.ceil(timeoutMs)), maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       outcome = { error, stdout, stderr }
     })
     child.once("close", () => {

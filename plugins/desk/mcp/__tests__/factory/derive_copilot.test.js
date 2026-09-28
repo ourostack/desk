@@ -15,7 +15,7 @@ import vm from "node:vm"
 import { deriveCopilotSession, __internals__ } from "../../src/factory/derive-copilot.js"
 import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows, __internals__ as usageInternals } from "../../src/factory/copilot-usage.js"
 import { spawnSync } from "node:child_process"
-import { validateLocalFacts as validateFacts, validateLocalFactsBytes as validateFactsBytes } from "../../src/factory/schema.js"
+import { validateLocalFacts, validateLocalFactsBytes } from "../../src/factory/schema.js"
 import {
   SENTINEL,
   SESSIONS,
@@ -32,7 +32,7 @@ import {
 } from "./fixtures/copilot/make.js"
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "copilot")
-const PLUGINS = [{ name: "desk", version: "3.2.0-alpha.22" }]
+const PLUGINS = [{ name: "desk", version: "3.2.0-alpha.22", source: "ourostack/desk" }]
 
 /** A fresh Copilot home holding the named fixture sessions and, unless `store` is null, a synthetic database. */
 function makeHome({ sessions = Object.values(SESSIONS), store = defaultStoreRows(), texts = {} } = {}) {
@@ -69,9 +69,9 @@ function derive(home, sessionId, overrides = {}) {
 }
 
 function assertValid(facts) {
-  const result = validateFacts(facts)
-  assert.deepEqual(result.errors, [], "facts must always pass validateFacts")
-  assert.equal(validateFactsBytes(JSON.stringify(facts)).ok, true, "the canonical bytes must pass too")
+  const result = validateLocalFacts(facts)
+  assert.deepEqual(result.errors, [], "facts must always pass validateLocalFacts")
+  assert.equal(validateLocalFactsBytes(JSON.stringify(facts)).ok, true, "the canonical bytes must pass too")
 }
 
 function intervalsOf(facts, kind) {
@@ -293,9 +293,9 @@ test("plugins merge the marker's list with skill.invoked plugin versions", async
   try {
     const { facts } = await derive(home, SESSIONS.full)
     assert.deepEqual(facts.plugins, [
-      { name: "desk", version: "3.2.0-alpha.22" },
-      { name: "superpowers", version: "5.1.0" },
-    ])
+      { name: "desk", version: "3.2.0-alpha.22", source: "ourostack/desk" },
+      { name: "superpowers", version: "5.1.0", source: null },
+    ], "a skill-invoked plugin with no marker plugin of its name has no known source")
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
@@ -605,7 +605,7 @@ test("odd turn, tool, permission, subagent and compaction shapes are skipped or 
   assert.equal(facts.counts.api_retries, 2)
   assert.deepEqual(intervalsOf(facts, "api_retry"), [{ kind: "api_retry", agent: 0, ...span(83, 85) }])
   assert.equal(intervalsOf(facts, "permission_wait").length, 0)
-  assert.deepEqual(facts.plugins, [...PLUGINS, { name: "extra", version: "1.0.0" }])
+  assert.deepEqual(facts.plugins, [...PLUGINS, { name: "extra", version: "1.0.0", source: null }])
   assert.deepEqual(events.fileWrites, [{ at: at(34), path: `/tmp/${SENTINEL}/raw.md` }])
   assert.deepEqual(events.deskToolCalls, [])
   assert.deepEqual(facts.unavailable, [
@@ -661,11 +661,28 @@ test("more than 32 models, 64 plugins or 2000 commits are trimmed with capped", 
 
 test("invalid marker plugins are dropped; a non-array marker list is empty", async () => {
   const ev = eventWriter()
-  let { facts } = await deriveText([start(ev)], { plugins: [{ name: SENTINEL, version: "1.0.0" }, null, { name: "ok", version: SENTINEL }, { name: "ok", version: "1.0.0" }] })
-  assert.deepEqual(facts.plugins, [{ name: "ok", version: "1.0.0" }])
+  let { facts } = await deriveText([start(ev)], { plugins: [{ name: SENTINEL, version: "1.0.0" }, null, { name: "ok", version: SENTINEL }, { name: "ok", version: "2.0.0", source: SENTINEL }, { name: "ok", version: "1.0.0" }] })
+  assert.deepEqual(facts.plugins, [{ name: "ok", version: "1.0.0", source: null }], "an invalid source drops the entry; a missing one reads as null")
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
   assert.ok(facts.unavailable.some((entry) => entry.field === "plugins" && entry.reason === "source_unreadable"))
   ;({ facts } = await deriveText([start(ev)], { plugins: SENTINEL }))
   assert.deepEqual(facts.plugins, [])
+})
+
+test("a skill-invoked plugin takes its install source from the marker plugin of the same name, else none", async () => {
+  const ev = eventWriter()
+  const { facts } = await deriveText([
+    start(ev),
+    ev("skill.invoked", 1, { name: "x", pluginName: "desk", pluginVersion: "3.2.0-alpha.23" }),
+    ev("skill.invoked", 2, { name: "x", pluginName: "loose", pluginVersion: "1.0.0" }),
+  ], { plugins: [{ name: "desk", version: "3.2.0-alpha.22", source: "ourostack/desk" }, { name: "desk", version: "3.2.0-alpha.21", source: "someone/other" }, { name: "older", version: "1.0.0" }] })
+  assert.deepEqual(facts.plugins, [
+    { name: "desk", version: "3.2.0-alpha.22", source: "ourostack/desk" },
+    { name: "desk", version: "3.2.0-alpha.21", source: "someone/other" },
+    { name: "older", version: "1.0.0", source: null },
+    { name: "desk", version: "3.2.0-alpha.23", source: "ourostack/desk" },
+    { name: "loose", version: "1.0.0", source: null },
+  ])
 })
 
 test("an unreadable session database flags tokens and commits as source_unreadable", async () => {

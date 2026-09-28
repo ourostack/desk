@@ -6,8 +6,7 @@
 // columns of `sessions` are queried, always filtered to one session. `turns`
 // holds message text and is never touched.
 //
-// Derived from the work ledger's `measurement/copilot-usage.js`, which keeps
-// its own `better-sqlite3` reader unchanged until the ledger retires (M3-12).
+// Derived from the retired work ledger's reader of the same table.
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files, so this copy opens the database with `node:sqlite`, loaded lazily at
 // the first read. It never throws and never prints: `node:sqlite` is missing

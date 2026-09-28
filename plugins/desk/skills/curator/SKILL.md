@@ -1,6 +1,6 @@
 ---
 name: curator
-description: Invoke ONLY when the operator explicitly asks to process the open friction backlog — walk each open `_friction/*.md` entry and decide encode / no-op dispositions. Triggered by phrases like "let's go through friction", "process the backlog", "curate the friction", "let's curate". Do NOT invoke for appending a new friction entry (that's `friction-management`), answering questions about what's in the backlog, or discussing friction abstractly.
+description: Invoke ONLY when the operator explicitly asks to process the open friction backlog or work the kaizen cards — walk each open `_friction/*.md` entry and decide encode / no-op dispositions, file system friction as kaizen cards, and ship, check and close open kaizen cards. Triggered by phrases like "let's go through friction", "process the backlog", "curate the friction", "let's curate", "work the kaizen cards". Do NOT invoke for appending a new friction entry (that's `friction-management`), answering questions about what's in the backlog, or discussing friction abstractly.
 ---
 
 # Curator
@@ -29,12 +29,22 @@ no deferrals. every card gets a disposition in the same pass: encoded, or an exp
 
 when a card is about a human-intervention point in a skill (a sign-off gate, an approval checkpoint, a "steer?" prompt), treat the gate as scaffolding: name the gate and why it exists. if the why is only that the agent might not do the right thing, encode the rule and remove the gate. where the gate is really a safety check, turn it into a self-check the agent runs, with the operator reviewing only failed checks. replace default escalation with named escalation conditions (a new architectural decision, a failed self-check, a missing prerequisite). "you should have just done X" encodes X; "you should have asked" adds the named condition. a gate stays only when it is a genuine human gate from `using-desk`.
 
+## The kaizen worker
+
+curator is also the kaizen worker: it moves system friction through the kaizen loop. a kaizen card is an issue labeled `kaizen` in the desk's factory store, with a `yaml` card block the store's build checks (`docs/factory-local-capture.md`, "The kaizen check").
+
+1. **andon first.** an open `andon` issue means a release made a quality measure clearly worse for a plugin the store tracks; session start lists them. treat it as the top card: find the change that caused it (the issue names every plugin that changed in the same version set) and fix or revert it. the store's build closes the andon issue itself once a later release recovers. when you judge an alarm a false one or an accepted trade-off, label it `andon-dismissed` with a one-line reason; the build then never reopens or closes it, but still posts the numbers when they change.
+2. **file the system friction, after signoff.** kaizen candidates on the desk (entries `friction_add` recorded with `about: "system"`, including ones an earlier pass could not file) are part of the step 4 batch below. after the operator's signoff, file each one with `friction_add`, `about: "system"` and `file_card: true`, at most five per pass. the filer routes, dedupes and caps it (`friction-management`); a desk whose route is unknown keeps its candidates, and a work desk never files to a public store. take each filed candidate down, leaving the card's URL.
+3. **work the open cards.** for each open card, pick the countermeasure and ship it through the normal PR flow on the owning repository, as for `encode-in-skill` below. set the card's `countermeasure` to the PR URL. complete a draft card (no `signal` or `hypothesis`) from the rollups first: the check can't judge a card without them.
+4. **fill `version` when the release lands.** once the release carrying the countermeasure is published, edit the card block's `version` to that first version. from then on every store build compares the jobs before and after it and keeps one comment on the card.
+5. **act on the verdict.** `confirmed`: close the card, naming the release and the build comment. `not-confirmed`: the measure moved clearly the wrong way after the countermeasure; revert it or re-plan it through a new PR, and set `version` again when that ships. "not enough independent jobs yet" or "no clear change so far": leave the card open; the build checks it again as jobs arrive. never close a card because the data is thin.
+
 ## Process
 
 1. **list the still-pinned cards.** `ls $DESK/<track>/_friction/` plus `$DESK/_meta/friction.md` for cross-track entries. skip archived entries under `_archive/`.
 2. **read each card end-to-end** before picking a disposition. don't skim. reactive edits without reading the full entry produce churn.
 3. **decide disposition.** name the target file or rationale.
-4. **batch decisions.** present dispositions to operator in one message with a clear table (entry → disposition → target). wait for signoff. don't walk the operator through one card at a time (`interaction-style` §1).
+4. **batch decisions.** present dispositions to operator in one message with a clear table (entry → disposition → target). wait for signoff. don't walk the operator through one card at a time (`interaction-style` §1). include the kaizen candidates to file in the same table; file them only after the signoff.
 5. **Encode in a single authorized PR** against the plugin repo, one unit per card with acceptance checks. Invoke `desk:using-superpowers-with-desk` for the needed Superpowers planning and implementation skills.
 6. **take landed cards down** in the same motion they shipped: update the `Status:` line to name the PR and merge SHA, move the entry to `_friction/_archive/`. see the `friction-management` skill.
 

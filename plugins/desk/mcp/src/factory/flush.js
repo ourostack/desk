@@ -108,6 +108,7 @@ import {
   writeStatus,
   writeVisibilityCache,
 } from "./outbox.js"
+import { refreshAndon } from "./andon-watch.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
 import { validatePublishedBytes } from "./published-schema.js"
@@ -116,7 +117,7 @@ import { PATTERNS, isPlainObject } from "./schema.js"
 /** Every result `flush` can return. */
 export const FLUSH_CODES = Object.freeze([
   "delivered_pr_open", "intake_stale_retried", "nothing_pending", "not_opted_in", "no_account", "gh_missing", "gh_too_old", "auth_failed",
-  "store_missing", "fork_pending", "rate_limited", "offline", "locked", "deadline", "unexpected",
+  "store_missing", "account_cannot_deliver", "fork_pending", "rate_limited", "offline", "locked", "deadline", "unexpected",
 ])
 
 export const INTAKE_TITLE = "Factory intake"
@@ -329,7 +330,7 @@ function createClient({ runner, deadline, now }) {
     return answer.json
   }
 
-  return { session, api, need }
+  return { call, session, api, need }
 }
 
 function compareVersion(left, right) {
@@ -375,6 +376,8 @@ function referencedRepos(facts) {
   for (const refs of [facts?.refs?.prs, facts?.refs?.commits]) {
     for (const ref of list(refs)) if (isRepo(ref?.repo)) repos.push(ref.repo)
   }
+  // A plugin's install source decides whether a public store may name it.
+  for (const plugin of list(facts?.plugins)) if (isRepo(plugin?.source)) repos.push(plugin.source)
   return repos
 }
 
@@ -398,7 +401,7 @@ async function resolveVisibility(env, client, account, repos, nowIso) {
   return known
 }
 
-function publishOne(local, name, { transform, known, desk, secret }) {
+function publishOne(local, name, { transform, known, desk, store, secret }) {
   if (`${local?.session?.host}-${local?.session?.id}.json` !== name) return { reason: "invalid" }
   let out
   try {
@@ -406,6 +409,8 @@ function publishOne(local, name, { transform, known, desk, secret }) {
       visibility: (repo) => known.get(repo.toLowerCase()) ?? "unknown",
       // Every GitHub desk remote was resolved with the references; anything else is unknown.
       deskVisibility: desk ? known.get(desk.toLowerCase()) : "unknown",
+      // The store was resolved with them too; an unknown store is treated as public.
+      storeVisibility: known.get(store.toLowerCase()) ?? "unknown",
       machineSecret: secret,
     })
   } catch {
@@ -445,9 +450,28 @@ function publishLabelsOne(local, key, { known, desks, secret }) {
 // Store side.
 // ---------------------------------------------------------------------------
 
+// A GitHub login with `_` belongs to an Enterprise Managed User: personal logins may hold only letters, digits and hyphens,
+// and a managed login is the handle, `_` and the enterprise's short code. A managed account cannot fork or open pull
+// requests on repositories outside its enterprise.
+const MANAGED_LOGIN = /_/u
+
+/**
+ * How `account` can open an intake pull request on a store it read as `info` (`GET /repos/{store}` with its token):
+ * `"direct"` with push permission, `"fork"` through its own fork, or why it cannot: `"forking_disabled"` or
+ * `"managed_account"`.
+ */
+export function deliveryRoute(account, info) {
+  if (info?.permissions?.push === true) return "direct"
+  if (info?.allow_forking === false) return "forking_disabled"
+  if (MANAGED_LOGIN.test(account)) return "managed_account"
+  return "fork"
+}
+
 async function resolveTarget(client, { store, account, info }) {
   const branch = info.default_branch
-  if (info.permissions?.push === true) return { repo: store, owner: store.split("/")[0], branch }
+  const route = deliveryRoute(account, info)
+  if (route === "direct") return { repo: store, owner: store.split("/")[0], branch }
+  if (route !== "fork") stop("account_cannot_deliver")
   const repoName = store.split("/")[1]
   let fork = null
   const existing = await client.api("GET", `repos/${account}/${repoName}`)
@@ -633,6 +657,8 @@ async function deliver(env, context) {
   const parsedLabels = labelCandidates.map(({ name, localBytes }) => ({ key: name, local: JSON.parse(localBytes.toString("utf8")) }))
   const desks = await deskRepositories(env, { deadline, now })
   const repos = parsed.flatMap(({ local }) => referencedRepos(local))
+  // Only a store known not to be public may name a plugin from a private or unknown source.
+  if (parsed.some(({ local }) => list(local?.plugins).length > 0)) repos.push(store)
   for (const { name } of parsed) if (desks.get(name)) repos.push(desks.get(name))
   for (const { local } of parsedLabels) for (const name of factsNamesOf(local?.session)) if (desks.get(name)) repos.push(desks.get(name))
   const known = await resolveVisibility(env, client, account, repos, nowIso)
@@ -640,7 +666,7 @@ async function deliver(env, context) {
 
   const bytesByName = new Map()
   for (const { name, local } of parsed) {
-    const out = publishOne(local, name, { transform, known, desk: desks.get(name), secret })
+    const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
     if (out.bytes) bytesByName.set(name, out.bytes)
     else await quarantine(env, store, name, out.reason)
   }
@@ -769,8 +795,13 @@ export async function flush(env, options = {}) {
 // Start-time delivery.
 // ---------------------------------------------------------------------------
 
-/** One sweep, then a flush of every store with `contribute: true`, within one deadline. Never throws. */
-export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, sweep = sweepMarkers, flush: flushStore = flush } = {}) {
+/**
+ * One sweep, then, for every store with `contribute: true`, a flush and a
+ * refresh of its open andon issues (`andon-watch.js`), within one deadline.
+ * Resolves `{ swept, stores, andon }` with each store's results. Never
+ * throws.
+ */
+export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, sweep = sweepMarkers, flush: flushStore = flush, andon: watch = refreshAndon } = {}) {
   const deadline = now() + deadlineMs
   try {
     if (await factoryStateRoot(env, { create: false }) === null) return { stores: {} }
@@ -784,6 +815,7 @@ export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DE
       // A failed sweep leaves markers for the next start; delivery still runs.
     }
     const results = {}
+    const andon = {}
     for (const store of stores) {
       const remaining = deadline - now()
       if (remaining <= 0) {
@@ -795,8 +827,17 @@ export async function flushConsented(env, { runner = ghRunner(), deadlineMs = DE
       } catch {
         results[store] = { result: "unexpected" }
       }
+      if (deadline - now() <= 0) {
+        andon[store] = { result: "deadline" }
+        continue
+      }
+      try {
+        andon[store] = await watch(env, { store, runner, now })
+      } catch {
+        andon[store] = { result: "unexpected" }
+      }
     }
-    return { swept, stores: results }
+    return { swept, stores: results, andon }
   } catch {
     return { stores: {} }
   }
@@ -888,4 +929,69 @@ export async function finalize(env, {
   if (!delivered) return { result: "retained", flushes }
   await clearFinalize(env, job)
   return { result: "cleared", flushes }
+}
+
+// ---------------------------------------------------------------------------
+// Choosing the account.
+// ---------------------------------------------------------------------------
+
+/** Every result `chooseAccount` can return. */
+export const ACCOUNT_RESULTS = Object.freeze(["account_found", "no_account_can_deliver", "gh_missing", "gh_too_old", "rate_limited", "offline", "deadline", "unexpected"])
+
+/** The github.com logins in `gh auth status` output, the active one first. */
+export function signedInAccounts(text) {
+  const accounts = []
+  let current = null
+  for (const line of String(text).split("\n")) {
+    const login = /Logged in to github\.com account ([A-Za-z0-9][A-Za-z0-9_-]{0,38})(?:\s|$)/u.exec(line)
+    if (login) {
+      current = { login: login[1], active: false }
+      if (!accounts.some((entry) => entry.login === current.login)) accounts.push(current)
+      continue
+    }
+    if (/^\S/u.test(line)) current = null
+    else if (current !== null && /Active account:\s*true/u.test(line)) current.active = true
+  }
+  return [...accounts.filter((entry) => entry.active), ...accounts.filter((entry) => !entry.active)].map((entry) => entry.login)
+}
+
+/**
+ * `chooseAccount({ store, runner, deadlineMs })`: the signed-in github.com account that can open intake pull requests
+ * on `store`, never assumed from gh's active account. Each account signed in to gh is asked for `GET /repos/{store}`
+ * with its own token; one with push permission is preferred, then one that can fork, the active account first among
+ * equals. Returns `{ result: "account_found", account, route, accounts }`, or `{ result: "no_account_can_deliver",
+ * accounts }` where each account carries its `route` or the reason it cannot deliver (`store_not_visible`,
+ * `auth_failed`, `forking_disabled`, `managed_account`), or another of `ACCOUNT_RESULTS` when gh cannot be asked.
+ * Tokens stay in memory and reach gh only as `GH_TOKEN`.
+ */
+export async function chooseAccount({ store, runner, deadlineMs = 60000, now = Date.now }) {
+  if (!isRepo(store)) throw new Error("chooseAccount: store must be <owner>/<repo>")
+  const deadline = now() + deadlineMs
+  try {
+    const status = await createClient({ runner, deadline, now }).call(["auth", "status", "--hostname", "github.com"])
+    if (status.spawnError === "ENOENT" || status.code === 127) stop("gh_missing")
+    const accounts = []
+    for (const account of signedInAccounts(`${status.stdout ?? ""}\n${status.stderr ?? ""}`)) {
+      const client = createClient({ runner, deadline, now })
+      try {
+        await client.session(account)
+        const answer = await client.api("GET", `repos/${store}`)
+        if (answer.status === 200 && isPlainObject(answer.json)) {
+          const route = deliveryRoute(account, answer.json)
+          accounts.push(route === "direct" || route === "fork" ? { account, route } : { account, reason: route })
+        } else if (answer.status === 403 || answer.status === 404) {
+          accounts.push({ account, reason: "store_not_visible" })
+        } else {
+          stop("unexpected")
+        }
+      } catch (error) {
+        if (!(error instanceof Stop) || error.code !== "auth_failed") throw error
+        accounts.push({ account, reason: "auth_failed" })
+      }
+    }
+    const chosen = accounts.find((entry) => entry.route === "direct") ?? accounts.find((entry) => entry.route === "fork")
+    return chosen ? { result: "account_found", account: chosen.account, route: chosen.route, accounts } : { result: "no_account_can_deliver", accounts }
+  } catch (error) {
+    return { result: error instanceof Stop ? error.code : "unexpected" }
+  }
 }

@@ -73,6 +73,7 @@ import { closeSync, openSync, readSync, readdirSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { parseFrontmatterLite } from "./frontmatter-lite.js"
+import { folderHandle } from "./handles.js"
 import { isCredentialLike, validateName, validateTrackName, validateScope } from "./naming.js"
 
 const requireFromHere = createRequire(import.meta.url)
@@ -221,10 +222,14 @@ function nameFindingCode(validatorCode) {
   }
 }
 
-function nameFinding({ result, deskRoot, absPath, moveHint }) {
+// A name finding carries the folder's handle (./handles.js), so the rename
+// can name the folder by handle: a credential-like name is shown redacted and
+// must never be recovered by listing the folder.
+function nameFinding({ result, deskRoot, absPath, kind, moveHint }) {
   return {
     code: nameFindingCode(result.code),
     path: redactedRelPath(deskRoot, absPath),
+    handle: folderHandle(kind, deskRoot, absPath),
     hint: `${result.hint} — ${moveHint}`,
   }
 }
@@ -241,7 +246,8 @@ function processTaskDir({ taskDirAbs, deskRoot, archived, findings, liveTaskCard
         result: nameResult,
         deskRoot,
         absPath: taskDirAbs,
-        moveHint: "rename with task_move",
+        kind: "task",
+        moveHint: "rename with task_move (handle, to_slug)",
       }),
     )
   }
@@ -335,7 +341,8 @@ function processTrackDir({ trackDirAbs, deskRoot, operatorNames, findings, liveT
         result: nameResult,
         deskRoot,
         absPath: trackDirAbs,
-        moveHint: "rename with track_rename",
+        kind: "track",
+        moveHint: "rename with track_rename (handle, to)",
       }),
     )
   }

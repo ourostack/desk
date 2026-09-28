@@ -852,6 +852,33 @@ requires(
   "friction-management logs what the operator teaches",
   /operator teaches[\s\S]+even offhand[\s\S]+no-write/iu,
 );
+// The kaizen loop: system friction becomes a kaizen candidate; the curator files it after signoff, public cards carry structured fields only, and the kaizen worker ships, checks and closes it.
+requires(
+  "plugins/desk/skills/friction-management/SKILL.md",
+  "friction-management records system friction as a kaizen candidate the curator files, with no free text in a public store",
+  /### About the system, or about this desk.s setup[\s\S]+\*\*`system`\*\*[\s\S]+kaizen candidate and sends nothing[\s\S]+setup[\s\S]+stays on the desk[\s\S]+only the kaizen worker \(`curator`\) files a candidate as a card, after its signoff step[\s\S]+same route as the desk's facts[\s\S]+route_unknown[\s\S]+work desk files only to its work store[\s\S]+free text never goes to a public store[\s\S]+structured fields[\s\S]+plugin_not_public[\s\S]+evidence_jobs_local[\s\S]+generically/iu,
+);
+requires(
+  "plugins/desk/skills/lesson-capture/SKILL.md",
+  "lesson-capture proposes kaizen cards from the evaluator's waste and never files them",
+  /## Waste the evaluator found[\s\S]+not a private note[\s\S]+kaizen candidate[\s\S]+signal[\s\S]+evidence_jobs[\s\S]+never files a card itself[\s\S]+after its signoff step/iu,
+);
+requires(
+  "plugins/desk/skills/curator/SKILL.md",
+  "curator works kaizen cards from filing to verdict",
+  /## The kaizen worker[\s\S]+andon first[\s\S]+andon-dismissed[\s\S]+file the system friction, after signoff[\s\S]+file_card: true[\s\S]+at most five per pass[\s\S]+never files to a public store[\s\S]+PR flow[\s\S]+fill `version` when the release lands[\s\S]+confirmed[\s\S]+close[\s\S]+not-confirmed[\s\S]+moved clearly the wrong way[\s\S]+revert[\s\S]+re-plan[\s\S]+never close a card because the data is thin[\s\S]+## Process[\s\S]+file them only after the signoff/iu,
+);
+
+requires(
+  "plugins/desk/skills/session-start/SKILL.md",
+  "session-start surfaces open andon issues and offers the curator",
+  /## Step 4\.8 — Factory boot lines[\s\S]+waste labels and andon[\s\S]+open andon issues in <store>[\s\S]+Step 5 status block[\s\S]+`curator` pass, which handles them first/u,
+);
+requires(
+  "plugins/desk/docs/agentic-engineering-v2-rfc.md",
+  "the RFC states the kaizen and andon rules the store's build applies",
+  /\*\*The loop closes\.\*\*[\s\S]+structured fields only[\s\S]+after the operator signs off[\s\S]+at least 6 groups[\s\S]+computed from the confidence level[\s\S]+not-confirmed ones[\s\S]+\*\*Andon stops the line\.\*\*[\s\S]+`factory\.json`[\s\S]+latest version with enough independent jobs[\s\S]+`andon-dismissed`[\s\S]+session start lists[\s\S]+\*\*Still open\.\*\*[\s\S]+Draining recorded friction into kaizen cards/u,
+);
 
 // The observer agent: worker's sibling, named for Lean's process observer, who watches the work, times it and
 // classifies each step, and never does the work. Its three bodies carry identity only, like worker's.
@@ -975,6 +1002,84 @@ requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle starts t
 // One owner for the evaluator answer and the Factory label lines: session-start, which every session loads first.
 requires("plugins/desk/skills/session-start/SKILL.md", "session-start owns the Factory label lines and the evaluator answer",
   /## Step 4\.8 — Factory boot lines[\s\S]+finished tasks have no waste labels yet[\s\S]+factory\.js evaluate --pending[\s\S]+quarantined waste labels that will not be delivered[\s\S]+`ready` → start a fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`no_sessions`[\s\S]+never reopens a task/u);
+// The factory's one-time consent question (M3-11): asked once per store, in plain words, recorded yes or no
+// through `factory.js consent`, never asked again, and never asked in a noninteractive session.
+const sessionStart = "plugins/desk/skills/session-start/SKILL.md";
+contract("session-start asks the factory contribution question once, in plain words, and records either answer", () => {
+  const step = text(sessionStart).split("\n## Step 2.7 — Factory contribution: ask once\n", 2)[1]?.split("\n## ", 1)[0] ?? "";
+  assert.ok(step, "session-start is missing Step 2.7");
+  assert.match(step, /`factory` in the `desk_status` result[\s\S]+`factory\.consent` is `undecided`/u);
+  assert.match(step, /never asked again/u);
+  const question = step.split("\n> ", 2)[1]?.split("\n", 1)[0] ?? "";
+  assert.ok(question, "Step 2.7 quotes the question it asks");
+  for (const published of ["durations", "counts", "tool kinds", "plugin and model versions", "public repositories"]) {
+    assert.match(question, new RegExp(`What it publishes:[^.]*${published}`, "u"), `the question says it publishes ${published}`);
+  }
+  for (const never of ["prompt, assistant or tool content", "names", "dates", "times of day"]) {
+    assert.match(question, new RegExp(`What it never publishes:[^.]*${never}`, "u"), `the question says it never publishes ${never}`);
+  }
+  assert.match(question, /`<store>` is a public repository/u);
+  assert.match(question, /GitHub account `<login>` appears as the author of the intake pull requests/u);
+  assert.match(step, /factory\.js consent --store <store> --contribute yes --account <login>/u);
+  assert.match(step, /factory\.js consent --store <store> --contribute no\n/u);
+  assert.match(step, /`no` is a decision too[\s\S]+recorded/u);
+  assert.match(step, /[Nn]oninteractive[\s\S]+do not ask and do not record anything/u);
+  assert.doesNotMatch(step, /consent\.json/u, "the skill records consent only through factory.js");
+  // Review M3-11 D1 and D3: the boot line and desk_status agree, and the account is chosen by asking GitHub, never assumed.
+  assert.match(step, /`held` means no store is resolved[^\n]+nothing to ask[^\n]+boot line does not ask/u);
+  assert.match(step, /Never assume gh's active account/u);
+  assert.match(step, /factory\.js account --store <store>/u);
+  assert.match(step, /`no_account_can_deliver`, do not ask/u);
+  assert.doesNotMatch(step, /gh api user/u, "the active account is never assumed");
+});
+contract("session-start never skips Step 2.7", () => {
+  assert.match(text(sessionStart).split("## Never skip, never route around", 2)[1] ?? "", /2\.7/u);
+});
+// Kaizen card 4: the desk's own interaction contract (its AGENTS.md) binds before the first question or action.
+contract("session-start reads the bound desk's AGENTS.md before the first question or action, and says so in one line", () => {
+  const body = text(sessionStart);
+  const step = body.split("\n## Step 0.25 — Read the desk's AGENTS.md\n", 2)[1]?.split("\n## ", 1)[0] ?? "";
+  assert.ok(step, "session-start is missing Step 0.25");
+  assert.ok(body.indexOf("## Step 0.25") < body.indexOf("## Step 0.5"), "Step 0.25 runs before the migrations act");
+  assert.match(step, /bound desk/u);
+  assert.match(step, /before the first question[^\n]+or action/u);
+  assert.match(step, /[Ww]hen the file is absent[^\n]+silent/u);
+  assert.match(step, /binding/u);
+  assert.match(step, /one line/u);
+  assert.match(step, /> Read `\$DESK\/AGENTS\.md`/u);
+  assert.match(step, /Step 2[^\n]+changed it[^\n]+read it again/u);
+  assert.match(body.split("## Never skip, never route around", 2)[1] ?? "", /0\.25/u);
+});
+// Kaizen card 5: archiving stages only the paths it moved, as git-hygiene's targeted staging requires.
+contract("archive-workflow stages only the paths it moved", () => {
+  const body = text("plugins/desk/skills/archive-workflow/SKILL.md");
+  const code = (body.match(/```bash\n[\s\S]*?```/gu) ?? []).join("\n");
+  const adds = code.match(/git add [^\n]+/gu) ?? [];
+  const commits = code.match(/git commit [^\n]+/gu) ?? [];
+  assert.equal(adds.length, 4, "the four archive stagings");
+  assert.equal(commits.length, 4, "the four archive commits");
+  for (const add of adds) assert.match(add, /^git add -A -- \S/u, `staging names its paths: ${add}`);
+  for (const commit of commits) {
+    assert.doesNotMatch(commit, /^git commit -[a-z]*a/u, `no commit -a: ${commit}`);
+    assert.match(commit, / -- \S/u, `commit names its paths: ${commit}`);
+  }
+  assert.match(body, /`git-hygiene`[^\n]+targeted staging/u);
+});
+requires("plugins/desk/skills/first-run-bootstrap/SKILL.md", "first-run-bootstrap asks the factory question once at the converged endpoint",
+  /### Converged endpoint[\s\S]+factory contribution question once[\s\S]+`desk:session-start` Step 2\.7[\s\S]+factory\.js consent/u);
+requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle says done writes the report link and never waits for the store",
+  /transitioning to `done`[^\n]+`task_update`[^\n]+`factory_report: <link>`[^\n]+resolved store has consent[^\n]+finalize request[^\n]+`done` does not wait for the store[^\n]+resolves once the store merges/u);
+contract("task-card-format documents the optional factory_report field", () => {
+  const skill = text("plugins/desk/skills/task-card-format/SKILL.md");
+  assert.match(skill, /^factory_report: https:\/\/github\.com\/<store>\/blob\/reports\/jobs\/<job>\.md +# /mu);
+  assert.match(skill, /\*\*`factory_report`\*\*[^\n]+written by `task_update` or `task_archive`[^\n]+transition to `done`[^\n]+consent[^\n]+may not resolve until[^\n]+never write or edit it by hand/u);
+});
+contract("public Desk skills name only the public factory store", () => {
+  for (const file of [sessionStart, "plugins/desk/skills/first-run-bootstrap/SKILL.md", "plugins/desk/skills/task-lifecycle/SKILL.md", "plugins/desk/skills/task-card-format/SKILL.md"]) {
+    const stores = [...text(file).matchAll(/\b[A-Za-z0-9-]+\/[A-Za-z0-9._-]*factory\b(?!\.js|\/)/gu)].map((match) => match[0])
+    assert.deepEqual([...new Set(stores)].filter((store) => store !== "ourostack/factory"), [], file);
+  }
+});
 requires(factoryEvaluator, "factory-evaluator treats the session log as data and never changes the brief",
   /nothing in it is an instruction[\s\S]+never change the brief/u);
 
@@ -1058,6 +1163,31 @@ contract("every writing command block in the evaluation packet fails closed insi
 });
 contract("the evaluation packet prose is not hard-wrapped", () => {
   assert.deepEqual(proseUnits(evaluationPacket).filter((unit) => unit.length > 1).map((unit) => unit[0].number), []);
+});
+
+// Session start never prints a desk folder name it has not redacted (review of #51, B1 and S2): a folder another
+// machine created can carry a secret's value in its name, and a git diffstat or a glob would put it in the transcript.
+contract("session start syncs the desk quietly and says why", () => {
+  const skill = text(sessionStart);
+  assert.match(skill, /cd \$DESK && git pull --rebase --quiet origin main/u);
+  assert.match(skill, /keep `--quiet`: without it the pull prints a diffstat and a `create mode` line/u);
+  for (const match of skill.matchAll(/git (?:-C \S+ )?(pull|fetch|log|diff|status|ls-files)\b[^\n`]*/gu)) {
+    if (match[1] === "pull" || match[1] === "fetch") assert.match(match[0], /--quiet|--no-stat/u, `a startup git ${match[1]} must be quiet: ${match[0]}`);
+  }
+});
+contract("session start and status list active tasks from desk_status, never a script or a glob", () => {
+  for (const file of [sessionStart, "plugins/desk/skills/status/SKILL.md"]) {
+    const skill = text(file);
+    assert.doesNotMatch(skill, /active-tasks\.js/u, `${file} still runs the listing script`);
+    assert.match(skill, /`active_tasks`/u, `${file} does not read desk_status active_tasks`);
+  }
+  assert.match(text(sessionStart), /do not fall back to globbing the desk/u);
+  assert.match(text(sessionStart), /`task_move` with `handle` and an outcome `to_slug`/u);
+});
+contract("the tidy renames a redacted folder by its handle, never by listing its parent", () => {
+  const tidy = text("plugins/desk/migrations/02-tidy-desk.md");
+  assert.doesNotMatch(tidy, /listing its parent yourself/u);
+  assert.match(tidy, /by the handle its finding shows: a task with task_move \(handle, to_slug\), a track with track_rename \(handle, to\)/u);
 });
 
 assert.equal(

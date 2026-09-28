@@ -2,7 +2,7 @@
 //
 // Loaded three ways, so no test can reach the real ~/.cache or ~/.local/state:
 // - `npm test`, the coverage runner and the native Windows CI steps preload it with `--import`, and the test runner passes that to every test file's process;
-// - `_temp_roots.js` imports it, so a test file run on its own with `node --test <file>` is isolated too;
+// - `_temp_roots.js` and `factory/_session_helpers.js` import it, so a test file run on its own with `node --test <file>` is isolated too;
 // - a process that inherits DESK_TEST_RUN_DIR from its parent reuses the parent's folder, so one run shares one folder.
 //
 // The write guard covers this process's own `node:fs` calls (sync, callback and promise forms). A path under the real home is refused unless it is under the OS temp folder or this repository checkout, which may themselves sit under the home.
@@ -156,7 +156,7 @@ if (!fs.__deskTestGuard) {
 
 // ---- this checkout's Git configuration stays untouched ----
 //
-// Admission marks the Git checkout of every desk root it binds as protected (desk-protected.config plus an includeIf in the shared config). A test that bound this repository's own folder once wrote that marker onto the real worktree, and the installed guard then refused Git commands there. Every process snapshots the repository and worktree configuration that applies to this checkout when it starts, and compares it when it exits: the top-level test runner, and a test file run on its own, fail the run when it changed; a test file's process under the runner names itself, so the log shows which files were running. Several worktrees can share one repository config file, and other work on the machine legitimately adds branch, remote and includeIf entries to it, so those keys are left out; what an include sets for this checkout (such as desk.protected) still shows up.
+// Admission marks the Git checkout of every desk root it binds as protected (desk-protected.config plus an includeIf in the shared config). A test that bound this repository's own folder once wrote that marker onto the real worktree, and the installed guard then refused Git commands there. Every process snapshots the repository and worktree configuration that applies to this checkout when it starts, and compares it when it exits: the top-level test runner, and a test file run on its own, fail the run when it changed; a test file's process under the runner names itself, so the log shows which files were running. Several worktrees can share one repository config file, and other work on the machine legitimately adds branch, remote and includeIf entries to it, so those keys are left out, as is desk.stateBranch, which Desk writes beside desk.protected; what an include sets for this checkout (such as desk.protected) still shows up.
 export const GUARDED_CHECKOUT = "DESK_TEST_GUARDED_CHECKOUT"
 
 /** The repository- and worktree-scope Git configuration that applies to `checkout`, one "scope key=value" line each, or null outside a Git checkout. */
@@ -166,7 +166,7 @@ export function checkoutConfig(checkout) {
   })
   if (result.status !== 0 || result.error) return null
   return result.stdout.split(/\r?\n/u)
-    .filter((line) => /^(?:local|worktree)\t/u.test(line) && !/^\w+\t(?:includeif|branch|remote)\./iu.test(line))
+    .filter((line) => /^(?:local|worktree)\t/u.test(line) && !/^\w+\t(?:includeif\.|branch\.|remote\.|desk\.statebranch=)/iu.test(line))
     .sort()
     .join("\n")
 }

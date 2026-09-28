@@ -59,11 +59,10 @@ async function makeSession(t, overrides = {}) {
   return { session, base, root, lines, runtime, log: () => lines.join("") }
 }
 
-test("tool requirements: status, doctor, reads, authority, controller and writes", () => {
+test("tool requirements: status, doctor, reads, controller and writes", () => {
   assert.equal(toolRequirement("desk_status"), "status")
   assert.equal(toolRequirement("desk_doctor"), "doctor")
   for (const name of ["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"]) assert.equal(toolRequirement(name), "read")
-  assert.equal(toolRequirement("desk_work_ledger"), "authority")
   assert.equal(toolRequirement("desk_reindex"), "controller")
   for (const name of ["task_create", "track_rename", "friction_add", "lesson_add"]) assert.equal(toolRequirement(name), "write")
   const readable = { runtimeServer: {}, root: {} }
@@ -79,16 +78,15 @@ test("tool requirements: status, doctor, reads, authority, controller and writes
   assert.equal(requirementMet("read", { ...readable, launcher: { mode: "refuse" } }), false)
 })
 
-test("unknown tools are refused; reads, the ledger and journaled writes dispatch to the runtime once admitted", async (t) => {
+test("unknown tools are refused; reads and journaled writes dispatch to the runtime once admitted", async (t) => {
   const { session, runtime } = await makeSession(t)
   assert.equal((await session.callTool({ name: "nope" })).isError, true)
   assert.equal(payload(await session.callTool({ name: "desk_search", input: { query: "x" } })).tool, "desk_search")
-  assert.equal(payload(await session.callTool({ name: "desk_work_ledger" })).tool, "desk_work_ledger")
   assert.equal(payload(await session.callTool({ name: "desk_reindex" })).tool, "desk_reindex")
   assert.equal(payload(await session.callTool({ name: "task_create" })).tool, "task_create")
-  assert.deepEqual(runtime.calls.map((call) => call.name), ["desk_search", "desk_work_ledger", "desk_reindex", "task_create"])
-  assert.deepEqual(runtime.calls[3].input, {})
-  assert.equal(typeof runtime.calls[3].admission.controller.status, "function", "a healthy controller journals the write")
+  assert.deepEqual(runtime.calls.map((call) => call.name), ["desk_search", "desk_reindex", "task_create"])
+  assert.deepEqual(runtime.calls[2].input, {})
+  assert.equal(typeof runtime.calls[2].admission.controller.status, "function", "a healthy controller journals the write")
   assert.equal(session.admission.snapshot().state, "ready")
 })
 
