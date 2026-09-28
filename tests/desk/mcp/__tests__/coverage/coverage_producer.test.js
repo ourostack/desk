@@ -97,7 +97,7 @@ function runProducerFixture(t, { complete, includeUnexecuted = false, viaChild =
   ].join("\n"))
   if (includeUnexecuted) writeSource(unexecutedSource, "export const unexecuted = true\n")
   const subjectImports = [
-    'import { invoke } from "../src/subject.js"',
+    'import { invoke } from "../../../../plugins/desk/mcp/src/subject.js"',
     'import cjs from "../../../../scripts/subject.cjs"',
   ]
   const assertions = complete ? [
@@ -112,7 +112,7 @@ function runProducerFixture(t, { complete, includeUnexecuted = false, viaChild =
       '  assert.equal(Object.hasOwn(globalThis, "coverageUnreached"), false)',
       '  assert.equal(Object.hasOwn(globalThis, "coverageCjsUnreached"), false)',
     ]
-  const childPath = path.join(mcpRoot, "__tests__", "child-program.js")
+  const childPath = path.join(repoRoot, "tests", "desk", "mcp", "__tests__", "child-program.js")
   if (viaChild) write(childPath, [
     'import { strict as assert } from "node:assert"',
     ...subjectImports,

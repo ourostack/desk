@@ -13,6 +13,8 @@ import { syncBuiltinESMExports } from "node:module"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+// The tests live outside the shipped plugin; this links their bare-name imports to the installed dependencies.
+import "../../link-dependencies.mjs"
 
 export const REAL_HOME_WRITE = "DESK_TEST_REAL_HOME_WRITE"
 

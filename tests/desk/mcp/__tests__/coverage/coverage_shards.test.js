@@ -436,7 +436,7 @@ test("real shards each cover part of a file, and only their merged coverage pass
     write(repoRoot, `tests/desk/mcp/__tests__/${name}.test.js`, [
       'import { test } from "node:test"',
       'import { strict as assert } from "node:assert"',
-      'import { choose } from "../src/covered.js"',
+      'import { choose } from "../../../../plugins/desk/mcp/src/covered.js"',
       `test("${name} arm", () => assert.equal(choose(${flag}), "${expected}"))`,
       "",
     ].join("\n"))

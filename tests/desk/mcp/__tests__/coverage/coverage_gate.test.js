@@ -541,7 +541,6 @@ test("coverage runner discovers changed files from git state and falls back from
     assert.deepEqual(
       normalizePaths(collectChangedFiles({ repoRoot: fixtureRoot, spawn, env: {} })),
       [
-        "tests/desk/mcp/__tests__/coverage/coverage_gate.test.js",
         "plugins/desk/mcp/index.js",
         "plugins/desk/mcp/scripts/run-coverage.js",
         "plugins/desk/mcp/src/coverage/gate.js",
@@ -549,6 +548,7 @@ test("coverage runner discovers changed files from git state and falls back from
         "scripts/test-desk-docs.cjs",
         "scripts/test-desk-generated-artifacts.cjs",
         "scripts/validate-desk-activation.cjs",
+        "tests/desk/mcp/__tests__/coverage/coverage_gate.test.js",
       ],
     )
     assert.deepEqual(

@@ -52,14 +52,15 @@ test("writes under the temporary folders and reads anywhere still work", async (
 test("npm test and the coverage runner both preload the setup, so a test file that never imports it is isolated too", async () => {
   const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../plugins/desk/mcp")
   const pkg = JSON.parse(await fsPromises.readFile(path.join(mcpRoot, "package.json"), "utf8"))
-  assert.match(pkg.scripts.test, /^node --import \.\/__tests__\/_isolated_env\.mjs --test /u)
-  assert.match(await fsPromises.readFile(path.join(mcpRoot, "src", "coverage", "runner.js"), "utf8"), /"__tests__", "_isolated_env\.mjs"/u)
+  assert.match(pkg.scripts.test, /^node --import \.\.\/\.\.\/\.\.\/tests\/desk\/mcp\/__tests__\/_isolated_env\.mjs --test /u)
+  assert.match(await fsPromises.readFile(path.join(mcpRoot, "src", "coverage", "runner.js"), "utf8"), /defaultTestRoot, "_isolated_env\.mjs"/u)
 })
 
 test("a factory test file run on its own with node --test never reads the machine's recorded factory consent", async () => {
   // A machine that contributes to a factory store has consent.json under its real state folder. boot_check.test.js reads
   // the default environment on purpose, so run alone without the preload it must still see its own temporary state.
-  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../plugins/desk/mcp")
+  // The test file path below is relative to tests/desk/mcp, the folder that holds the tests.
+  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
   const machine = await mkTempRoot("desk-machine-home-")
   const consent = path.join(machine, ".local", "state", "ouroboros-skills", "desk", "factory", "consent.json")
   mkdirSync(path.dirname(consent), { recursive: true })

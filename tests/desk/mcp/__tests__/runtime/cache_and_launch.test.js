@@ -278,11 +278,12 @@ function declarationCases(pluginRoot = deskPluginRoot) {
     },
     {
       id: "generic stdio fixture",
-      sourcePath: path.join(pluginRoot, "mcp/__tests__/fixtures/runtime/host-launch/generic-stdio.mcp.json"),
+      sourcePath: path.join(fixtureRoot, "host-launch/generic-stdio.mcp.json"),
+      // The fixture models a config four folders below the plugin's mcp/ folder; its cwd, "../../../..", resolves from there.
       configBaseDir: path.join(pluginRoot, "mcp/__tests__/fixtures/runtime/host-launch"),
       expandTokens: [],
       resolveRelativeCwdFromConfig: true,
-      resolveServer: () => mcpServerFromConfig(path.join(pluginRoot, "mcp/__tests__/fixtures/runtime/host-launch/generic-stdio.mcp.json")),
+      resolveServer: () => mcpServerFromConfig(path.join(fixtureRoot, "host-launch/generic-stdio.mcp.json")),
     },
   ];
 }
