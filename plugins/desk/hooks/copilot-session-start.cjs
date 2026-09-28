@@ -49,9 +49,13 @@ async function startupDirection() {
     const sessionFolder = await readSessionFolder();
     const direction = copilotStartupDirection({ env: process.env, sessionFolder });
     // The boot checks add one agent line only when one of them has something to say.
-    const { runBootChecks } = require("./boot-checks.cjs");
+    const { runBootChecks, migrationLine } = require("./boot-checks.cjs");
+    // Desk's own migration Detect blocks run alongside the boot checks, and
+    // add one line only when a migration is pending.
+    const pending = migrationLine({ host: "copilot", env: process.env, sessionFolder });
     const boot = await runBootChecks({ host: "copilot", env: process.env, sessionFolder });
-    return boot ? `${direction}\n\n${boot}` : direction;
+    const migrations = await pending;
+    return [direction, boot, migrations].filter(Boolean).join("\n\n");
   } catch {
     return "Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound.";
   }

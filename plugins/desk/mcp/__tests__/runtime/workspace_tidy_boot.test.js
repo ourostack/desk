@@ -191,6 +191,8 @@ cp.execFile = function(file, args, options, callback) {
 };
 require("node:module").syncBuiltinESMExports();
 require(${JSON.stringify(fileURLToPath(hookPath))}).runBootChecks = ((run) => options => run({...options, launch: async () => {}}))(require(${JSON.stringify(fileURLToPath(hookPath))}).runBootChecks);
+// Only the tidy check's inspection is under test here; Desk's migration check has its own budget and tests.
+require(${JSON.stringify(fileURLToPath(hookPath))}).migrationLine = async () => "";
 process.once("exit", () => fs.writeFileSync(${JSON.stringify(proof)}, JSON.stringify({born, exited:Date.now(), children})));
 `)
   const child = spawn(host === "claude" ? "bash" : process.execPath, [path.join(plugin, "hooks", host === "claude" ? "session-start.sh" : "copilot-session-start.cjs")], {

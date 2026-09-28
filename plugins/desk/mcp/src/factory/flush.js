@@ -9,8 +9,11 @@
 //
 //   1. Take `flush.lock` in the protected state folder (a lock older than ten
 //      minutes is abandoned and replaced); a live lock returns `locked`.
-//   2. Read the store's consent and account. Transform every outbox file that
-//      is not quarantined. The visibility of each referenced repository, and
+//   2. Read the store's consent and account. Release the quarantine an older
+//      Desk wrote when the store refused its facts as
+//      `private_plugins_missing` (`releaseRefusedPluginNames`): this Desk
+//      always writes `refs.private.plugins`, so those files go again.
+//      Transform every outbox file that is not quarantined. The visibility of each referenced repository, and
 //      of the desk's own GitHub remote, comes from the seven-day cache or
 //      `GET /repos/{owner}/{repo}` with the account's token (`private: false`
 //      is public, `private: true` private, 403 or 404 unknown). A desk that is
@@ -105,6 +108,7 @@ import {
   readMachineSecret,
   readStatus,
   readVisibilityCache,
+  releaseRefusedPluginNames,
   writeStatus,
   writeVisibilityCache,
 } from "./outbox.js"
@@ -648,6 +652,8 @@ async function deliver(env, context) {
   if (!INTAKE_ID.test(record.intake_id ?? "")) stop("unexpected")
   const { account } = record
 
+  // A store refused an older Desk's facts for naming every plugin; this Desk publishes them with `refs.private.plugins`, so they go again.
+  await releaseRefusedPluginNames(env, store)
   const candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL })
   const labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })
   if (candidates.length === 0 && labelCandidates.length === 0) return { result: "nothing_pending" }

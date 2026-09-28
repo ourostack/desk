@@ -1024,6 +1024,59 @@ export async function holdLabels(env, store, { job, session }) {
   return null
 }
 
+// A store refuses a facts file without `refs.private.plugins` with this
+// code (ourostack/factory's intake check). Only a Desk from before plugin
+// names were withheld can send such a file, and this Desk always writes the
+// field, so such a refusal is lifted here and the file goes out again.
+const REFUSED_PLUGIN_NAMES = "private_plugins_missing"
+
+// A quarantine record's reason, read without the repair `readJsonFileSafe`
+// performs: a record that does not parse stays exactly where it is, so its
+// file stays quarantined.
+async function quarantineReason(file) {
+  try {
+    const record = JSON.parse(await fsp.readFile(file, "utf8"))
+    return isPlainObject(record) ? record : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `releaseRefusedPluginNames(env, store) -> { facts, labels }`: removes the
+ * quarantine records an older Desk wrote for `store` when the store refused
+ * its facts as `private_plugins_missing`, so the next listing sends those
+ * files again, published by this Desk with `refs.private.plugins`. Labels
+ * quarantined with the same code are released, and so are labels held back
+ * as `facts_quarantined` for a facts file released here. Every other record
+ * stays, and so does one that is not a regular file or does not parse.
+ * Returns the released facts names and labels keys, each sorted.
+ */
+export async function releaseRefusedPluginNames(env, store) {
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env)
+  const dir = path.join(root, "quarantine", slug)
+  const facts = []
+  for (const name of await listRegularFiles(dir, OUTBOX_NAME_PATTERN)) {
+    if ((await quarantineReason(path.join(dir, name)))?.reason !== REFUSED_PLUGIN_NAMES) continue
+    await fsp.unlink(path.join(dir, name))
+    facts.push(name)
+  }
+  const released = new Set(facts)
+  const labels = []
+  for (const job of await listDirSafe(path.join(dir, "labels"))) {
+    const jobDir = path.join(dir, "labels", job)
+    if (!PATTERNS.jobId.test(job) || !(await lstatIfPresent(jobDir, NAMING)).isDirectory()) continue
+    for (const file of await listRegularFiles(jobDir, LABELS_NAME_PATTERN)) {
+      const record = await quarantineReason(path.join(jobDir, file))
+      if (record?.reason !== REFUSED_PLUGIN_NAMES && !(record?.reason === "facts_quarantined" && released.has(record.facts))) continue
+      await fsp.unlink(path.join(jobDir, file))
+      labels.push(`labels/${job}/${file}`)
+    }
+  }
+  return { facts, labels }
+}
+
 /**
  * `evaluationPaths(env, { job, store, name }) -> { brief, output }`: where
  * the waste evaluator's brief for outbox file `name` of `store` lives, and

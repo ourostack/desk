@@ -101,8 +101,8 @@ function isDirectory(file) {
  * without a roster next to a `desks/` folder (an older alias-only roster, say)
  * makes a crew workspace with no rows, so no person resolves and nothing is
  * tidied at the crew root. Only a desk with no `desks/` folder and either no
- * file or a file without a roster (a hub's registry, a spoke's pointer) is
- * single-owner.
+ * file or a file without a roster row that names an alias (a hub's registry, a
+ * spoke's pointer, an empty file or an empty roster table) is single-owner.
  */
 export function crewWorkspace(deskRoot) {
   if (typeof deskRoot !== "string" || deskRoot === "") return { crew: false, roster: null }
@@ -122,7 +122,9 @@ export function crewWorkspace(deskRoot) {
   } catch {
     return { crew: true, roster: [] }
   }
+  // Only a roster with at least one named row makes a crew; an empty table is
+  // a template, like a heading-only file or a pointer.
   const roster = parseCrewRoster(raw)
-  if (roster !== null) return { crew: true, roster }
+  if (roster !== null && roster.some((row) => row.alias !== "")) return { crew: true, roster }
   return desks ? { crew: true, roster: [] } : { crew: false, roster: null }
 }
