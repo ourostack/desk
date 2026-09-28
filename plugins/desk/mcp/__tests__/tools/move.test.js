@@ -17,6 +17,7 @@ import { task_move, track_rename } from "../../src/tools/move.js"
 import { task_create, task_archive } from "../../src/tools/task.js"
 import { track_create } from "../../src/tools/track.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
+import { folderHandle } from "../../src/desk/handles.js"
 
 const SCOPE = "fixture track scope; not anything else"
 
@@ -1333,11 +1334,11 @@ test("track_rename requires track and to", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
     () => track_rename({ deskRoot: root, input: { to: "somewhere-new" } }),
-    /`track` and `to` are required/,
+    /`track` is required, or `handle` in its place/,
   )
   await assert.rejects(
     () => track_rename({ deskRoot: root, input: { track: "main-track" } }),
-    /`track` and `to` are required/,
+    /`to` is required, with `track` or `handle`/,
   )
 })
 
@@ -1357,7 +1358,7 @@ test("track_rename defaults a missing input to an empty object", async () => {
   const root = await mkTempDeskRoot()
   await assert.rejects(
     () => track_rename({ deskRoot: root }),
-    /`track` and `to` are required/,
+    /`to` is required/,
   )
 })
 
@@ -1420,4 +1421,89 @@ test("track_rename honors the --person write prefix", async () => {
   })
   assert.equal(result.to, path.join("desks", "ari", "new-track"))
   assert.ok(await exists(path.join(root, "desks", "ari", "new-track", "track.md")))
+})
+
+// ── Handles (review of #51, S1) ────────────────────────────────────────────
+//
+// A folder whose name carries a secret's value is renamed by its handle, and
+// neither the result nor an error ever shows the old name.
+
+const SECRET_SLUG = "set pw hunter2"
+
+async function deskWithSecretTask() {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "main-track", { rows: [] })
+  const dir = path.join(root, "main-track", SECRET_SLUG)
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, "task.md"), "---\ntitle: T\nstatus: drafting\ntrack: main-track\n---\nsee main-track/set pw hunter2\n")
+  await fs.writeFile(path.join(root, "main-track", "notes.md"), "old home: main-track/set pw hunter2\n")
+  commitAll(root)
+  return { root, handle: folderHandle("task", root, dir) }
+}
+
+test("task_move renames a task by its handle and never shows the old name", async () => {
+  const { root, handle } = await deskWithSecretTask()
+  const result = await task_move({ deskRoot: root, input: { handle, to_slug: "restore-root-access" } })
+  assert.doesNotMatch(JSON.stringify(result), /hunter/)
+  assert.equal(result.from, "main-track/<redacted segment>")
+  assert.equal(result.to, "main-track/restore-root-access")
+  assert.deepEqual(result.mentions, ["main-track/notes.md"])
+  assert.equal(await exists(path.join(root, "main-track", "restore-root-access", "task.md")), true)
+  assert.equal(await exists(path.join(root, "main-track", SECRET_SLUG)), false)
+})
+
+test("task_move by handle refuses a stale handle, a mixed call and a clash without naming the folder", async () => {
+  const { root, handle } = await deskWithSecretTask()
+  await assert.rejects(() => task_move({ deskRoot: root, input: { handle: "task-0000000000", to_slug: "x-y" } }), /no task in this session's desk has that handle/)
+  await assert.rejects(() => task_move({ deskRoot: root, input: { handle, track: "main-track", to_slug: "x-y" } }), /pass `handle` or `track` and `slug`, not both/)
+  await assert.rejects(() => task_move({ deskRoot: root, input: { handle, slug: "a", to_slug: "x-y" } }), /not both/)
+  await assert.rejects(
+    () => task_move({ deskRoot: root, input: { handle } }),
+    (error) => {
+      assert.match(error.message, /target already exists at main-track\/<redacted segment>/)
+      assert.doesNotMatch(error.message, /hunter/)
+      return true
+    },
+  )
+  await assert.rejects(
+    () => task_move({ deskRoot: root, input: { track: "main-track", slug: "set pw hunter3", to_slug: "x-y" } }),
+    (error) => {
+      assert.match(error.message, /task does not exist at main-track\/<redacted segment>/)
+      return true
+    },
+  )
+})
+
+test("track_rename renames a track by its handle and never shows the old name", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.mkdir(path.join(root, "pw-hunter2-track", "some-task"), { recursive: true })
+  await fs.writeFile(path.join(root, "pw-hunter2-track", "track.md"), `---\ntitle: T\nscope: ${SCOPE}\n---\n`)
+  await fs.writeFile(path.join(root, "pw-hunter2-track", "some-task", "task.md"), "---\ntitle: T\nstatus: drafting\ntrack: pw-hunter2-track\n---\n")
+  commitAll(root)
+  const handle = folderHandle("track", root, path.join(root, "pw-hunter2-track"))
+
+  await assert.rejects(() => track_rename({ deskRoot: root, input: { handle: "track-0000000000", to: "access-work" } }), /no track in this session's desk has that handle/)
+  await assert.rejects(() => track_rename({ deskRoot: root, input: { handle, track: "pw-hunter2-track", to: "access-work" } }), /pass `handle` or `track`, not both/)
+
+  const result = await track_rename({ deskRoot: root, input: { handle, to: "access-work" } })
+  assert.doesNotMatch(JSON.stringify(result), /hunter/)
+  assert.equal(result.from, "<redacted segment>")
+  assert.deepEqual(result.updated_files, ["access-work/some-task/task.md"])
+  assert.equal((await readFront(path.join(root, "access-work", "some-task", "task.md"))).data.track, "access-work")
+})
+
+test("track_rename errors show a credential-like track name redacted", async () => {
+  const root = await mkTempDeskRoot()
+  await assert.rejects(
+    () => track_rename({ deskRoot: root, input: { track: "pw-hunter2-track", to: "access-work" } }),
+    (error) => {
+      assert.equal(error.message, "track_rename: track does not exist at <redacted segment>")
+      return true
+    },
+  )
+  await mkTrack(root, "access-work", { rows: [] })
+  await mkTrack(root, "other-track", { rows: [] })
+  await assert.rejects(() => track_rename({ deskRoot: root, input: { track: "other-track", to: "access-work" } }), /target already exists at access-work/)
 })
