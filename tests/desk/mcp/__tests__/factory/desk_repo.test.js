@@ -141,6 +141,149 @@ before(() => {
   write("track/unclosed-frontmatter-edit/task.md", "---\nstatus: done\n")
   shas.unclosedEdited = commitAt("2026-09-25T08:58:30Z", "unclosed: edit")
 
+  // --- Fixtures for the tidy-rewrite extensions to isCardHousekeeping
+  // (ourostack/desk#75 follow-up): quote-only frontmatter rewrites and
+  // same-commit rename substitutions. ---
+
+  // A quote-only rewrite: every frontmatter scalar's value is the same once
+  // its surrounding quotes are normalized — double to single, or dropped
+  // entirely — including inside a list item, and the body is untouched.
+  // This is what a real move/rename tool's own YAML re-serialization does.
+  // The folded `note: |` continuation line is neither a `key: value` scalar
+  // nor a `- value` list item, and is unchanged either side: it exercises
+  // normalizeQuotingLine's plain pass-through for a frontmatter line that
+  // matches neither shape.
+  write("quote-only-task/task.md", card(["status: drafting", "created: \"2026-09-17T21:22:00Z\"", "requester: \"ari\"", "note: |", "  plain continuation line without a colon or dash"]))
+  shas.quoteOnlyCreated = commitAt("2026-09-25T09:10:00Z", "quote-only: create")
+  write("quote-only-task/task.md", card(["status: drafting", "created: '2026-09-17T21:22:00Z'", "requester: ari", "note: |", "  plain continuation line without a colon or dash"]))
+  shas.quoteOnlyEdited = commitAt("2026-09-25T09:10:10Z", "quote-only: normalize quoting")
+
+  write("quote-list-task/task.md", card(["status: drafting", "repos:", "  - \"./presentation/script.md\"", "  - \"./notes.md\""]))
+  shas.quoteListCreated = commitAt("2026-09-25T09:10:20Z", "quote-list: create")
+  write("quote-list-task/task.md", card(["status: drafting", "repos:", "  - ./presentation/script.md", "  - ./notes.md"]))
+  shas.quoteListEdited = commitAt("2026-09-25T09:10:30Z", "quote-list: normalize list-item quoting")
+
+  // A same-commit rename this card only references: the tidy commit renames
+  // ref-rewrite-source/doc.md (unrelated to any card) and, in the same
+  // commit, rewrites this card's body reference to it — nothing else
+  // changes. The rename pair alone explains the whole diff.
+  write("ref-rewrite-source/doc.md", "shared doc content\n")
+  write("ref-rewrite-card/task.md", card(["status: drafting"], "# A task\n\nSee ref-rewrite-source/doc.md for details."))
+  shas.refRewriteCreated = commitAt("2026-09-25T09:11:00Z", "ref-rewrite: create")
+  remove("ref-rewrite-source/doc.md")
+  write("ref-rewrite-source/renamed-doc.md", "shared doc content\n")
+  write("ref-rewrite-card/task.md", card(["status: drafting"], "# A task\n\nSee ref-rewrite-source/renamed-doc.md for details."))
+  shas.refRewriteEdited = commitAt("2026-09-25T09:11:10Z", "ref-rewrite: rename doc.md and update the reference")
+
+  // A directory rename derived from one file's own rename pair: the tidy
+  // commit renames dir-group/dir-rename-source-2026/task.md ->
+  // dir-group/dir-rename-source/task.md (a task folder drops its year
+  // suffix, nested under a parent both sides keep) and, in the same commit,
+  // rewrites a different card's reference to another file under the old
+  // directory — a file this commit never touches directly. Nested under
+  // dir-group on purpose: directorySubstitution only derives a pair that
+  // keeps at least two segments on each side, so a bare, single-segment
+  // directory rename never widens into one (see the rename-cap-adjacent
+  // "solo rename leaves unrelated prose alone" test below).
+  write("dir-group/dir-rename-source-2026/task.md", card(["status: drafting"], "# A task\n\nfolder being renamed"))
+  write("dir-ref-card/task.md", card(["status: drafting"], "# A task\n\nSee dir-group/dir-rename-source-2026/notes.md for background."))
+  shas.dirRefCreated = commitAt("2026-09-25T09:12:00Z", "dir-ref: create")
+  remove("dir-group/dir-rename-source-2026/task.md")
+  write("dir-group/dir-rename-source/task.md", card(["status: drafting"], "# A task\n\nfolder being renamed"))
+  write("dir-ref-card/task.md", card(["status: drafting"], "# A task\n\nSee dir-group/dir-rename-source/notes.md for background."))
+  shas.dirRefEdited = commitAt("2026-09-25T09:12:10Z", "dir-ref: rename the folder and update the reference")
+
+  // A reference written with a leading, non-repo-relative prefix (a real
+  // desk's own convention for a path on another machine): the
+  // substitution's boundary check accepts any character before the match
+  // that cannot continue a path segment, `~` and `/` included, so the
+  // prefix survives.
+  write("prefixed-source/doc.md", "shared doc content\n")
+  write("prefixed-ref-card/task.md", card(["status: drafting"], "# A task\n\nSee ~/desk/prefixed-source/doc.md for details."))
+  shas.prefixedRefCreated = commitAt("2026-09-25T09:13:00Z", "prefixed-ref: create")
+  remove("prefixed-source/doc.md")
+  write("prefixed-source/renamed/doc.md", "shared doc content\n")
+  write("prefixed-ref-card/task.md", card(["status: drafting"], "# A task\n\nSee ~/desk/prefixed-source/renamed/doc.md for details."))
+  shas.prefixedRefEdited = commitAt("2026-09-25T09:13:10Z", "prefixed-ref: rename doc.md and update the prefixed reference")
+
+  // A rename whose derived directory substitution must not cross a path
+  // boundary: boundary-group/boundary-source/task.md renames to
+  // boundary-group/boundary-target/task.md (a nested folder rename, so
+  // directorySubstitution derives boundary-group/boundary-source ->
+  // boundary-group/boundary-target), but this card's own reference is to
+  // the unrelated boundary-group/boundary-source-extra folder, a longer
+  // name that merely starts with the same text. The reference changes by
+  // hand in the same commit; the substitution must not paper over it, so
+  // this still binds.
+  write("boundary-group/boundary-source/task.md", card(["status: drafting"], "# A task\n\nfolder being renamed"))
+  write("boundary-group/boundary-source-extra/notes.md", "notes\n")
+  write("boundary-ref-card/task.md", card(["status: drafting"], "# A task\n\nSee boundary-group/boundary-source-extra/notes.md for background."))
+  shas.boundaryCreated = commitAt("2026-09-25T09:14:00Z", "boundary: create")
+  remove("boundary-group/boundary-source/task.md")
+  write("boundary-group/boundary-target/task.md", card(["status: drafting"], "# A task\n\nfolder being renamed"))
+  write("boundary-ref-card/task.md", card(["status: drafting"], "# A task\n\nSee boundary-group/boundary-target-extra/notes.md for background."))
+  shas.boundaryEdited = commitAt("2026-09-25T09:14:10Z", "boundary: rename the folder and hand-edit the unrelated reference")
+
+  // A whole-track rename (a bare, single-segment old and new path) must not
+  // widen into a directory-level substitution at all: solo-name/task.md
+  // renames to solo-renamed/task.md, and an entirely unrelated card gets
+  // only a genuine housekeeping touch of its own (a bare title: line added)
+  // in the same commit, while its body merely happens to mention
+  // "solo-name" as plain prose, not as a path. If a bare solo-name ->
+  // solo-renamed substitution were derived and applied globally, it would
+  // corrupt this unrelated, unchanged prose and make the card look edited
+  // beyond its own real (housekeeping) change. Real same-commit evidence
+  // (ourostack desk history) showed exactly this: a track renamed after a
+  // person corrupted an unrelated card's own mention of that person's
+  // username in a filesystem path, and a track's bare old name corrupted
+  // another card's own title and heading that happened to read the same as
+  // that name.
+  write("solo-name/task.md", card(["status: drafting"], "# A task\n\nfolder being renamed"))
+  write("solo-prose-card/task.md", card(["status: drafting"], "# A task\n\nMentions solo-name in passing, not as a path reference."))
+  shas.soloRenameCreated = commitAt("2026-09-25T09:14:20Z", "solo-rename: create")
+  remove("solo-name/task.md")
+  write("solo-renamed/task.md", card(["status: drafting"], "# A task\n\nfolder being renamed"))
+  write("solo-prose-card/task.md", card(["title: Solo prose card", "status: drafting"], "# A task\n\nMentions solo-name in passing, not as a path reference."))
+  shas.soloRenameEdited = commitAt("2026-09-25T09:14:30Z", "solo-rename: rename the track and add a title to the unrelated card")
+
+  // A real edit riding along with a reference rewrite the commit's own
+  // rename explains: mixed-source/doc.md renames to
+  // mixed-source/renamed.md, and mixed-edit-card's reference is rewritten
+  // to match, but its body also gains a genuine new line the rename does
+  // not explain, and its status changes too — real content, so this binds.
+  write("mixed-source/doc.md", "shared doc content\n")
+  write("mixed-edit-card/task.md", card(["status: drafting"], "# A task\n\nSee mixed-source/doc.md for details."))
+  shas.mixedEditCreated = commitAt("2026-09-25T09:15:00Z", "mixed-edit: create")
+  remove("mixed-source/doc.md")
+  write("mixed-source/renamed.md", "shared doc content\n")
+  write("mixed-edit-card/task.md", card(["status: done"], "# A task\n\nSee mixed-source/renamed.md for details.\n\n- also did real work"))
+  shas.mixedEditEdited = commitAt("2026-09-25T09:15:10Z", "mixed-edit: rename doc.md, update the reference, and do real work")
+
+  // A quoted value that itself contains a backslash: never normalized, so a
+  // difference here is compared literally and binds, even though it looks
+  // like the same quote-only rewrite pattern.
+  write("escaped-quote-task/task.md", card(["status: drafting", "note: \"a\\backslash\""]))
+  shas.escapedQuoteCreated = commitAt("2026-09-25T09:16:00Z", "escaped-quote: create")
+  write("escaped-quote-task/task.md", card(["status: drafting", "note: 'a\\backslash'"]))
+  shas.escapedQuoteEdited = commitAt("2026-09-25T09:16:10Z", "escaped-quote: change the quoted value's quoting")
+
+  // A pathological commit's rename count must not be trusted at all: more
+  // than RENAME_PAIR_CAP rename pairs makes the whole commit not
+  // housekeeping, even for a card whose own edit is nothing but a quote
+  // rewrite that needs no substitution at all.
+  const RENAME_CAP_FILE_COUNT = 2001
+  for (let i = 0; i < RENAME_CAP_FILE_COUNT; i += 1) {
+    write(`rename-cap-source/f${i}.md`, `unique file ${i}\n`)
+  }
+  write("rename-cap-card/task.md", card(["status: drafting", "requester: \"ari\""]))
+  shas.renameCapCreated = commitAt("2026-09-25T09:17:00Z", "rename-cap: create")
+  for (let i = 0; i < RENAME_CAP_FILE_COUNT; i += 1) {
+    remove(`rename-cap-source/f${i}.md`)
+    write(`rename-cap-target/f${i}.md`, `unique file ${i}\n`)
+  }
+  write("rename-cap-card/task.md", card(["status: drafting", "requester: ari"]))
+  shas.renameCapEdited = commitAt("2026-09-25T09:17:10Z", "rename-cap: rename past the cap and touch the card")
+
   // A nested frontmatter value changes (a repos: entry's branch_base) while
   // every top-level field stays the same text: a field map keyed only by
   // each line's own top-level key would see `repos:`'s own captured value
@@ -591,6 +734,45 @@ test("isCardHousekeeping is false when Git's list of the commit's changes is tru
   const fakeGit = path.join(scratch, "fake-git-truncated-rename.sh")
   writeFileSync(fakeGit, "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = diff-tree ] && { printf 'R100\\000onlypath\\000'; exit 0; }; done\nexec git \"$@\"\n", { mode: 0o755 })
   assert.equal(createDeskReaders({ deskRoot: desk, git: fakeGit }).isCardHousekeeping(shas.first, "track/live-task/task.md"), false)
+})
+
+// --- isCardHousekeeping: tidy-rewrite extensions (quote normalization and same-commit rename substitutions) -------
+
+test("isCardHousekeeping is true for a quote-only frontmatter rewrite: scalar and list-item quoting normalized, nothing else different", () => {
+  assert.equal(housekeeping(shas.quoteOnlyEdited, "quote-only-task/task.md"), true, "a scalar's quoting")
+  assert.equal(housekeeping(shas.quoteListEdited, "quote-list-task/task.md"), true, "a list item's quoting")
+})
+
+test("isCardHousekeeping is true when a card's only change is a reference to a path this same commit renamed", () => {
+  assert.equal(housekeeping(shas.refRewriteEdited, "ref-rewrite-card/task.md"), true)
+})
+
+test("isCardHousekeeping is true when a card's reference is to a directory this same commit's file rename implies was renamed, even for a file the commit never touches", () => {
+  assert.equal(housekeeping(shas.dirRefEdited, "dir-ref-card/task.md"), true)
+})
+
+test("isCardHousekeeping is true when the renamed-path reference carries a leading prefix, such as a tilde path to another machine's desk", () => {
+  assert.equal(housekeeping(shas.prefixedRefEdited, "prefixed-ref-card/task.md"), true)
+})
+
+test("isCardHousekeeping is false when a reference merely starts with a renamed directory's name: the substitution must not cross the path boundary", () => {
+  assert.equal(housekeeping(shas.boundaryEdited, "boundary-ref-card/task.md"), false)
+})
+
+test("isCardHousekeeping is false for a real edit that rides along with a reference rewrite the commit's own rename explains", () => {
+  assert.equal(housekeeping(shas.mixedEditEdited, "mixed-edit-card/task.md"), false)
+})
+
+test("isCardHousekeeping is false for a quoted value that contains a backslash: never normalized, so a quoting difference there is compared literally", () => {
+  assert.equal(housekeeping(shas.escapedQuoteEdited, "escaped-quote-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false for a commit with more rename pairs than the cap allows, even for a card whose own edit needs no substitution", () => {
+  assert.equal(housekeeping(shas.renameCapEdited, "rename-cap-card/task.md"), false)
+})
+
+test("isCardHousekeeping is true for an unrelated card's own housekeeping touch, even when the same commit's whole-track rename is a bare word its body happens to mention as plain prose", () => {
+  assert.equal(housekeeping(shas.soloRenameEdited, "solo-prose-card/task.md"), true)
 })
 
 // --- resolveJobIdentity (ourostack/desk#76): the birth path ------------------------------
