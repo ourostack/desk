@@ -433,6 +433,16 @@ test("a live spoke's prose pointer in desks.md is a single desk: the tidy runs a
   assert.equal(cli(["--detect", "--root", root], { env: { DESK: root }, spawnGh: noGh }).code, 1, "once tidied, Detect stops firing")
 })
 
+test("an empty desks.md, or one with only a heading or an empty table, is a single desk too", () => {
+  for (const registry of ["", "# Desks\n", "| alias | identity |\n|---|---|\n"]) {
+    const root = registryDesk(registry)
+    const result = status(root, { spawnGh: noGh })
+    assert.equal(result.unresolved_person, false, JSON.stringify(registry))
+    assert.equal(result.subtree, root, JSON.stringify(registry))
+    assert.equal(result.needed, true, JSON.stringify(registry))
+  }
+})
+
 test("a desks.md the tidy cannot read, or an alias-only roster beside desks/, stops the tidy instead of tidying the crew root", () => {
   const unreadable = registryDesk(HUB_REGISTRY)
   rmSync(path.join(unreadable, "_meta", "desks.md"))

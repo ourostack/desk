@@ -113,6 +113,12 @@ test("crewWorkspace fails closed when a crew workspace cannot be ruled out", asy
   assert.deepEqual(crewWorkspace(await deskWith(SPOKE)), { crew: false, roster: null }, "a spoke: single owner")
   assert.deepEqual(crewWorkspace(await deskWith(ROSTER)).roster.map((row) => row.alias), ["alex", "bob"])
   assert.equal(crewWorkspace(await deskWith(ROSTER)).crew, true)
+  for (const [registry, label] of [["", "an empty file"], ["# Desks\n", "a heading only"], ["| alias | identity |\n|---|---|\n", "an empty roster table"], ["| alias | identity |\n|---|---|\n| | orphan |\n", "rows with no alias"]]) {
+    assert.deepEqual(crewWorkspace(await deskWith(registry)), { crew: false, roster: null }, `${label}: single owner`)
+  }
+  const emptyTableWithDesks = await deskWith("| alias | identity |\n|---|---|\n")
+  await fs.mkdir(path.join(emptyTableWithDesks, "desks"), { recursive: true })
+  assert.deepEqual(crewWorkspace(emptyTableWithDesks), { crew: true, roster: [] }, "an empty roster beside a desks/ folder still fails closed")
 
   const unreadable = await deskWith(null)
   await fs.mkdir(path.join(unreadable, CREW_ROSTER_FILE), { recursive: true })
