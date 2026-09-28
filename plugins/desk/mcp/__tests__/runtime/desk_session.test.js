@@ -688,22 +688,106 @@ test("desk_status answers at once: a slow or failing runtime status never holds 
   assert.equal(payload(await session.callTool({ name: "desk_status" })).status_error, "status exploded")
   runtime.callTool = async () => { throw "string" }
   assert.equal(payload(await session.callTool({ name: "desk_status" })).status_error, "string")
-  runtime.callTool = () => new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: "{}" }] }), 1000))
+  runtime.callTool = async () => ({ content: [{ type: "text", text: "not json" }] })
+  assert.match(payload(await session.callTool({ name: "desk_status" })).status_error, /JSON/u)
+  // desk_status's own timer is unreferenced (a real server is kept alive by its stdin), so the test holds the event loop open while a computation it controls is pending.
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
+  let release
+  let computations = 0
+  runtime.callTool = () => {
+    computations += 1
+    return new Promise((resolve) => { release = () => resolve({ content: [{ type: "text", text: JSON.stringify({ status: "ok", local_db: { state: "late" } }) }] }) })
+  }
   const started = Date.now()
   const slow = payload(await session.callTool({ name: "desk_status" }))
   assert.ok(Date.now() - started < 400, `desk_status took ${Date.now() - started} ms`)
-  assert.match(slow.status_detail, /^unavailable: .*did not answer in time/u)
+  assert.match(slow.status_detail, /^unavailable: .*did not answer within this call's budget/u)
   assert.equal(slow.state, "ready")
-  // Once a detail has arrived, a late one is replaced by the last, marked cached.
+  // While that computation runs, another call waits only its own budget for it and does not start a second one.
+  const joinedStarted = Date.now()
+  assert.match(payload(await session.callTool({ name: "desk_status" })).status_detail, /^unavailable: a runtime status computation .* that started at \d{4}-.* is still running/u)
+  assert.ok(Date.now() - joinedStarted < 200, `desk_status took ${Date.now() - joinedStarted} ms`)
+  assert.equal(computations, 1)
+  // A late detail is kept: the next call serves it, marked cached with when it was computed.
+  const beforeLate = new Date().toISOString()
+  release()
+  await new Promise((resolve) => setImmediate(resolve))
+  runtime.callTool = () => new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: "{}" }] }), 1000))
+  const late = payload(await session.callTool({ name: "desk_status" }))
+  assert.equal(late.local_db.state, "late")
+  assert.match(late.status_detail, /^cached: .*this detail is from \d{4}-/u)
+  assert.ok(late.status_detail_from < beforeLate, "the detail is dated from when its computation started")
+  assert.equal(late.state, "ready", "the admission fields are current, not cached")
+})
+
+test("desk_status serves a fresh detail once no older computation is running, and a cached one after it", async (t) => {
+  const runtime = fakeRuntime()
+  const { session } = await makeSession(t, { runtime })
+  await session.admission.refresh()
   runtime.callTool = async () => ({ content: [{ type: "text", text: JSON.stringify({ status: "ok", local_db: { state: "fresh" } }) }] })
-  assert.equal(payload(await session.callTool({ name: "desk_status" })).local_db.state, "fresh")
+  const fresh = payload(await session.callTool({ name: "desk_status" }))
+  assert.equal(fresh.local_db.state, "fresh")
+  assert.equal(fresh.status_detail, undefined)
+  assert.equal(fresh.status_detail_from, undefined)
   runtime.callTool = () => new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: "{}" }] }), 1000))
   const cachedStarted = Date.now()
   const cached = payload(await session.callTool({ name: "desk_status" }))
   assert.ok(Date.now() - cachedStarted < 200, `desk_status took ${Date.now() - cachedStarted} ms`)
   assert.equal(cached.local_db.state, "fresh")
   assert.match(cached.status_detail, /^cached: .*this detail is from \d{4}-/u)
-  assert.equal(cached.state, "ready", "the admission fields are current, not cached")
+})
+
+test("desk_status: a call that arrives while a computation runs waits its own budget for that computation's answer", async (t) => {
+  const runtime = fakeRuntime()
+  const { session } = await makeSession(t, { runtime })
+  await session.admission.refresh()
+  let computations = 0
+  runtime.callTool = () => {
+    computations += 1
+    return new Promise((resolve) => setTimeout(() => resolve({ content: [{ type: "text", text: JSON.stringify({ status: "ok", local_db: { state: "shared" } }) }] }), 30))
+  }
+  const replies = (await Promise.all([session.callTool({ name: "desk_status" }), session.callTool({ name: "desk_status" })])).map(payload)
+  assert.equal(computations, 1)
+  assert.deepEqual(replies.map((reply) => reply.local_db.state), ["shared", "shared"])
+  const joined = replies.filter((reply) => reply.status_detail !== undefined)
+  assert.equal(joined.length, 1, "the call that started the computation gets a fresh detail, the one that joined it a detail marked with its start")
+  assert.match(joined[0].status_detail, /^cached: this detail comes from a runtime status computation .* already running when this call arrived; it started at \d{4}-/u)
+  assert.equal(typeof joined[0].status_detail_from, "string")
+})
+
+test("desk_status abandons a stuck computation after its age limit, and the abandoned one never replaces newer detail", async (t) => {
+  const runtime = fakeRuntime()
+  const { session } = await makeSession(t, { runtime, statusRunLimitMs: 300 })
+  await session.admission.refresh()
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
+  const reply = (state) => ({ content: [{ type: "text", text: JSON.stringify({ status: "ok", local_db: { state } }) }] })
+  let computations = 0
+  runtime.callTool = async () => { computations += 1; return reply("old") }
+  assert.equal(payload(await session.callTool({ name: "desk_status" })).local_db.state, "old")
+  let releaseStuck
+  runtime.callTool = () => { computations += 1; return new Promise((resolve) => { releaseStuck = () => resolve(reply("stale")) }) }
+  assert.match(payload(await session.callTool({ name: "desk_status" })).status_detail, /^cached: .*did not answer within this call's budget; this detail is from \d{4}-.* \(\d+ s old\)/u)
+  runtime.callTool = async () => { computations += 1; return reply("recovered") }
+  // Within the age limit the stuck computation is still joined, and the reply says so.
+  const joined = payload(await session.callTool({ name: "desk_status" }))
+  assert.equal(joined.local_db.state, "old")
+  assert.match(joined.status_detail, /^cached: a runtime status computation .* is still running; this detail is from /u)
+  assert.equal(computations, 2)
+  // Past the limit, the next call starts a new computation and the runtime's recovery shows.
+  await new Promise((resolve) => setTimeout(resolve, 350))
+  const recovered = payload(await session.callTool({ name: "desk_status" }))
+  assert.equal(computations, 3)
+  assert.equal(recovered.local_db.state, "recovered")
+  assert.equal(recovered.status_detail, undefined)
+  // The abandoned computation finishing late does not overwrite the newer detail.
+  releaseStuck()
+  await new Promise((resolve) => setImmediate(resolve))
+  runtime.callTool = () => new Promise((resolve) => setTimeout(() => resolve(reply("slow")), 1000))
+  const cached = payload(await session.callTool({ name: "desk_status" }))
+  assert.equal(cached.local_db.state, "recovered")
+  assert.match(cached.status_detail, /^cached: /u)
 })
 
 test("desk_status answers while an admission attempt is still running", async (t) => {
