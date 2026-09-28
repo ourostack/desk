@@ -576,6 +576,7 @@ function bindFixture(facts, events) {
       : { status: "processing", created_at: null, updated_at: null }),
     deskCommitsBetween: () => [],
     gitCommitTaskPaths: () => ({ exists: false }),
+    isCardHousekeeping: () => false,
   })
   return { ...facts, jobs }
 }

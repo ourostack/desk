@@ -26,7 +26,14 @@
 // holds the commit message; it is matched in memory and never returned.
 // `bindSession` decides which paths are task folders. `gitCommitTaskPaths(
 // sha)` lists one commit's paths, with `exists: false` for a SHA not in the
-// desk. `readDeskRemote` returns `origin`'s URL, or `null`.
+// desk. `isCardHousekeeping(sha, path)` judges one commit's change to one
+// card: true when `path`'s content in the commit (found through Git's own
+// rename detection, so a move or rename is paired with its other side) is
+// identical to its content before, or differs only in frontmatter `title:`,
+// `track:` or `updated:`; false for anything else, including a path this
+// commit only added or only removed, and including any git failure —
+// housekeeping is never a guess. `readDeskRemote` returns `origin`'s URL,
+// or `null`.
 //
 // The desk must be a repository of its own: Git's top level for the desk
 // root must be the desk root's real path (checked as an empty
@@ -129,6 +136,66 @@ function cardFields(text) {
 }
 
 // ---------------------------------------------------------------------------
+// Card housekeeping (identity/placement-only edits).
+// ---------------------------------------------------------------------------
+
+const HOUSEKEEPING_FIELDS = new Set(["title", "track", "updated"])
+
+// Every frontmatter field, unbounded (a commit diff can move real content
+// past line 40), plus the body, the text after the closing `---`.
+function splitCard(text) {
+  const lines = text.split(/\r?\n/u)
+  if (lines[0] !== "---") return { fields: {}, body: text }
+  const end = lines.indexOf("---", 1)
+  if (end === -1) return { fields: {}, body: text }
+  const fields = {}
+  for (const line of lines.slice(1, end)) {
+    const match = /^([A-Za-z_][A-Za-z0-9_-]*):(.*)$/u.exec(line)
+    if (match && !Object.hasOwn(fields, match[1])) fields[match[1]] = unquote(match[2])
+  }
+  return { fields, body: lines.slice(end + 1).join("\n") }
+}
+
+// True when the only difference between the two card texts is identity or
+// placement: the body is byte-identical, and any frontmatter field that
+// differs (added, removed or changed) is `title`, `track` or `updated`.
+function isHousekeepingEdit(oldText, newText) {
+  const before = splitCard(oldText)
+  const after = splitCard(newText)
+  if (before.body !== after.body) return false
+  const keys = new Set([...Object.keys(before.fields), ...Object.keys(after.fields)])
+  for (const key of keys) {
+    if (HOUSEKEEPING_FIELDS.has(key)) continue
+    if (before.fields[key] !== after.fields[key]) return false
+  }
+  return true
+}
+
+// `git diff-tree --name-status -z` output: `status\0path` for an add,
+// modify or delete, `status\0oldPath\0newPath` for a rename or copy (status
+// starts `R` or `C`, optionally followed by a similarity percentage).
+function parseNameStatus(output) {
+  const parts = output.split("\0").filter((part) => part !== "")
+  const entries = []
+  let i = 0
+  while (i < parts.length) {
+    const status = parts[i]
+    i += 1
+    if (/^[RC]/u.test(status)) {
+      const oldPath = parts[i]
+      const newPath = parts[i + 1]
+      i += 2
+      if (oldPath !== undefined && newPath !== undefined) entries.push({ status, oldPath, path: newPath })
+    } else {
+      const filePath = parts[i]
+      i += 1
+      if (filePath !== undefined) entries.push({ status, path: filePath })
+    }
+  }
+  return entries
+}
+
+// ---------------------------------------------------------------------------
 // Git history.
 // ---------------------------------------------------------------------------
 
@@ -169,7 +236,8 @@ function isWindow(startIso, endIso) {
 
 /**
  * `createDeskReaders({ deskRoot, personPrefix, git, timeoutMs })` ->
- * `{ readTask, deskCommitsBetween, gitCommitTaskPaths }` for `bindSession`.
+ * `{ readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping }`
+ * for `bindSession`.
  */
 export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", timeoutMs = DEFAULT_TIMEOUT_MS }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("createDeskReaders: deskRoot must be an absolute path")
@@ -220,7 +288,28 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
     return { exists: true, taskPaths: (output ?? "").split("\0").filter((entry) => entry !== "") }
   }
 
-  return { readTask, deskCommitsBetween, gitCommitTaskPaths }
+  // Its own diff-tree call, Git's own rename detection on (its default
+  // similarity threshold, just to pair an old path with a new one): a
+  // question about one path's change in one commit, independent of the
+  // `--no-renames` path lists above (those must keep a rename as a delete
+  // and an add, so the old and new task each get their own say). The
+  // pairing only finds candidates; the verdict is always this module's own
+  // content comparison, never Git's similarity score.
+  function isCardHousekeeping(sha, filePath) {
+    if (typeof filePath !== "string" || filePath === "") return false
+    if (typeof sha !== "string" || !PATTERNS.commitSha.test(sha) || !deskIsOwnRepository()) return false
+    const output = runGit(options, ["diff-tree", "--root", "-M", "--no-commit-id", "--name-status", "-r", "-z", sha])
+    if (output === null) return false
+    const match = parseNameStatus(output).find((entry) => entry.path === filePath || entry.oldPath === filePath)
+    if (!match || match.status === "A" || match.status === "D") return false
+    const oldPath = match.oldPath ?? filePath
+    const oldText = runGit(options, ["show", `${sha}~1:${oldPath}`])
+    const newText = runGit(options, ["show", `${sha}:${match.path}`])
+    if (oldText === null || newText === null) return false
+    return isHousekeepingEdit(oldText, newText)
+  }
+
+  return { readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping }
 }
 
 /**

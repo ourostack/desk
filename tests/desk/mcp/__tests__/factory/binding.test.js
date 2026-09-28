@@ -29,8 +29,8 @@ const expectedId = (remote, prefix, track, slug) => createHash("sha256").update(
 
 const CARD = { status: "processing", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z" }
 
-function fakes({ cards = {}, commitsBetween = [], nativeCommits = {} } = {}) {
-  const calls = { readTask: [], between: [], native: [] }
+function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeeping = {} } = {}) {
+  const calls = { readTask: [], between: [], native: [], housekeeping: [] }
   return {
     calls,
     readTask(track, slug) {
@@ -45,6 +45,12 @@ function fakes({ cards = {}, commitsBetween = [], nativeCommits = {} } = {}) {
     gitCommitTaskPaths(sha) {
       calls.native.push(sha)
       return nativeCommits[sha] ?? { exists: false, taskPaths: [] }
+    },
+    // Keyed `${sha}:${path}`; defaults to false (a real, binding change) like
+    // the real reader does on anything it cannot positively call housekeeping.
+    isCardHousekeeping(sha, filePath) {
+      calls.housekeeping.push([sha, filePath])
+      return Boolean(housekeeping[`${sha}:${filePath}`])
     },
   }
 }
@@ -159,24 +165,27 @@ test("hashes scraped from tool output (events.commitShas) never bind: only nativ
   assert.deepEqual(calls.native, [])
 })
 
-// --- The bare card never binds file_write or desk_commit ---------------------
+// --- The bare card: housekeeping never binds, real content always does -------
 //
 // task_update/task_create/task_archive stay a precise, deliberate signal
-// (desk_tool, unaffected below). A write or a commit whose only change inside
-// a task's folder is the card itself, task.md, is what housekeeping (tidy,
-// renames, scope-line and title edits, and their reverts) touches without
-// anyone doing the task's work, so it must not join or create that job.
+// (desk_tool, unaffected below). A commit whose only change inside a task's
+// folder is the card itself, task.md, binds only when `isCardHousekeeping`
+// says the card's own diff in that commit is real, not identity or
+// placement. A file_write cannot be judged this way (the deriver hands the
+// binder a path only, never content), so a bare-card file_write always
+// binds, same as before this rule existed at all: that is how a
+// hand-edited card (a checkbox, a progress note, task_update cannot do
+// either) still counts as work.
 
-test("a file write to the bare task card alone binds nothing, live or archived", () => {
+test("a file write to the bare task card alone still binds, live or archived: file_write has no diff to judge", () => {
   const live = bind({ fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/${SLUG}/task.md` }] })
-  assert.deepEqual(live.jobs, [])
-  assert.deepEqual(live.calls.readTask, [])
+  assert.deepEqual(live.jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["file_write"] }])
+  assert.deepEqual(live.calls.housekeeping, [], "file_write never consults the housekeeping reader")
   const archived = bind({ fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/_archive/${SLUG}/task.md` }] })
-  assert.deepEqual(archived.jobs, [])
-  assert.deepEqual(archived.calls.readTask, [])
+  assert.deepEqual(archived.jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["file_write"] }])
 })
 
-test("a file write alongside the bare card still binds: the card just contributes nothing by itself", () => {
+test("a file write alongside the bare card still binds as one job with one file_write basis", () => {
   const { jobs } = bind({ fileWrites: [
     { at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/${SLUG}/task.md` },
     { at: "2026-09-25T08:00:01.000Z", path: `${DESK}/${TRACK}/${SLUG}/notes.md` },
@@ -184,40 +193,116 @@ test("a file write alongside the bare card still binds: the card just contribute
   assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["file_write"] }])
 })
 
-test("a native commit touching only the bare card, live or archived, binds nothing", () => {
+test("a native commit touching only the bare card, live or archived, binds nothing when the card's diff is housekeeping", () => {
   const { jobs, calls } = bind(
     { nativeCommitShas: [SHA_A, SHA_B] },
-    { nativeCommits: {
-      [SHA_A]: { exists: true, taskPaths: [`${TRACK}/${SLUG}/task.md`] },
-      [SHA_B]: { exists: true, taskPaths: [`${TRACK}/_archive/${OTHER}/task.md`] },
-    } },
+    {
+      nativeCommits: {
+        [SHA_A]: { exists: true, taskPaths: [`${TRACK}/${SLUG}/task.md`] },
+        [SHA_B]: { exists: true, taskPaths: [`${TRACK}/_archive/${OTHER}/task.md`] },
+      },
+      housekeeping: { [`${SHA_A}:${TRACK}/${SLUG}/task.md`]: true, [`${SHA_B}:${TRACK}/_archive/${OTHER}/task.md`]: true },
+    },
   )
   assert.deepEqual(calls.native, [SHA_A, SHA_B])
+  assert.deepEqual(calls.housekeeping.sort(), [[SHA_A, `${TRACK}/${SLUG}/task.md`], [SHA_B, `${TRACK}/_archive/${OTHER}/task.md`]].sort())
   assert.deepEqual(jobs, [])
 })
 
-test("a desk commit whose only change to one task is the bare card binds nothing there, but still binds a task it actually changed", () => {
+test("a native commit touching only the bare card binds when the card's diff is real content, not housekeeping", () => {
+  const { jobs } = bind(
+    { nativeCommitShas: [SHA_A] },
+    { nativeCommits: { [SHA_A]: { exists: true, taskPaths: [`${TRACK}/${SLUG}/task.md`] } } },
+    // No housekeeping entry: the fake's default (false) is a real change, so it binds.
+  )
+  assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["desk_commit"] }])
+})
+
+test("a desk commit whose only change to one task is a housekeeping card edit binds nothing there, but still binds a task it actually changed", () => {
   const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`, `${TRACK}/${OTHER}/notes.md`] }
-  const { jobs } = bind({ shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] }, { commitsBetween: [commit] })
+  const { jobs } = bind(
+    { shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] },
+    { commitsBetween: [commit], housekeeping: { [`${SHA_A}:${TRACK}/${SLUG}/task.md`]: true } },
+  )
   assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, OTHER), basis: ["desk_commit"] }])
 })
 
-test("a bulk commit that only touches card files across many tasks, live and archived, binds none of them: the housekeeping case", () => {
+// Finding 5: a card whose diff changes status or body must bind.
+test("a desk commit whose only change to one task is the card, and the card's diff changes status or body, binds that task", () => {
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`] }
+  const { jobs, calls } = bind(
+    { shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] },
+    { commitsBetween: [commit] },
+    // No housekeeping entry: the fake's default (false) stands in for a status or body change.
+  )
+  assert.deepEqual(calls.housekeeping, [[SHA_A, `${TRACK}/${SLUG}/task.md`]])
+  assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["desk_commit"] }])
+})
+
+test("a bulk commit that only touches card files across many tasks, live and archived, binds none of them when every card's diff is housekeeping", () => {
   const commit = {
     sha: SHA_A,
     committed_at: "2026-09-25T08:20:01.000Z",
     taskPaths: [`${TRACK}/${SLUG}/task.md`, `${TRACK}/${OTHER}/task.md`, `${TRACK}/_archive/${SLUG}/task.md`],
   }
-  const { jobs } = bind({ shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] }, { commitsBetween: [commit] })
+  const housekeeping = Object.fromEntries(commit.taskPaths.map((taskPath) => [`${SHA_A}:${taskPath}`, true]))
+  const { jobs } = bind({ shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] }, { commitsBetween: [commit], housekeeping })
   assert.deepEqual(jobs, [])
 })
 
-test("a Desk task tool call still binds on its own even when the only other touch to the task is its bare card", () => {
-  const { jobs } = bind({
-    deskToolCalls: [deskCall({ status: "done" })],
-    fileWrites: [{ at: "2026-09-25T08:10:01.000Z", path: `${DESK}/${TRACK}/${SLUG}/task.md` }],
-  })
+test("a bulk commit that only touches card files across many tasks binds every one whose card's diff is real", () => {
+  const commit = {
+    sha: SHA_A,
+    committed_at: "2026-09-25T08:20:01.000Z",
+    taskPaths: [`${TRACK}/${SLUG}/task.md`, `${TRACK}/${OTHER}/task.md`],
+  }
+  const { jobs } = bind({ shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] }, { commitsBetween: [commit] })
+  assert.deepEqual(jobs.map(({ job }) => job).sort(), [expectedId(NORMALIZED, "", TRACK, SLUG), expectedId(NORMALIZED, "", TRACK, OTHER)].sort())
+})
+
+test("a Desk task tool call still binds on its own even when the only other touch to the task is a housekeeping card commit", () => {
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:10:01.000Z", taskPaths: [`${TRACK}/${SLUG}/task.md`] }
+  const { jobs } = bind(
+    { deskToolCalls: [deskCall({ status: "done" })], shellGitCommits: [{ start: "2026-09-25T08:10:00.000Z", end: "2026-09-25T08:10:02.000Z", cwd: DESK }] },
+    { commitsBetween: [commit], housekeeping: { [`${SHA_A}:${TRACK}/${SLUG}/task.md`]: true } },
+  )
   assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["desk_tool"] }])
+})
+
+// Finding 4: the card name is matched case-insensitively, on both sides.
+test("the bare card is matched case-insensitively, so Task.MD is still judged by its diff, not bound outright", () => {
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/Task.MD`] }
+  const housekeepingRun = bind(
+    { shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] },
+    { commitsBetween: [commit], housekeeping: { [`${SHA_A}:${TRACK}/${SLUG}/Task.MD`]: true } },
+  )
+  // If the match were case-sensitive, "Task.MD" would not be seen as the card, the
+  // housekeeping reader would never be asked, and it would bind outright instead.
+  assert.deepEqual(housekeepingRun.calls.housekeeping, [[SHA_A, `${TRACK}/${SLUG}/Task.MD`]])
+  assert.deepEqual(housekeepingRun.jobs, [])
+})
+
+// Finding 5: a nested task.md, inside a subfolder of the task, is not the
+// bare card at all (only a card at the task's own root is) and always binds.
+test("a task.md nested inside a subfolder is not the bare card and always binds", () => {
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/notes/task.md`] }
+  const { jobs, calls } = bind({ shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] }, { commitsBetween: [commit] })
+  assert.deepEqual(calls.housekeeping, [], "a nested task.md is a real file signal, never routed through the housekeeping check")
+  assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, SLUG), basis: ["desk_commit"] }])
+})
+
+// Finding 5: Windows-separated paths.
+test("a commit path spelled with Windows separators maps to the right task, and the bare card check still applies", () => {
+  const commit = {
+    sha: SHA_A,
+    committed_at: "2026-09-25T08:20:01.000Z",
+    taskPaths: [`${TRACK}\\${SLUG}\\task.md`, `${TRACK}\\${OTHER}\\notes.md`],
+  }
+  const { jobs } = bind(
+    { shellGitCommits: [{ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK }] },
+    { commitsBetween: [commit], housekeeping: { [`${SHA_A}:${TRACK}\\${SLUG}\\task.md`]: true } },
+  )
+  assert.deepEqual(jobs.map(({ job, basis }) => ({ job, basis })), [{ job: expectedId(NORMALIZED, "", TRACK, OTHER), basis: ["desk_commit"] }])
 })
 
 // --- Where the git commit ran -----------------------------------------------
@@ -456,6 +541,7 @@ test("caller bugs throw a TypeError: a relative desk root, a bad person prefix, 
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, readTask: null }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, deskCommitsBetween: undefined }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, gitCommitTaskPaths: 1 }), TypeError)
+  assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, isCardHousekeeping: undefined }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: 5, personPrefix: "", ...deps }), TypeError)
 })
 

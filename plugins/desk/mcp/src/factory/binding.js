@@ -35,16 +35,26 @@
 // Reads never bind (no deriver emits them). Paths outside the desk, relative
 // paths, and paths under `_meta/`, `_friction/`, `_planning/`, the top-level
 // `_archive/`, a dot folder, or directly in a track (such as `track.md`) bind
-// nothing. Nor does a `file_write` or `desk_commit` that touches only the
-// task's own `task.md`, with no other file inside the task folder: a card
-// carries organization (a rename, a scope-line pass, an archive move, a
-// revert of one), not evidence that the session worked the task, and one
-// commit that reorganizes many task cards must not read as work on all of
-// them. `task_update`, `task_create` and `task_archive` still bind their
-// task precisely through `desk_tool`, whatever else touched the card; only
-// the file-shaped fallbacks lose the bare card as a signal. A task whose
-// card is found neither live nor archived is not a job. A session with no
-// jobs gets `jobs: []`.
+// nothing.
+//
+// A `desk_commit` whose only change inside a task's folder is the card
+// itself, `task.md` (matched case-insensitively), binds only when that
+// change is real. The commit's diff of the card is read
+// (`isCardHousekeeping`), and the touch is dropped when the card was
+// renamed or moved with no content change (an exact, R100-equivalent
+// rename) or when the only lines that differ are frontmatter `title:`,
+// `track:` or `updated:`. A changed `status`, a changed body (so a
+// checkbox toggle or a progress note binds), or any other changed
+// frontmatter field makes it a real touch, and it binds. A `file_write`
+// cannot be read this way: the deriver hands the binder a path only, never
+// the write's or edit's content, so a bare-card `file_write` always binds,
+// the same as any other write in the folder — that is how a hand-edited
+// card (`skills/task-lifecycle` has agents toggle checkboxes and add
+// progress notes this way, since `task_update` cannot) still counts as
+// work. `task_update`, `task_create` and `task_archive` bind their task
+// precisely through `desk_tool` either way. A task whose card is found
+// neither live nor archived is not a job. A session with no jobs gets
+// `jobs: []`.
 //
 // Output. `{ jobs: LocalJob[] }`, sorted by job ID, where `LocalJob` is
 // `{ job, basis, task_created_at, transitions, observed }`: the hashed job
@@ -57,9 +67,10 @@
 //
 // Dependencies are injected so tests can fake them (`desk-repo.js` has the
 // real ones): `readTask(track, slug)`, `deskCommitsBetween(startIso,
-// endIso)` and `gitCommitTaskPaths(sha)`. The desk root is passed in rather
-// than resolved here: `src/util/paths.js` is outside `src/factory`, so the
-// caller resolves it (with `resolveDeskRootWithSource`) and hands it over.
+// endIso)`, `gitCommitTaskPaths(sha)` and `isCardHousekeeping(sha, path)`.
+// The desk root is passed in rather than resolved here: `src/util/paths.js`
+// is outside `src/factory`, so the caller resolves it (with
+// `resolveDeskRootWithSource`) and hands it over.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -142,11 +153,12 @@ export function jobId({ deskRemote, personPrefix, track, slug }) {
 const CARD_FILE = "task.md"
 
 /**
- * `{ track, slug }` for desk-relative path segments naming a work signal
- * inside a task folder, or null. A path is inside the task's folder but not
- * a work signal when the only segment past `<track>/<slug>` (or
- * `<track>/_archive/<slug>`) is the card itself, `task.md`: see the header
- * for why the bare card never binds through this path.
+ * `{ track, slug, bare }` for desk-relative path segments naming a path
+ * inside a task folder, or null. `bare` is true when the only segment past
+ * `<track>/<slug>` (or `<track>/_archive/<slug>`) is the card itself,
+ * `task.md`, matched case-insensitively so `Task.md` and `TASK.MD` are the
+ * same card; a nested `task.md` inside a subfolder is not bare. See the
+ * header for what a caller does with `bare`.
  */
 function taskOfSegments(segments, alias) {
   let rest = segments
@@ -161,8 +173,8 @@ function taskOfSegments(segments, alias) {
   const slug = archived ? third : second
   const inner = rest.slice(archived ? 3 : 2)
   if (!isTaskSegment(track) || !isTaskSegment(slug) || inner.length < 1) return null
-  if (inner.length === 1 && inner[0] === CARD_FILE) return null
-  return { track, slug }
+  const bare = inner.length === 1 && inner[0].toLowerCase() === CARD_FILE
+  return { track, slug, bare }
 }
 
 function relativeSegments(relative) {
@@ -224,16 +236,17 @@ function requireFunction(value, name) {
 
 /**
  * `bindSession({ events, deskRoot, deskRemote, personPrefix, readTask,
- * deskCommitsBetween, gitCommitTaskPaths }) -> { jobs: LocalJob[] }`.
- * `deskRemote` is the desk's `origin` URL, or empty when it has none (the
- * job IDs then use `local:` plus the desk root).
+ * deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping }) -> { jobs:
+ * LocalJob[] }`. `deskRemote` is the desk's `origin` URL, or empty when it
+ * has none (the job IDs then use `local:` plus the desk root).
  */
-export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTask, deskCommitsBetween, gitCommitTaskPaths }) {
+export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("bindSession: deskRoot must be an absolute path")
   const alias = checkPersonPrefix(personPrefix, "bindSession")
   requireFunction(readTask, "readTask")
   requireFunction(deskCommitsBetween, "deskCommitsBetween")
   requireFunction(gitCommitTaskPaths, "gitCommitTaskPaths")
+  requireFunction(isCardHousekeeping, "isCardHousekeeping")
   if (deskRemote !== undefined && deskRemote !== null && typeof deskRemote !== "string") throw new TypeError("bindSession: deskRemote must be a string or empty")
   // One unpublished desk reached through a symlink and through its real path is one desk.
   const remote = typeof deskRemote === "string" && deskRemote.trim() !== "" ? deskRemote : `local:${realOrResolved(deskRoot)}`
@@ -243,16 +256,20 @@ export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTa
   const tasks = new Map() // "track/slug" -> { track, slug, basis: Set, transitions: [] }
   const touch = (task, basis) => {
     const key = `${task.track}/${task.slug}`
-    if (!tasks.has(key)) tasks.set(key, { ...task, basis: new Set(), transitions: [] })
+    if (!tasks.has(key)) tasks.set(key, { track: task.track, slug: task.slug, basis: new Set(), transitions: [] })
     const entry = tasks.get(key)
     entry.basis.add(basis)
     return entry
   }
-  const bindCommitPaths = (taskPaths) => {
+  // A bare card only binds a `desk_commit` when its diff in that commit is
+  // real, not identity or placement: `isCardHousekeeping` is the judge.
+  const bindCommitPaths = (sha, taskPaths) => {
     for (const taskPath of asArray(taskPaths)) {
       if (typeof taskPath !== "string") continue
       const task = taskOfSegments(relativeSegments(taskPath), alias)
-      if (task !== null) touch(task, "desk_commit")
+      if (task === null) continue
+      if (task.bare && isCardHousekeeping(sha, taskPath)) continue
+      touch(task, "desk_commit")
     }
   }
 
@@ -279,14 +296,14 @@ export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTa
     const last = windows.reduce((latest, window) => (window.end > latest ? window.end : latest), windows[0].end)
     for (const commit of asArray(deskCommitsBetween(first, last))) {
       const at = commit?.committed_at
-      if (isTime(at) && windows.some((window) => at >= window.start && at <= window.end)) bindCommitPaths(commit.taskPaths)
+      if (isTime(at) && windows.some((window) => at >= window.start && at <= window.end)) bindCommitPaths(commit.sha, commit.taskPaths)
     }
   }
 
   for (const sha of asArray(source.nativeCommitShas)) {
     if (typeof sha !== "string" || !PATTERNS.commitSha.test(sha)) continue
     const found = gitCommitTaskPaths(sha)
-    if (found?.exists === true) bindCommitPaths(found.taskPaths)
+    if (found?.exists === true) bindCommitPaths(sha, found.taskPaths)
   }
 
   const jobs = []
