@@ -376,6 +376,8 @@ function referencedRepos(facts) {
   for (const refs of [facts?.refs?.prs, facts?.refs?.commits]) {
     for (const ref of list(refs)) if (isRepo(ref?.repo)) repos.push(ref.repo)
   }
+  // A plugin's install source decides whether a public store may name it.
+  for (const plugin of list(facts?.plugins)) if (isRepo(plugin?.source)) repos.push(plugin.source)
   return repos
 }
 
@@ -399,7 +401,7 @@ async function resolveVisibility(env, client, account, repos, nowIso) {
   return known
 }
 
-function publishOne(local, name, { transform, known, desk, secret }) {
+function publishOne(local, name, { transform, known, desk, store, secret }) {
   if (`${local?.session?.host}-${local?.session?.id}.json` !== name) return { reason: "invalid" }
   let out
   try {
@@ -407,6 +409,8 @@ function publishOne(local, name, { transform, known, desk, secret }) {
       visibility: (repo) => known.get(repo.toLowerCase()) ?? "unknown",
       // Every GitHub desk remote was resolved with the references; anything else is unknown.
       deskVisibility: desk ? known.get(desk.toLowerCase()) : "unknown",
+      // The store was resolved with them too; an unknown store is treated as public.
+      storeVisibility: known.get(store.toLowerCase()) ?? "unknown",
       machineSecret: secret,
     })
   } catch {
@@ -653,6 +657,8 @@ async function deliver(env, context) {
   const parsedLabels = labelCandidates.map(({ name, localBytes }) => ({ key: name, local: JSON.parse(localBytes.toString("utf8")) }))
   const desks = await deskRepositories(env, { deadline, now })
   const repos = parsed.flatMap(({ local }) => referencedRepos(local))
+  // Only a store known not to be public may name a plugin from a private or unknown source.
+  if (parsed.some(({ local }) => list(local?.plugins).length > 0)) repos.push(store)
   for (const { name } of parsed) if (desks.get(name)) repos.push(desks.get(name))
   for (const { local } of parsedLabels) for (const name of factsNamesOf(local?.session)) if (desks.get(name)) repos.push(desks.get(name))
   const known = await resolveVisibility(env, client, account, repos, nowIso)
@@ -660,7 +666,7 @@ async function deliver(env, context) {
 
   const bytesByName = new Map()
   for (const { name, local } of parsed) {
-    const out = publishOne(local, name, { transform, known, desk: desks.get(name), secret })
+    const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
     if (out.bytes) bytesByName.set(name, out.bytes)
     else await quarantine(env, store, name, out.reason)
   }

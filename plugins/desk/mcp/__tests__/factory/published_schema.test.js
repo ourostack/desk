@@ -354,6 +354,10 @@ const SIMPLE_VIOLATIONS = [
   { keys: ["refs", "commits", 0, "sha"], value: SENTINEL, code: "pattern" },
   { keys: ["refs", "private", "prs"], value: -1, code: "integer" },
   { keys: ["refs", "private", "commits"], value: SENTINEL, code: "integer" },
+  { keys: ["refs", "private", "plugins"], value: -1, code: "integer" },
+  { keys: ["refs", "private", "plugins"], value: 1.5, code: "integer" },
+  { keys: ["refs", "private", "plugins"], value: SENTINEL, code: "integer" },
+  { keys: ["refs", "private", "plugins"], value: null, code: "integer" },
   { keys: ["jobs", 0, "job"], value: SENTINEL, code: "pattern" },
   { keys: ["jobs", 0, "session_offset_ms"], value: SENTINEL, code: "integer" },
   { keys: ["jobs", 0, "session_offset_ms"], value: 1.5, code: "integer" },
@@ -456,6 +460,22 @@ test("an unknown key in counts.tool_calls names the map, not the key", () => {
   const result = validatePublished(value)
   assertSingle(result, "unknown_key", "counts.tool_calls")
   assertNoLeak(result)
+})
+
+test("refs.private.plugins is optional, so files published before plugins were counted stay valid", () => {
+  const without = golden()
+  delete without.refs.private.plugins
+  assert.deepEqual(validatePublished(without), { ok: true, errors: [] })
+  assert.deepEqual(validatePublishedBytes(Buffer.from(`${JSON.stringify(without)}\n`)), { ok: true, errors: [] })
+  const counted = golden()
+  counted.refs.private.plugins = 5
+  assert.deepEqual(validatePublished(counted), { ok: true, errors: [] })
+})
+
+test("a published plugin never carries its install source", () => {
+  const value = golden()
+  value.plugins[0].source = "ourostack/desk"
+  assertSingle(validatePublished(value), "unknown_key", "plugins.0")
 })
 
 // ---------------------------------------------------------------------------

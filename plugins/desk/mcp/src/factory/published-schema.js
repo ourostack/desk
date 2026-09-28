@@ -5,7 +5,10 @@
 // nothing about who did it or when: durations and offsets only, never a
 // date, a time of day or an epoch value, and never a contributor, operator,
 // machine, host name, desk path, account or branch. Only references to
-// public repositories appear; the rest are counted in `refs.private`.
+// public repositories appear; the rest are counted in `refs.private`. A
+// plugin is named only when it was installed from a public repository or the
+// store is not public; the rest are counted in `refs.private.plugins`, an
+// optional count that files published before it existed omit.
 // `publish.js`'s `toPublished` produces this form from local facts, and the
 // stores' CI runs `validatePublishedBytes` on every intake file.
 //
@@ -59,7 +62,6 @@ import {
   LIMITS,
   MODEL_SPEC,
   PATTERNS,
-  PLUGIN_SPEC,
   PR_SPEC,
   addError,
   arrayField,
@@ -164,8 +166,9 @@ const offsetField = () => leaf((value, path, errors) => {
 // The levels shaped as in the local schema reuse its spec objects, with each
 // pattern-checked string replaced by its date-refusing form.
 
+// A published plugin is a name and a version only: the local install source
+// decides whether the plugin is named at all and is never published.
 const PLUGIN = {
-  ...PLUGIN_SPEC,
   name: publicTokenField(PATTERNS.pluginName),
   version: publicPatternField(PATTERNS.semver),
 }
@@ -191,15 +194,18 @@ const COMMIT = {
   sha: publicPatternField(PATTERNS.commitSha),
 }
 
-const PRIVATE = {
-  prs: nonNegIntField(),
-  commits: nonNegIntField(),
+// `plugins` is optional, so files published before plugins were counted stay
+// valid: the stores' CI validates every intake file with Desk's main branch.
+function privateFields(value) {
+  const fields = { prs: nonNegIntField(), commits: nonNegIntField() }
+  if (Object.hasOwn(value, "plugins")) fields.plugins = nonNegIntField()
+  return fields
 }
 
 const REFS = {
   prs: arrayField(objectField(PR), LIMITS.prs),
   commits: arrayField(objectField(COMMIT), LIMITS.commits),
-  private: objectField(PRIVATE),
+  private: objectField(privateFields),
 }
 
 const TRANSITION = {
@@ -277,7 +283,7 @@ export const __PUBLISHED_SPECS__ = Object.freeze({
   agent: AGENT,
   pr: PR,
   commit: COMMIT,
-  private: PRIVATE,
+  private: privateFields({ plugins: 0 }),
   refs: REFS,
   transition: TRANSITION,
   observed: OBSERVED,

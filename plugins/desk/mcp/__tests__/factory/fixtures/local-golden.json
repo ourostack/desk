@@ -10,7 +10,7 @@
     "end_reason": "prompt_input_exit",
     "derived_through": "2026-09-25T09:30:00.000Z"
   },
-  "plugins": [{ "name": "desk", "version": "3.2.0-alpha.24" }],
+  "plugins": [{ "name": "desk", "version": "3.2.0-alpha.24", "source": "ourostack/desk" }],
   "models": [
     { "id": "claude-opus-5-5", "requests": 412, "tokens": { "input": 1200, "output": 88000, "cache_read": 9100000, "cache_write": 410000, "reasoning": null } },
     { "id": "claude-sonnet-5", "requests": 37, "tokens": { "input": 300, "output": 9000, "cache_read": 700000, "cache_write": 52000, "reasoning": null } }
