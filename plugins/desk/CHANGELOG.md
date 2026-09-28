@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.115 — 2026-09-28
+
+The one-time desk tidy now runs from an agent's own shell. Claude Code's Bash tool sets neither `DESK` nor `CLAUDE_PROJECT_DIR`, so the command the startup line names found no desk there and stopped with "the tidy found no desk" even when the Desk tools had bound one. That stop wrote a hold recording "no desk", and the session-start hook, which does have `CLAUDE_PROJECT_DIR`, resolved the desk, saw a different state and told the next session to tidy again, at every start. The tidy now uses its working folder as the host project when no `CLAUDE_PROJECT_DIR` is set, and, like the host project, only when that folder is a desk, so an agent's shell standing in the desk and the startup hook resolve the same desk, and a hold written in one is honored in the other ([tidy.js](mcp/src/desk/tidy.js)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.114 — 2026-09-28
 
 The factory job report's "What was waste" section now shows the independent evaluator's labels for the job: how many sessions are labeled, muda time by waste, value and support time, mura and muri flags, and what the evaluator could not read. It says "Not classified yet" only when no session of the job has labels, instead of always saying so.
