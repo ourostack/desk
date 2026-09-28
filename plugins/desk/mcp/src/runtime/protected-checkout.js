@@ -151,6 +151,15 @@ function aliasFrom(overrides, name) {
   return overrides.filter(([key]) => canonicalKey(key) === `alias.${name}`).at(-1)?.[1]
 }
 
+// Only Git's own environment (GIT_DIR and its siblings, GIT_CONFIG_* overrides) can change what a Git call does;
+// `gitInvocation` already folds those into `invocation.location`/`invocation.overrides`. A shell loop's own
+// variables (a loop counter, an unrelated export) never reach Git and must not be part of the guard's cache key,
+// or an identical, already-decided Git call spends a fresh Git read on every iteration instead of reusing the
+// answer for its one distinct target (ourostack/factory#39).
+function gitRelevantEnv(variables) {
+  return Object.fromEntries(Object.entries(variables).filter(([key]) => /^GIT_/u.test(key)))
+}
+
 // Words that could run Git somewhere other than the statement's own directory.
 const RELOCATES = /(?<![\w-])(?:set-location|sl|cd|chdir|push-location|pushd|pop-location|popd|start-process|saps|start|invoke-command|icm|start-job|sajb|start-threadjob|enter-pssession|ssh|wsl|docker|worktree|submodule)(?![\w-])|--git-dir|--work-tree|git_dir|git_work_tree|git_common_dir|currentdirectory|-workingdirectory|(?<![\w-])-wd(?![\w-])/iu
 
@@ -179,7 +188,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     const target = invocation.cwd === UNKNOWN ? null : existingDirectory(invocation.cwd)
     const where = "which checkout this Git command runs in"
     if (target !== null && !existsSync(target)) return
-    const key = JSON.stringify([invocation, variables])
+    const key = JSON.stringify([invocation, gitRelevantEnv(variables)])
     if (inspected.has(key)) return
     inspected.add(key)
     if (!BUILTINS.has(operation)) {
@@ -252,7 +261,10 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
   async function guardedVisit(call) {
     try { await visit(call) } catch (error) {
       if (error instanceof GuardDenial) throw error
-      if (error.code === "ETIMEDOUT") throw new GuardDenial(`Desk could not finish checking this command within its ${budgetMs / 1000} s budget because Git answered too slowly, so it is denied to keep a protected checkout safe. Retry it.`)
+      // A single slow Git read and a loop over more distinct targets than the budget can check both end up here;
+      // simply retrying either answers nothing when the command has too many distinct targets, so the guard also
+      // names the fix: fewer targets per command, or a script file so each target's check gets its own budget.
+      if (error.code === "ETIMEDOUT") throw new GuardDenial(`Desk could not finish checking this command within its ${budgetMs / 1000} s budget because Git answered too slowly, so it is denied to keep a protected checkout safe. If it loops over many Git targets, split it into fewer targets per command, or run it as a script file so each target's check gets its own budget; otherwise, retry it.`)
       throw new GuardDenial(`Desk could not inspect a Git command in this shell command (${error.message}), and it could change a protected checkout. Retry it, or split it into simpler commands.`)
     }
   }

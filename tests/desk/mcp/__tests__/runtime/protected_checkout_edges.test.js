@@ -4,8 +4,9 @@ import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
-import { guardShellCommand, protectedCheckoutHook, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
+import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectedCheckoutHook, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { inspectShell, tokenizeShell } from "../../../../../plugins/desk/mcp/src/runtime/shell-commands.js"
+import { readInspectionGit } from "../../../../../plugins/desk/mcp/src/runtime/git-inspection.js"
 
 function fixture(t) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-guard-edges-"))
@@ -156,6 +157,64 @@ test("long loops over commands with unknown exit statuses stay within the inspec
   const visited = []
   await inspectShell({ command: "while read line; do wc -l \"$line\"; done || touch marker", cwd: tmpdir(), env: {}, visit({ name }) { visited.push(name) } })
   assert.deepEqual(visited.filter((name) => name === "touch"), ["touch"])
+})
+
+// ourostack/factory#39 (closing comment): the guard's cache key for a Git call included the whole modeled shell
+// environment, loop variable included, so a loop that called Git every iteration spent one real Git read per
+// iteration even when the call's actual target and behavior never changed. The guard's work must instead be
+// bounded by the command's distinct Git targets.
+test("a long loop of identical, always-allowed Git calls costs reads proportional to its one distinct target, not its length", async (t) => {
+  const { guard } = fixture(t)
+  let reads = 0
+  const countingGit = (cwd, args, env, options) => { reads++; return readInspectionGit(cwd, args, env, options) }
+  const iterations = 200
+  const values = Array.from({ length: iterations }, (_, index) => `v${index}`).join(" ")
+  // The loop variable is read but never used to change the Git call's target or arguments: every iteration runs
+  // the exact same "git push", which the policy always allows here (no force, no remote configured).
+  const result = await guard(`for f in ${values}; do echo "$f" > /dev/null; git push; done`, { readGit: countingGit })
+  assert.equal(result.deny, false)
+  assert.ok(reads > 0 && reads <= 4, `expected the guard's Git reads to stay bounded by the command's one distinct target, got ${reads} reads for ${iterations} identical iterations`)
+})
+
+test("a loop containing a dangerous Git call on the protected checkout is still denied, without walking the rest of the loop", async (t) => {
+  const { guard } = fixture(t)
+  const iterations = 200
+  const values = Array.from({ length: iterations }, (_, index) => `v${index}`).join(" ")
+  let reads = 0
+  const countingGit = (cwd, args, env, options) => { reads++; return readInspectionGit(cwd, args, env, options) }
+  const result = await guard(`for f in ${values}; do git reset --hard; done`, { readGit: countingGit })
+  assert.equal(result.deny, true)
+  assert.match(result.reason, /this would discard other sessions' uncommitted work/u)
+  assert.ok(reads <= 4, `expected the denial to short-circuit instead of walking all ${iterations} iterations, got ${reads} reads`)
+})
+
+test("a loop over many distinct repositories costs reads proportional to its distinct targets, and a budget too small to finish says why and what to do", async (t) => {
+  const { root, guard } = fixture(t)
+  const repoCount = 15
+  const dirs = []
+  for (let index = 0; index < repoCount; index++) {
+    const dir = path.join(root, `repo-${index}`)
+    mkdirSync(dir)
+    execFileSync("git", ["-C", dir, "init", "-q"], { stdio: "ignore" })
+    execFileSync("git", ["-C", dir, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "initial"], { stdio: "ignore" })
+    dirs.push(dir)
+  }
+  const command = `for d in ${dirs.map((dir) => `'${dir}'`).join(" ")}; do git -C "$d" push; done`
+
+  let reads = 0
+  const countingGit = (cwd, args, env, options) => { reads++; return readInspectionGit(cwd, args, env, options) }
+  const result = await guard(command, { readGit: countingGit })
+  assert.equal(result.deny, false)
+  assert.equal(reads, repoCount * 2, `expected two Git reads per distinct repository, got ${reads} reads for ${repoCount} repositories`)
+
+  // A budget that cannot finish checking every distinct target is denied, and says why and what to do about it,
+  // rather than just "retry it": retrying an inherently large loop would only time out again the same way.
+  let clock = 0
+  const spentGit = (cwd, args, env) => { clock += GUARD_INSPECTION_BUDGET_MS; return readInspectionGit(cwd, args, env) }
+  const tooSlow = await guard(command, { readGit: spentGit, now: () => clock })
+  assert.equal(tooSlow.deny, true)
+  assert.match(tooSlow.reason, new RegExp(`within its ${GUARD_INSPECTION_BUDGET_MS / 1000} s budget`, "u"))
+  assert.match(tooSlow.reason, /split it into fewer targets|run it as a script file/u)
 })
 
 test("home expansion respects quoting and inline alias cache keys include alias definitions", async (t) => {
