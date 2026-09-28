@@ -2,7 +2,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, promises as fsPromises, writeFile, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, promises as fsPromises, readdirSync, writeFile, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -70,4 +70,30 @@ test("a factory test file run on its own with node --test never reads the machin
   const { spawnSync } = await import("node:child_process")
   const run = spawnSync(process.execPath, ["--test", path.join("__tests__", "factory", "boot_check.test.js")], { cwd: mcpRoot, env, encoding: "utf8", timeout: 120000 })
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`.split("\n").filter((line) => /^not ok|expected|actual|Error/u.test(line)).join("\n"))
+})
+
+test("a tools test file run on its own with node --test never writes the machine's real factory state, even while driving a task to done/cancelled", async () => {
+  // task_archive.test.js builds its own temp desk root (tools/_helpers.js's mkTempDeskRoot) and drives tasks to
+  // `done`/`cancelled`, which requests both a finalize and a waste-evaluation record for the job
+  // (tools/task.js's requestTaskTerminalSync). Those defaults to `env = process.env`, so run alone without the
+  // preload the request must still land nowhere but its own temporary state, never the machine's real one — this
+  // reproduces the exact shape of the leak this test guards against (ourostack/desk: 26 evaluate-requests files
+  // recorded under a developer's real ~/.local/state/ouroboros-skills/desk/factory/, each naming a `desk-test-*`
+  // fixture root as its desk_root).
+  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+  const machine = await mkTempRoot("desk-machine-home-")
+  const factoryDir = path.join(machine, ".local", "state", "ouroboros-skills", "desk", "factory")
+  // requestTaskFinalize/requestTaskEvaluation each check `factoryStateRoot(env, { create: false })` first and are a
+  // no-op when it does not exist yet, so a "machine" with no prior factory state would pass this guard test
+  // vacuously (nothing ever attempts a write) whether or not isolation held. Pre-create the folder, as a real
+  // machine that has ever run a session with a consented store would have, so the write is actually attempted.
+  mkdirSync(factoryDir, { recursive: true, mode: 0o700 })
+  const env = { ...process.env, HOME: machine, USERPROFILE: machine, DESK_TEST_REAL_HOME: machine }
+  for (const key of ["DESK_TEST_RUN_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "NODE_OPTIONS", "NODE_TEST_CONTEXT"]) delete env[key]
+  const { spawnSync } = await import("node:child_process")
+  const run = spawnSync(process.execPath, ["--test", path.join("__tests__", "tools", "task_archive.test.js")], { cwd: mcpRoot, env, encoding: "utf8", timeout: 120000 })
+  assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`.split("\n").filter((line) => /^not ok|expected|actual|Error/u.test(line)).join("\n"))
+  const listing = (dir) => (existsSync(dir) ? readdirSync(dir) : [])
+  assert.deepEqual(listing(path.join(factoryDir, "finalize")), [], "task_archive's terminal-status transitions must never create real finalize requests under the machine's own home")
+  assert.deepEqual(listing(path.join(factoryDir, "evaluate-requests")), [], "task_archive's terminal-status transitions must never create real evaluate-requests under the machine's own home")
 })

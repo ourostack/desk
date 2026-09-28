@@ -1,5 +1,11 @@
 // Shared scaffolding for tool tests — isolated tmp desk root + matter parsing.
 
+// Imported first so a test file run on its own (`node --test <file>`, not
+// through `npm test`) also gets the temporary HOME and XDG folders and the
+// real-home write guard: these fixtures feed task_create/task_update/
+// task_archive, whose terminal-status transitions write factory state under
+// whatever `$XDG_STATE_HOME` resolves to at call time.
+import "../_isolated_env.mjs"
 import { promises as fs } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
