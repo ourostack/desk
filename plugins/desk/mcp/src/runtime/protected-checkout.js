@@ -1,19 +1,19 @@
 import { existsSync, realpathSync } from "node:fs"
+import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { inspectShell } from "./shell-commands.js"
 import { runGit } from "./state-branch.js"
 import { readInspectionGit } from "./git-inspection.js"
-import { physicalDirectory } from "./shell-paths.js"
-import { inspectGitOptions } from "./git-guard-options.js"
+import { existingDirectory, physicalDirectory } from "./shell-paths.js"
+import { BUILTINS, canonicalKey, classifyGit, hasRule, MESSAGES } from "./git-guard-policy.js"
+import { GuardDenial, inspectionBudget, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
 
-export const WORKTREE_GUIDANCE = 'shared checkout: use git worktree add --detach "$(mktemp -d)" <ref>'
-const OPERATIONS = new Set(["checkout", "switch", "reset", "rebase", "pull", "merge", "stash", "clean"])
-// The hosts stop a PreToolUse hook at its declared timeout (10 s for both). One command's Git calls share this budget, so a loaded machine's slow calls can still decide, and the guard always answers, failing closed, before the host gives up on it.
-export const GUARD_INSPECTION_BUDGET_MS = 7000
+export { WORKTREE_COMMAND }
 
 // Git copies config.worktree to new worktrees. An exact gitdir conditional include
 // keeps this local marker on the bound checkout without changing Git's extensions.
-export async function protectCheckout({ root, git = runGit }) {
+// The state branch, when the host names one, is recorded beside the marker.
+export async function protectCheckout({ root, stateBranch = null, git = runGit }) {
   const location = await git({ cwd: root, args: ["rev-parse", "--absolute-git-dir"] })
   if (!location.ok) return { protected: false }
   const gitDir = location.stdout.replaceAll("\\", "/")
@@ -24,21 +24,98 @@ export async function protectCheckout({ root, git = runGit }) {
   const marker = path.join(gitDir, "desk-protected.config")
   const pattern = gitDir.replace(/[*?[\]]/gu, "\\$&")
   await write(["config", "--file", marker, "desk.protected", "true"])
+  if (stateBranch) await write(["config", "--file", marker, "desk.stateBranch", stateBranch])
+  else await git({ cwd: root, args: ["config", "--file", marker, "--unset-all", "desk.stateBranch"] })
   await write(["config", "--local", `includeIf.gitdir:${pattern}.path`, marker])
   return { protected: true }
 }
 
-async function protectedTarget(cwd, options, env, readGit) {
-  const location = await readGit(cwd, [...options, "rev-parse", "--absolute-git-dir"], env)
-  if (!location.ok) return false
-  const config = await readGit(cwd, [...options, "config", "--show-scope", "--type=bool", "--get-all", "desk.protected"], env)
-  if (!config.ok && config.code !== 1) throw new Error(`cannot read checkout protection: ${config.stderr}`)
-  const values = config.stdout.split(/\r?\n/u).filter((line) => /^(local|worktree)\s/u.test(line))
-  return values.length > 0 && /\s+true$/u.test(values[values.length - 1])
+// The hosts stop a PreToolUse hook at its declared timeout (10 s for both). One command's Git reads share this
+// budget, so a loaded machine's slow reads can still decide, and the guard always answers, failing closed, first.
+export const GUARD_INSPECTION_BUDGET_MS = 7000
+// One read answers protection, the state branch, upstreams and push configuration.
+const POLICY_KEYS = "^(desk\\.(protected|statebranch)|branch\\..+\\.(remote|merge|rebase)|remote\\..+\\.(mirror|push)|pull\\.rebase)$"
+
+function gitBoolean(value) {
+  if (value === undefined || /^(?:true|yes|on)$/iu.test(value)) return true
+  if (value === "" || /^(?:false|no|off)$/iu.test(value)) return false
+  if (/^-?\d+$/u.test(value)) return Number(value) !== 0
+  throw new Error(`cannot read checkout protection: bad boolean config value '${value}' for 'desk.protected'`)
 }
 
-function gitInvocation(args, cwd) {
-  const location = [], aliases = new Map()
+async function readPolicy(read, cwd, options, env) {
+  // -z keeps an empty value ("key\n\0", false) apart from a key with no value ("key\0", true).
+  const result = await read(cwd, [...options, "config", "-z", "--show-scope", "--get-regexp", POLICY_KEYS], env)
+  // Outside a checkout, or with a location that is not one, Git reports no value (exit 1) and there is no local policy.
+  // A directory Git cannot open as a repository at all (a removed worktree's leftover .git file) runs no Git either.
+  if (!result.ok && result.code === 128 && /not a git repository/iu.test(result.stderr)) return { protected: false, entries: [] }
+  if (!result.ok && result.code !== 1) throw new Error(`cannot read checkout protection: ${result.stderr}`)
+  const entries = [], fields = result.stdout.split("\0")
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const at = fields[i + 1].indexOf("\n")
+    entries.push({ scope: fields[i], key: at < 0 ? fields[i + 1] : fields[i + 1].slice(0, at), value: at < 0 ? undefined : fields[i + 1].slice(at + 1) })
+  }
+  // Only the checkout's own saved configuration can protect it; global and command scopes cannot opt in or out.
+  const marker = entries.filter((entry) => entry.key === "desk.protected" && /^(?:local|worktree)$/u.test(entry.scope)).at(-1)
+  return { protected: marker !== undefined && gitBoolean(marker.value), entries }
+}
+
+// Reads of the target checkout for the policy's checks: the prefetched policy and branch, and lazy reads.
+function checkoutContext(read, cwd, options, env, policy, branch) {
+  const value = async (key, args) => {
+    const result = await read(cwd, [...options, ...args], env)
+    return result.ok && result.stdout ? result.stdout : null
+  }
+  const known = (text, what) => {
+    if (text.includes(UNKNOWN)) throw unresolved(what)
+    return text
+  }
+  const configAll = (key) => policy.entries.filter((entry) => entry.key === key).map((entry) => entry.value ?? "true")
+  const context = {
+    known,
+    config: (key) => configAll(key).at(-1),
+    configAll,
+    branch: async () => branch,
+    stateBranch: async () => context.config("desk.statebranch") ?? branch,
+    head: () => value("head", ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]),
+    commit: (rev) => value(`commit ${known(rev, "a Git revision")}`, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`]),
+    fullName: (rev) => value(`name ${known(rev, "a Git revision")}`, ["rev-parse", "--symbolic-full-name", rev.startsWith("-") ? "--" : rev]),
+    remoteBranch: async (name) => await value(`remote ${name}`, ["for-each-ref", "--count=1", "--format=%(refname)", `refs/remotes/*/${name}`]) !== null,
+    pushed: async () => await value("pushed", ["for-each-ref", "--count=1", "--contains=HEAD", "--format=%(refname)", "refs/remotes"]) !== null,
+    // An absolute path relative to the checkout's top level: "" for the top level or an ancestor of it, null outside it.
+    async rootRelative(spec) {
+      const top = await value("top", ["rev-parse", "--show-toplevel"])
+      if (top === null) return null
+      const real = (file) => {
+        try { return realpathSync(file) } catch { return path.join(real(path.dirname(file)), path.basename(file)) }
+      }
+      const relative = path.relative(real(top), real(path.resolve(spec)))
+      if (!relative.startsWith("..") && !path.isAbsolute(relative)) return relative.split(path.sep).join("/")
+      return (real(top) + path.sep).startsWith(real(path.resolve(spec)).replace(/[\\/]*$/u, path.sep)) ? "" : null
+    },
+    // The upstream from saved configuration, with its remote-tracking ref under the default fetch layout.
+    async upstream() {
+      const remote = context.config(`branch.${branch}.remote`), merge = context.config(`branch.${branch}.merge`)
+      if (branch === null || !remote || !merge) return null
+      return { remote, merge, ref: remote === "." ? merge : `refs/remotes/${remote}/${merge.replace(/^refs\/heads\//u, "")}` }
+    },
+  }
+  return context
+}
+
+// Configuration a command inherits from its environment, in the order Git applies it.
+function environmentOverrides(variables) {
+  const overrides = []
+  for (const match of (variables.GIT_CONFIG_PARAMETERS ?? "").matchAll(/'([^']*)'(?:='([^']*)')?/gu)) overrides.push([match[1], match[2] ?? "true"])
+  const count = Number(variables.GIT_CONFIG_COUNT)
+  for (let i = 0; Number.isInteger(count) && i < count; i++) {
+    if (variables[`GIT_CONFIG_KEY_${i}`] !== undefined) overrides.push([variables[`GIT_CONFIG_KEY_${i}`], variables[`GIT_CONFIG_VALUE_${i}`] ?? ""])
+  }
+  return overrides
+}
+
+function gitInvocation(args, cwd, variables) {
+  const location = [], overrides = environmentOverrides(variables), commandLine = []
   let i = 0
   for (; i < args.length; i++) {
     const arg = args[i]
@@ -56,71 +133,177 @@ function gitInvocation(args, cwd) {
     } else if (/^--(?:git-dir|work-tree|namespace)=/u.test(arg)) location.push(arg)
     else if (arg === "-c" || arg.startsWith("-c")) {
       const config = arg === "-c" ? args[++i] : arg.slice(2)
-      const match = /^alias\.([^=]+)=(.*)$/su.exec(config ?? "")
-      if (match) aliases.set(match[1], match[2])
-    } else if (arg === "--config-env") i++
-    else if (arg === "--") { i++; break }
+      if (config === undefined) return null
+      const at = config.indexOf("=")
+      commandLine.push(at < 0 ? [config, "true"] : [config.slice(0, at), config.slice(at + 1)])
+    } else if (arg === "--config-env" || arg.startsWith("--config-env=")) {
+      const spec = arg === "--config-env" ? args[++i] : arg.slice(13)
+      const at = spec?.indexOf("=") ?? -1
+      if (at > 0) commandLine.push([spec.slice(0, at), variables[spec.slice(at + 1)] ?? UNKNOWN])
+    } else if (arg === "--") { i++; break }
     else if (arg === "--help" || arg === "--version") return null
   }
-  return { cwd, location, aliases, name: args[i], args: args.slice(i + 1) }
+  return { cwd, location, overrides: [...overrides, ...commandLine], commandLine, global: args.slice(0, i), name: args[i], args: args.slice(i + 1) }
 }
 
-function destructive(name, args) {
-  if (OPERATIONS.has(name)) return true
-  if (name === "restore" || name === "branch") return inspectGitOptions(name, args).enabled
-  return name === "worktree" && args[0] === "remove" && inspectGitOptions("remove", args.slice(1)).enabled
+// Git aliases are configuration variables, so their section and name are case-insensitive.
+function aliasFrom(overrides, name) {
+  return overrides.filter(([key]) => canonicalKey(key) === `alias.${name}`).at(-1)?.[1]
 }
 
-export async function guardShellCommand({ command, cwd, env = process.env, powershell = false, readGit: read = readInspectionGit, now = Date.now }) {
-  const deadline = now() + GUARD_INSPECTION_BUDGET_MS
-  function readGit(directory, args, variables) {
-    const timeoutMs = deadline - now()
-    if (timeoutMs <= 0) throw new Error(`protected-checkout inspection budget of ${GUARD_INSPECTION_BUDGET_MS} ms is spent`)
-    return read(directory, args, variables, { timeoutMs })
-  }
-  let deny = false
+// Words that could run Git somewhere other than the statement's own directory.
+const RELOCATES = /(?<![\w-])(?:set-location|sl|cd|chdir|push-location|pushd|pop-location|popd|start-process|saps|start|invoke-command|icm|start-job|sajb|start-threadjob|enter-pssession|ssh|wsl|docker|worktree|submodule)(?![\w-])|--git-dir|--work-tree|git_dir|git_work_tree|git_common_dir|currentdirectory|-workingdirectory|(?<![\w-])-wd(?![\w-])/iu
+
+const quote = (arg) => `'${arg.replaceAll("'", "'\\''")}'`
+const GIT_LIKE = /^(?:-C|-c|--git-dir|--work-tree|--config-env)/u
+
+export async function guardShellCommand({ command, cwd, env = process.env, powershell = false, budgetMs = GUARD_INSPECTION_BUDGET_MS, readGit = readInspectionGit, now = Date.now }) {
   const inspected = new Set()
-  async function visit({ name, args, cwd: directory, env: variables }) {
-    // One protected target decides the command; later Git calls cannot undo a denial.
-    if (deny || name !== "git") return
-    const invocation = gitInvocation(args, directory)
-    if (!invocation || !existsSync(invocation.cwd)) return
-    const { location, aliases } = invocation
-    const operation = invocation.name, operands = invocation.args
-    const key = JSON.stringify([invocation, [...aliases], variables])
+  const deadline = now() + budgetMs
+  // Inspection steps share this deadline with the Git reads, across Bash, PowerShell and nested scripts.
+  const budget = inspectionBudget({ deadline, now, budgetMs })
+  // Each read gets what is left of the budget; a spent budget, like a read that timed out, is ETIMEDOUT.
+  async function read(dir, args, variables) {
+    const timeoutMs = deadline - now()
+    if (timeoutMs <= 0) throw Object.assign(new Error(`protected-checkout inspection budget of ${budgetMs} ms is spent`), { code: "ETIMEDOUT" })
+    return readGit(dir, args, variables, { timeoutMs })
+  }
+  async function visit({ name, args, cwd: directory, env: variables, computed = false, powershell: fromPowerShell = false }) {
+    if (name !== "git") return
+    const invocation = gitInvocation(args, directory, variables)
+    if (!invocation || invocation.name === undefined) return
+    const { location, overrides, name: operation, args: operands } = invocation
+    // A computed program is judged as Git only when its arguments read like a Git command the policy checks.
+    if (computed && !GIT_LIKE.test(args[0]) && !hasRule(operation)) return
+    if (operation.includes(UNKNOWN)) throw unresolved("which Git command this runs")
+    const target = invocation.cwd === UNKNOWN ? null : existingDirectory(invocation.cwd)
+    const where = "which checkout this Git command runs in"
+    if (target !== null && !existsSync(target)) return
+    const key = JSON.stringify([invocation, variables])
     if (inspected.has(key)) return
     inspected.add(key)
-    if (operation && !OPERATIONS.has(operation) && !["restore", "branch", "worktree"].includes(operation)) {
-      const alias = aliases.get(operation) ?? (await readGit(invocation.cwd, [...location, "config", "--get", `alias.${operation}`], variables)).stdout
-      if (alias) {
-        const builtins = await readGit(invocation.cwd, ["--list-cmds=builtins"], variables)
-        if (builtins.stdout.split(/\r?\n/u).includes(operation)) return
-        const target = await readGit(invocation.cwd, [...location, "rev-parse", "--show-toplevel"], variables)
-        // Git runs shell aliases at its top level. Quoted arguments remain arguments.
-        const quote = (arg) => `'${arg.replaceAll("'", "'\\''")}'`
-        const text = `${alias.startsWith("!") ? alias.slice(1) : `git ${alias}`} ${operands.map(quote).join(" ")}`
-        await inspectShell({ command: text, cwd: target.ok ? target.stdout : invocation.cwd, env: variables, powershell, visit })
+    if (!BUILTINS.has(operation)) {
+      const lower = operation.toLowerCase()
+      let alias = aliasFrom(overrides, lower)
+      if (alias === undefined) {
+        if (target === null) throw unresolved(where)
+        alias = (await read(target, [...location, "config", "--get", `alias.${lower}`], variables)).stdout
+      }
+      if (!alias) return
+      if (alias.includes(UNKNOWN)) throw unresolved("a Git alias")
+      const builtins = await read(target ?? tmpdir(), ["--list-cmds=builtins"], variables)
+      if (builtins.stdout.split(/\r?\n/u).includes(operation)) return
+      const rest = operands.map(quote).join(" ")
+      if (!alias.startsWith("!")) {
+        // Git expands a plain alias in the same process, with the issuing command's options.
+        await inspectShell({ command: `git ${invocation.global.map(quote).join(" ")} ${alias} ${rest}`, cwd: directory, env: variables, powershell: false, visit, budget })
         return
       }
-    }
-    if (!destructive(operation, operands)) return
-    if (operation === "worktree") {
-      const [target] = inspectGitOptions("remove", operands.slice(1)).operands
-      if (target) {
-        const worktrees = await readGit(invocation.cwd, [...location, "worktree", "list", "--porcelain"], variables)
-        const paths = worktrees.stdout.split(/\r?\n/u).filter((line) => line.startsWith("worktree ")).map((line) => line.slice(9))
-        let resolved = path.resolve(invocation.cwd, target)
-        try { resolved = realpathSync(resolved) } catch (error) { if (error.code !== "ENOENT") throw error }
-        const found = paths.find((p) => p === resolved) ?? paths.find((p) => path.basename(p) === target)
-        if (found && await protectedTarget(found, [], {}, readGit)) deny = true
+      if (target === null) throw unresolved(where)
+      // A shell alias runs at the top level with the location and -c settings Git exports to it.
+      const top = await read(target, [...location, "rev-parse", "--show-toplevel"], variables)
+      const exported = { ...variables }
+      for (let i = 0; i < location.length; i++) {
+        const [option, value] = location[i].includes("=") ? location[i].split(/=(.*)/su) : [location[i], location[++i]]
+        const variable = { "--git-dir": "GIT_DIR", "--work-tree": "GIT_WORK_TREE", "--namespace": "GIT_NAMESPACE" }[option]
+        exported[variable] = option === "--namespace" ? value : path.resolve(target, value)
       }
+      exported.GIT_CONFIG_PARAMETERS = [variables.GIT_CONFIG_PARAMETERS, ...invocation.commandLine.map(([k, v]) => `'${k}'='${v}'`)].filter(Boolean).join(" ")
+      await inspectShell({ command: `${alias.slice(1)} ${rest}`, cwd: top.ok ? top.stdout : target, env: exported, powershell: false, visit, budget })
       return
     }
-    if (await protectedTarget(invocation.cwd, location, variables, readGit)) deny = true
+    const rule = classifyGit(operation, operands, overrides, { variables: fromPowerShell })
+    if (!rule) return
+    // Configuration from an environment variable Desk cannot compute could override what a rule trusts. (An unknown
+    // GIT_DIR or GIT_WORK_TREE already stops the policy read.)
+    if (Object.entries(variables).some(([key, value]) => /^GIT_CONFIG_/iu.test(key) && String(value).includes(UNKNOWN))) throw unresolved("the Git configuration this command inherits")
+    if (target === null || location.some((option) => option.includes(UNKNOWN))) {
+      // Adds, commits, pulls and rebases onto the upstream, and non-force pushes are safe in any checkout.
+      if (rule.anywhere) return
+      throw unresolved(where)
+    }
+    if (rule.victim !== undefined) {
+      // Force-removal checks the removed checkout with its own identity, not the issuer's overrides.
+      const worktrees = await read(target, [...location, "worktree", "list", "--porcelain"], variables)
+      const paths = worktrees.stdout.split(/\r?\n/u).filter((line) => line.startsWith("worktree ")).map((line) => line.slice(9))
+      const victim = rule.victim
+      if (victim.includes(UNKNOWN)) {
+        // An unknown victim is checked against every worktree of the repository: it passes when none is protected.
+        for (const candidate of paths) {
+          if ((await readPolicy(read, candidate, [], {})).protected) throw new GuardDenial(`Desk protected checkout ${candidate}: ${MESSAGES.worktreeRemove}`)
+        }
+        return
+      }
+      let resolved = path.resolve(target, victim)
+      try { resolved = realpathSync(resolved) } catch (error) { if (error.code !== "ENOENT") throw error }
+      const found = paths.find((p) => p === resolved) ?? paths.find((p) => path.basename(p) === victim)
+      if (found && (await readPolicy(read, found, [], {})).protected) throw new GuardDenial(`Desk protected checkout ${found}: ${MESSAGES.worktreeRemove}`)
+      return
+    }
+    // The policy and the current branch are read together, so most checks take one round of reads.
+    const [policy, head] = await Promise.all([
+      readPolicy(read, target, location, variables),
+      read(target, [...location, "symbolic-ref", "--quiet", "--short", "HEAD"], variables),
+    ])
+    if (!policy.protected) return
+    const reason = await rule(checkoutContext(read, target, location, variables, policy, head.ok && head.stdout ? head.stdout : null))
+    if (reason) throw new GuardDenial(`Desk protected checkout ${target}: ${reason}`)
   }
-  await inspectShell({ command, cwd, env, powershell, visit })
-  return deny ? { deny: true, reason: WORKTREE_GUIDANCE } : { deny: false }
+  async function guardedVisit(call) {
+    try { await visit(call) } catch (error) {
+      if (error instanceof GuardDenial) throw error
+      if (error.code === "ETIMEDOUT") throw new GuardDenial(`Desk could not finish checking this command within its ${budgetMs / 1000} s budget because Git answered too slowly, so it is denied to keep a protected checkout safe. Retry it.`)
+      throw new GuardDenial(`Desk could not inspect a Git command in this shell command (${error.message}), and it could change a protected checkout. Retry it, or split it into simpler commands.`)
+    }
+  }
+  // A PowerShell statement outside the Git allowlist is allowed when it can only reach a known checkout that is not
+  // protected: it names nothing that changes the location or Git's directory, and the environment sets no Git directory.
+  guardedVisit.unmodeled = async ({ text, cwd: directory, env: variables }) => {
+    if (directory === UNKNOWN || RELOCATES.test(text) || /(?<![\w-])-C/u.test(text)) return false
+    if (Object.keys(variables).some((key) => /^GIT_(?:DIR|WORK_TREE|COMMON_DIR)$/iu.test(key))) return false
+    const target = existingDirectory(directory)
+    try { return !(await readPolicy(read, target, [], variables)).protected } catch { return false }
+  }
+  try {
+    await inspectShell({ command, cwd, env, powershell, visit: guardedVisit, budget })
+  } catch (error) {
+    if (error instanceof GuardDenial) return { deny: true, reason: redact(error.reason) }
+    // Text Desk cannot parse is judged from its words: it is denied only when it names a Git operation that a rule
+    // would check anywhere but in a known unprotected checkout (fallbackOperation).
+    const operation = fallbackOperation(command)
+    if (operation === null) return { deny: false }
+    if (await guardedVisit.unmodeled({ text: command, cwd, env })) return { deny: false }
+    return { deny: true, reason: redact(`Desk could not inspect this shell command (${error.message}), and its git ${operation} could change a protected checkout. Split it into simpler commands.`) }
+  }
+  return { deny: false }
 }
+
+// The first Git operation named in shell text Desk could not parse that a rule could deny in a protected checkout,
+// or null. Quotes are dropped and the words after `git <operation>` up to a separator are its arguments; an
+// operation safe in any checkout (a plain commit, pull, push or rebase onto the upstream) does not count.
+const FALLBACK_GIT = /(?<![\w.-])git(?:\.exe)?((?:\s+(?:-[Cc]\s+\S+|--?[\w-]+(?:=\S+)?))*)\s+([A-Za-z][\w-]*)([^\n;&|()`]*)/gu
+export function fallbackOperation(command) {
+  for (const match of command.replace(/["']/gu, "").replaceAll("\\", "/").matchAll(FALLBACK_GIT)) {
+    const operation = match[2]
+    if (!hasRule(operation)) continue
+    const rule = classifyGit(operation, match[3].split(/\s+/u).filter(Boolean))
+    if (rule && !rule.anywhere) return operation
+  }
+  return null
+}
+
+// Credentials never reach a denial message: a URL's user information (https://user:token@host), the user information
+// of any url.<base> configuration key, with or without a scheme (url.<token>@host:.insteadOf), an scp-style user that
+// looks like a token (<token>@host:path), and an Authorization header value.
+export function redact(text) {
+  return text
+    .replace(/([a-z][\w+.-]*:\/\/)[^\s/@'"]+@/giu, "$1<redacted>@")
+    .replace(/(\burl\.)(?!<redacted>)([^\s/@'"=]+)@/giu, "$1<redacted>@")
+    .replace(/([^\s'"]*)@(?=[\w.-]+:)/gu, (match, user) => user.endsWith("<redacted>") || /^[\w.-]{1,23}$/u.test(user) && !TOKEN_PREFIX.test(user) ? match : "<redacted>@")
+    .replace(/((?:authorization|proxy-authorization)\s*:\s*(?:bearer|basic|token)?\s*)[^\s'"]+/giu, "$1<redacted>")
+    .replace(/(?<![\w.-])(?:gh[pousr]_|github_pat_|glpat-|sk-|xox[abpr]-)[\w-]{8,}/gu, "<redacted>")
+}
+const TOKEN_PREFIX = /^(?:gh[pousr]_|github_pat_|glpat-|sk-|xox[abpr]-)/u
 
 export async function protectedCheckoutHook(input, host) {
   const name = String(input.tool_name ?? input.toolName).toLowerCase()
