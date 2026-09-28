@@ -311,7 +311,9 @@ test("A3b review: one inspection budget bounds the decision below the hosts' 10 
     assert.match(text, /protected-checkout\.cjs[^}]*"timeout(?:Sec)?":10/u, manifest)
   }
   const f = await fixture(t)
-  await slowGit(t, f, 1500)
+  // Git that answers only long after the 2 s budget, so every command that needs a Git read takes the budget path on any
+  // runner. (With Git that answered in 1.5 s, a fast runner decided allowed commands such as a pull into main on content.)
+  await slowGit(t, f, 60000)
   // Allowed commands need no reads, so slow Git does not delay them.
   for (const command of ["git status", "git add file.txt && git commit -qm x", "git log -1"]) {
     const started = Date.now()
@@ -324,7 +326,7 @@ test("A3b review: one inspection budget bounds the decision below the hosts' 10 
     const elapsed = Date.now() - started
     assert.equal(result.deny, true, command)
     assert.ok(elapsed < 3500, `${command} decided in ${elapsed} ms`)
-    if (/budget/u.test(result.reason)) assert.match(result.reason, /within its 2 s budget because Git answered too slowly/u)
+    assert.match(result.reason, /within its 2 s budget because Git answered too slowly/u, command)
   }
   // The registered hook answers "deny" at its own deadline even if inspection has not finished.
   const input = { tool_name: "Bash", tool_input: { command: "git checkout topic" }, cwd: f.prot }
