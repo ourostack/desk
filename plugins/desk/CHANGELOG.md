@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.124 — 2026-09-28
+
+A job's identity is now a task's birth path — the `track/slug` its card, `task.md`, was first added at — instead of its current `track/slug` ([`resolveJobIdentity`](mcp/src/factory/desk-repo.js), [ourostack/desk#76](https://github.com/ourostack/desk/issues/76)). A track rename, a task move or an archive move no longer splits one job's accumulated history in two: the birth path is found by following the card's own Git rename history (`git log --follow --diff-filter=A`), including a task whose whole track was archived, or one archived a second time within an already-archived track, so it works retroactively, from history alone, with no new card field and no write to the desk. `bindSession`, the task tools' finalize and evaluation requests, the factory boot check's finalize repair, `factory.js evaluate` and, with its new `--desk <path>` flag, `factory.js job-link` all resolve the same birth path before hashing a job ID, so they keep agreeing on one job across a rename instead of quietly starting a second, disconnected one.
+
+A card with no Git history yet (new and uncommitted), a desk that is not its own Git repository, or any ordinary Git failure falls back to the given current path exactly as before, and never throws for those reasons; only a caller that shares a deadline with it (the factory boot check's finalize repair, exactly as it already does with `readDeskRemote`) can make it throw, on reaching that deadline. A card just renamed or moved but not yet committed — right after a task move, before the agent's own commit — resolves to its current path until that commit lands: this is expected, not a bug, and is expected to become rare once Desk tools start committing their own writes. The birth-path lookup is cached per process, since one call can resolve many tasks; the cache is invalidated whenever the desk's `HEAD` moves, so a card path one task vacates and a different task later reoccupies, within the same process, is never given the first task's cached birth.
+
+This fix stops new splits from happening going forward; it does not merge a job that already split under the old scheme, before this fix, back together — a rename that already produced two disconnected jobs keeps them disconnected, since nothing here rewrites already-recorded local factory state.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.123 — 2026-09-28
 
 The Agentic Engineering V2 RFC's Section 9 citations are refreshed against their live state: items the RFC called "in review" that have since merged now say so ([#37](https://github.com/ourostack/desk/pull/37), [#54](https://github.com/ourostack/desk/pull/54), [#55](https://github.com/ourostack/desk/pull/55)), the closed Superpowers-refresh issue ([#38](https://github.com/ourostack/desk/issues/38)) now names the pull request that resolved it, and the claim that a job's report does not yet show its labels is corrected now that [#67](https://github.com/ourostack/desk/pull/67) shipped that.
