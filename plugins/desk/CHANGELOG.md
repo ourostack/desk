@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.111 — 2026-09-28
+
+**The RFC's status now records the factory working end to end.** Facts and waste labels from an installed Desk reach the public store, merge and build reports, private plugin names stay out of it, and delivery to the store is no longer listed as not yet live ([RFC status](docs/agentic-engineering-v2-rfc.md)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.110 — 2026-09-28
 
 `desk_status` keeps its index and readiness detail on a busy machine instead of answering "unavailable". Only one [runtime status](mcp/src/runtime/desk-session.js) computation runs at a time. A call that arrives while one is running waits its own short budget for that answer. A detail that arrives late is kept, and the next call serves it marked cached, with its start time in the new `status_detail_from` field and its age in `status_detail`. A computation still running after 10 seconds is treated as stuck: the next call starts a fresh one, and the stuck one can never replace newer detail when it finishes. Before this change, each call threw away any computation that ran past about a tenth of a second and started another, so on a slow machine every call could answer "unavailable". The lexical readiness smoke test, which failed on busy CI runners for the same reason, now waits for a detail computed after the event it checks.
