@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.117 — 2026-09-28
+
+### First-run bootstrap tells a noninteractive session to stop at the desk ask
+
+A noninteractive session running `first-run-bootstrap` Entrance A (for example `claude -p`) could reach A3's "ask once" step with no one able to answer, silently bind whatever desk-shaped directory it happened to be running in, write `desk.activation.json`, and report the bootstrap complete — all without ever asking. The [first-run bootstrap skill](../skills/first-run-bootstrap/SKILL.md) now states the rule directly: such a session stops at the ask, reports the question and everything it found, and never picks, binds, writes, or claims completion on the operator's behalf; a working directory that is itself desk-shaped is one candidate to present, never an automatic bind. It also says why this differs from the migration rule below: A3 gates a consequential, irreversible choice among candidate desks, while a migration is one deterministic, idempotent script with no choice in it. [SETUP.md](../../../SETUP.md) step 5 carries the matching sentence, and [`crew:join-crew`](../../crew/skills/join-crew/SKILL.md)'s own clone-or-not ask now points back to this same rule. This is prose, not a mechanical gate: two real `claude -p --model haiku` reruns against the new text still bound the desk, so a hook that refuses the `desk.activation.json` write in a noninteractive session is tracked as follow-up work.
+
+### The ouroboros-skills-to-ourostack channel migration now says to run, not just to ask
+
+The old-channel plugin swap (`plugins/desk/migrations/01-move-to-ourostack-desk.md`) was already correct end to end once actually run — verified directly against a temp `CLAUDE_CONFIG_DIR` fixture — but the startup line telling an agent to run it bundled "run this" together with "ask the human to restart," with no guidance for a session with nobody to ask. That reads as blocked in a noninteractive session, which is consistent with real fresh-setup dry runs where the marketplace got added but the plugin swap itself never completed across several session starts. The line now says to run the migration immediately regardless of who is watching, and only conditions the restart request on a human being present. This wording fix only takes effect for an install already running content that has it; the four sessions that first surfaced the stalled swap were pinned to the frozen `ouroboros-skills` `v2-alpha` channel at a commit that predates this file entirely, so they never see the new wording at all. `ouroboros-skills#235` repoints that channel's `desk` marketplace entry at current `ourostack/desk` so those installs converge on this fix through their own `autoUpdate`.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.116 — 2026-09-28
 
 Installing or refreshing Desk no longer downloads its tests. The MCP server tests and the browser broker tests moved out of the plugin folder to `tests/desk/` at the repository root, so the folder hosts copy or download shrinks from 711 files (17.0 MB) to 320 files (12.1 MB). Agency and Copilot fetch a plugin one file at a time through the GitHub API, so a full refresh now makes about 55% fewer requests. To run the tests, run `npm ci` in `mcp/` as before and then `npm test`; see [the MCP README](mcp/README.md#tests).
