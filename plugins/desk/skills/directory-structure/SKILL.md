@@ -9,7 +9,7 @@ this is the floor plan of the room. the desk lives at `$DESK/` — the same shap
 
 ```
 $DESK/
-  .gitignore                            # includes .machine-local.yml
+  .gitignore                            # includes .state/, .machine-local.yml and ~$* (Office lock files)
   .machine-local.yml                    # gitignored: per-machine local_path overrides (see repo-handling)
   AGENTS.md                             # operator preferences that compose with every session's instructions
   artifacts/                            # committed vector packs, snapshots, and publication policy

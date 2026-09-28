@@ -48,7 +48,7 @@ If nothing was found, lead with creating a fresh desk. Never offer "continue wit
 
 - **Local desk:** bind it in place; do not copy or move it.
 - **Clone:** clone with the authenticated remote into the chosen path, then verify origin and the desk shape.
-- **Fresh-create:** create `_archive/` and `_meta/`, each holding an empty `.gitkeep` so a clone keeps the desk shape, a `.gitignore` containing `.state/`, and a short README; initialize Git and commit. Offer to create the remote with `gh repo create <owner>/desk --private --source <path> --push`, asking for owner and visibility rather than choosing them silently.
+- **Fresh-create:** create `_archive/` and `_meta/`, each holding an empty `.gitkeep` so a clone keeps the desk shape, a `.gitignore` containing `.state/`, `.machine-local.yml` and `~$*` (Office lock files, which appear while a document in the desk is open), and a short README; initialize Git and commit. Offer to create the remote with `gh repo create <owner>/desk --private --source <path> --push`, asking for owner and visibility rather than choosing them silently.
 - **Operator-provided path or URL:** bind an existing path without copying it; clone a URL.
 - **Skip:** warn that task lifecycle, recall, resumption, friction and lesson persistence are unavailable for this session, and offer bootstrap again next session.
 
