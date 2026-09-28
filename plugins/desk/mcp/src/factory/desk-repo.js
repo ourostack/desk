@@ -340,8 +340,10 @@ function isOwnRepository(options, runFn = runGit) {
 // literal path can have more than one across an unrelated delete and
 // re-create, and only the newest is this path's own current lineage (see
 // the header for why, and for the same-commit swap this also keeps out).
-// `runFn` calls `runGit` directly by default; see `isOwnRepository`.
-function gitBirthPathSegments(options, relativePath, runFn = runGit) {
+// Unlike `isOwnRepository`, `runFn` has no default here: `resolveJobIdentity`
+// is this function's only caller, and it always passes its own deadline-aware
+// `run`, so a default would be dead code no path through this module reaches.
+function gitBirthPathSegments(options, relativePath, runFn) {
   const output = runFn(options, ["log", "--follow", "--diff-filter=A", "-z", "--format=%x1e%H", "--name-only", "--", relativePath])
   if (output === null) return null
   const records = output.split("\x1e").filter((record) => record !== "")
