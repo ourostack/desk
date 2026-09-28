@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.116 — 2026-09-28
+
+Installing or refreshing Desk no longer downloads its tests. The MCP server tests and the browser broker tests moved out of the plugin folder to `tests/desk/` at the repository root, so the folder hosts copy or download shrinks from 711 files (17.0 MB) to 320 files (12.1 MB). Agency and Copilot fetch a plugin one file at a time through the GitHub API, so a full refresh now makes about 55% fewer requests. To run the tests, run `npm ci` in `mcp/` as before and then `npm test`; see [the MCP README](mcp/README.md#tests).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.115 — 2026-09-28
 
 The one-time desk tidy now runs from an agent's own shell. Claude Code's Bash tool sets neither `DESK` nor `CLAUDE_PROJECT_DIR`, so the command the startup line names found no desk there and stopped with "the tidy found no desk" even when the Desk tools had bound one. That stop wrote a hold recording "no desk", and the session-start hook, which does have `CLAUDE_PROJECT_DIR`, resolved the desk, saw a different state and told the next session to tidy again, at every start. The tidy now uses its working folder as the host project when no `CLAUDE_PROJECT_DIR` is set, and, like the host project, only when that folder is a desk, so an agent's shell standing in the desk and the startup hook resolve the same desk, and a hold written in one is honored in the other ([tidy.js](mcp/src/desk/tidy.js)).
