@@ -62,15 +62,18 @@ import { createHash, randomUUID } from "node:crypto"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { organizationFindings, redactedRelPath } from "./organization.js"
+import { loadFrontmatterParser, organizationFindings, redactedRelPath } from "./organization.js"
 import { operatorNames } from "./naming.js"
 import { crewWorkspace, parseCrewRoster, readCrewRoster } from "./crew-roster.js"
+import { hasUnstagedWork } from "../util/git-stage.js"
 import {
   expandHome,
   personPrefix,
   resolveActivationConfigPath,
   resolveDeskRootWithSource,
 } from "../util/paths.js"
+
+const parseFrontmatter = loadFrontmatterParser()
 
 export const TIDY_VERSION = 1
 export const ORGANIZATION_RECORD = path.join("_meta", "organization.json")
@@ -386,6 +389,113 @@ export function writeOrganizationRecord(subtree, now = new Date()) {
   return file
 }
 
+// ── The `--write-record` gate (fix round, 2026-09-28) ─────────────────────
+//
+// Step 7 of the printed procedure tells the agent to check, before it ever
+// runs `--write-record`, that `git diff --name-only` and `git ls-files
+// --others --exclude-standard` (both scoped to this session's own desk) print
+// nothing, and that something is actually staged. A session that skips
+// reading the steps — or reads them and skips running them — used to get the
+// record written anyway, with no way to tell later that the checks never
+// ran. `--write-record` now runs the same checks itself and refuses when
+// they don't pass, so the record can never lag behind what the desk actually
+// looks like.
+
+function relSubtreeArg(root, subtree) {
+  const rel = path.relative(root, subtree)
+  return rel === "" ? "." : rel
+}
+
+function stagedPaths(root, relSubtree, spawnGit) {
+  const result = run(spawnGit, "git", ["-C", root, "diff", "--cached", "--name-only", "--", relSubtree])
+  if (result.status !== 0) return []
+  return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "")
+}
+
+function safeReaddirEntries(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+}
+
+// The `track:` field of `taskMd`'s frontmatter, or null when the file is
+// missing, unreadable, or has no string `track` field.
+function taskTrackField(taskMd) {
+  try {
+    const data = parseFrontmatter(readFileSync(taskMd, "utf8")).data
+    return typeof data?.track === "string" ? data.track : null
+  } catch {
+    return null
+  }
+}
+
+// The track names among `staged` (paths relative to `root`) that fall inside
+// `subtree` — the only tracks this tidy run could plausibly have renamed.
+function stagedTrackNames(root, subtree, staged) {
+  const names = new Set()
+  for (const relFromRoot of staged) {
+    const relFromSubtree = path.relative(subtree, path.resolve(root, relFromRoot))
+    if (relFromSubtree.startsWith("..") || path.isAbsolute(relFromSubtree)) continue
+    const [trackName] = relFromSubtree.split(path.sep)
+    if (trackName && !trackName.startsWith("_") && !trackName.startsWith(".")) names.add(trackName)
+  }
+  return [...names].sort()
+}
+
+// Track directories, among `candidateTracks`, that hold a task card whose
+// `track:` field still names a different track. Only `track_rename` rewrites
+// that field on every card it moves (`tools/move.js`), so a mismatch here is
+// what a track folder renamed by a raw `git mv` leaves behind, whatever
+// staged it. This never reads Git history — the mismatch alone is enough.
+function tracksRenamedWithoutTrackRename(subtree, candidateTracks) {
+  const mismatched = []
+  for (const trackName of candidateTracks) {
+    const trackDir = path.join(subtree, trackName)
+    if (!existsSync(path.join(trackDir, "track.md"))) continue
+    const hasMismatch = safeReaddirEntries(trackDir).some((entry) => {
+      if (!entry.isDirectory() || entry.name.startsWith("_") || entry.name.startsWith(".")) return false
+      const taskMd = path.join(trackDir, entry.name, "task.md")
+      if (!existsSync(taskMd)) return false
+      const track = taskTrackField(taskMd)
+      return track !== null && track !== trackName
+    })
+    if (hasMismatch) mismatched.push(trackName)
+  }
+  return mismatched
+}
+
+/**
+ * Why `--write-record` must refuse right now, or null when step 7's own
+ * checks pass and it may proceed:
+ *   - an unstaged change to a tracked file, or an untracked file that is not
+ *     ignored, anywhere in this session's own desk — the tidy stages
+ *     everything it changes, so one left over means either a skipped step or
+ *     someone else's work still sitting there;
+ *   - nothing at all staged in this session's own desk — there is no tidy to
+ *     record;
+ *   - a track directory (among the ones this run touched) holding a task card
+ *     whose `track:` field still names a different track — a raw `git mv` of
+ *     a track folder instead of `track_rename`.
+ */
+export function writeRecordProblem(root, subtree, { spawnGit = spawnSync } = {}) {
+  const relSubtree = relSubtreeArg(root, subtree)
+  if (hasUnstagedWork(root, [relSubtree], spawnGit)) {
+    return "the tidy's own step 7 checks did not pass: this session's own desk still has an unstaged change to a tracked file, or an untracked file that is not ignored. Stage exactly what the tidy changed (never a folder, a pattern or -A), or run --defer if it isn't the tidy's own work, then run --write-record again."
+  }
+  const staged = stagedPaths(root, relSubtree, spawnGit)
+  if (staged.length === 0) {
+    return "the tidy's own step 7 checks did not pass: nothing is staged in this session's own desk, so there is no tidy to record."
+  }
+  const bypassed = tracksRenamedWithoutTrackRename(subtree, stagedTrackNames(root, subtree, staged))
+  if (bypassed.length > 0) {
+    const plural = bypassed.length === 1
+    return `the tidy's own step 7 checks did not pass: ${bypassed.join(", ")} ${plural ? "has" : "have"} a task card whose track: field still names a different track — only track_rename keeps that in sync, so this looks like a track folder moved by a raw git mv. Fix the field (or redo the move with track_rename) and run --write-record again.`
+  }
+  return null
+}
+
 function describe(root, person) {
   if (root === null) return "no desk"
   return `${root}${person === null ? "" : ` as ${person}`}`
@@ -611,8 +721,10 @@ function parseArgs(argv) {
  *                       and exit 0 when the tidy can run now; otherwise print
  *                       the one line to say instead (and hold the tidy when
  *                       Detect would fire again) and exit 1
- *   --write-record      write _meta/organization.json in this session's own
- *                       desk, then release the claim and any hold
+ *   --write-record      refuse (see `writeRecordProblem`) unless step 7's own
+ *                       checks pass; otherwise write _meta/organization.json
+ *                       in this session's own desk, then release the claim
+ *                       and any hold
  *   --defer <reason>    hold the tidy until the desk's latest commit or its
  *                       uncommitted paths change, and release the claim
  *   --refresh-identity  look the `gh` identity up and cache it (Detect starts
@@ -697,6 +809,12 @@ export function runTidyStatusCli({
     releaseClaim(gitDir, args.claim)
     io.stdout.write(`The tidy is on hold: ${reason}. Session start names it until this desk's latest commit or its uncommitted changes differ, and then the tidy runs again.\n`)
     return 0
+  }
+
+  const problem = writeRecordProblem(status.root, status.subtree, { spawnGit })
+  if (problem !== null) {
+    io.stdout.write(`${problem}\n`)
+    return 1
   }
 
   const file = writeOrganizationRecord(status.subtree, now === undefined ? undefined : new Date(now))

@@ -429,6 +429,7 @@ test("a live spoke's prose pointer in desks.md is a single desk: the tidy runs a
   const report = cli(["--report", "--root", root], { env: { DESK: root }, spawnGh: noGh })
   assert.equal(report.code, 0)
   assert.doesNotMatch(report.stdout, /crew workspace/)
+  git(root, "add", "-A") // stand in for the tidy's own staged work — this test is about desk resolution, not step 7.
   assert.equal(cli(["--write-record", "--root", root, "--claim", claimOf(report)], { env: { DESK: root }, spawnGh: noGh }).code, 0)
   assert.equal(cli(["--detect", "--root", root], { env: { DESK: root }, spawnGh: noGh }).code, 1, "once tidied, Detect stops firing")
 })
@@ -679,6 +680,7 @@ test("--report lists this session's own findings, and gives one line for a desk 
 test("--write-record writes the record in this session's own subtree and turns Detect off", () => {
   const root = crewDesk()
   const env = { DESK: root, DESK_PERSON: "bob" }
+  git(root, "add", "-A") // stand in for the tidy's own staged work — this test is about the record, not step 7.
   const written = cli(["--write-record", "--root", root, "--person", "bob"], { env })
   assert.equal(written.code, 0)
   assert.equal(written.stdout, `${path.join("desks", "bob", "_meta", "organization.json")}\n`)
@@ -688,8 +690,106 @@ test("--write-record writes the record in this session's own subtree and turns D
 
   const now = Date.now()
   const solo = soloDesk()
+  git(solo, "add", "-A")
   assert.equal(runTidyStatusCli({ argv: ["--write-record"], env: { DESK: solo }, io: io().io, homeDir: tempDir(), cwd: tempDir() }), 0)
   assert.ok(Date.parse(readOrganizationRecord(solo).tidied_at) >= now - 1000)
+})
+
+// ── The --write-record gate: step 7's own checks, enforced in code ────────
+//
+// Fix round, 2026-09-28: a session that skipped step 7 (or read it and
+// skipped running it) used to get the record written anyway, with the same
+// exit code and shape as a real, checked tidy. `--write-record` now runs the
+// same checks step 7 tells the agent to run — a clean working tree in this
+// session's own desk, something actually staged, and no track folder whose
+// task cards still name a different track — and refuses otherwise.
+
+test("--write-record refuses when an unstaged change remains in this session's own desk", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: billing disputes; not payroll\nextra: unstaged\n---\n")
+  const refused = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stdout, /step 7/)
+  assert.equal(readOrganizationRecord(root), null)
+})
+
+test("--write-record refuses when an untracked file remains in this session's own desk", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  write(root, "billing-disputes/_planning/notes.md", "stray notes\n")
+  const refused = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stdout, /step 7/)
+  assert.equal(readOrganizationRecord(root), null)
+})
+
+test("--write-record refuses when nothing at all is staged", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  const refused = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stdout, /nothing is staged/)
+  assert.equal(readOrganizationRecord(root), null)
+})
+
+test("--write-record proceeds once everything the tidy changed is staged and nothing is left over", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: a freshly tidied scope; not anything else\n---\n")
+  git(root, "add", "-A")
+  const written = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(written.code, 0)
+  assert.ok(readOrganizationRecord(root) !== null)
+})
+
+test("--write-record refuses a track folder moved by a raw git mv instead of track_rename", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  write(
+    root,
+    "billing-disputes/refund-flow-cleanup/task.md",
+    `---\ntitle: refund-flow-cleanup\nstatus: processing\nupdated: '${RECENT}'\ntrack: billing-disputes\n---\n`,
+  )
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  // track_rename would rewrite `track:` on every card it moves; a raw `git
+  // mv` of the folder carries the old value forward unchanged.
+  git(root, "mv", "billing-disputes", "billing-issues")
+  const refused = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(refused.code, 1)
+  assert.match(refused.stdout, /track_rename/)
+  assert.equal(readOrganizationRecord(root), null)
+})
+
+test("--write-record does not flag a track whose task cards already name it correctly", () => {
+  const root = tempDir()
+  cleanTrack(root)
+  write(
+    root,
+    "billing-disputes/refund-flow-cleanup/task.md",
+    `---\ntitle: refund-flow-cleanup\nstatus: processing\nupdated: '${RECENT}'\ntrack: billing-disputes\n---\n`,
+  )
+  initGit(root)
+  git(root, "add", "-A")
+  git(root, "commit", "-q", "-m", "initial")
+  write(root, "billing-disputes/track.md", "---\ntitle: billing-disputes\nscope: billing disputes and refunds; not payroll\n---\n")
+  git(root, "add", "-A")
+  const written = cli(["--write-record"], { env: { DESK: root } })
+  assert.equal(written.code, 0)
 })
 
 // ── One tidy at a time, and no repeated instruction when it cannot finish ──
@@ -725,6 +825,7 @@ test("only one session tidies a desk at a time: the claim holds off a second rep
   const second = cli(["--report"], { env, now: stale })
   assert.equal(second.code, 0)
   assert.notEqual(claimOf(second), token)
+  git(root, "add", "-A") // stand in for the tidy's own staged work — this test is about claim rotation, not step 7.
   assert.equal(cli(["--write-record", "--claim", claimOf(second)], { env, now: stale }).code, 0)
   const gitDir = path.join(root, ".git")
   assert.deepEqual(claimFiles(gitDir), ["desk-tidy-claim.2.json"], "the takeover is the next generation, and the older one is pruned")
@@ -745,6 +846,7 @@ test("releasing leaves another session's claim alone, and replaces an unreadable
   assert.deepEqual(claimIn(gitDir, 4), { token: "theirs", claimed_at: NOW - CLAIM_STALE_MS })
   // An unreadable current claim counts as nobody's, and releasing replaces it.
   writeFileSync(path.join(gitDir, "desk-tidy-claim.5.json"), "{")
+  git(root, "add", "-A") // stand in for the tidy's own staged work — this test is about claim release, not step 7.
   assert.equal(cli(["--write-record"], { env }).code, 0)
   assert.deepEqual(claimIn(gitDir, 5), { claimed_at: 0 })
 })

@@ -5,6 +5,10 @@
 // track names additionally reject catch-all and person names; track.md
 // gains a required one-line `scope:`. Existing (possibly bad) names are
 // never rejected on read — only creation and renaming call these.
+//
+// Fix round, 2026-09-28: the shape rule is 1-6 words, not 2-6 — a single
+// established word (clippy, desk, spoonjoy, friends) is a valid outcome name
+// on its own; nothing about "kebab-case" ever implied a second word.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -48,11 +52,20 @@ test("validateName accepts the 6-word upper bound", () => {
 
 // ── validateName: shape ─────────────────────────────────────────────────
 
-test("validateName rejects a single word as shape", () => {
-  const result = validateName("misc")
-  assert.equal(result.ok, false)
-  assert.equal(result.code, "shape")
-  assert.match(result.hint, /2.6/)
+test("validateName accepts a single established word as shape", () => {
+  assert.deepEqual(validateName("clippy"), { ok: true })
+  assert.deepEqual(validateName("misc"), { ok: true })
+})
+
+test("validateName rejects a leading or trailing hyphen as shape", () => {
+  assert.equal(validateName("-oauth-fix").code, "shape")
+  assert.equal(validateName("oauth-fix-").code, "shape")
+  const result = validateName("-oauth-fix")
+  assert.match(result.hint, /1.6/)
+})
+
+test("validateName rejects a double hyphen (an empty word) as shape", () => {
+  assert.equal(validateName("oauth--fix").code, "shape")
 })
 
 test("validateName rejects a 7-word name as shape", () => {
@@ -325,8 +338,13 @@ test("validateTrackName falls through to base validateName rules for an ordinary
   assert.deepEqual(validateTrackName("billing-disputes", { operatorNames: ["ari"] }), { ok: true })
 })
 
+test("validateTrackName accepts an established one-word name that is not catch-all or person", () => {
+  assert.deepEqual(validateTrackName("clippy", { operatorNames: [] }), { ok: true })
+  assert.deepEqual(validateTrackName("oneword", { operatorNames: [] }), { ok: true })
+})
+
 test("validateTrackName still rejects a shape-invalid name that is not catch-all or person", () => {
-  const result = validateTrackName("oneword", { operatorNames: [] })
+  const result = validateTrackName("Oneword", { operatorNames: [] })
   assert.equal(result.code, "shape")
 })
 

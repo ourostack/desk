@@ -61,7 +61,8 @@ Rules for every step:
   with the reason in place of <one-line reason>. That releases the claim and keeps session start from asking again until this desk's latest commit or its uncommitted changes differ. Then say the reason in one line.
 - Move and rename only through Git: task_move and track_rename stage a git mv, and git mv moves a loose file. An untracked loose file that is not ignored gets git add first, then git mv. Leave ignored files where they are. Never delete content.
 - Never change a task's status. Stale tasks are reported only; their status belongs to the work.
-- Build every new name from the outcome, 2 to 6 lowercase kebab-case words. Never copy text from an old name, and never write an old name that failed the credential or prompt check (shown as <redacted segment>, name_credential_like or name_prompt_like) anywhere: not in a card, a commit message or the announcement. Describe such a move by its new name only.
+- Build every new name from the outcome, 1 to 6 lowercase kebab-case words. Never copy text from an old name, and never write an old name that failed the credential or prompt check (shown as <redacted segment>, name_credential_like or name_prompt_like) anywhere: not in a card, a commit message or the announcement. Describe such a move by its new name only.
+- Never rename or move a track or task folder with a raw git mv, a bare `git add -A` or a folder/pattern add, or by deleting `.git/index.lock` — all four are forbidden, whatever the reason. A track or task only ever moves through track_rename or task_move (step 4's loose-file git mv is not a track or task move); if a git command is refused, that is the tool protecting another session's work, not an obstacle to route around by hand.
 
 Steps, in order:
 1. Scope lines. For every track without one (track_missing_scope), write a scope line from its tasks with track_update (frontmatter.scope), in the form "<what belongs>; not <what doesn't>".

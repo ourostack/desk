@@ -161,10 +161,11 @@ async function buildOneOfEachFixture() {
     track: "normal-track",
   })
 
-  // name_shape: task slug is a single word.
-  await writeCard(root, "normal-track/oneword/task.md", {
+  // name_shape: task slug uses underscores, not kebab-case (fix round,
+  // 2026-09-28: a single word alone, e.g. "oneword", is now valid shape).
+  await writeCard(root, "normal-track/under_score_slug/task.md", {
     schema_version: 1,
-    title: "oneword",
+    title: "under_score_slug",
     status: "processing",
     created: RECENT,
     updated: RECENT,
@@ -313,7 +314,7 @@ test("name_prompt_like and name_shape point at the offending task directory", as
   const root = await buildOneOfEachFixture()
   const findings = organizationFindings(root, { now: NOW, operatorNames: ["ari-mendelow"] })
   assert.ok(findByCode(findings, "name_prompt_like").some((f) => f.path === "normal-track/hi-please-fix-this"))
-  assert.ok(findByCode(findings, "name_shape").some((f) => f.path === "normal-track/oneword"))
+  assert.ok(findByCode(findings, "name_shape").some((f) => f.path === "normal-track/under_score_slug"))
 })
 
 test("stale_task flags only the non-terminal aging task, never the terminal one", async () => {
@@ -850,6 +851,49 @@ test("track_empty accept: a track with a live task never fires", async () => {
   assert.deepEqual(findByCode(findings, "track_empty"), [])
 })
 
+// Fix round, 2026-09-28: a track holding only `_meta`/`_planning` files (no
+// live or archived tasks) was wrongly reported as empty and archived — the
+// live tidy run that exposed this archived `friends`, a who's-who layer
+// whose only content was `_meta/charter.md` and 41 `_planning` files.
+test("track_empty accept: a track holding only _meta content never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "friends/track.md", {
+    schema_version: 1,
+    title: "friends",
+    status: "active",
+    scope: "who's who; not anything else",
+  })
+  await writeFile(root, "friends/_meta/charter.md", "# Charter\n")
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "track_empty"), [])
+})
+
+test("track_empty accept: a track holding only _planning content never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "friends/track.md", {
+    schema_version: 1,
+    title: "friends",
+    status: "active",
+    scope: "who's who; not anything else",
+  })
+  await writeFile(root, "friends/_planning/2026-09-24-notes.md", "notes\n")
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "track_empty"), [])
+})
+
+test("track_empty still fires for a track holding only a dotfile", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "no-tasks-yet/track.md", {
+    schema_version: 1,
+    title: "no-tasks-yet",
+    status: "active",
+    scope: "an outcome that has no tasks filed under it yet; not anything else",
+  })
+  await writeFile(root, "no-tasks-yet/.gitkeep", "")
+  const findings = organizationFindings(root, { now: NOW })
+  assert.equal(findByCode(findings, "track_empty").length, 1)
+})
+
 test("name_prompt_like accept: a task name that doesn't start with a blocked word never fires", async () => {
   const root = await mkTempRoot()
   await writeCard(root, "billing-disputes/track.md", {
@@ -905,6 +949,29 @@ test("name_shape accept: a 2-6 word lowercase kebab-case name never fires", asyn
     created: RECENT,
     updated: RECENT,
     track: "billing-disputes",
+  })
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "name_shape"), [])
+})
+
+// Fix round, 2026-09-28: an established one-word track or task name is valid
+// shape too — the live tidy run that exposed this renamed clippy, spoonjoy
+// and desk to worse, invented multi-word names to satisfy the old rule.
+test("name_shape accept: an established one-word track and task name never fires", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "clippy/track.md", {
+    schema_version: 1,
+    title: "clippy",
+    status: "active",
+    scope: "clippy assistant development; not anything else",
+  })
+  await writeCard(root, "clippy/spoonjoy/task.md", {
+    schema_version: 1,
+    title: "spoonjoy",
+    status: "processing",
+    created: RECENT,
+    updated: RECENT,
+    track: "clippy",
   })
   const findings = organizationFindings(root, { now: NOW })
   assert.deepEqual(findByCode(findings, "name_shape"), [])
