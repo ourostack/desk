@@ -28,6 +28,21 @@
 // never a real TTY, in both cases), so this environment variable is the only
 // signal found; see the evidence trail linked from this change's changelog
 // fragment for the research that ruled the alternatives out.
+//
+// The path match covers more than this session's own computed binding path.
+// Live-proof evidence for this change (2026-09-28) had a haiku session under
+// a throwaway CLAUDE_CONFIG_DIR mis-resolve the env var, fall back to a
+// literal `~/...` path, and have the Write/Edit tools expand that `~` to the
+// real OS home directory -- landing on the operator's real, already-bound
+// `~/.claude` (its CLAUDE_CONFIG_DIR override was set for this session, but
+// the literal `~` bypassed it) copy of plugins/data/desk-ourostack/
+// desk.activation.json, instead of the throwaway profile's own file. An
+// exact match against only this session's own CLAUDE_PLUGIN_DATA would have
+// missed that path entirely, so Write/Edit also matches the general shape
+// any Claude config dir's plugin activation file has (`.../plugins/data/
+// <plugin-id>/desk.activation.json`), and "already bound" is checked against
+// the actual resolved path, not just the primary target -- so a real,
+// already-bound file is still never denied.
 
 import { existsSync } from "node:fs"
 import * as path from "node:path"
@@ -36,6 +51,7 @@ import { claudeBindingPath } from "../util/paths.js"
 const ATTENDED_ENV = "CLAUDE_CODE_SESSION_ATTENDED"
 const CONFIRMED_UNATTENDED = "0"
 const GATED_TOOLS = new Set(["Write", "Edit", "Bash", "PowerShell"])
+const ACTIVATION_FILENAME = "desk.activation.json"
 
 // Best-effort only, unlike protected-checkout's real shell-command inspector:
 // a false negative here just leaves today's prose-only rule as the only
@@ -44,8 +60,8 @@ const GATED_TOOLS = new Set(["Write", "Edit", "Bash", "PowerShell"])
 // both present in the command text.
 const SHELL_WRITE_PATTERN = /(>>?(?!=)|\btee\b|\bcp\b|\bmv\b|\bdd\s+of=|Set-Content|Add-Content|Out-File|Copy-Item|Move-Item|New-Item)/iu
 
-function shellCommandTargets(command, filename) {
-  if (typeof command !== "string" || !command.includes(filename)) return false
+function shellCommandTargets(command) {
+  if (typeof command !== "string" || !command.includes(ACTIVATION_FILENAME)) return false
   return SHELL_WRITE_PATTERN.test(command)
 }
 
@@ -53,6 +69,18 @@ function writeTargetPath(toolName, toolInput, cwd) {
   if (toolName !== "Write" && toolName !== "Edit") return null
   if (typeof toolInput?.file_path !== "string") return null
   return path.resolve(cwd ?? process.cwd(), toolInput.file_path)
+}
+
+// True for `.../plugins/data/<any plugin id>/desk.activation.json`, the
+// shape Claude Code gives every plugin's activation file under any config
+// dir -- not only this session's own. Deliberately structural rather than a
+// bare filename match, so an unrelated file that happens to share the name
+// (for example a test fixture) does not collide with it.
+function looksLikeClaudeActivationPath(resolvedPath) {
+  if (path.basename(resolvedPath) !== ACTIVATION_FILENAME) return false
+  const pluginDir = path.dirname(resolvedPath)
+  const dataDir = path.dirname(pluginDir)
+  return path.basename(dataDir) === "data" && path.basename(path.dirname(dataDir)) === "plugins"
 }
 
 // `input` is the hook's JSON stdin (never carries env). `env` defaults to
@@ -67,10 +95,6 @@ export async function askGateHook(input, host, env = process.env) {
   if (!GATED_TOOLS.has(name)) return {}
   if (env?.[ATTENDED_ENV] !== CONFIRMED_UNATTENDED) return {}
 
-  const target = claudeBindingPath(env)
-  if (target === null) return {} // can't compute the real binding path: fail open
-  if (existsSync(target)) return {} // already bound: never block a rebind a human drives
-
   let args = input.tool_input ?? input.toolArgs
   if (typeof args === "string") {
     try {
@@ -81,11 +105,19 @@ export async function askGateHook(input, host, env = process.env) {
   }
   if (!args || typeof args !== "object") return {}
 
-  const filename = path.basename(target)
-  const hit = name === "Write" || name === "Edit"
-    ? writeTargetPath(name, args, input.cwd) === target
-    : shellCommandTargets(args.command, filename)
-  if (!hit) return {}
+  if (name === "Write" || name === "Edit") {
+    const resolved = writeTargetPath(name, args, input.cwd)
+    if (resolved === null) return {}
+    const target = claudeBindingPath(env)
+    const matches = resolved === target || looksLikeClaudeActivationPath(resolved)
+    if (!matches) return {}
+    if (existsSync(resolved)) return {} // already bound: never block a rebind a human drives
+  } else {
+    const target = claudeBindingPath(env)
+    if (target === null) return {} // can't compute the real binding path: fail open
+    if (existsSync(target)) return {} // already bound: never block a rebind a human drives
+    if (!shellCommandTargets(args.command)) return {}
+  }
 
   const reason = "Desk ask-gate: this session reports nobody attending "
     + `(${ATTENDED_ENV}=${CONFIRMED_UNATTENDED}) and no desk is bound yet. `

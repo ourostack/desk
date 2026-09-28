@@ -18,6 +18,20 @@ function fixture() {
   return { root, pluginData, bindingPath: path.join(pluginData, "desk.activation.json") }
 }
 
+// Shapes a second, unrelated Claude config dir's plugin-data folder --
+// `<root>/other-config/plugins/data/desk-ourostack/desk.activation.json` --
+// the structural pattern any Claude config dir's activation file has,
+// distinct from this fixture's own `CLAUDE_PLUGIN_DATA` (`f.pluginData`).
+// Reproduces the live-proof incident this change closed: a session whose
+// own CLAUDE_PLUGIN_DATA points at a throwaway profile can still have a
+// Write/Edit call resolve (for example via `~` expansion) to a *different*
+// config dir's real, already-shaped activation file.
+function otherConfigDirFixture(root) {
+  const otherPluginData = path.join(root, "other-config", "plugins", "data", "desk-ourostack")
+  mkdirSync(otherPluginData, { recursive: true })
+  return { otherPluginData, otherBindingPath: path.join(otherPluginData, "desk.activation.json") }
+}
+
 function teardown(root) {
   rmSync(root, { recursive: true, force: true })
 }
@@ -182,6 +196,57 @@ test("resolves a relative Write file_path against the hook's cwd", async () => {
     })
     const result = await askGateHook(input, "claude", { ...UNATTENDED, CLAUDE_PLUGIN_DATA: f.pluginData })
     assertDenied(result)
+  } finally {
+    teardown(f.root)
+  }
+})
+
+test("denies a Write to a different Claude config dir's activation file, even though it doesn't match this session's own CLAUDE_PLUGIN_DATA", async () => {
+  const f = fixture()
+  try {
+    const other = otherConfigDirFixture(f.root)
+    const input = writeInput({
+      pluginData: f.pluginData,
+      toolName: "Write",
+      toolInput: { file_path: other.otherBindingPath, content: "{}" },
+    })
+    // This session's own env points at f.pluginData, not other.otherPluginData:
+    // an exact match against CLAUDE_PLUGIN_DATA alone would miss this target.
+    const result = await askGateHook(input, "claude", { ...UNATTENDED, CLAUDE_PLUGIN_DATA: f.pluginData })
+    assertDenied(result)
+  } finally {
+    teardown(f.root)
+  }
+})
+
+test("allows a Write to a different Claude config dir's activation file when that one is already bound (never blocks a rebind a human drives)", async () => {
+  const f = fixture()
+  try {
+    const other = otherConfigDirFixture(f.root)
+    writeFileSync(other.otherBindingPath, JSON.stringify({ schema_version: 1, desk: { root: "/elsewhere" } }))
+    const input = writeInput({
+      pluginData: f.pluginData,
+      toolName: "Write",
+      toolInput: { file_path: other.otherBindingPath, content: "{}" },
+    })
+    const result = await askGateHook(input, "claude", { ...UNATTENDED, CLAUDE_PLUGIN_DATA: f.pluginData })
+    assertAllowed(result)
+  } finally {
+    teardown(f.root)
+  }
+})
+
+test("ignores a desk.activation.json-named file outside the plugins/data shape (precision: no false positive)", async () => {
+  const f = fixture()
+  try {
+    const strayPath = path.join(f.root, "desk.activation.json")
+    const input = writeInput({
+      pluginData: f.pluginData,
+      toolName: "Write",
+      toolInput: { file_path: strayPath, content: "{}" },
+    })
+    const result = await askGateHook(input, "claude", { ...UNATTENDED, CLAUDE_PLUGIN_DATA: f.pluginData })
+    assertAllowed(result)
   } finally {
     teardown(f.root)
   }
