@@ -2,26 +2,18 @@
 //
 // It answers initialize, ping and tools/list at once, always with the full tool set, so the handshake never waits for the runtime pack, the desk root, authority or the readiness controller, and a host that caches the first tools/list never loses a tool once Desk recovers. Every tools/call goes to the `callTool` it is given, which gates tools by admission state.
 //
-// It imports only the tool names, so it runs before the runtime pack (and its native modules) is restored.
+// It imports only the tool names and their dependency-free input schemas, so it runs before the runtime pack (and its native modules) is restored.
 
 import { TOOL_DESCRIPTIONS, TOOL_NAMES } from "../tool-names.js"
+import { DOCTOR_REPAIRS, TOOL_INPUT_SCHEMAS } from "../tool-schemas.js"
 
-export const DOCTOR_REPAIRS = Object.freeze(["switch_state_branch", "reclaim_controller", "prune_readiness_state"])
+export { DOCTOR_REPAIRS }
 
-// One tool list for every mode, in the canonical order. desk_doctor keeps its stricter schema.
+// One tool list for every mode, in the canonical order, each with its declared input schema.
 export const FRONT_DOOR_TOOLS = Object.freeze(TOOL_NAMES.map((name) => Object.freeze({
   name,
   description: TOOL_DESCRIPTIONS[name],
-  inputSchema: name === "desk_doctor"
-    ? {
-        type: "object",
-        properties: {
-          format: { type: "string", enum: ["full", "preview"] },
-          repair: { type: "string", enum: [...DOCTOR_REPAIRS] },
-        },
-        additionalProperties: false,
-      }
-    : { type: "object", properties: {}, additionalProperties: true },
+  inputSchema: TOOL_INPUT_SCHEMAS[name],
 })))
 
 /**

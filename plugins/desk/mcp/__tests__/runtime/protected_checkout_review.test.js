@@ -5,13 +5,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout, protectedCheckoutHook, WORKTREE_GUIDANCE } from "../../src/runtime/protected-checkout.js"
+import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout, protectedCheckoutHook } from "../../src/runtime/protected-checkout.js"
 import { inspectionEnvironment, readInspectionGit, resolveInspectionGit } from "../../src/runtime/git-inspection.js"
-import { inspectGitOptions } from "../../src/runtime/git-guard-options.js"
+import { hasOption, parseGitOptions, SPECS } from "../../src/runtime/git-guard-options.js"
 import { inspectShell } from "../../src/runtime/shell-commands.js"
-import { inspectPowerShell } from "../../src/runtime/powershell-commands.js"
+import { inspectPowerShell, POWERSHELL_GIT_FORMS } from "../../src/runtime/powershell-commands.js"
 
 const plugin = fileURLToPath(new URL("../../../", import.meta.url))
+const LEAVE = /^Desk protected checkout .+: this would move HEAD off the checkout's branch\. To leave the state branch, use your own worktree: git worktree add --detach "\$HOME\/<new directory>" <ref>$/u
+const DENIED = /^Desk protected checkout .+: /u
+const enabled = (operation, args, name) => hasOption(parseGitOptions(SPECS[operation], args), name)
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
 const q = (text) => `'${text.replaceAll("'", "'\\''")}'`
 const psq = (text) => `'${text.replaceAll("'", "''")}'`
@@ -51,7 +54,7 @@ test("A3-C01: candidate PATH and loader variables never select an inspection exe
     const command = `PATH=${q(bin)} NODE_OPTIONS=${q(`--require=${preload}`)} GIT_EXEC_PATH=${q(bin)} ${executable} -C ${q(f.shared)} checkout --detach HEAD`
     const response = await f.guard(command)
     assert.equal(existsSync(sentinel), false, "inspection must not execute candidate-selected code")
-    assert.equal(response.reason, WORKTREE_GUIDANCE)
+    assert.match(response.reason, LEAVE)
     for (const host of ["claude", "copilot"]) {
       const input = host === "claude" ? { tool_name: "Bash", tool_input: { command }, cwd: f.ordinary }
         : { toolName: "bash", toolArgs: { command }, cwd: f.ordinary }
@@ -92,10 +95,12 @@ test("A3-I01: physical Git traversal and logical/physical cd inspect the same ch
 test("A3-I02: accepted Git option abbreviations mutate while option values remain read-only", async (t) => {
   const f = fixture(t)
   writeFileSync(path.join(f.shared, "file.txt"), "changed\n")
-  assert.equal((await f.guard(`git -C ${q(f.shared)} restore --sour=HEAD -- file.txt`)).deny, true)
-  f.git(f.shared, "restore", "--sour=HEAD", "--", "file.txt")
+  // A whole-tree restore is denied (named paths pass since 2026-09-27), so the abbreviation is checked on `.`.
+  assert.equal((await f.guard(`git -C ${q(f.shared)} restore --sour=HEAD -- .`)).deny, true)
+  f.git(f.shared, "restore", "--sour=HEAD", "--", ".")
   assert.equal(readFileSync(path.join(f.shared, "file.txt"), "utf8"), "base\n")
-  assert.equal((await f.guard(`git -C ${q(f.shared)} branch --forc topic HEAD`)).deny, true)
+  assert.equal((await f.guard(`git -C ${q(f.shared)} branch --forc main HEAD`)).deny, true, "force-moving the current branch")
+  assert.equal((await f.guard(`git -C ${q(f.shared)} branch --forc topic HEAD`)).deny, false, "force-moving another branch")
   f.git(f.shared, "branch", "--forc", "topic", "HEAD")
   assert.equal(f.git(f.shared, "rev-parse", "topic"), f.git(f.shared, "rev-parse", "HEAD"))
   for (const args of ["branch --format -f", "branch --format --force", "branch --format=--forc", "branch --list --format -f"]) {
@@ -126,8 +131,8 @@ test("A3-I03: ANSI-C quotes and unquoted parameter fields retain Bash command se
     assert.equal(f.git(f.shared, "rev-parse", "--abbrev-ref", "HEAD"), "HEAD")
   }
   assert.equal((await f.guard(`G='git -C ${f.shared}'; "$G" checkout HEAD`)).deny, false)
-  await assert.rejects(f.guard('git -C "$(opaque-command)" checkout HEAD'), /unresolved/u)
-  await assert.rejects(f.guard('cd "$(opaque-command)" && git checkout HEAD'), /unresolved/u)
+  assert.match((await f.guard('git -C "$(opaque-command)" checkout HEAD')).reason, /could not resolve which checkout/u)
+  assert.match((await f.guard('cd "$(opaque-command)" && git checkout HEAD')).reason, /could not resolve which checkout/u)
 })
 
 test("A3-I04: PowerShell assignment, aliases, variables and parameters are case-insensitive", async (t) => {
@@ -183,7 +188,8 @@ test("A3-I06: valid case syntax is non-applicable unless its selected arm invoke
   }
   assert.equal((await f.guard(`case x in y) echo no;; x) git -C ${q(f.shared)} checkout HEAD;; esac`)).deny, true)
   assert.equal((await f.guard(`case x in y) git -C ${q(f.shared)} checkout HEAD;; *) echo harmless;; esac`)).deny, false)
-  await assert.rejects(f.guard(`case x in x) git -C ${q(f.shared)} checkout HEAD;`), /shell|case/u)
+  assert.match((await f.guard(`case x in x) git -C ${q(f.shared)} checkout HEAD;`)).reason, /could not inspect this shell command \(expected shell \)\)/u)
+  assert.equal((await f.guard("case x in x) echo harmless;")).deny, false, "unparseable text without Git stays allowed")
 })
 
 test("A3-I07: Claude's native PowerShell registration selects PowerShell for parent and child payloads", async (t) => {
@@ -195,7 +201,7 @@ test("A3-I07: Claude's native PowerShell registration selects PowerShell for par
     assert.equal((await protectedCheckoutHook(input, "claude")).hookSpecificOutput.permissionDecision, "deny")
     const result = spawnSync(process.execPath, [hook, "claude"], { input: JSON.stringify(input), env: f.env, encoding: "utf8" })
     assert.equal(result.status, 0, result.stderr)
-    assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason, WORKTREE_GUIDANCE)
+    assert.match(JSON.parse(result.stdout).hookSpecificOutput.permissionDecisionReason, LEAVE)
   }
 })
 
@@ -216,7 +222,7 @@ test("PowerShell hook command is invokable on every PowerShell host, not only Wi
   const input = { toolName: "powershell", toolArgs: { command: "git checkout HEAD" }, cwd: f.shared }
   const result = spawnSync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], { cwd: f.ordinary, env: f.env, input: JSON.stringify(input), encoding: "utf8" })
   assert.equal(result.status, 0, result.stderr)
-  assert.equal(JSON.parse(result.stdout).permissionDecisionReason, WORKTREE_GUIDANCE)
+  assert.match(JSON.parse(result.stdout).permissionDecisionReason, LEAVE)
 })
 
 test("inspection trust is independent of candidate runtime search and fails explicitly without trusted Git", async (t) => {
@@ -234,6 +240,8 @@ test("inspection trust is independent of candidate runtime search and fails expl
   await assert.rejects(readInspectionGit(f.root + "/absent", ["status"], {}), /ENOENT/u)
   // hash-object --stdin waits on input the inspection never sends, so the hooks' default 2 s limit ends it and says so.
   await assert.rejects(readInspectionGit(f.ordinary, ["hash-object", "--stdin"], {}), /Git inspection timed out after 2000 ms: git hash-object --stdin/u)
+  // A missing value is an answer (exit 1 with no output), not an inspection failure.
+  assert.deepEqual(await readInspectionGit(f.ordinary, ["config", "--get", "alias.log"], {}), { ok: false, stdout: "", stderr: "", code: 1 })
 })
 
 test("the guard shares one inspection budget across its Git calls, below every host's hook timeout", async (t) => {
@@ -254,37 +262,39 @@ test("the guard shares one inspection budget across its Git calls, below every h
   // Once the budget is spent the guard fails closed and says why.
   clock = 0
   const spentGit = (cwd, args, env) => { clock += GUARD_INSPECTION_BUDGET_MS; return readInspectionGit(cwd, args, env) }
-  await assert.rejects(f.guard(command, { readGit: spentGit, now: () => clock }), new RegExp(`inspection budget of ${GUARD_INSPECTION_BUDGET_MS} ms is spent`, "u"))
+  const spent = await f.guard(command, { readGit: spentGit, now: () => clock })
+  assert.equal(spent.deny, true)
+  assert.match(spent.reason, new RegExp(`within its ${GUARD_INSPECTION_BUDGET_MS / 1000} s budget because Git answered too slowly`, "u"))
 })
 
 test("operation option parsing consumes values, detects unambiguous prefixes and respects negation", () => {
   const cases = [
-    ["restore", ["--sour", "HEAD", "--", "file"], true],
-    ["restore", ["--source=HEAD", "--no-source", "file"], false],
-    ["restore", ["--s"], false],
-    ["restore", ["--source"], false],
-    ["restore", ["-s"], false],
-    ["restore", ["-sHEAD"], true],
-    ["restore", ["-U", "2", "-sHEAD"], true],
-    ["restore", ["--conflict", "-sHEAD"], false],
-    ["branch", ["--forc", "topic"], true],
-    ["branch", ["--for"], false],
-    ["branch", ["--format", "--force"], false],
-    ["branch", ["--format=-f"], false],
-    ["branch", ["--format"], false],
-    ["branch", ["-u", "-f"], false],
-    ["branch", ["--force", "--no-force", "topic"], false],
-    ["branch", ["--contains", "HEAD", "-f", "topic"], true],
-    ["branch", ["--contains", "-f", "topic"], true],
-    ["branch", ["--contains"], false],
-    ["branch", ["--contains=HEAD"], false],
-    ["branch", ["--color=never", "-f", "topic"], true],
-    ["branch", ["-", "--force"], true],
-    ["remove", ["--forc", "victim"], true],
-    ["remove", ["--force", "--no-force", "victim"], false],
-    ["remove", ["--", "--force"], false],
+    ["restore", ["--sour", "HEAD", "--", "file"], "source", true],
+    ["restore", ["--source=HEAD", "--no-source", "file"], "source", false],
+    ["restore", ["--s"], "source", false],
+    ["restore", ["--source"], "source", false],
+    ["restore", ["-s"], "source", false],
+    ["restore", ["-sHEAD"], "source", true],
+    ["restore", ["-U", "2", "-sHEAD"], "source", true],
+    ["restore", ["--conflict", "-sHEAD"], "source", false],
+    ["branch", ["--forc", "topic"], "force", true],
+    ["branch", ["--for"], "force", false],
+    ["branch", ["--format", "--force"], "force", false],
+    ["branch", ["--format=-f"], "force", false],
+    ["branch", ["--format"], "force", false],
+    ["branch", ["-u", "-f"], "force", false],
+    ["branch", ["--force", "--no-force", "topic"], "force", false],
+    ["branch", ["--contains", "HEAD", "-f", "topic"], "force", true],
+    ["branch", ["--contains", "-f", "topic"], "force", true],
+    ["branch", ["--contains"], "force", false],
+    ["branch", ["--contains=HEAD"], "force", false],
+    ["branch", ["--color=never", "-f", "topic"], "force", true],
+    ["branch", ["-", "--force"], "force", true],
+    ["worktree remove", ["--forc", "victim"], "force", true],
+    ["worktree remove", ["--force", "--no-force", "victim"], "force", false],
+    ["worktree remove", ["--", "--force"], "force", false],
   ]
-  for (const [operation, args, enabled] of cases) assert.equal(inspectGitOptions(operation, args).enabled, enabled, `${operation} ${args.join(" ")}`)
+  for (const [operation, args, name, expected] of cases) assert.equal(enabled(operation, args, name), expected, `${operation} ${args.join(" ")}`)
 })
 
 test("ANSI-C literal escapes decode without executing code or expanding quoted variables", async (t) => {
@@ -296,8 +306,17 @@ test("ANSI-C literal escapes decode without executing code or expanding quoted v
     `$'g\\x69t' -C ${q(f.shared)} checkout HEAD`,
   ]) assert.equal((await f.guard(command)).deny, true, command)
   for (const command of ["printf $'\\a\\b\\e\\E\\f\\n\\r\\t\\v\\\\\\'\\\"'", "printf $'\\cA\\z'"]) assert.equal((await f.guard(command)).deny, false)
-  for (const command of ["echo $'unterminated", "echo $'\\x'", "echo $'\\c"]) await assert.rejects(f.guard(command), /ANSI-C/u)
-  await assert.rejects(f.guard('$(opaque-command) status'), /unresolved shell command/u)
+  for (const command of ["echo $'unterminated", "echo $'\\x'", "echo $'\\c"]) {
+    assert.equal((await f.guard(command)).deny, false, command)
+    // Unparseable text is judged by the Git operations it names: status passes, stash does not.
+    assert.equal((await f.guard(`git status; ${command}`)).deny, false, command)
+    assert.match((await f.guard(`git -C ${q(f.shared)} stash; ${command}`)).reason, /could not inspect this shell command \(.*ANSI-C.*git stash could change/u, command)
+  }
+  assert.equal((await f.guard("$(opaque-command) status")).deny, false, "an unknown program with no path to Git")
+  // A computed program is judged as Git by its arguments (2026-09-27): read-only Git passes, a denied operation does not.
+  assert.equal((await f.guard("$(opaque-command) git status")).deny, false)
+  assert.equal((await f.guard("$(command -v git) status")).deny, false)
+  assert.match((await f.guard(`$(command -v git) -C ${q(f.shared)} stash`)).reason, /git stash takes other sessions/u)
   assert.equal((await f.guard(`G='git:-C:${f.shared}'; IFS=:; $G checkout HEAD`)).deny, true)
   assert.equal((await f.guard(`G='git -C ${f.shared}'; IFS=; $G checkout HEAD`)).deny, false)
 })
@@ -322,11 +341,23 @@ test("case patterns, branch fallthrough and subshell boundaries match reachable 
 
 test("PowerShell non-Git expressions and redirects are allowed; computed targets and calls fail safely", async (t) => {
   const f = fixture(t)
-  for (const command of ["", '"git checkout HEAD"', "Write-Output harmless > result.txt", "$unused = 1 + 2; Write-Output ok"]) {
+  for (const command of ["", "Write-Output harmless > result.txt", "$unused = 1 + 2; Write-Output ok"]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
   }
-  for (const command of ["&", "$name = 1 + 2; & $name", "$repo = 1 + 2; sl $repo", `sl -unsupported ${psq(f.shared)}`, `git -C "$(opaque-command)" checkout HEAD`]) {
-    await assert.rejects(f.guard(command, { powershell: true }), /unresolved/u, command)
+  // Round 4 ruling: in a protected checkout, text that names Git outside the plain forms is denied, even a string.
+  // An unprotected checkout never gets the allowlist denial (narrowed 2026-09-27).
+  assert.equal((await f.guard('"git checkout HEAD"', { powershell: true, cwd: f.shared })).reason, POWERSHELL_GIT_FORMS)
+  assert.equal((await f.guard('"git checkout HEAD"', { powershell: true })).deny, false)
+  for (const command of ["&", "$name = 1 + 2; & $name", "$repo = 1 + 2; sl $repo", `sl -unsupported ${psq(f.shared)}`]) {
+    assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
+  }
+  // A computed program from an unprotected checkout can reach no protected one; from a protected checkout it is denied.
+  assert.equal((await f.guard("$name = (Get-Command git).Source; & $name status", { powershell: true })).deny, false)
+  assert.equal((await f.guard("$name = (Get-Command git).Source; & $name status", { powershell: true, cwd: f.shared })).deny, true)
+  assert.equal((await f.guard("&; git status", { powershell: true, cwd: f.shared })).deny, false, "unparseable, and names no denied operation")
+  assert.equal((await f.guard("&; git stash", { powershell: true, cwd: f.shared })).deny, true)
+  for (const command of [`$repo = 1 + 2; sl $repo; git checkout HEAD`, `sl -unsupported ${psq(f.shared)}; git stash`, `git -C "$(opaque-command)" checkout HEAD`]) {
+    assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
   }
   assert.equal((await f.guard(`Write-Output $(git -C ${psq(f.shared)} checkout HEAD)`, { powershell: true })).deny, true)
   assert.equal((await f.guard(`$repo=${psq(f.shared)}; Write-Output $(git -C $repo checkout HEAD)`, { powershell: true })).deny, true)
@@ -360,12 +391,16 @@ test("PowerShell keeps environment, local variables, conditional reachability an
   assert.equal((await f.guard("sl '~'; echo no-home", { powershell: true, env: {} })).deny, false)
   assert.equal((await f.guard("echo harmless", { powershell: true, cwd: f.root + "/absent" })).deny, false)
   assert.equal((await f.guard("git -C $(Get-Location) checkout HEAD", { powershell: true, cwd: f.shared })).deny, true)
-  for (const command of ["Write-Output >", "(opaque)", "Write-Output $(echo (x))", "Write-Output $(Write-Output `)"]) {
-    await assert.rejects(f.guard(command, { powershell: true }), /unresolved|unterminated/u, command)
+  for (const command of ["git status; (opaque)", "git status; Write-Output $(echo (x))"]) assert.equal((await f.guard(command, { powershell: true })).deny, false, `${command}: groups are parsed, not unparseable`)
+  for (const command of ["Write-Output >", "Write-Output $(Write-Output `)"]) {
+    assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
+    assert.equal((await f.guard(`git status; ${command}`, { powershell: true, cwd: f.shared })).deny, false, command)
+    assert.match((await f.guard(`git stash; ${command}`, { powershell: true, cwd: f.shared })).reason, /could not inspect this shell command|git stash takes other sessions/u, command)
   }
+  // Only Git calls reach the policy.
   const calls = []
-  await inspectPowerShell({ command: "Write-Output ok", cwd: f.ordinary, env: {}, visit: (call) => calls.push(call.name) })
-  assert.deepEqual(calls, ["write-output"])
+  await inspectPowerShell({ command: "Write-Output ok; git status", cwd: f.ordinary, env: {}, visit: (call) => calls.push(call.name) })
+  assert.deepEqual(calls, ["git"])
 })
 
 test("Bash scalar and field expansion preserve empty values, literal dollars and case fallthrough", async (t) => {
@@ -385,7 +420,7 @@ test("Bash scalar and field expansion preserve empty values, literal dollars and
   assert.deepEqual(calls, [["%s", "prefixa", "bsuffix"]])
 })
 
-function assertHookDecision(f, command, deny, { cwd = f.ordinary, powershell = false } = {}) {
+function assertHookDecision(f, command, deny, { cwd = f.ordinary, powershell = false, reason = LEAVE } = {}) {
   const before = f.git(f.shared, "reflog", "--format=%H %gs")
   for (const host of ["claude", "copilot"]) {
     for (const child of [false, true]) {
@@ -398,7 +433,7 @@ function assertHookDecision(f, command, deny, { cwd = f.ordinary, powershell = f
       if (deny) {
         const decision = output.hookSpecificOutput ?? output
         assert.equal(decision.permissionDecision, "deny")
-        assert.equal(decision.permissionDecisionReason, WORKTREE_GUIDANCE)
+        assert.match(decision.permissionDecisionReason, reason)
       } else assert.deepEqual(output, {})
     }
   }
@@ -438,19 +473,27 @@ test("A3-I06 round 2: multiline and empty case forms remain non-applicable in ei
   assertDirectCheckout(t, f, mutation)
 })
 
-test("A3-R1-I01: quoted PowerShell results are data but their executable interpolation is inspected", async (t) => {
+// Round 4 ruling: a string that names Git outside an interpolation is outside the plain forms. Replay ruling
+// (2026-09-27): an interpolation `$( … )` runs as its own statement, so its Git is judged by the policy.
+test("A3-R1-I01: quoted PowerShell results that name Git are denied, and their executable interpolation would run", async (t) => {
   const f = fixture(t)
+  const forms = new RegExp(`^${POWERSHELL_GIT_FORMS.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`, "u")
   for (const command of [
     `"$(git -C ${psq(f.shared)} checkout --detach HEAD)"`,
     `"prefix$(git -C ${psq(f.shared)} checkout --detach HEAD)suffix"`,
   ]) {
     assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
-    assertHookDecision(f, command, true, { powershell: true })
+    assertHookDecision(f, command, true, { powershell: true, reason: /this would move HEAD off/u })
     assertDirectCheckout(t, f, command, { powershell: true })
   }
   for (const command of ['"git checkout HEAD"', psq(`$(git -C ${psq(f.shared)} checkout HEAD)`), '"`$(git checkout HEAD)"']) {
+    assert.equal((await f.guard(command, { powershell: true, cwd: f.shared })).reason, POWERSHELL_GIT_FORMS, command)
+    assertHookDecision(f, command, true, { powershell: true, reason: forms, cwd: f.shared })
+  }
+  // From an unprotected checkout, only text that could reach another checkout keeps the allowlist denial.
+  assert.equal((await f.guard(psq(`$(git -C ${psq(f.shared)} checkout HEAD)`), { powershell: true })).reason, POWERSHELL_GIT_FORMS)
+  for (const command of ['"git checkout HEAD"', '"`$(git checkout HEAD)"']) {
     assert.equal((await f.guard(command, { powershell: true })).deny, false, command)
-    assertHookDecision(f, command, false, { powershell: true })
   }
 })
 
@@ -458,12 +501,13 @@ test("A3-R1-I02: unknown PowerShell status retains both conditional location and
   const f = fixture(t)
   const command = `git -C ${psq(path.join(f.root, "missing"))} status && Set-Location ${psq(f.ordinary)}; git checkout --detach HEAD`
   assert.equal((await f.guard(command, { cwd: f.shared, powershell: true })).deny, true)
-  assertHookDecision(f, command, true, { cwd: f.shared, powershell: true })
+  assertHookDecision(f, command, true, { cwd: f.shared, powershell: true, reason: /^Desk could not resolve which checkout this Git command runs in/u })
   assertDirectCheckout(t, f, command, { cwd: f.shared, powershell: true })
   for (const operator of ["&&", "||"]) {
+    // A statement that may or may not run leaves the location it could change unknown.
     const calls = []
     await inspectPowerShell({ command: `external-command ${operator} Set-Location ${psq(f.ordinary)}; git status`, cwd: f.shared, env: f.env, visit: (call) => { if (call.name === "git") calls.push(call.cwd) } })
-    assert.deepEqual([...new Set(calls)].sort(), [f.ordinary, f.shared].sort())
+    assert.deepEqual(calls, ["\0"])
     const variable = `$repo=${psq(f.shared)}; external-command ${operator} $repo=${psq(f.ordinary)}; git -C $repo checkout HEAD`
     assert.equal((await f.guard(variable, { powershell: true })).deny, true)
     const multiline = `external-command ${operator}\n Set-Location ${psq(f.ordinary)};\n git checkout HEAD`
@@ -517,11 +561,11 @@ test("A3-R1-I04: case has its own status, including successful unmatched and emp
 test("A3-R1-I05: only negatable options compete for negative prefixes and ambiguity retains recognized mutation", async (t) => {
   const f = fixture(t)
   for (const option of ["--no-o", "--no-ov", "--no-overlay"]) {
-    const command = `git -C ${q(f.shared)} restore --source=HEAD ${option} -- file.txt`
+    const command = `git -C ${q(f.shared)} restore --source=HEAD ${option} -- .`
     writeFileSync(path.join(f.shared, "file.txt"), "changed\n")
     assert.equal((await f.guard(command)).deny, true, command)
-    assertHookDecision(f, command, true)
-    f.git(f.shared, "restore", "--source=HEAD", option, "--", "file.txt")
+    assertHookDecision(f, command, true, { reason: DENIED })
+    f.git(f.shared, "restore", "--source=HEAD", option, "--", ".")
     assert.equal(readFileSync(path.join(f.shared, "file.txt"), "utf8"), "base\n")
   }
   for (const args of [
@@ -529,7 +573,7 @@ test("A3-R1-I05: only negatable options compete for negative prefixes and ambigu
     ["--source=HEAD", "--unrecognized"],
     ["--source=HEAD", "--s"],
     ["--unrecognized", "--source=HEAD"],
-  ]) assert.equal(inspectGitOptions("restore", args).enabled, true, args.join(" "))
-  assert.equal(inspectGitOptions("restore", ["--source=HEAD", "--no-source"]).enabled, false)
+  ]) assert.equal(enabled("restore", args, "source"), true, args.join(" "))
+  assert.equal(enabled("restore", ["--source=HEAD", "--no-source"], "source"), false)
   assert.equal((await f.guard(`git -C ${q(f.shared)} branch --format --no-o`)).deny, false)
 })
