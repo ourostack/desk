@@ -75,6 +75,86 @@ export async function writeMarkdown(filePath, data, content) {
   await fs.writeFile(filePath, serializeMarkdown(data, content), "utf8")
 }
 
+// A YAML plain scalar is safe here only for the narrow shapes this
+// function's own callers actually pass (a track slug, a status word, a
+// task reference such as `other-track/other-slug`): starts with a letter,
+// then letters, digits, `-`, `_`, or `/`, and never one of YAML's own
+// reserved plain-scalar spellings. Everything else — including every
+// timestamp `patchFrontmatterFields` writes, which always starts with a
+// digit — is double-quoted, so its type survives the next parse (an
+// unquoted `2026-09-25T09:00:00Z` is a Date under gray-matter's default
+// schema, not a string).
+const SAFE_BARE_SCALAR = /^[A-Za-z][A-Za-z0-9_/-]*$/u
+const YAML_RESERVED_WORD = /^(?:true|false|null|~|yes|no|on|off)$/iu
+
+function encodeScalar(value) {
+  const text = String(value)
+  if (SAFE_BARE_SCALAR.test(text) && !YAML_RESERVED_WORD.test(text)) return text
+  return `"${text.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n")}"`
+}
+
+const FRONTMATTER_TOP_LEVEL_KEY = /^([A-Za-z_][A-Za-z0-9_-]*):(?:\s|$)/u
+
+/**
+ * Rewrite only the named top-level frontmatter fields of `rawText`
+ * (`{ key: value }`), leaving every other byte untouched: other fields'
+ * quoting, key order, comments, date formats, and block scalars, plus the
+ * body, survive exactly as written. A field not already present is
+ * appended as a new plain-scalar line just before the closing fence; a
+ * field that is present, however it was written (quoted, folded, a block
+ * scalar), is replaced by one new plain-scalar line, dropping its own
+ * continuation lines only.
+ *
+ * Returns `null` when `rawText` has no `---`-fenced frontmatter to patch —
+ * the caller's cue to fall back to a full parse + re-dump, since there are
+ * then no pre-existing bytes worth a surgical edit.
+ *
+ * This exists so a mover/renamer never has to round-trip a card's whole
+ * frontmatter through `serializeMarkdown`'s YAML dump just to change
+ * `track:`/`updated:`/`status:`: that round trip is what silently rewrites
+ * a date-only value's format, a scalar's quoting, or a long line folded
+ * into a `>-` block, even when every field's actual value is unchanged.
+ */
+export function patchFrontmatterFields(rawText, fields) {
+  const lines = rawText.split(/\r?\n/u)
+  if (lines[0] !== "---") return null
+  const end = lines.indexOf("---", 1)
+  if (end === -1) return null
+
+  const remaining = new Map(Object.entries(fields))
+  const patched = lines.slice(0, end)
+  for (let index = 1; index < patched.length; index += 1) {
+    const line = patched[index]
+    if (line === "" || /^\s/u.test(line)) continue
+    const match = FRONTMATTER_TOP_LEVEL_KEY.exec(line)
+    if (!match || !remaining.has(match[1])) continue
+    let dropEnd = index + 1
+    while (dropEnd < patched.length && (patched[dropEnd] === "" || /^\s/u.test(patched[dropEnd]))) dropEnd += 1
+    patched.splice(index, dropEnd - index, `${match[1]}: ${encodeScalar(remaining.get(match[1]))}`)
+    remaining.delete(match[1])
+  }
+  for (const [key, value] of remaining) patched.push(`${key}: ${encodeScalar(value)}`)
+  return [...patched, ...lines.slice(end)].join("\n")
+}
+
+/**
+ * Patch only the named top-level frontmatter fields of the file at
+ * `filePath` in place (see `patchFrontmatterFields`). Falls back to a full
+ * read + merge + `writeMarkdown` only when the file has no `---`-fenced
+ * frontmatter to patch surgically — a malformed or fence-less card, which
+ * has no pre-existing byte layout worth preserving anyway.
+ */
+export async function patchMarkdownFrontmatter(filePath, fields) {
+  const raw = await fs.readFile(filePath, "utf8")
+  const patched = patchFrontmatterFields(raw, fields)
+  if (patched !== null) {
+    await fs.writeFile(filePath, patched, "utf8")
+    return
+  }
+  const parsed = matter(raw)
+  await writeMarkdown(filePath, { ...parsed.data, ...fields }, parsed.content)
+}
+
 /** Check whether a path exists (file OR directory). */
 export async function pathExists(p) {
   try {

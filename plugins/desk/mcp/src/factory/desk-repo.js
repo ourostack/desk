@@ -421,23 +421,144 @@ function deriveSubstitutions(renamePairs) {
   return [...byKey.values()]
 }
 
+// One top-level frontmatter entry: its key (`null` when the line doesn't
+// parse as `key:` or `key: value`), the raw value text after the colon on
+// its own header line, and the header line plus every line that continues
+// it (a block scalar's body, a nested map or list). Operates on lines
+// already run through `stripHousekeepingLines`/`normalizeQuotingLine`, so
+// grouping never has to re-derive either of those.
+const TOP_LEVEL_ENTRY = /^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t](.*))?$/u
+function groupFrontmatterEntries(lines) {
+  const entries = []
+  for (const line of lines) {
+    if (isTopLevelLine(line)) {
+      const match = TOP_LEVEL_ENTRY.exec(line)
+      entries.push({ key: match ? match[1] : null, value: match ? (match[2] ?? "") : "", header: line, continuation: [] })
+    } else if (entries.length > 0) {
+      entries[entries.length - 1].continuation.push(line)
+    }
+  }
+  return entries
+}
+
+function entryLiteral(entry) {
+  return [entry.header, ...entry.continuation].join("\n")
+}
+
+// An entry's own header line plus a chomp-`-` block scalar body (`>-`
+// folded, `|-` literal) folded to the text it denotes, when that's
+// unambiguous: uniform indentation (taken from the first continuation
+// line), no blank line, no other chomp or explicit-indentation indicator
+// (bare `>`/`|`, `+`, or a digit are all left unparsed). Anything this
+// can't fold with confidence — including a nested map or list, which has
+// no `>-`/`|-` header at all — returns `null`, the same "don't know, so it
+// binds" signal `deriveSubstitutions` and friends already use past their
+// own caps.
+const BLOCK_SCALAR_HEADER = /^([|>])-$/u
+function semanticScalarValue(entry) {
+  const blockHeader = BLOCK_SCALAR_HEADER.exec(entry.value.trim())
+  if (blockHeader) {
+    if (entry.continuation.length === 0) return null
+    const indentMatch = /^(\s+)/u.exec(entry.continuation[0])
+    if (!indentMatch) return null
+    const indent = indentMatch[1]
+    const contentLines = []
+    for (const line of entry.continuation) {
+      if (line === "" || !line.startsWith(indent)) return null
+      contentLines.push(line.slice(indent.length))
+    }
+    return blockHeader[1] === ">" ? contentLines.join(" ") : contentLines.join("\n")
+  }
+  if (entry.continuation.length > 0) return null
+  return normalizedScalar(entry.value)
+}
+
+// True when both values name the same UTC instant, once written the way a
+// full YAML re-dump (`Date.prototype.toISOString()`, under the hood) always
+// writes it: exactly `.000` milliseconds when the original had none, an
+// implicit `T00:00:00` for a bare `YYYY-MM-DD` date. Two verified real-data
+// residuals this module's tests were built against are both this same
+// artifact: a date-only `created:` reformatted to its own midnight
+// timestamp, and a `created:`/similar full timestamp gaining a redundant
+// `.000` with no other change. A real sub-second change (non-`.000`
+// milliseconds appearing or changing) or a non-UTC offset is a real
+// difference, not this artifact, and returns `null`/unequal.
+const DATE_ONLY_VALUE = /^\d{4}-\d{2}-\d{2}$/u
+const TIMESTAMP_VALUE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d{3})?Z$/u
+function timestampInstant(value) {
+  if (DATE_ONLY_VALUE.test(value)) return `${value}T00:00:00`
+  const match = TIMESTAMP_VALUE.exec(value)
+  if (!match) return null
+  if (match[2] !== undefined && match[2] !== ".000") return null
+  return match[1]
+}
+function isEquivalentTimestampPair(a, b) {
+  const instantA = timestampInstant(a)
+  const instantB = timestampInstant(b)
+  return instantA !== null && instantB !== null && instantA === instantB
+}
+
+// The frontmatter-equality check `isHousekeepingEdit` runs once its fast,
+// purely textual comparison (this same function, before this fallback
+// existed) finds a difference. Same key at the same position, in the same
+// order, both sides: kept. Any entry whose two sides aren't byte-identical
+// falls to a semantic comparison that recognizes exactly two YAML
+// re-serialization artifacts — an ISO timestamp re-encoded with the same
+// instant (a bare date's own midnight, or the same time with a redundant
+// `.000` added), and a folded/literal block scalar re-encoded as (or from)
+// the single-line scalar with the same text — and nothing else. Different
+// entry counts, a reordered key, a key that doesn't parse, or a value
+// neither side can confidently reduce to plain text: not equal, the same
+// fail-safe direction every other heuristic in this module takes.
+function frontmatterEntriesEqual(beforeLines, afterLines) {
+  const before = groupFrontmatterEntries(beforeLines)
+  const after = groupFrontmatterEntries(afterLines)
+  if (before.length !== after.length) return false
+  for (let index = 0; index < before.length; index += 1) {
+    const beforeEntry = before[index]
+    const afterEntry = after[index]
+    if (entryLiteral(beforeEntry) === entryLiteral(afterEntry)) continue
+    if (beforeEntry.key === null || afterEntry.key === null || beforeEntry.key !== afterEntry.key) return false
+    const beforeValue = semanticScalarValue(beforeEntry)
+    const afterValue = semanticScalarValue(afterEntry)
+    if (beforeValue === null || afterValue === null) return false
+    if (beforeValue === afterValue || isEquivalentTimestampPair(beforeValue, afterValue)) continue
+    return false
+  }
+  return true
+}
+
+// True when the two bodies are byte-identical, or differ by exactly one
+// trailing newline on either side — the one body-level artifact a full
+// YAML re-dump is known to introduce (real evidence: personal-desk commit
+// 207c6dd2, where a hand-authored file with no trailing newline gained
+// one). More than that one newline of difference, or any difference
+// earlier in the text, is a real change.
+function bodiesEquivalent(before, after) {
+  return before === after || `${before}\n` === after || before === `${after}\n`
+}
+
 // True when the only difference between the two card texts is identity or
 // placement. `substitutions` (this commit's own rename pairs, file and
 // directory) are applied to `oldText` first, so a reference to a path this
 // same commit also moved — in frontmatter or body — reads as unchanged too.
-// The body must then be byte-identical; the frontmatter must be identical
-// once every top-level `title:`, `track:` and `updated:` line (and their
-// continuation lines) is dropped from both and each remaining line's scalar
-// quoting is normalized (`normalizeQuotingLine`) — a straight line
-// comparison, never a per-field guess, so a change inside a nested value (a
-// `repos:` entry's `branch_base:`, say) is never invisible to it.
+// The body must then be byte-identical, up to one trailing newline
+// (`bodiesEquivalent`); the frontmatter must be identical once every
+// top-level `title:`, `track:` and `updated:` line (and their continuation
+// lines) is dropped from both and each remaining line's scalar quoting is
+// normalized (`normalizeQuotingLine`) — a per-entry comparison
+// (`frontmatterEntriesEqual`), never a per-field guess, so a change inside a
+// nested value (a `repos:` entry's `branch_base:`, say) is never invisible
+// to it, and the two known YAML-reserialization artifacts (an ISO timestamp
+// re-encoded as the same instant, folded block scalar vs. single line) are
+// the only value encodings it treats as equal without being byte-identical.
 function isHousekeepingEdit(oldText, newText, substitutions) {
   const before = splitCard(applyPathSubstitutions(oldText, substitutions))
   const after = splitCard(newText)
-  if (before.body !== after.body) return false
+  if (!bodiesEquivalent(before.body, after.body)) return false
   const beforeLines = stripHousekeepingLines(before.frontmatter).map(normalizeQuotingLine)
   const afterLines = stripHousekeepingLines(after.frontmatter).map(normalizeQuotingLine)
-  return beforeLines.join("\n") === afterLines.join("\n")
+  return frontmatterEntriesEqual(beforeLines, afterLines)
 }
 
 // `git diff-tree --name-status -z` output: `status\0path` for an add,
@@ -549,6 +670,29 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
     return ownRepository
   }
 
+  // Keyed by sha alone: this cache lives for exactly one `createDeskReaders`
+  // call, so it can never mix results across a different `deskRoot`, `git`
+  // binary, or `timeoutMs` the way a module-level cache keyed only on
+  // `deskRoot`+`sha` could (two callers can point `git` at a stub in tests).
+  // No invalidation is needed either way — a commit's own diff-tree is
+  // immutable from the moment the commit exists.
+  const commitDiffCache = new Map()
+  function commitDiffAndSubstitutions(sha) {
+    if (commitDiffCache.has(sha)) return commitDiffCache.get(sha)
+    const output = runGit(options, ["diff-tree", "--root", "-M", "--no-commit-id", "--name-status", "-r", "-z", sha])
+    const result = output === null ? null : (() => {
+      const entries = parseNameStatus(output)
+      // `parseNameStatus` only ever pushes an `R`/`C` entry once both sides
+      // of the pair parsed, so every `R` entry here already has its `oldPath`.
+      const renamePairs = entries
+        .filter((entry) => /^R/u.test(entry.status))
+        .map((entry) => ({ oldPath: entry.oldPath, newPath: entry.path }))
+      return { entries, substitutions: deriveSubstitutions(renamePairs) }
+    })()
+    commitDiffCache.set(sha, result)
+    return result
+  }
+
   function deskCommitsBetween(startIso, endIso) {
     if (!isWindow(startIso, endIso) || !deskIsOwnRepository()) return []
     const branches = runGit(options, ["for-each-ref", "--format=%(refname)", "refs/heads"])
@@ -588,25 +732,21 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
   // judgment — are reused to derive the path substitutions `isHousekeepingEdit`
   // applies to the old text before comparing; `deriveSubstitutions` returns
   // `null` past `RENAME_PAIR_CAP`, which reads the same as any other doubt:
-  // not housekeeping.
+  // not housekeeping. `commitDiffAndSubstitutions` caches the diff-tree call
+  // and the derived substitutions per sha, so a commit touching N cards in
+  // one `createDeskReaders` session pays for the diff-tree walk once.
   function isCardHousekeeping(sha, filePath) {
     if (typeof filePath !== "string" || filePath === "") return false
     if (typeof sha !== "string" || !PATTERNS.commitSha.test(sha) || !deskIsOwnRepository()) return false
-    const output = runGit(options, ["diff-tree", "--root", "-M", "--no-commit-id", "--name-status", "-r", "-z", sha])
-    if (output === null) return false
-    const entries = parseNameStatus(output)
+    const diff = commitDiffAndSubstitutions(sha)
+    if (diff === null) return false
+    const { entries, substitutions } = diff
     const match = entries.find((entry) => entry.path === filePath || entry.oldPath === filePath)
     if (!match || match.status === "A" || match.status === "D") return false
     const oldPath = match.oldPath ?? filePath
     const oldText = runGit(options, ["show", `${sha}~1:${oldPath}`])
     const newText = runGit(options, ["show", `${sha}:${match.path}`])
     if (oldText === null || newText === null) return false
-    // `parseNameStatus` only ever pushes an `R`/`C` entry once both sides of
-    // the pair parsed, so every `R` entry here already has its `oldPath`.
-    const renamePairs = entries
-      .filter((entry) => /^R/u.test(entry.status))
-      .map((entry) => ({ oldPath: entry.oldPath, newPath: entry.path }))
-    const substitutions = deriveSubstitutions(renamePairs)
     if (substitutions === null) return false
     return isHousekeepingEdit(oldText, newText, substitutions)
   }

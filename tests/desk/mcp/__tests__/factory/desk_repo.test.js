@@ -267,6 +267,111 @@ before(() => {
   write("escaped-quote-task/task.md", card(["status: drafting", "note: 'a\\backslash'"]))
   shas.escapedQuoteEdited = commitAt("2026-09-25T09:16:10Z", "escaped-quote: change the quoted value's quoting")
 
+  // A surgical writer only ever rewrites the fields it means to change
+  // (track/updated/status/…) and leaves every other line's bytes alone, so
+  // these next fixtures exist to prove the *judge's* fallback for commits
+  // already made under the old full-YAML-redump writer: a date-only value
+  // re-encoded as its own UTC midnight timestamp, and a folded/literal
+  // block scalar re-encoded as (or from) the single line with the same
+  // text, both count as the same value, while a handful of near-miss shapes
+  // stay real differences (fail-safe).
+
+  // `created:` written as a bare date, then re-serialized to that date's own
+  // midnight timestamp — exactly what the old writer did to a field it
+  // never meant to touch, incidentally, while doing a real `track:` move.
+  write("date-equiv-task/task.md", card(["track: track-one", "status: drafting", "created: 2026-05-26"], "# A task\n\ndate-equiv body, unchanged either side."))
+  shas.dateEquivCreated = commitAt("2026-09-25T09:17:20Z", "date-equiv: create")
+  write("date-equiv-task/task.md", card(["track: track-two", "status: drafting", "created: 2026-05-26T00:00:00.000Z", "updated: '2026-09-25T09:17:30Z'"], "# A task\n\ndate-equiv body, unchanged either side."))
+  shas.dateEquivEdited = commitAt("2026-09-25T09:17:30Z", "date-equiv: move the track (old writer reformats created too)")
+
+  // A date-only value paired with a non-midnight timestamp is a real
+  // difference, not the known artifact: this must still bind.
+  write("date-mismatch-task/task.md", card(["track: track-one", "status: drafting", "created: 2026-05-26"]))
+  shas.dateMismatchCreated = commitAt("2026-09-25T09:17:40Z", "date-mismatch: create")
+  write("date-mismatch-task/task.md", card(["track: track-two", "status: drafting", "created: 2026-05-26T09:30:00.000Z"]))
+  shas.dateMismatchEdited = commitAt("2026-09-25T09:17:50Z", "date-mismatch: move the track and actually change created's time")
+
+  // A full (non-midnight) timestamp gaining a redundant `.000` with no
+  // other change — real evidence from personal-desk commit 207c6dd2, where
+  // this was the only reason 9 of 10 renamed cards still bound: the same
+  // `Date.prototype.toISOString()` artifact as the date-only case, just
+  // starting from a value that already had a time-of-day.
+  write("millis-equiv-task/task.md", card(["track: track-one", "status: drafting", "created: 2026-05-27T18:47:19Z"]))
+  shas.millisEquivCreated = commitAt("2026-09-25T09:17:52Z", "millis-equiv: create")
+  write("millis-equiv-task/task.md", card(["track: track-two", "status: drafting", "created: 2026-05-27T18:47:19.000Z"]))
+  shas.millisEquivEdited = commitAt("2026-09-25T09:17:54Z", "millis-equiv: move the track (old writer adds .000 to created too)")
+
+  // A genuine, non-`.000` sub-second difference is a real change, not the
+  // known artifact: this must still bind.
+  write("millis-mismatch-task/task.md", card(["track: track-one", "status: drafting", "created: 2026-05-27T18:47:19Z"]))
+  shas.millisMismatchCreated = commitAt("2026-09-25T09:17:56Z", "millis-mismatch: create")
+  write("millis-mismatch-task/task.md", card(["track: track-two", "status: drafting", "created: 2026-05-27T18:47:19.500Z"]))
+  shas.millisMismatchEdited = commitAt("2026-09-25T09:17:58Z", "millis-mismatch: move the track and actually change created's milliseconds")
+
+  // `purpose: >-` (folded, chomp `-`) re-encoded as the one-line scalar with
+  // the same folded text — a long single-line scalar is exactly what a real
+  // full-YAML redump can turn into a folded block, and back.
+  write("block-equiv-task/task.md", card(["track: track-one", "status: drafting", "purpose: >-", "  Rename the desk card mover's", "  tests to match."]))
+  shas.blockEquivCreated = commitAt("2026-09-25T09:18:00Z", "block-equiv: create")
+  write("block-equiv-task/task.md", card(["track: track-two", "status: drafting", "purpose: Rename the desk card mover's tests to match."]))
+  shas.blockEquivEdited = commitAt("2026-09-25T09:18:10Z", "block-equiv: move the track (old writer folds purpose too)")
+
+  // `note: |-` (literal, chomp `-`) with exactly one content line — a
+  // literal block whose folded text has no newline in it — equals that
+  // same text as a plain one-line scalar.
+  write("literal-equiv-task/task.md", card(["track: track-one", "status: drafting", "note: |-", "  a single literal line"]))
+  shas.literalEquivCreated = commitAt("2026-09-25T09:18:20Z", "literal-equiv: create")
+  write("literal-equiv-task/task.md", card(["track: track-two", "status: drafting", "note: a single literal line"]))
+  shas.literalEquivEdited = commitAt("2026-09-25T09:18:30Z", "literal-equiv: move the track (old writer unfolds note too)")
+
+  // A blank line inside a block scalar's continuation: real YAML folding
+  // turns that into a paragraph break, which this module deliberately never
+  // implements, so this is treated as unparseable and binds.
+  write("block-blank-task/task.md", card(["track: track-one", "status: drafting", "purpose: >-", "  line one", "", "  line two"]))
+  shas.blockBlankCreated = commitAt("2026-09-25T09:18:40Z", "block-blank: create")
+  write("block-blank-task/task.md", card(["track: track-two", "status: drafting", "purpose: line one line two"]))
+  shas.blockBlankEdited = commitAt("2026-09-25T09:18:50Z", "block-blank: move the track; purpose has a blank continuation line")
+
+  // Inconsistent indentation inside a block scalar's continuation: the
+  // second line is indented deeper than the first sets the block at, so
+  // this is treated as unparseable and binds.
+  write("block-indent-task/task.md", card(["track: track-one", "status: drafting", "purpose: >-", "  line one", "    line two"]))
+  shas.blockIndentCreated = commitAt("2026-09-25T09:19:00Z", "block-indent: create")
+  write("block-indent-task/task.md", card(["track: track-two", "status: drafting", "purpose: line one line two"]))
+  shas.blockIndentEdited = commitAt("2026-09-25T09:19:10Z", "block-indent: move the track; purpose has inconsistent indentation")
+
+  // A bare `>` (clip, not strip) is a real chomp variant this module
+  // deliberately never parses, so it is compared literally and binds even
+  // though its folded text would otherwise match.
+  write("block-chomp-task/task.md", card(["track: track-one", "status: drafting", "purpose: >", "  line one", "  line two"]))
+  shas.blockChompCreated = commitAt("2026-09-25T09:19:20Z", "block-chomp: create")
+  write("block-chomp-task/task.md", card(["track: track-two", "status: drafting", "purpose: line one line two"]))
+  shas.blockChompEdited = commitAt("2026-09-25T09:19:30Z", "block-chomp: move the track; purpose uses clip chomping, not strip")
+
+  // The same two fields, reordered: `frontmatterEntriesEqual` compares
+  // position by position, so a real key-order change is a real difference
+  // and binds, even though both fields' own values are untouched.
+  write("key-order-task/task.md", card(["track: track-one", "status: drafting", "requester: ari"]))
+  shas.keyOrderCreated = commitAt("2026-09-25T09:19:40Z", "key-order: create")
+  write("key-order-task/task.md", card(["track: track-two", "requester: ari", "status: drafting"]))
+  shas.keyOrderEdited = commitAt("2026-09-25T09:19:50Z", "key-order: move the track and swap requester/status order")
+
+  // A hand-authored card with no trailing newline gains one — real evidence
+  // from personal-desk commit 207c6dd2, where this was the only remaining
+  // reason 4 of the 6 still-binding renamed cards bound, once the
+  // timestamp-reformatting judge above was in place.
+  write("trailing-newline-task/task.md", card(["track: track-one", "status: drafting"], "# A task\n\nBody with no trailing newline").replace(/\n$/u, ""))
+  shas.trailingNewlineCreated = commitAt("2026-09-25T09:19:52Z", "trailing-newline: create")
+  write("trailing-newline-task/task.md", card(["track: track-two", "status: drafting"], "# A task\n\nBody with no trailing newline"))
+  shas.trailingNewlineEdited = commitAt("2026-09-25T09:19:54Z", "trailing-newline: move the track (old writer adds a trailing newline too)")
+
+  // More than one trailing newline of difference is a real change, not the
+  // known artifact: this must still bind.
+  write("newline-mismatch-task/task.md", card(["track: track-one", "status: drafting"], "# A task\n\nBody text"))
+  shas.newlineMismatchCreated = commitAt("2026-09-25T09:19:56Z", "newline-mismatch: create")
+  write("newline-mismatch-task/task.md", card(["track: track-two", "status: drafting"], "# A task\n\nBody text\n\n"))
+  shas.newlineMismatchEdited = commitAt("2026-09-25T09:19:58Z", "newline-mismatch: move the track and actually add a blank line to the body")
+
   // A pathological commit's rename count must not be trusted at all: more
   // than RENAME_PAIR_CAP rename pairs makes the whole commit not
   // housekeeping, even for a card whose own edit is nothing but a quote
@@ -773,6 +878,56 @@ test("isCardHousekeeping is false for a commit with more rename pairs than the c
 
 test("isCardHousekeeping is true for an unrelated card's own housekeeping touch, even when the same commit's whole-track rename is a bare word its body happens to mention as plain prose", () => {
   assert.equal(housekeeping(shas.soloRenameEdited, "solo-prose-card/task.md"), true)
+})
+
+// --- isCardHousekeeping: semantic frontmatter equality for pre-existing full-YAML-redump commits ------
+
+test("isCardHousekeeping is true when a real track move's own commit also reformats a date-only value to that same date's midnight timestamp", () => {
+  assert.equal(housekeeping(shas.dateEquivEdited, "date-equiv-task/task.md"), true)
+})
+
+test("isCardHousekeeping is false when a date-only value is paired with a non-midnight timestamp: a real change, not the known reformatting artifact", () => {
+  assert.equal(housekeeping(shas.dateMismatchEdited, "date-mismatch-task/task.md"), false)
+})
+
+test("isCardHousekeeping is true when a real track move's own commit also adds a redundant .000 to a full (non-midnight) timestamp — the actual residual found in personal-desk's own tidy commit", () => {
+  assert.equal(housekeeping(shas.millisEquivEdited, "millis-equiv-task/task.md"), true)
+})
+
+test("isCardHousekeeping is false when a timestamp's milliseconds actually change to a non-.000 value: a real change, not the known reformatting artifact", () => {
+  assert.equal(housekeeping(shas.millisMismatchEdited, "millis-mismatch-task/task.md"), false)
+})
+
+test("isCardHousekeeping is true when a real track move's own commit also adds a trailing newline to a body that had none — the actual body-level residual found in personal-desk's own tidy commit", () => {
+  assert.equal(housekeeping(shas.trailingNewlineEdited, "trailing-newline-task/task.md"), true)
+})
+
+test("isCardHousekeeping is false when more than one trailing newline separates the two bodies: a real change, not the known reformatting artifact", () => {
+  assert.equal(housekeeping(shas.newlineMismatchEdited, "newline-mismatch-task/task.md"), false)
+})
+
+test("isCardHousekeeping is true when a real track move's own commit also folds a long single-line scalar into a >- block, or back", () => {
+  assert.equal(housekeeping(shas.blockEquivEdited, "block-equiv-task/task.md"), true)
+})
+
+test("isCardHousekeeping is true when a real track move's own commit also turns a single-line |- literal block into that same one-line scalar, or back", () => {
+  assert.equal(housekeeping(shas.literalEquivEdited, "literal-equiv-task/task.md"), true)
+})
+
+test("isCardHousekeeping is false when a block scalar's continuation has a blank line: folding it is never attempted, so it binds", () => {
+  assert.equal(housekeeping(shas.blockBlankEdited, "block-blank-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false when a block scalar's continuation lines are indented inconsistently: never folded, so it binds", () => {
+  assert.equal(housekeeping(shas.blockIndentEdited, "block-indent-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false for a bare > (clip) block scalar: only the strip (-) chomp indicator is folded, so a clip block is compared literally and binds", () => {
+  assert.equal(housekeeping(shas.blockChompEdited, "block-chomp-task/task.md"), false)
+})
+
+test("isCardHousekeeping is false when two untouched fields swap order: entries are compared position by position, so a reordered key is a real difference", () => {
+  assert.equal(housekeeping(shas.keyOrderEdited, "key-order-task/task.md"), false)
 })
 
 // --- resolveJobIdentity (ourostack/desk#76): the birth path ------------------------------

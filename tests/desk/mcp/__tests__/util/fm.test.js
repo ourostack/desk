@@ -11,6 +11,8 @@ import {
   serializeMarkdown,
   slugify,
   today,
+  patchFrontmatterFields,
+  patchMarkdownFrontmatter,
 } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
 import { lesson_add } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
@@ -354,4 +356,142 @@ test("readMarkdown returns concrete data and content without frontmatter", async
 test("serializeMarkdown handles empty and already-prefixed content", () => {
   assert.equal(serializeMarkdown({}, null), "\n")
   assert.equal(serializeMarkdown({}, "\nBody.\n"), "\nBody.\n")
+})
+
+// --- patchFrontmatterFields / patchMarkdownFrontmatter ------------------------------------
+//
+// A mover/renamer/archiver only ever changes a small, known set of fields
+// (`track`, `updated`, `status`, `merged_into`, `factory_report`). These
+// prove every other byte of a hand-written card — a date-only value, a long
+// single-line scalar, quoted and unquoted values, a `note: |` block, key
+// order, and a trailing comment — survives untouched, which
+// `serializeMarkdown`'s full YAML re-dump cannot guarantee.
+
+const HAND_WRITTEN_CARD = [
+  "---",
+  "schema_version: 1",
+  "title: Rename the desk card mover's tests to match",
+  "track: old-track",
+  "status: drafting",
+  "created: 2026-05-26",
+  "requester: \"ari\"",
+  "reviewer: ari",
+  "purpose: A long single-line scalar describing the task in one uninterrupted run of prose, exactly as a human first typed it, with no wrapping.",
+  "note: |",
+  "  first literal line",
+  "  second literal line",
+  "repos:",
+  "  - name: alpha",
+  "    branch_base: main",
+  "updated: \"2026-09-20T10:00:00Z\" # last touched by hand",
+  "---",
+  "",
+  "# A task",
+  "",
+  "Body text, never touched by a frontmatter patch.",
+  "",
+].join("\n")
+
+test("patchFrontmatterFields changes only the named fields and leaves every other byte, including a date-only value, a long single-line scalar, quoted and unquoted values, a note: | block, nested repos:, key order, and a trailing comment", () => {
+  const patched = patchFrontmatterFields(HAND_WRITTEN_CARD, { track: "new-track", updated: "2026-09-28T12:00:00Z" })
+  const expected = [
+    "---",
+    "schema_version: 1",
+    "title: Rename the desk card mover's tests to match",
+    "track: new-track",
+    "status: drafting",
+    "created: 2026-05-26",
+    "requester: \"ari\"",
+    "reviewer: ari",
+    "purpose: A long single-line scalar describing the task in one uninterrupted run of prose, exactly as a human first typed it, with no wrapping.",
+    "note: |",
+    "  first literal line",
+    "  second literal line",
+    "repos:",
+    "  - name: alpha",
+    "    branch_base: main",
+    "updated: \"2026-09-28T12:00:00Z\"",
+    "---",
+    "",
+    "# A task",
+    "",
+    "Body text, never touched by a frontmatter patch.",
+    "",
+  ].join("\n")
+  assert.equal(patched, expected)
+})
+
+test("patchFrontmatterFields appends a new field just before the closing fence, and encodes a track/status-shaped value bare but a timestamp quoted", () => {
+  const card = "---\nstatus: drafting\ntrack: t\n---\n\nBody.\n"
+  const patched = patchFrontmatterFields(card, { status: "done", updated: "2026-09-28T12:00:00Z", merged_into: "other-task" })
+  assert.equal(patched, [
+    "---",
+    'status: done',
+    "track: t",
+    'updated: "2026-09-28T12:00:00Z"',
+    "merged_into: other-task",
+    "---",
+    "",
+    "Body.",
+    "",
+  ].join("\n"))
+})
+
+test("patchFrontmatterFields replaces a field that was itself a block scalar or nested value with one plain-scalar line, dropping only that field's own continuation", () => {
+  const card = [
+    "---",
+    "status: drafting",
+    "note: >-",
+    "  a folded value",
+    "  across two lines",
+    "track: t",
+    "---",
+    "",
+    "Body.",
+    "",
+  ].join("\n")
+  const patched = patchFrontmatterFields(card, { note: "a replaced note" })
+  assert.equal(patched, [
+    "---",
+    "status: drafting",
+    'note: "a replaced note"',
+    "track: t",
+    "---",
+    "",
+    "Body.",
+    "",
+  ].join("\n"))
+})
+
+test("patchFrontmatterFields returns null when there is no closing frontmatter fence, so the caller can fall back rather than corrupt the file", () => {
+  assert.equal(patchFrontmatterFields("no frontmatter here\n", { status: "done" }), null)
+  assert.equal(patchFrontmatterFields("---\nstatus: drafting\n", { status: "done" }), null)
+})
+
+test("patchMarkdownFrontmatter writes only the patched bytes to disk, in place", async () => {
+  const root = await mkTempDeskRoot()
+  const filePath = path.join(root, "task.md")
+  await fs.writeFile(filePath, HAND_WRITTEN_CARD, "utf8")
+  await patchMarkdownFrontmatter(filePath, { track: "new-track", status: "done" })
+  const raw = await fs.readFile(filePath, "utf8")
+  assert.match(raw, /\ntrack: new-track\n/u)
+  assert.match(raw, /\nstatus: done\n/u)
+  assert.match(raw, /\ncreated: 2026-05-26\n/u)
+  assert.match(raw, /\nrequester: "ari"\n/u)
+  assert.match(raw, /\nreviewer: ari\n/u)
+  assert.match(raw, /\nnote: \|\n {2}first literal line\n {2}second literal line\n/u)
+  assert.match(raw, /\nupdated: "2026-09-20T10:00:00Z" # last touched by hand\n/u)
+})
+
+test("patchMarkdownFrontmatter falls back to a full write for a file with no frontmatter fence, still landing the intended fields", async () => {
+  const root = await mkTempDeskRoot()
+  const filePath = path.join(root, "task.md")
+  await fs.writeFile(filePath, "Just a body, no frontmatter.\n", "utf8")
+  await patchMarkdownFrontmatter(filePath, { status: "done" })
+  const { data, content } = await readMarkdown(filePath)
+  assert.equal(data.status, "done")
+  // gray-matter's own stringify/parse round trip adds and then keeps a
+  // blank line between the newly added fence and the body (unrelated to
+  // this patch: the same thing happens for any fenced card with a body).
+  assert.equal(content, "\nJust a body, no frontmatter.\n")
 })
