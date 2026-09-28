@@ -2,6 +2,8 @@
 
 This directory is the canonical plugin-relative source for Desk's generic browser context broker. It contains the executable, production modules, lockfile, and package metadata needed to install and run the broker with Node.js 20 or newer.
 
+The broker's tests live outside the plugin, in [`tests/desk/browser-context-broker/test`](../../../tests/desk/browser-context-broker/test/), so installs never download them. To run them, run `npm ci` and then `npm test` in this folder.
+
 An ordinary Desk plugin install does not install a bare `browser-context-broker` command on `PATH`. The capability is optional until a consuming host overlay provisions it.
 
 The host overlay owns the runtime contract:

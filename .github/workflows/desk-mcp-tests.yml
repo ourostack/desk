@@ -4,7 +4,7 @@ name: desk MCP tests
 # (plugins/desk/mcp `npm run test:coverage`).
 # Skill-manifest validation lives in validate-skills.yml and does NOT exercise
 # the MCP code, so without this job desk-core changes can merge untested.
-# Path-filtered to MCP, offline-evaluation and root validation inputs so related changes run this gate.
+# Path-filtered to MCP, its tests under tests/, offline-evaluation and root validation inputs so related changes run this gate.
 
 on:
   pull_request:
@@ -26,6 +26,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - "plugins/desk/mcp/**"
+      - "tests/**"
       - "plugins/desk/activation/**"
       - "plugins/desk/.claude-plugin/plugin.json"
       - "plugins/desk/.codex-plugin/plugin.json"
@@ -80,6 +81,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - "plugins/desk/mcp/**"
+      - "tests/**"
       - "plugins/desk/activation/**"
       - "plugins/desk/.claude-plugin/plugin.json"
       - "plugins/desk/.codex-plugin/plugin.json"
@@ -529,13 +531,13 @@ jobs:
       - name: Exercise real NTFS protection, private-store CRUD and the offline source mirror
         working-directory: plugins/desk/mcp
         run: |
-          node --import ./__tests__/_isolated_env.mjs --test --test-name-pattern "^native[: ]" __tests__/feedback/windows_acl.test.js __tests__/feedback/windows_store.test.js __tests__/feedback/source_mirror.test.js __tests__/factory/outbox_windows.test.js
+          node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern "^native[: ]" ../../../tests/desk/mcp/__tests__/feedback/windows_acl.test.js ../../../tests/desk/mcp/__tests__/feedback/windows_store.test.js ../../../tests/desk/mcp/__tests__/feedback/source_mirror.test.js ../../../tests/desk/mcp/__tests__/factory/outbox_windows.test.js
 
       # Both host MCP configs start Desk through mcp/bootstrap.cjs with whatever node the host has, so native Windows must complete a real MCP handshake through it.
       - name: Complete an MCP handshake through the Desk bootstrap on Windows
         working-directory: plugins/desk/mcp
         run: |
-          node --import ./__tests__/_isolated_env.mjs --test --test-name-pattern "^native[: ]" __tests__/launch/bootstrap.test.js
+          node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern "^native[: ]" ../../../tests/desk/mcp/__tests__/launch/bootstrap.test.js
 
       # A host may start the bootstrap with an older Node than the one Desk ships a pack for; Node 20 has no Windows pack, so the bootstrap must find the Node 24 set up above and run index.js in it.
       - name: Set up an older Node that the bootstrap must re-exec from
@@ -547,4 +549,4 @@ jobs:
         working-directory: plugins/desk/mcp
         run: |
           node --version
-          node --import ./__tests__/_isolated_env.mjs --test --test-name-pattern "^native[: ]" __tests__/launch/bootstrap.test.js
+          node --import ../../../tests/desk/mcp/__tests__/_isolated_env.mjs --test --test-name-pattern "^native[: ]" ../../../tests/desk/mcp/__tests__/launch/bootstrap.test.js

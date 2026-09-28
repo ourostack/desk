@@ -270,7 +270,7 @@ for (const file of workerBodies) {
 for (const mode of ["global-personal", "project-local"]) {
   contract(`the Codex ${mode} owned block restates no owned rule`, () => {
     const foundation = text("plugins/desk/skills/using-desk/SKILL.md").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/u, "").trim();
-    const block = text(`plugins/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`).split("# BEGIN desk activation:")[1];
+    const block = text(`tests/desk/mcp/__tests__/fixtures/activation/codex/${mode}/generated-instructions.md`).split("# BEGIN desk activation:")[1];
     assert.ok(block && block.includes(foundation), "the owned block injects the using-desk foundation");
     const owned = block.replace(foundation, "");
     for (const [pattern, owner] of ownedRules) {

@@ -618,15 +618,15 @@ async function expectedCodexFixtures({ repoRoot, mcpRoot }) {
   ).href);
   const manifest = readJson(repoRoot, activationManifestPath);
   return {
-    "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml":
+    "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-config.toml":
       materializeCodexActivation(codexActivationInput(manifest, "global-personal")).generatedConfig,
-    "plugins/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-instructions.md":
+    "tests/desk/mcp/__tests__/fixtures/activation/codex/global-personal/generated-instructions.md":
       materializeCodexActivation(codexActivationInput(manifest, "global-personal")).generatedInstructions,
-    "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-config.toml":
+    "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-config.toml":
       materializeCodexActivation(codexActivationInput(manifest, "project-local")).generatedConfig,
-    "plugins/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md":
+    "tests/desk/mcp/__tests__/fixtures/activation/codex/project-local/generated-instructions.md":
       materializeCodexActivation(codexActivationInput(manifest, "project-local")).generatedInstructions,
-    "plugins/desk/mcp/__tests__/fixtures/activation/codex/manual-only/generated-config.toml":
+    "tests/desk/mcp/__tests__/fixtures/activation/codex/manual-only/generated-config.toml":
       materializeCodexActivation(codexActivationInput(manifest, "manual-only")).generatedConfig,
   };
 }

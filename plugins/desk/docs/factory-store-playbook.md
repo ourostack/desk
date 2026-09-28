@@ -799,10 +799,10 @@ node <desk plugin root>/mcp/scripts/factory.js consent --store <owner>/<reposito
 
 ## 8. Prove the store
 
-Run the three proof pull requests in order and keep each receipt. The facts files come from Desk's synthetic store fixture, `plugins/desk/mcp/__tests__/factory/fixtures/store/facts/`, in a clone of `ourostack/desk` `main`. Never use real facts for the proof.
+Run the three proof pull requests in order and keep each receipt. The facts files come from Desk's synthetic store fixture, `tests/desk/mcp/__tests__/factory/fixtures/store/facts/`, in a clone of `ourostack/desk` `main`. Never use real facts for the proof.
 
 ```sh
-FIXTURES=<desk clone>/plugins/desk/mcp/__tests__/factory/fixtures/store/facts
+FIXTURES=<desk clone>/tests/desk/mcp/__tests__/factory/fixtures/store/facts
 ```
 
 ### Proof 1: a valid intake merges itself
