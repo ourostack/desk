@@ -1,0 +1,1 @@
+The factory job report's "What was waste" section now shows the independent evaluator's labels for the job: how many sessions are labeled, muda time by waste, value and support time, mura and muri flags, and what the evaluator could not read. It says "Not classified yet" only when no session of the job has labels, instead of always saying so.
