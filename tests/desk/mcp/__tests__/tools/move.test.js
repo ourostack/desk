@@ -131,6 +131,51 @@ test("task_move renames a task within the same track (Git desk) and renames its 
   assert.equal(gitLog(root).trim().split("\n").length, 1, "task_move must never commit: only the fixture commit exists")
 })
 
+test("task_move preserves every other frontmatter byte untouched: a date-only value, a long single-line scalar, quoted and unquoted values, and a note: | block", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "main-track", { rows: ["old-name"] })
+  await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "T" } })
+  const filePath = path.join(root, "main-track", "old-name", "task.md")
+  const handWritten = [
+    "---",
+    "schema_version: 1",
+    "title: T",
+    "track: main-track",
+    "status: drafting",
+    "created: 2026-05-26",
+    "requester: \"ari\"",
+    "reviewer: ari",
+    "purpose: A long single-line scalar describing the task in one uninterrupted run of prose, with no wrapping at all.",
+    "note: |",
+    "  first literal line",
+    "  second literal line",
+    "updated: \"2026-09-20T10:00:00Z\"",
+    "---",
+    "",
+    "# T",
+    "",
+    "Body text.",
+    "",
+  ].join("\n")
+  await fs.writeFile(filePath, handWritten, "utf8")
+
+  commitAll(root)
+  await task_move({ deskRoot: root, input: { track: "main-track", slug: "old-name", to_slug: "new-name" } })
+
+  const raw = await fs.readFile(path.join(root, "main-track", "new-name", "task.md"), "utf8")
+  assert.match(raw, /\ncreated: 2026-05-26\n/u, "the date-only created value is untouched")
+  assert.match(raw, /\nrequester: "ari"\n/u, "the quoted requester value is untouched")
+  assert.match(raw, /\nreviewer: ari\n/u, "the unquoted reviewer value is untouched")
+  assert.match(
+    raw,
+    /\npurpose: A long single-line scalar describing the task in one uninterrupted run of prose, with no wrapping at all\.\n/u,
+    "the long single-line purpose scalar is untouched",
+  )
+  assert.match(raw, /\nnote: \|\n {2}first literal line\n {2}second literal line\n/u, "the note: | block is untouched")
+  assert.doesNotMatch(raw, /updated: "2026-09-20T10:00:00Z"/u, "updated is refreshed")
+})
+
 test("task_move updates a plain (non-backtick) slug cell too", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
@@ -1237,6 +1282,51 @@ test("track_rename renames a track and rewrites track: on every live task card",
   assert.match(status, /^R  old-track\/track\.md -> new-track\/track\.md$/m, "staged as a rename of the committed track")
   assert.doesNotMatch(status, /^\?\?/m)
   assert.equal(gitLog(root).trim().split("\n").length, 1, "track_rename must never commit: only the fixture commit exists")
+})
+
+test("track_rename preserves every other frontmatter byte untouched: a date-only value, a long single-line scalar, quoted and unquoted values, and a note: | block", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "old-track", { rows: [] })
+  await task_create({ deskRoot: root, input: { track: "old-track", slug: "task-one", title: "T" } })
+  const filePath = path.join(root, "old-track", "task-one", "task.md")
+  const handWritten = [
+    "---",
+    "schema_version: 1",
+    "title: T",
+    "track: old-track",
+    "status: drafting",
+    "created: 2026-05-26",
+    "requester: \"ari\"",
+    "reviewer: ari",
+    "purpose: A long single-line scalar describing the task in one uninterrupted run of prose, with no wrapping at all.",
+    "note: |",
+    "  first literal line",
+    "  second literal line",
+    "updated: \"2026-09-20T10:00:00Z\"",
+    "---",
+    "",
+    "# T",
+    "",
+    "Body text.",
+    "",
+  ].join("\n")
+  await fs.writeFile(filePath, handWritten, "utf8")
+
+  commitAll(root)
+  await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
+
+  const raw = await fs.readFile(path.join(root, "new-track", "task-one", "task.md"), "utf8")
+  assert.match(raw, /\ncreated: 2026-05-26\n/u, "the date-only created value is untouched")
+  assert.match(raw, /\nrequester: "ari"\n/u, "the quoted requester value is untouched")
+  assert.match(raw, /\nreviewer: ari\n/u, "the unquoted reviewer value is untouched")
+  assert.match(
+    raw,
+    /\npurpose: A long single-line scalar describing the task in one uninterrupted run of prose, with no wrapping at all\.\n/u,
+    "the long single-line purpose scalar is untouched",
+  )
+  assert.match(raw, /\nnote: \|\n {2}first literal line\n {2}second literal line\n/u, "the note: | block is untouched")
+  assert.doesNotMatch(raw, /updated: "2026-09-20T10:00:00Z"/u, "updated is refreshed")
 })
 
 test("track_rename with archived tasks rewrites both live and archived task cards", async () => {

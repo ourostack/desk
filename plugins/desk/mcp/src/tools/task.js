@@ -11,6 +11,7 @@ import {
   nowIso,
   readMarkdown,
   writeMarkdown,
+  patchMarkdownFrontmatter,
   pathExists,
 } from "../util/fm.js"
 import { isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
@@ -486,14 +487,13 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     const currentStatus = existing.data.status
     finalStatus = currentStatus
     if (!TERMINAL_STATUSES.has(currentStatus)) {
-      const merged = {
-        ...existing.data,
-        status: "done",
-        updated: nowIso(),
-      }
+      // Patch only `status:`/`updated:`/`factory_report:` in place: every
+      // other byte of the card — quoting, date formats, block scalars, key
+      // order — survives.
+      const patchFields = { status: "done", updated: nowIso() }
       const link = await factoryReportFor({ deskRoot, person, track, slug, env })
-      if (link !== null) merged.factory_report = link
-      await writeMarkdown(filePath, merged, existing.content)
+      if (link !== null) patchFields.factory_report = link
+      await patchMarkdownFrontmatter(filePath, patchFields)
       await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
       finalStatus = "done"
     }
