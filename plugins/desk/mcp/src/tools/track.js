@@ -13,6 +13,7 @@ import {
 } from "../util/fm.js"
 import { resolveWriteTarget } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
+import { objectInput } from "../util/object-input.js"
 import { isGitRepository, hasUnstagedWork, stagePaths } from "../util/git-stage.js"
 import {
   validateTrackName,
@@ -138,7 +139,9 @@ export async function track_create({ deskRoot, input, person = null, readiness, 
  * Input:
  *   {
  *     slug: string,
- *     frontmatter?: object,  // may set `scope` — validated, see Errors;
+ *     frontmatter?: object,  // may set `scope` — validated, see Errors; a
+ *                            // JSON-string object is parsed, anything else
+ *                            // is refused before the card is touched;
  *                            // `slug` itself is never re-validated, so an
  *                            // update to a track named before these rules
  *                            // existed still works
@@ -159,10 +162,11 @@ export async function track_create({ deskRoot, input, person = null, readiness, 
  */
 export async function track_update({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
   const values = input ?? {}
-  const { slug, frontmatter, body_append } = values
+  const { slug, body_append } = values
   if (!Object.hasOwn(values, "slug")) {
     throw new Error("track_update: `slug` is required")
   }
+  const frontmatter = objectInput(values.frontmatter, { tool: "track_update", field: "frontmatter" })
 
   if (frontmatter && Object.hasOwn(frontmatter, "scope")) {
     const scopeResult = validateScope(frontmatter.scope)

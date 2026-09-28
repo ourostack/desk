@@ -20,14 +20,17 @@ when a task is done — merged or set aside — i slide it toward the back of th
    mv $DESK/<track>/<task> $DESK/<track>/_archive/<task>
    ```
 
-2. commit the move:
+2. commit the move, staging only the two paths it touched (the task's old and new locations), per `git-hygiene`'s targeted staging. never `git add -A`, `git add .` or `git commit -a`: in a shared desk those sweep other sessions' in-flight edits into the archive commit.
    ```bash
-   cd $DESK && git add -A && git commit -m "archive: <task> (done)"
+   cd $DESK && git add -A -- <track>/<task> <track>/_archive/<task> \
+     && git commit -m "archive: <task> (done)" -- <track>/<task> <track>/_archive/<task>
    ```
    for cancelled tasks:
    ```bash
-   cd $DESK && git add -A && git commit -m "archive: <task> (cancelled)"
+   cd $DESK && git add -A -- <track>/<task> <track>/_archive/<task> \
+     && git commit -m "archive: <task> (cancelled)" -- <track>/<task> <track>/_archive/<task>
    ```
+   `git add -A -- <paths>` stages the deletions at the old path and the files at the new one, and nothing outside those paths; `git commit ... -- <paths>` commits only them, even when another session has staged something else.
 
 3. push if remote is configured.
 
@@ -56,10 +59,10 @@ iteration archival is not tied to PR merge alone — short-lived tasks where the
    - move the archived iteration's entry from `active:` (if it was there) or update it in `history[]` so `path:` points at the `_archive/` location.
    - set `outcome:` to the terminal value (`merged`, `shipped-to-pr`, `reverted`).
 
-3. commit:
+3. commit the moved iteration and the task card, and nothing else:
    ```bash
-   cd $DESK && git add -A \
-     && git commit -m "archive: iteration <iteration-slug> (<outcome>)"
+   cd $DESK && git add -A -- <track>/<task>/<repo>/<iteration-slug> <track>/<task>/<repo>/_archive/<iteration-slug> <track>/<task>/task.md \
+     && git commit -m "archive: iteration <iteration-slug> (<outcome>)" -- <track>/<task>/<repo>/<iteration-slug> <track>/<task>/<repo>/_archive/<iteration-slug> <track>/<task>/task.md
    ```
 
 4. push.
@@ -84,7 +87,8 @@ after archiving any task, i check whether the parent track — the whole drawer 
      ```
    - commit:
      ```bash
-     cd $DESK && git add -A && git commit -m "archive: track <track> (all tasks terminal)"
+     cd $DESK && git add -A -- <track> _archive/<track> \
+       && git commit -m "archive: track <track> (all tasks terminal)" -- <track> _archive/<track>
      ```
    - push.
 

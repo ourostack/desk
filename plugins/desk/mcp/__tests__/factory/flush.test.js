@@ -12,7 +12,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
-  factoryStateRoot, gitBlobSha, readConsent, readMachineSecret, readStatus, readVisibilityCache, setConsent, writeLocalFacts, writeMarker, writeStatus,
+  factoryStateRoot, gitBlobSha, readConsent, readMachineSecret, readStatus, readVisibilityCache, setConsent, writeLocalFacts, writeMarker, writeStatus, writeVisibilityCache,
 } from "../../src/factory/outbox.js"
 import { serializePublished, toPublished } from "../../src/factory/publish.js"
 import { validatePublishedBytes } from "../../src/factory/published-schema.js"
@@ -76,7 +76,7 @@ async function publishedFor(env, facts, { deskVisibility = "unknown", visibility
 
 test("flush without consent, with a declined store or without an account records a stable code and never runs gh", () => scratch(async ({ env }) => {
   const { flush, FLUSH_CODES } = await load()
-  assert.deepEqual([...FLUSH_CODES].sort(), ["auth_failed", "deadline", "delivered_pr_open", "fork_pending", "gh_missing", "gh_too_old", "intake_stale_retried", "locked", "no_account", "not_opted_in", "nothing_pending", "offline", "rate_limited", "store_missing", "unexpected"])
+  assert.deepEqual([...FLUSH_CODES].sort(), ["account_cannot_deliver", "auth_failed", "deadline", "delivered_pr_open", "fork_pending", "gh_missing", "gh_too_old", "intake_stale_retried", "locked", "no_account", "not_opted_in", "nothing_pending", "offline", "rate_limited", "store_missing", "unexpected"])
   const github = fakeGitHub()
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "not_opted_in" })
   assert.equal(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory")), false, "flushing never creates factory state")
@@ -294,10 +294,10 @@ test("visibility is resolved with the account token, cached for seven days, and 
   const published = JSON.parse(github.blobs.get(github.headFacts(STORE, await intakeBranch(env)).get(name).sha))
   assert.deepEqual(published.refs.prs, [{ repo: "acme/open", number: 1 }])
   assert.deepEqual(published.refs.commits, [{ repo: "acme/open", sha: "a".repeat(40) }])
-  assert.deepEqual(published.refs.private, { prs: 3, commits: 1 })
+  assert.deepEqual(published.refs.private, { prs: 3, commits: 1, plugins: 1 }, "the desk plugin's source is not known to be public in this fake")
   assert.doesNotMatch(JSON.stringify(published), /secret|hidden|gone/u)
   const cache = await readVisibilityCache(env, { now: () => new Date(clock).toISOString() })
-  assert.deepEqual(Object.fromEntries(Object.entries(cache).map(([key, value]) => [key, value.visibility])), { "acme/gone": "unknown", "acme/hidden": "unknown", "acme/open": "public", "acme/secret": "private" })
+  assert.deepEqual(Object.fromEntries(Object.entries(cache).map(([key, value]) => [key, value.visibility])), { "acme/gone": "unknown", "acme/hidden": "unknown", "acme/open": "public", "acme/secret": "private", "ourostack/desk": "unknown", "ourostack/factory": "public" }, "the plugin's source and the store are cached with the references")
   const before = github.calls.length
   clock += 6 * DAY
   await flush(env, { store: STORE, runner: github.runner, now })
@@ -306,6 +306,58 @@ test("visibility is resolved with the account token, cached for seven days, and 
   clock += 2 * DAY
   await flush(env, { store: STORE, runner: github.runner, now })
   assert.equal(apiCalls({ calls: github.calls.slice(after) }, "GET", /^repos\/acme\//u).length, 4, "an expired entry is looked up again")
+}))
+
+test("a public store names only plugins from public sources and resolves its own visibility with them", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const plugins = [
+    { name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" },
+    { name: "work-tools", version: "1.0.0", source: "acme/tools" },
+    { name: "older", version: "0.1.0" },
+  ]
+  const name = await put(env, localFacts(1, { plugins }))
+  const github = fakeGitHub({ visibility: { "ourostack/desk": "public", "acme/tools": "private" } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner })).result, "delivered_pr_open")
+  const lookups = apiCalls(github, "GET", /^repos\/[^/]+\/[^/]+$/u).map((call) => call.args.at(-1))
+  for (const repo of ["repos/ourostack/desk", "repos/acme/tools", `repos/${STORE}`]) assert.ok(lookups.includes(repo), repo)
+  const published = JSON.parse(github.blobs.get(github.headFacts(STORE, await intakeBranch(env)).get(name).sha))
+  assert.deepEqual(published.plugins, [{ name: "desk", version: "3.2.0-alpha.24" }])
+  assert.equal(published.refs.private.plugins, 2)
+  assert.doesNotMatch(JSON.stringify(published), /work-tools|older|acme\/tools/u)
+  const cache = await readVisibilityCache(env)
+  assert.equal(cache[STORE].visibility, "public", "the store's visibility is cached with the references'")
+}))
+
+test("a store known to be private keeps every plugin name", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }, { name: "work-tools", version: "1.0.0", source: null }]
+  const name = await put(env, localFacts(1, { plugins }))
+  await writeVisibilityCache(env, { [STORE]: { visibility: "private", checked_at: new Date().toISOString() } })
+  const github = fakeGitHub({ visibility: { "ourostack/desk": "private" } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner })).result, "delivered_pr_open")
+  const published = JSON.parse(github.blobs.get(github.headFacts(STORE, await intakeBranch(env)).get(name).sha))
+  assert.deepEqual(published.plugins.map((plugin) => plugin.name), ["desk", "work-tools"])
+  assert.equal(published.refs.private.plugins, 0)
+}))
+
+test("the transform learns the store's visibility only when a file has plugins, and an unresolved store is unknown", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const seen = []
+  const transform = (local, options) => { seen.push(options.storeVisibility); return toPublished(local, options) }
+  await put(env, localFacts(1, { plugins: [] }))
+  const quiet = fakeGitHub()
+  await flush(env, { store: STORE, runner: quiet.runner, transform })
+  assert.deepEqual(seen, ["unknown"])
+  assert.equal(apiCalls(quiet, "GET", new RegExp(`^repos/${STORE}$`, "u")).length, 1, "only the delivery's own read of the store, after the transform")
+  assert.equal((await readVisibilityCache(env))[STORE], undefined)
+
+  await put(env, localFacts(2))
+  const hidden = fakeGitHub({ visibility: { [STORE]: 404 } })
+  await flush(env, { store: STORE, runner: hidden.runner, transform })
+  assert.equal(seen.at(-1), "unknown", "a store GitHub will not describe is treated as public")
 }))
 
 async function deskRepository(base, remote) {
@@ -713,14 +765,21 @@ test("start-time delivery sweeps once and flushes every consented store within o
     runner: () => assert.fail("injected flush"),
     sweep: async () => { swept.push(1); return { written: 0 } },
     flush: async (_env, options) => { flushed.push(options.store); assert.ok(options.deadlineMs <= 120000); return { result: "nothing_pending" } },
+    andon: async (_env, options) => { flushed.push(`andon ${options.store}`); assert.equal(typeof options.runner, "function"); return { result: "recorded", count: 0 } },
   })
-  assert.deepEqual(summary, { swept: { written: 0 }, stores: { "acme/second": { result: "nothing_pending" }, [STORE]: { result: "nothing_pending" } } })
-  assert.deepEqual(flushed, ["acme/second", STORE])
+  assert.deepEqual(summary, { swept: { written: 0 }, stores: { "acme/second": { result: "nothing_pending" }, [STORE]: { result: "nothing_pending" } }, andon: { "acme/second": { result: "recorded", count: 0 }, [STORE]: { result: "recorded", count: 0 } } })
+  // Each store's andon refresh follows its flush.
+  assert.deepEqual(flushed, ["acme/second", "andon acme/second", STORE, `andon ${STORE}`])
   let clock = 0
-  const late = await flushConsented(env, { now: () => clock, deadlineMs: 10, sweep: async () => { clock = 50; throw new Error("sweep failed") }, flush: async () => assert.fail("past the deadline") })
-  assert.deepEqual(late, { swept: null, stores: { "acme/second": { result: "deadline" }, [STORE]: { result: "deadline" } } })
-  const broken = await flushConsented(env, { sweep: async () => ({}), flush: async () => { throw new Error("boom") } })
+  const late = await flushConsented(env, { now: () => clock, deadlineMs: 10, sweep: async () => { clock = 50; throw new Error("sweep failed") }, flush: async () => assert.fail("past the deadline"), andon: async () => assert.fail("past the deadline") })
+  assert.deepEqual(late, { swept: null, stores: { "acme/second": { result: "deadline" }, [STORE]: { result: "deadline" } }, andon: {} })
+  // A flush that uses up the deadline leaves no time for andon.
+  clock = 0
+  const spent = await flushConsented(env, { now: () => clock, deadlineMs: 10, sweep: async () => ({}), flush: async () => { clock = 50; return { result: "nothing_pending" } }, andon: async () => assert.fail("past the deadline") })
+  assert.deepEqual(spent.andon, { "acme/second": { result: "deadline" } })
+  const broken = await flushConsented(env, { sweep: async () => ({}), flush: async () => { throw new Error("boom") }, andon: async () => { throw new Error("boom") } })
   assert.deepEqual(broken.stores[STORE], { result: "unexpected" })
+  assert.deepEqual(broken.andon[STORE], { result: "unexpected" })
 }))
 
 // ---------------------------------------------------------------------------

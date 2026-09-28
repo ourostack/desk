@@ -280,6 +280,21 @@ export function expandHome(p, homeDir = os.homedir()) {
   return p
 }
 
+/**
+ * `<state home>` for the protected stores: `XDG_STATE_HOME` (with `~`
+ * expanded against `HOME`) when set and not blank, else `HOME/.local/state`.
+ * The private stores and the doctor's count of the retired ledger's folders
+ * share this one lookup, so they always agree on where the state lives.
+ */
+export function resolveStateHome(env) {
+  const home = env.HOME ?? os.homedir()
+  const configured = env.XDG_STATE_HOME
+  if (typeof configured === "string" && configured.trim() !== "") {
+    return path.resolve(expandHome(configured, home))
+  }
+  return path.join(home, ".local", "state")
+}
+
 function hasText(value) {
   return typeof value === "string" && value.trim().length > 0
 }

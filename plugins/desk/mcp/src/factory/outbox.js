@@ -88,7 +88,8 @@ const VISIBILITY_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const STALE_TMP_MS = 60 * 60 * 1000
 const LOCK_STALE_MS = 10 * 60 * 1000
 const LOCK_RETRY_DELAY_MS = 15
-const ACCOUNT_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?$/u
+// A GitHub login: letters, digits and hyphens, and for an Enterprise Managed User the enterprise short code after `_`, the account a work store needs.
+const ACCOUNT_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?(?:_[A-Za-z0-9]{1,20})?$/u
 const REASON_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u
 const SHA1 = /^[0-9a-f]{40}$/u
 const VISIBILITY_VALUES = ["public", "private", "unknown"]
@@ -101,8 +102,8 @@ const LABELS_KEY_PATTERN = new RegExp(`^labels/[0-9a-f]{32}/${SESSION_ID_SRC}\\.
 const BRIEF_NAME_PATTERN = new RegExp(`^((?:${ENUMS.host.join("|")})-${SESSION_ID_SRC})\\.brief\\.json$`, "u")
 const STORE_SLUG_PATTERN = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})?)__([A-Za-z0-9._-]{1,100})$/u
 
-// `store.js` uses one `naming` per caller (`desk_feedback`, `desk_work_ledger`);
-// this is the factory outbox's, also passed as `protectWindowsPaths`'s `label`.
+// `store.js` uses one `naming` per caller (`desk_feedback`); this is the
+// factory outbox's, also passed as `protectWindowsPaths`'s `label`.
 const NAMING = { label: "desk_factory", subject: "factory state" }
 
 // Shape checks for `readJsonFileSafe`: valid JSON of the wrong shape is

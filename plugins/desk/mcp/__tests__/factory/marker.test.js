@@ -4,7 +4,7 @@ import fs from "node:fs"
 import * as path from "node:path"
 import { absolutePath, MAX_MARKER_BYTES, readSmallText, validMarker, validRouting } from "../../src/factory/marker.js"
 import { factoryStateRoot, listFinalizeJobs, readMarker, writeMarker } from "../../src/factory/outbox.js"
-import { scratch, session, STORE, END } from "./_session_helpers.js"
+import { scratch, session, SENTINEL, STORE, END } from "./_session_helpers.js"
 
 test("marker validation rejects unknown fields, path traversal, free-text metadata and malformed optional context", () => scratch(async (ctx) => {
   const marker = await session(ctx)
@@ -23,6 +23,19 @@ test("marker validation rejects unknown fields, path traversal, free-text metada
     { ...marker, routing: {} },
   ]) assert.equal(validMarker(invalid), false, JSON.stringify(invalid).slice(0, 150))
   for (const value of [null, "a".repeat(4097), "/x\0y", "relative"]) assert.equal(absolutePath(value), false)
+}))
+
+test("a marker plugin may name its install source; one written before sources were recorded stays valid", () => scratch(async (ctx) => {
+  const marker = await session(ctx)
+  for (const plugins of [
+    [{ name: "desk", version: "1.0.0" }],
+    [{ name: "desk", version: "1.0.0", source: null }],
+    [{ name: "desk", version: "1.0.0", source: "ourostack/desk" }, { name: "notes", version: "2.0.0" }],
+  ]) assert.equal(validMarker({ ...marker, plugins }), true, JSON.stringify(plugins))
+  for (const source of ["", "ourostack", "ourostack/desk/extra", `${SENTINEL} x/y`, 42, ["ourostack/desk"], { repo: "ourostack/desk" }, "https://github.com/ourostack/desk"]) {
+    assert.equal(validMarker({ ...marker, plugins: [{ name: "desk", version: "1.0.0", source }] }), false, JSON.stringify(source))
+  }
+  assert.equal(validMarker({ ...marker, plugins: [{ name: "desk", version: "1.0.0", source: null, origin: "x" }] }), false, "no other key is allowed")
 }))
 
 test("routing snapshots accept only classified local warnings and valid destinations", () => {

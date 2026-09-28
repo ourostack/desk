@@ -138,6 +138,25 @@ export function storeRecords(storeDir) {
   return readStore(store).records
 }
 
+/**
+ * `storePublicPlugins(storeDir) -> names`: the plugin names that facts
+ * carrying `refs.private.plugins` publish, sorted. Only a client that applies
+ * the public-source rule writes that count, and it names only plugins
+ * installed from a public repository, so these are the plugins public by
+ * that rule. Older facts, which named every plugin, add nothing.
+ */
+export function storePublicPlugins(storeDir) {
+  if (typeof storeDir !== "string") throw new TypeError("storePublicPlugins: storeDir must be a path")
+  const store = path.resolve(storeDir)
+  requireDirectory(store, "store")
+  const names = new Set()
+  for (const session of readSessions(store)) {
+    if (!Object.hasOwn(session.refs.private, "plugins")) continue
+    for (const plugin of session.plugins) names.add(plugin.name)
+  }
+  return [...names].sort(compareText)
+}
+
 export function build({ storeDir, outDir }) {
   if (typeof storeDir !== "string" || typeof outDir !== "string") throw new TypeError("build: storeDir and outDir must be paths")
   const store = path.resolve(storeDir)

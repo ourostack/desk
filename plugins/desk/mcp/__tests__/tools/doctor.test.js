@@ -62,6 +62,8 @@ test("healthy desk_doctor uses the same dependency-free diagnostic vocabulary", 
     }))
 
     assert.deepEqual(Object.keys(body).sort(), [
+      "factory",
+      "legacy_work_ledger",
       "mode",
       "organization",
       "reason",
@@ -194,6 +196,10 @@ test("desk_doctor reports organization findings for the caller's own desk", asyn
     }
     assert.match(body.summary, /Organization/u)
     assert.match(body.summary, /track_catch_all/u)
+    const catchAll = body.organization.find((f) => f.code === "track_catch_all")
+    assert.match(catchAll.handle, /^track-[0-9a-f]{10}$/u)
+    assert.ok(body.summary.includes(`inbox (handle ${catchAll.handle}) — `), "the doctor text shows the handle a rename needs")
+    assert.equal(body.organization.find((f) => f.code === "track_missing_scope").handle, undefined)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -263,7 +269,8 @@ function findByCode(findings, code) {
 }
 
 test("desk_doctor treats a blank deskRoot the same as no deskRoot at all", async () => {
-  const body = doctorRuntime({ input: {}, deskRoot: "   " })
+  // An empty state home keeps this exact summary independent of the machine's own retired-ledger partitions.
+  const body = doctorRuntime({ input: {}, deskRoot: "   ", env: { HOME: tmpdir(), XDG_STATE_HOME: path.join(tmpdir(), "desk-doctor-no-state-" + process.pid) } })
   assert.deepEqual(body.organization, [])
   assert.equal(body.summary, "Desk MCP runtime dependencies are ready.")
 })

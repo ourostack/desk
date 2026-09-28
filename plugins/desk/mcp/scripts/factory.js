@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // The Desk factory CLI.
 //
+//   node scripts/factory.js account --store <owner/repo>
 //   node scripts/factory.js consent --store <owner/repo> --contribute yes|no [--account <gh login>]
 //   node scripts/factory.js flush --store <owner/repo>
 //   node scripts/factory.js finalize --job <job> [--job <job> ...]
@@ -13,6 +14,10 @@
 //   node scripts/factory.js kaizen-check --store <directory> --repo <owner/repo> [--author <login>]
 //   node scripts/factory.js andon --store <directory> --repo <owner/repo> [--author <login>]
 //
+// `account` names the signed-in GitHub account that can open intake pull
+// requests on the store, asking GitHub with each account's own token rather
+// than assuming gh's active account, and prints the named reason and exits 1
+// when no signed-in account can deliver; `consent` records the account it names.
 // Every subcommand prints one JSON value on success. Validation failures print
 // their stable JSON result and exit 1; usage errors print one line to stderr.
 // Candidate revisions are inspected through Git as bytes and are never loaded.
@@ -41,13 +46,13 @@ import { readDeskRemote } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
-import { build, jobLink, storeRecords } from "../src/factory/pipeline/build.js"
+import { build, jobLink, storePublicPlugins, storeRecords } from "../src/factory/pipeline/build.js"
 import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
 import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
 import { issuesClient } from "../src/factory/store-issues.js"
 import { factsPathsForSession, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon"])
+export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
@@ -328,6 +333,14 @@ export async function runEvaluateAcceptCommand({ argv, env, pluginVersion = desk
   return acceptEvaluations(env, { job: options.get("job"), pluginVersion })
 }
 
+/** `account --store <owner/repo>`: the signed-in account that can open intake pull requests there (`chooseAccount`). */
+export async function runAccountCommand({ argv, env, runner }) {
+  const options = parseOptions(argv)
+  if (options === null || options.size !== 1 || !PATTERNS.prRepo.test(options.get("store") ?? "")) throw new Error("Usage: factory.js account --store <owner/repo>")
+  const { chooseAccount, ghRunner } = await import("../src/factory/flush.js")
+  return chooseAccount({ store: options.get("store"), runner: runner ?? ghRunner({ env }) })
+}
+
 const STORE_ISSUE_OPTIONS = ["store", "repo", "author"]
 
 // The options `kaizen-check` (and andon) share: the checked-out store, the
@@ -358,7 +371,8 @@ export async function runAndonCommand({ argv, env, runner }) {
   const configPath = path.join(parseOptions(argv).get("store"), "factory.json")
   const config = parseStoreConfig(existsSync(configPath) ? readFileSync(configPath, "utf8") : null)
   if (!config.ok) throw new Error(`factory.js andon: the store's factory.json is not valid (${config.code})`)
-  return syncAndon({ ...context, plugins: config.plugins })
+  // Other plugins are named only when public by the publishing rule (M3-12).
+  return syncAndon({ ...context, plugins: config.plugins, publicPlugins: storePublicPlugins(parseOptions(argv).get("store")) })
 }
 
 /** Runs the `consent` subcommand: validates `argv`, calls `setConsent`, and returns the JSON-ready result. */
@@ -385,6 +399,7 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
       throw new Error(`factory.js: unknown subcommand ${JSON.stringify(subcommand ?? "")} (supported: ${SUPPORTED_COMMANDS.join(", ")})`)
     }
     const command = {
+      account: runAccountCommand,
       consent: runConsentCommand,
       derive: runDeriveCommand,
       status: runStatusCommand,
@@ -400,7 +415,8 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    return (subcommand === "validate-pr" && result.ok === false) || Object(result).failed > 0 ? 1 : 0
+    const failed = (subcommand === "validate-pr" && result.ok === false) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
+    return failed ? 1 : 0
   } catch (error) {
     logError(`${error.message}\n`)
     return 1

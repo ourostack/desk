@@ -22,9 +22,9 @@ DESK=~/<your-workspace> node ./index.js
 
 ## Factory capture, delivery and store pipeline
 
-Claude and Copilot end/stop hooks write protected local markers; detached derivation binds native session evidence to jobs and writes consent-gated local facts. Each session start runs the bounded boot-check registry and starts delivery detached: one sweep, then a flush of every consented store that sends only transformed published facts as one intake pull request per machine per store. Task completion queues finalization, which the end-of-turn hook and the boot check run as `finalize`. The factory CLI exposes `derive`, `status`, `flush` and `finalize`, validates store intake (published facts and waste labels) with `validate-pr`, builds deterministic reports and cross-job waste rollups with `build`, and derives a hashed report URL with `job-link`. `evaluate` prepares bounded briefs for the waste evaluator when a task reaches `done`, and `evaluate-accept` checks the evaluator's labels before they join the local outbox; delivering those labels is not wired yet. The live delivery proof against the public store is separate milestone work. See [the factory capture and pipeline contract](../docs/factory-local-capture.md) for privacy, commands, formulas and recovery boundaries.
+Claude and Copilot end/stop hooks write protected local markers; detached derivation binds native session evidence to jobs and writes consent-gated local facts. Each session start runs the bounded boot-check registry and starts delivery detached: one sweep, then a flush of every consented store that sends only transformed published facts as one intake pull request per machine per store. Task completion queues finalization, which the end-of-turn hook and the boot check run as `finalize`. The factory CLI exposes `derive`, `status`, `flush` and `finalize`, validates store intake (published facts and waste labels) with `validate-pr`, builds deterministic reports and cross-job waste rollups with `build`, and derives a hashed report URL with `job-link`, which `task_update` and `task_archive` write into the task card as `factory_report` on the transition to `done` when the store has consent. `desk_status` and `desk_doctor` report the bound desk's store, consent per store, undelivered and quarantined counts and the last flush result code as `factory`, with no path, secret, account or content. `evaluate` prepares bounded briefs for the waste evaluator when a task reaches `done`, and `evaluate-accept` checks the evaluator's labels before they join the local outbox; delivering those labels is not wired yet. The live delivery proof against the public store is separate milestone work. See [the factory capture and pipeline contract](../docs/factory-local-capture.md) for privacy, commands, formulas and recovery boundaries.
 
-## Tools exposed (18)
+## Tools exposed (17)
 
 **Runtime CRUD:**
 - `task_create`, `task_update`, `task_archive`
@@ -37,10 +37,7 @@ Claude and Copilot end/stop hooks write protected local markers; detached deriva
 
 **Status:**
 - `desk_status` — session-start-safe MCP health, root, activation, index, snapshot, and vector-pack status
-- `desk_doctor` — healthy-runtime confirmation or precise failure diagnosis and remediation; `{"repair":"switch_state_branch"}`, `{"repair":"reclaim_controller"}` and `{"repair":"prune_readiness_state"}` run the repairs described under [Handshake first, then admission](#handshake-first-then-admission)
-
-**Private work measurement:**
-- `desk_work_ledger` — the owner's own work-item ledger, kept in their private state directory outside Git, the search index and telemetry; it measures work, not people
+- `desk_doctor` — healthy-runtime confirmation or precise failure diagnosis and remediation; `{"repair":"switch_state_branch"}`, `{"repair":"reclaim_controller"}` and `{"repair":"prune_readiness_state"}` run the repairs described under [Handshake first, then admission](#handshake-first-then-admission); it also counts the private partitions the retired manual measurement ledger left under `<state home>/ouroboros-skills/desk/work-ledger/`, without opening, moving or deleting them
 
 **Search:**
 - `desk_search` — hybrid lexical + semantic
@@ -50,7 +47,7 @@ Claude and Copilot end/stop hooks write protected local markers; detached deriva
 - `desk_thread` — provenance walk via refs_graph
 - `desk_reindex` — rebuild or repair the local search index
 
-All 18 tools are wired to real implementations. There is no qualitative feedback tool: preview feedback a participant chooses to offer is written as Markdown in their own desk at `_meta/preview-feedback.md`, and the protected store that already holds private records is retained as a [storage primitive](docs/private-feedback.md) with no route from this server. The optional `desk_doctor` input `{"format":"preview"}` returns a [minimal local diagnostic snapshot](../docs/preview-diagnostics.md), not feedback collection or a network report.
+All 17 tools are wired to real implementations. There is no work-measurement tool either: the factory accounts for each session when it ends and reports each finished job ([local capture](../docs/factory-local-capture.md)). There is no qualitative feedback tool: preview feedback a participant chooses to offer is written as Markdown in their own desk at `_meta/preview-feedback.md`, and the protected store that already holds private records is retained as a [storage primitive](docs/private-feedback.md) with no route from this server. The optional `desk_doctor` input `{"format":"preview"}` returns a [minimal local diagnostic snapshot](../docs/preview-diagnostics.md), not feedback collection or a network report.
 
 ## How consumers wire this up
 
@@ -86,7 +83,7 @@ Admission runs in the background (`src/runtime/desk-session.js`, `src/runtime/ad
 - A degraded session retries on its own after 1, 2, 5, 10 and 30 s, then every 60 s, and at once on every `desk_status` call and on a change to the checkout's `.git/HEAD`. A fix the agent makes in the session (creating the desk, correcting the activation config, pushing local commits) upgrades the same session to `ready` with no restart.
 - `desk_status` always answers, with `state`, `code`, `fix`, the latest `repair` and an `admission` block (attempts, next retry, state branch, controller, a hung controller's missed checks and owner, whether writes are available, exceptions caught after the handshake, and the launcher mode).
 - Reads (`desk_search`, `desk_recall`, `desk_similar`, `desk_timeline`, `desk_thread`) need the runtime and a root. Without a readiness controller, lexical search and timeline read the files directly.
-- `desk_work_ledger` also needs admitted write authority; `desk_reindex` needs the readiness controller.
+- `desk_reindex` also needs the readiness controller.
 - Writes (`task_*`, `track_*`, `friction_add`, `lesson_add`) need admitted write authority and the checkout on its state branch, re-checked before every write. They never need the readiness controller: with one that answers, the change is journaled through it; without one, it goes straight to the file and a controller's watcher, or the next controller's convergence scan, picks it up.
 - A tool whose needs are not met returns `{"status":"degraded","state","code","fix","blockers","tool"}` with a fix the agent can act on in the session. A tool that throws returns the same shape with `code: "tool_exception"`.
 - After the handshake, an uncaught exception or unhandled rejection never ends the process, on every launch path (`node index.js`, `bootstrap.cjs` running `index.js` in its own process or re-running it as a child, and the Claude `.mcp.json` inline launcher): Desk records it, moves to `degraded:runtime_exception`, keeps serving and re-admits on its backoff.
