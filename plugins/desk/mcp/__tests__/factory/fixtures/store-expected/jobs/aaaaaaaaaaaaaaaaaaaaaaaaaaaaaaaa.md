@@ -26,7 +26,10 @@
 
 ## What was waste
 
-Not classified yet: the independent evaluator arrives in slice 2.
+- Classified by the independent evaluator: 1 of 2 sessions labeled; not classified yet: 1 session.
+- Muda: 5000 ms (55.56% of labeled time): defects 3000 ms (1 stretch), waiting 2000 ms (1 stretch).
+- Value 4000 ms; support 0 ms.
+- Mura (unevenness) flagged on 0 stretches; muri (overburden) on 0 stretches.
 - Candidate signals only (inferred): 2 tool failures, 3 tool retries, 1 API retry, 1 session re-touch.
 - Wait signals: human 2000 ms (measured, partial: 1 session uncovered), permission 1000 ms (measured, partial: 1 session uncovered), API retry 500 ms (measured), compaction 0 ms (measured).
 

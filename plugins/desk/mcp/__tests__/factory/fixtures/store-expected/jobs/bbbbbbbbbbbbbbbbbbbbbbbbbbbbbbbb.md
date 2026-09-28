@@ -26,7 +26,7 @@
 
 ## What was waste
 
-Not classified yet: the independent evaluator arrives in slice 2.
+Not classified yet: no session of this job has labels from the independent evaluator.
 - Candidate signals only (inferred): 1 tool failure, 2 tool retries, 1 API retry, 1 session re-touch.
 - Wait signals: human unavailable (host_does_not_record), permission 1000 ms (measured), API retry 500 ms (measured), compaction 0 ms (measured).
 

@@ -177,7 +177,7 @@ export function build({ storeDir, outDir }) {
     writeFileSync(path.join(temporary, "index.md"), renderIndexMarkdown(reports, buildCoverage(sessions)))
     for (const { timeline, formulas } of reports) {
       writeFileSync(path.join(temporary, "jobs", `${timeline.job}.json`), `${stableStringify({ job: timeline.job, timeline: outputTimeline(timeline), formulas })}\n`)
-      writeFileSync(path.join(temporary, "jobs", `${timeline.job}.md`), renderJobMarkdown({ timeline, formulas }))
+      writeFileSync(path.join(temporary, "jobs", `${timeline.job}.md`), renderJobMarkdown({ timeline, formulas, labels: labels.byJobSession }))
     }
     writeRollups(path.join(temporary, "rollups"), rollups)
     replaceDirectory(temporary, out)
