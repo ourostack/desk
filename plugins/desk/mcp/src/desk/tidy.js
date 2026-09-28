@@ -29,11 +29,39 @@
 //
 // A desk that is not a Git work tree is never tidied: tidying is safe only
 // because every move goes through Git and can be undone.
+//
+// Ruling (2026-09-27, review of the startup-hook change): the startup hooks
+// tell the agent to run the tidy whenever Detect fires, so Detect must not
+// fire when the tidy cannot make progress, and only one session may tidy a
+// desk at a time.
+//
+// - A claim. `--report` takes an exclusive claim in the desk's Git folder
+//   before it prints the steps, and the steps carry its token to
+//   `--write-record` and `--defer`. While another session's claim is fresh
+//   (CLAIM_STALE_MS), `--report` prints one line instead of the steps and
+//   Detect reports the tidy as held. Claims are numbered generations
+//   (`desk-tidy-claim.<n>.json`), and the newest is the current one. A
+//   session takes over by linking a fully written file to the next number,
+//   which fails when another session got there first, and then checks that
+//   no newer generation appeared; nothing ever deletes or rewrites another
+//   session's claim, so two sessions can never both hold one.
+// - A hold. When the tidy stops (no person resolves, the tools and the script
+//   disagree about the desk, Git is mid-merge, or the agent stops it with
+//   `--defer <reason>`), a hold records the reason and a fingerprint of the
+//   state that stopped it. Detect then prints `held: <reason>` and exits 1
+//   until that state changes or HOLD_MAX_MS passes, so the hooks show one
+//   line with the reason instead of the instruction.
+// - The `gh` identity lookup. In Detect, a cold identity cache starts the
+//   lookup in a background process that writes the cache, and Detect does
+//   not fire this time, so a slow `gh` never holds up session start and the
+//   next session start has the identity.
 
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
-import { spawnSync } from "node:child_process"
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
+import { spawn as spawnChild, spawnSync } from "node:child_process"
+import { createHash, randomUUID } from "node:crypto"
 import * as os from "node:os"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 import { organizationFindings, redactedRelPath } from "./organization.js"
 import { operatorNames } from "./naming.js"
 import { crewWorkspace, parseCrewRoster, readCrewRoster } from "./crew-roster.js"
@@ -65,6 +93,16 @@ const IDENTITY_TIMEOUT_MS = 10_000
 // round 2): a found identity for 24 hours, a failed lookup for 1 hour.
 const IDENTITY_FOUND_TTL_MS = 24 * 60 * 60 * 1000
 const IDENTITY_FAILED_TTL_MS = 60 * 60 * 1000
+
+// A claim older than this is abandoned (its session ended mid-tidy), and
+// another session may take it over.
+export const CLAIM_STALE_MS = 30 * 60 * 1000
+// A hold lapses after this even when nothing changed, so the tidy is tried
+// again now and then.
+export const HOLD_MAX_MS = 7 * 24 * 60 * 60 * 1000
+const CLAIM_NAME = /^desk-tidy-claim\.(\d+)\.json$/u
+const HOLD_FILE = "desk-tidy-hold.json"
+const TIDY_STATUS_SCRIPT = fileURLToPath(new URL("../../scripts/tidy-status.js", import.meta.url))
 
 /** `{ schema_version: 1, tidy_version: 1, tidied_at: <iso> }` */
 export function organizationRecord(now = new Date()) {
@@ -163,11 +201,22 @@ function freshEntry(entry, now) {
 
 // The GitHub login `gh` reports, through the cache. A cache that cannot be
 // written only costs a lookup next time.
-function ghIdentity(root, { env, spawnGh, homeDir, now }) {
+// With `spawnBackground`, a cold cache starts `tidy-status.js
+// --refresh-identity` in its own process group and returns undefined: the
+// lookup finishes and writes the cache even when the caller is stopped.
+function ghIdentity(root, { env, spawnGh, homeDir, now, spawnBackground }) {
   const file = identityCachePath({ env, homeDir })
   const key = real(root)
   const cache = readIdentityCache(file)
   if (freshEntry(cache[key], now)) return cache[key].identity
+  if (spawnBackground !== undefined) {
+    try {
+      spawnBackground(process.execPath, [TIDY_STATUS_SCRIPT, "--refresh-identity", "--root", root], { env, detached: true, stdio: "ignore", windowsHide: true }).unref()
+    } catch {
+      // Could not start it: the next Detect tries again.
+    }
+    return undefined
+  }
   const result = run(spawnGh, "gh", ["api", "user", "--jq", ".login"])
   const identity = result.status === 0 && hasText(result.stdout) ? result.stdout.trim() : null
   try {
@@ -185,17 +234,19 @@ function ghIdentity(root, { env, spawnGh, homeDir, now }) {
  * identity (`DESK_IDENTITY`, else the cached `gh` login), else null.
  * `roster` is the desk's already parsed crew roster (null for a desk that has
  * none); when it is left out, it is read from `root`. A desk without a crew
- * roster has no person, so no identity is looked up for it.
+ * roster has no person, so no identity is looked up for it. With
+ * `spawnBackground`, a cold `gh` lookup runs in the background and the result
+ * is undefined: not known yet.
  */
-export function resolvePerson(root, { env, spawnGh = spawnSync, homeDir = os.homedir(), now = Date.now(), roster }) {
+export function resolvePerson(root, { env, spawnGh = spawnSync, homeDir = os.homedir(), now = Date.now(), roster, spawnBackground }) {
   if (hasText(env.DESK_PERSON)) return env.DESK_PERSON.trim()
   if (root === null) return null
   const rows = (roster === undefined ? readCrewRoster(root) : roster)?.filter((row) => row.alias !== "")
   if (rows === undefined || rows.length === 0) return null
   const identity = hasText(env.DESK_IDENTITY)
     ? env.DESK_IDENTITY.trim()
-    : ghIdentity(root, { env, spawnGh, homeDir, now })
-  if (identity === null) return null
+    : ghIdentity(root, { env, spawnGh, homeDir, now, spawnBackground })
+  if (identity === undefined || identity === null) return identity
   const row = rows.find((candidate) => candidate.identity.toLowerCase() === identity.toLowerCase())
   return row === undefined ? null : row.alias
 }
@@ -205,13 +256,15 @@ function base(fields, reason) {
 }
 
 /**
- * tidyStatus({ root?, person?, env, cwd?, homeDir?, now?, spawnGit?, spawnGh? }) ->
+ * tidyStatus({ root?, person?, env, cwd?, homeDir?, now?, spawnGit?, spawnGh?, spawnBackground? }) ->
  *   { root, person, subtree, resolved, mismatch: false|"root"|"person", applicable, reason, needed,
  *     unresolved_person, tidy_version, findings }
  *
- * Read-only. `root`/`person` are the Desk tools' own (from `desk_status`);
- * without `root` the script's own resolution is used. `needed` is the
- * Detect predicate.
+ * Read-only, except that `spawnBackground` lets a cold identity lookup run
+ * in the background (see `ghIdentity`); until it lands, `needed` is false.
+ * `root`/`person` are the Desk tools' own (from `desk_status`); without
+ * `root` the script's own resolution is used. `needed` is the Detect
+ * predicate, before any claim or hold (see `heldReason`).
  */
 export function tidyStatus({
   root,
@@ -222,6 +275,7 @@ export function tidyStatus({
   now,
   spawnGit = spawnSync,
   spawnGh = spawnSync,
+  spawnBackground,
 }) {
   const resolvedRoot = resolveRoot({ env, cwd, homeDir })
   const bound = hasText(root)
@@ -229,7 +283,8 @@ export function tidyStatus({
   // Read once: the crew workspace check decides crew mode, and its roster
   // resolves the person.
   const workspace = crewWorkspace(deskRoot)
-  const resolvedPerson = resolvePerson(deskRoot, { env, spawnGh, homeDir, now: now ?? Date.now(), roster: workspace.roster })
+  const lookedUp = resolvePerson(deskRoot, { env, spawnGh, homeDir, now: now ?? Date.now(), roster: workspace.roster, spawnBackground })
+  const resolvedPerson = lookedUp ?? null
   const alias = bound ? (hasText(person) ? person.trim() : null) : resolvedPerson
   const resolved = { root: resolvedRoot, person: resolvedPerson }
   // "root" when the script finds another desk (or none), "person" when it
@@ -240,6 +295,7 @@ export function tidyStatus({
   const fields = { root: deskRoot, person: alias, subtree: null, resolved, mismatch }
 
   if (deskRoot === null) return base(fields, "no desk is bound")
+  if (lookedUp === undefined) return base(fields, "this session's GitHub identity is still being looked up")
   // A crew workspace is one whose `_meta/desks.md` holds the crew roster, or
   // one it cannot rule out (see `crewWorkspace`). A hub's routing registry or
   // a spoke's pointer in that file is not one: that desk is tidied at its
@@ -333,22 +389,178 @@ function describe(root, person) {
   return `${root}${person === null ? "" : ` as ${person}`}`
 }
 
-// The one line the agent says instead of the Announce line when the tidy
-// cannot run this session, or null when it can.
-function stopLine(status, spawnGit) {
+// Why the tidy cannot run this session, or null when it can: `line` is what
+// the agent says instead of the Announce line, and `kind` names the state
+// whose fingerprint holds the tidy until it changes (null: nothing to hold,
+// because Detect does not fire for it).
+function stopReason(status, spawnGit) {
   if (status.unresolved_person) {
-    return "I couldn't tell which desk in this crew workspace is mine, so I left every desk as it is."
+    return { kind: "who", reason: "no person in this crew workspace's roster matches this session", line: "I couldn't tell which desk in this crew workspace is mine, so I left every desk as it is." }
   }
   if (status.mismatch === "person" && status.resolved.person === null) {
-    return `I left my desk untidied: the Desk tools name ${status.person} as this session's person, but I couldn't resolve this session's identity to a person in the crew registry.`
+    return { kind: "who", reason: "the Desk tools' person does not match this session's identity", line: `I left my desk untidied: the Desk tools name ${status.person} as this session's person, but I couldn't resolve this session's identity to a person in the crew registry.` }
   }
   if (status.mismatch) {
-    return `I left my desk untidied: the Desk tools use ${describe(status.root, status.person)}, but the tidy found ${describe(status.resolved.root, status.resolved.person)}.`
+    return { kind: "who", reason: "the Desk tools and the tidy resolve different desks", line: `I left my desk untidied: the Desk tools use ${describe(status.root, status.person)}, but the tidy found ${describe(status.resolved.root, status.resolved.person)}.` }
   }
-  if (!status.applicable) return `I left my desk untidied: ${status.reason}.`
+  if (!status.applicable) return { kind: null, line: `I left my desk untidied: ${status.reason}.` }
   const problem = tidySafetyProblem(status.root, { spawnGit })
-  if (problem !== null) return `I left my desk untidied for now because ${problem}; I'll tidy it in a later session.`
+  if (problem !== null) return { kind: "busy", reason: problem, line: `I left my desk untidied for now because ${problem}; I'll tidy it in a later session.` }
   return null
+}
+
+// ── Claim and hold, both in the desk repository's Git folder ─────────────
+
+function gitCommonDir(root, spawnGit) {
+  const result = run(spawnGit, "git", ["-C", root, "rev-parse", "--git-common-dir"])
+  return result.status === 0 && hasText(result.stdout) ? path.resolve(root, result.stdout.trim()) : null
+}
+
+function readJson(file) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"))
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function removeFile(file) {
+  try {
+    unlinkSync(file)
+  } catch {
+    // Already gone.
+  }
+}
+
+function freshClaim(claim, now) {
+  return claim !== null && typeof claim.token === "string" && typeof claim.claimed_at === "number" &&
+    now - claim.claimed_at >= 0 && now - claim.claimed_at < CLAIM_STALE_MS
+}
+
+const claimFile = (gitDir, generation) => path.join(gitDir, `desk-tidy-claim.${generation}.json`)
+
+// The claim generations in the Git folder, newest first.
+function claimGenerations(gitDir) {
+  let names
+  try {
+    names = readdirSync(gitDir)
+  } catch {
+    return []
+  }
+  return names.flatMap((name) => {
+    const match = CLAIM_NAME.exec(name)
+    return match === null ? [] : [Number(match[1])]
+  }).sort((a, b) => b - a)
+}
+
+// The current (newest) claim and its generation, or null when there is none.
+// `claim` is null when the file is unreadable, which counts as stale.
+function currentClaim(gitDir) {
+  const [generation] = claimGenerations(gitDir)
+  return generation === undefined ? null : { generation, claim: readJson(claimFile(gitDir, generation)) }
+}
+
+// Writes a claim to a private file beside the generations, so a generation
+// only ever appears fully written.
+function stagedClaim(gitDir, claim) {
+  const file = path.join(gitDir, `desk-tidy-claim-${randomUUID()}.tmp`)
+  writeFileSync(file, `${JSON.stringify(claim)}\n`, { mode: 0o600 })
+  return file
+}
+
+/**
+ * takeClaim(gitDir, { now, token?, link? }) -> { token } | { held: { claimed_at } }
+ *
+ * The exclusive claim on tidying this desk. A fresh current claim is another
+ * session's. Otherwise this session links its claim to the next generation:
+ * the link fails when a racing session took that generation first, and a
+ * generation newer than ours means a racing session that started from an
+ * older view won, so ours is withdrawn. Older generations are then pruned.
+ * `link` is `fs.linkSync`, injectable so tests can stage a race.
+ */
+export function takeClaim(gitDir, { now, token = randomUUID(), link = linkSync }) {
+  const current = currentClaim(gitDir)
+  if (current !== null && freshClaim(current.claim, now)) return { held: current.claim }
+  const generation = (current?.generation ?? 0) + 1
+  const mine = claimFile(gitDir, generation)
+  let staged = null
+  try {
+    staged = stagedClaim(gitDir, { token, claimed_at: now })
+    link(staged, mine)
+  } catch {
+    return { held: readJson(mine) ?? { claimed_at: now } }
+  } finally {
+    if (staged !== null) removeFile(staged)
+  }
+  const [newest, ...older] = claimGenerations(gitDir)
+  if (newest !== generation) {
+    removeFile(mine)
+    return { held: readJson(claimFile(gitDir, newest)) ?? { claimed_at: now } }
+  }
+  for (const stale of older) removeFile(claimFile(gitDir, stale))
+  return { token }
+}
+
+// Another session's fresh claim, or null when `token` may act.
+function otherClaim(gitDir, token, now) {
+  const current = currentClaim(gitDir)
+  return current !== null && freshClaim(current.claim, now) && current.claim.token !== token ? current.claim : null
+}
+
+// Releases the current claim when it is `token`'s, by replacing it with one
+// claimed at the epoch, so the next session may take over at once. The
+// generation stays, so the numbering only ever grows; a newer generation, or
+// another session's claim, is left alone.
+function releaseClaim(gitDir, token) {
+  const current = currentClaim(gitDir)
+  if (current !== null && current.claim?.token === token) {
+    renameSync(stagedClaim(gitDir, { token, claimed_at: 0 }), claimFile(gitDir, current.generation))
+  }
+}
+
+const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16)
+
+function rosterText(root) {
+  try {
+    return readFileSync(path.join(root, "_meta", "desks.md"), "utf8")
+  } catch {
+    return ""
+  }
+}
+
+// The state a hold of `kind` waits on. "who": which desk and person the
+// script resolves, and the crew roster. "busy": the Git operation in
+// progress. "agent" (from `--defer`): the desk's latest commit and the
+// uncommitted paths in this session's own desk.
+function holdFingerprint(kind, status, spawnGit) {
+  if (kind === "who") return digest([status.resolved, rosterText(status.resolved.root ?? status.root)])
+  if (kind === "busy") return digest(tidySafetyProblem(status.root, { spawnGit }))
+  const head = run(spawnGit, "git", ["-C", status.root, "rev-parse", "HEAD"])
+  return digest([head.stdout.trim(), uncommittedPaths(status.root, status.subtree, { spawnGit })])
+}
+
+function writeHold(gitDir, status, { kind, reason }, { spawnGit, now }) {
+  try {
+    writeFileSync(path.join(gitDir, HOLD_FILE), `${JSON.stringify({ kind, reason, fingerprint: holdFingerprint(kind, status, spawnGit), held_at: now }, null, 2)}\n`)
+  } catch {
+    // An unwritable Git folder only means Detect fires again next session.
+  }
+}
+
+/**
+ * Why Detect should not fire although the tidy is needed, or null: another
+ * session's fresh claim, or a hold whose state has not changed.
+ */
+export function heldReason(status, { spawnGit = spawnSync, now = Date.now() } = {}) {
+  const gitDir = gitCommonDir(status.root, spawnGit)
+  if (gitDir === null) return null
+  const claim = currentClaim(gitDir)?.claim ?? null
+  if (freshClaim(claim, now)) return `another session has been tidying this desk since ${new Date(claim.claimed_at).toISOString()}`
+  const hold = readJson(path.join(gitDir, HOLD_FILE))
+  if (hold === null || !["who", "busy", "agent"].includes(hold.kind) || typeof hold.held_at !== "number" || !hasText(hold.reason)) return null
+  if (now - hold.held_at < 0 || now - hold.held_at >= HOLD_MAX_MS) return null
+  return hold.fingerprint === holdFingerprint(hold.kind, status, spawnGit) ? hold.reason.trim() : null
 }
 
 function reportText(status, dirty) {
@@ -369,13 +581,17 @@ function reportText(status, dirty) {
 }
 
 function parseArgs(argv) {
-  const args = { mode: "json", root: undefined, person: undefined }
+  const args = { mode: "json", root: undefined, person: undefined, claim: undefined, reason: undefined }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
-    if (arg === "--root" || arg === "--person") {
+    if (arg === "--root" || arg === "--person" || arg === "--claim") {
       args[arg.slice(2)] = argv[index + 1]
       index += 1
-    } else if (["--detect", "--report", "--write-record"].includes(arg)) {
+    } else if (arg === "--defer") {
+      args.mode = "defer"
+      args.reason = argv[index + 1]
+      index += 1
+    } else if (["--detect", "--report", "--write-record", "--refresh-identity"].includes(arg)) {
       args.mode = arg.slice(2)
     } else {
       throw new Error(`tidy-status: unknown argument ${JSON.stringify(arg)}`)
@@ -386,52 +602,104 @@ function parseArgs(argv) {
 
 /**
  * The `scripts/tidy-status.js` command line. Modes:
- *   (none)          print tidyStatus as JSON; exit 0
- *   --detect        exit 0 when the tidy is needed, 1 otherwise; print nothing
- *   --report        print the report and exit 0 when the tidy can run now;
- *                   otherwise print the one line to say instead and exit 1
- *   --write-record  write _meta/organization.json in this session's own desk
+ *   (none)              print tidyStatus as JSON; exit 0
+ *   --detect            exit 0 when the tidy is needed and not held, 1
+ *                       otherwise; print `held: <reason>` when it is held
+ *   --report            take the claim, print the report and its claim token,
+ *                       and exit 0 when the tidy can run now; otherwise print
+ *                       the one line to say instead (and hold the tidy when
+ *                       Detect would fire again) and exit 1
+ *   --write-record      write _meta/organization.json in this session's own
+ *                       desk, then release the claim and any hold
+ *   --defer <reason>    hold the tidy until the desk's latest commit or its
+ *                       uncommitted paths change, and release the claim
+ *   --refresh-identity  look the `gh` identity up and cache it (Detect starts
+ *                       this in the background)
  * `--root <path>` and `--person <alias>` are the Desk tools' own root and
- * person, from `desk_status`.
+ * person, from `desk_status`; `--claim <token>` is the token `--report`
+ * printed.
  */
 export function runTidyStatusCli({
-  argv = process.argv.slice(2),
-  env = process.env,
-  io = process,
+  argv,
+  env,
+  io,
   cwd,
   homeDir,
   now,
   spawnGit = spawnSync,
   spawnGh = spawnSync,
-} = {}) {
+  spawnBackground = spawnChild,
+}) {
   let args
   try {
     args = parseArgs(argv)
+    if (args.mode === "defer" && !hasText(args.reason)) throw new Error("tidy-status: --defer needs a one-line reason")
+    if (args.mode === "refresh-identity" && !hasText(args.root)) throw new Error("tidy-status: --refresh-identity needs --root")
   } catch (error) {
     io.stderr.write(`${error.message}\n`)
     return 2
   }
-  const status = tidyStatus({ root: args.root, person: args.person, env, cwd, homeDir, now, spawnGit, spawnGh })
+  const clock = now ?? Date.now()
 
-  if (args.mode === "detect") return status.needed ? 0 : 1
+  if (args.mode === "refresh-identity") {
+    ghIdentity(path.resolve(args.root), { env, spawnGh, homeDir, now: clock })
+    return 0
+  }
+
+  const status = tidyStatus({ root: args.root, person: args.person, env, cwd, homeDir, now, spawnGit, spawnGh, spawnBackground: args.mode === "detect" ? spawnBackground : undefined })
+
+  if (args.mode === "detect") {
+    if (!status.needed) return 1
+    const held = heldReason(status, { spawnGit, now: clock })
+    if (held === null) return 0
+    io.stdout.write(`held: ${held}\n`)
+    return 1
+  }
 
   if (args.mode === "json") {
     io.stdout.write(`${JSON.stringify(status, null, 2)}\n`)
     return 0
   }
 
-  const stop = stopLine(status, spawnGit)
+  const stop = stopReason(status, spawnGit)
+  const gitDir = status.root === null ? null : gitCommonDir(status.root, spawnGit)
   if (stop !== null) {
-    io.stdout.write(`${stop}\n`)
+    if (stop.kind !== null && gitDir !== null && args.mode === "report") writeHold(gitDir, status, stop, { spawnGit, now: clock })
+    io.stdout.write(`${stop.line}\n`)
     return 1
   }
 
   if (args.mode === "report") {
+    const claim = takeClaim(gitDir, { now: clock })
+    if (claim.held !== undefined) {
+      io.stdout.write(`Another session has been tidying this desk since ${new Date(claim.held.claimed_at).toISOString()}, so I left the tidy to it. If that session is this one, carry on with the steps it printed.\n`)
+      return 1
+    }
+    removeFile(path.join(gitDir, HOLD_FILE))
     io.stdout.write(reportText(status, uncommittedPaths(status.root, status.subtree, { spawnGit })))
+    io.stdout.write(`Tidy claim: ${claim.token} (this session's until ${new Date(clock + CLAIM_STALE_MS).toISOString()}; the record and defer commands below carry it)\n`)
+    return 0
+  }
+
+  // Past this check the claim is this session's, stale or absent, so both
+  // modes below may release it.
+  const other = otherClaim(gitDir, args.claim, clock)
+  if (other !== null) {
+    io.stdout.write(`Another session has been tidying this desk since ${new Date(other.claimed_at).toISOString()}, so I changed nothing.\n`)
+    return 1
+  }
+
+  if (args.mode === "defer") {
+    const reason = args.reason.replace(/[\x00-\x1f\x7f]+/gu, " ").trim()
+    writeHold(gitDir, status, { kind: "agent", reason }, { spawnGit, now: clock })
+    releaseClaim(gitDir, args.claim)
+    io.stdout.write(`The tidy is on hold: ${reason}. Session start names it until this desk's latest commit or its uncommitted changes differ, and then the tidy runs again.\n`)
     return 0
   }
 
   const file = writeOrganizationRecord(status.subtree, now === undefined ? undefined : new Date(now))
+  releaseClaim(gitDir, args.claim)
+  removeFile(path.join(gitDir, HOLD_FILE))
   io.stdout.write(`${path.relative(status.root, file)}\n`)
   return 0
 }

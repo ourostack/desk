@@ -3,8 +3,9 @@
 // JSON. Startup hooks call this so they can never disagree with the server.
 // `--root-only` prints just the root (empty when none); `--startup-line` prints
 // the `Desk startup:` line the Claude hook appends; `--boot-checks` appends the
-// one `Desk boot:` line when a boot check has something to say, then starts
-// factory delivery detached. Always exits 0: a hook must not block session
+// one `Desk boot:` line when a boot check has something to say and the one
+// `Desk migrations:` line when one of Desk's own migrations is pending, then
+// starts factory delivery detached. Always exits 0: a hook must not block session
 // start.
 import process from "node:process"
 import * as os from "node:os"
@@ -40,9 +41,14 @@ export async function main({ argv = process.argv.slice(2), env = process.env, wr
   if (argv.includes("--startup-line")) output = claudeStartupDirection({ env })
   if (argv.includes("--boot-checks")) {
     const { default: boot } = await loadBoot()
+    // Desk's own migration Detect blocks run alongside the boot checks, and
+    // add one line only when a migration is pending.
+    const migrations = boot.migrationLine({ host: "claude", env })
     // One agent line only when a boot check has something to say; otherwise the output is unchanged.
     const line = await boot.runBootChecks({ host: "claude", env })
     if (line) output += `\n\n${line}`
+    const pending = await migrations
+    if (pending) output += `\n\n${pending}`
     // Factory delivery starts detached only once the output is built.
     await boot.startFactory({ env })
   }

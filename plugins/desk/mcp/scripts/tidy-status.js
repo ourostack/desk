@@ -5,4 +5,4 @@
 // modules. See src/desk/tidy.js for the modes.
 import { runTidyStatusCli } from "../src/desk/tidy.js"
 
-process.exitCode = runTidyStatusCli()
+process.exitCode = runTidyStatusCli({ argv: process.argv.slice(2), env: process.env, io: process })

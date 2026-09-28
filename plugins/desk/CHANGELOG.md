@@ -1,5 +1,29 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.111 — 2026-09-28
+
+**The RFC's status now records the factory working end to end.** Facts and waste labels from an installed Desk reach the public store, merge and build reports, private plugin names stay out of it, and delivery to the store is no longer listed as not yet live ([RFC status](docs/agentic-engineering-v2-rfc.md)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.110 — 2026-09-28
+
+`desk_status` keeps its index and readiness detail on a busy machine instead of answering "unavailable". Only one [runtime status](mcp/src/runtime/desk-session.js) computation runs at a time. A call that arrives while one is running waits its own short budget for that answer. A detail that arrives late is kept, and the next call serves it marked cached, with its start time in the new `status_detail_from` field and its age in `status_detail`. A computation still running after 10 seconds is treated as stuck: the next call starts a fresh one, and the stuck one can never replace newer detail when it finishes. Before this change, each call threw away any computation that ran past about a tenth of a second and started another, so on a slow machine every call could answer "unavailable". The lexical readiness smoke test, which failed on busy CI runners for the same reason, now waits for a detail computed after the event it checks.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.109 — 2026-09-28
+
+**The manual work-measurement ledger is retired; the factory accounts for finished jobs instead.** The `desk_work_ledger` tool and its published input schema, the `work-measurement-ledger` skill, the batch work-profile script and their measurement code are removed, so Desk now exposes 17 tools and no tool, skill or instruction asks anyone to record work by hand. The factory already captures each session when it ends and reports each finished job ([local capture](docs/factory-local-capture.md)). The `online-evaluation` skill now reads the factory's report and waste labels for flow and consumption, and marks them unavailable, with the reason, when the factory has no evidence for the job.
+
+**Existing ledger records stay where they are.** Nothing migrates, opens or deletes the private partitions under `<state home>/ouroboros-skills/desk/work-ledger/`. `desk_doctor` now counts them in a `legacy_work_ledger` field and a "Retired work ledger" summary section, and reports an uncountable folder as unavailable rather than zero; remove the folder yourself when you no longer want those records. A call to `desk_work_ledger` from an old client is refused as an unknown tool and touches nothing.
+
+**The M3-5 schema aliases are gone.** `validateFacts` and `validateFactsBytes` are no longer exported from the factory schema; use `validateLocalFacts` and `validateLocalFactsBytes`.
+
+**The frozen offline benchmark cannot run natively until a new dataset version drops the ledger case.** The `v2-alpha-v1` dataset still requires the `private.ledger` callback, which no Desk tool supplies now, so a native run is refused with `NATIVE_CALLBACK_UNMAPPED` ([offline evals](../../evals/offline/README.md)). The frozen dataset is not edited; [#56](https://github.com/ourostack/desk/issues/56) tracks the new version.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.108 — 2026-09-28
 
 Session start now reads the bound desk's `AGENTS.md` right after the host probe, before the first question or action, treats its rules as binding for the session and says so in one line. Archiving a task, an iteration or a track now stages and commits only the paths it moved, as `git-hygiene`'s targeted staging requires, so an archive commit in a shared desk no longer sweeps in another session's edits.
