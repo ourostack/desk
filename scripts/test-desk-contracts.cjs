@@ -1008,6 +1008,36 @@ contract("session-start asks the factory contribution question once, in plain wo
 contract("session-start never skips Step 2.7", () => {
   assert.match(text(sessionStart).split("## Never skip, never route around", 2)[1] ?? "", /2\.7/u);
 });
+// Kaizen card 4: the desk's own interaction contract (its AGENTS.md) binds before the first question or action.
+contract("session-start reads the bound desk's AGENTS.md before the first question or action, and says so in one line", () => {
+  const body = text(sessionStart);
+  const step = body.split("\n## Step 0.25 — Read the desk's AGENTS.md\n", 2)[1]?.split("\n## ", 1)[0] ?? "";
+  assert.ok(step, "session-start is missing Step 0.25");
+  assert.ok(body.indexOf("## Step 0.25") < body.indexOf("## Step 0.5"), "Step 0.25 runs before the migrations act");
+  assert.match(step, /bound desk/u);
+  assert.match(step, /before the first question[^\n]+or action/u);
+  assert.match(step, /[Ww]hen the file is absent[^\n]+silent/u);
+  assert.match(step, /binding/u);
+  assert.match(step, /one line/u);
+  assert.match(step, /> Read `\$DESK\/AGENTS\.md`/u);
+  assert.match(step, /Step 2[^\n]+changed it[^\n]+read it again/u);
+  assert.match(body.split("## Never skip, never route around", 2)[1] ?? "", /0\.25/u);
+});
+// Kaizen card 5: archiving stages only the paths it moved, as git-hygiene's targeted staging requires.
+contract("archive-workflow stages only the paths it moved", () => {
+  const body = text("plugins/desk/skills/archive-workflow/SKILL.md");
+  const code = (body.match(/```bash\n[\s\S]*?```/gu) ?? []).join("\n");
+  const adds = code.match(/git add [^\n]+/gu) ?? [];
+  const commits = code.match(/git commit [^\n]+/gu) ?? [];
+  assert.equal(adds.length, 4, "the four archive stagings");
+  assert.equal(commits.length, 4, "the four archive commits");
+  for (const add of adds) assert.match(add, /^git add -A -- \S/u, `staging names its paths: ${add}`);
+  for (const commit of commits) {
+    assert.doesNotMatch(commit, /^git commit -[a-z]*a/u, `no commit -a: ${commit}`);
+    assert.match(commit, / -- \S/u, `commit names its paths: ${commit}`);
+  }
+  assert.match(body, /`git-hygiene`[^\n]+targeted staging/u);
+});
 requires("plugins/desk/skills/first-run-bootstrap/SKILL.md", "first-run-bootstrap asks the factory question once at the converged endpoint",
   /### Converged endpoint[\s\S]+factory contribution question once[\s\S]+`desk:session-start` Step 2\.7[\s\S]+factory\.js consent/u);
 requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle says done writes the report link and never waits for the store",
