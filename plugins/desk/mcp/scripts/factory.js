@@ -42,7 +42,7 @@ import * as path from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { jobId } from "../src/factory/binding.js"
-import { readDeskRemote } from "../src/factory/desk-repo.js"
+import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
@@ -316,8 +316,10 @@ export async function runEvaluateCommand({ argv, env, pluginVersion = deskVersio
   }
   let job
   try {
+    const personPrefix = crew ? `desks/${segments[1].trim()}` : ""
     const deskRemote = readDeskRemote({ deskRoot: root }) || `local:${root}`
-    job = jobId({ deskRemote, personPrefix: crew ? `desks/${segments[1].trim()}` : "", track: segments.at(-2), slug: segments.at(-1) })
+    const birth = resolveJobIdentity({ deskRoot: root, personPrefix, track: segments.at(-2), slug: segments.at(-1) })
+    job = jobId({ deskRemote, personPrefix, track: birth.track, slug: birth.slug })
   } catch {
     throw new Error(EVALUATE_USAGE)
   }

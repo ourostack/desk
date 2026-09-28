@@ -45,7 +45,9 @@
 // `<track>/_archive/<task>/task.md` and the same under `_archive/<track>/`,
 // below `desks/<alias>/` when a person prefix is given. A crew root's
 // `desks/` folder is never read as a track, and nothing infers a person from
-// other files. The job ID is computed exactly as the task tools compute it.
+// other files. The job ID is computed exactly as the task tools compute it,
+// birth path (`resolveJobIdentity`) included, so a pending finalize request
+// filed under a renamed task's birth ID is still recognized here.
 // Every file read is regular-file-only, no-follow and size-capped; every
 // directory listing is capped. `deadline` (a `performance.now()` value) stops
 // the scan, and bounds the desk remote's Git calls together, with a thrown
@@ -59,7 +61,7 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 import { checkPersonPrefix, jobId } from "./binding.js"
-import { readDeskRemote } from "./desk-repo.js"
+import { readDeskRemote, resolveJobIdentity } from "./desk-repo.js"
 import { readSmallText } from "./marker.js"
 import { expandHome } from "./os-protect.js"
 import { isPlainObject } from "./schema.js"
@@ -294,7 +296,7 @@ export function finishedTasks({ deskRoot, personPrefix = "", now = Date.now(), d
 
 /** See the header. Never writes; throws only `boot_check_budget` (and caller-contract errors for a bad person prefix). */
 export function factoryBootCheck({
-  env = process.env, deskRoot, personPrefix = "", pluginDirs = [], pluginScanIncomplete = false, now = Date.now(), deadline = Infinity, clock = () => performance.now(), readRemote = readDeskRemote,
+  env = process.env, deskRoot, personPrefix = "", pluginDirs = [], pluginScanIncomplete = false, now = Date.now(), deadline = Infinity, clock = () => performance.now(), readRemote = readDeskRemote, resolveIdentity = resolveJobIdentity,
 }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) return { jobs: [] }
   const route = resolveStore({ deskRoot, pluginDirs, read: (file) => readSmallText(file) })
@@ -326,7 +328,8 @@ export function factoryBootCheck({
   for (const { track, slug: task } of finished) {
     let job
     try {
-      job = jobId({ deskRemote: remote, personPrefix, track, slug: task })
+      const birth = resolveIdentity({ deskRoot: root, personPrefix, track, slug: task })
+      job = jobId({ deskRemote: remote, personPrefix, track: birth.track, slug: birth.slug })
     } catch {
       continue
     }

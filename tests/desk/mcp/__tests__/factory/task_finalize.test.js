@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import { task_create, task_update, task_archive } from "../../../../../plugins/desk/mcp/src/tools/task.js"
@@ -29,6 +30,26 @@ test("task archive queues one job, including repeat archive and person scoping",
     assert.ok(request)
     assert.equal(request.job, jobId({ deskRemote: `local:${desk}`, personPrefix: "desks/alice", track: "track", slug: "finished-work" }))
   }
+}))
+
+test("a completed task renamed outside the tools still queues the job at its birth path (ourostack/desk#76)", () => scratch(async ({ desk, env }) => {
+  await factoryStateRoot(env)
+  const git = (...args) => execFileSync("git", args, { cwd: desk, encoding: "utf8" }).trim()
+  git("init", "-q", "-b", "main")
+  git("config", "user.name", "Fixture")
+  git("config", "user.email", "fixture@example.invalid")
+  await task_create({ deskRoot: desk, input: { track: "track", slug: "origin-slug", title: "fixture" } })
+  git("add", "-A")
+  git("commit", "-q", "-m", "create the task")
+  // A rename made outside the task tools (an editor, `git mv`, a track rename): the card moves, but its identity should not.
+  await fs.rename(path.join(desk, "track", "origin-slug"), path.join(desk, "track", "renamed-slug"))
+  git("add", "-A")
+  git("commit", "-q", "-m", "rename the task")
+  const result = await task_update({ deskRoot: desk, env, input: { track: "track", slug: "renamed-slug", frontmatter: { status: "done" } } })
+  assert.equal(result.status, "updated")
+  const [request] = await listFinalizeRequests(env)
+  assert.ok(request, "completion must leave a finalize request")
+  assert.equal(request.job, jobId({ deskRemote: `local:${desk}`, personPrefix: "", track: "track", slug: "origin-slug" }), "the queued job is the task's birth path, not the renamed one")
 }))
 
 test("no factory state is created by completion; unavailable factory state never fails a task update", () => scratch(async ({ desk, env }) => {

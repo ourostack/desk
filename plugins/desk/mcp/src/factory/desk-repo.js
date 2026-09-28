@@ -46,6 +46,37 @@
 // it elsewhere), no prompts, and a timeout. Any failure reads as "nothing
 // found", never a throw.
 //
+// `resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs
+// }) -> { track, slug }` is a job's identity (ourostack/desk#76): the birth
+// path — the `track/slug` the task's card, `task.md`, was first added at —
+// found by following its *current* path's rename history with Git's own
+// `--follow` (`git log --follow --diff-filter=A`, chasing through
+// `-M`-equivalent rename detection, so a track rename, a task move and an
+// archive move all keep the same birth path; a reverted rename walks back
+// through both hops to the same original). No card field is read or written
+// for this — it works retroactively, from history alone — and it falls back
+// to the given `{ track, slug }`, unchanged, whenever Git cannot settle the
+// question: the card is found neither live nor archived, the desk is not a
+// Git repository of its own, the card has no Git history yet (new and
+// uncommitted), or any Git call fails. It never throws for a Git reason,
+// only for a bad `personPrefix` (`checkPersonPrefix`'s own contract) or a
+// `deskRoot` that is not an absolute path.
+//
+// Git's `--diff-filter=A` can list more than one add for the same current
+// name: a card deleted and later re-created at the same path is one
+// literal-path history, delete included, so the *newest* add — the current
+// lineage's own creation — is the one kept, never an unrelated predecessor's
+// (a rename risks the same confusion one hop further back: a deleted task
+// that once passed through this exact name on its way somewhere else must
+// not lend its history to whatever is here now). Two tasks that swap slugs
+// in the same commit each keep the birth they already had: a path Git sees
+// on both sides of one commit is a modification, never a rename candidate,
+// so nothing here reads a same-commit swap as an identity change.
+//
+// Cached for this process — the desk's own-repository check, and the birth
+// path for one desk root and one card path — since neither can change while
+// the process runs, and binding may resolve many tasks in one call.
+//
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
 
@@ -53,13 +84,20 @@ import { spawnSync } from "node:child_process"
 import { closeSync, openSync, readSync } from "node:fs"
 import * as path from "node:path"
 
-import { checkPersonPrefix, isTaskSegment } from "./binding.js"
+import { checkPersonPrefix, isTaskSegment, relativeSegments, taskOfSegments } from "./binding.js"
 import { ENUMS, PATTERNS } from "./schema.js"
 import { normalizeTimestamp } from "./time.js"
 
 const FRONTMATTER_LINES = 40
 const READ_BYTES = 16 * 1024
 const DEFAULT_TIMEOUT_MS = 20_000
+
+// `resolveJobIdentity`'s process-lifetime caches: a desk root's real path ->
+// is it its own Git repository, and "<that real path>\u0000<repo-relative
+// card path>" -> the birth `{ track, slug }` already found for it. Neither
+// answer can change while this process runs.
+const REPO_CHECK_CACHE = new Map()
+const BIRTH_PATH_CACHE = new Map()
 
 export function gitEnv() {
   const env = {}
@@ -133,6 +171,17 @@ function cardFields(text) {
     created_at: normalizeTimestamp(fields.created),
     updated_at: normalizeTimestamp(fields.updated),
   }
+}
+
+// The card's absolute folder — live, else archived — and its raw text, or
+// null when neither exists. The one place `readTask` and job-identity
+// resolution both look a card up, so they always agree on where it lives.
+function findCard(base, track, slug) {
+  for (const folder of [path.join(base, track, slug), path.join(base, track, "_archive", slug)]) {
+    const text = readHead(path.join(folder, "task.md"))
+    if (text !== null) return { folder, text }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -247,14 +296,33 @@ function isOwnRepository(options) {
   return prefix !== null && prefix.trim() === ""
 }
 
+// The repo-relative path segments of `relativePath`'s birth commit — the
+// newest commit in which it was purely added, chasing the name back through
+// Git's own rename detection (`--follow` implies it) — or null when Git has
+// no such commit (an uncommitted path, or any Git failure). `--diff-filter=A`
+// keeps only genuine adds, newest first; the *first* one is kept, since a
+// literal path can have more than one across an unrelated delete and
+// re-create, and only the newest is this path's own current lineage (see
+// the header for why, and for the same-commit swap this also keeps out).
+function gitBirthPathSegments(options, relativePath) {
+  const output = runGit(options, ["log", "--follow", "--diff-filter=A", "-z", "--format=%x1e%H", "--name-only", "--", relativePath])
+  if (output === null) return null
+  const records = output.split("\x1e").filter((record) => record !== "")
+  if (records.length === 0) return null
+  const headerEnd = records[0].indexOf("\0")
+  if (headerEnd === -1) return null
+  const paths = records[0].slice(headerEnd + 1).split("\0").map((entry) => entry.replace(/^\n/u, "")).filter((entry) => entry !== "")
+  return paths.length > 0 ? relativeSegments(paths[0]) : null
+}
+
 function isWindow(startIso, endIso) {
   return typeof startIso === "string" && typeof endIso === "string" && PATTERNS.timestamp.test(startIso) && PATTERNS.timestamp.test(endIso) && startIso <= endIso
 }
 
 /**
  * `createDeskReaders({ deskRoot, personPrefix, git, timeoutMs })` ->
- * `{ readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping }`
- * for `bindSession`.
+ * `{ readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
+ * resolveJobIdentity }` for `bindSession`.
  */
 export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", timeoutMs = DEFAULT_TIMEOUT_MS }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("createDeskReaders: deskRoot must be an absolute path")
@@ -264,11 +332,8 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
 
   function readTask(track, slug) {
     if (!isTaskSegment(track) || !isTaskSegment(slug)) return null
-    for (const folder of [path.join(base, track, slug), path.join(base, track, "_archive", slug)]) {
-      const text = readHead(path.join(folder, "task.md"))
-      if (text !== null) return cardFields(text)
-    }
-    return null
+    const found = findCard(base, track, slug)
+    return found === null ? null : cardFields(found.text)
   }
 
   let ownRepository
@@ -326,7 +391,43 @@ export function createDeskReaders({ deskRoot, personPrefix = "", git = "git", ti
     return isHousekeepingEdit(oldText, newText)
   }
 
-  return { readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping }
+  return {
+    readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
+    resolveJobIdentity: (track, slug) => resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs }),
+  }
+}
+
+/**
+ * `resolveJobIdentity({ deskRoot, personPrefix, track, slug, git, timeoutMs
+ * })` -> `{ track, slug }`: the task's birth path. See the header.
+ */
+export function resolveJobIdentity({ deskRoot, personPrefix = "", track, slug, git = "git", timeoutMs = DEFAULT_TIMEOUT_MS }) {
+  const current = { track, slug }
+  if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("resolveJobIdentity: deskRoot must be an absolute path")
+  const alias = checkPersonPrefix(personPrefix, "resolveJobIdentity")
+  if (!isTaskSegment(track) || !isTaskSegment(slug)) return current
+
+  const found = findCard(path.join(deskRoot, personPrefix), track, slug)
+  if (found === null) return current
+
+  const options = { git, deskRoot, timeoutMs }
+  const root = path.resolve(deskRoot)
+  let ownRepo = REPO_CHECK_CACHE.get(root)
+  if (ownRepo === undefined) {
+    ownRepo = isOwnRepository(options)
+    REPO_CHECK_CACHE.set(root, ownRepo)
+  }
+  if (!ownRepo) return current
+
+  const relative = path.relative(deskRoot, path.join(found.folder, "task.md")).split(path.sep).join("/")
+  const cacheKey = `${root}\u0000${relative}`
+  if (BIRTH_PATH_CACHE.has(cacheKey)) return BIRTH_PATH_CACHE.get(cacheKey)
+
+  const segments = gitBirthPathSegments(options, relative)
+  const parsed = segments === null ? null : taskOfSegments(segments, alias)
+  const result = parsed === null ? current : { track: parsed.track, slug: parsed.slug }
+  BIRTH_PATH_CACHE.set(cacheKey, result)
+  return result
 }
 
 /**

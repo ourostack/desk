@@ -29,8 +29,8 @@ const expectedId = (remote, prefix, track, slug) => createHash("sha256").update(
 
 const CARD = { status: "processing", created_at: "2026-09-20T10:00:00.000Z", updated_at: "2026-09-25T09:00:00.000Z" }
 
-function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeeping = {} } = {}) {
-  const calls = { readTask: [], between: [], native: [], housekeeping: [] }
+function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeeping = {}, birthPaths = {} } = {}) {
+  const calls = { readTask: [], between: [], native: [], housekeeping: [], resolveJobIdentity: [] }
   return {
     calls,
     readTask(track, slug) {
@@ -51,6 +51,12 @@ function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeepi
     isCardHousekeeping(sha, filePath) {
       calls.housekeeping.push([sha, filePath])
       return Boolean(housekeeping[`${sha}:${filePath}`])
+    },
+    // Defaults to the identity (current path is the birth path), like a task
+    // that has never been renamed; `birthPaths` overrides by `track/slug`.
+    resolveJobIdentity(track, slug) {
+      calls.resolveJobIdentity.push(`${track}/${slug}`)
+      return Object.hasOwn(birthPaths, `${track}/${slug}`) ? birthPaths[`${track}/${slug}`] : { track, slug }
     },
   }
 }
@@ -525,6 +531,21 @@ test("remote normalization reaches the job: scp-style and credentialed https giv
   }
 })
 
+// --- Birth path resolution ----------------------------------------------------
+
+test("a job's ID hashes the birth path resolveJobIdentity returns for the touched task, not the touched path itself", () => {
+  const birthTrack = `birth-${SENTINEL}`
+  const birthSlug = `birth-slug-${SENTINEL}`
+  const { jobs, calls } = bind(
+    { fileWrites: [{ at: "2026-09-25T08:00:00.000Z", path: `${DESK}/${TRACK}/${SLUG}/notes.md` }] },
+    { birthPaths: { [`${TRACK}/${SLUG}`]: { track: birthTrack, slug: birthSlug } } },
+  )
+  assert.deepEqual(jobs.map(({ job }) => job), [expectedId(NORMALIZED, "", birthTrack, birthSlug)])
+  assert.notEqual(jobs[0].job, expectedId(NORMALIZED, "", TRACK, SLUG), "not the touched path's own ID")
+  assert.deepEqual(calls.resolveJobIdentity, [`${TRACK}/${SLUG}`], "resolved once, from the touched (current) track/slug")
+  assert.deepEqual(calls.readTask, [`${TRACK}/${SLUG}`], "the card is still read at the touched path, not the birth path")
+})
+
 // --- Caps and caller bugs -------------------------------------------------------
 
 test("jobs and transitions are capped at the facts limits", () => {
@@ -542,6 +563,7 @@ test("caller bugs throw a TypeError: a relative desk root, a bad person prefix, 
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, deskCommitsBetween: undefined }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, gitCommitTaskPaths: 1 }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, isCardHousekeeping: undefined }), TypeError)
+  assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: REMOTE, personPrefix: "", ...deps, resolveJobIdentity: null }), TypeError)
   assert.throws(() => bindSession({ events: {}, deskRoot: DESK, deskRemote: 5, personPrefix: "", ...deps }), TypeError)
 })
 

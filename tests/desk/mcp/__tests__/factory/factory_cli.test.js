@@ -733,6 +733,24 @@ test("evaluate computes the task's job as the task tools do and prepares its bri
   assert.deepEqual((await runEvaluateCommand({ argv: ["--pending"], env })).jobs.map((entry) => entry.job).sort(), [crew, job].sort())
 }))
 
+test("evaluate computes the task's job from its birth path, not its current one (ourostack/desk#76)", () => scratch(async (env) => {
+  const desk = path.join(env.HOME, "desk")
+  const git = (...args) => execFileSync("git", args, { cwd: desk, encoding: "utf8" }).trim()
+  await fs.mkdir(path.join(desk, "factory", "origin-evaluator"), { recursive: true })
+  await fs.writeFile(path.join(desk, "factory", "origin-evaluator", "task.md"), "---\nstatus: drafting\n---\n\n# Evaluator task, unique body for the birth-path CLI fixture.\n")
+  git("init", "-q", "-b", "main")
+  git("config", "user.name", "Fixture")
+  git("config", "user.email", "fixture@example.invalid")
+  git("add", "-A")
+  git("commit", "-q", "-m", "create the evaluator task")
+  await fs.rename(path.join(desk, "factory", "origin-evaluator"), path.join(desk, "factory", "renamed-evaluator"))
+  git("add", "-A")
+  git("commit", "-q", "-m", "rename the evaluator task")
+  const birthJob = jobId({ deskRemote: `local:${desk}`, personPrefix: "", track: "factory", slug: "origin-evaluator" })
+  const result = await runEvaluateCommand({ argv: ["--desk", desk, "--task", "factory/renamed-evaluator"], env, pluginVersion: "3.2.0-alpha.40" })
+  assert.equal(result.job, birthJob, "the CLI's evaluate subcommand hashes the birth path, agreeing with the task tools")
+}))
+
 test("evaluate uses the desk's origin remote when it has one", () => scratch(async (env) => {
   const desk = path.join(env.HOME, "desk")
   await fs.mkdir(desk)

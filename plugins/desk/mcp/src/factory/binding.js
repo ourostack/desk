@@ -65,12 +65,20 @@
 // `cancelled`) and otherwise `null` — or `null` when the card has no valid
 // status. Jobs and transitions are capped at the facts limits.
 //
+// A job's ID hashes its task's *birth* path, not the path a touch was
+// matched against: once a task is found (`readTask` answers), `entry.track`
+// and `entry.slug` are handed to `resolveJobIdentity`, which is where the
+// desk's Git decides whether the task has ever been renamed or moved (the
+// controller ruling in ourostack/desk#76). This is how a track rename or a
+// task move keeps one job's history in one place instead of starting a new
+// job at zero.
+//
 // Dependencies are injected so tests can fake them (`desk-repo.js` has the
 // real ones): `readTask(track, slug)`, `deskCommitsBetween(startIso,
-// endIso)`, `gitCommitTaskPaths(sha)` and `isCardHousekeeping(sha, path)`.
-// The desk root is passed in rather than resolved here: `src/util/paths.js`
-// is outside `src/factory`, so the caller resolves it (with
-// `resolveDeskRootWithSource`) and hands it over.
+// endIso)`, `gitCommitTaskPaths(sha)`, `isCardHousekeeping(sha, path)` and
+// `resolveJobIdentity(track, slug)`. The desk root is passed in rather than
+// resolved here: `src/util/paths.js` is outside `src/factory`, so the
+// caller resolves it (with `resolveDeskRootWithSource`) and hands it over.
 //
 // `src/factory/**` imports only `node:` built-ins and other `src/factory/`
 // files.
@@ -160,7 +168,7 @@ const CARD_FILE = "task.md"
  * same card; a nested `task.md` inside a subfolder is not bare. See the
  * header for what a caller does with `bare`.
  */
-function taskOfSegments(segments, alias) {
+export function taskOfSegments(segments, alias) {
   let rest = segments
   if (alias !== null) {
     if (rest[0] !== "desks" || rest[1] !== alias) return null
@@ -177,7 +185,7 @@ function taskOfSegments(segments, alias) {
   return { track, slug, bare }
 }
 
-function relativeSegments(relative) {
+export function relativeSegments(relative) {
   return relative.split(/[/\\]/u).filter((segment) => segment !== "")
 }
 
@@ -236,17 +244,19 @@ function requireFunction(value, name) {
 
 /**
  * `bindSession({ events, deskRoot, deskRemote, personPrefix, readTask,
- * deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping }) -> { jobs:
- * LocalJob[] }`. `deskRemote` is the desk's `origin` URL, or empty when it
- * has none (the job IDs then use `local:` plus the desk root).
+ * deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
+ * resolveJobIdentity }) -> { jobs: LocalJob[] }`. `deskRemote` is the desk's
+ * `origin` URL, or empty when it has none (the job IDs then use `local:`
+ * plus the desk root).
  */
-export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping }) {
+export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("bindSession: deskRoot must be an absolute path")
   const alias = checkPersonPrefix(personPrefix, "bindSession")
   requireFunction(readTask, "readTask")
   requireFunction(deskCommitsBetween, "deskCommitsBetween")
   requireFunction(gitCommitTaskPaths, "gitCommitTaskPaths")
   requireFunction(isCardHousekeeping, "isCardHousekeeping")
+  requireFunction(resolveJobIdentity, "resolveJobIdentity")
   if (deskRemote !== undefined && deskRemote !== null && typeof deskRemote !== "string") throw new TypeError("bindSession: deskRemote must be a string or empty")
   // One unpublished desk reached through a symlink and through its real path is one desk.
   const remote = typeof deskRemote === "string" && deskRemote.trim() !== "" ? deskRemote : `local:${realOrResolved(deskRoot)}`
@@ -313,8 +323,9 @@ export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTa
     const status = ENUMS.jobStatus.includes(card.status) ? card.status : null
     let observedAt = null
     if (status !== null && TERMINAL.has(status) && isTime(card.updated_at)) observedAt = card.updated_at
+    const birth = resolveJobIdentity(entry.track, entry.slug)
     jobs.push({
-      job: jobId({ deskRemote: remote, personPrefix, track: entry.track, slug: entry.slug }),
+      job: jobId({ deskRemote: remote, personPrefix, track: birth.track, slug: birth.slug }),
       basis: ENUMS.jobBasis.filter((basis) => entry.basis.has(basis)),
       task_created_at: isTime(card.created_at) ? card.created_at : null,
       transitions: entry.transitions.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)).slice(0, LIMITS.jobTransitions),

@@ -178,6 +178,22 @@ test("a desk with a known remote computes the task tools' job IDs, and a folder 
   assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW, readRemote: () => remote }), { jobs: [job] })
 }))
 
+test("a job ID is computed from the resolved birth path, not the card's current path (ourostack/desk#76)", () => scratch(async ({ env, desk }) => {
+  const { factoryBootCheck } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await card(path.join(desk, "alpha", "renamed-task"))
+  const remote = "https://github.com/acme/desk.git"
+  const birthJob = jobId({ deskRemote: remote, personPrefix: "", track: "alpha-original", slug: "renamed-task-original" })
+  await requestFinalize(env, { job: birthJob, deskRoot: desk })
+  const seen = []
+  const resolveIdentity = ({ track, slug }) => {
+    seen.push(`${track}/${slug}`)
+    return { track: "alpha-original", slug: "renamed-task-original" }
+  }
+  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW, readRemote: () => remote, resolveIdentity }), { jobs: [birthJob] }, "the pending finalize request filed under the birth path is found from the task's current path")
+  assert.deepEqual(seen, ["alpha/renamed-task"], "the resolver is asked about the card's current track/slug")
+}))
+
 test("at most eight jobs, sorted, and a hundred cards stay within the check's budget", () => scratch(async ({ env, desk }) => {
   const { factoryBootCheck, MAX_FINALIZE_JOBS } = await load()
   assert.equal(MAX_FINALIZE_JOBS, 8)
