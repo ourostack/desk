@@ -16,10 +16,6 @@
 // runtime pack is restored.
 
 import { flag, integer, list, oneOf, schema, text } from "./tool-schema-parts.js"
-// The work ledger's schema lives in its own module, the one file here that
-// depends on src/measurement/: retiring the ledger drops this import, that
-// file and the desk_work_ledger entry below, and nothing else.
-import { WORK_LEDGER_INPUT_SCHEMA } from "./work-ledger-schema.js"
 
 export const DOCTOR_REPAIRS = Object.freeze(["switch_state_branch", "reclaim_controller", "prune_readiness_state"])
 
@@ -133,7 +129,6 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     topic: text("The lesson topic; slugified for the filename."),
     body: text("Markdown body."),
   }, ["topic", "body"]),
-  desk_work_ledger: WORK_LEDGER_INPUT_SCHEMA,
   desk_search: schema({
     query: text("The search query."),
     limit: LIMIT,

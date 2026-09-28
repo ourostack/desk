@@ -1,5 +1,47 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.110 — 2026-09-28
+
+`desk_status` keeps its index and readiness detail on a busy machine instead of answering "unavailable". Only one [runtime status](mcp/src/runtime/desk-session.js) computation runs at a time. A call that arrives while one is running waits its own short budget for that answer. A detail that arrives late is kept, and the next call serves it marked cached, with its start time in the new `status_detail_from` field and its age in `status_detail`. A computation still running after 10 seconds is treated as stuck: the next call starts a fresh one, and the stuck one can never replace newer detail when it finishes. Before this change, each call threw away any computation that ran past about a tenth of a second and started another, so on a slow machine every call could answer "unavailable". The lexical readiness smoke test, which failed on busy CI runners for the same reason, now waits for a detail computed after the event it checks.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.109 — 2026-09-28
+
+**The manual work-measurement ledger is retired; the factory accounts for finished jobs instead.** The `desk_work_ledger` tool and its published input schema, the `work-measurement-ledger` skill, the batch work-profile script and their measurement code are removed, so Desk now exposes 17 tools and no tool, skill or instruction asks anyone to record work by hand. The factory already captures each session when it ends and reports each finished job ([local capture](docs/factory-local-capture.md)). The `online-evaluation` skill now reads the factory's report and waste labels for flow and consumption, and marks them unavailable, with the reason, when the factory has no evidence for the job.
+
+**Existing ledger records stay where they are.** Nothing migrates, opens or deletes the private partitions under `<state home>/ouroboros-skills/desk/work-ledger/`. `desk_doctor` now counts them in a `legacy_work_ledger` field and a "Retired work ledger" summary section, and reports an uncountable folder as unavailable rather than zero; remove the folder yourself when you no longer want those records. A call to `desk_work_ledger` from an old client is refused as an unknown tool and touches nothing.
+
+**The M3-5 schema aliases are gone.** `validateFacts` and `validateFactsBytes` are no longer exported from the factory schema; use `validateLocalFacts` and `validateLocalFactsBytes`.
+
+**The frozen offline benchmark cannot run natively until a new dataset version drops the ledger case.** The `v2-alpha-v1` dataset still requires the `private.ledger` callback, which no Desk tool supplies now, so a native run is refused with `NATIVE_CALLBACK_UNMAPPED` ([offline evals](../../evals/offline/README.md)). The frozen dataset is not edited; [#56](https://github.com/ourostack/desk/issues/56) tracks the new version.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.108 — 2026-09-28
+
+Session start now reads the bound desk's `AGENTS.md` right after the host probe, before the first question or action, treats its rules as binding for the session and says so in one line. Archiving a task, an iteration or a track now stages and commits only the paths it moved, as `git-hygiene`'s targeted staging requires, so an archive commit in a shared desk no longer sweeps in another session's edits.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.107 — 2026-09-28
+
+A public factory store now names only plugins installed from a public repository. The session-end hook records where each plugin was installed from, and records nothing unless that is certain. On Claude Code, the source is the GitHub marketplace whose cached manifest lists the plugin. On Copilot under Agency, it is the one GitHub repository of every cache entry at the plugin's exact version, from a complete scan. On plain Copilot, it is the GitHub marketplace of the plugin's one install record. The store's andon issues name another plugin only when it is public by the same rule and every compared job reports it. Before publishing, the flush checks each source's visibility, and the store's own, with the references it already checks. A public store, or one whose visibility is unknown, gets the name and version of each plugin from a public source and a count of the rest in the new optional `refs.private.plugins`; an organization's private or internal store keeps every name. Markers, local facts and published files written before this change stay valid ([publishing transform](mcp/src/factory/publish.js), [published schema](mcp/src/factory/published-schema.js), [end hook](hooks/factory-end.cjs), [factory capture](docs/factory-local-capture.md)).
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.106 — 2026-09-28
+
+Each session start now lists the open andon issues of every store the desk contributes to, in one line such as `Factory: 1 open andon issue in ourostack/factory (#41); ...`. The start-time delivery refreshes the list after each store's flush, keeping only issues the store's build opened for a plugin in the store's `factory.json` that no one labeled `andon-dismissed` ([andon-watch.js](mcp/src/factory/andon-watch.js)). The line therefore shows what the previous session's refresh found, and the `session-start` skill says to offer a `curator` pass, which handles andon first. The RFC now describes the kaizen loop and andon under the current rules ([agentic-engineering-v2-rfc.md](docs/agentic-engineering-v2-rfc.md), section 4): at least 6 independent session groups a side, computed from the confidence level; andon only for tracked plugins, on the latest version with enough jobs; the `andon-dismissed` label; and structured-only public cards filed after signoff. Section 9 records the first live check of card factory#39 and keeps draining the desks' friction under Still open. The andon fixture test now uses 6 single-session jobs a version, adds a case where too few jobs neither open nor close an alarm, and says that GitHub is simulated ([andon_regression.test.js](mcp/__tests__/factory/andon_regression.test.js)). The README describes `curator` as running on the operator's request.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.105 — 2026-09-28
+
+Friction about the shared system now becomes a kaizen candidate, and the curator files candidates as kaizen cards after its signoff step. `friction_add` takes `about`: `setup` (the default) stays on the desk as before, and `system` records a candidate on the desk with a `title`, the `plugin` (default `desk`), a `friction_class`, and the `signal` and `evidence_jobs` when known; nothing leaves the machine. With `file_card: true`, which only the `curator` skill uses, the card is filed in the store the desk's facts go to, including the routing the session recorded from the overlays; when that route is unknown nothing is filed ([kaizen-file.js](mcp/src/factory/kaizen-file.js)). Free text never goes to a public store: a public card carries only the plugin (publicly distributed plugins only), the friction class, the measure and published job IDs, and this machine's plain local job IDs are refused. A private store's card also carries the title and body, still refused if they hold anything credential-shaped, a home or drive path, or an email address. A fingerprint keeps a retry from filing the same card twice, and at most five cards go to one store in a day. The `friction-management` skill says which friction is about the system, `lesson-capture` proposes candidates from the evaluator's waste without filing them, and `curator` becomes the kaizen worker: it handles open andon issues first, files candidates after signoff, ships each card's countermeasure, fills in `version` when the release lands, closes confirmed cards and reverts or re-plans not-confirmed ones.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.104 — 2026-09-28
 
 Every Desk MCP tool now advertises a real JSON input schema ([tool schemas](mcp/src/tool-schemas.js)), with its properties, required fields and `additionalProperties: false`. Before, 17 of the 18 tools were listed as `{ properties: {}, additionalProperties: true }`, so Claude Code had no shape to build arguments from and sent `task_update`'s `frontmatter` as a JSON string, which the tool spread into the card as one key per character (`"0": "{"`, `"1": "\""`, ...). A test now fails if any tool is registered without declared properties, with a required field it does not declare, or with an object or list field that has no type. Object and list fields are typed: `repos` entries carry `name`, `local_path` and `mode`, and the work ledger's `operator_go`, `task_ref`, `carry_forward` and path lists have their shapes. Only the degraded server that runs when no compatible Node is found still lists tools with an open schema, on purpose, because every call there answers with the reason and the fix.

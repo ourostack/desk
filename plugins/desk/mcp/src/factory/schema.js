@@ -15,8 +15,7 @@
 // raw bytes to be the canonical serialization of what they parse to, so a
 // duplicate JSON key — which `JSON.parse` silently collapses to its last
 // value — cannot let free text ride along in bytes that otherwise parse
-// clean. The M3-1 names `validateFacts` and `validateFactsBytes` remain as
-// aliases until M3-12 retires them.
+// clean.
 //
 // The schema is a real declarative spec walker: one field-spec object per
 // level (`SESSION_SPEC`, `MODEL_SPEC`, ...) is the *only* place that names a
@@ -327,6 +326,22 @@ export const PLUGIN_SPEC = {
   version: patternField(PATTERNS.semver),
 }
 
+// A local plugin may also say where it was installed from: the GitHub
+// `owner/repo` of its marketplace or cache entry, or `null` when that is
+// unknown. The key is optional, so older local facts stay valid and read as
+// `null`; the transform names a plugin in a public store only when this
+// repository is public, and it never publishes the source itself.
+const nullableRepoField = () => leaf((value, path, errors) => (value === null ? true : checkPattern(value, path, PATTERNS.prRepo, errors)))
+
+/** Whether a plugin entry's optional `source` is absent, `null` or an `owner/repo` name. */
+export function validPluginSource(plugin) {
+  return !Object.hasOwn(plugin, "source") || plugin.source === null || (typeof plugin.source === "string" && PATTERNS.prRepo.test(plugin.source))
+}
+
+function localPluginFields(value) {
+  return Object.hasOwn(value, "source") ? { ...PLUGIN_SPEC, source: nullableRepoField() } : PLUGIN_SPEC
+}
+
 export const AGENT_SPEC = {
   n: rangeIntField(0, 9999),
   parent: nullableRangeIntField(0, 9999),
@@ -341,7 +356,7 @@ export const PR_SPEC = {
 // A commit's repository, when the deriver can attribute one; `null` when it
 // cannot (the transform drops and counts those).
 const COMMIT_SPEC = {
-  repo: leaf((value, path, errors) => (value === null ? true : checkPattern(value, path, PATTERNS.prRepo, errors))),
+  repo: nullableRepoField(),
   sha: patternField(PATTERNS.commitSha),
 }
 
@@ -481,7 +496,7 @@ export const COUNTS_SPEC = {
 const TOP_SPEC = {
   schema: patternField(PATTERNS.schema),
   session: objectField(SESSION_SPEC, sessionOrderCheck),
-  plugins: arrayField(objectField(PLUGIN_SPEC), LIMITS.plugins),
+  plugins: arrayField(objectField(localPluginFields), LIMITS.plugins),
   models: arrayField(objectField(MODEL_SPEC), LIMITS.models),
   agents: arrayField(objectField(AGENT_SPEC), LIMITS.agents),
   intervals: arrayField(INTERVAL_FIELD, LIMITS.intervals),
@@ -501,7 +516,7 @@ export const __SPECS__ = Object.freeze({
   session: SESSION_SPEC,
   model: MODEL_SPEC,
   tokens: TOKENS_SPEC,
-  plugin: PLUGIN_SPEC,
+  plugin: localPluginFields({ source: null }),
   agent: AGENT_SPEC,
   pr: PR_SPEC,
   commit: COMMIT_SPEC,
@@ -604,7 +619,3 @@ export function validateCanonicalBytes(buffer, validate) {
 export function validateLocalFactsBytes(buffer) {
   return validateCanonicalBytes(buffer, validateLocalFacts)
 }
-
-// The M3-1 names, kept as aliases of the local validators until M3-12.
-export const validateFacts = validateLocalFacts
-export const validateFactsBytes = validateLocalFactsBytes

@@ -46,7 +46,7 @@ import { readDeskRemote } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
-import { build, jobLink, storeRecords } from "../src/factory/pipeline/build.js"
+import { build, jobLink, storePublicPlugins, storeRecords } from "../src/factory/pipeline/build.js"
 import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
 import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
 import { issuesClient } from "../src/factory/store-issues.js"
@@ -371,7 +371,8 @@ export async function runAndonCommand({ argv, env, runner }) {
   const configPath = path.join(parseOptions(argv).get("store"), "factory.json")
   const config = parseStoreConfig(existsSync(configPath) ? readFileSync(configPath, "utf8") : null)
   if (!config.ok) throw new Error(`factory.js andon: the store's factory.json is not valid (${config.code})`)
-  return syncAndon({ ...context, plugins: config.plugins })
+  // Other plugins are named only when public by the publishing rule (M3-12).
+  return syncAndon({ ...context, plugins: config.plugins, publicPlugins: storePublicPlugins(parseOptions(argv).get("store")) })
 }
 
 /** Runs the `consent` subcommand: validates `argv`, calls `setConsent`, and returns the JSON-ready result. */

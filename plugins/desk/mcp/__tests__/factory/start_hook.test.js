@@ -11,7 +11,7 @@ import { createRequire } from "node:module"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { factoryStateRoot, quarantine, readStatus, requestEvaluation, requestFinalize, setConsent, updateJobsIndex } from "../../src/factory/outbox.js"
+import { factoryStateRoot, quarantine, readStatus, requestEvaluation, requestFinalize, setConsent, updateJobsIndex, writeStatus } from "../../src/factory/outbox.js"
 import { jobId } from "../../src/factory/binding.js"
 import { resolveDeskStateDir, writeLastStart } from "../../src/runtime/last-start.js"
 import { copilotStartupDirection, claudeStartupDirection } from "../../src/util/startup-direction.js"
@@ -37,7 +37,7 @@ const check = (id, run, budgetMs = 100) => ({ id, budgetMs, run })
 // ---------------------------------------------------------------------------
 
 test("the registry runs its checks in order: factory, then labels, then desk-health, then workspace-tidy", () => {
-  assert.deepEqual(boot().checks.map((entry) => entry.id), ["factory", "labels", "desk-health", "workspace-tidy"])
+  assert.deepEqual(boot().checks.map((entry) => entry.id), ["factory", "labels", "andon", "desk-health", "workspace-tidy"])
   assert.equal(boot().TOTAL_BUDGET_MS, 300)
   assert.ok(boot().checks.every((entry) => entry.budgetMs <= 300))
 })
@@ -314,6 +314,19 @@ test("startFactory starts factory-start.cjs detached only when a store has contr
   assert.deepEqual(launched.map((entry) => entry.command), [[process.execPath, BOOT, "--compatible", START]], "delivery starts through the compatible-Node launcher")
   assert.equal(launched[0].childEnv, env)
   assert.equal(await startFactory({ env, launch: async () => { throw new Error("spawn failed") } }), false)
+}))
+
+test("the andon check names each contributing store's open andon issues in one line, with no repair", () => scratch(async ({ env }) => {
+  const { runBootChecks, andonCheck } = boot()
+  const repairs = []
+  const run = () => runBootChecks({ ...quiet, host: "claude", env, checks: [andonCheck], checkBudgets: { andon: 2000 }, totalBudgetMs: 2000, launchRepair: async (command) => repairs.push(command) })
+  assert.equal(await run(), "")
+  assert.equal(existsSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills")), false)
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await setConsent(env, { store: "acme/work", contribute: true, account: "worker" })
+  await writeStatus(env, { andon: { [STORE]: { checked_at: "2026-09-27T12:00:00.000Z", issues: [{ number: 41, title: "Andon: desk 3.4.0 tool_failures other" }] }, "acme/work": { checked_at: "2026-09-27T12:00:00.000Z", issues: [] } } })
+  assert.equal(await run(), "Desk boot: Factory: 1 open andon issue in ourostack/factory (#41); a release made a quality measure clearly worse, and the kaizen worker handles it before any other card (desk:curator)")
+  assert.deepEqual(repairs, [])
 }))
 
 test("factory-start.cjs runs sweep and flush for consented stores, prints nothing and exits 0", () => scratch(async ({ env }) => {

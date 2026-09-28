@@ -177,7 +177,7 @@ import { createInterface } from "node:readline"
 
 import { SHORT_SHA, createCommitResolver } from "./commit-resolve.js"
 import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows } from "./copilot-usage.js"
-import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
+import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
 import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
@@ -692,23 +692,27 @@ function refsFromDatabase({ sessionId, env, flag, gitRoot, resolveCommits }) {
 // Entry point.
 // ---------------------------------------------------------------------------
 
+// A skill-invoked plugin takes its install source from a marker plugin of the same name; the event itself names no source.
 function mergePlugins(input, skillPlugins, flag) {
   const merged = []
   const seen = new Set()
-  const add = (plugin) => {
+  const sourceOf = new Map()
+  const add = (plugin, source) => {
     const key = `${plugin.name}@${plugin.version}`
     if (seen.has(key)) return
     seen.add(key)
-    merged.push({ name: plugin.name, version: plugin.version })
+    merged.push({ name: plugin.name, version: plugin.version, source })
   }
   for (const plugin of Array.isArray(input) ? input : []) {
-    if (isObject(plugin) && typeof plugin.name === "string" && PATTERNS.pluginName.test(plugin.name) && typeof plugin.version === "string" && PATTERNS.semver.test(plugin.version)) {
-      add(plugin)
+    if (isObject(plugin) && typeof plugin.name === "string" && PATTERNS.pluginName.test(plugin.name) && typeof plugin.version === "string" && PATTERNS.semver.test(plugin.version) && validPluginSource(plugin)) {
+      const source = plugin.source ?? null
+      if (!sourceOf.has(plugin.name)) sourceOf.set(plugin.name, source)
+      add(plugin, source)
     } else {
       flag("plugins", "source_unreadable")
     }
   }
-  for (const plugin of skillPlugins) add(plugin)
+  for (const plugin of skillPlugins) add(plugin, sourceOf.get(plugin.name) ?? null)
   if (merged.length > LIMITS.plugins) flag("plugins", "capped")
   return merged.slice(0, LIMITS.plugins)
 }

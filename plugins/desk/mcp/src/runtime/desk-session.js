@@ -5,7 +5,7 @@
 // Each tool needs part of that context:
 // - desk_status and desk_doctor always answer, and each desk_status retries admission when Desk is not ready;
 // - reads (search, recall, similar, timeline, thread) need the runtime and a root; without a readiness controller, lexical search and timeline read the files directly;
-// - desk_work_ledger also needs admitted authority, and desk_reindex a readiness controller;
+// - desk_reindex also needs a readiness controller;
 // - writes (task_*, track_*, friction_add, lesson_add) need admitted authority and the checkout on its state branch, checked again right before each write. They never need the readiness controller: with one, the change is journaled; without one, it goes straight to the file and the next controller's watcher or scan picks it up.
 // A tool whose needs are not met answers `{ status: "degraded", code, fix }` with a fix the agent can act on in this session, and a tool that throws answers the same way instead of failing the call.
 //
@@ -33,6 +33,8 @@ const STATUS_WAIT_MS = 50
 const STATUS_DETAIL_MS = 120
 // The most desk_status spends on its own waits (a new admission attempt, then the runtime status), well inside the 200 ms it must answer in.
 const STATUS_BUDGET_MS = 90
+// How long one runtime status computation may run before desk_status stops waiting on it and starts another. It is well above the 2 s the controller status check allows itself, so only a computation that is stuck (a filesystem read that never returns, say) is abandoned.
+const STATUS_RUN_LIMIT_MS = 10000
 const GATE_WAIT_MS = 10000
 const HEAD_DEBOUNCE_MS = 100
 const WRITE_PING_MS = 1000
@@ -44,11 +46,10 @@ export const LAUNCHER_READ_ONLY_CODES = Object.freeze([
   "identity_unavailable", "identity_not_emu", "identity_unregistered", "identity_ambiguous",
 ])
 
-/** What a tool needs from admission: "status", "doctor", "read", "authority", "controller" or "write". */
+/** What a tool needs from admission: "status", "doctor", "read", "controller" or "write". */
 export function toolRequirement(name) {
   if (name === "desk_status" || name === "desk_doctor") return name.slice(5)
   if (READ_TOOLS.has(name)) return "read"
-  if (name === "desk_work_ledger") return "authority"
   if (name === "desk_reindex") return "controller"
   return "write"
 }
@@ -83,6 +84,7 @@ export function createDeskSession(deps) {
     notifyToolsChanged = () => {},
     launcher = null,
     hung: hungOptions = {},
+    statusRunLimitMs = STATUS_RUN_LIMIT_MS,
   } = deps
   const hungPolicy = {
     misses: HUNG_MISSES,
@@ -98,8 +100,11 @@ export function createDeskSession(deps) {
   let disposed = false
   let unwatchController = null
   let hungOwner = null
-  // The latest runtime status detail, served (and marked cached) when a fresh one does not arrive within desk_status's budget.
+  // The latest runtime status detail, served (and marked cached) when a fresh one does not arrive within desk_status's budget. `at` is when its computation started and `seq` orders computations, so a detail is only ever replaced by a newer one.
   let lastStatusDetail = null
+  // The one runtime status computation allowed at a time, so repeated desk_status calls on a slow machine never pile up work: `{ promise, at, started, seq }`. One older than statusRunLimitMs is abandoned in favor of a new one.
+  let statusRun = null
+  let statusSeq = 0
 
   const log = (line) => stderr.write(`[desk-mcp] ${line}\n`)
 
@@ -556,26 +561,55 @@ export function createDeskSession(deps) {
     if (snapshot.state === "ready") backgroundControllerCheck()
     let payload = baseDiagnostic(snapshot)
     if (context.runtimeServer && context.root && launcher?.mode !== "refuse") {
-      const outcome = await raceWithTimer(Promise.resolve().then(() => runtimeCall("desk_status", input, signal)), Math.max(0, Math.min(STATUS_DETAIL_MS, deadline - Date.now())))
-      if (outcome.timedOut && lastStatusDetail !== null) {
-        payload = { ...lastStatusDetail.payload, status_detail: `cached: the runtime status (index, readiness controller) did not answer in time; this detail is from ${lastStatusDetail.at}. Call desk_status again for a fresh one.` }
-      } else if (outcome.timedOut) {
-        payload = { ...payload, status_detail: "unavailable: the runtime status (index, readiness controller) did not answer in time; call desk_status again" }
-      } else if (outcome.error !== undefined) {
-        const error = outcome.error
+      // A computation that is still running and not yet stuck is joined; otherwise this call starts a new one. Either way the call waits only for what is left of its own budget.
+      const joined = statusRun !== null && Date.now() - statusRun.started < statusRunLimitMs
+      const run = joined ? statusRun : startStatusRun(input, signal)
+      const outcome = await raceWithTimer(run.promise, Math.max(0, Math.min(STATUS_DETAIL_MS, deadline - Date.now())))
+      if (!outcome.timedOut && outcome.value.error !== undefined) {
+        const error = outcome.value.error
         payload = { ...payload, status_error: error instanceof Error ? error.message : String(error) }
+      } else if (!outcome.timedOut && joined) {
+        // The joined computation answered in time, but it started before this call, so its detail is marked with when it started.
+        payload = { ...outcome.value.payload, status_detail: `cached: this detail comes from a runtime status computation (index, readiness controller) that was already running when this call arrived; it started at ${run.at}.`, status_detail_from: run.at }
+      } else if (!outcome.timedOut) {
+        payload = outcome.value.payload
       } else {
-        payload = JSON.parse(outcome.value.content[0].text)
-        lastStatusDetail = { payload, at: new Date().toISOString() }
+        const why = joined
+          ? `a runtime status computation (index, readiness controller) that started at ${run.at} is still running`
+          : "the runtime status (index, readiness controller) did not answer within this call's budget"
+        payload = lastStatusDetail === null
+          ? { ...payload, status_detail: `unavailable: ${why}; call desk_status again shortly` }
+          : { ...lastStatusDetail.payload, status_detail: `cached: ${why}; this detail is from ${lastStatusDetail.at} (${ageSeconds(lastStatusDetail.at)} s old). Call desk_status again shortly for a fresh one.`, status_detail_from: lastStatusDetail.at }
       }
     }
     return jsonResult(withAdmission(payload, admission.snapshot()))
   }
 
+  // Starts a runtime status computation. Its detail is kept even when it arrives after the call that started it has answered, so the next call serves it, marked cached with when it was computed. An abandoned computation that finishes late never replaces a detail from a newer one.
+  function startStatusRun(input, signal) {
+    const run = { at: new Date().toISOString(), started: Date.now(), seq: (statusSeq += 1) }
+    run.promise = Promise.resolve()
+      .then(() => runtimeCall("desk_status", input, signal))
+      .then((value) => {
+        const payload = JSON.parse(value.content[0].text)
+        if (lastStatusDetail === null || lastStatusDetail.seq < run.seq) lastStatusDetail = { payload, at: run.at, seq: run.seq }
+        return { payload }
+      })
+      .catch((error) => ({ error }))
+      .finally(() => { if (statusRun === run) statusRun = null })
+    statusRun = run
+    return run
+  }
+
+  function ageSeconds(at) {
+    return Math.max(0, Math.round((Date.now() - Date.parse(at)) / 1000))
+  }
+
+  // `promise` never rejects: a status run settles with its payload or its error.
   function raceWithTimer(promise, ms) {
     let timer
     return Promise.race([
-      promise.then((value) => ({ value }), (error) => ({ error })),
+      promise.then((value) => ({ value })),
       new Promise((resolve) => {
         timer = setTimeout(() => resolve({ timedOut: true }), ms)
         timer.unref?.()
@@ -747,7 +781,6 @@ export function createDeskSession(deps) {
 const STATUS_BY_STATE = { no_desk_root: "setup_required" }
 const REQUIREMENT_TEXT = {
   read: "the desk root and the Desk runtime",
-  authority: "admitted write authority",
   controller: "the shared readiness controller",
   write: "admitted write authority and the checkout on its state branch",
 }

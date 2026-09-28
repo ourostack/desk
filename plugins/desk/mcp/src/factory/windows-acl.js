@@ -1,5 +1,5 @@
 // Native Windows ACL primitive, shared by every private and protected store
-// on this machine (the feedback and work-ledger SQLite stores via
+// on this machine (the feedback SQLite store via
 // `src/protected/store.js`, the readiness journal via
 // `src/readiness/journal.js`, and the factory outbox via `factory/outbox.js`).
 //

@@ -22,7 +22,7 @@
     "evals/fixtures/unicode-slug/__tests__/tools/lesson_add.test.js",
     "evals/fixtures/unicode-slug/__tests__/tools/friction_add.test.js"
   ],
-  "reviewedSourceFingerprint": "bd24d627e1618b37d3b723428f61d81bfbd5da0473f5c8a2ec5e154752527d71",
+  "reviewedSourceFingerprint": "1b6f49f77b4f0f90f04a1de4675d2ebfe934531124037b4c4126442a39b3e2ef",
   "requirements": [
     {"id": "v2-substantive-alignment", "description": "Ground the first conversation in current behavior and material choices rather than silently choosing the outcome."},
     {"id": "v2-explicit-go", "description": "New engineering work needs explicit agreement and go before implementation; contribution permission is not enough."},
