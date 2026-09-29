@@ -60,6 +60,17 @@ function spellings(target) {
   return out
 }
 
+// os.tmpdir() does not change for the life of a process (Node reads it fresh from the environment on every call, but
+// nothing in this codebase mutates TMPDIR/TEMP/TMP after start), so its realpath spellings are computed once, lazily,
+// rather than on every isUnderOsTmpdir call. This guard sits on `last-start.js`'s two write points and runs on every
+// call once a node:test run is detected (see looksLikeNodeTestRunner below); a repeated realpathSync syscall there
+// was measurable on a loaded CI runner (ourostack/desk PR #101, 2026-09-29).
+let cachedTmpdirSpellings
+function tmpdirSpellings() {
+  if (!cachedTmpdirSpellings) cachedTmpdirSpellings = spellings(os.tmpdir())
+  return cachedTmpdirSpellings
+}
+
 /** True when this process looks like a node:test test-file run, by either signal above. */
 export function looksLikeNodeTestRunner(env = process.env) {
   if (hasText(env.NODE_TEST_CONTEXT)) return true
@@ -69,7 +80,7 @@ export function looksLikeNodeTestRunner(env = process.env) {
 
 /** True when `dir` (an already-resolved absolute path) sits under the OS temp directory, in either spelling. */
 export function isUnderOsTmpdir(dir, { platform = process.platform } = {}) {
-  for (const root of spellings(os.tmpdir())) {
+  for (const root of tmpdirSpellings()) {
     if (inside(dir, root, platform)) return true
   }
   return false
