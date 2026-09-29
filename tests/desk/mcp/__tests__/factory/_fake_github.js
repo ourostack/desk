@@ -8,6 +8,7 @@
 
 import { createHash } from "node:crypto"
 
+import { anonymousGithub } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import { gitBlobSha } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 export const TOKEN = "ghp_SENTINEL"
@@ -16,6 +17,39 @@ export const BOT = "github-actions[bot]"
 const hash = (value) => createHash("sha1").update(JSON.stringify(value)).digest("hex")
 const ok = (json, status = 200) => ({ code: 0, stdout: json === undefined ? "" : JSON.stringify(json), stderr: "", status })
 export const httpError = (status, message) => ({ code: 1, stdout: JSON.stringify({ message }), stderr: `gh: ${message} (HTTP ${status})\n` })
+
+// A `visibility[repo]` entry is usually the same answer for the account's token and for an unauthenticated
+// request. `{ authenticated, anonymous }` gives each its own answer, for a fixture modeling a token that
+// 403s or 404s a repository an unauthenticated request can still see (a fine-grained token scoped away from
+// it, or an organization's SSO enforcement) — or the other way for a repository gone only from the
+// unauthenticated side. `"rate_limited"` on the anonymous half answers a 403 with an exhausted budget.
+const perAuth = (spec) => (spec !== null && typeof spec === "object" && !Array.isArray(spec))
+function answerFor(visibility, wanted, anonymous) {
+  const spec = visibility[wanted]
+  return perAuth(spec) ? spec[anonymous ? "anonymous" : "authenticated"] : spec
+}
+
+/**
+ * A fake `fetch` for `anonymousGithub`'s unauthenticated repository lookup: answers `GET
+ * https://api.github.com/repos/{owner}/{repo}` from the same `visibility` map `fakeGitHub` uses for the
+ * account's token, reading its `anonymous` half when a fixture splits the two. Every call is recorded as
+ * `{ url, options }`, exactly as given, so a test can assert it carried no `Authorization` header.
+ */
+export function fakeAnonymousFetch({ visibility = {} } = {}) {
+  const calls = []
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options })
+    const wanted = decodeURIComponent(new URL(url).pathname.replace(/^\/repos\//u, ""))
+    const forThisCall = answerFor(visibility, wanted, true)
+    if (forThisCall === "rate_limited") {
+      return new Response(JSON.stringify({ message: "API rate limit exceeded for the unauthenticated request" }), { status: 403, headers: { "x-ratelimit-remaining": "0" } })
+    }
+    if (typeof forThisCall === "number") return new Response(JSON.stringify({ message: "Forbidden or missing" }), { status: forThisCall })
+    if (forThisCall === "public" || forThisCall === "private") return new Response(JSON.stringify({ full_name: wanted, private: forThisCall === "private" }), { status: 200 })
+    return new Response(JSON.stringify({ message: "Not Found" }), { status: 404 })
+  }
+  return { fetch: fetchImpl, calls }
+}
 
 export function fakeGitHub({
   store = "ourostack/factory",
@@ -107,17 +141,7 @@ export function fakeGitHub({
     return [...filesOf(commits.get(head).tree)].filter(([name, sha]) => DATA.test(name) && before.get(name) !== sha).map(([name]) => ({ filename: name }))
   }
 
-  // A `visibility[repo]` entry is usually the same answer for the account's token and for an anonymous
-  // request. `{ authenticated, anonymous }` gives each its own answer, for a fixture modeling a token that
-  // 404s a repository an unauthenticated request can still see (a fine-grained token scoped away from it, or
-  // an organization's SSO enforcement).
-  const perAuth = (spec) => (spec !== null && typeof spec === "object" && !Array.isArray(spec))
-  const answerFor = (wanted, anonymous) => {
-    const spec = visibility[wanted]
-    return perAuth(spec) ? spec[anonymous ? "anonymous" : "authenticated"] : spec
-  }
-
-  function api(method, route, body, anonymous = false) {
+  function api(method, route, body) {
     const [pathPart, query = ""] = route.split("?")
     const params = new URLSearchParams(query)
     // GitHub's paging: `per_page` (default 30, at most 100) items of page `page` (default 1).
@@ -129,7 +153,7 @@ export function fakeGitHub({
     let m
     if (method === "GET" && (m = /^repos\/([^/]+\/[^/]+)$/u.exec(pathPart))) {
       const wanted = m[1]
-      const forThisCall = answerFor(wanted, anonymous)
+      const forThisCall = answerFor(visibility, wanted, false)
       if (typeof forThisCall === "number") return httpError(forThisCall, "Forbidden or missing")
       const found = repo(wanted)
       if (found) return ok(found.meta)
@@ -235,13 +259,11 @@ export function fakeGitHub({
       return args[3] === account ? { code: 0, stdout: `${TOKEN}\n`, stderr: "" } : { code: 1, stdout: "", stderr: `no oauth token found for ${args[3]}\n` }
     }
     if (args[0] !== "api") return { code: 1, stdout: "", stderr: "unknown command\n" }
-    const anonymous = options.token === undefined
-    // Real GitHub asks for no auth to read a public repository's metadata; only a bad, non-empty token is rejected.
-    if (!anonymous && options.token !== TOKEN) return httpError(401, "Bad credentials")
+    if (options.token !== TOKEN) return httpError(401, "Bad credentials")
     const method = args[args.indexOf("--method") + 1]
     const route = args.find((arg, index) => index > 0 && /^repos\//u.test(arg))
     const body = args.includes("--input") ? JSON.parse(options.input) : undefined
-    return api(method, route, body, anonymous)
+    return api(method, route, body)
   }
 
   const runner = async (args, options = {}) => {
@@ -252,12 +274,18 @@ export function fakeGitHub({
     return answer(args, options)
   }
 
+  const anon = fakeAnonymousFetch({ visibility })
+
   return {
     runner,
     calls,
     blobs,
     pulls,
     forkName,
+    /** Every unauthenticated `repos/{owner}/{repo}` call the anonymous retry made, as `{ url, options }`. */
+    anonymousCalls: anon.calls,
+    /** Ready to pass as `flush`'s `anonymousLookup`: the real `anonymousGithub` wired to this fixture's fake fetch. */
+    anonymousLookup: anonymousGithub({ fetch: anon.fetch }),
     storeMain: () => storeRepo().refs.get("heads/main"),
     mainFacts: () => factsOf(storeRepo().refs.get("heads/main")),
     /** Every data file (`facts/…`, `labels/…`) on the store's main, path to blob SHA. */

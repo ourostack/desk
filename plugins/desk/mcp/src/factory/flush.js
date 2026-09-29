@@ -18,13 +18,16 @@
 //      `GET /repos/{owner}/{repo}` with the account's token (`private: false`
 //      is public, `private: true` private, 403 or 404 unknown). A token that
 //      cannot see a repository in its own scope (a fine-grained token, or an
-//      organization's SSO enforcement) still answers 404 for a repository
-//      that is genuinely public, so a 404 is retried once, unauthenticated,
-//      before it is accepted as unknown; only the exact answer that comes
-//      back — public, private or still unknown — is cached. A network
-//      failure, a 5xx or a rate limit is never cached as unknown: it stops
-//      the flush outright (`offline`, `unexpected` or `rate_limited`), so
-//      only a definitive answer ever reaches the seven-day cache. A desk that is
+//      organization's SSO enforcement) still answers 403 or 404 for a
+//      repository that is genuinely public, so either is retried once with a
+//      plain, unauthenticated HTTP request — never through `gh`, whose own
+//      stored login answers for whichever account is signed in there instead
+//      of for no one — before it is accepted as unknown; only the exact
+//      answer that comes back — public, private or still unknown — is
+//      cached. A network failure, a 5xx or a rate limit, on either try, is
+//      never cached as unknown: it stops the flush outright (`offline`,
+//      `unexpected` or `rate_limited`), so only a definitive answer ever
+//      reaches the seven-day cache. A desk that is
 //      not known to be private publishes machine-keyed job IDs without
 //      timing, keyed by the protected 32-byte machine secret. A file the
 //      transform refuses or the public gate rejects is quarantined with a
@@ -227,6 +230,41 @@ export function ghRunner({ spawn = spawnProcess, env = process.env, maxOutput = 
   })
 }
 
+/**
+ * `anonymousGithub({ fetch }) -> (repo, { timeoutMs }) -> Promise<{ status, json, headers } | { networkError: true }>`:
+ * asks `GET https://api.github.com/repos/{owner}/{repo}` with a `User-Agent` and an `Accept` header and
+ * nothing else — no `Authorization` header, no cookie, no ambient credential of any kind. This never goes
+ * through `gh`: on a machine signed in to `gh`, unsetting `GH_TOKEN` and its relatives still leaves `gh`
+ * free to fall back to its own stored login (`gh auth login`), which answers for whichever account happens
+ * to be signed in there — the same restricted account on a single-account machine, or an arbitrary one on
+ * a multi-account machine — never for no one. A plain HTTP request has no such fallback. A network failure
+ * or an abort at `timeoutMs` is reported as `{ networkError: true }`, never thrown.
+ */
+export function anonymousGithub({ fetch: fetchImpl = globalThis.fetch } = {}) {
+  return async (repo, { timeoutMs = DEFAULT_DEADLINE_MS } = {}) => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const response = await fetchImpl(`https://api.github.com/repos/${repo}`, {
+        method: "GET",
+        headers: { "User-Agent": "desk-factory", Accept: "application/vnd.github+json" },
+        signal: controller.signal,
+      })
+      let json = null
+      try {
+        json = await response.json()
+      } catch {
+        // An error body is informational only.
+      }
+      return { status: response.status, json, headers: response.headers }
+    } catch {
+      return { networkError: true }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The lock.
 // ---------------------------------------------------------------------------
@@ -278,7 +316,7 @@ function parseJson(text) {
   }
 }
 
-function createClient({ runner, deadline, now }) {
+function createClient({ runner, deadline, now, anonymousLookup = anonymousGithub() }) {
   const state = { token: null }
 
   async function call(args, { token, input } = {}) {
@@ -314,17 +352,11 @@ function createClient({ runner, deadline, now }) {
     state.token = token
   }
 
-  /**
-   * `{ status, json }` for a 2xx answer or an HTTP error the caller may
-   * expect; every other failure stops the flush. `anonymous: true` sends the
-   * request with no token at all (never the account's), for a caller that
-   * must tell a repository its own token cannot see from one that is truly
-   * gone or private.
-   */
-  async function api(method, route, body, { anonymous = false } = {}) {
+  /** `{ status, json }` for a 2xx answer or an HTTP error the caller may expect; every other failure stops the flush. */
+  async function api(method, route, body) {
     const args = ["api", "--method", method, "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", route]
     if (body !== undefined) args.push("--input", "-")
-    const result = await call(args, { token: anonymous ? undefined : state.token, input: body === undefined ? undefined : JSON.stringify(body) })
+    const result = await call(args, { token: state.token, input: body === undefined ? undefined : JSON.stringify(body) })
     const stdout = String(result.stdout ?? "")
     const stderr = String(result.stderr ?? "")
     if (result.code === 0) return { status: 200, json: parseJson(stdout) }
@@ -342,14 +374,49 @@ function createClient({ runner, deadline, now }) {
     return { status, json }
   }
 
+  /**
+   * `{ status, json }` for a 200, 403 or 404 answer to an unauthenticated
+   * `GET /repos/{owner}/{repo}`, through `anonymousLookup` (`anonymousGithub`
+   * in production; a fake in tests) rather than `gh`. A rate limit hit by
+   * this try, a network failure, or any other status stops the flush
+   * outright, exactly as an authenticated call would.
+   */
+  async function anonymousRepo(repo) {
+    const remaining = deadline - now()
+    if (remaining <= 0) stop("deadline")
+    let timer
+    let result
+    try {
+      result = await Promise.race([
+        Promise.resolve().then(() => anonymousLookup(repo, { timeoutMs: remaining })),
+        new Promise((resolve) => { timer = setTimeout(resolve, remaining, TIMEOUT) }),
+      ])
+    } catch {
+      stop("unexpected")
+    } finally {
+      clearTimeout(timer)
+    }
+    if (result === TIMEOUT || now() >= deadline) stop("deadline")
+    if (!isPlainObject(result)) stop("unexpected")
+    if (result.networkError === true) stop("offline")
+    const { status, json, headers } = result
+    if (status === 429 || (status === 403 && isRateLimitedAnswer(json, headers))) stop("rate_limited")
+    if (status === 200 || status === 403 || status === 404) return { status, json }
+    stop("unexpected")
+  }
+
   async function need(method, route, body) {
     const answer = await api(method, route, body)
     if (answer.status !== 200) stop("unexpected")
     return answer.json
   }
 
-  return { call, session, api, need }
+  return { call, session, api, anonymousRepo, need }
 }
+
+// GitHub answers a rate-limited anonymous request with 403 (never 429, which is reserved for a
+// secondary/abuse limit) and either an empty `x-ratelimit-remaining` budget or a message naming the limit.
+const isRateLimitedAnswer = (json, headers) => headers?.get?.("x-ratelimit-remaining") === "0" || RATE_LIMIT.test(String(json?.message ?? ""))
 
 function compareVersion(left, right) {
   for (let index = 0; index < 3; index += 1) {
@@ -407,11 +474,13 @@ async function resolveVisibility(env, client, account, repos, nowIso) {
     if (known.has(repo)) continue
     await client.session(account)
     let answer = await client.api("GET", `repos/${repo}`)
-    // The account's own token can 404 a repository that is genuinely public: a fine-grained token scoped
-    // away from it, or an organization's SSO enforcement withholding it from this token alone. Since neither
-    // reason follows an anonymous request, one more try with no token at all tells a repository truly private
-    // or gone (still 404) from one only this account cannot see (now 200).
-    if (answer.status === 404) answer = await client.api("GET", `repos/${repo}`, undefined, { anonymous: true })
+    // The account's own token can 403 or 404 a repository that is genuinely public: a fine-grained token
+    // scoped away from it, or an organization's SSO enforcement withholding it from this token alone. A
+    // rate-limited 403 never reaches here — `api` already stops the flush for that. Since neither remaining
+    // reason follows a plain, unauthenticated request, one more try with no token at all — never through
+    // `gh`, whose own stored login would answer for an arbitrary signed-in account instead of for no one —
+    // tells a repository truly private or gone (still 403 or 404) from one only this account cannot see (now 200).
+    if (answer.status === 403 || answer.status === 404) answer = await client.anonymousRepo(repo)
     let visibility
     if (answer.status === 200 && answer.json?.private === false) visibility = "public"
     else if (answer.status === 200 && answer.json?.private === true) visibility = "private"
@@ -759,7 +828,7 @@ async function deliver(env, context) {
 }
 
 /** The flush with what finalize needs: the names still waiting for delivery after it. */
-async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, transform = toPublished, maxFiles = MAX_FILES, maxBytes = MAX_BYTES }) {
+async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now, transform = toPublished, maxFiles = MAX_FILES, maxBytes = MAX_BYTES, anonymousLookup = anonymousGithub() }) {
   const deadline = now() + deadlineMs
   if (!isRepo(store)) return { result: "unexpected", pending: null }
   let lock
@@ -776,7 +845,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
   const progress = { pending: null, rejectionsThrough: null }
   let outcome
   try {
-    const client = createClient({ runner, deadline, now })
+    const client = createClient({ runner, deadline, now, anonymousLookup })
     outcome = await deliver(env, { store, client, now, deadline, transform, maxFiles, maxBytes, progress })
   } catch (error) {
     outcome = { result: error instanceof Stop ? error.code : "unexpected" }
@@ -809,7 +878,8 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
  * stale_retries? }`, `result` one of `FLUSH_CODES`, `pr` `{ number, url }`
  * with `delivered_pr_open` and `intake_stale_retried`, which also gives how
  * many stale-refused intake PRs this flush read before opening a new one. Also takes `now` (a millisecond clock), `transform`
- * (the publishing transform) and the batch caps `maxFiles`/`maxBytes`.
+ * (the publishing transform), the batch caps `maxFiles`/`maxBytes`, and `anonymousLookup` (`anonymousGithub()`
+ * by default; a fake in tests) for the unauthenticated repository retry.
  */
 export async function flush(env, options = {}) {
   const { pending, ...result } = await flushDetailed(env, options)
