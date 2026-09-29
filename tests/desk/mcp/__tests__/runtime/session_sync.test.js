@@ -323,6 +323,42 @@ test("syncWorkspace treats a pull that succeeds but leaves its own autostash pop
   assert.match(git(cloneA, ["stash", "list"]), /autostash/u, "the stash entry is deliberately not dropped, exactly as real git leaves it")
 })
 
+// The retry pull (after a dirty-index quarantine) can leave its own
+// autostash pop conflicted too, not just the first pull -- a separate branch
+// in syncWorkspace from the one above. A fresh dirty tracked-file edit is
+// injected as a side effect of the one `ls-files` call `untrackedPaths` makes
+// right before quarantine runs -- the same "mutate the real repo from inside
+// a scripted spawnGit" pattern `sync_worker.test.js`'s own "the loop
+// re-checks for new commits" test already uses -- since quarantine only ever
+// moves the untracked paths it already found, never touching a tracked file.
+test("syncWorkspace treats the retry-after-quarantine pull's own autostash pop conflict as unresolved too, with the reason and quarantined paths both reported", async () => {
+  const { origin, cloneA } = await mkDirtyIndexFixture()
+  const cloneB2 = await mkClone(origin, "b2", { trackMain: true })
+  await writeAndCommit(cloneB2, "seed.md", "seed\nfrom origin\n", "origin edits seed too")
+  git(cloneB2, ["push", "-q"])
+
+  let injected = false
+  const spawnGit = (cmd, args, opts) => {
+    if (!injected && args.includes("ls-files")) {
+      injected = true
+      writeFileSync(path.join(cloneA, "seed.md"), "seed\nfrom A working tree\n")
+    }
+    return spawnSync(cmd, args, opts)
+  }
+  let filed = null
+  const result = await syncWorkspace({ root: cloneA, env, spawnGit, fileProblem: (args) => { filed = args } })
+
+  assert.equal(result.state, "unresolved")
+  assert.ok(Array.isArray(result.quarantinedPaths) && result.quarantinedPaths.some((p) => p.endsWith("stray.txt")), "the original stray path was still quarantined before the retry ran")
+  assert.match(result.diagnostic, /autostash_pop_conflict_after_quarantine\)/u)
+  assert.match(result.diagnostic, /conflicted: seed\.md/u)
+  assert.equal(filed.reason, "autostash_pop_conflict_after_quarantine")
+
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "never left mid-rebase")
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false, "never left mid-rebase")
+  assert.match(git(cloneA, ["status", "--porcelain"]), /^UU seed\.md/mu, "the retry's own stash-pop conflict is real, left on disk exactly as real git leaves it")
+})
+
 // ---------------------------------------------------------------------------
 // The 20s wall-clock budget (fix round, controller ruling 5): each git call
 // gets whatever of the budget remains, and the whole sequence gives up as
