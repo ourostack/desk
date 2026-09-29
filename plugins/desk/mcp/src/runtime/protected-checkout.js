@@ -4,7 +4,7 @@ import * as path from "node:path"
 import { inspectShell } from "./shell-commands.js"
 import { runGit } from "./state-branch.js"
 import { readInspectionGit } from "./git-inspection.js"
-import { existingDirectory, processDirectory } from "./shell-paths.js"
+import { existingDirectory, gitDirectory, processDirectory } from "./shell-paths.js"
 import { BUILTINS, canonicalKey, classifyGit, hasRule, MESSAGES } from "./git-guard-policy.js"
 import { GuardDenial, inspectionBudget, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
 
@@ -158,7 +158,8 @@ function gitInvocation(args, cwd, variables) {
     } else if (arg === "--") { i++; break }
     else if (arg === "--help" || arg === "--version") return null
   }
-  return { cwd, location, overrides: [...overrides, ...commandLine], commandLine, global: args.slice(0, i), name: args[i], args: args.slice(i + 1) }
+  // The `-C` chain moves the way the process does; Git then works from the folder it resolves to.
+  return { cwd: gitDirectory(cwd), location, overrides: [...overrides, ...commandLine], commandLine, global: args.slice(0, i), name: args[i], args: args.slice(i + 1) }
 }
 
 // Git aliases are configuration variables, so their section and name are case-insensitive.

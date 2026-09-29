@@ -49,6 +49,15 @@ export function processDirectoryFor(platform) {
 
 export const processDirectory = processDirectoryFor(process.platform)
 
+// Where Git works once it starts in `dir`. Git for Windows reads its current directory with junctions resolved, so it finds
+// the repository and resolves its own operands (a worktree to remove, a pathspec) from the physical folder, even after a
+// lexical `-C` chain or PowerShell location brought it there. Elsewhere `dir` is already physical.
+export function gitDirectoryFor(platform) {
+  return platform === "win32" ? (dir) => physicalDirectory(dir, ".") ?? dir : (dir) => dir
+}
+
+export const gitDirectory = gitDirectoryFor(process.platform)
+
 /** The directory Git would inspect for `dir`: itself, or the parent of a pending mktemp directory. */
 export function existingDirectory(dir) {
   return path.basename(dir).startsWith(MKTEMP_PREFIX) ? path.dirname(dir) : dir
@@ -103,5 +112,6 @@ export function staticGitOutput(words, cwd, env) {
   const known = ["git rev-parse --show-toplevel", "git branch --show-current", "git rev-parse --abbrev-ref HEAD"]
   if (!known.includes(text)) return null
   if (Object.keys(env).some((key) => /^GIT_(?:DIR|WORK_TREE)$/iu.test(key))) return UNKNOWN
-  return text === known[0] ? gitToplevel(cwd) : currentBranch(cwd, text === known[2])
+  const dir = gitDirectory(cwd)
+  return text === known[0] ? gitToplevel(dir) : currentBranch(dir, text === known[2])
 }

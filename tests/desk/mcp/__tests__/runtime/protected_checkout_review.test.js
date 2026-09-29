@@ -127,6 +127,36 @@ test("Windows PowerShell locations and Git -C resolve '..' after a junction as t
   }
 })
 
+test("Windows Git works from the physical folder once a junction brought it there", { skip: process.platform !== "win32" && "Windows directory semantics" }, async (t) => {
+  const f = fixture(t)
+  const link = path.join(f.ordinary, "link")
+  symlinkSync(path.join(f.shared, "child"), link, "junction")
+  // Git finds the repository, and resolves its own operands, from the junction's target: ../victim is shared's sibling of child.
+  const victim = path.join(f.shared, "victim")
+  const cases = [
+    [`git -C ${q(link)} worktree remove --force ../victim`, false],
+    [`Set-Location ${psq(link)}; git worktree remove --force ../victim`, true],
+    [`git -C ${psq(link)} worktree remove --force ../victim`, true],
+  ]
+  for (const [command, powershell] of cases) {
+    f.git(f.shared, "worktree", "add", "--detach", victim, "HEAD")
+    await protectCheckout({ root: victim })
+    assert.equal((await f.guard(command, { powershell })).deny, true, command)
+    const result = powershell ? spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", command], { cwd: f.ordinary, env: f.env, encoding: "utf8" })
+      : spawnSync("bash", ["--noprofile", "--norc", "-c", command], { cwd: f.ordinary, env: f.env, encoding: "utf8" })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(existsSync(victim), false, `${command} really removes the protected worktree`)
+  }
+  // Desk's model of `git rev-parse --show-toplevel` names the repository Git really finds.
+  const command = `Set-Location ${psq(link)}; $top = git rev-parse --show-toplevel; git -C $top checkout --detach HEAD`
+  f.git(f.shared, "checkout", "main")
+  const before = f.git(f.shared, "reflog", "--format=%H %gs")
+  assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
+  const result = spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", command], { cwd: f.ordinary, env: f.env, encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  assert.notEqual(f.git(f.shared, "reflog", "--format=%H %gs"), before)
+})
+
 test("Windows worktree removal finds a protected worktree named in another path form", { skip: process.platform !== "win32" && "Windows path forms" }, async (t) => {
   const f = fixture(t)
   const victim = path.join(f.root, "victim")

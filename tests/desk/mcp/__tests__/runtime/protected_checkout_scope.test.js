@@ -12,7 +12,7 @@ import { guardShellCommand, pathForms, protectCheckout, protectedCheckoutHook } 
 import { classifyGit, MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
 import { hasOption, parseGitOptions, SPECS } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-options.js"
 import { mayInvokeGit, UNKNOWN } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
-import { existingDirectory, lexicalDirectory, mktempPath, physicalDirectory, processDirectory, processDirectoryFor } from "../../../../../plugins/desk/mcp/src/runtime/shell-paths.js"
+import { existingDirectory, lexicalDirectory, mktempPath, gitDirectoryFor, physicalDirectory, processDirectory, processDirectoryFor } from "../../../../../plugins/desk/mcp/src/runtime/shell-paths.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
@@ -361,6 +361,10 @@ test("A3b: the Git-reach rule, option parser and mktemp model", (t) => {
   assert.equal(processDirectoryFor("win32"), lexicalDirectory)
   assert.equal(processDirectoryFor("darwin"), physicalDirectory)
   assert.equal(processDirectoryFor("linux"), physicalDirectory)
+  for (const platform of ["darwin", "linux"]) assert.equal(gitDirectoryFor(platform)(link), link, `${platform} dirs are already physical`)
+  assert.equal(gitDirectoryFor("win32")(link), physicalDirectory(link, "."), "Git works from the junction target")
+  assert.equal(gitDirectoryFor("win32")(path.join(cwd, "definitely-missing")), path.join(cwd, "definitely-missing"))
+  assert.equal(gitDirectoryFor("win32")(UNKNOWN), UNKNOWN)
   assert.equal(existingDirectory(pending), cwd)
   assert.equal(existingDirectory(cwd), cwd)
 })
