@@ -190,7 +190,7 @@ function checkStartupHooks(skill) {
 
     // When the hook cannot run Desk's resolver, both hosts say so and still carry the RFC line. On Windows the
     // Claude plugin root uses backslashes, so the RFC path keeps that separator.
-    const couldNot = /^Desk startup: Desk could not resolve its root in this hook\. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound\.$/u;
+    const couldNot = /^Desk startup: Desk could not resolve its root in this hook\. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound\. A child agent with a bounded brief follows the brief instead and skips this\.$/u;
     const bare = path.join(codeRepo, "bare-plugin");
     fs.mkdirSync(path.join(bare, "skills", "using-desk"), { recursive: true });
     fs.copyFileSync(skillPath, path.join(bare, "skills", "using-desk", "SKILL.md"));
@@ -427,6 +427,8 @@ function main() {
     "no new durable task identity",
     "early-return framing is input, not authority",
     "root retains final accountability",
+    "A child agent with a bounded brief follows the brief, not this text",
+    "skips session-start, host probes, sync and any real-desk boot ceremony",
   ]);
 
   assertSectionPhrases(section(skill, "The RFC"), "using-desk The RFC", [
@@ -460,9 +462,10 @@ function main() {
   // Injected at every startup, so it stays compact: each rule is a sentence or two and procedure lives in the owning
   // skill. The ceiling rose from 6500 to 7500 bytes for the four collaboration rules Ari approved on 2026-09-25, and
   // from 7500 to 7900 bytes for the durable-output-first sentence and the desk-problem pointer (Part 9 of the
-  // agents-never-fight-the-desk plan, 2026-09-28); a further addition has to justify its size.
+  // agents-never-fight-the-desk plan, 2026-09-28), then from 7900 to 8000 bytes for the child-agent stand-down
+  // sentence in "Child agents" (2026-09-29); a further addition has to justify its size.
   const skillBytes = Buffer.byteLength(skill, "utf8");
-  assert.ok(skillBytes >= 4500 && skillBytes <= 7900, `using-desk should stay about 5-7.9 KB; found ${skillBytes} bytes`);
+  assert.ok(skillBytes >= 4500 && skillBytes <= 8000, `using-desk should stay about 5-8 KB; found ${skillBytes} bytes`);
 
   assert.doesNotMatch(
     skill,

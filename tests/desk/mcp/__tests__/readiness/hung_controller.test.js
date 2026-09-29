@@ -11,6 +11,7 @@ import { readinessContracts } from "../../../../../plugins/desk/mcp/src/readines
 import { HUNG_MISSES, HUNG_PROBE_MS, hungControllerReport, probeController, probeMissed } from "../../../../../plugins/desk/mcp/src/readiness/hung-controller.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { killAndWait } from "../_kill_and_wait.js"
 
 const posixOnly = process.platform === "win32" ? "unix sockets and signals" : false
 const policy = { lexical: "required", semantic: "unsupported" }
@@ -84,7 +85,7 @@ test("probes tell missing, refused, answering and silent controllers apart", { s
 test("a hung controller is reported with its owner and endpoint, never signalled", { skip: posixOnly }, async (t) => {
   const context = await fixture(t, "desk-hung-report-")
   const child = await silentChild(context.endpoint)
-  t.after(() => child.kill("SIGKILL"))
+  t.after(() => killAndWait(child))
   writeOwner(context, child.pid)
   const probe = await probeController({ root: context.root, policy, stateHome: context.stateHome, timeoutMs: 200 })
   assert.equal(probe.state, "silent")
@@ -97,7 +98,7 @@ test("a hung controller is reported with its owner and endpoint, never signalled
 test("a socket that refuses, or is gone, while its owner runs is unreachable, not refused or missing", { skip: posixOnly }, async (t) => {
   const context = await fixture(t, "desk-hung-unreachable-")
   const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
-  t.after(() => owner.kill("SIGKILL"))
+  t.after(() => killAndWait(owner))
   const dead = await silentChild(context.endpoint)
   dead.kill("SIGKILL")
   await new Promise((resolve) => dead.once("exit", resolve))
@@ -127,7 +128,7 @@ test("a report reads what the owner record says, and nothing when it says nothin
 test("owner_verified requires a successful live start match, including when identity lookup fails", { skip: posixOnly }, async (t) => {
   const context = await fixture(t, "desk-owner-verified-")
   const child = await silentChild(context.endpoint)
-  t.after(() => child.kill("SIGKILL"))
+  t.after(() => killAndWait(child))
   const socket = lstatSync(context.endpoint)
   writeFileSync(path.join(context.stateDir, "owner.json"), JSON.stringify({
     schema_version: 1, identity: context.identity, endpoint: context.endpoint, socket: { dev: socket.dev, ino: socket.ino },

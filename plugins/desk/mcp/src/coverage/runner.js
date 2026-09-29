@@ -310,9 +310,17 @@ function runCoverageShard({ repoRoot, request, requiredFiles, coverageIncludeFil
   // spawned and has already awaited to exit) can still be flushing a file into this same directory in the instant
   // after the instrumented run above reports done, which races Node's own recursive rmdir -- it lists entries, then
   // rmdir's the now-believed-empty directory, and a file that lands in that window fails it with ENOTEMPTY (seen on
-  // CI, not locally: ourostack/desk PR #101, runs 36557284368 and prior, shard 2). The same short retry `_fake_real_
-  // root.js` already uses for its own fixture cleanup.
-  rmSync(path.join(rawDirectory, "processinfo"), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  // CI, not locally: ourostack/desk PR #101, runs 36557284368 and prior, shard 2; recurred after the retry, PR #104,
+  // run 36612760345, shard 8). This is still bookkeeping, not coverage, so exhausting the retry must not fail an
+  // otherwise-passing shard: name the leftover file(s) in one warning line -- they identify which process was still
+  // writing -- and continue. The shard's own status (the instrumented run's own pass/fail) is unaffected either way.
+  const processInfoDirectory = path.join(rawDirectory, "processinfo")
+  try {
+    fsOps.removeDirRetrying(processInfoDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  } catch (error) {
+    const leftover = listLeftoverFiles(fsOps, processInfoDirectory)
+    io.stderr.write(`[coverage-gate] could not remove ${processInfoDirectory} after the retry (${error.code ?? error.message}); it is process bookkeeping, not coverage, so the shard continues; leftover file(s): ${leftover.length ? leftover.join(", ") : "(none listed; the directory itself could not be read)"}\n`)
+  }
   const seconds = Math.round((Date.now() - started) / 100) / 10
   writeFileSync(path.join(output, "shard.json"), `${JSON.stringify({
     schema_version: COVERAGE_SHARD_SCHEMA_VERSION,
@@ -325,6 +333,17 @@ function runCoverageShard({ repoRoot, request, requiredFiles, coverageIncludeFil
   }, null, 2)}\n`)
   io.stdout.write(`[coverage-gate] shard ${request.index}/${request.total} ran ${testFiles.length} test file(s) in ${seconds} s with status ${status}; the merge step owns admission\n`)
   return status
+}
+
+// Best-effort naming for the warning above: the directory a failed removal left behind may itself be unreadable
+// (gone between the failed retry and this listing, or a permissions edge), in which case there is nothing more to
+// name and the warning says so instead of throwing a second error out of a cleanup path.
+function listLeftoverFiles(fsOps, directory) {
+  try {
+    return fsOps.listDir(directory)
+  } catch {
+    return []
+  }
 }
 
 /**
@@ -504,6 +523,10 @@ function defaultFsOps() {
     removeDir: (dir) => rmSync(dir, { recursive: true, force: true }),
     readText: (file) => readFileSync(file, "utf8"),
     writeText: (file, text) => writeFileSync(file, text, "utf8"),
+    // A separate hook from `removeDir` (no retry/force options there) so a test can make exactly this removal --
+    // and only this one -- fail, the way a real ENOTEMPTY from a still-writing process does.
+    removeDirRetrying: (dir, options) => rmSync(dir, options),
+    listDir: (dir) => readdirSync(dir),
   }
 }
 

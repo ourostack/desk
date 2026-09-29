@@ -149,6 +149,11 @@ test("the complete boot check has a deadline even when launching repair stalls",
   t.diagnostic(`a 60 ms budget returned in ${Math.round(elapsed)} ms with the launch stalled`)
   assert.ok(elapsed < STALLED_LAUNCH_LIMIT_MS, `the boot check took ${Math.round(elapsed)} ms`)
   assert.match(line, /budget.*deferred/)
+  // The line says plainly this needs no agent action (it retries automatically next boot) and spells out the exact,
+  // copy-pasteable repair command an agent can run sooner, rather than leaving "the repair" unnamed.
+  assert.match(line, /no agent action needed/)
+  assert.match(line, /deferred to the next session start automatically/)
+  assert.equal(line, `Desk boot: workspace-tidy budget exceeded; deferred to the next session start automatically, no agent action needed; to run it sooner: node ${hookPath.pathname} --repair <desk_status root>`)
 
   // Mocked time: the check ends exactly at the budget it was given, not at the 500 ms default, once the launch has begun and stalled.
   t.mock.timers.enable({ apis: ["setTimeout"] })

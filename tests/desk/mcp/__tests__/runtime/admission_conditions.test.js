@@ -13,6 +13,7 @@ import { TOOL_NAMES } from "../../../../../plugins/desk/mcp/src/tool-names.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { connectOrStartController, probeEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { readinessContracts } from "../../../../../plugins/desk/mcp/src/server.js"
+import { killAndWait } from "../_kill_and_wait.js"
 import {
   HANDSHAKE_BUDGET_MS, git, makeGitDesk, readLastStart, settled, startDesk, writeActivation, writeFile,
 } from "./_admission_fixtures.js"
@@ -143,7 +144,7 @@ test("a hung controller is detected after 3 missed checks and never stopped; rea
   const configPath = writeActivation(fixture)
   const { endpoint, stateDir, identity } = controllerFixture(fixture)
   const hung = await startHungController(endpoint)
-  t.after(() => hung.kill("SIGKILL"))
+  t.after(() => killAndWait(hung))
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const stat = statSync(endpoint)
   writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({
@@ -483,7 +484,7 @@ test("a stale owner record whose PID now belongs to an unrelated process: other 
   assert.ok(statSync(record.endpoint).isSocket())
   await new Promise((resolve) => setTimeout(resolve, 1100))
   const unrelated = spawn("sleep", ["300"], { stdio: "ignore" })
-  t.after(() => unrelated.kill("SIGKILL"))
+  t.after(() => killAndWait(unrelated))
   await new Promise((resolve) => unrelated.once("spawn", resolve))
   writeFileSync(ownerFile, JSON.stringify({ ...record, owner: { ...record.owner, pid: unrelated.pid } }, null, 2))
   const sessions = await Promise.all([0, 1].map(() => startDesk(fixture, { args: ["--activation-config", configPath], env: { DESK_READINESS_PROBE_MS: "300" } })))

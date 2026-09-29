@@ -7,6 +7,7 @@ import { spawn } from "node:child_process"
 import {
   processStartReaders, readOwnProcessStart, readProcessStart, resetOwnProcessStart, runForText,
 } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
+import { killAndWait } from "../_kill_and_wait.js"
 
 const nativeRead = process.platform === "linux" || process.platform === "darwin" ? false : "reads /proc or ps"
 
@@ -17,7 +18,7 @@ test("this machine: a running process has one start time, read the same way ever
   // ps reports whole seconds: the later process must start in a later second.
   await new Promise((resolve) => setTimeout(resolve, 1100))
   const sleeper = spawn("sleep", ["30"], { stdio: "ignore" })
-  t.after(() => sleeper.kill("SIGKILL"))
+  t.after(() => killAndWait(sleeper))
   await new Promise((resolve) => sleeper.once("spawn", resolve))
   const other = await readProcessStart(sleeper.pid)
   assert.match(other, new RegExp(`^${process.platform}:`, "u"))

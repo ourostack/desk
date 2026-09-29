@@ -7,6 +7,10 @@ description: Map an existing Desk task, approval, plan and progress record onto 
 
 Desk owns work identity, authority, durable state and the agreed delivery endpoint. Superpowers owns engineering discovery, planning, implementation and verification. This adapter is the only seam between them: it reads what Desk already recorded, selects one provider entry, and hands over explicit existing paths. It is not a second lifecycle, contract, store or scheduler.
 
+## This entry satisfies Superpowers' "1% chance" rule
+
+`superpowers:using-superpowers` requires invoking a skill the moment there is even a 1% chance it applies; for engineering work on a Desk task, this adapter is that skill, so invoking it at the start of engineering work, a reconciled resume or a material redesign is how that rule gets satisfied, not a workaround to weigh against it. Invoke this adapter first rather than reasoning about which raw `superpowers:*` skill might apply instead; its own Boundary below then selects and hands off to the specific one (brainstorming, writing-plans, subagent-driven-development, or the executing-plans fallback), which is the next required invocation the same rule already covers, not a redundant second decision.
+
 ## Boundary
 
 ```text
