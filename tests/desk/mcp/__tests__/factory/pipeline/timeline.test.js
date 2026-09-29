@@ -130,3 +130,11 @@ test("transitions with unknown offsets sort after every known one instead of pos
   assert.deepEqual(buildJobTimeline(CLOSED, [one]).transitions, expected)
   assert.deepEqual(buildJobTimeline(CLOSED, [reversed]).transitions, expected)
 })
+
+test("normalizePublished sorts a job's workers numerically and leaves jobs without workers alone", () => {
+  const input = structuredClone(sessions[2])
+  input.jobs[0].agents = [2, 0, 10]
+  const normalized = normalizePublished(input)
+  assert.deepEqual(normalized.jobs.find((job) => job.job === input.jobs[0].job).agents, [0, 2, 10])
+  assert.equal(normalized.jobs.filter((job) => Object.hasOwn(job, "agents")).length, 1)
+})

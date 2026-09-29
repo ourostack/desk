@@ -622,3 +622,23 @@ test("every field in every published level spec carries a check function", () =>
   }
   assert.ok(Object.isFrozen(PUBLISHED_LIMITS))
 })
+
+// --- per-worker bindings: jobs[].agents and refs.prs[].agent ---------------
+
+test("published jobs[].agents and refs.prs[].agent validate when they name real workers", () => {
+  const value = setPath(setPath(golden(), ["jobs", 0, "agents"], [0, 1]), ["refs", "prs", 0, "agent"], 1)
+  assert.deepEqual(validatePublished(value), { ok: true, errors: [] })
+})
+
+test("published jobs[].agents refuses duplicates, empty lists, non-arrays and unknown workers", () => {
+  const cases = [[[0, 0], "duplicate", "jobs.0.agents"], [[], "empty", "jobs.0.agents"], ["0", "type", "jobs.0.agents"], [[7], "agent_unknown", "jobs.0.agents.0"], [Array.from({ length: LIMITS.agents + 1 }, (_, n) => n), "too_many", "jobs.0.agents"]]
+  for (const [agents, code, where] of cases) {
+    const result = validatePublished(setPath(golden(), ["jobs", 0, "agents"], agents))
+    assert.ok(result.errors.some((error) => error.code === code && error.path === where), JSON.stringify(result.errors))
+  }
+})
+
+test("published refs.prs[].agent refuses an unknown or negative worker", () => {
+  assertSingle(validatePublished(setPath(golden(), ["refs", "prs", 0, "agent"], 7)), "agent_unknown", "refs.prs.0.agent")
+  assertSingle(validatePublished(setPath(golden(), ["refs", "prs", 0, "agent"], -1)), "range", "refs.prs.0.agent")
+})

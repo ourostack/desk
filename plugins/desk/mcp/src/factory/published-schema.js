@@ -63,6 +63,8 @@ import {
   MODEL_SPEC,
   PATTERNS,
   PR_SPEC,
+  prFields,
+  jobFields,
   addError,
   arrayField,
   booleanField,
@@ -188,6 +190,11 @@ const PR = {
   repo: publicTokenField(PATTERNS.prRepo),
 }
 
+// The optional worker attribution, as in the local form.
+function prFieldsPublished(value) {
+  return { ...prFields(value), ...PR }
+}
+
 // Unlike the local form, a published commit always names its repository.
 const COMMIT = {
   repo: publicTokenField(PATTERNS.prRepo),
@@ -203,7 +210,7 @@ function privateFields(value) {
 }
 
 const REFS = {
-  prs: arrayField(objectField(PR), LIMITS.prs),
+  prs: arrayField(objectField(prFieldsPublished), LIMITS.prs),
   commits: arrayField(objectField(COMMIT), LIMITS.commits),
   private: objectField(privateFields),
 }
@@ -270,7 +277,7 @@ const TOP = {
   intervals: arrayField(objectField(intervalFields, intervalOrderCheck), LIMITS.intervals),
   counts: objectField(COUNTS_SPEC),
   refs: objectField(REFS),
-  jobs: arrayField(objectField(JOB), LIMITS.jobs),
+  jobs: arrayField(objectField((value) => jobFields(value, JOB)), LIMITS.jobs),
   unavailable: arrayField(objectField(UNAVAILABLE), LIMITS.unavailable),
 }
 

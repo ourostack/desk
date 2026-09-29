@@ -354,7 +354,7 @@ test("an unrecognized key in counts.tool_failures fails with unknown_key naming 
   assertNoLeak(result)
 })
 
-test("a negative value in counts.tool_calls fails with integer", () => {
+test("a negative value in counts.tool_calls fails with range", () => {
   const value = golden()
   value.counts.tool_calls.shell = -1
   const result = validateLocalFacts(value)
@@ -711,7 +711,7 @@ test("ENUMS matches the brief's table exactly, and every array (and ENUMS itself
     intervalKind: ["turn", "tool", "subagent", "human_wait", "permission_wait", "api_retry", "compaction"],
     outcome: ["ok", "error", "denied", "interrupted", "timeout"],
     jobStatus: ["drafting", "processing", "validating", "collaborating", "paused", "blocked", "done", "cancelled"],
-    jobBasis: ["desk_tool", "file_write", "desk_commit"],
+    jobBasis: ["desk_tool", "file_write", "desk_commit", "spawn_brief", "inherited"],
     unavailableField: [
       "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
       "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
@@ -746,4 +746,36 @@ test("every field in every level spec carries a real check function (the allow-l
       assert.equal(typeof field.check, "function", `${levelName}.${fieldName} should carry a check function`)
     }
   }
+})
+
+// --- per-worker bindings: jobs[].agents and refs.prs[].agent ---------------
+
+test("jobs[].agents and refs.prs[].agent validate when they name real workers", () => {
+  const value = setPath(setPath(golden(), ["jobs", 0, "agents"], [0, 1]), ["refs", "prs", 0, "agent"], 1)
+  assert.deepEqual(validateLocalFacts(value), { ok: true, errors: [] })
+})
+
+test("the new job bases are accepted", () => {
+  assert.deepEqual(ENUMS.jobBasis, ["desk_tool", "file_write", "desk_commit", "spawn_brief", "inherited"])
+  assert.equal(validateLocalFacts(setPath(golden(), ["jobs", 0, "basis"], ["spawn_brief", "inherited"])).ok, true)
+})
+
+for (const [name, agents, code, where] of [
+  ["duplicate workers", [0, 0], "duplicate", "jobs.0.agents"],
+  ["an empty list", [], "empty", "jobs.0.agents"],
+  ["a non-array", "0", "type", "jobs.0.agents"],
+  ["a worker not in agents[]", [7], "agent_unknown", "jobs.0.agents.0"],
+  ["a negative worker", [-1], "range", "jobs.0.agents.0"],
+  ["too many workers", Array.from({ length: LIMITS.agents + 1 }, (_, n) => n), "too_many", "jobs.0.agents"],
+]) {
+  test(`jobs[].agents with ${name} fails with ${code}`, () => {
+    const result = validateLocalFacts(setPath(golden(), ["jobs", 0, "agents"], agents))
+    assert.equal(result.ok, false)
+    assert.ok(result.errors.some((error) => error.code === code && error.path === where), JSON.stringify(result.errors))
+  })
+}
+
+test("refs.prs[].agent outside agents[] fails with agent_unknown, and a negative one with range", () => {
+  assertSingle(validateLocalFacts(setPath(golden(), ["refs", "prs", 0, "agent"], 7)), "agent_unknown", "refs.prs.0.agent")
+  assertSingle(validateLocalFacts(setPath(golden(), ["refs", "prs", 0, "agent"], -1)), "range", "refs.prs.0.agent")
 })

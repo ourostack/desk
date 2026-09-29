@@ -391,3 +391,12 @@ test("validatePr accepts labels that declare facts_missing without a facts file,
   assert.deepEqual(validatePr({ changes: [{ path: unboundPath, status: "added", bytes: unbound, facts: LABEL_FACTS }] }), { ok: false, errors: [{ code: "job_unbound", path: unboundPath }] })
   assert.deepEqual(validatePr({ changes: [{ path: LABEL_PATH, status: "added", bytes: declared, facts: [{ path: VALID_PATH, bytes: Buffer.from("{") }] }] }), { ok: false, errors: [{ code: "facts_invalid", path: LABEL_PATH }] })
 })
+
+test("validatePr accepts published facts with per-worker job and PR attribution, and still accepts the old shape", () => {
+  const value = structuredClone(GOLDEN)
+  value.jobs[0].agents = [0, 1]
+  value.refs.prs[0].agent = 1
+  const upgraded = Buffer.from(`${JSON.stringify(value)}\n`)
+  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: upgraded }] }), { ok: true, errors: [] })
+  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: GOLDEN_BYTES }] }), { ok: true, errors: [] })
+})
