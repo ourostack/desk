@@ -20,7 +20,12 @@ function fixture(t) {
   const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-boot-drift-")))
   t.after(() => rmSync(repo, { recursive: true, force: true, maxRetries: 5 }))
   const env = {
-    ...process.env, HOME: repo, DESK: repo, GIT_CONFIG_NOSYSTEM: "1",
+    // XDG_STATE_HOME is set explicitly, not just inherited from `...process.env`: the
+    // filing-storm throttle (fix round, spec.md §1 Part 5) keys its stamp file off this
+    // directory, and the isolated test run pins XDG_STATE_HOME process-wide -- leaving it
+    // inherited here would make every fixture share one throttle stamp regardless of this
+    // repo's own unique HOME, colliding across tests that hit the same reason text.
+    ...process.env, HOME: repo, XDG_STATE_HOME: path.join(repo, ".local", "state"), DESK: repo, GIT_CONFIG_NOSYSTEM: "1",
     GIT_AUTHOR_NAME: "F", GIT_AUTHOR_EMAIL: "f@example.invalid", GIT_COMMITTER_NAME: "F", GIT_COMMITTER_EMAIL: "f@example.invalid",
   }
   for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_(?:COUNT|KEY_|VALUE_|PARAMETERS|GLOBAL))/u.test(key)) delete env[key]
@@ -46,6 +51,44 @@ test("a check that stages a file mid-run produces a Desk problem: index-drift bl
   assert.match(line, /it may have staged it, or another session may have staged it at the same time/)
   assert.doesNotMatch(line, /staged a file it should never touch/)
   assert.doesNotMatch(line, /unexpectedly staged/)
+})
+
+// ── index-drift is migrated onto real filing too (spec.md §1, Part 5) ──────
+
+test("an index-drift block queues the detached filer, never awaiting it, and reports filing in background", async (t) => {
+  const { runBootChecks } = require(BOOT)
+  const { repo, env, git } = fixture(t)
+  const launched = []
+  writeFileSync(path.join(repo, "stray.txt"), "x\n")
+  const line = await runBootChecks({
+    ...quiet,
+    host: "claude",
+    env,
+    checks: [{ id: "probe", budgetMs: 50, run: async () => { git("add", "stray.txt"); return {} } }],
+    launchRepair: async (command, launchEnv) => { launched.push({ command, launchEnv }) },
+  })
+  assert.match(line, /Desk problem: index-drift — unexpected file staged during probe/)
+  assert.match(line, /file: filing in background/)
+  assert.equal(launched.length, 1)
+  assert.ok(launched[0].command.some((part) => part.endsWith("file-desk-problem.js")))
+  assert.ok(launched[0].command.includes("--mechanism"))
+  assert.ok(launched[0].command.includes("index-drift"))
+  assert.ok(launched[0].command.includes("--host"))
+  assert.ok(launched[0].command.includes("claude"))
+})
+
+test("an index-drift block still renders, with 'not filed', when the launcher itself fails to start", async (t) => {
+  const { runBootChecks } = require(BOOT)
+  const { repo, env, git } = fixture(t)
+  writeFileSync(path.join(repo, "stray.txt"), "x\n")
+  const line = await runBootChecks({
+    ...quiet,
+    env,
+    checks: [{ id: "probe", budgetMs: 50, run: async () => { git("add", "stray.txt"); return {} } }],
+    launchRepair: async () => { throw new Error("spawn unavailable") },
+  })
+  assert.match(line, /Desk problem: index-drift — unexpected file staged during probe/)
+  assert.match(line, /file: filing in background/)
 })
 
 test("a check with no index change adds no index-drift block, and the usual line still comes through", async (t) => {

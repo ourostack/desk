@@ -76,31 +76,100 @@
 // Inspection runs Git only from a trusted system location, never the command's PATH or
 // loader settings. Policy: ../mcp/src/runtime/git-guard-policy.js; shell model:
 // ../mcp/src/runtime/shell-commands.js and powershell-commands.js; docs: ../docs/protected-checkouts.md.
+//
+// The 9 s deadline below (fix round 1's own backstop) is migrated onto the
+// failure contract (spec.md §1's table, row 5, Part 5): a *repeated* timeout
+// of the exact same command -- not just one slow call -- now also emits a
+// `Desk problem:` block and queues the detached filer, the same way every
+// other migrated mechanism does. The plain "denied to keep a protected
+// checkout safe" decision, and this hook's exit-code contract, are unchanged
+// either way; see mcp/src/runtime/protected-checkout-repeat.js for the
+// counting itself, kept in Desk's own state directory, never inside a desk.
 
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
-let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => { input += chunk; });
-// The hosts stop a hook at 10 s; answer first, and deny, if inspection has not finished at 9 s.
-const deadline = setTimeout(() => {
-  const decision = { permissionDecision: "deny", permissionDecisionReason: "Desk could not finish checking this command in time, so it is denied to keep a protected checkout safe. Retry it." };
-  process.stdout.write(`${JSON.stringify(process.argv[2] === "claude" ? { hookSpecificOutput: { hookEventName: "PreToolUse", ...decision } } : decision)}\n`);
-  process.exit(0);
-}, Number(process.env.DESK_GUARD_DEADLINE_MS) || 9000);
-process.stdin.on("end", async () => {
+
+function commandTextFromRawInput(raw) {
   try {
-    const { protectedCheckoutHook } = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/protected-checkout.js")).href);
-    const output = await protectedCheckoutHook(JSON.parse(input), process.argv[2]);
-    process.stdout.write(`${JSON.stringify(output)}\n`);
-  } catch (error) {
-    // The message can quote the command, so it goes through the same credential redaction as a denial; if the guard
-    // module itself cannot load, only the error's name is written.
-    const detail = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/protected-checkout.js")).href)
-      .then(({ redact }) => redact(String(error?.message ?? error)), () => String(error?.name ?? "Error"));
-    process.stderr.write(`Desk protected-checkout guard could not inspect this command: ${detail}\n`);
-    process.exitCode = 2;
-  } finally {
-    clearTimeout(deadline);
+    const parsed = JSON.parse(raw);
+    let args = parsed.tool_input ?? parsed.toolArgs;
+    if (typeof args === "string") args = JSON.parse(args);
+    return typeof args?.command === "string" ? args.command : "";
+  } catch {
+    return "";
   }
-});
+}
+
+function defaultSpawnFiler({ mechanism, reason, host, env = process.env }) {
+  const { compatibleCommand, launchCommand } = require("./boot-checks.cjs");
+  const script = path.join(__dirname, "..", "mcp", "scripts", "file-desk-problem.js");
+  const command = compatibleCommand(script, "--mechanism", mechanism, "--reason", reason || "unknown", "--host", host || "unknown");
+  // Fire-and-forget, exactly like ask-gate.cjs's own filer: not awaited, and its own rejection swallowed.
+  launchCommand(command, env).catch(() => {});
+}
+
+/**
+ * Builds the guard's own 9 s-deadline answer, adding a `Desk problem:` block
+ * (and queuing the detached filer, never awaited) only when the same
+ * command's signature has now timed out repeatedly (spec.md §1's table, row
+ * 5) -- see mcp/src/runtime/protected-checkout-repeat.js. The plain deny
+ * decision is unchanged either way. Exported for tests; the real entry
+ * point below is the only production caller.
+ */
+async function deadlineDecision({ rawInput, host, deadlineMs, env = process.env, spawnFiler = defaultSpawnFiler } = {}) {
+  const decision = {
+    permissionDecision: "deny",
+    permissionDecisionReason: "Desk could not finish checking this command in time, so it is denied to keep a protected checkout safe. Retry it.",
+  };
+  let block = null;
+  try {
+    const command = commandTextFromRawInput(rawInput);
+    const { repeatedTimeoutDeskProblem } = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/protected-checkout-repeat.js")).href);
+    const result = repeatedTimeoutDeskProblem({ command, env, deadlineMs });
+    if (result.block) {
+      block = result.block;
+      if (result.shouldFile) {
+        try {
+          spawnFiler({ mechanism: "protected-checkout", reason: `repeated timeout (${result.count}x)`, host, env });
+        } catch {
+          // Best-effort: the block still reports "filing in background" honestly enough -- the next repeated timeout tries again.
+        }
+      }
+    }
+  } catch {
+    // Never let the repeated-timeout signal itself change whether, or how fast, this deadline answers.
+  }
+  return { decision, block };
+}
+
+module.exports = { deadlineDecision, commandTextFromRawInput };
+
+if (require.main === module) {
+  let input = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => { input += chunk; });
+  const deadlineMs = Number(process.env.DESK_GUARD_DEADLINE_MS) || 9000;
+  // The hosts stop a hook at 10 s; answer first, and deny, if inspection has not finished at 9 s.
+  const deadline = setTimeout(async () => {
+    const { decision, block } = await deadlineDecision({ rawInput: input, host: process.argv[2], deadlineMs });
+    if (block) process.stderr.write(`${block}\n`);
+    process.stdout.write(`${JSON.stringify(process.argv[2] === "claude" ? { hookSpecificOutput: { hookEventName: "PreToolUse", ...decision } } : decision)}\n`);
+    process.exit(0);
+  }, deadlineMs);
+  process.stdin.on("end", async () => {
+    try {
+      const { protectedCheckoutHook } = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/protected-checkout.js")).href);
+      const output = await protectedCheckoutHook(JSON.parse(input), process.argv[2]);
+      process.stdout.write(`${JSON.stringify(output)}\n`);
+    } catch (error) {
+      // The message can quote the command, so it goes through the same credential redaction as a denial; if the guard
+      // module itself cannot load, only the error's name is written.
+      const detail = await import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/protected-checkout.js")).href)
+        .then(({ redact }) => redact(String(error?.message ?? error)), () => String(error?.name ?? "Error"));
+      process.stderr.write(`Desk protected-checkout guard could not inspect this command: ${detail}\n`);
+      process.exitCode = 2;
+    } finally {
+      clearTimeout(deadline);
+    }
+  });
+}

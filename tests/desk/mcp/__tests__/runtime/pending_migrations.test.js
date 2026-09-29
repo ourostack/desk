@@ -229,10 +229,89 @@ test("migrationLine says what to do for each state, with the exact command, and 
 })
 
 test("startupMigrationLine never throws, and the boot-check hook helper passes the session's folder", async () => {
-  assert.equal(await startupMigrationLine({ pluginRoot: undefined }), "")
+  const registryError = await startupMigrationLine({ pluginRoot: undefined })
+  assert.match(registryError, /^Desk problem: pending-migrations — the migration registry failed internally\n/u)
+  assert.match(registryError, /  file: not filed: filer_unavailable\n/u)
   const root = await plugin([{ id: "01-where", agent: true, detect: '[ "$PWD" = "$EXPECTED" ]' }])
   assert.match(await startupMigrationLine({ pluginRoot: root, env: { ...process.env, EXPECTED: root }, cwd: root }), /^Desk migrations: 01-where is pending/u)
   assert.equal(await startupMigrationLine({ pluginRoot: root, env: { ...process.env, EXPECTED: root }, cwd: path.dirname(root) }), "")
+})
+
+// ── The migration registry's own failures (spec.md §1, Part 5) ─────────────
+
+test("startupMigrationLine's registry-error block calls the injected fileProblem (never filing inline itself) and reports what it returns", async () => {
+  const calls = []
+  const line = await startupMigrationLine({
+    pluginRoot: undefined, host: "claude",
+    fileProblem: async ({ reason, host }) => { calls.push({ reason, host }); return { file: "filing in background" } },
+  })
+  assert.match(line, /^Desk problem: pending-migrations — the migration registry failed internally\n/u)
+  assert.match(line, /  file: filing in background\n/u)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].host, "claude")
+  assert.ok(calls[0].reason.length > 0)
+})
+
+test("startupMigrationLine's registry-error block still renders a reason when the registry throws a non-Error value", async () => {
+  const root = await plugin([{ id: "01-where", agent: true, detect: '[ "$PWD" = "$EXPECTED" ]' }])
+  const line = await startupMigrationLine({ pluginRoot: root, env: { EXPECTED: root }, cwd: root, spawn: () => { throw "not-an-error-object" } })
+  assert.match(line, /^Desk problem: pending-migrations — the migration registry failed internally\n/u)
+  assert.match(line, /  broke: not-an-error-object\n/u)
+})
+
+test("startupMigrationLine's registry-error block stays 'not filed: filer_unavailable' when fileProblem itself throws", async () => {
+  const line = await startupMigrationLine({ pluginRoot: undefined, fileProblem: async () => { throw new Error("filer unavailable") } })
+  assert.match(line, /  file: not filed: filer_unavailable\n/u)
+})
+
+test("migrationLine (the boot-check hook helper) queues the detached filer, never awaiting it, when the migration registry fails internally", async () => {
+  // The filing-storm throttle (fix round, spec.md §1 Part 5) keys its stamp file off
+  // this call's own state directory, so this test needs a HOME of its own -- an empty
+  // `env` here would fall back to the process-wide isolated-test HOME and collide with
+  // the next test's identical mechanism+reason.
+  const launched = []
+  const line = await boot.migrationLine({
+    host: "claude", env: { HOME: await mkTempRoot("desk-pending-migrations-filer-") }, pluginRoot: null,
+    launchRepair: async (command, env) => { launched.push({ command, env }) },
+  })
+  assert.match(line, /^Desk problem: pending-migrations — the migration registry failed internally\n/u)
+  assert.match(line, /  file: filing in background\n/u)
+  assert.equal(launched.length, 1)
+  assert.ok(launched[0].command.some((part) => part.endsWith("file-desk-problem.js")))
+  assert.ok(launched[0].command.includes("--mechanism"))
+  assert.ok(launched[0].command.includes("pending-migrations"))
+  assert.ok(launched[0].command.includes("--host"))
+  assert.ok(launched[0].command.includes("claude"))
+})
+
+test("migrationLine falls back to 'not filed: filer_unavailable' when the launcher itself fails, without throwing", async () => {
+  const line = await boot.migrationLine({
+    host: "claude", env: { HOME: await mkTempRoot("desk-pending-migrations-filer-") }, pluginRoot: null,
+    launchRepair: async () => { throw new Error("spawn failed") },
+  })
+  assert.match(line, /  file: not filed: filer_unavailable\n/u)
+})
+
+test("migrationLine's filer argv carries the fixed 'reason unavailable' placeholder, never the raw reason, when argvSafeReason itself fails to load", async () => {
+  // Fix round, spec.md §1 Part 5: a redaction helper that cannot load must
+  // never fall back to passing its unredacted input straight through --
+  // that would defeat the whole point of narrowing what reaches a spawned
+  // process's own argv (`ps`-visible machine-wide). This drives migrationLine
+  // down the same "registry failed internally" path as the tests above, but
+  // with a `loadArgvSafeReason` that rejects, and checks the launched
+  // command's own `--reason` argument rather than the human-facing block.
+  const launched = []
+  const line = await boot.migrationLine({
+    host: "claude", env: { HOME: await mkTempRoot("desk-pending-migrations-filer-") }, pluginRoot: null,
+    launchRepair: async (command, env) => { launched.push({ command, env }) },
+    loadArgvSafeReason: async () => { throw new Error("argv-safe-reason module missing") },
+  })
+  assert.match(line, /^Desk problem: pending-migrations — the migration registry failed internally\n/u)
+  assert.match(line, /  file: filing in background\n/u)
+  assert.equal(launched.length, 1)
+  const reasonIndex = launched[0].command.indexOf("--reason")
+  assert.ok(reasonIndex >= 0)
+  assert.equal(launched[0].command[reasonIndex + 1], "reason unavailable (redactor not loaded)")
 })
 
 // ── Index tracing (spec.md §3) ──────────────────────────────────────────────

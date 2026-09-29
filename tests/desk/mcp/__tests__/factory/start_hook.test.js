@@ -75,7 +75,7 @@ test("repairs start detached after every check has run, and a repair that cannot
   assert.deepEqual(events, [["check", "a"], ["check", "b"], ["check", "c"], ["repair", ["fails"]], ["repair", ["node", "x.js"]]])
 })
 
-test("a check that overruns its budget or throws is skipped for this start and recorded; the rest still run", async () => {
+test("a check that overruns its budget is skipped silently, but a check that throws is skipped, recorded and reported as a Desk problem: block; the rest still run", async () => {
   const { runBootChecks } = boot()
   const recorded = []
   let aborted = false
@@ -90,7 +90,14 @@ test("a check that overruns its budget or throws is skipped for this start and r
       check("fine", async () => ({ line: "fine" })),
     ],
   })
-  assert.equal(line, "Desk boot: fine")
+  assert.equal(line, [
+    "Desk boot: Desk problem: broken — the check failed internally at startup",
+    "  broke: boom",
+    '  means: Desk\'s "broken" boot check could not report its status this session',
+    "  fix: not fixable automatically -- the check itself needs investigation",
+    "  file: filing in background",
+    '  tell: Desk\'s "broken" boot check failed internally this session (boom). Filing this now so it gets fixed.; fine',
+  ].join("\n"))
   assert.ok(performance.now() - started < 300)
   assert.ok(aborted, "the overrunning check is told to stop")
   assert.deepEqual(recorded.map(({ id, reason }) => ({ id, reason })), [{ id: "slow", reason: "budget" }, { id: "self-stopped", reason: "budget" }, { id: "broken", reason: "error" }])

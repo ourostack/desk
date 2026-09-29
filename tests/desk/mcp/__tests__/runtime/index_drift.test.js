@@ -83,8 +83,8 @@ test("formatDeskProblem renders the six fields in order, the header carrying sym
   )
 })
 
-test("formatIndexDriftProblem names one file in the singular, without accusing the check or migration of staging it", () => {
-  const block = formatIndexDriftProblem({ kind: "boot check", label: "probe", drift: ["stray.txt"] })
+test("formatIndexDriftProblem names one file in the singular, without accusing the check or migration of staging it", async () => {
+  const block = await formatIndexDriftProblem({ kind: "boot check", label: "probe", drift: ["stray.txt"] })
   assert.match(block, /^Desk problem: index-drift — unexpected file staged during probe\n/)
   assert.match(block, /\n {2}broke: probe: unexpected staged path\(s\) appeared during this boot check: stray\.txt\n/)
   assert.match(block, /\n {2}means: stray\.txt appeared in the index while boot check "probe" ran — it may have staged it, or another session may have staged it at the same time\n/)
@@ -93,9 +93,29 @@ test("formatIndexDriftProblem names one file in the singular, without accusing t
   assert.doesNotMatch(block, /unexpectedly staged/)
 })
 
-test("formatIndexDriftProblem names several files in the plural", () => {
-  const block = formatIndexDriftProblem({ kind: "migration block", label: "01-a:migrate", drift: ["a.txt", "b.txt"] })
+test("formatIndexDriftProblem names several files in the plural", async () => {
+  const block = await formatIndexDriftProblem({ kind: "migration block", label: "01-a:migrate", drift: ["a.txt", "b.txt"] })
   assert.match(block, /^Desk problem: index-drift — unexpected files staged during 01-a:migrate\n/)
   assert.match(block, /\n {2}means: a\.txt, b\.txt appeared in the index while migration block "01-a:migrate" ran — it may have staged them, or another session may have staged them at the same time\n/)
   assert.match(block, /\n {2}tell: Files appeared in the index while "01-a:migrate" ran \(a\.txt, b\.txt\); it may have staged them, or another session may have staged them at the same time\. Left as-is so you can inspect it\.$/)
+})
+
+// ── index-drift is migrated onto real filing too (spec.md §1, Part 5) ──────
+
+test("formatIndexDriftProblem renders 'not filed: filer_unavailable' by default, filing nothing itself", async () => {
+  const block = await formatIndexDriftProblem({ kind: "boot check", label: "probe", drift: ["stray.txt"] })
+  assert.match(block, /\n {2}file: not filed: filer_unavailable\n/)
+})
+
+test("formatIndexDriftProblem reports whatever the injected fileProblem returns, and passes it the drift's own reason", async () => {
+  const calls = []
+  const block = await formatIndexDriftProblem({
+    kind: "boot check", label: "probe", drift: ["stray.txt"], env: { X: "1" }, host: "claude",
+    fileProblem: async ({ env, host, reason }) => { calls.push({ env, host, reason }); return { file: "filing in background" } },
+  })
+  assert.match(block, /\n {2}file: filing in background\n/)
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].env, { X: "1" })
+  assert.equal(calls[0].host, "claude")
+  assert.match(calls[0].reason, /probe: unexpected staged path\(s\) appeared during this boot check: stray\.txt/)
 })
