@@ -43,6 +43,72 @@ test("derivation honors consent and holds invalid routing without reading the lo
   assert.deepEqual(await deriveMarker(ctx.env, { ...marker, session_id: "../escape" }), { result: "invalid", store: null })
 }))
 
+test("a deriver older than the session's declared Desk holds instead of binding with superseded logic", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0-alpha.999", source: "ourostack/desk" }] }
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.deepEqual(await deriveMarker(ctx.env, marker, { ownVersion: () => "3.2.0-alpha.1" }), { result: "held", store: null })
+  const file = path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", `${marker.host}-${ID}.json`)
+  assert.equal(existsSync(file), false)
+}))
+
+test("a deriver at or ahead of the session's declared Desk still derives, and a marker without a desk entry is unaffected", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const atParity = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0-alpha.5", source: "ourostack/desk" }] }
+  assert.equal((await deriveMarker(ctx.env, atParity, { ownVersion: () => "3.2.0-alpha.5" })).result, "written")
+  const ahead = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0-alpha.1", source: "ourostack/desk" }] }
+  assert.equal((await deriveMarker(ctx.env, ahead, { ownVersion: () => "3.2.0-alpha.5" })).result, "written")
+  const noDeskEntry = { ...await session(ctx), plugins: [{ name: "other-plugin", version: "1.0.0", source: "example/other" }] }
+  assert.equal((await deriveMarker(ctx.env, noDeskEntry, { ownVersion: () => { throw new Error("must not be read") } })).result, "written")
+}))
+
+test("a stale-deriver hold survives exactly seven days but expires the instant after, deriving with the running code instead of holding forever", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const updatedAt = "2026-09-01T00:00:00.000Z"
+  const holdMs = 7 * 24 * 60 * 60 * 1000
+  const marker = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0-alpha.999", source: "ourostack/desk" }], updated_at: updatedAt }
+  assert.deepEqual(await deriveMarker(ctx.env, marker, { ownVersion: () => "3.2.0-alpha.1", now: () => Date.parse(updatedAt) + holdMs }), { result: "held", store: null })
+  assert.equal((await deriveMarker(ctx.env, marker, { ownVersion: () => "3.2.0-alpha.1", now: () => Date.parse(updatedAt) + holdMs + 1 })).result, "written")
+}))
+
+test("two different-origin \"desk\" entries naming different versions are an ambiguous declaration and never hold", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const marker = { ...await session(ctx), plugins: [
+    { name: "desk", version: "3.2.0-alpha.999", source: "ourostack/desk" },
+    { name: "desk", version: "3.2.0-alpha.1", source: "acme/desk-fork" },
+  ] }
+  assert.equal((await deriveMarker(ctx.env, marker, { ownVersion: () => { throw new Error("must not be read") } })).result, "written")
+}))
+
+test("two different-origin \"desk\" entries agreeing on version are unambiguous and still hold", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const marker = { ...await session(ctx), plugins: [
+    { name: "desk", version: "3.2.0-alpha.999", source: "ourostack/desk" },
+    { name: "desk", version: "3.2.0-alpha.999", source: "acme/desk-fork" },
+  ] }
+  assert.equal((await deriveMarker(ctx.env, marker, { ownVersion: () => "3.2.0-alpha.1" })).result, "held")
+}))
+
+test("an unreadable or non-semver running version fails open and still derives even when a \"desk\" entry is present", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const throwing = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0-alpha.999", source: "ourostack/desk" }] }
+  assert.equal((await deriveMarker(ctx.env, throwing, { ownVersion: () => { throw new Error("boom") } })).result, "written")
+  const nonSemver = { ...await session(ctx), plugins: [{ name: "desk", version: "3.2.0-alpha.999", source: "ourostack/desk" }] }
+  assert.equal((await deriveMarker(ctx.env, nonSemver, { ownVersion: () => "not-a-version" })).result, "written")
+}))
+
+test("with no ownVersion override, the real running version is read from the co-located plugin.json", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const marker = { ...await session(ctx), plugins: [{ name: "desk", version: "999.0.0", source: "ourostack/desk" }] }
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null })
+}))
+
 test("missing, unreadable and mismatched logs have explicit outcomes", () => scratch(async (ctx) => {
   const { deriveMarker } = await runner()
   const marker = await session(ctx)

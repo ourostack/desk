@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { promises as fs } from "node:fs"
+import { readFileSync, promises as fs } from "node:fs"
 import * as path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { bindSession } from "./binding.js"
@@ -8,6 +8,7 @@ import { deriveCopilotSession } from "./derive-copilot.js"
 import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
 import { factoryStateRoot, listMarkers, readConsent, readMarker, readStatus, updateJobsIndex, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
+import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { resolveStore } from "./store-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
 
@@ -24,11 +25,61 @@ function markerHash(marker) {
   return createHash("sha256").update(JSON.stringify(content)).digest("hex")
 }
 
-export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, quietMs = 0, requireQuiet = false, requireStored = false } = {}) {
+// The version of Desk actually running this code, read from the plugin.json
+// that ships beside it. A long-lived session's own plugin metadata can name a
+// newer Desk than the one still executing (its hook stays pinned to whatever
+// was on disk when the session started), so this is never taken from a
+// marker or an installed-plugins registry.
+function ownDeskVersion() {
+  return JSON.parse(readFileSync(new URL("../../../plugin.json", import.meta.url), "utf8")).version
+}
+
+// How long a stale-deriver hold (below) is honored before this deriver stops
+// waiting for a fresher process and derives with the code it is actually
+// running. A marker's declared version is frozen at the moment it is
+// written; if the machine later rolls back to an older Desk, the marker
+// keeps naming a version no installed deriver can ever reach, and without an
+// expiry every deriver would hold it forever, until outbox.js's own marker
+// pruning (MARKER_TTL_MS, 30 days) deletes it unpublished and the session's
+// facts are lost outright. Seven days sits well inside that 30-day window,
+// so a genuinely stale process still gets a real chance to be replaced by a
+// fresher one before this deriver gives up on waiting and just derives.
+const STALE_DERIVER_HOLD_MS = 7 * 24 * 60 * 60 * 1000
+
+// The marker's declared "desk" plugin version, or null when there is none to
+// trust: no "desk" entry, or more than one "desk" entry naming different
+// versions. Two different-origin "desk" installs can coexist in
+// marker.plugins; when they disagree, picking one over the other would be
+// arbitrary, so an ambiguous declaration is treated the same as no
+// declaration at all — it never causes a hold.
+function declaredDeskVersion(plugins) {
+  const versions = new Set(plugins.filter((plugin) => plugin.name === "desk").map((plugin) => plugin.version))
+  return versions.size === 1 ? [...versions][0] : null
+}
+
+// Whether the marker declares a "desk" plugin newer than the code actually
+// running it. A stale deriver must hold rather than bind with logic its own
+// declared version has already superseded (an unreadable or malformed own
+// version fails open: proceed as before, as does an ambiguous declaration —
+// see declaredDeskVersion — and a hold older than STALE_DERIVER_HOLD_MS).
+function isStaleDeriver(ownVersion, plugins, updatedAt, now) {
+  const declared = declaredDeskVersion(plugins)
+  if (declared === null) return false
+  if (now() - Date.parse(updatedAt) > STALE_DERIVER_HOLD_MS) return false
+  let own
+  try {
+    own = ownVersion()
+  } catch {
+    return false
+  }
+  return isVersion(own) && compareVersions(own, declared) < 0
+}
+
+export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, quietMs = 0, requireQuiet = false, requireStored = false, ownVersion = ownDeskVersion, now = Date.now } = {}) {
   if (!validMarker(marker)) return { result: "invalid", store: null }
   if (marker.desk_root === null) return { result: "held", store: null }
   try {
-    return await withDerivationLock(env, `${marker.host}-${marker.session_id}.json`, (root) => deriveUnlocked(env, marker, { claude, copilot, quietMs, requireQuiet, requireStored, root }), { deskRoot: marker.desk_root })
+    return await withDerivationLock(env, `${marker.host}-${marker.session_id}.json`, (root) => deriveUnlocked(env, marker, { claude, copilot, quietMs, requireQuiet, requireStored, root, ownVersion, now }), { deskRoot: marker.desk_root })
   } catch {
     return { result: "source_unreadable", store: null }
   }
@@ -46,11 +97,12 @@ async function newestMarker(env, root, marker, requireStored) {
   }
 }
 
-async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQuiet, requireStored, root }) {
+async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQuiet, requireStored, root, ownVersion, now }) {
   let store = null
   try {
     let marker = await newestMarker(env, root, input, requireStored)
     if (marker.desk_root === null) return { result: "held", store }
+    if (isStaleDeriver(ownVersion, marker.plugins, marker.updated_at, now)) return { result: "held", store }
     await factoryStateRoot(env, { deskRoot: marker.desk_root })
     const current = resolveStore({ deskRoot: marker.desk_root })
     const route = current.source === "default" && marker.routing ? marker.routing : current

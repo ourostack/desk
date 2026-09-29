@@ -151,6 +151,31 @@ function aliasFrom(overrides, name) {
   return overrides.filter(([key]) => canonicalKey(key) === `alias.${name}`).at(-1)?.[1]
 }
 
+// Only Git's own environment (GIT_DIR and its siblings, GIT_CONFIG_* overrides) can change what a Git call does;
+// `gitInvocation` already folds those into `invocation.location`/`invocation.overrides`. A shell loop's own
+// variables (a loop counter, an unrelated export) never reach Git and must not be part of the guard's cache key,
+// or an identical, already-decided Git call spends a fresh Git read on every iteration instead of reusing the
+// answer for its one distinct target (ourostack/factory#39).
+function gitRelevantEnv(variables) {
+  return Object.fromEntries(Object.entries(variables).filter(([key]) => /^GIT_/u.test(key)))
+}
+
+// GIT_WORK_TREE, or the parent directory of a plain ".git" GIT_DIR, is the checkout Git will actually act in
+// when the command line does not already say so with -C, --git-dir or --work-tree; `readGit` already forwards
+// both variables to the real Git process (git-inspection.js's LOCATION_KEYS). The target the guard checks for
+// existence and reads policy from must follow them too, or a checkout reachable only through the environment
+// is invisible to that check, and an unrelated or nonexistent modeled directory hides it - a false allow found
+// in review of the fix for ourostack/factory#39, independent of the cache-key defect that issue named.
+function gitEnvTarget(location, variables) {
+  if (location.length > 0) return undefined
+  const workTree = variables.GIT_WORK_TREE
+  if (workTree !== undefined) return workTree
+  const gitDir = variables.GIT_DIR
+  if (gitDir === undefined) return undefined
+  if (gitDir.includes(UNKNOWN)) return gitDir
+  return path.basename(gitDir) === ".git" ? path.dirname(gitDir) : gitDir
+}
+
 // Words that could run Git somewhere other than the statement's own directory.
 const RELOCATES = /(?<![\w-])(?:set-location|sl|cd|chdir|push-location|pushd|pop-location|popd|start-process|saps|start|invoke-command|icm|start-job|sajb|start-threadjob|enter-pssession|ssh|wsl|docker|worktree|submodule)(?![\w-])|--git-dir|--work-tree|git_dir|git_work_tree|git_common_dir|currentdirectory|-workingdirectory|(?<![\w-])-wd(?![\w-])/iu
 
@@ -176,10 +201,16 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     // A computed program is judged as Git only when its arguments read like a Git command the policy checks.
     if (computed && !GIT_LIKE.test(args[0]) && !hasRule(operation)) return
     if (operation.includes(UNKNOWN)) throw unresolved("which Git command this runs")
-    const target = invocation.cwd === UNKNOWN ? null : existingDirectory(invocation.cwd)
+    // An environment value the guard cannot compute (GIT_DIR="$(pick)") is left for the real Git read to reject:
+    // `readGit` already forwards it (git-inspection.js's LOCATION_KEYS) and fails closed there. Resolving it into
+    // `target` here instead would let an operation safe in any checkout, or the wrong denial message, bypass that.
+    const envTarget = gitEnvTarget(location, variables)
+    const knownEnvTarget = envTarget !== undefined && !envTarget.includes(UNKNOWN) ? envTarget : undefined
+    // A relative GIT_WORK_TREE/GIT_DIR is relative to the directory Git runs in, never to the hook's own process.
+    const target = invocation.cwd === UNKNOWN ? null : existingDirectory(knownEnvTarget === undefined ? invocation.cwd : path.resolve(invocation.cwd, knownEnvTarget))
     const where = "which checkout this Git command runs in"
     if (target !== null && !existsSync(target)) return
-    const key = JSON.stringify([invocation, variables])
+    const key = JSON.stringify([invocation, gitRelevantEnv(variables)])
     if (inspected.has(key)) return
     inspected.add(key)
     if (!BUILTINS.has(operation)) {
@@ -252,7 +283,10 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
   async function guardedVisit(call) {
     try { await visit(call) } catch (error) {
       if (error instanceof GuardDenial) throw error
-      if (error.code === "ETIMEDOUT") throw new GuardDenial(`Desk could not finish checking this command within its ${budgetMs / 1000} s budget because Git answered too slowly, so it is denied to keep a protected checkout safe. Retry it.`)
+      // A single slow Git read and a loop over more distinct targets than the budget can check both end up here;
+      // simply retrying either answers nothing when the command has too many distinct targets, so the guard also
+      // names the fix: fewer targets per command, or a script file so each target's check gets its own budget.
+      if (error.code === "ETIMEDOUT") throw new GuardDenial(`Desk could not finish checking this command within its ${budgetMs / 1000} s budget because Git answered too slowly, so it is denied to keep a protected checkout safe. If it loops over many Git targets, split it into fewer targets per command, or run it as a script file so each target's check gets its own budget; otherwise, retry it.`)
       throw new GuardDenial(`Desk could not inspect a Git command in this shell command (${error.message}), and it could change a protected checkout. Retry it, or split it into simpler commands.`)
     }
   }
