@@ -21,6 +21,7 @@ import {
   acquireSyncLock,
   aheadBehindCounts,
   defaultSpawnWorker,
+  finalUnpushedCheck,
   hasRemoteConfigured,
   hostFromEnv,
   queueDeskProblemFiling,
@@ -551,4 +552,71 @@ test("runSyncPushCli falls back to DEFAULT_DEBOUNCE_MS when --debounce-ms is omi
 
   await runSyncPushCli({ argv: ["--root", "/x", "--debounce-ms", "nope"], env: {}, runWorker: async (args) => { called = args } })
   assert.equal(called.debounceMs, DEFAULT_DEBOUNCE_MS)
+})
+
+// ---------------------------------------------------------------------------
+// finalUnpushedCheck (sync-end.cjs's own SessionEnd/sessionEnd safety net).
+// ---------------------------------------------------------------------------
+
+test("finalUnpushedCheck reports clean with no remote configured", async () => {
+  const root = await mkPlainRepo()
+  await writeAndCommit(root, "a.md", "a\n", "a")
+  assert.deepEqual(finalUnpushedCheck({ root, env: process.env }), { state: "clean" })
+})
+
+test("finalUnpushedCheck reports clean when a remote exists but there is no upstream", async () => {
+  const root = await mkPlainRepo()
+  const origin = await mkBareOrigin()
+  git(root, ["remote", "add", "origin", origin])
+  await writeAndCommit(root, "a.md", "a\n", "a")
+  assert.deepEqual(finalUnpushedCheck({ root, env: process.env }), { state: "clean" })
+})
+
+test("finalUnpushedCheck reports clean when nothing is ahead of the upstream", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  assert.deepEqual(finalUnpushedCheck({ root: cloneA, env: process.env }), { state: "clean" })
+})
+
+test("finalUnpushedCheck reports unpushed and records a fresh blocked status when nothing was recorded yet", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  await writeAndCommit(cloneA, "more.md", "more\n", "more")
+  assert.equal(readSyncStatus({ root: cloneA, env: process.env }), null)
+
+  const result = finalUnpushedCheck({ root: cloneA, env: process.env })
+  assert.equal(result.state, "unpushed")
+  assert.match(result.diagnostic, /Desk problem: desk-sync/)
+  assert.match(result.diagnostic, /unpushed_at_session_end/)
+  assert.match(result.diagnostic, /file: not filed:/)
+
+  const status = readSyncStatus({ root: cloneA, env: process.env })
+  assert.equal(status.blocked, true)
+  assert.equal(status.reason, "unpushed_at_session_end")
+  assert.deepEqual(status.paths, [])
+})
+
+test("finalUnpushedCheck preserves a more specific reason and paths the worker already recorded, without overwriting them", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  await writeAndCommit(cloneA, "more.md", "more\n", "more")
+  const recordedAt = new Date(0).toISOString()
+  const seeded = { blocked: true, reason: "pull_rebase_failed", paths: ["conflict.md"], at: recordedAt }
+  const statusFile = syncStatusPath({ root: cloneA, env: process.env })
+  mkdirSync(path.dirname(statusFile), { recursive: true, mode: 0o700 })
+  writeFileSync(statusFile, `${JSON.stringify(seeded)}\n`)
+
+  const result = finalUnpushedCheck({ root: cloneA, env: process.env })
+  assert.equal(result.state, "unpushed")
+  assert.match(result.diagnostic, /pull_rebase_failed/)
+  assert.deepEqual(readSyncStatus({ root: cloneA, env: process.env }), seeded, "an already-blocked status is left exactly as the worker recorded it")
+})
+
+test("finalUnpushedCheck falls back to its own reason when an existing blocked status has none", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  await writeAndCommit(cloneA, "more.md", "more\n", "more")
+  const statusFile = syncStatusPath({ root: cloneA, env: process.env })
+  mkdirSync(path.dirname(statusFile), { recursive: true, mode: 0o700 })
+  writeFileSync(statusFile, `${JSON.stringify({ blocked: true })}\n`)
+
+  const result = finalUnpushedCheck({ root: cloneA, env: process.env })
+  assert.match(result.diagnostic, /unpushed_at_session_end/)
+  assert.deepEqual(readSyncStatus({ root: cloneA, env: process.env }), { blocked: true }, "an already-blocked status is never rewritten, even with no reason of its own")
 })

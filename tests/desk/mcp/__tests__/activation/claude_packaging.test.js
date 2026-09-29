@@ -454,6 +454,13 @@ test("Claude registers the Desk-only enforcement hooks: a PreToolUse deny and a 
   assert.ok(naming.some((entry) => entry.hooks.some((hook) => hook.command.includes("desk-naming.cjs"))), "UserPromptSubmit must run desk-naming.cjs")
 })
 
+test("hooks.json registers sync-end.cjs under SessionEnd, not Stop (M4-6 Part 3, Review Focus: never raise on every turn)", () => {
+  const hooks = loadJson("plugins", "desk", "hooks", "hooks.json")
+  const registeredUnder = (event) => hooks.hooks[event].some((entry) => entry.hooks.some((hook) => hook.command.includes("sync-end.cjs")))
+  assert.ok(registeredUnder("SessionEnd"), "hooks.json's SessionEnd array must register sync-end.cjs")
+  assert.ok(!registeredUnder("Stop"), "sync-end.cjs must never bind to Stop, which fires after every turn")
+})
+
 test("Claude SessionStart injects the full Desk foundation once without scanning tasks", () => {
   const hook = readText("plugins", "desk", "hooks", "session-start.sh")
   const startup = runSessionStartHook()

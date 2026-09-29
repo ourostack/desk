@@ -215,11 +215,12 @@ test("task_update requires both task identifiers", async () => {
 test("task_update stages and commits exactly the task.md it updated", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
 
   const result = await task_update({
     deskRoot: root,
     input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
+    schedulePush: () => {},
   })
 
   assert.equal(result.status, "updated")
@@ -229,10 +230,26 @@ test("task_update stages and commits exactly the task.md it updated", async () =
   assert.deepEqual(lastCommitFiles(root), [path.join("t", "book-flights", "task.md")])
 })
 
+test("task_update calls schedulePush exactly once with { root: deskRoot } on a successful commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
+
+  const calls = []
+  const result = await task_update({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
+    schedulePush: (opts) => calls.push(opts),
+  })
+
+  assert.equal(result.status, "updated")
+  assert.deepEqual(calls, [{ root }], "schedulePush is called exactly once, with the desk root")
+})
+
 test("task_update commits only its own file, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
 
   // Simulates another process staging an unrelated path in the window
   // between task_update's dirty check and its own stage/commit.
@@ -242,6 +259,7 @@ test("task_update commits only its own file, leaving another process's staged, u
   const result = await task_update({
     deskRoot: root,
     input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
+    schedulePush: () => {},
   })
 
   assert.equal(result.commit, undefined, "task_update's own commit succeeded")
@@ -253,37 +271,42 @@ test("task_update commits only its own file, leaving another process's staged, u
 test("task_update reports a commit failure without losing the write", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
   const spawnGit = (cmd, args, opts) => {
     if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
 
+  const calls = []
   const result = await task_update({
     deskRoot: root,
     input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
     spawnGit,
+    schedulePush: (opts) => calls.push(opts),
   })
 
   assert.equal(result.status, "updated", "the write itself is never lost to a commit failure")
   const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
   assert.equal(data.status, "in_progress")
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 
 test("task_update skips staging and committing when the file held unstaged changes before the write", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
   const filePath = path.join(root, "t", "book-flights", "task.md")
 
   // Another session's unstaged edit to this same file, in place before
   // task_update writes.
   await fs.appendFile(filePath, "\nanother session's note\n")
 
+  const calls = []
   const result = await task_update({
     deskRoot: root,
     input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
+    schedulePush: (opts) => calls.push(opts),
   })
 
   assert.equal(result.status, "updated", "the write always happens")
@@ -291,6 +314,7 @@ test("task_update skips staging and committing when the file held unstaged chang
   const { data } = await readFront(filePath)
   assert.equal(data.status, "in_progress")
   assert.match(gitStatus(root), /t\/book-flights\/task\.md/, "the file is left as an uncommitted change")
+  assert.equal(calls.length, 0, "schedulePush is never called when staging was skipped for a pre-existing dirty file")
 })
 
 // A real `.git/index.lock`, held the way a concurrent Git command (or a
@@ -300,7 +324,7 @@ test("task_update skips staging and committing when the file held unstaged chang
 test("task_update reports a real staging failure without losing the write, when .git/index.lock is genuinely held", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" }, schedulePush: () => {} })
 
   const lockPath = path.join(root, ".git", "index.lock")
   await fs.writeFile(lockPath, "")

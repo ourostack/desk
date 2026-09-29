@@ -15,6 +15,7 @@ import { resolveWriteTarget } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { objectInput } from "../util/object-input.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import {
   validateTrackName,
   validateScope,
@@ -88,7 +89,7 @@ function stageAndCommitTrackCard(filePath, message, spawnGit) {
  *
  * Returns: { status: "created", path }
  */
-export async function track_create({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
+export async function track_create({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { slug, title } = values
   if (!Object.hasOwn(values, "slug")) {
@@ -144,6 +145,7 @@ export async function track_create({ deskRoot, input, person = null, readiness, 
   let commit
   if (isGitRepository(path.dirname(filePath), spawnGit)) {
     commit = stageAndCommitTrackCard(filePath, `track_create: ${slug}`, spawnGit)
+    if (!commit) schedulePush({ root: deskRoot })
   }
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   const result = { status: "created", path: relPath(deskRoot, filePath) }
@@ -178,7 +180,7 @@ export async function track_create({ deskRoot, input, person = null, readiness, 
  *
  * Returns: { status: "updated", path }
  */
-export async function track_update({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
+export async function track_update({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { slug, body_append } = values
   if (!Object.hasOwn(values, "slug")) {
@@ -226,6 +228,7 @@ export async function track_update({ deskRoot, input, person = null, readiness, 
   const stage = stagingAllowed(filePath, spawnGit)
   await writeMarkdown(filePath, merged, newBody)
   const commit = stage ? stageAndCommitTrackCard(filePath, `track_update: ${slug}`, spawnGit) : undefined
+  if (stage && !commit) schedulePush({ root: deskRoot })
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit

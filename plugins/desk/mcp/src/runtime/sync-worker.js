@@ -53,6 +53,7 @@ import { fileURLToPath } from "node:url"
 
 import { lastStartRootKey, resolveDeskStateDir } from "./last-start.js"
 import { readProcessStart } from "../readiness/process-start.js"
+import { formatDeskProblem } from "./index-drift.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -393,4 +394,52 @@ export async function runSyncPushCli({ argv = process.argv.slice(2), env = proce
   const debounceMs = Number.parseInt(options.get("debounce-ms") ?? "", 10)
   await runWorker({ root, env, debounceMs: Number.isFinite(debounceMs) ? debounceMs : DEFAULT_DEBOUNCE_MS })
   return 0
+}
+
+// ---------------------------------------------------------------------------
+// SessionEnd/sessionEnd's own safety net (`hooks/sync-end.cjs`).
+// ---------------------------------------------------------------------------
+
+/**
+ * The one check `sync-end.cjs` runs at genuine session end (spec.md's
+ * "offline rule": a push failure never re-raises on every turn — only once,
+ * at genuine session end, if the desk still has unpushed commits then).
+ * Purely local: `hasRemoteConfigured` plus one `git rev-list` against the
+ * already-known upstream, never a network call and never a push attempt of
+ * its own — the background worker alone owns pushing, and a hook that
+ * reached for the real filer here would risk the exact hang `runtime/host-
+ * enforcement-registration.js`'s own header warns about (a slow `gh` call
+ * eating a hook's whole timeout budget).
+ *
+ * Never files (plan.md Part 3 Task 2 — "emits the plain diagnostic, never
+ * files"): a session ending before its own scheduled push finished isn't
+ * itself evidence of a defect — the detached worker may simply still be
+ * running, independent of this process's exit — so this only records the
+ * fact for `desk_status`'s `syncStatus` to surface next time (never
+ * clobbering a more specific reason the worker itself already recorded) and
+ * returns the same honest, unfiled `Desk problem:` block shape `runtime/
+ * host-enforcement-registration.js` already uses for a filer its own callers
+ * can't afford to reach synchronously. Never throws.
+ */
+export function finalUnpushedCheck({ root, env, spawnGit = spawnSync }) {
+  if (!hasRemoteConfigured(root, spawnGit)) return { state: "clean" }
+  const counts = aheadBehindCounts({ root, spawnGit })
+  if (counts === null || counts.ahead <= 0) return { state: "clean" }
+
+  const existing = readSyncStatus({ root, env })
+  const reason = existing?.blocked && typeof existing.reason === "string" ? existing.reason : "unpushed_at_session_end"
+  if (!existing?.blocked) {
+    updateSyncStatus(root, env, { blocked: true, reason, paths: existing?.paths ?? [], at: new Date().toISOString() })
+  }
+
+  const diagnostic = formatDeskProblem({
+    mechanism: "desk-sync",
+    symptom: "commits still unpushed at session end",
+    broke: `${counts.ahead} commit(s) ahead of the upstream with no successful push recorded (${reason})`,
+    means: "this desk's latest work is committed locally but has not reached the remote; another session or machine won't see it yet",
+    fix: "not auto-repaired here — the background push worker retries on the next write, or push manually with `git push`",
+    file: "not filed: session end is a safety net, not itself evidence of a defect",
+    tell: "Run desk_status and check its sync section before assuming this work is shared elsewhere.",
+  })
+  return { state: "unpushed", diagnostic }
 }

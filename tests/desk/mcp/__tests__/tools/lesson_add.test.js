@@ -132,6 +132,7 @@ test("lesson_add stages and commits exactly the lesson file it wrote", async () 
   const result = await lesson_add({
     deskRoot: root,
     input: { topic: "topic-x", body: "First lesson." },
+    schedulePush: () => {},
   })
 
   assert.equal(result.status, "added")
@@ -153,6 +154,7 @@ test("lesson_add commits only its own file, leaving another process's staged, un
   const result = await lesson_add({
     deskRoot: root,
     input: { topic: "topic-x", body: "First lesson." },
+    schedulePush: () => {},
   })
 
   assert.equal(result.commit, undefined, "lesson_add's own commit succeeded")
@@ -169,15 +171,19 @@ test("lesson_add reports a commit failure without losing the write", async () =>
     return spawnSync(cmd, args, opts)
   }
 
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
   const result = await lesson_add({
     deskRoot: root,
     input: { topic: "topic-x", body: "First lesson." },
     spawnGit,
+    schedulePush,
   })
 
   assert.equal(result.status, "added", "the write itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "_meta", "tips", "topic-x.md")))
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 
 test("lesson_add reports a staging failure without losing the write", async () => {
@@ -201,32 +207,40 @@ test("lesson_add reports a staging failure without losing the write", async () =
 
 test("lesson_add skips staging and committing silently on a non-Git desk", async () => {
   const root = await mkTempDeskRoot()
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
   const result = await lesson_add({
     deskRoot: root,
     input: { topic: "topic-x", body: "First lesson." },
+    schedulePush,
   })
   assert.equal(result.status, "added")
   assert.equal(result.commit, undefined)
+  assert.equal(calls.length, 0, "schedulePush is never called on a non-Git desk")
 })
 
 test("lesson_add skips staging and committing when the file held unstaged changes before the write", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await lesson_add({ deskRoot: root, input: { topic: "topic-x", body: "First lesson." } })
+  await lesson_add({ deskRoot: root, input: { topic: "topic-x", body: "First lesson." }, schedulePush: () => {} })
   const filePath = path.join(root, "_meta", "tips", "topic-x.md")
 
   // Another session's unstaged edit to this same file, in place before
   // lesson_add's own append.
   await fs.appendFile(filePath, "\nanother session's note\n")
 
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
   const result = await lesson_add({
     deskRoot: root,
     input: { topic: "topic-x", body: "Second lesson." },
+    schedulePush,
   })
 
   assert.equal(result.status, "added", "the write always happens")
   assert.equal(result.commit, undefined, "no commit attempted when the file was already dirty")
   assert.match(gitStatus(root), /_meta\/tips\/topic-x\.md/, "the file is left as an uncommitted change")
+  assert.equal(calls.length, 0, "schedulePush is never called when the commit is skipped")
 })
 
 test("lesson_add commits both the rename and the write as one commit", async () => {
@@ -249,6 +263,7 @@ test("lesson_add commits both the rename and the write as one commit", async () 
   const result = await lesson_add({
     deskRoot: root,
     input: { topic: "CON", body: "Updated reserved lesson." },
+    schedulePush: () => {},
   })
 
   assert.equal(result.path, path.join("_meta", "tips", "_con.md"))
@@ -271,9 +286,12 @@ test("lesson_add skips staging and committing when the pre-rename file held unst
   // Left untracked by another session — it's the pre-rename identity that
   // must be checked for dirtiness, not the (as yet nonexistent) destination.
 
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
   const result = await lesson_add({
     deskRoot: root,
     input: { topic: "CON", body: "Updated reserved lesson." },
+    schedulePush,
   })
 
   assert.equal(result.path, path.join("_meta", "tips", "_con.md"))
@@ -283,4 +301,21 @@ test("lesson_add skips staging and committing when the pre-rename file held unst
   assert.match(await fs.readFile(destPath, "utf8"), /Updated reserved lesson/)
   const log = spawnSync("git", ["-C", root, "log", "--oneline"], { encoding: "utf8" })
   assert.equal(log.stdout.trim(), "", "nothing was ever committed")
+  assert.equal(calls.length, 0, "schedulePush is never called when the commit is skipped")
+})
+
+// ── M4-6 Part 3: schedule push ──────────────────────────────────────────────
+
+test("lesson_add schedules a push exactly once with the desk root after a successful, silent commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
+  const result = await lesson_add({
+    deskRoot: root,
+    input: { topic: "topic-x", body: "First lesson." },
+    schedulePush,
+  })
+  assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
+  assert.deepEqual(calls, [{ root }])
 })

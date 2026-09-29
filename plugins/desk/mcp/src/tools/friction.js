@@ -28,6 +28,7 @@ import { spawnSync } from "node:child_process"
 import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.js"
 import { resolveWriteTarget } from "../util/paths.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { FRICTION_CLASSES, fileKaizenCard } from "../factory/kaizen-file.js"
 import { PATTERNS } from "../factory/schema.js"
@@ -124,7 +125,7 @@ async function resolveTrackFrictionPath({ deskRoot, person, track, themeSlug }) 
  * { status: "added", path, kaizen: <code>, commit? } when the card was not
  * filed.
  */
-export async function friction_add({ deskRoot, input, person = null, readiness, env = process.env, fileCard = fileKaizenCard, spawnGit = spawnSync }) {
+export async function friction_add({ deskRoot, input, person = null, readiness, env = process.env, fileCard = fileKaizenCard, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, theme } = values
   const { body } = values
@@ -204,6 +205,7 @@ export async function friction_add({ deskRoot, input, person = null, readiness, 
   const commit = stage
     ? stageAndCommitFriction(filePath, `friction_add: ${values.plugin ?? "desk-plugin"}`, spawnGit)
     : undefined
+  if (stage && !commit) schedulePush({ root: deskRoot })
 
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   const written = relPath(deskRoot, filePath)

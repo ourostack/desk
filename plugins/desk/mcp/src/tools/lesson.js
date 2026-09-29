@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process"
 import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.js"
 import { resolveWriteTarget } from "../util/paths.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 
 function relPath(deskRoot, absPath) {
@@ -128,7 +129,7 @@ function stageAndCommitLesson(root, paths, message, spawnGit) {
  *
  * Returns: { status: "added", path, commit? }
  */
-export async function lesson_add({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
+export async function lesson_add({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { topic, body } = values
   if (!topic || typeof topic !== "string") {
@@ -196,6 +197,7 @@ export async function lesson_add({ deskRoot, input, person = null, readiness, sp
         spawnGit,
       )
     : undefined
+  if (stage && !commit) schedulePush({ root: deskRoot })
 
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   const result = { status: "added", path: relPath(deskRoot, filePath) }

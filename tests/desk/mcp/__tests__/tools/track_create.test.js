@@ -263,6 +263,7 @@ test("track_create stages and commits exactly the track.md it wrote", async () =
   const result = await track_create({
     deskRoot: root,
     input: { slug: "europe-trip", title: "Europe trip 2026", scope: SCOPE },
+    schedulePush: () => {},
   })
   assert.equal(result.status, "created")
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
@@ -283,6 +284,7 @@ test("track_create commits only its own file, leaving another process's staged, 
   const result = await track_create({
     deskRoot: root,
     input: { slug: "europe-trip", title: "Europe trip 2026", scope: SCOPE },
+    schedulePush: () => {},
   })
 
   assert.equal(result.commit, undefined, "track_create's own commit succeeded")
@@ -298,14 +300,18 @@ test("track_create reports a commit failure without losing the write", async () 
     if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
   const result = await track_create({
     deskRoot: root,
     input: { slug: "europe-trip", title: "Europe trip 2026", scope: SCOPE },
     spawnGit,
+    schedulePush,
   })
   assert.equal(result.status, "created", "the write itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "europe-trip", "track.md")))
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(calls, [], "a push is never scheduled when the commit itself failed")
 })
 
 test("track_create reports a staging failure without losing the write", async () => {
@@ -327,10 +333,31 @@ test("track_create reports a staging failure without losing the write", async ()
 
 test("track_create skips staging and committing silently on a non-Git desk", async () => {
   const root = await mkTempDeskRoot()
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
   const result = await track_create({
     deskRoot: root,
     input: { slug: "europe-trip", title: "Europe trip 2026", scope: SCOPE },
+    schedulePush,
   })
   assert.equal(result.status, "created")
   assert.equal(result.commit, undefined)
+  assert.deepEqual(calls, [], "a push is never scheduled on a non-Git desk")
+})
+
+// ── M4-6 Part 3: schedule push ──────────────────────────────────────────────
+
+test("track_create schedules a push exactly once after a successful, silent commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
+  const result = await track_create({
+    deskRoot: root,
+    input: { slug: "europe-trip", title: "Europe trip 2026", scope: SCOPE },
+    schedulePush,
+  })
+  assert.equal(result.status, "created")
+  assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
+  assert.deepEqual(calls, [{ root }])
 })
