@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.143 — 2026-09-29
+
+Desk's state-directory resolution now refuses to touch the real `ouroboros-skills/desk` state folder from anything that looks like a `node:test` run, whether or not that run loaded the test suite's own isolation setup — closing a gap where a test file executed directly with a bare `node --test <file>` (skipping the `--import` that normally redirects state under a temporary folder) could still write real records, such as factory evaluate-requests, onto a developer's own machine.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.142 — 2026-09-29
 
 Every Desk write tool that commits (`task_create`, `task_update`, `task_archive`, `task_move`, `track_create`, `track_update`, `track_rename`, `friction_add`, `lesson_add`, `desk_save`) now schedules a push right after a successful, silent commit, instead of leaving pushing to a later manual step. The push itself runs in a detached background worker (`mcp/scripts/sync-push.js`) that keeps running after the short-lived tool call returns, so a debounce window (2s, coalescing a burst of commits into one push) is never cut short by the calling process exiting first. A named lock at `$XDG_STATE_HOME/ouroboros-skills/desk/sync/<desk-hash>.lock`, staleness-checked the same way `boot-checks.cjs`'s own report lock is, keeps two workers on the same desk from racing each other; the one holding the lock re-checks for newly-unpushed commits before it releases, so a commit that lands mid-push still gets its own push rather than being silently left behind. A push that a remote rejects gets exactly one `git pull --rebase --autostash` retry and one more push attempt; a rebase left conflicted is always aborted, never left mid-flight, and a push still blocked after the retry is recorded for `desk_status` and filed as a `Desk problem:` through the detached filer rather than surfacing inline. A desk with no remote, or a branch with no upstream yet, is treated as nothing to push, never an error.
