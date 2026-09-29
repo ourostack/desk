@@ -3,8 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { bytes, diskRunSet, methodFixture, planFixture } from "./helpers/run-set.mjs";
+import { bytes, diskRunSet, expectedFixture, methodFixture, planFixture } from "./helpers/run-set.mjs";
 import { dataRoot, repository, workRoot } from "./helpers/paths.mjs";
+import { jsonBytes, sha256 } from "../core.mjs";
 
 const root = workRoot("cli-consumer");
 const cli = path.join(repository, "scripts/skill-evals.cjs");
@@ -21,15 +22,51 @@ test("the shipping CLI reports static help, typed invalid invocations and a trut
     assert.equal(result.status, 4, result.stderr);
     assert.equal(JSON.parse(result.stderr).kind, "offline_error");
   }
+  // A plan naming a dataset id this producer does not recognize is refused loudly as a typed, invalid-input
+  // contract violation -- never a silent hold that a caller could mistake for the distinct, unrelated "native
+  // prerequisites unmet" signal below.
+  const unsupportedFilename = path.join(root, "unsupported-plan.json");
+  fs.writeFileSync(unsupportedFilename, bytes(planFixture()));
+  const unsupportedOutput = path.join(root, "must-not-exist-unsupported");
+  const unsupported = run(["run", "--plan", unsupportedFilename, "--output", unsupportedOutput]);
+  assert.equal(unsupported.status, 4, unsupported.stderr);
+  assert.equal(JSON.parse(unsupported.stderr).code, "UNSUPPORTED_DATASET");
+  assert.equal(fs.existsSync(unsupportedOutput), false);
+
+  const dataset = JSON.parse(fs.readFileSync(path.join(dataRoot, "dataset.json")));
+  const plan = planFixture();
+  plan.dataset = { id: dataset.id, version: dataset.version, sha256: sha256(fs.readFileSync(path.join(dataRoot, "dataset.json"))) };
+  plan.fixtureManifestSha256 = sha256(fs.readFileSync(path.join(dataRoot, "fixture-manifest.json")));
+  plan.checkerManifestSha256 = sha256(fs.readFileSync(path.join(dataRoot, "check-expectations.json")));
+  const expected = { schemaVersion: 1, cells: dataset.cases.flatMap(definition => ["gpt-6-astra", "claude-opus-5"].map((model, index) => {
+    const cell = expectedFixture(plan, definition.mode === "deterministic").cells[0];
+    cell.id = `${definition.id}-${index + 1}`;
+    cell.caseId = definition.id;
+    if (cell.executionKind === "deterministic") cell.repetition = index + 1;
+    else { cell.subject.model = model; cell.judge.model = model; }
+    return cell;
+  })) };
+  plan.expectedCells = { path: "expected-cells.json", sha256: sha256(jsonBytes(expected)) };
   const filename = path.join(root, "plan.json");
-  fs.writeFileSync(filename, bytes(planFixture()));
-  const output = path.join(root, "must-not-exist");
-  // No parent-owned T13 preflight reaches the shipping CLI route, so conditional admission still refuses.
+  fs.writeFileSync(path.join(root, "expected-cells.json"), jsonBytes(expected));
+  fs.writeFileSync(filename, bytes(plan));
+  // A genuinely dataset-bound plan reaches the producer's output-root authorization check, so its output must be a
+  // real sibling root -- not nested under the plan's own input root, which that check correctly refuses.
+  const output = path.join(workRoot("cli-consumer-native-output"), "must-not-exist");
+  // No parent-owned T13 preflight reaches the shipping CLI route, so conditional admission still refuses -- for a
+  // supported, correctly validated dataset this time, not for an unrecognized one.
   const held = run(["run", "--plan", filename, "--output", output]);
   assert.equal(held.status, 3, held.stderr);
   assert.equal(JSON.parse(held.stderr).status, "unavailable");
   assert.equal(JSON.parse(held.stderr).code, "NATIVE_QUALIFICATION_REQUIRED");
-  assert.equal(fs.existsSync(output), false);
+  // The denominator is frozen before any native prerequisite is attempted: a validated, dataset-bound plan's output
+  // root is really published -- run-set.json, the frozen plan and expected cells -- with an honest unqualified
+  // producer status, never silently withheld the way an unmapped dataset id's refusal withholds it above.
+  assert.equal(fs.existsSync(output), true);
+  const producerStatus = JSON.parse(fs.readFileSync(path.join(output, "producer-status.json")));
+  assert.equal(producerStatus.status, "unavailable");
+  assert.equal(producerStatus.reason, "native_producer_not_qualified");
+  assert.equal(fs.existsSync(path.join(output, "run-set.json")), true);
 });
 
 test("the actual CLI compares complete sealed inventories without calling them scored evaluations", () => {
@@ -44,6 +81,20 @@ test("the actual CLI compares complete sealed inventories without calling them s
   assert.equal(output.left.cells[0].status, "product_failure");
   assert.equal(output.right.cells[0].status, "passed");
   assert.equal("winner" in output, false);
+});
+
+test("the actual CLI refuses to compare runs across different dataset versions", () => {
+  // Neither id is a registered alpha dataset, so this isolates the CLI's own cross-version refusal from the
+  // separate, unrelated alpha-matrix structural validation `bundle()` runs for a registered dataset id.
+  const left = diskRunSet(root, { id: "cross-version-left", withSeed: true, datasetId: "unrelated-dataset-a" });
+  const right = diskRunSet(root, { id: "cross-version-right", status: "passed", withSeed: true, datasetId: "unrelated-dataset-b" });
+  const result = run(["compare", "--left", left.filename, "--right", right.filename]);
+  assert.equal(result.status, 2, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.status, "not_comparable");
+  assert.equal(output.scored, false);
+  assert.equal(output.compatibility.compatible, false);
+  assert.equal(output.compatibility.reason, "DATASET_VERSION_MISMATCH");
 });
 
 test("the actual CLI retains unpublished, pending and unstarted cells as not comparable", () => {

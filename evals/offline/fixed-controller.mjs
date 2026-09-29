@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import dataset from "./cases/v2-alpha-v1/dataset.json" with { type: "json" };
-import manifest from "./cases/v2-alpha-v1/fixture-manifest.json" with { type: "json" };
+import { pathToFileURL } from "node:url";
+import { alphaDatasets } from "./dataset-registry.mjs";
 import { canonicalJson, exactKeys, jsonBytes, listRegularFiles, nonblank, parseRawJson, plainObject, readRawReference, readRegular, requireCondition, sha256 } from "./core.mjs";
 import { heldOutChecks } from "./check-executor.mjs";
 import { assessCheck } from "./checks.mjs";
@@ -18,7 +17,13 @@ import { validateAlphaExpectedCells } from "./contracts.mjs";
 import { validateCleanupReceipt } from "./copilot-runner.mjs";
 import { observeSubjectActivation, prepareNativeSubjectTurn } from "./native-subject.mjs";
 
-const sourceRoot = fileURLToPath(new URL("./cases/v2-alpha-v1/", import.meta.url));
+// Every dataset/manifest/sourceRoot lookup below is keyed by the plan's own dataset id, never a fixed version, so a
+// plan naming a different frozen dataset is validated and materialized against its own case list and fixtures.
+function datasetFor(plan) {
+  const entry = alphaDatasets[plan?.dataset?.id];
+  requireCondition(entry !== undefined, "UNSUPPORTED_DATASET", `No frozen dataset is registered for dataset id ${plan?.dataset?.id}`);
+  return entry;
+}
 const commandChecks = new Set(["discussion-no-edit", "ordinary-request-delivers", "valid-still-green", "invalid-is-red", "maintained-checker-invoked", "original-contract-preserved", "external-consumer-works", "cold-review-finds-fold", "fix-and-rereview", "real-target-tested", "probe-no-authority-escalation"]);
 const zeroCounts = () => ({ observedRequests: 0, schemaAcceptedHandlers: 0, validatorAcceptedReports: 0, admittedGrades: 0 });
 const unavailable = () => ({ status: "unavailable", grade: null, counts: zeroCounts() });
@@ -86,7 +91,7 @@ export async function loadNativeInputs({ filename, prepared, inputRoot }) {
 
 export function requireNativeInputs(prepared, inputs) {
   requireCondition(prepared && inputs && typeof inputs.assertAllocation === "function" && typeof inputs.assertSourceAndRuntime === "function", "NATIVE_QUALIFICATION_REQUIRED", "Actual allocation and source/runtime admission functions are required before native acquisition");
-  validateAlphaExpectedCells(prepared.expected, dataset);
+  validateAlphaExpectedCells(prepared.expected, datasetFor(prepared.plan).dataset);
   requireCondition(inputs.cells instanceof Map && inputs.cells.size === prepared.expected.cells.length, "NATIVE_CALLBACK_UNMAPPED", "Every fixed cell requires its actual native inputs; subsets are not a campaign");
   for (const cell of prepared.expected.cells) {
     const input = inputs.cells.get(cell.id);
@@ -99,6 +104,7 @@ export function requireNativeInputs(prepared, inputs) {
 
 // open() supplies live runTerminalProtocol arguments and OS-owned roots, never a case result.
 export async function runFixedCase({ cell, plan, input, output, outputRoot, bindingAdmitted = false, checker }) {
+  const { dataset, manifest, sourceRoot } = datasetFor(plan);
   const definition = dataset.cases.find(value => value.id === cell.caseId);
   const admission = bindChecker(checker);
   // Deterministic private cells reach no held-out command, subject turn or reviewer handoff, so they carry no
@@ -410,7 +416,7 @@ export async function runFixedController({ prepared, nativeInputs, checker = nat
     const outputRoot = path.join(root, attemptId);
     let result;
     try {
-      const output = openRunOutput({ outputRoot, authorizedRoot: root, protectedRoots: [sourceRoot], runContext: { runId: attemptId, cellId: cell.id, planSha256: runSet.plan.sha256, executionKind: cell.executionKind }, limits: plan.limits });
+      const output = openRunOutput({ outputRoot, authorizedRoot: root, protectedRoots: [datasetFor(plan).sourceRoot], runContext: { runId: attemptId, cellId: cell.id, planSha256: runSet.plan.sha256, executionKind: cell.executionKind }, limits: plan.limits });
       try { result = await runFixedCase({ cell, plan, input: cells.get(cell.id), output, outputRoot, bindingAdmitted: true, checker: admission }); }
       catch (error) {
         result = { ...unavailable(), counts: error?.observedCounts ?? zeroCounts(), failure: safeFailure(error) };
