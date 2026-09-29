@@ -192,6 +192,12 @@ test("protectWindowsPaths invokes one fixed, non-interpolating provider command"
     assert.match(script, /SetAccessRuleProtection\(\$true, \$false\)/u)
     assert.match(script, /if \(-not \$applied\.AreAccessRulesProtected\)/u)
     assert.match(script, /ReparsePoint/u)
+    // Never load or write the audit section (SACL): that needs SeSecurityPrivilege,
+    // which a non-elevated Windows user does not hold, and the Get-Acl and Set-Acl cmdlets touch it.
+    assert.match(script, /GetAccessControl\('Access,Owner'\)/u)
+    assert.match(script, /\$item\.SetAccessControl\(\$acl\)/u)
+    assert.ok(!/\bSet-Acl\b/u.test(script), "Set-Acl would write the audit section")
+    assert.ok(!/GetAccessControl\([^)]*Audit/iu.test(script))
     assert.match(script, /FileSystemRights\]::FullControl/u)
     assert.match(script, /\[Console\]::InputEncoding = \$utf8/u)
     assert.match(script, /\[Console\]::OutputEncoding = \$utf8/u)
