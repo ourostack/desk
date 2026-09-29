@@ -64,7 +64,7 @@ test("tool requirements: status, doctor, reads, controller and writes", () => {
   assert.equal(toolRequirement("desk_doctor"), "doctor")
   for (const name of ["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"]) assert.equal(toolRequirement(name), "read")
   assert.equal(toolRequirement("desk_reindex"), "controller")
-  for (const name of ["task_create", "track_rename", "friction_add", "lesson_add"]) assert.equal(toolRequirement(name), "write")
+  for (const name of ["task_create", "track_rename", "friction_add", "lesson_add", "desk_save"]) assert.equal(toolRequirement(name), "write")
   const readable = { runtimeServer: {}, root: {} }
   assert.equal(requirementMet("read", {}), false)
   assert.equal(requirementMet("read", readable), true)

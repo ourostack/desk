@@ -14,7 +14,7 @@ import {
 import { resolveWriteTarget } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { objectInput } from "../util/object-input.js"
-import { isGitRepository, hasUnstagedWork, stagePaths } from "../util/git-stage.js"
+import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import {
   validateTrackName,
   validateScope,
@@ -45,8 +45,21 @@ function stagingAllowed(filePath, spawnGit) {
   return isGitRepository(dir, spawnGit) && !hasUnstagedWork(dir, [path.basename(filePath)], spawnGit)
 }
 
-function stageTrackCard(filePath, spawnGit) {
-  stagePaths(path.dirname(filePath), [path.basename(filePath)], spawnGit)
+// After staging, commits exactly the one file staged (M4-6 Part 2: every
+// write tool commits its own paths synchronously; push is a later part).
+// A stage failure (e.g. a concurrent call holding .git/index.lock) leaves
+// nothing to commit, and neither it nor a commit failure ever throws away
+// the write or the tool's own result — either comes back as this
+// function's return value, which a caller attaches to its result under
+// `commit` only on failure, so a normal, silent success stays byte-identical
+// to today's response shape.
+function stageAndCommitTrackCard(filePath, message, spawnGit) {
+  const dir = path.dirname(filePath)
+  const basename = path.basename(filePath)
+  const staged = stagePaths(dir, [basename], spawnGit)
+  if (!staged.ok) return { status: "failed", reason: staged.stderr }
+  const committed = commitPaths(dir, [basename], message, spawnGit)
+  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
 }
 
 /**
@@ -128,9 +141,14 @@ export async function track_create({ deskRoot, input, person = null, readiness, 
   }
 
   await writeMarkdown(filePath, data, values.body ?? "")
-  if (isGitRepository(path.dirname(filePath), spawnGit)) stageTrackCard(filePath, spawnGit)
+  let commit
+  if (isGitRepository(path.dirname(filePath), spawnGit)) {
+    commit = stageAndCommitTrackCard(filePath, `track_create: ${slug}`, spawnGit)
+  }
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
-  return { status: "created", path: relPath(deskRoot, filePath) }
+  const result = { status: "created", path: relPath(deskRoot, filePath) }
+  if (commit) result.commit = commit
+  return result
 }
 
 /**
@@ -207,7 +225,9 @@ export async function track_update({ deskRoot, input, person = null, readiness, 
 
   const stage = stagingAllowed(filePath, spawnGit)
   await writeMarkdown(filePath, merged, newBody)
-  if (stage) stageTrackCard(filePath, spawnGit)
+  const commit = stage ? stageAndCommitTrackCard(filePath, `track_update: ${slug}`, spawnGit) : undefined
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
-  return { status: "updated", path: relPath(deskRoot, filePath) }
+  const result = { status: "updated", path: relPath(deskRoot, filePath) }
+  if (commit) result.commit = commit
+  return result
 }

@@ -5,11 +5,40 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { track_create, track_update } from "../../../../../plugins/desk/mcp/src/tools/track.js"
 import { writeMarkdown } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { mkTempDeskRoot, readFront } from "./_helpers.js"
 
 const SCOPE = "billing disputes and refund flows; not payroll"
+
+function initGit(root) {
+  const run = (args) => {
+    const result = spawnSync("git", args, { cwd: root, encoding: "utf8" })
+    assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`)
+  }
+  run(["init", "-q"])
+  run(["config", "user.email", "test@example.com"])
+  run(["config", "user.name", "Test"])
+}
+
+function gitStatus(root) {
+  const result = spawnSync("git", ["-C", root, "status", "--short"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout
+}
+
+function lastCommitMessage(root) {
+  const result = spawnSync("git", ["-C", root, "log", "-1", "--format=%s"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.trim()
+}
+
+function lastCommitFiles(root) {
+  const result = spawnSync("git", ["-C", root, "show", "--stat", "--format=", "--name-only", "HEAD"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.split("\n").filter(Boolean).sort()
+}
 
 test("track_update merges frontmatter and refreshes `updated`", async () => {
   const root = await mkTempDeskRoot()
@@ -215,4 +244,99 @@ test("track_update leaves an existing badly named track's scope alone when scope
   assert.equal(result.status, "updated")
   const { data } = await readFront(filePath)
   assert.equal(data.status, "closed")
+})
+
+// ── M4-6 Part 2: stage + commit ─────────────────────────────────────────────
+
+test("track_update stages and commits exactly the track.md it updated", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await track_create({
+    deskRoot: root,
+    input: { slug: "billing-disputes", title: "T", scope: SCOPE },
+  })
+
+  const result = await track_update({
+    deskRoot: root,
+    input: { slug: "billing-disputes", frontmatter: { status: "closed" } },
+  })
+
+  assert.equal(result.status, "updated")
+  assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
+  assert.equal(gitStatus(root), "")
+  assert.equal(lastCommitMessage(root), "track_update: billing-disputes")
+  assert.deepEqual(lastCommitFiles(root), [path.join("billing-disputes", "track.md")])
+})
+
+test("track_update commits only its own file, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await track_create({
+    deskRoot: root,
+    input: { slug: "billing-disputes", title: "T", scope: SCOPE },
+  })
+
+  // Simulates another process staging an unrelated path in the window
+  // between track_update's dirty check and its own stage/commit.
+  await fs.writeFile(path.join(root, "unrelated.txt"), "another process's work\n")
+  spawnSync("git", ["-C", root, "add", "--", "unrelated.txt"], { encoding: "utf8" })
+
+  const result = await track_update({
+    deskRoot: root,
+    input: { slug: "billing-disputes", frontmatter: { status: "closed" } },
+  })
+
+  assert.equal(result.commit, undefined, "track_update's own commit succeeded")
+  assert.deepEqual(lastCommitFiles(root), [path.join("billing-disputes", "track.md")])
+  const status = gitStatus(root)
+  assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
+})
+
+test("track_update reports a commit failure without losing the write", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await track_create({
+    deskRoot: root,
+    input: { slug: "billing-disputes", title: "T", scope: SCOPE },
+  })
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    return spawnSync(cmd, args, opts)
+  }
+
+  const result = await track_update({
+    deskRoot: root,
+    input: { slug: "billing-disputes", frontmatter: { status: "closed" } },
+    spawnGit,
+  })
+
+  assert.equal(result.status, "updated", "the write itself is never lost to a commit failure")
+  const { data } = await readFront(path.join(root, "billing-disputes", "track.md"))
+  assert.equal(data.status, "closed")
+  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+})
+
+test("track_update skips staging and committing when the file held unstaged changes before the write", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await track_create({
+    deskRoot: root,
+    input: { slug: "billing-disputes", title: "T", scope: SCOPE },
+  })
+  const filePath = path.join(root, "billing-disputes", "track.md")
+
+  // Another session's unstaged edit to this same file, in place before
+  // track_update writes.
+  await fs.appendFile(filePath, "\nanother session's note\n")
+
+  const result = await track_update({
+    deskRoot: root,
+    input: { slug: "billing-disputes", frontmatter: { status: "closed" } },
+  })
+
+  assert.equal(result.status, "updated", "the write always happens")
+  assert.equal(result.commit, undefined, "no commit attempted when the file was already dirty")
+  const { data } = await readFront(filePath)
+  assert.equal(data.status, "closed")
+  assert.match(gitStatus(root), /billing-disputes\/track\.md/, "the file is left as an uncommitted change")
 })

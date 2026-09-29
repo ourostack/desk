@@ -129,6 +129,10 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     topic: text("The lesson topic; slugified for the filename."),
     body: text("Markdown body."),
   }, ["topic", "body"]),
+  desk_save: schema({
+    paths: list("The paths to commit, relative to the desk root."),
+    message: text("The commit message."),
+  }, ["paths", "message"]),
   desk_search: schema({
     query: text("The search query."),
     limit: LIMIT,

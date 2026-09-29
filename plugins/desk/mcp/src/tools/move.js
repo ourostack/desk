@@ -6,10 +6,11 @@
 // and best-effort keep each `track.md`'s "## Tasks" table in sync. Neither
 // tool ever rewrites free text elsewhere — it only reports, in `mentions`,
 // other text files under the desk that still mention the old relative path,
-// so the agent (or the operator) can fix them if they matter. Neither
-// commits; staging (or a plain rename on a non-Git desk) is as far as this
-// goes, matching M4-1's "channels never commits" carry-in. On a Git desk
-// they stage every file they write, too (M4-5 fix round 4).
+// so the agent (or the operator) can fix them if they matter. On a Git desk
+// they stage every file they write (M4-5 fix round 4) and commit exactly
+// the paths they wrote — the moved directory plus any track.md tables it
+// edited — right after (M4-6 Part 2); a plain rename with no commit is as
+// far as either goes on a non-Git desk.
 
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
@@ -23,7 +24,7 @@ import {
 } from "../util/fm.js"
 import { resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
-import { isGitRepository, hasUnstagedWork, stagePaths } from "../util/git-stage.js"
+import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { resolveTaskHandle, resolveTrackHandle } from "../desk/handles.js"
 import {
@@ -161,6 +162,25 @@ function stageWrites({ root, files, spawnGit }) {
   if (!result.ok) {
     throw new Error(redactCredentialLikeText(`desk-mcp: git add failed staging the move's edits: ${result.stderr}`))
   }
+}
+
+/**
+ * Commit everything a move touched (M4-6 Part 2): the moved directories
+ * (already staged by `movePath`'s own `git mv`, so they are only named
+ * here, never re-`git add`ed — `git add` on an already-fully-staged,
+ * now-gone directory fails with "did not match any files", but `git commit
+ * -- <pathspec>` still matches the staged rename by index content) plus
+ * whatever `stageWrites` staged on top (the patched card, the edited
+ * `track.md` tables). A no-op on a non-Git desk. Never throws: a commit
+ * failure comes back as this function's return value, which a caller
+ * attaches to its result under `commit` only on failure, so a normal,
+ * silent success stays byte-identical to today's response shape.
+ */
+function commitMove({ root, movedDirs, writtenFiles, message, spawnGit }) {
+  if (!isGitRepository(root, spawnGit)) return undefined
+  const relPaths = [...new Set([...movedDirs, ...writtenFiles].map((p) => relPath(root, p)))]
+  const committed = commitPaths(root, relPaths, message, spawnGit)
+  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
 }
 
 /**
@@ -373,7 +393,13 @@ function trueOrAbsent(tool, field, value) {
  * table. Nothing is deleted. It cannot be combined with `to_slug` or
  * `unarchive`.
  *
- * Returns: { from, to, updated_files, mentions }
+ * On a Git desk it also commits exactly the paths it wrote — the moved
+ * directory and any `track.md` tables it edited — right after staging them
+ * (M4-6 Part 2). A commit failure never loses the move: it comes back as
+ * `commit: { status: "failed", reason }` on the result, omitted entirely on
+ * a normal, silent success or on a non-Git desk.
+ *
+ * Returns: { from, to, updated_files, mentions, commit? }
  */
 export async function task_move({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
   const values = input ?? {}
@@ -550,9 +576,17 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
     }
   }
 
+  const writtenFiles = updatedFiles.map((p) => path.join(deskRoot, p))
   stageWrites({
     root: effectiveRoot,
-    files: updatedFiles.map((p) => path.join(deskRoot, p)),
+    files: writtenFiles,
+    spawnGit,
+  })
+  const commit = commitMove({
+    root: effectiveRoot,
+    movedDirs: [srcDir, destDir],
+    writtenFiles,
+    message: `task_move: ${slug} → ${toTrack}`,
     spawnGit,
   })
 
@@ -571,12 +605,14 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
     ],
   })
 
-  return {
+  const result = {
     from: shownRelPath(deskRoot, srcDir),
     to: shownRelPath(deskRoot, destDir),
     updated_files: updatedFiles.map(shownPath),
     mentions: mentions.map(shownPath),
   }
+  if (commit) result.commit = commit
+  return result
 }
 
 // ── track_rename ─────────────────────────────────────────────────────────
@@ -590,9 +626,14 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
  * `to` isn't a valid track name (M4-1's `validateTrackName`), or, on a Git
  * desk, if the track has unstaged changes or untracked, non-ignored files,
  * unless `allow_dirty: true`. Rewrites `track:` in every `task.md` under the
- * moved tree, live and archived, and stages those edits on a Git desk.
+ * moved tree, live and archived, and stages those edits on a Git desk, then
+ * commits exactly the paths it wrote — the moved directory and every
+ * rewritten task.md — right after (M4-6 Part 2). A commit failure never
+ * loses the rename: it comes back as `commit: { status: "failed", reason }`
+ * on the result, omitted entirely on a normal, silent success or on a
+ * non-Git desk.
  *
- * Returns: { from, to, updated_files, mentions }
+ * Returns: { from, to, updated_files, mentions, commit? }
  */
 export async function track_rename({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
   const values = input ?? {}
@@ -634,6 +675,13 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
     updatedFiles.push(relPath(deskRoot, file))
   }
   stageWrites({ root: effectiveRoot, files: taskFiles, spawnGit })
+  const commit = commitMove({
+    root: effectiveRoot,
+    movedDirs: [srcDir, destDir],
+    writtenFiles: taskFiles,
+    message: `track_rename: ${track} → ${to}`,
+    spawnGit,
+  })
 
   const mentions = await findMentions({
     root: effectiveRoot,
@@ -650,10 +698,12 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
     ],
   })
 
-  return {
+  const result = {
     from: shownRelPath(deskRoot, srcDir),
     to: shownRelPath(deskRoot, destDir),
     updated_files: updatedFiles.map(shownPath),
     mentions: mentions.map(shownPath),
   }
+  if (commit) result.commit = commit
+  return result
 }

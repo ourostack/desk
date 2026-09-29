@@ -26,6 +26,7 @@ const SURFACE_BEFORE_FEEDBACK_RETIREMENT = [
   "track_rename",
   "friction_add",
   "lesson_add",
+  "desk_save",
   "desk_feedback",
   "desk_work_ledger",
   "desk_search",
