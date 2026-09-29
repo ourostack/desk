@@ -16,6 +16,7 @@ import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { resolveDeskStateDir } from "./last-start.js"
+import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 const ALLOWLIST_DIR = "host-enforcement-naming"
 
@@ -107,6 +108,7 @@ export function loadSessionAllowlist({ env = process.env, sessionId }) {
 export function saveSessionAllowlist({ env = process.env, sessionId, sessionState }) {
   try {
     const file = sessionAllowlistPath({ env, sessionId })
+    assertNotRealStateUnderTest(path.dirname(file), { env })
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     const temporary = `${file}.${process.pid}.tmp`
     writeFileSync(temporary, `${JSON.stringify({ allowed: [...sessionState] })}\n`, { mode: 0o600 })

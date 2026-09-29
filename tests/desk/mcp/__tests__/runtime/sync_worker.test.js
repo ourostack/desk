@@ -17,6 +17,7 @@ import * as os from "node:os"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { lastStartRootKey, resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
+import { DESK_TEST_REAL_STATE } from "../../../../../plugins/desk/mcp/src/runtime/test-state-guard.js"
 import {
   DEFAULT_DEBOUNCE_MS,
   acquireSyncLock,
@@ -112,6 +113,19 @@ test("resolveSyncLockPath and syncStatusPath live under the desk state directory
 // ---------------------------------------------------------------------------
 // The lock.
 // ---------------------------------------------------------------------------
+
+test("under a node:test run, acquireSyncLock refuses a real (non-temp) state home rather than writing to it", async (t) => {
+  // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
+  // the developer's real home, so a lock file landing here would be exactly the incident the guard exists to stop.
+  const realTmp = await fs.realpath(os.tmpdir())
+  const fakeReal = await fs.mkdtemp(path.join(path.dirname(realTmp), "desk-sync-worker-fake-real-"))
+  t.after(() => fs.rm(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
+  await assert.rejects(
+    () => acquireSyncLock({ root: "/some/desk-root", env: { HOME: fakeReal } }),
+    { code: DESK_TEST_REAL_STATE },
+  )
+  assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home")
+})
 
 test("acquireSyncLock creates a fresh lock file, and release() removes it", async () => {
   const root = await mkTempRoot("desk-sync-worker-lock-")
@@ -794,4 +808,18 @@ test("finalUnpushedCheck falls back to its own reason when an existing blocked s
   const result = finalUnpushedCheck({ root: cloneA, env: process.env })
   assert.match(result.diagnostic, /unpushed_at_session_end/)
   assert.deepEqual(readSyncStatus({ root: cloneA, env: process.env }), { blocked: true }, "an already-blocked status is never rewritten, even with no reason of its own")
+})
+
+test("under a node:test run, finalUnpushedCheck's own status write refuses a real (non-temp) state home rather than writing to it", async (t) => {
+  // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
+  // the developer's real home, so a status file landing here would be exactly the incident the guard exists to
+  // stop. Only the state directory is faked; the Git root stays a real, temp-based fixture.
+  const { cloneA } = await mkOriginWithClone()
+  await writeAndCommit(cloneA, "more.md", "more\n", "more")
+  const realTmp = await fs.realpath(os.tmpdir())
+  const fakeReal = await fs.mkdtemp(path.join(path.dirname(realTmp), "desk-sync-worker-status-fake-real-"))
+  t.after(() => fs.rm(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
+  const env = { HOME: fakeReal }
+  assert.throws(() => finalUnpushedCheck({ root: cloneA, env }), { code: DESK_TEST_REAL_STATE })
+  assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home")
 })

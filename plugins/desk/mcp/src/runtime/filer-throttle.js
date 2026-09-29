@@ -17,6 +17,7 @@ import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { resolveDeskStateDir } from "./last-start.js"
+import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 const THROTTLE_STATE_DIR = "filer-throttle"
 export const DEFAULT_FILER_COOLDOWN_MS = 60 * 60 * 1000
@@ -53,6 +54,7 @@ export function shouldLaunchFiler({
   }
   try {
     const directory = path.dirname(file)
+    assertNotRealStateUnderTest(directory, { env })
     mkdirSync(directory, { recursive: true, mode: 0o700 })
     const temporary = `${file}.${process.pid}.tmp`
     writeFileSync(temporary, `${JSON.stringify({ at: now() })}\n`, { mode: 0o600 })

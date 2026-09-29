@@ -35,6 +35,10 @@ import {
   ensureOwnerOnlyDirectory,
   lstatIfPresent,
 } from "../factory/os-protect.js"
+// Reused rather than duplicated: unlike `src/factory/**`, this tree already
+// imports across trees (`util/paths.js`, `feedback/windows-acl.js`, the line
+// above), so there is no boundary reason to keep a third copy of the guard.
+import { assertNotRealStateUnderTest } from "../factory/test-state-guard.js"
 
 const OWNER_ONLY_DIR_MODE = 0o700
 const OWNER_ONLY_FILE_MODE = 0o600
@@ -68,6 +72,7 @@ export async function resolveProtectedStore({
   const realDeskRoot = await realPathOrThrow(deskRoot, "desk root could not be resolved", naming)
 
   const stateHome = resolveStateHome(env)
+  assertNotRealStateUnderTest(stateHome, { env, platform })
   await fs.mkdir(stateHome, { recursive: true, mode: OWNER_ONLY_DIR_MODE })
   const realStateHome = await realPathOrThrow(
     stateHome,

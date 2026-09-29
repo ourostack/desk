@@ -8,7 +8,7 @@
 import { test, after } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync, spawn, spawnSync } from "node:child_process"
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -524,6 +524,22 @@ test("the identity cache honours XDG_STATE_HOME and survives a bad or unwritable
   const blocked = tempDir()
   write(blocked, "ouroboros-skills", "not a folder")
   assert.equal(status(root, { env: { DESK: root, XDG_STATE_HOME: blocked }, homeDir: home, spawnGh }).person, "bob")
+})
+
+test("under a node:test run, a real (non-temp) identity cache folder is refused -- the gh lookup still answers, but nothing is persisted", () => {
+  // A folder that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
+  // the developer's real home, so a cache write landing here would be exactly the incident the guard exists to stop.
+  const realTmp = realpathSync(os.tmpdir())
+  const fakeReal = realpathSync(mkdtempSync(path.join(path.dirname(realTmp), "desk-tidy-fake-real-")))
+  try {
+    const root = crewDesk()
+    const spawnGh = () => ({ status: 0, stdout: "Bob-Login\n" })
+    const person = resolvePerson(root, { env: {}, homeDir: fakeReal, spawnGh, now: NOW })
+    assert.equal(person, "bob", "the lookup itself still answers")
+    assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home")
+  } finally {
+    rmSync(fakeReal, { recursive: true, force: true })
+  }
 })
 
 test("an invalid person is treated as no person, never silently", () => {

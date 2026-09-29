@@ -56,6 +56,7 @@ import { readProcessStart } from "../readiness/process-start.js"
 import { formatDeskProblem } from "./index-drift.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
+import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -152,6 +153,7 @@ export async function acquireSyncLock({
   root, env, pid = process.pid, processStart = readProcessStart, readLock = readJsonIfPresent, kill = process.kill,
 }) {
   const lockPath = resolveSyncLockPath({ root, env })
+  assertNotRealStateUnderTest(path.dirname(lockPath), { env })
   mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 })
   const token = randomUUID()
   const start = await processStart(pid)
@@ -258,6 +260,7 @@ function pushWithRetry(root, spawnGit) {
 
 function updateSyncStatus(root, env, patch) {
   const file = syncStatusPath({ root, env })
+  assertNotRealStateUnderTest(path.dirname(file), { env })
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const next = { ...(readJsonIfPresent(file) ?? {}), ...patch }
   const temporary = `${file}.${randomUUID()}.tmp`

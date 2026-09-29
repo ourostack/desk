@@ -7,7 +7,7 @@
 // real HOME or XDG_STATE_HOME.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import {
@@ -59,6 +59,18 @@ test("recordTimeout fails toward 1 (not 0, not a throw) when the state directory
   const env = { HOME: path.join("/dev/null", "not-a-real-directory") }
   assert.equal(recordTimeout({ env, command: "git checkout main" }), 1)
   assert.equal(recordTimeout({ env, command: "git checkout main" }), 1, "never persisted, so every call starts fresh")
+})
+
+test("under a node:test run, recordTimeout refuses a real (non-temp) state home rather than writing to it", (t) => {
+  // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for the
+  // developer's real home, so a write landing here would be exactly the incident the guard exists to stop.
+  const realTmp = realpathSync(tmpdir())
+  const fakeReal = mkdtempSync(path.join(path.dirname(realTmp), "desk-protected-checkout-repeat-fake-real-"))
+  t.after(() => rmSync(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
+  const env = { HOME: fakeReal }
+  assert.equal(recordTimeout({ env, command: "git checkout main" }), 1, "still fails toward 1")
+  assert.equal(recordTimeout({ env, command: "git checkout main" }), 1, "never persisted, so every call starts fresh")
+  assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home")
 })
 
 test("recordTimeout treats a corrupt or unrecognizable previous record as no previous record", (t) => {

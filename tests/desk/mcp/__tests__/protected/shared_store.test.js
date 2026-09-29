@@ -14,8 +14,10 @@ import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
+import * as os from "node:os"
 import { resolvePrivateStore, withPrivateStore } from "../../../../../plugins/desk/mcp/src/feedback/store.js"
 import { resolveProtectedStore, withProtectedStore } from "../../../../../plugins/desk/mcp/src/protected/store.js"
+import { DESK_TEST_REAL_STATE } from "../../../../../plugins/desk/mcp/src/factory/test-state-guard.js"
 import { cleanup, mkFeedbackFixture as mkStoreFixture } from "../feedback/_helpers.js"
 
 // These cases are about POSIX store layout, refusals, journalling and message
@@ -189,6 +191,31 @@ test("the primitive refuses to write a private store inside the desk workspace",
     )
   } finally {
     await cleanup(fixture.base)
+  }
+})
+
+test("under a node:test run, the primitive refuses a real (non-temp) state home rather than writing to it", async () => {
+  // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
+  // the developer's real home, so a store landing here would be exactly the incident the guard exists to stop.
+  const fixture = await mkStoreFixture()
+  const realTmp = await fs.realpath(os.tmpdir())
+  const fakeReal = await fs.mkdtemp(path.join(path.dirname(realTmp), "desk-shared-store-fake-real-"))
+  try {
+    await assert.rejects(
+      () =>
+        resolveProtectedStore({
+          deskRoot: fixture.deskRoot,
+          person: "rowan",
+          env: { HOME: fixture.base, XDG_STATE_HOME: path.join(fakeReal, "state") },
+          platform: POSIX_PLATFORM,
+          ...SECOND,
+        }),
+      { code: DESK_TEST_REAL_STATE },
+    )
+    assert.equal(await fs.access(path.join(fakeReal, "state")).then(() => true, () => false), false, "the guard refuses before creating anything under the fake real home")
+  } finally {
+    await cleanup(fixture.base)
+    await fs.rm(fakeReal, { recursive: true, force: true })
   }
 })
 
