@@ -206,7 +206,8 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
     // `target` here instead would let an operation safe in any checkout, or the wrong denial message, bypass that.
     const envTarget = gitEnvTarget(location, variables)
     const knownEnvTarget = envTarget !== undefined && !envTarget.includes(UNKNOWN) ? envTarget : undefined
-    const target = invocation.cwd === UNKNOWN ? null : existingDirectory(knownEnvTarget ?? invocation.cwd)
+    // A relative GIT_WORK_TREE/GIT_DIR is relative to the directory Git runs in, never to the hook's own process.
+    const target = invocation.cwd === UNKNOWN ? null : existingDirectory(knownEnvTarget === undefined ? invocation.cwd : path.resolve(invocation.cwd, knownEnvTarget))
     const where = "which checkout this Git command runs in"
     if (target !== null && !existsSync(target)) return
     const key = JSON.stringify([invocation, gitRelevantEnv(variables)])

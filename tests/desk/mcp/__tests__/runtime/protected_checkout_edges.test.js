@@ -232,6 +232,15 @@ test("GIT_DIR/GIT_WORK_TREE name the real target even when the modeled cwd does 
 // GIT_DIR alone, without GIT_WORK_TREE, must still name the checkout: its parent directory for a plain ".git",
 // or the directory itself for a bare repository. Neither the command line nor the ambient cwd names anywhere
 // protected, so only GIT_DIR finding the target proves the command is still checked.
+test("a relative GIT_DIR/GIT_WORK_TREE resolves against the directory the Git call runs in, not the hook's own", async (t) => {
+  const { root } = fixture(t)
+  const relDir = await guardShellCommand({ command: `cd "${root}" && GIT_DIR=.git git reset --hard`, cwd: tmpdir(), env: process.env })
+  assert.equal(relDir.deny, true, "GIT_DIR=.git inside the protected checkout names that checkout")
+  assert.match(relDir.reason, /this would discard other sessions' uncommitted work/u)
+  const relTree = await guardShellCommand({ command: `cd "${root}" && GIT_WORK_TREE=. git reset --hard`, cwd: tmpdir(), env: process.env })
+  assert.equal(relTree.deny, true, "GIT_WORK_TREE=. inside the protected checkout names that checkout")
+})
+
 test("GIT_DIR alone names the checkout, non-bare or bare", async (t) => {
   const { root } = fixture(t)
   const elsewhere = mkdtempSync(path.join(tmpdir(), "desk-guard-edges-elsewhere-"))
