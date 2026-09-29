@@ -15,7 +15,7 @@ import { flush } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import {
   factoryStateRoot, quarantine, readConsent, readMachineSecret, releaseRefusedPluginNames, setConsent, writeLocalFacts, writeLocalLabels,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { fakeGitHub } from "./_fake_github.js"
+import { fakeGitHub, httpError } from "./_fake_github.js"
 import { STORE, scratch } from "./_session_helpers.js"
 
 const GOLDEN = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/local-golden.json", import.meta.url)), "utf8"))
@@ -214,3 +214,23 @@ test("an unparseable quarantine record keeps its file quarantined", () => scratc
   assert.equal(await fs.readFile(file, "utf8"), "{")
   assert.equal(github.pullCount(), 0)
 }))
+
+for (const status of [500, 422]) {
+  test(`a held file whose repo cannot be resolved does not block pending files (${status})`, () => scratch(async ({ env }) => {
+    await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+    await put(env, 1, { labels: false })
+    await put(env, 2, { labels: false })
+    // Session 1 is held and references a repository only it names.
+    const held = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(env), "outbox", SLUG, nameOf(1)), "utf8"))
+    held.refs = { prs: [{ repo: "acme/held-only", number: 1 }], commits: [], unresolved: { prs: 0, commits: 0 } }
+    await fs.writeFile(path.join(await factoryStateRoot(env), "outbox", SLUG, nameOf(1)), `${JSON.stringify(held)}\n`)
+    await quarantine(env, STORE, nameOf(1), "plugin_not_public")
+    const file = path.join(await factoryStateRoot(env), "quarantine", SLUG, nameOf(1))
+    const before = await fs.readFile(file)
+    const github = fakeGitHub({ intercept: (call) => (call.args.some((arg) => /repos\/acme\/held-only$/u.test(arg)) ? httpError(status, "boom") : undefined) })
+    const out = await flushOnce(env, github)
+    assert.equal(out.result, "delivered_pr_open")
+    assert.deepEqual([...github.headFiles(STORE, await branchOf(env)).keys()], [`facts/${nameOf(2)}`])
+    assert.deepEqual(await fs.readFile(file), before)
+  }))
+}

@@ -752,12 +752,26 @@ async function deliver(env, context) {
   const parsed = candidates.map(({ name, localBytes, quarantine: held }) => ({ name, held, local: JSON.parse(localBytes.toString("utf8")) }))
   const parsedLabels = labelCandidates.map(({ name, localBytes }) => ({ key: name, local: JSON.parse(localBytes.toString("utf8")) }))
   const desks = await deskRepositories(env, { deadline, now })
-  const repos = parsed.flatMap(({ local }) => referencedRepos(local))
-  // Only a store known not to be public may name a plugin from a private or unknown source.
-  if (parsed.some(({ local }) => list(local?.plugins).length > 0)) repos.push(store)
-  for (const { name } of parsed) if (desks.get(name)) repos.push(desks.get(name))
+  // What a file needs resolved: the repositories it references, its desk remote, and the store when it names a plugin.
+  const reposOf = ({ name, local }) => [
+    ...referencedRepos(local),
+    ...(list(local?.plugins).length > 0 ? [store] : []),
+    ...(desks.get(name) ? [desks.get(name)] : []),
+  ]
+  const ordinary = parsed.filter(({ held }) => held === null)
+  const repos = ordinary.flatMap(reposOf)
   for (const { local } of parsedLabels) for (const name of factsNamesOf(local?.session)) if (desks.get(name)) repos.push(desks.get(name))
   const known = await resolveVisibility(env, client, account, repos, nowIso)
+  // A held file is a retry, never a reason to stop: its repositories resolve one file at a time, and a file whose repositories cannot all be resolved keeps its record and waits for a later flush.
+  const unresolved = new Set()
+  for (const item of parsed) {
+    if (item.held === null) continue
+    try {
+      for (const [repo, visibility] of await resolveVisibility(env, client, account, reposOf(item), nowIso)) known.set(repo, visibility)
+    } catch {
+      unresolved.add(item.name)
+    }
+  }
   const secret = await readMachineSecret(env)
 
   const bytesByName = new Map()
@@ -765,6 +779,7 @@ async function deliver(env, context) {
   for (const { name, held, local } of parsed) {
     const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
     if (held !== null) {
+      if (unresolved.has(name)) continue
       // A quarantined file goes again only when what it publishes now differs from what the store refused; otherwise its record stays as it is.
       if (!out.bytes || gitBlobSha(out.bytes) === held.blob) continue
       releasedLabels = (await releaseQuarantined(env, store, [name])).labels.length > 0 || releasedLabels
