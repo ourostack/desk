@@ -12,7 +12,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
 // Graph algorithm tests use an explicitly built index; alpha tests use the routed tool.
-import { desk_thread as routedThread, indexedThread as desk_thread, describeRefKind } from "../../../../../plugins/desk/mcp/src/tools/thread.js"
+import { desk_thread as routedThread, indexedThread as desk_thread, describeRefKind, normalizeStartPath, compareChainRows } from "../../../../../plugins/desk/mcp/src/tools/thread.js"
 import { openDb, closeDb } from "../../../../../plugins/desk/mcp/src/db/init.js"
 import { rebuildIndex } from "../../../../../plugins/desk/mcp/src/indexer/index.js"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -534,4 +534,118 @@ test("describeRefKind — known ref_kinds produce expected phrasing", () => {
   assert.equal(describeRefKind("custom_of", "foo"), "custom entry of foo")
   // Missing slug → defaults to "task".
   assert.equal(describeRefKind("planning_of", null), "planning doc of task")
+})
+
+test("describeRefKind — nullish ref_kind falls through to the generic phrase", () => {
+  // Neither `null` nor `undefined` matches a `case`, so both reach `default:`
+  // with an empty `base` after stripping the (absent) trailing `_of`.
+  assert.equal(describeRefKind(null, "foo"), "connected to foo")
+  assert.equal(describeRefKind(undefined, "foo"), "connected to foo")
+})
+
+// ---------------------------------------------------------------------------
+// normalizeStartPath unit — the two defensive branches no caller currently
+// exercises (indexedThread already rejects an empty start_path before
+// calling this, and every fixture above passes a path inside deskRoot).
+// ---------------------------------------------------------------------------
+
+test("normalizeStartPath — empty start path returns empty string", () => {
+  assert.equal(normalizeStartPath("/desk/root", ""), "")
+})
+
+test("normalizeStartPath — an absolute path outside deskRoot is returned unchanged", () => {
+  const outside = path.join("/desk/root", "..", "..", "outside", "file.md")
+  const rel = path.relative("/desk/root", outside)
+  assert.ok(rel.startsWith(".."), "fixture path must actually escape deskRoot")
+  assert.equal(normalizeStartPath("/desk/root", outside), outside)
+})
+
+// ---------------------------------------------------------------------------
+// compareChainRows unit — the tie-breaking paths within a shared hop that a
+// BFS-driven fixture can't reliably force onto both sides of the
+// comparator (Array#sort's call order isn't ours to dictate).
+// ---------------------------------------------------------------------------
+
+test("compareChainRows — different hop_distance sorts ascending", () => {
+  const shallow = { hop_distance: 1, updated_at: "2026-04-20", path: "a.md" }
+  const deep = { hop_distance: 2, updated_at: "2026-04-20", path: "b.md" }
+  assert.equal(compareChainRows(shallow, deep), -1)
+  assert.equal(compareChainRows(deep, shallow), 1)
+})
+
+test("compareChainRows — equal updated_at (including both missing) ties on path", () => {
+  const a = { hop_distance: 1, updated_at: "2026-04-20", path: "b.md" }
+  const b = { hop_distance: 1, updated_at: "2026-04-20", path: "a.md" }
+  assert.equal(compareChainRows(a, b), "b.md".localeCompare("a.md"))
+
+  const noDateA = { hop_distance: 1, updated_at: null, path: "b.md" }
+  const noDateB = { hop_distance: 1, updated_at: null, path: "a.md" }
+  assert.equal(compareChainRows(noDateA, noDateB), "b.md".localeCompare("a.md"))
+})
+
+test("compareChainRows — a missing updated_at sorts after b", () => {
+  const a = { hop_distance: 1, updated_at: null, path: "x.md" }
+  const b = { hop_distance: 1, updated_at: "2026-04-20", path: "y.md" }
+  assert.equal(compareChainRows(a, b), 1)
+})
+
+test("compareChainRows — b missing updated_at sorts after a", () => {
+  const a = { hop_distance: 1, updated_at: "2026-04-20", path: "x.md" }
+  const b = { hop_distance: 1, updated_at: null, path: "y.md" }
+  assert.equal(compareChainRows(a, b), -1)
+})
+
+test("compareChainRows — both present and different sorts newer first", () => {
+  const older = { hop_distance: 1, updated_at: "2026-04-10", path: "x.md" }
+  const newer = { hop_distance: 1, updated_at: "2026-04-20", path: "y.md" }
+  assert.equal(compareChainRows(newer, older), newer.updated_at < older.updated_at ? 1 : -1)
+})
+
+// ---------------------------------------------------------------------------
+// Orphaned edge: refs_graph can point at a doc id that no longer has a
+// `docs` row. db/init.js always turns `foreign_keys` ON with `ON DELETE
+// CASCADE` on both columns, so this desk's own writes can never produce
+// that state — but the index db is a file on disk, and a hand-edited
+// fixture, a restored partial backup, or a future migration that forgets
+// the cascade could still hand indexedThread a dangling edge. Reproducing
+// that requires bypassing the same guarantee: toggle `foreign_keys` off
+// around a direct delete, the way an external tool could.
+// ---------------------------------------------------------------------------
+
+test("desk_thread — an edge to a doc missing from the index is skipped, not crashed", async () => {
+  const root = await mkTempDeskRoot()
+  await writeFile(root, "_meta/friction.md", "---\nschema_version: 1\n---\nseed\n")
+  await indexNoEmbed(root)
+
+  const db = openDb(root)
+  try {
+    db.exec("DELETE FROM refs_graph; DELETE FROM docs;")
+    const startId = insertSyntheticDoc(db, {
+      path: "start.md",
+      kind: "other",
+      updated_at: "2026-04-20",
+    })
+    const orphanId = insertSyntheticDoc(db, {
+      path: "orphan.md",
+      kind: "other",
+      updated_at: "2026-04-19",
+    })
+    insertEdge(db, startId, orphanId, "linked_from_body")
+    // Remove the target doc's row without the FK cascade pruning the edge —
+    // this desk never does this itself; it's standing in for external
+    // corruption of the index db.
+    db.pragma("foreign_keys = OFF")
+    db.prepare("DELETE FROM docs WHERE id = ?").run(orphanId)
+    db.pragma("foreign_keys = ON")
+  } finally {
+    closeDb(db)
+  }
+
+  const res = await desk_thread({
+    deskRoot: root,
+    input: { start_path: "start.md", direction: "forward" },
+  })
+  // Only the start doc appears; the orphaned neighbour is silently dropped.
+  assert.equal(res.chain.length, 1)
+  assert.equal(res.chain[0].path, "start.md")
 })

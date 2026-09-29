@@ -35,6 +35,23 @@ import { PATTERNS } from "../factory/schema.js"
 
 const ABOUT = new Set(["setup", "system"])
 
+// Every field friction_add reads off `input`, kept next to the handler so a
+// field added to its reads below is a field added here in the same diff.
+// __tests__/tool_schema_parity.test.js checks this against the tool's
+// declared schema in tool-schemas.js.
+export const FRICTION_ADD_FIELDS = [
+  "track",
+  "theme",
+  "body",
+  "about",
+  "file_card",
+  "title",
+  "plugin",
+  "friction_class",
+  "signal",
+  "evidence_jobs",
+]
+
 function relPath(deskRoot, absPath) {
   return path.relative(deskRoot, absPath)
 }
