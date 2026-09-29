@@ -11,6 +11,7 @@ import {
 import { ownerState } from "./owner-record.js"
 import { requestMessage } from "./protocol.js"
 import { startReadinessController } from "./controller-server.js"
+import { assertNotRealStateUnderTest } from "../runtime/test-state-guard.js"
 
 const localControllers = new Map()
 const ABANDONED_RECHECK_MS = 50
@@ -47,9 +48,20 @@ export async function connectOrStartController({
   ephemeral = false,
   onRepair = () => {},
   startController = startReadinessController,
+  env = process.env,
 } = {}) {
   const identity = controllerIdentity({ root, protocolVersion, lexicalContract, semanticContract })
   const stateDir = path.join(stateHome, identity.id)
+  // Refuses a real, non-temp state home under what looks like a node:test run (Review Focus, PR #101 fix round: this
+  // write sits under the CACHE home, not the STATE home every other guarded writer in this PR uses, so the original
+  // sweep for `.local/state`/`XDG_STATE_HOME` never caught it). Left to throw rather than caught here: unlike the
+  // detached sync-push worker, every caller of `connectOrStartController` already wraps it in a try/catch that turns
+  // any failure -- controller unreachable, an unsafe state directory, this guard refusing one -- into the same
+  // "controller unavailable, writes still go straight to files" degrade (`admitAuthority`'s `connectController` and
+  // `reconnectController` in `runtime/desk-session.js`, falling through to `admission.js`'s generic
+  // `exceptionOutcome` for a code this specific). Matching that existing contract means throwing normally, not
+  // inventing a new local return shape.
+  assertNotRealStateUnderTest(stateDir, { env })
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   privateDirectoryTighteners[process.platform](stateDir, onRepair)
   privateDirectoryValidators[process.platform](stateDir)

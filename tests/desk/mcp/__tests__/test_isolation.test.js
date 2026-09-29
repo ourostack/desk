@@ -121,3 +121,52 @@ test("a tools test file run on its own with node --test never writes the machine
   assert.deepEqual(listing(path.join(factoryDir, "finalize")), [], "task_archive's terminal-status transitions must never create real finalize requests under the machine's own home")
   assert.deepEqual(listing(path.join(factoryDir, "evaluate-requests")), [], "task_archive's terminal-status transitions must never create real evaluate-requests under the machine's own home")
 })
+
+test("sync-push.js, run directly with an inherited NODE_TEST_CONTEXT and a real (non-temp) HOME, degrades and exits 0 instead of crashing", async () => {
+  // Fix round for PR #101 (review: CHANGES NEEDED). The reviewer's own reproduction: `env NODE_TEST_CONTEXT=1 node
+  // plugins/desk/mcp/scripts/sync-push.js --root /tmp/x --debounce-ms 0` crashed with an uncaught throw from
+  // acquireSyncLock, propagated through runPushWorker and the script's own top-level await. NODE_TEST_CONTEXT is
+  // inherited by every child process of a `node --test` run, so a real session's detached push worker, launched
+  // from inside any agent session that happens to be running under `node --test` (a coding-harness self-test, for
+  // instance), would silently stop pushing with a crash nobody sees (`stdio: "ignore"` on the real spawn). This
+  // spawns the actual script file, not just the exported function, so a regression in the one-line CLI wrapper
+  // itself (script.js:10's own try/catch) would be caught here too.
+  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../plugins/desk/mcp")
+  const realTmp = await fsPromises.realpath(os.tmpdir())
+  const fakeReal = path.join(path.dirname(realTmp), `desk-fake-real-home-syncpush-${process.pid}`)
+  mkdirSync(fakeReal, { recursive: true })
+  try {
+    const env = { ...process.env, HOME: fakeReal, USERPROFILE: fakeReal, NODE_TEST_CONTEXT: "1" }
+    for (const key of ["DESK_TEST_RUN_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "NODE_OPTIONS"]) delete env[key]
+    const { spawnSync } = await import("node:child_process")
+    const run = spawnSync(
+      process.execPath,
+      [path.join(mcpRoot, "scripts", "sync-push.js"), "--root", "/tmp/desk-test-isolation-sync-push-root", "--debounce-ms", "0"],
+      { cwd: mcpRoot, env, encoding: "utf8", timeout: 120000 },
+    )
+    assert.equal(run.status, 0, `expected a clean exit, got:\n${run.stdout}\n${run.stderr}`)
+    assert.doesNotMatch(run.stderr, /Uncaught|throw new Error|at acquireSyncLock|at runPushWorker/u, "must degrade, not crash with a stack trace")
+    assert.match(run.stderr, /test_isolation_refused|DESK_TEST_REAL_STATE/u, "the refusal must be visible, not silent")
+    assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard must refuse before creating anything under the fake real home")
+  } finally {
+    rmSync(fakeReal, { recursive: true, force: true })
+  }
+})
+
+test("sync-push.js's own top-level catch reports a genuine failure and exits 1, instead of an uncaught stack trace", async () => {
+  // Ruling (c)'s backstop, exercised for a failure the guard fix does not itself remove: runSyncPushCli still throws
+  // synchronously when --root is missing (argument validation, not the test-isolation guard), so this is the one
+  // remaining live path through sync-push.js's own try/catch. Deliberately does NOT touch HOME/NODE_OPTIONS -- this
+  // failure has nothing to do with test isolation, and leaving the environment untouched keeps this runnable in
+  // whatever environment (instrumented or not) spawns it.
+  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../plugins/desk/mcp")
+  const { spawnSync } = await import("node:child_process")
+  const run = spawnSync(
+    process.execPath,
+    [path.join(mcpRoot, "scripts", "sync-push.js")],
+    { cwd: mcpRoot, encoding: "utf8", timeout: 120000 },
+  )
+  assert.equal(run.status, 1)
+  assert.doesNotMatch(run.stderr, /Uncaught|at runSyncPushCli/u, "must degrade to a clean message, not an uncaught stack trace")
+  assert.match(run.stderr, /sync-push\.js:.*--root <path> is required/u)
+})

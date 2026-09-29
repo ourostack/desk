@@ -114,16 +114,22 @@ test("resolveSyncLockPath and syncStatusPath live under the desk state directory
 // The lock.
 // ---------------------------------------------------------------------------
 
-test("under a node:test run, acquireSyncLock refuses a real (non-temp) state home rather than writing to it", async (t) => {
+test("under a node:test run, acquireSyncLock refuses a real (non-temp) state home rather than writing to it, without throwing", async (t) => {
+  // Fix round for PR #101 (review: CHANGES NEEDED). The reviewer reproduced a crash: acquireSyncLock used to reject
+  // with DESK_TEST_REAL_STATE here, uncaught all the way through runPushWorker and the detached sync-push.js worker's
+  // own top-level await, so a real session launched under any `node --test` (NODE_TEST_CONTEXT is inherited by every
+  // child process) would crash instead of silently skipping a push cycle. Ruling (a): the guard now degrades locally
+  // to `{ refused: true }`, a third sentinel distinct from both a normal `{ token, release }` lock and the `null`
+  // "busy" contention result, so runPushWorker can tell the two apart and treat a refusal as "could not run this
+  // cycle", never a crash.
+  //
   // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
   // the developer's real home, so a lock file landing here would be exactly the incident the guard exists to stop.
   const realTmp = await fs.realpath(os.tmpdir())
   const fakeReal = await fs.mkdtemp(path.join(path.dirname(realTmp), "desk-sync-worker-fake-real-"))
   t.after(() => fs.rm(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
-  await assert.rejects(
-    () => acquireSyncLock({ root: "/some/desk-root", env: { HOME: fakeReal } }),
-    { code: DESK_TEST_REAL_STATE },
-  )
+  const lock = await acquireSyncLock({ root: "/some/desk-root", env: { HOME: fakeReal } })
+  assert.deepEqual(lock, { refused: true })
   assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home")
 })
 
@@ -413,6 +419,25 @@ test("runPushWorker exits quietly (busy) without pushing when another worker alr
   assert.equal(pushCalled, false)
   assert.equal(originCommitCount(origin), 1, "nothing was pushed while busy")
   held.release()
+})
+
+test("under a node:test run, runPushWorker treats a refused lock as a non-throwing 'could not run' result, and logs it to stderr rather than staying silent", async (t) => {
+  // Fix round for PR #101 (review: CHANGES NEEDED). Ruling (a) and (b) together: a refused lock is a third outcome
+  // distinct from both a normal push and "busy" (another worker holds the lock) -- runPushWorker must resolve, not
+  // reject, and the refusal must be visible on stderr rather than silently swallowed, even though the CLI's own
+  // stdio is ignored in production (defaultSpawnWorker's real spawn uses `stdio: "ignore"`; this only matters to a
+  // caller -- a test, a manual invocation -- that inspects this process's stderr directly).
+  const realTmp = await fs.realpath(os.tmpdir())
+  const fakeReal = await fs.mkdtemp(path.join(path.dirname(realTmp), "desk-sync-worker-runworker-fake-real-"))
+  t.after(() => fs.rm(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
+  const written = []
+  const stderr = { write: (chunk) => { written.push(chunk) } }
+  const result = await runPushWorker({ root: "/some/desk-root", env: { HOME: fakeReal }, clock: instantClock, stderr })
+  assert.deepEqual(result, { result: "test_isolation_refused" })
+  assert.equal(written.length, 1)
+  assert.match(written[0], /test_isolation_refused|DESK_TEST_REAL_STATE/u)
+  assert.match(written[0], new RegExp(DESK_TEST_REAL_STATE, "u"))
+  assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home")
 })
 
 test("runPushWorker skips (no error) when there is no remote configured", async () => {
@@ -810,16 +835,23 @@ test("finalUnpushedCheck falls back to its own reason when an existing blocked s
   assert.deepEqual(readSyncStatus({ root: cloneA, env: process.env }), { blocked: true }, "an already-blocked status is never rewritten, even with no reason of its own")
 })
 
-test("under a node:test run, finalUnpushedCheck's own status write refuses a real (non-temp) state home rather than writing to it", async (t) => {
-  // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
-  // the developer's real home, so a status file landing here would be exactly the incident the guard exists to
-  // stop. Only the state directory is faked; the Git root stays a real, temp-based fixture.
+test("under a node:test run, finalUnpushedCheck still reports unpushed even though its own status write is refused", async (t) => {
+  // Fix round for PR #101 (review: CHANGES NEEDED). Ruling (b): finalUnpushedCheck computes "unpushed" straight from
+  // Git, independent of whether it manages to record that in the status file; a status write that cannot be
+  // persisted -- an unwritable folder, or here, the state guard refusing a real, non-temp state home under what
+  // looks like a node:test run -- must never be reported as "unavailable" just because the write failed. It used to
+  // reject with DESK_TEST_REAL_STATE here (the same uncaught-crash shape as acquireSyncLock, since updateSyncStatus
+  // had the identical unguarded throw); now the write degrades to a no-op and finalUnpushedCheck's own git-derived
+  // answer is untouched. Only the state directory is faked; the Git root stays a real, temp-based fixture.
   const { cloneA } = await mkOriginWithClone()
   await writeAndCommit(cloneA, "more.md", "more\n", "more")
   const realTmp = await fs.realpath(os.tmpdir())
   const fakeReal = await fs.mkdtemp(path.join(path.dirname(realTmp), "desk-sync-worker-status-fake-real-"))
   t.after(() => fs.rm(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
   const env = { HOME: fakeReal }
-  assert.throws(() => finalUnpushedCheck({ root: cloneA, env }), { code: DESK_TEST_REAL_STATE })
-  assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home")
+  const result = finalUnpushedCheck({ root: cloneA, env })
+  assert.equal(result.state, "unpushed")
+  assert.match(result.diagnostic, /Desk problem: desk-sync/)
+  assert.match(result.diagnostic, /unpushed_at_session_end/)
+  assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard refuses before creating anything under the fake real home; the status write is best-effort only")
 })
