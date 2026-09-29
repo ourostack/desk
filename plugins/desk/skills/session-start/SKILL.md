@@ -165,6 +165,8 @@ cd $DESK && git pull --rebase --quiet origin main
 ```
 keep `--quiet`: without it the pull prints a diffstat and a `create mode` line for every file it brings in, so a folder another machine created with a secret's value in its name would land in this session's output before Step 3 can hide it. errors still print. if the pull fails (conflict, no remote), warn the operator but proceed — don't block. to see what changed, use the Step 3 listing, never `git log --stat` or `git diff --stat` on the desk.
 
+a session doing work unrelated to the desk — a different tool, a different repo, a one-off script — should not use the desk root as its working directory; a stray file dropped there by an unrelated tool session is exactly how loose scratch content has ended up committed to a desk before.
+
 ## Step 2.6 — Desk-registry awareness (shared-workspace mode)
 
 after sync, check whether this workspace carries a committed desk registry: `$DESK/_meta/desks.md`. **default-tolerant — absent → behave exactly as today (single-desk, no shared-workspace awareness).** the file is plain markdown that travels with the repo (no machine-local fork), so reading it is a cheap existence-check + parse.

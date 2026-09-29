@@ -1,5 +1,19 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.132 — 2026-09-29
+
+A fresh desk's `.gitignore` template now covers generic scratch shapes an unrelated tool session can drop at the desk root — loose `*.txt`/`*.png`/`*.jpg`/`*.log` files (anchored to the desk root and one level down only, so a real deliverable further inside a task folder is never silently ignored), an `undefined/` directory, and `_cache/` (the Desk-problem quarantine directory) — on top of the existing `.state/`/`.machine-local.yml`/`~$*` patterns. `first-run-bootstrap`'s fresh-create step ships the wider template, and `session-start` now says plainly that a session doing work unrelated to the desk should not use the desk root as its working directory.
+
+The doctor's `loose_file` finding now calls out a desk-root file or directory that matches one of those same scratch shapes as "probable scratch, not desk content," so tidying an older desk sees the distinction without new machinery. `_cache/` itself is never reported as loose; tidy never deletes anything in it, but a new `stale_quarantine` finding flags any entry directly inside it older than 30 days for the operator to review and delete themselves.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.131 — 2026-09-29
+
+Updates the Agentic Engineering V2 RFC (`plugins/desk/docs/agentic-engineering-v2-rfc.md`) to point at the public factory site, https://ourostack.github.io/factory/, now that it is live: a "See it" pointer and screenshot in the introduction, the two-step thesis the site is built to demonstrate in section 1 (an agent can carry a long-horizon task to a merged result, and once that holds the next problem is designing the work itself), a note in section 4 that the store's data is visualized there, and a "Works today" entry for the site in section 9. Also updates two section 9 entries with what has shipped since they were last written: "Job attribution" now covers the housekeeping-judge widening and the stale-deriver hold (desk#85, desk#87) and the store pull requests correcting polluted job entries that followed; "The kaizen loop and andon" now reflects that all six kaizen cards filed to date have closed on their merged, verified fixes rather than a statistical verdict, under the closure rule desk#83 added.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.130 — 2026-09-29
 
 The checkout guard's cache of already-decided Git calls is now keyed on a call's target and Git's own environment (`GIT_DIR` and its siblings, `GIT_CONFIG_*` overrides) instead of the whole modeled shell environment. A shell loop that calls Git every iteration against the same target — for example `for f in $(ls); do git -C "$dir" status; done`, or a retry loop around a plain `git push` — previously spent one real Git read per iteration even though nothing about the call actually changed, because the loop's own variables (a loop counter, an unrelated export) were part of the cache key and made every iteration look new. A long enough loop could exhaust the guard's 7 s Git-read budget and fail closed on a command that was always going to be allowed. A loop's Git reads are now bounded by its distinct Git targets, not its length; a loop over enough genuinely distinct targets to still exhaust the budget is denied with a reason that says why and what to do instead (split it into fewer targets per command, or run it as a script file), rather than just "retry it." A dangerous Git call inside a loop on a protected checkout is still denied, and still short-circuits the rest of the loop. [ourostack/factory#39](https://github.com/ourostack/factory/issues/39)
