@@ -112,6 +112,7 @@ test("task_move renames a task within the same track (Git desk) and renames its 
   const result = await task_move({
     deskRoot: root,
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.from, path.join("main-track", "old-name"))
@@ -146,6 +147,7 @@ test("task_move renames a task under a track that has no track.md, leaving the m
   const result = await task_move({
     deskRoot: root,
     input: { track: "lonely-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.to, path.join("lonely-track", "new-name"))
@@ -183,7 +185,7 @@ test("task_move preserves every other frontmatter byte untouched: a date-only va
   await fs.writeFile(filePath, handWritten, "utf8")
 
   commitAll(root)
-  await task_move({ deskRoot: root, input: { track: "main-track", slug: "old-name", to_slug: "new-name" } })
+  await task_move({ deskRoot: root, input: { track: "main-track", slug: "old-name", to_slug: "new-name" }, schedulePush: () => {} })
 
   const raw = await fs.readFile(path.join(root, "main-track", "new-name", "task.md"), "utf8")
   assert.match(raw, /\ncreated: 2026-05-26\n/u, "the date-only created value is untouched")
@@ -219,7 +221,7 @@ test("task_move updates a plain (non-backtick) slug cell too", async () => {
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "T" } })
 
   commitAll(root)
-  await task_move({ deskRoot: root, input: { track: "main-track", slug: "old-name", to_slug: "new-name" } })
+  await task_move({ deskRoot: root, input: { track: "main-track", slug: "old-name", to_slug: "new-name" }, schedulePush: () => {} })
 
   const body = await trackBody(root, "main-track")
   assert.match(body, /\|\s*new-name\s*\|/)
@@ -239,6 +241,7 @@ test("task_move moves a task across tracks, keeping the slug, and moves its task
   const result = await task_move({
     deskRoot: root,
     input: { track: "track-a", slug: "shared-task", to_track: "track-b" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.from, path.join("track-a", "shared-task"))
@@ -265,6 +268,7 @@ test("task_move moves and renames simultaneously across tracks", async () => {
   const result = await task_move({
     deskRoot: root,
     input: { track: "track-a", slug: "old-name", to_track: "track-b", to_slug: "new-name" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.to, path.join("track-b", "new-name"))
@@ -358,6 +362,7 @@ test("task_move moves into a valid, already-existing destination track", async (
   const result = await task_move({
     deskRoot: root,
     input: { track: "track-a", slug: "solo-task", to_track: "track-b" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.to, path.join("track-b", "solo-task"))
@@ -375,6 +380,7 @@ test("task_move across tracks leaves both tables alone when the source table has
   const result = await task_move({
     deskRoot: root,
     input: { track: "track-a", slug: "untracked-in-table", to_track: "track-b" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.updated_files.includes(path.join("track-a", "track.md")), false)
@@ -398,6 +404,7 @@ test("task_move across tracks leaves the destination table alone when it exists 
   const result = await task_move({
     deskRoot: root,
     input: { track: "track-a", slug: "moving-task", to_track: "track-b" },
+    schedulePush: () => {},
   })
 
   assert.ok(await exists(path.join(root, "track-b", "moving-task", "task.md")))
@@ -416,6 +423,7 @@ test("task_move within the same track leaves the table alone when it has no row 
   const result = await task_move({
     deskRoot: root,
     input: { track: "track-a", slug: "untracked-in-table", to_slug: "still-untracked" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.updated_files.includes(path.join("track-a", "track.md")), false)
@@ -445,6 +453,7 @@ test("task_move leaves a track.md with no Tasks table alone", async () => {
   const result = await task_move({
     deskRoot: root,
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.updated_files.includes(path.join("main-track", "track.md")), false)
@@ -469,6 +478,7 @@ test("task_move leaves a track.md alone when the Tasks heading has no table unde
   const result = await task_move({
     deskRoot: root,
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: () => {},
   })
   assert.equal(result.updated_files.includes(path.join("main-track", "track.md")), false)
 })
@@ -486,6 +496,7 @@ test("task_move leaves a track.md alone when the Tasks heading is the last line 
   const result = await task_move({
     deskRoot: root,
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: () => {},
   })
   assert.equal(result.updated_files.includes(path.join("main-track", "track.md")), false)
 })
@@ -508,6 +519,7 @@ test("task_move leaves a track.md alone when the header row has no separator row
   const result = await task_move({
     deskRoot: root,
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: () => {},
   })
   assert.equal(result.updated_files.includes(path.join("main-track", "track.md")), false)
 })
@@ -530,6 +542,7 @@ test("task_move leaves a track.md alone when the row after the header isn't a va
   const result = await task_move({
     deskRoot: root,
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: () => {},
   })
   assert.equal(result.updated_files.includes(path.join("main-track", "track.md")), false)
 })
@@ -548,6 +561,7 @@ test("task_move relocates an archived task and keeps it archived", async () => {
   const result = await task_move({
     deskRoot: root,
     input: { track: "track-a", slug: "old-task", to_track: "track-b", to_slug: "renamed-task" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.from, path.join("track-a", "_archive", "old-task"))
@@ -732,6 +746,7 @@ test("task_move reports mentions elsewhere but never rewrites them", async () =>
   const result = await task_move({
     deskRoot: root,
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: () => {},
   })
 
   assert.deepEqual(result.mentions, [path.join("_meta", "notes.md")])
@@ -754,6 +769,7 @@ test("task_move mentions scan skips node_modules/.git/.state directories", async
   const result = await task_move({
     deskRoot: root,
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: () => {},
   })
   assert.deepEqual(result.mentions, [])
 })
@@ -913,6 +929,7 @@ test("task_move commits only its own paths, leaving another process's staged, un
   const result = await task_move({
     deskRoot: root,
     input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.to, path.join("main-track", "new-name"))
@@ -940,6 +957,73 @@ test("task_move treats a spawnGit throw as a non-Git desk", async () => {
   assert.ok(await exists(path.join(root, "main-track", "new-name", "task.md")))
 })
 
+// ── task_move: push scheduling ───────────────────────────────────────────────
+//
+// After a successful, silent commit, task_move schedules a background push
+// through the injectable `schedulePush` seam (never the real, spawning
+// default in runtime/sync-worker.js — a test that reaches this code path
+// without overriding it would fire a real detached process). It must run
+// exactly once, keyed on the tool's own top-level `deskRoot` (never
+// `effectiveRoot` or the moved directory), and only when the desk is a Git
+// repo and the commit didn't fail.
+
+test("task_move schedules a push exactly once, keyed on the plain deskRoot, after a successful commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "main-track", { rows: ["old-name"] })
+  await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "T" } })
+  commitAll(root)
+
+  const calls = []
+  const result = await task_move({
+    deskRoot: root,
+    input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: (opts) => calls.push(opts),
+  })
+
+  assert.equal(result.to, path.join("main-track", "new-name"))
+  assert.deepEqual(calls, [{ root }])
+})
+
+test("task_move never schedules a push on a non-Git desk", async () => {
+  const root = await mkTempDeskRoot()
+  await mkTrack(root, "main-track", { rows: ["old-name"] })
+  await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "T" } })
+
+  const calls = []
+  await task_move({
+    deskRoot: root,
+    input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    schedulePush: (opts) => calls.push(opts),
+  })
+
+  assert.deepEqual(calls, [])
+})
+
+test("task_move never schedules a push when the commit fails", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "main-track", { rows: ["old-name"] })
+  await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "T" } })
+
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    return spawnSync(cmd, args, opts)
+  }
+
+  commitAll(root)
+  const calls = []
+  const result = await task_move({
+    deskRoot: root,
+    input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    spawnGit,
+    schedulePush: (opts) => calls.push(opts),
+  })
+
+  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(calls, [])
+})
+
 // ── task_move: unarchive (M4-5) ──────────────────────────────────────────────
 
 async function archivedTask(root, { track = "main-track", slug = "old-task", rows = [] } = {}) {
@@ -957,6 +1041,7 @@ test("task_move unarchive moves an archived task back to a live folder and resto
   const result = await task_move({
     deskRoot: root,
     input: { track: "main-track", slug: "old-task", unarchive: true },
+    schedulePush: () => {},
   })
 
   assert.equal(result.from, path.join("main-track", "_archive", "old-task"))
@@ -1120,6 +1205,7 @@ test("task_move into_task moves a duplicate into the kept task as a dated iterat
   const result = await task_move({
     deskRoot: root,
     input: { track: "main-track", slug: "dup-task", into_task: "keep-task" },
+    schedulePush: () => {},
   })
 
   const iteration = path.join("main-track", "keep-task", "_iterations", `${day}-dup-task`)
@@ -1252,12 +1338,12 @@ test("task_move ignores ignored files, and moves a dirty task when allow_dirty i
   await fs.writeFile(path.join(root, ".gitignore"), "*.log\n")
   commitAll(root)
   await fs.writeFile(path.join(root, "main-track", "clean-task", "run.log"), "ignored\n")
-  await task_move({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "moved-task" } })
+  await task_move({ deskRoot: root, input: { track: "main-track", slug: "clean-task", to_slug: "moved-task" }, schedulePush: () => {} })
   assert.ok(await exists(path.join(root, "main-track", "moved-task", "run.log")))
 
   commitAll(root)
   await fs.writeFile(path.join(root, "main-track", "moved-task", "doing.md"), "in progress\n")
-  const result = await task_move({ deskRoot: root, input: { track: "main-track", slug: "moved-task", to_slug: "final-task", allow_dirty: true } })
+  const result = await task_move({ deskRoot: root, input: { track: "main-track", slug: "moved-task", to_slug: "final-task", allow_dirty: true }, schedulePush: () => {} })
   assert.equal(result.to, path.join("main-track", "final-task"))
   // allow_dirty sweeps the dirty file along with the move (existing `git add
   // -A` + `git mv` behavior); the move's own commit picks it up too, since it
@@ -1303,7 +1389,7 @@ test("task_move refuses to edit a track.md that holds another session's uncommit
   await fs.appendFile(path.join(root, "track-a", "track.md"), "\nAnother edit.\n")
   await assert.rejects(task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_slug: "renamed-task" } }), /a track\.md this move would edit has unstaged changes or untracked files/)
 
-  const result = await task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b", allow_dirty: true } })
+  const result = await task_move({ deskRoot: root, input: { track: "track-a", slug: "clean-task", to_track: "track-b", allow_dirty: true }, schedulePush: () => {} })
   assert.equal(result.to, path.join("track-b", "clean-task"))
 })
 
@@ -1324,10 +1410,10 @@ test("task_move into_task refuses to hide a live task inside a done one, and mer
   )
   assert.ok(await exists(path.join(root, "main-track", "live-task", "task.md")), "the live task stays where it is")
 
-  const kept = await task_move({ deskRoot: root, input: { track: "main-track", slug: "done-task", into_task: "live-task" } })
+  const kept = await task_move({ deskRoot: root, input: { track: "main-track", slug: "done-task", into_task: "live-task" }, schedulePush: () => {} })
   assert.match(kept.to, /^main-track\/live-task\/_iterations\/\d{4}-\d{2}-\d{2}-done-task$/)
   commitAll(root)
-  const both = await task_move({ deskRoot: root, input: { track: "main-track", slug: "other-live-task", into_task: "live-task" } })
+  const both = await task_move({ deskRoot: root, input: { track: "main-track", slug: "other-live-task", into_task: "live-task" }, schedulePush: () => {} })
   assert.match(both.to, /other-live-task$/, "two live tasks for one job can still be merged")
 })
 
@@ -1344,7 +1430,7 @@ test("track_rename refuses a track with uncommitted work unless allow_dirty is t
   assert.doesNotMatch(error.message, /old-track|task-one/)
   assert.ok(await exists(path.join(root, "old-track", "track.md")))
 
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track", allow_dirty: true } })
+  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track", allow_dirty: true }, schedulePush: () => {} })
   assert.equal(result.to, "new-track")
   await assert.rejects(track_rename({ deskRoot: root, input: { track: "new-track", to: "newer-track", allow_dirty: 1 } }), /`allow_dirty` must be true or false/)
 })
@@ -1359,7 +1445,7 @@ test("track_rename renames a track and rewrites track: on every live task card",
   await task_create({ deskRoot: root, input: { track: "old-track", slug: "task-two", title: "T" } })
 
   commitAll(root)
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
+  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
 
   assert.equal(result.from, "old-track")
   assert.equal(result.to, "new-track")
@@ -1411,7 +1497,7 @@ test("track_rename preserves every other frontmatter byte untouched: a date-only
   await fs.writeFile(filePath, handWritten, "utf8")
 
   commitAll(root)
-  await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
+  await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
 
   const raw = await fs.readFile(path.join(root, "new-track", "task-one", "task.md"), "utf8")
   assert.match(raw, /\ncreated: 2026-05-26\n/u, "the date-only created value is untouched")
@@ -1435,7 +1521,7 @@ test("track_rename with archived tasks rewrites both live and archived task card
   await task_archive({ deskRoot: root, input: { track: "old-track", slug: "task-gone" } })
 
   commitAll(root)
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
+  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
 
   const { data: liveData } = await readFront(path.join(root, "new-track", "live-one", "task.md"))
   assert.equal(liveData.track, "new-track")
@@ -1460,7 +1546,7 @@ test("track_rename works on a track with no tasks", async () => {
   await mkTrack(root, "old-track", { rows: [] })
 
   commitAll(root)
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
+  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
   assert.deepEqual(result.updated_files, [])
   assert.ok(await exists(path.join(root, "new-track", "track.md")))
 })
@@ -1559,7 +1645,7 @@ test("track_rename reports mentions elsewhere but never rewrites them", async ()
   await fs.writeFile(notePath, noteText, "utf8")
 
   commitAll(root)
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
+  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
   assert.deepEqual(result.mentions, [path.join("_meta", "notes.md")])
   assert.equal(await fs.readFile(notePath, "utf8"), noteText)
 })
@@ -1576,7 +1662,7 @@ test("track_rename findTaskCards skips node_modules/.git/.state under the moved 
   )
 
   commitAll(root)
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
+  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
   assert.deepEqual(result.updated_files, [])
 })
 
@@ -1609,12 +1695,73 @@ test("track_rename commits only its own paths, leaving another process's staged,
   await fs.writeFile(path.join(root, "unrelated.txt"), "another process's work\n")
   spawnSync("git", ["-C", root, "add", "--", "unrelated.txt"], { encoding: "utf8" })
 
-  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
+  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })
 
   assert.equal(result.to, "new-track")
   assert.equal(result.commit, undefined, "the rename's own commit succeeded")
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
+})
+
+// ── track_rename: push scheduling ────────────────────────────────────────────
+//
+// Same contract as task_move's (see above): a real push is scheduled through
+// the injectable `schedulePush` seam, never the real, spawning default,
+// exactly once, keyed on the plain top-level `deskRoot`, and only after a
+// successful commit on a Git desk.
+
+test("track_rename schedules a push exactly once, keyed on the plain deskRoot, after a successful commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "old-track", { rows: [] })
+  commitAll(root)
+
+  const calls = []
+  const result = await track_rename({
+    deskRoot: root,
+    input: { track: "old-track", to: "new-track" },
+    schedulePush: (opts) => calls.push(opts),
+  })
+
+  assert.equal(result.to, "new-track")
+  assert.deepEqual(calls, [{ root }])
+})
+
+test("track_rename never schedules a push on a non-Git desk", async () => {
+  const root = await mkTempDeskRoot()
+  await mkTrack(root, "old-track", { rows: [] })
+
+  const calls = []
+  await track_rename({
+    deskRoot: root,
+    input: { track: "old-track", to: "new-track" },
+    schedulePush: (opts) => calls.push(opts),
+  })
+
+  assert.deepEqual(calls, [])
+})
+
+test("track_rename never schedules a push when the commit fails", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "old-track", { rows: [] })
+
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    return spawnSync(cmd, args, opts)
+  }
+
+  commitAll(root)
+  const calls = []
+  const result = await track_rename({
+    deskRoot: root,
+    input: { track: "old-track", to: "new-track" },
+    spawnGit,
+    schedulePush: (opts) => calls.push(opts),
+  })
+
+  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(calls, [])
 })
 
 // ── track_rename: non-Git desk + person scoping ──────────────────────────────
@@ -1668,7 +1815,7 @@ async function deskWithSecretTask() {
 
 test("task_move renames a task by its handle and never shows the old name", async () => {
   const { root, handle } = await deskWithSecretTask()
-  const result = await task_move({ deskRoot: root, input: { handle, to_slug: "restore-root-access" } })
+  const result = await task_move({ deskRoot: root, input: { handle, to_slug: "restore-root-access" }, schedulePush: () => {} })
   assert.doesNotMatch(JSON.stringify(result), /hunter/)
   assert.equal(result.from, "main-track/<redacted segment>")
   assert.equal(result.to, "main-track/restore-root-access")
@@ -1711,7 +1858,7 @@ test("track_rename renames a track by its handle and never shows the old name", 
   await assert.rejects(() => track_rename({ deskRoot: root, input: { handle: "track-0000000000", to: "access-work" } }), /no track in this session's desk has that handle/)
   await assert.rejects(() => track_rename({ deskRoot: root, input: { handle, track: "pw-hunter2-track", to: "access-work" } }), /pass `handle` or `track`, not both/)
 
-  const result = await track_rename({ deskRoot: root, input: { handle, to: "access-work" } })
+  const result = await track_rename({ deskRoot: root, input: { handle, to: "access-work" }, schedulePush: () => {} })
   assert.doesNotMatch(JSON.stringify(result), /hunter/)
   assert.equal(result.from, "<redacted segment>")
   assert.deepEqual(result.updated_files, ["access-work/some-task/task.md"])

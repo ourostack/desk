@@ -51,6 +51,7 @@ test("desk_save stages and commits exactly the given path", async () => {
   const result = await desk_save({
     deskRoot: root,
     input: { paths: ["notes.md"], message: "save planning notes" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.status, "committed")
@@ -70,6 +71,7 @@ test("desk_save commits several paths together as one commit", async () => {
   const result = await desk_save({
     deskRoot: root,
     input: { paths: ["planning/spec.md", "planning/plan.md"], message: "save spec and plan" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.status, "committed")
@@ -87,23 +89,27 @@ test("desk_save reports nothing_to_commit for a path that was never written, and
   await spawnSync("git", ["-C", root, "add", "--", "seed.md"], { encoding: "utf8" })
   await spawnSync("git", ["-C", root, "commit", "-q", "-m", "seed"], { encoding: "utf8" })
   const before = commitCount(root)
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
 
   const result = await desk_save({
     deskRoot: root,
     input: { paths: ["never-written.md"], message: "save nothing" },
+    schedulePush,
   })
 
   assert.equal(result.status, "nothing_to_commit")
   assert.equal(result.commit, undefined)
   assert.equal(commitCount(root), before, "no empty commit was created")
   assert.equal(gitStatus(root), "")
+  assert.equal(calls.length, 0, "schedulePush is never called when there is nothing to commit")
 })
 
 test("desk_save reports nothing_to_commit for a path that is already committed and unchanged", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await fs.writeFile(path.join(root, "notes.md"), "Hand-written notes.\n", "utf8")
-  await desk_save({ deskRoot: root, input: { paths: ["notes.md"], message: "save notes" } })
+  await desk_save({ deskRoot: root, input: { paths: ["notes.md"], message: "save notes" }, schedulePush: () => {} })
   const before = commitCount(root)
 
   const result = await desk_save({
@@ -142,6 +148,7 @@ test("desk_save commits a path inside the resolved --person write prefix", async
     deskRoot: root,
     person: "alex",
     input: { paths: ["desks/alex/notes.md"], message: "save alex's notes" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.status, "committed")
@@ -161,6 +168,7 @@ test("desk_save commits only its own paths, leaving another process's staged, un
   const result = await desk_save({
     deskRoot: root,
     input: { paths: ["notes.md"], message: "save notes" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.status, "committed")
@@ -177,16 +185,20 @@ test("desk_save reports a commit failure as nothing_to_commit with the reason, a
     if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
 
   const result = await desk_save({
     deskRoot: root,
     input: { paths: ["notes.md"], message: "save notes" },
     spawnGit,
+    schedulePush,
   })
 
   assert.equal(result.status, "nothing_to_commit")
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
   assert.equal(commitCount(root), 0)
+  assert.equal(calls.length, 0, "schedulePush is never called after a commit failure")
 })
 
 test("desk_save reports a staging failure as nothing_to_commit with the reason", async () => {
@@ -197,28 +209,54 @@ test("desk_save reports a staging failure as nothing_to_commit with the reason",
     if (args.includes("add")) return { status: 1, stdout: "", stderr: "add boom" }
     return spawnSync(cmd, args, opts)
   }
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
 
   const result = await desk_save({
     deskRoot: root,
     input: { paths: ["notes.md"], message: "save notes" },
     spawnGit,
+    schedulePush,
   })
 
   assert.equal(result.status, "nothing_to_commit")
   assert.deepEqual(result.commit, { status: "failed", reason: "add boom" })
+  assert.equal(calls.length, 0, "schedulePush is never called after a staging failure")
 })
 
 test("desk_save reports nothing_to_commit on a non-Git desk", async () => {
   const root = await mkTempDeskRoot()
   await fs.writeFile(path.join(root, "notes.md"), "Hand-written notes.\n", "utf8")
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
 
   const result = await desk_save({
     deskRoot: root,
     input: { paths: ["notes.md"], message: "save notes" },
+    schedulePush,
   })
 
   assert.equal(result.status, "nothing_to_commit")
   assert.equal(result.commit, undefined)
+  assert.equal(calls.length, 0, "schedulePush is never called on a non-Git desk")
+})
+
+test("desk_save schedules a push after a successful commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await fs.writeFile(path.join(root, "notes.md"), "Hand-written notes.\n", "utf8")
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
+
+  const result = await desk_save({
+    deskRoot: root,
+    input: { paths: ["notes.md"], message: "save notes" },
+    schedulePush,
+  })
+
+  assert.equal(result.status, "committed")
+  assert.equal(calls.length, 1, "schedulePush is called exactly once")
+  assert.deepEqual(calls[0], { root })
 })
 
 test("desk_save accepts `paths` sent as a JSON-encoded array string", async () => {
@@ -229,6 +267,7 @@ test("desk_save accepts `paths` sent as a JSON-encoded array string", async () =
   const result = await desk_save({
     deskRoot: root,
     input: { paths: JSON.stringify(["notes.md"]), message: "save notes" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.status, "committed")

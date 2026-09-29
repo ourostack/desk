@@ -23,6 +23,7 @@ import {
 } from "../util/fm.js"
 import { isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
@@ -320,7 +321,7 @@ function splitAbsolutePath(candidate) {
  *
  * Returns: { status: "created", path: "<track>/<slug>/task.md", commit? }
  */
-export async function task_create({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
+export async function task_create({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug, title } = values
   if (!Object.hasOwn(values, "track")) {
@@ -371,6 +372,7 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
   let commit
   if (isGitRepository(path.dirname(filePath), spawnGit)) {
     commit = stageAndCommitCard(filePath, `task_create: ${track}/${slug}`, spawnGit)
+    if (!commit) schedulePush({ root: deskRoot })
   }
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   const result = { status: "created", path: relPath(deskRoot, filePath) }
@@ -405,7 +407,7 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
  *
  * Returns: { status: "updated", path, commit? }
  */
-export async function task_update({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync }) {
+export async function task_update({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug, body_append } = values
   if (
@@ -456,6 +458,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   const stage = stagingAllowed(filePath, spawnGit)
   await writeMarkdown(filePath, merged, newBody)
   const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit) : undefined
+  if (stage && !commit) schedulePush({ root: deskRoot })
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
@@ -501,7 +504,7 @@ async function archivedTaskStatus(archivedFile) {
  *
  * Returns: { status: "archived" | "already_archived", path, commit? }
  */
-export async function task_archive({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync }) {
+export async function task_archive({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -583,6 +586,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
   // now) last, once every write this call makes is in place (M4-6 Part 2).
   const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
   const commit = stageAndCommitMove(effectiveRoot, [srcDir, archiveDir], `task_archive: ${track}/${slug}`, spawnGit)
+  if (commit === undefined && isGitRepository(effectiveRoot, spawnGit)) schedulePush({ root: deskRoot })
 
   await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
   const result = { status: "archived", path: relPath(deskRoot, filePath) }

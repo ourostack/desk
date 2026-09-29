@@ -254,11 +254,13 @@ test("track_update stages and commits exactly the track.md it updated", async ()
   await track_create({
     deskRoot: root,
     input: { slug: "billing-disputes", title: "T", scope: SCOPE },
+    schedulePush: () => {},
   })
 
   const result = await track_update({
     deskRoot: root,
     input: { slug: "billing-disputes", frontmatter: { status: "closed" } },
+    schedulePush: () => {},
   })
 
   assert.equal(result.status, "updated")
@@ -274,6 +276,7 @@ test("track_update commits only its own file, leaving another process's staged, 
   await track_create({
     deskRoot: root,
     input: { slug: "billing-disputes", title: "T", scope: SCOPE },
+    schedulePush: () => {},
   })
 
   // Simulates another process staging an unrelated path in the window
@@ -284,6 +287,7 @@ test("track_update commits only its own file, leaving another process's staged, 
   const result = await track_update({
     deskRoot: root,
     input: { slug: "billing-disputes", frontmatter: { status: "closed" } },
+    schedulePush: () => {},
   })
 
   assert.equal(result.commit, undefined, "track_update's own commit succeeded")
@@ -298,22 +302,27 @@ test("track_update reports a commit failure without losing the write", async () 
   await track_create({
     deskRoot: root,
     input: { slug: "billing-disputes", title: "T", scope: SCOPE },
+    schedulePush: () => {},
   })
   const spawnGit = (cmd, args, opts) => {
     if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
 
   const result = await track_update({
     deskRoot: root,
     input: { slug: "billing-disputes", frontmatter: { status: "closed" } },
     spawnGit,
+    schedulePush,
   })
 
   assert.equal(result.status, "updated", "the write itself is never lost to a commit failure")
   const { data } = await readFront(path.join(root, "billing-disputes", "track.md"))
   assert.equal(data.status, "closed")
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.deepEqual(calls, [], "a push is never scheduled when the commit itself failed")
 })
 
 test("track_update skips staging and committing when the file held unstaged changes before the write", async () => {
@@ -322,6 +331,7 @@ test("track_update skips staging and committing when the file held unstaged chan
   await track_create({
     deskRoot: root,
     input: { slug: "billing-disputes", title: "T", scope: SCOPE },
+    schedulePush: () => {},
   })
   const filePath = path.join(root, "billing-disputes", "track.md")
 
@@ -329,9 +339,12 @@ test("track_update skips staging and committing when the file held unstaged chan
   // track_update writes.
   await fs.appendFile(filePath, "\nanother session's note\n")
 
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
   const result = await track_update({
     deskRoot: root,
     input: { slug: "billing-disputes", frontmatter: { status: "closed" } },
+    schedulePush,
   })
 
   assert.equal(result.status, "updated", "the write always happens")
@@ -339,4 +352,29 @@ test("track_update skips staging and committing when the file held unstaged chan
   const { data } = await readFront(filePath)
   assert.equal(data.status, "closed")
   assert.match(gitStatus(root), /billing-disputes\/track\.md/, "the file is left as an uncommitted change")
+  assert.deepEqual(calls, [], "a push is never scheduled when staging was skipped")
+})
+
+// ── M4-6 Part 3: schedule push ──────────────────────────────────────────────
+
+test("track_update schedules a push exactly once after a successful, silent commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await track_create({
+    deskRoot: root,
+    input: { slug: "billing-disputes", title: "T", scope: SCOPE },
+    schedulePush: () => {},
+  })
+
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
+  const result = await track_update({
+    deskRoot: root,
+    input: { slug: "billing-disputes", frontmatter: { status: "closed" } },
+    schedulePush,
+  })
+
+  assert.equal(result.status, "updated")
+  assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
+  assert.deepEqual(calls, [{ root }])
 })

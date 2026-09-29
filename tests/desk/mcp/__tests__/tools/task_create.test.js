@@ -246,12 +246,26 @@ test("task_create stages and commits exactly the task.md it wrote", async () => 
   const result = await task_create({
     deskRoot: root,
     input: { track: "europe-trip", slug: "book-flights", title: "Book the Paris flights" },
+    schedulePush: () => {},
   })
   assert.equal(result.status, "created")
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "task_create: europe-trip/book-flights")
   assert.deepEqual(lastCommitFiles(root), [path.join("europe-trip", "book-flights", "task.md")])
+})
+
+test("task_create calls schedulePush exactly once with { root: deskRoot } on a successful commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const calls = []
+  const result = await task_create({
+    deskRoot: root,
+    input: { track: "europe-trip", slug: "book-flights", title: "Book the Paris flights" },
+    schedulePush: (opts) => calls.push(opts),
+  })
+  assert.equal(result.status, "created")
+  assert.deepEqual(calls, [{ root }], "schedulePush is called exactly once, with the desk root")
 })
 
 test("task_create commits only its own file, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
@@ -266,6 +280,7 @@ test("task_create commits only its own file, leaving another process's staged, u
   const result = await task_create({
     deskRoot: root,
     input: { track: "europe-trip", slug: "book-flights", title: "Book the Paris flights" },
+    schedulePush: () => {},
   })
 
   assert.equal(result.commit, undefined, "task_create's own commit succeeded")
@@ -281,14 +296,17 @@ test("task_create reports a commit failure without losing the write", async () =
     if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
+  const calls = []
   const result = await task_create({
     deskRoot: root,
     input: { track: "europe-trip", slug: "book-flights", title: "Book the Paris flights" },
     spawnGit,
+    schedulePush: (opts) => calls.push(opts),
   })
   assert.equal(result.status, "created", "the write itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "europe-trip", "book-flights", "task.md")))
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 
 test("task_create reports a staging failure without losing the write", async () => {
@@ -310,10 +328,13 @@ test("task_create reports a staging failure without losing the write", async () 
 
 test("task_create skips staging and committing silently on a non-Git desk", async () => {
   const root = await mkTempDeskRoot()
+  const calls = []
   const result = await task_create({
     deskRoot: root,
     input: { track: "europe-trip", slug: "book-flights", title: "Book the Paris flights" },
+    schedulePush: (opts) => calls.push(opts),
   })
   assert.equal(result.status, "created")
   assert.equal(result.commit, undefined)
+  assert.equal(calls.length, 0, "schedulePush is never called on a non-Git desk")
 })

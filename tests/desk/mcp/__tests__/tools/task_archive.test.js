@@ -223,9 +223,9 @@ test("task_archive's status bump preserves every other frontmatter byte untouche
 test("task_archive stages and commits exactly the moved paths", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" }, schedulePush: () => {} })
 
-  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" }, schedulePush: () => {} })
 
   assert.equal(result.status, "archived")
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
@@ -234,17 +234,33 @@ test("task_archive stages and commits exactly the moved paths", async () => {
   assert.deepEqual(lastCommitFiles(root), [path.join("t", "_archive", "book-flights", "task.md")])
 })
 
+test("task_archive calls schedulePush exactly once with { root: deskRoot } on a successful commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" }, schedulePush: () => {} })
+
+  const calls = []
+  const result = await task_archive({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights" },
+    schedulePush: (opts) => calls.push(opts),
+  })
+
+  assert.equal(result.status, "archived")
+  assert.deepEqual(calls, [{ root }], "schedulePush is called exactly once, with the desk root")
+})
+
 test("task_archive commits only its own paths, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" }, schedulePush: () => {} })
 
   // Simulates another process staging an unrelated path in the window
   // between task_archive's move and its own stage/commit.
   await fs.writeFile(path.join(root, "unrelated.txt"), "another process's work\n")
   spawnSync("git", ["-C", root, "add", "--", "unrelated.txt"], { encoding: "utf8" })
 
-  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" }, schedulePush: () => {} })
 
   assert.equal(result.commit, undefined, "task_archive's own commit succeeded")
   assert.deepEqual(lastCommitFiles(root), [path.join("t", "_archive", "book-flights", "task.md")])
@@ -255,23 +271,30 @@ test("task_archive commits only its own paths, leaving another process's staged,
 test("task_archive reports a commit failure without losing the move", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" }, schedulePush: () => {} })
   const spawnGit = (cmd, args, opts) => {
     if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
 
-  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" }, spawnGit })
+  const calls = []
+  const result = await task_archive({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights" },
+    spawnGit,
+    schedulePush: (opts) => calls.push(opts),
+  })
 
   assert.equal(result.status, "archived", "the move itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "t", "_archive", "book-flights", "task.md")))
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 
 test("task_archive reports a staging failure without losing the move", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" }, schedulePush: () => {} })
   const spawnGit = (cmd, args, opts) => {
     if (args.includes("add")) return { status: 1, stdout: "", stderr: "add boom" }
     return spawnSync(cmd, args, opts)
@@ -287,22 +310,34 @@ test("task_archive reports a staging failure without losing the move", async () 
 test("task_archive skips staging and committing silently on a non-Git desk", async () => {
   const root = await mkTempDeskRoot()
   await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
-  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+  const calls = []
+  const result = await task_archive({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights" },
+    schedulePush: (opts) => calls.push(opts),
+  })
   assert.equal(result.status, "archived")
   assert.equal(result.commit, undefined)
+  assert.equal(calls.length, 0, "schedulePush is never called on a non-Git desk")
 })
 
 test("already_archived stages and commits nothing", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
-  await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" }, schedulePush: () => {} })
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" }, schedulePush: () => {} })
 
   const before = lastCommitMessage(root)
-  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+  const calls = []
+  const result = await task_archive({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights" },
+    schedulePush: (opts) => calls.push(opts),
+  })
 
   assert.equal(result.status, "already_archived")
   assert.equal(result.commit, undefined)
   assert.equal(lastCommitMessage(root), before, "nothing changed, so nothing was committed")
   assert.equal(gitStatus(root), "")
+  assert.equal(calls.length, 0, "schedulePush is never called on the idempotent already_archived path")
 })

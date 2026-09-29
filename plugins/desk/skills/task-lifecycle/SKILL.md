@@ -100,13 +100,15 @@ Clear tasks can execute from the task card without a doing document. Update the 
 
 `task_update`, `track_update` and `task_archive` stage and commit the files they write themselves, exactly the paths written, as part of the call — no separate `git add`/`git commit` follows one of those calls. Update the mapped progress/rulings record with a Desk tool where one exists; when it's a hand-written file no Desk tool covers, commit it with `desk_save` (`paths`, `message`) rather than a manual `git commit`.
 
-Pushing is still manual until the background push worker ships:
+Each of those tools also schedules a debounced background push right after a successful commit — it runs detached, off the tool call, so nothing here waits on it. Manual pushing still works:
 
 ```
 cd $DESK && git push origin main
 ```
 
-Auth and push convention is consumer-specific: corporate-worker overlays push under whatever enterprise-managed identity the org requires (the overlay's git-identity skill handles this); ouroboros agents push under whatever account their bundle's git remote is configured for; personal agents per their setup.
+and is the right call when the push needs to have actually landed before doing something else — handing off to another machine or agent mid-session, say — rather than leaving it to the background worker's own timing. Either way, `desk_status`'s `sync` field reports whether the desk is caught up (`blocked: false`, with `ahead`/`behind` counts and the last recorded push time) or stuck (`blocked: true`, with `reason`/`paths`); it never makes a network call itself, so it reports state as of the last push attempt or fetch, not a live check.
+
+Auth and push convention is consumer-specific: corporate-worker overlays push under whatever enterprise-managed identity the org requires (the overlay's git-identity skill handles this); ouroboros agents push under whatever account their bundle's git remote is configured for; personal agents per their setup. This applies to the background worker's own pushes as much as a manual one — both use whatever credentials are already configured in the environment.
 
 ### 5. Downstream triggers
 

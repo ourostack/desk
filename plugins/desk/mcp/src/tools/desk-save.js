@@ -17,6 +17,7 @@ import * as path from "node:path"
 import { spawnSync } from "node:child_process"
 import { personPrefix, isPathContained } from "../util/paths.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
 function pathsInput(value) {
   let parsed = value
@@ -62,7 +63,7 @@ function pathsInput(value) {
  *
  * Returns: { status: "committed" | "nothing_to_commit", commit? }
  */
-export async function desk_save({ deskRoot, input, person = null, spawnGit = spawnSync }) {
+export async function desk_save({ deskRoot, input, person = null, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const paths = pathsInput(values.paths)
   const { message } = values
@@ -98,5 +99,6 @@ export async function desk_save({ deskRoot, input, person = null, spawnGit = spa
   if (!committed.ok) {
     return { status: "nothing_to_commit", commit: { status: "failed", reason: committed.stderr } }
   }
+  schedulePush({ root: deskRoot })
   return { status: "committed" }
 }

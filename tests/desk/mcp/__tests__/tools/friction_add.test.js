@@ -250,6 +250,7 @@ test("friction_add stages and commits exactly the friction file it wrote", async
   const result = await friction_add({
     deskRoot: root,
     input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." },
+    schedulePush: () => {},
   })
   assert.equal(result.status, "added")
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
@@ -266,6 +267,7 @@ test("friction_add names the commit after the given plugin for system friction",
     deskRoot: root,
     input: { about: "system", title: "A generic title", plugin: "desk-tidy", body: "The friction." },
     fileCard,
+    schedulePush: () => {},
   })
   assert.equal(result.status, "added")
   assert.equal(calls.length, 0)
@@ -284,6 +286,7 @@ test("friction_add commits only its own file, leaving another process's staged, 
   const result = await friction_add({
     deskRoot: root,
     input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." },
+    schedulePush: () => {},
   })
 
   assert.equal(result.commit, undefined, "friction_add's own commit succeeded")
@@ -299,14 +302,18 @@ test("friction_add reports a commit failure without losing the write", async () 
     if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
     return spawnSync(cmd, args, opts)
   }
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
   const result = await friction_add({
     deskRoot: root,
     input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." },
     spawnGit,
+    schedulePush,
   })
   assert.equal(result.status, "added", "the write itself is never lost to a commit failure")
   assert.ok(await exists(path.join(root, "_meta", "friction.md")))
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+  assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
 
 test("friction_add reports a staging failure without losing the write", async () => {
@@ -329,8 +336,8 @@ test("friction_add reports a staging failure without losing the write", async ()
 test("friction_add appends to an existing file and commits again", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await friction_add({ deskRoot: root, input: { body: "First entry." } })
-  const result = await friction_add({ deskRoot: root, input: { body: "Second entry." } })
+  await friction_add({ deskRoot: root, input: { body: "First entry." }, schedulePush: () => {} })
+  const result = await friction_add({ deskRoot: root, input: { body: "Second entry." }, schedulePush: () => {} })
 
   assert.equal(result.commit, undefined)
   assert.equal(gitStatus(root), "")
@@ -341,30 +348,37 @@ test("friction_add appends to an existing file and commits again", async () => {
 test("friction_add skips staging and committing when the file held unstaged changes before the write", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
-  await friction_add({ deskRoot: root, input: { body: "First entry." } })
+  await friction_add({ deskRoot: root, input: { body: "First entry." }, schedulePush: () => {} })
   const filePath = path.join(root, "_meta", "friction.md")
 
   // Another session's unstaged edit to this same file, in place before
   // friction_add appends.
   await fs.appendFile(filePath, "\nanother session's note\n")
 
-  const result = await friction_add({ deskRoot: root, input: { body: "Second entry." } })
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
+  const result = await friction_add({ deskRoot: root, input: { body: "Second entry." }, schedulePush })
 
   assert.equal(result.status, "added", "the write always happens")
   assert.equal(result.commit, undefined, "no commit attempted when the file was already dirty")
   const content = await fs.readFile(filePath, "utf8")
   assert.match(content, /Second entry\./)
   assert.match(gitStatus(root), /_meta\/friction\.md/, "the file is left as an uncommitted change")
+  assert.equal(calls.length, 0, "schedulePush is never called when the commit is skipped")
 })
 
 test("friction_add skips staging and committing silently on a non-Git desk", async () => {
   const root = await mkTempDeskRoot()
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
   const result = await friction_add({
     deskRoot: root,
     input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." },
+    schedulePush,
   })
   assert.equal(result.status, "added")
   assert.equal(result.commit, undefined)
+  assert.equal(calls.length, 0, "schedulePush is never called on a non-Git desk")
 })
 
 test("friction_add retries with an underscore-prefixed slug when a same-named file has a different identity", async () => {
@@ -386,9 +400,26 @@ test("friction_add stages and commits a track-local friction file", async () => 
   const result = await friction_add({
     deskRoot: root,
     input: { track: "t1", theme: "tools", body: "Track-local friction." },
+    schedulePush: () => {},
   })
   assert.equal(result.status, "added")
   assert.match(result.path, /^t1\/_friction\/\d{4}-\d{2}-\d{2}-tools\.md$/u)
   assert.equal(gitStatus(root), "")
   assert.deepEqual(lastCommitFiles(root), [result.path.split(path.sep).join("/")])
+})
+
+// ── M4-6 Part 3: schedule push ──────────────────────────────────────────────
+
+test("friction_add schedules a push exactly once with the desk root after a successful, silent commit", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const calls = []
+  const schedulePush = (opts) => calls.push(opts)
+  const result = await friction_add({
+    deskRoot: root,
+    input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." },
+    schedulePush,
+  })
+  assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
+  assert.deepEqual(calls, [{ root }])
 })

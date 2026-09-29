@@ -388,6 +388,13 @@ test("Copilot preToolUse hooks include Desk-only host enforcement (Part 8, spec 
   }
 })
 
+test("Copilot registers sync-end.cjs under sessionEnd, not agentStop (M4-6 Part 3, Review Focus: never raise on every turn)", () => {
+  const copilotHooks = loadJson("plugins", "desk", "hooks", "copilot-hooks.json")
+  const registeredUnder = (event) => copilotHooks.hooks[event].some((entry) => entry.bash.includes("sync-end.cjs"))
+  assert.ok(registeredUnder("sessionEnd"), "copilot-hooks.json's sessionEnd array must register sync-end.cjs")
+  assert.ok(!registeredUnder("agentStop"), "sync-end.cjs must never bind to agentStop, which fires after every turn")
+})
+
 test("Copilot sessionStart hook stays lightweight and local-only", () => {
   const hookSource = readText("plugins", "desk", "hooks", "copilot-session-start.cjs")
   assertLightweightCopilotStartupHookSource(hookSource)

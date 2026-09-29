@@ -25,6 +25,7 @@ import {
 import { resolveWriteTarget, personPrefix } from "../util/paths.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
+import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { resolveTaskHandle, resolveTrackHandle } from "../desk/handles.js"
 import {
@@ -401,7 +402,7 @@ function trueOrAbsent(tool, field, value) {
  *
  * Returns: { from, to, updated_files, mentions, commit? }
  */
-export async function task_move({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
+export async function task_move({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   const { track, slug } = taskMoveSource(deskRoot, person, values)
   rejectTraversalShapedInput("task_move", "track", track)
@@ -589,6 +590,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
     message: `task_move: ${slug} → ${toTrack}`,
     spawnGit,
   })
+  if (commit === undefined && isGitRepository(effectiveRoot, spawnGit)) schedulePush({ root: deskRoot })
 
   const mentions = await findMentions({
     root: effectiveRoot,
@@ -635,7 +637,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
  *
  * Returns: { from, to, updated_files, mentions, commit? }
  */
-export async function track_rename({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
+export async function track_rename({ deskRoot, input, person = null, readiness, spawnGit = spawnSync, schedulePush = schedulePushDefault }) {
   const values = input ?? {}
   if (!Object.hasOwn(values, "to")) {
     throw new Error("track_rename: `to` is required, with `track` or `handle`")
@@ -682,6 +684,7 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
     message: `track_rename: ${track} → ${to}`,
     spawnGit,
   })
+  if (commit === undefined && isGitRepository(effectiveRoot, spawnGit)) schedulePush({ root: deskRoot })
 
   const mentions = await findMentions({
     root: effectiveRoot,

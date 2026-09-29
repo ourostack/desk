@@ -1169,10 +1169,11 @@ contract("the evaluation packet prose is not hard-wrapped", () => {
 // machine created can carry a secret's value in its name, and a git diffstat or a glob would put it in the transcript.
 contract("session start syncs the desk quietly and says why", () => {
   const skill = text(sessionStart);
-  assert.match(skill, /cd \$DESK && git pull --rebase --quiet origin main/u);
-  assert.match(skill, /keep `--quiet`: without it the pull prints a diffstat and a `create mode` line/u);
+  assert.match(skill, /node <Desk plugin folder>\/mcp\/scripts\/session-sync\.js/u);
+  assert.match(skill, /never streaming git's own diffstat to this session's output, so a folder another machine created with a secret's value in its name can't land here before Step 3 hides it/u);
+  assert.match(skill, /to see what changed, use the Step 3 listing, never `git log --stat` or `git diff --stat` on the desk/u);
   for (const match of skill.matchAll(/git (?:-C \S+ )?(pull|fetch|log|diff|status|ls-files)\b[^\n`]*/gu)) {
-    if (match[1] === "pull" || match[1] === "fetch") assert.match(match[0], /--quiet|--no-stat/u, `a startup git ${match[1]} must be quiet: ${match[0]}`);
+    if (match[1] === "pull" || match[1] === "fetch") assert.match(match[0], /--quiet|--no-stat|--autostash/u, `a startup git ${match[1]} must be quiet: ${match[0]}`);
   }
 });
 contract("session start and status list active tasks from desk_status, never a script or a glob", () => {
