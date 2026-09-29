@@ -64,7 +64,10 @@ try {
     if ($isDirectory -ne ($entry.kind -eq 'directory')) {
       throw "path is not a $($entry.kind): $target"
     }
-    $acl = Get-Acl -LiteralPath $target
+    # Read only the owner and access sections. Get-Acl also loads the audit
+    # section (SACL), and writing that section back needs
+    # SeSecurityPrivilege, which a non-elevated user does not hold.
+    $acl = $item.GetAccessControl('Access,Owner')
     $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
     $reassigned = $false
     if ($owner -ne $self) {
@@ -88,7 +91,7 @@ try {
       $inheritance,
       [System.Security.AccessControl.PropagationFlags]::None,
       [System.Security.AccessControl.AccessControlType]::Allow)))
-    Set-Acl -LiteralPath $target -AclObject $acl
+    $item.SetAccessControl($acl)
     $applied = Get-Acl -LiteralPath $target
     if ($applied.GetOwner([System.Security.Principal.SecurityIdentifier]) -ne $self) {
       throw "owner was not applied: $target"
