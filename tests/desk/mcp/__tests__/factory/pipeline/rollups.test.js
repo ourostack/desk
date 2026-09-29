@@ -211,6 +211,18 @@ test("jobRecord leaves compactions unavailable when no session records turns, an
   assert.deepEqual(jobRecord({ timeline: some, formulas: calculateFormulas(some) }, new Map()).measures.compactions, { excluded: "partial" })
 })
 
+test("jobRecord excludes compactions of a session split across jobs as partial, and a covering binding counts them", () => {
+  const sessions = fixtureSessions().filter((session) => session.session.id === S(3) || session.session.id === S(4))
+  const workers = [...sessions[0].agents, { n: 1, parent: 0, model: sessions[0].agents[0].model }]
+  const bound = (agents) => ({ ...sessions[0], agents: workers, jobs: sessions[0].jobs.map((binding) => ({ ...binding, agents })) })
+  const record = (list) => {
+    const [timeline] = buildTimelines(list)
+    return jobRecord({ timeline, formulas: calculateFormulas(timeline) }, new Map()).measures.compactions
+  }
+  assert.deepEqual(record([bound([0]), sessions[1]]), { excluded: "partial" })
+  assert.deepEqual(record([bound([0, 1]), sessions[1]]), record(sessions))
+})
+
 test("the measure rollups report median, p75 and counted jobs per group, and list each exclusion reason", () => {
   const { rollups } = fixtureRollups()
   const overall = rollups.measures.groupings.overall.all
