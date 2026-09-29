@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.138 — 2026-09-29
+
+Every Desk write tool now stages and commits exactly the file or files it wrote, synchronously in the same call, when the desk is a Git repository: `task_create`, `task_update`, `task_archive`, `task_move`, `track_create`, `track_update`, `track_rename`, `friction_add` and `lesson_add`. Each commit uses `git commit -- <paths>` against only the tool's own paths, never `-a` or `-A`, so a path another process staged in the same window (an in-flight edit, a parallel tool call) is left alone rather than swept into the commit. A stage or commit failure never loses the write: the file stays written, and the tool's result carries a `commit: { status: "failed", reason }` field reporting what went wrong. On a desk that isn't a Git repository, staging and committing are skipped silently, matching how these tools already behaved before this change. Pushing stays a separate, later step; a background push worker is planned but not part of this change.
+
+A new tool, `desk_save`, gives the same treatment to files an agent writes directly with `Write`/`Edit` rather than through a structured Desk tool — a planning doc, a spec, a progress record. It takes `paths` (relative to the desk root) and a commit `message`, and stages and commits exactly those paths the same way the other write tools commit their own. On a crew desk (`--person <alias>`), every path must resolve inside that alias's write prefix, or the call is refused. When none of `paths` holds an unstaged change or an untracked file — most often a path that was never actually written — `desk_save` reports `nothing_to_commit` without creating an empty commit.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.137 — 2026-09-29
 
 Desk mechanisms that fail at their own job (not at the operator's task) now have a shared failure contract: a `Desk problem: <mechanism> — <symptom>` block naming what broke, what it means, what Desk did about it, whether it filed a public issue on `ourostack/desk`, and one line to tell the operator. The new `desk-problem` skill documents the seven-step procedure, and `factory/desk-problem-file.js` files or recognizes an already-known issue, reusing `kaizen-file.js`'s account, cap and scrub primitives -- with one deliberate difference: its fingerprint is a plain, secret-free `SHA-256` of the mechanism and a normalized error signature, so any agent on any machine computes the same hash for the same failure and cross-operator dedup works off the public tracker itself.
