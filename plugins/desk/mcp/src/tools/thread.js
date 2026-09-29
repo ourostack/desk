@@ -52,7 +52,7 @@ function clampDepth(depth) {
  * relativized; relative paths stay as-is. Result uses forward-slash semantics
  * since that's how docs.path is stored by the indexer.
  */
-function normalizeStartPath(deskRoot, startPath) {
+export function normalizeStartPath(deskRoot, startPath) {
   if (!startPath) return ""
   if (path.isAbsolute(startPath)) {
     const rel = path.relative(deskRoot, startPath)
@@ -170,6 +170,27 @@ export async function desk_thread({ deskRoot, input, readiness, queryRouter, sig
   })
 }
 
+/**
+ * Order two chain rows for the final result: ascending by hop_distance,
+ * then descending by updated_at (newer first) within the same hop, with a
+ * missing updated_at sorting last and a path tiebreak when both match.
+ * Extracted (rather than inlined in the `.sort()` call) so every tie-break
+ * path can be exercised directly — `Array#sort`'s call order for a small
+ * fixture array isn't something a test can dictate.
+ */
+export function compareChainRows(a, b) {
+  if (a.hop_distance !== b.hop_distance) {
+    return a.hop_distance - b.hop_distance
+  }
+  // Newer first within the same hop. Nulls sort last.
+  const ua = a.updated_at ?? ""
+  const ub = b.updated_at ?? ""
+  if (ua === ub) return a.path.localeCompare(b.path)
+  if (!ua) return 1
+  if (!ub) return -1
+  return ub.localeCompare(ua)
+}
+
 export async function indexedThread({ deskRoot, input, db: suppliedDb }) {
   const rawPath = String(input?.start_path ?? "").trim()
   if (!rawPath) {
@@ -251,18 +272,7 @@ export async function indexedThread({ deskRoot, input, db: suppliedDb }) {
 
     // Sort: start doc first (hop_distance 0), then by hop_distance asc, then
     // by updated_at desc within the same hop. Stable on ties.
-    rows.sort((a, b) => {
-      if (a.hop_distance !== b.hop_distance) {
-        return a.hop_distance - b.hop_distance
-      }
-      // Newer first within the same hop. Nulls sort last.
-      const ua = a.updated_at ?? ""
-      const ub = b.updated_at ?? ""
-      if (ua === ub) return a.path.localeCompare(b.path)
-      if (!ua) return 1
-      if (!ub) return -1
-      return ub.localeCompare(ua)
-    })
+    rows.sort(compareChainRows)
 
     return {
       start: { path: startDoc.path, kind: startDoc.kind },
