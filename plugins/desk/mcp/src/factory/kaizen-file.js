@@ -74,14 +74,18 @@ const MAX_TITLE = 120
 const MAX_BODY = 8000
 const MAX_EVIDENCE_JOBS = 100
 const HIGHER_IS_BETTER = new Set(["flow_efficiency"])
-const PRIVATE_TEXT = [
+// Exported so the Desk-problem filer (factory/desk-problem-template.js) can
+// reuse this exact scrub instead of duplicating it -- the one deliberate
+// departure spec.md's fingerprint design calls out is the fingerprint
+// itself (no machine secret), not this credential/path/email defense.
+export const PRIVATE_TEXT = [
   /(^|[\s("'`])~[\\/]/u,
   /\/(Users|home)\//u,
   /[A-Za-z]:\\/u,
   /[^\s@]+@[^\s@]+\.[A-Za-z]{2,}/u,
 ]
 
-const isGeneric = (text) => !isCredentialLike(text) && !text.split(/\s+/u).some(isCredentialLike) && !PRIVATE_TEXT.some((pattern) => pattern.test(text))
+export const isGeneric = (text) => !isCredentialLike(text) && !text.split(/\s+/u).some(isCredentialLike) && !PRIVATE_TEXT.some((pattern) => pattern.test(text))
 
 /** `normalizeTitle(title) -> string`: lower case, with runs of anything but letters and digits as one space; the fingerprint's form of a title. */
 export function normalizeTitle(title) {

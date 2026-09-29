@@ -6,12 +6,24 @@
 // registered for the current host, and reporting a missing registration
 // through the failure contract as a `Desk problem:` block."
 //
-// The failure contract's real filer (Part 4 of this task's plan) has not
-// merged yet -- this PR ships ahead of it, independently, per spec §8.7's own
-// "independent of Parts 1-6" sequencing note. `fileHookRegistrationProblem`
-// below is the single function Part 4's PR swaps for a call into the real
-// filer; until then it returns the honest `not filed: filer_unavailable`
-// rather than pretending to file anything.
+// This module only verifies registration and formats the block; it never
+// files by itself. Filing a real `Desk problem:` (through
+// `factory/desk-problem-file.js`, Part 4) means an account lookup and `gh`
+// calls that can run for tens of seconds on a slow network, and neither of
+// this module's two callers may pay that cost inline: `desk_status` must
+// answer with no network call at all (a fix round after this Part first
+// shipped found the SessionStart hook losing its whole output past a 10 s
+// timeout, and `desk_status` hanging on every call, because the real filer
+// was reached straight from both). So `hookRegistrationDeskProblem`'s
+// `fileProblem` has no filing default: given none, the block renders
+// honestly with `file: not filed: filer_unavailable`, and each real caller
+// supplies its own deliberate, differently-shaped step --
+// boot-checks.cjs's `hostEnforcementCheck` queues a detached, unref'd run of
+// `mcp/scripts/file-desk-problem.js` (the same repair-launch pattern it
+// already uses) and reports `file: filing in background`; `status.js`'s
+// `hostEnforcementStatus` reports `file: filed at session start` with no
+// filing step of its own, since the boot check already covers it once per
+// session.
 
 import { readFile as fsReadFile } from "node:fs/promises"
 import * as path from "node:path"
@@ -75,15 +87,8 @@ export async function verifyHookRegistered({ host, pluginRoot, readFile = defaul
   }
 }
 
-/**
- * The swappable filing step (see header): Part 4's real Desk-problem filer
- * is not merged yet, so this stub always reports the honest
- * `not filed: filer_unavailable` rather than filing anything. Callers pass a
- * different `fileProblem` (matching this same `() -> Promise<{ file }>`
- * shape) once a real filer exists; `hookRegistrationDeskProblem` below is the
- * only caller, so swapping this one function is enough.
- */
-export async function fileHookRegistrationProblem() {
+/** The honest, no-op filing step: never called with `env` missing, since neither real caller needs it to resolve anything -- see the header. */
+async function noFiler() {
   return { file: "not filed: filer_unavailable" }
 }
 
@@ -105,18 +110,22 @@ function formatDeskProblemBlock({ mechanism, symptom, broke, means, fix, file, t
 }
 
 /**
- * `{ host, pluginRoot, readFile?, fileProblem? }` -> `{ registered, block }`.
- * `registered` is `null` (nothing to report) when the host isn't checked at
- * all, `true` with a `null` block when the hook is registered, and `false`
- * with a full `Desk problem:` block when it is not -- never blocking,
- * never throwing; a caller (the boot check, `desk_status`) shows the block
- * as-is.
+ * `{ host, pluginRoot, readFile?, env?, fileProblem? }` -> `{ registered,
+ * block }`. `registered` is `null` (nothing to report) when the host isn't
+ * checked at all, `true` with a `null` block when the hook is registered,
+ * and `false` with a full `Desk problem:` block when it is not -- never
+ * blocking, never throwing; a caller (the boot check, `desk_status`) shows
+ * the block as-is. `fileProblem` has no filing default (see the header):
+ * without one, the block still renders, with `file: not filed:
+ * filer_unavailable`; each real caller supplies its own.
  */
-export async function hookRegistrationDeskProblem({ host, pluginRoot, readFile, fileProblem = fileHookRegistrationProblem } = {}) {
+export async function hookRegistrationDeskProblem({
+  host, pluginRoot, readFile, env, fileProblem = noFiler,
+} = {}) {
   const result = await verifyHookRegistered({ host, pluginRoot, readFile })
   if (!result.applicable) return { registered: null, block: null }
   if (result.registered) return { registered: true, block: null }
-  const { file } = await fileProblem()
+  const { file } = await fileProblem({ env, host, reason: result.reason })
   const isCodexHookTrustGap = host === "codex"
   const block = formatDeskProblemBlock({
     mechanism: "host-enforcement",

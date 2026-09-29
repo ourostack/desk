@@ -40,6 +40,7 @@
 //                                      before it becomes local labels
 //   evaluate-requests/<job>.json       a finished job still needing labels
 //   evaluate-requests/quarantine/<job>.json   { reason, at }
+//   locks/<name>.lock                  a named critical-section lock with no JSON file of its own
 //
 // Local labels (`desk.factory.labels/1`) are already on the published
 // session clock and carry no free text; like local facts they leave only
@@ -96,6 +97,7 @@ const VISIBILITY_VALUES = ["public", "private", "unknown"]
 const SESSION_ID_SRC = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 const OUTBOX_NAME_PATTERN = new RegExp(`^(?:${ENUMS.host.join("|")})-${SESSION_ID_SRC}\\.json$`, "u")
 const FINALIZE_NAME_PATTERN = /^[0-9a-f]{32}\.json$/u
+const LOCK_NAME_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u
 const SESSION_ID_PATTERN = new RegExp(`^${SESSION_ID_SRC}$`, "u")
 const LABELS_NAME_PATTERN = new RegExp(`^${SESSION_ID_SRC}\\.json$`, "u")
 const LABELS_KEY_PATTERN = new RegExp(`^labels/[0-9a-f]{32}/${SESSION_ID_SRC}\\.json$`, "u")
@@ -552,6 +554,19 @@ export async function withDerivationLock(env, name, body, { deskRoot = null } = 
   requirePattern(name, OUTBOX_NAME_PATTERN, "name")
   const root = await factoryStateRoot(env, { deskRoot })
   return withLock(root, path.join(root, "deriving", name), process.platform, () => body(root))
+}
+
+/**
+ * The general-purpose form of the locks above: serializes `body()` under a named lock with no JSON file
+ * of its own, for a critical section that isn't a single file's read-modify-write -- for example, a
+ * check-known / check-cap / create-on-a-shared-external-resource sequence two processes (two sessions
+ * starting at once, say) must never both be inside at once. `name` scopes the lock (callers from
+ * different concerns never block each other); it must be a safe path segment.
+ */
+export async function withNamedLock(env, name, body, { platform = process.platform, runner = undefined, deskRoot = null } = {}) {
+  requirePattern(name, LOCK_NAME_PATTERN, "name")
+  const root = await factoryStateRoot(env, { platform, runner, deskRoot })
+  return withLock(root, path.join(root, "locks", name), platform, body)
 }
 
 /**
