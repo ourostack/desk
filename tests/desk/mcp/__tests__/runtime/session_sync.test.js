@@ -12,8 +12,9 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { promises as fs, existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { promises as fs, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
+import * as os from "node:os"
 import { execFileSync, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { mkTempRoot } from "../_temp_roots.js"
@@ -243,18 +244,154 @@ test("conflictedPaths and untrackedPaths degrade to empty when their own git com
 })
 
 // ---------------------------------------------------------------------------
+// GIT_SSH_COMMAND (fix round, controller ruling 4): every git call disables
+// interactive SSH prompts too, the same way GIT_TERMINAL_PROMPT=0 already
+// disables the HTTPS one, extending rather than replacing any value the
+// caller's own environment already set. Mirrors `sync-worker.js`'s own
+// equivalent test.
+// ---------------------------------------------------------------------------
+
+test("syncWorkspace's own git calls extend an already-set GIT_SSH_COMMAND with -o BatchMode=yes, rather than replacing it", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  const originalSsh = process.env.GIT_SSH_COMMAND
+  process.env.GIT_SSH_COMMAND = "ssh -i /custom/identity"
+  try {
+    let captured = null
+    const spawnGit = (cmd, args, opts) => {
+      if (captured === null && opts?.env?.GIT_SSH_COMMAND) captured = opts.env.GIT_SSH_COMMAND
+      return spawnSync(cmd, args, opts)
+    }
+    await syncWorkspace({ root: cloneA, env, spawnGit })
+    assert.equal(captured, "ssh -i /custom/identity -o BatchMode=yes")
+  } finally {
+    if (originalSsh === undefined) delete process.env.GIT_SSH_COMMAND
+    else process.env.GIT_SSH_COMMAND = originalSsh
+  }
+})
+
+test("GIT_SSH_COMMAND defaults to -o BatchMode=yes alone when nothing was already set", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  const originalSsh = process.env.GIT_SSH_COMMAND
+  delete process.env.GIT_SSH_COMMAND
+  try {
+    let captured = null
+    const spawnGit = (cmd, args, opts) => {
+      if (captured === null && opts?.env?.GIT_SSH_COMMAND) captured = opts.env.GIT_SSH_COMMAND
+      return spawnSync(cmd, args, opts)
+    }
+    await syncWorkspace({ root: cloneA, env, spawnGit })
+    assert.equal(captured, "ssh -o BatchMode=yes")
+  } finally {
+    if (originalSsh !== undefined) process.env.GIT_SSH_COMMAND = originalSsh
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Fix round, controller ruling 2: a status-0 `git pull --rebase --autostash`
+// is not proof the tree ended up clean -- popping the autostash can itself
+// conflict without failing the pull's own exit code. Verified directly with
+// real git before writing this test: with a plain dirty (uncommitted, no
+// local commit needed) tracked-file edit that collides with an incoming
+// fast-forward pull, `git pull --rebase --autostash` prints "Applying
+// autostash resulted in conflicts..." yet still exits 0, leaves `UU seed.md`
+// in `git status --porcelain`, and does not drop its own stash entry.
+// ---------------------------------------------------------------------------
+
+test("syncWorkspace treats a pull that succeeds but leaves its own autostash pop conflicted as unresolved, and leaves no rebase in progress", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  const cloneB = await mkClone(origin, "b", { trackMain: true })
+  await writeAndCommit(cloneB, "seed.md", "seed\nfrom origin\n", "origin edits seed")
+  git(cloneB, ["push", "-q"])
+
+  // An uncommitted, working-tree-only edit to the very file origin just
+  // changed -- no local commit needed at all -- is what autostash then fails
+  // to pop cleanly.
+  await fs.writeFile(path.join(cloneA, "seed.md"), "seed\nfrom A working tree\n")
+
+  let filed = null
+  const result = await syncWorkspace({ root: cloneA, env, fileProblem: (args) => { filed = args } })
+
+  assert.equal(result.state, "unresolved")
+  assert.equal(result.quarantinedPaths, undefined)
+  assert.match(result.diagnostic, /autostash_pop_conflict\)/u)
+  assert.match(result.diagnostic, /conflicted: seed\.md/u)
+  assert.equal(filed.reason, "autostash_pop_conflict")
+
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "never left mid-rebase")
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false, "never left mid-rebase")
+  assert.match(git(cloneA, ["status", "--porcelain"]), /^UU seed\.md/mu, "the stash-pop conflict is real, left on disk exactly as real git leaves it")
+  assert.match(git(cloneA, ["stash", "list"]), /autostash/u, "the stash entry is deliberately not dropped, exactly as real git leaves it")
+})
+
+// ---------------------------------------------------------------------------
+// The 20s wall-clock budget (fix round, controller ruling 5): each git call
+// gets whatever of the budget remains, and the whole sequence gives up as
+// `unresolved` (reason `sync_deadline_exceeded`) rather than pushing ahead
+// with an unbounded or zero-timeout call once it is gone. `now` is an
+// injected clock throughout -- never a real sleep.
+// ---------------------------------------------------------------------------
+
+test("syncWorkspace reports sync_deadline_exceeded and never attempts a pull when the budget is already exhausted", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  let calls = 0
+  const now = () => { calls += 1; return calls === 1 ? 0 : 999_999 }
+  let pullCalled = false
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("pull")) pullCalled = true
+    return spawnSync(cmd, args, opts)
+  }
+  let filed = null
+  const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
+  assert.equal(result.state, "unresolved")
+  assert.match(result.diagnostic, /sync_deadline_exceeded/u)
+  assert.equal(pullCalled, false, "no real pull was ever attempted once the budget was already exhausted")
+  assert.equal(filed.reason, "sync_deadline_exceeded")
+})
+
+test("syncWorkspace reports sync_deadline_exceeded, without attempting a second pull, when the budget runs out after quarantining", async () => {
+  const { cloneA } = await mkDirtyIndexFixture()
+  let exhausted = false
+  const now = () => (exhausted ? 999_999 : 0)
+  let pullCalls = 0
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("ls-files")) exhausted = true
+    if (args.includes("pull")) pullCalls += 1
+    return spawnSync(cmd, args, opts)
+  }
+  let filed = null
+  const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
+  assert.equal(result.state, "unresolved")
+  assert.match(result.diagnostic, /sync_deadline_exceeded/u)
+  assert.equal(pullCalls, 1, "only the first pull attempt ran; the sequence gave up before a second")
+  assert.ok(Array.isArray(result.quarantinedPaths) && result.quarantinedPaths.some((p) => p.endsWith("stray.txt")), "the stray path was still quarantined before the budget ran out")
+  assert.equal(filed.reason, "sync_deadline_exceeded")
+})
+
+// ---------------------------------------------------------------------------
 // queueDeskProblemFiling — the real default `fileProblem`, tested directly
 // with an injected `spawnImpl` so the real detached filer never actually
 // launches from a test (it really does shell out toward `gh`).
 // ---------------------------------------------------------------------------
 
-test("queueDeskProblemFiling spawns the detached filer with mechanism session-sync and the given reason/host", () => {
+// A fresh, throwaway HOME per test -- never `process.env` itself, whose own
+// `XDG_STATE_HOME` is one shared directory for this whole test-file run (set
+// once by `_isolated_env.mjs`), which would let one test's throttle stamp
+// leak into a sibling test using the same mechanism+reason pair. Matches
+// `filer_throttle.test.js`'s own `fixtureEnv` exactly.
+function fixtureFilerEnv(t) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "desk-session-sync-filer-"))
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  return { HOME: root }
+}
+
+test("queueDeskProblemFiling spawns the detached filer with mechanism session-sync and the given reason/host", (t) => {
   let captured = null
   const spawnImpl = (cmd, args, opts) => {
     captured = { cmd, args, opts }
     return { on: (event, handler) => { if (event === "error") handler(new Error("unused")) }, unref: () => {} }
   }
-  queueDeskProblemFiling({ root: "/some/root", env: { A: "1" }, reason: "pull_rebase_failed", host: "claude", spawnImpl })
+  const env = fixtureFilerEnv(t)
+  queueDeskProblemFiling({ root: "/some/root", env, reason: "pull_rebase_failed", host: "claude", spawnImpl })
   assert.equal(captured.cmd, process.execPath)
   assert.ok(captured.args.includes("--mechanism"))
   assert.ok(captured.args.includes("session-sync"))
@@ -266,10 +403,49 @@ test("queueDeskProblemFiling spawns the detached filer with mechanism session-sy
   assert.equal(captured.opts.detached, true)
   assert.equal(captured.opts.stdio, "ignore")
   assert.equal(captured.opts.cwd, "/some/root")
+  assert.equal(captured.opts.env, env)
 })
 
-test("queueDeskProblemFiling never throws, even when the spawn implementation itself throws", () => {
-  assert.doesNotThrow(() => queueDeskProblemFiling({ root: "/x", env: {}, reason: "x", host: "unknown", spawnImpl: () => { throw new Error("boom") } }))
+test("queueDeskProblemFiling never throws, even when the spawn implementation itself throws", (t) => {
+  assert.doesNotThrow(() => queueDeskProblemFiling({ root: "/x", env: fixtureFilerEnv(t), reason: "x", host: "unknown", spawnImpl: () => { throw new Error("boom") } }))
+})
+
+// Fix round, spec.md §1 Part 5: `reason`'s raw text must never reach the
+// spawned filer's own argv unredacted -- `ps` shows a process's argv to every
+// account on the machine. Mirrors `boot-checks.cjs`'s own filer-argv
+// redaction test (`boot_checks_error_skip.test.js`) and `sync-worker.js`'s
+// own equivalent (`sync_worker.test.js`).
+test("queueDeskProblemFiling redacts a path-shaped reason out of the spawned filer's own argv", (t) => {
+  let captured = null
+  const spawnImpl = (cmd, args, opts) => {
+    captured = { cmd, args, opts }
+    return { on: (event, handler) => { if (event === "error") handler(new Error("unused")) }, unref: () => {} }
+  }
+  const rawReason = "boom: failed to read /Users/ari/personal-desk/track/task/notes.md"
+  queueDeskProblemFiling({ root: "/some/root", env: fixtureFilerEnv(t), reason: rawReason, host: "claude", spawnImpl })
+  const reasonIndex = captured.args.indexOf("--reason")
+  assert.ok(reasonIndex >= 0)
+  const safeReason = captured.args[reasonIndex + 1]
+  assert.doesNotMatch(safeReason, /\/Users\//u)
+  assert.doesNotMatch(safeReason, /personal-desk/u)
+  assert.ok(!captured.args.some((arg) => typeof arg === "string" && arg.includes("/Users/ari")))
+})
+
+// Fix round, spec.md §1 Part 5: `shouldLaunchFiler` throttles the actual spawn
+// to once per hour per mechanism+reason pair -- the caller still reports a
+// `file` field either way.
+test("queueDeskProblemFiling does not launch a second filer for the same reason within the cooldown", (t) => {
+  const env = fixtureFilerEnv(t)
+  let spawnCalls = 0
+  const spawnImpl = () => {
+    spawnCalls += 1
+    return { on: (event, handler) => { if (event === "error") handler(new Error("unused")) }, unref: () => {} }
+  }
+  const first = queueDeskProblemFiling({ root: "/some/root", env, reason: "pull_rebase_failed", host: "claude", spawnImpl })
+  const second = queueDeskProblemFiling({ root: "/some/root", env, reason: "pull_rebase_failed", host: "claude", spawnImpl })
+  assert.equal(spawnCalls, 1, "only the first call actually spawns")
+  assert.deepEqual(first, { file: "filing in background" })
+  assert.deepEqual(second, { file: "filing already queued (within the last hour)" })
 })
 
 // ---------------------------------------------------------------------------
