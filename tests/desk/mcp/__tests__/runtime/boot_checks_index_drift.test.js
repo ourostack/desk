@@ -32,7 +32,7 @@ function fixture(t) {
   return { repo, env, git }
 }
 
-test("a check that stages a file mid-run produces a Desk problem: index-drift block", async (t) => {
+test("a check that stages a file mid-run produces a Desk problem: index-drift block, without accusing the check of it", async (t) => {
   const { runBootChecks } = require(BOOT)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray.txt"), "x\n")
@@ -41,8 +41,11 @@ test("a check that stages a file mid-run produces a Desk problem: index-drift bl
     env,
     checks: [{ id: "probe", budgetMs: 50, run: async () => { git("add", "stray.txt"); return {} } }],
   })
-  assert.match(line, /Desk problem: index-drift — probe/)
+  assert.match(line, /Desk problem: index-drift — unexpected file staged during probe/)
   assert.match(line, /stray\.txt/)
+  assert.match(line, /it may have staged it, or another session may have staged it at the same time/)
+  assert.doesNotMatch(line, /staged a file it should never touch/)
+  assert.doesNotMatch(line, /unexpectedly staged/)
 })
 
 test("a check with no index change adds no index-drift block, and the usual line still comes through", async (t) => {
@@ -75,7 +78,7 @@ test("a bound desk that resolves but is not itself a Git repository is never wat
   assert.equal(line, "")
 })
 
-test("a check that stages several files mid-run names every one of them", async (t) => {
+test("a check that stages several files mid-run names every one of them, in the plural", async (t) => {
   const { runBootChecks } = require(BOOT)
   const { repo, env, git } = fixture(t)
   writeFileSync(path.join(repo, "stray-a.txt"), "a\n")
@@ -85,10 +88,10 @@ test("a check that stages several files mid-run names every one of them", async 
     env,
     checks: [{ id: "probe", budgetMs: 50, run: async () => { git("add", "stray-a.txt", "stray-b.txt"); return {} } }],
   })
-  assert.match(line, /Desk problem: index-drift — probe/)
+  assert.match(line, /Desk problem: index-drift — unexpected files staged during probe/)
   assert.match(line, /stray-a\.txt/)
   assert.match(line, /stray-b\.txt/)
-  assert.match(line, /unexpectedly staged files/)
+  assert.match(line, /Files appeared in the index while "probe" ran/)
 })
 
 test("the five real boot checks produce zero false-positive drift blocks against a synthetic bound desk", async (t) => {
@@ -96,4 +99,64 @@ test("the five real boot checks produce zero false-positive drift blocks against
   const { env } = fixture(t)
   const line = await runBootChecks({ ...quiet, host: "claude", env, checks, checkBudgets: Object.fromEntries(checks.map((c) => [c.id, 2000])), totalBudgetMs: 10000 })
   assert.doesNotMatch(line, /Desk problem: index-drift/)
+})
+
+// ── A snapshot's own cost never eats the check's budget (fix round 2) ──────
+//
+// Independent review reproduced: with the before/after snapshot inside the
+// check's own elapsed measurement, a check with no index change lost its
+// line to a false "over budget" 2/3 local runs — the snapshot's own git call
+// cost was being charged against the check's tiny budget (as little as
+// 20 ms). Both below prove it is excluded: one with a synthetic timed-out
+// git call (what a real hang eventually resolves to), one with a real,
+// deliberately slow git call bounded well under the check's own budget.
+
+test("a git call that reports a timeout mid-snapshot never drops the check's line, and adds no drift block", async (t) => {
+  const { runBootChecks } = require(BOOT)
+  const { env } = fixture(t)
+  const timedOutSpawnGit = (command, args) => (args.includes("rev-parse")
+    ? { status: 0, stdout: "true\n", stderr: "" }
+    : { status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) })
+  const line = await runBootChecks({
+    ...quiet,
+    env,
+    spawnGit: timedOutSpawnGit,
+    checks: [{ id: "quiet-check", budgetMs: 20, run: async () => ({ line: "fine" }) }],
+  })
+  assert.equal(line, "Desk boot: fine")
+})
+
+test("a before-snapshot that fails skips the after-snapshot entirely — it never turns its own failure into a false-positive drift", async (t) => {
+  const { runBootChecks } = require(BOOT)
+  const { env } = fixture(t)
+  let diffCalls = 0
+  const spawnGit = (command, args) => {
+    if (args.includes("rev-parse")) return { status: 0, stdout: "true\n", stderr: "" }
+    diffCalls += 1
+    return { status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) }
+  }
+  const line = await runBootChecks({ ...quiet, env, spawnGit, checks: [{ id: "probe", budgetMs: 50, run: async () => ({ line: "fine" }) }] })
+  assert.equal(diffCalls, 1, "only the before-snapshot is attempted; the after-snapshot is skipped")
+  assert.equal(line, "Desk boot: fine")
+  assert.doesNotMatch(line, /Desk problem/)
+})
+
+test("a snapshot slower than the check's own tiny budget never drops the check's line — its cost is never charged to it", async (t) => {
+  const { runBootChecks } = require(BOOT)
+  const { env } = fixture(t)
+  // Every snapshot call (before and after) actually takes real wall-clock
+  // time, well past the check's own 20 ms budget, then reports "nothing
+  // staged" — proving the check's own elapsed measurement excludes it.
+  const slowSpawnGit = (command, args) => {
+    if (args.includes("rev-parse")) return { status: 0, stdout: "true\n", stderr: "" }
+    execFileSync("bash", ["-c", "sleep 0.15"])
+    return { status: 0, stdout: "", stderr: "" }
+  }
+  const line = await runBootChecks({
+    ...quiet,
+    env,
+    spawnGit: slowSpawnGit,
+    checks: [{ id: "quiet-check", budgetMs: 20, run: async () => ({ line: "fine" }) }],
+  })
+  assert.equal(line, "Desk boot: fine")
 })

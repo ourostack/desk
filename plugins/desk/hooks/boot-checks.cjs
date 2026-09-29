@@ -25,7 +25,7 @@
 // immediately before and after each `check.run(...)` call — against the same
 // desk root `factoryCheck`/`deskHealthCheck` already resolve, only when it is
 // itself a Git repository — catches a check that stages a path it never
-// should. A drift appends a five-field `Desk problem: index-drift — ...`
+// should. A drift appends a `Desk problem: index-drift — ...`
 // block (`mcp/src/runtime/index-drift.js`) to the same output; it names the
 // check and the exact paths, never undoes the staging, and never blocks.
 //
@@ -400,7 +400,7 @@ async function runBootChecks(options = {}) {
   // Index tracing (spec.md §3): resolved once, the same way `factoryCheck`/
   // `deskHealthCheck` resolve their own desk root, and only watched when it
   // is itself a Git repository.
-  const { snapshotStagedPaths, diffStagedPaths, formatDeskProblem } = await runtime("runtime/index-drift.js");
+  const { snapshotStagedPaths, diffStagedPaths, formatIndexDriftProblem } = await runtime("runtime/index-drift.js");
   const { isGitRepository } = await runtime("util/git-stage.js");
   const driftRoot = await boundRoot({ env, host: options.host, sessionFolder: options.sessionFolder, shared });
   const tracksIndex = typeof driftRoot === "string" && isGitRepository(driftRoot, spawnGit);
@@ -412,9 +412,12 @@ async function runBootChecks(options = {}) {
       continue;
     }
     const cancellation = new AbortController();
+    // Taken outside the check's own timing window, so a snapshot's cost (git
+    // is bounded to 1 s, never the check's own budget) is never charged
+    // against it — see `mcp/src/runtime/index-drift.js`.
+    const beforeStaged = tracksIndex ? snapshotStagedPaths({ root: driftRoot, spawnGit }) : null;
     const checkStarted = performance.now();
     const deadline = checkStarted + budget;
-    const beforeStaged = tracksIndex ? snapshotStagedPaths({ root: driftRoot, spawnGit }) : null;
     let timer;
     const outcome = await Promise.race([
       Promise.resolve()
@@ -423,22 +426,20 @@ async function runBootChecks(options = {}) {
       new Promise((resolve) => { timer = setTimeout(resolve, Math.ceil(budget), { overrun: true }); }),
     ]);
     clearTimeout(timer);
-    if (tracksIndex) {
-      const drift = diffStagedPaths(beforeStaged, snapshotStagedPaths({ root: driftRoot, spawnGit }));
-      if (drift.length > 0) {
-        lines.push(formatDeskProblem({
-          mechanism: "index-drift",
-          broke: `${check.id}: unexpected staged path(s) appeared during this boot check: ${drift.join(", ")}`,
-          means: "a Desk boot check staged a file it should never touch",
-          fix: "not undone — staged paths left as-is for inspection",
-          file: "not filed: filing lands once the failure-contract filer exists (spec §8 PR 4)",
-          tell: `Boot check "${check.id}" unexpectedly staged ${drift.length === 1 ? "a file" : "files"} (${drift.join(", ")}); left as-is so you can inspect it.`,
-        }));
-      }
-    }
     // A check that blocks synchronously settles before its timer can fire, so the real elapsed time decides: past the budget, its line and repair are discarded like a timed-out check's.
     const elapsed = performance.now() - checkStarted;
     used += elapsed;
+    // The after-snapshot is taken (and its own cost incurred) only once the
+    // check's own elapsed time is already settled, and only when the before-
+    // snapshot itself succeeded: a failed or timed-out "before" makes any
+    // diff meaningless, and trying again risks the same hang twice.
+    if (tracksIndex && beforeStaged !== null) {
+      const afterStaged = snapshotStagedPaths({ root: driftRoot, spawnGit });
+      if (afterStaged !== null) {
+        const drift = diffStagedPaths(beforeStaged, afterStaged);
+        if (drift.length > 0) lines.push(formatIndexDriftProblem({ kind: "boot check", label: check.id, drift }));
+      }
+    }
     if (outcome.overrun || elapsed > budget) {
       cancellation.abort();
       skipped.push({ id: check.id, reason: "budget", elapsed_ms: Math.round(elapsed) });

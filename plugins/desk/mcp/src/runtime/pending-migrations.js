@@ -38,7 +38,7 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { spawn as spawnChild, spawnSync } from "node:child_process"
 import * as path from "node:path"
-import { diffStagedPaths, formatDeskProblem, snapshotStagedPaths } from "./index-drift.js"
+import { diffStagedPaths, formatIndexDriftProblem, snapshotStagedPaths } from "./index-drift.js"
 import { isGitRepository } from "../util/git-stage.js"
 
 // All Detect blocks together, plus any Safety check and Migrate the hook runs,
@@ -185,11 +185,14 @@ export function migrationCommand(pluginRoot, id, { tools = false } = {}) {
  * snapshot taken immediately before and after each one, against `cwd` (only
  * when it is itself a Git repository), catches a block that stages a path it
  * never should. `onIndexDrift(block)` (a no-op by default) receives the
- * five-field `Desk problem: index-drift — ...` block for every drift found,
- * tagged `<migration id>:<block name>` (`detect` names the whole batch: those
- * run concurrently, so a drift there cannot be pinned to one migration). It
- * never undoes the staging and never fails this function; `spawnGit` is a
- * test-only seam over `node:child_process`'s `spawnSync`.
+ * `Desk problem: index-drift — ...` block for every drift found, tagged
+ * `<migration id>:<block name>` (`detect` names the whole batch: those run
+ * concurrently, so a drift there cannot be pinned to one migration). It never
+ * undoes the staging and never fails this function. Each snapshot is bounded
+ * to a short timeout of its own (`index-drift.js`) and fails toward `null` —
+ * skipping the diff, never guessing — so it can never hang this function nor
+ * manufacture a false drift out of its own failure; `spawnGit` is a test-only
+ * seam over `node:child_process`'s `spawnSync`.
  */
 export async function pendingMigrations({
   pluginRoot, env = process.env, cwd, budgetMs = MIGRATION_BUDGET_MS, blockLimitMs = Infinity, spawn, now = () => performance.now(),
@@ -209,17 +212,13 @@ export async function pendingMigrations({
   const watchIndex = async (tag, run) => {
     const before = tracksIndex ? snapshotStagedPaths({ root: cwd, spawnGit }) : null
     const result = await run()
-    if (tracksIndex) {
-      const drift = diffStagedPaths(before, snapshotStagedPaths({ root: cwd, spawnGit }))
-      if (drift.length > 0) {
-        onIndexDrift(formatDeskProblem({
-          mechanism: "index-drift",
-          broke: `${tag}: unexpected staged path(s) appeared during this migration block: ${drift.join(", ")}`,
-          means: "a Desk migration block staged a file it should never touch",
-          fix: "not undone — staged paths left as-is for inspection",
-          file: "not filed: filing lands once the failure-contract filer exists (spec §8 PR 4)",
-          tell: `Migration block "${tag}" unexpectedly staged ${drift.length === 1 ? "a file" : "files"} (${drift.join(", ")}); left as-is so you can inspect it.`,
-        }))
+    // A failed or timed-out "before" makes any diff meaningless — skip the
+    // after-snapshot too, rather than risk the same hang twice.
+    if (tracksIndex && before !== null) {
+      const after = snapshotStagedPaths({ root: cwd, spawnGit })
+      if (after !== null) {
+        const drift = diffStagedPaths(before, after)
+        if (drift.length > 0) onIndexDrift(formatIndexDriftProblem({ kind: "migration block", label: tag, drift }))
       }
     }
     return result
@@ -367,17 +366,13 @@ export async function runMigrationCli({ argv, env = process.env, io, pluginRoot,
   const watchIndex = async (tag, run) => {
     const before = tracksIndex ? snapshotStagedPaths({ root: cwd, spawnGit }) : null
     const result = await run()
-    if (tracksIndex) {
-      const drift = diffStagedPaths(before, snapshotStagedPaths({ root: cwd, spawnGit }))
-      if (drift.length > 0) {
-        io.stdout.write(`${formatDeskProblem({
-          mechanism: "index-drift",
-          broke: `${tag}: unexpected staged path(s) appeared during this migration block: ${drift.join(", ")}`,
-          means: "a Desk migration block staged a file it should never touch",
-          fix: "not undone — staged paths left as-is for inspection",
-          file: "not filed: filing lands once the failure-contract filer exists (spec §8 PR 4)",
-          tell: `Migration block "${tag}" unexpectedly staged ${drift.length === 1 ? "a file" : "files"} (${drift.join(", ")}); left as-is so you can inspect it.`,
-        })}\n`)
+    // A failed or timed-out "before" makes any diff meaningless — skip the
+    // after-snapshot too, rather than risk the same hang twice.
+    if (tracksIndex && before !== null) {
+      const after = snapshotStagedPaths({ root: cwd, spawnGit })
+      if (after !== null) {
+        const drift = diffStagedPaths(before, after)
+        if (drift.length > 0) io.stdout.write(`${formatIndexDriftProblem({ kind: "migration block", label: tag, drift })}\n`)
       }
     }
     return result

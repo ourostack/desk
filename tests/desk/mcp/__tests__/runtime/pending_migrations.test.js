@@ -249,15 +249,16 @@ test("a migration block that stages a file produces a Desk problem: index-drift 
   const root = await plugin([{ id: "02-tidy-desk", migrate: "touch stray.txt && git add stray.txt" }])
   gitInit(root)
   const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
-  assert.match(line, /Desk problem: index-drift — 02-tidy-desk:migrate/)
+  assert.match(line, /Desk problem: index-drift — unexpected file staged during 02-tidy-desk:migrate/)
   assert.match(line, /stray\.txt/)
+  assert.doesNotMatch(line, /staged a file it should never touch/)
 })
 
 test("a Safety check block that stages a file is named by its own tag, distinct from Migrate", async () => {
   const root = await plugin([{ id: "01-a", check: "touch sneaky.txt && git add sneaky.txt" }])
   gitInit(root)
   const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
-  assert.match(line, /Desk problem: index-drift — 01-a:safety-check/)
+  assert.match(line, /Desk problem: index-drift — unexpected file staged during 01-a:safety-check/)
   assert.doesNotMatch(line, /01-a:migrate/)
 })
 
@@ -265,9 +266,10 @@ test("several files staged by one block are all named, in the plural", async () 
   const root = await plugin([{ id: "01-a", migrate: "touch x.txt y.txt && git add x.txt y.txt" }])
   gitInit(root)
   const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.match(line, /Desk problem: index-drift — unexpected files staged during 01-a:migrate/)
   assert.match(line, /x\.txt/)
   assert.match(line, /y\.txt/)
-  assert.match(line, /unexpectedly staged files/)
+  assert.match(line, /Files appeared in the index while "01-a:migrate" ran/)
 })
 
 test("a migration block that changes nothing in the index adds no drift block", async () => {
@@ -290,7 +292,7 @@ test("pendingMigrations' own return shape is unchanged: a plain array of { id, s
   const pending = await pendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000, onIndexDrift: (block) => drifts.push(block) })
   assert.deepEqual(pending, [{ id: "01-a", state: "ran", report: "", announce: "Done." }])
   assert.equal(drifts.length, 1)
-  assert.match(drifts[0], /Desk problem: index-drift — 01-a:migrate/)
+  assert.match(drifts[0], /Desk problem: index-drift — unexpected file staged during 01-a:migrate/)
 })
 
 test("onIndexDrift defaults to doing nothing, so a caller that omits it is never broken by drift", async () => {
@@ -398,10 +400,11 @@ test("runMigrationCli catches a block that stages a file and prints a Desk probl
   const captured = io()
   const code = await runMigrationCli({ argv: ["run", "01-a"], io: captured.io, pluginRoot: root, cwd: root })
   assert.equal(code, 0)
-  assert.match(captured.out.stdout, /Desk problem: index-drift — 01-a:migrate/)
+  assert.match(captured.out.stdout, /Desk problem: index-drift — unexpected file staged during 01-a:migrate/)
   assert.match(captured.out.stdout, /stray\.txt/)
   assert.match(captured.out.stdout, /changed/)
   assert.match(captured.out.stdout, /Done\./)
+  assert.doesNotMatch(captured.out.stdout, /staged a file it should never touch/)
 })
 
 test("runMigrationCli names every file when a block stages several, in the plural, tagged by block", async () => {
@@ -410,11 +413,11 @@ test("runMigrationCli names every file when a block stages several, in the plura
   const captured = io()
   const code = await runMigrationCli({ argv: ["run", "01-a"], io: captured.io, pluginRoot: root, cwd: root })
   assert.equal(code, 0)
-  assert.match(captured.out.stdout, /Desk problem: index-drift — 01-a:safety-check/)
+  assert.match(captured.out.stdout, /Desk problem: index-drift — unexpected files staged during 01-a:safety-check/)
   assert.doesNotMatch(captured.out.stdout, /01-a:migrate/)
   assert.match(captured.out.stdout, /a\.txt/)
   assert.match(captured.out.stdout, /b\.txt/)
-  assert.match(captured.out.stdout, /unexpectedly staged files/)
+  assert.match(captured.out.stdout, /Files appeared in the index while "01-a:safety-check" ran/)
 })
 
 test("runMigrationCli tracks the index only when cwd is itself a Git repository", async () => {
