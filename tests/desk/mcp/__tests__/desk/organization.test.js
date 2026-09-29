@@ -7,6 +7,8 @@
 import { test, after } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
+import fsNative from "node:fs"
+import { syncBuiltinESMExports } from "node:module"
 import * as os from "node:os"
 import * as path from "node:path"
 import matter from "gray-matter"
@@ -352,6 +354,123 @@ test("loose_file never flags the desk-root allow-list", async () => {
   assert.ok(!loose.includes("README.md"))
   assert.ok(!loose.includes("CLAUDE.md"))
   assert.ok(!loose.includes(".gitignore"))
+})
+
+// ── Scratch flagging (Part 6) ───────────────────────────────────────────
+
+test("a loose root-level x.png is flagged with '— probable scratch, not desk content'; _cache/ itself is never flagged", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, "x.png", "binary-ish\n")
+  await writeFile(root, "_cache/stray-2026-09-28/stray.txt", "quarantined, never flagged\n")
+
+  const findings = organizationFindings(root, { now: NOW })
+  const loose = findByCode(findings, "loose_file")
+
+  const png = loose.find((f) => f.path === "x.png")
+  assert.ok(png, "expected x.png to be reported as loose_file")
+  assert.match(png.hint, /probable scratch, not desk content/)
+
+  assert.ok(!loose.some((f) => f.path.startsWith("_cache")), "_cache/ contents must never be reported at all")
+})
+
+test("a loose root-level ordinary file (not scratch-shaped) never gets the scratch hint suffix", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, "notes-from-a-meeting.md", "not scratch\n")
+
+  const findings = organizationFindings(root, { now: NOW })
+  const [finding] = findByCode(findings, "loose_file")
+  assert.equal(finding.path, "notes-from-a-meeting.md")
+  assert.doesNotMatch(finding.hint, /probable scratch, not desk content/)
+})
+
+test("the scratch hint covers *.txt/*.jpg/*.log and a bare 'undefined' file, case-insensitively", async () => {
+  const root = await mkTempRoot()
+  for (const name of ["a.txt", "b.JPG", "c.log", "undefined"]) {
+    await writeFile(root, name, "x\n")
+  }
+
+  const findings = organizationFindings(root, { now: NOW })
+  const loose = findByCode(findings, "loose_file")
+  for (const name of ["a.txt", "b.JPG", "c.log", "undefined"]) {
+    const finding = loose.find((f) => f.path === name)
+    assert.ok(finding, `expected ${name} to be reported as loose_file`)
+    assert.match(finding.hint, /probable scratch, not desk content/)
+  }
+})
+
+test("the scratch hint is desk-root-only: a track-root stray file with a scratch extension is still loose_file but keeps its ordinary hint", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "normal-track/track.md", {
+    schema_version: 1,
+    title: "normal-track",
+    status: "active",
+    scope: "holds the track-root scratch-extension fixture; not anything else",
+  })
+  await writeFile(root, "normal-track/scratch-shaped.txt", "stray at track root\n")
+
+  const findings = organizationFindings(root, { now: NOW })
+  const finding = findByCode(findings, "loose_file").find((f) => f.path === "normal-track/scratch-shaped.txt")
+  assert.ok(finding)
+  assert.doesNotMatch(finding.hint, /probable scratch, not desk content/)
+})
+
+test("a loose root-level 'undefined' directory gets the same scratch hint as a scratch-shaped file", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, "undefined/screenshot.png", "binary-ish\n")
+
+  const findings = organizationFindings(root, { now: NOW })
+  const finding = findByCode(findings, "loose_file").find((f) => f.path === "undefined")
+  assert.ok(finding, "expected the undefined/ directory itself to be reported as loose_file")
+  assert.match(finding.hint, /probable scratch, not desk content/)
+})
+
+// ── _cache/ quarantine (Part 6, fix round) ──────────────────────────────
+
+test("stale_quarantine flags a _cache entry older than 30 days but not one exactly at the 30-day boundary", async () => {
+  const root = await mkTempRoot()
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
+  const staleDir = path.join(root, "_cache", "stray-old")
+  const boundaryDir = path.join(root, "_cache", "stray-boundary")
+  await fs.mkdir(staleDir, { recursive: true })
+  await fs.mkdir(boundaryDir, { recursive: true })
+
+  const staleMtime = new Date(NOW - THIRTY_DAYS_MS - 1) // one ms past 30 days — stale
+  const boundaryMtime = new Date(NOW - THIRTY_DAYS_MS) // exactly 30 days — not "older than"
+  await fs.utimes(staleDir, staleMtime, staleMtime)
+  await fs.utimes(boundaryDir, boundaryMtime, boundaryMtime)
+
+  const findings = organizationFindings(root, { now: NOW })
+  const stale = findByCode(findings, "stale_quarantine")
+  assert.deepEqual(stale.map((f) => f.path), ["_cache/stray-old"])
+  assert.equal(stale[0].hint, "stale quarantine: review and delete")
+})
+
+test("_cache/ itself is never loose_file, whether or not it holds a stale entry", async () => {
+  const root = await mkTempRoot()
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
+  const staleDir = path.join(root, "_cache", "stray-old")
+  await fs.mkdir(staleDir, { recursive: true })
+  const staleMtime = new Date(NOW - THIRTY_DAYS_MS - 1)
+  await fs.utimes(staleDir, staleMtime, staleMtime)
+
+  const findings = organizationFindings(root, { now: NOW })
+  assert.ok(!findByCode(findings, "loose_file").some((f) => f.path.startsWith("_cache")))
+})
+
+test("a _cache entry that vanishes between readdir and lstat is tolerated, not thrown", async (t) => {
+  const root = await mkTempRoot()
+  const goneAbs = path.join(root, "_cache", "gone")
+  await fs.mkdir(goneAbs, { recursive: true })
+
+  const original = fsNative.lstatSync.bind(fsNative)
+  t.mock.method(fsNative, "lstatSync", (target, ...rest) => {
+    if (target === goneAbs) throw Object.assign(new Error("ENOENT: no such file or directory, lstat"), { code: "ENOENT" })
+    return original(target, ...rest)
+  })
+  syncBuiltinESMExports()
+
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "stale_quarantine"), [])
 })
 
 // ── Crew isolation ───────────────────────────────────────────────────────

@@ -235,6 +235,96 @@ test("startupMigrationLine never throws, and the boot-check hook helper passes t
   assert.equal(await startupMigrationLine({ pluginRoot: root, env: { ...process.env, EXPECTED: root }, cwd: path.dirname(root) }), "")
 })
 
+// ── Index tracing (spec.md §3) ──────────────────────────────────────────────
+
+function gitInit(root) {
+  const env = { ...process.env, GIT_AUTHOR_NAME: "F", GIT_AUTHOR_EMAIL: "f@example.invalid", GIT_COMMITTER_NAME: "F", GIT_COMMITTER_EMAIL: "f@example.invalid" }
+  execFileSync("git", ["init", "-q", "-b", "main", root], { env })
+  writeFileSync(path.join(root, "committed.md"), "base\n")
+  execFileSync("git", ["-C", root, "add", "committed.md"], { env })
+  execFileSync("git", ["-C", root, "commit", "-qm", "first"], { env })
+}
+
+test("a migration block that stages a file produces a Desk problem: index-drift block in startupMigrationLine's output", async () => {
+  const root = await plugin([{ id: "02-tidy-desk", migrate: "touch stray.txt && git add stray.txt" }])
+  gitInit(root)
+  const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.match(line, /Desk problem: index-drift — unexpected file staged during 02-tidy-desk:migrate/)
+  assert.match(line, /stray\.txt/)
+  assert.doesNotMatch(line, /staged a file it should never touch/)
+})
+
+test("a Safety check block that stages a file is named by its own tag, distinct from Migrate", async () => {
+  const root = await plugin([{ id: "01-a", check: "touch sneaky.txt && git add sneaky.txt" }])
+  gitInit(root)
+  const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.match(line, /Desk problem: index-drift — unexpected file staged during 01-a:safety-check/)
+  assert.doesNotMatch(line, /01-a:migrate/)
+})
+
+test("several files staged by one block are all named, in the plural", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "touch x.txt y.txt && git add x.txt y.txt" }])
+  gitInit(root)
+  const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.match(line, /Desk problem: index-drift — unexpected files staged during 01-a:migrate/)
+  assert.match(line, /x\.txt/)
+  assert.match(line, /y\.txt/)
+  assert.match(line, /Files appeared in the index while "01-a:migrate" ran/)
+})
+
+test("a migration block that changes nothing in the index adds no drift block", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "echo fine" }])
+  gitInit(root)
+  const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.doesNotMatch(line, /Desk problem/)
+})
+
+test("a cwd that is not itself a Git repository is never watched for drift", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "exit 0" }])
+  const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.doesNotMatch(line, /Desk problem/)
+})
+
+test("pendingMigrations' own return shape is unchanged: a plain array of { id, state, ... } entries", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "touch stray.txt && git add stray.txt" }])
+  gitInit(root)
+  const drifts = []
+  const pending = await pendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000, onIndexDrift: (block) => drifts.push(block) })
+  assert.deepEqual(pending, [{ id: "01-a", state: "ran", report: "", announce: "Done." }])
+  assert.equal(drifts.length, 1)
+  assert.match(drifts[0], /Desk problem: index-drift — unexpected file staged during 01-a:migrate/)
+})
+
+test("onIndexDrift defaults to doing nothing, so a caller that omits it is never broken by drift", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "touch stray.txt && git add stray.txt" }])
+  gitInit(root)
+  const pending = await pendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.deepEqual(pending, [{ id: "01-a", state: "ran", report: "", announce: "Done." }])
+})
+
+// A before-snapshot that succeeds but whose matching after-snapshot then fails
+// or times out must skip the diff too — the asymmetric case findings 1(b)/(c)
+// guard against, distinct from the before-fails case above. No real Git is
+// needed: `spawnGit` is faked end to end, succeeding on `rev-parse` and on the
+// very first `diff` call, then failing every one after it.
+function beforeSucceedsAfterFailsSpawnGit() {
+  let diffCalls = 0
+  return (command, args) => {
+    if (args.includes("rev-parse")) return { status: 0, stdout: "true\n", stderr: "" }
+    diffCalls += 1
+    if (diffCalls === 1) return { status: 0, stdout: "", stderr: "" }
+    return { status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) }
+  }
+}
+
+test("pendingMigrations: an after-snapshot that fails once its before-snapshot succeeded is skipped, not treated as no drift", async () => {
+  const root = await plugin([{ id: "01-a" }])
+  const drifts = []
+  const pending = await pendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000, spawnGit: beforeSucceedsAfterFailsSpawnGit(), onIndexDrift: (block) => drifts.push(block) })
+  assert.deepEqual(pending, [{ id: "01-a", state: "ran", report: "", announce: "Done." }])
+  assert.equal(drifts.length, 0)
+})
+
 // ── The real tidy migration, found by the startup hook helper ─────────────
 
 async function tidyDesk({ messy }) {
@@ -317,6 +407,56 @@ test("the run command walks one migration the way the migrations skill describes
   const captured = io()
   const code = await runMigrationCli({ argv: ["run", "08-fixed"], io: captured.io, pluginRoot: root, cwd: root, spawn: noBash })
   assert.deepEqual({ code, ...captured.out }, { code: 1, stdout: "", stderr: "migrations.js: bash is required to run Desk's migrations\n" })
+})
+
+// ── Index tracing on `runMigrationCli` (spec.md §3) ─────────────────────────
+//
+// The real incident this Part exists for happened here: `02-tidy-desk` is
+// `agent_work: true`, and `pendingMigrations` never runs its Safety check or
+// Migrate block itself (it stops after Detect for an agent-work migration) —
+// those blocks only ever run through this function. This is the path that
+// matters most.
+
+test("runMigrationCli catches a block that stages a file and prints a Desk problem: index-drift block, without changing the exit code", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "echo changed && touch stray.txt && git add stray.txt" }])
+  gitInit(root)
+  const captured = io()
+  const code = await runMigrationCli({ argv: ["run", "01-a"], io: captured.io, pluginRoot: root, cwd: root })
+  assert.equal(code, 0)
+  assert.match(captured.out.stdout, /Desk problem: index-drift — unexpected file staged during 01-a:migrate/)
+  assert.match(captured.out.stdout, /stray\.txt/)
+  assert.match(captured.out.stdout, /changed/)
+  assert.match(captured.out.stdout, /Done\./)
+  assert.doesNotMatch(captured.out.stdout, /staged a file it should never touch/)
+})
+
+test("runMigrationCli names every file when a block stages several, in the plural, tagged by block", async () => {
+  const root = await plugin([{ id: "01-a", check: "touch a.txt b.txt && git add a.txt b.txt" }])
+  gitInit(root)
+  const captured = io()
+  const code = await runMigrationCli({ argv: ["run", "01-a"], io: captured.io, pluginRoot: root, cwd: root })
+  assert.equal(code, 0)
+  assert.match(captured.out.stdout, /Desk problem: index-drift — unexpected files staged during 01-a:safety-check/)
+  assert.doesNotMatch(captured.out.stdout, /01-a:migrate/)
+  assert.match(captured.out.stdout, /a\.txt/)
+  assert.match(captured.out.stdout, /b\.txt/)
+  assert.match(captured.out.stdout, /Files appeared in the index while "01-a:safety-check" ran/)
+})
+
+test("runMigrationCli: an after-snapshot that fails once its before-snapshot succeeded is skipped, not treated as no drift", async () => {
+  const root = await plugin([{ id: "01-a" }])
+  const captured = io()
+  const code = await runMigrationCli({ argv: ["run", "01-a"], io: captured.io, pluginRoot: root, cwd: root, spawnGit: beforeSucceedsAfterFailsSpawnGit() })
+  assert.equal(code, 0)
+  assert.doesNotMatch(captured.out.stdout, /Desk problem/)
+})
+
+test("runMigrationCli tracks the index only when cwd is itself a Git repository", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "touch stray.txt && git init -q . && git add stray.txt" }])
+  const captured = io()
+  const code = await runMigrationCli({ argv: ["run", "01-a"], io: captured.io, pluginRoot: root, cwd: root })
+  assert.equal(code, 0)
+  assert.doesNotMatch(captured.out.stdout, /Desk problem/)
 })
 
 test("scripts/migrations.js runs Desk's own tidy migration and prints its steps and announcement", async () => {

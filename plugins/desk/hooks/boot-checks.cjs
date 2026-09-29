@@ -20,6 +20,15 @@
 // no check has a line, so its output is then byte-identical to the output it
 // built before the registry ran.
 //
+// Index tracing (spec.md §3): none of the checks below is designed to touch
+// the Git index, so a `git diff --cached --name-only` snapshot taken
+// immediately before and after each `check.run(...)` call — against the same
+// desk root `factoryCheck`/`deskHealthCheck` already resolve, only when it is
+// itself a Git repository — catches a check that stages a path it never
+// should. A drift appends a `Desk problem: index-drift — ...`
+// block (`mcp/src/runtime/index-drift.js`) to the same output; it names the
+// check and the exact paths, never undoes the staging, and never blocks.
+//
 // The registry, in order:
 //   1. factory: whether the bound desk's store has a consent decision, and a
 //      detached `factory.js finalize` for finished jobs whose facts are not
@@ -38,6 +47,10 @@
 //      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself so
 //      its line can say whether the launch happened, and keeps a soft deadline
 //      inside its budget so an unfinished inspection still reports "deferred".
+//   6. host-enforcement: whether Claude Code's deny hook (spec §5) is
+//      actually registered in this plugin's own hooks.json, reported as a
+//      Desk problem: block when it is not (mcp/src/runtime/
+//      host-enforcement-registration.js). A no-op on every host but claude.
 //
 // `startFactory` starts factory-start.cjs (sweep, then flush and refresh andon
 // for every consented store) detached; the hooks call it after their output
@@ -54,7 +67,7 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 // Loaded only by the detached launchers, never on the boot path.
 const compatibleNode = (options) => require("./compatible-node.cjs").compatibleNode(options);
@@ -350,6 +363,25 @@ const deskHealthCheck = {
 
 const workspaceTidyCheck = { id: "workspace-tidy", budgetMs: 260, run: runWorkspaceTidy };
 
+// Desk-only enforcement (spec §5) is only as good as its own registration:
+// this check confirms host-enforcement.cjs is actually wired into hooks.json
+// for the current host, and reports a missing registration as a
+// `Desk problem:` block rather than letting the gap stay silent. Copilot and
+// Codex are not checked here (Part 8 wires their own registration); this
+// check is a no-op for any host but claude.
+const hostEnforcementCheck = {
+  id: "host-enforcement",
+  budgetMs: 20,
+  async run(ctx) {
+    if (ctx.host !== "claude") return {};
+    const { hookRegistrationDeskProblem } = await runtime("runtime/host-enforcement-registration.js");
+    const pluginRoot = ctx.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
+    const { registered, block } = await hookRegistrationDeskProblem({ host: ctx.host, pluginRoot });
+    if (registered !== false) return {};
+    return { line: block };
+  },
+};
+
 // ---------------------------------------------------------------------------
 // The registry.
 // ---------------------------------------------------------------------------
@@ -368,7 +400,8 @@ const validRepair = (repair) => Array.isArray(repair?.command) && repair.command
  * Runs the registry (see the header). Options: `host`, `env`, `sessionFolder`,
  * plus for tests `checks`, `totalBudgetMs`, `checkBudgets` ({ id: ms }),
  * `launchRepair(command, env)`, `record(env, skipped)`, `launch` (the
- * workspace-tidy repair launcher) and `loadRedaction`. Resolves `""` or one
+ * workspace-tidy repair launcher), `loadRedaction` and `spawnGit` (the index-
+ * tracing Git seam; real callers never pass it). Resolves `""` or one
  * `Desk boot:` line; never rejects. The line names worktree paths, branches
  * and error messages, so each path segment or word that carries a secret's
  * value is redacted (mcp/src/util/redact.js); if the redaction cannot load,
@@ -378,6 +411,7 @@ async function runBootChecks(options = {}) {
   const {
     checks = module.exports.checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand, record = recordSkipped,
     loadRedaction = () => runtime("util/redact.js"),
+    spawnGit = spawnSync,
   } = options;
   const env = options.env ?? process.env;
   // The real time every check took, charged against the total budget.
@@ -386,6 +420,13 @@ async function runBootChecks(options = {}) {
   const lines = [];
   const repairs = [];
   const skipped = [];
+  // Index tracing (spec.md §3): resolved once, the same way `factoryCheck`/
+  // `deskHealthCheck` resolve their own desk root, and only watched when it
+  // is itself a Git repository.
+  const { snapshotStagedPaths, diffStagedPaths, formatIndexDriftProblem } = await runtime("runtime/index-drift.js");
+  const { isGitRepository } = await runtime("util/git-stage.js");
+  const driftRoot = await boundRoot({ env, host: options.host, sessionFolder: options.sessionFolder, shared });
+  const tracksIndex = typeof driftRoot === "string" && isGitRepository(driftRoot, spawnGit);
   for (const check of checks) {
     const budget = Math.min(checkBudgets[check.id] ?? check.budgetMs, totalBudgetMs - used);
     // Timers resolve to whole milliseconds, so less than one left is none left.
@@ -394,6 +435,10 @@ async function runBootChecks(options = {}) {
       continue;
     }
     const cancellation = new AbortController();
+    // Taken outside the check's own timing window, so a snapshot's cost (git
+    // is bounded to 1 s, never the check's own budget) is never charged
+    // against it — see `mcp/src/runtime/index-drift.js`.
+    const beforeStaged = tracksIndex ? snapshotStagedPaths({ root: driftRoot, spawnGit }) : null;
     const checkStarted = performance.now();
     const deadline = checkStarted + budget;
     let timer;
@@ -407,6 +452,17 @@ async function runBootChecks(options = {}) {
     // A check that blocks synchronously settles before its timer can fire, so the real elapsed time decides: past the budget, its line and repair are discarded like a timed-out check's.
     const elapsed = performance.now() - checkStarted;
     used += elapsed;
+    // The after-snapshot is taken (and its own cost incurred) only once the
+    // check's own elapsed time is already settled, and only when the before-
+    // snapshot itself succeeded: a failed or timed-out "before" makes any
+    // diff meaningless, and trying again risks the same hang twice.
+    if (tracksIndex && beforeStaged !== null) {
+      const afterStaged = snapshotStagedPaths({ root: driftRoot, spawnGit });
+      if (afterStaged !== null) {
+        const drift = diffStagedPaths(beforeStaged, afterStaged);
+        if (drift.length > 0) lines.push(formatIndexDriftProblem({ kind: "boot check", label: check.id, drift }));
+      }
+    }
     if (outcome.overrun || elapsed > budget) {
       cancellation.abort();
       skipped.push({ id: check.id, reason: "budget", elapsed_ms: Math.round(elapsed) });
@@ -585,8 +641,8 @@ async function runCompatible(script, args, { env = process.env, resolveNode = co
 }
 
 module.exports = {
-  checks: [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck],
-  factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck,
+  checks: [factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck],
+  factoryCheck, labelsCheck, andonCheck, deskHealthCheck, workspaceTidyCheck, hostEnforcementCheck,
   runBootChecks, startFactory, migrationLine, launchCommand, recordSkipped,
   runRepair, startRepair, launchRepair, runCompatible, compatibleCommand, acknowledgeRepair, reportPath, readReport, TOTAL_BUDGET_MS, REPAIR_NODE_ENV,
 };

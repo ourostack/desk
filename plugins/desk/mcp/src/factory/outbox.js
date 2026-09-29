@@ -169,6 +169,30 @@ async function assertOutsideBoundDesk(target, deskRoot) {
   }
 }
 
+/** Whether `target` resolves under `root` (both realpath'd as far as they already exist). */
+async function isUnderRoot(target, root) {
+  const resolvedRoot = await realpathExistingPrefix(root)
+  const resolvedTarget = await realpathExistingPrefix(target)
+  const relative = path.relative(path.join(resolvedRoot.real, ...resolvedRoot.remainder), path.join(resolvedTarget.real, ...resolvedTarget.remainder))
+  return relative === "" || (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
+}
+
+// Defense in depth against a test (or a scratch/throwaway run) whose own
+// isolation failed to apply: a desk root that lives under the OS temp
+// directory is, by construction, ephemeral — a real desk is never bound
+// there. Such a desk root paired with a state home that is *not* also under
+// the OS temp directory is exactly the shape of that failure (the desk root
+// got isolated into a temp fixture; the state home did not), so it is
+// refused here rather than recorded, alongside (not instead of) the test
+// harness fix that stops it at the source. A desk root outside temp — every
+// real desk — is entirely unaffected: the check returns immediately.
+async function assertDeskRootTempConsistency(stateHome, deskRoot) {
+  if (deskRoot === null) return
+  if (!(await isUnderRoot(deskRoot, os.tmpdir()))) return
+  if (await isUnderRoot(stateHome, os.tmpdir())) return
+  throw new Error("desk_factory: refused a temp-directory desk root paired with a factory state home outside the OS temp directory")
+}
+
 /**
  * The protected factory state root, created if needed. Resolves as much of
  * `$XDG_STATE_HOME` (else `~/.local/state`) as already exists and walks its
@@ -179,12 +203,16 @@ async function assertOutsideBoundDesk(target, deskRoot) {
  * is then created or re-verified — symlink refusal, mode repair, macOS
  * extended-ACL clearing — on every call. On Windows, the ACL provider's
  * availability is checked before anything is created, and the three
- * segments are protected with one batched call.
+ * segments are protected with one batched call. Also refused, the same way
+ * and before anything is created: a `deskRoot` under the OS temp directory
+ * paired with a state home that is not (`assertDeskRootTempConsistency`) —
+ * a throwaway desk whose isolation did not reach the state home too.
  */
 export async function factoryStateRoot(env = process.env, { platform = process.platform, runner = undefined, create = true, deskRoot = null } = {}) {
   if (platform === "win32") assertWindowsAclAvailable({ env, label: NAMING.label })
   const stateHome = resolveStateHome(env)
   await assertOutsideBoundDesk(path.join(stateHome, ...ROOT_SEGMENTS), deskRoot)
+  await assertDeskRootTempConsistency(stateHome, deskRoot)
   if (!create && (await lstatIfPresent(path.join(stateHome, ...ROOT_SEGMENTS), NAMING)) === null) return null
   const { real: realPrefix } = await realpathExistingPrefix(stateHome)
   await assertOutsideGitWorkspace(realPrefix, NAMING)
