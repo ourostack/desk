@@ -8,6 +8,7 @@ import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { REAL_HOME_WRITE, isRealHomeWrite, testRun } from "./_isolated_env.mjs"
 import { mkTempRoot } from "./_temp_roots.js"
+import { mkFakeRealRoot } from "./_fake_real_root.js"
 import { resolveDeskStateDir, resolveReadinessStateHome } from "../../../../plugins/desk/mcp/src/runtime/last-start.js"
 
 const inside = (child, parent) => !path.relative(parent, child).startsWith("..") && !path.isAbsolute(path.relative(parent, child))
@@ -81,9 +82,7 @@ test("a factory test file with no isolation import at all is still refused from 
   // here, standing in for a bare `node --test <file>` an agent ran directly. A fake HOME outside the OS temp
   // directory stands in for a real one, so this never touches this machine's actual home.
   const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-  const realTmp = await fsPromises.realpath(os.tmpdir())
-  const fakeReal = path.join(path.dirname(realTmp), `desk-fake-real-home-${process.pid}`)
-  mkdirSync(fakeReal, { recursive: true })
+  const fakeReal = mkFakeRealRoot(`desk-fake-real-home-${process.pid}-`)
   try {
     const env = { ...process.env, HOME: fakeReal, USERPROFILE: fakeReal }
     for (const key of ["DESK_TEST_RUN_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "NODE_OPTIONS"]) delete env[key]
@@ -132,9 +131,7 @@ test("sync-push.js, run directly with an inherited NODE_TEST_CONTEXT and a real 
   // spawns the actual script file, not just the exported function, so a regression in the one-line CLI wrapper
   // itself (script.js:10's own try/catch) would be caught here too.
   const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../plugins/desk/mcp")
-  const realTmp = await fsPromises.realpath(os.tmpdir())
-  const fakeReal = path.join(path.dirname(realTmp), `desk-fake-real-home-syncpush-${process.pid}`)
-  mkdirSync(fakeReal, { recursive: true })
+  const fakeReal = mkFakeRealRoot(`desk-fake-real-home-syncpush-${process.pid}-`)
   try {
     const env = { ...process.env, HOME: fakeReal, USERPROFILE: fakeReal, NODE_TEST_CONTEXT: "1" }
     for (const key of ["DESK_TEST_RUN_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "NODE_OPTIONS"]) delete env[key]

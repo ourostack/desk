@@ -15,6 +15,7 @@ import {
 import { startReadinessController } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
 import * as endpoints from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { DESK_TEST_REAL_STATE } from "../../../../../plugins/desk/mcp/src/runtime/test-state-guard.js"
+import { mkFakeRealRoot } from "../_fake_real_root.js"
 
 function tempFixture(prefix) {
   return mkdtempSync(path.join(realpathSync(tmpdir()), prefix))
@@ -160,9 +161,7 @@ test("under a node:test run, connectOrStartController refuses a real (non-temp) 
   // itself (verified by the guard's own module doc), so this test needs no env manipulation to trigger it -- only a
   // state home that is provably not under the OS temp directory, standing in for a developer's real HOME.
   const root = tempFixture("desk-controller-root-")
-  const realTmp = realpathSync(tmpdir())
-  const fakeReal = path.join(path.dirname(realTmp), `desk-fake-real-home-controller-${process.pid}`)
-  mkdirSync(fakeReal, { recursive: true })
+  const fakeReal = mkFakeRealRoot("desk-fake-real-home-controller-")
   try {
     await assert.rejects(
       () => connectOrStartController({ root, stateHome: fakeReal, ephemeral: true }),
@@ -179,9 +178,7 @@ test("connectOrStartController accepts a real (non-temp) state home when the cal
   // The guard's own escape hatch (DESK_ALLOW_REAL_STATE_IN_TEST): a caller that has deliberately chosen a real state
   // home under a node:test run -- this very test -- is not refused.
   const root = tempFixture("desk-controller-root-")
-  const realTmp = realpathSync(tmpdir())
-  const fakeReal = path.join(path.dirname(realTmp), `desk-fake-real-home-controller-optout-${process.pid}`)
-  mkdirSync(fakeReal, { recursive: true })
+  const fakeReal = mkFakeRealRoot("desk-fake-real-home-controller-optout-")
   t.after(() => {
     rmSync(root, { recursive: true, force: true })
     rmSync(fakeReal, { recursive: true, force: true })

@@ -1,3 +1,6 @@
 # Coverage runs write here; never commit their output.
 .nyc_output/
 coverage/
+
+# Guard tests' fake "real" (non-temp) state-home fixtures; see tests/desk/mcp/__tests__/_fake_real_root.js.
+.test-fake-real/

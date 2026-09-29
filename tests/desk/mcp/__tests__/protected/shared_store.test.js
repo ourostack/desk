@@ -14,10 +14,10 @@ import { createHash } from "node:crypto"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
 
-import * as os from "node:os"
 import { resolvePrivateStore, withPrivateStore } from "../../../../../plugins/desk/mcp/src/feedback/store.js"
 import { resolveProtectedStore, withProtectedStore } from "../../../../../plugins/desk/mcp/src/protected/store.js"
 import { DESK_TEST_REAL_STATE } from "../../../../../plugins/desk/mcp/src/factory/test-state-guard.js"
+import { mkFakeRealRoot } from "../_fake_real_root.js"
 import { cleanup, mkFeedbackFixture as mkStoreFixture } from "../feedback/_helpers.js"
 
 // These cases are about POSIX store layout, refusals, journalling and message
@@ -198,8 +198,7 @@ test("under a node:test run, the primitive refuses a real (non-temp) state home 
   // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
   // the developer's real home, so a store landing here would be exactly the incident the guard exists to stop.
   const fixture = await mkStoreFixture()
-  const realTmp = await fs.realpath(os.tmpdir())
-  const fakeReal = await fs.mkdtemp(path.join(path.dirname(realTmp), "desk-shared-store-fake-real-"))
+  const fakeReal = mkFakeRealRoot("desk-shared-store-fake-real-")
   try {
     await assert.rejects(
       () =>

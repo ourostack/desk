@@ -12,6 +12,7 @@ import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, 
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { mkFakeRealRoot } from "../_fake_real_root.js"
 import {
   CLAIM_STALE_MS,
   HOLD_MAX_MS,
@@ -529,8 +530,7 @@ test("the identity cache honours XDG_STATE_HOME and survives a bad or unwritable
 test("under a node:test run, a real (non-temp) identity cache folder is refused -- the gh lookup still answers, but nothing is persisted", () => {
   // A folder that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
   // the developer's real home, so a cache write landing here would be exactly the incident the guard exists to stop.
-  const realTmp = realpathSync(os.tmpdir())
-  const fakeReal = realpathSync(mkdtempSync(path.join(path.dirname(realTmp), "desk-tidy-fake-real-")))
+  const fakeReal = realpathSync(mkFakeRealRoot("desk-tidy-fake-real-"))
   try {
     const root = crewDesk()
     const spawnGh = () => ({ status: 0, stdout: "Bob-Login\n" })

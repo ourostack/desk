@@ -44,6 +44,7 @@ import {
   withDerivationLock,
   withNamedLock,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { fakeRealPath } from "../_fake_real_root.js"
 
 const nativeMac = { skip: process.platform !== "darwin" }
 
@@ -230,7 +231,7 @@ test("factoryStateRoot refuses a path component that is a plain file, not a dire
 // that is meant to keep every desk root's own state home in temp too.
 test("factoryStateRoot refuses a temp-directory desk root paired with a state home outside the OS temp directory", () => scratch(async (env) => {
   const deskRoot = mkdtempSync(path.join(os.tmpdir(), "desk-outbox-consistency-"))
-  const outsideTemp = path.join(path.dirname(await fs.realpath(os.tmpdir())), `desk-outbox-consistency-state-${process.pid}`)
+  const outsideTemp = fakeRealPath("desk-outbox-consistency-state-")
   await assert.rejects(
     () => factoryStateRoot({ HOME: outsideTemp }, { deskRoot }),
     /refused a temp-directory desk root paired with a factory state home outside the OS temp directory/u,
@@ -247,7 +248,7 @@ test("factoryStateRoot allows a temp-directory desk root when its state home is 
 }))
 
 test("factoryStateRoot is unaffected by a desk root outside the OS temp directory, whatever the state home resolves to", () => scratch(async (env) => {
-  const deskRoot = path.join(path.dirname(await fs.realpath(os.tmpdir())), `desk-outbox-consistency-real-${process.pid}`)
+  const deskRoot = fakeRealPath("desk-outbox-consistency-real-")
   const root = await factoryStateRoot(env, { deskRoot })
   assert.ok(root.startsWith(env.XDG_STATE_HOME))
 }))

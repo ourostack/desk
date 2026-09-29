@@ -6,7 +6,7 @@
 // mention ("don't use an artifact") must not count as naming.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import {
@@ -17,6 +17,7 @@ import {
   saveSessionAllowlist,
   sessionAllowlistPath,
 } from "../../../../../plugins/desk/mcp/src/runtime/naming-allowlist.js"
+import { mkFakeRealRoot } from "../_fake_real_root.js"
 
 function fixtureEnv() {
   const home = mkdtempSync(path.join(tmpdir(), "desk-naming-allowlist-"))
@@ -137,8 +138,7 @@ test("saveSessionAllowlist never throws when its directory cannot be created, an
 test("under a node:test run, saveSessionAllowlist refuses a real (non-temp) state home rather than writing to it", () => {
   // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for the
   // developer's real home, so a write landing here would be exactly the incident the guard exists to stop.
-  const realTmp = realpathSync(tmpdir())
-  const fakeReal = mkdtempSync(path.join(path.dirname(realTmp), "desk-naming-allowlist-fake-real-"))
+  const fakeReal = mkFakeRealRoot("desk-naming-allowlist-fake-real-")
   try {
     const env = { XDG_STATE_HOME: path.join(fakeReal, "state") }
     assert.equal(saveSessionAllowlist({ env, sessionId: "fake-real", sessionState: new Set(["artifact"]) }), false, "never persisted")

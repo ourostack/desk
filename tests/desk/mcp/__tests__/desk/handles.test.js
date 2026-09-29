@@ -15,6 +15,7 @@ import {
   resolveTaskHandle,
   resolveTrackHandle,
 } from "../../../../../plugins/desk/mcp/src/desk/handles.js"
+import { mkFakeRealRoot } from "../_fake_real_root.js"
 
 const ORIGINAL_STATE_HOME = process.env.XDG_STATE_HOME
 
@@ -95,8 +96,7 @@ test("a key that cannot be stored falls back to one key per process", () => {
 test("under a node:test run, a real (non-temp) key folder is refused -- falling back to a per-process key, same as any other unwritable state folder", () => {
   // A folder that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
   // the developer's real home, so a key landing here would be exactly the incident the guard exists to stop.
-  const realTmp = realpathSync(tmpdir())
-  const fakeReal = mkdtempSync(path.join(path.dirname(realTmp), "desk-handles-fake-real-"))
+  const fakeReal = mkFakeRealRoot("desk-handles-fake-real-")
   try {
     process.env.XDG_STATE_HOME = fakeReal
     const root = desk()

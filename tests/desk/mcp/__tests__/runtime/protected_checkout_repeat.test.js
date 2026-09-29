@@ -7,12 +7,13 @@
 // real HOME or XDG_STATE_HOME.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import {
   REPEAT_TIMEOUT_THRESHOLD, commandSignature, recordTimeout, repeatedTimeoutDeskProblem,
 } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout-repeat.js"
+import { mkFakeRealRoot } from "../_fake_real_root.js"
 
 function fixtureEnv(t) {
   const root = mkdtempSync(path.join(tmpdir(), "desk-protected-checkout-repeat-"))
@@ -64,8 +65,7 @@ test("recordTimeout fails toward 1 (not 0, not a throw) when the state directory
 test("under a node:test run, recordTimeout refuses a real (non-temp) state home rather than writing to it", (t) => {
   // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for the
   // developer's real home, so a write landing here would be exactly the incident the guard exists to stop.
-  const realTmp = realpathSync(tmpdir())
-  const fakeReal = mkdtempSync(path.join(path.dirname(realTmp), "desk-protected-checkout-repeat-fake-real-"))
+  const fakeReal = mkFakeRealRoot("desk-protected-checkout-repeat-fake-real-")
   t.after(() => rmSync(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
   const env = { HOME: fakeReal }
   assert.equal(recordTimeout({ env, command: "git checkout main" }), 1, "still fails toward 1")

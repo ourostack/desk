@@ -16,6 +16,7 @@ import * as path from "node:path"
 import * as os from "node:os"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
+import { mkFakeRealRoot } from "../_fake_real_root.js"
 import { lastStartRootKey, resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { DESK_TEST_REAL_STATE } from "../../../../../plugins/desk/mcp/src/runtime/test-state-guard.js"
 import {
@@ -125,8 +126,7 @@ test("under a node:test run, acquireSyncLock refuses a real (non-temp) state hom
   //
   // A HOME that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
   // the developer's real home, so a lock file landing here would be exactly the incident the guard exists to stop.
-  const realTmp = await fs.realpath(os.tmpdir())
-  const fakeReal = await fs.mkdtemp(path.join(path.dirname(realTmp), "desk-sync-worker-fake-real-"))
+  const fakeReal = mkFakeRealRoot("desk-sync-worker-fake-real-")
   t.after(() => fs.rm(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
   const lock = await acquireSyncLock({ root: "/some/desk-root", env: { HOME: fakeReal } })
   assert.deepEqual(lock, { refused: true })
@@ -427,8 +427,7 @@ test("under a node:test run, runPushWorker treats a refused lock as a non-throwi
   // reject, and the refusal must be visible on stderr rather than silently swallowed, even though the CLI's own
   // stdio is ignored in production (defaultSpawnWorker's real spawn uses `stdio: "ignore"`; this only matters to a
   // caller -- a test, a manual invocation -- that inspects this process's stderr directly).
-  const realTmp = await fs.realpath(os.tmpdir())
-  const fakeReal = await fs.mkdtemp(path.join(path.dirname(realTmp), "desk-sync-worker-runworker-fake-real-"))
+  const fakeReal = mkFakeRealRoot("desk-sync-worker-runworker-fake-real-")
   t.after(() => fs.rm(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
   const written = []
   const stderr = { write: (chunk) => { written.push(chunk) } }
@@ -845,8 +844,7 @@ test("under a node:test run, finalUnpushedCheck still reports unpushed even thou
   // answer is untouched. Only the state directory is faked; the Git root stays a real, temp-based fixture.
   const { cloneA } = await mkOriginWithClone()
   await writeAndCommit(cloneA, "more.md", "more\n", "more")
-  const realTmp = await fs.realpath(os.tmpdir())
-  const fakeReal = await fs.mkdtemp(path.join(path.dirname(realTmp), "desk-sync-worker-status-fake-real-"))
+  const fakeReal = mkFakeRealRoot("desk-sync-worker-status-fake-real-")
   t.after(() => fs.rm(fakeReal, { recursive: true, force: true, maxRetries: 5 }))
   const env = { HOME: fakeReal }
   const result = finalUnpushedCheck({ root: cloneA, env })
