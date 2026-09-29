@@ -69,7 +69,7 @@
 // Pull request URLs are read from the raw frontmatter text, which the
 // dependency-free reader extracts on both paths, so they find the same URLs.
 
-import { closeSync, openSync, readSync, readdirSync } from "node:fs"
+import { closeSync, lstatSync, openSync, readSync, readdirSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { parseFrontmatterLite } from "./frontmatter-lite.js"
@@ -103,22 +103,47 @@ const DESK_ROOT_ALLOWED_FILES = new Set(["AGENTS.md", "README.md", "CLAUDE.md"])
 
 // Plain (non-underscore) folders a desk root may hold besides tracks: the
 // shared `artifacts/` folder (vector packs, snapshots, publication policy).
-// `_cache/` (the Desk-problem quarantine dir) is already an underscore
-// folder, so `walkDeskLevel` never reaches this set for it; it is listed
-// here too, explicitly, so that allowance does not depend solely on the
-// underscore-folder convention holding.
-const DESK_ROOT_ALLOWED_DIRS = new Set(["artifacts", "_cache"])
+const DESK_ROOT_ALLOWED_DIRS = new Set(["artifacts"])
 
-// Desk-root-level loose *files* shaped like scratch a tool session dropped
+// Desk-root-level loose entries shaped like scratch a tool session dropped
 // by accident (Part 6, "Scratch out of the desk") rather than real desk
 // content: generic capture extensions, and the literal `undefined` name an
-// unexported shell variable's path produces. Track-root loose files never
-// go through this — scratch-shaped content one level into a track is still
-// just `loose_file` with its ordinary hint.
+// unexported shell variable's path (or an unrelated tool's output directory)
+// produces. Applies to both loose files and loose directories at the desk
+// root. Track-root loose entries never go through this — scratch-shaped
+// content one level into a track is still just `loose_file` with its
+// ordinary hint.
 const SCRATCH_EXTENSIONS = new Set([".txt", ".png", ".jpg", ".log"])
 
 function looksLikeScratch(name) {
   return name === "undefined" || SCRATCH_EXTENSIONS.has(path.extname(name).toLowerCase())
+}
+
+// The Desk-problem quarantine directory (spec §4): git-ignored, never
+// committed, an underscore folder already allowed at the desk root like
+// `_meta`/`_archive`. Tidy never deletes anything (M4-3's own ruling), so
+// instead of pruning, an entry directly one level under `_cache/` — never
+// deeper — older than `STALE_MS` is reported for the operator to review and
+// delete themselves. Age is read with `lstatSync` (never following a
+// symlink) so a stale entry's own mtime is what's judged, not a target it
+// happens to point at.
+const CACHE_DIR_NAME = "_cache"
+
+function cacheQuarantineFindings(deskRoot, cacheDirAbs, now) {
+  const findings = []
+  for (const entry of safeReaddir(cacheDirAbs)) {
+    const entryAbs = path.join(cacheDirAbs, entry.name)
+    let stat
+    try {
+      stat = lstatSync(entryAbs)
+    } catch {
+      continue
+    }
+    if (now - stat.mtimeMs > STALE_MS) {
+      findings.push({ code: "stale_quarantine", path: redactedRelPath(deskRoot, entryAbs), hint: "stale quarantine: review and delete" })
+    }
+  }
+  return findings
 }
 
 // A bounded read never costs more than this many bytes per card, whatever
@@ -432,6 +457,12 @@ function walkDeskLevel({ scanRoot, deskRoot, operatorNames, findings, liveTaskCa
 
     // Dot-folders (`.git/`, `.state/`, `.github/`) are allowed like dotfiles.
     if (isDotfile(entry.name)) continue
+    // The quarantine directory is never loose; it gets its own stale-entry
+    // scan instead of the ordinary underscore-folder skip below.
+    if (entry.name === CACHE_DIR_NAME) {
+      findings.push(...cacheQuarantineFindings(deskRoot, entryAbs, now))
+      continue
+    }
     if (isUnderscoreDir(entry.name)) continue
     // Never walk into a crew container — a peer's own desk is theirs.
     if (entry.name === "desks") continue
@@ -439,7 +470,10 @@ function walkDeskLevel({ scanRoot, deskRoot, operatorNames, findings, liveTaskCa
 
     const hasTrackMd = safeReaddir(entryAbs).some((e) => e.isFile() && e.name === "track.md")
     if (!hasTrackMd) {
-      findings.push(looseFinding(deskRoot, entryAbs, "loose at the desk root — this directory has no track.md; file it under a track or an underscore folder"))
+      const hint = looksLikeScratch(entry.name)
+        ? "loose at the desk root — this directory has no track.md; file it under a track or an underscore folder — probable scratch, not desk content"
+        : "loose at the desk root — this directory has no track.md; file it under a track or an underscore folder"
+      findings.push(looseFinding(deskRoot, entryAbs, hint))
       continue
     }
 

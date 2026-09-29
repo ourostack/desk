@@ -7,6 +7,8 @@
 import { test, after } from "node:test"
 import { strict as assert } from "node:assert"
 import { promises as fs } from "node:fs"
+import fsNative from "node:fs"
+import { syncBuiltinESMExports } from "node:module"
 import * as os from "node:os"
 import * as path from "node:path"
 import matter from "gray-matter"
@@ -410,6 +412,65 @@ test("the scratch hint is desk-root-only: a track-root stray file with a scratch
   const finding = findByCode(findings, "loose_file").find((f) => f.path === "normal-track/scratch-shaped.txt")
   assert.ok(finding)
   assert.doesNotMatch(finding.hint, /probable scratch, not desk content/)
+})
+
+test("a loose root-level 'undefined' directory gets the same scratch hint as a scratch-shaped file", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, "undefined/screenshot.png", "binary-ish\n")
+
+  const findings = organizationFindings(root, { now: NOW })
+  const finding = findByCode(findings, "loose_file").find((f) => f.path === "undefined")
+  assert.ok(finding, "expected the undefined/ directory itself to be reported as loose_file")
+  assert.match(finding.hint, /probable scratch, not desk content/)
+})
+
+// ── _cache/ quarantine (Part 6, fix round) ──────────────────────────────
+
+test("stale_quarantine flags a _cache entry older than 30 days but not one exactly at the 30-day boundary", async () => {
+  const root = await mkTempRoot()
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
+  const staleDir = path.join(root, "_cache", "stray-old")
+  const boundaryDir = path.join(root, "_cache", "stray-boundary")
+  await fs.mkdir(staleDir, { recursive: true })
+  await fs.mkdir(boundaryDir, { recursive: true })
+
+  const staleMtime = new Date(NOW - THIRTY_DAYS_MS - 1) // one ms past 30 days — stale
+  const boundaryMtime = new Date(NOW - THIRTY_DAYS_MS) // exactly 30 days — not "older than"
+  await fs.utimes(staleDir, staleMtime, staleMtime)
+  await fs.utimes(boundaryDir, boundaryMtime, boundaryMtime)
+
+  const findings = organizationFindings(root, { now: NOW })
+  const stale = findByCode(findings, "stale_quarantine")
+  assert.deepEqual(stale.map((f) => f.path), ["_cache/stray-old"])
+  assert.equal(stale[0].hint, "stale quarantine: review and delete")
+})
+
+test("_cache/ itself is never loose_file, whether or not it holds a stale entry", async () => {
+  const root = await mkTempRoot()
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
+  const staleDir = path.join(root, "_cache", "stray-old")
+  await fs.mkdir(staleDir, { recursive: true })
+  const staleMtime = new Date(NOW - THIRTY_DAYS_MS - 1)
+  await fs.utimes(staleDir, staleMtime, staleMtime)
+
+  const findings = organizationFindings(root, { now: NOW })
+  assert.ok(!findByCode(findings, "loose_file").some((f) => f.path.startsWith("_cache")))
+})
+
+test("a _cache entry that vanishes between readdir and lstat is tolerated, not thrown", async (t) => {
+  const root = await mkTempRoot()
+  const goneAbs = path.join(root, "_cache", "gone")
+  await fs.mkdir(goneAbs, { recursive: true })
+
+  const original = fsNative.lstatSync.bind(fsNative)
+  t.mock.method(fsNative, "lstatSync", (target, ...rest) => {
+    if (target === goneAbs) throw Object.assign(new Error("ENOENT: no such file or directory, lstat"), { code: "ENOENT" })
+    return original(target, ...rest)
+  })
+  syncBuiltinESMExports()
+
+  const findings = organizationFindings(root, { now: NOW })
+  assert.deepEqual(findByCode(findings, "stale_quarantine"), [])
 })
 
 // ── Crew isolation ───────────────────────────────────────────────────────
