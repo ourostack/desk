@@ -11,8 +11,20 @@
 // `spawnGit` is an injectable seam over `node:child_process`'s `spawnSync`,
 // for tests only; real callers never pass it.
 
+// Bounds every git call so a hung hook or a held lock can never block a tool
+// call indefinitely. Git hooks stay enabled — disabling them is not this
+// module's call to make; a hook that runs long simply times out like any
+// other slow git command and is reported the same way a stage or commit
+// failure is.
+const GIT_TIMEOUT_MS = 10_000
+
 function run(spawnGit, root, args) {
-  return spawnGit("git", ["-C", root, ...args], { encoding: "utf8" })
+  return spawnGit("git", ["-C", root, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS })
+}
+
+/** True when `result` (a `spawnSync`-shaped return value) is `spawnGit` reporting its own timeout kill. */
+function timedOut(result) {
+  return Boolean(result.error) && result.error.code === "ETIMEDOUT"
 }
 
 /** True when `root` is inside a Git work tree. A failing or missing `git` means no. */
@@ -43,9 +55,14 @@ export function hasUnstagedWork(root, relPaths, spawnGit) {
   return false
 }
 
-/** `git add` exactly `relPaths` (relative to `root`). Returns `{ ok, stderr }`; never throws on a Git failure. */
+/**
+ * `git add` exactly `relPaths` (relative to `root`). Returns `{ ok, stderr }`;
+ * never throws on a Git failure. A call that runs past `GIT_TIMEOUT_MS` is
+ * killed and reported as `{ ok: false, stderr: "timeout" }`.
+ */
 export function stagePaths(root, relPaths, spawnGit) {
   const result = run(spawnGit, root, ["add", "--", ...relPaths])
+  if (timedOut(result)) return { ok: false, stderr: "timeout" }
   return { ok: result.status === 0, stderr: result.stderr }
 }
 
@@ -54,9 +71,12 @@ export function stagePaths(root, relPaths, spawnGit) {
  * `-a`/`-A` and never a pattern: the pathspec after `--` names precisely the
  * paths this call commits, so a path another process staged in the same
  * index in the meantime is left staged and untouched, not swept into this
- * commit. Returns `{ ok, stderr }`; never throws on a Git failure.
+ * commit. Returns `{ ok, stderr }`; never throws on a Git failure. A call
+ * that runs past `GIT_TIMEOUT_MS` (a hung commit hook, most often) is killed
+ * and reported as `{ ok: false, stderr: "timeout" }`.
  */
 export function commitPaths(root, relPaths, message, spawnGit) {
   const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths])
+  if (timedOut(result)) return { ok: false, stderr: "timeout" }
   return { ok: result.status === 0, stderr: result.stderr }
 }

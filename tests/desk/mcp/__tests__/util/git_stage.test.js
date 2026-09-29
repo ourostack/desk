@@ -130,3 +130,40 @@ test("commitPaths reports failure without throwing, and keeps the index unchange
   const log = spawnSync("git", ["-C", root, "log", "--oneline"], { encoding: "utf8" })
   assert.notEqual(log.status, 0, "no commit exists yet in this fresh repo")
 })
+
+// A hung git hook or a lock held past the bound must never block a tool call
+// indefinitely (independent review, fix round). `spawnSync`'s own `timeout`
+// option kills the child and returns `{ status: null, error: { code:
+// "ETIMEDOUT" } }` rather than throwing — these mock that exact shape.
+function etimedoutResult() {
+  return {
+    status: null,
+    signal: "SIGTERM",
+    stdout: "",
+    stderr: "",
+    error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }),
+  }
+}
+
+test("every git call is bounded by a ~10s timeout so a hung hook or lock can never block indefinitely", async () => {
+  const root = await mkTempRepo()
+  let capturedOptions
+  const spy = (cmd, args, opts) => {
+    capturedOptions = opts
+    return spawnSync(cmd, args, opts)
+  }
+  stagePaths(root, ["does-not-exist.txt"], spy)
+  assert.equal(capturedOptions.timeout, 10_000)
+})
+
+test("stagePaths reports { ok: false, stderr: \"timeout\" } when the git call times out, without throwing", async () => {
+  const root = await mkTempRepo()
+  const result = stagePaths(root, ["a.txt"], etimedoutResult)
+  assert.deepEqual(result, { ok: false, stderr: "timeout" })
+})
+
+test("commitPaths reports { ok: false, stderr: \"timeout\" } when the git call times out, without throwing", async () => {
+  const root = await mkTempRepo()
+  const result = commitPaths(root, ["a.txt"], "message", etimedoutResult)
+  assert.deepEqual(result, { ok: false, stderr: "timeout" })
+})
