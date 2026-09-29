@@ -20,6 +20,15 @@
 // no check has a line, so its output is then byte-identical to the output it
 // built before the registry ran.
 //
+// Index tracing (spec.md §3): none of the checks below is designed to touch
+// the Git index, so a `git diff --cached --name-only` snapshot taken
+// immediately before and after each `check.run(...)` call — against the same
+// desk root `factoryCheck`/`deskHealthCheck` already resolve, only when it is
+// itself a Git repository — catches a check that stages a path it never
+// should. A drift appends a five-field `Desk problem: index-drift — ...`
+// block (`mcp/src/runtime/index-drift.js`) to the same output; it names the
+// check and the exact paths, never undoes the staging, and never blocks.
+//
 // The registry, in order:
 //   1. factory: whether the bound desk's store has a consent decision, and a
 //      detached `factory.js finalize` for finished jobs whose facts are not
@@ -54,7 +63,7 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 // Loaded only by the detached launchers, never on the boot path.
 const compatibleNode = (options) => require("./compatible-node.cjs").compatibleNode(options);
@@ -368,7 +377,8 @@ const validRepair = (repair) => Array.isArray(repair?.command) && repair.command
  * Runs the registry (see the header). Options: `host`, `env`, `sessionFolder`,
  * plus for tests `checks`, `totalBudgetMs`, `checkBudgets` ({ id: ms }),
  * `launchRepair(command, env)`, `record(env, skipped)`, `launch` (the
- * workspace-tidy repair launcher) and `loadRedaction`. Resolves `""` or one
+ * workspace-tidy repair launcher), `loadRedaction` and `spawnGit` (the index-
+ * tracing Git seam; real callers never pass it). Resolves `""` or one
  * `Desk boot:` line; never rejects. The line names worktree paths, branches
  * and error messages, so each path segment or word that carries a secret's
  * value is redacted (mcp/src/util/redact.js); if the redaction cannot load,
@@ -378,6 +388,7 @@ async function runBootChecks(options = {}) {
   const {
     checks = module.exports.checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand, record = recordSkipped,
     loadRedaction = () => runtime("util/redact.js"),
+    spawnGit = spawnSync,
   } = options;
   const env = options.env ?? process.env;
   // The real time every check took, charged against the total budget.
@@ -386,6 +397,13 @@ async function runBootChecks(options = {}) {
   const lines = [];
   const repairs = [];
   const skipped = [];
+  // Index tracing (spec.md §3): resolved once, the same way `factoryCheck`/
+  // `deskHealthCheck` resolve their own desk root, and only watched when it
+  // is itself a Git repository.
+  const { snapshotStagedPaths, diffStagedPaths, formatDeskProblem } = await runtime("runtime/index-drift.js");
+  const { isGitRepository } = await runtime("util/git-stage.js");
+  const driftRoot = await boundRoot({ env, host: options.host, sessionFolder: options.sessionFolder, shared });
+  const tracksIndex = typeof driftRoot === "string" && isGitRepository(driftRoot, spawnGit);
   for (const check of checks) {
     const budget = Math.min(checkBudgets[check.id] ?? check.budgetMs, totalBudgetMs - used);
     // Timers resolve to whole milliseconds, so less than one left is none left.
@@ -396,6 +414,7 @@ async function runBootChecks(options = {}) {
     const cancellation = new AbortController();
     const checkStarted = performance.now();
     const deadline = checkStarted + budget;
+    const beforeStaged = tracksIndex ? snapshotStagedPaths({ root: driftRoot, spawnGit }) : null;
     let timer;
     const outcome = await Promise.race([
       Promise.resolve()
@@ -404,6 +423,19 @@ async function runBootChecks(options = {}) {
       new Promise((resolve) => { timer = setTimeout(resolve, Math.ceil(budget), { overrun: true }); }),
     ]);
     clearTimeout(timer);
+    if (tracksIndex) {
+      const drift = diffStagedPaths(beforeStaged, snapshotStagedPaths({ root: driftRoot, spawnGit }));
+      if (drift.length > 0) {
+        lines.push(formatDeskProblem({
+          mechanism: "index-drift",
+          broke: `${check.id}: unexpected staged path(s) appeared during this boot check: ${drift.join(", ")}`,
+          means: "a Desk boot check staged a file it should never touch",
+          fix: "not undone — staged paths left as-is for inspection",
+          file: "not filed: filing lands once the failure-contract filer exists (spec §8 PR 4)",
+          tell: `Boot check "${check.id}" unexpectedly staged ${drift.length === 1 ? "a file" : "files"} (${drift.join(", ")}); left as-is so you can inspect it.`,
+        }));
+      }
+    }
     // A check that blocks synchronously settles before its timer can fire, so the real elapsed time decides: past the budget, its line and repair are discarded like a timed-out check's.
     const elapsed = performance.now() - checkStarted;
     used += elapsed;
