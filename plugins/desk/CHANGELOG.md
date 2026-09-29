@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.144 — 2026-09-29
+
+`friction_add`'s declared input schema (`mcp/src/tool-schemas.js`) listed only `track`, `theme` and `body`, but its handler (`mcp/src/tools/friction.js`) has read `about`, `file_card`, `title`, `plugin`, `friction_class`, `signal` and `evidence_jobs` since the kaizen-candidate work landed — a host builds its tool-call arguments from the declared schema, so none of those fields could ever actually be sent. The schema now declares all seven: `about` (`"setup" | "system"`, describing what a host would need to know to choose between them), `file_card` (curator-only, after signoff), and the system-friction fields the tool's own description already documented.
+
+A new parity test, `tests/desk/mcp/__tests__/tool_schema_parity.test.js`, now checks every Desk MCP tool's declared schema against the fields its handler actually reads, so this class of gap fails CI instead of silently blocking a host. Each handler module exports an explicit `<TOOL>_FIELDS` list colocated with the function that reads `input` — including `desk_doctor`, whose top-level fields are read by its session-layer dispatcher (`mcp/src/runtime/desk-session.js`) rather than by the module `server.js` registers for it — which the new test compares against `tool-schemas.js`. Auditing all eighteen tools against their handlers this way turned up no other drift: `friction_add` was the only tool whose schema and handler disagreed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.143 — 2026-09-29
 
 Desk's state-directory resolution now refuses to touch the real `ouroboros-skills/desk` state folder from anything that looks like a `node:test` run, whether or not that run loaded the test suite's own isolation setup — closing a gap where a test file executed directly with a bare `node --test <file>` (skipping the `--import` that normally redirects state under a temporary folder) could still write real records, such as factory evaluate-requests, onto a developer's own machine.
