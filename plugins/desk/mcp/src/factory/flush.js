@@ -13,7 +13,9 @@
 //      Desk wrote when the store refused its facts as
 //      `private_plugins_missing` (`releaseRefusedPluginNames`): this Desk
 //      always writes `refs.private.plugins`, so those files go again.
-//      Transform every outbox file that is not quarantined. The visibility of each referenced repository, and
+//      Transform every outbox file that is not quarantined, and every quarantined
+//      file whose record names no blob or a different blob than the one this Desk
+//      publishes now (released together, once, before sending). The visibility of each referenced repository, and
 //      of the desk's own GitHub remote, comes from the seven-day cache or
 //      `GET /repos/{owner}/{repo}` with the account's token (`private: false`
 //      is public, `private: true` private, 403 or 404 unknown). A token that
@@ -762,31 +764,38 @@ async function deliver(env, context) {
   const repos = ordinary.flatMap(reposOf)
   for (const { local } of parsedLabels) for (const name of factsNamesOf(local?.session)) if (desks.get(name)) repos.push(desks.get(name))
   const known = await resolveVisibility(env, client, account, repos, nowIso)
-  // A held file is a retry, never a reason to stop: its repositories resolve one file at a time, and a file whose repositories cannot all be resolved keeps its record and waits for a later flush.
+  // A held file is a retry, never a reason to stop for a repository it cannot resolve: its repositories resolve one file at a time, and a file whose repositories cannot all be resolved keeps its record and waits for a later flush.
+  // A file whose repositories are all known already needs no lookup, and no state-root check, so an unchanged held file costs nothing.
+  // Only an `unexpected` answer is swallowed; a deadline, an offline network, a rate limit or a failed sign-in still ends the flush.
   const unresolved = new Set()
   for (const item of parsed) {
     if (item.held === null) continue
+    const wanted = reposOf(item)
+    if (wanted.every((repo) => known.has(repo.toLowerCase()))) continue
     try {
-      for (const [repo, visibility] of await resolveVisibility(env, client, account, reposOf(item), nowIso)) known.set(repo, visibility)
-    } catch {
+      for (const [repo, visibility] of await resolveVisibility(env, client, account, wanted, nowIso)) known.set(repo, visibility)
+    } catch (error) {
+      if (error.code !== "unexpected") throw error
       unresolved.add(item.name)
     }
   }
   const secret = await readMachineSecret(env)
 
   const bytesByName = new Map()
-  let releasedLabels = false
+  const released = []
   for (const { name, held, local } of parsed) {
     const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
     if (held !== null) {
       if (unresolved.has(name)) continue
       // A quarantined file goes again only when what it publishes now differs from what the store refused; otherwise its record stays as it is.
       if (!out.bytes || gitBlobSha(out.bytes) === held.blob) continue
-      releasedLabels = (await releaseQuarantined(env, store, [name])).labels.length > 0 || releasedLabels
+      released.push(name)
       bytesByName.set(name, out.bytes)
     } else if (out.bytes) bytesByName.set(name, out.bytes)
     else await quarantine(env, store, name, out.reason)
   }
+  // One release for every file that goes again: the quarantine folders are listed once, not once per file.
+  const releasedLabels = released.length > 0 && (await releaseQuarantined(env, store, released)).labels.length > 0
   const labelsByKey = new Map()
   const publishLabels = async (items) => {
     for (const { key, local } of items) {
@@ -802,8 +811,8 @@ async function deliver(env, context) {
     const again = (await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })).filter(({ name }) => !seen.has(name))
     await publishLabels(again.map(({ name, localBytes }) => ({ key: name, local: JSON.parse(localBytes.toString("utf8")) })))
   }
-  // Every file without published bytes was just quarantined, so the listings below never ask about one.
-  const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts.session.host}-${facts.session.id}.json`) }))
+  // A file without bytes is one whose record is not a regular file (its file stays where it is) or a held file that stays held; the listing skips it.
+  const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts.session.host}-${facts.session.id}.json`) ?? null }))
     .map(({ name }) => ({ name, path: `facts/${name}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)) }))
   const labelsPending = (await pendingLabels(env, store, { publishedBytesFor: (labels) => labelsByKey.get(`labels/${labels.job}/${labels.session}.json`).bytes }))
     .map(({ name }) => {

@@ -234,3 +234,110 @@ for (const status of [500, 422]) {
     assert.deepEqual(await fs.readFile(file), before)
   }))
 }
+
+// A quarantine record that is not a regular file keeps its file where it is; it must never stop an unrelated file from going.
+const ODD_RECORDS = {
+  symlink: async (file, base) => {
+    const target = path.join(base, "elsewhere.json")
+    await fs.writeFile(target, JSON.stringify({ reason: "plugin_not_public", at: "2026-09-29T00:00:00.000Z" }))
+    await fs.symlink(target, file)
+  },
+  directory: async (file) => fs.mkdir(file),
+  "hard-linked file": async (file, base) => {
+    const target = path.join(base, "elsewhere.json")
+    await fs.writeFile(target, JSON.stringify({ reason: "plugin_not_public", at: "2026-09-29T00:00:00.000Z" }))
+    await fs.link(target, file)
+  },
+}
+for (const [kind, make] of Object.entries(ODD_RECORDS)) {
+  test(`a ${kind} quarantine record never blocks an unrelated pending file`, () => scratch(async ({ base, env }) => {
+    await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+    await put(env, 1, { labels: false })
+    await put(env, 2, { labels: false })
+    const root = await factoryStateRoot(env)
+    await fs.mkdir(path.join(root, "quarantine", SLUG), { recursive: true })
+    const file = path.join(root, "quarantine", SLUG, nameOf(1))
+    await make(file, base)
+    const before = await fs.lstat(file)
+    const github = fakeGitHub()
+    const out = await flushOnce(env, github)
+    assert.equal(out.result, "delivered_pr_open")
+    assert.deepEqual([...github.headFiles(STORE, await branchOf(env)).keys()], [`facts/${nameOf(2)}`])
+    const after = await fs.lstat(file)
+    assert.equal(after.ino, before.ino)
+    assert.equal(after.isSymbolicLink(), before.isSymbolicLink())
+    assert.equal(after.isDirectory(), before.isDirectory())
+  }))
+}
+
+// Counts the state-root checks (`factoryStateRoot` resolves the state folder's real path once per call) a flush makes.
+async function stateRootChecks(held) {
+  return scratch(async ({ env }) => {
+    await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+    for (let n = 1; n <= held; n += 1) {
+      await put(env, n, { labels: false })
+      await quarantine(env, STORE, nameOf(n), "plugin_not_public")
+    }
+    const github = fakeGitHub()
+    assert.equal((await flushOnce(env, github)).result, "delivered_pr_open")
+    github.rejectOpenPr("factory-rejected: plugin_not_public")
+    await flushOnce(env, github)
+    for (let n = 1; n <= held; n += 1) assert.equal(typeof (await record(env, nameOf(n))).blob, "string")
+    const prs = github.pullCount()
+    const original = fs.realpath
+    let checks = 0
+    fs.realpath = async (...args) => {
+      checks += 1
+      return original(...args)
+    }
+    try {
+      assert.equal((await flushOnce(env, github)).result, "nothing_pending")
+    } finally {
+      fs.realpath = original
+    }
+    assert.equal(github.pullCount(), prs)
+    return checks
+  })
+}
+
+test("held files that have not changed cost no state-root check each", async () => {
+  const one = await stateRootChecks(1)
+  const many = await stateRootChecks(6)
+  assert.ok(one > 0)
+  assert.equal(many, one)
+})
+
+test("a held file is released with every other in one release, and its labels go with it", () => scratch(async ({ env }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  for (const n of [1, 2, 3]) {
+    await put(env, n)
+    await quarantine(env, STORE, nameOf(n), "plugin_not_public")
+    await quarantine(env, STORE, keyOf(n), "facts_quarantined", { facts: nameOf(n) })
+  }
+  const github = fakeGitHub()
+  assert.equal((await flushOnce(env, github)).result, "delivered_pr_open")
+  assert.equal([...github.headFiles(STORE, await branchOf(env)).keys()].length, 6)
+  for (const n of [1, 2, 3]) {
+    assert.equal(await record(env, nameOf(n)), null)
+    assert.equal(await record(env, keyOf(n)), null)
+  }
+}))
+
+for (const [code, spec] of [
+  ["rate_limited", { intercept: (call) => (call.args.some((arg) => /repos\/acme\/held-only$/u.test(arg)) ? httpError(429, "Too Many Requests") : undefined) }],
+]) {
+  test(`a held file's lookup that ends the flush (${code}) still ends it and keeps the record`, () => scratch(async ({ env }) => {
+    await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+    await put(env, 1, { labels: false })
+    const name = path.join(await factoryStateRoot(env), "outbox", SLUG, nameOf(1))
+    const held = JSON.parse(await fs.readFile(name, "utf8"))
+    held.refs = { prs: [{ repo: "acme/held-only", number: 1 }], commits: [], unresolved: { prs: 0, commits: 0 } }
+    await fs.writeFile(name, `${JSON.stringify(held)}\n`)
+    await quarantine(env, STORE, nameOf(1), "plugin_not_public")
+    const file = path.join(await factoryStateRoot(env), "quarantine", SLUG, nameOf(1))
+    const before = await fs.readFile(file)
+    const github = fakeGitHub(spec)
+    assert.equal((await flushOnce(env, github)).result, code)
+    assert.deepEqual(await fs.readFile(file), before)
+  }))
+}

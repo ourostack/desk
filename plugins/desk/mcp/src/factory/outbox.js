@@ -24,13 +24,17 @@
 //   markers/<host>-<session_id>.json   pending-session bookkeeping
 //   outbox/<store-slug>/<host>-<session_id>.json   local facts, never as-is
 //   delivered/<store-slug>.json        name -> last delivered published blob sha
-//   quarantine/<store-slug>/<name>     { reason, at }, and for labels
+//   quarantine/<store-slug>/<name>     { reason, at, blob? } (blob: the
+//                                      published blob sha the store refused),
+//                                      and for labels
 //                                      held back for quarantined facts
 //                                      { reason: "facts_quarantined", facts, at }
 //   visibility.json                    repo visibility cache (7-day expiry)
 //   status.json                        last flush result per store
 //   finalize/<job>.json                a Desk task tool's sync-at-done request
-//   jobs-index.json                    job -> [outbox file names]
+//   jobs-index.json                    job -> [outbox file names], a mirror
+//                                      of the outbox (`jobs-index.rebuilt`
+//                                      stamps its one-time rebuild)
 //   machine-secret                     32 random bytes, created once
 //   labels/<store-slug>/<job>/<session_id>.json   local waste labels
 //   evaluations/<job>/<store-slug>/<host>-<session_id>.brief.json
