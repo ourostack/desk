@@ -53,12 +53,17 @@ test("boot check queues a detached repair, returns without waiting, and records 
   const f = await fixture()
   const w = path.join(f.root, "unowned")
   git(f.desk, "worktree", "add", "-b", "unowned", w)
+  // The launch is held back: the boot check may queue the repair but the repair does not start until the boot check has returned. That makes the ordering exact. If the boot check waited for the repair it would have no report to return with; here it returns with the repair not yet begun, whatever the machine's speed.
+  let held
   const started = performance.now()
-  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: f.desk })
+  const line = await tidy({ host: "copilot", env: f.env, sessionFolder: f.desk, launch: async (root, env) => { held = { root, env } } })
   const elapsed = performance.now() - started
   t.diagnostic(`boot check returned in ${Math.round(elapsed)} ms (whole-check budget ${BOOT_BUDGET_MS} ms)`)
-  // The whole-check budget is what keeps session start from waiting on the repair. The bound is that budget plus the same again for a loaded event loop, still far below the repair's own run time.
-  assert.ok(elapsed < 2 * BOOT_BUDGET_MS, `the boot check took ${Math.round(elapsed)} ms`)
+  const heldReportPath = boot.reportPath(f.desk, git(f.desk, "rev-parse", "--absolute-git-dir"))
+  await assert.rejects(boot.readReport(heldReportPath), { code: "ENOENT" }, "the repair had not run when the boot check returned")
+  // Session start must not wait on the repair. Ordering above is the property; this ceiling only catches a hang. It is far above the slowest coverage-shard time seen (about 900 ms), so a slow runner cannot trip it.
+  assert.ok(elapsed < 10_000, `the boot check took ${Math.round(elapsed)} ms`)
+  if (held) await boot.launchRepair(held.root, held.env)
   assert.match(line, /^Desk boot: workspace-tidy/)
   assert.match(line, /deferred/)
   assert.equal(line.split("\n").length, 1)
