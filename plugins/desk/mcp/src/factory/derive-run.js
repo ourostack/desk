@@ -7,7 +7,7 @@ import { deriveClaudeSession } from "./derive-claude.js"
 import { deriveCopilotSession } from "./derive-copilot.js"
 import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
-import { factoryStateRoot, listMarkers, readConsent, readMarker, readStatus, updateJobsIndex, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
+import { factoryStateRoot, listMarkers, readConsent, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { resolveStore } from "./store-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
@@ -146,7 +146,7 @@ async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQui
     derived.facts.jobs = jobs
     const written = await writeLocalFacts(env, store, derived.facts)
     if (!written.written) return { result: written.errors.length ? "invalid" : "not_opted_in", store }
-    for (const job of jobs) await updateJobsIndex(env, job.job, written.name)
+    await setJobsForFile(env, written.name, jobs.map((j) => j.job))
     await writeStatus(env, { derivations: { [name]: { store, marker: hash, ...before } } })
     return { result: "written", store }
   } catch (error) {
@@ -156,6 +156,7 @@ async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQui
 
 export async function sweep(env, { quietMs = 600000 } = {}) {
   const summary = { written: 0, held: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0 }
+  if (!(await jobsIndexRebuilt(env))) await rebuildJobsIndex(env)
   for (const marker of await listMarkers(env)) {
     const { result } = await deriveMarker(env, marker, { quietMs, requireStored: true })
     summary[result] += 1

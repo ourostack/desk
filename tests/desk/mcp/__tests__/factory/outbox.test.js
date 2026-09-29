@@ -36,7 +36,8 @@ import {
   readVisibilityCache,
   requestFinalize,
   setConsent,
-  updateJobsIndex,
+  setJobsForFile,
+  rebuildJobsIndex,
   writeLocalFacts,
   writeMarker,
   writeStatus,
@@ -118,6 +119,8 @@ function validLocalFacts(overrides = {}) {
 
 const STORE = "ourostack/factory"
 const JOB = "9f2c4b1a7d3e5f60718293a4b5c6d7e8"
+const JOB2 = "1a2b3c4d5e6f708192a3b4c5d6e7f809"
+const JOB3 = "2b3c4d5e6f708192a3b4c5d6e7f8091a"
 
 function validMarker(overrides = {}) {
   return {
@@ -588,7 +591,7 @@ test("a jobs-index.json holding an array is moved aside and read as empty, rathe
   const root = await factoryStateRoot(env)
   writeFileSync(path.join(root, "jobs-index.json"), "[]", { mode: 0o600 })
   assert.deepEqual(await readJobsIndex(env), {})
-  const next = await updateJobsIndex(env, JOB, "claude-code-a.json")
+  const next = await setJobsForFile(env, "claude-code-a.json", [JOB])
   assert.deepEqual(next, { [JOB]: ["claude-code-a.json"] })
 }))
 
@@ -1190,25 +1193,48 @@ test("listFinalizeRequests never follows a symlink planted in the finalize direc
 // Jobs index.
 // ---------------------------------------------------------------------------
 
-test("readJobsIndex defaults to empty and updateJobsIndex adds and dedupes file names", () => scratch(async (env) => {
+test("readJobsIndex defaults to empty and setJobsForFile is idempotent", () => scratch(async (env) => {
   assert.deepEqual(await readJobsIndex(env), {})
-  await updateJobsIndex(env, JOB, "claude-code-a.json")
-  const next = await updateJobsIndex(env, JOB, "claude-code-a.json")
+  await setJobsForFile(env, "claude-code-a.json", [JOB])
+  const next = await setJobsForFile(env, "claude-code-a.json", [JOB])
   assert.deepEqual(next[JOB], ["claude-code-a.json"])
-  const withSecond = await updateJobsIndex(env, JOB, "claude-code-b.json")
+  const withSecond = await setJobsForFile(env, "claude-code-b.json", [JOB])
   assert.deepEqual(withSecond[JOB], ["claude-code-a.json", "claude-code-b.json"])
 }))
 
-test("updateJobsIndex rejects a malformed job id or file name", () => scratch(async (env) => {
-  await assert.rejects(() => updateJobsIndex(env, "nope", "a.json"), TypeError)
-  await assert.rejects(() => updateJobsIndex(env, JOB, ""), TypeError)
+test("setJobsForFile moves a file between jobs and drops empty entries", () => scratch(async (env) => {
+  await writeFileSync(path.join(await factoryStateRoot(env), "jobs-index.json"), JSON.stringify({ [JOB]: ["f1"], [JOB2]: ["f1", "f2"] }), { mode: 0o600 })
+  const next = await setJobsForFile(env, "f1", [JOB3])
+  assert.deepEqual(next, { [JOB2]: ["f2"], [JOB3]: ["f1"] })
+  assert.deepEqual(await readJobsIndex(env), next)
+  assert.deepEqual(await setJobsForFile(env, "f1", []), { [JOB2]: ["f2"] })
 }))
 
-test("updateJobsIndex serializes 16 concurrent updates for different jobs so all 16 survive", () => scratch(async (env) => {
+test("setJobsForFile rejects a malformed job id or file name", () => scratch(async (env) => {
+  await assert.rejects(() => setJobsForFile(env, "a.json", ["nope"]), TypeError)
+  await assert.rejects(() => setJobsForFile(env, "", [JOB]), TypeError)
+  await assert.rejects(() => setJobsForFile(env, "a.json", JOB), TypeError)
+}))
+
+test("setJobsForFile serializes 16 concurrent updates for different files so all 16 survive", () => scratch(async (env) => {
   const jobs = Array.from({ length: 16 }, (_, index) => `${String(index).padStart(2, "0")}${JOB.slice(2)}`)
-  await Promise.all(jobs.map((job) => updateJobsIndex(env, job, "claude-code-x.json")))
+  await Promise.all(jobs.map((job, index) => setJobsForFile(env, `claude-code-${index}.json`, [job])))
   const index = await readJobsIndex(env)
   assert.deepEqual(Object.keys(index).sort(), jobs.slice().sort())
+}))
+
+test("rebuildJobsIndex mirrors the outbox and writes its stamp", () => scratch(async (env) => {
+  await setConsent(env, { store: STORE, contribute: true })
+  const jobsOf = (id, ...jobs) => validLocalFacts({ session: { ...validLocalFacts().session, id }, jobs: jobs.map((job) => ({ job, basis: ["desk_tool"], task_created_at: null, transitions: [], observed: null })) })
+  const first = await writeLocalFacts(env, STORE, jobsOf("3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f61", JOB))
+  const second = await writeLocalFacts(env, STORE, jobsOf("3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f62", JOB, JOB2))
+  assert.ok(first.written && second.written, JSON.stringify([first.errors, second.errors]))
+  await setJobsForFile(env, "claude-code-stale.json", [JOB3])
+  const result = await rebuildJobsIndex(env, STORE)
+  assert.deepEqual(result, { jobs: 2, files: 2 })
+  assert.deepEqual(await readJobsIndex(env), { [JOB]: [first.name, second.name].sort(), [JOB2]: [second.name] })
+  const stamp = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(env), "jobs-index.rebuilt"), "utf8"))
+  assert.equal(typeof stamp.at, "string")
 }))
 
 // ---------------------------------------------------------------------------

@@ -967,16 +967,66 @@ export async function readJobsIndex(env, { platform = process.platform, runner =
   return readJsonFileSafe(path.join(root, "jobs-index.json"), {}, platform)
 }
 
-/** Adds `fileName` to `job`'s entry (deduplicated); lets finalize and the boot check find a job's sessions without reading logs. Concurrent updates for different jobs are serialized so none is lost. */
-export async function updateJobsIndex(env, job, fileName, { platform = process.platform, runner = undefined } = {}) {
-  requirePattern(job, PATTERNS.jobId, "job")
+/** Puts `fileName` in exactly `jobIds`' entries, removes it from every other entry and drops entries left empty, so the index mirrors what the file binds now. Lets finalize and the boot check find a job's sessions without reading logs. Concurrent updates are serialized so none is lost. */
+export async function setJobsForFile(env, fileName, jobIds, { platform = process.platform, runner = undefined } = {}) {
   requireString(fileName, "fileName")
+  if (!Array.isArray(jobIds)) fail("jobIds", "must be an array")
+  for (const job of jobIds) requirePattern(job, PATTERNS.jobId, "job")
+  const wanted = new Set(jobIds)
   const root = await factoryStateRoot(env, { platform, runner })
   const file = path.join(root, "jobs-index.json")
   return updateJsonLocked(root, file, {}, (current) => {
-    const existing = current[job] ?? []
-    return { ...current, [job]: existing.includes(fileName) ? existing : [...existing, fileName] }
+    const next = {}
+    for (const [job, names] of Object.entries(current)) {
+      const kept = Array.isArray(names) ? names.filter((name) => name !== fileName) : []
+      if (wanted.has(job)) kept.push(fileName)
+      if (kept.length > 0) next[job] = kept
+    }
+    for (const job of wanted) if (next[job] === undefined) next[job] = [fileName]
+    return next
   }, { platform, env, runner })
+}
+
+/**
+ * `rebuildJobsIndex(env, store?) -> { jobs, files }`: rewrites
+ * `jobs-index.json` from the `jobs[].job` of every regular outbox file (one
+ * store's, or every store's when `store` is omitted; an unparseable file is
+ * skipped), then writes the stamp `jobs-index.rebuilt` holding `{ at }`.
+ */
+export async function rebuildJobsIndex(env, store = undefined, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  const slugs = store === undefined ? await listDirSafe(path.join(root, "outbox")) : [storeSlug(store)]
+  const rebuilt = {}
+  let files = 0
+  for (const slug of slugs) {
+    const dir = path.join(root, "outbox", slug)
+    for (const name of (await listRegularFiles(dir, OUTBOX_NAME_PATTERN)).sort()) {
+      let facts
+      try {
+        facts = JSON.parse(await fsp.readFile(path.join(dir, name), "utf8"))
+      } catch {
+        continue
+      }
+      files += 1
+      const jobs = Array.isArray(facts?.jobs) ? facts.jobs : []
+      for (const binding of jobs) {
+        const job = binding?.job
+        if (typeof job !== "string" || !PATTERNS.jobId.test(job)) continue
+        const names = (rebuilt[job] ??= [])
+        if (!names.includes(name)) names.push(name)
+      }
+    }
+  }
+  for (const names of Object.values(rebuilt)) names.sort()
+  await updateJsonLocked(root, path.join(root, "jobs-index.json"), {}, () => rebuilt, { platform, env, runner })
+  await updateJsonLocked(root, path.join(root, "jobs-index.rebuilt"), {}, () => ({ at: new Date().toISOString() }), { platform, env, runner })
+  return { jobs: Object.keys(rebuilt).length, files }
+}
+
+/** True once `rebuildJobsIndex` has stamped this state folder. */
+export async function jobsIndexRebuilt(env, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  return (await lstatIfPresent(path.join(root, "jobs-index.rebuilt"), NAMING)) !== null
 }
 
 // ---------------------------------------------------------------------------

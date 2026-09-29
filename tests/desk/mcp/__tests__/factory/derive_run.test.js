@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, promises as fs } from "node:fs"
 import * as path from "node:path"
-import { factoryStateRoot, listMarkers, readJobsIndex, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, listMarkers, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { deriveCopilotSession } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
 import { END, ID, SENTINEL, START, STORE, json, scratch, session } from "./_session_helpers.js"
@@ -141,6 +141,29 @@ test("sweep derives quiet stale and ended markers but skips busy logs and unchan
   await fs.utimes(marker.log_path, old, old)
   assert.equal((await sweep(ctx.env)).written, 1)
   assert.equal((await listMarkers(ctx.env)).length, 1)
+}))
+
+test("sweep rebuilds the index only once", () => scratch(async (ctx) => {
+  const { sweep } = await runner()
+  const root = await factoryStateRoot(ctx.env)
+  const stale = "9f2c4b1a7d3e5f60718293a4b5c6d7e8"
+  await setJobsForFile(ctx.env, "claude-code-old.json", [stale])
+  await sweep(ctx.env)
+  assert.deepEqual(await readJobsIndex(ctx.env), {}, "the first sweep drops entries no outbox file binds")
+  assert.equal(existsSync(path.join(root, "jobs-index.rebuilt")), true)
+  await setJobsForFile(ctx.env, "claude-code-old.json", [stale])
+  await sweep(ctx.env)
+  assert.deepEqual(await readJobsIndex(ctx.env), { [stale]: ["claude-code-old.json"] }, "the second sweep leaves a hand-edited index alone")
+}))
+
+test("re-deriving a session that no longer binds a job removes it from the index", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const gone = "9f2c4b1a7d3e5f60718293a4b5c6d7e8"
+  await setJobsForFile(ctx.env, `claude-code-${ID}.json`, [gone])
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  assert.deepEqual(await readJobsIndex(ctx.env), {})
 }))
 
 test("binding writes only hashed jobs and updates the finalize lookup", () => scratch(async (ctx) => {
