@@ -3,12 +3,15 @@ model = "gpt-5.4"
 approval_policy = "on-request"
 
 # BEGIN desk activation: desk@3.2.0-alpha.135 mode=global-personal owner=desk-activation
-features.memories = false
+[features]
+memories = false
 
-[hooks]
-PreToolUse = [
-  { matcher = "*", hooks = [ { type = "command", command = "node \"plugins/desk/hooks/host-enforcement.cjs\" codex" } ] }
-]
+[[hooks.PreToolUse]]
+matcher = "*"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "node \"plugins/desk/hooks/host-enforcement.cjs\" codex"
 
 [plugins."superpowers@ourostack"]
 enabled = true

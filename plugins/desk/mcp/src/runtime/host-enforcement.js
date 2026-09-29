@@ -31,15 +31,17 @@
  * names one `<server>-<tool>`) -- a caller never translates between hosts.
  * A whole MCP server's tools deny together without enumerating each one: an
  * entry ending in `*` matches any tool name sharing that prefix. Copilot and
- * Codex's lists stay empty for all five surfaces (Part 8, `docs/host-
- * enforcement-live-proof.md`): neither host documents or was observed to
- * expose an ask-user tool, a plan-mode tool, a persistent (not in-session)
- * task tool, or an Artifact/Claude Docs-shaped tool by any name -- those are
- * Claude-Code-specific surfaces, not gaps left to fill in. Host memory has no
- * tool on any host (it is a config flag -- `autoMemoryEnabled` on Claude
- * Code, `features.memories` on Codex, `memory` on Copilot -- pinned at setup
- * instead); every surface still gets a row here so its Desk-equivalent text
- * exists for every host's denial/documentation to reuse.
+ * Codex's lists stay empty for all five surfaces: this pass's live proof
+ * (`docs/host-enforcement-live-proof.md`) confirmed each host's `PreToolUse`
+ * wire shape, but never confirmed either host's own tool names for ask-user,
+ * plan-mode, a persistent task tool, or an Artifact/Claude-Docs-shaped
+ * surface. The lists stay empty until a live proof against a real Copilot or
+ * Codex session confirms each host's own names for these surfaces, rather
+ * than guessing names here. Host memory has no tool on any host (it is a
+ * config flag -- `autoMemoryEnabled` on Claude Code, `features.memories` on
+ * Codex, `memory` on Copilot -- pinned at setup instead); every surface still
+ * gets a row here so its Desk-equivalent text exists for every host's
+ * denial/documentation to reuse.
  */
 export const DENIED_SURFACES = {
   "ask-user": {

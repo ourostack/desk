@@ -609,7 +609,7 @@ function deskPluginPathFor(pluginId, namespace) {
 // manual-only, since both are safety pins independent of whether MCP
 // autostart is enabled. `features.memories = false` gates Codex's own
 // cross-session memory (docs/host-enforcement-live-proof.md's confirmed,
-// sufficient gate); the `[hooks] PreToolUse` entry registers the same
+// sufficient gate); the `[[hooks.PreToolUse]]` entry registers the same
 // `host-enforcement.cjs` script Claude Code and Copilot both use, passing
 // `codex` as its own host id, matched broadly (`matcher = "*"`, the exact
 // form the live-proof schema probe confirmed) since the shared runtime
@@ -621,14 +621,102 @@ function deskPluginPathFor(pluginId, namespace) {
 // honestly rather than claiming this entry protects the session today. It is
 // still written here, forward-compatible, so nothing else has to change the
 // day Codex ships a non-interactive trust grant.
-function renderHostEnforcementBlock(input) {
-  const command = tomlString(`node "${input.pluginRoot}/hooks/host-enforcement.cjs" codex`)
-  return `features.memories = false
+//
+// Both pieces are always real, root-absolute table headers, never a bare
+// dotted key: a bare `features.memories = false` right after the BEGIN
+// marker would bind to whatever table the operator's own config last opened
+// (for example a trailing `[shell_environment_policy]`), silently becoming
+// `shell_environment_policy.features.memories` (review round, Part 8 fix
+// round). `[[hooks.PreToolUse]]` is TOML's array-of-tables syntax for the
+// exact same data the live-proof schema uses (`[hooks] PreToolUse =
+// [{matcher, hooks = [{type, command}]}]`): unlike a plain `[hooks]` header,
+// it is safe to add even when the operator already declares their own
+// `[hooks]` table elsewhere, because it only *extends* that table with a new
+// key rather than redeclaring it.
+//
+// Each piece is independently skipped, never failing activation, when the
+// operator's own config already uses that key: `renderFeaturesBlock` skips
+// when a root `[features]` table or `features.`-prefixed key already exists
+// (Codex's own default is already `false`; an operator who sets it is making
+// their own choice, and duplicating `[features]` is invalid TOML anyway).
+// `renderHooksBlock` skips when `hooks.PreToolUse` is already defined in any
+// form, most importantly a static inline array (`PreToolUse = [...]`), which
+// an array-of-tables entry cannot be appended to without breaking the file.
+// `verifyHookRegistered`'s Codex reason names the hook-trust gap regardless
+// of whether this entry actually landed, so skipping it here never makes
+// that reason less true.
+function renderFeaturesBlock(existingConfig) {
+  if (tomlRootFeaturesTableUsed(existingConfig)) {
+    return null
+  }
+  return `[features]\nmemories = false`
+}
 
-[hooks]
-PreToolUse = [
-  { matcher = "*", hooks = [ { type = "command", command = ${command} } ] }
-]`
+function renderHooksBlock(input, existingConfig) {
+  if (tomlHooksPreToolUseUsed(existingConfig)) {
+    return null
+  }
+  const command = tomlString(`node "${input.pluginRoot}/hooks/host-enforcement.cjs" codex`)
+  return `[[hooks.PreToolUse]]
+matcher = "*"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = ${command}`
+}
+
+function renderHostEnforcementBlock(input, existingConfig) {
+  return [
+    renderFeaturesBlock(existingConfig),
+    renderHooksBlock(input, existingConfig),
+  ].filter((section) => section !== null).join("\n\n")
+}
+
+/** Whether the root `features` table is already used anywhere in `content`: a `[features]` (or `[features.*]`) header, or a root-level `features`/`features.*` dotted key declared before the first table header. Nested uses under some other table (`[foo]` then `features.bar = 1`, which sets `foo.features.bar`) do not count -- only the root `features` namespace Codex itself reads does. */
+function tomlRootFeaturesTableUsed(content) {
+  let sectionPath = []
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const line = stripTomlComment(rawLine).trim()
+    if (!line) continue
+
+    const tablePath = parseTomlTableHeader(line)
+    if (tablePath) {
+      sectionPath = tablePath
+      if (tablePath[0] === "features") return true
+      continue
+    }
+
+    if (sectionPath.length > 0) continue
+    const equalsIndex = findTomlTopLevelEquals(line)
+    if (equalsIndex === -1) continue
+    const keyPath = parseTomlDottedKey(line.slice(0, equalsIndex))
+    if (keyPath && keyPath[0] === "features") return true
+  }
+  return false
+}
+
+/** Whether `hooks.PreToolUse` is already used anywhere in `content`, in any form: a `[hooks.PreToolUse]` (or deeper) header, an array-of-tables `[[hooks.PreToolUse]]` header, or a `PreToolUse = ...` key under an open `[hooks]` table (most importantly a static inline array, which an appended `[[hooks.PreToolUse]]` entry cannot coexist with). */
+function tomlHooksPreToolUseUsed(content) {
+  const targetPath = ["hooks", "PreToolUse"]
+  let sectionPath = []
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const line = stripTomlComment(rawLine).trim()
+    if (!line) continue
+
+    const tablePath = parseTomlTableHeader(line)
+    if (tablePath) {
+      sectionPath = tablePath
+      if (pathStartsWith(tablePath, targetPath)) return true
+      continue
+    }
+
+    const equalsIndex = findTomlTopLevelEquals(line)
+    if (equalsIndex === -1) continue
+    const keyPath = parseTomlDottedKey(line.slice(0, equalsIndex))
+    if (!keyPath) continue
+    if (pathStartsWith([...sectionPath, ...keyPath], targetPath)) return true
+  }
+  return false
 }
 
 function renderConfigBlock(input, modeConfig, selectedActivation, existingConfig) {
@@ -657,7 +745,7 @@ default_tools_approval_mode = "prompt"`
     : ""
 
   return `# BEGIN desk activation: ${manifest.id}@${manifest.version} mode=${input.mode} owner=desk-activation
-${renderHostEnforcementBlock(input)}
+${renderHostEnforcementBlock(input, existingConfig)}
 
 ${renderPluginEnableBlocks(input, selectedActivation, namespace, existingConfig)}
 
