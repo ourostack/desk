@@ -285,6 +285,38 @@ test("global personal activation materializes worker and Desk as the default", a
   assertCodexActivationLine(result.generatedInstructions)
 })
 
+test("Codex activation pins features.memories = false and registers host-enforcement.cjs under [hooks] PreToolUse, in every mode including manual-only", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+
+  for (const mode of ["global-personal", "project-local", "manual-only"]) {
+    const { generatedConfig } = materializeCodexActivation(activationInput(mode))
+    assert.match(generatedConfig, /features\.memories\s*=\s*false/, `${mode}: features.memories pin`)
+    assert.match(generatedConfig, /\[hooks\]/, `${mode}: [hooks] table`)
+    assert.match(generatedConfig, /PreToolUse\s*=\s*\[/, `${mode}: PreToolUse array`)
+    assert.match(generatedConfig, /matcher\s*=\s*"\*"/, `${mode}: broad matcher`)
+    assert.match(generatedConfig, /type\s*=\s*"command"/, `${mode}: command hook type`)
+    assert.match(
+      generatedConfig,
+      /command\s*=\s*"node \\"plugins\/desk\/hooks\/host-enforcement\.cjs\\" codex"/,
+      `${mode}: host-enforcement.cjs wired for codex`,
+    )
+  }
+
+  assert.equal(materializeCodexActivation(activationInput("global-personal")).generatedConfig, loadFixture("global-personal", "generated-config.toml"))
+  assert.equal(materializeCodexActivation(activationInput("project-local")).generatedConfig, loadFixture("project-local", "generated-config.toml"))
+  assert.equal(materializeCodexActivation(activationInput("manual-only")).generatedConfig, loadFixture("manual-only", "generated-config.toml"))
+})
+
+test("Codex activation escapes the host-enforcement.cjs hook command for host paths, the same as the direct MCP args", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const result = materializeCodexActivation(activationInput("global-personal", {
+    pluginRoot: String.raw`C:\Users\Ari "Desk"\plugins\desk`,
+  }))
+  // The escaped plugin root must appear once for the MCP args and once for the hook command, both through the same tomlString escaping.
+  assert.equal(countOccurrences(result.generatedConfig, String.raw`C:\\Users\\Ari \"Desk\"\\plugins\\desk`), 2)
+  assert.ok(result.generatedConfig.includes(String.raw`hooks/host-enforcement.cjs\" codex`))
+})
+
 test("Codex activation injects the full Desk foundation once in automatic modes", async () => {
   const { materializeCodexActivation } = await loadCodexAdapter()
 

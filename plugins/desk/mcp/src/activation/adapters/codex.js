@@ -605,6 +605,32 @@ function deskPluginPathFor(pluginId, namespace) {
   return ["plugins", pluginRef(pluginId, namespace)]
 }
 
+// Desk-only enforcement (spec §5, Part 8): pinned in every mode, including
+// manual-only, since both are safety pins independent of whether MCP
+// autostart is enabled. `features.memories = false` gates Codex's own
+// cross-session memory (docs/host-enforcement-live-proof.md's confirmed,
+// sufficient gate); the `[hooks] PreToolUse` entry registers the same
+// `host-enforcement.cjs` script Claude Code and Copilot both use, passing
+// `codex` as its own host id, matched broadly (`matcher = "*"`, the exact
+// form the live-proof schema probe confirmed) since the shared runtime
+// decides allow/deny per tool name regardless of which call triggered it.
+// Codex's own hook-trust gate means this registration is not active yet
+// (silently skipped without `--dangerously-bypass-hook-trust`, with no
+// supported, automatable way found to grant that trust ahead of time) --
+// `host-enforcement-registration.js`'s `verifyHookRegistered` reports that
+// honestly rather than claiming this entry protects the session today. It is
+// still written here, forward-compatible, so nothing else has to change the
+// day Codex ships a non-interactive trust grant.
+function renderHostEnforcementBlock(input) {
+  const command = tomlString(`node "${input.pluginRoot}/hooks/host-enforcement.cjs" codex`)
+  return `features.memories = false
+
+[hooks]
+PreToolUse = [
+  { matcher = "*", hooks = [ { type = "command", command = ${command} } ] }
+]`
+}
+
 function renderConfigBlock(input, modeConfig, selectedActivation, existingConfig) {
   const { manifest } = input
   const namespace = activationNamespace(input)
@@ -631,6 +657,8 @@ default_tools_approval_mode = "prompt"`
     : ""
 
   return `# BEGIN desk activation: ${manifest.id}@${manifest.version} mode=${input.mode} owner=desk-activation
+${renderHostEnforcementBlock(input)}
+
 ${renderPluginEnableBlocks(input, selectedActivation, namespace, existingConfig)}
 
 ${pluginMcpPolicy}${approvalPolicy}${directMcp}
