@@ -790,10 +790,14 @@ function escapeRegExp(value) {
 }
 
 function scriptHelp(scriptName) {
+  // NODE_OPTIONS stripped: this `--help` subprocess is not anything whose own coverage this suite needs to
+  // measure, so it has no reason to inherit the coverage runner's instrumentation registration.
+  const bareEnv = { ...process.env }
+  delete bareEnv.NODE_OPTIONS
   const result = spawnSync(
     process.execPath,
     [path.join(mcpRoot, "scripts", scriptName), "--help"],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: bareEnv },
   )
   assert.equal(result.status, 0, result.stderr || result.stdout)
   return `${result.stdout}${result.stderr}`

@@ -15,6 +15,11 @@ const require = createRequire(import.meta.url)
 const script = path.join(repoRoot, "scripts", "release-desk.cjs")
 const release = require(script)
 
+// NODE_OPTIONS stripped: the CLI subprocess below is a real release run against a fixture checkout, not anything
+// whose own coverage this suite needs to measure, so it has no reason to inherit the coverage runner's instrumentation.
+const bareEnv = { ...process.env }
+delete bareEnv.NODE_OPTIONS
+
 const readRepo = (file) => readFileSync(path.join(repoRoot, file), "utf8")
 const currentDesk = JSON.parse(readRepo("plugins/desk/.claude-plugin/plugin.json")).version
 const mcpVersion = JSON.parse(readRepo("plugins/desk/mcp/package.json")).version
@@ -145,10 +150,10 @@ test("the CLI takes --date and --root, prints the result and reports errors on s
   assert.deepEqual(JSON.parse(output), { released: false, fragments: [] })
 
   fragment(root, "cli.md", "Released from the command line.\n")
-  const success = spawnSync(process.execPath, [script, "--root", root, "--date", "2026-10-02"], { encoding: "utf8" })
+  const success = spawnSync(process.execPath, [script, "--root", root, "--date", "2026-10-02"], { encoding: "utf8", env: bareEnv })
   assert.equal(success.status, 0, success.stderr)
   assert.equal(JSON.parse(success.stdout).to, release.nextAlpha(currentDesk))
-  const failure = spawnSync(process.execPath, [script, "--root", root, "--date", "tomorrow"], { encoding: "utf8" })
+  const failure = spawnSync(process.execPath, [script, "--root", root, "--date", "tomorrow"], { encoding: "utf8", env: bareEnv })
   assert.equal(failure.status, 1)
   assert.match(failure.stderr, /the release date must be YYYY-MM-DD: tomorrow/u)
   // The repository's own fragments folder keeps its instructions, and a real checkout has nothing to release by default here.

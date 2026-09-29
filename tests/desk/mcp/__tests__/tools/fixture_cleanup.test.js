@@ -37,6 +37,11 @@ for (const [helper, prefix] of [
         ].join("\n"), "utf8")
         const env = { ...process.env, TMPDIR: sandbox, TMP: sandbox, TEMP: sandbox }
         delete env.NODE_TEST_CONTEXT
+        // NODE_OPTIONS stripped too: this inner `node --test` run exercises fixture-teardown behavior, not anything
+        // whose own coverage this suite needs to measure, so it has no reason to inherit the coverage runner's
+        // instrumentation registration -- one less instrumented process writing into the shared raw coverage
+        // directory while this shard's own run is still going (ourostack/desk PR #101 fix round).
+        delete env.NODE_OPTIONS
         const result = spawnSync(process.execPath, ["--test", script], {
           env,
           encoding: "utf8",
