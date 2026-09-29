@@ -459,7 +459,7 @@ async function runBootChecks(options = {}) {
   // this function still shows the operator every time (fix round, spec.md
   // §1 Part 5). Both fail toward the old, always-filing behavior if they
   // cannot be loaded at all.
-  const argvSafeReason = await runtime("util/redact.js").then((mod) => mod.argvSafeReason, () => (text) => String(text ?? "unknown"));
+  const argvSafeReason = await runtime("runtime/argv-safe-reason.js").then((mod) => mod.argvSafeReason, () => (text) => String(text ?? "unknown"));
   const shouldLaunchFiler = await runtime("runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
   // Queued the same way host-enforcement's own repair is: a fileProblem
   // closure that only builds the repair command (compatibleCommand,
@@ -576,7 +576,7 @@ async function runBootChecks(options = {}) {
 async function migrationLine({ host, env = process.env, sessionFolder, budgetMs, pluginRoot = path.resolve(__dirname, ".."), launchRepair: startRepair = launchCommand } = {}) {
   try {
     const { startupMigrationLine } = await runtime("runtime/pending-migrations.js");
-    const argvSafeReason = await runtime("util/redact.js").then((mod) => mod.argvSafeReason, () => (text) => String(text ?? "unknown"));
+    const argvSafeReason = await runtime("runtime/argv-safe-reason.js").then((mod) => mod.argvSafeReason, () => (text) => String(text ?? "unknown"));
     const shouldLaunchFiler = await runtime("runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
     const cwd = host === "copilot" ? sessionFolder || process.cwd() : env.CLAUDE_PROJECT_DIR || process.cwd();
     return await startupMigrationLine({
