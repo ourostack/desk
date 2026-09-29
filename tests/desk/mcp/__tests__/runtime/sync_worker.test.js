@@ -1,0 +1,554 @@
+// sync-worker.js — the background push worker and its lock (M4-6 "agents
+// never fight the desk" Part 3, spec.md §2 "Background push, one retry").
+//
+// Real synthetic Git repos throughout (a bare origin plus one or more
+// clones), per spec.md §7 — not mocked command shapes, except for the
+// specific race windows and forced-rejection paths that real Git cannot be
+// made to hit deterministically (the lock's compare-and-write race, and a
+// push still rejected after an already-clean rebase), which use a scripted
+// `spawnGit`/`readLock` seam that falls through to the real command for
+// everything it does not deliberately intercept.
+
+import { test } from "node:test"
+import { strict as assert } from "node:assert"
+import { promises as fs, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import * as path from "node:path"
+import { spawnSync } from "node:child_process"
+import { mkTempRoot } from "../_temp_roots.js"
+import { lastStartRootKey, resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
+import {
+  DEFAULT_DEBOUNCE_MS,
+  acquireSyncLock,
+  aheadBehindCounts,
+  defaultSpawnWorker,
+  hasRemoteConfigured,
+  hostFromEnv,
+  queueDeskProblemFiling,
+  readSyncStatus,
+  resolveSyncLockPath,
+  runPushWorker,
+  runSyncPushCli,
+  schedulePush,
+  syncStatusPath,
+} from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
+
+const instantClock = { sleep: () => Promise.resolve() }
+const dead = () => { throw Object.assign(new Error("ESRCH"), { code: "ESRCH" }) }
+
+function git(root, args) {
+  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
+  assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`)
+  return result.stdout
+}
+
+async function mkPlainRepo() {
+  const root = await mkTempRoot("desk-sync-worker-plain-")
+  git(root, ["init", "-q"])
+  git(root, ["config", "user.email", "test@example.com"])
+  git(root, ["config", "user.name", "Test"])
+  return root
+}
+
+async function mkBareOrigin() {
+  const root = await mkTempRoot("desk-sync-worker-origin-")
+  git(root, ["init", "--bare", "-q"])
+  return root
+}
+
+async function mkClone(originDir, label, { trackMain = false } = {}) {
+  const root = await mkTempRoot(`desk-sync-worker-${label}-`)
+  git(root, ["clone", "-q", originDir, "."])
+  git(root, ["config", "user.email", "test@example.com"])
+  git(root, ["config", "user.name", "Test"])
+  // Never rely on the ambient `init.defaultBranch`: name the branch directly, the same way for every fixture.
+  if (trackMain) git(root, ["checkout", "-q", "-B", "main", "origin/main"])
+  else git(root, ["symbolic-ref", "HEAD", "refs/heads/main"])
+  return root
+}
+
+async function writeAndCommit(root, name, content, message) {
+  await fs.writeFile(path.join(root, name), content)
+  git(root, ["add", "--", name])
+  git(root, ["commit", "-q", "-m", message])
+}
+
+async function mkOriginWithClone() {
+  const origin = await mkBareOrigin()
+  const cloneA = await mkClone(origin, "a")
+  await writeAndCommit(cloneA, "seed.md", "seed\n", "seed")
+  git(cloneA, ["push", "-q", "-u", "origin", "main"])
+  return { origin, cloneA }
+}
+
+function originCommitCount(origin) {
+  return git(origin, ["log", "--oneline", "main"]).trim().split("\n").filter(Boolean).length
+}
+
+function writeLockFile(root, env, record) {
+  const file = resolveSyncLockPath({ root, env })
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  writeFileSync(file, `${JSON.stringify(record)}\n`)
+  return file
+}
+
+function readLockFile(root, env) {
+  return JSON.parse(readFileSync(resolveSyncLockPath({ root, env }), "utf8"))
+}
+
+// ---------------------------------------------------------------------------
+// Path resolution.
+// ---------------------------------------------------------------------------
+
+test("resolveSyncLockPath and syncStatusPath live under the desk state directory, keyed by the root", async () => {
+  const root = await mkTempRoot("desk-sync-worker-paths-")
+  const env = process.env
+  assert.equal(resolveSyncLockPath({ root, env }), path.join(resolveDeskStateDir({ env }), "sync", `${lastStartRootKey(root)}.lock`))
+  assert.equal(syncStatusPath({ root, env }), path.join(resolveDeskStateDir({ env }), "sync", `${lastStartRootKey(root)}.status.json`))
+})
+
+// ---------------------------------------------------------------------------
+// The lock.
+// ---------------------------------------------------------------------------
+
+test("acquireSyncLock creates a fresh lock file, and release() removes it", async () => {
+  const root = await mkTempRoot("desk-sync-worker-lock-")
+  const lock = await acquireSyncLock({ root, env: process.env })
+  assert.notEqual(lock, null)
+  const record = readLockFile(root, process.env)
+  assert.equal(record.token, lock.token)
+  assert.equal(record.pid, process.pid)
+  lock.release()
+  assert.equal(existsSync(resolveSyncLockPath({ root, env: process.env })), false)
+})
+
+test("release() is a no-op, without throwing, once the lock file is already gone", async () => {
+  const root = await mkTempRoot("desk-sync-worker-lock-")
+  const lock = await acquireSyncLock({ root, env: process.env })
+  lock.release()
+  assert.doesNotThrow(() => lock.release())
+})
+
+test("release() leaves a different token's lock alone", async () => {
+  const root = await mkTempRoot("desk-sync-worker-lock-")
+  const lock = await acquireSyncLock({ root, env: process.env })
+  writeLockFile(root, process.env, { token: "someone-else", pid: process.pid, start: null })
+  lock.release()
+  assert.equal(readLockFile(root, process.env).token, "someone-else")
+})
+
+test("a second acquire on a still-live root returns null: the contention rule is to exit quietly", async () => {
+  const root = await mkTempRoot("desk-sync-worker-lock-")
+  const first = await acquireSyncLock({ root, env: process.env })
+  const second = await acquireSyncLock({ root, env: process.env })
+  assert.notEqual(first, null)
+  assert.equal(second, null)
+  first.release()
+})
+
+test("a lock whose recorded owner is no longer running is taken over", async () => {
+  const root = await mkTempRoot("desk-sync-worker-lock-")
+  writeLockFile(root, process.env, { token: "stale", pid: 4242, start: "whatever" })
+  const lock = await acquireSyncLock({ root, env: process.env, kill: dead })
+  assert.notEqual(lock, null)
+  assert.notEqual(readLockFile(root, process.env).token, "stale")
+  lock.release()
+})
+
+test("a lock with no recorded start, or an empty one, is treated as alive and not taken over", async () => {
+  const rootA = await mkTempRoot("desk-sync-worker-lock-")
+  writeLockFile(rootA, process.env, { token: "no-start", pid: process.pid })
+  assert.equal(await acquireSyncLock({ root: rootA, env: process.env }), null)
+
+  const rootB = await mkTempRoot("desk-sync-worker-lock-")
+  writeLockFile(rootB, process.env, { token: "empty-start", pid: process.pid, start: "" })
+  assert.equal(await acquireSyncLock({ root: rootB, env: process.env }), null)
+})
+
+test("a lock whose recorded start no longer matches its pid's current start (a reused pid) is taken over", async () => {
+  const root = await mkTempRoot("desk-sync-worker-lock-")
+  writeLockFile(root, process.env, { token: "reused-pid", pid: process.pid, start: "not-the-real-start" })
+  const lock = await acquireSyncLock({ root, env: process.env })
+  assert.notEqual(lock, null)
+  lock.release()
+})
+
+test("a lock whose current start cannot be read is treated as alive and not taken over", async () => {
+  const root = await mkTempRoot("desk-sync-worker-lock-")
+  writeLockFile(root, process.env, { token: "unreadable-start", pid: process.pid, start: "whatever" })
+  const result = await acquireSyncLock({ root, env: process.env, processStart: async () => null })
+  assert.equal(result, null)
+})
+
+test("a corrupt (unparseable) lock file is treated as already gone, and taken over", async () => {
+  const root = await mkTempRoot("desk-sync-worker-lock-")
+  const file = resolveSyncLockPath({ root, env: process.env })
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  writeFileSync(file, "not json")
+  const lock = await acquireSyncLock({ root, env: process.env })
+  assert.notEqual(lock, null)
+  lock.release()
+})
+
+test("the takeover re-confirms the lock has not changed since the staleness check, aborting when it has", async () => {
+  const root = await mkTempRoot("desk-sync-worker-lock-")
+  writeLockFile(root, process.env, { token: "placeholder", pid: 4242, start: "x" }) // forces the fast create-exclusive path to fail
+  const staleRecord = { token: "stale", pid: 4242, start: "x" }
+  const racedInRecord = { token: "raced-in", pid: 4242, start: "x" }
+  let calls = 0
+  const readLock = () => (calls++ === 0 ? staleRecord : racedInRecord)
+  assert.equal(await acquireSyncLock({ root, env: process.env, readLock, kill: dead }), null)
+})
+
+test("the takeover aborts when the lock disappears between the staleness check and the write", async () => {
+  const root = await mkTempRoot("desk-sync-worker-lock-")
+  writeLockFile(root, process.env, { token: "placeholder", pid: 4242, start: "x" })
+  const staleRecord = { token: "stale", pid: 4242, start: "x" }
+  let calls = 0
+  const readLock = () => (calls++ === 0 ? staleRecord : null)
+  assert.equal(await acquireSyncLock({ root, env: process.env, readLock, kill: dead }), null)
+})
+
+test("the takeover proceeds when the lock is unchanged between the staleness check and the write", async () => {
+  const root = await mkTempRoot("desk-sync-worker-lock-")
+  writeLockFile(root, process.env, { token: "placeholder", pid: 4242, start: "x" })
+  const staleRecord = { token: "stale", pid: 4242, start: "x" }
+  const readLock = () => staleRecord
+  const lock = await acquireSyncLock({ root, env: process.env, readLock, kill: dead })
+  assert.notEqual(lock, null)
+  assert.equal(readLockFile(root, process.env).token, lock.token)
+  lock.release()
+})
+
+// ---------------------------------------------------------------------------
+// Local reads: remote/upstream and ahead/behind.
+// ---------------------------------------------------------------------------
+
+test("hasRemoteConfigured and aheadBehindCounts reflect real remote/upstream state, never a network call", async () => {
+  const plain = await mkPlainRepo()
+  assert.equal(hasRemoteConfigured(plain, spawnSync), false)
+  assert.equal(aheadBehindCounts({ root: plain, spawnGit: spawnSync }), null)
+
+  const { cloneA } = await mkOriginWithClone()
+  assert.equal(hasRemoteConfigured(cloneA, spawnSync), true)
+  assert.deepEqual(aheadBehindCounts({ root: cloneA, spawnGit: spawnSync }), { ahead: 0, behind: 0 })
+
+  await writeAndCommit(cloneA, "x.md", "x\n", "x")
+  assert.deepEqual(aheadBehindCounts({ root: cloneA, spawnGit: spawnSync }), { ahead: 1, behind: 0 })
+})
+
+test("aheadBehindCounts falls back to 0 for any count it cannot parse as a number", () => {
+  const stub = () => ({ status: 0, stdout: "not-a-number\tnope\n" })
+  assert.deepEqual(aheadBehindCounts({ root: "/x", spawnGit: stub }), { ahead: 0, behind: 0 })
+})
+
+// ---------------------------------------------------------------------------
+// hostFromEnv.
+// ---------------------------------------------------------------------------
+
+test("hostFromEnv names claude only when CLAUDE_PLUGIN_ROOT is a real value, else unknown", () => {
+  assert.equal(hostFromEnv({}), "unknown")
+  assert.equal(hostFromEnv({ CLAUDE_PLUGIN_ROOT: "   " }), "unknown")
+  assert.equal(hostFromEnv({ CLAUDE_PLUGIN_ROOT: "/x" }), "claude")
+})
+
+// ---------------------------------------------------------------------------
+// queueDeskProblemFiling.
+// ---------------------------------------------------------------------------
+
+test("queueDeskProblemFiling spawns the detached filer with mechanism desk-sync and the given reason/host", () => {
+  let captured = null
+  const spawnImpl = (cmd, args, opts) => {
+    captured = { cmd, args, opts }
+    return { on: (event, handler) => { if (event === "error") handler(new Error("unused")) }, unref: () => {} }
+  }
+  queueDeskProblemFiling({ root: "/some/root", env: { A: "1" }, reason: "pull_rebase_failed", host: "claude", spawnImpl })
+  assert.equal(captured.cmd, process.execPath)
+  assert.ok(captured.args.includes("--mechanism"))
+  assert.ok(captured.args.includes("desk-sync"))
+  assert.ok(captured.args.includes("--reason"))
+  assert.ok(captured.args.includes("pull_rebase_failed"))
+  assert.ok(captured.args.includes("--host"))
+  assert.ok(captured.args.includes("claude"))
+  assert.ok(captured.args.includes("--fix-attempt"))
+  assert.equal(captured.opts.detached, true)
+  assert.equal(captured.opts.stdio, "ignore")
+  assert.equal(captured.opts.cwd, "/some/root")
+})
+
+test("queueDeskProblemFiling never throws, even when the spawn implementation itself throws", () => {
+  assert.doesNotThrow(() => queueDeskProblemFiling({ root: "/x", env: {}, reason: "x", host: "unknown", spawnImpl: () => { throw new Error("boom") } }))
+})
+
+// ---------------------------------------------------------------------------
+// defaultSpawnWorker and schedulePush.
+// ---------------------------------------------------------------------------
+
+test("defaultSpawnWorker starts sync-push.js detached, with ignored stdio, and unrefs it", () => {
+  let captured = null
+  let unrefed = false
+  const spawnImpl = (cmd, args, opts) => {
+    captured = { cmd, args, opts }
+    return { on: (event, handler) => { if (event === "error") handler(new Error("unused")) }, unref: () => { unrefed = true } }
+  }
+  defaultSpawnWorker({ root: "/some/root", env: { A: "1" }, debounceMs: 1234, spawnImpl })
+  assert.equal(captured.cmd, process.execPath)
+  assert.ok(captured.args.includes("--root"))
+  assert.ok(captured.args.includes("/some/root"))
+  assert.ok(captured.args.includes("--debounce-ms"))
+  assert.ok(captured.args.includes("1234"))
+  assert.equal(captured.opts.detached, true)
+  assert.equal(captured.opts.stdio, "ignore")
+  assert.equal(unrefed, true, "detached + unref is what lets the child outlive this process")
+})
+
+test("schedulePush hands off to spawnWorker synchronously, and never throws even if it throws", () => {
+  let called = null
+  schedulePush({ root: "/r", env: { A: "1" }, debounceMs: 99, spawnWorker: (args) => { called = args } })
+  assert.deepEqual(called, { root: "/r", env: { A: "1" }, debounceMs: 99 })
+  assert.doesNotThrow(() => schedulePush({ root: "/r", spawnWorker: () => { throw new Error("boom") } }))
+})
+
+test("Review Focus: schedulePush returns immediately, and the real detached worker pushes on its own afterward", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  await writeAndCommit(cloneA, "more.md", "more\n", "more")
+
+  const startedAt = Date.now()
+  schedulePush({ root: cloneA, env: process.env, debounceMs: 50 })
+  const elapsed = Date.now() - startedAt
+  assert.ok(elapsed < 1000, `schedulePush must not wait on the worker it starts (took ${elapsed}ms)`)
+
+  const deadline = Date.now() + 15_000
+  let pushed = false
+  while (Date.now() < deadline) {
+    if (originCommitCount(origin) === 2) { pushed = true; break }
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  assert.ok(pushed, "the detached worker eventually pushed the commit to origin, entirely on its own")
+})
+
+// ---------------------------------------------------------------------------
+// runPushWorker.
+// ---------------------------------------------------------------------------
+
+test("runPushWorker exits quietly (busy) without pushing when another worker already holds the lock", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  await writeAndCommit(cloneA, "extra.md", "extra\n", "extra")
+  const held = await acquireSyncLock({ root: cloneA, env: process.env })
+  assert.notEqual(held, null)
+
+  let pushCalled = false
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("push")) pushCalled = true
+    return spawnSync(cmd, args, opts)
+  }
+  const result = await runPushWorker({ root: cloneA, env: process.env, spawnGit, clock: instantClock })
+  assert.deepEqual(result, { result: "busy" })
+  assert.equal(pushCalled, false)
+  assert.equal(originCommitCount(origin), 1, "nothing was pushed while busy")
+  held.release()
+})
+
+test("runPushWorker skips (no error) when there is no remote configured", async () => {
+  const root = await mkPlainRepo()
+  await writeAndCommit(root, "a.md", "a\n", "a")
+  const result = await runPushWorker({ root, env: process.env, clock: instantClock })
+  assert.deepEqual(result, { result: "skipped" })
+  assert.equal(readSyncStatus({ root, env: process.env }), null)
+})
+
+test("runPushWorker skips (no error) when a remote exists but there is no upstream", async () => {
+  const root = await mkPlainRepo()
+  const origin = await mkBareOrigin()
+  git(root, ["remote", "add", "origin", origin])
+  await writeAndCommit(root, "a.md", "a\n", "a")
+  const result = await runPushWorker({ root, env: process.env, clock: instantClock })
+  assert.deepEqual(result, { result: "skipped" })
+})
+
+test("runPushWorker records blocked:false and does nothing when nothing is ahead of the upstream", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  // Deliberately omits `env` (exercises its own default, `process.env`) and `clock` (exercises the real
+  // clock); debounceMs is overridden to 0 to keep the real sleep negligible.
+  const result = await runPushWorker({ root: cloneA, debounceMs: 0 })
+  assert.deepEqual(result, { result: "ok" })
+  const status = readSyncStatus({ root: cloneA, env: process.env })
+  assert.equal(status.blocked, false)
+  assert.equal(Object.hasOwn(status, "last_push_at"), false)
+})
+
+test("runPushWorker pushes a real ahead commit, records last_push_at, and preserves it across a later no-op", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  await writeAndCommit(cloneA, "more.md", "more\n", "more")
+  const before = Date.now()
+
+  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock })
+  assert.deepEqual(result, { result: "ok" })
+  const status = readSyncStatus({ root: cloneA, env: process.env })
+  assert.equal(status.blocked, false)
+  assert.equal(typeof status.last_push_at, "string")
+  assert.ok(Date.parse(status.last_push_at) >= before)
+  assert.equal(originCommitCount(origin), 2, "the commit really reached origin")
+
+  const again = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock })
+  assert.deepEqual(again, { result: "ok" })
+  const status2 = readSyncStatus({ root: cloneA, env: process.env })
+  assert.equal(status2.last_push_at, status.last_push_at, "a later no-op must not erase the last recorded push")
+})
+
+test("runPushWorker retries once via pull --rebase --autostash and pushes, after a non-conflicting rejection", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  const cloneB = await mkClone(origin, "b", { trackMain: true })
+  await writeAndCommit(cloneB, "from-b.md", "b\n", "from b")
+  git(cloneB, ["push", "-q", "origin", "main"])
+
+  await writeAndCommit(cloneA, "from-a.md", "a\n", "from a") // diverges from origin, but touches a different file
+
+  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock })
+  assert.deepEqual(result, { result: "ok" })
+  assert.equal(originCommitCount(origin), 3, "seed + from-b + from-a all landed")
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false)
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false)
+})
+
+test("runPushWorker aborts the rebase and reports blocked with the conflicted paths when the retry pull conflicts", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  const cloneB = await mkClone(origin, "b", { trackMain: true })
+  await fs.writeFile(path.join(cloneB, "seed.md"), "seed from b\n")
+  git(cloneB, ["commit", "-q", "-am", "b edits seed"])
+  git(cloneB, ["push", "-q", "origin", "main"])
+
+  await fs.writeFile(path.join(cloneA, "seed.md"), "seed from a\n")
+  git(cloneA, ["commit", "-q", "-am", "a edits seed"])
+
+  let filed = null
+  const result = await runPushWorker({
+    root: cloneA, env: process.env, clock: instantClock,
+    fileProblem: (args) => { filed = args },
+  })
+  assert.deepEqual(result, { result: "blocked", reason: "pull_rebase_failed" })
+
+  const status = readSyncStatus({ root: cloneA, env: process.env })
+  assert.equal(status.blocked, true)
+  assert.equal(status.reason, "pull_rebase_failed")
+  assert.deepEqual(status.paths, ["seed.md"])
+
+  assert.notEqual(filed, null)
+  assert.equal(filed.reason, "pull_rebase_failed")
+
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "never left mid-rebase")
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false, "never left mid-rebase")
+  assert.equal(spawnSync("git", ["-C", cloneA, "status", "--porcelain"], { encoding: "utf8" }).stdout, "")
+  assert.equal(originCommitCount(origin), 2, "never force-pushed: origin still only has seed + b's edit")
+})
+
+test("a conflicted-paths lookup that itself fails leaves the blocked report with an empty path list", async () => {
+  const { cloneA } = await (async () => {
+    const origin = await mkBareOrigin()
+    const a = await mkClone(origin, "a")
+    await writeAndCommit(a, "seed.md", "seed\n", "seed")
+    git(a, ["push", "-q", "-u", "origin", "main"])
+    const b = await mkClone(origin, "b", { trackMain: true })
+    await fs.writeFile(path.join(b, "seed.md"), "seed from b\n")
+    git(b, ["commit", "-q", "-am", "b edits seed"])
+    git(b, ["push", "-q", "origin", "main"])
+    return { origin, cloneA: a }
+  })()
+  await fs.writeFile(path.join(cloneA, "seed.md"), "seed from a\n")
+  git(cloneA, ["commit", "-q", "-am", "a edits seed"])
+
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("diff") && args.includes("--diff-filter=U")) return { status: 1, stdout: "", stderr: "boom" }
+    return spawnSync(cmd, args, opts)
+  }
+  const result = await runPushWorker({
+    root: cloneA, env: process.env, clock: instantClock, spawnGit, fileProblem: () => {},
+  })
+  assert.equal(result.reason, "pull_rebase_failed")
+  const status = readSyncStatus({ root: cloneA, env: process.env })
+  assert.deepEqual(status.paths, [])
+})
+
+test("runPushWorker aborts the rebase defensively and reports blocked when the push is still rejected after a clean rebase", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  await writeAndCommit(cloneA, "more.md", "more\n", "more")
+
+  let pushCalls = 0
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("push")) {
+      pushCalls += 1
+      return { status: 1, stdout: "", stderr: "! [rejected]" }
+    }
+    return spawnSync(cmd, args, opts)
+  }
+  let filed = null
+  const result = await runPushWorker({
+    root: cloneA, env: process.env, clock: instantClock, spawnGit,
+    fileProblem: (args) => { filed = args },
+  })
+  assert.deepEqual(result, { result: "blocked", reason: "push_rejected_after_rebase" })
+  assert.equal(pushCalls, 2, "the one allowed retry, no more")
+  const status = readSyncStatus({ root: cloneA, env: process.env })
+  assert.equal(status.reason, "push_rejected_after_rebase")
+  assert.deepEqual(status.paths, [])
+  assert.equal(filed.reason, "push_rejected_after_rebase")
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false)
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false)
+})
+
+test("the loop re-checks for new commits before releasing the lock, so a commit made mid-push is not left behind", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  await writeAndCommit(cloneA, "first.md", "first\n", "first")
+
+  let pushCalls = 0
+  const spawnGit = (cmd, args, opts) => {
+    const result = spawnSync(cmd, args, opts)
+    if (args.includes("push") && result.status === 0) {
+      pushCalls += 1
+      if (pushCalls === 1) {
+        // Simulate a second commit landing in the window between this push finishing and the loop's own re-check.
+        writeFileSync(path.join(cloneA, "second.md"), "second\n")
+        git(cloneA, ["add", "--", "second.md"])
+        git(cloneA, ["commit", "-q", "-m", "second"])
+      }
+    }
+    return result
+  }
+  const result = await runPushWorker({ root: cloneA, env: process.env, clock: instantClock, spawnGit })
+  assert.deepEqual(result, { result: "ok" })
+  assert.equal(pushCalls, 2, "the loop pushed again for the commit that landed mid-push")
+  assert.equal(originCommitCount(origin), 3, "seed + first + second all reached origin in one worker run")
+})
+
+// ---------------------------------------------------------------------------
+// runSyncPushCli.
+// ---------------------------------------------------------------------------
+
+test("runSyncPushCli requires --root", async () => {
+  await assert.rejects(runSyncPushCli({ argv: [], env: {} }), /--root/)
+})
+
+test("runSyncPushCli rejects a malformed argument", async () => {
+  await assert.rejects(runSyncPushCli({ argv: [42, "x"], env: {} }), /unexpected argument/)
+  await assert.rejects(runSyncPushCli({ argv: ["notflag", "x"], env: {} }), /unexpected argument/)
+  await assert.rejects(runSyncPushCli({ argv: [undefined, "x"], env: {} }), /unexpected argument ""/)
+})
+
+test("runSyncPushCli parses --root and --debounce-ms and passes them to runWorker", async () => {
+  let called = null
+  const exitCode = await runSyncPushCli({
+    argv: ["--root", "/x", "--debounce-ms", "500"],
+    env: { A: "1" },
+    runWorker: async (args) => { called = args },
+  })
+  assert.equal(exitCode, 0)
+  assert.deepEqual(called, { root: "/x", env: { A: "1" }, debounceMs: 500 })
+})
+
+test("runSyncPushCli falls back to DEFAULT_DEBOUNCE_MS when --debounce-ms is omitted or unparseable", async () => {
+  let called = null
+  await runSyncPushCli({ argv: ["--root", "/x"], env: {}, runWorker: async (args) => { called = args } })
+  assert.equal(called.debounceMs, DEFAULT_DEBOUNCE_MS)
+
+  await runSyncPushCli({ argv: ["--root", "/x", "--debounce-ms", "nope"], env: {}, runWorker: async (args) => { called = args } })
+  assert.equal(called.debounceMs, DEFAULT_DEBOUNCE_MS)
+})
