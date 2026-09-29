@@ -295,7 +295,10 @@ async function executeCase({ cell, plan, input, output, outputRoot, definition, 
             fixture.writableTargetVerified = result.resultType === "success" && result.textResultForLlm.includes(marker) && !fs.existsSync(filename);
             requireCondition(fixture.writableTargetVerified, "SUBJECT_TARGET_NOT_WRITABLE", "The real subject tool did not complete its positive write/read/remove probe");
           }
-          active = requireCallbacks(await input.createDeskCallbacks({ session: context.session, expectedAgent: opened.subjectTurn.agent, withPermission: input.withPermission }));
+          // Subject-mode turns only ever drive `createCanonicalController`, which never calls
+          // `callbacks.private.ledger` (that is the deterministic case's own route, above); the live source's
+          // native callback wiring does not need to publish a private ledger route for these cases to run.
+          active = requireCallbacks(await input.createDeskCallbacks({ session: context.session, expectedAgent: opened.subjectTurn.agent, withPermission: input.withPermission }), { requirePrivateLedger: false });
           if (cell.caseId === "review-recovery-state") {
             if (!canonical) {
               canonical = createCanonicalController({ callbacks, task: opened.task, scenario: parseRawJson(readRegular(fixture.canonicalView.root, "scenario.json").bytes), readCanonical: () => input.readCanonical({ opened }), retain });
