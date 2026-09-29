@@ -109,6 +109,26 @@ test("deadlineDecision adds a Desk problem: protected-checkout block and queues 
   assert.match(calls[0].reason, /repeated timeout \(3x\)/u)
 })
 
+test("deadlineDecision throttles the filer spawn to once per hour even though the block keeps rendering on every later repeated timeout", async (t) => {
+  const { env } = fixtureEnv(t)
+  const rawInput = JSON.stringify({ tool_name: "Bash", tool_input: { command: "git checkout topic" } })
+  const calls = []
+  let result
+  // Ramp up to the threshold, exactly as the "...once the same command repeats past the threshold" test above does.
+  for (let count = 0; count < REPEAT_TIMEOUT_THRESHOLD; count += 1) {
+    result = await deadlineDecision({ rawInput, host: "claude", deadlineMs: 9000, env, spawnFiler: (args) => calls.push(args) })
+  }
+  assert.equal(calls.length, 1)
+  assert.match(result.block, /file: filing in background/u)
+  // Every later repeated timeout still renders the block, but the spawn itself is throttled.
+  for (let extra = 0; extra < 6; extra += 1) {
+    result = await deadlineDecision({ rawInput, host: "claude", deadlineMs: 9000, env, spawnFiler: (args) => calls.push(args) })
+    assert.match(result.block, /^Desk problem: protected-checkout — the same command keeps timing out\n/u, `extra call ${extra}`)
+  }
+  assert.equal(calls.length, 1)
+  assert.match(result.block, /file: filing already queued \(within the last hour\)/u)
+})
+
 test("deadlineDecision never lets a broken spawnFiler change the decision or block text", async (t) => {
   const { env } = fixtureEnv(t)
   const rawInput = JSON.stringify({ tool_name: "Bash", tool_input: { command: "git checkout topic" } })

@@ -39,8 +39,21 @@ async function askGateFailureBlock(error, { host, env = process.env, spawnFiler 
   const reason = String(error?.message ?? error);
   let file = "not filed: filer_unavailable";
   try {
-    spawnFiler({ mechanism: "ask-gate", reason, host, env });
-    file = "filing in background";
+    // The reason never reaches the filer's own argv (`ps`-visible to every
+    // account on the machine) unredacted, and a mechanism that keeps failing
+    // the same way is throttled to one real spawn per hour -- the block below
+    // still renders every time regardless (fix round, spec.md §1 Part 5).
+    const [{ argvSafeReason }, { shouldLaunchFiler }] = await Promise.all([
+      import(pathToFileURL(path.join(__dirname, "../mcp/src/util/redact.js")).href),
+      import(pathToFileURL(path.join(__dirname, "../mcp/src/runtime/filer-throttle.js")).href),
+    ]);
+    const safeReason = argvSafeReason(reason);
+    if (shouldLaunchFiler({ env, mechanism: "ask-gate", signature: safeReason })) {
+      spawnFiler({ mechanism: "ask-gate", reason: safeReason, host, env });
+      file = "filing in background";
+    } else {
+      file = "filing already queued (within the last hour)";
+    }
   } catch {
     // stays "not filed: filer_unavailable"
   }

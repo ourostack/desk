@@ -128,10 +128,12 @@ async function deadlineDecision({ rawInput, host, deadlineMs, env = process.env,
     const result = repeatedTimeoutDeskProblem({ command, env, deadlineMs });
     if (result.block) {
       block = result.block;
-      try {
-        spawnFiler({ mechanism: "protected-checkout", reason: `repeated timeout (${result.count}x)`, host, env });
-      } catch {
-        // Best-effort: the block still reports "filing in background" honestly enough -- the next repeated timeout tries again.
+      if (result.shouldFile) {
+        try {
+          spawnFiler({ mechanism: "protected-checkout", reason: `repeated timeout (${result.count}x)`, host, env });
+        } catch {
+          // Best-effort: the block still reports "filing in background" honestly enough -- the next repeated timeout tries again.
+        }
       }
     }
   } catch {

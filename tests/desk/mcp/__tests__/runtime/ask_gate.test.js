@@ -39,6 +39,16 @@ function teardown(root) {
   rmSync(root, { recursive: true, force: true })
 }
 
+// A fresh, throwaway HOME for each askGateFailureBlock call below: the
+// filing-storm throttle (fix round, spec.md §1 Part 5) persists a stamp file
+// under the state directory, so every in-process test that exercises it
+// needs its own isolated root -- never the real machine's HOME/XDG_STATE_HOME,
+// and never shared with another test's throttle state.
+function filerEnvFixture() {
+  const root = mkdtempSync(path.join(tmpdir(), "desk-ask-gate-filer-"))
+  return { root, env: { HOME: root } }
+}
+
 const UNATTENDED = { CLAUDE_CODE_SESSION_ATTENDED: "0" }
 const ATTENDED = { CLAUDE_CODE_SESSION_ATTENDED: "1" }
 
@@ -541,33 +551,50 @@ test("the .cjs entry point denies over real stdin/stdout and never crashes the h
 
 test("askGateFailureBlock renders a Desk problem: ask-gate block, queues the detached filer via spawnFiler, and never awaits it past this call", async () => {
   const { askGateFailureBlock } = require(hook)
-  const calls = []
-  const block = await askGateFailureBlock(new Error("boom"), {
-    host: "claude",
-    spawnFiler: (args) => { calls.push(args) },
-  })
-  assert.match(block, /^Desk problem: ask-gate — internal error while inspecting this call\n/u)
-  assert.match(block, /  broke: boom\n/u)
-  assert.match(block, /  file: filing in background\n/u)
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].mechanism, "ask-gate")
-  assert.equal(calls[0].host, "claude")
-  assert.equal(calls[0].reason, "boom")
+  const { root, env } = filerEnvFixture()
+  try {
+    const calls = []
+    const block = await askGateFailureBlock(new Error("boom"), {
+      host: "claude",
+      env,
+      spawnFiler: (args) => { calls.push(args) },
+    })
+    assert.match(block, /^Desk problem: ask-gate — internal error while inspecting this call\n/u)
+    assert.match(block, /  broke: boom\n/u)
+    assert.match(block, /  file: filing in background\n/u)
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].mechanism, "ask-gate")
+    assert.equal(calls[0].host, "claude")
+    assert.equal(calls[0].reason, "boom")
+  } finally {
+    teardown(root)
+  }
 })
 
 test("askGateFailureBlock stays honest ('not filed') when spawnFiler itself throws, and never rejects", async () => {
   const { askGateFailureBlock } = require(hook)
-  const block = await askGateFailureBlock(new Error("boom"), {
-    host: "claude",
-    spawnFiler: () => { throw new Error("spawn unavailable") },
-  })
-  assert.match(block, /  file: not filed: filer_unavailable\n/u)
+  const { root, env } = filerEnvFixture()
+  try {
+    const block = await askGateFailureBlock(new Error("boom"), {
+      host: "claude",
+      env,
+      spawnFiler: () => { throw new Error("spawn unavailable") },
+    })
+    assert.match(block, /  file: not filed: filer_unavailable\n/u)
+  } finally {
+    teardown(root)
+  }
 })
 
 test("askGateFailureBlock renders a reason for a non-Error thrown value too", async () => {
   const { askGateFailureBlock } = require(hook)
-  const block = await askGateFailureBlock("plain string failure", { host: "claude", spawnFiler: () => {} })
-  assert.match(block, /  broke: plain string failure\n/u)
+  const { root, env } = filerEnvFixture()
+  try {
+    const block = await askGateFailureBlock("plain string failure", { host: "claude", env, spawnFiler: () => {} })
+    assert.match(block, /  broke: plain string failure\n/u)
+  } finally {
+    teardown(root)
+  }
 })
 
 test("requiring ask-gate.cjs attaches no stdin listeners: it is safe to import in-process for its own exports", () => {

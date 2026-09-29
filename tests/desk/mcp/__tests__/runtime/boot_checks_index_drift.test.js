@@ -20,7 +20,12 @@ function fixture(t) {
   const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-boot-drift-")))
   t.after(() => rmSync(repo, { recursive: true, force: true, maxRetries: 5 }))
   const env = {
-    ...process.env, HOME: repo, DESK: repo, GIT_CONFIG_NOSYSTEM: "1",
+    // XDG_STATE_HOME is set explicitly, not just inherited from `...process.env`: the
+    // filing-storm throttle (fix round, spec.md §1 Part 5) keys its stamp file off this
+    // directory, and the isolated test run pins XDG_STATE_HOME process-wide -- leaving it
+    // inherited here would make every fixture share one throttle stamp regardless of this
+    // repo's own unique HOME, colliding across tests that hit the same reason text.
+    ...process.env, HOME: repo, XDG_STATE_HOME: path.join(repo, ".local", "state"), DESK: repo, GIT_CONFIG_NOSYSTEM: "1",
     GIT_AUTHOR_NAME: "F", GIT_AUTHOR_EMAIL: "f@example.invalid", GIT_COMMITTER_NAME: "F", GIT_COMMITTER_EMAIL: "f@example.invalid",
   }
   for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_(?:COUNT|KEY_|VALUE_|PARAMETERS|GLOBAL))/u.test(key)) delete env[key]

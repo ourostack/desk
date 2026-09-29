@@ -265,9 +265,13 @@ test("startupMigrationLine's registry-error block stays 'not filed: filer_unavai
 })
 
 test("migrationLine (the boot-check hook helper) queues the detached filer, never awaiting it, when the migration registry fails internally", async () => {
+  // The filing-storm throttle (fix round, spec.md §1 Part 5) keys its stamp file off
+  // this call's own state directory, so this test needs a HOME of its own -- an empty
+  // `env` here would fall back to the process-wide isolated-test HOME and collide with
+  // the next test's identical mechanism+reason.
   const launched = []
   const line = await boot.migrationLine({
-    host: "claude", env: {}, pluginRoot: null,
+    host: "claude", env: { HOME: await mkTempRoot("desk-pending-migrations-filer-") }, pluginRoot: null,
     launchRepair: async (command, env) => { launched.push({ command, env }) },
   })
   assert.match(line, /^Desk problem: pending-migrations — the migration registry failed internally\n/u)
@@ -282,7 +286,7 @@ test("migrationLine (the boot-check hook helper) queues the detached filer, neve
 
 test("migrationLine falls back to 'not filed: filer_unavailable' when the launcher itself fails, without throwing", async () => {
   const line = await boot.migrationLine({
-    host: "claude", env: {}, pluginRoot: null,
+    host: "claude", env: { HOME: await mkTempRoot("desk-pending-migrations-filer-") }, pluginRoot: null,
     launchRepair: async () => { throw new Error("spawn failed") },
   })
   assert.match(line, /  file: not filed: filer_unavailable\n/u)

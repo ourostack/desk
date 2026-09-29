@@ -75,9 +75,11 @@ test("repeatedTimeoutDeskProblem stays null until the threshold, then emits a fu
     const result = repeatedTimeoutDeskProblem({ command: "git checkout main", env, deadlineMs: 9000 })
     assert.equal(result.count, count)
     assert.equal(result.block, null)
+    assert.equal(result.shouldFile, false)
   }
   const result = repeatedTimeoutDeskProblem({ command: "git checkout main", env, deadlineMs: 9000 })
   assert.equal(result.count, REPEAT_TIMEOUT_THRESHOLD)
+  assert.equal(result.shouldFile, true)
   assert.match(result.block, /^Desk problem: protected-checkout — the same command keeps timing out\n/u)
   assert.match(result.block, /broke: the same command has now timed out 3 times in a row at protected-checkout's own 9000 ms deadline/u)
   assert.match(result.block, /means: protected-checkout may be stuck inspecting this exact command/u)
@@ -93,6 +95,19 @@ test("repeatedTimeoutDeskProblem keeps emitting a block on every timeout past th
   assert.match(result.block, /now timed out 4 times in a row/u)
 })
 
+test("the block keeps rendering on every qualifying timeout, but shouldFile (and the filer spawn it gates) is throttled to once per hour", (t) => {
+  const { env } = fixtureEnv(t)
+  for (let index = 0; index < REPEAT_TIMEOUT_THRESHOLD - 1; index += 1) repeatedTimeoutDeskProblem({ command: "git checkout main", env })
+  const first = repeatedTimeoutDeskProblem({ command: "git checkout main", env })
+  assert.equal(first.shouldFile, true)
+  assert.match(first.block, /file: filing in background/u)
+  for (let index = 0; index < 6; index += 1) {
+    const again = repeatedTimeoutDeskProblem({ command: "git checkout main", env })
+    assert.equal(again.shouldFile, false, `call ${index}`)
+    assert.match(again.block, /file: filing already queued \(within the last hour\)/u, `call ${index}`)
+  }
+})
+
 test("repeatedTimeoutDeskProblem defaults deadlineMs to 9000 in its own prose when none is given", (t) => {
   const { env } = fixtureEnv(t)
   for (let index = 0; index < REPEAT_TIMEOUT_THRESHOLD; index += 1) repeatedTimeoutDeskProblem({ command: "git checkout main", env })
@@ -102,10 +117,10 @@ test("repeatedTimeoutDeskProblem defaults deadlineMs to 9000 in its own prose wh
 
 test("repeatedTimeoutDeskProblem never counts or blocks for an empty, missing or non-string command", (t) => {
   const { env } = fixtureEnv(t)
-  assert.deepEqual(repeatedTimeoutDeskProblem({ command: "", env }), { count: 0, block: null })
-  assert.deepEqual(repeatedTimeoutDeskProblem({ command: "   ", env }), { count: 0, block: null })
-  assert.deepEqual(repeatedTimeoutDeskProblem({ command: undefined, env }), { count: 0, block: null })
-  assert.deepEqual(repeatedTimeoutDeskProblem({ env }), { count: 0, block: null })
+  assert.deepEqual(repeatedTimeoutDeskProblem({ command: "", env }), { count: 0, block: null, shouldFile: false })
+  assert.deepEqual(repeatedTimeoutDeskProblem({ command: "   ", env }), { count: 0, block: null, shouldFile: false })
+  assert.deepEqual(repeatedTimeoutDeskProblem({ command: undefined, env }), { count: 0, block: null, shouldFile: false })
+  assert.deepEqual(repeatedTimeoutDeskProblem({ env }), { count: 0, block: null, shouldFile: false })
 })
 
 test("recordTimeout and repeatedTimeoutDeskProblem default env to process.env and now to Date.now, exactly like every other real caller", (t) => {

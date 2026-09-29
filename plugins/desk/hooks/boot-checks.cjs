@@ -452,14 +452,25 @@ async function runBootChecks(options = {}) {
   const { isGitRepository } = await runtime("util/git-stage.js");
   const driftRoot = await boundRoot({ env, host: options.host, sessionFolder: options.sessionFolder, shared });
   const tracksIndex = typeof driftRoot === "string" && isGitRepository(driftRoot, spawnGit);
+  // A failure's raw text (a staged path, an error message) never becomes an
+  // argument on the detached filer's own command line unredacted -- `ps`
+  // shows a process's argv to every account on the machine, not just this
+  // session. `shouldLaunchFiler` throttles the *spawn* only, never the block
+  // this function still shows the operator every time (fix round, spec.md
+  // §1 Part 5). Both fail toward the old, always-filing behavior if they
+  // cannot be loaded at all.
+  const argvSafeReason = await runtime("util/redact.js").then((mod) => mod.argvSafeReason, () => (text) => String(text ?? "unknown"));
+  const shouldLaunchFiler = await runtime("runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
   // Queued the same way host-enforcement's own repair is: a fileProblem
   // closure that only builds the repair command (compatibleCommand,
   // synchronous), returns `file: "filing in background"`, and lets the
   // registry's own post-loop repair loop below do the actual, unawaited
   // detached launch -- never inline, never on this check's own budget.
   const indexDriftFileProblem = async ({ reason }) => {
-    repairs.push(compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "index-drift", "--reason", reason || "unknown", "--host", options.host || "unknown", "--fix-attempt", INDEX_DRIFT_FIX_ATTEMPT));
-    return { file: "filing in background" };
+    const safeReason = argvSafeReason(reason);
+    const launch = shouldLaunchFiler({ env, mechanism: "index-drift", signature: safeReason });
+    if (launch) repairs.push(compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "index-drift", "--reason", safeReason || "unknown", "--host", options.host || "unknown", "--fix-attempt", INDEX_DRIFT_FIX_ATTEMPT));
+    return { file: launch ? "filing in background" : "filing already queued (within the last hour)" };
   };
   for (const check of checks) {
     const budget = Math.min(checkBudgets[check.id] ?? check.budgetMs, totalBudgetMs - used);
@@ -505,16 +516,18 @@ async function runBootChecks(options = {}) {
     if (outcome.failed) {
       skipped.push({ id: check.id, reason: "error", elapsed_ms: Math.round(elapsed) });
       const reason = oneLine(outcome.error?.message ?? String(outcome.error ?? "unknown error"));
+      const safeReason = argvSafeReason(reason);
+      const launch = shouldLaunchFiler({ env, mechanism: check.id, signature: safeReason });
       lines.push(formatDeskProblem({
         mechanism: check.id,
         symptom: "the check failed internally at startup",
         broke: reason,
         means: `Desk's "${check.id}" boot check could not report its status this session`,
         fix: "not fixable automatically -- the check itself needs investigation",
-        file: "filing in background",
+        file: launch ? "filing in background" : "filing already queued (within the last hour)",
         tell: `Desk's "${check.id}" boot check failed internally this session (${reason}). Filing this now so it gets fixed.`,
       }));
-      repairs.push(compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", check.id, "--reason", reason, "--host", options.host || "unknown", "--fix-attempt", BOOT_CHECK_FIX_ATTEMPT));
+      if (launch) repairs.push(compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", check.id, "--reason", safeReason, "--host", options.host || "unknown", "--fix-attempt", BOOT_CHECK_FIX_ATTEMPT));
       continue;
     }
     const { line, repair } = outcome.value ?? {};
@@ -563,12 +576,18 @@ async function runBootChecks(options = {}) {
 async function migrationLine({ host, env = process.env, sessionFolder, budgetMs, pluginRoot = path.resolve(__dirname, ".."), launchRepair: startRepair = launchCommand } = {}) {
   try {
     const { startupMigrationLine } = await runtime("runtime/pending-migrations.js");
+    const argvSafeReason = await runtime("util/redact.js").then((mod) => mod.argvSafeReason, () => (text) => String(text ?? "unknown"));
+    const shouldLaunchFiler = await runtime("runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
     const cwd = host === "copilot" ? sessionFolder || process.cwd() : env.CLAUDE_PROJECT_DIR || process.cwd();
     return await startupMigrationLine({
       pluginRoot, env, cwd, budgetMs, host,
       fileProblem: async ({ reason }) => {
+        const safeReason = argvSafeReason(reason);
+        if (!shouldLaunchFiler({ env, mechanism: "pending-migrations", signature: safeReason })) {
+          return { file: "filing already queued (within the last hour)" };
+        }
         try {
-          await startRepair(compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "pending-migrations", "--reason", reason || "unknown", "--host", host || "unknown", "--fix-attempt", MIGRATIONS_FIX_ATTEMPT), env);
+          await startRepair(compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "pending-migrations", "--reason", safeReason || "unknown", "--host", host || "unknown", "--fix-attempt", MIGRATIONS_FIX_ATTEMPT), env);
           return { file: "filing in background" };
         } catch {
           return { file: "not filed: filer_unavailable" };

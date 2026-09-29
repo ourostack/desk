@@ -15,6 +15,7 @@
 import { realpathSync } from "node:fs"
 import * as os from "node:os"
 import { isCredentialLike } from "../factory/credential.js"
+import { redactDeskRelativePaths } from "../factory/desk-problem-template.js"
 
 export const REDACTED_SEGMENT = "<redacted segment>"
 export const REDACTED_TITLE = "<redacted title>"
@@ -89,4 +90,39 @@ function redactWord(word) {
   const [, core, dots] = /^(.*?)(\.*)$/su.exec(word)
   const shown = redactName(core)
   return shown === core ? word : `${shown}${dots}`
+}
+
+// An absolute path's own leading shape: a home-directory reference (`~` or
+// `~/...`), a Unix path rooted at a well-known machine or user directory
+// (`/Users/...`, `/home/...`, `/var/...`, `/tmp/...`, `/private/...`,
+// `/mnt/...`, `/opt/...`, `/etc/...`), or a Windows drive path (`C:\...`).
+// `redactCredentialLikeText` only catches a path segment that is itself
+// secret-shaped, and `redactDeskRelativePaths` only catches a desk-relative
+// path; neither touches a real machine path such as a repository checkout
+// or a home directory, which names no secret but still names this machine
+// and this operator's account.
+const ABSOLUTE_PATH = /(?:~(?:[\\/][^\s"'`)\]]*)?|\/(?:Users|home|var|tmp|private|mnt|opt|etc)\/[^\s"'`)\]]*|[A-Za-z]:\\[^\s"'`)\]]*)/gu
+const ARGV_REASON_MAX = 300
+
+/**
+ * `argvSafeReason(text) -> string`: the one shared narrowing every caller
+ * runs a failure's raw text through before it becomes an argument on the
+ * detached filer's command line (spec.md §1, Part 5 fix round). A spawned
+ * process's argv is visible to every account on the machine via `ps`, which
+ * is a wider audience than the operator's own session -- so this is stricter
+ * than `redactCredentialLikeText` alone: it also collapses any desk-relative
+ * path to a count (`redactDeskRelativePaths`), replaces an absolute machine
+ * or home-directory path with a fixed marker, flattens the result onto one
+ * line, and caps its length. It never throws: a non-string input renders as
+ * its own `String(...)` form first. The block Desk shows the operator (the
+ * `broke`/`means`/`tell` fields) is never passed through this -- only the
+ * text that becomes argv.
+ */
+export function argvSafeReason(text) {
+  const raw = typeof text === "string" ? text : String(text ?? "")
+  const deskPathsCollapsed = redactDeskRelativePaths(raw)
+  const credentialsRedacted = redactCredentialLikeText(deskPathsCollapsed)
+  const pathsStripped = credentialsRedacted.replace(ABSOLUTE_PATH, "<redacted path>")
+  const oneLine = pathsStripped.replace(/\s+/gu, " ").trim()
+  return oneLine.length > ARGV_REASON_MAX ? `${oneLine.slice(0, ARGV_REASON_MAX)}…` : oneLine
 }

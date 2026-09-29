@@ -22,6 +22,7 @@ import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
 import { formatDeskProblem } from "./index-drift.js"
+import { shouldLaunchFiler } from "./filer-throttle.js"
 import { resolveDeskStateDir } from "./last-start.js"
 
 const TIMEOUT_STATE_DIR = "protected-checkout-timeouts"
@@ -68,20 +69,26 @@ export function recordTimeout({ env = process.env, command, now = () => Date.now
 }
 
 /**
- * `{ command, env, now, deadlineMs }` -> `{ count, block }`. `block` is the
- * full `Desk problem:` block (with `file: "filing in background"` already
- * filled in, matching every other migrated mechanism's own synchronous
- * report -- the actual filing, like theirs, happens later and is never
- * awaited here) once `command`'s own signature has timed out
- * `REPEAT_TIMEOUT_THRESHOLD` times in the current rolling window, else
- * `block: null` -- the guard's own plain per-call denial is unchanged
- * either way. An empty or missing `command` records nothing and never
- * blocks.
+ * `{ command, env, now, deadlineMs }` -> `{ count, block, shouldFile }`.
+ * `block` is the full `Desk problem:` block once `command`'s own signature
+ * has timed out `REPEAT_TIMEOUT_THRESHOLD` times in the current rolling
+ * window, else `block: null` -- the guard's own plain per-call denial is
+ * unchanged either way. An empty or missing `command` records nothing and
+ * never blocks.
+ *
+ * The block itself renders on every qualifying timeout, but the caller's
+ * actual filer spawn is throttled to once per hour per command signature
+ * (`shouldLaunchFiler`, fix round, spec.md §1 Part 5) -- a command stuck
+ * timing out on every single call would otherwise spawn a fresh filer every
+ * time. `shouldFile` tells the caller whether to actually spawn; the block's
+ * own `file:` field already reads accordingly ("filing in background" the
+ * first time, "filing already queued (within the last hour)" after).
  */
 export function repeatedTimeoutDeskProblem({ command, env = process.env, now, deadlineMs }) {
-  if (typeof command !== "string" || command.trim() === "") return { count: 0, block: null }
+  if (typeof command !== "string" || command.trim() === "") return { count: 0, block: null, shouldFile: false }
   const count = recordTimeout({ env, command, now })
-  if (count < REPEAT_TIMEOUT_THRESHOLD) return { count, block: null }
+  if (count < REPEAT_TIMEOUT_THRESHOLD) return { count, block: null, shouldFile: false }
+  const shouldFile = shouldLaunchFiler({ env, mechanism: "protected-checkout", signature: commandSignature(command), now })
   const reason = `the same command has now timed out ${count} times in a row at protected-checkout's own ${deadlineMs ?? 9000} ms deadline`
   const block = formatDeskProblem({
     mechanism: "protected-checkout",
@@ -89,8 +96,8 @@ export function repeatedTimeoutDeskProblem({ command, env = process.env, now, de
     broke: reason,
     means: "protected-checkout may be stuck inspecting this exact command, not just answering slowly this once",
     fix: "not fixable automatically -- the guard's own inspection of this command needs investigation",
-    file: "filing in background",
+    file: shouldFile ? "filing in background" : "filing already queued (within the last hour)",
     tell: `Desk's protected-checkout guard has now timed out ${count} times in a row on the same command. Filing this now so it gets fixed; the command stays denied so nothing unsafe happens meanwhile.`,
   })
-  return { count, block }
+  return { count, block, shouldFile }
 }
