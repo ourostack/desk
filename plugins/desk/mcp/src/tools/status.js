@@ -1,4 +1,5 @@
 import { existsSync, statSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import Database from "better-sqlite3"
@@ -11,6 +12,7 @@ import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatus } from "./factory-context.js"
 import { hookRegistrationDeskProblem } from "../runtime/host-enforcement-registration.js"
+import { aheadBehindCounts, hasRemoteConfigured, readSyncStatus } from "../runtime/sync-worker.js"
 
 const OWN_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 const text = (value) => (typeof value === "string" && value.trim() !== "" ? value : null)
@@ -52,6 +54,34 @@ async function hostEnforcementStatus({ env }) {
   const { registered, block } = await hookRegistrationDeskProblem({ host, pluginRoot, env, fileProblem: reportOnly })
   if (registered === null) return null
   return registered ? { registered: true } : { registered: false, desk_problem: block }
+}
+
+/**
+ * `desk_status`'s own read of sync state (spec §2's "desk_status surfaces
+ * sync state"; controller ruling 5) -- local-only, no network call: a plain
+ * desk with no remote (or no git repo at all -- the same `git remote`
+ * failure either way) reports the literal string `"no remote configured"`;
+ * otherwise `{ ahead, behind }` come from one local `git rev-list` against
+ * the already-known upstream (whatever the last `fetch` saw -- this never
+ * fetches itself), `null` counts (no upstream yet) reported as `0`/`0`, and
+ * `last_push_at`/a blocked reason come from the push worker's own status
+ * file (`readSyncStatus`) -- never recomputed here, since only the worker
+ * itself (`runtime/sync-worker.js`) and the SessionEnd safety net
+ * (`finalUnpushedCheck`) ever decide what "blocked" means.
+ */
+function syncStatus({ deskRoot, env, spawnGit = spawnSync }) {
+  if (!hasRemoteConfigured(deskRoot, spawnGit)) return "no remote configured"
+  const recorded = readSyncStatus({ root: deskRoot, env })
+  if (recorded?.blocked) {
+    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [] }
+  }
+  const counts = aheadBehindCounts({ root: deskRoot, spawnGit })
+  return {
+    blocked: false,
+    ahead: counts?.ahead ?? 0,
+    behind: counts?.behind ?? 0,
+    last_push_at: recorded?.last_push_at ?? null,
+  }
 }
 
 const DB_SCHEMA = { id: "desk-index", version: 1 }
@@ -133,6 +163,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
     // The redacted active-task listing session start and status render (./desk/active-tasks.js).
     active_tasks: root.valid ? activeTasks(root.path) : null,
     factory: factoryStatus({ env, deskRoot: root.valid ? root.path : null }),
+    sync: root.valid ? syncStatus({ deskRoot: root.path, env }) : null,
     host_enforcement: await hostEnforcementStatus({ env }),
     summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
   }
