@@ -30,6 +30,9 @@ import * as path from "node:path"
 
 // Resolved from %SystemRoot%, never from PATH: the provider must be the one
 // shipped with the operating system, not the first match on a search path.
+// The script relies on this pin: GetAccessControl and SetAccessControl are
+// instance methods of FileInfo and DirectoryInfo only on .NET Framework, which
+// Windows PowerShell 5.1 runs on; PowerShell 7 does not have them.
 const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"]
 
 const DEFAULT_LABEL = "desk_feedback"
