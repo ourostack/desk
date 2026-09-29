@@ -120,7 +120,10 @@ for (const alias of ["none", "state", "desk", "equal"]) {
     await task_create({ deskRoot: desk, input: { track: "track", slug: "completed-work", title: "fixture" } })
     const messages = []
     t.mock.method(console, "error", (message) => messages.push(message))
-    assert.equal((await task_update({ deskRoot: desk, env, input: { track: "track", slug: "completed-work", frontmatter: { status: "done" } } })).status, "updated")
+    // task_update's evidence gate (the invented-completion finding) only fires on
+    // the transition into `done`; this fixture carries it so the call still
+    // exercises the legacy-root-survival path it's actually testing.
+    assert.equal((await task_update({ deskRoot: desk, env, input: { track: "track", slug: "completed-work", frontmatter: { status: "done" }, evidence: { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" } } })).status, "updated")
     assert.deepEqual(messages, ["desk_factory: finalize_request_deferred", "desk_factory: evaluation_request_deferred"])
     await assert.rejects(fs.stat(path.join(root, "finalize")), { code: "ENOENT" })
   }))

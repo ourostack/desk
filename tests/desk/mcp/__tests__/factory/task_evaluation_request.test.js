@@ -16,10 +16,16 @@ import { factoryStateRoot, listEvaluationRequests, listFinalizeRequests } from "
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { scratch } from "./_session_helpers.js"
 
+// task_update's evidence gate (the invented-completion finding) only fires on the
+// transition into `done`; fixture calls that move a task to `done` carry
+// this so they still exercise the evaluation/finalize path they're actually
+// testing, not the evidence gate itself.
+const DONE_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" }
+
 test("task_update to done queues an evaluation request alongside the finalize request", () => scratch(async ({ desk, env }) => {
   await factoryStateRoot(env)
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
-  const result = await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" } } })
+  const result = await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
   assert.equal(result.status, "updated")
   const [request] = await listEvaluationRequests(env)
   assert.ok(request, "done must leave an evaluation request")
@@ -97,7 +103,7 @@ test("re-archiving over a corrupted archived task.md requests no evaluation, sti
 
 test("no factory state is created by completion; unavailable factory state never fails an evaluation request", () => scratch(async ({ desk, env }) => {
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
-  const options = { deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" } } }
+  const options = { deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } }
   assert.equal((await task_update(options)).status, "updated")
   await assert.rejects(fs.stat(env.XDG_STATE_HOME), { code: "ENOENT" }, "completion alone must never create factory state")
   await fs.mkdir(env.XDG_STATE_HOME, { recursive: true })

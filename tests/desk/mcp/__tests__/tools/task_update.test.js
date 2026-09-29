@@ -210,6 +210,144 @@ test("task_update requires both task identifiers", async () => {
   )
 })
 
+// ── Evidence gate on `done` (the invented-completion finding) ──────────────
+
+test("task_update refuses a bare move to `done`, leaving the card untouched, and names what to supply", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+  const filePath = path.join(root, "t", "book-flights", "task.md")
+  const before = await readFront(filePath)
+
+  await assert.rejects(
+    task_update({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", frontmatter: { status: "done" } },
+    }),
+    /task_update: moving a task to `done` needs evidence.*evidence: \{ kind, ref \}/,
+  )
+
+  const after = await readFront(filePath)
+  assert.deepEqual(after.data, before.data, "a refused done transition writes nothing")
+})
+
+test("task_update refuses `done` with a malformed evidence object, naming the bad value", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  await assert.rejects(
+    task_update({
+      deskRoot: root,
+      input: {
+        track: "t",
+        slug: "book-flights",
+        frontmatter: { status: "done" },
+        evidence: { kind: "vibes", ref: "trust me" },
+      },
+    }),
+    /task_update: `evidence` is not valid.*"kind":"vibes"/,
+  )
+
+  await assert.rejects(
+    task_update({
+      deskRoot: root,
+      input: {
+        track: "t",
+        slug: "book-flights",
+        frontmatter: { status: "done" },
+        evidence: { kind: "pr", ref: "   " },
+      },
+    }),
+    /task_update: `evidence` is not valid/,
+    "a blank ref is not a reference",
+  )
+})
+
+for (const evidence of [
+  { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/42" },
+  { kind: "commit", ref: "a1b2c3d on origin/main" },
+  { kind: "ci_run", ref: "https://ci.example.invalid/runs/9001" },
+  { kind: "non_code", ref: "https://example.invalid/confirmation/abc" },
+]) {
+  test(`task_update accepts a move to \`done\` with ${evidence.kind} evidence, and records it on the card`, async () => {
+    const root = await mkTempDeskRoot()
+    await task_create({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+    })
+
+    const result = await task_update({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", frontmatter: { status: "done" }, evidence },
+    })
+    assert.equal(result.status, "updated")
+
+    const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+    assert.equal(data.status, "done")
+    assert.equal(data.evidence.kind, evidence.kind)
+    assert.equal(data.evidence.ref, evidence.ref)
+    assert.equal(data.evidence.recorded_at, data.updated)
+  })
+}
+
+test("task_update accepts `evidence` as a JSON string, the same tolerance `frontmatter` gets", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  const result = await task_update({
+    deskRoot: root,
+    input: {
+      track: "t",
+      slug: "book-flights",
+      frontmatter: { status: "done" },
+      evidence: JSON.stringify({ kind: "pr", ref: "https://github.com/example-org/example-repo/pull/42" }),
+    },
+  })
+  assert.equal(result.status, "updated")
+  const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+  assert.equal(data.evidence.ref, "https://github.com/example-org/example-repo/pull/42")
+})
+
+test("task_update needs no evidence for a transition to any status other than `done`, including `cancelled`", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  for (const status of ["blocked", "paused", "collaborating", "cancelled"]) {
+    const result = await task_update({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", frontmatter: { status } },
+    })
+    assert.equal(result.status, "updated")
+  }
+})
+
+test("task_update needs no evidence to re-save an already-`done` card", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "done" },
+  })
+
+  const result = await task_update({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", body_append: "A later note." },
+  })
+  assert.equal(result.status, "updated")
+  const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+  assert.equal(Object.hasOwn(data, "evidence"), false, "re-saving an already-done card writes no evidence field")
+})
+
 // ── M4-6 Part 2: stage + commit ─────────────────────────────────────────────
 
 test("task_update stages and commits exactly the task.md it updated", async () => {

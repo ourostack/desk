@@ -33,6 +33,44 @@ import { objectInput } from "../util/object-input.js"
 import { reportLink } from "./factory-context.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
+const DONE_EVIDENCE_EXAMPLE = '{"kind": "pr", "ref": "https://github.com/org/repo/pull/123"}'
+const DONE_EVIDENCE_USAGE =
+  "`evidence.kind` is one of pr, commit, ci_run, non_code; `evidence.ref` is the PR URL, " +
+  '"<sha> on <remote-branch>", the CI run URL, or the non-code outcome\'s own proof link.'
+
+// A move to `done` needs at least one verifiable reference backing the
+// completion claim (the invented-completion finding, 2026-09-29): an
+// acceptance run told to resume a task instead edited the card directly
+// with the host's own Edit tool -- bypassing this function entirely --
+// set `status: done` and wrote a "Completed work" section claiming tests
+// passed and a branch merged, none of which had happened. `task_update`
+// is the one tool that can carry a task to `done`, so it is the one place
+// this is enforced; the direct-edit bypass that run took is separately
+// caught by the task-status-guard hook (../runtime/task-status-guard.js),
+// which points an agent back here.
+//
+// Only called on the transition into `done`: the one caller below already
+// guards `merged.status === "done" && existing.data.status !== "done"`, so
+// re-saving an already-`done` card, and moving to any other status
+// (including `cancelled`, which makes no completion claim to back), never
+// reach this function at all.
+function assertDoneEvidence(evidence) {
+  if (evidence === undefined) {
+    throw new Error(
+      "task_update: moving a task to `done` needs evidence -- pass `evidence: { kind, ref }`. " +
+        `${DONE_EVIDENCE_USAGE} Example: ${DONE_EVIDENCE_EXAMPLE}.`,
+    )
+  }
+  const kindOk = DONE_EVIDENCE_KINDS.has(evidence.kind)
+  const refOk = typeof evidence.ref === "string" && evidence.ref.trim().length > 0
+  if (!kindOk || !refOk) {
+    throw new Error(
+      `task_update: \`evidence\` is not valid (got ${JSON.stringify(evidence)}) -- ${DONE_EVIDENCE_USAGE} ` +
+        `Example: ${DONE_EVIDENCE_EXAMPLE}.`,
+    )
+  }
+}
 
 /**
  * The task's job identity as binding computes it: the desk's real path, its
@@ -400,6 +438,9 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
  *                             // JSON-string object is parsed, anything else
  *                             // is refused before the card is touched
  *     body_append?: string,   // appended to existing body (blank line sep)
+ *     evidence?: { kind, ref },  // required only when this call moves the
+ *                             // task into `done` from a non-`done` status;
+ *                             // see "Evidence gate on `done`" below
  *   }
  *
  * Side effects: rewrites `<root>/<track>/<slug>/task.md` in place, and on a
@@ -408,6 +449,19 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
  * Preserves: `schema_version`, `created`. Always refreshes `updated` to now.
  *
  * Errors: refuses if the task doesn't exist.
+ *
+ * Evidence gate on `done` (the invented-completion finding): a call whose
+ * merged `status` becomes `done` from a different previous status must
+ * carry `evidence: { kind, ref }`, `kind` one of `pr`, `commit`, `ci_run`,
+ * `non_code`, `ref` the PR URL, `"<sha> on <remote-branch>"`, the CI run
+ * URL, or the non-code outcome's own proof link. Refused with an error
+ * that says what to supply, before the card is touched, when `evidence`
+ * is missing or malformed. The tool then writes it onto the card as
+ * `evidence: { kind, ref, recorded_at }`, alongside `factory_report`.
+ * Re-saving an already-`done` card, and every transition to a status
+ * other than `done` (including `cancelled`), needs none of this.
+ * `task_archive`'s own implicit bump to `done` is a separate, unaffected
+ * path (see its own doc comment).
  *
  * On a Git desk, also commits exactly the file it staged (M4-6 Part 2). A
  * commit failure never loses the write: it comes back as `commit: { status:
@@ -428,6 +482,12 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   // Checked before anything is read or written: a string spread into the
   // card would write one key per character.
   const frontmatter = objectInput(values.frontmatter, { tool: "task_update", field: "frontmatter" })
+  const evidence = objectInput(values.evidence, {
+    tool: "task_update",
+    field: "evidence",
+    effect: "the `done` transition was not recorded",
+    example: DONE_EVIDENCE_EXAMPLE,
+  })
 
   const filePath = await resolveWriteTarget({
     deskRoot,
@@ -454,6 +514,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   }
   merged.updated = nowIso()
   if (merged.status === "done" && existing.data.status !== "done") {
+    assertDoneEvidence(evidence)
+    merged.evidence = { kind: evidence.kind, ref: evidence.ref, recorded_at: merged.updated }
     const link = await factoryReportFor({ deskRoot, person, track, slug, env })
     if (link !== null) merged.factory_report = link
   }

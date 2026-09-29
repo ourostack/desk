@@ -8,11 +8,17 @@ import { factoryStateRoot, listFinalizeRequests } from "../../../../../plugins/d
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { scratch } from "./_session_helpers.js"
 
+// task_update's evidence gate (the invented-completion finding) only fires on the
+// transition into `done`; these fixture calls carry it so the `done` half
+// of each `[done, cancelled]` pair still exercises the finalize/evaluation
+// path it's actually testing, not the evidence gate itself.
+const DONE_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" }
+
 for (const status of ["done", "cancelled"]) {
   test(`task_update to ${status} queues the same local job used by binding`, () => scratch(async ({ desk, env }) => {
     await factoryStateRoot(env)
     await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
-    const result = await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status } } })
+    const result = await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status }, ...(status === "done" ? { evidence: DONE_EVIDENCE } : {}) } })
     assert.equal(result.status, "updated")
     const [request] = await listFinalizeRequests(env)
     assert.ok(request, "completion must leave a finalize request")
@@ -45,7 +51,7 @@ test("a completed task renamed outside the tools still queues the job at its bir
   await fs.rename(path.join(desk, "track", "origin-slug"), path.join(desk, "track", "renamed-slug"))
   git("add", "-A")
   git("commit", "-q", "-m", "rename the task")
-  const result = await task_update({ deskRoot: desk, env, input: { track: "track", slug: "renamed-slug", frontmatter: { status: "done" } } })
+  const result = await task_update({ deskRoot: desk, env, input: { track: "track", slug: "renamed-slug", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
   assert.equal(result.status, "updated")
   const [request] = await listFinalizeRequests(env)
   assert.ok(request, "completion must leave a finalize request")
@@ -54,7 +60,7 @@ test("a completed task renamed outside the tools still queues the job at its bir
 
 test("no factory state is created by completion; unavailable factory state never fails a task update", () => scratch(async ({ desk, env }) => {
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
-  const options = { deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" } } }
+  const options = { deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } }
   assert.equal((await task_update(options)).status, "updated")
   await assert.rejects(fs.stat(env.XDG_STATE_HOME), { code: "ENOENT" })
   await fs.mkdir(env.XDG_STATE_HOME, { recursive: true })

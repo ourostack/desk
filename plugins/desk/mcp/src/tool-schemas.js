@@ -48,6 +48,17 @@ const CARD_UPDATE = {
   body_append: text("Markdown to append to the card body, separated by a blank line."),
 }
 
+const TASK_DONE_EVIDENCE = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    kind: { type: "string", enum: ["pr", "commit", "ci_run", "non_code"], description: "What kind of reference this is." },
+    ref: text('The verifiable reference: the PR URL, "<sha> on <remote-branch>", the CI run URL, or the non-code outcome\'s own proof link.'),
+  },
+  required: ["kind", "ref"],
+  description: "Required, as a JSON object (not a string), only when this call moves the task into `done` from a non-`done` status: at least one verifiable reference backing the completion claim. Omit for every other update, including a transition to `cancelled`. Refused with an error naming what to supply when the transition is to `done` and this is missing or malformed.",
+}
+
 export const TOOL_INPUT_SCHEMAS = Object.freeze({
   task_create: schema({
     ...TASK_TARGET,
@@ -92,7 +103,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     initiated_by: { type: "string", enum: ["operator", "agent"], description: "Who started the task: the operator asked, or the agent recognized the work." },
     origin_note: text("When the agent started the task: one line on what it noticed."),
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, ...CARD_UPDATE }, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, ...CARD_UPDATE, evidence: TASK_DONE_EVIDENCE }, ["track", "slug"]),
   task_archive: schema(TASK_TARGET, ["track", "slug"]),
   task_move: schema({
     ...TASK_TARGET,

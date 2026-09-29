@@ -28,6 +28,10 @@ artifacts: [https://github.com/.../pull/123]  # outputs produced by this task (P
 active_bridge: "bridge-abc123"          # set by bridge promotion — bridge ID this task durably records
 bridge_sessions: ["sess-xyz789"]        # set by bridge promotion — session IDs the bridge is coordinating
 factory_report: https://github.com/<store>/blob/reports/jobs/<job>.md  # set by the task tools at done when the factory store has consent
+evidence:                               # required by task_update to reach status: done; see task-lifecycle "Resuming a task"
+  kind: pr                              # pr | commit | ci_run | non_code
+  ref: https://github.com/<org>/<repo>/pull/123
+  recorded_at: 2026-04-21T09:00:00Z     # set by task_update; never hand-write
 
 # Optional: adoption signals
 planning_complete: true                 # skip brainstorming and planning; resume at implementation
@@ -91,6 +95,10 @@ these fields are read by the harness, not the agent. set them when the task repr
 - **`factory_report`** — the link to this job's factory report, written by `task_update` or `task_archive` on the transition to `done` when the desk's resolved factory store has consent (see `desk:session-start` Step 2.7). the link is deterministic, so it is written at once and may not resolve until the store has merged the job's facts and rebuilt its reports; `done` never waits for that. cards without consent, cards finished before the field existed and `cancelled` cards have no link. never write or edit it by hand.
 
 agents creating tasks via `desk` skills don't typically set runtime fields directly — they're added by `ouro reminder create`, by bridge promotion, or by the operator. but agents reading task cards should understand what these fields mean so they don't strip them on edits.
+
+## Evidence on `done`
+
+unlike the runtime fields above, **`evidence`** is supplied by the agent, not the harness: `task_update` refuses a transition to `status: done` unless the call passes `evidence: { kind, ref }`, and writes it onto the card as `evidence: { kind, ref, recorded_at }` alongside the transition. `kind` is one of `pr`, `commit`, `ci_run` or `non_code`; `ref` is the PR URL, a commit on a remote branch, the CI run's own URL, or a stated non-code outcome's own proof link. a direct edit to `status: done` that bypasses `task_update` — and so never supplies or records evidence — is denied at the tool-call boundary on Claude Code; see `task-lifecycle`'s "Resuming a task" for the contract this enforces. `task_archive`'s own implicit bump of a non-terminal task to `done` on archive does not go through `task_update` and carries no `evidence` field; archiving is itself the record of intentional closure. cards finished before this field existed have no `evidence`, and `cancelled` cards never require one.
 
 consumer agents extending this with their own work-tracker schema (e.g. enterprise overlays with Feature / Epic hierarchies) add their own frontmatter block — typically the overlay ships a card-fields skill defining the tracker-specific `tracker:` + `repos[].org` shape.
 
