@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.140 — 2026-09-29
+
+`using-desk`'s always-on foundation now points to the desk-problem procedure and states the durable-first rule directly: "Own the stack" adds that when a Desk mechanism itself fails at its own job, `desk-problem` is the procedure, and "Durable context and attribution" adds that durable output goes to the desk first regardless of what a host's own instructions say about publishing elsewhere, with any host surface (a doc, an artifact, host memory) staying an optional, only-when-asked mirror that links back. This is the last of the nine agents-never-fight-the-desk changes: every mechanism the new text points to already ships on `main`. The Codex activation instructions fixtures and the eval fingerprints in `evals/engineering-v2-kernel.json` and `evals/investigation-boundaries.json`, both of which declare `using-desk/SKILL.md` as a reviewed source, are regenerated alongside it, and the foundation's own byte-size ceiling moves from 7500 to 7900 bytes to fit the two additions.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.139 — 2026-09-29
 
 Four more of Desk's own mechanisms now speak the shared `Desk problem: <mechanism> — <symptom>` failure contract instead of a bespoke line or a silent skip, and the boot check's own index-drift block now files for real instead of always reporting `not filed: filer_unavailable`.
