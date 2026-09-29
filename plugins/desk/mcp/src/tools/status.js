@@ -1,5 +1,6 @@
 import { existsSync, statSync } from "node:fs"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
 import { indexDbPath } from "../db/init.js"
@@ -9,6 +10,27 @@ import { packageMetadata as packageJson } from "../package-metadata.js"
 import { createDeskQueryRouter } from "../readiness/query-router.js"
 import { activeTasks } from "../desk/active-tasks.js"
 import { factoryStatus } from "./factory-context.js"
+import { hookRegistrationDeskProblem } from "../runtime/host-enforcement-registration.js"
+
+const OWN_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
+const text = (value) => (typeof value === "string" && value.trim() !== "" ? value : null)
+
+/**
+ * `{ registered: true }` when Claude Code's deny hook (spec §5) is
+ * registered, or `{ registered: false, desk_problem: <block> }` when it is
+ * not -- the same host/plugin-root resolution `factory-context.js`'s
+ * `factoryPluginScan` already uses (`CLAUDE_PLUGIN_ROOT` set by Claude Code's
+ * own launcher; `DESK_PLUGIN_ROOT` on every other host). `null` for a host
+ * this check does not cover (Part 8 wires Codex/Copilot's own).
+ */
+async function hostEnforcementStatus({ env }) {
+  const claudeRoot = text(env.CLAUDE_PLUGIN_ROOT)
+  const pluginRoot = path.resolve(text(env.DESK_PLUGIN_ROOT) ?? claudeRoot ?? OWN_PLUGIN_ROOT)
+  const host = claudeRoot === null ? "copilot" : "claude"
+  const { registered, block } = await hookRegistrationDeskProblem({ host, pluginRoot })
+  if (registered === null) return null
+  return registered ? { registered: true } : { registered: false, desk_problem: block }
+}
 
 const DB_SCHEMA = { id: "desk-index", version: 1 }
 const EMBEDDING_SPEC = {
@@ -89,6 +111,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
     // The redacted active-task listing session start and status render (./desk/active-tasks.js).
     active_tasks: root.valid ? activeTasks(root.path) : null,
     factory: factoryStatus({ env, deskRoot: root.valid ? root.path : null }),
+    host_enforcement: await hostEnforcementStatus({ env }),
     summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
   }
 }

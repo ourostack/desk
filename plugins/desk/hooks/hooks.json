@@ -42,6 +42,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion|EnterPlanMode|ExitPlanMode|TaskCreate|Artifact|ArtifactComments|ArtifactData|ArtifactCheck|mcp__claude_ai_Claude_Docs__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/host-enforcement.cjs\" claude",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
