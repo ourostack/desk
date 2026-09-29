@@ -934,8 +934,17 @@ test("bootOnce: homeDir, gh and jq default to their real implementations when om
   const originalPath = process.env.PATH
   process.env.PATH = "/nonexistent-bin"
   try {
+    // `gh`'s real default (`ghRunner({ env })`) threads bootOnce's own
+    // `env` param into the child's spawn env, unlike `jq`'s real default
+    // (`commandRunner("jq")`), which reads live `process.env` directly. An
+    // `env` object with no `PATH` key at all — as opposed to one where
+    // `PATH` is set to a directory with nothing in it — lets a spawned
+    // child fall back to the OS's own default program search path, which
+    // on some hosts still finds a real `gh` binary outside `process.env`.
+    // Both must be pinned to the same nonexistent directory for `gh` and
+    // `jq` to fail the same deterministic way regardless of host.
     const viaEnvHome = await bootOnce({
-      env: { DESK: root, HOME: root },
+      env: { DESK: root, HOME: root, PATH: "/nonexistent-bin" },
       cwd: root,
       syncFn: async () => ({ state: "synced" }),
       factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
@@ -945,7 +954,7 @@ test("bootOnce: homeDir, gh and jq default to their real implementations when om
     assert.ok(viaEnvHome.degraded.some((line) => line.includes("jq_missing")))
 
     const viaOsHomedir = await bootOnce({
-      env: { DESK: root },
+      env: { DESK: root, PATH: "/nonexistent-bin" },
       cwd: root,
       syncFn: async () => ({ state: "synced" }),
       factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
