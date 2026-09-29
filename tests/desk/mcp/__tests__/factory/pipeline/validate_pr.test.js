@@ -400,3 +400,13 @@ test("validatePr accepts published facts with per-worker job and PR attribution,
   assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: upgraded }] }), { ok: true, errors: [] })
   assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "added", bytes: GOLDEN_BYTES }] }), { ok: true, errors: [] })
 })
+
+test("validatePr accepts a modification that adds job workers, and refuses an unsorted list", () => {
+  const value = structuredClone(GOLDEN)
+  value.jobs[0].agents = [0, 1]
+  const modified = Buffer.from(`${JSON.stringify(value)}\n`)
+  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "modified", bytes: modified, previousBytes: GOLDEN_BYTES }] }), { ok: true, errors: [] })
+  value.jobs[0].agents = [1, 0]
+  const unsorted = Buffer.from(`${JSON.stringify(value)}\n`)
+  assert.equal(validatePr({ changes: [{ path: VALID_PATH, status: "modified", bytes: unsorted, previousBytes: GOLDEN_BYTES }] }).ok, false)
+})

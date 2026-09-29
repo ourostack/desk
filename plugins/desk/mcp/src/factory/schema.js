@@ -383,6 +383,11 @@ export function checkJobAgents(value, path, errors) {
     addError(errors, "duplicate", path)
     ok = false
   }
+  // Canonical form: ascending, so one content gives one set of bytes.
+  if (ok && value.some((entry, index) => index > 0 && entry < value[index - 1])) {
+    addError(errors, "order", path)
+    ok = false
+  }
   return ok
 }
 

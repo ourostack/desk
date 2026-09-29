@@ -779,3 +779,8 @@ test("refs.prs[].agent outside agents[] fails with agent_unknown, and a negative
   assertSingle(validateLocalFacts(setPath(golden(), ["refs", "prs", 0, "agent"], 7)), "agent_unknown", "refs.prs.0.agent")
   assertSingle(validateLocalFacts(setPath(golden(), ["refs", "prs", 0, "agent"], -1)), "range", "refs.prs.0.agent")
 })
+
+test("an unsorted jobs[].agents is refused with order (canonical form is ascending)", () => {
+  assertSingle(validateLocalFacts(setPath(golden(), ["jobs", 0, "agents"], [1, 0])), "order", "jobs.0.agents")
+  assert.equal(validateLocalFacts(setPath(golden(), ["jobs", 0, "agents"], [0, 1])).ok, true)
+})
