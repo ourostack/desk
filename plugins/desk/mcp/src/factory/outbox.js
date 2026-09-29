@@ -987,6 +987,17 @@ export async function setJobsForFile(env, fileName, jobIds, { platform = process
   }, { platform, env, runner })
 }
 
+/** Names of the regular (non-symlink) store directories directly under `dir`; a stray file such as `.DS_Store` is ignored. */
+async function listStoreDirs(dir) {
+  const kept = []
+  for (const name of await listDirSafe(dir)) {
+    if (!STORE_SLUG_PATTERN.test(name)) continue
+    const stat = await lstatIfPresent(path.join(dir, name), NAMING)
+    if (stat !== null && stat.isDirectory()) kept.push(name)
+  }
+  return kept
+}
+
 /**
  * `rebuildJobsIndex(env, store?) -> { jobs, files }`: rewrites
  * `jobs-index.json` from the `jobs[].job` of every regular outbox file (one
@@ -995,7 +1006,7 @@ export async function setJobsForFile(env, fileName, jobIds, { platform = process
  */
 export async function rebuildJobsIndex(env, store = undefined, { platform = process.platform, runner = undefined } = {}) {
   const root = await factoryStateRoot(env, { platform, runner })
-  const slugs = store === undefined ? await listDirSafe(path.join(root, "outbox")) : [storeSlug(store)]
+  const slugs = store === undefined ? await listStoreDirs(path.join(root, "outbox")) : [storeSlug(store)]
   const rebuilt = {}
   let files = 0
   for (const slug of slugs) {
@@ -1004,8 +1015,10 @@ export async function rebuildJobsIndex(env, store = undefined, { platform = proc
       let facts
       try {
         facts = JSON.parse(await fsp.readFile(path.join(dir, name), "utf8"))
-      } catch {
-        continue
+      } catch (error) {
+        // Unparseable or vanished: skip. Any other read error (EACCES, EIO) aborts before the stamp, so the next sweep retries.
+        if (error instanceof SyntaxError || error.code === "ENOENT") continue
+        throw error
       }
       files += 1
       const jobs = Array.isArray(facts?.jobs) ? facts.jobs : []

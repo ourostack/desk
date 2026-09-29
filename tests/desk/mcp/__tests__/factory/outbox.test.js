@@ -7,6 +7,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -1235,6 +1236,30 @@ test("rebuildJobsIndex mirrors the outbox and writes its stamp", () => scratch(a
   assert.deepEqual(await readJobsIndex(env), { [JOB]: [first.name, second.name].sort(), [JOB2]: [second.name] })
   const stamp = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(env), "jobs-index.rebuilt"), "utf8"))
   assert.equal(typeof stamp.at, "string")
+}))
+
+test("rebuildJobsIndex ignores non-directory entries in the outbox", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  mkdirSync(path.join(root, "outbox"), { recursive: true })
+  writeFileSync(path.join(root, "outbox", ".DS_Store"), "x")
+  assert.deepEqual(await rebuildJobsIndex(env), { jobs: 0, files: 0 })
+  assert.equal(existsSync(path.join(root, "jobs-index.rebuilt")), true)
+}))
+
+// A chmod 000 outbox file is an EACCES read error (a directory named like an outbox file is skipped by listRegularFiles, so it is not one).
+test("a read error leaves the stamp unwritten", { skip: process.getuid?.() === 0 || process.platform === "win32" }, () => scratch(async (env) => {
+  await setConsent(env, { store: STORE, contribute: true })
+  const written = await writeLocalFacts(env, STORE, validLocalFacts({ jobs: [{ job: JOB, basis: ["desk_tool"], task_created_at: null, transitions: [], observed: null }] }))
+  const root = await factoryStateRoot(env)
+  const file = path.join(root, "outbox", "ourostack__factory", written.name)
+  chmodSync(file, 0)
+  try {
+    await assert.rejects(() => rebuildJobsIndex(env), { code: "EACCES" })
+    assert.equal(existsSync(path.join(root, "jobs-index.rebuilt")), false)
+  } finally {
+    chmodSync(file, 0o600)
+  }
+  assert.deepEqual(await rebuildJobsIndex(env), { jobs: 1, files: 1 })
 }))
 
 // ---------------------------------------------------------------------------

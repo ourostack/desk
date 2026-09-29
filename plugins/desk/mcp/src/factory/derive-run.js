@@ -156,7 +156,11 @@ async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQui
 
 export async function sweep(env, { quietMs = 600000 } = {}) {
   const summary = { written: 0, held: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0 }
-  if (!(await jobsIndexRebuilt(env))) await rebuildJobsIndex(env)
+  try {
+    if (!(await jobsIndexRebuilt(env))) await rebuildJobsIndex(env)
+  } catch {
+    // The rebuild retries on the next sweep; it must never stop this one deriving.
+  }
   for (const marker of await listMarkers(env)) {
     const { result } = await deriveMarker(env, marker, { quietMs, requireStored: true })
     summary[result] += 1

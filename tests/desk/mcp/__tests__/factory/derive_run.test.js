@@ -156,6 +156,27 @@ test("sweep rebuilds the index only once", () => scratch(async (ctx) => {
   assert.deepEqual(await readJobsIndex(ctx.env), { [stale]: ["claude-code-old.json"] }, "the second sweep leaves a hand-edited index alone")
 }))
 
+test("sweep derives even when the rebuild fails", { skip: process.getuid?.() === 0 || process.platform === "win32" }, () => scratch(async (ctx) => {
+  const { sweep } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await writeMarker(ctx.env, marker)
+  const old = new Date(Date.now() - 700000)
+  await fs.utimes(marker.log_path, old, old)
+  const root = await factoryStateRoot(ctx.env)
+  const bad = path.join(root, "outbox", "ourostack__other")
+  await fs.mkdir(bad, { recursive: true })
+  const file = path.join(bad, `claude-code-${ID.replace(/.$/u, "9")}.json`)
+  await fs.writeFile(file, "{}")
+  await fs.chmod(file, 0)
+  try {
+    assert.equal((await sweep(ctx.env)).written, 1)
+    assert.equal(existsSync(path.join(root, "jobs-index.rebuilt")), false, "the failed rebuild will retry")
+  } finally {
+    await fs.chmod(file, 0o600)
+  }
+}))
+
 test("re-deriving a session that no longer binds a job removes it from the index", () => scratch(async (ctx) => {
   const { deriveMarker } = await runner()
   const marker = await session(ctx)
