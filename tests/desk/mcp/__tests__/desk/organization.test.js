@@ -354,6 +354,64 @@ test("loose_file never flags the desk-root allow-list", async () => {
   assert.ok(!loose.includes(".gitignore"))
 })
 
+// ── Scratch flagging (Part 6) ───────────────────────────────────────────
+
+test("a loose root-level x.png is flagged with '— probable scratch, not desk content'; _cache/ itself is never flagged", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, "x.png", "binary-ish\n")
+  await writeFile(root, "_cache/stray-2026-09-28/stray.txt", "quarantined, never flagged\n")
+
+  const findings = organizationFindings(root, { now: NOW })
+  const loose = findByCode(findings, "loose_file")
+
+  const png = loose.find((f) => f.path === "x.png")
+  assert.ok(png, "expected x.png to be reported as loose_file")
+  assert.match(png.hint, /probable scratch, not desk content/)
+
+  assert.ok(!loose.some((f) => f.path.startsWith("_cache")), "_cache/ contents must never be reported at all")
+})
+
+test("a loose root-level ordinary file (not scratch-shaped) never gets the scratch hint suffix", async () => {
+  const root = await mkTempRoot()
+  await writeFile(root, "notes-from-a-meeting.md", "not scratch\n")
+
+  const findings = organizationFindings(root, { now: NOW })
+  const [finding] = findByCode(findings, "loose_file")
+  assert.equal(finding.path, "notes-from-a-meeting.md")
+  assert.doesNotMatch(finding.hint, /probable scratch, not desk content/)
+})
+
+test("the scratch hint covers *.txt/*.jpg/*.log and a bare 'undefined' file, case-insensitively", async () => {
+  const root = await mkTempRoot()
+  for (const name of ["a.txt", "b.JPG", "c.log", "undefined"]) {
+    await writeFile(root, name, "x\n")
+  }
+
+  const findings = organizationFindings(root, { now: NOW })
+  const loose = findByCode(findings, "loose_file")
+  for (const name of ["a.txt", "b.JPG", "c.log", "undefined"]) {
+    const finding = loose.find((f) => f.path === name)
+    assert.ok(finding, `expected ${name} to be reported as loose_file`)
+    assert.match(finding.hint, /probable scratch, not desk content/)
+  }
+})
+
+test("the scratch hint is desk-root-only: a track-root stray file with a scratch extension is still loose_file but keeps its ordinary hint", async () => {
+  const root = await mkTempRoot()
+  await writeCard(root, "normal-track/track.md", {
+    schema_version: 1,
+    title: "normal-track",
+    status: "active",
+    scope: "holds the track-root scratch-extension fixture; not anything else",
+  })
+  await writeFile(root, "normal-track/scratch-shaped.txt", "stray at track root\n")
+
+  const findings = organizationFindings(root, { now: NOW })
+  const finding = findByCode(findings, "loose_file").find((f) => f.path === "normal-track/scratch-shaped.txt")
+  assert.ok(finding)
+  assert.doesNotMatch(finding.hint, /probable scratch, not desk content/)
+})
+
 // ── Crew isolation ───────────────────────────────────────────────────────
 
 test("organizationFindings never reports a peer's messy desk in a crew workspace", async () => {

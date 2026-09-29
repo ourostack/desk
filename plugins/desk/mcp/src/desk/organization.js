@@ -103,7 +103,23 @@ const DESK_ROOT_ALLOWED_FILES = new Set(["AGENTS.md", "README.md", "CLAUDE.md"])
 
 // Plain (non-underscore) folders a desk root may hold besides tracks: the
 // shared `artifacts/` folder (vector packs, snapshots, publication policy).
-const DESK_ROOT_ALLOWED_DIRS = new Set(["artifacts"])
+// `_cache/` (the Desk-problem quarantine dir) is already an underscore
+// folder, so `walkDeskLevel` never reaches this set for it; it is listed
+// here too, explicitly, so that allowance does not depend solely on the
+// underscore-folder convention holding.
+const DESK_ROOT_ALLOWED_DIRS = new Set(["artifacts", "_cache"])
+
+// Desk-root-level loose *files* shaped like scratch a tool session dropped
+// by accident (Part 6, "Scratch out of the desk") rather than real desk
+// content: generic capture extensions, and the literal `undefined` name an
+// unexported shell variable's path produces. Track-root loose files never
+// go through this — scratch-shaped content one level into a track is still
+// just `loose_file` with its ordinary hint.
+const SCRATCH_EXTENSIONS = new Set([".txt", ".png", ".jpg", ".log"])
+
+function looksLikeScratch(name) {
+  return name === "undefined" || SCRATCH_EXTENSIONS.has(path.extname(name).toLowerCase())
+}
 
 // A bounded read never costs more than this many bytes per card, whatever
 // the file's real size — see the module header.
@@ -405,7 +421,10 @@ function walkDeskLevel({ scanRoot, deskRoot, operatorNames, findings, liveTaskCa
 
     if (entry.isFile()) {
       if (DESK_ROOT_ALLOWED_FILES.has(entry.name) || isDotfile(entry.name)) continue
-      findings.push(looseFinding(deskRoot, entryAbs, "loose at the desk root — file it under a track or an underscore folder"))
+      const hint = looksLikeScratch(entry.name)
+        ? "loose at the desk root — file it under a track or an underscore folder — probable scratch, not desk content"
+        : "loose at the desk root — file it under a track or an underscore folder"
+      findings.push(looseFinding(deskRoot, entryAbs, hint))
       continue
     }
 
