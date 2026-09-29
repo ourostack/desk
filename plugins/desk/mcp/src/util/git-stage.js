@@ -48,3 +48,15 @@ export function stagePaths(root, relPaths, spawnGit) {
   const result = run(spawnGit, root, ["add", "--", ...relPaths])
   return { ok: result.status === 0, stderr: result.stderr }
 }
+
+/**
+ * `git commit` exactly `relPaths` (relative to `root`) with `message`, never
+ * `-a`/`-A` and never a pattern: the pathspec after `--` names precisely the
+ * paths this call commits, so a path another process staged in the same
+ * index in the meantime is left staged and untouched, not swept into this
+ * commit. Returns `{ ok, stderr }`; never throws on a Git failure.
+ */
+export function commitPaths(root, relPaths, message, spawnGit) {
+  const result = run(spawnGit, root, ["commit", "-m", message, "--", ...relPaths])
+  return { ok: result.status === 0, stderr: result.stderr }
+}
