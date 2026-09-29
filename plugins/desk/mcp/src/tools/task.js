@@ -56,12 +56,19 @@ const HTTPS_URL_REF = /^https:\/\/\S+$/iu
 // leading `/` or `~` (both machine-specific, see task-card-format's "Local
 // path portability"), no Windows drive letter, and no whitespace (a real
 // desk path is a kebab-case-segmented relative path, never free prose).
-function isDeskRelativeProofPath(ref) {
+// Format alone still let free text like "done" or "trustme" through, so
+// (2026-09-29 controller check of a363c057) the tool -- which has the desk
+// root in hand -- also resolves the ref against it and requires that it
+// land on an existing file or directory *inside* the desk, rejecting any
+// `..` segment that would walk the reference back out of it.
+async function isDeskRelativeProofPath(ref, deskRoot) {
   if (/\s/u.test(ref)) return false
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//u.test(ref)) return false
   if (ref.startsWith("/") || ref.startsWith("~")) return false
   if (/^[a-zA-Z]:[\\/]/u.test(ref)) return false
-  return true
+  const candidate = path.resolve(deskRoot, ref)
+  if (!isPathContained(deskRoot, candidate)) return false
+  return pathExists(candidate)
 }
 
 const DONE_EVIDENCE_REF_CHECKS = {
@@ -78,8 +85,11 @@ const DONE_EVIDENCE_REF_CHECKS = {
     shape: "the CI run's own https URL",
   },
   non_code: {
-    test: (ref) => HTTPS_URL_REF.test(ref) || isDeskRelativeProofPath(ref),
-    shape: "an https URL to the proof, or a desk-relative path to it (not an absolute path, and not free-text with no link)",
+    test: async (ref, deskRoot) => HTTPS_URL_REF.test(ref) || (await isDeskRelativeProofPath(ref, deskRoot)),
+    shape:
+      "an https URL to the proof, or a desk-relative path to it (not an absolute path, and not free-text with no link) " +
+      "that resolves to a file or directory actually present inside the desk -- not a path that escapes it via \"..\", " +
+      "and not one that names nothing there",
   },
 }
 
@@ -101,7 +111,7 @@ const DONE_EVIDENCE_REF_CHECKS = {
 // re-saving an already-`done` card, and moving to any other status
 // (including `cancelled`, which makes no completion claim to back), never
 // reach this function at all.
-function assertDoneEvidence(evidence, toolName) {
+async function assertDoneEvidence(evidence, deskRoot, toolName) {
   if (evidence === undefined) {
     throw new Error(
       `${toolName}: moving a task to \`done\` needs evidence -- pass \`evidence: { kind, ref }\`. ` +
@@ -117,7 +127,7 @@ function assertDoneEvidence(evidence, toolName) {
     )
   }
   const check = DONE_EVIDENCE_REF_CHECKS[evidence.kind]
-  if (!check.test(evidence.ref.trim())) {
+  if (!(await check.test(evidence.ref.trim(), deskRoot))) {
     throw new Error(
       `${toolName}: \`evidence.ref\` is not a checkable ${evidence.kind} reference (got ${JSON.stringify(evidence.ref)}) -- ` +
         `for kind "${evidence.kind}", \`ref\` must be ${check.shape}.`,
@@ -569,7 +579,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   }
   merged.updated = nowIso()
   if (merged.status === "done" && existing.data.status !== "done") {
-    assertDoneEvidence(evidence, "task_update")
+    await assertDoneEvidence(evidence, deskRoot, "task_update")
     merged.evidence = { kind: evidence.kind, ref: evidence.ref, recorded_at: merged.updated }
     const link = await factoryReportFor({ deskRoot, person, track, slug, env })
     if (link !== null) merged.factory_report = link
@@ -730,7 +740,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       if (outcome === "cancelled") {
         archiveBump = { status: "cancelled" }
       } else {
-        assertDoneEvidence(evidence, "task_archive")
+        await assertDoneEvidence(evidence, deskRoot, "task_archive")
         archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: evidence.ref } }
       }
     }

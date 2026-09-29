@@ -306,7 +306,7 @@ for (const evidence of [
 for (const evidence of [
   { kind: "commit", ref: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", label: "a full 40-character sha with no repo/branch suffix" },
   { kind: "commit", ref: "https://github.com/example-org/example-repo/commit/a1b2c3d", label: "a commit URL rather than a bare sha" },
-  { kind: "non_code", ref: "reports/2026-09-29-confirmation.md", label: "a desk-relative path rather than a URL" },
+  { kind: "non_code", ref: "reports/2026-09-29-confirmation.md", label: "a desk-relative path to a file that exists in the desk" },
 ]) {
   test(`task_update accepts ${evidence.kind} evidence in its other checkable shape (${evidence.label})`, async () => {
     const root = await mkTempDeskRoot()
@@ -314,6 +314,11 @@ for (const evidence of [
       deskRoot: root,
       input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
     })
+    if (evidence.kind === "non_code") {
+      const proofPath = path.join(root, evidence.ref)
+      await fs.mkdir(path.dirname(proofPath), { recursive: true })
+      await fs.writeFile(proofPath, "confirmation\n")
+    }
 
     const result = await task_update({
       deskRoot: root,
@@ -356,6 +361,85 @@ for (const evidence of [
     )
   })
 }
+
+// ── non_code containment + existence check (2026-09-29 controller check of
+// a363c057) ──────────────────────────────────────────────────────────────
+//
+// Format alone let free text like "done" or "trustme" pass as non_code
+// evidence, since a desk-relative path was never actually resolved. Now the
+// tool -- which has the desk root -- resolves the ref against it and
+// requires it land on something that exists, inside the desk.
+
+test("task_update accepts non_code evidence whose ref is a desk-relative path to a directory, not just a file", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+  await fs.mkdir(path.join(root, "reports", "confirmation-photos"), { recursive: true })
+
+  const result = await task_update({
+    deskRoot: root,
+    input: {
+      track: "t",
+      slug: "book-flights",
+      frontmatter: { status: "done" },
+      evidence: { kind: "non_code", ref: "reports/confirmation-photos" },
+    },
+  })
+  assert.equal(result.status, "updated")
+
+  const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+  assert.equal(data.evidence.ref, "reports/confirmation-photos")
+})
+
+test("task_update refuses non_code evidence whose ref escapes the desk root via \"..\", even though the target actually exists", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+  // A sibling temp desk root, so the referenced file genuinely exists on
+  // disk -- a plain existence check with no containment check would wrongly
+  // accept this.
+  const outside = await mkTempDeskRoot()
+  await fs.writeFile(path.join(outside, "proof.md"), "not actually in this desk\n")
+  const ref = path.join("..", path.basename(outside), "proof.md")
+
+  await assert.rejects(
+    task_update({
+      deskRoot: root,
+      input: {
+        track: "t",
+        slug: "book-flights",
+        frontmatter: { status: "done" },
+        evidence: { kind: "non_code", ref },
+      },
+    }),
+    /task_update: `evidence\.ref` is not a checkable non_code reference.*actually present inside the desk/,
+  )
+})
+
+test("task_update refuses non_code evidence whose ref names nothing that exists in the desk", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  await assert.rejects(
+    task_update({
+      deskRoot: root,
+      input: {
+        track: "t",
+        slug: "book-flights",
+        frontmatter: { status: "done" },
+        evidence: { kind: "non_code", ref: "reports/does-not-exist.md" },
+      },
+    }),
+    /task_update: `evidence\.ref` is not a checkable non_code reference.*actually present inside the desk/,
+  )
+})
 
 test("task_update accepts `evidence` as a JSON string, the same tolerance `frontmatter` gets", async () => {
   const root = await mkTempDeskRoot()
