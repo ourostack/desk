@@ -368,6 +368,26 @@ test("Copilot root package docs avoid healthy-path manual dependency setup", () 
   assert.doesNotMatch(agentDocs, /Copilot CLI doesn't auto-resolve transitive plugin deps/u)
 })
 
+test("Copilot preToolUse hooks include Desk-only host enforcement (Part 8, spec §5) alongside the protected-checkout guard", () => {
+  const copilotHooks = loadJson("plugins", "desk", "hooks", "copilot-hooks.json")
+  const preToolUse = copilotHooks.hooks.preToolUse
+  assert.ok(Array.isArray(preToolUse) && preToolUse.length >= 2, "preToolUse must keep protected-checkout and add host-enforcement")
+  const commands = preToolUse.map((entry) => entry.bash)
+  assert.ok(
+    commands.some((command) => command === "node \"${PLUGIN_ROOT}/hooks/protected-checkout.cjs\" copilot"),
+    "the existing protected-checkout guard must stay wired",
+  )
+  assert.ok(
+    commands.some((command) => command === "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot"),
+    "host-enforcement.cjs must be wired for Copilot, passing its own host id",
+  )
+  for (const entry of preToolUse) {
+    assert.equal(entry.type, "command")
+    assert.equal(entry.powershell, entry.bash, "bash and powershell commands must match")
+    assert.equal(typeof entry.timeoutSec, "number")
+  }
+})
+
 test("Copilot sessionStart hook stays lightweight and local-only", () => {
   const hookSource = readText("plugins", "desk", "hooks", "copilot-session-start.cjs")
   assertLightweightCopilotStartupHookSource(hookSource)
@@ -408,7 +428,7 @@ test("Copilot packaging validation rejects missing root surfaces and stale versi
   staleDeskVersion.deskPlugin.version = "1.7.2"
   assert.deepEqual(
     validateCopilotPackagingContract(staleDeskVersion),
-    ["Copilot root Desk version must match activation version 3.2.0-alpha.135"],
+    ["Copilot root Desk version must match activation version 3.2.0-alpha.136"],
   )
 
   const staleWorkSuiteVersion = clone(currentCopilotPackagingInput())

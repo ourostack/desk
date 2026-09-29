@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.136 — 2026-09-29
+
+Desk-only enforcement's deny hook (`host-enforcement.cjs`) now runs under Copilot CLI and Codex CLI, not only Claude Code. Copilot's own `preToolUse` hook is wired in `copilot-hooks.json` beside the existing protected-checkout guard, reading Copilot's camelCase stdin and writing its flat deny JSON; Codex's activation now writes a `[hooks] PreToolUse` entry into `config.toml` in every mode, matched broadly since the shared decision logic still governs allow/deny per tool name. Codex also gets `features.memories = false` pinned in its generated config, closing the same host-memory gap Claude Code's `autoMemoryEnabled` setting and Copilot's own `memory` setting already close.
+
+Codex's own hook-trust gate means an untrusted, non-interactive `PreToolUse` hook is silently skipped unless Codex is launched with `--dangerously-bypass-hook-trust`, and no supported way was found to grant that trust ahead of time. Desk registers the hook anyway for forward compatibility, but `desk_status` and the boot check now report it honestly as registered but not active, with a reason naming the gap instead of claiming protection that is not really there. `docs/host-enforcement-live-proof.md` records the live findings behind every wire-format and trust-gate claim in this change, for both Codex and Copilot. Copilot's boot check (via `copilot-session-start.cjs`) now also verifies its own `preToolUse` registration, the same way Claude Code's already does. `SETUP.md` gains the matching Copilot host-defaults step: pin `memory` and `includeCoAuthoredBy` both to `false`, the same pair Claude Code's own setup step already pins.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.135 — 2026-09-29
 
 The factory's visibility lookup for a referenced repository, a plugin's install source, or the store's own remote asked the account's own token once and cached a 403 or a 404 as "unknown" for seven days. A fine-grained personal access token scoped away from a repository, or an organization's SSO enforcement withholding it from that token alone, still answers 403 or 404 for a repository that is genuinely public, so a plugin whose source lived there stayed hidden behind `refs.private.plugins` for a week even though its source was public.
