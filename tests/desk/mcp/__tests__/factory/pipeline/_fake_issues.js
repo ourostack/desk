@@ -2,6 +2,8 @@
 // the `issuesClient` interface from `src/factory/store-issues.js` over a
 // small model of issues and comments. Nothing here reaches the network.
 
+import "../../_isolated_env.mjs"
+
 export const BOT = "github-actions[bot]"
 
 export function fakeIssues({ issues = [], comments = {}, author = BOT } = {}) {

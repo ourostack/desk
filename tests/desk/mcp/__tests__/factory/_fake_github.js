@@ -8,6 +8,7 @@
 
 import { createHash } from "node:crypto"
 
+import "../_isolated_env.mjs"
 import { anonymousGithub } from "../../../../../plugins/desk/mcp/src/factory/flush.js"
 import { gitBlobSha } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 

@@ -2,7 +2,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, promises as fsPromises, readdirSync, writeFile, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, promises as fsPromises, readdirSync, rmSync, writeFile, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -70,6 +70,30 @@ test("a factory test file run on its own with node --test never reads the machin
   const { spawnSync } = await import("node:child_process")
   const run = spawnSync(process.execPath, ["--test", path.join("__tests__", "factory", "boot_check.test.js")], { cwd: mcpRoot, env, encoding: "utf8", timeout: 120000 })
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`.split("\n").filter((line) => /^not ok|expected|actual|Error/u.test(line)).join("\n"))
+})
+
+test("a factory test file with no isolation import at all is still refused from ever touching a non-temp state home, under a bare node --test", async () => {
+  // _uninsulated_state_guard_fixture.fixture.js imports no isolation helper whatsoever and calls factoryStateRoot()
+  // with the process's own, unmodified environment — the exact shape of the incident this guards against
+  // (ourostack/desk, 2026-09-29: 34 evaluate-requests files recorded under a developer's real
+  // ~/.local/state/ouroboros-skills/desk/factory/). Its own name deliberately does not end in .test.js, so `npm test`
+  // and the coverage runner's own glob never pick it up as a normal suite member; it is only ever run explicitly,
+  // here, standing in for a bare `node --test <file>` an agent ran directly. A fake HOME outside the OS temp
+  // directory stands in for a real one, so this never touches this machine's actual home.
+  const mcpRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+  const realTmp = await fsPromises.realpath(os.tmpdir())
+  const fakeReal = path.join(path.dirname(realTmp), `desk-fake-real-home-${process.pid}`)
+  mkdirSync(fakeReal, { recursive: true })
+  try {
+    const env = { ...process.env, HOME: fakeReal, USERPROFILE: fakeReal }
+    for (const key of ["DESK_TEST_RUN_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "NODE_OPTIONS"]) delete env[key]
+    const { spawnSync } = await import("node:child_process")
+    const run = spawnSync(process.execPath, ["--test", path.join("__tests__", "factory", "_uninsulated_state_guard_fixture.fixture.js")], { cwd: mcpRoot, env, encoding: "utf8", timeout: 120000 })
+    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`.split("\n").filter((line) => /^not ok|expected|actual|Error/u.test(line)).join("\n"))
+    assert.equal(existsSync(path.join(fakeReal, ".local")), false, "the guard must refuse before creating anything under the fake real home")
+  } finally {
+    rmSync(fakeReal, { recursive: true, force: true })
+  }
 })
 
 test("a tools test file run on its own with node --test never writes the machine's real factory state, even while driving a task to done/cancelled", async () => {

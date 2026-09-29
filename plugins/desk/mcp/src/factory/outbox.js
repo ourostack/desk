@@ -81,6 +81,7 @@ import { assertWindowsAclAvailable, protectWindowsPaths } from "./windows-acl.js
 import { validateLabels } from "./label-schema.js"
 import { ENUMS, LIMITS, PATTERNS, isPlainObject, validateLocalFacts } from "./schema.js"
 import { MAX_MARKER_BYTES, readSmallText, validMarker } from "./marker.js"
+import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 const OWNER_FILE_MODE = 0o600
 const ROOT_SEGMENTS = ["ouroboros-skills", "desk", "factory"]
@@ -208,13 +209,17 @@ async function assertDeskRootTempConsistency(stateHome, deskRoot) {
  * segments are protected with one batched call. Also refused, the same way
  * and before anything is created: a `deskRoot` under the OS temp directory
  * paired with a state home that is not (`assertDeskRootTempConsistency`) —
- * a throwaway desk whose isolation did not reach the state home too.
+ * a throwaway desk whose isolation did not reach the state home too — and,
+ * independent of whether a `deskRoot` was even passed, a state home that is
+ * not under the OS temp directory while this process itself looks like a
+ * node:test run (`assertNotRealStateUnderTest`; see `./test-state-guard.js`).
  */
 export async function factoryStateRoot(env = process.env, { platform = process.platform, runner = undefined, create = true, deskRoot = null } = {}) {
   if (platform === "win32") assertWindowsAclAvailable({ env, label: NAMING.label })
   const stateHome = resolveStateHome(env)
   await assertOutsideBoundDesk(path.join(stateHome, ...ROOT_SEGMENTS), deskRoot)
   await assertDeskRootTempConsistency(stateHome, deskRoot)
+  assertNotRealStateUnderTest(stateHome, { env })
   if (!create && (await lstatIfPresent(path.join(stateHome, ...ROOT_SEGMENTS), NAMING)) === null) return null
   const { real: realPrefix } = await realpathExistingPrefix(stateHome)
   await assertOutsideGitWorkspace(realPrefix, NAMING)
