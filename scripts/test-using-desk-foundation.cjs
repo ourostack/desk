@@ -345,6 +345,8 @@ function main() {
     "commit and push",
     "Keep nothing durable in host memory or configuration folders",
     "thin pointers to the desk",
+    "Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere",
+    "is an optional mirror, made only when asked, that links back to the desk",
     "one durable task",
     "You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking.",
     "Never add AI attribution",
@@ -364,6 +366,7 @@ function main() {
     "creative and scrappy before declaring yourself stuck",
     "`friction-management`",
     "kaizen card",
+    "When a Desk mechanism itself fails at its own job, `desk-problem` is the procedure",
   ]);
 
   assertSectionPhrases(
@@ -455,10 +458,11 @@ function main() {
   assert.doesNotMatch(skill, /approv\w* (?:of )?(?:that |the )?content|in the (?:human's|operator's) (?:name|voice)/iu, "send approval belongs to operator-voice-comments");
 
   // Injected at every startup, so it stays compact: each rule is a sentence or two and procedure lives in the owning
-  // skill. The ceiling rose from 6500 to 7500 bytes for the four collaboration rules Ari approved on 2026-09-25; a
-  // further addition has to justify its size.
+  // skill. The ceiling rose from 6500 to 7500 bytes for the four collaboration rules Ari approved on 2026-09-25, and
+  // from 7500 to 7900 bytes for the durable-output-first sentence and the desk-problem pointer (Part 9 of the
+  // agents-never-fight-the-desk plan, 2026-09-28); a further addition has to justify its size.
   const skillBytes = Buffer.byteLength(skill, "utf8");
-  assert.ok(skillBytes >= 4500 && skillBytes <= 7500, `using-desk should stay about 5-7.5 KB; found ${skillBytes} bytes`);
+  assert.ok(skillBytes >= 4500 && skillBytes <= 7900, `using-desk should stay about 5-7.9 KB; found ${skillBytes} bytes`);
 
   assert.doesNotMatch(
     skill,

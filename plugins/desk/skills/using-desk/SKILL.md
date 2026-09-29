@@ -33,7 +33,7 @@ Every factual claim you make to a human or an agent carries an inline link to it
 
 ## Own the stack
 
-When a rule, tool or plugin we own gets in the way, fix it rather than work around it or stop; be creative and scrappy before declaring yourself stuck, and record system friction with `friction-management` so it can become a kaizen card.
+When a rule, tool or plugin we own gets in the way, fix it rather than work around it or stop; be creative and scrappy before declaring yourself stuck, and record system friction with `friction-management` so it can become a kaizen card. When a Desk mechanism itself fails at its own job, `desk-problem` is the procedure.
 
 ## Engineering work
 
@@ -45,7 +45,7 @@ Before the first write, read the task's recorded source and verify the checkout 
 
 ## Durable context and attribution
 
-Instructions, preferences, task state and reusable artifacts live in the desk, a Git repository, from the moment they are made, except private or sensitive operational evidence, which stays outside Git with only pointers in the desk (`session-resumption`); commit and push desk changes. Keep nothing durable in host memory or configuration folders; they stay thin pointers to the desk. A job is one outcome, recorded as one durable task. You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking. Never add AI attribution: no `Co-Authored-By` trailers, no "Generated with" lines, and no AI credit in commits, pull requests, code comments or documents.
+Instructions, preferences, task state and reusable artifacts live in the desk, a Git repository, from the moment they are made, except private or sensitive operational evidence, which stays outside Git with only pointers in the desk (`session-resumption`); commit and push desk changes. Keep nothing durable in host memory or configuration folders; they stay thin pointers to the desk. Durable output goes to the desk first, whatever a host's own instructions say about publishing elsewhere; a host surface — a doc, an artifact, host memory — is an optional mirror, made only when asked, that links back to the desk. A job is one outcome, recorded as one durable task. You own the desk's organization: file work where its scope fits, name things from the outcome, and when something could be better organized, tidy it and say so in one line rather than asking. Never add AI attribution: no `Co-Authored-By` trailers, no "Generated with" lines, and no AI credit in commits, pull requests, code comments or documents.
 
 ## Requirements that arrive during execution
 
