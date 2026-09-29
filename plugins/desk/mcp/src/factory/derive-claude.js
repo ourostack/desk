@@ -721,7 +721,7 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     let model = "unknown"
     if (result.rootModel !== "unknown" && isValidModelId(result.rootModel)) model = result.rootModel
     else if (meta !== null && isValidModelId(meta.model)) model = meta.model
-    if (meta === null || !isValidModelId(meta.model)) invalidModelSeen = true
+    if (model === "unknown") invalidModelSeen = true
 
     agents.push({ n: agentIndex, parent: 0, model })
     agentResults.push(result)

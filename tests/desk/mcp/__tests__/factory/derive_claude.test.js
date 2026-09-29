@@ -161,9 +161,30 @@ test("isApiErrorMessage lines and the <synthetic> model are excluded from usage,
   assert.equal(facts.counts.api_retries, 1)
 })
 
-test("a subagent with no meta.json marks models unavailable (source_unreadable)", async () => {
-  const { facts } = await deriveFull()
-  assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "models"), [{ field: "models", reason: "source_unreadable" }])
+test("a subagent whose model resolves from its own lines does not mark models unavailable, even with no meta.json", async () => {
+  const { line, assistant } = workerLines()
+  const { facts } = await deriveWithSubagents(
+    [line({ type: "user", message: { role: "user", content: "go" } }), assistant("r1", "claude-opus-5-5")],
+    [{ stem: "agent-1", lines: [assistant("s1", "claude-sonnet-5", [{ type: "text", text: "hi" }])] }],
+  )
+  assert.equal(facts.agents[1].model, "claude-sonnet-5")
+  assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "models"), [])
+})
+
+test("a subagent whose model resolves nowhere still marks models unavailable (source_unreadable)", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-unresolved-"))
+  try {
+    const root = path.join(dir, `${SUB_SESSION_ID}.jsonl`)
+    const base = { sessionId: SUB_SESSION_ID, version: "2.1.282", timestamp: "2026-09-25T08:00:00.000Z" }
+    writeFileSync(root, `${JSON.stringify({ ...base, type: "user", message: { role: "user", content: "go" } })}\n`)
+    mkdirSync(path.join(dir, SUB_SESSION_ID, "subagents"), { recursive: true })
+    writeFileSync(path.join(dir, SUB_SESSION_ID, "subagents", "agent-1.jsonl"), `${JSON.stringify({ ...base, type: "user", message: { role: "user", content: "hi" } })}\n`)
+    const { facts } = await deriveClaudeSession({ transcriptPath: root, plugins: PLUGINS, endReason: "prompt_input_exit" })
+    assert.equal(facts.agents[1].model, "unknown")
+    assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "models"), [{ field: "models", reason: "source_unreadable" }])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test("a real (non-synthetic) model that fails the model-id pattern is dropped, not put through invalid", async () => {
@@ -421,6 +442,7 @@ test("a 40-hex token in a Bash result's stdout becomes a commitShas event, dedup
 // The commit message and every other argument carry this; only directories
 // may come back, and never into facts.
 const COMMIT_MESSAGE_SENTINEL = "COMMIT-MESSAGE-SENTINEL-9b1e"
+const SUB_SESSION_ID = "2a3b4c5d-6e7f-4809-9a0b-1c2d3e4f5a6b"
 const GIT_SESSION_ID = "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b"
 
 async function deriveLines(lines, endReason = "prompt_input_exit") {
@@ -765,7 +787,6 @@ test("a spawn prompt's Desk-Task line becomes events.spawnTasks for the spawned 
   assert.equal("spawnTasks" in facts, false)
 })
 
-const SUB_SESSION_ID = "2a3b4c5d-6e7f-4809-9a0b-1c2d3e4f5a6b"
 
 // A session on disk: root lines plus subagent files ({ stem, lines, meta }).
 async function deriveWithSubagents(rootLines, subagents) {
