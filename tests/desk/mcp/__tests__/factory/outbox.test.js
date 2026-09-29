@@ -13,6 +13,7 @@ import {
   mkdtempSync,
   promises as fs,
   readdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1244,6 +1245,54 @@ test("rebuildJobsIndex ignores non-directory entries in the outbox", () => scrat
   writeFileSync(path.join(root, "outbox", ".DS_Store"), "x")
   assert.deepEqual(await rebuildJobsIndex(env), { jobs: 0, files: 0 })
   assert.equal(existsSync(path.join(root, "jobs-index.rebuilt")), true)
+}))
+
+test("rebuildJobsIndex skips unparseable files, malformed bindings and repeated jobs", () => scratch(async (env) => {
+  await setConsent(env, { store: STORE, contribute: true })
+  const binding = (job) => ({ job, basis: ["desk_tool"], task_created_at: null, transitions: [], observed: null })
+  const written = await writeLocalFacts(env, STORE, validLocalFacts({ jobs: [binding(JOB)] }))
+  const dir = path.join(await factoryStateRoot(env), "outbox", "ourostack__factory")
+  const facts = JSON.parse(readFileSync(path.join(dir, written.name), "utf8"))
+  facts.jobs = [binding(JOB), binding(JOB), binding("not-a-job"), null]
+  writeFileSync(path.join(dir, written.name), JSON.stringify(facts))
+  writeFileSync(path.join(dir, "claude-code-3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f69.json"), "{")
+  writeFileSync(path.join(dir, "claude-code-3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f68.json"), JSON.stringify({ jobs: "nope" }))
+  assert.deepEqual(await rebuildJobsIndex(env, STORE), { jobs: 1, files: 2 })
+  assert.deepEqual(await readJobsIndex(env), { [JOB]: [written.name] })
+}))
+
+test("setJobsForFile drops an index entry that is not a list", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  writeFileSync(path.join(root, "jobs-index.json"), JSON.stringify({ [JOB2]: "stray", [JOB3]: ["claude-code-other.json"] }))
+  await setJobsForFile(env, "claude-code-mine.json", [JOB])
+  assert.deepEqual(await readJobsIndex(env), { [JOB]: ["claude-code-mine.json"], [JOB3]: ["claude-code-other.json"] })
+}))
+
+test("pendingFiles quarantines an outbox file that does not parse and lists the rest", () => scratch(async (env) => {
+  await setConsent(env, { store: STORE, contribute: true })
+  const good = await writeLocalFacts(env, STORE, validLocalFacts())
+  const dir = path.join(await factoryStateRoot(env), "outbox", "ourostack__factory")
+  const bad = "claude-code-3b0c1f5e-8a1d-4c2e-9f3a-1b2c3d4e5f69.json"
+  writeFileSync(path.join(dir, bad), "{")
+  const listed = await pendingFiles(env, STORE, { publishedBytesFor: () => Buffer.from("x") })
+  assert.deepEqual(listed.map(({ name }) => name), [good.name])
+  const record = JSON.parse(readFileSync(path.join(await factoryStateRoot(env), "quarantine", "ourostack__factory", bad), "utf8"))
+  assert.equal(record.reason, "invalid")
+}))
+
+test("rebuildJobsIndex skips a store folder that vanishes between the listing and the check", () => scratch(async (env) => {
+  const root = await factoryStateRoot(env)
+  mkdirSync(path.join(root, "outbox"), { recursive: true })
+  const original = fs.readdir
+  fs.readdir = async (dir, ...rest) => {
+    const names = await original(dir, ...rest)
+    return String(dir).endsWith(`${path.sep}outbox`) ? [...names, "ghost__store"] : names
+  }
+  try {
+    assert.deepEqual(await rebuildJobsIndex(env), { jobs: 0, files: 0 })
+  } finally {
+    fs.readdir = original
+  }
 }))
 
 // A chmod 000 outbox file is an EACCES read error (a directory named like an outbox file is skipped by listRegularFiles, so it is not one).

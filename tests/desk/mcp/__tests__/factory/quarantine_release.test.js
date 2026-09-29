@@ -215,6 +215,21 @@ test("an unparseable quarantine record keeps its file quarantined", () => scratc
   assert.equal(github.pullCount(), 0)
 }))
 
+test("a quarantined file that no longer parses keeps its record and does not block the others", () => scratch(async ({ env }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await put(env, 1, { labels: false })
+  await put(env, 2, { labels: false })
+  await quarantine(env, STORE, nameOf(1), "plugin_not_public")
+  const root = await factoryStateRoot(env)
+  await fs.writeFile(path.join(root, "outbox", SLUG, nameOf(1)), "{")
+  const file = path.join(root, "quarantine", SLUG, nameOf(1))
+  const before = await fs.readFile(file)
+  const github = fakeGitHub()
+  assert.equal((await flushOnce(env, github)).result, "delivered_pr_open")
+  assert.deepEqual([...github.headFiles(STORE, await branchOf(env)).keys()], [`facts/${nameOf(2)}`])
+  assert.deepEqual(await fs.readFile(file), before)
+}))
+
 for (const status of [500, 422]) {
   test(`a held file whose repo cannot be resolved does not block pending files (${status})`, () => scratch(async ({ env }) => {
     await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
