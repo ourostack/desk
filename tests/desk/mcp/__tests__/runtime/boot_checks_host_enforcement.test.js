@@ -37,9 +37,11 @@ test("the real registration in this checkout's own hooks.json passes with no lin
 test("a missing registration surfaces a Desk problem: host-enforcement block, never a thrown error", async () => {
   const root = fixturePluginRoot(UNREGISTERED)
   try {
-    const line = await runBootChecks({ host: "claude", env: { PLUGIN_ROOT: root }, checks: [hostEnforcementCheck] })
+    // PATH: "" keeps this check's real filing attempt (now wired to the real Desk-problem filer) from ever reaching
+    // a real gh binary or the network -- it fails instantly with "no account can file," the same as gh missing.
+    const line = await runBootChecks({ host: "claude", env: { PLUGIN_ROOT: root, PATH: "" }, checks: [hostEnforcementCheck] })
     assert.match(line, /Desk problem: host-enforcement/)
-    assert.match(line, /file: not filed: filer_unavailable/)
+    assert.match(line, /file: not filed: no_suitable_account/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -48,7 +50,7 @@ test("a missing registration surfaces a Desk problem: host-enforcement block, ne
 test("an unreadable hooks.json (no file at all) also surfaces the block, never throws", async () => {
   const root = fixturePluginRoot(null)
   try {
-    const line = await runBootChecks({ host: "claude", env: { PLUGIN_ROOT: root }, checks: [hostEnforcementCheck] })
+    const line = await runBootChecks({ host: "claude", env: { PLUGIN_ROOT: root, PATH: "" }, checks: [hostEnforcementCheck] })
     assert.match(line, /Desk problem: host-enforcement/)
   } finally {
     rmSync(root, { recursive: true, force: true })

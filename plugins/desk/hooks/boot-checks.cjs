@@ -376,7 +376,7 @@ const hostEnforcementCheck = {
     if (ctx.host !== "claude") return {};
     const { hookRegistrationDeskProblem } = await runtime("runtime/host-enforcement-registration.js");
     const pluginRoot = ctx.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
-    const { registered, block } = await hookRegistrationDeskProblem({ host: ctx.host, pluginRoot });
+    const { registered, block } = await hookRegistrationDeskProblem({ host: ctx.host, pluginRoot, env: ctx.env });
     if (registered !== false) return {};
     return { line: block };
   },
