@@ -102,6 +102,13 @@ test("an unreadable or non-semver running version fails open and still derives e
   assert.equal((await deriveMarker(ctx.env, nonSemver, { ownVersion: () => "not-a-version" })).result, "written")
 }))
 
+test("with no ownVersion override, the real running version is read from the co-located plugin.json", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const marker = { ...await session(ctx), plugins: [{ name: "desk", version: "999.0.0", source: "ourostack/desk" }] }
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "held", store: null })
+}))
+
 test("missing, unreadable and mismatched logs have explicit outcomes", () => scratch(async (ctx) => {
   const { deriveMarker } = await runner()
   const marker = await session(ctx)
