@@ -16,7 +16,15 @@
 //      Transform every outbox file that is not quarantined. The visibility of each referenced repository, and
 //      of the desk's own GitHub remote, comes from the seven-day cache or
 //      `GET /repos/{owner}/{repo}` with the account's token (`private: false`
-//      is public, `private: true` private, 403 or 404 unknown). A desk that is
+//      is public, `private: true` private, 403 or 404 unknown). A token that
+//      cannot see a repository in its own scope (a fine-grained token, or an
+//      organization's SSO enforcement) still answers 404 for a repository
+//      that is genuinely public, so a 404 is retried once, unauthenticated,
+//      before it is accepted as unknown; only the exact answer that comes
+//      back — public, private or still unknown — is cached. A network
+//      failure, a 5xx or a rate limit is never cached as unknown: it stops
+//      the flush outright (`offline`, `unexpected` or `rate_limited`), so
+//      only a definitive answer ever reaches the seven-day cache. A desk that is
 //      not known to be private publishes machine-keyed job IDs without
 //      timing, keyed by the protected 32-byte machine secret. A file the
 //      transform refuses or the public gate rejects is quarantined with a
@@ -306,11 +314,17 @@ function createClient({ runner, deadline, now }) {
     state.token = token
   }
 
-  /** `{ status, json }` for a 2xx answer or an HTTP error the caller may expect; every other failure stops the flush. */
-  async function api(method, route, body) {
+  /**
+   * `{ status, json }` for a 2xx answer or an HTTP error the caller may
+   * expect; every other failure stops the flush. `anonymous: true` sends the
+   * request with no token at all (never the account's), for a caller that
+   * must tell a repository its own token cannot see from one that is truly
+   * gone or private.
+   */
+  async function api(method, route, body, { anonymous = false } = {}) {
     const args = ["api", "--method", method, "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", route]
     if (body !== undefined) args.push("--input", "-")
-    const result = await call(args, { token: state.token, input: body === undefined ? undefined : JSON.stringify(body) })
+    const result = await call(args, { token: anonymous ? undefined : state.token, input: body === undefined ? undefined : JSON.stringify(body) })
     const stdout = String(result.stdout ?? "")
     const stderr = String(result.stderr ?? "")
     if (result.code === 0) return { status: 200, json: parseJson(stdout) }
@@ -392,7 +406,12 @@ async function resolveVisibility(env, client, account, repos, nowIso) {
   for (const repo of [...new Set(repos.map((name) => name.toLowerCase()))].sort()) {
     if (known.has(repo)) continue
     await client.session(account)
-    const answer = await client.api("GET", `repos/${repo}`)
+    let answer = await client.api("GET", `repos/${repo}`)
+    // The account's own token can 404 a repository that is genuinely public: a fine-grained token scoped
+    // away from it, or an organization's SSO enforcement withholding it from this token alone. Since neither
+    // reason follows an anonymous request, one more try with no token at all tells a repository truly private
+    // or gone (still 404) from one only this account cannot see (now 200).
+    if (answer.status === 404) answer = await client.api("GET", `repos/${repo}`, undefined, { anonymous: true })
     let visibility
     if (answer.status === 200 && answer.json?.private === false) visibility = "public"
     else if (answer.status === 200 && answer.json?.private === true) visibility = "private"

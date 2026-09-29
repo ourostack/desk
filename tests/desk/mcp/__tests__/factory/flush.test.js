@@ -289,8 +289,9 @@ test("visibility is resolved with the account token, cached for seven days, and 
   const github = fakeGitHub({ visibility: { "acme/open": "public", "acme/secret": "private", "acme/hidden": 403 } })
   assert.equal((await flush(env, { store: STORE, runner: github.runner, now })).result, "delivered_pr_open")
   const lookups = apiCalls(github, "GET", /^repos\/acme\/[a-z]+$/u)
-  assert.deepEqual(lookups.map((call) => call.args.at(-1)).sort(), ["repos/acme/gone", "repos/acme/hidden", "repos/acme/open", "repos/acme/secret"])
-  assert.ok(lookups.every((call) => call.token === TOKEN))
+  assert.deepEqual(lookups.map((call) => call.args.at(-1)).sort(), ["repos/acme/gone", "repos/acme/gone", "repos/acme/hidden", "repos/acme/open", "repos/acme/secret"], "a 404 is retried once, unauthenticated")
+  assert.ok(lookups.filter((call) => call.args.at(-1) !== "repos/acme/gone").every((call) => call.token === TOKEN))
+  assert.deepEqual(lookups.filter((call) => call.args.at(-1) === "repos/acme/gone").map((call) => call.token), [TOKEN, undefined], "the retry for a still-gone repository carries no token at all")
   const published = JSON.parse(github.blobs.get(github.headFacts(STORE, await intakeBranch(env)).get(name).sha))
   assert.deepEqual(published.refs.prs, [{ repo: "acme/open", number: 1 }])
   assert.deepEqual(published.refs.commits, [{ repo: "acme/open", sha: "a".repeat(40) }])
@@ -305,7 +306,61 @@ test("visibility is resolved with the account token, cached for seven days, and 
   const after = github.calls.length
   clock += 2 * DAY
   await flush(env, { store: STORE, runner: github.runner, now })
-  assert.equal(apiCalls({ calls: github.calls.slice(after) }, "GET", /^repos\/acme\//u).length, 4, "an expired entry is looked up again")
+  assert.equal(apiCalls({ calls: github.calls.slice(after) }, "GET", /^repos\/acme\//u).length, 5, "an expired entry is looked up again, and a still-gone one retried unauthenticated again too")
+}))
+
+// ---------------------------------------------------------------------------
+// A 404 that is the account's own blind spot, not the repository's: retried
+// unauthenticated once, with only the confirmed answer cached.
+// ---------------------------------------------------------------------------
+
+test("a plugin whose source the account's token cannot see is still named, once an unauthenticated retry confirms it public", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
+  const name = await put(env, localFacts(1, { plugins }))
+  // A fine-grained token scoped away from `ourostack/desk`, or an organization's SSO enforcement, 404s it for
+  // this account alone; an unauthenticated request still sees the public repository underneath.
+  const github = fakeGitHub({ visibility: { "ourostack/desk": { authenticated: 404, anonymous: "public" } } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner })).result, "delivered_pr_open")
+  const lookups = apiCalls(github, "GET", /^repos\/ourostack\/desk$/u)
+  assert.deepEqual(lookups.map((call) => call.token), [TOKEN, undefined], "the token's 404 is retried once, with no token at all")
+  const published = JSON.parse(github.blobs.get(github.headFacts(STORE, await intakeBranch(env)).get(name).sha))
+  assert.deepEqual(published.plugins, [{ name: "desk", version: "3.2.0-alpha.24" }])
+  assert.equal(published.refs.private.plugins, 0)
+  const cache = await readVisibilityCache(env)
+  assert.equal(cache["ourostack/desk"].visibility, "public", "the confirmed, unauthenticated answer is cached, never the token's 404")
+}))
+
+test("a plugin source neither the token nor an anonymous request can see stays unknown and hidden", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const plugins = [{ name: "work-tools", version: "1.0.0", source: "acme/private-tool" }]
+  const name = await put(env, localFacts(1, { plugins }))
+  const github = fakeGitHub({ visibility: { "acme/private-tool": 404 } })
+  assert.equal((await flush(env, { store: STORE, runner: github.runner })).result, "delivered_pr_open")
+  const lookups = apiCalls(github, "GET", /^repos\/acme\/private-tool$/u)
+  assert.deepEqual(lookups.map((call) => call.token), [TOKEN, undefined], "still retried once, unauthenticated, before giving up")
+  const published = JSON.parse(github.blobs.get(github.headFacts(STORE, await intakeBranch(env)).get(name).sha))
+  assert.deepEqual(published.plugins, [])
+  assert.equal(published.refs.private.plugins, 1)
+  const cache = await readVisibilityCache(env)
+  assert.equal(cache["acme/private-tool"].visibility, "unknown", "genuinely unreachable either way, so the fail-safe holds")
+}))
+
+test("a rate limit hit by the unauthenticated retry stops the flush instead of caching unknown", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const plugins = [{ name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" }]
+  await put(env, localFacts(1, { plugins }))
+  const github = fakeGitHub({
+    visibility: { "ourostack/desk": 404 },
+    intercept: (call) => (call.args[0] === "api" && call.token === undefined && call.args.at(-1) === "repos/ourostack/desk"
+      ? { code: 1, stdout: "{}", stderr: "gh: API rate limit exceeded for the unauthenticated request. (HTTP 403)\n" }
+      : undefined),
+  })
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "rate_limited" })
+  assert.equal((await readVisibilityCache(env))["ourostack/desk"], undefined, "a transient failure on the retry is never cached as unknown")
 }))
 
 test("a public store names only plugins from public sources and resolves its own visibility with them", () => scratch(async ({ env }) => {
@@ -588,7 +643,7 @@ test("the token is used only as the runner's token option: never an argument, re
   for (const call of github.calls) {
     assert.equal(call.args.join(" ").includes(TOKEN), false)
     assert.equal((call.input ?? "").includes(TOKEN), false)
-    if (call.args[0] === "api") assert.equal(call.token, TOKEN)
+    if (call.args[0] === "api") assert.ok(call.token === TOKEN || call.token === undefined, "an api call carries the account's own token or, for an unauthenticated 404 retry, none at all")
   }
   assert.equal(JSON.stringify(result).includes(TOKEN), false)
   for (const file of await allFiles(await factoryStateRoot(env))) assert.equal(readFileSync(file).includes(TOKEN), false, file)

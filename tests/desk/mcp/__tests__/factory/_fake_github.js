@@ -107,7 +107,17 @@ export function fakeGitHub({
     return [...filesOf(commits.get(head).tree)].filter(([name, sha]) => DATA.test(name) && before.get(name) !== sha).map(([name]) => ({ filename: name }))
   }
 
-  function api(method, route, body) {
+  // A `visibility[repo]` entry is usually the same answer for the account's token and for an anonymous
+  // request. `{ authenticated, anonymous }` gives each its own answer, for a fixture modeling a token that
+  // 404s a repository an unauthenticated request can still see (a fine-grained token scoped away from it, or
+  // an organization's SSO enforcement).
+  const perAuth = (spec) => (spec !== null && typeof spec === "object" && !Array.isArray(spec))
+  const answerFor = (wanted, anonymous) => {
+    const spec = visibility[wanted]
+    return perAuth(spec) ? spec[anonymous ? "anonymous" : "authenticated"] : spec
+  }
+
+  function api(method, route, body, anonymous = false) {
     const [pathPart, query = ""] = route.split("?")
     const params = new URLSearchParams(query)
     // GitHub's paging: `per_page` (default 30, at most 100) items of page `page` (default 1).
@@ -119,10 +129,11 @@ export function fakeGitHub({
     let m
     if (method === "GET" && (m = /^repos\/([^/]+\/[^/]+)$/u.exec(pathPart))) {
       const wanted = m[1]
-      if (typeof visibility[wanted] === "number") return httpError(visibility[wanted], "Forbidden or missing")
+      const forThisCall = answerFor(wanted, anonymous)
+      if (typeof forThisCall === "number") return httpError(forThisCall, "Forbidden or missing")
       const found = repo(wanted)
       if (found) return ok(found.meta)
-      if (visibility[wanted] === "public" || visibility[wanted] === "private") return ok({ full_name: wanted, private: visibility[wanted] === "private" })
+      if (forThisCall === "public" || forThisCall === "private") return ok({ full_name: wanted, private: forThisCall === "private" })
       return httpError(404, "Not Found")
     }
     if (method === "POST" && pathPart === `repos/${store}/forks`) {
@@ -224,11 +235,13 @@ export function fakeGitHub({
       return args[3] === account ? { code: 0, stdout: `${TOKEN}\n`, stderr: "" } : { code: 1, stdout: "", stderr: `no oauth token found for ${args[3]}\n` }
     }
     if (args[0] !== "api") return { code: 1, stdout: "", stderr: "unknown command\n" }
-    if (options.token !== TOKEN) return httpError(401, "Bad credentials")
+    const anonymous = options.token === undefined
+    // Real GitHub asks for no auth to read a public repository's metadata; only a bad, non-empty token is rejected.
+    if (!anonymous && options.token !== TOKEN) return httpError(401, "Bad credentials")
     const method = args[args.indexOf("--method") + 1]
     const route = args.find((arg, index) => index > 0 && /^repos\//u.test(arg))
     const body = args.includes("--input") ? JSON.parse(options.input) : undefined
-    return api(method, route, body)
+    return api(method, route, body, anonymous)
   }
 
   const runner = async (args, options = {}) => {
