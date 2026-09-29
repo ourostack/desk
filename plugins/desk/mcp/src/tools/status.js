@@ -21,7 +21,22 @@ const text = (value) => (typeof value === "string" && value.trim() !== "" ? valu
  * not -- the same host/plugin-root resolution `factory-context.js`'s
  * `factoryPluginScan` already uses (`CLAUDE_PLUGIN_ROOT` set by Claude Code's
  * own launcher; `DESK_PLUGIN_ROOT` on every other host). `null` for a host
- * this check does not cover (Part 8 wires Codex/Copilot's own).
+ * this check does not cover.
+ *
+ * Deliberately claude-only, not Part 8 leftover scope: Copilot's own launch
+ * config (`.mcp.copilot.json`) carries no host-identifying environment at
+ * all, by design (Review M3-11 D1, `cache_and_launch.test.js`), so this MCP
+ * tool has no reliable way to tell a real Copilot launch apart from an
+ * unknown one -- inventing one here would be guesswork this file's other
+ * host/plugin-root resolution deliberately avoids. Copilot's own
+ * registration is reported through its own channel instead: `copilot-
+ * session-start.cjs` calls `boot-checks.cjs`'s registry with `host:
+ * "copilot"` as a literal, the same way Claude Code's `session-start.sh`
+ * does with `"claude"` -- see `hostEnforcementCheck` there. Codex has no
+ * boot-check or session-start hook wired in Desk at all, and no supported
+ * way to confirm its own hook is actually active even if it did (`docs/
+ * host-enforcement-live-proof.md`'s hook-trust gap) -- its "registered, not
+ * active" story is documentation, not a runtime check.
  */
 async function hostEnforcementStatus({ env }) {
   const claudeRoot = text(env.CLAUDE_PLUGIN_ROOT)

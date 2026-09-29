@@ -17,6 +17,10 @@ import { readFile as fsReadFile } from "node:fs/promises"
 import * as path from "node:path"
 
 const HOOK_ENTRY_FILENAME = "host-enforcement.cjs"
+const CODEX_HOOK_TRUST_REASON =
+  "Codex silently skips an untrusted PreToolUse hook unless launched with " +
+  "--dangerously-bypass-hook-trust, and no supported, automatable way exists " +
+  "to grant hook trust ahead of time -- see docs/host-enforcement-live-proof.md"
 
 async function defaultReadFile(file) {
   return fsReadFile(file, "utf8")
@@ -29,24 +33,45 @@ function registeredInClaudeHooks(hooksJson) {
     && entry.hooks.some((hook) => typeof hook?.command === "string" && hook.command.includes(HOOK_ENTRY_FILENAME)))
 }
 
+function registeredInCopilotHooks(hooksJson) {
+  const entries = hooksJson?.hooks?.preToolUse
+  if (!Array.isArray(entries)) return false
+  return entries.some((entry) => typeof entry?.bash === "string" && entry.bash.includes(HOOK_ENTRY_FILENAME))
+}
+
 /**
  * `{ host, pluginRoot, readFile? }` -> `{ applicable, registered, reason? }`.
- * `applicable` is false for any host but `claude` today -- Codex/Copilot get
- * their own registration wiring in Part 8, and this function claims nothing
- * about a host it cannot check. For `claude`, reads the installed plugin's
- * own `hooks.json` and confirms `host-enforcement.cjs` is registered under
- * `PreToolUse`; any read or parse failure is reported the same as "not
+ * `applicable` is false for any host this function does not check at all
+ * (everything but `claude`, `copilot` and `codex`).
+ *
+ * `claude` reads the installed plugin's own `hooks.json` and confirms
+ * `host-enforcement.cjs` is registered under `PreToolUse`; `copilot` reads
+ * `copilot-hooks.json` and confirms the same script is registered under
+ * `preToolUse`. Either read or parse failure is reported the same as "not
  * registered," never thrown.
+ *
+ * `codex` always reports `registered: false`, regardless of what its own
+ * config.toml contains: Codex's own hook-trust gate silently skips an
+ * unattended, non-interactive hook unless it is explicitly launched with
+ * `--dangerously-bypass-hook-trust`, and no supported, automatable way to
+ * grant that trust ahead of time was found (`docs/host-enforcement-live-
+ * proof.md`). Desk's own Codex activation still writes the `[hooks]
+ * PreToolUse` entry for forward compatibility, but this function must never
+ * claim it is actually enforcing anything today.
  */
 export async function verifyHookRegistered({ host, pluginRoot, readFile = defaultReadFile }) {
-  if (host !== "claude") return { applicable: false, registered: null }
-  const file = path.join(pluginRoot, "hooks", "hooks.json")
+  if (host === "codex") return { applicable: true, registered: false, reason: CODEX_HOOK_TRUST_REASON }
+  if (host !== "claude" && host !== "copilot") return { applicable: false, registered: null }
+  const fileName = host === "claude" ? "hooks.json" : "copilot-hooks.json"
+  const arrayName = host === "claude" ? "PreToolUse" : "preToolUse"
+  const isRegistered = host === "claude" ? registeredInClaudeHooks : registeredInCopilotHooks
+  const file = path.join(pluginRoot, "hooks", fileName)
   try {
     const hooksJson = JSON.parse(await readFile(file))
-    if (registeredInClaudeHooks(hooksJson)) return { applicable: true, registered: true }
-    return { applicable: true, registered: false, reason: `${HOOK_ENTRY_FILENAME} missing from hooks.json's PreToolUse array` }
+    if (isRegistered(hooksJson)) return { applicable: true, registered: true }
+    return { applicable: true, registered: false, reason: `${HOOK_ENTRY_FILENAME} missing from ${fileName}'s ${arrayName} array` }
   } catch (error) {
-    return { applicable: true, registered: false, reason: `hooks.json unreadable (${error.code ?? error.message})` }
+    return { applicable: true, registered: false, reason: `${fileName} unreadable (${error.code ?? error.message})` }
   }
 }
 
@@ -92,14 +117,19 @@ export async function hookRegistrationDeskProblem({ host, pluginRoot, readFile, 
   if (!result.applicable) return { registered: null, block: null }
   if (result.registered) return { registered: true, block: null }
   const { file } = await fileProblem()
+  const isCodexHookTrustGap = host === "codex"
   const block = formatDeskProblemBlock({
     mechanism: "host-enforcement",
-    symptom: "deny hook not registered",
+    symptom: isCodexHookTrustGap ? "deny hook registered but not active" : "deny hook not registered",
     broke: result.reason,
     means: "the 5 denied surfaces aren't blocked this session.",
-    fix: "not auto-repaired -- reinstall Desk to restore it.",
+    fix: isCodexHookTrustGap
+      ? "not fixable by Desk alone -- Codex has no supported, automatable way to grant hook trust today; a host limitation, not a packaging bug."
+      : "not auto-repaired -- reinstall Desk to restore it.",
     file,
-    tell: "Desk's enforcement hook isn't registered, so ask-user/plan-mode/Artifacts/etc. aren't denied right now. Reinstalling Desk should fix it.",
+    tell: isCodexHookTrustGap
+      ? "Desk's Codex PreToolUse hook is registered but Codex will not run it until hook trust is granted, which today requires an interactive approval Desk cannot automate. See docs/host-enforcement-live-proof.md."
+      : "Desk's enforcement hook isn't registered, so ask-user/plan-mode/Artifacts/etc. aren't denied right now. Reinstalling Desk should fix it.",
   })
   return { registered: false, block }
 }
