@@ -333,8 +333,20 @@ function parseRunArgs(argv) {
  * Migrate's output, and then the Announce text: verbatim for a migration that
  * changed the machine, as the template to fill in for agent work that printed
  * steps, and followed by the restart request when the migration needs one.
+ *
+ * Index tracing (spec.md §3): the same before/after staged-path snapshot
+ * `pendingMigrations` takes, around each of this run's own Detect/Safety
+ * check/Migrate blocks, against `cwd` (only when it is itself a Git
+ * repository). This is the path that matters most: an `agent_work: true`
+ * migration's Safety check and Migrate blocks (the real `02-tidy-desk` is the
+ * only one today) run only here — `pendingMigrations` stops after Detect for
+ * those — so this is where the incident behind this design actually
+ * happened. A drift found here is printed straight to `io.stdout`, tagged
+ * `<id>:detect`/`<id>:safety-check`/`<id>:migrate`; it never changes the exit
+ * code and never undoes the staging. `spawnGit` is a test-only seam, passed
+ * through unchanged.
  */
-export async function runMigrationCli({ argv, env = process.env, io, pluginRoot, cwd, spawn }) {
+export async function runMigrationCli({ argv, env = process.env, io, pluginRoot, cwd, spawn, spawnGit = spawnSync }) {
   let args
   try {
     args = parseRunArgs(argv)
@@ -350,8 +362,28 @@ export async function runMigrationCli({ argv, env = process.env, io, pluginRoot,
   const blockEnv = { ...env, DESK_PLUGIN_ROOT: pluginRoot, DESK_TOOLS_ROOT: args.toolsRoot, DESK_TOOLS_PERSON: args.toolsPerson }
   if (!args.toolsRoot) delete blockEnv.DESK_TOOLS_ROOT
   if (!args.toolsPerson) delete blockEnv.DESK_TOOLS_PERSON
+  const tracksIndex = typeof cwd === "string" && isGitRepository(cwd, spawnGit)
+  const blockTag = { Detect: "detect", "Safety check": "safety-check", Migrate: "migrate" }
+  const watchIndex = async (tag, run) => {
+    const before = tracksIndex ? snapshotStagedPaths({ root: cwd, spawnGit }) : null
+    const result = await run()
+    if (tracksIndex) {
+      const drift = diffStagedPaths(before, snapshotStagedPaths({ root: cwd, spawnGit }))
+      if (drift.length > 0) {
+        io.stdout.write(`${formatDeskProblem({
+          mechanism: "index-drift",
+          broke: `${tag}: unexpected staged path(s) appeared during this migration block: ${drift.join(", ")}`,
+          means: "a Desk migration block staged a file it should never touch",
+          fix: "not undone — staged paths left as-is for inspection",
+          file: "not filed: filing lands once the failure-contract filer exists (spec §8 PR 4)",
+          tell: `Migration block "${tag}" unexpectedly staged ${drift.length === 1 ? "a file" : "files"} (${drift.join(", ")}); left as-is so you can inspect it.`,
+        })}\n`)
+      }
+    }
+    return result
+  }
   // No time or output limit: the agent needs every line the migration prints.
-  const run = (section) => runBlock(migration.blocks[section], { env: blockEnv, cwd, timeoutMs: 2 ** 31 - 1, outputChars: Infinity, spawn })
+  const run = (section) => watchIndex(`${args.id}:${blockTag[section]}`, () => runBlock(migration.blocks[section], { env: blockEnv, cwd, timeoutMs: 2 ** 31 - 1, outputChars: Infinity, spawn }))
 
   const detect = await run("Detect")
   if (detect.unavailable) {

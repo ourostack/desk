@@ -384,6 +384,47 @@ test("the run command walks one migration the way the migrations skill describes
   assert.deepEqual({ code, ...captured.out }, { code: 1, stdout: "", stderr: "migrations.js: bash is required to run Desk's migrations\n" })
 })
 
+// ── Index tracing on `runMigrationCli` (spec.md §3) ─────────────────────────
+//
+// The real incident this Part exists for happened here: `02-tidy-desk` is
+// `agent_work: true`, and `pendingMigrations` never runs its Safety check or
+// Migrate block itself (it stops after Detect for an agent-work migration) —
+// those blocks only ever run through this function. This is the path that
+// matters most.
+
+test("runMigrationCli catches a block that stages a file and prints a Desk problem: index-drift block, without changing the exit code", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "echo changed && touch stray.txt && git add stray.txt" }])
+  gitInit(root)
+  const captured = io()
+  const code = await runMigrationCli({ argv: ["run", "01-a"], io: captured.io, pluginRoot: root, cwd: root })
+  assert.equal(code, 0)
+  assert.match(captured.out.stdout, /Desk problem: index-drift — 01-a:migrate/)
+  assert.match(captured.out.stdout, /stray\.txt/)
+  assert.match(captured.out.stdout, /changed/)
+  assert.match(captured.out.stdout, /Done\./)
+})
+
+test("runMigrationCli names every file when a block stages several, in the plural, tagged by block", async () => {
+  const root = await plugin([{ id: "01-a", check: "touch a.txt b.txt && git add a.txt b.txt" }])
+  gitInit(root)
+  const captured = io()
+  const code = await runMigrationCli({ argv: ["run", "01-a"], io: captured.io, pluginRoot: root, cwd: root })
+  assert.equal(code, 0)
+  assert.match(captured.out.stdout, /Desk problem: index-drift — 01-a:safety-check/)
+  assert.doesNotMatch(captured.out.stdout, /01-a:migrate/)
+  assert.match(captured.out.stdout, /a\.txt/)
+  assert.match(captured.out.stdout, /b\.txt/)
+  assert.match(captured.out.stdout, /unexpectedly staged files/)
+})
+
+test("runMigrationCli tracks the index only when cwd is itself a Git repository", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "touch stray.txt && git init -q . && git add stray.txt" }])
+  const captured = io()
+  const code = await runMigrationCli({ argv: ["run", "01-a"], io: captured.io, pluginRoot: root, cwd: root })
+  assert.equal(code, 0)
+  assert.doesNotMatch(captured.out.stdout, /Desk problem/)
+})
+
 test("scripts/migrations.js runs Desk's own tidy migration and prints its steps and announcement", async () => {
   const pending = await tidyDesk({ messy: true })
   const script = path.join(mcpRoot, "scripts", "migrations.js")
