@@ -235,6 +235,71 @@ test("startupMigrationLine never throws, and the boot-check hook helper passes t
   assert.equal(await startupMigrationLine({ pluginRoot: root, env: { ...process.env, EXPECTED: root }, cwd: path.dirname(root) }), "")
 })
 
+// ── Index tracing (spec.md §3) ──────────────────────────────────────────────
+
+function gitInit(root) {
+  const env = { ...process.env, GIT_AUTHOR_NAME: "F", GIT_AUTHOR_EMAIL: "f@example.invalid", GIT_COMMITTER_NAME: "F", GIT_COMMITTER_EMAIL: "f@example.invalid" }
+  execFileSync("git", ["init", "-q", "-b", "main", root], { env })
+  writeFileSync(path.join(root, "committed.md"), "base\n")
+  execFileSync("git", ["-C", root, "add", "committed.md"], { env })
+  execFileSync("git", ["-C", root, "commit", "-qm", "first"], { env })
+}
+
+test("a migration block that stages a file produces a Desk problem: index-drift block in startupMigrationLine's output", async () => {
+  const root = await plugin([{ id: "02-tidy-desk", migrate: "touch stray.txt && git add stray.txt" }])
+  gitInit(root)
+  const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.match(line, /Desk problem: index-drift — 02-tidy-desk:migrate/)
+  assert.match(line, /stray\.txt/)
+})
+
+test("a Safety check block that stages a file is named by its own tag, distinct from Migrate", async () => {
+  const root = await plugin([{ id: "01-a", check: "touch sneaky.txt && git add sneaky.txt" }])
+  gitInit(root)
+  const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.match(line, /Desk problem: index-drift — 01-a:safety-check/)
+  assert.doesNotMatch(line, /01-a:migrate/)
+})
+
+test("several files staged by one block are all named, in the plural", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "touch x.txt y.txt && git add x.txt y.txt" }])
+  gitInit(root)
+  const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.match(line, /x\.txt/)
+  assert.match(line, /y\.txt/)
+  assert.match(line, /unexpectedly staged files/)
+})
+
+test("a migration block that changes nothing in the index adds no drift block", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "echo fine" }])
+  gitInit(root)
+  const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.doesNotMatch(line, /Desk problem/)
+})
+
+test("a cwd that is not itself a Git repository is never watched for drift", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "exit 0" }])
+  const line = await startupMigrationLine({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.doesNotMatch(line, /Desk problem/)
+})
+
+test("pendingMigrations' own return shape is unchanged: a plain array of { id, state, ... } entries", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "touch stray.txt && git add stray.txt" }])
+  gitInit(root)
+  const drifts = []
+  const pending = await pendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000, onIndexDrift: (block) => drifts.push(block) })
+  assert.deepEqual(pending, [{ id: "01-a", state: "ran", report: "", announce: "Done." }])
+  assert.equal(drifts.length, 1)
+  assert.match(drifts[0], /Desk problem: index-drift — 01-a:migrate/)
+})
+
+test("onIndexDrift defaults to doing nothing, so a caller that omits it is never broken by drift", async () => {
+  const root = await plugin([{ id: "01-a", migrate: "touch stray.txt && git add stray.txt" }])
+  gitInit(root)
+  const pending = await pendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000 })
+  assert.deepEqual(pending, [{ id: "01-a", state: "ran", report: "", announce: "Done." }])
+})
+
 // ── The real tidy migration, found by the startup hook helper ─────────────
 
 async function tidyDesk({ messy }) {

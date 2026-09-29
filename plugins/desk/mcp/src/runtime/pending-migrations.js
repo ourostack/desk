@@ -36,8 +36,10 @@
 // whatever Node the host puts first on PATH.
 
 import { readdirSync, readFileSync } from "node:fs"
-import { spawn as spawnChild } from "node:child_process"
+import { spawn as spawnChild, spawnSync } from "node:child_process"
 import * as path from "node:path"
+import { diffStagedPaths, formatDeskProblem, snapshotStagedPaths } from "./index-drift.js"
+import { isGitRepository } from "../util/git-stage.js"
 
 // All Detect blocks together, plus any Safety check and Migrate the hook runs,
 // get this long. The Copilot hook has 5 s in all and the registry's boot
@@ -163,7 +165,7 @@ export function migrationCommand(pluginRoot, id, { tools = false } = {}) {
 }
 
 /**
- * pendingMigrations({ pluginRoot, env, cwd, budgetMs, blockLimitMs, spawn, now }) -> Promise<[{ id, state, ... }]>
+ * pendingMigrations({ pluginRoot, env, cwd, budgetMs, blockLimitMs, spawn, now, spawnGit, onIndexDrift }) -> Promise<[{ id, state, ... }]>
  *
  * Runs every migration's Detect at once within one budget (and each block
  * within `blockLimitMs`, when that is smaller), then handles the ones that
@@ -176,8 +178,23 @@ export function migrationCommand(pluginRoot, id, { tools = false } = {}) {
  *   "held"        Detect did not fire but printed `held: <reason>`
  * A migration whose Detect does not fire otherwise, or that bash cannot run,
  * is left out.
+ *
+ * Index tracing (spec.md §3): none of these bash blocks is meant to touch the
+ * Git index — a migration's own contract is that Detect/Safety
+ * check/Migrate change no desk content — so a `git diff --cached --name-only`
+ * snapshot taken immediately before and after each one, against `cwd` (only
+ * when it is itself a Git repository), catches a block that stages a path it
+ * never should. `onIndexDrift(block)` (a no-op by default) receives the
+ * five-field `Desk problem: index-drift — ...` block for every drift found,
+ * tagged `<migration id>:<block name>` (`detect` names the whole batch: those
+ * run concurrently, so a drift there cannot be pinned to one migration). It
+ * never undoes the staging and never fails this function; `spawnGit` is a
+ * test-only seam over `node:child_process`'s `spawnSync`.
  */
-export async function pendingMigrations({ pluginRoot, env = process.env, cwd, budgetMs = MIGRATION_BUDGET_MS, blockLimitMs = Infinity, spawn, now = () => performance.now() }) {
+export async function pendingMigrations({
+  pluginRoot, env = process.env, cwd, budgetMs = MIGRATION_BUDGET_MS, blockLimitMs = Infinity, spawn, now = () => performance.now(),
+  spawnGit = spawnSync, onIndexDrift = () => {},
+}) {
   const started = now()
   const left = () => budgetMs - (now() - started)
   const limit = () => Math.min(left(), blockLimitMs)
@@ -188,11 +205,30 @@ export async function pendingMigrations({ pluginRoot, env = process.env, cwd, bu
   delete blockEnv.DESK_TOOLS_PERSON
   const pending = []
   const migrations = readMigrations(pluginRoot)
+  const tracksIndex = typeof cwd === "string" && isGitRepository(cwd, spawnGit)
+  const watchIndex = async (tag, run) => {
+    const before = tracksIndex ? snapshotStagedPaths({ root: cwd, spawnGit }) : null
+    const result = await run()
+    if (tracksIndex) {
+      const drift = diffStagedPaths(before, snapshotStagedPaths({ root: cwd, spawnGit }))
+      if (drift.length > 0) {
+        onIndexDrift(formatDeskProblem({
+          mechanism: "index-drift",
+          broke: `${tag}: unexpected staged path(s) appeared during this migration block: ${drift.join(", ")}`,
+          means: "a Desk migration block staged a file it should never touch",
+          fix: "not undone — staged paths left as-is for inspection",
+          file: "not filed: filing lands once the failure-contract filer exists (spec §8 PR 4)",
+          tell: `Migration block "${tag}" unexpectedly staged ${drift.length === 1 ? "a file" : "files"} (${drift.join(", ")}); left as-is so you can inspect it.`,
+        }))
+      }
+    }
+    return result
+  }
   // Detect blocks are pure predicates, so they run at once: session start
   // waits for the slowest, not their sum.
-  const detects = await Promise.all(migrations.map((migration) => (left() < 1
+  const detects = await watchIndex("detect", () => Promise.all(migrations.map((migration) => (left() < 1
     ? { timedOut: true }
-    : runBlock(migration.blocks.Detect, { env: blockEnv, cwd, timeoutMs: limit(), spawn }))))
+    : runBlock(migration.blocks.Detect, { env: blockEnv, cwd, timeoutMs: limit(), spawn })))))
   for (const [index, migration] of migrations.entries()) {
     const { id, blocks } = migration
     const detect = detects[index]
@@ -218,12 +254,12 @@ export async function pendingMigrations({ pluginRoot, env = process.env, cwd, bu
       pending.push({ id, state: "run", reason: `its safety is ${migration.safety || "not set"}, so it does not run on its own` })
       continue
     }
-    const safety = left() < 1 ? { timedOut: true } : await runBlock(blocks["Safety check"], { env: blockEnv, cwd, timeoutMs: limit(), spawn })
+    const safety = left() < 1 ? { timedOut: true } : await watchIndex(`${id}:safety-check`, () => runBlock(blocks["Safety check"], { env: blockEnv, cwd, timeoutMs: limit(), spawn }))
     if (safety.timedOut || safety.status !== 0) {
       pending.push({ id, state: "run", reason: safety.timedOut ? "its Safety check did not finish in time" : `its Safety check stopped it: ${oneLine(safety.stdout || safety.stderr).slice(0, OUTPUT_MAX_CHARS) || "no reason given"}` })
       continue
     }
-    const migrate = left() < 1 ? { timedOut: true } : await runBlock(blocks.Migrate, { env: blockEnv, cwd, timeoutMs: limit(), spawn })
+    const migrate = left() < 1 ? { timedOut: true } : await watchIndex(`${id}:migrate`, () => runBlock(blocks.Migrate, { env: blockEnv, cwd, timeoutMs: limit(), spawn }))
     if (migrate.timedOut || migrate.status !== 0) {
       pending.push({ id, state: "run", reason: migrate.timedOut ? "its Migrate did not finish in time" : "its Migrate failed" })
       continue
@@ -258,12 +294,18 @@ export function migrationLine(pending, pluginRoot) {
   return parts.length ? `Desk migrations: ${parts.join(" ")}` : ""
 }
 
-/** The startup line for this session, or "". Never rejects. */
-export async function startupMigrationLine({ pluginRoot, env = process.env, cwd = process.cwd(), budgetMs, spawn }) {
+/**
+ * The startup line for this session, or "". Never rejects. Any index-drift
+ * blocks `pendingMigrations` finds (spec.md §3) are appended after it, each on
+ * its own line; `spawnGit` is a test-only seam, passed through unchanged.
+ */
+export async function startupMigrationLine({ pluginRoot, env = process.env, cwd = process.cwd(), budgetMs, spawn, spawnGit }) {
+  const drifts = []
   try {
-    return migrationLine(await pendingMigrations({ pluginRoot, env, cwd, budgetMs, spawn }), pluginRoot)
+    const pending = await pendingMigrations({ pluginRoot, env, cwd, budgetMs, spawn, spawnGit, onIndexDrift: (block) => drifts.push(block) })
+    return [migrationLine(pending, pluginRoot), ...drifts].filter((part) => part !== "").join("\n")
   } catch {
-    return ""
+    return drifts.join("\n")
   }
 }
 
