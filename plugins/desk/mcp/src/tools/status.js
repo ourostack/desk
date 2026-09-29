@@ -26,7 +26,7 @@ const text = (value) => (typeof value === "string" && value.trim() !== "" ? valu
 async function hostEnforcementStatus({ env }) {
   const claudeRoot = text(env.CLAUDE_PLUGIN_ROOT)
   const pluginRoot = path.resolve(text(env.DESK_PLUGIN_ROOT) ?? claudeRoot ?? OWN_PLUGIN_ROOT)
-  const host = claudeRoot === null ? "copilot" : "claude"
+  const host = claudeRoot === null ? "unknown" : "claude"
   const { registered, block } = await hookRegistrationDeskProblem({ host, pluginRoot })
   if (registered === null) return null
   return registered ? { registered: true } : { registered: false, desk_problem: block }

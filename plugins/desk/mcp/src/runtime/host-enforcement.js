@@ -24,58 +24,70 @@
 /**
  * One row per denied surface (spec §5's table). `reason` names the Desk
  * equivalent, following the same "what's blocked, then what to do instead"
- * shape `git-guard-policy.js`'s `MESSAGES` already establishes. `tools.claude`
- * lists the exact Claude Code tool names this surface denies; a surface with
- * no Claude Code tool of its own (host memory, handled by the
+ * shape `git-guard-policy.js`'s `MESSAGES` already establishes. `tools` is
+ * keyed by host id (`claude`, `copilot`, `codex`); each host's list is
+ * spelled in that host's own tool-naming convention, including its own MCP
+ * form (`claude`/`codex` name an MCP tool `mcp__<server>__<tool>`; Copilot
+ * names one `<server>-<tool>`) -- a caller never translates between hosts.
+ * A whole MCP server's tools deny together without enumerating each one: an
+ * entry ending in `*` matches any tool name sharing that prefix. Claude Code
+ * and Codex's Part 8 lists are left empty here for Part 8 to fill in; a
+ * surface with no Claude Code tool of its own (host memory, handled by the
  * `autoMemoryEnabled: false` settings merge instead) still gets a row here so
- * its Desk-equivalent text exists for Part 8's other hosts to reuse.
+ * its Desk-equivalent text exists for every host to reuse.
  */
 export const DENIED_SURFACES = {
   "ask-user": {
     reason: "Desk denies the ask-user tool: converse in normal chat, one decision group at a time -- see interaction-style.",
-    tools: { claude: ["AskUserQuestion"] },
+    tools: { claude: ["AskUserQuestion"], copilot: [], codex: [] },
   },
   "host-memory": {
     reason: "Desk denies host memory: durable context lives in the desk itself -- friction-management, task cards, _meta/.",
-    tools: { claude: [] },
+    tools: { claude: [], copilot: [], codex: [] },
   },
   "plan-mode": {
     reason: "Desk denies plan mode: use superpowers:writing-plans or superpowers:brainstorming, and the desk's own planning docs.",
-    tools: { claude: ["EnterPlanMode", "ExitPlanMode"] },
+    tools: { claude: ["EnterPlanMode", "ExitPlanMode"], copilot: [], codex: [] },
   },
   "host-task": {
     reason: "Desk denies host task tools that persist across sessions: use task_create/task_update, the desk's own task cards.",
-    tools: { claude: ["TaskCreate"] },
+    // TaskStop and TaskOutput are deliberately not here: they manage a
+    // background shell's or subagent's already-running process, which an
+    // agent needs regardless of where its durable task state lives.
+    tools: { claude: ["TaskCreate", "TaskGet", "TaskList", "TaskUpdate"], copilot: [], codex: [] },
   },
   artifact: {
     reason: "Desk denies Artifacts and Claude Docs: use desk_save, or the task's own doc files, unless specifically asked for.",
-    tools: { claude: ["Artifact", "ArtifactComments", "ArtifactData", "ArtifactCheck"] },
+    tools: { claude: ["Artifact", "ArtifactComments", "ArtifactData", "ArtifactCheck", "mcp__claude_ai_Claude_Docs__*"], copilot: [], codex: [] },
   },
 }
 
-// Claude Code names every MCP tool `mcp__<server>__<tool>`; the Claude Docs
-// server's tools are all Artifact-shaped durable-doc surfaces, so the whole
-// family denies under the `artifact` surface without enumerating each tool.
-const CLAUDE_DOCS_MCP_PREFIX = "mcp__claude_ai_Claude_Docs__"
-
-/** The denied surface id `toolName` belongs to for Claude Code, or `null` when it denies nothing. */
-function surfaceForToolName(toolName) {
+/** The denied surface id `toolName` belongs to for `host`, or `null` when it denies nothing (including an unrecognized host, which this function never denies anything for). */
+export function surfaceForToolName(host, toolName, surfaces = DENIED_SURFACES) {
+  if (typeof host !== "string" || host === "") return null
   if (typeof toolName !== "string" || toolName === "") return null
-  if (toolName.startsWith(CLAUDE_DOCS_MCP_PREFIX)) return "artifact"
-  for (const [surfaceId, definition] of Object.entries(DENIED_SURFACES)) {
-    if (definition.tools.claude.includes(toolName)) return surfaceId
+  for (const [surfaceId, definition] of Object.entries(surfaces)) {
+    const toolsForHost = definition.tools?.[host]
+    if (!Array.isArray(toolsForHost)) continue
+    for (const entry of toolsForHost) {
+      const isWildcard = entry.endsWith("*")
+      if (isWildcard ? toolName.startsWith(entry.slice(0, -1)) : toolName === entry) return surfaceId
+    }
   }
   return null
 }
 
 /**
- * `{ toolName, allowedThisSession }` -> `{ permissionDecision: "deny", permissionDecisionReason } | {}`.
- * `allowedThisSession` is a `Set` of surface ids named by the operator this
- * session (see `naming-allowlist.js`); a surface in it is never denied, no
- * matter how many of its tools are called.
+ * `{ host, toolName, allowedThisSession }` -> `{ permissionDecision: "deny", permissionDecisionReason } | {}`.
+ * `host` defaults to `"claude"`, the only host this PR wires in, so today's
+ * one caller can omit it; Part 8's Copilot/Codex wrappers pass their own host
+ * id explicitly. An unrecognized `host` denies nothing, the same as an
+ * unrecognized `toolName`. `allowedThisSession` is a `Set` of surface ids
+ * named by the operator this session (see `naming-allowlist.js`); a surface
+ * in it is never denied, no matter how many of its tools are called.
  */
-export function evaluateDeniedTool({ toolName, allowedThisSession }) {
-  const surfaceId = surfaceForToolName(toolName)
+export function evaluateDeniedTool({ host = "claude", toolName, allowedThisSession }) {
+  const surfaceId = surfaceForToolName(host, toolName)
   if (surfaceId === null) return {}
   if (allowedThisSession?.has(surfaceId)) return {}
   return {

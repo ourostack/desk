@@ -44,7 +44,7 @@
         ]
       },
       {
-        "matcher": "AskUserQuestion|EnterPlanMode|ExitPlanMode|TaskCreate|Artifact|ArtifactComments|ArtifactData|ArtifactCheck|mcp__claude_ai_Claude_Docs__.*",
+        "matcher": "AskUserQuestion|EnterPlanMode|ExitPlanMode|TaskCreate|TaskGet|TaskList|TaskUpdate|Artifact|ArtifactComments|ArtifactData|ArtifactCheck|mcp__claude_ai_Claude_Docs__.*",
         "hooks": [
           {
             "type": "command",

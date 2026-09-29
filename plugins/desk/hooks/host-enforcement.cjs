@@ -27,7 +27,7 @@ process.stdin.on("end", async () => {
     const toolName = typeof payload?.tool_name === "string" ? payload.tool_name : payload?.toolName;
     const sessionId = payload?.session_id;
     const allowedThisSession = typeof sessionId === "string" && sessionId !== "" ? loadSessionAllowlist({ sessionId }) : new Set();
-    const decision = evaluateDeniedTool({ toolName, allowedThisSession });
+    const decision = evaluateDeniedTool({ host: process.argv[2], toolName, allowedThisSession });
     const output = decision.permissionDecision === "deny"
       ? { hookSpecificOutput: { hookEventName: "PreToolUse", ...decision } }
       : {};

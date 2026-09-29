@@ -436,10 +436,13 @@ test("Claude registers the Desk-only enforcement hooks: a PreToolUse deny and a 
 
   const enforcement = hooks.hooks.PreToolUse.find((entry) => entry.hooks.some((hook) => hook.command.includes("host-enforcement.cjs")))
   assert.ok(enforcement, "hooks.json's PreToolUse array must register host-enforcement.cjs")
-  for (const surface of ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "Artifact", "ArtifactComments", "ArtifactData", "ArtifactCheck"]) {
+  for (const surface of ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "Artifact", "ArtifactComments", "ArtifactData", "ArtifactCheck"]) {
     assert.ok(new RegExp(`^(?:${enforcement.matcher})$`, "u").test(surface), `matcher must cover ${surface}`)
   }
   assert.ok(new RegExp(`^(?:${enforcement.matcher})$`, "u").test("mcp__claude_ai_Claude_Docs__create"), "matcher must cover Claude Docs MCP tools")
+  for (const notDenied of ["TaskStop", "TaskOutput", "TodoWrite", "Agent", "SendMessage"]) {
+    assert.ok(!new RegExp(`^(?:${enforcement.matcher})$`, "u").test(notDenied), `matcher must not cover ${notDenied}`)
+  }
   assert.equal(
     enforcement.hooks[0].command,
     "node \"${CLAUDE_PLUGIN_ROOT}/hooks/host-enforcement.cjs\" claude",

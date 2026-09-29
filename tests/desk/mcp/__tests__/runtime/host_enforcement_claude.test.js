@@ -57,3 +57,14 @@ test("a full mcp__claude_ai_Claude_Docs__* tool name is denied naming desk_save"
   assert.equal(output.hookSpecificOutput.permissionDecision, "deny")
   assert.match(output.hookSpecificOutput.permissionDecisionReason, /desk_save/)
 })
+
+test("TaskUpdate is denied through the real process, with the host threaded from argv[2]; TaskStop and TaskOutput are allowed", () => {
+  const denied = runHookOverStdio({ hook_event_name: "PreToolUse", tool_name: "TaskUpdate", session_id: "s-4" })
+  assert.equal(denied.output.hookSpecificOutput.permissionDecision, "deny")
+  assert.match(denied.output.hookSpecificOutput.permissionDecisionReason, /task_create/)
+
+  for (const toolName of ["TaskStop", "TaskOutput"]) {
+    const { output } = runHookOverStdio({ hook_event_name: "PreToolUse", tool_name: toolName, session_id: "s-4" })
+    assert.deepEqual(output, {})
+  }
+})
