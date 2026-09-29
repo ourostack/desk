@@ -292,6 +292,28 @@ test("migrationLine falls back to 'not filed: filer_unavailable' when the launch
   assert.match(line, /  file: not filed: filer_unavailable\n/u)
 })
 
+test("migrationLine's filer argv carries the fixed 'reason unavailable' placeholder, never the raw reason, when argvSafeReason itself fails to load", async () => {
+  // Fix round, spec.md §1 Part 5: a redaction helper that cannot load must
+  // never fall back to passing its unredacted input straight through --
+  // that would defeat the whole point of narrowing what reaches a spawned
+  // process's own argv (`ps`-visible machine-wide). This drives migrationLine
+  // down the same "registry failed internally" path as the tests above, but
+  // with a `loadArgvSafeReason` that rejects, and checks the launched
+  // command's own `--reason` argument rather than the human-facing block.
+  const launched = []
+  const line = await boot.migrationLine({
+    host: "claude", env: { HOME: await mkTempRoot("desk-pending-migrations-filer-") }, pluginRoot: null,
+    launchRepair: async (command, env) => { launched.push({ command, env }) },
+    loadArgvSafeReason: async () => { throw new Error("argv-safe-reason module missing") },
+  })
+  assert.match(line, /^Desk problem: pending-migrations — the migration registry failed internally\n/u)
+  assert.match(line, /  file: filing in background\n/u)
+  assert.equal(launched.length, 1)
+  const reasonIndex = launched[0].command.indexOf("--reason")
+  assert.ok(reasonIndex >= 0)
+  assert.equal(launched[0].command[reasonIndex + 1], "reason unavailable (redactor not loaded)")
+})
+
 // ── Index tracing (spec.md §3) ──────────────────────────────────────────────
 
 function gitInit(root) {

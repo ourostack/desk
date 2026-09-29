@@ -425,17 +425,18 @@ const validRepair = (repair) => Array.isArray(repair?.command) && repair.command
  * Runs the registry (see the header). Options: `host`, `env`, `sessionFolder`,
  * plus for tests `checks`, `totalBudgetMs`, `checkBudgets` ({ id: ms }),
  * `launchRepair(command, env)`, `record(env, skipped)`, `launch` (the
- * workspace-tidy repair launcher), `loadRedaction` and `spawnGit` (the index-
- * tracing Git seam; real callers never pass it). Resolves `""` or one
- * `Desk boot:` line; never rejects. The line names worktree paths, branches
- * and error messages, so each path segment or word that carries a secret's
- * value is redacted (mcp/src/util/redact.js); if the redaction cannot load,
- * the line is withheld rather than shown unredacted.
+ * workspace-tidy repair launcher), `loadRedaction`, `loadArgvSafeReason` and
+ * `spawnGit` (the index-tracing Git seam; real callers never pass it).
+ * Resolves `""` or one `Desk boot:` line; never rejects. The line names
+ * worktree paths, branches and error messages, so each path segment or word
+ * that carries a secret's value is redacted (mcp/src/util/redact.js); if the
+ * redaction cannot load, the line is withheld rather than shown unredacted.
  */
 async function runBootChecks(options = {}) {
   const {
     checks = module.exports.checks, totalBudgetMs = TOTAL_BUDGET_MS, checkBudgets = {}, launchRepair: startRepair = launchCommand, record = recordSkipped,
     loadRedaction = () => runtime("util/redact.js"),
+    loadArgvSafeReason = () => runtime("runtime/argv-safe-reason.js"),
     spawnGit = spawnSync,
   } = options;
   const env = options.env ?? process.env;
@@ -457,9 +458,13 @@ async function runBootChecks(options = {}) {
   // shows a process's argv to every account on the machine, not just this
   // session. `shouldLaunchFiler` throttles the *spawn* only, never the block
   // this function still shows the operator every time (fix round, spec.md
-  // §1 Part 5). Both fail toward the old, always-filing behavior if they
-  // cannot be loaded at all.
-  const argvSafeReason = await runtime("runtime/argv-safe-reason.js").then((mod) => mod.argvSafeReason, () => (text) => String(text ?? "unknown"));
+  // §1 Part 5). `shouldLaunchFiler` fails toward the old, always-filing
+  // behavior if it cannot be loaded, since that only affects how often
+  // filing happens; `argvSafeReason` fails toward a fixed, unrevealing
+  // string instead, since its own job is exactly to keep raw text out of
+  // argv -- falling back to the raw text it could not redact would defeat
+  // the fix this function exists for.
+  const argvSafeReason = await loadArgvSafeReason().then((mod) => mod.argvSafeReason, () => () => "reason unavailable (redactor not loaded)");
   const shouldLaunchFiler = await runtime("runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
   // Queued the same way host-enforcement's own repair is: a fileProblem
   // closure that only builds the repair command (compatibleCommand,
@@ -573,10 +578,13 @@ async function runBootChecks(options = {}) {
  * launcher that fails leaves the block honestly reporting `file: not filed:
  * filer_unavailable` rather than throwing.
  */
-async function migrationLine({ host, env = process.env, sessionFolder, budgetMs, pluginRoot = path.resolve(__dirname, ".."), launchRepair: startRepair = launchCommand } = {}) {
+async function migrationLine({ host, env = process.env, sessionFolder, budgetMs, pluginRoot = path.resolve(__dirname, ".."), launchRepair: startRepair = launchCommand, loadArgvSafeReason = () => runtime("runtime/argv-safe-reason.js") } = {}) {
   try {
     const { startupMigrationLine } = await runtime("runtime/pending-migrations.js");
-    const argvSafeReason = await runtime("runtime/argv-safe-reason.js").then((mod) => mod.argvSafeReason, () => (text) => String(text ?? "unknown"));
+    // See runBootChecks's own comment above: argvSafeReason fails toward a
+    // fixed, unrevealing string, never toward the raw reason it could not
+    // redact.
+    const argvSafeReason = await loadArgvSafeReason().then((mod) => mod.argvSafeReason, () => () => "reason unavailable (redactor not loaded)");
     const shouldLaunchFiler = await runtime("runtime/filer-throttle.js").then((mod) => mod.shouldLaunchFiler, () => () => true);
     const cwd = host === "copilot" ? sessionFolder || process.cwd() : env.CLAUDE_PROJECT_DIR || process.cwd();
     return await startupMigrationLine({

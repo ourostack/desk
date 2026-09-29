@@ -100,6 +100,29 @@ test("a repair that cannot start is swallowed, exactly like every other check's 
   assert.match(line, /file: filing in background/)
 })
 
+test("a check's filer argv carries the fixed 'reason unavailable' placeholder, never the raw reason, when argvSafeReason itself fails to load", async () => {
+  // Fix round, spec.md §1 Part 5: a redaction helper that cannot load must
+  // never fall back to passing its unredacted input straight through -- a
+  // spawned process's argv (`ps`-visible machine-wide) is a materially wider
+  // audience than the block this function still shows the operator. The
+  // check below throws a path-shaped, sensitive-looking reason; the block
+  // (the operator-facing `broke:` field) still shows it in full, but the
+  // launched repair command's own `--reason` argument must not.
+  const launched = []
+  const line = await runBootChecks({
+    ...quiet,
+    env: { HOME: "/nonexistent-boot-error-skip-home" },
+    checks: [{ id: "probe", budgetMs: 50, run: async () => { throw new Error("/Users/someone/.ssh/id_rsa is unreadable") } }],
+    launchRepair: async (command, env) => { launched.push({ command, env }) },
+    loadArgvSafeReason: async () => { throw new Error("argv-safe-reason module missing") },
+  })
+  assert.match(line, /broke: \/Users\/someone\/\.ssh\/id_rsa is unreadable/)
+  assert.equal(launched.length, 1)
+  const reasonIndex = launched[0].command.indexOf("--reason")
+  assert.ok(reasonIndex >= 0)
+  assert.equal(launched[0].command[reasonIndex + 1], "reason unavailable (redactor not loaded)")
+})
+
 test("the failing check's own skip is still recorded in the protected status.json, exactly as before", async () => {
   const recorded = []
   await runBootChecks({
