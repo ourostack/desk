@@ -112,7 +112,7 @@ Claude Code keys its plugin cache on the version string, so a change reaches ins
 
 ## Other hosts
 
-- **Codex:** Codex can still run Desk, but it is not a supported target ([RFC section 8](plugins/desk/docs/agentic-engineering-v2-rfc.md#8-limits)). To try it anyway, see `plugins/desk/README.md` ("Under Codex") and `desk:codex-onboarding`; the activation adapter binds the desk and owns the instruction block.
-- **Copilot CLI and Ouroboros:** see `plugins/desk/README.md` for the admitted compositions.
+- **Codex:** Codex can still run Desk, but it is not a supported target ([RFC section 8](plugins/desk/docs/agentic-engineering-v2-rfc.md#8-limits)). To try it anyway, see `plugins/desk/README.md` ("Under Codex") and `desk:codex-onboarding`; the activation adapter binds the desk and owns the instruction block. Codex's own `features.memories` (default `false`) is pinned `false` by that same activation, so no separate step is needed here.
+- **Copilot CLI and Ouroboros:** see `plugins/desk/README.md` for the admitted compositions. Set Copilot's own host defaults, the same pair Claude Code's step 3 sets: `memory: false` (keeps durable context out of Copilot's own cross-session memory, both default `true`) and `includeCoAuthoredBy: false` (removes the AI attribution Copilot adds to commits). `copilot help config` lists both keys; use its own config command (or the equivalent key in Copilot's own settings file, wherever your installed version keeps it) to set both to `false`.
 
 The host defaults and the no-attribution rule above apply on every host; set them wherever that host keeps its user configuration.

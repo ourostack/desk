@@ -23,6 +23,12 @@
         "bash": "node \"${PLUGIN_ROOT}/hooks/protected-checkout.cjs\" copilot",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/protected-checkout.cjs\" copilot",
         "timeoutSec": 10
+      },
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot",
+        "timeoutSec": 10
       }
     ],
     "sessionStart": [

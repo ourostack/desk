@@ -49,6 +49,33 @@ function countOccurrences(value, phrase) {
   return value.split(phrase).length - 1
 }
 
+// No TOML parser dependency exists in this repo (review round, Part 8 fix
+// round): these two helpers give the new host-enforcement TOML assertions a
+// real structural check -- which table a key actually lands under, and that
+// no `[table]` header is ever declared twice -- without adding one. Array-
+// of-tables headers (`[[...]]`) are expected to repeat by design, so they are
+// excluded from the duplicate check.
+function tableBody(toml, headerLine) {
+  const lines = toml.split("\n")
+  const start = lines.findIndex((line) => line.trim() === headerLine)
+  assert.ok(start !== -1, `header not found in generated config: ${headerLine}`)
+  const rest = lines.slice(start + 1)
+  const end = rest.findIndex((line) => line.trim().startsWith("["))
+  return (end === -1 ? rest : rest.slice(0, end)).join("\n")
+}
+
+function assertNoDuplicateTableHeaders(toml) {
+  const seen = new Set()
+  for (const rawLine of toml.split("\n")) {
+    const line = rawLine.trim()
+    if (line.startsWith("[[")) continue
+    const match = line.match(/^\[([^[\]]+)\]$/u)
+    if (!match) continue
+    assert.ok(!seen.has(match[1]), `duplicate table header: [${match[1]}]`)
+    seen.add(match[1])
+  }
+}
+
 function deskFoundationBody() {
   return readFileSync(
     path.join(repoRoot, "plugins", "desk", "skills", "using-desk", "SKILL.md"),
@@ -283,6 +310,166 @@ test("global personal activation materializes worker and Desk as the default", a
   assert.match(result.generatedInstructions, /desk worker by default/)
   assert.match(result.generatedInstructions, /Run the `desk:session-start` skill/)
   assertCodexActivationLine(result.generatedInstructions)
+})
+
+test("Codex activation pins features.memories = false and registers host-enforcement.cjs under an array-of-tables [[hooks.PreToolUse]] entry, in every mode including manual-only", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+
+  for (const mode of ["global-personal", "project-local", "manual-only"]) {
+    const { generatedConfig } = materializeCodexActivation(activationInput(mode))
+    assert.match(generatedConfig, /^\[features\]$/mu, `${mode}: [features] table`)
+    assert.match(tableBody(generatedConfig, "[features]"), /^memories = false$/mu, `${mode}: memories pin lands under [features]`)
+    assert.match(generatedConfig, /^\[\[hooks\.PreToolUse\]\]$/mu, `${mode}: [[hooks.PreToolUse]] array-of-tables header`)
+    assert.match(tableBody(generatedConfig, "[[hooks.PreToolUse]]"), /^matcher = "\*"$/mu, `${mode}: broad matcher`)
+    assert.match(generatedConfig, /^\[\[hooks\.PreToolUse\.hooks\]\]$/mu, `${mode}: [[hooks.PreToolUse.hooks]] array-of-tables header`)
+    const hookBody = tableBody(generatedConfig, "[[hooks.PreToolUse.hooks]]")
+    assert.match(hookBody, /^type = "command"$/mu, `${mode}: command hook type`)
+    assert.match(
+      hookBody,
+      /^command = "node \\"plugins\/desk\/hooks\/host-enforcement\.cjs\\" codex"$/mu,
+      `${mode}: host-enforcement.cjs wired for codex`,
+    )
+    assertNoDuplicateTableHeaders(generatedConfig)
+  }
+
+  assert.equal(materializeCodexActivation(activationInput("global-personal")).generatedConfig, loadFixture("global-personal", "generated-config.toml"))
+  assert.equal(materializeCodexActivation(activationInput("project-local")).generatedConfig, loadFixture("project-local", "generated-config.toml"))
+  assert.equal(materializeCodexActivation(activationInput("manual-only")).generatedConfig, loadFixture("manual-only", "generated-config.toml"))
+})
+
+test("Codex activation writes features/hooks as real table headers, never a bare dotted key that would inherit whatever table trails the operator's config", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const trailingTableConfig = `${existingConfig}
+[shell_environment_policy]
+inherit = "all"
+`
+  const result = materializeCodexActivation(activationInput("global-personal", {
+    existingConfig: trailingTableConfig,
+  }))
+
+  // The bug this guards against: a leading bare `features.memories = false`
+  // binds to whatever table is still open at that point in the file, not to
+  // this file's start -- so it silently became
+  // `shell_environment_policy.features.memories` when the operator's config
+  // happened to end in a trailing table.
+  assert.doesNotMatch(result.generatedConfig, /shell_environment_policy\.features/u)
+  assert.match(tableBody(result.generatedConfig, "[shell_environment_policy]"), /^inherit = "all"$/mu)
+  assert.match(result.generatedConfig, /^\[features\]$/mu)
+  assert.match(tableBody(result.generatedConfig, "[features]"), /^memories = false$/mu)
+  assertNoDuplicateTableHeaders(result.generatedConfig)
+})
+
+test("Codex activation extends an operator's own [hooks] table with an array-of-tables PreToolUse entry instead of redeclaring [hooks]", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const ownHooksConfig = `${existingConfig}
+[hooks]
+SessionStart = [{ matcher = "*", hooks = [{ type = "command", command = "echo hi" }] }]
+`
+  const result = materializeCodexActivation(activationInput("global-personal", {
+    existingConfig: ownHooksConfig,
+  }))
+
+  assert.match(result.generatedConfig, /^SessionStart = \[\{ matcher = "\*", hooks = \[\{ type = "command", command = "echo hi" \}\] \}\]$/mu)
+  assert.match(result.generatedConfig, /^\[\[hooks\.PreToolUse\]\]$/mu)
+  assert.match(result.generatedConfig, /^\[\[hooks\.PreToolUse\.hooks\]\]$/mu)
+  assertNoDuplicateTableHeaders(result.generatedConfig)
+})
+
+test("Codex activation leaves an operator's own [features] table alone rather than adding a second, conflicting one", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const ownFeaturesConfig = `${existingConfig}
+[features]
+web_search = true
+`
+  const result = materializeCodexActivation(activationInput("global-personal", {
+    existingConfig: ownFeaturesConfig,
+  }))
+
+  assert.match(tableBody(result.generatedConfig, "[features]"), /^web_search = true$/mu)
+  assert.doesNotMatch(result.generatedConfig, /memories = false/u)
+  // The hooks decision is independent of the features decision.
+  assert.match(result.generatedConfig, /^\[\[hooks\.PreToolUse\]\]$/mu)
+  assertNoDuplicateTableHeaders(result.generatedConfig)
+})
+
+test("Codex activation skips its own PreToolUse hook entry, without failing activation, when the operator already defines hooks.PreToolUse as a static array", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const inlinePreToolUseConfig = `${existingConfig}
+[hooks]
+PreToolUse = [{ matcher = "Bash", hooks = [{ type = "command", command = "echo custom" }] }]
+`
+  let result
+  assert.doesNotThrow(() => {
+    result = materializeCodexActivation(activationInput("global-personal", {
+      existingConfig: inlinePreToolUseConfig,
+    }))
+  })
+
+  assert.match(result.generatedConfig, /^PreToolUse = \[\{ matcher = "Bash", hooks = \[\{ type = "command", command = "echo custom" \}\] \}\]$/mu)
+  assert.doesNotMatch(result.generatedConfig, /\[\[hooks\.PreToolUse/u)
+  assert.doesNotMatch(result.generatedConfig, /host-enforcement\.cjs/u)
+  // The features decision is independent of the hooks decision.
+  assert.match(result.generatedConfig, /^\[features\]$/mu)
+  assertNoDuplicateTableHeaders(result.generatedConfig)
+})
+
+test("Codex activation treats a root-level features.* dotted key the operator wrote before any table header as the features table already being used", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const rootFeaturesDottedKeyConfig = `${existingConfig}
+features.web_search = true
+`
+  const result = materializeCodexActivation(activationInput("global-personal", {
+    existingConfig: rootFeaturesDottedKeyConfig,
+  }))
+
+  assert.match(result.generatedConfig, /^features\.web_search = true$/mu)
+  assert.doesNotMatch(result.generatedConfig, /memories = false/u)
+  // The hooks decision is independent of the features decision.
+  assert.match(result.generatedConfig, /^\[\[hooks\.PreToolUse\]\]$/mu)
+  assertNoDuplicateTableHeaders(result.generatedConfig)
+})
+
+test("Codex activation treats an operator's own [hooks.PreToolUse] table header as hooks.PreToolUse already being used, and skips its own entry", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const ownPreToolUseTableConfig = `${existingConfig}
+[hooks.PreToolUse]
+matcher = "custom"
+`
+  const result = materializeCodexActivation(activationInput("global-personal", {
+    existingConfig: ownPreToolUseTableConfig,
+  }))
+
+  assert.match(result.generatedConfig, /^\[hooks\.PreToolUse\]$/mu)
+  assert.match(tableBody(result.generatedConfig, "[hooks.PreToolUse]"), /^matcher = "custom"$/mu)
+  assert.doesNotMatch(result.generatedConfig, /host-enforcement\.cjs/u)
+  assert.doesNotMatch(result.generatedConfig, /\[\[hooks\.PreToolUse/u)
+  // The features decision is independent of the hooks decision.
+  assert.match(result.generatedConfig, /^\[features\]$/mu)
+  assertNoDuplicateTableHeaders(result.generatedConfig)
+})
+
+test("Codex activation's features/hooks additions stay idempotent across repeated applies", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const first = materializeCodexActivation(activationInput("global-personal"))
+  const second = materializeCodexActivation(activationInput("global-personal", {
+    existingConfig: first.generatedConfig,
+  }))
+
+  assert.equal(second.generatedConfig, first.generatedConfig)
+  assert.equal((second.generatedConfig.match(/^\[features\]$/gmu) ?? []).length, 1)
+  assert.equal((second.generatedConfig.match(/^\[\[hooks\.PreToolUse\]\]$/gmu) ?? []).length, 1)
+  assert.equal((second.generatedConfig.match(/^\[\[hooks\.PreToolUse\.hooks\]\]$/gmu) ?? []).length, 1)
+  assertNoDuplicateTableHeaders(second.generatedConfig)
+})
+
+test("Codex activation escapes the host-enforcement.cjs hook command for host paths, the same as the direct MCP args", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const result = materializeCodexActivation(activationInput("global-personal", {
+    pluginRoot: String.raw`C:\Users\Ari "Desk"\plugins\desk`,
+  }))
+  // The escaped plugin root must appear once for the MCP args and once for the hook command, both through the same tomlString escaping.
+  assert.equal(countOccurrences(result.generatedConfig, String.raw`C:\\Users\\Ari \"Desk\"\\plugins\\desk`), 2)
+  assert.ok(result.generatedConfig.includes(String.raw`hooks/host-enforcement.cjs\" codex`))
 })
 
 test("Codex activation injects the full Desk foundation once in automatic modes", async () => {

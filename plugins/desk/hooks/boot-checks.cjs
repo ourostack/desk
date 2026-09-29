@@ -47,10 +47,11 @@
 //      (mcp/src/runtime/workspace-tidy.js). It launches that repair itself so
 //      its line can say whether the launch happened, and keeps a soft deadline
 //      inside its budget so an unfinished inspection still reports "deferred".
-//   6. host-enforcement: whether Claude Code's deny hook (spec §5) is
-//      actually registered in this plugin's own hooks.json, reported as a
-//      Desk problem: block when it is not (mcp/src/runtime/
-//      host-enforcement-registration.js). A no-op on every host but claude.
+//   6. host-enforcement: whether Claude Code's or Copilot's own deny hook
+//      (spec §5) is actually registered in this plugin's own hooks.json or
+//      copilot-hooks.json, reported as a Desk problem: block when it is not
+//      (mcp/src/runtime/host-enforcement-registration.js). A no-op on every
+//      other host -- Codex has no boot-check registry wired in Desk at all.
 //
 // `startFactory` starts factory-start.cjs (sweep, then flush and refresh andon
 // for every consented store) detached; the hooks call it after their output
@@ -365,15 +366,17 @@ const workspaceTidyCheck = { id: "workspace-tidy", budgetMs: 260, run: runWorksp
 
 // Desk-only enforcement (spec §5) is only as good as its own registration:
 // this check confirms host-enforcement.cjs is actually wired into hooks.json
-// for the current host, and reports a missing registration as a
-// `Desk problem:` block rather than letting the gap stay silent. Copilot and
-// Codex are not checked here (Part 8 wires their own registration); this
-// check is a no-op for any host but claude.
+// (Claude Code) or copilot-hooks.json (Copilot), and reports a missing
+// registration as a `Desk problem:` block rather than letting the gap stay
+// silent. A no-op for every other host: Codex has no boot-check or
+// session-start hook wired in Desk at all today, so `verifyHookRegistered`
+// reports its own "registered but not active" story directly through
+// `desk_status` instead (Part 8, docs/host-enforcement-live-proof.md).
 const hostEnforcementCheck = {
   id: "host-enforcement",
   budgetMs: 20,
   async run(ctx) {
-    if (ctx.host !== "claude") return {};
+    if (ctx.host !== "claude" && ctx.host !== "copilot") return {};
     const { hookRegistrationDeskProblem } = await runtime("runtime/host-enforcement-registration.js");
     const pluginRoot = ctx.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
     const { registered, block } = await hookRegistrationDeskProblem({ host: ctx.host, pluginRoot });
