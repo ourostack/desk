@@ -302,6 +302,29 @@ test("onIndexDrift defaults to doing nothing, so a caller that omits it is never
   assert.deepEqual(pending, [{ id: "01-a", state: "ran", report: "", announce: "Done." }])
 })
 
+// A before-snapshot that succeeds but whose matching after-snapshot then fails
+// or times out must skip the diff too — the asymmetric case findings 1(b)/(c)
+// guard against, distinct from the before-fails case above. No real Git is
+// needed: `spawnGit` is faked end to end, succeeding on `rev-parse` and on the
+// very first `diff` call, then failing every one after it.
+function beforeSucceedsAfterFailsSpawnGit() {
+  let diffCalls = 0
+  return (command, args) => {
+    if (args.includes("rev-parse")) return { status: 0, stdout: "true\n", stderr: "" }
+    diffCalls += 1
+    if (diffCalls === 1) return { status: 0, stdout: "", stderr: "" }
+    return { status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT" }) }
+  }
+}
+
+test("pendingMigrations: an after-snapshot that fails once its before-snapshot succeeded is skipped, not treated as no drift", async () => {
+  const root = await plugin([{ id: "01-a" }])
+  const drifts = []
+  const pending = await pendingMigrations({ pluginRoot: root, cwd: root, budgetMs: 30_000, spawnGit: beforeSucceedsAfterFailsSpawnGit(), onIndexDrift: (block) => drifts.push(block) })
+  assert.deepEqual(pending, [{ id: "01-a", state: "ran", report: "", announce: "Done." }])
+  assert.equal(drifts.length, 0)
+})
+
 // ── The real tidy migration, found by the startup hook helper ─────────────
 
 async function tidyDesk({ messy }) {
@@ -418,6 +441,14 @@ test("runMigrationCli names every file when a block stages several, in the plura
   assert.match(captured.out.stdout, /a\.txt/)
   assert.match(captured.out.stdout, /b\.txt/)
   assert.match(captured.out.stdout, /Files appeared in the index while "01-a:safety-check" ran/)
+})
+
+test("runMigrationCli: an after-snapshot that fails once its before-snapshot succeeded is skipped, not treated as no drift", async () => {
+  const root = await plugin([{ id: "01-a" }])
+  const captured = io()
+  const code = await runMigrationCli({ argv: ["run", "01-a"], io: captured.io, pluginRoot: root, cwd: root, spawnGit: beforeSucceedsAfterFailsSpawnGit() })
+  assert.equal(code, 0)
+  assert.doesNotMatch(captured.out.stdout, /Desk problem/)
 })
 
 test("runMigrationCli tracks the index only when cwd is itself a Git repository", async () => {
