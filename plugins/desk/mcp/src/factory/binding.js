@@ -310,7 +310,8 @@ export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTa
     }
   }
 
-  for (const sha of asArray(source.nativeCommitShas)) {
+  for (const entry of asArray(source.nativeCommitShas)) {
+    const sha = entry?.sha
     if (typeof sha !== "string" || !PATTERNS.commitSha.test(sha)) continue
     const found = gitCommitTaskPaths(sha)
     if (found?.exists === true) bindCommitPaths(sha, found.taskPaths)

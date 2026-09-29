@@ -158,7 +158,7 @@ test("desk history is read once per session over the span of its calls, and a co
 
 test("a commit from the session's native refs alone binds the tasks it changed; one missing from the desk binds nothing", () => {
   const { jobs, calls } = bind(
-    { nativeCommitShas: [SHA_A, SHA_B, "not-a-sha", SHA_A.toUpperCase(), 7] },
+    { nativeCommitShas: [SHA_A, SHA_B, "not-a-sha", SHA_A.toUpperCase(), 7, null, {}].map((entry) => (typeof entry === "string" ? { sha: entry, agent: 0 } : entry)) },
     { nativeCommits: { [SHA_A]: { exists: true, taskPaths: [`${TRACK}/_archive/${SLUG}/notes.md`] }, [SHA_B]: { exists: false, taskPaths: [`${TRACK}/${OTHER}/x.md`] } } },
   )
   assert.deepEqual(calls.native, [SHA_A, SHA_B])
@@ -201,7 +201,7 @@ test("a file write alongside the bare card still binds as one job with one file_
 
 test("a native commit touching only the bare card, live or archived, binds nothing when the card's diff is housekeeping", () => {
   const { jobs, calls } = bind(
-    { nativeCommitShas: [SHA_A, SHA_B] },
+    { nativeCommitShas: [{ sha: SHA_A, agent: 0 }, { sha: SHA_B, agent: 0 }] },
     {
       nativeCommits: {
         [SHA_A]: { exists: true, taskPaths: [`${TRACK}/${SLUG}/task.md`] },
@@ -217,7 +217,7 @@ test("a native commit touching only the bare card, live or archived, binds nothi
 
 test("a native commit touching only the bare card binds when the card's diff is real content, not housekeeping", () => {
   const { jobs } = bind(
-    { nativeCommitShas: [SHA_A] },
+    { nativeCommitShas: [{ sha: SHA_A, agent: 0 }] },
     { nativeCommits: { [SHA_A]: { exists: true, taskPaths: [`${TRACK}/${SLUG}/task.md`] } } },
     // No housekeeping entry: the fake's default (false) is a real change, so it binds.
   )
