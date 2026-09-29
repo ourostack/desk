@@ -71,6 +71,11 @@ export function formatDeskProblem({ mechanism, symptom, broke, means, fix, file,
   ].join("\n")
 }
 
+/** The honest, no-op filing step: never called with `env` missing -- see the header above `formatIndexDriftProblem`. */
+async function noFiler() {
+  return { file: "not filed: filer_unavailable" }
+}
+
 /**
  * The complete index-drift `Desk problem:` block for `drift` (one or more
  * newly staged paths) found while `label` ran — a boot check's own id, or a
@@ -83,17 +88,30 @@ export function formatDeskProblem({ mechanism, symptom, broke, means, fix, file,
  * agent: the same-process check and a different session's own work landing
  * at that exact moment look identical from here, so both are named as
  * possibilities rather than one being asserted as fact.
+ *
+ * Migrated onto the failure contract (spec.md §1, Part 5): filing is never
+ * done here, and never awaited by this function's own callers past this
+ * call -- `fileProblem` is an injectable hook, mirroring `host-enforcement-
+ * registration.js`'s `hookRegistrationDeskProblem`. With no default filing
+ * step (real callers on a hot, tightly budgeted path could not afford an
+ * account lookup and `gh` calls inline), the block renders honestly with
+ * `file: not filed: filer_unavailable`; each real call site (boot-
+ * checks.cjs's registry loop, pending-migrations.js's `pendingMigrations`
+ * and `runMigrationCli`) supplies its own closure that queues the same
+ * detached `file-desk-problem.js` run every other migrated mechanism uses
+ * and reports `file: filing in background`.
  */
-export function formatIndexDriftProblem({ kind, label, drift }) {
+export async function formatIndexDriftProblem({ kind, label, drift, env, host, fileProblem = noFiler }) {
   const plural = drift.length !== 1
   const paths = drift.join(", ")
+  const { file } = await fileProblem({ env, host, reason: `${label}: unexpected staged path(s) appeared during this ${kind}: ${paths}` })
   return formatDeskProblem({
     mechanism: "index-drift",
     symptom: `unexpected ${plural ? "files" : "file"} staged during ${label}`,
     broke: `${label}: unexpected staged path(s) appeared during this ${kind}: ${paths}`,
     means: `${paths} appeared in the index while ${kind} "${label}" ran — it may have staged ${plural ? "them" : "it"}, or another session may have staged ${plural ? "them" : "it"} at the same time`,
     fix: "not undone — staged paths left as-is for inspection",
-    file: "not filed: filing lands once the failure-contract filer exists (spec §8 PR 4)",
+    file,
     tell: `${plural ? "Files" : "A file"} appeared in the index while "${label}" ran (${paths}); it may have staged ${plural ? "them" : "it"}, or another session may have staged ${plural ? "them" : "it"} at the same time. Left as-is so you can inspect it.`,
   })
 }

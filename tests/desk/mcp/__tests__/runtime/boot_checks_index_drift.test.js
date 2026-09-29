@@ -48,6 +48,44 @@ test("a check that stages a file mid-run produces a Desk problem: index-drift bl
   assert.doesNotMatch(line, /unexpectedly staged/)
 })
 
+// ── index-drift is migrated onto real filing too (spec.md §1, Part 5) ──────
+
+test("an index-drift block queues the detached filer, never awaiting it, and reports filing in background", async (t) => {
+  const { runBootChecks } = require(BOOT)
+  const { repo, env, git } = fixture(t)
+  const launched = []
+  writeFileSync(path.join(repo, "stray.txt"), "x\n")
+  const line = await runBootChecks({
+    ...quiet,
+    host: "claude",
+    env,
+    checks: [{ id: "probe", budgetMs: 50, run: async () => { git("add", "stray.txt"); return {} } }],
+    launchRepair: async (command, launchEnv) => { launched.push({ command, launchEnv }) },
+  })
+  assert.match(line, /Desk problem: index-drift — unexpected file staged during probe/)
+  assert.match(line, /file: filing in background/)
+  assert.equal(launched.length, 1)
+  assert.ok(launched[0].command.some((part) => part.endsWith("file-desk-problem.js")))
+  assert.ok(launched[0].command.includes("--mechanism"))
+  assert.ok(launched[0].command.includes("index-drift"))
+  assert.ok(launched[0].command.includes("--host"))
+  assert.ok(launched[0].command.includes("claude"))
+})
+
+test("an index-drift block still renders, with 'not filed', when the launcher itself fails to start", async (t) => {
+  const { runBootChecks } = require(BOOT)
+  const { repo, env, git } = fixture(t)
+  writeFileSync(path.join(repo, "stray.txt"), "x\n")
+  const line = await runBootChecks({
+    ...quiet,
+    env,
+    checks: [{ id: "probe", budgetMs: 50, run: async () => { git("add", "stray.txt"); return {} } }],
+    launchRepair: async () => { throw new Error("spawn unavailable") },
+  })
+  assert.match(line, /Desk problem: index-drift — unexpected file staged during probe/)
+  assert.match(line, /file: filing in background/)
+})
+
 test("a check with no index change adds no index-drift block, and the usual line still comes through", async (t) => {
   const { runBootChecks } = require(BOOT)
   const { env } = fixture(t)

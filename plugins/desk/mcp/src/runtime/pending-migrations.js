@@ -38,7 +38,7 @@
 import { readdirSync, readFileSync } from "node:fs"
 import { spawn as spawnChild, spawnSync } from "node:child_process"
 import * as path from "node:path"
-import { diffStagedPaths, formatIndexDriftProblem, snapshotStagedPaths } from "./index-drift.js"
+import { diffStagedPaths, formatDeskProblem, formatIndexDriftProblem, snapshotStagedPaths } from "./index-drift.js"
 import { isGitRepository } from "../util/git-stage.js"
 
 // All Detect blocks together, plus any Safety check and Migrate the hook runs,
@@ -196,7 +196,7 @@ export function migrationCommand(pluginRoot, id, { tools = false } = {}) {
  */
 export async function pendingMigrations({
   pluginRoot, env = process.env, cwd, budgetMs = MIGRATION_BUDGET_MS, blockLimitMs = Infinity, spawn, now = () => performance.now(),
-  spawnGit = spawnSync, onIndexDrift = () => {},
+  spawnGit = spawnSync, onIndexDrift = () => {}, host,
 }) {
   const started = now()
   const left = () => budgetMs - (now() - started)
@@ -218,7 +218,7 @@ export async function pendingMigrations({
       const after = snapshotStagedPaths({ root: cwd, spawnGit })
       if (after !== null) {
         const drift = diffStagedPaths(before, after)
-        if (drift.length > 0) onIndexDrift(formatIndexDriftProblem({ kind: "migration block", label: tag, drift }))
+        if (drift.length > 0) onIndexDrift(await formatIndexDriftProblem({ kind: "migration block", label: tag, drift, env, host }))
       }
     }
     return result
@@ -293,18 +293,52 @@ export function migrationLine(pending, pluginRoot) {
   return parts.length ? `Desk migrations: ${parts.join(" ")}` : ""
 }
 
+/** The honest, no-op filing step: mirrors `host-enforcement-registration.js`'s `noFiler` -- see the doc comment above. */
+async function defaultFileProblem() {
+  return { file: "not filed: filer_unavailable" }
+}
+
 /**
  * The startup line for this session, or "". Never rejects. Any index-drift
  * blocks `pendingMigrations` finds (spec.md §3) are appended after it, each on
  * its own line; `spawnGit` is a test-only seam, passed through unchanged.
+ *
+ * Migrated onto the failure contract (spec.md §1, Part 5): an internal error
+ * in the migration *registry* itself (not one migration's own reported
+ * states, which already carry decent messaging through `migrationLine`) now
+ * emits a full `Desk problem:` block instead of silently returning only the
+ * index-drift lines found before the error. Filing is never done here, and
+ * never awaited past this call: `fileProblem` is an injectable hook (default:
+ * the honest `not filed: filer_unavailable`, mirroring `host-enforcement-
+ * registration.js`'s `noFiler`), which `boot-checks.cjs`'s `migrationLine`
+ * supplies for real, queuing the same detached `file-desk-problem.js` run
+ * every other migrated mechanism uses.
  */
-export async function startupMigrationLine({ pluginRoot, env = process.env, cwd = process.cwd(), budgetMs, spawn, spawnGit }) {
+export async function startupMigrationLine({
+  pluginRoot, env = process.env, cwd = process.cwd(), budgetMs, spawn, spawnGit, host, fileProblem = defaultFileProblem,
+}) {
   const drifts = []
   try {
-    const pending = await pendingMigrations({ pluginRoot, env, cwd, budgetMs, spawn, spawnGit, onIndexDrift: (block) => drifts.push(block) })
+    const pending = await pendingMigrations({ pluginRoot, env, cwd, budgetMs, spawn, spawnGit, host, onIndexDrift: (block) => drifts.push(block) })
     return [migrationLine(pending, pluginRoot), ...drifts].filter((part) => part !== "").join("\n")
-  } catch {
-    return drifts.join("\n")
+  } catch (error) {
+    const reason = oneLine(error?.message ?? String(error))
+    let file = "not filed: filer_unavailable"
+    try {
+      ({ file } = await fileProblem({ env, host, reason }))
+    } catch {
+      // stays "not filed: filer_unavailable" -- this function must never throw, whatever fileProblem does.
+    }
+    const block = formatDeskProblem({
+      mechanism: "pending-migrations",
+      symptom: "the migration registry failed internally",
+      broke: reason,
+      means: "Desk could not check whether any of its own migrations are pending this session",
+      fix: "not fixable automatically -- the migration registry itself needs investigation",
+      file,
+      tell: `Desk's migration check failed internally this session (${reason}). Filing this now so it gets fixed.`,
+    })
+    return [...drifts, block].filter((part) => part !== "").join("\n")
   }
 }
 
@@ -372,7 +406,13 @@ export async function runMigrationCli({ argv, env = process.env, io, pluginRoot,
       const after = snapshotStagedPaths({ root: cwd, spawnGit })
       if (after !== null) {
         const drift = diffStagedPaths(before, after)
-        if (drift.length > 0) io.stdout.write(`${formatIndexDriftProblem({ kind: "migration block", label: tag, drift })}\n`)
+        // No fileProblem here: this CLI already prints the block straight to the
+        // agent running it, with no time budget and nothing to lose past a
+        // timeout, unlike the hook path -- the honest `file: not filed:
+        // filer_unavailable` default is the right answer, matching
+        // `host-enforcement-registration.js`'s own `status.js` caller, which
+        // also supplies no filing step of its own.
+        if (drift.length > 0) io.stdout.write(`${await formatIndexDriftProblem({ kind: "migration block", label: tag, drift })}\n`)
       }
     }
     return result
