@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.146 — 2026-09-29
+
+The factory intake now delivers files it used to leave frozen, and its local diagnostics agree with the store.
+
+Quarantine records now keep the sha of the blob the factory store refused. A flush now retries a quarantined facts file when its published blob differs from the refused one, so files frozen by an older Desk or a stale refusal are delivered again; a held file whose repository visibility cannot be resolved stays quarantined without blocking other files, and a quarantine record that is not a regular file (a symlink, a directory or a hard-linked file) is left alone and never blocks a flush. A held file that has not changed costs no state-folder check, and the files that go again are released together, once, so a store with hundreds of held files no longer slows every flush. The local jobs index now mirrors the outbox: a re-derive that drops a job removes it, and existing indexes are rebuilt once.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.145 — 2026-09-29
 
 A child agent dispatched with a bounded brief could receive the same startup text a root session gets — the `using-desk` foundation and the `Desk startup:` line, including its "invoke `desk:session-start` now" imperative — whenever it runs as its own top-level session rather than an in-process subagent (Claude Code's `SessionStart` hook has no field that marks a session as a bounded child; only `SubagentStart`, a separate hook Desk does not register, carries `agent_id`/`agent_type`). Reading that text at face value, such a child could run host probes, sync and other real-desk boot steps that were never its job. The foundation's "Child agents" section and every `Desk startup:` line (including the Claude and Copilot degraded fallbacks) now carry a short stand-down clause: a child agent with a bounded brief follows the brief instead and skips the imperative, the same way Superpowers' own entry skill stands its subagents down.
