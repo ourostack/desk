@@ -17,7 +17,7 @@ Path migrations must complete before any path-dependent startup scans run, inclu
 
 ## When this skill fires
 
-- at the top of `desk:session-start`, before any other path-dependent skill work or startup scans — specifically before Step 1's prereq probes (which assume `$DESK/` resolves correctly), Step 2's workspace sync, and any of the later scans.
+- at the top of `desk:session-start`, before any other path-dependent skill work or startup scans — specifically before Step 0.75's boot script (whose prereq probe, sync and scans all assume `$DESK/` resolves correctly) and any of the later scans.
 - re-runs on every session start. idempotent: a migration that already ran returns non-zero from its `Detect` block on the next session, so the skill skips it silently.
 
 ## Migration file format

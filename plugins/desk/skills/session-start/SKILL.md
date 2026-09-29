@@ -1,6 +1,6 @@
 ---
 name: session-start
-description: Session-start checklist. Invoke as the FIRST thing in every agent session — probes prerequisites (gh binary + version floor + auth state, jq, Windows PATH gotchas), syncs the workspace repo, scans for active tasks, and emits a one-screen status block. Hard-stops on prereq failures; does NOT silently fall through to local-only operation. If `$DESK/` doesn't exist, hands off to `first-run-bootstrap`. If the operator picks a task to resume, hands off to `session-resumption`.
+description: Session-start checklist. Invoke as the FIRST thing in every agent session — runs the boot script (host identity, prerequisites: gh binary + version floor + auth state, jq; workspace sync; the active-task index; task-card frontmatter validation; push-account resolution) in one call, then scans for active tasks and emits a one-screen status block. Hard-stops on prereq failures; does NOT silently fall through to local-only operation. If `$DESK/` doesn't exist, hands off to `first-run-bootstrap`. If the operator picks a task to resume, hands off to `session-resumption`.
 ---
 
 # Session start
@@ -29,12 +29,12 @@ hostname && pwd && whoami && uname -s
 hostname; (Get-Location).Path; whoami; [System.Environment]::OSVersion.Platform
 ```
 
-both shells: just run it. four commands, idempotent — re-running is cheap. don't try to short-circuit by "checking if probe already ran" before any tool call; the check is harder than the probe itself.
+both shells: just run it. four commands, idempotent — re-running is cheap. don't try to short-circuit by "checking if probe already ran" before any tool call; the check is harder than the probe itself. Step 0.75's boot script reports this same identity again, in its `host` field — that is redundant confirmation, not a second probe to act on.
 
-then write the result to durable state. persistence precedence:
+then write the result to durable state, **but only when the host has changed** — repeating an unchanged host's identity every session is exactly the kind of boot-line noise this skill otherwise works to cut. persistence precedence:
 
-- **if a task card exists**, the task-card preamble is **mandatory**. add a "Host context" line: ``Host: `<hostname>` / user: `<user>` / cwd: `<pwd>` / OS: `<os>` / probed: <timestamp>``. chat scrollback is ephemeral from the perspective of a future session resuming this task; the task card is what survives, so that's where the host context belongs.
-- **if no task card exists** (fresh session, nothing picked yet), open the first chat message with a one-line "Running on `<hostname>` as `<user>` in `<pwd>`, OS `<os>`." visible to the operator from turn one; cheap to add.
+- **if a task card exists**, and its own "Host context" line (if any) names a different `hostname` than this probe just found, updating it is **mandatory**: add or replace the line with ``Host: `<hostname>` / user: `<user>` / cwd: `<pwd>` / OS: `<os>` / probed: <timestamp>``. chat scrollback is ephemeral from the perspective of a future session resuming this task; the task card is what survives, so that's where the host context belongs. an unchanged hostname writes nothing.
+- **if no task card exists** (fresh session, nothing picked yet), open the first chat message with a one-line "Running on `<hostname>` as `<user>` in `<pwd>`, OS `<os>`." visible to the operator from turn one, **only** the first time this session sees this host; a session that already said so, or resumes on the same host a task card already recorded, does not repeat it.
 - **both** is fine — chat lead + task-card preamble together — but the task card is what carries across sessions.
 
 applies to ANY agent using this skill — worker, ccatester, investigator, triage, future fleet agents. single-host setups still benefit (the probe is fast and silent on the happy path), but the cost-of-omission climbs as host count grows.
@@ -53,7 +53,7 @@ if Step 2's sync changed it, read it again before Step 2.7 or any later question
 
 before any path-dependent work — before the prereq probe, before sync, before scans — hand off to the `session-start-migrations` skill. it walks every enabled plugin's `migrations/` dir, runs each migration's Detect predicate, and (for the ones that fire) runs Safety/Migrate/Announce. if any migration with `needs_restart: true` runs successfully, the skill hard-stops the session with a "please restart" message; the operator restarts and the next session opens against canonical paths.
 
-why here, not later: most later steps assume `$DESK/` already points at the right place. if the machine is still on a pre-migration name (an old workspace dir that's since been renamed), running Step 1's prereq probe or Step 2's desk sync first would either fail confusingly or — worse — quietly operate against stale state. migrations run first, restart, everything downstream resolves cleanly.
+why here, not later: most later steps assume `$DESK/` already points at the right place. if the machine is still on a pre-migration name (an old workspace dir that's since been renamed), running Step 0.75's boot script first would either fail confusingly or — worse — quietly operate against stale state. migrations run first, restart, everything downstream resolves cleanly.
 
 on a machine with no pending migrations (the common case) this step is a few cheap Detect bash exits and returns immediately.
 
@@ -61,13 +61,41 @@ a migration marked `agent_work: true` (such as `02-tidy-desk`, the one-time desk
 
 Desk's own migrations do not wait on this step: the startup hook runs their Detect blocks itself and adds one `Desk migrations:` line to the startup context when one is pending (`session-start-migrations` owns what that line says). When the startup context has that line, do what it says in this session; it is part of starting the session, not a suggestion.
 
-## Step 0.75 — Desk MCP availability checkpoint
+## Step 0.75 — Run the boot script, then confirm Desk MCP availability
 
-**no desk yet comes first.** if the startup hook said no desk is bound yet, or `desk_status` reports `mode: setup` (`status: setup_required`), this is a first run, not an outage: go straight to the onboarding path `desk_status` names in `onboarding_skill` — `desk:first-run-bootstrap` Entrance A by default, or an overlay's own path such as `crew:join-crew` — and skip the rest of this step and Steps 1–2. do not present the fix/continue decision below — a missing desk is fixed by finding or creating the desk, and Desk keeps running in setup mode until then.
+right after Step 0.5's migrations settle — never before, since a stale pre-migration `$DESK/` could otherwise get scanned or synced under the wrong path — run the boot script. it replaces what used to be a chain of separate steps the agent re-derived and re-ran by hand each session: a five-part prerequisite probe, the workspace sync, the active-task index, task-card frontmatter validation, and per-task-repo push-account resolution. one call, one JSON result, so nothing downstream re-derives or re-runs what it already answered.
 
-**a bound desk that is missing is not a first run.** if `desk_status` reports `degraded:root_unavailable`, the folder that `--root`, the saved binding or `$DESK` names is missing or unreadable, and Desk deliberately binds no other desk. report the configured path from `desk_status.root` and follow its fix: restore or clone the desk at that path, or, with the operator's agreement, rebind through `desk:first-run-bootstrap`. never work around it by pointing `$DESK` at a different desk. Desk upgrades to ready in the same session once the folder exists.
+```bash
+node <Desk plugin folder>/mcp/scripts/session-boot.js
+```
 
-otherwise, before treating session-start as healthy, check whether the active host session exposes the Desk MCP tool surface. this applies to every agent built on `desk:worker`, including downstream overlays like `ms-desk` and area-specific workers. overlays may add their own MCP checks, but they inherit this substrate check rather than re-implementing it.
+`<Desk plugin folder>` is two levels above this skill's folder. it prints one line of JSON and always exits 0 — a boot script must never block session start on its own crash. `boot_complete: true` always appears in that line; it marks that the script finished and returned a complete result, not that everything it found is healthy. read:
+
+- **`status`** — one word: `"ready"`, `"degraded"` or `"setup_required"`. never two contradictory state words (a slow readiness-convergence check must never report something that disagrees with what just ran) — act on this one field.
+- **`degraded`** — why, one line per problem. work through every one before treating startup as healthy; a session with broken auth isn't "offline mode," it's "not-yet-ready" — don't fall back to local-only operation.
+- **`pending`** — checks the wall-clock budget didn't let finish (a slow auth check, a push-account store past the deadline). not a failure; carry it into the Step 5 status block, don't block on it.
+- **`actions`** — concrete next steps, each naming the task, repo or file it is about. surface these to the operator instead of re-deriving your own remediation prose.
+- **`root`**, **`host`**, **`desk_export_line`** — the resolved desk and this host's identity (hostname, user, cwd, platform, probed timestamp); export the line so later shell calls in this session see `$DESK`. `host` reports the same identity Step 0 already probed — redundant confirmation, not a second write.
+- **`prereqs`** — `gh` binary present, `gh` version floor (2.40 — `gh auth switch -u <user>`, used by any workflow disambiguating cached GitHub accounts, landed there; older gh silently drops the flag and a push can leak under the wrong account), `jq` present, and `gh auth status` actually healthy (a cached-but-expired token fails every later `gh` call with a confusing 401/403). a Windows host missing `winget` on PATH is a known false "missing" reading — `WindowsApps` not on the current user's PATH for a templated admin-base image — diagnose with `Get-AppxPackage Microsoft.DesktopAppInstaller`, `Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"`, and `$env:Path -split ';' | Select-String WindowsApps` before recommending a reinstall.
+- **`sync`** — the workspace-sync result: **synced** (the ordinary case), **quarantined** (a dirty index blocked the pull; every stray untracked path moved, never deleted, to `_cache/stray-<date>/`, then the pull retried and succeeded), or **unresolved** (a genuine conflict, or the retry still failed — read `git status` in the desk before making further changes there). the script runs the pull itself, never streaming git's own diffstat to this session's output, so a folder another machine created with a secret's value in its name can't land here before Step 3 hides it; to see what changed, use the Step 3 listing, never `git log --stat` or `git diff --stat` on the desk.
+- **`active_tasks`** — the cheap, filesystem-only task index Step 3 reads. never the slow runtime status, so it is never blocked behind readiness convergence.
+- **`card_validation`** — every task card whose frontmatter is malformed (a missing or non-string required field, an unrecognized `status`, an unparseable timestamp, a malformed `repos[]` entry, or the numeric-string-keyed-object corruption pattern a card can pick up from a bad write), named by redacted track/slug/desk and a stable handle, with the specific problem spelled out — never a bare "N cards have problems" count. surface these in the Step 3 listing; fix a card's frontmatter through its `handle`, the same discipline Step 3 already uses for a redacted name.
+- **`push_accounts`** — the push-capable GitHub account for every repo of every open task, reusing the same per-store, per-signed-in-account resolution Step 2.7 uses for the factory account: it asks each account's own token, never assumes `gh`'s active account. `no_account_can_deliver` means do not push there — ask the operator which account to use, or fork.
+- **`factory`** — the same factory-consent context Step 2.7 reads via `desk_status`.
+
+`status: "setup_required"` means no desk is bound yet — a first run, not an outage: follow the action the script names (hand off to the onboarding path `desk_status` names in `onboarding_skill` — `desk:first-run-bootstrap` Entrance A by default, or an overlay's own path such as `crew:join-crew`) and skip the rest of this step and Step 2. do not present the fix/continue decision below — a missing desk is fixed by finding or creating the desk, and Desk keeps running in setup mode until then.
+
+`status: "degraded"` with a root problem (`desk_status` would report `degraded:root_unavailable`) means the folder that `--root`, the saved binding or `$DESK` names is missing or unreadable, and Desk deliberately binds no other desk: the script's own `actions` line already names the configured path and the fix (restore or clone the desk there, or, with the operator's agreement, rebind through `desk:first-run-bootstrap`); never work around it by pointing `$DESK` at a different desk. Desk upgrades to ready in the same session once the folder exists. any other `degraded` entry (a prereq or sync failure) is like a compile error: work through it before treating this session as ready.
+
+if the boot script itself fails to run at all (no Node on PATH, a permissions problem) — the rare exception the script cannot report on itself — fall back to running `gh --version`, `jq --version`, and `gh auth status` by hand, and record the failure as friction.
+
+**named-task short path**: if the operator's own first message already names the task to resume (a title, a slug, or an unambiguous handle), still run the boot script exactly as above — every check still applies, a named task is not license to skip a prereq or sync problem — but skip presenting the full status block before acting: fold `status`/`degraded`/`actions` straight into the reply that hands off to `session-resumption`, and let that skill's own resume flow carry the rest. a named task is license to skip only the "which one?" prompt.
+
+**workspace-tidy budget exceeded, deferred**: the startup hook may append a `Desk boot: workspace-tidy budget exceeded; deferred; run the repair with the desk_status root.` line, separate from the boot script's own JSON. it means the hook's own background tidy check hit its wall-clock budget before finishing — unlike the ordinary tidy-check path, this one did not launch the repair itself. the repair is `node <Desk plugin folder>/hooks/boot-checks.cjs --repair <root>`, using the `root` the boot script (or `desk_status`) reports; it is optional and best-effort — run it in the background when the line appears, but never let it block this session, and don't repeat the line once it's launched.
+
+now, before treating session-start as healthy, check whether the active host session exposes the Desk MCP tool surface. this is a distinct concern from the boot script's own `status`: the boot script reports the desk *workspace's* state, while this checks whether *this running session* can reach Desk's MCP tools at all. this applies to every agent built on `desk:worker`, including downstream overlays like `ms-desk` and area-specific workers. overlays may add their own MCP checks, but they inherit this substrate check rather than re-implementing it.
+
+re-run this check after a context-compaction resume, not only at the very first message of a session: compaction can restart the host process or reload tools, so a tool surface confirmed available before compaction is not guaranteed to still be available after — treat a fresh resume the same as a fresh session for this one check, even mid-task.
 
 the minimum sentinel is `desk_status`. if the host exposes an active tool list, look for `desk_status` or the Desk MCP namespace. if the host does not expose a tool-list API, infer from the callable tools available in the current session. this is an active-session check: repo source and plugin cache can both be current while this running agent still lacks the MCP because the host has not reloaded or the MCP failed to launch.
 
@@ -93,77 +121,13 @@ if the operator chooses **Fix Desk MCP now**, route to `codex-onboarding` under 
 
 if the operator chooses **Continue without reminders**, honor the mute for the rest of the session. if they explicitly ask for a durable no-reminder preference, record it in `$DESK/AGENTS.md` as an operator preference so future worker-based agents inherit it across machines. do not silently switch the activation to `manual-only`: explain that durable manual-only mode disables default worker/MCP autostart, while a reminder mute only suppresses the generic warning.
 
-## Step 1 — Prerequisite probe
-
-five checks. any failure surfaces the specific remediation to the operator and **waits** — don't proceed to step 2, and don't fall back to a local-only mode. a session with broken auth isn't "offline mode"; it's "not-yet-ready."
-
-### 1a. `gh` binary present
-
-```bash
-gh --version
-```
-
-missing → install command per OS:
-- macOS: `brew install gh`
-- Windows: `winget install --id GitHub.cli` (or see 1d below if winget is also missing)
-- Linux: [cli.github.com](https://cli.github.com/) for distro packages
-
-### 1b. `gh` version floor — 2.40 or newer
-
-`gh auth switch -u <user>` (used by any workflow that disambiguates between multiple cached GitHub accounts) landed in gh 2.40 (Dec 2023). older gh errors with `unknown shorthand flag: 'u' in -u` and the rest of the chained command **never runs** — which is dangerous when multiple identities are cached: a push can leak under the wrong account because the switch silently failed.
-
-```bash
-gh --version | head -1 | awk '{print $3}'
-# Parse: major.minor.patch. Require major > 2 OR (major == 2 AND minor >= 40).
-```
-
-below 2.40 → surface the version and recommend `winget upgrade GitHub.cli` / `brew upgrade gh` / `sudo apt update && sudo apt upgrade gh`. hard-stop; do not proceed.
-
-### 1c. `jq` present
-
-```bash
-jq --version
-```
-
-missing → `brew install jq`, `winget install jqlang.jq`, `sudo apt install jq`. hard-stop — several skills lean on `jq` for JSON parsing.
-
-### 1d. Windows winget diagnostic (only if `winget` itself is missing)
-
-fresh Windows VM images built from a templated admin-user base often leave the current user's `WindowsApps` off their PATH, so `winget.exe` is installed but not reachable by name. don't recommend "reinstall winget" — that's a dead end. diagnose instead:
-
-```powershell
-Get-AppxPackage Microsoft.DesktopAppInstaller
-Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
-$env:Path -split ';' | Select-String WindowsApps
-```
-
-if `Test-Path` returns `True` but PATH doesn't contain `$env:LOCALAPPDATA\Microsoft\WindowsApps`, the fix is:
-1. short-term: invoke winget by absolute path — `& "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" install jqlang.jq`
-2. durable: append `%LOCALAPPDATA%\Microsoft\WindowsApps` to the user PATH via `setx PATH "$env:Path;$env:LOCALAPPDATA\Microsoft\WindowsApps"` or the System Properties GUI.
-
-surface both and let the operator pick.
-
-### 1e. `gh auth status` — auth is actually working
-
-```bash
-gh auth status
-```
-
-look in the output for `The github.com token in oauth_token is no longer valid` or similar staleness signals. a cached-but-expired token fails every subsequent gh call with a confusing 401/403 that masquerades as a permissions problem. **hard-stop on stale token**. walk the operator through `gh auth login --hostname github.com` before going further.
-
 ## Step 2 — Workspace sync
 
-if no desk is bound (`$DESK/` doesn't exist, or `desk_status` reports setup mode) → hand off to `first-run-bootstrap` Entrance A. Its local discovery needs no network; it gates only remote discovery and remote creation on `gh auth status`.
+Step 0.75's boot script already resolved the desk and synced it — see `sync` in its result, described there. by this point in the skill, status was already `"ready"`; a `"setup_required"` result would already have handed off to `first-run-bootstrap` Entrance A and ended session-start before this step, so this step never itself has to check whether a desk is bound or run its own sync command.
 
 ### Existing-workspace V1 upgrade branch
 
 If `$DESK/` already exists and the workspace still shows V1 evidence instead of an already-migrated V2 Desk, do not continue straight into ordinary sync and resumption. Ground that decision in existing Desk layout and activation evidence: durable Desk state is already present in the documented workspace layout (for example task cards or system directories such as `_meta/`, `_archive/`, or `artifacts/`), but the V2 startup foundations and activation-owned worker surface described in `plugins/desk/README.md` and `desk:codex-onboarding` are not yet in place. In that case, hand off to `first-run-bootstrap` Entrance B so it inventories and upgrades the same workspace in place, preserves the same workspace, and avoids cloning or creating a parallel Desk. Once that same workspace has completed the V1-to-V2 upgrade, later session-start runs skip this branch and continue with ordinary sync + scan.
-
-if it exists, sync it:
-```bash
-node <Desk plugin folder>/mcp/scripts/session-sync.js
-```
-this replaces the old bare `git pull --rebase --quiet origin main` plus "if the pull fails, warn the operator but proceed" — that left a desk silently out of sync with its remote for the rest of the session. the script runs `git pull --rebase --autostash` itself (never streaming git's own diffstat to this session's output, so a folder another machine created with a secret's value in its name can't land here before Step 3 hides it) and settles into one of three states: **synced** (the ordinary case — prints nothing), **quarantined** (a dirty index blocked the pull; every stray untracked path was moved, never deleted, to `_cache/stray-<date>/` — or `-<date>-2/` etc. if today's quarantine dir is already taken — and the pull was retried and succeeded; prints a one-line summary of what moved), or **unresolved** (a genuine conflict on a tracked file, or the retry still failed; prints a `Desk problem:` block and moves on rather than blocking the session — read it, and run `git status` in the desk before making further changes there). errors from the script itself still print. to see what changed, use the Step 3 listing, never `git log --stat` or `git diff --stat` on the desk.
 
 a session doing work unrelated to the desk — a different tool, a different repo, a one-off script — should not use the desk root as its working directory; a stray file dropped there by an unrelated tool session is exactly how loose scratch content has ended up committed to a desk before.
 
@@ -239,7 +203,9 @@ In a noninteractive session, such as `claude -p`, a scheduled run or a subagent 
 
 ## Step 3 — Scan for active tasks
 
-build the status block from the `active_tasks` field of the `desk_status` answer (Step 1 already called it; call it again if the tasks may have changed since), never from a glob or a folder listing. it lists the non-terminal tasks (NOT `done`, NOT `cancelled`), grouped by track, newest `updated` first, skipping `_archive/`. this is the look across the drawers to see what's still open. **in a shared crew workspace** (crew roster present from Step 2.6), it also lists every `desks/<alias>/` subtree with each task's `desk` — surface peers' open tasks as theirs, and this session's own desk first. every task and track carries a `handle`.
+build the status block from the `active_tasks` field of the boot script's result (Step 0.75 already called it; call `desk_status` again if the tasks may have changed since), never from a glob or a folder listing. it lists the non-terminal tasks (NOT `done`, NOT `cancelled`), grouped by track, newest `updated` first, skipping `_archive/`. this is the look across the drawers to see what's still open. **in a shared crew workspace** (crew roster present from Step 2.6), it also lists every `desks/<alias>/` subtree with each task's `desk` — surface peers' open tasks as theirs, and this session's own desk first. every task and track carries a `handle`.
+
+**surface `card_validation` and `push_accounts` findings here too**, not as a separate pass: a task with a `card_validation` entry gets a short problem note next to its listing (the specific defect, not a bare count); a task whose `push_accounts` resolution came back `no_account_can_deliver` gets a short note naming the repo and that no signed-in account can push there. both come from Step 0.75's boot result — don't re-derive either by re-reading cards or re-running `gh` by hand.
 
 **never repeat a redacted name.** a folder name can carry a secret's value (a task folder named after a prompt that held a password), and the status block reaches the chat and the transcript. the listing shows such a track, task or desk name as `<redacted segment>` and such a title as `<redacted title>`, and counts them under `redacted`. show the marker as it is, with the task's `handle` so the operator can tell two redacted tasks apart; do not open the card or list the folder to recover the name, and do not quote it in any later step. to resume or rename such a task, act on it by its handle: `task_move` with `handle` and an outcome `to_slug` (a track: `track_rename` with `handle` and `to`), then use the new name. when `redacted` is non-zero, rename those in your own desk that way as ordinary tidying (build the new name from the task's status, repos and the work you know about, never from the old name), and add one line after the status block: "N names hidden because they looked like they contained a secret's value; I renamed them to outcome names." when `active_tasks` is missing or `null` (Desk is still starting, or the root is not valid), say the listing is unavailable and why in one line; do not fall back to globbing the desk.
 
@@ -296,6 +262,8 @@ a missing or failed evaluation never reopens a task, and `done` never waits for 
 
 ## Step 5 — Emit status + ask
 
+**first-reply content discipline**: the first reply is this concise status block, not a dump of the boot script's raw JSON and not an enumeration of every prereq that passed. surface only non-default state — the `degraded` and `pending` lists (when non-empty), any `card_validation` or `push_accounts` problem, and the status block itself — and fold a `setup_required` or `degraded` boot result straight into the reply that names the fix, rather than printing the field names the script used internally. a healthy `ready` boot with nothing pending needs no separate mention beyond the status block below; the operator asked to sit down at the desk, not to read a health-check transcript.
+
 concise status block, then an open prompt:
 
 ```
@@ -332,6 +300,6 @@ these prompts are one decision group each, per `interaction-style`. if both fire
 
 ## Never skip, never route around
 
-every step in this skill — Step 0 and Step 0.25 plus the Step 1 through Step 5 chain (including the `.x` sub-steps for 2.5, 2.6, 2.7, 4.5, 4.6, 4.7, 4.8) — runs every session. Step 2.6 (desk-registry awareness) is a cheap existence-check that is silent on the single-desk happy path (no `_meta/desks.md` → no-op). the host-identity probe (Step 0) is cheap and silent on the single-host happy path; the prereq probe (Step 1) is load-bearing — most mid-session failures trace back to a missing tool, an old `gh`, or stale auth that wasn't caught at start.
+every step in this skill — Step 0, 0.25, 0.5 and 0.75, plus the Step 2 through Step 5 chain (including the `.x` sub-steps for 2.6, 2.7, 4.5, 4.6, 4.7, 4.8) — runs every session. Step 2.6 (desk-registry awareness) is a cheap existence-check that is silent on the single-desk happy path (no `_meta/desks.md` → no-op). the host-identity probe (Step 0) is cheap and silent on the single-host happy path; the boot script (Step 0.75) is load-bearing — most mid-session failures trace back to a missing tool, an old `gh`, or stale auth that wasn't caught at start.
 
 **auto-mode is license for action, not for skipping safety checks.** a prereq-probe failure is like a compile error: fix it, don't proceed. if the operator insists on proceeding with broken prereqs, surface the specific risk (e.g., "no gh = can't push to the workspace state repo = state won't sync across machines") and require an explicit override.
