@@ -139,7 +139,7 @@ export function fakeGitHub({
     const head = repo(pr.headRepo).refs.get(`heads/${pr.head.ref}`)
     const main = storeRepo().refs.get("heads/main")
     const before = filesOf(commits.get(main).tree)
-    return [...filesOf(commits.get(head).tree)].filter(([name, sha]) => DATA.test(name) && before.get(name) !== sha).map(([name]) => ({ filename: name }))
+    return [...filesOf(commits.get(head).tree)].filter(([name, sha]) => DATA.test(name) && before.get(name) !== sha).map(([name, sha]) => ({ filename: name, sha }))
   }
 
   function api(method, route, body) {
@@ -287,6 +287,7 @@ export function fakeGitHub({
     anonymousCalls: anon.calls,
     /** Ready to pass as `flush`'s `anonymousLookup`: the real `anonymousGithub` wired to this fixture's fake fetch. */
     anonymousLookup: anonymousGithub({ fetch: anon.fetch }),
+    pullCount: () => pulls.length,
     storeMain: () => storeRepo().refs.get("heads/main"),
     mainFacts: () => factsOf(storeRepo().refs.get("heads/main")),
     /** Every data file (`facts/…`, `labels/…`) on the store's main, path to blob SHA. */

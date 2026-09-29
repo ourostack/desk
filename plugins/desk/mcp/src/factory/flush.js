@@ -119,6 +119,7 @@ import {
   readMachineSecret,
   readStatus,
   readVisibilityCache,
+  releaseQuarantined,
   releaseRefusedPluginNames,
   writeStatus,
   writeVisibilityCache,
@@ -742,12 +743,13 @@ async function deliver(env, context) {
 
   // A store refused an older Desk's facts for naming every plugin; this Desk publishes them with `refs.private.plugins`, so they go again.
   await releaseRefusedPluginNames(env, store)
-  const candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL })
+  // Quarantined files are candidates too: a store may have refused an older publication that this Desk now publishes differently.
+  const candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true })
   const labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })
   if (candidates.length === 0 && labelCandidates.length === 0) return { result: "nothing_pending" }
 
   // `pendingFiles` already quarantined every file that does not parse, and `pendingLabels` lists only labels that parse.
-  const parsed = candidates.map(({ name, localBytes }) => ({ name, local: JSON.parse(localBytes.toString("utf8")) }))
+  const parsed = candidates.map(({ name, localBytes, quarantine: held }) => ({ name, held, local: JSON.parse(localBytes.toString("utf8")) }))
   const parsedLabels = labelCandidates.map(({ name, localBytes }) => ({ key: name, local: JSON.parse(localBytes.toString("utf8")) }))
   const desks = await deskRepositories(env, { deadline, now })
   const repos = parsed.flatMap(({ local }) => referencedRepos(local))
@@ -759,16 +761,31 @@ async function deliver(env, context) {
   const secret = await readMachineSecret(env)
 
   const bytesByName = new Map()
-  for (const { name, local } of parsed) {
+  let releasedLabels = false
+  for (const { name, held, local } of parsed) {
     const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
-    if (out.bytes) bytesByName.set(name, out.bytes)
+    if (held !== null) {
+      // A quarantined file goes again only when what it publishes now differs from what the store refused; otherwise its record stays as it is.
+      if (!out.bytes || gitBlobSha(out.bytes) === held.blob) continue
+      releasedLabels = (await releaseQuarantined(env, store, [name])).labels.length > 0 || releasedLabels
+      bytesByName.set(name, out.bytes)
+    } else if (out.bytes) bytesByName.set(name, out.bytes)
     else await quarantine(env, store, name, out.reason)
   }
   const labelsByKey = new Map()
-  for (const { key, local } of parsedLabels) {
-    const out = publishLabelsOne(local, key, { known, desks, secret })
-    if (out.bytes) labelsByKey.set(key, out)
-    else await quarantine(env, store, key, out.reason)
+  const publishLabels = async (items) => {
+    for (const { key, local } of items) {
+      const out = publishLabelsOne(local, key, { known, desks, secret })
+      if (out.bytes) labelsByKey.set(key, out)
+      else await quarantine(env, store, key, out.reason)
+    }
+  }
+  await publishLabels(parsedLabels)
+  // Labels held back behind facts released above are ordinary candidates now; their facts' repositories were resolved with the facts.
+  if (releasedLabels) {
+    const seen = new Set(labelsByKey.keys())
+    const again = (await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })).filter(({ name }) => !seen.has(name))
+    await publishLabels(again.map(({ name, localBytes }) => ({ key: name, local: JSON.parse(localBytes.toString("utf8")) })))
   }
   // Every file without published bytes was just quarantined, so the listings below never ask about one.
   const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts.session.host}-${facts.session.id}.json`) }))
