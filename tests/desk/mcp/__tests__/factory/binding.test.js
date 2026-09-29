@@ -61,9 +61,9 @@ function fakes({ cards = {}, commitsBetween = [], nativeCommits = {}, housekeepi
   }
 }
 
-function bind(events, { deskRoot = DESK, deskRemote = REMOTE, personPrefix = "", ...options } = {}) {
+function bind(events, { deskRoot = DESK, deskRemote = REMOTE, personPrefix = "", agents, ...options } = {}) {
   const deps = fakes(options)
-  const result = bindSession({ events, deskRoot, deskRemote, personPrefix, ...deps })
+  const result = bindSession({ events, agents, deskRoot, deskRemote, personPrefix, ...deps })
   assert.equal(JSON.stringify(result).includes(SENTINEL), false, "no track, slug or path ever reaches a job")
   return { ...result, calls: deps.calls }
 }
@@ -121,6 +121,7 @@ test("a successful Desk task tool call alone binds its task, with its status as 
   assert.deepEqual(jobs, [{
     job: expectedId(NORMALIZED, "", TRACK, SLUG),
     basis: ["desk_tool"],
+    agents: [0],
     task_created_at: CARD.created_at,
     transitions: [{ to: "processing", at: "2026-09-25T08:10:00.000Z" }],
     observed: { status: "processing", at: null },
@@ -592,4 +593,113 @@ test("end to end: a failed Write under the desk binds nothing; the successful on
   } finally {
     rmSync(scratch, { recursive: true, force: true })
   }
+})
+
+// --- Per-worker binding -------------------------------------------------------
+
+const window0 = (agent, extra = {}) => ({ start: "2026-09-25T08:20:00.000Z", end: "2026-09-25T08:20:05.000Z", cwd: DESK, agent, ...extra })
+const idOf = (slug) => expectedId(NORMALIZED, "", TRACK, slug)
+const summary = (jobs) => jobs.map(({ job, basis, agents }) => ({ job, basis, agents }))
+
+test("a commit touching cards in 21 tasks binds none of them", () => {
+  const taskPaths = Array.from({ length: 21 }, (_, i) => `${TRACK}/task-${i}-${SENTINEL}/task.md`)
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths }
+  const { jobs } = bind({ shellGitCommits: [window0(0)] }, { commitsBetween: [commit] })
+  assert.deepEqual(jobs, [])
+  const native = bind({ nativeCommitShas: [{ sha: SHA_A, agent: 0 }] }, { nativeCommits: { [SHA_A]: { exists: true, taskPaths } } })
+  assert.deepEqual(native.jobs, [])
+})
+
+test("a commit touching 3 tasks binds all 3", () => {
+  const taskPaths = ["a", "b", "c"].map((name) => `${TRACK}/${name}-${SENTINEL}/notes.md`)
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [...taskPaths, taskPaths[0]] }
+  const { jobs } = bind({ shellGitCommits: [window0(0)] }, { commitsBetween: [commit] })
+  assert.equal(jobs.length, 3)
+})
+
+test("a commit whose housekeeping cards are filtered out to 3 or fewer tasks still binds the rest", () => {
+  const taskPaths = ["a", "b", "c", "d", "e"].map((name) => `${TRACK}/${name}-${SENTINEL}/task.md`)
+  const housekeeping = Object.fromEntries(taskPaths.slice(0, 2).map((p) => [`${SHA_A}:${p}`, true]))
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths }
+  const { jobs } = bind({ shellGitCommits: [window0(0)] }, { commitsBetween: [commit], housekeeping })
+  assert.equal(jobs.length, 3)
+})
+
+test("a commit is credited to each worker whose commit call covers it, and to none outside", () => {
+  const commit = { sha: SHA_A, committed_at: "2026-09-25T08:20:01.000Z", taskPaths: [`${TRACK}/${SLUG}/notes.md`, 7] }
+  const late = { start: "2026-09-25T09:00:00.000Z", end: "2026-09-25T09:00:05.000Z", cwd: DESK, agent: 2 }
+  const { jobs } = bind({ shellGitCommits: [window0(1), window0(3), late] }, { commitsBetween: [commit, { committed_at: "bad" }], agents: [{ n: 0 }, { n: 1, parent: 0 }, { n: 2, parent: 0 }, { n: 3, parent: 0 }] })
+  assert.deepEqual(summary(jobs), [{ job: idOf(SLUG), basis: ["desk_commit"], agents: [1, 3] }])
+  assert.deepEqual(bind({ shellGitCommits: [late] }, { commitsBetween: [commit] }).jobs, [])
+})
+
+test("a subagent with a Desk-Task line binds that task only", () => {
+  const agents = [{ n: 0 }, { n: 1, parent: 0 }]
+  const { jobs } = bind(
+    { deskToolCalls: [deskCall({ agent: 0 })], spawnTasks: [{ agent: 1, track: TRACK, slug: OTHER }] },
+    { agents },
+  )
+  assert.deepEqual(summary(jobs).sort((a, b) => a.agents[0] - b.agents[0]), [
+    { job: idOf(SLUG), basis: ["desk_tool"], agents: [0] },
+    { job: idOf(OTHER), basis: ["spawn_brief"], agents: [1] },
+  ].sort((a, b) => a.agents[0] - b.agents[0]))
+})
+
+test("a Desk-Task line naming a task with no card binds nothing", () => {
+  const agents = [{ n: 0 }, { n: 1, parent: 0 }]
+  const { jobs } = bind({ spawnTasks: [{ agent: 1, track: TRACK, slug: OTHER }, { agent: 1, track: "../x", slug: OTHER }, null] }, { agents, cards: { [`${TRACK}/${OTHER}`]: null } })
+  assert.deepEqual(jobs, [])
+})
+
+test("a subagent under a parent bound to one job inherits it", () => {
+  const agents = [{ n: 0 }, { n: 1, parent: 0 }, { n: 2, parent: 0 }]
+  const { jobs } = bind({ deskToolCalls: [deskCall({ agent: 0 })] }, { agents })
+  assert.deepEqual(summary(jobs), [{ job: idOf(SLUG), basis: ["desk_tool", "inherited"], agents: [0, 1, 2] }])
+})
+
+test("a subagent under a parent bound to several jobs stays unattributed", () => {
+  const agents = [{ n: 0 }, { n: 1, parent: 0 }]
+  const { jobs } = bind({ deskToolCalls: [deskCall({ agent: 0 }), deskCall({ agent: 0, slug: OTHER })] }, { agents })
+  assert.equal(jobs.length, 2)
+  for (const job of jobs) assert.deepEqual(job.agents, [0])
+})
+
+test("nested inheritance skips an evidence-less middle worker", () => {
+  const agents = [{ n: 0 }, { n: 1, parent: 0 }, { n: 2, parent: 1 }]
+  const { jobs } = bind({ deskToolCalls: [deskCall({ agent: 0 })] }, { agents })
+  assert.deepEqual(summary(jobs), [{ job: idOf(SLUG), basis: ["desk_tool", "inherited"], agents: [0, 1, 2] }])
+})
+
+test("inheritance stops at the first ancestor with evidence, even when it binds several jobs", () => {
+  const agents = [{ n: 0 }, { n: 1, parent: 0 }, { n: 2, parent: 1 }]
+  const { jobs } = bind({ deskToolCalls: [deskCall({ agent: 0 }), deskCall({ agent: 1 }), deskCall({ agent: 1, slug: OTHER })] }, { agents })
+  for (const job of jobs) assert.equal(job.agents.includes(2), false)
+})
+
+test("a worker that cannot be traced to an ancestor with evidence stays unattributed, without looping", () => {
+  const cyclic = [{ n: 0 }, { n: 1, parent: 2 }, { n: 2, parent: 1 }, { n: 3 }, { n: 4, parent: 9 }, { n: 5, parent: 5 }, { n: "x", parent: 0 }, null]
+  const { jobs } = bind({ deskToolCalls: [deskCall({ agent: 0 })] }, { agents: cyclic })
+  assert.deepEqual(summary(jobs), [{ job: idOf(SLUG), basis: ["desk_tool"], agents: [0] }])
+})
+
+test("a worker missing from agents still counts for its own evidence but cannot inherit", () => {
+  const { jobs } = bind({ deskToolCalls: [deskCall({ agent: 4 }), deskCall({ agent: -1, slug: OTHER }), deskCall({ agent: 1.5, slug: OTHER })] }, { agents: [{ n: 0 }] })
+  assert.deepEqual(summary(jobs).sort((a, b) => a.agents[0] - b.agents[0]), [
+    { job: idOf(OTHER), basis: ["desk_tool"], agents: [0] },
+    { job: idOf(SLUG), basis: ["desk_tool"], agents: [4] },
+  ])
+})
+
+test("legacy call without agents treats everything as agent 0", () => {
+  const { jobs } = bind({ deskToolCalls: [deskCall({ agent: 3 })], fileWrites: [{ path: `${DESK}/${TRACK}/${OTHER}/x.md`, agent: 2 }] })
+  assert.deepEqual(summary(jobs).map((job) => job.agents), [[0], [0]])
+})
+
+test("a native commit is credited to its worker, and a worker's spawn brief joins its own evidence with the job's other workers", () => {
+  const agents = [{ n: 0 }, { n: 1, parent: 0 }]
+  const { jobs } = bind(
+    { nativeCommitShas: [{ sha: SHA_A, agent: 1 }], spawnTasks: [{ agent: 0, track: TRACK, slug: SLUG }] },
+    { agents, nativeCommits: { [SHA_A]: { exists: true, taskPaths: [`${TRACK}/${SLUG}/notes.md`] } } },
+  )
+  assert.deepEqual(summary(jobs), [{ job: idOf(SLUG), basis: ["desk_commit", "spawn_brief"], agents: [0, 1] }])
 })
