@@ -6,18 +6,27 @@
 // registered for the current host, and reporting a missing registration
 // through the failure contract as a `Desk problem:` block."
 //
-// `fileHookRegistrationProblem` below is the single function that files
-// through the real Desk-problem filer (`factory/desk-problem-file.js`, Part
-// 4) -- the swappable seam a caller (or a test) can still replace via
-// `hookRegistrationDeskProblem`'s own `fileProblem` parameter. With no `env`
-// to resolve an account or a `gh` binary from, there is nothing to file with,
-// so it reports the honest `not filed: filer_unavailable` rather than ever
-// reaching for a real, unmocked `gh` process.
+// This module only verifies registration and formats the block; it never
+// files by itself. Filing a real `Desk problem:` (through
+// `factory/desk-problem-file.js`, Part 4) means an account lookup and `gh`
+// calls that can run for tens of seconds on a slow network, and neither of
+// this module's two callers may pay that cost inline: `desk_status` must
+// answer with no network call at all (a fix round after this Part first
+// shipped found the SessionStart hook losing its whole output past a 10 s
+// timeout, and `desk_status` hanging on every call, because the real filer
+// was reached straight from both). So `hookRegistrationDeskProblem`'s
+// `fileProblem` has no filing default: given none, the block renders
+// honestly with `file: not filed: filer_unavailable`, and each real caller
+// supplies its own deliberate, differently-shaped step --
+// boot-checks.cjs's `hostEnforcementCheck` queues a detached, unref'd run of
+// `mcp/scripts/file-desk-problem.js` (the same repair-launch pattern it
+// already uses) and reports `file: filing in background`; `status.js`'s
+// `hostEnforcementStatus` reports `file: filed at session start` with no
+// filing step of its own, since the boot check already covers it once per
+// session.
 
 import { readFile as fsReadFile } from "node:fs/promises"
 import * as path from "node:path"
-
-import { fileDeskProblem } from "../factory/desk-problem-file.js"
 
 const HOOK_ENTRY_FILENAME = "host-enforcement.cjs"
 
@@ -53,31 +62,9 @@ export async function verifyHookRegistered({ host, pluginRoot, readFile = defaul
   }
 }
 
-/**
- * The default filing step (see header): `{ env, host, reason, runner?, now?
- * }` -> `Promise<{ file }>`. Files through the real `fileDeskProblem`, mapped
- * to the block format's three `file:` shapes (spec §1) -- `<url> (filed)`,
- * `known: <url>`, or `not filed: <reason>` (`held_cap` included). With no
- * `env`, there is no account or `gh` binary to resolve, so nothing is
- * attempted: `not filed: filer_unavailable`, exactly as before this was
- * wired to a real filer. `hookRegistrationDeskProblem` below is the only
- * caller, and its own `fileProblem` parameter is still how a test (or a
- * future caller) swaps this default for something else.
- */
-export async function fileHookRegistrationProblem({ env, host, reason, runner, now } = {}) {
-  if (env === undefined || env === null) return { file: "not filed: filer_unavailable" }
-  const result = await fileDeskProblem(env, {
-    mechanism: "host-enforcement",
-    rawText: reason ?? "host-enforcement.cjs missing from hooks.json's PreToolUse array",
-    fixAttempt: "not auto-repaired -- reinstall Desk to restore it.",
-    host,
-    runner,
-    now,
-  })
-  if (result.result === "filed") return { file: `${result.url} (filed)` }
-  if (result.result === "known") return { file: `known: ${result.url}` }
-  if (result.result === "held_cap") return { file: "not filed: held_cap" }
-  return { file: `not filed: ${result.reason}` }
+/** The honest, no-op filing step: never called with `env` missing, since neither real caller needs it to resolve anything -- see the header. */
+async function noFiler() {
+  return { file: "not filed: filer_unavailable" }
 }
 
 /**
@@ -103,17 +90,17 @@ function formatDeskProblemBlock({ mechanism, symptom, broke, means, fix, file, t
  * checked at all, `true` with a `null` block when the hook is registered,
  * and `false` with a full `Desk problem:` block when it is not -- never
  * blocking, never throwing; a caller (the boot check, `desk_status`) shows
- * the block as-is. `env` (and, for tests, `runner`/`now`) reach the default
- * filing step; with no `env` the block still renders, with
- * `file: not filed: filer_unavailable`.
+ * the block as-is. `fileProblem` has no filing default (see the header):
+ * without one, the block still renders, with `file: not filed:
+ * filer_unavailable`; each real caller supplies its own.
  */
 export async function hookRegistrationDeskProblem({
-  host, pluginRoot, readFile, env, runner, now, fileProblem = fileHookRegistrationProblem,
+  host, pluginRoot, readFile, env, fileProblem = noFiler,
 } = {}) {
   const result = await verifyHookRegistered({ host, pluginRoot, readFile })
   if (!result.applicable) return { registered: null, block: null }
   if (result.registered) return { registered: true, block: null }
-  const { file } = await fileProblem({ env, host, reason: result.reason, runner, now })
+  const { file } = await fileProblem({ env, host, reason: result.reason })
   const block = formatDeskProblemBlock({
     mechanism: "host-enforcement",
     symptom: "deny hook not registered",

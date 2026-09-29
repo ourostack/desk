@@ -81,6 +81,8 @@ const oneLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ").slice
 const TOTAL_BUDGET_MS = 300;
 const TIDY_SOFT_MARGIN_MS = 20;
 const FACTORY_SCRIPT = path.join(__dirname, "..", "mcp", "scripts", "factory.js");
+const DESK_PROBLEM_SCRIPT = path.join(__dirname, "..", "mcp", "scripts", "file-desk-problem.js");
+const HOST_ENFORCEMENT_FIX_ATTEMPT = "not auto-repaired -- reinstall Desk to restore it.";
 const PERSON = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 
 // `root` is the bound desk's canonical identity, its real path, so every
@@ -369,6 +371,17 @@ const workspaceTidyCheck = { id: "workspace-tidy", budgetMs: 260, run: runWorksp
 // `Desk problem:` block rather than letting the gap stay silent. Copilot and
 // Codex are not checked here (Part 8 wires their own registration); this
 // check is a no-op for any host but claude.
+//
+// Filing is never awaited inline: a real filing attempt is an account lookup
+// and `gh` calls that can run for tens of seconds on a slow network, and this
+// check's own budget is 20 ms. Instead, when the hook is missing, `run` queues
+// the same kind of detached repair every other check here already uses --
+// `file-desk-problem.js` run through the compatible-Node launcher -- and the
+// block reports `file: filing in background`; the registry above launches it,
+// detached and unref'd, once every check has run (a fix round after this Part
+// first shipped: the inline filer's own process-spawn overhead alone was
+// enough to blow this budget on a loaded CI runner, and on a slow network it
+// risked losing the SessionStart hook's whole output past its own timeout).
 const hostEnforcementCheck = {
   id: "host-enforcement",
   budgetMs: 20,
@@ -376,9 +389,14 @@ const hostEnforcementCheck = {
     if (ctx.host !== "claude") return {};
     const { hookRegistrationDeskProblem } = await runtime("runtime/host-enforcement-registration.js");
     const pluginRoot = ctx.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
-    const { registered, block } = await hookRegistrationDeskProblem({ host: ctx.host, pluginRoot, env: ctx.env });
+    let repairCommand = null;
+    const fileProblem = async ({ host, reason }) => {
+      repairCommand = compatibleCommand(DESK_PROBLEM_SCRIPT, "--mechanism", "host-enforcement", "--reason", reason || "unknown", "--host", host || "unknown", "--fix-attempt", HOST_ENFORCEMENT_FIX_ATTEMPT);
+      return { file: "filing in background" };
+    };
+    const { registered, block } = await hookRegistrationDeskProblem({ host: ctx.host, pluginRoot, env: ctx.env, fileProblem });
     if (registered !== false) return {};
-    return { line: block };
+    return { line: block, repair: repairCommand ? { command: repairCommand } : undefined };
   },
 };
 

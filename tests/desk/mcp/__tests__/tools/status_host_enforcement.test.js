@@ -31,16 +31,20 @@ test("desk_status reports host_enforcement.registered true when the hook is wire
   assert.deepEqual(body.host_enforcement, { registered: true })
 })
 
-test("desk_status reports host_enforcement.registered false with a Desk problem: block when the hook is missing, and never makes a real network call filing it", async (t) => {
+test("desk_status reports host_enforcement.registered false with a Desk problem: block when the hook is missing, and never files itself (the boot check already does, once per session)", async (t) => {
   const deskRoot = makeDeskRoot()
   const pluginRoot = fixturePluginRoot(UNREGISTERED)
   t.after(() => { rmSync(deskRoot, { recursive: true, force: true }); rmSync(pluginRoot, { recursive: true, force: true }) })
-  // PATH: "" makes the real filer's real gh runner fail instantly with "no gh binary found" (ENOENT), the same
-  // technique the filer's own tests use, so this never reaches the network even though a real env is passed.
+  // PATH: "" is not filing-safety here (desk_status never reaches for gh at all) -- it just keeps this
+  // real env from being mistaken for anything else able to affect the result.
+  const started = Date.now()
   const body = await desk_status({ deskRoot, env: { CLAUDE_PLUGIN_ROOT: pluginRoot, DESK_PLUGIN_ROOT: pluginRoot, PATH: "" } })
+  // No account lookup, no gh call and no network round trip sit on this path, so even a call that would
+  // hang for tens of seconds on a slow network never shows up here: well under any such delay.
+  assert.ok(Date.now() - started < 2000)
   assert.equal(body.host_enforcement.registered, false)
   assert.match(body.host_enforcement.desk_problem, /^Desk problem: host-enforcement — /)
-  assert.match(body.host_enforcement.desk_problem, /file: not filed: no_suitable_account/)
+  assert.match(body.host_enforcement.desk_problem, /file: filed at session start/)
 })
 
 test("desk_status reports host_enforcement: null for a host this check does not cover (no CLAUDE_PLUGIN_ROOT set)", async (t) => {

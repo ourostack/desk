@@ -15,19 +15,27 @@ import { hookRegistrationDeskProblem } from "../runtime/host-enforcement-registr
 const OWN_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 const text = (value) => (typeof value === "string" && value.trim() !== "" ? value : null)
 
+// desk_status never files (a fix round after this Part first shipped: the real filer reached straight
+// from here hung this tool on every call once `gh` was installed). The boot check already files, once
+// per session, off its own critical path (`hostEnforcementCheck` in boot-checks.cjs); this just says so.
+async function reportOnly() {
+  return { file: "filed at session start" }
+}
+
 /**
  * `{ registered: true }` when Claude Code's deny hook (spec §5) is
  * registered, or `{ registered: false, desk_problem: <block> }` when it is
  * not -- the same host/plugin-root resolution `factory-context.js`'s
  * `factoryPluginScan` already uses (`CLAUDE_PLUGIN_ROOT` set by Claude Code's
  * own launcher; `DESK_PLUGIN_ROOT` on every other host). `null` for a host
- * this check does not cover (Part 8 wires Codex/Copilot's own).
+ * this check does not cover (Part 8 wires Codex/Copilot's own). Makes no
+ * network call: see `reportOnly` above.
  */
 async function hostEnforcementStatus({ env }) {
   const claudeRoot = text(env.CLAUDE_PLUGIN_ROOT)
   const pluginRoot = path.resolve(text(env.DESK_PLUGIN_ROOT) ?? claudeRoot ?? OWN_PLUGIN_ROOT)
   const host = claudeRoot === null ? "unknown" : "claude"
-  const { registered, block } = await hookRegistrationDeskProblem({ host, pluginRoot, env })
+  const { registered, block } = await hookRegistrationDeskProblem({ host, pluginRoot, env, fileProblem: reportOnly })
   if (registered === null) return null
   return registered ? { registered: true } : { registered: false, desk_problem: block }
 }

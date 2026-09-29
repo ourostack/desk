@@ -2,14 +2,18 @@
 // runner here is an in-memory model (spec.md §7).
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { mkdtempSync, promises as fs, rmSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 
 import { deskProblemFingerprint, normalizeErrorSignature } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-fingerprint.js"
 import { FINGERPRINT_PREFIX } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-template.js"
-import { LABEL, MAX_PROBLEMS_PER_DAY, STORE, fileDeskProblem } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-file.js"
+import { LABEL, MAX_PROBLEMS_PER_DAY, STORE, fileDeskProblem, runFileDeskProblemCli } from "../../../../../plugins/desk/mcp/src/factory/desk-problem-file.js"
 import { readStatus, setConsent } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+
+const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/file-desk-problem.js", import.meta.url))
 
 const VERSION = "gh version 2.54.0 (2024-07-31)\n"
 
@@ -222,4 +226,116 @@ test("fileDeskProblem never throws when called with no options at all, and makes
   const result = await fileDeskProblem({ ...env, PATH: "" })
   assert.equal(result.result, "not_filed")
   assert.equal(result.reason, "no_suitable_account")
+}))
+
+// ── deadlineMs (ruling 3): the whole attempt is bounded, not just the account lookup ──────────────
+
+test("a runner that never resolves still returns not_filed: deadline within the given bound, rather than hanging", () => scratch(async ({ env }) => {
+  const hang = () => new Promise(() => {})
+  const startedAt = Date.now()
+  const result = await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected", runner: hang, deadlineMs: 20 })
+  assert.equal(result.result, "not_filed")
+  assert.equal(result.reason, "deadline")
+  assert.match(result.body, /desk-problem-fingerprint/u)
+  assert.ok(Date.now() - startedAt < 2000, "must resolve near its own bound, never hang")
+}))
+
+test("a deadline that is already spent by the time the account is chosen is also reported as not_filed: deadline", () => scratch(async ({ env }) => {
+  const { runner } = fakeGh(ONE_ACCOUNT)
+  const result = await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected", runner, deadlineMs: 0 })
+  assert.equal(result.result, "not_filed")
+  assert.equal(result.reason, "deadline")
+}))
+
+test("a deadline spent entirely by a successful account selection is caught by fileDeskProblem's own post-selection check, not just chooseAccount's", () => scratch(async ({ env }) => {
+  // chooseAccount can spend a whole deadline choosing an account and still succeed (its own internal
+  // races only stop it when time runs out *during* a gh call, never merely because none is left over
+  // afterward). fileDeskProblem's own `if (remaining() <= 0)` right after selection exists for exactly
+  // that gap. A ticking fake clock -- one unit per `now()` call, shared with chooseAccount -- reproduces
+  // it deterministically: tuned so every check *inside* account selection still sees time left, but the
+  // very next tick, taken right after selection succeeds, has none.
+  let tick = -1
+  const now = () => { tick += 1; return tick }
+  const { runner } = fakeGh(ONE_ACCOUNT)
+  const result = await fileDeskProblem(env, { mechanism: "desk-sync", rawText: "push rejected", runner, now, deadlineMs: 10 })
+  assert.equal(result.result, "not_filed")
+  assert.equal(result.reason, "deadline")
+  assert.match(result.body, /desk-problem-fingerprint/u)
+}))
+
+// ── the dedup/cap/create critical section is locked (ruling 2): two sessions racing the same broken
+//    mechanism at once must not both file ──────────────────────────────────────────────────────────
+
+test("two concurrent filings for the same new fingerprint create only one issue; the other finds it known", () => scratch(async ({ env }) => {
+  const issues = []
+  let createCalls = 0
+  const fingerprint = fingerprintOf("desk-sync", "concurrent failure")
+  const runner = async (args, options = {}) => {
+    if (args[0] === "--version") return { code: 0, stdout: VERSION, stderr: "" }
+    if (args[0] === "auth" && args[1] === "status") return { code: 0, stdout: authStatus(ONE_ACCOUNT.accounts), stderr: "" }
+    if (args[0] === "auth" && args[1] === "token") return { code: 0, stdout: "token-contributor\n", stderr: "" }
+    if (args[0] === "api") {
+      const method = args[2]
+      const route = args[7]
+      if (route === `repos/${STORE}`) return { code: 0, stdout: JSON.stringify(PUSH), stderr: "" }
+      if (route.startsWith(`repos/${STORE}/issues?`)) return { code: 0, stdout: JSON.stringify(issues), stderr: "" }
+      if (method === "POST" && route === `repos/${STORE}/issues`) {
+        createCalls += 1
+        // A slow create widens the check-then-act window a missing lock would let a second racer slip through.
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        const number = issues.length + 1
+        const html_url = `https://github.com/${STORE}/issues/${number}`
+        issues.push({ number, html_url, title: "t", body: `${FINGERPRINT_PREFIX}${fingerprint} -->`, labels: [{ name: LABEL }], state: "open", pull_request: null })
+        return { code: 0, stdout: JSON.stringify({ number, html_url }), stderr: "" }
+      }
+    }
+    return { code: 1, stdout: "", stderr: "unexpected call\n" }
+  }
+  const [a, b] = await Promise.all([
+    fileDeskProblem(env, { mechanism: "desk-sync", rawText: "concurrent failure", runner }),
+    fileDeskProblem(env, { mechanism: "desk-sync", rawText: "concurrent failure", runner }),
+  ])
+  assert.equal(createCalls, 1, "the lock must keep a second racer out of the dedup/cap/create section entirely")
+  assert.deepEqual([a.result, b.result].sort(), ["filed", "known"])
+}))
+
+// ── runFileDeskProblemCli: the detached filer's whole CLI surface, unit-tested directly ───────────
+
+test("runFileDeskProblemCli requires --mechanism, and refuses an empty one", () => scratch(async ({ env }) => {
+  await assert.rejects(runFileDeskProblemCli({ argv: [], env }), /--mechanism <name> is required/u)
+  await assert.rejects(runFileDeskProblemCli({ argv: ["--mechanism", ""], env }), /--mechanism <name> is required/u)
+}))
+
+test("runFileDeskProblemCli refuses an argument that isn't a --flag", () => scratch(async ({ env }) => {
+  await assert.rejects(runFileDeskProblemCli({ argv: ["oops"], env }), /unexpected argument "oops"/u)
+}))
+
+test("runFileDeskProblemCli refuses a non-string argument too, naming it safely rather than throwing on the name itself", () => scratch(async ({ env }) => {
+  await assert.rejects(runFileDeskProblemCli({ argv: [null], env }), /unexpected argument ""/u)
+}))
+
+test("runFileDeskProblemCli resolves 0 and never throws once --mechanism is given, whether or not the optional flags are, and even when nothing can file", () => scratch(async ({ env }) => {
+  const withAll = await runFileDeskProblemCli({
+    argv: ["--mechanism", "desk-sync", "--reason", "push rejected", "--host", "claude", "--fix-attempt", "retry"],
+    env: { ...env, PATH: "" },
+  })
+  assert.equal(withAll, 0)
+  const mechanismOnly = await runFileDeskProblemCli({ argv: ["--mechanism", "desk-sync"], env: { ...env, PATH: "" } })
+  assert.equal(mechanismOnly, 0)
+}))
+
+// ── scripts/file-desk-problem.js: the one-line CLI entry point itself, run for real as a subprocess
+//    (the coverage runner instruments child node processes through the parent's own environment,
+//    the same pattern scripts/tidy-status.js's own test uses) ──────────────────────────────────────
+
+test("scripts/file-desk-problem.js runs the real CLI end to end, filing nothing when it cannot reach gh", () => scratch(async ({ env, base }) => {
+  const childEnv = { ...process.env, HOME: env.HOME, XDG_STATE_HOME: env.XDG_STATE_HOME, PATH: "" }
+  const result = spawnSync(process.execPath, [SCRIPT, "--mechanism", "desk-sync", "--reason", "subprocess failure", "--host", "claude"], { env: childEnv, encoding: "utf8", cwd: base })
+  assert.equal(result.status, 0, result.stderr)
+}))
+
+test("scripts/file-desk-problem.js exits non-zero on a usage error (no --mechanism)", () => scratch(async ({ env, base }) => {
+  const childEnv = { ...process.env, HOME: env.HOME, XDG_STATE_HOME: env.XDG_STATE_HOME, PATH: "" }
+  const result = spawnSync(process.execPath, [SCRIPT], { env: childEnv, encoding: "utf8", cwd: base })
+  assert.notEqual(result.status, 0)
 }))

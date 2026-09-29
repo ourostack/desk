@@ -42,6 +42,7 @@ import {
   writeStatus,
   writeVisibilityCache,
   withDerivationLock,
+  withNamedLock,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 
 const nativeMac = { skip: process.platform !== "darwin" }
@@ -321,6 +322,39 @@ test("derivation locks serialize concurrent callers with default options and rel
   await Promise.all([withDerivationLock(env, name, body), withDerivationLock(env, name, body, {})])
   assert.equal(maximum, 1)
   assert.deepEqual(await fs.readdir(path.join(await factoryStateRoot(env), "deriving")), [])
+}))
+
+test("withNamedLock serializes concurrent callers under one name, leaves no lock file behind, and returns the body's own value", () => scratch(async (env) => {
+  let active = 0, maximum = 0
+  const body = async () => {
+    active += 1
+    maximum = Math.max(maximum, active)
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    active -= 1
+    return "done"
+  }
+  const [a, b] = await Promise.all([withNamedLock(env, "desk-problem-desk-sync", body), withNamedLock(env, "desk-problem-desk-sync", body)])
+  assert.equal(maximum, 1)
+  assert.deepEqual([a, b], ["done", "done"])
+  assert.deepEqual(await fs.readdir(path.join(await factoryStateRoot(env), "locks")), [])
+}))
+
+test("withNamedLock refuses a name that isn't a safe path segment", () => scratch(async (env) => {
+  await assert.rejects(withNamedLock(env, "not/safe", async () => {}), TypeError)
+  await assert.rejects(withNamedLock(env, "", async () => {}), TypeError)
+  await assert.rejects(withNamedLock(env, "Upper-Case", async () => {}), TypeError)
+}))
+
+test("two differently named locks never block each other", () => scratch(async (env) => {
+  let concurrent = 0, maximum = 0
+  const body = async () => {
+    concurrent += 1
+    maximum = Math.max(maximum, concurrent)
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    concurrent -= 1
+  }
+  await Promise.all([withNamedLock(env, "lock-a", body), withNamedLock(env, "lock-b", body)])
+  assert.equal(maximum, 2)
 }))
 
 test("an outbox listing error cannot be reported as an empty pending queue", () => scratch(async (env) => {
