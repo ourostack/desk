@@ -38,9 +38,9 @@ test("a completed task renamed outside the tools still queues the job at its bir
   git("init", "-q", "-b", "main")
   git("config", "user.name", "Fixture")
   git("config", "user.email", "fixture@example.invalid")
+  // task_create commits the new card itself (M4-6 Part 2), so there is
+  // nothing left to add or commit here.
   await task_create({ deskRoot: desk, input: { track: "track", slug: "origin-slug", title: "fixture" } })
-  git("add", "-A")
-  git("commit", "-q", "-m", "create the task")
   // A rename made outside the task tools (an editor, `git mv`, a track rename): the card moves, but its identity should not.
   await fs.rename(path.join(desk, "track", "origin-slug"), path.join(desk, "track", "renamed-slug"))
   git("add", "-A")

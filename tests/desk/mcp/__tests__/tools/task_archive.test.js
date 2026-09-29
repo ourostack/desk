@@ -5,11 +5,40 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
+import { spawnSync } from "node:child_process"
 import {
   task_create,
   task_archive,
 } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
+
+function initGit(root) {
+  const run = (args) => {
+    const result = spawnSync("git", args, { cwd: root, encoding: "utf8" })
+    assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`)
+  }
+  run(["init", "-q"])
+  run(["config", "user.email", "test@example.com"])
+  run(["config", "user.name", "Test"])
+}
+
+function gitStatus(root) {
+  const result = spawnSync("git", ["-C", root, "status", "--short"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout
+}
+
+function lastCommitMessage(root) {
+  const result = spawnSync("git", ["-C", root, "log", "-1", "--format=%s"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.trim()
+}
+
+function lastCommitFiles(root) {
+  const result = spawnSync("git", ["-C", root, "show", "--stat", "--format=", "--name-only", "HEAD"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.split("\n").filter(Boolean).sort()
+}
 
 test("task_archive moves the dir into _archive/ and marks status=done", async () => {
   const root = await mkTempDeskRoot()
@@ -187,4 +216,93 @@ test("task_archive's status bump preserves every other frontmatter byte untouche
     "the long single-line purpose scalar is untouched",
   )
   assert.match(raw, /\nnote: \|\n {2}first literal line\n {2}second literal line\n/u, "the note: | block is untouched")
+})
+
+// ── M4-6 Part 2: stage + commit ─────────────────────────────────────────────
+
+test("task_archive stages and commits exactly the moved paths", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
+
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+
+  assert.equal(result.status, "archived")
+  assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
+  assert.equal(gitStatus(root), "")
+  assert.equal(lastCommitMessage(root), "task_archive: t/book-flights")
+  assert.deepEqual(lastCommitFiles(root), [path.join("t", "_archive", "book-flights", "task.md")])
+})
+
+test("task_archive commits only its own paths, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
+
+  // Simulates another process staging an unrelated path in the window
+  // between task_archive's move and its own stage/commit.
+  await fs.writeFile(path.join(root, "unrelated.txt"), "another process's work\n")
+  spawnSync("git", ["-C", root, "add", "--", "unrelated.txt"], { encoding: "utf8" })
+
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+
+  assert.equal(result.commit, undefined, "task_archive's own commit succeeded")
+  assert.deepEqual(lastCommitFiles(root), [path.join("t", "_archive", "book-flights", "task.md")])
+  const status = gitStatus(root)
+  assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
+})
+
+test("task_archive reports a commit failure without losing the move", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    return spawnSync(cmd, args, opts)
+  }
+
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" }, spawnGit })
+
+  assert.equal(result.status, "archived", "the move itself is never lost to a commit failure")
+  assert.ok(await exists(path.join(root, "t", "_archive", "book-flights", "task.md")))
+  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+})
+
+test("task_archive skips committing silently when staging itself fails", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("add")) return { status: 1, stdout: "", stderr: "add boom" }
+    return spawnSync(cmd, args, opts)
+  }
+
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" }, spawnGit })
+
+  assert.equal(result.status, "archived", "the move itself is never lost to a staging failure")
+  assert.equal(result.commit, undefined, "nothing was staged, so nothing is committed or reported as failed")
+  assert.ok(await exists(path.join(root, "t", "_archive", "book-flights", "task.md")))
+})
+
+test("task_archive skips staging and committing silently on a non-Git desk", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+  assert.equal(result.status, "archived")
+  assert.equal(result.commit, undefined)
+})
+
+test("already_archived stages and commits nothing", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+
+  const before = lastCommitMessage(root)
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+
+  assert.equal(result.status, "already_archived")
+  assert.equal(result.commit, undefined)
+  assert.equal(lastCommitMessage(root), before, "nothing changed, so nothing was committed")
+  assert.equal(gitStatus(root), "")
 })

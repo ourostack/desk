@@ -1,10 +1,15 @@
 // The one-time tidy's own work versus another session's (M4-5 fix round 4).
 //
 // The tidy makes several task_move / track_rename / track_update /
-// track_create calls per track and commits once, at step 7, without ever
-// passing allow_dirty. Every one of those tools stages what it writes, so a
-// staged change reads as the tidy's own work in progress, and only unstaged
-// changes or untracked, non-ignored files read as another session's work.
+// track_create calls per track, without ever passing allow_dirty. Every one
+// of those tools stages what it writes and commits exactly that (M4-6 Part
+// 2), so each step lands as its own commit as the tidy goes, rather than
+// waiting on a single commit at the end; a step still reads its own earlier
+// staged-then-committed work as the tidy's own, and only unstaged changes or
+// untracked, non-ignored files read as another session's work. A step the
+// tidy takes directly with `git` (not through a Desk tool, e.g. moving a
+// whole track under `_archive/` by hand) still leaves its own change staged,
+// uncommitted, for the tidy to commit itself.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -168,9 +173,9 @@ test("task_move surfaces a git add failure while staging its edits", async () =>
   )
 })
 
-// ── Step 7 commits exactly the tidy's changes ───────────────────────────────
+// ── Each tool commits its own step; a manual step still needs its own ──────
 
-test("step 7's git commit -- <tidy paths> commits exactly the tidy's changes and leaves other sessions' work as it was", async () => {
+test("each Desk-tool step in a tidy commits its own paths as it goes, and a manual git step still needs its own commit, leaving other sessions' work as it was", async () => {
   const root = await committedDesk({
     "track-a": ["keeper-task", "dupe-task", "fix-it-now"],
     "old-bucket": ["loose-job"],
@@ -182,7 +187,9 @@ test("step 7's git commit -- <tidy paths> commits exactly the tidy's changes and
   await fs.writeFile(path.join(root, "other-track", "other-task", "doing.md"), "staged elsewhere\n")
   git(root, ["add", "--", "other-track/other-task/doing.md"])
 
-  // The tidy, steps 1-5, never passing allow_dirty.
+  // The tidy, steps 1-5, never passing allow_dirty. Each Desk-tool call below
+  // stages and commits exactly the paths it wrote (M4-6 Part 2), so nothing
+  // from these steps is left for a later, separate commit.
   await track_update({ deskRoot: root, input: { slug: "track-a", frontmatter: { scope: "billing work; not payroll" } } })
   await task_move({ deskRoot: root, input: { track: "track-a", slug: "fix-it-now", to_slug: "invoice-retry-fix" } })
   await task_move({ deskRoot: root, input: { track: "track-a", slug: "keeper-task", to_slug: "kept-outcome" } })
@@ -190,11 +197,20 @@ test("step 7's git commit -- <tidy paths> commits exactly the tidy's changes and
   await track_create({ deskRoot: root, input: { slug: "billing-work", title: "Billing", scope: SCOPE, body: tasksBody([]) } })
   await task_move({ deskRoot: root, input: { track: "old-bucket", slug: "loose-job", to_track: "billing-work" } })
   await track_rename({ deskRoot: root, input: { track: "track-a", to: "invoice-work" } })
+
+  // Every Desk-tool path is already fully committed: nothing unstaged,
+  // untracked, or even staged-but-uncommitted remains under any of them.
+  const toolPaths = ["invoice-work", "billing-work"]
+  assert.equal(unstaged(root, toolPaths), "")
+  assert.equal(git(root, ["diff", "--cached", "--name-only", "--", ...toolPaths]), "")
+
+  // A step the tidy takes directly with `git`, not through a Desk tool,
+  // still leaves its own change merely staged — this one still needs the
+  // tidy's own commit.
   await fs.mkdir(path.join(root, "_archive"))
   git(root, ["mv", "old-bucket", "_archive/old-bucket"])
 
-  // Step 7's check: nothing unstaged or untracked under the tidy paths.
-  const tidyPaths = ["track-a", "invoice-work", "old-bucket", "billing-work", "_archive"]
+  const tidyPaths = ["old-bucket", "_archive"]
   assert.equal(unstaged(root, tidyPaths), "")
   const stagedBefore = lines(git(root, ["diff", "--cached", "--name-only", "--no-renames"]))
   git(root, ["commit", "-q", "-m", "tidy", "--", ...tidyPaths])
@@ -202,9 +218,7 @@ test("step 7's git commit -- <tidy paths> commits exactly the tidy's changes and
   const committed = lines(git(root, ["show", "--name-only", "--format=", "--no-renames", "HEAD"]))
   assert.deepEqual(committed, stagedBefore.filter((file) => file !== "other-track/other-task/doing.md"))
   assert.ok(committed.every((file) => tidyPaths.some((p) => file.startsWith(`${p}/`))))
-  assert.ok(committed.some((file) => /^invoice-work\/kept-outcome\/_iterations\/\d{4}-\d{2}-\d{2}-dupe-task\/merged-task\.md$/.test(file)))
-  assert.ok(committed.includes("track-a/track.md") && committed.includes("invoice-work/track.md"))
-  assert.ok(committed.includes("_archive/old-bucket/track.md") && committed.includes("billing-work/loose-job/task.md"))
+  assert.ok(committed.includes("_archive/old-bucket/track.md"))
 
   // Other sessions' work is exactly as it was: staged stays staged, unstaged stays unstaged.
   assert.deepEqual(lines(git(root, ["diff", "--cached", "--name-only"])), ["other-track/other-task/doing.md"])

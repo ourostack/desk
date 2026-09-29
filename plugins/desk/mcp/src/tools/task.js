@@ -4,9 +4,16 @@
 // pair. The implementation owns the on-disk layout under
 // `<root>/<track>/<slug>/task.md` and obeys the schema documented in
 // `plugins/desk/skills/task-card-format/SKILL.md` (schema_version 1).
+//
+// On a Git desk, each tool stages exactly what it wrote and then commits
+// exactly those paths, synchronously in the tool call (M4-6 Part 2); pushing
+// is a later part. A commit failure never loses the write — it comes back as
+// `commit: { status: "failed", reason }` on the result, omitted entirely on
+// a normal, silent success or on a non-Git desk.
 
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
+import { spawnSync } from "node:child_process"
 import {
   nowIso,
   readMarkdown,
@@ -15,6 +22,7 @@ import {
   pathExists,
 } from "../util/fm.js"
 import { isPathContained, resolveWriteTarget, personPrefix } from "../util/paths.js"
+import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
@@ -121,6 +129,47 @@ const OPTIONAL_RUNTIME_FIELDS = [
 
 function relPath(deskRoot, absPath) {
   return path.relative(deskRoot, absPath)
+}
+
+// On a Git desk, a task tool stages the task.md it writes (M4-5 fix round 4)
+// only when the file held no unstaged changes before this write, so a
+// dirty/untracked card left by another session is never adopted as this
+// tool's own work. `spawnGit` is a test-only seam over `spawnSync`.
+function stagingAllowed(filePath, spawnGit) {
+  const dir = path.dirname(filePath)
+  return isGitRepository(dir, spawnGit) && !hasUnstagedWork(dir, [path.basename(filePath)], spawnGit)
+}
+
+// After staging, commits exactly the one file staged (M4-6 Part 2: every
+// write tool commits its own paths synchronously; push is a later part).
+// Staging and committing are both best-effort: a stage failure leaves
+// nothing to commit, and a commit failure never throws away the write or the
+// tool's own result — it comes back as this function's return value, which a
+// caller attaches to its result under `commit` only on failure, so a normal,
+// silent success stays byte-identical to today's response shape.
+function stageAndCommitCard(filePath, message, spawnGit) {
+  const dir = path.dirname(filePath)
+  const basename = path.basename(filePath)
+  const staged = stagePaths(dir, [basename], spawnGit)
+  if (!staged.ok) return undefined
+  const committed = commitPaths(dir, [basename], message, spawnGit)
+  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
+}
+
+// task_archive moves a folder with a plain `fs.rename`, never `git mv` (see
+// task_archive's own doc comment) — but a bare `git add -- <old> <new>`
+// still stages the move as a rename (Git detects it from the deletion at
+// `<old>` plus the addition at `<new>`; no `-A` needed since both paths are
+// named explicitly), so the same stage-then-commit shape as every other
+// write tool applies here too (M4-6 Part 2). `root` is the effective
+// (person-scoped) desk root; `paths` are absolute.
+function stageAndCommitMove(root, paths, message, spawnGit) {
+  if (!isGitRepository(root, spawnGit)) return undefined
+  const relPaths = paths.map((p) => path.relative(root, p))
+  const staged = stagePaths(root, relPaths, spawnGit)
+  if (!staged.ok) return undefined
+  const committed = commitPaths(root, relPaths, message, spawnGit)
+  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
 }
 
 async function assertArchiveSourceIsRelocationSafe({
@@ -254,7 +303,8 @@ function splitAbsolutePath(candidate) {
  *     ...optional runtime fields per task-card schema
  *   }
  *
- * Side effects: creates `<root>/<track>/<slug>/task.md` (and parent dirs).
+ * Side effects: creates `<root>/<track>/<slug>/task.md` (and parent dirs),
+ * and stages + commits it on a Git desk (M4-6 Part 2).
  *
  * Errors:
  *   - refuses if the target task.md already exists.
@@ -262,9 +312,14 @@ function splitAbsolutePath(candidate) {
  *     `desk/naming.js`): wrong shape, too long, prompt-like, or
  *     credential-like.
  *
- * Returns: { status: "created", path: "<track>/<slug>/task.md" }
+ * On a Git desk, commits exactly the file it wrote right after staging it. A
+ * commit failure never loses the write: it comes back as `commit: { status:
+ * "failed", reason }` on the result, omitted entirely on a normal, silent
+ * success or on a non-Git desk.
+ *
+ * Returns: { status: "created", path: "<track>/<slug>/task.md", commit? }
  */
-export async function task_create({ deskRoot, input, person = null, readiness }) {
+export async function task_create({ deskRoot, input, person = null, readiness, spawnGit = spawnSync }) {
   const values = input ?? {}
   const { track, slug, title } = values
   if (!Object.hasOwn(values, "track")) {
@@ -312,8 +367,14 @@ export async function task_create({ deskRoot, input, person = null, readiness })
   }
 
   await writeMarkdown(filePath, data, values.body ?? "")
+  let commit
+  if (isGitRepository(path.dirname(filePath), spawnGit)) {
+    commit = stageAndCommitCard(filePath, `task_create: ${track}/${slug}`, spawnGit)
+  }
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
-  return { status: "created", path: relPath(deskRoot, filePath) }
+  const result = { status: "created", path: relPath(deskRoot, filePath) }
+  if (commit) result.commit = commit
+  return result
 }
 
 /**
@@ -329,15 +390,21 @@ export async function task_create({ deskRoot, input, person = null, readiness })
  *     body_append?: string,   // appended to existing body (blank line sep)
  *   }
  *
- * Side effects: rewrites `<root>/<track>/<slug>/task.md` in place.
+ * Side effects: rewrites `<root>/<track>/<slug>/task.md` in place, and on a
+ * Git desk stages it when it held no unstaged changes before the write.
  *
  * Preserves: `schema_version`, `created`. Always refreshes `updated` to now.
  *
  * Errors: refuses if the task doesn't exist.
  *
- * Returns: { status: "updated", path }
+ * On a Git desk, also commits exactly the file it staged (M4-6 Part 2). A
+ * commit failure never loses the write: it comes back as `commit: { status:
+ * "failed", reason }` on the result, omitted entirely on a normal, silent
+ * success, when the file was already dirty, or on a non-Git desk.
+ *
+ * Returns: { status: "updated", path, commit? }
  */
-export async function task_update({ deskRoot, input, person = null, readiness, env = process.env }) {
+export async function task_update({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync }) {
   const values = input ?? {}
   const { track, slug, body_append } = values
   if (
@@ -385,10 +452,14 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     newBody = `${newBody}${sep}${body_append}`
   }
 
+  const stage = stagingAllowed(filePath, spawnGit)
   await writeMarkdown(filePath, merged, newBody)
+  const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit) : undefined
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
-  return { status: "updated", path: relPath(deskRoot, filePath) }
+  const result = { status: "updated", path: relPath(deskRoot, filePath) }
+  if (commit) result.commit = commit
+  return result
 }
 
 // The already-archived card's status, read fail-safe: a missing file reads
@@ -417,11 +488,19 @@ async function archivedTaskStatus(archivedFile) {
  * Marks the task `done` if not already in a terminal status.
  *
  * Idempotent: if the source dir doesn't exist AND `_archive/<slug>` does,
- * returns `{ status: "already_archived" }`. Throws if neither exists.
+ * returns `{ status: "already_archived" }` without staging or committing
+ * anything (nothing changed). Throws if neither exists.
  *
- * Returns: { status: "archived" | "already_archived", path }
+ * On a Git desk, stages the move (a plain `fs.rename`, never `git mv`) with
+ * `git add -- <source> <destination>` — Git detects the rename itself from
+ * the deletion and the addition, no `-A` needed — then commits exactly those
+ * two paths (M4-6 Part 2). A commit failure never loses the archive: it
+ * comes back as `commit: { status: "failed", reason }` on the result,
+ * omitted entirely on a normal, silent success or on a non-Git desk.
+ *
+ * Returns: { status: "archived" | "already_archived", path, commit? }
  */
-export async function task_archive({ deskRoot, input, person = null, readiness, env = process.env }) {
+export async function task_archive({ deskRoot, input, person = null, readiness, env = process.env, spawnGit = spawnSync }) {
   const values = input ?? {}
   const { track, slug } = values
   if (
@@ -499,6 +578,13 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     }
   }
 
+  // Stage + commit the move (and any status bump above, already on disk by
+  // now) last, once every write this call makes is in place (M4-6 Part 2).
+  const effectiveRoot = path.resolve(personPrefix(deskRoot, person))
+  const commit = stageAndCommitMove(effectiveRoot, [srcDir, archiveDir], `task_archive: ${track}/${slug}`, spawnGit)
+
   await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: finalStatus })
-  return { status: "archived", path: relPath(deskRoot, filePath) }
+  const result = { status: "archived", path: relPath(deskRoot, filePath) }
+  if (commit) result.commit = commit
+  return result
 }
