@@ -54,6 +54,8 @@ import { fileURLToPath } from "node:url"
 import { lastStartRootKey, resolveDeskStateDir } from "./last-start.js"
 import { readProcessStart } from "../readiness/process-start.js"
 import { formatDeskProblem } from "./index-drift.js"
+import { argvSafeReason } from "./argv-safe-reason.js"
+import { shouldLaunchFiler } from "./filer-throttle.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -61,11 +63,23 @@ export const DEFAULT_DEBOUNCE_MS = 2000
 const SYNC_PUSH_SCRIPT = fileURLToPath(new URL("../../scripts/sync-push.js", import.meta.url))
 const FILE_DESK_PROBLEM_SCRIPT = fileURLToPath(new URL("../../scripts/file-desk-problem.js", import.meta.url))
 
+// `GIT_SSH_COMMAND` gets the same treatment `GIT_TERMINAL_PROMPT=0` already
+// gives the HTTPS credential prompt: `-o BatchMode=yes` disables every
+// interactive SSH prompt (a host-key question, a passphrase) so an
+// SSH-remote desk can never hang this worker either. A caller's own
+// `GIT_SSH_COMMAND` (an already-configured SSH wrapper, a custom identity
+// file) is extended, never replaced.
+function gitEnv() {
+  const existing = process.env.GIT_SSH_COMMAND
+  const sshCommand = typeof existing === "string" && existing.trim() !== "" ? `${existing} -o BatchMode=yes` : "ssh -o BatchMode=yes"
+  return { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: sshCommand }
+}
+
 function run(spawnGit, root, args) {
   return spawnGit("git", ["-C", root, ...args], {
     encoding: "utf8",
     timeout: GIT_TIMEOUT_MS,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env: gitEnv(),
   })
 }
 
@@ -191,6 +205,14 @@ function conflictedPaths(root, spawnGit) {
   return result.stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "")
 }
 
+// The number of stash entries `root` currently has — used only to notice a
+// `git stash pop` that silently failed to drop its own entry (below).
+export function stashCount(root, spawnGit) {
+  const result = run(spawnGit, root, ["stash", "list"])
+  if (result.status !== 0 || typeof result.stdout !== "string") return 0
+  return result.stdout.split("\n").filter((line) => line.trim() !== "").length
+}
+
 function abortRebase(root, spawnGit) {
   // Best-effort safety net: harmless (and ignored) when there is no rebase in progress.
   run(spawnGit, root, ["rebase", "--abort"])
@@ -201,14 +223,29 @@ function abortRebase(root, spawnGit) {
  * rejection gets exactly one `git pull --rebase --autostash`, then one more
  * push. A failed rebase, or a push still rejected after a clean one, always
  * leaves the repo not mid-rebase — never `--force`.
+ *
+ * A status-0 pull is not proof the tree actually ended up clean (fix round):
+ * `git pull --rebase --autostash` can exit 0 even when popping its own
+ * autostash conflicts — the rebase step itself finished, but the stash pop
+ * leaves UU conflict markers and keeps the stash entry rather than failing
+ * the pull's own exit code. `conflictedPaths` catches a pop that left
+ * merge-conflict markers; `stashCount` growing catches the other shape (an
+ * untracked file colliding with one the stash would restore), which leaves
+ * the stash entry behind with no UU marker at all.
  */
 function pushWithRetry(root, spawnGit) {
   if (run(spawnGit, root, ["push"]).status === 0) return { result: "ok" }
+  const stashBefore = stashCount(root, spawnGit)
   const pulled = run(spawnGit, root, ["pull", "--rebase", "--autostash"])
   if (pulled.status !== 0) {
     const paths = conflictedPaths(root, spawnGit)
     abortRebase(root, spawnGit)
     return { result: "blocked", reason: "pull_rebase_failed", paths }
+  }
+  const stashConflictPaths = conflictedPaths(root, spawnGit)
+  if (stashConflictPaths.length > 0 || stashCount(root, spawnGit) > stashBefore) {
+    abortRebase(root, spawnGit)
+    return { result: "blocked", reason: "autostash_pop_conflict", paths: stashConflictPaths }
   }
   if (run(spawnGit, root, ["push"]).status === 0) return { result: "ok" }
   abortRebase(root, spawnGit)
@@ -249,8 +286,22 @@ function text(value) {
  * by this module's own one caller (`runPushWorker`, below); `spawnImpl` is a
  * test seam only — every test injects one, since the real default really
  * shells out toward `gh` and could actually file a GitHub issue.
+ *
+ * `reason`'s raw text never becomes an argument on the detached filer's own
+ * command line unredacted (fix round, spec.md §1 Part 5): `ps` shows a
+ * process's argv to every account on the machine, not just this session, so
+ * it is narrowed through `argvSafeReason` first, the same way `boot-
+ * checks.cjs`'s own filing call sites already do. `shouldLaunchFiler`
+ * throttles the actual *spawn* to once per hour per reason, matching `boot-
+ * checks.cjs`'s own cooldown — the caller still gets a `file` field back
+ * either way, since a filing that is merely deduped is not itself a new
+ * failure to report.
  */
 export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
+  const safeReason = argvSafeReason(reason)
+  if (!shouldLaunchFiler({ env, mechanism: "desk-sync", signature: safeReason })) {
+    return { file: "filing already queued (within the last hour)" }
+  }
   try {
     // istanbul ignore next -- see the doc comment above: the real default is
     // exercised only by the real filer in production, never by a test.
@@ -258,7 +309,7 @@ export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
     const child = spawnChild(process.execPath, [
       FILE_DESK_PROBLEM_SCRIPT,
       "--mechanism", "desk-sync",
-      "--reason", reason,
+      "--reason", safeReason,
       "--host", host,
       "--fix-attempt", "retried once with git pull --rebase --autostash, then pushed again",
     ], { cwd: root, detached: true, stdio: "ignore", windowsHide: true, env })
@@ -267,6 +318,7 @@ export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
   } catch {
     // Never let filing itself become a new failure.
   }
+  return { file: "filing in background" }
 }
 
 /**

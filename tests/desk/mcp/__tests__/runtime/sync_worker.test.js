@@ -11,8 +11,9 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { promises as fs, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { promises as fs, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
+import * as os from "node:os"
 import { spawnSync } from "node:child_process"
 import { mkTempRoot } from "../_temp_roots.js"
 import { lastStartRootKey, resolveDeskStateDir } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
@@ -30,6 +31,7 @@ import {
   runPushWorker,
   runSyncPushCli,
   schedulePush,
+  stashCount,
   syncStatusPath,
 } from "../../../../../plugins/desk/mcp/src/runtime/sync-worker.js"
 
@@ -256,13 +258,25 @@ test("hostFromEnv names claude only when CLAUDE_PLUGIN_ROOT is a real value, els
 // queueDeskProblemFiling.
 // ---------------------------------------------------------------------------
 
-test("queueDeskProblemFiling spawns the detached filer with mechanism desk-sync and the given reason/host", () => {
+// A fresh, throwaway HOME per test -- never `process.env` itself, whose own
+// `XDG_STATE_HOME` is one shared directory for this whole test-file run (set
+// once by `_isolated_env.mjs`), which would let one test's throttle stamp
+// leak into a sibling test using the same mechanism+reason pair. Matches
+// `filer_throttle.test.js`'s own `fixtureEnv` exactly.
+function fixtureFilerEnv(t) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "desk-sync-worker-filer-"))
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  return { HOME: root }
+}
+
+test("queueDeskProblemFiling spawns the detached filer with mechanism desk-sync and the given reason/host", (t) => {
   let captured = null
   const spawnImpl = (cmd, args, opts) => {
     captured = { cmd, args, opts }
     return { on: (event, handler) => { if (event === "error") handler(new Error("unused")) }, unref: () => {} }
   }
-  queueDeskProblemFiling({ root: "/some/root", env: { A: "1" }, reason: "pull_rebase_failed", host: "claude", spawnImpl })
+  const env = fixtureFilerEnv(t)
+  queueDeskProblemFiling({ root: "/some/root", env, reason: "pull_rebase_failed", host: "claude", spawnImpl })
   assert.equal(captured.cmd, process.execPath)
   assert.ok(captured.args.includes("--mechanism"))
   assert.ok(captured.args.includes("desk-sync"))
@@ -274,10 +288,48 @@ test("queueDeskProblemFiling spawns the detached filer with mechanism desk-sync 
   assert.equal(captured.opts.detached, true)
   assert.equal(captured.opts.stdio, "ignore")
   assert.equal(captured.opts.cwd, "/some/root")
+  assert.equal(captured.opts.env, env)
 })
 
-test("queueDeskProblemFiling never throws, even when the spawn implementation itself throws", () => {
-  assert.doesNotThrow(() => queueDeskProblemFiling({ root: "/x", env: {}, reason: "x", host: "unknown", spawnImpl: () => { throw new Error("boom") } }))
+test("queueDeskProblemFiling never throws, even when the spawn implementation itself throws", (t) => {
+  assert.doesNotThrow(() => queueDeskProblemFiling({ root: "/x", env: fixtureFilerEnv(t), reason: "x", host: "unknown", spawnImpl: () => { throw new Error("boom") } }))
+})
+
+// Fix round, spec.md §1 Part 5: `reason`'s raw text must never reach the
+// spawned filer's own argv unredacted -- `ps` shows a process's argv to every
+// account on the machine. A path-shaped reason here mirrors `boot-checks.cjs`'s
+// own filer-argv redaction test (`boot_checks_error_skip.test.js`).
+test("queueDeskProblemFiling redacts a path-shaped reason out of the spawned filer's own argv", (t) => {
+  let captured = null
+  const spawnImpl = (cmd, args, opts) => {
+    captured = { cmd, args, opts }
+    return { on: (event, handler) => { if (event === "error") handler(new Error("unused")) }, unref: () => {} }
+  }
+  const rawReason = "boom: failed to read /Users/ari/personal-desk/track/task/notes.md"
+  queueDeskProblemFiling({ root: "/some/root", env: fixtureFilerEnv(t), reason: rawReason, host: "claude", spawnImpl })
+  const reasonIndex = captured.args.indexOf("--reason")
+  assert.ok(reasonIndex >= 0)
+  const safeReason = captured.args[reasonIndex + 1]
+  assert.doesNotMatch(safeReason, /\/Users\//u)
+  assert.doesNotMatch(safeReason, /personal-desk/u)
+  assert.ok(!captured.args.some((arg) => typeof arg === "string" && arg.includes("/Users/ari")))
+})
+
+// Fix round, spec.md §1 Part 5: `shouldLaunchFiler` throttles the actual spawn
+// to once per hour per mechanism+reason pair -- the caller still reports a
+// `file` field either way.
+test("queueDeskProblemFiling does not launch a second filer for the same reason within the cooldown", (t) => {
+  const env = fixtureFilerEnv(t)
+  let spawnCalls = 0
+  const spawnImpl = () => {
+    spawnCalls += 1
+    return { on: (event, handler) => { if (event === "error") handler(new Error("unused")) }, unref: () => {} }
+  }
+  const first = queueDeskProblemFiling({ root: "/some/root", env, reason: "pull_rebase_failed", host: "claude", spawnImpl })
+  const second = queueDeskProblemFiling({ root: "/some/root", env, reason: "pull_rebase_failed", host: "claude", spawnImpl })
+  assert.equal(spawnCalls, 1, "only the first call actually spawns")
+  assert.deepEqual(first, { file: "filing in background" })
+  assert.deepEqual(second, { file: "filing already queued (within the last hour)" })
 })
 
 // ---------------------------------------------------------------------------
@@ -440,6 +492,129 @@ test("runPushWorker aborts the rebase and reports blocked with the conflicted pa
   assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false, "never left mid-rebase")
   assert.equal(spawnSync("git", ["-C", cloneA, "status", "--porcelain"], { encoding: "utf8" }).stdout, "")
   assert.equal(originCommitCount(origin), 2, "never force-pushed: origin still only has seed + b's edit")
+})
+
+test("stashCount reports the real number of stash entries, and 0 when the list command itself fails", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  assert.equal(stashCount(cloneA, spawnSync), 0)
+  await fs.writeFile(path.join(cloneA, "seed.md"), "seed\nlocal edit\n")
+  git(cloneA, ["stash", "push", "-u"])
+  assert.equal(stashCount(cloneA, spawnSync), 1)
+  assert.equal(stashCount(cloneA, () => ({ status: 1, stdout: "" })), 0)
+})
+
+// GIT_SSH_COMMAND (fix round, controller ruling 4): every git call disables
+// interactive SSH prompts too, the same way GIT_TERMINAL_PROMPT=0 already
+// disables the HTTPS one, extending rather than replacing any value the
+// caller's own environment already set.
+test("every git call extends an already-set GIT_SSH_COMMAND with -o BatchMode=yes, rather than replacing it", async () => {
+  const root = await mkPlainRepo()
+  const originalSsh = process.env.GIT_SSH_COMMAND
+  process.env.GIT_SSH_COMMAND = "ssh -i /custom/identity"
+  try {
+    let captured = null
+    const spawnGit = (cmd, args, opts) => {
+      if (captured === null) captured = opts.env.GIT_SSH_COMMAND
+      return spawnSync(cmd, args, opts)
+    }
+    hasRemoteConfigured(root, spawnGit)
+    assert.equal(captured, "ssh -i /custom/identity -o BatchMode=yes")
+  } finally {
+    if (originalSsh === undefined) delete process.env.GIT_SSH_COMMAND
+    else process.env.GIT_SSH_COMMAND = originalSsh
+  }
+})
+
+test("GIT_SSH_COMMAND defaults to -o BatchMode=yes alone when nothing was already set", async () => {
+  const root = await mkPlainRepo()
+  const originalSsh = process.env.GIT_SSH_COMMAND
+  delete process.env.GIT_SSH_COMMAND
+  try {
+    let captured = null
+    const spawnGit = (cmd, args, opts) => {
+      if (captured === null) captured = opts.env.GIT_SSH_COMMAND
+      return spawnSync(cmd, args, opts)
+    }
+    hasRemoteConfigured(root, spawnGit)
+    assert.equal(captured, "ssh -o BatchMode=yes")
+  } finally {
+    if (originalSsh !== undefined) process.env.GIT_SSH_COMMAND = originalSsh
+  }
+})
+
+// Fix round, controller ruling 2: a status-0 `git pull --rebase --autostash`
+// is not proof the tree ended up clean -- popping the autostash can itself
+// conflict without failing the pull's own exit code. Verified directly with
+// real git before writing this test: after a rejected push, `git pull
+// --rebase --autostash` prints "Applying autostash resulted in conflicts..."
+// yet still exits 0, leaves `UU seed.md` in `git status --porcelain`, and
+// does not drop its own stash entry.
+test("runPushWorker treats a pull that succeeds but leaves its own autostash pop conflicted as blocked, and never force-pushes", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  const cloneB = await mkClone(origin, "b", { trackMain: true })
+  await writeAndCommit(cloneB, "seed.md", "seed\nfrom origin\n", "origin edits seed")
+  git(cloneB, ["push", "-q"])
+
+  // An unrelated committed change makes cloneA's own push get rejected as
+  // behind; an *uncommitted* working-tree edit to the very file origin just
+  // changed is what autostash then fails to pop cleanly.
+  await writeAndCommit(cloneA, "mine.md", "mine\n", "mine")
+  await fs.writeFile(path.join(cloneA, "seed.md"), "seed\nfrom A working tree\n")
+
+  let filed = null
+  const result = await runPushWorker({
+    root: cloneA, env: process.env, clock: instantClock,
+    fileProblem: (args) => { filed = args },
+  })
+  assert.deepEqual(result, { result: "blocked", reason: "autostash_pop_conflict" })
+
+  const status = readSyncStatus({ root: cloneA, env: process.env })
+  assert.equal(status.blocked, true)
+  assert.equal(status.reason, "autostash_pop_conflict")
+  assert.deepEqual(status.paths, ["seed.md"])
+
+  assert.notEqual(filed, null)
+  assert.equal(filed.reason, "autostash_pop_conflict")
+
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "never left mid-rebase")
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false, "never left mid-rebase")
+  assert.match(git(cloneA, ["status", "--porcelain"]), /^UU seed\.md/mu, "the stash-pop conflict is real, left on disk exactly as real git leaves it")
+  assert.match(git(cloneA, ["stash", "list"]), /autostash/u, "the stash entry is deliberately not dropped, exactly as real git leaves it")
+  assert.equal(originCommitCount(origin), 2, "never force-pushed: origin still only has seed + b's edit")
+})
+
+// The other shape `stashCount` growing guards against (an untracked file
+// colliding with one the stash would restore, which leaves no UU marker at
+// all) is not reliably reproducible with real git in one deterministic step,
+// so -- exactly as this file's own header reserves scripted `spawnGit` for
+// ("forced-rejection paths that real Git cannot be made to hit
+// deterministically") -- this exercises it directly instead.
+test("runPushWorker also treats a stash count that grew without leaving UU markers as an autostash pop conflict", async () => {
+  const { origin, cloneA } = await mkOriginWithClone()
+  const cloneB = await mkClone(origin, "b", { trackMain: true })
+  await writeAndCommit(cloneB, "other.md", "other\n", "other")
+  git(cloneB, ["push", "-q"])
+  await writeAndCommit(cloneA, "mine.md", "mine\n", "mine") // cloneA's own push is rejected as behind
+
+  let stashListCalls = 0
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("diff") && args.includes("--diff-filter=U")) return { status: 0, stdout: "" }
+    if (args.includes("stash") && args.includes("list")) {
+      stashListCalls += 1
+      return { status: 0, stdout: stashListCalls <= 1 ? "" : "stash@{0}: autostash\n" }
+    }
+    return spawnSync(cmd, args, opts)
+  }
+  let filed = null
+  const result = await runPushWorker({
+    root: cloneA, env: process.env, clock: instantClock, spawnGit,
+    fileProblem: (args) => { filed = args },
+  })
+  assert.deepEqual(result, { result: "blocked", reason: "autostash_pop_conflict" })
+  assert.equal(filed.reason, "autostash_pop_conflict")
+  const status = readSyncStatus({ root: cloneA, env: process.env })
+  assert.equal(status.reason, "autostash_pop_conflict")
+  assert.deepEqual(status.paths, [])
 })
 
 test("a conflicted-paths lookup that itself fails leaves the blocked report with an empty path list", async () => {
