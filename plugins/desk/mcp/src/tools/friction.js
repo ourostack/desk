@@ -17,11 +17,17 @@
 // and its folder created first, then the card is filed in the desk's
 // factory store (`src/factory/kaizen-file.js`, which routes, dedupes and
 // caps it), and a short record of the outcome is appended to the desk.
+//
+// On a Git desk, stages the file it wrote and commits exactly that file
+// right after, synchronously in the call (M4-6 Part 2); pushing is a later
+// part.
 
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
+import { spawnSync } from "node:child_process"
 import { findFilenameEquivalent, today, slugify, pathExists } from "../util/fm.js"
 import { resolveWriteTarget } from "../util/paths.js"
+import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { recordCanonicalChanges } from "../readiness/journal.js"
 import { FRICTION_CLASSES, fileKaizenCard } from "../factory/kaizen-file.js"
 import { PATTERNS } from "../factory/schema.js"
@@ -34,6 +40,32 @@ function relPath(deskRoot, absPath) {
 
 function trackFrictionIdentity(themeSlug) {
   return `<!-- desk-friction:v2 theme=${themeSlug} -->`
+}
+
+// On a Git desk, friction_add stages the file it writes (new or appended-to)
+// only when it held no unstaged changes before this write, so a dirty or
+// untracked friction file left by another session is never adopted as this
+// call's own work — mirrors track.js/task.js's identically named helper.
+// `spawnGit` is a test-only seam over `spawnSync`.
+function stagingAllowed(filePath, spawnGit) {
+  const dir = path.dirname(filePath)
+  return isGitRepository(dir, spawnGit) && !hasUnstagedWork(dir, [path.basename(filePath)], spawnGit)
+}
+
+// After staging, commits exactly the one file staged (M4-6 Part 2: every
+// write tool commits its own paths synchronously; push is a later part).
+// Staging and committing are both best-effort: a stage failure leaves
+// nothing to commit, and a commit failure never throws away the write or the
+// tool's own result — it comes back as this function's return value, which
+// the caller attaches to its result under `commit` only on failure, so a
+// normal, silent success stays byte-identical to today's response shape.
+function stageAndCommitFriction(filePath, message, spawnGit) {
+  const dir = path.dirname(filePath)
+  const basename = path.basename(filePath)
+  const staged = stagePaths(dir, [basename], spawnGit)
+  if (!staged.ok) return undefined
+  const committed = commitPaths(dir, [basename], message, spawnGit)
+  return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
 }
 
 async function resolveTrackFrictionPath({ deskRoot, person, track, themeSlug }) {
@@ -78,12 +110,20 @@ async function resolveTrackFrictionPath({ deskRoot, person, track, themeSlug }) 
  * `---` separator between entries (and a trailing newline) so future entries
  * land cleanly.
  *
- * Returns: { status: "added", path }; { status: "added", path, kaizen:
- * "candidate" } for system friction; with `file_card`, { status: "filed",
- * path, url, kaizen: "filed" | "duplicate" } or { status: "added", path,
- * kaizen: <code> } when the card was not filed.
+ * On a Git desk, also stages the file it wrote — when it held no unstaged
+ * changes before this write — and commits exactly that file right after
+ * (M4-6 Part 2). A commit failure never loses the write: it comes back as
+ * `commit: { status: "failed", reason }` on the result, omitted entirely on
+ * a normal, silent success, when the file was already dirty, or on a
+ * non-Git desk.
+ *
+ * Returns: { status: "added", path, commit? }; { status: "added", path,
+ * kaizen: "candidate", commit? } for system friction; with `file_card`,
+ * { status: "filed", path, url, kaizen: "filed" | "duplicate", commit? } or
+ * { status: "added", path, kaizen: <code>, commit? } when the card was not
+ * filed.
  */
-export async function friction_add({ deskRoot, input, person = null, readiness, env = process.env, fileCard = fileKaizenCard }) {
+export async function friction_add({ deskRoot, input, person = null, readiness, env = process.env, fileCard = fileKaizenCard, spawnGit = spawnSync }) {
   const values = input ?? {}
   const { track, theme } = values
   const { body } = values
@@ -127,6 +167,10 @@ export async function friction_add({ deskRoot, input, person = null, readiness, 
 
   // The desk write must be possible before anything is filed.
   await fs.mkdir(path.dirname(filePath), { recursive: true })
+  // Checked once the parent dir exists (a brand-new track's `_friction/`
+  // folder may not, yet) and before this call's own write, so it reads only
+  // whether another session already left this file dirty.
+  const stage = stagingAllowed(filePath, spawnGit)
 
   let filed = null
   let entry = body
@@ -156,10 +200,22 @@ export async function friction_add({ deskRoot, input, person = null, readiness, 
     await fs.writeFile(filePath, initial, "utf8")
   }
 
+  const commit = stage
+    ? stageAndCommitFriction(filePath, `friction_add: ${values.plugin ?? "desk-plugin"}`, spawnGit)
+    : undefined
+
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   const written = relPath(deskRoot, filePath)
-  if (card === null) return { status: "added", path: written }
-  if (filed === null) return { status: "added", path: written, kaizen: "candidate" }
-  if (filed.result === "filed" || filed.result === "duplicate") return { status: "filed", path: written, url: filed.url, kaizen: filed.result }
-  return { status: "added", path: written, kaizen: filed.result }
+  let result
+  if (card === null) {
+    result = { status: "added", path: written }
+  } else if (filed === null) {
+    result = { status: "added", path: written, kaizen: "candidate" }
+  } else if (filed.result === "filed" || filed.result === "duplicate") {
+    result = { status: "filed", path: written, url: filed.url, kaizen: filed.result }
+  } else {
+    result = { status: "added", path: written, kaizen: filed.result }
+  }
+  if (commit) result.commit = commit
+  return result
 }

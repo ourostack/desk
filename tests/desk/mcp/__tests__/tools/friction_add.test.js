@@ -4,8 +4,38 @@ import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import * as path from "node:path"
 import { promises as fs } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { friction_add } from "../../../../../plugins/desk/mcp/src/tools/friction.js"
+import { today } from "../../../../../plugins/desk/mcp/src/util/fm.js"
 import { mkTempDeskRoot, exists } from "./_helpers.js"
+
+function initGit(root) {
+  const run = (args) => {
+    const result = spawnSync("git", args, { cwd: root, encoding: "utf8" })
+    assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`)
+  }
+  run(["init", "-q"])
+  run(["config", "user.email", "test@example.com"])
+  run(["config", "user.name", "Test"])
+}
+
+function gitStatus(root) {
+  const result = spawnSync("git", ["-C", root, "status", "--short"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout
+}
+
+function lastCommitMessage(root) {
+  const result = spawnSync("git", ["-C", root, "log", "-1", "--format=%s"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.trim()
+}
+
+function lastCommitFiles(root) {
+  const result = spawnSync("git", ["-C", root, "show", "--stat", "--format=", "--name-only", "HEAD"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.split("\n").filter(Boolean).sort()
+}
 
 test("friction_add (no track) writes to _meta/friction.md", async () => {
   const root = await mkTempDeskRoot()
@@ -210,4 +240,155 @@ test("friction_add with file_card uses the factory's filer by default, which fil
   const env = { HOME: root, XDG_STATE_HOME: path.join(path.dirname(root), `${path.basename(root)}-state`) }
   const result = await friction_add({ deskRoot: root, input: { about: "system", file_card: true, title: "A generic title", body: "The friction." }, env })
   assert.equal(result.kaizen, "route_unknown")
+})
+
+// ── M4-6 Part 2: stage + commit ─────────────────────────────────────────────
+
+test("friction_add stages and commits exactly the friction file it wrote", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const result = await friction_add({
+    deskRoot: root,
+    input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." },
+  })
+  assert.equal(result.status, "added")
+  assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
+  assert.equal(gitStatus(root), "")
+  assert.equal(lastCommitMessage(root), "friction_add: desk-plugin")
+  assert.deepEqual(lastCommitFiles(root), [path.join("_meta", "friction.md")])
+})
+
+test("friction_add names the commit after the given plugin for system friction", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const { calls, fileCard } = cardFiler({ result: "route_unknown" })
+  const result = await friction_add({
+    deskRoot: root,
+    input: { about: "system", title: "A generic title", plugin: "desk-tidy", body: "The friction." },
+    fileCard,
+  })
+  assert.equal(result.status, "added")
+  assert.equal(calls.length, 0)
+  assert.equal(lastCommitMessage(root), "friction_add: desk-tidy")
+})
+
+test("friction_add commits only its own file, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+
+  // Simulates another process staging an unrelated path in the window
+  // between friction_add's dirty check and its own stage/commit.
+  await fs.writeFile(path.join(root, "unrelated.txt"), "another process's work\n")
+  spawnSync("git", ["-C", root, "add", "--", "unrelated.txt"], { encoding: "utf8" })
+
+  const result = await friction_add({
+    deskRoot: root,
+    input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." },
+  })
+
+  assert.equal(result.commit, undefined, "friction_add's own commit succeeded")
+  assert.deepEqual(lastCommitFiles(root), [path.join("_meta", "friction.md")])
+  const status = gitStatus(root)
+  assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
+})
+
+test("friction_add reports a commit failure without losing the write", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    return spawnSync(cmd, args, opts)
+  }
+  const result = await friction_add({
+    deskRoot: root,
+    input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." },
+    spawnGit,
+  })
+  assert.equal(result.status, "added", "the write itself is never lost to a commit failure")
+  assert.ok(await exists(path.join(root, "_meta", "friction.md")))
+  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+})
+
+test("friction_add skips committing silently when staging itself fails", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("add")) return { status: 1, stdout: "", stderr: "add boom" }
+    return spawnSync(cmd, args, opts)
+  }
+  const result = await friction_add({
+    deskRoot: root,
+    input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." },
+    spawnGit,
+  })
+  assert.equal(result.status, "added", "the write itself is never lost to a staging failure")
+  assert.equal(result.commit, undefined, "nothing was staged, so nothing is committed or reported as failed")
+  assert.ok(await exists(path.join(root, "_meta", "friction.md")))
+})
+
+test("friction_add appends to an existing file and commits again", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await friction_add({ deskRoot: root, input: { body: "First entry." } })
+  const result = await friction_add({ deskRoot: root, input: { body: "Second entry." } })
+
+  assert.equal(result.commit, undefined)
+  assert.equal(gitStatus(root), "")
+  const content = await fs.readFile(path.join(root, "_meta", "friction.md"), "utf8")
+  assert.match(content, /First entry\.[\s\S]*Second entry\./)
+})
+
+test("friction_add skips staging and committing when the file held unstaged changes before the write", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await friction_add({ deskRoot: root, input: { body: "First entry." } })
+  const filePath = path.join(root, "_meta", "friction.md")
+
+  // Another session's unstaged edit to this same file, in place before
+  // friction_add appends.
+  await fs.appendFile(filePath, "\nanother session's note\n")
+
+  const result = await friction_add({ deskRoot: root, input: { body: "Second entry." } })
+
+  assert.equal(result.status, "added", "the write always happens")
+  assert.equal(result.commit, undefined, "no commit attempted when the file was already dirty")
+  const content = await fs.readFile(filePath, "utf8")
+  assert.match(content, /Second entry\./)
+  assert.match(gitStatus(root), /_meta\/friction\.md/, "the file is left as an uncommitted change")
+})
+
+test("friction_add skips staging and committing silently on a non-Git desk", async () => {
+  const root = await mkTempDeskRoot()
+  const result = await friction_add({
+    deskRoot: root,
+    input: { body: "## 2026-05-22 — onboarding hurts\n\nFoo." },
+  })
+  assert.equal(result.status, "added")
+  assert.equal(result.commit, undefined)
+})
+
+test("friction_add retries with an underscore-prefixed slug when a same-named file has a different identity", async () => {
+  const root = await mkTempDeskRoot()
+  const date = today()
+  const collidingPath = path.join(root, "t1", "_friction", `${date}-tools.md`)
+  await fs.mkdir(path.dirname(collidingPath), { recursive: true })
+  await fs.writeFile(collidingPath, "An unrelated legacy file, no identity comment.\n", "utf8")
+
+  const result = await friction_add({ deskRoot: root, input: { track: "t1", theme: "tools", body: "New entry." } })
+
+  assert.equal(result.path, path.join("t1", "_friction", `${date}-_tools.md`))
+  assert.match(await fs.readFile(path.join(root, result.path), "utf8"), /New entry\./)
+})
+
+test("friction_add stages and commits a track-local friction file", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  const result = await friction_add({
+    deskRoot: root,
+    input: { track: "t1", theme: "tools", body: "Track-local friction." },
+  })
+  assert.equal(result.status, "added")
+  assert.match(result.path, /^t1\/_friction\/\d{4}-\d{2}-\d{2}-tools\.md$/u)
+  assert.equal(gitStatus(root), "")
+  assert.deepEqual(lastCommitFiles(root), [result.path.split(path.sep).join("/")])
 })
