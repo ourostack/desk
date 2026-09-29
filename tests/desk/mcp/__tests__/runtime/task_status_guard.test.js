@@ -62,6 +62,23 @@ test("setsStatusToDone reads Write's content and Edit's new_string, in several q
   assert.equal(setsStatusToDone("Read", { content: "status: done" }), false, "a tool this guard does not cover")
 })
 
+test("setsStatusToDone reads MultiEdit's edits: [{ old_string, new_string }] array, flagging the call when any single edit's new_string sets status: done", () => {
+  assert.equal(
+    setsStatusToDone("MultiEdit", { edits: [{ old_string: "old next step", new_string: "new next step" }, { old_string: "status: processing", new_string: "status: done" }] }),
+    true,
+    "the done-setting edit is not the first one in the array",
+  )
+  assert.equal(
+    setsStatusToDone("MultiEdit", { edits: [{ old_string: "status: drafting", new_string: "status: processing" }, { old_string: "old next step", new_string: "new next step" }] }),
+    false,
+    "no edit in the array sets status: done",
+  )
+  assert.equal(setsStatusToDone("MultiEdit", { edits: [] }), false, "empty edits array")
+  assert.equal(setsStatusToDone("MultiEdit", {}), false, "missing edits entirely")
+  assert.equal(setsStatusToDone("MultiEdit", { edits: "not an array" }), false, "edits is not an array")
+  assert.equal(setsStatusToDone("MultiEdit", { edits: [{ old_string: "x" }] }), false, "an edit entry missing new_string")
+})
+
 test("denies a Claude Code Write that would create a task card with status: done", () => {
   const result = taskStatusGuardHook(
     writeInput({ toolName: "Write", toolInput: { file_path: "/repo/track/my-task/task.md", content: "---\nstatus: done\n---\n" } }),
@@ -76,6 +93,40 @@ test("denies a Claude Code Edit whose new_string sets status: done", () => {
     "claude",
   )
   assertDenied(result)
+})
+
+test("denies a Claude Code MultiEdit whose edits array includes one that sets status: done, even when it is not the first edit", () => {
+  const result = taskStatusGuardHook(
+    writeInput({
+      toolName: "MultiEdit",
+      toolInput: {
+        file_path: "/repo/track/my-task/task.md",
+        edits: [
+          { old_string: "old next step", new_string: "new next step" },
+          { old_string: "status: processing", new_string: "status: done" },
+        ],
+      },
+    }),
+    "claude",
+  )
+  assertDenied(result)
+})
+
+test("allows a Claude Code MultiEdit to a task card whose edits array never sets status: done", () => {
+  const result = taskStatusGuardHook(
+    writeInput({
+      toolName: "MultiEdit",
+      toolInput: {
+        file_path: "/repo/track/my-task/task.md",
+        edits: [
+          { old_string: "status: drafting", new_string: "status: processing" },
+          { old_string: "old next step", new_string: "new next step" },
+        ],
+      },
+    }),
+    "claude",
+  )
+  assertAllowed(result)
 })
 
 test("allows an Edit to a task card that changes status to anything other than done", () => {

@@ -2,9 +2,9 @@
 "use strict";
 
 // Desk's task-status guard: see mcp/src/runtime/task-status-guard.js for
-// what it checks and why. A PreToolUse hook on Write|Edit; Claude Code
-// only today (see that module's doc comment for what Copilot/Codex would
-// need).
+// what it checks and why. A PreToolUse hook on Write|Edit|MultiEdit; Claude
+// Code only today (see that module's doc comment for what Copilot/Codex
+// would need).
 //
 // Fails open on an internal error, the same as ask-gate.cjs and
 // host-enforcement.cjs: this guard must never be the thing that blocks a

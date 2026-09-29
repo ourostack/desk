@@ -295,6 +295,68 @@ for (const evidence of [
   })
 }
 
+// ── Per-kind ref-shape checks (network-free, 2026-09-29 review of #106) ────
+//
+// `assertDoneEvidence` checks each kind's `ref` against its own shape --
+// commit and non_code each accept two distinct shapes, and every kind
+// refuses a ref that doesn't look like a reference at all. The loop above
+// only exercises one accepted shape per kind; these two loops round that
+// out to full branch coverage of `DONE_EVIDENCE_REF_CHECKS`.
+
+for (const evidence of [
+  { kind: "commit", ref: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", label: "a full 40-character sha with no repo/branch suffix" },
+  { kind: "commit", ref: "https://github.com/example-org/example-repo/commit/a1b2c3d", label: "a commit URL rather than a bare sha" },
+  { kind: "non_code", ref: "reports/2026-09-29-confirmation.md", label: "a desk-relative path rather than a URL" },
+]) {
+  test(`task_update accepts ${evidence.kind} evidence in its other checkable shape (${evidence.label})`, async () => {
+    const root = await mkTempDeskRoot()
+    await task_create({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+    })
+
+    const result = await task_update({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", frontmatter: { status: "done" }, evidence: { kind: evidence.kind, ref: evidence.ref } },
+    })
+    assert.equal(result.status, "updated")
+
+    const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+    assert.equal(data.evidence.kind, evidence.kind)
+    assert.equal(data.evidence.ref, evidence.ref)
+  })
+}
+
+for (const evidence of [
+  { kind: "pr", ref: "https://github.com/example-org/example-repo/issues/42", why: "an issue URL, not a pull request URL" },
+  { kind: "pr", ref: "example-org/example-repo#42", why: "a shorthand reference with no URL at all" },
+  { kind: "commit", ref: "abc12", why: "5 hex characters -- shorter than the 7-character minimum" },
+  { kind: "commit", ref: "not-hex-at-all", why: "not a hex string" },
+  { kind: "ci_run", ref: "http://ci.example.invalid/runs/9001", why: "http, not https" },
+  { kind: "ci_run", ref: "ci.example.invalid/runs/9001", why: "no scheme at all" },
+  { kind: "non_code", ref: "the confirmation email ari sent", why: "free text with a space, not a link or path" },
+  { kind: "non_code", ref: "/etc/confirmation.txt", why: "an absolute path, machine-specific" },
+  { kind: "non_code", ref: "~/confirmation.txt", why: "a tilde path, machine-specific" },
+  { kind: "non_code", ref: "ftp://files.example.invalid/confirmation.txt", why: "a non-https URL scheme" },
+  { kind: "non_code", ref: "C:\\Users\\ari\\confirmation.txt", why: "a Windows drive-letter path" },
+]) {
+  test(`task_update refuses ${evidence.kind} evidence whose ref is ${evidence.why}, naming the expected shape`, async () => {
+    const root = await mkTempDeskRoot()
+    await task_create({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+    })
+
+    await assert.rejects(
+      task_update({
+        deskRoot: root,
+        input: { track: "t", slug: "book-flights", frontmatter: { status: "done" }, evidence: { kind: evidence.kind, ref: evidence.ref } },
+      }),
+      new RegExp(`task_update: \`evidence.ref\` is not a checkable ${evidence.kind} reference`),
+    )
+  })
+}
+
 test("task_update accepts `evidence` as a JSON string, the same tolerance `frontmatter` gets", async () => {
   const root = await mkTempDeskRoot()
   await task_create({

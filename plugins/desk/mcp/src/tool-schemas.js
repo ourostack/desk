@@ -53,10 +53,16 @@ const TASK_DONE_EVIDENCE = {
   additionalProperties: false,
   properties: {
     kind: { type: "string", enum: ["pr", "commit", "ci_run", "non_code"], description: "What kind of reference this is." },
-    ref: text('The verifiable reference: the PR URL, "<sha> on <remote-branch>", the CI run URL, or the non-code outcome\'s own proof link.'),
+    ref: text('The verifiable, checkable reference in that kind\'s own shape: a PR URL (GitHub or Azure DevOps) for pr; a 7-40 character hex commit sha, optionally with its repo/branch, or a commit URL for commit; the CI run\'s own https URL for ci_run; or an https URL or desk-relative path to the proof for non_code.'),
   },
   required: ["kind", "ref"],
-  description: "Required, as a JSON object (not a string), only when this call moves the task into `done` from a non-`done` status: at least one verifiable reference backing the completion claim. Omit for every other update, including a transition to `cancelled`. Refused with an error naming what to supply when the transition is to `done` and this is missing or malformed.",
+  description: "Required, as a JSON object (not a string), when this call moves a task into `done` from a non-`done` status: at least one checkable reference backing the completion claim. On task_update, that is any transition whose merged status becomes `done`. On task_archive, that is archiving a task that isn't already `done` or `cancelled`, unless `outcome: \"cancelled\"` is given instead. Omit for every other update, including a transition to `cancelled`. Refused with an error naming what to supply when required and this is missing, malformed, or shaped wrong for its kind.",
+}
+
+const TASK_ARCHIVE_OUTCOME = {
+  type: "string",
+  enum: ["cancelled"],
+  description: 'Pass "cancelled" to archive a task that is not already `done` or `cancelled` as abandoned work, needing no `evidence`. Omit for a completed task and pass `evidence` instead. An already-`done` or already-`cancelled` task, or one with no task.md at all, needs neither.',
 }
 
 export const TOOL_INPUT_SCHEMAS = Object.freeze({
@@ -104,7 +110,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     origin_note: text("When the agent started the task: one line on what it noticed."),
   }, ["track", "slug", "title"]),
   task_update: schema({ ...TASK_TARGET, ...CARD_UPDATE, evidence: TASK_DONE_EVIDENCE }, ["track", "slug"]),
-  task_archive: schema(TASK_TARGET, ["track", "slug"]),
+  task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_move: schema({
     ...TASK_TARGET,
     handle: text("The task's handle from desk_status active_tasks or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."),

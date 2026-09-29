@@ -437,6 +437,97 @@ test("patchFrontmatterFields appends a new field just before the closing fence, 
   ].join("\n"))
 })
 
+test("patchFrontmatterFields appends a plain-object field (task_archive's evidence: { kind, ref, recorded_at }) as a key: header plus one indented subkey line per entry", () => {
+  const card = "---\nstatus: drafting\ntrack: t\n---\n\nBody.\n"
+  const patched = patchFrontmatterFields(card, {
+    status: "done",
+    evidence: { kind: "pr", ref: "https://github.com/org/repo/pull/1", recorded_at: "2026-09-29T12:00:00Z" },
+  })
+  assert.equal(patched, [
+    "---",
+    "status: done",
+    "track: t",
+    "evidence:",
+    "  kind: pr",
+    "  ref: \"https://github.com/org/repo/pull/1\"",
+    "  recorded_at: \"2026-09-29T12:00:00Z\"",
+    "---",
+    "",
+    "Body.",
+    "",
+  ].join("\n"))
+})
+
+test("patchFrontmatterFields treats a null-prototype object (Object.create(null)) as a plain object too, not just an Object.prototype literal", () => {
+  const card = "---\nstatus: drafting\ntrack: t\n---\n\nBody.\n"
+  const evidence = Object.create(null)
+  evidence.kind = "pr"
+  evidence.ref = "https://github.com/org/repo/pull/1"
+  const patched = patchFrontmatterFields(card, { evidence })
+  assert.equal(patched, [
+    "---",
+    "status: drafting",
+    "track: t",
+    "evidence:",
+    "  kind: pr",
+    "  ref: \"https://github.com/org/repo/pull/1\"",
+    "---",
+    "",
+    "Body.",
+    "",
+  ].join("\n"))
+})
+
+test("patchFrontmatterFields replaces an existing scalar field's line with a nested block when the new value is a plain object, and skips back over that block's own indented lines on the next iteration rather than misreading one as another field", () => {
+  const card = ["---", "status: processing", "evidence: none yet", "track: t", "---", "", "Body.", ""].join("\n")
+  const patched = patchFrontmatterFields(card, {
+    evidence: { kind: "commit", ref: "a1b2c3d on origin/main" },
+    track: "new-track",
+  })
+  assert.equal(patched, [
+    "---",
+    "status: processing",
+    "evidence:",
+    "  kind: commit",
+    "  ref: \"a1b2c3d on origin/main\"",
+    "track: new-track",
+    "---",
+    "",
+    "Body.",
+    "",
+  ].join("\n"))
+})
+
+test("patchFrontmatterFields replaces a field that was itself a nested block with a new plain-object value, dropping only the old block's own lines, and carries a trailing comment forward onto the new header line", () => {
+  const card = [
+    "---",
+    "status: processing",
+    "evidence: # old shape",
+    "  note: superseded",
+    "  ref: stale",
+    "track: t",
+    "---",
+    "",
+    "Body.",
+    "",
+  ].join("\n")
+  const patched = patchFrontmatterFields(card, {
+    evidence: { kind: "ci_run", ref: "https://ci.example.invalid/runs/9001" },
+  })
+  assert.equal(patched, [
+    "---",
+    "status: processing",
+    "evidence: # old shape",
+    "  kind: ci_run",
+    "  ref: \"https://ci.example.invalid/runs/9001\"",
+    "track: t",
+    "---",
+    "",
+    "Body.",
+    "",
+  ].join("\n"))
+})
+
 test("patchFrontmatterFields replaces a field that was itself a block scalar or nested value with one plain-scalar line, dropping only that field's own continuation", () => {
   const card = [
     "---",

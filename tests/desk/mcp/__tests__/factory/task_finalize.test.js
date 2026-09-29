@@ -31,7 +31,7 @@ test("task archive queues one job, including repeat archive and person scoping",
   await factoryStateRoot(env)
   await task_create({ deskRoot: desk, person: "alice", input: { track: "track", slug: "finished-work", title: "fixture" } })
   for (const expected of ["archived", "already_archived"]) {
-    assert.equal((await task_archive({ deskRoot: desk, env, person: "alice", input: { track: "track", slug: "finished-work" } })).status, expected)
+    assert.equal((await task_archive({ deskRoot: desk, env, person: "alice", input: { track: "track", slug: "finished-work", evidence: DONE_EVIDENCE } })).status, expected)
     const [request] = await listFinalizeRequests(env)
     assert.ok(request)
     assert.equal(request.job, jobId({ deskRemote: `local:${desk}`, personPrefix: "desks/alice", track: "track", slug: "finished-work" }))

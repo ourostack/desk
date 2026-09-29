@@ -84,7 +84,7 @@ test("a crew desk's link carries the person prefix, and archiving an open task w
   await task_update({ deskRoot: desk, env, person: "alice", input: { track: "track", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
   assert.equal((await card(desk, "desks/alice/track/finished-work/task.md")).factory_report, await expectedLink(desk, { personPrefix: "desks/alice" }))
   await task_create({ deskRoot: desk, input: { track: "track", slug: "archived-work", title: "fixture", status: "processing" } })
-  assert.equal((await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "archived-work" } })).status, "archived")
+  assert.equal((await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "archived-work", evidence: DONE_EVIDENCE } })).status, "archived")
   const archived = await card(desk, "track/_archive/archived-work/task.md")
   assert.equal(archived.status, "done")
   assert.equal(archived.factory_report, await expectedLink(desk, { slug: "archived-work" }))

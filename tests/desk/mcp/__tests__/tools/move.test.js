@@ -22,6 +22,12 @@ import { folderHandle } from "../../../../../plugins/desk/mcp/src/desk/handles.j
 
 const SCOPE = "fixture track scope; not anything else"
 
+// A fixture card defaults to `status: drafting` -- non-terminal -- so
+// archiving one now needs evidence (task.js's `assertDoneEvidence`/the
+// archive evidence gate) to reach `done`, the status these move/rename
+// fixtures assume once archived.
+const DONE_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" }
+
 function tasksTableBody(rows) {
   const rowLines = rows.map((slug) => `| \`${slug}\` | drafting | - | - | - |`)
   return [
@@ -555,7 +561,7 @@ test("task_move relocates an archived task and keeps it archived", async () => {
   await mkTrack(root, "track-a", { rows: [] })
   await mkTrack(root, "track-b", { rows: [] })
   await task_create({ deskRoot: root, input: { track: "track-a", slug: "old-task", title: "T" } })
-  await task_archive({ deskRoot: root, input: { track: "track-a", slug: "old-task" } })
+  await task_archive({ deskRoot: root, input: { track: "track-a", slug: "old-task", evidence: DONE_EVIDENCE } })
 
   commitAll(root)
   const result = await task_move({
@@ -1029,7 +1035,7 @@ test("task_move never schedules a push when the commit fails", async () => {
 async function archivedTask(root, { track = "main-track", slug = "old-task", rows = [] } = {}) {
   await mkTrack(root, track, { rows })
   await task_create({ deskRoot: root, input: { track, slug, title: "T" } })
-  await task_archive({ deskRoot: root, input: { track, slug } })
+  await task_archive({ deskRoot: root, input: { track, slug, evidence: DONE_EVIDENCE } })
 }
 
 test("task_move unarchive moves an archived task back to a live folder and restores its missing row", async () => {
@@ -1128,7 +1134,7 @@ test("task_move unarchive leaves a track.md with no Tasks table alone", async ()
   const root = await mkTempDeskRoot()
   await track_create({ deskRoot: root, input: { slug: "main-track", title: "main-track", scope: SCOPE } })
   await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-task", title: "T" } })
-  await task_archive({ deskRoot: root, input: { track: "main-track", slug: "old-task" } })
+  await task_archive({ deskRoot: root, input: { track: "main-track", slug: "old-task", evidence: DONE_EVIDENCE } })
 
   const result = await task_move({
     deskRoot: root,
@@ -1518,7 +1524,7 @@ test("track_rename with archived tasks rewrites both live and archived task card
   await mkTrack(root, "old-track", { rows: [] })
   await task_create({ deskRoot: root, input: { track: "old-track", slug: "live-one", title: "T" } })
   await task_create({ deskRoot: root, input: { track: "old-track", slug: "task-gone", title: "T" } })
-  await task_archive({ deskRoot: root, input: { track: "old-track", slug: "task-gone" } })
+  await task_archive({ deskRoot: root, input: { track: "old-track", slug: "task-gone", evidence: DONE_EVIDENCE } })
 
   commitAll(root)
   const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, schedulePush: () => {} })

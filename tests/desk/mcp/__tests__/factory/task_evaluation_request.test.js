@@ -60,7 +60,7 @@ test("archiving an in-flight task forces it to done and queues one evaluation re
   await factoryStateRoot(env)
   await task_create({ deskRoot: desk, person: "alice", input: { track: "track", slug: "finished-work", title: "fixture" } })
   for (const expected of ["archived", "already_archived"]) {
-    assert.equal((await task_archive({ deskRoot: desk, env, person: "alice", input: { track: "track", slug: "finished-work" } })).status, expected)
+    assert.equal((await task_archive({ deskRoot: desk, env, person: "alice", input: { track: "track", slug: "finished-work", evidence: DONE_EVIDENCE } })).status, expected)
     const [request] = await listEvaluationRequests(env)
     assert.ok(request, `${expected} must leave an evaluation request`)
     assert.equal(request.job, jobId({ deskRemote: `local:${desk}`, personPrefix: "desks/alice", track: "track", slug: "finished-work" }))
@@ -78,7 +78,7 @@ test("archiving an already-cancelled task queues an evaluation request and the f
 test("re-archiving with the archived task.md gone requests no evaluation and does not fail", () => scratch(async ({ desk, env }) => {
   await factoryStateRoot(env)
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
-  assert.equal((await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work" } })).status, "archived")
+  assert.equal((await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", evidence: DONE_EVIDENCE } })).status, "archived")
   await fs.rm(path.join(desk, "track", "_archive", "finished-work", "task.md"))
   await fs.rm(path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory", "evaluate-requests"), { recursive: true, force: true })
   const result = await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work" } })
@@ -89,7 +89,7 @@ test("re-archiving with the archived task.md gone requests no evaluation and doe
 test("re-archiving over a corrupted archived task.md requests no evaluation, still queues the finalize request, and does not throw", () => scratch(async ({ desk, env }) => {
   await factoryStateRoot(env)
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
-  assert.equal((await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work" } })).status, "archived")
+  assert.equal((await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", evidence: DONE_EVIDENCE } })).status, "archived")
   const archivedFile = path.join(desk, "track", "_archive", "finished-work", "task.md")
   await fs.writeFile(archivedFile, "---\nstatus: [done\nupdated: 2026-01-01\n---\nbody\n")
   const factoryRoot = path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk", "factory")
