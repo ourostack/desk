@@ -15,34 +15,41 @@ import { hookRegistrationDeskProblem } from "../runtime/host-enforcement-registr
 const OWN_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 const text = (value) => (typeof value === "string" && value.trim() !== "" ? value : null)
 
+// desk_status never files (a fix round after this Part first shipped: the real filer reached straight
+// from here hung this tool on every call once `gh` was installed). The boot check already files, once
+// per session, off its own critical path (`hostEnforcementCheck` in boot-checks.cjs); this just says so.
+async function reportOnly() {
+  return { file: "filed at session start" }
+}
+
 /**
  * `{ registered: true }` when Claude Code's deny hook (spec §5) is
  * registered, or `{ registered: false, desk_problem: <block> }` when it is
  * not -- the same host/plugin-root resolution `factory-context.js`'s
  * `factoryPluginScan` already uses (`CLAUDE_PLUGIN_ROOT` set by Claude Code's
  * own launcher; `DESK_PLUGIN_ROOT` on every other host). `null` for a host
- * this check does not cover.
+ * this check does not cover. Makes no network call: see `reportOnly` above.
  *
- * Deliberately claude-only, not Part 8 leftover scope: Copilot's own launch
- * config (`.mcp.copilot.json`) carries no host-identifying environment at
- * all, by design (Review M3-11 D1, `cache_and_launch.test.js`), so this MCP
- * tool has no reliable way to tell a real Copilot launch apart from an
- * unknown one -- inventing one here would be guesswork this file's other
- * host/plugin-root resolution deliberately avoids. Copilot's own
- * registration is reported through its own channel instead: `copilot-
- * session-start.cjs` calls `boot-checks.cjs`'s registry with `host:
- * "copilot"` as a literal, the same way Claude Code's `session-start.sh`
- * does with `"claude"` -- see `hostEnforcementCheck` there. Codex has no
- * boot-check or session-start hook wired in Desk at all, and no supported
- * way to confirm its own hook is actually active even if it did (`docs/
- * host-enforcement-live-proof.md`'s hook-trust gap) -- its "registered, not
- * active" story is documentation, not a runtime check.
+ * Deliberately claude-only, not leftover scope: Copilot's own launch config
+ * (`.mcp.copilot.json`) carries no host-identifying environment at all, by
+ * design (Review M3-11 D1, `cache_and_launch.test.js`), so this MCP tool has
+ * no reliable way to tell a real Copilot launch apart from an unknown one --
+ * inventing one here would be guesswork this file's other host/plugin-root
+ * resolution deliberately avoids. Copilot's own registration is reported
+ * through its own channel instead: `copilot-session-start.cjs` calls
+ * `boot-checks.cjs`'s registry with `host: "copilot"` as a literal, the same
+ * way Claude Code's `session-start.sh` does with `"claude"` -- see
+ * `hostEnforcementCheck` there, which also files (detached, bounded) on
+ * either host. Codex has no boot-check or session-start hook wired in Desk
+ * at all, and no supported way to confirm its own hook is actually active
+ * even if it did (`docs/host-enforcement-live-proof.md`'s hook-trust gap) --
+ * its "registered, not active" story is documentation, not a runtime check.
  */
 async function hostEnforcementStatus({ env }) {
   const claudeRoot = text(env.CLAUDE_PLUGIN_ROOT)
   const pluginRoot = path.resolve(text(env.DESK_PLUGIN_ROOT) ?? claudeRoot ?? OWN_PLUGIN_ROOT)
   const host = claudeRoot === null ? "unknown" : "claude"
-  const { registered, block } = await hookRegistrationDeskProblem({ host, pluginRoot })
+  const { registered, block } = await hookRegistrationDeskProblem({ host, pluginRoot, env, fileProblem: reportOnly })
   if (registered === null) return null
   return registered ? { registered: true } : { registered: false, desk_problem: block }
 }

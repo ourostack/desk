@@ -48,17 +48,6 @@ test("the real registration in this checkout's own copilot-hooks.json passes wit
   assert.equal(line, "")
 })
 
-test("Copilot: a missing registration surfaces a Desk problem: host-enforcement block, never a thrown error", async () => {
-  const root = fixturePluginRoot(UNREGISTERED_COPILOT, "copilot-hooks.json")
-  try {
-    const line = await runBootChecks({ host: "copilot", env: { PLUGIN_ROOT: root }, checks: [hostEnforcementCheck] })
-    assert.match(line, /Desk problem: host-enforcement/)
-    assert.match(line, /file: not filed: filer_unavailable/)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
 test("Copilot: a present registration under a fixture plugin root produces no line", async () => {
   const root = fixturePluginRoot(REGISTERED_COPILOT, "copilot-hooks.json")
   try {
@@ -69,22 +58,58 @@ test("Copilot: a present registration under a fixture plugin root produces no li
   }
 })
 
-test("a missing registration surfaces a Desk problem: host-enforcement block, never a thrown error", async () => {
-  const root = fixturePluginRoot(UNREGISTERED)
+for (const [host, unregistered, fileName] of [["claude", UNREGISTERED, "hooks.json"], ["copilot", UNREGISTERED_COPILOT, "copilot-hooks.json"]]) {
+  test(`${host}: a missing registration surfaces a Desk problem: host-enforcement block, queues the detached filer, never a thrown error`, async () => {
+    const root = fixturePluginRoot(unregistered, fileName)
+    const launched = []
+    try {
+      // launchRepair is the same test seam every other check's detached repair already uses: no real
+      // process is spawned here, so this stays fast and deterministic regardless of gh, the network or
+      // this check's own 20 ms budget -- the point of queuing a repair instead of filing inline.
+      const line = await runBootChecks({
+        host, env: { PLUGIN_ROOT: root }, checks: [hostEnforcementCheck],
+        launchRepair: async (command, env) => { launched.push({ command, env }) },
+      })
+      assert.match(line, /Desk problem: host-enforcement/)
+      assert.match(line, /file: filing in background/)
+      assert.equal(launched.length, 1)
+      assert.ok(launched[0].command.some((part) => part.endsWith("file-desk-problem.js")))
+      assert.ok(launched[0].command.includes("--mechanism"))
+      assert.ok(launched[0].command.includes("host-enforcement"))
+      assert.ok(launched[0].command.includes("--reason"))
+      assert.ok(launched[0].command.includes("--host"))
+      assert.ok(launched[0].command.includes(host))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+}
+
+test("an unreadable hooks.json (no file at all) also surfaces the block, never throws", async () => {
+  const root = fixturePluginRoot(null)
   try {
-    const line = await runBootChecks({ host: "claude", env: { PLUGIN_ROOT: root }, checks: [hostEnforcementCheck] })
+    const line = await runBootChecks({
+      host: "claude", env: { PLUGIN_ROOT: root }, checks: [hostEnforcementCheck],
+      launchRepair: async () => {},
+    })
     assert.match(line, /Desk problem: host-enforcement/)
-    assert.match(line, /file: not filed: filer_unavailable/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
 })
 
-test("an unreadable hooks.json (no file at all) also surfaces the block, never throws", async () => {
-  const root = fixturePluginRoot(null)
+test("the check's own run() never launches or awaits the filer itself: it only hands back a repair command, well inside its 20 ms budget", async () => {
+  const root = fixturePluginRoot(UNREGISTERED)
   try {
-    const line = await runBootChecks({ host: "claude", env: { PLUGIN_ROOT: root }, checks: [hostEnforcementCheck] })
+    // run() never invokes any launcher at all -- runBootChecks's own registry loop does that afterward,
+    // from the `repair` field run() returns. So even a launcher that would hang forever cannot affect
+    // run()'s own timing, proven here by calling it directly with none supplied.
+    const startedAt = performance.now()
+    const { line, repair } = await hostEnforcementCheck.run({ host: "claude", env: { PLUGIN_ROOT: root } })
+    assert.ok(performance.now() - startedAt < 500, "hostEnforcementCheck.run() must resolve on its own, with no launcher involved")
     assert.match(line, /Desk problem: host-enforcement/)
+    assert.match(line, /file: filing in background/)
+    assert.ok(Array.isArray(repair.command))
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

@@ -1,15 +1,17 @@
 // Desk-only enforcement is only as good as its own registration (spec §5's
 // "closed instead by desk_status and the boot checks verifying ... and
 // reporting a missing registration through the failure contract as a
-// `Desk problem:` block"). Part 4's real filer has not merged yet: the
-// registration check emits the block with `file: not filed:
-// filer_unavailable` behind `fileHookRegistrationProblem`, the single
-// function a later PR swaps for a call into the real filer -- proven here by
-// swapping it in a test.
+// `Desk problem:` block"). This module only verifies registration and
+// formats the block; it never files by itself -- `hookRegistrationDeskProblem`'s
+// `fileProblem` has no filing default, so with none given the block still
+// renders honestly with `file: not filed: filer_unavailable`. Each real
+// caller's own filing step (the boot check's detached launch, desk_status's
+// read-only report) is tested where it lives: boot_checks_host_enforcement.test.js
+// and status_host_enforcement.test.js; the real filer itself is
+// desk_problem_file.test.js's job.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import {
-  fileHookRegistrationProblem,
   hookRegistrationDeskProblem,
   verifyHookRegistered,
 } from "../../../../../plugins/desk/mcp/src/runtime/host-enforcement-registration.js"
@@ -65,6 +67,12 @@ test("verifyHookRegistered reads the real hooks.json from this checkout by defau
   assert.deepEqual(result, { applicable: true, registered: true })
 })
 
+test("verifyHookRegistered reports registered: false when hooks.json has no PreToolUse array at all", async () => {
+  const result = await verifyHookRegistered({ host: "claude", pluginRoot: "/fixture", readFile: readFileReturning(JSON.stringify({ hooks: {} })) })
+  assert.equal(result.registered, false)
+  assert.match(result.reason, /missing from hooks\.json/)
+})
+
 test("hookRegistrationDeskProblem reports nothing for a host that isn't applicable", async () => {
   const result = await hookRegistrationDeskProblem({ host: "some-future-host", pluginRoot: "/fixture", readFile: readFileReturning(REGISTERED_HOOKS_JSON) })
   assert.deepEqual(result, { registered: null, block: null })
@@ -75,7 +83,7 @@ test("hookRegistrationDeskProblem reports registered with no block when the hook
   assert.deepEqual(result, { registered: true, block: null })
 })
 
-test("hookRegistrationDeskProblem renders the five-field Desk problem: block, with the default filer's not-filed reason, when missing", async () => {
+test("hookRegistrationDeskProblem renders the five-field Desk problem: block, honestly not filed, when no fileProblem is given", async () => {
   const result = await hookRegistrationDeskProblem({ host: "claude", pluginRoot: "/fixture", readFile: readFileReturning(UNREGISTERED_HOOKS_JSON) })
   assert.equal(result.registered, false)
   assert.match(result.block, /^Desk problem: host-enforcement — /)
@@ -86,32 +94,36 @@ test("hookRegistrationDeskProblem renders the five-field Desk problem: block, wi
   assert.match(result.block, /\n {2}tell: /)
 })
 
-test("verifyHookRegistered reports registered: false when hooks.json has no PreToolUse array at all", async () => {
-  const result = await verifyHookRegistered({ host: "claude", pluginRoot: "/fixture", readFile: readFileReturning(JSON.stringify({ hooks: {} })) })
-  assert.equal(result.registered, false)
-  assert.match(result.reason, /missing from hooks\.json/)
-})
-
 test("verifyHookRegistered reports registered: false for Copilot when copilot-hooks.json has no preToolUse array at all", async () => {
   const result = await verifyHookRegistered({ host: "copilot", pluginRoot: "/fixture", readFile: readFileReturning(JSON.stringify({ hooks: {} })) })
   assert.equal(result.registered, false)
   assert.match(result.reason, /missing from copilot-hooks\.json/)
 })
 
-test("hookRegistrationDeskProblem defaults to the real hooks.json and the real filer stub when called with no arguments at all", async () => {
+test("hookRegistrationDeskProblem defaults to the real hooks.json and the honest not-filed default when called with no arguments at all", async () => {
   const result = await hookRegistrationDeskProblem()
   assert.equal(result.registered, null)
   assert.equal(result.block, null)
 })
 
-test("fileHookRegistrationProblem is the single swappable filing step, honest about not filing yet", async () => {
-  assert.deepEqual(await fileHookRegistrationProblem(), { file: "not filed: filer_unavailable" })
+test("hookRegistrationDeskProblem's filing step is swappable: a different fileProblem changes the block's file: field, and is given the host and the reason", async () => {
+  const calls = []
+  const fileProblem = async (args) => {
+    calls.push(args)
+    return { file: "https://github.com/ourostack/desk/issues/999" }
+  }
+  const result = await hookRegistrationDeskProblem({ host: "claude", pluginRoot: "/fixture", readFile: readFileReturning(UNREGISTERED_HOOKS_JSON), env: { FAKE: "1" }, fileProblem })
+  assert.match(result.block, /\n {2}file: https:\/\/github\.com\/ourostack\/desk\/issues\/999/)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].host, "claude")
+  assert.deepEqual(calls[0].env, { FAKE: "1" })
+  assert.match(calls[0].reason, /missing from hooks\.json/)
 })
 
-test("hookRegistrationDeskProblem's filing step is swappable: a different fileProblem changes the block's file: field", async () => {
-  const fileProblem = async () => ({ file: "https://github.com/ourostack/desk/issues/999" })
-  const result = await hookRegistrationDeskProblem({ host: "claude", pluginRoot: "/fixture", readFile: readFileReturning(UNREGISTERED_HOOKS_JSON), fileProblem })
-  assert.match(result.block, /\n {2}file: https:\/\/github\.com\/ourostack\/desk\/issues\/999/)
+test("hookRegistrationDeskProblem never calls fileProblem when the hook is registered or the host isn't applicable", async () => {
+  const fileProblem = async () => { throw new Error("must not be called") }
+  await hookRegistrationDeskProblem({ host: "claude", pluginRoot: "/fixture", readFile: readFileReturning(REGISTERED_HOOKS_JSON), fileProblem })
+  await hookRegistrationDeskProblem({ host: "some-future-host", pluginRoot: "/fixture", readFile: readFileReturning(UNREGISTERED_HOOKS_JSON), fileProblem })
 })
 
 const REGISTERED_COPILOT_HOOKS_JSON = JSON.stringify({
