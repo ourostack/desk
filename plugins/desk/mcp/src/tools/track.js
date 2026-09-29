@@ -47,16 +47,17 @@ function stagingAllowed(filePath, spawnGit) {
 
 // After staging, commits exactly the one file staged (M4-6 Part 2: every
 // write tool commits its own paths synchronously; push is a later part).
-// Staging and committing are both best-effort: a stage failure leaves
-// nothing to commit, and a commit failure never throws away the write or
-// the tool's own result — it comes back as this function's return value,
-// which a caller attaches to its result under `commit` only on failure, so
-// a normal, silent success stays byte-identical to today's response shape.
+// A stage failure (e.g. a concurrent call holding .git/index.lock) leaves
+// nothing to commit, and neither it nor a commit failure ever throws away
+// the write or the tool's own result — either comes back as this
+// function's return value, which a caller attaches to its result under
+// `commit` only on failure, so a normal, silent success stays byte-identical
+// to today's response shape.
 function stageAndCommitTrackCard(filePath, message, spawnGit) {
   const dir = path.dirname(filePath)
   const basename = path.basename(filePath)
   const staged = stagePaths(dir, [basename], spawnGit)
-  if (!staged.ok) return undefined
+  if (!staged.ok) return { status: "failed", reason: staged.stderr }
   const committed = commitPaths(dir, [basename], message, spawnGit)
   return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
 }

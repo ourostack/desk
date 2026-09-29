@@ -180,7 +180,7 @@ test("lesson_add reports a commit failure without losing the write", async () =>
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
 })
 
-test("lesson_add skips committing silently when staging itself fails", async () => {
+test("lesson_add reports a staging failure without losing the write", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   const spawnGit = (cmd, args, opts) => {
@@ -195,7 +195,7 @@ test("lesson_add skips committing silently when staging itself fails", async () 
   })
 
   assert.equal(result.status, "added", "the write itself is never lost to a staging failure")
-  assert.equal(result.commit, undefined, "nothing was staged, so nothing is committed or reported as failed")
+  assert.deepEqual(result.commit, { status: "failed", reason: "add boom" }, "a stage failure is reported, not swallowed as a silent success")
   assert.ok(await exists(path.join(root, "_meta", "tips", "topic-x.md")))
 })
 

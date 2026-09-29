@@ -90,10 +90,16 @@ function stagingAllowed(filePath, spawnGit) {
   return isGitRepository(dir, spawnGit) && !hasUnstagedWork(dir, [path.basename(filePath)], spawnGit)
 }
 
+// A stage failure (e.g. a concurrent call holding .git/index.lock) leaves
+// nothing to commit, and neither it nor a commit failure ever throws away
+// the write or the tool's own result — either comes back as this function's
+// return value, which the caller attaches to its result under `commit` only
+// on failure, so a normal, silent success stays byte-identical to today's
+// response shape.
 function stageAndCommitLesson(root, paths, message, spawnGit) {
   const relPaths = paths.map((p) => path.relative(root, p))
   const staged = stagePaths(root, relPaths, spawnGit)
-  if (!staged.ok) return undefined
+  if (!staged.ok) return { status: "failed", reason: staged.stderr }
   const committed = commitPaths(root, relPaths, message, spawnGit)
   return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
 }

@@ -292,3 +292,30 @@ test("task_update skips staging and committing when the file held unstaged chang
   assert.equal(data.status, "in_progress")
   assert.match(gitStatus(root), /t\/book-flights\/task\.md/, "the file is left as an uncommitted change")
 })
+
+// A real `.git/index.lock`, held the way a concurrent Git command (or a
+// crashed one) would hold it, must fail `git add` for real, not through a
+// mocked `spawnGit` — proving the fix against genuine git behavior
+// (independent review, fix round).
+test("task_update reports a real staging failure without losing the write, when .git/index.lock is genuinely held", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "T" } })
+
+  const lockPath = path.join(root, ".git", "index.lock")
+  await fs.writeFile(lockPath, "")
+  try {
+    const result = await task_update({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
+    })
+
+    assert.equal(result.status, "updated", "the write itself is never lost to a genuinely held lock")
+    const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+    assert.equal(data.status, "in_progress", "the frontmatter merge is on disk despite the lock")
+    assert.equal(result.commit.status, "failed", "a real `git add` failure is reported, not swallowed as a silent success")
+    assert.match(result.commit.reason, /index\.lock/)
+  } finally {
+    await fs.rm(lockPath, { force: true })
+  }
+})

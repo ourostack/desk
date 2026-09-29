@@ -268,7 +268,7 @@ test("task_archive reports a commit failure without losing the move", async () =
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
 })
 
-test("task_archive skips committing silently when staging itself fails", async () => {
+test("task_archive reports a staging failure without losing the move", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" } })
@@ -280,7 +280,7 @@ test("task_archive skips committing silently when staging itself fails", async (
   const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" }, spawnGit })
 
   assert.equal(result.status, "archived", "the move itself is never lost to a staging failure")
-  assert.equal(result.commit, undefined, "nothing was staged, so nothing is committed or reported as failed")
+  assert.deepEqual(result.commit, { status: "failed", reason: "add boom" }, "a stage failure is reported, not swallowed as a silent success")
   assert.ok(await exists(path.join(root, "t", "_archive", "book-flights", "task.md")))
 })
 
