@@ -688,15 +688,18 @@ export async function markDelivered(env, store, { name, publishedBlobSha }, { pl
  * labels key, `labels/<job>/<session_id>.json`, which is quarantined at
  * `quarantine/<store-slug>/labels/<job>/<session_id>.json`. `facts`, a facts
  * file name, is recorded beside the reason when given: the quarantined facts
- * a labels key is held back for.
+ * a labels key is held back for. `blob`, the git blob sha the store refused,
+ * is recorded when given, so a later flush can tell whether the published
+ * file has changed since.
  */
-export async function quarantine(env, store, name, reason, { facts = undefined, now = defaultNow, platform = process.platform, runner = undefined } = {}) {
+export async function quarantine(env, store, name, reason, { facts = undefined, blob = undefined, now = defaultNow, platform = process.platform, runner = undefined } = {}) {
   if (!LABELS_KEY_PATTERN.test(String(name))) requirePattern(name, OUTBOX_NAME_PATTERN, "name")
   requirePattern(reason, REASON_PATTERN, "reason")
   if (facts !== undefined) requirePattern(facts, OUTBOX_NAME_PATTERN, "facts")
+  if (blob !== undefined) requirePattern(blob, SHA1, "blob")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
-  const record = facts === undefined ? { reason, at: now() } : { reason, facts, at: now() }
+  const record = { reason, ...(facts === undefined ? {} : { facts }), ...(blob === undefined ? {} : { blob }), at: now() }
   await writeJsonAtomic(root, path.join(root, "quarantine", slug, name), record, { platform, env, runner })
   return record
 }

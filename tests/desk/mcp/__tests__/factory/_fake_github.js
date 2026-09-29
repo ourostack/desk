@@ -334,12 +334,12 @@ export function fakeGitHub({
       pr.state = "closed"
       return pr
     },
-    addClosedPr({ comment = null, commentBy = BOT, fileNames = [], merged = false, headLabel = null }) {
+    addClosedPr({ comment = null, commentBy = BOT, fileNames = [], fileShas = {}, merged = false, headLabel = null }) {
       const number = 100 + pulls.length + 1
       const [owner, ref] = (headLabel ?? `${storeOwner}:intake/0000000000000000`).split(":")
       pulls.push({ number, state: "closed", merged_at: merged ? "merged" : null, title: "Factory intake", body: "1", head: { ref, label: `${owner}:${ref}` }, base: { ref: "main" }, headRepo: store, html_url: `https://github.com/${store}/pull/${number}` })
       if (comment !== null) comments.set(number, [{ user: { login: commentBy, type: commentBy === BOT ? "Bot" : "User" }, body: comment }])
-      files.set(number, fileNames.map((name) => ({ filename: name.includes("/") ? name : `facts/${name}` })))
+      files.set(number, fileNames.map((name) => ({ filename: name.includes("/") ? name : `facts/${name}`, ...(fileShas[name] === undefined ? {} : { sha: fileShas[name] }) })))
       return number
     },
   }

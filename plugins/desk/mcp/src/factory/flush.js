@@ -635,7 +635,7 @@ async function readRejections(env, client, { store, head, through, labelKeys }) 
       // A labels file is known by its published path; only labels still waiting here can be named back to their local key.
       const name = FACTS_PATH.exec(String(file?.filename))?.[1] ?? labelKeys.get(String(file?.filename))
       if (name === undefined) continue
-      await quarantine(env, store, name, code)
+      await quarantine(env, store, name, code, SHA.test(String(file.sha)) ? { blob: file.sha } : {})
       rejected.add(name)
     }
   }

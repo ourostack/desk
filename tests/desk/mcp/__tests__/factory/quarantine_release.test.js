@@ -114,3 +114,24 @@ test("a flush sends again the facts and labels an older client quarantined for p
   assert.equal(await record(env, nameOf(1)), null)
   assert.equal((await record(env, nameOf(2))).reason, "date")
 }))
+
+test("quarantine records the refused blob sha when given", () => scratch(async ({ env }) => {
+  const now = () => "2026-09-29T00:00:00.000Z"
+  const blob = "a".repeat(40)
+  assert.deepEqual(await quarantine(env, STORE, nameOf(1), "plugin_not_public", { blob, now }), { reason: "plugin_not_public", blob, at: now() })
+  assert.deepEqual(await record(env, nameOf(1)), { reason: "plugin_not_public", blob, at: now() })
+  await assert.rejects(quarantine(env, STORE, nameOf(2), "plugin_not_public", { blob: "nope", now }), /blob/u)
+  assert.equal(await record(env, nameOf(2)), null)
+}))
+
+test("a store rejection quarantines each file with the blob the PR carried", () => scratch(async ({ env }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  await put(env, 1, { labels: false })
+  const github = fakeGitHub()
+  const branch = `intake/${(await readConsent(env)).stores[STORE].intake_id}`
+  github.addClosedPr({ comment: "factory-rejected: plugin_not_public", fileNames: [nameOf(1)], fileShas: { [nameOf(1)]: "b".repeat(40) }, headLabel: `ourostack:${branch}` })
+  await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  const found = await record(env, nameOf(1))
+  assert.equal(found.reason, "plugin_not_public")
+  assert.equal(found.blob, "b".repeat(40))
+}))
