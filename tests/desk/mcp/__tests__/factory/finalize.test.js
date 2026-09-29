@@ -203,11 +203,15 @@ test("end to end with the real flush: the request stays while the PR is open and
   await jobFile(ctx, 1)
   await requested(ctx)
   const github = fakeGitHub()
-  const first = await finalize(ctx.env, { job: JOB, runner: github.runner, derive: async () => ({ result: "skipped" }) })
+  const first = await finalize(ctx.env, { job: JOB, runner: github.runner, anonymousLookup: github.anonymousLookup, derive: async () => ({ result: "skipped" }) })
   assert.deepEqual(first, { result: "retained", flushes: { [STORE]: "delivered_pr_open" } })
+  // The referenced repo's visibility check 404s against the fake's authenticated call and must retry through
+  // the fake's anonymousLookup, never the real fetch: a regression guard for finalize threading its
+  // anonymousLookup option through to the flush, instead of falling back to a real, rate-limitable request.
+  assert.ok(github.anonymousCalls.length > 0, "finalize's flush must use the fake anonymousLookup, not a real fetch")
   assert.equal(await pendingRequest(ctx.env), true)
   github.mergeOpenPr()
-  const second = await finalize(ctx.env, { job: JOB, runner: github.runner, derive: async () => ({ result: "skipped" }) })
+  const second = await finalize(ctx.env, { job: JOB, runner: github.runner, anonymousLookup: github.anonymousLookup, derive: async () => ({ result: "skipped" }) })
   assert.deepEqual(second, { result: "cleared", flushes: { [STORE]: "nothing_pending" } })
   assert.equal(await pendingRequest(ctx.env), false)
 }))
