@@ -4,11 +4,20 @@ import * as path from "node:path"
 import { inspectShell } from "./shell-commands.js"
 import { runGit } from "./state-branch.js"
 import { readInspectionGit } from "./git-inspection.js"
-import { existingDirectory, physicalDirectory } from "./shell-paths.js"
+import { existingDirectory, processDirectory } from "./shell-paths.js"
 import { BUILTINS, canonicalKey, classifyGit, hasRule, MESSAGES } from "./git-guard-policy.js"
 import { GuardDenial, inspectionBudget, UNKNOWN, unresolved, WORKTREE_COMMAND } from "./guard-unknowns.js"
 
 export { WORKTREE_COMMAND }
+
+// Windows paths from Git (C:/Users/name/...) and from the shell or %TEMP% (C:\Users\NAME~1\...) name one folder in different forms. The native
+// realpath expands 8.3 short names; the comparison also folds separators and case, as Windows does. Other platforms keep exact comparison.
+const WINDOWS = process.platform === "win32"
+const realPath = WINDOWS ? realpathSync.native : realpathSync
+const samePath = (a, b) => WINDOWS ? path.win32.normalize(a).toLowerCase() === path.win32.normalize(b).toLowerCase() : a === b
+function canonicalPath(file) {
+  try { return realPath(file) } catch (error) { if (error.code === "ENOENT") return file; throw error }
+}
 
 // Git copies config.worktree to new worktrees. An exact gitdir conditional include
 // keeps this local marker on the bound checkout without changing Git's extensions.
@@ -87,7 +96,7 @@ function checkoutContext(read, cwd, options, env, policy, branch) {
       const top = await value("top", ["rev-parse", "--show-toplevel"])
       if (top === null) return null
       const real = (file) => {
-        try { return realpathSync(file) } catch { return path.join(real(path.dirname(file)), path.basename(file)) }
+        try { return realPath(file) } catch { return path.join(real(path.dirname(file)), path.basename(file)) }
       }
       const relative = path.relative(real(top), real(path.resolve(spec)))
       if (!relative.startsWith("..") && !path.isAbsolute(relative)) return relative.split(path.sep).join("/")
@@ -124,7 +133,7 @@ function gitInvocation(args, cwd, variables) {
       const dir = arg === "-C" ? args[++i] : arg.slice(2)
       if (dir === undefined) return null
       if (dir) {
-        cwd = physicalDirectory(cwd, dir)
+        cwd = processDirectory(cwd, dir)
         if (cwd === null) return null
       }
     } else if (arg === "--git-dir" || arg === "--work-tree" || arg === "--namespace") {
@@ -265,9 +274,8 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
         }
         return
       }
-      let resolved = path.resolve(target, victim)
-      try { resolved = realpathSync(resolved) } catch (error) { if (error.code !== "ENOENT") throw error }
-      const found = paths.find((p) => p === resolved) ?? paths.find((p) => path.basename(p) === victim)
+      const resolved = canonicalPath(path.resolve(target, victim))
+      const found = paths.find((p) => samePath(WINDOWS ? canonicalPath(p) : p, resolved)) ?? paths.find((p) => path.basename(p) === victim)
       if (found && (await readPolicy(read, found, [], {})).protected) throw new GuardDenial(`Desk protected checkout ${found}: ${MESSAGES.worktreeRemove}`)
       return
     }

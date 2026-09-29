@@ -4,15 +4,15 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { guardShellCommand, protectCheckout, protectedCheckoutHook } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { classifyGit, MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
 import { hasOption, parseGitOptions, SPECS } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-options.js"
-import { mayInvokeGit } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
-import { existingDirectory, mktempPath, physicalDirectory } from "../../../../../plugins/desk/mcp/src/runtime/shell-paths.js"
+import { mayInvokeGit, UNKNOWN } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
+import { existingDirectory, lexicalDirectory, mktempPath, physicalDirectory, processDirectory } from "../../../../../plugins/desk/mcp/src/runtime/shell-paths.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
@@ -22,7 +22,7 @@ const pwsh = !spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]).error
 
 // A bare origin, a protected desk clone on main whose state branch is recorded, and an ordinary clone.
 function desk(t) {
-  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-scope-")))
+  const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), "desk-guard-scope-")))
   t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
   const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" }
   for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_(?:COUNT|KEY_|VALUE_))/u.test(key)) delete env[key]
@@ -306,7 +306,7 @@ test("A3b: PowerShell unknown values follow the same rule", async (t) => {
   }
 })
 
-test("A3b: the Git-reach rule, option parser and mktemp model", () => {
+test("A3b: the Git-reach rule, option parser and mktemp model", (t) => {
   for (const text of ["git status", "/usr/bin/git log", "g''it checkout", "g\\it", "Git.exe status", "git-lfs pull", "eval x", "source x", "x; . y", "iex $x", "Invoke-Expression $x"]) {
     assert.equal(mayInvokeGit(text), true, text)
   }
@@ -331,7 +331,7 @@ test("A3b: the Git-reach rule, option parser and mktemp model", () => {
   assert.equal(classifyGit("merge", ["--autostash", "topic"]), null, "--autostash re-applies within the same command")
   assert.equal(classifyGit("worktree", ["remove", "--force"]), null, "no worktree named")
   assert.equal(classifyGit("worktree", ["repair"]), null)
-  const cwd = realpathSync(tmpdir())
+  const cwd = realpathSync.native(tmpdir())
   assert.equal(mktempPath([], cwd, {}, 1), path.join(realpathSync("/tmp"), ".desk-guard-mktemp-1"))
   assert.equal(mktempPath(["-d", "-t", "x"], cwd, { TMPDIR: cwd }, 2), path.join(cwd, ".desk-guard-mktemp-2"))
   assert.equal(mktempPath(["-d", "x.XXXX"], cwd, { TMPDIR: "/tmp" }, 3), path.join(cwd, ".desk-guard-mktemp-3"), "a bare template is created in the current directory")
@@ -342,13 +342,29 @@ test("A3b: the Git-reach rule, option parser and mktemp model", () => {
   assert.equal(physicalDirectory(pending, "."), pending)
   assert.equal(physicalDirectory(pending, "sub"), null)
   assert.equal(physicalDirectory(path.join(cwd, "definitely-missing"), ".desk-guard-mktemp-1"), null)
+  // Windows resolves a relative location against the path it was given, not the directory a link points to.
+  const linkRoot = mkdtempSync(path.join(cwd, "desk-lexical-"))
+  t.after(() => rmSync(linkRoot, { recursive: true, force: true }))
+  mkdirSync(path.join(linkRoot, "issuer")); mkdirSync(path.join(linkRoot, "target", "child"), { recursive: true })
+  const link = path.join(linkRoot, "issuer", "link")
+  symlinkSync(path.join(linkRoot, "target", "child"), link, process.platform === "win32" ? "junction" : "dir")
+  assert.equal(lexicalDirectory(link, ".."), path.join(linkRoot, "issuer"))
+  // One operand's own ".." is normalized by Windows before the link is followed, so there it is lexical too.
+  assert.equal(physicalDirectory(link, ".."), process.platform === "win32" ? path.join(linkRoot, "issuer") : realpathSync.native(path.join(linkRoot, "target")))
+  assert.equal(lexicalDirectory(cwd, link), link, "an absolute operand keeps its own path")
+  assert.equal(lexicalDirectory(cwd, "definitely-missing"), null)
+  assert.equal(lexicalDirectory(cwd, ".desk-guard-mktemp-8"), path.join(cwd, ".desk-guard-mktemp-8"))
+  assert.equal(lexicalDirectory(path.join(cwd, "definitely-missing"), ".desk-guard-mktemp-9"), null)
+  assert.equal(lexicalDirectory(UNKNOWN, "rel"), UNKNOWN, "a relative operand from an unknown directory")
+  assert.equal(lexicalDirectory(cwd, UNKNOWN), UNKNOWN, "an unknown operand")
+  assert.equal(processDirectory, process.platform === "win32" ? lexicalDirectory : physicalDirectory)
   assert.equal(existingDirectory(pending), cwd)
   assert.equal(existingDirectory(cwd), cwd)
 })
 
 test("A3b: Desk admission records the host's state branch beside the protection marker", async (t) => {
   const { createDeskSession } = await import("../../../../../plugins/desk/mcp/src/runtime/desk-session.js")
-  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-admission-")))
+  const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), "desk-guard-admission-")))
   t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
   for (const child of ["_meta", "_archive"]) mkdirSync(path.join(root, child))
   const calls = []

@@ -30,6 +30,21 @@ export function physicalDirectory(cwd, operand) {
   return parent && path.join(parent, path.basename(lexical))
 }
 
+// Windows keeps a process's current directory as the path it was given, so a later relative operand is resolved against
+// that text: after `git -C link` or `Set-Location link`, where link is a junction, ".." is link's own parent, not its
+// target's. Git still finds the repository from the directory the path names. Measured on Windows 11 with Git for Windows
+// and PowerShell 7, 2026-09-29. Git Bash's `cd` is handled by the shell model, which hands Git the resolved directory.
+export function lexicalDirectory(cwd, operand) {
+  if (operand.includes("\0") || (!path.isAbsolute(operand) && cwd.includes("\0"))) return UNKNOWN
+  const lexical = path.resolve(cwd, operand)
+  if (resolveExisting(lexical) !== null) return lexical
+  if (!path.basename(lexical).startsWith(MKTEMP_PREFIX)) return null
+  return resolveExisting(path.dirname(lexical)) === null ? null : lexical
+}
+
+/** How Git's own `-C` and PowerShell locations move: lexically on Windows, one real chdir at a time elsewhere. */
+export const processDirectory = process.platform === "win32" ? lexicalDirectory : physicalDirectory
+
 /** The directory Git would inspect for `dir`: itself, or the parent of a pending mktemp directory. */
 export function existingDirectory(dir) {
   return path.basename(dir).startsWith(MKTEMP_PREFIX) ? path.dirname(dir) : dir
