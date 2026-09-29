@@ -85,9 +85,13 @@ test("Windows: Get-CimInstance Win32_Process CreationDate, in UTC", async () => 
 })
 
 test("runForText resolves with stdout, or null when the command fails or cannot run", async () => {
-  assert.equal(await runForText(process.execPath, ["-e", "process.stdout.write('hi')"], { timeout: 10000, env: process.env }), "hi")
-  assert.equal(await runForText(process.execPath, ["-e", "process.exit(3)"], { timeout: 10000, env: process.env }), null)
-  assert.equal(await runForText("/no/such/command", [], { timeout: 10000, env: process.env }), null)
+  // NODE_OPTIONS stripped: these `node -e` children exercise runForText's own plumbing, not anything that needs its
+  // own coverage measured, so there is no reason for them to inherit the coverage runner's instrumentation registration.
+  const bareEnv = { ...process.env }
+  delete bareEnv.NODE_OPTIONS
+  assert.equal(await runForText(process.execPath, ["-e", "process.stdout.write('hi')"], { timeout: 10000, env: bareEnv }), "hi")
+  assert.equal(await runForText(process.execPath, ["-e", "process.exit(3)"], { timeout: 10000, env: bareEnv }), null)
+  assert.equal(await runForText("/no/such/command", [], { timeout: 10000, env: bareEnv }), null)
 })
 
 test("this process's own start time is read once, and a failed read is no start time", async (t) => {

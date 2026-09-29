@@ -859,7 +859,11 @@ test("the factory reader's first load of node:sqlite prints nothing", () => {
   try {
     const moduleUrl = new URL("../../../../../plugins/desk/mcp/src/factory/copilot-usage.js", import.meta.url).href
     const script = `const m = await import(${JSON.stringify(moduleUrl)}); const r = m.readSessionRows({ sessionId: ${JSON.stringify(OTHER_SESSION)}, env: { COPILOT_HOME: ${JSON.stringify(home)} } }); await new Promise((resolve) => setTimeout(resolve, 20)); process.stdout.write(r.status + ":" + r.rows.length)`
-    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" })
+    // NODE_OPTIONS stripped: this child's own coverage is not what this test measures, so it has no reason to
+    // inherit the coverage runner's instrumentation registration.
+    const bareEnv = { ...process.env }
+    delete bareEnv.NODE_OPTIONS
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env: bareEnv })
     assert.equal(child.stdout, "ok:1")
     assert.equal(child.stderr, "")
   } finally {

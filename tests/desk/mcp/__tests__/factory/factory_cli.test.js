@@ -663,7 +663,10 @@ function runCli(args, env) {
 }
 
 test("the CLI consent round trip: yes mints an intake_id, a later no keeps it, both visible in the written consent.json", () => scratch(async (env) => {
+  // NODE_OPTIONS stripped: this real CLI subprocess is not anything whose own coverage this suite needs to
+  // measure, so it has no reason to inherit the coverage runner's instrumentation registration.
   const fullEnv = { ...process.env, ...env }
+  delete fullEnv.NODE_OPTIONS
   const yesOut = JSON.parse(runCli(["consent", "--store", "ourostack/factory", "--contribute", "yes"], fullEnv))
   assert.equal(yesOut.contribute, true)
   assert.match(yesOut.intake_id, /^[0-9a-f]{16}$/u)
@@ -677,7 +680,10 @@ test("the CLI consent round trip: yes mints an intake_id, a later no keeps it, b
 }))
 
 test("the real CLI exits non-zero and prints one line to stderr for a bad invocation", () => scratch(async (env) => {
+  // NODE_OPTIONS stripped: this real CLI subprocess is not anything whose own coverage this suite needs to
+  // measure, so it has no reason to inherit the coverage runner's instrumentation registration.
   const fullEnv = { ...process.env, ...env }
+  delete fullEnv.NODE_OPTIONS
   try {
     execFileSync(process.execPath, [SCRIPT, "consent"], { encoding: "utf8", env: fullEnv, stdio: ["ignore", "pipe", "pipe"] })
     assert.fail("expected a non-zero exit")

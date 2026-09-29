@@ -1,11 +1,14 @@
 // Desk's small local record of how its latest start went, for boot checks and agents that did not see the session's tool calls.
 //
 // `last-start.json` in Desk's state directory holds the latest admission state of any session, its code and the latest repair; `last-start/<root key>.json` holds the same for each desk root, so a boot check reads the record of its own root. Both are rewritten on every state change, starting with `admitting`: the root's own record gets that first `admitting` state as soon as the session resolves the root. `repairs.log` gets one line per repair Desk makes on its own.
+//
+// `writeLastStart` and `appendRepairLog` are the two places this module actually writes; each calls `assertNotRealStateUnderTest` (`./test-state-guard.js`) first, refusing a non-temp state directory from what looks like a node:test run. `resolveDeskStateDir` itself stays a plain, side-effect-free function — many tests call it only to compute an expected path — so the guard sits at the write points, not there.
 
 import { createHash } from "node:crypto"
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 export const LAST_START_FILE = "last-start.json"
 export const REPAIR_LOG_FILE = "repairs.log"
@@ -36,6 +39,7 @@ export function lastStartPath({ stateDir, root = null }) {
 
 /** Replace last-start.json, and the root's own record when the root is known, atomically. Returns the path of last-start.json. */
 export function writeLastStart({ stateDir, snapshot, root = null, pid = process.pid, now = () => new Date() }) {
+  assertNotRealStateUnderTest(stateDir)
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const file = path.join(stateDir, LAST_START_FILE)
   const record = {
@@ -65,6 +69,7 @@ function replaceFile(file, record, pid) {
 
 /** Append one repair line: `<time> <root> <line>`. */
 export function appendRepairLog({ stateDir, line, root, now = () => new Date() }) {
+  assertNotRealStateUnderTest(stateDir)
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   const file = path.join(stateDir, REPAIR_LOG_FILE)
   appendFileSync(file, `${now().toISOString()} ${root} ${line}\n`, { mode: 0o600 })

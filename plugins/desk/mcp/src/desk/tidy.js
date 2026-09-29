@@ -66,6 +66,7 @@ import { loadFrontmatterParser, organizationFindings, redactedRelPath } from "./
 import { operatorNames } from "./naming.js"
 import { crewWorkspace, parseCrewRoster, readCrewRoster } from "./crew-roster.js"
 import { hasUnstagedWork } from "../util/git-stage.js"
+import { assertNotRealStateUnderTest } from "../runtime/test-state-guard.js"
 import {
   expandHome,
   personPrefix,
@@ -225,6 +226,7 @@ function ghIdentity(root, { env, spawnGh, homeDir, now, spawnBackground }) {
   const result = run(spawnGh, "gh", ["api", "user", "--jq", ".login"])
   const identity = result.status === 0 && hasText(result.stdout) ? result.stdout.trim() : null
   try {
+    assertNotRealStateUnderTest(path.dirname(file), { env })
     mkdirSync(path.dirname(file), { recursive: true })
     writeFileSync(file, `${JSON.stringify({ ...cache, [key]: { identity, checked_at: now } }, null, 2)}\n`)
   } catch {

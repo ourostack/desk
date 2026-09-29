@@ -56,6 +56,7 @@ import { readProcessStart } from "../readiness/process-start.js"
 import { formatDeskProblem } from "./index-drift.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
+import { DESK_TEST_REAL_STATE, assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 const GIT_TIMEOUT_MS = 10_000
 export const DEFAULT_DEBOUNCE_MS = 2000
@@ -146,12 +147,24 @@ function releaseSyncLock(lockPath, token) {
  * whatever exists by the time it runs). A lock whose owner is no longer
  * running is taken over — by a fresh exclusive create when it has already
  * been released, or a compare-and-write when it is still there and provably
- * stale. Never throws.
+ * stale. Never throws — including when the state guard refuses a real,
+ * non-temp state home under what looks like a node:test run, which resolves
+ * `{ refused: true }` instead (a session launched under any `node --test`
+ * inherits `NODE_TEST_CONTEXT`, so this must degrade, not crash the detached
+ * worker — Review Focus, `sync_worker.test.js`).
  */
 export async function acquireSyncLock({
   root, env, pid = process.pid, processStart = readProcessStart, readLock = readJsonIfPresent, kill = process.kill,
 }) {
   const lockPath = resolveSyncLockPath({ root, env })
+  try {
+    assertNotRealStateUnderTest(path.dirname(lockPath), { env })
+  } catch (error) {
+    // istanbul ignore next -- assertNotRealStateUnderTest's own contract is "throws an Error with
+    // .code = DESK_TEST_REAL_STATE; never throws otherwise", so this rethrow has no other error to see.
+    if (error.code !== DESK_TEST_REAL_STATE) throw error
+    return { refused: true }
+  }
   mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 })
   const token = randomUUID()
   const start = await processStart(pid)
@@ -256,8 +269,20 @@ function pushWithRetry(root, spawnGit) {
 // Recording the outcome for `desk_status`, and filing a Desk problem.
 // ---------------------------------------------------------------------------
 
+// Never throws: a status write that cannot be persisted -- an unwritable folder, or, under a node:test run, the
+// state guard refusing a real, non-temp state home -- costs the next reader a recorded status, never a crash. A
+// caller (`runPushWorker`, `finalUnpushedCheck`) that has already computed its own answer from Git still returns
+// that answer; only the recording is best-effort.
 function updateSyncStatus(root, env, patch) {
   const file = syncStatusPath({ root, env })
+  try {
+    assertNotRealStateUnderTest(path.dirname(file), { env })
+  } catch (error) {
+    // istanbul ignore next -- assertNotRealStateUnderTest's own contract is "throws an Error with
+    // .code = DESK_TEST_REAL_STATE; never throws otherwise", so this rethrow has no other error to see.
+    if (error.code !== DESK_TEST_REAL_STATE) throw error
+    return null
+  }
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const next = { ...(readJsonIfPresent(file) ?? {}), ...patch }
   const temporary = `${file}.${randomUUID()}.tmp`
@@ -346,12 +371,26 @@ const REAL_CLOCK = { sleep: (ms) => new Promise((resolve) => setTimeout(resolve,
  * an error — controller ruling 2), otherwise debounce, then push (with the
  * one retry) in a loop that keeps re-checking what is ahead until nothing
  * is, so the lock holder never releases while a commit is left unpushed.
- * Never throws. `clock`, `spawnGit` and `fileProblem` are test seams.
+ * Never throws — including when the lock is refused under a node:test run
+ * (`result: "test_isolation_refused"`, logged to `stderr` rather than left
+ * silent), which `runSyncPushCli`/`sync-push.js` still resolve to exit code
+ * 0 for, the same as `"busy"` or `"skipped"`. `clock`, `spawnGit`,
+ * `fileProblem` and `stderr` are test seams.
  */
 export async function runPushWorker({
   root, env = process.env, debounceMs = DEFAULT_DEBOUNCE_MS, spawnGit = spawnSync, clock = REAL_CLOCK, fileProblem = queueDeskProblemFiling,
+  stderr = process.stderr,
 }) {
   const lock = await acquireSyncLock({ root, env })
+  if (lock?.refused) {
+    // Not silent, even though the CLI's own stdio is ignored (`defaultSpawnWorker`): the reason still lands
+    // wherever this process's stderr goes, for anyone inspecting it directly (a test, a manual `node sync-push.js`
+    // run). A session launched under any `node --test` inherits NODE_TEST_CONTEXT, so this is the ordinary
+    // shape of "this desk root is a node:test child process", not a defect -- treated as "could not run this
+    // cycle", never a crash (Review Focus, `sync_worker.test.js`).
+    stderr.write(`Desk sync worker: refused the real state folder under what looks like a node:test run (${DESK_TEST_REAL_STATE}); not pushing this cycle.\n`)
+    return { result: "test_isolation_refused" }
+  }
   if (lock === null) return { result: "busy" }
   try {
     if (!canPush(root, spawnGit)) return { result: "skipped" }

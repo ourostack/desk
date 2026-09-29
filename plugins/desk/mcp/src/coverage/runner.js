@@ -305,8 +305,14 @@ function runCoverageShard({ repoRoot, request, requiredFiles, coverageIncludeFil
     if (result.error) io.stderr.write(`[coverage-gate] the instrumented test run could not finish (${result.error.code ?? result.error.message})\n`)
     status = result.status ?? 1
   }
-  // Process bookkeeping is not coverage; only the per-process coverage files travel to the merge.
-  rmSync(path.join(rawDirectory, "processinfo"), { recursive: true, force: true })
+  // Process bookkeeping is not coverage; only the per-process coverage files travel to the merge. Retried rather
+  // than a single attempt: nyc/istanbul's own per-process coverage writers (including any instrumented child a test
+  // spawned and has already awaited to exit) can still be flushing a file into this same directory in the instant
+  // after the instrumented run above reports done, which races Node's own recursive rmdir -- it lists entries, then
+  // rmdir's the now-believed-empty directory, and a file that lands in that window fails it with ENOTEMPTY (seen on
+  // CI, not locally: ourostack/desk PR #101, runs 36557284368 and prior, shard 2). The same short retry `_fake_real_
+  // root.js` already uses for its own fixture cleanup.
+  rmSync(path.join(rawDirectory, "processinfo"), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   const seconds = Math.round((Date.now() - started) / 100) / 10
   writeFileSync(path.join(output, "shard.json"), `${JSON.stringify({
     schema_version: COVERAGE_SHARD_SCHEMA_VERSION,

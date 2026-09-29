@@ -24,6 +24,7 @@ import * as path from "node:path"
 import { formatDeskProblem } from "./index-drift.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 import { resolveDeskStateDir } from "./last-start.js"
+import { assertNotRealStateUnderTest } from "./test-state-guard.js"
 
 const TIMEOUT_STATE_DIR = "protected-checkout-timeouts"
 const REPEAT_WINDOW_MS = 60 * 60 * 1000
@@ -58,6 +59,7 @@ export function recordTimeout({ env = process.env, command, now = () => Date.now
   count += 1
   try {
     const directory = path.dirname(file)
+    assertNotRealStateUnderTest(directory, { env })
     mkdirSync(directory, { recursive: true, mode: 0o700 })
     const temporary = `${file}.${process.pid}.tmp`
     writeFileSync(temporary, `${JSON.stringify({ count, at: now() })}\n`, { mode: 0o600 })

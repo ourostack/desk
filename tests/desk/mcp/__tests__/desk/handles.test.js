@@ -4,7 +4,7 @@
 
 import { test, afterEach } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import {
@@ -15,6 +15,7 @@ import {
   resolveTaskHandle,
   resolveTrackHandle,
 } from "../../../../../plugins/desk/mcp/src/desk/handles.js"
+import { mkFakeRealRoot } from "../_fake_real_root.js"
 
 const ORIGINAL_STATE_HOME = process.env.XDG_STATE_HOME
 
@@ -90,6 +91,21 @@ test("a key that cannot be stored falls back to one key per process", () => {
   assert.equal(readFileSync(handleKeyPath(), "utf8"), "not a key\n", "an unreadable key file is never overwritten")
   process.env.XDG_STATE_HOME = unusable()
   assert.equal(folderHandle("task", root, target), first, "the per-process key is reused")
+})
+
+test("under a node:test run, a real (non-temp) key folder is refused -- falling back to a per-process key, same as any other unwritable state folder", () => {
+  // A folder that genuinely exists and is genuinely writable, but sits outside the OS temp directory: stands in for
+  // the developer's real home, so a key landing here would be exactly the incident the guard exists to stop.
+  const fakeReal = mkFakeRealRoot("desk-handles-fake-real-")
+  try {
+    process.env.XDG_STATE_HOME = fakeReal
+    const root = desk()
+    const first = folderHandle("task", root, path.join(root, "work", "plain-task"))
+    assert.ok(isHandle("task", first), "still returns a valid handle, from the per-process fallback")
+    assert.equal(existsSync(path.join(fakeReal, "ouroboros-skills")), false, "the guard refuses before creating anything under the fake real home")
+  } finally {
+    rmSync(fakeReal, { recursive: true, force: true })
+  }
 })
 
 test("isHandle checks the shape and the kind", () => {

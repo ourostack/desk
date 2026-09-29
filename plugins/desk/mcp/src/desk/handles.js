@@ -24,6 +24,7 @@ import { createHmac, randomBytes } from "node:crypto"
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import { assertNotRealStateUnderTest } from "../runtime/test-state-guard.js"
 
 const HANDLE = /^(task|track)-[0-9a-f]{10}$/u
 const keys = new Map()
@@ -58,6 +59,7 @@ function readKey(file) {
 function createKey(file) {
   const key = randomBytes(32).toString("hex")
   try {
+    assertNotRealStateUnderTest(path.dirname(file))
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     writeFileSync(file, `${key}\n`, { flag: "wx", mode: 0o600 })
     return key

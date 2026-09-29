@@ -14,6 +14,8 @@ import {
 } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { startReadinessController } from "../../../../../plugins/desk/mcp/src/readiness/controller-server.js"
 import * as endpoints from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
+import { DESK_TEST_REAL_STATE } from "../../../../../plugins/desk/mcp/src/runtime/test-state-guard.js"
+import { mkFakeRealRoot } from "../_fake_real_root.js"
 
 function tempFixture(prefix) {
   return mkdtempSync(path.join(realpathSync(tmpdir()), prefix))
@@ -149,6 +151,50 @@ test("controller startup without options fails before creating an owner", async 
     () => connectOrStartController(),
     { code: "ERR_INVALID_ARG_TYPE" },
   )
+})
+
+test("under a node:test run, connectOrStartController refuses a real (non-temp) state home rather than writing to it", async () => {
+  // Fix round for PR #101 (review: CHANGES NEEDED). Ruling 2: guard the mkdirSync under
+  // `~/.cache/ouroboros-skills/desk/readiness` the same way every other real writer in this PR is guarded. This one
+  // sits under the CACHE home rather than the STATE home every other guarded writer uses, so it was never caught by
+  // the original `.local/state`/`XDG_STATE_HOME` sweep. Every actual node:test run already sets NODE_TEST_CONTEXT
+  // itself (verified by the guard's own module doc), so this test needs no env manipulation to trigger it -- only a
+  // state home that is provably not under the OS temp directory, standing in for a developer's real HOME.
+  const root = tempFixture("desk-controller-root-")
+  const fakeReal = mkFakeRealRoot("desk-fake-real-home-controller-")
+  try {
+    await assert.rejects(
+      () => connectOrStartController({ root, stateHome: fakeReal, ephemeral: true }),
+      { code: DESK_TEST_REAL_STATE },
+    )
+    assert.deepEqual(readdirSync(fakeReal), [], "the guard must refuse before creating anything under the fake real state home")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(fakeReal, { recursive: true, force: true })
+  }
+})
+
+test("connectOrStartController accepts a real (non-temp) state home when the caller opts out of the guard", async (t) => {
+  // The guard's own escape hatch (DESK_ALLOW_REAL_STATE_IN_TEST): a caller that has deliberately chosen a real state
+  // home under a node:test run -- this very test -- is not refused.
+  const root = tempFixture("desk-controller-root-")
+  const fakeReal = mkFakeRealRoot("desk-fake-real-home-controller-optout-")
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(fakeReal, { recursive: true, force: true })
+  })
+  const client = await connectOrStartController({
+    root,
+    stateHome: fakeReal,
+    ephemeral: true,
+    env: { ...process.env, DESK_ALLOW_REAL_STATE_IN_TEST: "1" },
+  })
+  try {
+    assert.equal(client.accepted, true)
+    assert.equal(existsSync(path.join(fakeReal, client.id, "owner.json")), true)
+  } finally {
+    await client.close()
+  }
 })
 
 test("controller server startup without options fails before opening a listener", async () => {

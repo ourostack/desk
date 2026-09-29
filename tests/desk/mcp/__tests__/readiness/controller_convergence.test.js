@@ -7,6 +7,12 @@ import * as path from "node:path"
 import { connectOrStartController } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { ACTIVE_EMBEDDING_SPEC } from "../../../../../plugins/desk/mcp/src/indexer/spec.js"
 
+// NODE_OPTIONS stripped: the convergence-initiator child spawned below exercises the controller's socket protocol,
+// not anything whose own coverage this suite needs to measure, so it has no reason to inherit the coverage
+// runner's instrumentation registration.
+const bareEnv = { ...process.env }
+delete bareEnv.NODE_OPTIONS
+
 function deferred() {
   let resolve
   const promise = new Promise((done) => { resolve = done })
@@ -132,7 +138,7 @@ test("exiting initiating client does not cancel controller-owned work observed b
       params: { token: ${JSON.stringify(owner.owner.token)} }
     }) + "\\n"));
     process.stdin.once("data", () => process.exit(0));
-  `], { stdio: ["pipe", "ignore", "pipe"] })
+  `], { stdio: ["pipe", "ignore", "pipe"], env: bareEnv })
   const closed = new Promise((resolve, reject) => {
     child.once("error", reject)
     child.once("close", (code) => resolve(code))
