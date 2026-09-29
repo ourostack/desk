@@ -98,10 +98,12 @@ Clear tasks can execute from the task card without a doing document. Update the 
 
 ### 4. Commit + push
 
-After the three artifact updates above:
+`task_update`, `track_update` and `task_archive` stage and commit the files they write themselves, exactly the paths written, as part of the call — no separate `git add`/`git commit` follows one of those calls. Update the mapped progress/rulings record with a Desk tool where one exists; when it's a hand-written file no Desk tool covers, commit it with `desk_save` (`paths`, `message`) rather than a manual `git commit`.
+
+Pushing is still manual until the background push worker ships:
 
 ```
-cd $DESK && git add <specific-files> && git commit -m "task(<slug>): <old> -> <new>" && git push origin main
+cd $DESK && git push origin main
 ```
 
 Auth and push convention is consumer-specific: corporate-worker overlays push under whatever enterprise-managed identity the org requires (the overlay's git-identity skill handles this); ouroboros agents push under whatever account their bundle's git remote is configured for; personal agents per their setup.

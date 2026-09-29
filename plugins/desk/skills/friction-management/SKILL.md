@@ -59,7 +59,7 @@ when the operator hits friction, or when i notice a recurring rough edge:
    **Status**: open.
    ```
 
-3. commit + push to the desk workspace. no separate review step; the corkboard is live evidence.
+3. `friction_add` stages and commits the entry itself; only pushing to the desk workspace remains manual. no separate review step; the corkboard is live evidence.
 
 ### Pin the card while it's still warm
 
