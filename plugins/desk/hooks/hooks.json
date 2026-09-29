@@ -44,6 +44,17 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/desk-naming.cjs\" claude",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup|resume|clear|compact",
