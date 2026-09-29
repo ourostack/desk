@@ -1,10 +1,12 @@
 // desk MCP server registration.
 //
-// Registers all 17 tools as stdio MCP handlers. Units 3 + 5 + 6 wire every
+// Registers all 18 tools as stdio MCP handlers. Units 3 + 5 + 6 wire every
 // tool to a real implementation:
 //   - Unit 3: task_create, task_update, task_archive, track_create,
 //             track_update, friction_add, lesson_add
 //   - M4-2 (cheap moves): task_move, track_rename
+//   - M4-6 Part 2: desk_save (commits hand-written files the same way every
+//     other write tool commits its own)
 //   - Unit 5: desk_search, desk_recall, desk_similar, desk_timeline
 //   - Unit 6: desk_thread (refs_graph provenance walk)
 //   - Index mgmt: desk_reindex (requests shared controller convergence)
@@ -35,6 +37,7 @@ import { track_create, track_update } from "./tools/track.js"
 import { task_move, track_rename } from "./tools/move.js"
 import { friction_add } from "./tools/friction.js"
 import { lesson_add } from "./tools/lesson.js"
+import { desk_save } from "./tools/desk-save.js"
 import {
   desk_search,
   desk_recall,
@@ -213,6 +216,7 @@ export const TOOL_IMPLS = {
   track_rename,
   friction_add,
   lesson_add,
+  desk_save,
   desk_search,
   desk_recall,
   desk_similar,
@@ -248,7 +252,7 @@ export async function callTool({ deskRoot, name, input, person = null, statusCon
   }
   const impl = TOOL_IMPLS[name]
   if (!impl) {
-    // All 16 tools wired; this branch only fires if a name exists in
+    // All 18 tools wired; this branch only fires if a name exists in
     // TOOL_NAMES but is missing from TOOL_IMPLS — i.e. a wiring bug.
     // Return a structured payload that points at the cause.
     return {

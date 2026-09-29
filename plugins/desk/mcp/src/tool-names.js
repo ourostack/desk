@@ -1,4 +1,4 @@
-// Single source of truth for the 17 MCP tools desk-mcp exposes.
+// Single source of truth for the 18 MCP tools desk-mcp exposes.
 //
 // Imported by both server.js (registers them) and the tests (asserts the
 // list is canonical). Kept in a no-deps file so tests can import without
@@ -15,6 +15,7 @@ export const TOOL_NAMES = [
   "track_rename",
   "friction_add",
   "lesson_add",
+  "desk_save",
   // Search (Units 5 + 6)
   "desk_search",
   "desk_recall",
@@ -47,6 +48,8 @@ export const TOOL_DESCRIPTIONS = {
     "Append a friction entry — cross-cutting to <root>/_meta/friction.md, or track-local to <root>/<track>/_friction/<date>-<theme>.md. `about` is \"setup\" (default: this desk's own setup, kept on the desk) or \"system\" (Desk, its skills or the factory): system friction needs a one-line `title` and may carry `plugin` (default \"desk\"), `friction_class` (guard, hook, mcp_tool, skill, factory, release, ci, docs or other; default other), `signal` (a rollups measure) and `evidence_jobs`; it is recorded on the desk as a kaizen candidate and sends nothing (result `kaizen: \"candidate\"`). `file_card: true` is for the curator after its signoff step only: it files the card in the desk's factory store (the facts route; nothing when the route is unknown; structured fields only in a public store; deduplicated; at most five a day) and records the outcome on the desk: status \"filed\" with the `url` and `kaizen` \"filed\" or \"duplicate\", or status \"added\" with the reason code in `kaizen`.",
   lesson_add:
     "Write or append a lesson under <root>/_meta/tips/<topic>.md. Existing file gets an `## Update <date>` section.",
+  desk_save:
+    "Commit files written directly with Write/Edit rather than through a structured Desk tool — a planning doc, a spec, a report. `paths` are relative to the desk root; each must resolve inside the resolved --person write prefix, or the call is refused. Stages and commits exactly `paths` with `message` (`git commit -- <paths>`, never -a or -A). Returns `nothing_to_commit`, without committing, when none of `paths` holds an unstaged change or an untracked file — most often a path that was never actually written — so a stale or mistyped path never becomes an empty commit.",
   desk_search:
     "Hybrid lexical+semantic search across desk. Filters: track, status, kind, since, until. Returns ranked chunks with score_breakdown. Soft-fails to FTS-only when Ollama is unreachable. `scope` (optional): 'active' (default), 'archived', or 'all' — desk_search defaults to active because day-to-day signal beats archive noise; pass 'all' to search history too.",
   desk_recall:

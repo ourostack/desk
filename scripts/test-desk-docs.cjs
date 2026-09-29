@@ -222,6 +222,7 @@ const MCP_TOOL_NAMES = Object.freeze([
   "track_rename",
   "friction_add",
   "lesson_add",
+  "desk_save",
   "desk_search",
   "desk_recall",
   "desk_similar",
