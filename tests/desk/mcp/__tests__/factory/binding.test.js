@@ -6,13 +6,13 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 
 import { bindSession, jobId, normalizeRemote } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { DESK_MARKER } from "../../../../../plugins/desk/mcp/src/factory/shell-git.js"
-import { LIMITS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
+import { LIMITS, validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { deriveClaudeSession } from "../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
 
 const SENTINEL = "SENTINEL-7f3a"
@@ -682,12 +682,27 @@ test("a worker that cannot be traced to an ancestor with evidence stays unattrib
   assert.deepEqual(summary(jobs), [{ job: idOf(SLUG), basis: ["desk_tool"], agents: [0] }])
 })
 
-test("a worker missing from agents still counts for its own evidence but cannot inherit", () => {
-  const { jobs } = bind({ deskToolCalls: [deskCall({ agent: 4 }), deskCall({ agent: -1, slug: OTHER }), deskCall({ agent: 1.5, slug: OTHER })] }, { agents: [{ n: 0 }] })
-  assert.deepEqual(summary(jobs).sort((a, b) => a.agents[0] - b.agents[0]), [
-    { job: idOf(OTHER), basis: ["desk_tool"], agents: [0] },
-    { job: idOf(SLUG), basis: ["desk_tool"], agents: [4] },
-  ])
+test("a worker missing from agents binds nothing and nothing inherits from it", () => {
+  const { jobs } = bind({
+    deskToolCalls: [deskCall({ agent: 4 }), deskCall({ agent: -1, slug: OTHER }), deskCall({ agent: 1.5, slug: OTHER })],
+    fileWrites: [{ path: `${DESK}/${TRACK}/${OTHER}/x.md`, agent: 4 }],
+    spawnTasks: [{ agent: 4, track: TRACK, slug: OTHER }],
+  }, { agents: [{ n: 1, parent: 4 }, { n: 5, parent: 4 }] })
+  assert.deepEqual(jobs, [], "workers 4, and 0 (the fallback for a bad id), are not listed")
+  const listedOnly = bind({ deskToolCalls: [deskCall({ agent: 4 }), deskCall({ agent: 1, slug: OTHER })] }, { agents: [{ n: 1, parent: 4 }] })
+  assert.deepEqual(summary(listedOnly.jobs), [{ job: idOf(OTHER), basis: ["desk_tool"], agents: [1] }])
+})
+
+test("a bound session's jobs pass the local facts validator, agents included", () => {
+  const golden = JSON.parse(readFileSync(new URL("./fixtures/local-golden.json", import.meta.url), "utf8"))
+  const agents = [{ n: 0 }, { n: 1, parent: 0 }, { n: 2, parent: 1 }]
+  const { jobs } = bind(
+    { deskToolCalls: [deskCall({ agent: 0 }), deskCall({ agent: 7, slug: OTHER })], spawnTasks: [{ agent: 1, track: TRACK, slug: "third" }] },
+    { agents },
+  )
+  assert.equal(jobs.length, 2)
+  const facts = { ...golden, agents: golden.agents.concat({ n: 2, parent: 1, model: "claude-sonnet-5" }), jobs }
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 })
 
 test("legacy call without agents treats everything as agent 0", () => {

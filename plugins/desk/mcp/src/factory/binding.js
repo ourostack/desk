@@ -274,7 +274,11 @@ export function bindSession({ events, agents, deskRoot, deskRemote, personPrefix
   // Without `agents` (a legacy caller) every event is the root worker's (0).
   const hasAgents = Array.isArray(agents)
   const agentOf = (item) => (hasAgents && Number.isInteger(item?.agent) && item.agent >= 0 ? item.agent : 0)
+  // With `agents`, a worker it does not list contributes no evidence: the
+  // facts could not name it in a job's `agents`, and the validator refuses that.
+  const listed = new Set((hasAgents ? agents : []).map((worker) => worker?.n))
   const touch = (agent, task, basis) => {
+    if (hasAgents && !listed.has(agent)) return { transitions: [] }
     const key = `${task.track}/${task.slug}`
     if (!tasks.has(key)) tasks.set(key, { track: task.track, slug: task.slug, transitions: [] })
     if (!evidence.has(agent)) evidence.set(agent, new Map())
