@@ -5,7 +5,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
+import { createRequire } from "node:module"
 
+const require = createRequire(import.meta.url)
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const source = new URL("../../../../../plugins/desk/mcp/src/runtime/ask-gate.js", import.meta.url)
 const hook = path.join(plugin, "hooks", "ask-gate.cjs")
@@ -512,10 +514,64 @@ test("the .cjs entry point denies over real stdin/stdout and never crashes the h
     const parsed = JSON.parse(result.stdout)
     assert.equal(parsed.hookSpecificOutput.permissionDecision, "deny")
 
-    // Malformed stdin must not exit 2 (the only PreToolUse code that blocks): it must fail open.
-    const broken = spawnSync(process.execPath, [hook, "claude"], { input: "not json", env, encoding: "utf8" })
+    // Malformed stdin must not exit 2 (the only PreToolUse code that blocks): it must fail open, and
+    // now writes a full Desk problem: ask-gate block instead of a bare line. HOME/XDG are redirected
+    // to this fixture's own throwaway root so the detached filer this really spawns can find no gh
+    // credentials at all and reach no network, whatever this machine's own gh auth state is.
+    const isolatedHome = path.join(f.root, "isolated-home")
+    mkdirSync(isolatedHome, { recursive: true })
+    const isolatedEnv = {
+      ...env,
+      HOME: isolatedHome,
+      XDG_CONFIG_HOME: path.join(isolatedHome, ".config"),
+      XDG_STATE_HOME: path.join(isolatedHome, ".local", "state"),
+    }
+    delete isolatedEnv.GH_TOKEN
+    delete isolatedEnv.GITHUB_TOKEN
+    const broken = spawnSync(process.execPath, [hook, "claude"], { input: "not json", env: isolatedEnv, encoding: "utf8" })
     assert.notEqual(broken.status, 2)
+    assert.match(broken.stderr, /^Desk problem: ask-gate — internal error while inspecting this call\n/u)
+    assert.match(broken.stderr, /  file: filing in background\n/u)
   } finally {
     teardown(f.root)
   }
+})
+
+// ── ask-gate's catch-all is migrated onto the failure contract (spec.md §1, Part 5) ──
+
+test("askGateFailureBlock renders a Desk problem: ask-gate block, queues the detached filer via spawnFiler, and never awaits it past this call", async () => {
+  const { askGateFailureBlock } = require(hook)
+  const calls = []
+  const block = await askGateFailureBlock(new Error("boom"), {
+    host: "claude",
+    spawnFiler: (args) => { calls.push(args) },
+  })
+  assert.match(block, /^Desk problem: ask-gate — internal error while inspecting this call\n/u)
+  assert.match(block, /  broke: boom\n/u)
+  assert.match(block, /  file: filing in background\n/u)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].mechanism, "ask-gate")
+  assert.equal(calls[0].host, "claude")
+  assert.equal(calls[0].reason, "boom")
+})
+
+test("askGateFailureBlock stays honest ('not filed') when spawnFiler itself throws, and never rejects", async () => {
+  const { askGateFailureBlock } = require(hook)
+  const block = await askGateFailureBlock(new Error("boom"), {
+    host: "claude",
+    spawnFiler: () => { throw new Error("spawn unavailable") },
+  })
+  assert.match(block, /  file: not filed: filer_unavailable\n/u)
+})
+
+test("askGateFailureBlock renders a reason for a non-Error thrown value too", async () => {
+  const { askGateFailureBlock } = require(hook)
+  const block = await askGateFailureBlock("plain string failure", { host: "claude", spawnFiler: () => {} })
+  assert.match(block, /  broke: plain string failure\n/u)
+})
+
+test("requiring ask-gate.cjs attaches no stdin listeners: it is safe to import in-process for its own exports", () => {
+  const before = process.stdin.listenerCount("data")
+  require(hook)
+  assert.equal(process.stdin.listenerCount("data"), before)
 })
