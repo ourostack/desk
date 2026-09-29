@@ -2,11 +2,12 @@
 // track_rename (rename a track, updating every task card under it).
 //
 // Both stage moves with `git mv` semantics on a Git desk, or fall back to a
-// plain rename otherwise; neither ever commits. Coverage below is written
-// TDD-first per task M4-2's checklist: same-track rename, cross-track move,
-// archived-task move, track rename with archived tasks, target-exists
-// refusal, invalid-new-name refusal, mentions reported but not rewritten,
-// and a non-Git desk working the same way.
+// plain rename otherwise, then commit exactly the paths they wrote (M4-6
+// Part 2). Coverage below is written TDD-first per task M4-2's checklist:
+// same-track rename, cross-track move, archived-task move, track rename
+// with archived tasks, target-exists refusal, invalid-new-name refusal,
+// mentions reported but not rewritten, and a non-Git desk working the same
+// way (no staging, no commit).
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -67,6 +68,12 @@ function gitLog(root) {
   return result.stdout
 }
 
+function lastCommitMessage(root) {
+  const result = spawnSync("git", ["-C", root, "log", "-1", "--format=%s"], { encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  return result.stdout.trim()
+}
+
 // Fix round 1, Important: no refusal may quote a candidate. Checking every
 // 4-character substring is equivalent to checking every substring longer
 // than 3 characters — any longer run contains a 4-character run as a prefix.
@@ -122,13 +129,28 @@ test("task_move renames a task within the same track (Git desk) and renames its 
   assert.doesNotMatch(body, /`old-name`/)
   assert.match(body, /`other-task`/, "the other row must be left alone")
 
-  // Staged, never committed: the committed card leaves its old path in the
-  // index and appears at the new one, with nothing left untracked.
-  const status = gitStatus(root)
-  assert.match(status, /main-track\/new-name\/task\.md/)
-  assert.match(status, /^(R. main-track\/old-name\/task\.md -> |D  main-track\/old-name\/task\.md$)/m)
-  assert.doesNotMatch(status, /^\?\?/m)
-  assert.equal(gitLog(root).trim().split("\n").length, 1, "task_move must never commit: only the fixture commit exists")
+  // Staged and committed (M4-6 Part 2): the tree is clean afterward, and the
+  // new commit names the tool and the move.
+  assert.equal(gitStatus(root), "")
+  assert.equal(lastCommitMessage(root), "task_move: old-name → main-track")
+})
+
+test("task_move renames a task under a track that has no track.md, leaving the missing table alone", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  // No track_create call: the track folder gets no track.md at all, which
+  // editTasksTable treats as "no table to maintain" rather than an error.
+  await task_create({ deskRoot: root, input: { track: "lonely-track", slug: "old-name", title: "T" } })
+
+  commitAll(root)
+  const result = await task_move({
+    deskRoot: root,
+    input: { track: "lonely-track", slug: "old-name", to_slug: "new-name" },
+  })
+
+  assert.equal(result.to, path.join("lonely-track", "new-name"))
+  assert.deepEqual(result.updated_files, [path.join("lonely-track", "new-name", "task.md")])
+  assert.equal(await exists(path.join(root, "lonely-track", "track.md")), false)
 })
 
 test("task_move preserves every other frontmatter byte untouched: a date-only value, a long single-line scalar, quoted and unquoted values, and a note: | block", async () => {
@@ -827,6 +849,78 @@ test("task_move surfaces a git mv failure", async () => {
   )
 })
 
+test("task_move surfaces a git add failure staging its own table edits", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "main-track", { rows: ["old-name"] })
+  await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "T" } })
+
+  // movePath's own `git add -A -- <dir>` (source staging, ahead of `git mv`)
+  // must still succeed; only stageWrites' plain `git add -- <files>` (for the
+  // rewritten track.md table) fails here.
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("add") && !args.includes("-A")) return { status: 1, stdout: "", stderr: "table add boom" }
+    return spawnSync(cmd, args, opts)
+  }
+
+  commitAll(root)
+  await assert.rejects(
+    () =>
+      task_move({
+        deskRoot: root,
+        input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+        spawnGit,
+      }),
+    /git add failed staging the move's edits/,
+  )
+})
+
+test("task_move reports a commit failure without losing the move", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "main-track", { rows: ["old-name"] })
+  await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "T" } })
+
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    return spawnSync(cmd, args, opts)
+  }
+
+  commitAll(root)
+  const result = await task_move({
+    deskRoot: root,
+    input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+    spawnGit,
+  })
+
+  assert.equal(result.to, path.join("main-track", "new-name"), "the move itself is never lost to a commit failure")
+  assert.ok(await exists(path.join(root, "main-track", "new-name", "task.md")))
+  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+})
+
+test("task_move commits only its own paths, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "main-track", { rows: ["old-name"] })
+  await task_create({ deskRoot: root, input: { track: "main-track", slug: "old-name", title: "T" } })
+  commitAll(root)
+
+  // Simulates another process staging an unrelated path in the window
+  // between task_move's own dirty check and its stage/commit.
+  await fs.writeFile(path.join(root, "unrelated.txt"), "another process's work\n")
+  spawnSync("git", ["-C", root, "add", "--", "unrelated.txt"], { encoding: "utf8" })
+
+  const result = await task_move({
+    deskRoot: root,
+    input: { track: "main-track", slug: "old-name", to_slug: "new-name" },
+  })
+
+  assert.equal(result.to, path.join("main-track", "new-name"))
+  assert.equal(result.commit, undefined, "the move's own commit succeeded")
+  const status = gitStatus(root)
+  assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
+})
+
 test("task_move treats a spawnGit throw as a non-Git desk", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
@@ -875,8 +969,8 @@ test("task_move unarchive moves an archived task back to a live folder and resto
   assert.match(body, /^\| `old-task` \| done \|  \|  \|  \|$/m)
   assert.match(body, /`other-task`/)
   assert.ok(result.updated_files.includes(path.join("main-track", "track.md")))
-  assert.match(gitStatus(root), /main-track\/old-task\/task\.md/)
-  assert.equal(gitLog(root).trim().split("\n").length, 1, "task_move must never commit: only the fixture commit exists")
+  assert.equal(gitStatus(root), "")
+  assert.equal(lastCommitMessage(root), "task_move: old-task → main-track")
 })
 
 test("task_move unarchive leaves a row that is still in the table alone", async () => {
@@ -1046,7 +1140,8 @@ test("task_move into_task moves a duplicate into the kept task as a dated iterat
   assert.doesNotMatch(body, /`dup-task`/)
   assert.match(body, /`keep-task`/)
   assert.deepEqual(result.updated_files, [path.join(iteration, "merged-task.md"), path.join("main-track", "track.md")])
-  assert.equal(gitLog(root).trim().split("\n").length, 1, "task_move must never commit: only the fixture commit exists")
+  assert.equal(gitStatus(root), "")
+  assert.equal(lastCommitMessage(root), "task_move: dup-task → main-track")
 })
 
 test("task_move into_task across tracks leaves the destination table alone", async () => {
@@ -1164,7 +1259,11 @@ test("task_move ignores ignored files, and moves a dirty task when allow_dirty i
   await fs.writeFile(path.join(root, "main-track", "moved-task", "doing.md"), "in progress\n")
   const result = await task_move({ deskRoot: root, input: { track: "main-track", slug: "moved-task", to_slug: "final-task", allow_dirty: true } })
   assert.equal(result.to, path.join("main-track", "final-task"))
-  assert.match(gitStatus(root), /main-track\/final-task\/doing\.md/)
+  // allow_dirty sweeps the dirty file along with the move (existing `git add
+  // -A` + `git mv` behavior); the move's own commit picks it up too, since it
+  // is part of the moved directory, not an unrelated path (M4-6 Part 2).
+  assert.equal(gitStatus(root), "")
+  assert.equal(lastCommitMessage(root), "task_move: moved-task → main-track")
 
   await assert.rejects(
     task_move({ deskRoot: root, input: { track: "main-track", slug: "final-task", to_slug: "other-task", allow_dirty: "yes" } }),
@@ -1276,12 +1375,10 @@ test("track_rename renames a track and rewrites track: on every live task card",
     [path.join("new-track", "task-one", "task.md"), path.join("new-track", "task-two", "task.md")].sort(),
   )
 
-  const status = gitStatus(root)
-  assert.match(status, /new-track\/task-one\/task\.md/)
-  assert.match(status, /new-track\/task-two\/task\.md/)
-  assert.match(status, /^R  old-track\/track\.md -> new-track\/track\.md$/m, "staged as a rename of the committed track")
-  assert.doesNotMatch(status, /^\?\?/m)
-  assert.equal(gitLog(root).trim().split("\n").length, 1, "track_rename must never commit: only the fixture commit exists")
+  // Staged and committed (M4-6 Part 2): the tree is clean afterward, and the
+  // new commit names the tool and the rename.
+  assert.equal(gitStatus(root), "")
+  assert.equal(lastCommitMessage(root), "track_rename: old-track → new-track")
 })
 
 test("track_rename preserves every other frontmatter byte untouched: a date-only value, a long single-line scalar, quoted and unquoted values, and a note: | block", async () => {
@@ -1481,6 +1578,43 @@ test("track_rename findTaskCards skips node_modules/.git/.state under the moved 
   commitAll(root)
   const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
   assert.deepEqual(result.updated_files, [])
+})
+
+test("track_rename reports a commit failure without losing the rename", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "old-track", { rows: [] })
+
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("commit")) return { status: 1, stdout: "", stderr: "commit boom" }
+    return spawnSync(cmd, args, opts)
+  }
+
+  commitAll(root)
+  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" }, spawnGit })
+
+  assert.equal(result.to, "new-track", "the rename itself is never lost to a commit failure")
+  assert.ok(await exists(path.join(root, "new-track", "track.md")))
+  assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
+})
+
+test("track_rename commits only its own paths, leaving another process's staged, unrelated file untouched (TOCTOU)", async () => {
+  const root = await mkTempDeskRoot()
+  initGit(root)
+  await mkTrack(root, "old-track", { rows: [] })
+  commitAll(root)
+
+  // Simulates another process staging an unrelated path in the window
+  // between track_rename's own dirty check and its stage/commit.
+  await fs.writeFile(path.join(root, "unrelated.txt"), "another process's work\n")
+  spawnSync("git", ["-C", root, "add", "--", "unrelated.txt"], { encoding: "utf8" })
+
+  const result = await track_rename({ deskRoot: root, input: { track: "old-track", to: "new-track" } })
+
+  assert.equal(result.to, "new-track")
+  assert.equal(result.commit, undefined, "the rename's own commit succeeded")
+  const status = gitStatus(root)
+  assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
 })
 
 // ── track_rename: non-Git desk + person scoping ──────────────────────────────
