@@ -33,6 +33,14 @@ import { createDeskQueryRouter } from "../readiness/query-router.js"
 const DEFAULT_DEPTH = 4
 const MAX_DEPTH = 32
 
+// Every field desk_thread reads off `input` — not in the exported
+// `desk_thread` itself (it spreads `...input` into the query router
+// unread) but in `indexedThread` below, which actually destructures it.
+// Kept next to this module so a field added to that read is a field added
+// here in the same diff. __tests__/tool_schema_parity.test.js checks this
+// against the tool's declared schema in tool-schemas.js.
+export const DESK_THREAD_FIELDS = ["start_path", "depth", "direction"]
+
 /** Clamp depth to [1, MAX_DEPTH] with a sane default. */
 function clampDepth(depth) {
   if (typeof depth !== "number" || !Number.isFinite(depth)) return DEFAULT_DEPTH

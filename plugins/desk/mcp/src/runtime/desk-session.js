@@ -29,6 +29,16 @@ import { isDeskWorkspace } from "../util/paths.js"
 const READ_TOOLS = new Set(["desk_search", "desk_recall", "desk_similar", "desk_timeline", "desk_thread"])
 const SEMANTIC_TOOLS = new Set(["desk_recall", "desk_similar"])
 export const RECLAIM_REPAIR = "reclaim_controller"
+// Every field desk_doctor reads off `input`: both are read by the
+// `deskDoctor` function below, not by tools/doctor.js's `doctorRuntime`
+// (the module server.js registers for this tool name) — `deskDoctor` is the
+// session-layer dispatcher every desk_doctor call actually reaches first,
+// and it forwards only `{ format }` on to `doctorRuntime`, never `repair`.
+// Kept here, at module scope next to `deskDoctor`, so a field added to its
+// reads is a field added here in the same diff.
+// __tests__/tool_schema_parity.test.js checks this against the tool's
+// declared schema in tool-schemas.js.
+export const DESK_DOCTOR_FIELDS = ["format", "repair"]
 const STATUS_WAIT_MS = 50
 const STATUS_DETAIL_MS = 120
 // The most desk_status spends on its own waits (a new admission attempt, then the runtime status), well inside the 200 ms it must answer in.

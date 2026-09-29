@@ -124,6 +124,22 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     track: text("Track for a track-local entry; omit for the cross-cutting log."),
     theme: text("Short slug for a track-local entry's filename; defaults to untitled."),
     body: text("The entry body, without surrounding --- separators."),
+    about: {
+      type: "string",
+      enum: ["setup", "system"],
+      description: "What the friction is about. \"setup\" (default): friction with this desk's own setup; it stays on the desk. \"system\": friction with Desk itself (its skills, tools or the factory); it becomes a kaizen candidate for the curator.",
+    },
+    title: text("Required when about is \"system\": the kaizen card's title, on one line."),
+    plugin: text("When about is \"system\": the plugin the friction is in; defaults to \"desk\"."),
+    friction_class: {
+      type: "string",
+      // Mirrors FRICTION_CLASSES in src/factory/kaizen-file.js.
+      enum: ["guard", "hook", "mcp_tool", "skill", "factory", "release", "ci", "docs", "other"],
+      description: "When about is \"system\": the kind of friction; defaults to \"other\".",
+    },
+    signal: text("When about is \"system\": the rollups measure the friction moves, when known."),
+    evidence_jobs: list("When about is \"system\": factory job ids that show the friction, when known."),
+    file_card: flag("Curator-only, after its signoff step: file the \"system\" kaizen candidate as a card now instead of leaving it a candidate. Only valid when about is \"system\"."),
   }, ["body"]),
   lesson_add: schema({
     topic: text("The lesson topic; slugified for the filename."),
