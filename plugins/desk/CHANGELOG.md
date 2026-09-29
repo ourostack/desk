@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.145 — 2026-09-29
+
+A child agent dispatched with a bounded brief could receive the same startup text a root session gets — the `using-desk` foundation and the `Desk startup:` line, including its "invoke `desk:session-start` now" imperative — whenever it runs as its own top-level session rather than an in-process subagent (Claude Code's `SessionStart` hook has no field that marks a session as a bounded child; only `SubagentStart`, a separate hook Desk does not register, carries `agent_id`/`agent_type`). Reading that text at face value, such a child could run host probes, sync and other real-desk boot steps that were never its job. The foundation's "Child agents" section and every `Desk startup:` line (including the Claude and Copilot degraded fallbacks) now carry a short stand-down clause: a child agent with a bounded brief follows the brief instead and skips the imperative, the same way Superpowers' own entry skill stands its subagents down.
+
+The `workspace-tidy budget exceeded` boot line no longer just says "run the repair" with no command: it now says plainly that no agent action is required (the check retries automatically at the next session start) and gives the exact, copy-pasteable repair command for an agent that wants to run it sooner, with the desk root left to `desk_status` rather than guessed.
+
+`using-superpowers-with-desk` now says plainly that invoking it at the start of engineering work is how Superpowers' "even a 1% chance, you must invoke" rule gets satisfied for entering Superpowers, so an agent doing engineering work is not left to weigh that rule against the Desk adapter's own entry point.
+
+A test coverage shard could fail after every one of its own tests had already passed: [`mcp/src/coverage/runner.js`](mcp/src/coverage/runner.js) deletes a per-process bookkeeping folder (`processinfo`, not coverage data itself) once a shard finishes, and a still-writing child process a test had spawned but only signal-killed — never actually awaited to exit — could still be dropping a file into that folder in the instant the cleanup listed it as empty, failing the whole shard with `ENOTEMPTY` even though every test in it passed. Twelve such spots across eight `mcp/__tests__` files now wait for the real `exit` event before moving on (a shared `killAndWait` test helper), closing the race at its source. The cleanup itself is also now non-fatal: `processinfo` is bookkeeping, not coverage, so if it still cannot be removed after the existing retry, the shard logs one warning naming the leftover file(s) and keeps its own pass/fail status rather than failing on a bookkeeping deletion.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.144 — 2026-09-29
 
 `friction_add`'s declared input schema (`mcp/src/tool-schemas.js`) listed only `track`, `theme` and `body`, but its handler (`mcp/src/tools/friction.js`) has read `about`, `file_card`, `title`, `plugin`, `friction_class`, `signal` and `evidence_jobs` since the kaizen-candidate work landed — a host builds its tool-call arguments from the declared schema, so none of those fields could ever actually be sent. The schema now declares all seven: `about` (`"setup" | "system"`, describing what a host would need to know to choose between them), `file_card` (curator-only, after signoff), and the system-friction fields the tool's own description already documented.
