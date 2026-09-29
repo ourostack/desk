@@ -159,7 +159,7 @@ if no desk is bound (`$DESK/` doesn't exist, or `desk_status` reports setup mode
 
 If `$DESK/` already exists and the workspace still shows V1 evidence instead of an already-migrated V2 Desk, do not continue straight into ordinary sync and resumption. Ground that decision in existing Desk layout and activation evidence: durable Desk state is already present in the documented workspace layout (for example task cards or system directories such as `_meta/`, `_archive/`, or `artifacts/`), but the V2 startup foundations and activation-owned worker surface described in `plugins/desk/README.md` and `desk:codex-onboarding` are not yet in place. In that case, hand off to `first-run-bootstrap` Entrance B so it inventories and upgrades the same workspace in place, preserves the same workspace, and avoids cloning or creating a parallel Desk. Once that same workspace has completed the V1-to-V2 upgrade, later session-start runs skip this branch and continue with ordinary sync + scan.
 
-if it exists, sync it, passing the desk root that `desk_status` reports in `root.path` (the script does not discover the desk itself; without `--root` or a `DESK` environment variable it prints a usage line and syncs nothing):
+if it exists, sync it, passing the desk root that `desk_status` reports in `root.path`, or the bound `$DESK` path when `desk_status` is not callable (the script does not discover the desk itself; without `--root` or a `DESK` environment variable it prints a usage line and syncs nothing):
 ```bash
 node <Desk plugin folder>/mcp/scripts/session-sync.js --root "<root.path from desk_status>"
 ```
