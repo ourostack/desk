@@ -18,6 +18,9 @@ async function sourceStamp(file) {
   return { size: stat.size, mtime: stat.mtimeMs, ino: stat.ino, dev: stat.dev }
 }
 
+/** Bump when binding changes what a derived session credits; sessions with a lower or missing receipt version re-derive once. */
+export const BINDING_VERSION = 2
+
 const sameSource = (a, b) => a.size === b.size && a.mtime === b.mtime && a.ino === b.ino && a.dev === b.dev
 
 function markerHash(marker) {
@@ -118,7 +121,7 @@ async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQui
     const hash = markerHash(marker)
     const receipt = (await readStatus(env)).derivations?.[name]
     const destination = path.join(root, "outbox", store.replace("/", "__"), name)
-    if (receipt?.store === store && receipt.marker === hash && sameSource(receipt, before)) {
+    if (receipt?.store === store && receipt.marker === hash && receipt.binding_version >= BINDING_VERSION && sameSource(receipt, before)) {
       try {
         await sourceStamp(destination)
         return { result: "skipped", store }
@@ -140,14 +143,14 @@ async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQui
     const personPrefix = marker.person_prefix ?? ""
     const deskRoot = marker.desk_root
     const { jobs } = bindSession({
-      events: derived.events, deskRoot, deskRemote: readDeskRemote({ deskRoot }), personPrefix,
+      events: derived.events, agents: derived.facts.agents, deskRoot, deskRemote: readDeskRemote({ deskRoot }), personPrefix,
       ...createDeskReaders({ deskRoot, personPrefix }),
     })
     derived.facts.jobs = jobs
     const written = await writeLocalFacts(env, store, derived.facts)
     if (!written.written) return { result: written.errors.length ? "invalid" : "not_opted_in", store }
     await setJobsForFile(env, written.name, jobs.map((j) => j.job))
-    await writeStatus(env, { derivations: { [name]: { store, marker: hash, ...before } } })
+    await writeStatus(env, { derivations: { [name]: { store, marker: hash, binding_version: BINDING_VERSION, ...before } } })
     return { result: "written", store }
   } catch (error) {
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store }
