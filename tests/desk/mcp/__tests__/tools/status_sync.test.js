@@ -30,6 +30,8 @@ async function mkPlainRepo(prefix) {
   git(root, ["init", "-q"])
   git(root, ["config", "user.email", "test@example.com"])
   git(root, ["config", "user.name", "Test"])
+  // Never rely on the ambient `init.defaultBranch`: name the branch directly, the same way for every fixture.
+  git(root, ["symbolic-ref", "HEAD", "refs/heads/main"])
   return root
 }
 
