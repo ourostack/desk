@@ -1,0 +1,5 @@
+### Index tracing for boot checks and startup migrations
+
+Desk's boot-check registry (`hooks/boot-checks.cjs`) and its own startup migrations (`mcp/src/runtime/pending-migrations.js`) now snapshot the Git staging area immediately before and after each of their own bash blocks runs, when the bound desk is itself a Git repository. A boot check or a migration's `Detect`/`Safety check`/`Migrate` block is never supposed to touch the index — a migration's own contract says these blocks change no desk content — so a path that appears staged mid-run is a genuine anomaly, caught the moment it happens and surfaced as a `Desk problem: index-drift` block naming exactly which check or block ran and which paths appeared. Nothing is undone and nothing blocks the session; this is diagnostic evidence, not a repair.
+
+This closes the gap behind a real incident: a session's sync was blocked for 90 minutes by two stray staged files with no record of what staged them (`_meta/desk-sync-and-storage-handoff.md`, commit `58c1db2ad`). Whatever stages a path during one of these blocks going forward gets named immediately instead of surfacing later as an opaque pull failure.
