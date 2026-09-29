@@ -275,6 +275,7 @@
     "tests/desk/mcp/__tests__/snapshots/restore.test.js": 0.6,
     "tests/desk/mcp/__tests__/test_isolation.test.js": 0.5,
     "tests/desk/mcp/__tests__/test_isolation_git_config.test.js": 3.1,
+    "tests/desk/mcp/__tests__/tool_schema_parity.test.js": 0.7,
     "tests/desk/mcp/__tests__/tools/doctor.test.js": 0.9,
     "tests/desk/mcp/__tests__/tools/fixture_cleanup.test.js": 4,
     "tests/desk/mcp/__tests__/tools/friction_add.test.js": 0.6,

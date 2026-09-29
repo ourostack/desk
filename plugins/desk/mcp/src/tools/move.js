@@ -37,6 +37,13 @@ import {
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".state"])
 
+// Every field task_move/track_rename read off `input`, kept next to this
+// module so a field added to either handler's reads is a field added here
+// in the same diff. __tests__/tool_schema_parity.test.js checks these
+// against each tool's declared schema in tool-schemas.js.
+export const TASK_MOVE_FIELDS = ["track", "slug", "handle", "to_track", "to_slug", "unarchive", "into_task", "allow_dirty"]
+export const TRACK_RENAME_FIELDS = ["track", "handle", "to", "allow_dirty"]
+
 // Mirrors tools/task.js's TERMINAL_STATUSES.
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 
