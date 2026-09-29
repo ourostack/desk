@@ -102,6 +102,35 @@ test("private operations exercise the real call contract without manufacturing a
   assert.ok(retained.length > 10);
 });
 
+test("requireCallbacks is caller-scoped: requirePrivateLedger:false accepts canonical-only native wiring", () => {
+  const good = callbacks();
+  delete good.private.ledger;
+  delete good.private.feedback;
+  assert.equal(requireCallbacks(good, { requirePrivateLedger: false }), good);
+  // The default stays strict: the same canonical-only wiring is still refused without the option.
+  assert.throws(() => requireCallbacks(good), { code: "NATIVE_CALLBACK_UNMAPPED" });
+});
+
+test("createCanonicalController never calls private.ledger, so native wiring can omit it entirely", async () => {
+  const c = callbacks();
+  delete c.private;
+  const readbacks = [];
+  let state = "original history";
+  const controller = createCanonicalController({
+    callbacks: c, task: { track: "track", slug: "task" },
+    scenario: { outcome: "discount items", initialAuthority: "review only", deliveryEndpoint: "local commit", laterScopeRevision: "empty order zero" },
+    readCanonical: async () => Buffer.from(state),
+    retain: (name, value) => { readbacks.push({ name, value }); return { path: name, sha256: "a".repeat(64) }; },
+  });
+  await controller.seed();
+  await controller.reviewFailure({ resultType: "failure", error: "missing binary" });
+  await controller.restart("old", "new");
+  state += "\nnew scope";
+  await controller.scope();
+  assert.equal(c.calls.filter(input => input.name === "create").length, 1);
+  assert.ok(readbacks.length >= 3);
+});
+
 test("canonical restart retains the same native record instead of seeding a new identity", async () => {
   const c = callbacks();
   const readbacks = [];

@@ -40,7 +40,7 @@ export function bindMethod(plan, proof) {
   plan.candidate.method.payloadManifest.sha256 = sha256(proof.method);
 }
 // These are synthetic publication/inventory controls, not native producer or model qualifications.
-export function diskRunSet(parent, { id, dimension = "candidate", started = true, published = true, closed = true, status = "product_failure", deterministic = false, withSeed = false, method }) {
+export function diskRunSet(parent, { id, dimension = "candidate", started = true, published = true, closed = true, status = "product_failure", deterministic = false, withSeed = false, method, datasetId }) {
   const root = path.join(parent, id);
   fs.mkdirSync(root);
   const put = (name, value) => {
@@ -49,6 +49,7 @@ export function diskRunSet(parent, { id, dimension = "candidate", started = true
     return { path: name, sha256: sha256(data) };
   };
   const plan = planFixture(id, dimension);
+  if (datasetId) plan.dataset.id = datasetId;
   if (withSeed) plan.gitSeeds = [seedFixture()];
   if (method) {
     bindMethod(plan, method);

@@ -1,5 +1,5 @@
 import path from "node:path";
-import alphaDataset from "./cases/v2-alpha-v1/dataset.json" with { type: "json" };
+import { alphaDatasets } from "./dataset-registry.mjs";
 import { canonicalJson, exactKeys, hashString, nonblank, parseRawJson, plainObject, readRawReference, relativeName, requireCondition, sha256 } from "./core.mjs";
 import { logicalCellKey, validateAlphaExpectedCells, validateExpectedCells, validatePlan, validateReference } from "./contracts.mjs";
 
@@ -20,7 +20,8 @@ export function validateRunSetInventory({ runSet, expectedCells, journalRecords,
   requireCondition(exactKeys(runSet, ["schemaVersion", "kind", "runSetId", "state", "plan", "expectedCells", "attemptJournal", "attempts", "unstartedCellIds", "createdAt", "closedAt"]) && runSet.schemaVersion === 1 && runSet.kind === "offline_run_set" && nonblank(runSet.runSetId) && ["complete", "incomplete"].includes(runSet.state) && date(runSet.createdAt) && (runSet.closedAt === null || date(runSet.closedAt)), "INVALID_RUN_SET", "Expected a closed versioned run-set envelope");
   const plan = validatePlan(readJson(runSet.plan, readArtifact));
   const expected = validateExpectedCells(readJson(runSet.expectedCells, readArtifact));
-  if (plan.dataset.id === alphaDataset.id) validateAlphaExpectedCells(expected, alphaDataset);
+  const registered = alphaDatasets[plan.dataset.id];
+  if (registered) validateAlphaExpectedCells(expected, registered.dataset);
   requireCondition(plan.runSetId === runSet.runSetId && same(plan.expectedCells, runSet.expectedCells) && same(expected, expectedCells), "RUN_SET_BINDING_MISMATCH", "Run plan and decoded expected cells differ from their frozen references");
   requireCondition(expected.cells.every(cell => cell.candidateId === plan.candidate.id) && plan.gitSeeds.every(seed => expected.cells.some(cell => cell.id === seed.cellId)), "RUN_SET_CANDIDATE_MISMATCH", "Every cell and seed must belong to this candidate and expected matrix");
   validateReference(runSet.attemptJournal);

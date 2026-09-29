@@ -3,10 +3,12 @@ import path from "node:path";
 import { canonicalJson, listRegularFiles, readRegular, requireCondition, sha256 } from "./core.mjs";
 import { observeEffectiveConfiguration } from "./native-assessment.mjs";
 
-// The sixth fixed case is private work measurement through the protected ledger. No qualitative evaluator feedback
-// route is required or consulted; `requireCallbacks` keeps the canonical create/update/archive contract unchanged.
-export function requireCallbacks(callbacks) {
-  for (const [group, names] of Object.entries({ canonical: ["create", "update", "archive"], private: ["ledger"] })) {
+// Private work measurement through the protected ledger is its own fixed case, exercised only by
+// `runPrivateOperations`. `createCanonicalController` never calls `callbacks.private.ledger`, so it asks for
+// `requirePrivateLedger: false` and only the canonical create/update/archive contract is required there.
+export function requireCallbacks(callbacks, { requirePrivateLedger = true } = {}) {
+  const groups = { canonical: ["create", "update", "archive"], ...(requirePrivateLedger ? { private: ["ledger"] } : {}) };
+  for (const [group, names] of Object.entries(groups)) {
     for (const name of names) requireCondition(typeof callbacks?.[group]?.[name] === "function", "NATIVE_CALLBACK_UNMAPPED", `The live native callback ${group}.${name} is required`);
   }
   return callbacks;
@@ -115,7 +117,7 @@ export async function runPrivateOperations({ callbacks, taskRef, request, reques
 }
 
 export function createCanonicalController({ callbacks, task, scenario, readCanonical, retain }) {
-  requireCallbacks(callbacks);
+  requireCallbacks(callbacks, { requirePrivateLedger: false });
   requireCondition(typeof readCanonical === "function" && typeof retain === "function", "NATIVE_CALLBACK_UNMAPPED", "Canonical control requires actual destination readback and raw retention");
   let prior;
   let sequence = 0;

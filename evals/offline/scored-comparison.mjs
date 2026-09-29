@@ -1,5 +1,5 @@
 import path from "node:path";
-import dataset from "./cases/v2-alpha-v1/dataset.json" with { type: "json" };
+import { alphaDatasets } from "./dataset-registry.mjs";
 import { canonicalJson, parseRawJson, readRawReference, readRegular, requireCondition } from "./core.mjs";
 import { assessCheck } from "./checks.mjs";
 import { readCommittedRun } from "./output.mjs";
@@ -7,7 +7,7 @@ import { prepareNativeAssessment } from "./native-assessment.mjs";
 import { reportSchema } from "./native-protocol.mjs";
 import { validateRuntimeQualification, verifyAssessmentEvidence } from "./native-runtime.mjs";
 
-export function replayScoredCell({ root, cell, expected }) {
+export function replayScoredCell({ root, cell, expected, dataset }) {
   requireCondition(cell.commitMarker !== null && cell.receipt !== null, "CELL_UNPUBLISHED", "Only a committed attempt can carry a result");
   const directory = path.join(root, path.dirname(cell.commitMarker.path));
   const committed = readCommittedRun(directory);
@@ -42,11 +42,15 @@ export function replayScoredCell({ root, cell, expected }) {
 }
 
 export function compareScoredResults({ left, right, compatibility }) {
-  const sides = [left, right].map(side => side.expectedCells.cells.map(expected => {
-    const cell = side.cells.find(value => value.cellId === expected.id);
-    try { return { cellId: expected.id, caseId: expected.caseId, ...replayScoredCell({ root: side.root, cell, expected }) }; }
-    catch (error) { return { cellId: expected.id, caseId: expected.caseId, status: "unavailable", grade: null, reason: error.code ?? "SCORING_EVIDENCE_INVALID" }; }
-  }));
+  const sides = [left, right].map(side => {
+    const registered = alphaDatasets[side.plan.dataset.id];
+    requireCondition(registered !== undefined, "UNSUPPORTED_DATASET", `No frozen dataset is registered for dataset id ${side.plan.dataset.id}`);
+    return side.expectedCells.cells.map(expected => {
+      const cell = side.cells.find(value => value.cellId === expected.id);
+      try { return { cellId: expected.id, caseId: expected.caseId, ...replayScoredCell({ root: side.root, cell, expected, dataset: registered.dataset }) }; }
+      catch (error) { return { cellId: expected.id, caseId: expected.caseId, status: "unavailable", grade: null, reason: error.code ?? "SCORING_EVIDENCE_INVALID" }; }
+    });
+  });
   const missing = sides.flat().filter(cell => cell.status === "unavailable").length;
   const comparable = compatibility.compatible && left.inventoryComplete && right.inventoryComplete && missing === 0;
   return { schemaVersion: 1, status: comparable ? "compatible" : "not_comparable", assessment: "source_compatible_native_replay", scored: comparable, grade: null, compatibility, expectedCells: sides.flat().length, missing, left: { inventoryComplete: left.inventoryComplete, cells: sides[0] }, right: { inventoryComplete: right.inventoryComplete, cells: sides[1] } };

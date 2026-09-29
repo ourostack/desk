@@ -5,6 +5,7 @@ import test from "node:test";
 import { compareScoredResults, replayScoredCell } from "../scored-comparison.mjs";
 import { runFixedCase } from "../fixed-controller.mjs";
 import * as fixedController from "../fixed-controller.mjs";
+import { alphaDatasets } from "../dataset-registry.mjs";
 import { openRunOutput } from "../output.mjs";
 import { jsonBytes, sha256 } from "../core.mjs";
 import { controllerFixture } from "./helpers/controller-fixture.mjs";
@@ -38,7 +39,7 @@ async function produce(deterministic = false) {
     }
     out.commit(value);
     const cell = { cellId: f.cell.id, commitMarker: { path: `${path.basename(root)}/COMMITTED.json`, sha256: sha256(fs.readFileSync(path.join(root, "COMMITTED.json"))) }, receipt: { path: `${path.basename(root)}/receipt.json`, sha256: sha256(fs.readFileSync(path.join(root, "receipt.json"))) } };
-    return { root: f.root, cell, expected: f.cell };
+    return { root: f.root, cell, expected: f.cell, dataset: alphaDatasets["engineering-v2-alpha"].dataset };
   }
   return { publication };
 }
@@ -69,7 +70,7 @@ test("comparison replays native grading evidence and refuses altered rubrics, mo
   const unpublished = f.publication();
   unpublished.cell.receipt = null;
   assert.throws(() => replayScoredCell(unpublished), { code: "CELL_UNPUBLISHED" });
-  const side = value => ({ root: value.root, inventoryComplete: true, expectedCells: { cells: [value.expected] }, cells: [value.cell] });
+  const side = value => ({ root: value.root, plan: { dataset: { id: "engineering-v2-alpha" } }, inventoryComplete: true, expectedCells: { cells: [value.expected] }, cells: [value.cell] });
   const left = side(f.publication());
   const right = side(f.publication());
   const result = compareScoredResults({ left, right, compatibility: { compatible: true } });

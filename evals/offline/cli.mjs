@@ -1,4 +1,5 @@
 import path from "node:path";
+import { alphaDatasets } from "./dataset-registry.mjs";
 import { validateDatasetFiles } from "./dataset.mjs";
 import { prepareRunPlan } from "./producer.mjs";
 import { loadNativeInputs, runFixedController } from "./fixed-controller.mjs";
@@ -58,9 +59,14 @@ export async function main(args, io = process, nativeInputs) {
     }
     const compatibility = left.plan.runSetId === right.plan.runSetId || left.plan.comparison.treatmentId === right.plan.comparison.treatmentId
       ? { compatible: false, reason: "DUPLICATE_COMPARISON_INPUT" }
+      : left.plan.dataset.id !== right.plan.dataset.id
+      ? { compatible: false, reason: "DATASET_VERSION_MISMATCH" }
       : checkComparisonCompatibility({ leftPlan: left.plan, rightPlan: right.plan, leftCells: left.expectedCells, rightCells: right.expectedCells, sourceProof });
     const compatible = left.inventoryComplete && right.inventoryComplete && compatibility.compatible;
-    if (left.plan.dataset.id === "engineering-v2-alpha" && right.plan.dataset.id === "engineering-v2-alpha") {
+    // Both sides must name the same known, scoreable alpha dataset. A dataset id absent from the registry, or a
+    // cross-version pairing (already refused above as DATASET_VERSION_MISMATCH), falls through to the inventory-only
+    // report instead of ever reaching a scored replay of mismatched case definitions.
+    if (left.plan.dataset.id === right.plan.dataset.id && Object.hasOwn(alphaDatasets, left.plan.dataset.id)) {
       const result = compareScoredResults({ left, right, compatibility });
       io.stdout.write(`${JSON.stringify(result)}\n`);
       return result.scored ? 0 : 2;
@@ -78,7 +84,9 @@ export async function main(args, io = process, nativeInputs) {
       io.stdout.write(`${JSON.stringify(result)}\n`);
       return result.exitCode;
     } catch (error) {
-      if (error?.code === "NATIVE_QUALIFICATION_REQUIRED") Object.assign(error, { exitCode: 3, status: "unavailable", artifacts: prepared?.root ?? null });
+      // `prepared` is always a fully published denominator by this point: `prepareRunPlan` above either throws
+      // before this try block starts or returns a complete object, never a silent null a caller could misread.
+      if (error?.code === "NATIVE_QUALIFICATION_REQUIRED") Object.assign(error, { exitCode: 3, status: "unavailable", artifacts: prepared.root });
       throw error;
     }
   }

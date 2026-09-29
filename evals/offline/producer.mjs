@@ -4,14 +4,21 @@ import { fileURLToPath } from "node:url";
 import { validateAlphaExpectedCells, validatePlan } from "./contracts.mjs";
 import { absoluteRoot, jsonBytes, overlaps, parseRawJson, pathIdentities, readRawReference, readRegular, relativeName, requireCondition, sha256 } from "./core.mjs";
 
-const dataRoot = fileURLToPath(new URL("./cases/v2-alpha-v1/", import.meta.url));
+// Every dataset id this producer will run resolves to exactly one frozen `cases/<version>` directory. An id absent
+// from this map is not a native hold: it is a contract violation, so it fails loudly with `UNSUPPORTED_DATASET`
+// rather than a silent `null` that a caller could mistake for the distinct "native prerequisites unmet" signal.
+export const datasetRoots = {
+  "engineering-v2-alpha": fileURLToPath(new URL("./cases/v2-alpha-v1/", import.meta.url)),
+  "engineering-v2-alpha-v2": fileURLToPath(new URL("./cases/v2-alpha-v2/", import.meta.url)),
+};
 
 // The denominator is frozen before any native prerequisite is attempted. This is not a model attempt or a grade.
 export function prepareRunPlan({ filename, outputRoot }) {
   const inputRoot = path.dirname(filename);
   const rawPlan = readRegular(inputRoot, path.basename(filename)).bytes;
   const plan = validatePlan(parseRawJson(rawPlan));
-  if (plan.dataset.id !== "engineering-v2-alpha") return null;
+  const dataRoot = datasetRoots[plan.dataset.id];
+  requireCondition(dataRoot !== undefined, "UNSUPPORTED_DATASET", `No frozen cases/<version> directory is mapped for dataset id ${plan.dataset.id}`);
   const datasetBytes = readRegular(dataRoot, "dataset.json").bytes;
   const dataset = parseRawJson(datasetBytes);
   requireCondition(plan.dataset.version === dataset.version && plan.dataset.sha256 === sha256(datasetBytes) && plan.fixtureManifestSha256 === readRegular(dataRoot, "fixture-manifest.json").sha256 && plan.checkerManifestSha256 === readRegular(dataRoot, "check-expectations.json").sha256, "PRODUCER_CONTROL_MISMATCH", "The producer requires the unchanged fixed dataset, fixture manifest and checker contract");
