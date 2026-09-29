@@ -7,6 +7,7 @@
 // - Desk's own browser is headless, so agents never take the operator's focus, and isolated, so concurrent sessions never fight over one profile. Playwright MCP writes its snapshots and screenshots to an `output` folder in Desk's state folder, never into the session's project. Options passed after the script go to Playwright MCP after these defaults. A caller that connects to an existing browser (`--cdp-endpoint`, `--extension` or `--endpoint`, as the managed-Edge overlay does) gets no headless or isolated defaults.
 // - Playwright MCP defaults to Google Chrome. When Chrome is only in ~/Applications on macOS, where Playwright does not look, the launcher passes its path. When Chrome is not installed but Edge is (always the case on Windows), it uses Edge. With neither, page tools fail with Playwright's own message until one is installed, for example with `npx -y @playwright/mcp@latest install-browser chrome`.
 // - Authenticated or persistent browser contexts are not this file's job: they go through the claims-based browser context broker (desk:cdp-headed-browser).
+// - This file backs the `web` MCP server Desk declares beside `desk` (its tools read `mcp__plugin_desk_web__browser_navigate` and so on). Before Playwright MCP takes over stdio, any failure here -- no compatible Node, no npm beside it, an unreachable registry, a Node that will not spawn, or anything else that throws -- is served as a degraded MCP handshake instead of a silent `exit(1)`: every tool is listed as unavailable and every call answers with a `status`, a `code` and a `fix`, the same shape `desk`'s own bootstrap serves when it cannot start. The one difference: `desk` keeps `desk_status`/`desk_doctor` answering without `isError` so a resuming agent can still ask "what's wrong"; the browser has no diagnostic tool of its own, so every call here answers with `isError: true` and the fix is in the payload itself.
 //
 // Like bootstrap.cjs it must parse on very old Node, so it uses ES5 syntax and only built-ins.
 
@@ -25,7 +26,19 @@ var DEFAULT_ARGS = ["--headless", "--isolated"];
 var CONNECT = ["--cdp-endpoint", "--extension", "--endpoint"];
 // Options that already say which browser to drive or connect to; with any of them the launcher adds no browser choice of its own.
 var BROWSER_CHOICE = ["--browser", "--executable-path"].concat(CONNECT);
-var REFRESH_FLAG = "--desk-browser-refresh";
+var REFRESH_FLAG = "--desk-web-refresh";
+var DEFAULT_PROTOCOL = "2025-06-18";
+// The tool names Playwright MCP's currently-installed channel exposes, used only so the degraded tools/list below
+// looks like the real server's. Desk tracks @playwright/mcp@latest with no pinned version (see PACKAGE above), so
+// this list can drift from a future release's; that is harmless, because every tools/call below answers with the
+// same degraded payload whatever name it is asked for.
+var BROWSER_TOOL_NAMES = [
+  "browser_click", "browser_close", "browser_console_messages", "browser_drag", "browser_drop",
+  "browser_emulate_media", "browser_evaluate", "browser_file_upload", "browser_fill_form", "browser_find",
+  "browser_handle_dialog", "browser_hover", "browser_navigate", "browser_navigate_back", "browser_network_request",
+  "browser_network_requests", "browser_press_key", "browser_resize", "browser_run_code_unsafe", "browser_select_option",
+  "browser_snapshot", "browser_tabs", "browser_take_screenshot", "browser_type", "browser_wait_for"
+];
 // npm without retries and with a short fetch timeout: an unreachable registry fails in seconds, not minutes.
 var NPM_ENV = {
   npm_config_fetch_retries: "0",
@@ -443,15 +456,106 @@ function startRefresh(o) {
   return child;
 }
 
-// ---- run ----
+// ---- degrade, never die: serve the MCP handshake itself when the browser cannot start ----
+//
+// Mirrors bootstrap.cjs's own degraded responder (same wire shape, same `serveDegraded` name), so an agent reads
+// the same thing from either server: every tool listed as unavailable, every call answered with a status, a code
+// and a fix. The browser has no diagnostic tool of its own (no `desk_status` equivalent), so every call here is
+// `isError: true`; the fix is in the payload regardless.
 
-function fail(stderr, exit, message) {
-  stderr.write("[desk-browser] " + message + "\n");
-  exit(1);
-  return Promise.resolve();
+function reconnectFix(action) {
+  return action + ", then reconnect the web MCP server (in Claude Code run /mcp and reconnect web; otherwise start a new session).";
 }
 
-function start(o, stderr, exit) {
+function degraded(code, summary, fix) {
+  return { status: "degraded", state: "degraded:" + code, code: code, summary: summary, fix: fix };
+}
+
+function respond(stdout, id, body) {
+  var message = { jsonrpc: "2.0", id: id };
+  Object.keys(body).forEach(function (key) {
+    message[key] = body[key];
+  });
+  stdout.write(JSON.stringify(message) + "\n");
+}
+
+function answer(stdout, payload, line) {
+  var text = line.trim();
+  if (text === "") return;
+  var message;
+  try {
+    message = JSON.parse(text);
+  } catch (error) {
+    respond(stdout, null, { error: { code: -32700, message: "Parse error" } });
+    return;
+  }
+  if (message.id === undefined) return;
+  var params = either(message.params, {});
+  if (message.method === "initialize") {
+    respond(stdout, message.id, { result: {
+      protocolVersion: typeof params.protocolVersion === "string" ? params.protocolVersion : DEFAULT_PROTOCOL,
+      capabilities: { tools: { listChanged: true } },
+      serverInfo: { name: "desk-web-launcher", version: "0.0.0" },
+      instructions: payload.summary + " " + payload.fix
+    } });
+  } else if (message.method === "ping") {
+    respond(stdout, message.id, { result: {} });
+  } else if (message.method === "tools/list") {
+    respond(stdout, message.id, { result: { tools: BROWSER_TOOL_NAMES.map(function (name) {
+      return {
+        name: name,
+        description: "Unavailable: the browser could not start. Call this tool for the code and the fix.",
+        inputSchema: { type: "object", properties: {}, additionalProperties: true }
+      };
+    }) } });
+  } else if (message.method === "tools/call") {
+    respond(stdout, message.id, { result: { content: [{ type: "text", text: JSON.stringify(payload) }], isError: true } });
+  } else {
+    respond(stdout, message.id, { error: { code: -32601, message: "Method not found: " + message.method } });
+  }
+}
+
+// Line-delimited JSON-RPC on stdio, answering every call with one degraded payload; resolves when stdin closes.
+function serveDegraded(options) {
+  var stdin = options.stdin;
+  return new Promise(function (resolve) {
+    var buffered = "";
+    function onData(chunk) {
+      buffered += chunk;
+      var newline = buffered.indexOf("\n");
+      while (newline !== -1) {
+        answer(options.stdout, options.payload, buffered.slice(0, newline));
+        buffered = buffered.slice(newline + 1);
+        newline = buffered.indexOf("\n");
+      }
+    }
+    function finish() {
+      answer(options.stdout, options.payload, buffered);
+      buffered = "";
+      stdin.removeListener("data", onData);
+      stdin.removeListener("end", finish);
+      stdin.removeListener("error", finish);
+      resolve();
+    }
+    stdin.setEncoding("utf8");
+    stdin.on("data", onData);
+    stdin.on("end", finish);
+    stdin.on("error", finish);
+    if (stdin.resume) stdin.resume();
+  });
+}
+
+// ---- run ----
+
+// Writes one stderr line naming what went wrong, then keeps the process alive serving the degraded handshake above
+// until the host closes stdin -- never exit(1), which left an agent with a failed server and no message it could
+// read.
+function fail(io, code, summary, fix) {
+  io.stderr.write("[web] " + summary + "; serving degraded:" + code + "\n");
+  return serveDegraded({ stdin: io.stdin, stdout: io.stdout, payload: degraded(code, summary, fix) });
+}
+
+function start(o, io) {
   var env = either(o.env, process.env);
   var platform = either(o.platform, process.platform);
   var fileExists = either(o.exists, exists);
@@ -471,12 +575,16 @@ function start(o, stderr, exit) {
     now: o.now
   });
   if (selection.node === null) {
-    return fail(stderr, exit, "no Node satisfies " + selection.range + " (this one is " + current.version + "), so the browser cannot start. Install Node " + selection.range + " and reconnect the desk-browser MCP server.");
+    return fail(io, "node_missing",
+      "Desk needs Node.js " + selection.range + " to start the browser; this one is " + current.version + ", so the browser is unavailable until a compatible Node is installed",
+      reconnectFix("Install Node " + selection.range));
   }
   var node = selection.node.path;
   var cli = npmCli(node, platform, fileExists);
   if (cli === null) {
-    return fail(stderr, exit, "Node " + selection.node.version + " at " + node + " has no npm beside it, so the browser cannot start. Reinstall that Node with its bundled npm and reconnect the desk-browser MCP server.");
+    return fail(io, "npm_missing",
+      "Desk found Node " + selection.node.version + " at " + node + " but it has no npm beside it, so the browser is unavailable",
+      reconnectFix("Reinstall that Node with its bundled npm"));
   }
   var root = stateDir(env, homeDir);
   mkdirp(root);
@@ -485,11 +593,13 @@ function start(o, stderr, exit) {
     if (!got.installed) {
       return npm(tools, ["config", "get", "registry"], REGISTRY_MS).then(function (answer) {
         var registry = answer.code === 0 && lastLine(answer.stdout) ? lastLine(answer.stdout) : "the configured npm registry";
-        return fail(stderr, exit, "could not install " + PACKAGE + " from " + registry + " (" + got.error + "). Check that this machine can reach that registry, or point npm at one it can reach (npm config set registry <url>), then reconnect the desk-browser MCP server.");
+        return fail(io, "install_failed",
+          "Desk could not install " + PACKAGE + " from " + registry + " (" + got.error + "), so the browser is unavailable",
+          reconnectFix("Check that this machine can reach " + registry + ", or point npm at one it can reach (npm config set registry <url>)"));
       });
     }
     var installed = got.installed;
-    stderr.write("[desk-browser] " + PACKAGE_NAME + " " + installed.version + (installed.core ? " (playwright-core " + installed.core + ")" : "") + " from " + installed.dir + "\n");
+    io.stderr.write("[web] " + PACKAGE_NAME + " " + installed.version + (installed.core ? " (playwright-core " + installed.core + ")" : "") + " from " + installed.dir + "\n");
     // A copy installed just now is already the channel's current release.
     if (!got.fresh) either(o.startRefresh, startRefresh)({ node: node, npmCli: cli, env: env });
     return bootstrap.reexec({
@@ -497,33 +607,36 @@ function start(o, stderr, exit) {
       indexFile: installed.cli,
       args: launchArgs(args, platform, env, fileExists, root),
       env: withNodeFirst(env, node, platform),
-      stderr: stderr,
+      stderr: io.stderr,
       spawn: either(o.spawn, childProcess.spawn),
       signals: either(o.signals, process),
-      exit: exit,
+      exit: io.exit,
       kill: either(o.kill, process.kill),
       onSpawnError: function (error) {
-        return fail(stderr, exit, "could not start Node " + node + ": " + describe(error));
+        return fail(io, "node_spawn_failed",
+          "Desk found Node " + selection.node.version + " at " + node + " but could not start it: " + describe(error) + ", so the browser is unavailable",
+          reconnectFix("Check that this Node runs, or reinstall it"));
       }
     });
   });
 }
 
-// Never throws or rejects: anything that goes wrong is one stderr line and exit code 1, which the host reports as a failed server. Every option defaults to the real process.
+// Never throws or rejects: anything that goes wrong is degraded:launch_failed over the handshake above, which the
+// host reports as a connected but degraded server, never a failed one. Every option defaults to the real process.
 function run(o) {
-  var stderr = either(o.stderr, process.stderr);
-  var exit = either(o.exit, process.exit);
+  var io = { stderr: either(o.stderr, process.stderr), stdin: either(o.stdin, process.stdin), stdout: either(o.stdout, process.stdout), exit: either(o.exit, process.exit) };
   function failed(error) {
-    return fail(stderr, exit, "could not start the browser: " + describe(error));
+    return fail(io, "launch_failed", "Desk could not start the browser: " + describe(error), reconnectFix("Refresh or reinstall the Desk plugin"));
   }
   try {
-    return start(o, stderr, exit).then(null, failed);
+    return start(o, io).then(null, failed);
   } catch (error) {
     return failed(error);
   }
 }
 
 module.exports = {
+  BROWSER_TOOL_NAMES: BROWSER_TOOL_NAMES,
   DEFAULT_ARGS: DEFAULT_ARGS,
   NPM_ENV: NPM_ENV,
   PACKAGE: PACKAGE,
@@ -536,6 +649,7 @@ module.exports = {
   readInstalled: readInstalled,
   refresh: refresh,
   run: run,
+  serveDegraded: serveDegraded,
   startRefresh: startRefresh,
   stateDir: stateDir,
   takeLock: takeLock,

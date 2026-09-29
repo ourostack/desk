@@ -1,6 +1,6 @@
-// Desk's default browser launcher (mcp/browser.cjs).
+// Desk's default browser launcher (mcp/web.cjs), which backs the `web` MCP server.
 //
-// Every fresh Desk install gets a browser through the `desk-browser` MCP server. The launcher starts a copy of `@playwright/mcp` installed in Desk's state folder, installs it on first use, and refreshes it from the `@latest` channel in a detached process after start. No test reaches a registry: the chosen Node's npm is a fake (`npm-cli.js` beside a link to this Node) that installs a stub package, reports a version, fails, or hangs on request, and logs every call. In-process tests inject the platform, environment, file checks, spawn and exit, so every branch (including the Windows layouts) is measured on any host. Spawned tests run the real Claude inline launcher, the Copilot entry point and concurrent launches against a fixture plugin.
+// Every fresh Desk install gets a browser through the `web` MCP server. The launcher starts a copy of `@playwright/mcp` installed in Desk's state folder, installs it on first use, and refreshes it from the `@latest` channel in a detached process after start. Before Playwright MCP takes over stdio, any failure here -- no compatible Node, no npm beside it, an unreachable registry, a Node that will not spawn, or anything else that throws -- is served as a degraded MCP handshake instead of a silent `exit(1)`: every browser_* tool lists as unavailable and every call answers with a status, a code and a fix, mirroring `desk`'s own bootstrap. No test reaches a registry: the chosen Node's npm is a fake (`npm-cli.js` beside a link to this Node) that installs a stub package, reports a version, fails, or hangs on request, and logs every call. In-process tests inject the platform, environment, file checks, spawn and stdio, so every branch (including the Windows layouts) is measured on any host. Spawned tests run the real Claude inline launcher, the Copilot entry point and concurrent launches against a fixture plugin.
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -9,11 +9,12 @@ import { EventEmitter } from "node:events"
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
+import { PassThrough } from "node:stream"
 import { mkTempRoot } from "../_temp_roots.js"
-import { mcpRoot, pluginRoot } from "./_mcp_handshake.js"
+import { mcpRoot, pluginRoot, toolPayload } from "./_mcp_handshake.js"
 
 const require = createRequire(import.meta.url)
-const browserPath = path.join(mcpRoot, "browser.cjs")
+const browserPath = path.join(mcpRoot, "web.cjs")
 const browser = require(browserPath)
 const posixOnly = { skip: process.platform === "win32" ? "fixture Nodes are POSIX links and shell scripts" : false }
 
@@ -105,13 +106,23 @@ function preinstall(state, version = "0.0.81", id = "installs/1-1-a") {
   return path.join(modules, "@playwright", "mcp", "cli.js")
 }
 
-/** Run the launcher with a fake MCP spawn; resolves once the MCP is spawned (or the launcher ended without spawning it). */
-function launch(options) {
+/** Collects newline-delimited JSON-RPC responses written to a stream, the same helper bootstrap.test.js uses to read a degraded responder's stdout. */
+function collect(output) {
+  const chunks = []
+  output.on("data", (chunk) => chunks.push(chunk))
+  return () => Buffer.concat(chunks).toString("utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))
+}
+
+/** Run the launcher with a fake MCP spawn; resolves once the MCP is spawned (or the launcher ended without spawning it). Stdin/stdout default to a pair of streams with stdin already closed, so a launch that degrades instead of spawning resolves at once instead of waiting on the real process's stdin; a test that wants to drive the degraded responder itself passes its own `stdin`/`stdout` and ends them when it is done. */
+function launch(options = {}) {
   const errors = []
   const exits = []
   const spawns = []
   const child = fakeChild()
   const signals = new EventEmitter()
+  const stdin = options.stdin || new PassThrough()
+  const stdout = options.stdout || new PassThrough()
+  const read = collect(stdout)
   let spawned
   const ready = new Promise((resolve) => { spawned = resolve })
   const running = browser.run({
@@ -121,8 +132,32 @@ function launch(options) {
     stderr: { write: (text) => errors.push(text) },
     exit: (code) => exits.push(code),
     ...options,
+    stdin,
+    stdout,
   })
-  return { running, ready: Promise.race([ready, running]), errors, exits, spawns, child, signals }
+  if (!options.stdin) stdin.end()
+  return { running, ready: Promise.race([ready, running]), errors, exits, spawns, child, signals, stdin, stdout, read }
+}
+
+/** Run the launcher against a stdin that carries the given JSON-RPC requests (if any) and then closes, for exercising the "degrade, never die" paths: no spawn is faked, so a regression that reaches the real Playwright MCP spawn fails the test instead of spawning something real. Returns the parsed responses alongside the usual stderr lines and exit calls (expected to stay empty: a degraded server answers over the protocol, it does not exit). */
+async function launchDegraded(options, requests = []) {
+  const input = new PassThrough()
+  const output = new PassThrough()
+  const read = collect(output)
+  const errors = []
+  const exits = []
+  const running = browser.run({
+    stdin: input,
+    stdout: output,
+    stderr: { write: (text) => errors.push(text) },
+    exit: (code) => exits.push(code),
+    spawn: () => { throw new Error("no spawn expected") },
+    ...options,
+  })
+  for (const request of requests) input.write(`${JSON.stringify(request)}\n`)
+  input.end()
+  await running
+  return { errors, exits, responses: read() }
 }
 
 // ---- the package follows its channel ----
@@ -187,7 +222,7 @@ test("Desk's defaults and output folder come first, a connecting caller gets no 
 // ---- which npm, which Node, which folder ----
 
 test("npm is the one that ships beside the chosen Node, found through links too", async () => {
-  const root = await mkTempRoot("desk-browser-npm-")
+  const root = await mkTempRoot("desk-web-npm-")
   const cli = touch(path.join(root, "real", "lib", "node_modules", "npm", "bin", "npm-cli.js"))
   const node = touch(path.join(root, "real", "bin", "node"))
   const exists = (file) => existsSync(file)
@@ -232,7 +267,7 @@ test("the browser's state folder is per user and never inside a project", () => 
 })
 
 test("only a complete install counts as installed", async () => {
-  const root = await mkTempRoot("desk-browser-read-")
+  const root = await mkTempRoot("desk-web-read-")
   assert.equal(browser.readInstalled(root), null)
   touch(path.join(root, "current.json"), JSON.stringify({ version: "1" }))
   assert.equal(browser.readInstalled(root), null)
@@ -253,7 +288,7 @@ test("only a complete install counts as installed", async () => {
 // ---- the lock ----
 
 test("the lock admits one owner and replaces an owner that died or went stale", async () => {
-  const root = await mkTempRoot("desk-browser-lock-")
+  const root = await mkTempRoot("desk-web-lock-")
   const lock = path.join(root, "refresh.lock")
   assert.equal(browser.takeLock(lock, Date.now), true)
   assert.equal(browser.takeLock(lock, Date.now), false, "held by a live process")
@@ -270,7 +305,7 @@ test("the lock admits one owner and replaces an owner that died or went stale", 
 })
 
 test("a lock that vanishes while it is replaced is decided by the next create", async () => {
-  const root = await mkTempRoot("desk-browser-lockrace-")
+  const root = await mkTempRoot("desk-web-lockrace-")
   const lock = path.join(root, "refresh.lock")
   writeFileSync(lock, JSON.stringify({ pid: process.pid }))
   // Released by its owner between the failed create and the staleness check, so both the check and the unlink miss it.
@@ -282,7 +317,7 @@ test("a lock that vanishes while it is replaced is decided by the next create", 
 // ---- run: the first launch installs, later launches start at once ----
 
 test("the first launch installs the channel in the foreground, names the version and starts it under the chosen Node", posixOnly, async () => {
-  const m = await machine("desk-browser-first-", { env: { FAKE_NPM_VERSION: "0.0.90" } })
+  const m = await machine("desk-web-first-", { env: { FAKE_NPM_VERSION: "0.0.90" } })
   const l = launch({ ...m.options, args: ["--caps", "vision"] })
   await l.ready
   const installed = browser.readInstalled(m.state)
@@ -294,7 +329,7 @@ test("the first launch installs the channel in the foreground, names the version
   }])
   assert.equal(l.spawns[0].env.PATH, `${path.dirname(m.install.node)}:/usr/bin`)
   assert.equal(l.spawns[0].env.npm_config_fetch_retries, undefined, "npm settings stay out of the browser's environment")
-  assert.match(l.errors.join(""), /^\[desk-browser\] @playwright\/mcp 0\.0\.90 \(playwright-core 1\.64\.0-test\) from .*installs/u)
+  assert.match(l.errors.join(""), /^\[web\] @playwright\/mcp 0\.0\.90 \(playwright-core 1\.64\.0-test\) from .*installs/u)
   const [call] = m.calls()
   assert.deepEqual(call.args.slice(0, 1).concat(call.args.slice(-3)), ["install", "--no-save", "--no-package-lock", "@playwright/mcp@latest"])
   assert.equal(call.retries, "0")
@@ -309,7 +344,7 @@ test("the first launch installs the channel in the foreground, names the version
 
 test("a later launch starts the installed copy with no npm call, then starts the refresh", posixOnly, async () => {
   const refreshes = []
-  const m = await machine("desk-browser-later-", { startRefresh: (o) => refreshes.push(o), platform: "darwin" })
+  const m = await machine("desk-web-later-", { startRefresh: (o) => refreshes.push(o), platform: "darwin" })
   const cli = preinstall(m.state)
   const l = launch({ ...m.options, args: [] })
   await l.ready
@@ -321,14 +356,17 @@ test("a later launch starts the installed copy with no npm call, then starts the
   await l.running
 })
 
-test("an unreachable registry fails fast with one line naming the registry, and leaves nothing half-installed", posixOnly, async () => {
+test("an unreachable registry fails fast with one line naming the registry, and serves the browser as degraded rather than a silent exit", posixOnly, async () => {
   for (const [mode, registry] of [["fail", "https://registry.example/"], ["failall", "the configured npm registry"]]) {
-    const m = await machine("desk-browser-offline-", { env: { FAKE_NPM_MODE: mode } })
-    const l = launch(m.options)
-    await l.running
-    assert.deepEqual(l.exits, [1])
-    assert.equal(l.spawns.length, 0)
-    assert.equal(l.errors.join(""), `[desk-browser] could not install @playwright/mcp@latest from ${registry} (ENOTCONN: network unreachable). Check that this machine can reach that registry, or point npm at one it can reach (npm config set registry <url>), then reconnect the desk-browser MCP server.\n`)
+    const m = await machine("desk-web-offline-", { env: { FAKE_NPM_MODE: mode } })
+    const { errors, exits, responses } = await launchDegraded(m.options, [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "browser_navigate" } }])
+    assert.deepEqual(exits, [], "never exits; the browser degrades instead")
+    assert.equal(errors.join(""), `[web] Desk could not install @playwright/mcp@latest from ${registry} (ENOTCONN: network unreachable), so the browser is unavailable; serving degraded:install_failed\n`)
+    const payload = toolPayload(responses[0])
+    assert.equal(payload.status, "degraded")
+    assert.equal(payload.state, "degraded:install_failed")
+    assert.equal(payload.code, "install_failed")
+    assert.match(payload.fix, /reconnect the web MCP server/u)
     assert.deepEqual(readdirSync(path.join(m.state, "installs")), [])
     assert.equal(existsSync(path.join(m.state, "refresh.lock")), false)
   }
@@ -336,13 +374,13 @@ test("an unreachable registry fails fast with one line naming the registry, and 
 
 test("an install that npm reports as done but left incomplete is an error, not a launch", posixOnly, async () => {
   for (const mode of ["silent", "nocli", "nobin"]) {
-    const m = await machine("desk-browser-incomplete-", { env: { FAKE_NPM_MODE: mode } })
-    const l = launch(m.options)
-    await l.running
-    assert.deepEqual(l.exits, [1])
-    assert.match(l.errors.join(""), /\(npm install exited with code 0\)/u)
+    const m = await machine("desk-web-incomplete-", { env: { FAKE_NPM_MODE: mode } })
+    const { errors, exits } = await launchDegraded(m.options)
+    assert.deepEqual(exits, [])
+    assert.match(errors.join(""), /\(npm install exited with code 0\)/u)
+    assert.match(errors.join(""), /serving degraded:install_failed/u)
   }
-  const m = await machine("desk-browser-stringbin-", { env: { FAKE_NPM_MODE: "stringbin" } })
+  const m = await machine("desk-web-stringbin-", { env: { FAKE_NPM_MODE: "stringbin" } })
   const l = launch(m.options)
   await l.ready
   assert.equal(l.spawns.length, 1)
@@ -350,22 +388,20 @@ test("an install that npm reports as done but left incomplete is an error, not a
 })
 
 test("a registry that hangs is cut off at the first-install time limit", posixOnly, async () => {
-  const m = await machine("desk-browser-hang-", { env: { FAKE_NPM_MODE: "hang" }, firstInstallMs: 100 })
+  const m = await machine("desk-web-hang-", { env: { FAKE_NPM_MODE: "hang" }, firstInstallMs: 100 })
   const started = Date.now()
-  const l = launch(m.options)
-  await l.running
+  const { errors, exits } = await launchDegraded(m.options)
   assert.ok(Date.now() - started < 10000)
-  assert.deepEqual(l.exits, [1])
-  assert.match(l.errors.join(""), /\(npm install timed out after 1 seconds\)/u)
+  assert.deepEqual(exits, [])
+  assert.match(errors.join(""), /\(npm install timed out after 1 seconds\)/u)
 })
 
 test("npm that cannot be spawned, or fails to start, is reported like any other install failure", posixOnly, async () => {
-  const m = await machine("desk-browser-npmspawn-", { npmSpawn: () => { throw new Error("spawn EMFILE") } })
-  const l = launch(m.options)
-  await l.running
-  assert.match(l.errors.join(""), /from the configured npm registry \(spawn EMFILE\)/u)
+  const m = await machine("desk-web-npmspawn-", { npmSpawn: () => { throw new Error("spawn EMFILE") } })
+  const { errors } = await launchDegraded(m.options)
+  assert.match(errors.join(""), /from the configured npm registry \(spawn EMFILE\)/u)
 
-  const n = await machine("desk-browser-npmerror-", {
+  const n = await machine("desk-web-npmerror-", {
     npmSpawn: () => {
       const child = fakeChild()
       child.stdout = new EventEmitter()
@@ -374,14 +410,13 @@ test("npm that cannot be spawned, or fails to start, is reported like any other 
       return child
     },
   })
-  const k = launch(n.options)
-  await k.running
-  assert.match(k.errors.join(""), /\(spawn ENOENT\)/u)
+  const { errors: errorsK } = await launchDegraded(n.options)
+  assert.match(errorsK.join(""), /\(spawn ENOENT\)/u)
 })
 
 test("a launch that finds another session installing waits for it, then starts that copy", posixOnly, async () => {
   const refreshes = []
-  const m = await machine("desk-browser-wait-", { startRefresh: (o) => refreshes.push(o) })
+  const m = await machine("desk-web-wait-", { startRefresh: (o) => refreshes.push(o) })
   mkdirSync(m.state, { recursive: true })
   writeFileSync(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid }))
   setTimeout(() => { preinstall(m.state, "0.0.85"); require("node:fs").unlinkSync(path.join(m.state, "refresh.lock")) }, 300)
@@ -394,21 +429,19 @@ test("a launch that finds another session installing waits for it, then starts t
 })
 
 test("a launch gives up when another session's install outlasts the time limit", posixOnly, async () => {
-  const m = await machine("desk-browser-waitlong-", { firstInstallMs: 0 })
+  const m = await machine("desk-web-waitlong-", { firstInstallMs: 0 })
   mkdirSync(m.state, { recursive: true })
   writeFileSync(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid }))
-  const l = launch(m.options)
-  await l.running
-  assert.match(l.errors.join(""), /\(another Desk session was still installing it\)/u)
+  const { errors } = await launchDegraded(m.options)
+  assert.match(errors.join(""), /\(another Desk session was still installing it\)/u)
 })
 
 test("a state folder that cannot hold an install fails the launch and releases the lock", posixOnly, async () => {
-  const m = await machine("desk-browser-badstate-")
+  const m = await machine("desk-web-badstate-")
   touch(path.join(m.state, "installs"), "a file where a folder belongs")
-  const l = launch(m.options)
-  await l.running
-  assert.deepEqual(l.exits, [1])
-  assert.match(l.errors.join(""), /could not start the browser: ENOTDIR/u)
+  const { errors, exits } = await launchDegraded(m.options)
+  assert.deepEqual(exits, [])
+  assert.match(errors.join(""), /could not start the browser: ENOTDIR.*serving degraded:launch_failed/u)
   assert.equal(existsSync(path.join(m.state, "refresh.lock")), false)
 })
 
@@ -420,7 +453,7 @@ async function refreshMachine(prefix, env = {}) {
 }
 
 test("a refresh that finds the channel unchanged installs nothing", posixOnly, async () => {
-  const m = await refreshMachine("desk-browser-same-", { FAKE_NPM_VERSION: "0.0.81" })
+  const m = await refreshMachine("desk-web-same-", { FAKE_NPM_VERSION: "0.0.81" })
   preinstall(m.state, "0.0.81")
   assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.81", changed: false })
   assert.deepEqual(m.calls().map((call) => call.args[0]), ["view"])
@@ -429,7 +462,7 @@ test("a refresh that finds the channel unchanged installs nothing", posixOnly, a
 })
 
 test("a refresh that finds a new release installs it beside the old one and switches the pointer", posixOnly, async () => {
-  const m = await refreshMachine("desk-browser-new-", { FAKE_NPM_VERSION: "0.0.83" })
+  const m = await refreshMachine("desk-web-new-", { FAKE_NPM_VERSION: "0.0.83" })
   preinstall(m.state, "0.0.81")
   assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.83", changed: true })
   const pointer = JSON.parse(readFileSync(path.join(m.state, "current.json"), "utf8"))
@@ -441,7 +474,7 @@ test("a refresh that finds a new release installs it beside the old one and swit
 })
 
 test("a refresh prunes installs older than a week, except the current and previous ones", posixOnly, async () => {
-  const m = await refreshMachine("desk-browser-prune-", { FAKE_NPM_VERSION: "0.0.84" })
+  const m = await refreshMachine("desk-web-prune-", { FAKE_NPM_VERSION: "0.0.84" })
   preinstall(m.state, "0.0.80", "installs/0-old")
   preinstall(m.state, "0.0.81", "installs/1-young")
   preinstall(m.state, "0.0.82", "installs/2-previous")
@@ -463,30 +496,30 @@ test("a refresh prunes installs older than a week, except the current and previo
 
 test("a refresh records a registry failure, an empty answer and a failed install without touching the installed copy", posixOnly, async () => {
   for (const [mode, error] of [["fail", "ENOTCONN: network unreachable"], ["emptyview", "npm view exited with code 0"]]) {
-    const m = await refreshMachine("desk-browser-refail-", { FAKE_NPM_MODE: mode })
+    const m = await refreshMachine("desk-web-refail-", { FAKE_NPM_MODE: mode })
     preinstall(m.state, "0.0.81")
     assert.deepEqual(await m.refresh(), { ok: false, error })
     assert.equal(browser.readInstalled(m.state).version, "0.0.81")
   }
-  const m = await refreshMachine("desk-browser-refail2-", { FAKE_NPM_MODE: "silent", FAKE_NPM_VERSION: "0.0.99" })
+  const m = await refreshMachine("desk-web-refail2-", { FAKE_NPM_MODE: "silent", FAKE_NPM_VERSION: "0.0.99" })
   assert.deepEqual(await m.refresh(), { ok: false, error: "npm install exited with code 0" })
   assert.equal(browser.readInstalled(m.state), null)
 })
 
 test("a refresh skips while another session holds the lock, and survives a state folder it cannot write", posixOnly, async () => {
-  const m = await refreshMachine("desk-browser-busy-")
+  const m = await refreshMachine("desk-web-busy-")
   mkdirSync(m.state, { recursive: true })
   writeFileSync(path.join(m.state, "refresh.lock"), JSON.stringify({ pid: process.pid }))
   assert.deepEqual(await m.refresh(), { ok: true, skipped: "another Desk session holds the refresh lock" })
   assert.deepEqual(m.calls(), [])
 
-  const n = await refreshMachine("desk-browser-norecord-", { FAKE_NPM_VERSION: "0.0.81" })
+  const n = await refreshMachine("desk-web-norecord-", { FAKE_NPM_VERSION: "0.0.81" })
   preinstall(n.state, "0.0.81")
   mkdirSync(path.join(n.state, "last-refresh.json", "x"), { recursive: true })
   assert.deepEqual(await n.refresh(), { ok: true, version: "0.0.81", changed: false })
   assert.equal(existsSync(path.join(n.state, "refresh.lock")), false, "a lost record never keeps the lock")
 
-  const root = await mkTempRoot("desk-browser-nostate-")
+  const root = await mkTempRoot("desk-web-nostate-")
   touch(path.join(root, "file"))
   const result = await browser.refresh({ env: { DESK_BROWSER_STATE_DIR: path.join(root, "file", "state") }, npmCli: n.install.cli })
   assert.equal(result.ok, false)
@@ -494,19 +527,19 @@ test("a refresh skips while another session holds the lock, and survives a state
 })
 
 test("a refresh never removes a lock that another session took over", posixOnly, async () => {
-  const m = await refreshMachine("desk-browser-steal-", { FAKE_NPM_MODE: "steal", FAKE_NPM_VERSION: "0.0.81" })
+  const m = await refreshMachine("desk-web-steal-", { FAKE_NPM_MODE: "steal", FAKE_NPM_VERSION: "0.0.81" })
   preinstall(m.state, "0.0.81")
   assert.deepEqual(await m.refresh(), { ok: true, version: "0.0.81", changed: false })
   assert.equal(JSON.parse(readFileSync(path.join(m.state, "refresh.lock"), "utf8")).pid, 1)
 })
 
 test("a refresh that cannot start is ignored, never a crash in the launch", async () => {
-  const child = browser.startRefresh({ node: path.join(await mkTempRoot("desk-browser-nonode-refresh-"), "missing-node"), npmCli: "npm-cli.js", env: {} })
+  const child = browser.startRefresh({ node: path.join(await mkTempRoot("desk-web-nonode-refresh-"), "missing-node"), npmCli: "npm-cli.js", env: {} })
   await new Promise((resolve) => child.on("error", resolve))
 })
 
 test("a refresh fills its options from the real process", posixOnly, async () => {
-  const root = await mkTempRoot("desk-browser-refdefaults-")
+  const root = await mkTempRoot("desk-web-refdefaults-")
   const install = nodeInstall(path.join(root, "node"))
   const state = path.join(root, "state")
   const saved = { ...process.env }
@@ -519,7 +552,7 @@ test("a refresh fills its options from the real process", posixOnly, async () =>
 })
 
 test("the launch starts the real refresh detached, and it brings the copy up to the channel", posixOnly, async () => {
-  const m = await machine("desk-browser-detached-", { env: { FAKE_NPM_VERSION: "0.0.87" }, startRefresh: undefined })
+  const m = await machine("desk-web-detached-", { env: { FAKE_NPM_VERSION: "0.0.87" }, startRefresh: undefined })
   preinstall(m.state, "0.0.81")
   const l = launch(m.options)
   await l.ready
@@ -533,50 +566,104 @@ test("the launch starts the real refresh detached, and it brings the copy up to 
 
 // ---- run: failures before any install ----
 
-test("with no compatible Node the launcher names the fix and exits 1", async () => {
-  const m = await machine("desk-browser-nonode-")
+test("with no compatible Node the launcher names the fix and serves the browser as degraded, never a silent exit", async () => {
+  const m = await machine("desk-web-nonode-")
   const old = path.join(m.root, "old", "node")
-  const l = launch({ ...m.options, current: { path: old, version: "v16.20.2", abi: "93" } })
-  await l.running
-  assert.deepEqual(l.exits, [1])
-  assert.match(l.errors.join(""), /no Node satisfies >=20\.0\.0 \(this one is v16\.20\.2\).*reconnect the desk-browser MCP server/u)
+  const { errors, exits, responses } = await launchDegraded(
+    { ...m.options, current: { path: old, version: "v16.20.2", abi: "93" } },
+    [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "browser_navigate" } }],
+  )
+  assert.deepEqual(exits, [])
+  assert.match(errors.join(""), /Desk needs Node\.js >=20\.0\.0 to start the browser; this one is v16\.20\.2.*serving degraded:node_missing/u)
+  const payload = toolPayload(responses[0])
+  assert.equal(payload.code, "node_missing")
+  assert.match(payload.fix, /Install Node >=20\.0\.0, then reconnect the web MCP server/u)
 })
 
-test("a Node with no npm beside it is named and exits 1", async () => {
-  const root = await mkTempRoot("desk-browser-nonpm-")
+test("a Node with no npm beside it is named and served as degraded, never a silent exit", async () => {
+  const root = await mkTempRoot("desk-web-nonpm-")
   const node = touch(path.join(root, "bin", "node"))
-  const l = launch({
+  const { errors, exits } = await launchDegraded({
     env: { PATH: "/usr/bin" }, platform: "linux", arch: "x64", homeDir: root, systemPrefix: root,
     current: { path: node, version: "v22.9.0", abi: "127" }, now: () => 0, probe: () => null,
   })
-  await l.running
-  assert.deepEqual(l.exits, [1])
-  assert.match(l.errors.join(""), /has no npm beside it/u)
+  assert.deepEqual(exits, [])
+  assert.match(errors.join(""), /has no npm beside it.*serving degraded:npm_missing/u)
 })
 
-test("a Node that cannot be spawned is named and exits 1", posixOnly, async () => {
-  const m = await machine("desk-browser-spawnfail-", { startRefresh: () => {} })
+test("a Node that cannot be spawned is named and served as degraded, never a silent exit", posixOnly, async () => {
+  const m = await machine("desk-web-spawnfail-", { startRefresh: () => {} })
   preinstall(m.state)
   const l = launch(m.options)
   await l.ready
   l.child.emit("error", new Error("spawn EACCES"))
   await l.running
-  assert.deepEqual(l.exits, [1])
-  assert.match(l.errors.join(""), /could not start Node .*: spawn EACCES/u)
+  assert.deepEqual(l.exits, [])
+  assert.match(l.errors.join(""), /could not start it: spawn EACCES.*serving degraded:node_spawn_failed/u)
 })
 
-test("anything that throws while starting is one stderr line and exit 1, never a crash", async () => {
-  for (const [thrown, expected] of [[new Error("disk gone"), /could not start the browser: disk gone/u], ["plain text", /could not start the browser: plain text/u]]) {
-    const m = await machine("desk-browser-throw-", { exists: () => { throw thrown } })
-    const l = launch(m.options)
-    await l.running
-    assert.deepEqual(l.exits, [1])
-    assert.match(l.errors.join(""), expected)
+test("the degraded responder completes a full JSON-RPC handshake: initialize with and without a protocol version, ping, tools/list, an unknown method, and a line that is not JSON", async () => {
+  const m = await machine("desk-web-nonode-handshake-")
+  const old = path.join(m.root, "old", "node")
+  const { responses } = await launchDegraded(
+    { ...m.options, current: { path: old, version: "v16.20.2", abi: "93" } },
+    [
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+      { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-03-26" } },
+      { jsonrpc: "2.0", id: 1, method: "initialize" },
+      { jsonrpc: "2.0", id: 2, method: "ping" },
+      { jsonrpc: "2.0", id: 3, method: "tools/list" },
+      { jsonrpc: "2.0", id: 4, method: "prompts/list" },
+    ],
+  )
+  const [withVersion, bare, ping, list, unknown] = responses
+  assert.equal(withVersion.id, 0)
+  assert.equal(withVersion.result.protocolVersion, "2025-03-26")
+  assert.deepEqual(withVersion.result.capabilities, { tools: { listChanged: true } })
+  assert.match(withVersion.result.instructions, /reconnect the web MCP server/u)
+  assert.equal(bare.id, 1)
+  assert.equal(bare.result.protocolVersion, "2025-06-18")
+  assert.deepEqual(ping.result, {})
+  assert.deepEqual(list.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
+  assert.equal(unknown.error.code, -32601)
+  assert.match(unknown.error.message, /prompts\/list/u)
+
+  const input = new PassThrough()
+  const output = new PassThrough()
+  const read = collect(output)
+  const running = browser.run({ ...m.options, current: { path: old, version: "v16.20.2", abi: "93" }, stdin: input, stdout: output, stderr: { write: () => {} } })
+  input.end("not json\n")
+  await running
+  assert.equal(read()[0].error.code, -32700)
+})
+
+test("the degraded responder tolerates a stdin double with no resume method", async () => {
+  const output = new PassThrough()
+  const handlers = {}
+  const stdin = {
+    setEncoding: () => {},
+    on: (event, handler) => { handlers[event] = handler },
+    removeListener: () => {},
+  }
+  const running = browser.serveDegraded({ stdin, stdout: output, payload: { status: "degraded", state: "degraded:x", code: "x", fix: "f" } })
+  handlers.end()
+  await running
+})
+
+test("anything that throws while starting is one stderr line and a degraded launch_failed, never a crash or a silent exit", async () => {
+  for (const [thrown, expected] of [
+    [new Error("disk gone"), /could not start the browser: disk gone.*serving degraded:launch_failed/u],
+    ["plain text", /could not start the browser: plain text.*serving degraded:launch_failed/u],
+  ]) {
+    const m = await machine("desk-web-throw-", { exists: () => { throw thrown } })
+    const { errors, exits } = await launchDegraded(m.options)
+    assert.deepEqual(exits, [])
+    assert.match(errors.join(""), expected)
   }
 })
 
 test("run fills every other option from the real process", async () => {
-  const state = await mkTempRoot("desk-browser-defaults-")
+  const state = await mkTempRoot("desk-web-defaults-")
   const cli = preinstall(state)
   const refreshes = []
   const spawns = []
@@ -599,29 +686,29 @@ test("run fills every other option from the real process", async () => {
 
 test("run finds HOME through USERPROFILE and the running system's home", async () => {
   for (const env of [{ PATH: "", USERPROFILE: "/nonexistent-profile" }, { PATH: "" }]) {
-    const l = launch({ env, platform: "linux", current: { path: "/nonexistent/node", version: "v16.20.2", abi: "93" }, now: () => 0, probe: () => null })
-    await l.running
-    assert.deepEqual(l.exits, [1])
+    const { errors, exits } = await launchDegraded({ env, platform: "linux", current: { path: "/nonexistent/node", version: "v16.20.2", abi: "93" }, now: () => 0, probe: () => null })
+    assert.deepEqual(exits, [])
+    assert.match(errors.join(""), /serving degraded:node_missing/u)
   }
 })
 
 // ---- the host configs ----
 
-test("the Claude and Copilot configs declare the desk-browser server beside Desk, never a bare playwright name", () => {
+test("the Claude and Copilot configs declare the web server beside Desk, never a bare playwright name", () => {
   const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers
-  assert.deepEqual(Object.keys(claude), ["desk", "desk-browser"])
-  const server = claude["desk-browser"]
+  assert.deepEqual(Object.keys(claude), ["desk", "web"])
+  const server = claude.web
   assert.deepEqual(Object.keys(server), ["type", "command", "args", "cwd", "env"])
   assert.equal(server.type, "stdio")
   assert.equal(server.command, "node")
   assert.equal(server.args[0], "-e")
   assert.doesNotMatch(server.args[1], /\$\{|=>|`|\?\.|\blet\s|\bconst\s/u)
-  assert.match(server.args[1], /require\(path\.join\(root,'mcp','browser\.cjs'\)\)\.run\(\{args:\[\]\}\)/u)
+  assert.match(server.args[1], /require\(path\.join\(root, 'mcp', 'web\.cjs'\)\)\.run\(\{ args: \[\] \}\)/u)
   assert.equal(server.cwd, ".")
   assert.deepEqual(server.env, { DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" })
   const copilot = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.copilot.json"), "utf8")).mcpServers
-  assert.deepEqual(Object.keys(copilot), ["desk", "desk-browser"])
-  assert.deepEqual(copilot["desk-browser"], { type: "stdio", command: "node", args: ["${COPILOT_PLUGIN_ROOT}/mcp/browser.cjs"], env: {} })
+  assert.deepEqual(Object.keys(copilot), ["desk", "web"])
+  assert.deepEqual(copilot.web, { type: "stdio", command: "node", args: ["${COPILOT_PLUGIN_ROOT}/mcp/web.cjs"], env: {} })
 })
 
 // ---- spawned: the real entry points against a fixture plugin ----
@@ -631,7 +718,7 @@ async function fixturePlugin(prefix) {
   const root = await mkTempRoot(prefix)
   const plugin = path.join(root, "plugin")
   mkdirSync(path.join(plugin, "mcp"), { recursive: true })
-  copyFileSync(browserPath, path.join(plugin, "mcp", "browser.cjs"))
+  copyFileSync(browserPath, path.join(plugin, "mcp", "web.cjs"))
   copyFileSync(path.join(mcpRoot, "bootstrap.cjs"), path.join(plugin, "mcp", "bootstrap.cjs"))
   // A version folder with a known major needs no probe, so a busy machine cannot run the selection out of time; no real Node is this new.
   writeFileSync(path.join(plugin, "mcp", "package.json"), JSON.stringify({ version: "0.0.0", engines: { node: ">=24.999.0" } }))
@@ -650,36 +737,58 @@ async function fixturePlugin(prefix) {
 }
 
 test("the Claude inline launcher finds the plugin through DESK_PLUGIN_ROOT or the working directory", posixOnly, async () => {
-  const fixture = await fixturePlugin("desk-browser-claude-")
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-browser"]
+  const fixture = await fixturePlugin("desk-web-claude-")
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.web
   const viaEnv = spawnSync(process.execPath, claude.args, { cwd: fixture.root, encoding: "utf8", env: { ...fixture.env, DESK_PLUGIN_ROOT: fixture.plugin } })
   assert.match(viaEnv.stdout, /^ran \[--headless\] \[--isolated\]( \[--browser\] \[msedge\]| \[--executable-path\] \[[^\]]+\])? \[--output-dir\] \[[^\]]+state\/output\]\n$/u, viaEnv.stderr)
-  assert.match(viaEnv.stderr, /\[desk-browser\] @playwright\/mcp 0\.0\.82 \(playwright-core 1\.64\.0-test\) from /u)
+  assert.match(viaEnv.stderr, /\[web\] @playwright\/mcp 0\.0\.82 \(playwright-core 1\.64\.0-test\) from /u)
   const viaCwd = spawnSync(process.execPath, claude.args, { cwd: fixture.plugin, encoding: "utf8", env: { ...fixture.env, DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" } })
   assert.match(viaCwd.stdout, /^ran \[--headless\] \[--isolated\]/u, viaCwd.stderr)
 })
 
-test("the Claude inline launcher names the fix when it cannot find the plugin", async () => {
-  const cwd = await mkTempRoot("desk-browser-noplugin-")
-  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers["desk-browser"]
-  const result = spawnSync(process.execPath, claude.args, { cwd, encoding: "utf8", env: { PATH: "/usr/bin:/bin", DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}", NODE_OPTIONS: "" } })
-  assert.equal(result.status, 1)
-  assert.equal(result.stdout, "")
-  assert.match(result.stderr, /Desk could not find its plugin files.*reconnect the desk-browser MCP server/u)
+test("the Claude inline launcher still completes a handshake on this Node when it cannot find the plugin", async () => {
+  const cwd = await mkTempRoot("desk-web-noplugin-")
+  const claude = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).mcpServers.web
+  const result = spawnSync(process.execPath, claude.args, {
+    cwd,
+    encoding: "utf8",
+    env: { PATH: "/usr/bin:/bin", DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}", NODE_OPTIONS: "" },
+    input: [
+      { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "c", version: "1" } } },
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+      { jsonrpc: "2.0", id: 1, method: "ping" },
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_navigate", arguments: {} } },
+      { jsonrpc: "2.0", id: "u", method: "prompts/list" },
+      { jsonrpc: "2.0", id: 4, method: "initialize" },
+    ].map((message) => JSON.stringify(message)).join("\n") + "\nnot json\n",
+  })
+  assert.equal(result.status, 0, result.stderr)
+  const [init, ping, list, status, unknown, bare] = result.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line))
+  assert.equal(init.id, 0)
+  assert.equal(init.result.protocolVersion, "2025-03-26")
+  assert.deepEqual(init.result.capabilities, { tools: { listChanged: true } })
+  assert.deepEqual(ping.result, {})
+  assert.deepEqual(list.result.tools.map((tool) => tool.name), browser.BROWSER_TOOL_NAMES)
+  assert.equal(toolPayload(status).state, "degraded:plugin_root_missing")
+  assert.match(toolPayload(status).fix, /reconnect the web MCP server/u)
+  assert.equal(status.result.isError, true)
+  assert.equal(unknown.error.code, -32601)
+  assert.equal(bare.result.protocolVersion, "2025-06-18")
 })
 
 test("the Copilot entry point runs the launcher with its own arguments", posixOnly, async () => {
-  const fixture = await fixturePlugin("desk-browser-copilot-")
-  const result = spawnSync(process.execPath, [path.join(fixture.plugin, "mcp", "browser.cjs"), "--caps", "pdf"], { cwd: fixture.root, encoding: "utf8", env: fixture.env })
+  const fixture = await fixturePlugin("desk-web-copilot-")
+  const result = spawnSync(process.execPath, [path.join(fixture.plugin, "mcp", "web.cjs"), "--caps", "pdf"], { cwd: fixture.root, encoding: "utf8", env: fixture.env })
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stdout, /^ran \[--headless\] \[--isolated\].*\[--output-dir\] \[[^\]]+\] \[--caps\] \[pdf\]\n$/u)
 })
 
 test("sessions that start together install once and every one gets its browser", posixOnly, async () => {
-  const fixture = await fixturePlugin("desk-browser-concurrent-")
+  const fixture = await fixturePlugin("desk-web-concurrent-")
   const env = { ...fixture.env, FAKE_NPM_DELAY_MS: "400" }
   const runs = await Promise.all(Array.from({ length: 5 }, () => new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.join(fixture.plugin, "mcp", "browser.cjs")], { cwd: fixture.root, env })
+    const child = spawn(process.execPath, [path.join(fixture.plugin, "mcp", "web.cjs")], { cwd: fixture.root, env })
     let stdout = ""
     let stderr = ""
     child.stdout.on("data", (chunk) => { stdout += chunk })

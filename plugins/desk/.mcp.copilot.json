@@ -6,10 +6,10 @@
       "args": ["${COPILOT_PLUGIN_ROOT}/mcp/bootstrap.cjs"],
       "env": {}
     },
-    "desk-browser": {
+    "web": {
       "type": "stdio",
       "command": "node",
-      "args": ["${COPILOT_PLUGIN_ROOT}/mcp/browser.cjs"],
+      "args": ["${COPILOT_PLUGIN_ROOT}/mcp/web.cjs"],
       "env": {}
     }
   }
