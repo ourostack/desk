@@ -127,14 +127,14 @@ test("a flush whose recorded account cannot fork the store stops with account_ca
   await setConsent(env, { store: STORE, contribute: true, account: "worker_corp" })
   assert.equal((await writeLocalFacts(env, STORE, golden)).written, true)
   let github = fakeGitHub({ push: false, account: "worker_corp" })
-  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "account_cannot_deliver" })
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup }), { result: "account_cannot_deliver" })
   assert.equal(forks(github), 0, "no fork is attempted")
 
   // A store that disallows forks stops a personal account without push permission the same way.
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
   const noForks = { code: 0, stdout: JSON.stringify({ ...PUBLIC_READ, allow_forking: false }), stderr: "" }
   github = fakeGitHub({ push: false, intercept: (call) => (call.args[0] === "api" && call.args.at(-1) === `repos/${STORE}` ? noForks : undefined) })
-  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner }), { result: "account_cannot_deliver" })
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup }), { result: "account_cannot_deliver" })
   assert.equal(forks(github), 0, "no fork is attempted")
 }))
 

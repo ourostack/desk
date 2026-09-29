@@ -964,11 +964,13 @@ async function logIsQuiet(marker, quietMs) {
 /**
  * `finalize(env, { job, runner }) -> { result: "cleared" | "retained" |
  * "expired" | "invalid", flushes? }`. See the header. Also takes
- * `deadlineMs`, `quietMs` (5000), `maxQuietWaitMs`, `now`, `derive` and
- * `flush` for tests.
+ * `deadlineMs`, `quietMs` (5000), `maxQuietWaitMs`, `now`, `derive`,
+ * `anonymousLookup` (`anonymousGithub()` by default; a fake in tests, passed
+ * through to each flush's unauthenticated repository retry) and `flush` for
+ * tests.
  */
 export async function finalize(env, {
-  job, runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, quietMs = FINALIZE_QUIET_MS, maxQuietWaitMs = 60000, now = Date.now, derive = deriveFile, flush: flushStore = flushDetailed,
+  job, runner = ghRunner(), deadlineMs = DEFAULT_DEADLINE_MS, quietMs = FINALIZE_QUIET_MS, maxQuietWaitMs = 60000, now = Date.now, derive = deriveFile, anonymousLookup = anonymousGithub(), flush: flushStore = flushDetailed,
 } = {}) {
   if (typeof job !== "string" || !PATTERNS.jobId.test(job)) return { result: "invalid" }
   const root = await factoryStateRoot(env, { create: false })
@@ -1012,7 +1014,7 @@ export async function finalize(env, {
         outcome = { result: "deadline", pending: null }
         break
       }
-      outcome = await flushStore(env, { store, runner, deadlineMs: remaining, now })
+      outcome = await flushStore(env, { store, runner, deadlineMs: remaining, now, anonymousLookup })
       if (outcome.result === "locked") await sleep(Math.min(1000, Math.max(0, deadline - now())))
     } while (outcome.result === "locked")
     flushes[store] = outcome.result

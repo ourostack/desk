@@ -105,7 +105,7 @@ test("a flush sends again the facts and labels an older client quarantined for p
   await quarantine(env, STORE, keyOf(1), "private_plugins_missing")
   await quarantine(env, STORE, nameOf(2), "date")
   const github = fakeGitHub()
-  assert.equal((await flush(env, { store: STORE, runner: github.runner })).result, "delivered_pr_open")
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
   const branch = `intake/${(await readConsent(env)).stores[STORE].intake_id}`
   const files = [...github.headFiles(STORE, branch).keys()].sort()
   assert.deepEqual(files, [`facts/${nameOf(1)}`, `labels/${await keyed(env)}/${sessionId(1)}.json`])
