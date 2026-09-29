@@ -18,6 +18,7 @@ import {
   nowIso,
   readMarkdown,
   writeMarkdown,
+  patchMarkdownFrontmatter,
   pathExists,
 } from "../util/fm.js"
 import { resolveWriteTarget, personPrefix } from "../util/paths.js"
@@ -488,9 +489,12 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
     await movePath({ root: effectiveRoot, from: path.join(destDir, "task.md"), to: destFile, spawnGit })
   }
 
-  const mergedCard = { ...srcCard.data, track: toTrack, updated: nowIso() }
-  if (intoTask !== undefined) mergedCard.merged_into = intoTask
-  await writeMarkdown(destFile, mergedCard, srcCard.content)
+  // `movePath` above already relocated the file with its original bytes
+  // intact; patch only the fields this move actually changes so every other
+  // byte — quoting, date formats, block scalars, key order — survives.
+  const patchFields = { track: toTrack, updated: nowIso() }
+  if (intoTask !== undefined) patchFields.merged_into = intoTask
+  await patchMarkdownFrontmatter(destFile, patchFields)
 
   const updatedFiles = [relPath(deskRoot, destFile)]
   const touched = new Set([destFile])
@@ -518,7 +522,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
         return { changed: true }
       }
       if (!unarchive) return { changed: false }
-      lines.splice(bounds.rowEnd, 0, buildRow(lines[bounds.rowStart - 2], toSlug, mergedCard.status))
+      lines.splice(bounds.rowEnd, 0, buildRow(lines[bounds.rowStart - 2], toSlug, srcCard.data.status))
       return { changed: true }
     })
     if (result.changed) updatedFiles.push(relPath(deskRoot, srcTrackMd))
@@ -537,7 +541,7 @@ export async function task_move({ deskRoot, input, person = null, readiness, spa
     if (row !== null || unarchive) {
       const inserted = await editTasksTable(destTrackMd, (lines, bounds) => {
         const newRow = row === null
-          ? buildRow(lines[bounds.rowStart - 2], toSlug, mergedCard.status)
+          ? buildRow(lines[bounds.rowStart - 2], toSlug, srcCard.data.status)
           : renameRowSlug(row, toSlug)
         lines.splice(bounds.rowEnd, 0, newRow)
         return { changed: true }
@@ -624,9 +628,9 @@ export async function track_rename({ deskRoot, input, person = null, readiness, 
   const taskFiles = await findTaskCards(destDir)
   const updatedFiles = []
   for (const file of taskFiles) {
-    const existing = await readMarkdown(file)
-    const merged = { ...existing.data, track: to, updated: nowIso() }
-    await writeMarkdown(file, merged, existing.content)
+    // Patch only `track:`/`updated:` in place: every other byte of each
+    // card — quoting, date formats, block scalars, key order — survives.
+    await patchMarkdownFrontmatter(file, { track: to, updated: nowIso() })
     updatedFiles.push(relPath(deskRoot, file))
   }
   stageWrites({ root: effectiveRoot, files: taskFiles, spawnGit })

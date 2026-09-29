@@ -7,6 +7,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   promises as fs,
@@ -216,6 +217,38 @@ test("factoryStateRoot refuses a path component that is a plain file, not a dire
   mkdirSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills"), { recursive: true })
   writeFileSync(path.join(env.XDG_STATE_HOME, "ouroboros-skills", "desk"), "not a directory")
   await assert.rejects(() => factoryStateRoot(env), /is not a directory/u)
+}))
+
+// A desk root under the OS temp directory is, by construction, ephemeral (a
+// scratch or test desk); paired with a state home that resolved somewhere
+// else, that is exactly the shape of a test whose own isolation did not
+// reach the state home (ourostack/desk: a leak that recorded factory
+// evaluate-requests naming `desk-test-*` fixture roots under a developer's
+// real ~/.local/state). `factoryStateRoot` refuses that combination before
+// creating anything, independent of (and in addition to) the test harness
+// that is meant to keep every desk root's own state home in temp too.
+test("factoryStateRoot refuses a temp-directory desk root paired with a state home outside the OS temp directory", () => scratch(async (env) => {
+  const deskRoot = mkdtempSync(path.join(os.tmpdir(), "desk-outbox-consistency-"))
+  const outsideTemp = path.join(path.dirname(await fs.realpath(os.tmpdir())), `desk-outbox-consistency-state-${process.pid}`)
+  await assert.rejects(
+    () => factoryStateRoot({ HOME: outsideTemp }, { deskRoot }),
+    /refused a temp-directory desk root paired with a factory state home outside the OS temp directory/u,
+  )
+  assert.equal(existsSync(outsideTemp), false, "the refused call created nothing")
+  rmSync(deskRoot, { recursive: true, force: true })
+}))
+
+test("factoryStateRoot allows a temp-directory desk root when its state home is also under the OS temp directory", () => scratch(async (env, base) => {
+  const deskRoot = path.join(base, "desk")
+  mkdirSync(deskRoot, { recursive: true })
+  const root = await factoryStateRoot(env, { deskRoot })
+  assert.ok(root.startsWith(await fs.realpath(os.tmpdir())))
+}))
+
+test("factoryStateRoot is unaffected by a desk root outside the OS temp directory, whatever the state home resolves to", () => scratch(async (env) => {
+  const deskRoot = path.join(path.dirname(await fs.realpath(os.tmpdir())), `desk-outbox-consistency-real-${process.pid}`)
+  const root = await factoryStateRoot(env, { deskRoot })
+  assert.ok(root.startsWith(env.XDG_STATE_HOME))
 }))
 
 test("factoryStateRoot clears an inherited macOS ACL grant on its own segments", nativeMac, () => scratch(async (env) => {
