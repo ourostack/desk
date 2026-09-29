@@ -489,6 +489,10 @@ function answer(stdout, payload, line) {
     respond(stdout, null, { error: { code: -32700, message: "Parse error" } });
     return;
   }
+  if (message === null || typeof message !== "object" || Array.isArray(message)) {
+    respond(stdout, null, { error: { code: -32600, message: "Invalid Request" } });
+    return;
+  }
   if (message.id === undefined) return;
   var params = either(message.params, {});
   if (message.method === "initialize") {

@@ -637,6 +637,19 @@ test("the degraded responder completes a full JSON-RPC handshake: initialize wit
   assert.equal(read()[0].error.code, -32700)
 })
 
+test("the degraded responder never crashes on a line that is valid JSON but not a request object: null, a boolean, a number, an array, a bare string", async () => {
+  const m = await machine("desk-web-nonobject-")
+  const old = path.join(m.root, "old", "node")
+  const { responses } = await launchDegraded(
+    { ...m.options, current: { path: old, version: "v16.20.2", abi: "93" } },
+    [null, true, 42, [], "hi"],
+  )
+  assert.equal(responses.length, 5)
+  for (const response of responses) {
+    assert.deepEqual(response, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request" } })
+  }
+})
+
 test("the degraded responder tolerates a stdin double with no resume method", async () => {
   const output = new PassThrough()
   const handlers = {}
