@@ -172,7 +172,7 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "frontmatter", "body_append"]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "frontmatter", "body_append", "evidence"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug"]
 
 function relPath(deskRoot, absPath) {
