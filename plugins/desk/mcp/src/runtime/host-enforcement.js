@@ -30,11 +30,16 @@
  * form (`claude`/`codex` name an MCP tool `mcp__<server>__<tool>`; Copilot
  * names one `<server>-<tool>`) -- a caller never translates between hosts.
  * A whole MCP server's tools deny together without enumerating each one: an
- * entry ending in `*` matches any tool name sharing that prefix. Claude Code
- * and Codex's Part 8 lists are left empty here for Part 8 to fill in; a
- * surface with no Claude Code tool of its own (host memory, handled by the
- * `autoMemoryEnabled: false` settings merge instead) still gets a row here so
- * its Desk-equivalent text exists for every host to reuse.
+ * entry ending in `*` matches any tool name sharing that prefix. Copilot and
+ * Codex's lists stay empty for all five surfaces (Part 8, `docs/host-
+ * enforcement-live-proof.md`): neither host documents or was observed to
+ * expose an ask-user tool, a plan-mode tool, a persistent (not in-session)
+ * task tool, or an Artifact/Claude Docs-shaped tool by any name -- those are
+ * Claude-Code-specific surfaces, not gaps left to fill in. Host memory has no
+ * tool on any host (it is a config flag -- `autoMemoryEnabled` on Claude
+ * Code, `features.memories` on Codex, `memory` on Copilot -- pinned at setup
+ * instead); every surface still gets a row here so its Desk-equivalent text
+ * exists for every host's denial/documentation to reuse.
  */
 export const DENIED_SURFACES = {
   "ask-user": {
@@ -94,4 +99,69 @@ export function evaluateDeniedTool({ host = "claude", toolName, allowedThisSessi
     permissionDecision: "deny",
     permissionDecisionReason: DENIED_SURFACES[surfaceId].reason,
   }
+}
+
+/**
+ * The tool-name field out of a raw `PreToolUse`-family stdin payload, read in
+ * `host`'s own wire shape (`docs/host-enforcement-live-proof.md`): Copilot's
+ * is camelCase `toolName`; Claude Code's and Codex's are both the shared
+ * snake_case `tool_name` (confirmed identical on the wire for both hosts).
+ * Returns `undefined`, never throws, when the field is missing or not a
+ * string -- the same shape `evaluateDeniedTool`'s own `toolName` already
+ * tolerates.
+ */
+export function toolNameFromPayload(host, payload) {
+  const raw = host === "copilot" ? payload?.toolName : payload?.tool_name
+  return typeof raw === "string" ? raw : undefined
+}
+
+/**
+ * The session-id field out of a raw `PreToolUse`-family stdin payload, read
+ * in `host`'s own wire shape: Copilot's camelCase `sessionId`; Claude Code's
+ * and Codex's shared snake_case `session_id`.
+ */
+export function sessionIdFromPayload(host, payload) {
+  return host === "copilot" ? payload?.sessionId : payload?.session_id
+}
+
+/**
+ * Wraps `decision` (an `evaluateDeniedTool` result) in `host`'s own
+ * `PreToolUse` JSON response shape. Claude Code nests a deny inside
+ * `hookSpecificOutput` (confirmed today, Part 7); Copilot's own shape is
+ * flat, with no wrapper at all -- confirmed live against a real fired hook,
+ * `docs/host-enforcement-live-proof.md`. An allow (`{}`) is identical on both
+ * hosts. Codex's deny mechanism is not JSON at all (exit code 2 plus stderr
+ * text, confirmed live) -- a caller on `codex` never calls this function for
+ * a deny; it exists only for hosts whose `PreToolUse` contract is JSON.
+ */
+export function formatHookOutput(host, decision) {
+  if (decision.permissionDecision !== "deny") return {}
+  if (host === "claude") return { hookSpecificOutput: { hookEventName: "PreToolUse", ...decision } }
+  return { ...decision }
+}
+
+/**
+ * The complete `PreToolUse` hook process contract for `host`, given
+ * `decision` (an `evaluateDeniedTool` result): exactly what to write to
+ * stdout, what to write to stderr, and what exit code to use. This is the
+ * one place that branches on a host's wire contract -- `host-
+ * enforcement.cjs` itself stays a thin, branch-free wrapper that writes
+ * these fields directly, so every one of these contracts is covered by a
+ * plain function call here rather than needing a real denied tool for each
+ * host to exercise it end to end (`docs/host-enforcement-live-proof.md`).
+ *
+ * Claude Code and Copilot both read a JSON decision on stdout and always
+ * exit 0 -- `formatHookOutput` shapes it per host. Codex has no JSON
+ * `PreToolUse` contract at all (confirmed live): a deny is exit code 2 with
+ * the reason on stderr and nothing on stdout; an allow writes nothing on
+ * either stream and exits 0.
+ */
+export function hookProcessOutput(host, decision) {
+  if (host === "codex") {
+    if (decision.permissionDecision === "deny") {
+      return { stdout: "", stderr: `${decision.permissionDecisionReason}\n`, exitCode: 2 }
+    }
+    return { stdout: "", stderr: "", exitCode: 0 }
+  }
+  return { stdout: `${JSON.stringify(formatHookOutput(host, decision))}\n`, stderr: "", exitCode: 0 }
 }

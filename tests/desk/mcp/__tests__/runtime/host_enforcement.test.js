@@ -3,7 +3,15 @@
 // Part 8's Codex/Copilot wrappers will call too.
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { DENIED_SURFACES, evaluateDeniedTool, surfaceForToolName } from "../../../../../plugins/desk/mcp/src/runtime/host-enforcement.js"
+import {
+  DENIED_SURFACES,
+  evaluateDeniedTool,
+  formatHookOutput,
+  hookProcessOutput,
+  sessionIdFromPayload,
+  surfaceForToolName,
+  toolNameFromPayload,
+} from "../../../../../plugins/desk/mcp/src/runtime/host-enforcement.js"
 
 test("evaluateDeniedTool denies AskUserQuestion naming interaction-style, allows it once named this session, and never denies TodoWrite", () => {
   const out = evaluateDeniedTool({ toolName: "AskUserQuestion", allowedThisSession: new Set() })
@@ -95,4 +103,52 @@ test("surfaceForToolName recognizes the same surface under Copilot's own MCP nam
   assert.equal(surfaceForToolName("copilot", "claude_ai_Claude_Docs-read", surfaces), "artifact")
   // The same tool name under a host this fixture gives no list for.
   assert.equal(surfaceForToolName("codex", "claude_ai_Claude_Docs-create", surfaces), null)
+})
+
+test("toolNameFromPayload reads Copilot's camelCase toolName, and Claude/Codex's shared snake_case tool_name", () => {
+  assert.equal(toolNameFromPayload("copilot", { toolName: "bash" }), "bash")
+  assert.equal(toolNameFromPayload("claude", { tool_name: "Read" }), "Read")
+  assert.equal(toolNameFromPayload("codex", { tool_name: "Bash" }), "Bash")
+})
+
+test("toolNameFromPayload returns undefined for a missing or non-string field, on every host", () => {
+  assert.equal(toolNameFromPayload("copilot", {}), undefined)
+  assert.equal(toolNameFromPayload("copilot", { toolName: 12 }), undefined)
+  assert.equal(toolNameFromPayload("claude", {}), undefined)
+  assert.equal(toolNameFromPayload("claude", { tool_name: 12 }), undefined)
+})
+
+test("sessionIdFromPayload reads Copilot's camelCase sessionId, and Claude/Codex's shared snake_case session_id", () => {
+  assert.equal(sessionIdFromPayload("copilot", { sessionId: "s-1" }), "s-1")
+  assert.equal(sessionIdFromPayload("claude", { session_id: "s-2" }), "s-2")
+  assert.equal(sessionIdFromPayload("codex", { session_id: "s-3" }), "s-3")
+  assert.equal(sessionIdFromPayload("copilot", {}), undefined)
+})
+
+test("formatHookOutput wraps a deny in Claude's hookSpecificOutput shape, but leaves Copilot's flat, and allows through as {} on both", () => {
+  const deny = { permissionDecision: "deny", permissionDecisionReason: "because" }
+  assert.deepEqual(formatHookOutput("claude", deny), { hookSpecificOutput: { hookEventName: "PreToolUse", ...deny } })
+  assert.deepEqual(formatHookOutput("copilot", deny), deny)
+  assert.deepEqual(formatHookOutput("claude", {}), {})
+  assert.deepEqual(formatHookOutput("copilot", {}), {})
+})
+
+test("hookProcessOutput on Codex: a deny writes the reason to stderr and exits 2, with nothing on stdout", () => {
+  const result = hookProcessOutput("codex", { permissionDecision: "deny", permissionDecisionReason: "because" })
+  assert.deepEqual(result, { stdout: "", stderr: "because\n", exitCode: 2 })
+})
+
+test("hookProcessOutput on Codex: an allow writes nothing at all and exits 0 -- Codex has no JSON PreToolUse convention", () => {
+  const result = hookProcessOutput("codex", {})
+  assert.deepEqual(result, { stdout: "", stderr: "", exitCode: 0 })
+})
+
+test("hookProcessOutput on Claude and Copilot: the JSON decision goes to stdout, exit 0, nothing on stderr", () => {
+  const deny = { permissionDecision: "deny", permissionDecisionReason: "because" }
+  assert.deepEqual(hookProcessOutput("claude", deny), {
+    stdout: `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...deny } })}\n`,
+    stderr: "",
+    exitCode: 0,
+  })
+  assert.deepEqual(hookProcessOutput("copilot", {}), { stdout: "{}\n", stderr: "", exitCode: 0 })
 })
