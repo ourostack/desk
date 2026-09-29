@@ -79,11 +79,20 @@ export function validateExpectedCells(expected) {
   return expected;
 }
 
+// Each known dataset id's own frozen case count. This is not a source of truth for a dataset's shape -- the dataset
+// file itself is -- it is a name-pinned integrity check so a known, historically frozen dataset id cannot silently
+// pass with a truncated or padded case list. `engineering-v2-alpha` must keep requiring exactly its original six
+// cases; any dataset id absent from this map (including a future version) is still fully validated structurally
+// below, just without a second, redundant width pinned to its name.
+const frozenCaseCounts = { "engineering-v2-alpha": 6, "engineering-v2-alpha-v2": 5 };
+
 export function validateAlphaExpectedCells(expected, dataset) {
   validateExpectedCells(expected);
-  requireCondition(Array.isArray(dataset?.cases) && dataset.cases.length === 6, "INVALID_ALPHA_DATASET", "Alpha requires the complete six-case frozen dataset");
+  requireCondition(Array.isArray(dataset?.cases) && dataset.cases.length > 0, "INVALID_ALPHA_DATASET", "Alpha requires a dataset with its own nonempty, complete case list");
+  const frozenCount = frozenCaseCounts[dataset?.id];
+  requireCondition(frozenCount === undefined || dataset.cases.length === frozenCount, "INVALID_ALPHA_DATASET", `Alpha requires ${dataset?.id}'s own complete, frozen ${frozenCount}-case dataset`);
   const models = ["gpt-6-astra", "claude-opus-5"];
-  requireCondition(expected.cells.length === dataset.cases.length * models.length, "INCOMPLETE_ALPHA_MATRIX", "Alpha requires twelve cells per stack, not a selected subset");
+  requireCondition(expected.cells.length === dataset.cases.length * models.length, "INCOMPLETE_ALPHA_MATRIX", "Alpha requires the dataset's own complete case list twice over, not a selected subset");
   for (const definition of dataset.cases) {
     const cells = expected.cells.filter(cell => cell.caseId === definition.id);
     requireCondition(cells.length === models.length, "INCOMPLETE_ALPHA_MATRIX", "Every frozen alpha case requires both configuration strata");
