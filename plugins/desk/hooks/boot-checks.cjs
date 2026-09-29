@@ -79,6 +79,9 @@ const REPAIR_NODE_ENV = "DESK_TIDY_REPAIR_NODE";
 const LAUNCHER_PROBE_BUDGET_MS = 3000;
 const NODE_STATUS_MAX_BYTES = 4096;
 const oneLine = (value) => String(value).replace(/[\x00-\x1f\x7f]/gu, " ").slice(0, 480);
+// This file's own installed path, so a boot line that names "the repair" can give the exact, copy-pasteable
+// command instead of leaving the agent to guess it (docs/workspace-tidy.md's own worked example).
+const REPAIR_ENTRY_POINT = __filename;
 const TOTAL_BUDGET_MS = 300;
 const TIDY_SOFT_MARGIN_MS = 20;
 const FACTORY_SCRIPT = path.join(__dirname, "..", "mcp", "scripts", "factory.js");
@@ -254,7 +257,11 @@ async function runWorkspaceTidy(ctx) {
       new Promise((resolve) => {
         timer = setTimeout(() => {
           stopAll();
-          resolve("workspace-tidy budget exceeded; deferred; run the repair with the desk_status root.");
+          // Deferred, not stuck: the next session start runs this check fresh and launches the repair itself, so no
+          // agent action is required. The exact command is spelled out (docs/workspace-tidy.md) for an agent that
+          // wants it sooner, with the root left to `desk_status` rather than guessed, since a guessed root here could
+          // name the wrong desk.
+          resolve(`workspace-tidy budget exceeded; deferred to the next session start automatically, no agent action needed; to run it sooner: node ${REPAIR_ENTRY_POINT} --repair <desk_status root>`);
         }, Math.max(1, Math.min(ctx.tidyBudgetMs ?? Infinity, ctx.budgetMs - TIDY_SOFT_MARGIN_MS)));
       }),
     ]);

@@ -18,12 +18,12 @@ emit() {
 }
 
 if [ ! -r "$FOUNDATION_SKILL" ]; then
-  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. Invoke desk:session-start before other work; it remains the authoritative workspace scan."
+  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. Invoke desk:session-start before other work; it remains the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this."
   exit 0
 fi
 
 foundation=$(cat "$FOUNDATION_SKILL" 2>/dev/null) || {
-  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. Invoke desk:session-start before other work; it remains the authoritative workspace scan."
+  emit "desk worker boot — the Desk foundation could not be read from $FOUNDATION_SKILL. Invoke desk:session-start before other work; it remains the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this."
   exit 0
 }
 
@@ -40,7 +40,7 @@ if command -v node >/dev/null 2>&1; then
   direction=$(node "$PLUGIN_ROOT/mcp/scripts/resolve-desk-root.js" --startup-line --boot-checks 2>/dev/null)
 fi
 if [ -z "$direction" ]; then
-  direction="Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound."
+  direction="Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this."
 fi
 
 # The foundation points at the RFC through this line: the installed copy, which
