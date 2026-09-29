@@ -42,8 +42,12 @@ export function lexicalDirectory(cwd, operand) {
   return resolveExisting(path.dirname(lexical)) === null ? null : lexical
 }
 
-/** How Git's own `-C` and PowerShell locations move: lexically on Windows, one real chdir at a time elsewhere. */
-export const processDirectory = process.platform === "win32" ? lexicalDirectory : physicalDirectory
+/** How Git's own `-C` and PowerShell locations move on `platform`: lexically on Windows, one real chdir at a time elsewhere. */
+export function processDirectoryFor(platform) {
+  return platform === "win32" ? lexicalDirectory : physicalDirectory
+}
+
+export const processDirectory = processDirectoryFor(process.platform)
 
 /** The directory Git would inspect for `dir`: itself, or the parent of a pending mktemp directory. */
 export function existingDirectory(dir) {

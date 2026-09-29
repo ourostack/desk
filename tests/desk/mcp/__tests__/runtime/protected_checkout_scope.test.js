@@ -8,11 +8,11 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { guardShellCommand, protectCheckout, protectedCheckoutHook } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
+import { guardShellCommand, pathForms, protectCheckout, protectedCheckoutHook } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { classifyGit, MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
 import { hasOption, parseGitOptions, SPECS } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-options.js"
 import { mayInvokeGit, UNKNOWN } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
-import { existingDirectory, lexicalDirectory, mktempPath, physicalDirectory, processDirectory } from "../../../../../plugins/desk/mcp/src/runtime/shell-paths.js"
+import { existingDirectory, lexicalDirectory, mktempPath, physicalDirectory, processDirectory, processDirectoryFor } from "../../../../../plugins/desk/mcp/src/runtime/shell-paths.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
@@ -358,6 +358,9 @@ test("A3b: the Git-reach rule, option parser and mktemp model", (t) => {
   assert.equal(lexicalDirectory(UNKNOWN, "rel"), UNKNOWN, "a relative operand from an unknown directory")
   assert.equal(lexicalDirectory(cwd, UNKNOWN), UNKNOWN, "an unknown operand")
   assert.equal(processDirectory, process.platform === "win32" ? lexicalDirectory : physicalDirectory)
+  assert.equal(processDirectoryFor("win32"), lexicalDirectory)
+  assert.equal(processDirectoryFor("darwin"), physicalDirectory)
+  assert.equal(processDirectoryFor("linux"), physicalDirectory)
   assert.equal(existingDirectory(pending), cwd)
   assert.equal(existingDirectory(cwd), cwd)
 })
@@ -399,4 +402,24 @@ test("A3b: a command aimed at an unprotected worktree from a protected cwd is ju
   assert.equal((await f.guard(`cd ${q(worktree)}; cd ${q(f.shared)} && git stash`, { cwd: f.shared })).deny, true)
   // A missing alias in the target is "no alias": `git log` and an unknown command both pass.
   assert.equal((await f.guard("{ git log -1; git frobnicate; } > /dev/null", { cwd: f.shared })).deny, false)
+})
+
+test("A3b: worktree paths compare by folder on Windows and exactly elsewhere", () => {
+  // Paths that exist nowhere keep their own spelling, so these cases run on every platform.
+  const windows = pathForms("win32")
+  assert.equal(windows.sameFolder("C:/Users/name/desk-wt", "C:\\USERS\\Name\\desk-wt"), true, "separators and case")
+  assert.equal(windows.sameFolder("C:/Users/name/desk-wt", "C:\\Users\\name\\desk-wt\\sub\\.."), true, "normalized")
+  assert.equal(windows.sameFolder("C:/Users/name/desk-wt", "C:\\Users\\name\\desk-wt-2"), false)
+  for (const platform of ["darwin", "linux"]) {
+    const posix = pathForms(platform)
+    assert.equal(posix.sameFolder("/Users/name/desk-wt", "/Users/name/desk-wt"), true)
+    assert.equal(posix.sameFolder("/Users/name/desk-wt", "/Users/Name/desk-wt"), false, `${platform} keeps case`)
+    assert.equal(posix.realPath, realpathSync)
+  }
+  assert.equal(windows.realPath, realpathSync.native)
+  // A missing path is kept as written; any other failure is not swallowed.
+  const root = realpathSync.native(tmpdir())
+  assert.equal(windows.canonical(path.join(root, "definitely-missing-desk-guard")), path.join(root, "definitely-missing-desk-guard"))
+  assert.equal(pathForms(process.platform).canonical(root), root)
+  assert.throws(() => windows.canonical("bad\0path"))
 })

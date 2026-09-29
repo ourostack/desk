@@ -12,12 +12,18 @@ export { WORKTREE_COMMAND }
 
 // Windows paths from Git (C:/Users/name/...) and from the shell or %TEMP% (C:\Users\NAME~1\...) name one folder in different forms. The native
 // realpath expands 8.3 short names; the comparison also folds separators and case, as Windows does. Other platforms keep exact comparison.
-const WINDOWS = process.platform === "win32"
-const realPath = WINDOWS ? realpathSync.native : realpathSync
-const samePath = (a, b) => WINDOWS ? path.win32.normalize(a).toLowerCase() === path.win32.normalize(b).toLowerCase() : a === b
-function canonicalPath(file) {
-  try { return realPath(file) } catch (error) { if (error.code === "ENOENT") return file; throw error }
+export function pathForms(platform) {
+  const windows = platform === "win32"
+  const realPath = windows ? realpathSync.native : realpathSync
+  function canonical(file) {
+    try { return realPath(file) } catch (error) { if (error.code === "ENOENT") return file; throw error }
+  }
+  const fold = (file) => path.win32.normalize(canonical(file)).toLowerCase()
+  /** Whether a path `git worktree list` printed names the same folder as an already-canonical path. */
+  const sameFolder = windows ? (listed, resolved) => fold(listed) === path.win32.normalize(resolved).toLowerCase() : (listed, resolved) => listed === resolved
+  return { realPath, canonical, sameFolder }
 }
+const { realPath, canonical: canonicalPath, sameFolder } = pathForms(process.platform)
 
 // Git copies config.worktree to new worktrees. An exact gitdir conditional include
 // keeps this local marker on the bound checkout without changing Git's extensions.
@@ -275,7 +281,7 @@ export async function guardShellCommand({ command, cwd, env = process.env, power
         return
       }
       const resolved = canonicalPath(path.resolve(target, victim))
-      const found = paths.find((p) => samePath(WINDOWS ? canonicalPath(p) : p, resolved)) ?? paths.find((p) => path.basename(p) === victim)
+      const found = paths.find((p) => sameFolder(p, resolved)) ?? paths.find((p) => path.basename(p) === victim)
       if (found && (await readPolicy(read, found, [], {})).protected) throw new GuardDenial(`Desk protected checkout ${found}: ${MESSAGES.worktreeRemove}`)
       return
     }
