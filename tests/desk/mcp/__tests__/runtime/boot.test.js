@@ -9,7 +9,8 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { promises as fs } from "node:fs"
 import * as path from "node:path"
-import { spawnSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
+import { fileURLToPath } from "node:url"
 
 import { mkTempRoot } from "../_temp_roots.js"
 import {
@@ -54,7 +55,11 @@ const VALID_CARD = [
 
 test("resolveBootRoot: an env:DESK pointing at a real desk workspace resolves ready", async () => {
   const root = await mkDeskWorkspace()
-  const result = resolveBootRoot({ env: { DESK: root }, cwd: root, homeDir: root })
+  // cwd is a separate, non-desk folder so this exercises env:DESK winning on
+  // its own merits, not the host-project/cwd fallback resolving first because
+  // cwd happened to already be the desk.
+  const elsewhere = await mkTempRoot("desk-boot-envdesk-cwd-")
+  const result = resolveBootRoot({ env: { DESK: root }, cwd: elsewhere, homeDir: elsewhere })
   assert.deepEqual(result, { status: "ready", path: root, source: "env:DESK", binding_path: null })
 })
 
@@ -108,6 +113,20 @@ test("resolveBootRoot: homeDir defaults to os.homedir() (not the real user's HOM
   const emptyHome = await mkTempRoot("desk-boot-homedir-default-")
   const result = resolveBootRoot({ env: {}, cwd: emptyHome })
   assert.equal(result.status, "setup_required")
+})
+
+test("resolveBootRoot: no CLAUDE_PROJECT_DIR (a Bash-spawned boot script has none), but cwd is itself a desk workspace → resolves ready via cwd, same as an agent's shell in tidy.js", async () => {
+  const root = await mkDeskWorkspace()
+  const emptyHome = await mkTempRoot("desk-boot-cwd-fallback-home-")
+  const result = resolveBootRoot({ env: {}, cwd: root, homeDir: emptyHome })
+  assert.deepEqual(result, { status: "ready", path: root, source: "host-project", binding_path: null })
+})
+
+test("resolveBootRoot: CLAUDE_PROJECT_DIR set to a desk workspace is used over a non-desk cwd, not overridden by it", async () => {
+  const root = await mkDeskWorkspace()
+  const emptyHome = await mkTempRoot("desk-boot-cwd-elsewhere-home-")
+  const result = resolveBootRoot({ env: { CLAUDE_PROJECT_DIR: root }, cwd: emptyHome, homeDir: emptyHome })
+  assert.deepEqual(result, { status: "ready", path: root, source: "host-project", binding_path: null })
 })
 
 // ── probeHost ────────────────────────────────────────────────────────────
@@ -1027,4 +1046,35 @@ test("runBootCli: bootOnce itself throwing still produces one complete, degraded
   assert.equal(result.boot_complete, true)
   assert.equal(result.status, "degraded")
   assert.ok(result.degraded[0].includes("totally unexpected"))
+})
+
+// ---------------------------------------------------------------------------
+// scripts/session-boot.js — the one-line CLI entry point itself, run for
+// real as a subprocess (the same pattern scripts/session-sync.js's own test
+// uses). Pointed at an empty HOME with every root-naming env var cleared, it
+// settles into "setup_required" immediately — bootOnce's own early return
+// means no gh, jq, sync or network call ever fires — so this is a fast,
+// side-effect-free way to exercise the actual shipped file's own single
+// statement.
+// ---------------------------------------------------------------------------
+
+test("scripts/session-boot.js runs the command line for real, as a subprocess", async () => {
+  const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/session-boot.js", import.meta.url))
+  const emptyHome = await mkTempRoot("desk-boot-script-home-")
+  const stdout = execFileSync(process.execPath, [SCRIPT], {
+    encoding: "utf8",
+    cwd: emptyHome,
+    env: {
+      ...process.env,
+      HOME: emptyHome,
+      DESK: "",
+      CLAUDE_PROJECT_DIR: "",
+      DESK_ACTIVATION_CONFIG: "",
+      CODEX_HOME: "",
+      CLAUDE_PLUGIN_DATA: "",
+    },
+  })
+  const result = JSON.parse(stdout)
+  assert.equal(result.boot_complete, true)
+  assert.equal(result.status, "setup_required")
 })

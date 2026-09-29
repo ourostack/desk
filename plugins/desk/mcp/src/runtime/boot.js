@@ -91,7 +91,12 @@ export function resolveBootRoot({
       env,
       cwd,
       homeDir,
-      hostProjectRoot: env.CLAUDE_PROJECT_DIR,
+      // A Bash-spawned boot script has no CLAUDE_PROJECT_DIR (Claude Code only
+      // sets it for the MCP server's own process); its cwd stands in, and like
+      // the host project it only counts when it is itself a desk workspace.
+      // Mirrors `desk/tidy.js`'s `resolveRoot`, which resolves the same way for
+      // the same reason.
+      hostProjectRoot: env.CLAUDE_PROJECT_DIR ?? cwd,
       readActivationConfig,
     })
     return { status: "ready", path: resolved.root, source: resolved.source, binding_path: bindingPath }
