@@ -413,6 +413,41 @@ PreToolUse = [{ matcher = "Bash", hooks = [{ type = "command", command = "echo c
   assertNoDuplicateTableHeaders(result.generatedConfig)
 })
 
+test("Codex activation treats a root-level features.* dotted key the operator wrote before any table header as the features table already being used", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const rootFeaturesDottedKeyConfig = `${existingConfig}
+features.web_search = true
+`
+  const result = materializeCodexActivation(activationInput("global-personal", {
+    existingConfig: rootFeaturesDottedKeyConfig,
+  }))
+
+  assert.match(result.generatedConfig, /^features\.web_search = true$/mu)
+  assert.doesNotMatch(result.generatedConfig, /memories = false/u)
+  // The hooks decision is independent of the features decision.
+  assert.match(result.generatedConfig, /^\[\[hooks\.PreToolUse\]\]$/mu)
+  assertNoDuplicateTableHeaders(result.generatedConfig)
+})
+
+test("Codex activation treats an operator's own [hooks.PreToolUse] table header as hooks.PreToolUse already being used, and skips its own entry", async () => {
+  const { materializeCodexActivation } = await loadCodexAdapter()
+  const ownPreToolUseTableConfig = `${existingConfig}
+[hooks.PreToolUse]
+matcher = "custom"
+`
+  const result = materializeCodexActivation(activationInput("global-personal", {
+    existingConfig: ownPreToolUseTableConfig,
+  }))
+
+  assert.match(result.generatedConfig, /^\[hooks\.PreToolUse\]$/mu)
+  assert.match(tableBody(result.generatedConfig, "[hooks.PreToolUse]"), /^matcher = "custom"$/mu)
+  assert.doesNotMatch(result.generatedConfig, /host-enforcement\.cjs/u)
+  assert.doesNotMatch(result.generatedConfig, /\[\[hooks\.PreToolUse/u)
+  // The features decision is independent of the hooks decision.
+  assert.match(result.generatedConfig, /^\[features\]$/mu)
+  assertNoDuplicateTableHeaders(result.generatedConfig)
+})
+
 test("Codex activation's features/hooks additions stay idempotent across repeated applies", async () => {
   const { materializeCodexActivation } = await loadCodexAdapter()
   const first = materializeCodexActivation(activationInput("global-personal"))
