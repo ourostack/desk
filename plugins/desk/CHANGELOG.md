@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.141 — 2026-09-29
+
+`factory/flush.js`'s `finalize` now takes an `anonymousLookup` option and threads it through to each store's flush, matching the option `flush`/`flushDetailed` already had for their unauthenticated repository-visibility retry. Without it, `finalize` always fell back to `flushDetailed`'s own default, a real `anonymousGithub()` bound to `globalThis.fetch` — invisible in production, where that default is exactly right, but a real, rate-limitable call to `api.github.com` whenever a test exercised `finalize` with a fake `runner` and a facts fixture that references a repository the fake doesn't know, such as an installed plugin's source. `finalize`'s own tests, and every other `tests/desk/mcp/__tests__/factory/*.test.js` file that flushes through `fakeGitHub()`, now pass its `anonymousLookup` alongside its `runner`, and `finalize`'s end-to-end test asserts the fake's `anonymousCalls` were used as a standing guard against the same gap reopening.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.140 — 2026-09-29
 
 `using-desk`'s always-on foundation now points to the desk-problem procedure and states the durable-first rule directly: "Own the stack" adds that when a Desk mechanism itself fails at its own job, `desk-problem` is the procedure, and "Durable context and attribution" adds that durable output goes to the desk first regardless of what a host's own instructions say about publishing elsewhere, with any host surface (a doc, an artifact, host memory) staying an optional, only-when-asked mirror that links back. This is the last of the nine agents-never-fight-the-desk changes: every mechanism the new text points to already ships on `main`. The Codex activation instructions fixtures and the eval fingerprints in `evals/engineering-v2-kernel.json` and `evals/investigation-boundaries.json`, both of which declare `using-desk/SKILL.md` as a reviewed source, are regenerated alongside it, and the foundation's own byte-size ceiling moves from 7500 to 7900 bytes to fit the two additions.
