@@ -257,6 +257,15 @@ assumed to match on another.
   trust approval prompt that persists a usable `trusted_hash` — not exercised
   here, since it requires a human answering a TUI prompt and would not change
   what Desk's own (unattended) activation can establish ahead of time.
-- Neither host confirms a documented prompt-submit-equivalent event the way
-  Copilot confirms `userPromptSubmitted` for Codex specifically; Codex's own
-  hooks reference was not exhaustively re-verified for one during this pass.
+- A `UserPromptSubmit`-equivalent event for `naming-allowlist.js`'s "named by
+  the operator this session" exception (spec's controller ruling 3): Copilot's
+  own hooks reference names a `userPromptSubmitted` event, but this pass never
+  fired one live, so its stdin field names (a `sessionId`/`prompt` shape is
+  assumed, not confirmed) are unverified. Codex's own hooks reference was not
+  exhaustively re-checked for a prompt-submit-equivalent event at all. Given
+  neither is confirmed, Part 8 does not wire `desk-naming.cjs` for either
+  host: shipping it against a guessed payload shape would risk a silent no-op
+  that looks wired but never actually populates the session allowlist, which
+  is worse than the documented gap it would paper over. `UserPromptSubmit`
+  stays Claude-Code-only until a live-fired Copilot or Codex payload confirms
+  the real field names.
