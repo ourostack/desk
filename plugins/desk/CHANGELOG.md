@@ -1,5 +1,17 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.147 — 2026-09-29
+
+Session start's workspace sync now names the desk it syncs. The [`session-start`](skills/session-start/SKILL.md) skill gave `node <Desk plugin folder>/mcp/scripts/session-sync.js` with no arguments, but the script needs `--root` or a `DESK` environment variable, which hosts do not set, so an agent that followed the skill printed a usage line and skipped the sync without noticing. The skill now passes `--root` with the desk root that `desk_status` reports.
+
+Windows store protection no longer fails for a non-elevated user with "The process does not possess the 'SeSecurityPrivilege' privilege". The native ACL routine read each protected folder with `Get-Acl` and wrote it back with `Set-Acl`, and that pair also carries the audit section (SACL) whenever a folder has one. Writing a SACL needs a privilege that only an elevated process holds, so every Desk factory command and the readiness convergence stopped on such a machine. The routine now reads only the owner and access sections and writes them back with `SetAccessControl`, so the audit section is never touched. The protection it applies and verifies is unchanged: one Allow rule for the current user, inherited rules cut off, and the same read-back checks.
+
+The protected-checkout guard works on Windows. Under Claude Code it could not find Git at all: the hook copied the environment into a plain object, which loses Windows' case-insensitive names, and Claude Code runs hooks through Git Bash, which passes `PROGRAMFILES` in capitals. Every command the guard needed to inspect was therefore refused with "trusted Git is unavailable". The trusted-Git lookup in [`mcp/src/runtime/git-inspection.js`](mcp/src/runtime/git-inspection.js) now matches those names without regard to case on Windows, and also tries `ProgramW6432`, where Git for Windows installs for a 32-bit Node.
+
+With Git reachable, the guard's decisions on Windows were checked against what really runs, and two gaps were fixed. First, `git worktree remove` did not recognize a protected worktree, because Git lists it as `C:/Users/name/...` while a command names it with backslashes or an 8.3 short name; the guard now compares Windows paths by their long, normalized, case-folded form. Second, Windows keeps a directory as the path it was given, so after `git -C <junction>` or PowerShell's `Set-Location <junction>`, a later `..` is the junction's own parent rather than its target's; the guard modelled the POSIX behavior, so a command could reach a protected checkout the guard had judged elsewhere. Git's own `-C` chain and PowerShell locations now resolve lexically on Windows ([`mcp/src/runtime/shell-paths.js`](mcp/src/runtime/shell-paths.js)), and trusted Git still finds the repository from there. Git Bash's `cd` already hands Git the resolved directory and is unchanged. On macOS and Linux every one of these paths behaves exactly as before.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.146 — 2026-09-29
 
 The factory intake now delivers files it used to leave frozen, and its local diagnostics agree with the store.
