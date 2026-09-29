@@ -58,8 +58,10 @@ function gitEnv() {
 // A budget-exhausted caller must never hand `spawnSync` a `timeout` of `0`
 // (or less) -- Node treats that as "no timeout at all," the exact opposite
 // of what an exhausted budget needs -- so `run` itself refuses to spawn once
-// `timeoutMs` runs out and reports a synthetic failure instead.
-function run(spawnGit, root, args, timeoutMs = GIT_TIMEOUT_MS) {
+// `timeoutMs` runs out and reports a synthetic failure instead. Every call
+// site below threads its own budgeted timeout through explicitly (fix
+// round), so `timeoutMs` has no default of its own left to fall back to.
+function run(spawnGit, root, args, timeoutMs) {
   if (timeoutMs <= 0) return { status: 1, stdout: "", stderr: "sync-workspace budget exhausted" }
   return spawnGit("git", ["-C", root, ...args], {
     encoding: "utf8",

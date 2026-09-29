@@ -403,6 +403,80 @@ test("syncWorkspace reports sync_deadline_exceeded, without attempting a second 
   assert.equal(filed.reason, "sync_deadline_exceeded")
 })
 
+// The three lines a nondeterministic (real-clock) run can cover only by
+// accident, depending on how long the surrounding git calls happen to take
+// on a given machine: `run`'s own `timeoutMs <= 0` guard, `stashCount`'s
+// fallback when its own `git stash list` call fails, and the checkpoint
+// right after the *first* pull's own failure is captured and aborted (as
+// distinct from the two checkpoints above it, which sit before the first
+// pull and after quarantining respectively). Each gets one dedicated,
+// clock-scripted test so coverage of these lines no longer depends on how
+// fast the real git calls around them happen to run.
+
+test("run() itself refuses to spawn once the per-call budget is exhausted, never calling spawnGit for any of the remaining steps", async () => {
+  const { cloneA } = await mkOriginWithClone()
+  let calls = 0
+  // call 1 sets deadlineAt; call 2 is the pre-pull checkpoint (still
+  // within budget); every call from here on reports the budget as long
+  // gone, so every git step from stashCount onward hits run()'s own
+  // `timeoutMs <= 0` guard instead of ever reaching spawnGit.
+  const now = () => { calls += 1; return calls <= 2 ? 0 : 999_999 }
+  let spawnGitCalled = false
+  const spawnGit = (cmd, args, opts) => {
+    if (["stash", "pull", "diff", "rebase"].some((verb) => args.includes(verb))) spawnGitCalled = true
+    return spawnSync(cmd, args, opts)
+  }
+  let filed = null
+  const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
+  assert.equal(spawnGitCalled, false, "run()'s own budget-exhausted guard synthesized every remaining step's failure without ever spawning git for it")
+  assert.equal(result.state, "unresolved")
+  assert.match(result.diagnostic, /sync_deadline_exceeded/u)
+  assert.equal(filed.reason, "sync_deadline_exceeded")
+})
+
+test("stashCount falls back to 0 when its own git stash list call fails, and again when it returns non-string stdout", async () => {
+  const { cloneA: cloneStatus } = await mkOriginWithClone()
+  const failingStatus = (cmd, args, opts) => {
+    if (args.includes("stash") && args.includes("list")) return { status: 1, stdout: "" }
+    return spawnSync(cmd, args, opts)
+  }
+  assert.deepEqual(await syncWorkspace({ root: cloneStatus, env, spawnGit: failingStatus }), { state: "synced" }, "a stashCount lookup that fails outright still resolves synced on an already-clean pull")
+
+  const { cloneA: cloneStdout } = await mkOriginWithClone()
+  const nonStringStdout = (cmd, args, opts) => {
+    if (args.includes("stash") && args.includes("list")) return { status: 0, stdout: undefined }
+    return spawnSync(cmd, args, opts)
+  }
+  assert.deepEqual(await syncWorkspace({ root: cloneStdout, env, spawnGit: nonStringStdout }), { state: "synced" }, "a stashCount lookup with non-string stdout falls back the same way")
+})
+
+test("syncWorkspace reports sync_deadline_exceeded right after the first pull's own conflict is captured and aborted, carrying firstConflicted through", async () => {
+  const { cloneA } = await mkConflictFixture()
+  let calls = 0
+  // calls 1-6 cover deadlineAt, the pre-pull checkpoint, stashCount,
+  // the (failing) first pull, conflictedPaths and abortRebase -- all
+  // still within budget. Call 7 is the checkpoint right after that
+  // abort (`if (remaining() <= 0) return deadlineExceeded(firstConflicted)`),
+  // which this scripts as exhausted so the sequence gives up there
+  // instead of ever reaching untrackedPaths/quarantine.
+  const now = () => { calls += 1; return calls <= 6 ? 0 : 999_999 }
+  let untrackedCalled = false
+  const spawnGit = (cmd, args, opts) => {
+    if (args.includes("ls-files")) untrackedCalled = true
+    return spawnSync(cmd, args, opts)
+  }
+  let filed = null
+  const result = await syncWorkspace({ root: cloneA, env, spawnGit, now, fileProblem: (args) => { filed = args } })
+  assert.equal(result.state, "unresolved")
+  assert.equal(result.quarantinedPaths, undefined, "the budget ran out before quarantine was ever attempted")
+  assert.equal(untrackedCalled, false, "untrackedPaths was never reached once this checkpoint gave up")
+  assert.match(result.diagnostic, /sync_deadline_exceeded/u)
+  assert.match(result.diagnostic, /conflicted: seed\.md/u, "firstConflicted -- captured before the abort that cleared it -- was carried through into the diagnostic")
+  assert.equal(filed.reason, "sync_deadline_exceeded")
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-merge")), false, "the defensive abort still ran before this checkpoint gave up")
+  assert.equal(existsSync(path.join(cloneA, ".git", "rebase-apply")), false)
+})
+
 // ---------------------------------------------------------------------------
 // queueDeskProblemFiling — the real default `fileProblem`, tested directly
 // with an injected `spawnImpl` so the real detached filer never actually
