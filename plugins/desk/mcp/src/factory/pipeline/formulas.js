@@ -120,22 +120,27 @@ function unavailableGroups(sessions) {
 //
 // `split` holds the sessions whose counts belong to several jobs. Each is
 // uncovered once, and the coverage says how many were cut for that reason.
-export function fieldCoverage(sessions, fields, partialFields = [], split = new Set()) {
+// `shared` holds the sessions whose workers also belong to another job, so
+// their time is counted for each of those jobs; it is reported the same way.
+export function fieldCoverage(sessions, fields, partialFields = [], split = new Set(), shared = new Set()) {
   const reasons = new Set()
   let uncovered = 0
   let lacking = 0
   let splitCount = 0
+  let sharedCount = 0
   for (const session of sessions) {
     const missing = session.unavailable.filter((entry) => fields.includes(entry.field))
     const incomplete = session.unavailable.some((entry) => partialFields.includes(entry.field))
     const divided = split.has(session)
     if (divided) splitCount += 1
-    if (missing.length > 0 || incomplete || divided) uncovered += 1
+    const overlapping = shared.has(session)
+    if (overlapping) sharedCount += 1
+    if (missing.length > 0 || incomplete || divided || overlapping) uncovered += 1
     if (missing.length === 0) continue
     lacking += 1
     for (const entry of missing) reasons.add(entry.reason)
   }
-  return { uncovered, none: lacking === sessions.length, reasons: [...reasons].sort(compareText), split: splitCount }
+  return { uncovered, none: lacking === sessions.length, reasons: [...reasons].sort(compareText), split: splitCount, shared: sharedCount }
 }
 
 function missingValue(coverage) {
@@ -145,7 +150,8 @@ function missingValue(coverage) {
 function withCoverage(value, coverage) {
   if (value.class === "unavailable" || coverage.uncovered === 0) return value
   const marked = { ...value, partial: true, uncovered_sessions: coverage.uncovered }
-  return coverage.split > 0 ? { ...marked, partial_reasons: ["worker_split"] } : marked
+  const reasons = [...(coverage.split > 0 ? ["worker_split"] : []), ...(coverage.shared > 0 ? ["worker_shared"] : [])]
+  return reasons.length > 0 ? { ...marked, partial_reasons: reasons } : marked
 }
 
 // Missing data is never a measured zero: a value no covering session could
@@ -246,6 +252,18 @@ export function splitSessions(timeline) {
   return new Set(timeline.source_sessions.filter((session) => !ownsWholeSession(session, bindingOf(session, timeline.job))))
 }
 
+// The source sessions in which one of the job's workers also belongs to
+// another job. That worker's time is counted for each job that owns it, so
+// the job's time is partial; splitting it is left to a later milestone. A
+// legacy binding lists no workers and never counts as sharing.
+export function sharedSessions(timeline) {
+  return new Set(timeline.source_sessions.filter((session) => {
+    const own = bindingOf(session, timeline.job)
+    if (!Object.hasOwn(own, "agents")) return false
+    return session.jobs.some((other) => other !== own && Object.hasOwn(other, "agents") && other.agents.some((agent) => own.agents.includes(agent)))
+  }))
+}
+
 // The counts of a split session that belong to the job: tool calls and
 // failures from the job's own tool intervals (a subagent interval is an
 // `agent` call, and carries no outcome). Retries and compactions have no
@@ -319,7 +337,7 @@ export function calculateFormulas(timeline) {
     byAgent.get(agentKey).push(interval)
   }
 
-  const activeCoverage = fieldCoverage(timedSources, ACTIVE_FIELDS, ACTIVE_PARTIAL_FIELDS)
+  const activeCoverage = fieldCoverage(timedSources, ACTIVE_FIELDS, ACTIVE_PARTIAL_FIELDS, new Set(), sharedSessions(timeline))
   const activeValue = (compute) => timed(() => covered(activeCoverage, compute))
   const whenActive = (compute) => activeValue(() => activeMs === 0 ? unavailable("no_active_intervals") : compute())
   const active = activeValue(() => measured(activeMs))

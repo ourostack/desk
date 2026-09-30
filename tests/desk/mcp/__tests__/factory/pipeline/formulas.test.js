@@ -493,8 +493,10 @@ test("a session split across jobs credits each job only its workers", () => {
 test("a binding that covers every worker behaves like the legacy session-level binding", () => {
   const legacy = splitSession()
   delete legacy.jobs[0].agents
+  legacy.jobs = [legacy.jobs[0]]
   const covering = splitSession()
   covering.jobs[0].agents = [0, 1, 2]
+  covering.jobs = [covering.jobs[0]]
   const legacyFormulas = calculateFormulas(buildJobTimeline(JOB_A, [legacy]))
   const coveringFormulas = calculateFormulas(buildJobTimeline(JOB_A, [covering]))
   assert.deepEqual(coveringFormulas, legacyFormulas)
@@ -520,4 +522,43 @@ test("a PR is credited to the job of the worker that opened it", () => {
   const legacy = splitSession({ refs: { prs, commits: [], private: { prs: 0, commits: 0 } } })
   delete legacy.jobs[1].agents
   assert.deepEqual(numbers(JOB_B, [legacy]), [1, 2, 3])
+})
+
+test("time from a worker that several jobs share is partial with worker_shared, and is not split", () => {
+  const shared = splitSession()
+  shared.jobs[0].agents = [0, 1]
+  shared.jobs[1].agents = [0, 2]
+  const a = calculateFormulas(buildJobTimeline(JOB_A, [shared]))
+  const b = calculateFormulas(buildJobTimeline(JOB_B, [shared]))
+  const partial = { partial: true, uncovered_sessions: 1, partial_reasons: ["worker_shared"] }
+  // Worker 0 is in both jobs and keeps its whole time in each: A is [0,6000], B is [0,4000] + [8000,11000].
+  assert.deepEqual(a.active_time_ms, { class: "measured", value: 6000, ...partial })
+  assert.deepEqual(b.active_time_ms, { class: "measured", value: 7000, ...partial })
+  assert.deepEqual(a.busy_time_ms, { class: "measured", value: 8000, ...partial })
+  // Only the time is marked: the tool measures follow each job's own tool intervals and are marked worker_split.
+  assert.deepEqual(a.tool_calls_by_kind.partial_reasons, ["worker_split"])
+})
+
+test("disjoint workers, legacy bindings and a lone job are not marked worker_shared", () => {
+  const disjoint = calculateFormulas(buildJobTimeline(JOB_A, [splitSession()]))
+  assert.equal(Object.hasOwn(disjoint.active_time_ms, "partial_reasons"), false)
+  const legacySibling = splitSession()
+  delete legacySibling.jobs[1].agents
+  assert.equal(Object.hasOwn(calculateFormulas(buildJobTimeline(JOB_A, [legacySibling])).active_time_ms, "partial"), false)
+  const legacyOwn = splitSession()
+  delete legacyOwn.jobs[0].agents
+  assert.equal(Object.hasOwn(calculateFormulas(buildJobTimeline(JOB_A, [legacyOwn])).active_time_ms, "partial"), false)
+  const alone = splitSession()
+  alone.jobs = [alone.jobs[0]]
+  assert.equal(Object.hasOwn(calculateFormulas(buildJobTimeline(JOB_A, [alone])).active_time_ms, "partial"), false)
+})
+
+test("a job that shares workers in one session and not in another counts only the shared one as uncovered", () => {
+  const shared = splitSession()
+  shared.jobs[1].agents = [1]
+  const other = splitSession()
+  other.session.id = "66666666-6666-4666-8666-666666666666"
+  const formulas = calculateFormulas(buildJobTimeline(JOB_A, [shared, other]))
+  assert.equal(formulas.active_time_ms.uncovered_sessions, 1)
+  assert.deepEqual(formulas.active_time_ms.partial_reasons, ["worker_shared"])
 })
