@@ -8,11 +8,19 @@ const HOST_ENV = { ...process.env }
 const LOCATION_KEYS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_NAMESPACE"]
 let trustedGit
 
+// Windows environment names are case-insensitive, but HOST_ENV is a plain copy, so its lookups are not. Claude Code runs hooks through Git Bash, which passes PROGRAMFILES in capitals.
+function windowsEnvValue(env, name) {
+  if (typeof env[name] === "string") return env[name]
+  const lower = name.toLowerCase()
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === lower)
+  return key === undefined ? undefined : env[key]
+}
+
 export function resolveInspectionGit({ platform = process.platform, env = HOST_ENV, accessible = (file) => {
   try { accessSync(file, constants.X_OK); return true } catch { return false }
 } } = {}) {
   const candidates = platform === "win32"
-    ? [env.ProgramFiles, env["ProgramFiles(x86)"]].filter(Boolean).map((root) => path.win32.join(root, "Git", "cmd", "git.exe"))
+    ? [...new Set(["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"].map((name) => windowsEnvValue(env, name)).filter(Boolean))].map((root) => path.win32.join(root, "Git", "cmd", "git.exe"))
     : ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"]
   const executable = candidates.find(accessible)
   if (!executable) throw new Error("trusted Git is unavailable; install Git in a standard system location")

@@ -8,7 +8,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { factoryStateRoot, quarantine, requestFinalize, setConsent, updateJobsIndex, writeLocalFacts, markDelivered } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, quarantine, requestFinalize, setConsent, writeLocalFacts, markDelivered } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { indexJob } from "./_index_helper.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { STORE, json, scratch } from "./_session_helpers.js"
 
@@ -93,15 +94,15 @@ test("a finished job with an undelivered outbox file or a pending finalize reque
   const requested = await jobOf(desk, "alpha", "requested")
   const missing = await jobOf(desk, "alpha", "missing-file")
   const open = await jobOf(desk, "alpha", "open")
-  await updateJobsIndex(env, undelivered, await outboxFile(env, 1))
+  await indexJob(env, undelivered, await outboxFile(env, 1))
   const deliveredName = await outboxFile(env, 2)
-  await updateJobsIndex(env, delivered, deliveredName)
+  await indexJob(env, delivered, deliveredName)
   await markDelivered(env, STORE, { name: deliveredName, publishedBlobSha: "a".repeat(40) })
   const quarantinedName = await outboxFile(env, 3)
-  await updateJobsIndex(env, quarantined, quarantinedName)
+  await indexJob(env, quarantined, quarantinedName)
   await quarantine(env, STORE, quarantinedName, "date")
-  await updateJobsIndex(env, missing, `claude-code-${sessionId(9)}.json`)
-  await updateJobsIndex(env, open, await outboxFile(env, 4))
+  await indexJob(env, missing, `claude-code-${sessionId(9)}.json`)
+  await indexJob(env, open, await outboxFile(env, 4))
   await requestFinalize(env, { job: requested, deskRoot: desk })
   await requestFinalize(env, { job: open, deskRoot: desk })
   const result = factoryBootCheck({ env, deskRoot: desk, now: NOW })
@@ -287,7 +288,7 @@ test("unsafe state files are never followed: a symlinked consent is silent, and 
   await card(path.join(desk, "alpha", "one"))
   const job = await jobOf(desk, "alpha", "one")
   const name = await outboxFile(env, 1)
-  await updateJobsIndex(env, job, name)
+  await indexJob(env, job, name)
   await markDelivered(env, STORE, { name, publishedBlobSha: "a".repeat(40) })
   const root = await factoryStateRoot(env)
   assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] })
@@ -346,14 +347,14 @@ test("labelsBootCheck reports quarantined labels, and a request whose every sess
   const labelsKey = (job, n) => `labels/${job}/${sessionId(n)}.json`
   const facts = (n) => `claude-code-${sessionId(n)}.json`
   // `held`: both sessions held back, one in each contributing store.
-  await updateJobsIndex(env, held, facts(1))
-  await updateJobsIndex(env, held, facts(2))
+  await indexJob(env, held, facts(1))
+  await indexJob(env, held, facts(2))
   await quarantine(env, STORE, labelsKey(held, 1), "facts_quarantined", { facts: facts(1) })
   await quarantine(env, OTHER_STORE, labelsKey(held, 2), "facts_quarantined", { facts: facts(2) })
   await requestEvaluation(env, { job: held, deskRoot: desk })
   // `partly`: one session of two held back; still waiting.
-  await updateJobsIndex(env, partly, facts(3))
-  await updateJobsIndex(env, partly, "not an outbox name")
+  await indexJob(env, partly, facts(3))
+  await indexJob(env, partly, "not an outbox name")
   await quarantine(env, STORE, labelsKey(partly, 3), "facts_quarantined", { facts: facts(3) })
   await requestEvaluation(env, { job: partly, deskRoot: desk })
   // `unindexed`: a request with no sessions in the index is waiting.

@@ -57,7 +57,7 @@ async function startupDirection() {
     const migrations = await pending;
     return [direction, boot, migrations].filter(Boolean).join("\n\n");
   } catch {
-    return "Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound.";
+    return "Desk startup: Desk could not resolve its root in this hook. Invoke desk:session-start now for the authoritative workspace scan before other work; desk_status reports the root Desk actually bound. A child agent with a bounded brief follows the brief instead and skips this.";
   }
 }
 
@@ -82,6 +82,6 @@ function emit(additionalContext) {
     await startFactory();
     emit(output);
   } catch {
-    emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. Invoke desk:session-start before other work; it remains the authoritative workspace scan.`);
+    emit(`desk worker boot — the Desk foundation could not be read from ${foundationPath}. Invoke desk:session-start before other work; it remains the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this.`);
   }
 })();

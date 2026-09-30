@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
+import { killAndWait } from "../_kill_and_wait.js"
 import { MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
 import { POWERSHELL_GIT_FORMS } from "../../../../../plugins/desk/mcp/src/runtime/powershell-commands.js"
 
@@ -301,7 +302,7 @@ async function slowGit(t, f, delayMs) {
     const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
     for (;;) { const fd = fs.openSync(${JSON.stringify(fifo)}, "w"); sleep(${delayMs}); fs.closeSync(fd) }
   `], { stdio: "ignore" })
-  t.after(() => writer.kill("SIGKILL"))
+  t.after(() => killAndWait(writer))
 }
 
 test("A3b review: one inspection budget bounds the decision below the hosts' 10 s hook deadline", { skip: process.platform === "win32" ? "mkfifo is POSIX-only" : false }, async (t) => {

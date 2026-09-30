@@ -11,7 +11,8 @@ import { createRequire } from "node:module"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
-import { factoryStateRoot, quarantine, readStatus, requestEvaluation, requestFinalize, setConsent, updateJobsIndex, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, quarantine, readStatus, requestEvaluation, requestFinalize, setConsent, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { indexJob } from "./_index_helper.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
 import { resolveDeskStateDir, writeLastStart } from "../../../../../plugins/desk/mcp/src/runtime/last-start.js"
 import { copilotStartupDirection, claudeStartupDirection } from "../../../../../plugins/desk/mcp/src/util/startup-direction.js"
@@ -260,7 +261,7 @@ test("the labels check names how many finished tasks have no waste labels and st
   assert.deepEqual(repairs, [[process.execPath, BOOT, "--compatible", path.join(PLUGIN, "mcp", "scripts", "factory.js"), "evaluate", "--pending"]], "evaluate --pending starts through the compatible-Node launcher")
   // Labels quarantined with their facts are reported, and a job whose every session is held back is not counted as waiting.
   const root = await factoryStateRoot(env)
-  await updateJobsIndex(env, "5e6f708192a3b4c5d6e7f8091a2b3c4d", "claude-code-00000001-0000-4000-8000-000000000001.json")
+  await indexJob(env, "5e6f708192a3b4c5d6e7f8091a2b3c4d", "claude-code-00000001-0000-4000-8000-000000000001.json")
   await quarantine(env, STORE, "labels/5e6f708192a3b4c5d6e7f8091a2b3c4d/00000001-0000-4000-8000-000000000001.json", "facts_quarantined", { facts: "claude-code-00000001-0000-4000-8000-000000000001.json" })
   assert.equal(await run(), "Desk boot: Factory: 1 finished tasks have no waste labels yet; run the evaluator for them in the background; Factory: 1 finished tasks have quarantined waste labels that will not be delivered; tell the operator (desk:session-start)")
   // Quarantined labels alone are reported without a repair.

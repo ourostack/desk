@@ -5,7 +5,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 
 import { FRICTION_CLASSES, MAX_CARDS_PER_DAY, PUBLIC_PLUGINS, cardBlock, fileKaizenCard, normalizeTitle, privateCard, publicCard } from "../../../../../plugins/desk/mcp/src/factory/kaizen-file.js"
-import { readStatus, setConsent, updateJobsIndex, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { indexJob } from "./_index_helper.js"
 import { parseCard } from "../../../../../plugins/desk/mcp/src/factory/pipeline/kaizen.js"
 
 const TOKEN = "ghs_SENTINEL"
@@ -114,7 +115,7 @@ test("to a private store the card keeps the free text and may name any plugin", 
   declare(deskRoot, WORK_STORE)
   await setConsent(env, { store: WORK_STORE, contribute: true, account: "worker" })
   const { runner, created } = fakeGh({ repo: { private: true }, create: { number: 1, html_url: "https://github.com/example/internal-factory/issues/1" } })
-  await updateJobsIndex(env, LOCAL_JOB, "claude-code-x.json")
+  await indexJob(env, LOCAL_JOB, "claude-code-x.json")
   const result = await fileKaizenCard(env, { deskRoot, title: "Work overlay loses the MCP", body: "The overlay drops the MCP.", plugin: "ms-tools", frictionClass: "hook", signal: "tool_failures", evidenceJobs: [LOCAL_JOB], runner })
   assert.deepEqual(result, { result: "filed", store: WORK_STORE, url: "https://github.com/example/internal-factory/issues/1", visibility: "private" })
   const [sent] = created()
@@ -126,7 +127,7 @@ test("to a private store the card keeps the free text and may name any plugin", 
 test("a public store refuses a plugin outside the public list and this machine's plain local job IDs", () => scratch(async ({ env, deskRoot }) => {
   declare(deskRoot)
   await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
-  await updateJobsIndex(env, LOCAL_JOB, "claude-code-x.json")
+  await indexJob(env, LOCAL_JOB, "claude-code-x.json")
   const { runner, created } = fakeGh()
   assert.deepEqual(await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", plugin: "ms-tools", runner }), { result: "plugin_not_public", store: STORE })
   assert.deepEqual(await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", evidenceJobs: [JOB, LOCAL_JOB], runner }), { result: "evidence_jobs_local", store: STORE })

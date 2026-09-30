@@ -7,7 +7,7 @@ import { deriveClaudeSession } from "./derive-claude.js"
 import { deriveCopilotSession } from "./derive-copilot.js"
 import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
-import { factoryStateRoot, listMarkers, readConsent, readMarker, readStatus, updateJobsIndex, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
+import { factoryStateRoot, listMarkers, readConsent, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
 import { resolveStore } from "./store-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
@@ -17,6 +17,9 @@ async function sourceStamp(file) {
   if (!stat.isFile() || stat.nlink !== 1) throw new Error("source_unreadable")
   return { size: stat.size, mtime: stat.mtimeMs, ino: stat.ino, dev: stat.dev }
 }
+
+/** Bump when binding changes what a derived session credits; sessions with a lower or missing receipt version re-derive once. */
+export const BINDING_VERSION = 2
 
 const sameSource = (a, b) => a.size === b.size && a.mtime === b.mtime && a.ino === b.ino && a.dev === b.dev
 
@@ -118,7 +121,7 @@ async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQui
     const hash = markerHash(marker)
     const receipt = (await readStatus(env)).derivations?.[name]
     const destination = path.join(root, "outbox", store.replace("/", "__"), name)
-    if (receipt?.store === store && receipt.marker === hash && sameSource(receipt, before)) {
+    if (receipt?.store === store && receipt.marker === hash && receipt.binding_version >= BINDING_VERSION && sameSource(receipt, before)) {
       try {
         await sourceStamp(destination)
         return { result: "skipped", store }
@@ -140,14 +143,14 @@ async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQui
     const personPrefix = marker.person_prefix ?? ""
     const deskRoot = marker.desk_root
     const { jobs } = bindSession({
-      events: derived.events, deskRoot, deskRemote: readDeskRemote({ deskRoot }), personPrefix,
+      events: derived.events, agents: derived.facts.agents, deskRoot, deskRemote: readDeskRemote({ deskRoot }), personPrefix,
       ...createDeskReaders({ deskRoot, personPrefix }),
     })
     derived.facts.jobs = jobs
     const written = await writeLocalFacts(env, store, derived.facts)
     if (!written.written) return { result: written.errors.length ? "invalid" : "not_opted_in", store }
-    for (const job of jobs) await updateJobsIndex(env, job.job, written.name)
-    await writeStatus(env, { derivations: { [name]: { store, marker: hash, ...before } } })
+    await setJobsForFile(env, written.name, jobs.map((j) => j.job))
+    await writeStatus(env, { derivations: { [name]: { store, marker: hash, binding_version: BINDING_VERSION, ...before } } })
     return { result: "written", store }
   } catch (error) {
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store }
@@ -156,6 +159,11 @@ async function deriveUnlocked(env, input, { claude, copilot, quietMs, requireQui
 
 export async function sweep(env, { quietMs = 600000 } = {}) {
   const summary = { written: 0, held: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0 }
+  try {
+    if (!(await jobsIndexRebuilt(env))) await rebuildJobsIndex(env)
+  } catch {
+    // The rebuild retries on the next sweep; it must never stop this one deriving.
+  }
   for (const marker of await listMarkers(env)) {
     const { result } = await deriveMarker(env, marker, { quietMs, requireStored: true })
     summary[result] += 1
