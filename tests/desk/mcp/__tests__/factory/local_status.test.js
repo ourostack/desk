@@ -11,7 +11,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { factoryStateRoot, markDelivered, quarantine, readMachineSecret, setConsent, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { factoryBootCheck, FACTORY_NO_CONSENT_LINE } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
+import { factoryBootCheck } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
 import { jobLink } from "../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { main as factoryCli } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { STORE, json, scratch } from "./_session_helpers.js"
@@ -57,7 +57,7 @@ test("with no factory state the bound desk reports to the default store, undecid
 for (const answer of ["yes", "no"]) {
   test(`a recorded ${answer} through factory.js consent is reported and the start never asks again`, () => scratch(async ({ desk, env }) => {
     const { factoryLocalStatus } = await load()
-    assert.deepEqual(factoryBootCheck({ env, deskRoot: desk }), { line: FACTORY_NO_CONSENT_LINE })
+    assert.deepEqual(factoryBootCheck({ env, deskRoot: desk }), { jobs: [] })
     const recorded = await cli(env, "consent", "--store", STORE, "--contribute", answer, ...(answer === "yes" ? ["--account", "example-user"] : []))
     assert.equal(recorded.contribute, answer === "yes")
     const status = factoryLocalStatus({ env, deskRoot: desk })
@@ -223,7 +223,7 @@ test("the boot line asks exactly when desk_status reports undecided, in every ro
     const status = factoryLocalStatus({ env, deskRoot: desk, pluginScanIncomplete: entry.scanIncomplete === true })
     const boot = factoryBootCheck({ env, deskRoot: desk, pluginScanIncomplete: entry.scanIncomplete === true })
     assert.equal(status.consent, entry.expect, `${entry.name}: desk_status consent`)
-    assert.equal(boot.line === FACTORY_NO_CONSENT_LINE, status.consent === "undecided", `${entry.name}: the boot line asks only when desk_status says undecided`)
+    assert.equal(boot.line, undefined, `${entry.name}: the boot check never adds a consent line, whatever desk_status says`)
   }
 }))
 

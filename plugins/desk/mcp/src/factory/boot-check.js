@@ -8,15 +8,16 @@
 // `quarantine/<store-slug>/` and `finalize/`, and the first 40 lines of the
 // bound desk's task cards. It returns:
 //
-//   - `{ line: FACTORY_NO_CONSENT_LINE }` when the store has no consent
-//     decision at all, so the agent asks the operator once;
-//   - `{ jobs }` otherwise: up to eight jobs, sorted, each with a pending
+//   - `{ jobs }`: up to eight jobs, sorted, each with a pending
 //     finalize request (whatever person prefix the task tools bound it
 //     under) or finished (a card whose status is `done` or `cancelled` and
 //     whose `updated` time is within 30 days) with an outbox file not yet
 //     delivered or quarantined. The caller starts one detached `factory.js
-//     finalize` for them. A declined store, an invalid store declaration, no
-//     bound desk or unreadable state return `{ jobs: [] }`.
+//     finalize` for them. An undecided or declined store, an invalid store
+//     declaration, no bound desk or unreadable state return `{ jobs: [] }`.
+//     An undecided store adds no line: the boot script's `instructions` own
+//     the consent question, which never comes first and is never raised in a
+//     noninteractive session, and a hook line cannot know either.
 //
 // `labelsBootCheck({ env, now })` reads, when a store has `contribute: true`,
 // the names in `evaluate-requests/` and in each contributing store's
@@ -74,7 +75,6 @@ import { isPlainObject } from "./schema.js"
 import { resolveStore } from "./store-route.js"
 import { normalizeTimestamp } from "./time.js"
 
-export const FACTORY_NO_CONSENT_LINE = "Factory: this desk hasn't decided whether to contribute measurement data; ask the operator once (desk:session-start)"
 export const MAX_FINALIZE_JOBS = 8
 
 const RECENT_MS = 30 * 24 * 60 * 60 * 1000
@@ -309,10 +309,8 @@ export function factoryBootCheck({
   // As in the end hook: an incomplete plugin scan may have missed an overlay's declaration, so only the desk's own counts.
   if (route.store === null || (pluginScanIncomplete && route.source !== "desk")) return { jobs: [] }
   const dir = factoryStateDir(env)
-  // The same decision desk_status reports, so the boot line asks exactly when desk_status says `undecided`.
-  const decided = consentDecision(consentRecords(dir), route.store)
-  if (decided === "undecided") return { line: FACTORY_NO_CONSENT_LINE }
-  if (decided !== "yes") return { jobs: [] }
+  // Only a yes starts finalize work. An undecided store stays silent here: the boot script owns the consent question.
+  if (consentDecision(consentRecords(dir), route.store) !== "yes") return { jobs: [] }
 
   // Every pending finalize request is a job the task tools finished, whatever person prefix they bound it under.
   const jobs = new Set(listNames(path.join(dir, "finalize")).filter((name) => FINALIZE_NAME.test(name)).map((name) => name.slice(0, -5)))

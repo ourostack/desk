@@ -42,12 +42,12 @@ async function outboxFile(env, n) {
   return written.name
 }
 
-test("a store with no consent decision asks the agent to ask the operator once, in exactly the approved words", () => scratch(async ({ env, desk }) => {
-  const { factoryBootCheck, FACTORY_NO_CONSENT_LINE } = await load()
-  assert.equal(FACTORY_NO_CONSENT_LINE, "Factory: this desk hasn't decided whether to contribute measurement data; ask the operator once (desk:session-start)")
-  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { line: FACTORY_NO_CONSENT_LINE })
+test("a store with no consent decision adds no line: the boot script owns the consent question", () => scratch(async ({ env, desk }) => {
+  const { factoryBootCheck } = await load()
+  assert.equal((await load()).FACTORY_NO_CONSENT_LINE, undefined)
+  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] })
   await setConsent(env, { store: "acme/other", contribute: true })
-  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { line: FACTORY_NO_CONSENT_LINE }, "another store's decision is not this store's")
+  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] }, "another store's decision is not this store's")
   const root = await factoryStateRoot(env)
   await fs.writeFile(path.join(root, "consent.json"), "{ not json")
   assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] }, "unreadable consent stays silent")
@@ -55,7 +55,7 @@ test("a store with no consent decision asks the agent to ask the operator once, 
   await fs.writeFile(path.join(root, "consent.json"), JSON.stringify({ schema_version: 1, stores: [] }))
   assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] }, "a malformed consent file is unreadable, as desk_status reports it")
   await fs.writeFile(path.join(root, "consent.json"), JSON.stringify({ schema_version: 1, stores: { [STORE]: { contribute: "maybe" } } }))
-  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { line: FACTORY_NO_CONSENT_LINE }, "a record without a yes or no is undecided, as desk_status reports it")
+  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] }, "a record without a yes or no is undecided, as desk_status reports it")
 }))
 
 test("the check never creates or changes factory state", () => scratch(async ({ env, desk, base }) => {
@@ -74,7 +74,7 @@ test("a declined store, an invalid declaration, an unbound desk and an incomplet
   await json(path.join(desk, "_meta", "factory.json"), { schema_version: 1, store: "not a store" })
   assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] })
   await json(path.join(desk, "_meta", "factory.json"), { schema_version: 1, store: "acme/declared" })
-  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW, pluginScanIncomplete: true }).line, "Factory: this desk hasn't decided whether to contribute measurement data; ask the operator once (desk:session-start)", "the desk's own declaration decides even when the plugin scan is incomplete")
+  assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW, pluginScanIncomplete: true }), { jobs: [] }, "the desk's own declaration decides even when the plugin scan is incomplete")
 }))
 
 test("a finished job with an undelivered outbox file or a pending finalize request gets a finalize repair", () => scratch(async ({ env, desk }) => {
@@ -306,7 +306,7 @@ test("unsafe state files are never followed: a symlinked consent is silent, and 
   assert.deepEqual(factoryBootCheck({ env, deskRoot: desk, now: NOW }), { jobs: [] })
   assert.equal(hasContributingStore(env), false)
   assert.equal(hasContributingStore(), false)
-  assert.deepEqual(factoryBootCheck({ deskRoot: desk }).line, "Factory: this desk hasn't decided whether to contribute measurement data; ask the operator once (desk:session-start)", "the default environment is this process's")
+  assert.deepEqual(factoryBootCheck({ deskRoot: desk }), { jobs: [] }, "the default environment is this process's")
   assert.deepEqual(finishedTasks({ deskRoot: desk, now: NOW }).map(({ slug }) => slug), ["one"])
   const recentDesk = path.join(base, "recent-desk")
   await card(path.join(recentDesk, "alpha", "today"), { updated: new Date().toISOString() })
