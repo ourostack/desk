@@ -50,7 +50,7 @@ export const ENUMS = Object.freeze({
   jobStatus: Object.freeze([
     "drafting", "processing", "validating", "collaborating", "paused", "blocked", "done", "cancelled",
   ]),
-  jobBasis: Object.freeze(["desk_tool", "file_write", "desk_commit"]),
+  jobBasis: Object.freeze(["desk_tool", "file_write", "desk_commit", "spawn_brief", "inherited"]),
   unavailableField: Object.freeze([
     "tokens", "requests", "models", "turns", "tool_durations", "permission_waits",
     "human_waits", "api_retries", "commits", "ci_runs", "plugins", "ended_at",
@@ -353,6 +353,49 @@ export const PR_SPEC = {
   number: positiveIntField(),
 }
 
+// `agent` (the worker that opened the PR) is optional, so files written before
+// workers were attributed stay valid. Whether it names a real worker is a
+// cross-field check (`checkAgentReferences`).
+export function prFields(value) {
+  return Object.hasOwn(value, "agent") ? { ...PR_SPEC, agent: rangeIntField(0, 9999) } : PR_SPEC
+}
+
+// `jobs[].agents`: the workers whose work belongs to the job. A non-empty,
+// duplicate-free list of worker numbers; absent means every worker in the session.
+export function checkJobAgents(value, path, errors) {
+  if (!Array.isArray(value)) {
+    addError(errors, "type", path)
+    return false
+  }
+  if (value.length === 0) {
+    addError(errors, "empty", path)
+    return false
+  }
+  if (value.length > LIMITS.agents) {
+    addError(errors, "too_many", path)
+    return false
+  }
+  let ok = true
+  value.forEach((entry, index) => {
+    if (!rangeIntField(0, 9999).check(entry, joinPath(path, index), errors)) ok = false
+  })
+  if (ok && new Set(value).size !== value.length) {
+    addError(errors, "duplicate", path)
+    ok = false
+  }
+  // Canonical form: ascending, so one content gives one set of bytes.
+  if (ok && value.some((entry, index) => index > 0 && entry < value[index - 1])) {
+    addError(errors, "order", path)
+    ok = false
+  }
+  return ok
+}
+
+// Adds the optional `agents` key to a job spec when the job carries it.
+export function jobFields(value, base) {
+  return Object.hasOwn(value, "agents") ? { ...base, agents: customField(checkJobAgents) } : base
+}
+
 // A commit's repository, when the deriver can attribute one; `null` when it
 // cannot (the transform drops and counts those).
 const COMMIT_SPEC = {
@@ -369,7 +412,7 @@ const UNRESOLVED_SPEC = {
 }
 
 const REFS_SPEC = {
-  prs: arrayField(objectField(PR_SPEC), LIMITS.prs),
+  prs: arrayField(objectField(prFields), LIMITS.prs),
   commits: arrayField(objectField(COMMIT_SPEC), LIMITS.commits),
   unresolved: objectField(UNRESOLVED_SPEC),
 }
@@ -502,7 +545,7 @@ const TOP_SPEC = {
   intervals: arrayField(INTERVAL_FIELD, LIMITS.intervals),
   counts: objectField(COUNTS_SPEC),
   refs: objectField(REFS_SPEC),
-  jobs: arrayField(objectField(JOB_SPEC), LIMITS.jobs),
+  jobs: arrayField(objectField((value) => jobFields(value, JOB_SPEC)), LIMITS.jobs),
   unavailable: arrayField(objectField(UNAVAILABLE_SPEC), LIMITS.unavailable),
 }
 
@@ -558,6 +601,19 @@ export function checkAgentReferences(value, results, errors) {
     if (!isPlainObject(item)) return
     if (results.agents[index]?.parent === true && item.parent !== null && !agentIds.has(item.parent)) {
       addError(errors, "reference", `agents.${index}.parent`)
+    }
+  })
+
+  // A job's or PR's worker must be a real worker of this session.
+  results.jobs?.forEach((jobResult, index) => {
+    if (jobResult?.agents !== true) return
+    value.jobs[index].agents.forEach((n, entry) => {
+      if (!agentIds.has(n)) addError(errors, "agent_unknown", `jobs.${index}.agents.${entry}`)
+    })
+  })
+  results.refs?.prs?.forEach((prResult, index) => {
+    if (prResult?.agent === true && !agentIds.has(value.refs.prs[index].agent)) {
+      addError(errors, "agent_unknown", `refs.prs.${index}.agent`)
     }
   })
 

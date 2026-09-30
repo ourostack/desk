@@ -205,7 +205,7 @@ function publishRefs(refs, askPublic) {
     }
     return kept
   }
-  const prs = keep(refs.prs, "prs", (pr) => `${pr.repo}#${pr.number}`, (pr) => ({ repo: pr.repo, number: pr.number }))
+  const prs = keep(refs.prs, "prs", (pr) => `${pr.repo}#${pr.number}`, (pr) => ({ repo: pr.repo, number: pr.number, ...(Object.hasOwn(pr, "agent") ? { agent: pr.agent } : {}) }))
   const commits = keep(refs.commits, "commits", (commit) => commit.sha, (commit) => ({ repo: commit.repo, sha: commit.sha }))
   return { prs, commits, dropped }
 }
@@ -245,6 +245,11 @@ function refusalOf(local, startedMs, durationMs) {
   return null
 }
 
+// The job's workers, when it records them (absent: every worker in the session).
+function agentsOf(job) {
+  return Object.hasOwn(job, "agents") ? { agents: [...job.agents] } : {}
+}
+
 // A public (or not surely private) desk's job: a keyed ID and no timing.
 function protectedJob(job, machineSecret) {
   return {
@@ -253,6 +258,7 @@ function protectedJob(job, machineSecret) {
     session_offset_ms: null,
     transitions: [],
     observed: job.observed === null ? null : { status: job.observed.status, offset_ms: null },
+    ...agentsOf(job),
   }
 }
 
@@ -280,7 +286,7 @@ function publishJob(job, startedMs, flag) {
   }
   if (lost) flag("job_offsets", "source_unreadable")
 
-  return { job: job.job, basis: [...job.basis], session_offset_ms: sessionOffset, transitions, observed }
+  return { job: job.job, basis: [...job.basis], session_offset_ms: sessionOffset, transitions, observed, ...agentsOf(job) }
 }
 
 /**

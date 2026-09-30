@@ -3,7 +3,7 @@
 // instruction to split it. Statements without Git are walked for what they do to the location, variables and
 // environment those Git calls use. One state is kept: whatever may or may not happen (a script block, a control
 // statement, the right side of `&&`/`||` after an unknown status) leaves every value it could change unknown.
-import { physicalDirectory, staticGitOutput } from "./shell-paths.js"
+import { physicalDirectory, processDirectory, staticGitOutput } from "./shell-paths.js"
 import { inspectShell, shellScript, tokenizeShell } from "./shell-commands.js"
 import { GuardDenial, inspectionBudget, mayInvokeGit, mergedValue, namesGit, UNKNOWN, UNKNOWN_GIT, unknownOutput, unresolved } from "./guard-unknowns.js"
 
@@ -250,7 +250,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
   const opaqueVariables = VARIABLE_SETTERS.test(text), opaqueEnvironment = ENVIRONMENT_SETTERS.test(text)
   const variables = { home: env.HOME ?? env.USERPROFILE }
   const environment = { ...env }
-  let directory = physicalDirectory(cwd, ".") ?? cwd
+  let directory = processDirectory(cwd, ".") ?? cwd
   let status = true, terminated = false
   const aliases = new Set()
   // Function and filter bodies by name: a call runs the body again where it is called.
@@ -565,7 +565,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       }
       const target = positional[0] ?? variables.home
       if (!target) { status = false; return }
-      const dir = physicalDirectory(directory, target.replace(/^~(?=$|[/\\])/u, variables.home ?? "~"))
+      const dir = processDirectory(directory, target.replace(/^~(?=$|[/\\])/u, variables.home ?? "~"))
       if (!dir) { status = false; return }
       directory = dir
       status = dir === UNKNOWN ? null : true
@@ -595,7 +595,7 @@ export async function inspectPowerShell({ command, cwd, env, visit, depth = 0, b
       const source = script.command ?? piped
       // A script with an unknown part is inspected only when the part Desk can read names Git or runs code.
       if (source !== undefined && !(source.includes(UNKNOWN) && !mayInvokeGit(known(source)))) {
-        const where = script.directory === undefined ? directory : physicalDirectory(directory, script.directory) ?? UNKNOWN
+        const where = script.directory === undefined ? directory : processDirectory(directory, script.directory) ?? UNKNOWN
         await inspectShell({ command: source, cwd: where, env: environment, visit, depth: depth + 1, budget, powershell: name === "pwsh" || name === "powershell" })
       }
     }

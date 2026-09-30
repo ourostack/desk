@@ -160,6 +160,9 @@ export function jobId({ deskRemote, personPrefix, track, slug }) {
 
 const CARD_FILE = "task.md"
 
+// A desk commit spanning more tasks than this is a sweep and binds none.
+const MASS_COMMIT_TASKS = 3
+
 /**
  * `{ track, slug, bare }` for desk-relative path segments naming a path
  * inside a task folder, or null. `bare` is true when the only segment past
@@ -243,13 +246,15 @@ function requireFunction(value, name) {
 }
 
 /**
- * `bindSession({ events, deskRoot, deskRemote, personPrefix, readTask,
+ * `bindSession({ events, agents, deskRoot, deskRemote, personPrefix, readTask,
  * deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping,
- * resolveJobIdentity }) -> { jobs: LocalJob[] }`. `deskRemote` is the desk's
+ * resolveJobIdentity }) -> { jobs: LocalJob[] }`. `agents` is the facts'
+ * `agents[]` (`{ n, parent }`), used for ancestry; each job lists the
+ * workers bound to it in `agents`. Every event counts as worker 0 without it. `deskRemote` is the desk's
  * `origin` URL, or empty when it has none (the job IDs then use `local:`
  * plus the desk root).
  */
-export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity }) {
+export function bindSession({ events, agents, deskRoot, deskRemote, personPrefix, readTask, deskCommitsBetween, gitCommitTaskPaths, isCardHousekeeping, resolveJobIdentity }) {
   if (typeof deskRoot !== "string" || !path.isAbsolute(deskRoot)) throw new TypeError("bindSession: deskRoot must be an absolute path")
   const alias = checkPersonPrefix(personPrefix, "bindSession")
   requireFunction(readTask, "readTask")
@@ -263,72 +268,140 @@ export function bindSession({ events, deskRoot, deskRemote, personPrefix, readTa
   const roots = deskRootsOf(deskRoot)
   const source = events ?? {}
 
-  const tasks = new Map() // "track/slug" -> { track, slug, basis: Set, transitions: [] }
-  const touch = (task, basis) => {
+  // "track/slug" -> { track, slug, transitions: [] }, and worker -> ("track/slug" -> basis Set).
+  const tasks = new Map()
+  const evidence = new Map()
+  // Without `agents` (a legacy caller) every event is the root worker's (0).
+  const hasAgents = Array.isArray(agents)
+  const agentOf = (item) => (hasAgents && Number.isInteger(item?.agent) && item.agent >= 0 ? item.agent : 0)
+  // With `agents`, a worker it does not list contributes no evidence: the
+  // facts could not name it in a job's `agents`, and the validator refuses that.
+  const listed = new Set((hasAgents ? agents : []).map((worker) => worker?.n))
+  const touch = (agent, task, basis) => {
+    if (hasAgents && !listed.has(agent)) return { transitions: [] }
     const key = `${task.track}/${task.slug}`
-    if (!tasks.has(key)) tasks.set(key, { track: task.track, slug: task.slug, basis: new Set(), transitions: [] })
-    const entry = tasks.get(key)
-    entry.basis.add(basis)
-    return entry
+    if (!tasks.has(key)) tasks.set(key, { track: task.track, slug: task.slug, transitions: [] })
+    if (!evidence.has(agent)) evidence.set(agent, new Map())
+    const own = evidence.get(agent)
+    if (!own.has(key)) own.set(key, new Set())
+    own.get(key).add(basis)
+    return tasks.get(key)
   }
-  // A bare card only binds a `desk_commit` when its diff in that commit is
-  // real, not identity or placement: `isCardHousekeeping` is the judge.
-  const bindCommitPaths = (sha, taskPaths) => {
+  // The tasks a commit's paths bind. A bare card only binds when its diff in
+  // that commit is real, not identity or placement (`isCardHousekeeping` is
+  // the judge). A commit left spanning more than MASS_COMMIT_TASKS tasks is a
+  // housekeeping sweep, not work on any one of them, and binds none.
+  const commitTasks = (sha, taskPaths) => {
+    const found = new Map()
     for (const taskPath of asArray(taskPaths)) {
       if (typeof taskPath !== "string") continue
       const task = taskOfSegments(relativeSegments(taskPath), alias)
       if (task === null) continue
       if (task.bare && isCardHousekeeping(sha, taskPath)) continue
-      touch(task, "desk_commit")
+      found.set(`${task.track}/${task.slug}`, task)
     }
+    return found.size > MASS_COMMIT_TASKS ? [] : [...found.values()]
   }
 
   for (const call of asArray(source.deskToolCalls)) {
     if (call?.ok !== true || !isTaskSegment(call.track) || !isTaskSegment(call.slug)) continue
-    const entry = touch({ track: call.track, slug: call.slug }, "desk_tool")
+    const entry = touch(agentOf(call), { track: call.track, slug: call.slug }, "desk_tool")
     if (ENUMS.jobStatus.includes(call.status) && isTime(call.at)) entry.transitions.push({ to: call.status, at: call.at })
   }
 
   for (const write of asArray(source.fileWrites)) {
     const segments = segmentsInDesk(write?.path, roots)
     const task = segments === null ? null : taskOfSegments(segments, alias)
-    if (task !== null) touch(task, "file_write")
+    if (task !== null) touch(agentOf(write), task, "file_write")
+  }
+
+  // A brief naming a task with a card is that worker's own evidence.
+  for (const spawn of asArray(source.spawnTasks)) {
+    if (!isTaskSegment(spawn?.track) || !isTaskSegment(spawn.slug)) continue
+    const card = readTask(spawn.track, spawn.slug)
+    if (card === null || card === undefined) continue
+    touch(agentOf(spawn), { track: spawn.track, slug: spawn.slug }, "spawn_brief")
   }
 
   const windows = []
   for (const call of asArray(source.shellGitCommits)) {
     if (!isTime(call?.start) || !isTime(call.end) || call.end < call.start) continue
     if (segmentsInDesk(expandDeskMarker(call.cwd, roots[0]), roots) === null) continue
-    windows.push({ start: floorToSecond(call.start), end: call.end })
+    windows.push({ start: floorToSecond(call.start), end: call.end, agent: agentOf(call) })
   }
   if (windows.length > 0) {
     const first = windows.reduce((earliest, window) => (window.start < earliest ? window.start : earliest), windows[0].start)
     const last = windows.reduce((latest, window) => (window.end > latest ? window.end : latest), windows[0].end)
     for (const commit of asArray(deskCommitsBetween(first, last))) {
       const at = commit?.committed_at
-      if (isTime(at) && windows.some((window) => at >= window.start && at <= window.end)) bindCommitPaths(commit.sha, commit.taskPaths)
+      if (!isTime(at)) continue
+      const owners = new Set(windows.filter((window) => at >= window.start && at <= window.end).map((window) => window.agent))
+      if (owners.size === 0) continue
+      const bound = commitTasks(commit.sha, commit.taskPaths)
+      for (const owner of owners) for (const task of bound) touch(owner, task, "desk_commit")
     }
   }
 
-  for (const sha of asArray(source.nativeCommitShas)) {
+  for (const entry of asArray(source.nativeCommitShas)) {
+    const sha = entry?.sha
     if (typeof sha !== "string" || !PATTERNS.commitSha.test(sha)) continue
     const found = gitCommitTaskPaths(sha)
-    if (found?.exists === true) bindCommitPaths(sha, found.taskPaths)
+    if (found?.exists === true) for (const task of commitTasks(sha, found.taskPaths)) touch(agentOf(entry), task, "desk_commit")
+  }
+
+  // Only a task with a card is a job.
+  const cards = new Map()
+  for (const key of tasks.keys()) {
+    const task = tasks.get(key)
+    const card = readTask(task.track, task.slug)
+    if (card !== null && card !== undefined) cards.set(key, card)
+  }
+  const ownJobs = new Map() // worker -> Map(key -> basis Set), jobs with a card only
+  for (const [agent, own] of evidence) {
+    const kept = new Map([...own].filter(([key]) => cards.has(key)))
+    if (kept.size > 0) ownJobs.set(agent, kept)
+  }
+  // A worker with no evidence of its own inherits from its nearest ancestor
+  // that has some, when that ancestor binds exactly one job; the walk stops
+  // at the first ancestor with evidence, and at a cycle or unknown parent.
+  const parents = new Map()
+  for (const worker of hasAgents ? agents : []) {
+    if (Number.isInteger(worker?.n) && Number.isInteger(worker.parent)) parents.set(worker.n, worker.parent)
+  }
+  const bound = new Map(ownJobs) // worker -> Map(key -> basis Set)
+  for (const worker of hasAgents ? agents : []) {
+    if (!Number.isInteger(worker?.n) || ownJobs.has(worker.n)) continue
+    const seen = new Set([worker.n])
+    let ancestor = parents.get(worker.n)
+    while (ancestor !== undefined && !seen.has(ancestor) && !ownJobs.has(ancestor)) {
+      seen.add(ancestor)
+      ancestor = parents.get(ancestor)
+    }
+    const inherited = ancestor === undefined || seen.has(ancestor) ? null : ownJobs.get(ancestor)
+    if (inherited !== null && inherited.size === 1) bound.set(worker.n, new Map([[inherited.keys().next().value, new Set(["inherited"])]]))
   }
 
   const jobs = []
-  for (const entry of tasks.values()) {
-    const card = readTask(entry.track, entry.slug)
-    if (card === null || card === undefined) continue
+  for (const [key, card] of cards) {
+    const entry = tasks.get(key)
+    const basis = new Set()
+    const workers = []
+    for (const [agent, own] of bound) {
+      if (!own.has(key)) continue
+      workers.push(agent)
+      for (const item of own.get(key)) basis.add(item)
+    }
     const status = ENUMS.jobStatus.includes(card.status) ? card.status : null
     let observedAt = null
     if (status !== null && TERMINAL.has(status) && isTime(card.updated_at)) observedAt = card.updated_at
     const birth = resolveJobIdentity(entry.track, entry.slug)
     jobs.push({
       job: jobId({ deskRemote: remote, personPrefix, track: birth.track, slug: birth.slug }),
-      basis: ENUMS.jobBasis.filter((basis) => entry.basis.has(basis)),
+      basis: ENUMS.jobBasis.filter((item) => basis.has(item)),
+      // A legacy caller passes no `agents`: the key is left out, which reads as every worker.
+      ...(hasAgents ? { agents: workers.sort((x, y) => x - y) } : {}),
       task_created_at: isTime(card.created_at) ? card.created_at : null,
-      transitions: entry.transitions.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)).slice(0, LIMITS.jobTransitions),
+      transitions: entry.transitions.sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : 0)).slice(0, LIMITS.jobTransitions),
       observed: status === null ? null : { status, at: observedAt },
     })
   }

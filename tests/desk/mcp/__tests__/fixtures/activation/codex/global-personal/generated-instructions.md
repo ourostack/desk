@@ -1,7 +1,7 @@
 # user-authored Codex guidance
 Keep repo-local rules intact.
 
-# BEGIN desk activation: desk@3.2.0-alpha.143 mode=global-personal owner=desk-activation
+# BEGIN desk activation: desk@3.2.0-alpha.149 mode=global-personal owner=desk-activation
 You are the desk worker by default.
 
 # Using Desk
@@ -62,7 +62,7 @@ When instructions are confusing, redundant or in conflict, say so and record the
 
 ## Child agents
 
-Children are not assumed to rerun startup hooks, so every brief carries the bounded outcome, scope, authority, source, write set, dependencies, success evidence, prohibited actions and return contract. A child gains no new authority, no new durable task identity and no second lifecycle policy. A child's early-return framing is input, not authority: re-dispatch it or finish the work in the root. The root retains final accountability and folds returned evidence into the same task.
+Children are not assumed to rerun startup hooks, so every brief carries the bounded outcome, scope, authority, source, write set, dependencies, success evidence, prohibited actions and return contract. A child gains no new authority, no new durable task identity and no second lifecycle policy. A child's early-return framing is input, not authority: re-dispatch it or finish the work in the root. The root retains final accountability and folds returned evidence into the same task. A child agent with a bounded brief follows the brief, not this text, and skips session-start, host probes, sync and any real-desk boot ceremony.
 
 ## The RFC
 

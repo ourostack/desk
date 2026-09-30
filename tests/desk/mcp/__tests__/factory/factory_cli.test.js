@@ -31,7 +31,8 @@ import {
   runValidatePrCommand,
 } from "../../../../../plugins/desk/mcp/scripts/factory.js"
 import { jobId } from "../../../../../plugins/desk/mcp/src/factory/binding.js"
-import { factoryStateRoot, readConsent, setConsent, updateJobsIndex, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, readConsent, setConsent, writeLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { indexJob } from "./_index_helper.js"
 
 const SCRIPT = fileURLToPath(new URL("../../../../../plugins/desk/mcp/scripts/factory.js", import.meta.url))
 const FIXTURE_STORE = fileURLToPath(new URL("fixtures/store", import.meta.url))
@@ -741,7 +742,7 @@ async function seedJob(env, job) {
   facts.jobs.sort((a, b) => (a.job < b.job ? -1 : 1))
   await setConsent(env, { store: "ourostack/factory", contribute: true })
   await writeLocalFacts(env, "ourostack/factory", facts)
-  await updateJobsIndex(env, job, `claude-code-${EVAL_SESSION}.json`)
+  await indexJob(env, job, `claude-code-${EVAL_SESSION}.json`)
 }
 
 test("deskVersion is the installed plugin's version", () => {

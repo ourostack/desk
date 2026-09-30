@@ -10,8 +10,9 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
-  factoryStateRoot, listFinalizeRequests, requestFinalize, setConsent, updateJobsIndex, writeLocalFacts, writeMarker, writeStatus,
+  factoryStateRoot, listFinalizeRequests, requestFinalize, setConsent, writeLocalFacts, writeMarker, writeStatus,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { indexJob } from "./_index_helper.js"
 import { fakeGitHub } from "./_fake_github.js"
 import { STORE, scratch, session } from "./_session_helpers.js"
 
@@ -44,7 +45,7 @@ async function jobFile(ctx, n) {
   facts.refs = { prs: [], commits: [], unresolved: { prs: 0, commits: 0 } }
   const written = await writeLocalFacts(ctx.env, STORE, facts)
   assert.equal(written.written, true)
-  await updateJobsIndex(ctx.env, JOB, written.name)
+  await indexJob(ctx.env, JOB, written.name)
   await writeStatus(ctx.env, { derivations: { [written.name]: { store: STORE, marker: "x", size: 1, mtime: 1, ino: 1, dev: 1 } } })
   return written.name
 }
@@ -62,7 +63,7 @@ test("finalize re-derives only the job's indexed sessions and markers updated si
   await marker(ctx, 1, at(-2 * 60 * 60 * 1000))
   await marker(ctx, 2, at(60 * 1000))
   await marker(ctx, 3, at(-60 * 60 * 1000))
-  await updateJobsIndex(ctx.env, JOB, nameOf(1))
+  await indexJob(ctx.env, JOB, nameOf(1))
   await requested(ctx)
   const derived = []
   const result = await finalize(ctx.env, {
@@ -147,7 +148,7 @@ test("finalize keeps the request while a session is unreadable or still busy", (
   const { finalize } = await load()
   await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
   const log = await marker(ctx, 1, at(-60 * 1000))
-  await updateJobsIndex(ctx.env, JOB, nameOf(1))
+  await indexJob(ctx.env, JOB, nameOf(1))
   await requested(ctx)
   const nothing = async () => ({ result: "nothing_pending", pending: [] })
   assert.equal((await finalize(ctx.env, { job: JOB, now: clockAt(REQUESTED), derive: async () => ({ result: "source_unreadable" }), flush: nothing })).result, "retained")
@@ -177,7 +178,7 @@ test("finalize ignores index entries whose store is unknown or whose outbox file
   const { finalize } = await load()
   await setConsent(ctx.env, { store: STORE, contribute: true, account: "contributor" })
   const name = await jobFile(ctx, 1)
-  await updateJobsIndex(ctx.env, JOB, nameOf(2))
+  await indexJob(ctx.env, JOB, nameOf(2))
   await fs.unlink(path.join(await factoryStateRoot(ctx.env), "outbox", "ourostack__factory", name))
   await requested(ctx)
   const result = await finalize(ctx.env, { job: JOB, derive: async () => ({ result: "skipped" }), flush: async () => assert.fail("nothing to flush") })
@@ -224,7 +225,7 @@ test("without a request finalize works from the jobs index alone, and flushes ev
   const facts = structuredClone(GOLDEN)
   facts.session.id = sessionId(2)
   const written = await writeLocalFacts(ctx.env, "acme/second", facts)
-  await updateJobsIndex(ctx.env, JOB, written.name)
+  await indexJob(ctx.env, JOB, written.name)
   await writeStatus(ctx.env, { derivations: { [written.name]: { store: "acme/second", marker: "x", size: 1, mtime: 1, ino: 1, dev: 1 } } })
   await marker(ctx, 3, at(0))
   const derived = []

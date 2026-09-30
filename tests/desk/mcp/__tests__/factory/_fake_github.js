@@ -139,7 +139,7 @@ export function fakeGitHub({
     const head = repo(pr.headRepo).refs.get(`heads/${pr.head.ref}`)
     const main = storeRepo().refs.get("heads/main")
     const before = filesOf(commits.get(main).tree)
-    return [...filesOf(commits.get(head).tree)].filter(([name, sha]) => DATA.test(name) && before.get(name) !== sha).map(([name]) => ({ filename: name }))
+    return [...filesOf(commits.get(head).tree)].filter(([name, sha]) => DATA.test(name) && before.get(name) !== sha).map(([name, sha]) => ({ filename: name, sha }))
   }
 
   function api(method, route, body) {
@@ -287,6 +287,7 @@ export function fakeGitHub({
     anonymousCalls: anon.calls,
     /** Ready to pass as `flush`'s `anonymousLookup`: the real `anonymousGithub` wired to this fixture's fake fetch. */
     anonymousLookup: anonymousGithub({ fetch: anon.fetch }),
+    pullCount: () => pulls.length,
     storeMain: () => storeRepo().refs.get("heads/main"),
     mainFacts: () => factsOf(storeRepo().refs.get("heads/main")),
     /** Every data file (`facts/…`, `labels/…`) on the store's main, path to blob SHA. */
@@ -334,12 +335,12 @@ export function fakeGitHub({
       pr.state = "closed"
       return pr
     },
-    addClosedPr({ comment = null, commentBy = BOT, fileNames = [], merged = false, headLabel = null }) {
+    addClosedPr({ comment = null, commentBy = BOT, fileNames = [], fileShas = {}, merged = false, headLabel = null }) {
       const number = 100 + pulls.length + 1
       const [owner, ref] = (headLabel ?? `${storeOwner}:intake/0000000000000000`).split(":")
       pulls.push({ number, state: "closed", merged_at: merged ? "merged" : null, title: "Factory intake", body: "1", head: { ref, label: `${owner}:${ref}` }, base: { ref: "main" }, headRepo: store, html_url: `https://github.com/${store}/pull/${number}` })
       if (comment !== null) comments.set(number, [{ user: { login: commentBy, type: commentBy === BOT ? "Bot" : "User" }, body: comment }])
-      files.set(number, fileNames.map((name) => ({ filename: name.includes("/") ? name : `facts/${name}` })))
+      files.set(number, fileNames.map((name) => ({ filename: name.includes("/") ? name : `facts/${name}`, ...(fileShas[name] === undefined ? {} : { sha: fileShas[name] }) })))
       return number
     },
   }

@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, promises as fs } from "node:fs"
 import * as path from "node:path"
-import { factoryStateRoot, listMarkers, readJobsIndex, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, listMarkers, readJobsIndex, setJobsForFile, readStatus, setConsent, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { deriveCopilotSession } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
 import { END, ID, SENTINEL, START, STORE, json, scratch, session } from "./_session_helpers.js"
@@ -143,6 +143,50 @@ test("sweep derives quiet stale and ended markers but skips busy logs and unchan
   assert.equal((await listMarkers(ctx.env)).length, 1)
 }))
 
+test("sweep rebuilds the index only once", () => scratch(async (ctx) => {
+  const { sweep } = await runner()
+  const root = await factoryStateRoot(ctx.env)
+  const stale = "9f2c4b1a7d3e5f60718293a4b5c6d7e8"
+  await setJobsForFile(ctx.env, "claude-code-old.json", [stale])
+  await sweep(ctx.env)
+  assert.deepEqual(await readJobsIndex(ctx.env), {}, "the first sweep drops entries no outbox file binds")
+  assert.equal(existsSync(path.join(root, "jobs-index.rebuilt")), true)
+  await setJobsForFile(ctx.env, "claude-code-old.json", [stale])
+  await sweep(ctx.env)
+  assert.deepEqual(await readJobsIndex(ctx.env), { [stale]: ["claude-code-old.json"] }, "the second sweep leaves a hand-edited index alone")
+}))
+
+test("sweep derives even when the rebuild fails", { skip: process.getuid?.() === 0 || process.platform === "win32" }, () => scratch(async (ctx) => {
+  const { sweep } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await writeMarker(ctx.env, marker)
+  const old = new Date(Date.now() - 700000)
+  await fs.utimes(marker.log_path, old, old)
+  const root = await factoryStateRoot(ctx.env)
+  const bad = path.join(root, "outbox", "ourostack__other")
+  await fs.mkdir(bad, { recursive: true })
+  const file = path.join(bad, `claude-code-${ID.replace(/.$/u, "9")}.json`)
+  await fs.writeFile(file, "{}")
+  await fs.chmod(file, 0)
+  try {
+    assert.equal((await sweep(ctx.env)).written, 1)
+    assert.equal(existsSync(path.join(root, "jobs-index.rebuilt")), false, "the failed rebuild will retry")
+  } finally {
+    await fs.chmod(file, 0o600)
+  }
+}))
+
+test("re-deriving a session that no longer binds a job removes it from the index", () => scratch(async (ctx) => {
+  const { deriveMarker } = await runner()
+  const marker = await session(ctx)
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  const gone = "9f2c4b1a7d3e5f60718293a4b5c6d7e8"
+  await setJobsForFile(ctx.env, `claude-code-${ID}.json`, [gone])
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+  assert.deepEqual(await readJobsIndex(ctx.env), {})
+}))
+
 test("binding writes only hashed jobs and updates the finalize lookup", () => scratch(async (ctx) => {
   const { deriveMarker } = await runner()
   const marker = await session(ctx)
@@ -272,4 +316,33 @@ test("quiet wait refuses a marker invalidated while the detached process was wai
     return stat
   })
   assert.equal((await deriveFile(ctx.env, file, { quietMs: 10 })).result, "invalid")
+}))
+
+test("a session derived under an older binding version re-derives once", () => scratch(async (ctx) => {
+  const { deriveMarker, BINDING_VERSION } = await runner()
+  assert.equal(BINDING_VERSION, 2)
+  const marker = { ...await session(ctx), end_reason: "complete", ended_at: END }
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
+  const name = `claude-code-${ID}.json`
+  const receipt = (await readStatus(ctx.env)).derivations[name]
+  assert.equal(receipt.binding_version, BINDING_VERSION)
+  for (const older of [undefined, 1]) {
+    const { binding_version, ...legacy } = receipt
+    await writeStatus(ctx.env, { derivations: { [name]: older === undefined ? legacy : { ...legacy, binding_version: older } } })
+    assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+    assert.equal((await readStatus(ctx.env)).derivations[name].binding_version, BINDING_VERSION)
+    assert.equal((await deriveMarker(ctx.env, marker)).result, "skipped", "the second sweep skips it")
+  }
+}))
+
+test("a current receipt still skips", () => scratch(async (ctx) => {
+  const { deriveMarker, BINDING_VERSION } = await runner()
+  const marker = { ...await session(ctx), end_reason: "complete", ended_at: END }
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await deriveMarker(ctx.env, marker)
+  const name = `claude-code-${ID}.json`
+  const receipt = (await readStatus(ctx.env)).derivations[name]
+  await writeStatus(ctx.env, { derivations: { [name]: { ...receipt, binding_version: BINDING_VERSION + 1 } } })
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "skipped")
 }))
