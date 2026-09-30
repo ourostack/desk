@@ -14,18 +14,37 @@ import { fileURLToPath } from "node:url"
 
 import { mkTempRoot } from "../_temp_roots.js"
 import {
-  bootOnce,
+  bootOnce as realBootOnce,
   cardProblems,
   cardValidation,
   checkPrereqs,
+  detectAgentHost,
+  ENV_TOKEN_ACCOUNT,
   commandRunner,
+  openPullRequests,
+  parseBootArgs,
   probeHost,
+  repoStates,
+  resolveTaskQuery,
+  withAmbientToken,
   resolveBootRoot,
   resolvePushAccounts,
   runBootCli,
   walkTaskCards,
 } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
 import { REDACTED_SEGMENT } from "../../../../../plugins/desk/mcp/src/util/redact.js"
+
+// Every collaborator that reaches outside the process (migration Detect
+// blocks, `git fetch`, `gh pr list`) is faked unless a test says otherwise;
+// the tests that exercise the real defaults call `realBootOnce` directly.
+function bootOnce(options = {}) {
+  return realBootOnce({
+    migrationsFn: async () => [],
+    repoFn: () => ({ states: [], pending: [] }),
+    prFn: async () => ({ prs: [], pending: [] }),
+    ...options,
+  })
+}
 
 async function mkDeskWorkspace() {
   const root = await mkTempRoot("desk-boot-root-")
@@ -813,7 +832,7 @@ test("bootOnce: two or more corrupted task cards are summarized in the plural", 
 })
 
 test("bootOnce: called fully bare — no desk at the isolated test HOME resolves setup_required without touching gh, jq or the network", async () => {
-  const result = await bootOnce()
+  const result = await realBootOnce()
   assert.equal(result.boot_complete, true)
   assert.equal(result.status, "setup_required")
 })
@@ -962,9 +981,10 @@ test("bootOnce: homeDir, gh and jq default to their real implementations when om
     // on some hosts still finds a real `gh` binary outside `process.env`.
     // Both must be pinned to the same nonexistent directory for `gh` and
     // `jq` to fail the same deterministic way regardless of host.
-    const viaEnvHome = await bootOnce({
+    const viaEnvHome = await realBootOnce({
       env: { DESK: root, HOME: root, PATH: "/nonexistent-bin" },
       cwd: root,
+      migrationsFn: async () => [],
       syncFn: async () => ({ state: "synced" }),
       factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
     })
@@ -972,9 +992,10 @@ test("bootOnce: homeDir, gh and jq default to their real implementations when om
     assert.ok(viaEnvHome.degraded.some((line) => line.includes("gh_missing")))
     assert.ok(viaEnvHome.degraded.some((line) => line.includes("jq_missing")))
 
-    const viaOsHomedir = await bootOnce({
+    const viaOsHomedir = await realBootOnce({
       env: { DESK: root, PATH: "/nonexistent-bin" },
       cwd: root,
+      migrationsFn: async () => [],
       syncFn: async () => ({ state: "synced" }),
       factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
     })
@@ -1011,22 +1032,17 @@ test("runBootCli: env and io default to the real process when omitted, writing t
   }
 })
 
-test("runBootCli: called fully bare, bootFn defaults to the real bootOnce — no desk at the isolated test HOME, so it still exits 0", async () => {
-  const originalWrite = process.stdout.write
+test("runBootCli: bootFn defaults to the real bootOnce — no desk at the isolated test HOME, so it still exits 0", async () => {
   const originalPath = process.env.PATH
   let written = ""
-  process.stdout.write = (text) => {
-    written += text
-    return true
-  }
+  const io = { stdout: { write: (text) => { written += text } } }
   process.env.PATH = "/nonexistent-bin"
   try {
-    const code = await runBootCli()
+    const code = await runBootCli({ io })
     assert.equal(code, 0)
     const result = JSON.parse(written)
     assert.equal(result.boot_complete, true)
   } finally {
-    process.stdout.write = originalWrite
     process.env.PATH = originalPath
   }
 })
@@ -1046,6 +1062,407 @@ test("runBootCli: bootOnce itself throwing still produces one complete, degraded
   assert.equal(result.boot_complete, true)
   assert.equal(result.status, "degraded")
   assert.ok(result.degraded[0].includes("totally unexpected"))
+})
+
+// ── Token-only hosts (GH_TOKEN, no keyring login) ────────────────────────
+
+test("checkPrereqs: the auth check uses its own ambient-env runner, so a GH_TOKEN-only host is healthy", async () => {
+  const jq = fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } })
+  const stripped = fixedRunner({
+    "--version": { code: 0, stdout: VERSION_OK, stderr: "" },
+    "auth status": { code: 1, stdout: "", stderr: "You are not logged into any GitHub hosts\n" },
+  })
+  const ambient = fixedRunner({ "auth status": { code: 0, stdout: "github.com\n  ✓ Logged in to github.com account GH_TOKEN (GH_TOKEN)\n", stderr: "" } })
+  assert.equal((await checkPrereqs({ gh: stripped, jq })).auth.reason, "auth_stale")
+  assert.equal((await checkPrereqs({ gh: stripped, jq, ghAuth: ambient })).auth.ok, true)
+})
+
+test("withAmbientToken: without a token in the environment the runner is returned untouched", () => {
+  const runner = async () => ({ code: 0, stdout: "", stderr: "" })
+  assert.equal(withAmbientToken(runner, {}), runner)
+  assert.equal(withAmbientToken(runner, { GH_TOKEN: "   " }), runner)
+})
+
+test("withAmbientToken: a token-only host answers as one account, env-token, whose token is the ambient one", async () => {
+  const noAccounts = async () => ({ code: 1, stdout: "", stderr: "You are not logged into any GitHub hosts\n" })
+  for (const env of [{ GH_TOKEN: "ghp_abc" }, { GITHUB_TOKEN: "ghp_abc" }]) {
+    const runner = withAmbientToken(noAccounts, env)
+    const status = await runner(["auth", "status", "--hostname", "github.com"])
+    assert.match(status.stdout, new RegExp(`Logged in to github.com account ${ENV_TOKEN_ACCOUNT}`, "u"))
+    assert.equal((await runner(["auth", "token", "--user", ENV_TOKEN_ACCOUNT])).stdout.trim(), "ghp_abc")
+  }
+})
+
+test("withAmbientToken: accounts gh itself lists, and other calls, pass through unchanged", async () => {
+  const listed = async (args) => (args[0] === "auth" && args[1] === "status"
+    ? { code: 0, stdout: "  ✓ Logged in to github.com account ari (keyring)\n", stderr: "" }
+    : { code: 0, stdout: `other:${args.join(" ")}`, stderr: "" })
+  const runner = withAmbientToken(listed, { GH_TOKEN: "ghp_abc" })
+  assert.match((await runner(["auth", "status"])).stdout, /account ari/u)
+  assert.equal((await runner(["auth", "token", "--user", "ari"])).stdout, "other:auth token --user ari")
+  assert.equal((await runner(["api", "x"])).stdout, "other:api x")
+})
+
+test("bootOnce: a host signed in only through GH_TOKEN is not auth_stale, and its one account can push", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+  // The factory runner strips ambient tokens, so it sees no keyring login at all.
+  const gh = async (args, { token } = {}) => {
+    if (args[0] === "--version") return { code: 0, stdout: VERSION_OK, stderr: "" }
+    if (args[0] === "auth" && args[1] === "status") return { code: 1, stdout: "", stderr: "You are not logged into any GitHub hosts\n" }
+    if (args[0] === "api") return { code: 0, stdout: JSON.stringify(token === "ghp_abc" ? PUBLIC_PUSH : {}), stderr: "" }
+    return { code: 1, stdout: "", stderr: "unexpected call" }
+  }
+  const ghAuth = fixedRunner({ "auth status": { code: 0, stdout: "github.com\n  ✓ Logged in to github.com account someone (GH_TOKEN)\n", stderr: "" } })
+  const jq = fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } })
+  const result = await bootOnce({
+    env: { DESK: root, GH_TOKEN: "ghp_abc" }, cwd: root, homeDir: root, gh, ghAuth, jq,
+    syncFn: async () => ({ state: "synced" }),
+    factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
+  })
+  assert.equal(result.status, "ready", JSON.stringify(result.degraded))
+  assert.equal(result.prereqs.auth.ok, true)
+  assert.equal(result.push_accounts[0].result, "account_found")
+  assert.equal(result.push_accounts[0].account, ENV_TOKEN_ACCOUNT)
+})
+
+// ── Card validation: Date timestamps and the dependency-free parser ──────
+
+test("cardProblems: unquoted timestamps (parsed as Dates) are valid; an invalid Date is reported", () => {
+  const card = { schema_version: 1, title: "T", status: "processing", created: new Date("2026-01-01T00:00:00Z"), updated: new Date("2026-01-02T00:00:00Z"), track: "t", repos: [] }
+  assert.deepEqual(cardProblems(card), [])
+  const bad = cardProblems({ ...card, updated: new Date("nope") })
+  assert.deepEqual(bad, ["`updated` is not a parseable timestamp"])
+})
+
+test("cardProblems: with nested:false (no gray-matter), repos is not judged", () => {
+  const card = { schema_version: 1, title: "T", status: "processing", created: "2026-01-01T00:00:00Z", updated: "2026-01-02T00:00:00Z", track: "t", repos: null }
+  assert.deepEqual(cardProblems(card, { nested: false }), [])
+  assert.deepEqual(cardProblems(card), ["`repos` is missing or not a list"])
+})
+
+test("card validation reads a card with unquoted timestamps and a repos list as healthy, end to end", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "unquoted", VALID_CARD.replace("'2026-01-01T00:00:00Z'", "2026-01-01T00:00:00Z").replace("'2026-01-02T00:00:00Z'", "2026-01-02T00:00:00Z").replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+  assert.deepEqual(cardValidation(root), [])
+})
+
+test("bootOnce: without gray-matter the repos lists are not validated, and the result says so instead of flagging every card", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const { gh, jq } = okPrereqRunners()
+  const lite = await bootOnce({
+    env: { DESK: root }, cwd: root, homeDir: root, gh, jq, nestedCards: false,
+    walkFn: () => [{ track: "track-a", slug: "open-task", desk: null, file: path.join(root, "track-a", "open-task", "task.md"), data: { title: "T", status: "processing", created: "2026-01-01T00:00:00Z", updated: "2026-01-02T00:00:00Z", track: "t", repos: null } }],
+    syncFn: async () => ({ state: "synced" }),
+    factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
+  })
+  assert.equal(lite.status, "ready")
+  assert.equal(lite.card_parser, "lite")
+  assert.deepEqual(lite.card_validation, [])
+  assert.ok(lite.pending.some((line) => line.startsWith("card repos: not validated")))
+})
+
+// ── detectAgentHost, parseBootArgs ───────────────────────────────────────
+
+test("detectAgentHost: names the covered host from its own variables, unknown otherwise", () => {
+  assert.equal(detectAgentHost({ CLAUDE_PLUGIN_ROOT: "/x" }), "claude")
+  assert.equal(detectAgentHost({ CODEX_HOME: "/x" }), "codex")
+  assert.equal(detectAgentHost({ COPILOT_CLI: "1" }), "copilot")
+  assert.equal(detectAgentHost({}), "unknown")
+})
+
+test("parseBootArgs: --task takes the next argument; a missing or blank value is no task", () => {
+  assert.deepEqual(parseBootArgs([]), { taskQuery: null })
+  assert.deepEqual(parseBootArgs(["--task", "faster-desk"]), { taskQuery: "faster-desk" })
+  assert.deepEqual(parseBootArgs(["--task"]), { taskQuery: null })
+  assert.deepEqual(parseBootArgs(["--task", "  "]), { taskQuery: null })
+})
+
+test("runBootCli: --task reaches bootOnce as taskQuery", async () => {
+  let seen = null
+  const io = { stdout: { write: () => {} } }
+  await runBootCli({ argv: ["--task", "x/y"], env: {}, io, bootFn: async (options) => { seen = options; return {} } })
+  assert.equal(seen.taskQuery, "x/y")
+})
+
+// ── resolveTaskQuery ─────────────────────────────────────────────────────
+
+async function taskFixture() {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "faster-desk-flow", VALID_CARD.replace("Example task", "Faster desk PR flow"))
+  await writeCard(root, "track-a", "faster-builds", VALID_CARD.replace("Example task", "Faster builds"))
+  await writeCard(root, "track-b", "old-one", VALID_CARD.replace("status: processing", "status: done"))
+  await writeCard(root, "track-b", "untitled", VALID_CARD.replace("title: Example task\n", ""))
+  await writeCard(root, "track-d", "no-status", VALID_CARD.replace("status: processing\n", ""))
+  await writeCard(root, "track-c", "crew-one", VALID_CARD, { desk: "alex" })
+  return { root, cards: walkTaskCards(root) }
+}
+
+test("resolveTaskQuery: an exact slug, track/slug, title or handle resolves one open task with its card path", async () => {
+  const { root, cards } = await taskFixture()
+  const bySlug = resolveTaskQuery("faster-desk-flow", cards, root)
+  assert.equal(bySlug.status, "resolved")
+  assert.equal(bySlug.task.card, "track-a/faster-desk-flow/task.md")
+  assert.equal(resolveTaskQuery("TRACK-A/faster-builds", cards, root).task.slug, "faster-builds")
+  assert.equal(resolveTaskQuery("Faster desk PR flow", cards, root).task.slug, "faster-desk-flow")
+  assert.equal(resolveTaskQuery(bySlug.task.handle, cards, root).task.slug, "faster-desk-flow")
+  const crew = resolveTaskQuery("crew-one", cards, root)
+  assert.equal(crew.task.card, "desks/alex/track-c/crew-one/task.md")
+  assert.equal(crew.task.desk, "alex")
+})
+
+test("resolveTaskQuery: a unique substring resolves; several are ambiguous; none, blank and finished tasks are not found", async () => {
+  const { root, cards } = await taskFixture()
+  assert.equal(resolveTaskQuery("desk-flow", cards, root).task.slug, "faster-desk-flow")
+  const ambiguous = resolveTaskQuery("faster", cards, root)
+  assert.equal(ambiguous.status, "ambiguous")
+  assert.equal(ambiguous.candidates.length, 2)
+  assert.equal(resolveTaskQuery("nothing-like-this", cards, root).status, "not_found")
+  assert.equal(resolveTaskQuery("  ", cards, root).status, "not_found")
+  assert.equal(resolveTaskQuery("old-one", cards, root).status, "not_found")
+  assert.equal(resolveTaskQuery("untitled", cards, root).task.title, null)
+  assert.equal(resolveTaskQuery("no-status", cards, root).task.status, null)
+})
+
+// ── repoStates, openPullRequests ─────────────────────────────────────────
+
+test("repoStates: fetches and reports branch and dirty state for each local repo of an open task, skipping everything else", () => {
+  const calls = []
+  const spawnGit = (cmd, args) => {
+    calls.push(args.join(" "))
+    if (args.includes("fetch")) return { status: args[1] === "/clones/stale" ? 1 : 0, stdout: "" }
+    if (args[1] === "/clones/gone") return { status: 128, stdout: "" }
+    if (args[1] === "/clones/empty") return { status: 0, stdout: "" }
+    return { status: 0, stdout: args[1] === "/clones/dirty" ? "## feature...origin/feature\n M file\n" : "## main...origin/main\n" }
+  }
+  const open = (repos) => ({ track: "t", slug: "s", desk: null, data: { status: "processing", repos } })
+  const local = (name, dir) => ({ name, local_path: dir, mode: "local" })
+  const cards = [
+    open([local("clean", "/clones/clean"), local("dirty", "/clones/dirty"), local("stale", "/clones/stale"), local("gone", "/clones/gone"), local("empty", "/clones/empty")]),
+    open([{ name: "remote-only", local_path: "", mode: "remote" }, { name: "no-path", mode: "local" }, null]),
+    { track: "t", slug: "done", desk: null, data: { status: "done", repos: [local("finished", "/clones/clean")] } },
+    { track: "t", slug: "no-repos", desk: null, data: { status: "processing" } },
+  ]
+  const { states, pending } = repoStates({ cards, spawnGit, now: () => 0, deadline: 60000 })
+  assert.deepEqual(pending, [])
+  assert.deepEqual(states.map((state) => [state.repo, state.present, state.branch, state.dirty, state.fetched]), [
+    ["clean", true, "main", false, true],
+    ["dirty", true, "feature", true, true],
+    ["stale", true, "main", false, false],
+    ["gone", false, undefined, undefined, undefined],
+    ["empty", true, null, false, true],
+  ])
+  assert.ok(calls.includes("-C /clones/clean fetch --quiet origin"))
+})
+
+test("repoStates: a repo past the wall-clock deadline is pending, not fetched", () => {
+  const cards = [{ track: "t", slug: "s", desk: null, data: { status: "processing", repos: [{ name: "late", local_path: "/clones/late", mode: "local" }] } }]
+  const spawnGit = () => assert.fail("must not run git past the deadline")
+  const { states, pending } = repoStates({ cards, spawnGit, now: () => 100, deadline: 101 })
+  assert.deepEqual(states, [])
+  assert.match(pending[0], /repo state for late \(t\/s\): boot_budget_exceeded/u)
+})
+
+test("repoStates: the real git defaults read a real clone's branch and dirty state", async () => {
+  const dir = await mkTempRoot("desk-boot-real-clone-")
+  spawnSync("git", ["init", "-q", "-b", "main", dir])
+  const cards = [{ track: "t", slug: "s", desk: null, data: { status: "processing", repos: [{ name: "real", local_path: dir, mode: "local" }] } }]
+  const { states } = repoStates({ cards, now: Date.now, deadline: Date.now() + 60000 })
+  assert.equal(states[0].present, true)
+  assert.equal(states[0].branch, "main")
+  assert.equal(states[0].fetched, false)
+})
+
+test("openPullRequests: lists each store's open pull requests, and reports a slow store as pending", async () => {
+  const runner = async (args) => {
+    const store = args[3]
+    if (store === "a/slow") return { code: null, stdout: "", stderr: "", timedOut: true }
+    if (store === "a/err") return { code: 1, stdout: "", stderr: "boom" }
+    if (store === "a/junk") return { code: 0, stdout: "not json", stderr: "" }
+    if (store === "a/obj") return { code: 0, stdout: "{}", stderr: "" }
+    return { code: 0, stdout: JSON.stringify([{ number: 7, title: "Fix it", url: "https://x/7", isDraft: true, reviewDecision: "APPROVED" }, { number: 8, url: "https://x/8" }]), stderr: "" }
+  }
+  const { prs, pending } = await openPullRequests({ stores: ["a/ok", "a/slow", "a/err", "a/junk", "a/obj"], runner, now: () => 0, deadline: 60000 })
+  assert.deepEqual(prs, [
+    { store: "a/ok", number: 7, title: "Fix it", url: "https://x/7", draft: true, review: "APPROVED" },
+    { store: "a/ok", number: 8, title: "", url: "https://x/8", draft: false, review: null },
+  ])
+  assert.deepEqual(pending, ["open pull requests for a/slow: timeout"])
+})
+
+test("openPullRequests: past the deadline nothing is asked", async () => {
+  const { prs, pending } = await openPullRequests({ stores: ["a/late"], runner: () => assert.fail("no call"), now: () => 100, deadline: 101 })
+  assert.deepEqual(prs, [])
+  assert.deepEqual(pending, ["open pull requests for a/late: boot_budget_exceeded"])
+})
+
+// ── bootOnce: migrations, named task, instructions, budget ───────────────
+
+function healthyBoot(root, extra = {}) {
+  const { gh, jq } = okPrereqRunners()
+  return bootOnce({
+    env: { DESK: root }, cwd: root, homeDir: root, gh, jq,
+    syncFn: async () => ({ state: "synced" }),
+    factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
+    ...extra,
+  })
+}
+
+test("bootOnce: a healthy boot lists instructions (export line, MCP check, status block) and the covered hosts", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const result = await healthyBoot(root)
+  assert.deepEqual(result.covers_hosts, ["claude", "copilot", "codex"])
+  assert.ok(result.instructions.some((line) => line.includes(`export DESK=${root}`)))
+  assert.ok(result.instructions.some((line) => line.includes("desk_status")))
+  assert.ok(!result.instructions.some((line) => line.includes("AGENTS.md")))
+  assert.ok(result.instructions.some((line) => line.startsWith("No task was named")))
+  await fs.writeFile(path.join(root, "AGENTS.md"), "rules\n")
+  const withAgents = await healthyBoot(root)
+  assert.ok(withAgents.instructions.some((line) => line.startsWith(`Read ${path.join(root, "AGENTS.md")} now`)))
+  assert.match(result.instructions.at(-1), /hosts/u)
+  assert.equal(result.task, null)
+  const claude = await healthyBoot(root, { env: { DESK: root, CLAUDECODE: "1" } })
+  assert.match(claude.instructions.at(-1), /looks like claude/u)
+})
+
+test("bootOnce: --task resolves the named task, hands off to session-resumption, and asks for a Host-line update only when the host differs", async () => {
+  const root = await mkDeskWorkspace()
+  const dir = await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const same = await healthyBoot(root, { taskQuery: "open-task" })
+  assert.equal(same.task.status, "resolved")
+  assert.equal(same.task.host_line_changed, false)
+  assert.ok(same.instructions.some((line) => line.includes("desk:session-resumption") && line.includes("track-a/open-task/task.md")))
+  assert.ok(!same.instructions.some((line) => line.includes("Host line")))
+  await fs.writeFile(path.join(dir, "task.md"), `---\n${VALID_CARD}\n---\n\nHost: \`other-machine\` / user: \`x\`\n`)
+  const changed = await healthyBoot(root, { taskQuery: "open-task" })
+  assert.equal(changed.task.host_line_changed, true)
+  assert.ok(changed.instructions.some((line) => line.includes("Host line names a different host")))
+  await fs.writeFile(path.join(dir, "task.md"), `---\n${VALID_CARD}\n---\n\nHost: \`${changed.host.hostname}\` / user: \`x\`\n`)
+  assert.equal((await healthyBoot(root, { taskQuery: "open-task" })).task.host_line_changed, false)
+  const unreadable = await healthyBoot(root, { taskQuery: "open-task", walkFn: () => [{ track: "track-a", slug: "open-task", desk: null, file: path.join(dir, "missing.md"), data: { status: "processing" } }] })
+  assert.equal(unreadable.task.host_line_changed, false)
+})
+
+test("bootOnce: an ambiguous or unknown --task is reported in instructions, not guessed", async () => {
+  const { root } = await taskFixture()
+  const ambiguous = await healthyBoot(root, { taskQuery: "faster" })
+  assert.equal(ambiguous.task.status, "ambiguous")
+  assert.ok(ambiguous.instructions.some((line) => line.includes("more than one open task")))
+  const missing = await healthyBoot(root, { taskQuery: "zzz-none" })
+  assert.equal(missing.task.status, "not_found")
+  assert.ok(missing.instructions.some((line) => line.includes("matches no open task")))
+})
+
+test("bootOnce: migrations run first; a pending one that needs a restart stops boot before the desk is touched", async () => {
+  const root = await mkDeskWorkspace()
+  let synced = false
+  const result = await healthyBoot(root, {
+    migrationsFn: async () => [{ id: "01-move", state: "restart", description: "moves the desk" }],
+    syncFn: async () => { synced = true; return { state: "synced" } },
+  })
+  assert.equal(synced, false)
+  assert.equal(result.status, "degraded")
+  assert.deepEqual(result.migrations, [{ id: "01-move", state: "restart" }])
+  assert.match(result.instructions[0], /01-move is pending/u)
+  assert.ok(result.degraded.some((line) => line.includes("needs a restart")))
+  const cannotRun = await healthyBoot(root, { migrationsFn: async () => [{ id: "03-x", state: "run", reason: "its Migrate failed" }] })
+  assert.ok(cannotRun.degraded.some((line) => line.includes("its Migrate failed")))
+})
+
+test("bootOnce: agent-work, unchecked and ran migrations become instructions while boot continues", async () => {
+  const root = await mkDeskWorkspace()
+  const result = await healthyBoot(root, {
+    migrationsFn: async () => [
+      { id: "02-tidy", state: "agent_work" },
+      { id: "04-slow", state: "unchecked" },
+      { id: "05-done", state: "ran", report: "moved it", announce: "Tell them." },
+    ],
+  })
+  assert.equal(result.status, "ready")
+  assert.ok(result.pending.includes("migration 04-slow: not checked in time"))
+  assert.ok(result.instructions.some((line) => line.startsWith("02-tidy is pending")))
+  assert.ok(result.instructions.some((line) => line.startsWith("05-done ran at startup")))
+})
+
+test("bootOnce: a migration check that throws degrades only itself", async () => {
+  const root = await mkDeskWorkspace()
+  const result = await healthyBoot(root, { migrationsFn: async () => { throw new Error("registry down") } })
+  assert.ok(result.degraded.includes("migrations: registry down"))
+  assert.equal(result.active_tasks.task_count, 0)
+})
+
+test("bootOnce: setup_required and a missing bound desk each come back with their own instruction", async () => {
+  const emptyHome = await mkTempRoot("desk-boot-instr-home-")
+  const setup = await bootOnce({ env: {}, cwd: emptyHome, homeDir: emptyHome })
+  assert.equal(setup.status, "setup_required")
+  assert.match(setup.instructions[0], /first run, not an outage/u)
+  const missing = await bootOnce({ env: { DESK: path.join(emptyHome, "gone") }, cwd: emptyHome, homeDir: emptyHome })
+  assert.equal(missing.status, "degraded")
+  assert.match(missing.instructions[0], /Never point \$DESK at a different desk/u)
+})
+
+test("bootOnce: prereq, sync, card and push-account problems each become one plain instruction", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "bad-card", "title: broken")
+  await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote"))
+  const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: 404 } })
+  const ghAuth = fixedRunner({ "auth status": { code: null, stdout: "", stderr: "", timedOut: true } })
+  const jq = fixedRunner({ "--version": { code: null, stdout: "", stderr: "", spawnError: "ENOENT" } })
+  const result = await bootOnce({
+    env: { DESK: root }, cwd: root, homeDir: root, gh, ghAuth, jq,
+    syncFn: async () => ({ state: "unresolved" }),
+    factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
+  })
+  const text = result.instructions.join("\n")
+  assert.match(text, /Hard stop: Install jq/u)
+  assert.doesNotMatch(text, /auth_timeout/u)
+  assert.match(text, /git sync is unresolved/u)
+  assert.match(text, /Fix the frontmatter of track-a\/bad-card\/task\.md/u)
+  assert.match(text, /Do not push acme\/widgets/u)
+  const quarantined = await healthyBoot(root, { syncFn: async () => ({ state: "quarantined" }) })
+  assert.ok(quarantined.instructions.some((line) => line.includes("Sync moved stray untracked paths")))
+})
+
+test("bootOnce: undecided factory consent becomes instructions, with the noninteractive expectation stated", async () => {
+  const root = await mkDeskWorkspace()
+  const result = await healthyBoot(root, { factoryStatusFn: () => ({ store: "ourostack/factory-intake", source: "x", consent: "undecided", stores: [], warnings: [] }) })
+  const text = result.instructions.join("\n")
+  assert.match(text, /Noninteractive session.*do not ask and do not record anything; that is expected/u)
+  assert.match(text, /factory\.js account --store ourostack\/factory-intake/u)
+  assert.match(text, /consent --store ourostack\/factory-intake --contribute yes --account <login>/u)
+  assert.match(text, /Contribute\? \(yes or no\)/u)
+})
+
+test("bootOnce: a sync that outlives the budget is pending, not a hang", async () => {
+  const root = await mkDeskWorkspace()
+  const result = await healthyBoot(root, { budgetMs: 30, syncFn: () => new Promise(() => {}) })
+  assert.ok(result.pending.includes("sync: boot_budget_exceeded"))
+  assert.equal(result.sync, null)
+})
+
+test("bootOnce: a repo-state or open-PR step that throws degrades only itself; found PRs and repo states reach the result", async () => {
+  const root = await mkDeskWorkspace()
+  const broken = await healthyBoot(root, { repoFn: () => { throw new Error("git gone") }, prFn: async () => { throw new Error("gh gone") } })
+  assert.ok(broken.degraded.includes("repo_states: git gone"))
+  assert.ok(broken.degraded.includes("open_prs: gh gone"))
+  const found = await healthyBoot(root, {
+    repoFn: () => ({ states: [{ repo: "r", branch: "main" }], pending: ["late"] }),
+    prFn: async () => ({ prs: [{ number: 1 }], pending: ["also late"] }),
+  })
+  assert.deepEqual(found.repo_states, [{ repo: "r", branch: "main" }])
+  assert.deepEqual(found.open_prs, [{ number: 1 }])
+  assert.ok(found.pending.includes("late") && found.pending.includes("also late"))
+})
+
+test("bootOnce: open-PR lookup is asked only for the GitHub repos the push-account step resolved", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "push-task", VALID_CARD.replace("repos: []", "repos:\n  - name: acme/widgets\n    local_path: \"\"\n    mode: remote\n  - name: not-github\n    local_path: \"\"\n    mode: remote"))
+  let asked = null
+  const gh = fakeGhRunner({ accounts: [{ login: "ari", active: true }], repos: { ari: PUBLIC_PUSH } })
+  await healthyBoot(root, { gh, prFn: async ({ stores }) => { asked = stores; return { prs: [], pending: [] } } })
+  assert.deepEqual(asked, ["acme/widgets"])
 })
 
 // ---------------------------------------------------------------------------

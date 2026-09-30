@@ -870,9 +870,9 @@ requires(
 );
 
 requires(
-  "plugins/desk/skills/session-start/SKILL.md",
+  "plugins/desk/skills/session-start/details.md",
   "session-start surfaces open andon issues and offers the curator",
-  /## Step 4\.8 — Factory boot lines[\s\S]+waste labels and andon[\s\S]+open andon issues in <store>[\s\S]+Step 5 status block[\s\S]+`curator` pass, which handles them first/u,
+  /## Factory boot lines[\s\S]+waste labels and andon[\s\S]+open andon issues in <store>[\s\S]+status block[\s\S]+`curator` pass, which handles them first/u,
 );
 requires(
   "plugins/desk/docs/agentic-engineering-v2-rfc.md",
@@ -998,57 +998,52 @@ contract("factory-evaluator stays public-safe", () => {
   assert.ok(Buffer.byteLength(skill) <= 8192, `rubric is ${Buffer.byteLength(skill)} bytes; keep it concise`);
 });
 requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle records the evaluation request itself on done or cancelled and hands its answer to session-start",
-  /transitioning to `done` or `cancelled` → the same `task_update` \(or `task_archive`\) call already records the job's evaluation request[\s\S]+kept in protected factory state[\s\S]+Both statuses request one: a cancelled job is still a finished job[\s\S]+evaluate --pending[\s\S]+as `desk:session-start` Step 4\.8 says[\s\S]+Neither status waits for the evaluator/u);
+  /transitioning to `done` or `cancelled` → the same `task_update` \(or `task_archive`\) call already records the job's evaluation request[\s\S]+kept in protected factory state[\s\S]+Both statuses request one: a cancelled job is still a finished job[\s\S]+evaluate --pending[\s\S]+as `desk:session-start`'s factory boot lines say[\s\S]+Neither status waits for the evaluator/u);
 // One owner for the evaluator answer and the Factory label lines: session-start, which every session loads first.
-requires("plugins/desk/skills/session-start/SKILL.md", "session-start owns the Factory label lines and the evaluator answer",
-  /## Step 4\.8 — Factory boot lines[\s\S]+finished tasks have no waste labels yet[\s\S]+factory\.js evaluate --pending[\s\S]+quarantined waste labels that will not be delivered[\s\S]+`ready` → start a fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`no_sessions`[\s\S]+never reopens a task/u);
+requires("plugins/desk/skills/session-start/details.md", "session-start owns the Factory label lines and the evaluator answer",
+  /## Factory boot lines[\s\S]+finished tasks have no waste labels yet[\s\S]+factory\.js evaluate --pending[\s\S]+quarantined waste labels that will not be delivered[\s\S]+`ready` → start a fresh `desk:observer` subagent in the background[\s\S]+`desk:factory-evaluator`[\s\S]+nothing else from this conversation[\s\S]+`no_sessions`[\s\S]+never reopens a task/u);
 // The factory's one-time consent question (M3-11): asked once per store, in plain words, recorded yes or no
 // through `factory.js consent`, never asked again, and never asked in a noninteractive session.
 const sessionStart = "plugins/desk/skills/session-start/SKILL.md";
+const bootSource = "plugins/desk/mcp/src/runtime/boot.js";
 contract("session-start asks the factory contribution question once, in plain words, and records either answer", () => {
-  const step = text(sessionStart).split("\n## Step 2.7 — Factory contribution: ask once\n", 2)[1]?.split("\n## ", 1)[0] ?? "";
-  assert.ok(step, "session-start is missing Step 2.7");
-  assert.match(step, /`factory` in the `desk_status` result[\s\S]+`factory\.consent` is `undecided`/u);
-  assert.match(step, /never asked again/u);
-  const question = step.split("\n> ", 2)[1]?.split("\n", 1)[0] ?? "";
-  assert.ok(question, "Step 2.7 quotes the question it asks");
+  const source = text(bootSource);
+  const step = source.slice(source.indexOf("const FACTORY_QUESTION"), source.indexOf("function buildInstructions"));
+  assert.ok(step.includes("factory?.consent"), "the boot script builds the factory consent instruction");
+  assert.match(step, /consent !== "undecided"/u);
+  assert.match(step, /never asked again|is never asked again/u);
+  const question = step.split("\n", 2)[0];
   for (const published of ["durations", "counts", "tool kinds", "plugin and model versions", "public repositories"]) {
     assert.match(question, new RegExp(`What it publishes:[^.]*${published}`, "u"), `the question says it publishes ${published}`);
   }
   for (const never of ["prompt, assistant or tool content", "names", "dates", "times of day"]) {
     assert.match(question, new RegExp(`What it never publishes:[^.]*${never}`, "u"), `the question says it never publishes ${never}`);
   }
-  assert.match(question, /`<store>` is a public repository/u);
-  assert.match(question, /GitHub account `<login>` appears as the author of the intake pull requests/u);
-  assert.match(step, /factory\.js consent --store <store> --contribute yes --account <login>/u);
-  assert.match(step, /factory\.js consent --store <store> --contribute no\n/u);
-  assert.match(step, /`no` is a decision too[\s\S]+recorded/u);
-  assert.match(step, /[Nn]oninteractive[\s\S]+do not ask and do not record anything/u);
-  assert.doesNotMatch(step, /consent\.json/u, "the skill records consent only through factory.js");
-  // Review M3-11 D1 and D3: the boot line and desk_status agree, and the account is chosen by asking GitHub, never assumed.
-  assert.match(step, /`held` means no store is resolved[^\n]+nothing to ask[^\n]+boot line does not ask/u);
-  assert.match(step, /Never assume gh's active account/u);
-  assert.match(step, /factory\.js account --store <store>/u);
-  assert.match(step, /`no_account_can_deliver`, do not ask/u);
+  assert.match(question, /is a public repository/u);
+  assert.match(question, /GitHub account \\`\$\{login\}\\` appears as the author of the intake pull requests/u);
+  assert.match(step, /consent --store \$\{store\} --contribute yes --account <login>/u);
+  assert.match(step, /consent --store \$\{store\} --contribute no/u);
+  assert.match(step, /a no is a decision too/u);
+  assert.match(step, /[Nn]oninteractive session[\s\S]+do not ask and do not record anything/u);
+  assert.doesNotMatch(step, /consent\.json/u, "the script records consent only through factory.js");
+  assert.match(step, /never assume gh's active account/u);
+  assert.match(step, /account --store \$\{store\}/u);
+  assert.match(step, /no_account_can_deliver/u);
   assert.doesNotMatch(step, /gh api user/u, "the active account is never assumed");
+  assert.match(text(sessionStart), /factory consent question[\s\S]+noninteractive session[\s\S]+do not ask and do not record anything/u);
 });
-contract("session-start never skips Step 2.7", () => {
-  assert.match(text(sessionStart).split("## Never skip, never route around", 2)[1] ?? "", /2\.7/u);
+contract("session-start still owns the factory consent question", () => {
+  assert.match(text(sessionStart), /factory consent/u);
 });
 // Kaizen card 4: the desk's own interaction contract (its AGENTS.md) binds before the first question or action.
-contract("session-start reads the bound desk's AGENTS.md before the first question or action, and says so in one line", () => {
+contract("session-start reads the bound desk's AGENTS.md before the first question or action", () => {
   const body = text(sessionStart);
-  const step = body.split("\n## Step 0.25 — Read the desk's AGENTS.md\n", 2)[1]?.split("\n## ", 1)[0] ?? "";
-  assert.ok(step, "session-start is missing Step 0.25");
-  assert.ok(body.indexOf("## Step 0.25") < body.indexOf("## Step 0.5"), "Step 0.25 runs before the migrations act");
-  assert.match(step, /bound desk/u);
-  assert.match(step, /before the first question[^\n]+or action/u);
-  assert.match(step, /[Ww]hen the file is absent[^\n]+silent/u);
-  assert.match(step, /binding/u);
-  assert.match(step, /one line/u);
-  assert.match(step, /> Read `\$DESK\/AGENTS\.md`/u);
-  assert.match(step, /Step 2[^\n]+changed it[^\n]+read it again/u);
-  assert.match(body.split("## Never skip, never route around", 2)[1] ?? "", /0\.25/u);
+  assert.match(body, /Read `\$DESK\/AGENTS\.md` when the instructions say to\. Its rules bind the whole session/u);
+  assert.match(body, /reads the desk's `AGENTS\.md`/u);
+  const source = text(bootSource);
+  assert.match(source, /before the first question or action on the desk/u);
+  assert.match(source, /its rules bind this session \(read it again if sync changed it\)/u);
+  assert.ok(source.indexOf("AGENTS.md") < source.indexOf("Export the desk root"), "AGENTS.md is read before anything else is asked");
 });
 // Kaizen card 5: archiving stages only the paths it moved, as git-hygiene's targeted staging requires.
 contract("archive-workflow stages only the paths it moved", () => {
@@ -1066,7 +1061,7 @@ contract("archive-workflow stages only the paths it moved", () => {
   assert.match(body, /`git-hygiene`[^\n]+targeted staging/u);
 });
 requires("plugins/desk/skills/first-run-bootstrap/SKILL.md", "first-run-bootstrap asks the factory question once at the converged endpoint",
-  /### Converged endpoint[\s\S]+factory contribution question once[\s\S]+`desk:session-start` Step 2\.7[\s\S]+factory\.js consent/u);
+  /### Converged endpoint[\s\S]+factory contribution question once[\s\S]+`desk:session-start`'s boot script puts in its `instructions`[\s\S]+factory\.js consent/u);
 requires("plugins/desk/skills/task-lifecycle/SKILL.md", "task-lifecycle says done writes the report link and never waits for the store",
   /transitioning to `done`[^\n]+`task_update`[^\n]+`factory_report: <link>`[^\n]+resolved store has consent[^\n]+finalize request[^\n]+`done` does not wait for the store[^\n]+resolves once the store merges/u);
 contract("task-card-format documents the optional factory_report field", () => {
@@ -1170,8 +1165,8 @@ contract("the evaluation packet prose is not hard-wrapped", () => {
 contract("session start syncs the desk quietly and says why", () => {
   const skill = text(sessionStart);
   assert.match(skill, /node <Desk plugin folder>\/mcp\/scripts\/session-boot\.js/u);
-  assert.match(skill, /never streaming git's own diffstat to this session's output, so a folder another machine created with a secret's value in its name can't land here before Step 3 hides it/u);
-  assert.match(skill, /to see what changed, use the Step 3 listing, never `git log --stat` or `git diff --stat` on the desk/u);
+  assert.match(skill, /never streaming git's own diffstat to this session's output, so a folder another machine created with a secret's value in its name can't land here before the `active_tasks` listing hides it/u);
+  assert.match(skill, /To see what changed, use that listing, never `git log --stat` or `git diff --stat` on the desk/u);
   for (const match of skill.matchAll(/git (?:-C \S+ )?(pull|fetch|log|diff|status|ls-files)\b[^\n`]*/gu)) {
     if (match[1] === "pull" || match[1] === "fetch") assert.match(match[0], /--quiet|--no-stat|--autostash/u, `a startup git ${match[1]} must be quiet: ${match[0]}`);
   }
@@ -1183,7 +1178,7 @@ contract("session start and status list active tasks from desk_status, never a s
     assert.match(skill, /`active_tasks`/u, `${file} does not read desk_status active_tasks`);
   }
   assert.match(text(sessionStart), /do not fall back to globbing the desk/u);
-  assert.match(text(sessionStart), /`task_move` with `handle` and an outcome `to_slug`/u);
+  assert.match(text("plugins/desk/skills/session-start/details.md"), /`task_move` with `handle` and an outcome `to_slug`/u);
 });
 contract("the tidy renames a redacted folder by its handle, never by listing its parent", () => {
   const tidy = text("plugins/desk/migrations/02-tidy-desk.md");
