@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 
 import { BUILTIN_AGENT_TYPES, CUSTOM_AGENT_TYPE, publishedAgentType } from "../../../../../plugins/desk/mcp/src/factory/agent-types.js"
 import { ENUMS, validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
-import { validatePublished } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
+import { validatePublished, validatePublishedBytes } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { toPublished, serializePublished } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -179,4 +179,31 @@ test("publish carries requested_model with or without agent_type", () => {
   const agents = publishAgents(agentsWith({ requested_model: "sonnet" }, { requested_model: "claude-sonnet-5" }))
   assert.deepEqual(agents.map((agent) => agent.requested_model), ["sonnet", "claude-sonnet-5"])
   assert.equal(agents.some((agent) => Object.hasOwn(agent, "agent_type")), false)
+})
+
+// --- A per-worker value never blocks publishing ------------------------------
+
+const HEX_RUN = "a1b2c3d4e5f60718"
+
+test("publishedAgentType returns custom for a plugin type the published validator would reject", () => {
+  assert.equal(publishedAgentType("claude-code", `myplug:${HEX_RUN}`, ["myplug"]), "custom")
+  assert.equal(publishedAgentType("claude-code", "myplug:worker", ["myplug"]), "myplug:worker")
+  assert.equal(publishedAgentType("claude-code", "myplug:run-2026-09-25", ["myplug"]), "myplug:run-20260925", "a date shape is scrubbed, not refused")
+})
+
+test("a credential-shaped agent type, requested model and model still publish, as custom, omitted and unknown", () => {
+  const value = local([
+    { n: 0, parent: null, model: "claude-opus-5-5" },
+    { n: 1, parent: 0, model: `sk-${HEX_RUN}`, agent_type: `myplug:${HEX_RUN}`, requested_model: `sk-${HEX_RUN}` },
+    { n: 2, parent: 0, model: "claude-sonnet-5", agent_type: "myplug:worker", requested_model: "sonnet" },
+  ])
+  value.plugins = [{ name: "myplug", version: "1.0.0", source: "ourostack/desk" }]
+  const { published } = toPublished(value, { visibility, deskVisibility: "private", storeVisibility: "public" })
+  const bytes = serializePublished(published)
+  assert.deepEqual(validatePublishedBytes(bytes), { ok: true, errors: [] })
+  assert.equal(bytes.includes(HEX_RUN), false)
+  assert.equal(published.agents[1].model, "unknown")
+  assert.equal(published.agents[1].agent_type, "custom")
+  assert.equal(Object.hasOwn(published.agents[1], "requested_model"), false)
+  assert.deepEqual(published.agents[2], { n: 2, parent: 0, model: "claude-sonnet-5", agent_type: "myplug:worker", requested_model: "sonnet" })
 })

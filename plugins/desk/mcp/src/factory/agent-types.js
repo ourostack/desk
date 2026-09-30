@@ -5,7 +5,9 @@
 // Everything else publishes as `custom`, so a private agent's name never leaves
 // the machine.
 //
-// Imports nothing: `src/factory/**` takes only `node:` built-ins and its own files.
+// `src/factory/**` takes only `node:` built-ins and its own files.
+
+import { publishableToken, scrub } from "./published-schema.js"
 
 /** The fallback a published fact carries for any agent type it may not name. */
 export const CUSTOM_AGENT_TYPE = "custom"
@@ -25,6 +27,8 @@ export const BUILTIN_AGENT_TYPES = Object.freeze({
 })
 
 /**
+ * The type as it publishes, never a value the published validator rejects: after
+ * the date and time scrub, a credential-shaped or otherwise unpublishable type is `custom`.
  * `publishedAgentType(host, agentType, publicPlugins) -> string`. `publicPlugins`
  * is a collection (array or Set) of the plugin names that publish names in
  * the store this file goes to.
@@ -33,6 +37,9 @@ export function publishedAgentType(host, agentType, publicPlugins) {
   const builtins = Object.hasOwn(BUILTIN_AGENT_TYPES, host) ? BUILTIN_AGENT_TYPES[host] : []
   if (builtins.includes(agentType)) return agentType
   const colon = agentType.indexOf(":")
-  if (colon > 0 && new Set(publicPlugins).has(agentType.slice(0, colon))) return agentType
+  if (colon > 0 && new Set(publicPlugins).has(agentType.slice(0, colon))) {
+    const scrubbed = scrub(agentType)
+    return publishableToken(scrubbed) ? scrubbed : CUSTOM_AGENT_TYPE
+  }
   return CUSTOM_AGENT_TYPE
 }

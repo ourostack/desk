@@ -108,7 +108,7 @@ import { createHmac } from "node:crypto"
 import { publishedAgentType } from "./agent-types.js"
 import { validateLabels } from "./label-schema.js"
 import { LIMITS, validateLocalFacts } from "./schema.js"
-import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, TIME_SHAPE, validatePublished } from "./published-schema.js"
+import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, publishableToken, scrub, validatePublished } from "./published-schema.js"
 
 /** Why `toPublished` returned no file. */
 export const REFUSALS = Object.freeze(["implausible_session_span", "session_id_not_v4"])
@@ -135,28 +135,17 @@ const INTERVAL_FIELD = Object.freeze({
   compaction: "turns",
 })
 
-const DATE_PARTS = /(\d{4})-(\d{2})-(\d{2})/u
-const TIME_PARTS = /(\d{2}):(\d{2})/u
-
-// Removes the hyphens of every ISO date and the colons of every time of day
-// in an identifier, including one that an earlier removal uncovers
-// (`x-2024-08-06-01-02`, `m:08:30:00`).
-function scrub(id) {
-  let text = id
-  // Each pass removes at least one character, so this ends.
-  while (DATE_SHAPE.test(text) || TIME_SHAPE.test(text)) text = text.replace(DATE_PARTS, "$1$2$3").replace(TIME_PARTS, "$1$2")
-  return text
-}
-
 // The worker's number, parent and models, plus its agent type when it has one: kept
-// for a built-in type or a public plugin's type, `custom` for any other.
+// for a built-in type or a public plugin's type, `custom` for any other. A per-worker
+// value the published validator would reject never blocks the file: the model becomes
+// `unknown`, the requested model is left out and the type is `custom`.
 function publishAgent(agent, host, publicPluginNames) {
   return {
     n: agent.n,
     parent: agent.parent,
-    model: scrub(agent.model),
-    ...(Object.hasOwn(agent, "agent_type") ? { agent_type: scrub(publishedAgentType(host, agent.agent_type, publicPluginNames)) } : {}),
-    ...(Object.hasOwn(agent, "requested_model") ? { requested_model: scrub(agent.requested_model) } : {}),
+    model: publishableToken(scrub(agent.model)) ? scrub(agent.model) : "unknown",
+    ...(Object.hasOwn(agent, "agent_type") ? { agent_type: publishedAgentType(host, agent.agent_type, publicPluginNames) } : {}),
+    ...(Object.hasOwn(agent, "requested_model") && publishableToken(scrub(agent.requested_model)) ? { requested_model: scrub(agent.requested_model) } : {}),
   }
 }
 
