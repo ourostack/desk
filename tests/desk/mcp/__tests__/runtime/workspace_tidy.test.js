@@ -305,17 +305,18 @@ test("one malformed, inaccessible or oversized card is skipped by name; every ot
   }
   // A card whose repos Desk cannot read is one card's issue, never the whole desk's, and it authorizes nothing.
   await fs.rm(path.dirname(sibling), { recursive: true })
-  for (const body of [
-    '---\nstatus: processing\nrepos: [{mode: local}]\n---',
-    '---\nstatus: processing\nrepos:\n  - local_path: "/x"\n---',
-    '---\nstatus: processing\nrepos:\n  - mode: local\n---',
-    '---\nstatus: processing\nrepos:\n  - mode: local\n    local_path: ./relative\n---',
-    '---\nstatus: processing\nrepos:\n  - mode: local\n    local_path: /no/such/repository\n---',
+  for (const [body, reason] of [
+    ['---\nstatus: processing\nrepos: [{mode: local}]\n---', "repos list not readable"],
+    ['---\nstatus: processing\nrepos:\n  - local_path: "/x"\n---', "repos list not readable"],
+    ['---\nstatus: processing\nrepos:\n  - mode: local\n---', "repos list not readable"],
+    ['---\nstatus: processing\nrepos:\n  - mode: local\n    local_path: ./relative\n---', "repo ./relative is not an absolute or ~/ path"],
+    ['---\nstatus: processing\nrepos:\n  - mode: local\n    local_path: /no/such/repository\n---', "repo /no/such/repository not found"],
+    ['---\nstatus: processing\nrepos:\n  - mode: local\n    local_path: /no/such/pw hunter2\n---', "repo /no/such/<redacted segment> not found"],
   ]) {
     await fs.writeFile(f.card, body)
     const result = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
     assert.equal(result.complete, true, body)
-    assert.deepEqual(result.issues, ["1 task card with unreadable repos; their repositories were not inspected"])
+    assert.deepEqual(result.issues, [`1 task card with unreadable repos: track/task/task.md (${reason}); their repositories were not inspected`], body)
     assert.deepEqual(result.cardRecords[f.card].repositories, [])
   }
   await fs.writeFile(f.card, original)
@@ -811,7 +812,7 @@ test("cards with no repos, or repos Desk cannot read, among valid ones never sto
   }
   const inventory = await tidy.inspectWorkspace({ deskRoot: f.desk, budgetMs: 5000 })
   assert.equal(inventory.complete, true)
-  assert.deepEqual(inventory.issues, ["2 task cards with unreadable repos; their repositories were not inspected"])
+  assert.deepEqual(inventory.issues, ["2 task cards with unreadable repos: track/unreadable-repos/task.md (repos list not readable), track/unreadable-too/task.md (repo ./relative is not an absolute or ~/ path); their repositories were not inspected"])
   assert.deepEqual(inventory.cardRecords[plain].repositories, [f.desk], "no repos field: the desk only")
   assert.ok(inventory.repositories.includes(await fs.realpath(f.repo)), "the valid card's repository is still inspected")
 
@@ -1049,4 +1050,15 @@ test("F1-I01 exhausted canonical capacity refuses before cleanup and acknowledge
   const after = await boot.readReport(file)
   assert.deepEqual(after.resources.filter((entry) => entry.path !== w.directory), historical.slice(4))
   assert.ok((await fs.stat(file)).size <= 1_048_576)
+})
+
+test("the unreadable-repos issue names the first three cards in order and counts the rest", async () => {
+  const f = await fixture()
+  for (const name of ["e", "d", "c", "b", "a"]) {
+    const file = path.join(f.desk, "track", name, "task.md")
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, `---\nstatus: processing\nrepos:\n  - mode: local\n    local_path: ~/missing-${name}\n---\n`)
+  }
+  const { issues } = await tidy.inspectWorkspace({ deskRoot: f.desk, homeDir: f.root, budgetMs: 5000 })
+  assert.deepEqual(issues, ["5 task cards with unreadable repos: track/a/task.md (repo ~/missing-a not found), track/b/task.md (repo ~/missing-b not found), track/c/task.md (repo ~/missing-c not found), and 2 more; their repositories were not inspected"])
 })
