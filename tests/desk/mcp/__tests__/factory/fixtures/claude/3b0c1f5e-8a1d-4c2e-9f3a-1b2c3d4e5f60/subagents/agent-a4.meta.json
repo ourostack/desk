@@ -1,5 +1,5 @@
 {
-  "agentType": "general-purpose-SENTINEL-7f3a",
+  "agentType": "not a valid type!",
   "description": "bad model meta SENTINEL-7f3a",
   "toolUseId": "no-matching-tool-use",
   "spawnDepth": 1,

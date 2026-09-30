@@ -353,16 +353,34 @@ test("a depth-2 subagent gets the agent that spawned it as parent, even when its
   const { facts } = await deriveFull()
   assert.deepEqual(facts.agents, [
     { n: 0, parent: null, model: "claude-opus-5-5" },
-    { n: 1, parent: 0, model: "claude-sonnet-5" },
+    // The resolved model is what the worker's own lines used; the requested one is the meta's alias.
+    { n: 1, parent: 0, model: "claude-sonnet-5", agent_type: "Explore", requested_model: "sonnet" },
     // agent-a2 was spawned by agent-a4's Agent call (n 4, read after it).
     // A subagent's model is what its own assistant lines used, before its meta.
-    { n: 2, parent: 4, model: "claude-opus-5-5" },
+    { n: 2, parent: 4, model: "claude-opus-5-5", agent_type: "general-purpose", requested_model: "claude-opus-4-1" },
     // agent-a3 has no meta.json at all; agent-a4 has one, but its toolUseId
     // matches no call — both fall back to parent 0, for different reasons,
-    // and both still count.
+    // and both still count. agent-a4's meta values fail the local patterns, so neither key is stored.
     { n: 3, parent: 0, model: "claude-sonnet-5" },
     { n: 4, parent: 0, model: "claude-sonnet-5" },
   ])
+})
+
+test("the root worker has no agent_type and no requested_model, and the facts validate", async () => {
+  const { facts } = await deriveFull()
+  assert.equal(Object.hasOwn(facts.agents[0], "agent_type"), false)
+  assert.equal(Object.hasOwn(facts.agents[0], "requested_model"), false)
+  assert.deepEqual(validateLocalFacts(facts).errors, [])
+})
+
+test("a subagent meta value that fails its local pattern is left out, and a worker with no meta has neither key; descriptions never enter facts", async () => {
+  const { facts } = await deriveFull()
+  assert.equal(Object.hasOwn(facts.agents[3], "agent_type"), false)
+  assert.equal(Object.hasOwn(facts.agents[3], "requested_model"), false)
+  assert.equal(Object.hasOwn(facts.agents[4], "agent_type"), false)
+  assert.equal(Object.hasOwn(facts.agents[4], "requested_model"), false)
+  assert.equal(JSON.stringify(facts).includes("investigate something"), false)
+  assert.equal(JSON.stringify(facts).includes("nested investigation"), false)
 })
 
 test("a tool_use with no matching tool_result anywhere is dropped from intervals and counts, not fabricated", async () => {

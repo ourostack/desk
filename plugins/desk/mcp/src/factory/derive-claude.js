@@ -729,7 +729,11 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     else if (meta !== null && isValidModelId(meta.model)) model = meta.model
     if (model === "unknown") invalidModelSeen = true
 
-    agents.push({ n: agentIndex, parent: 0, model })
+    // Only values that pass the local patterns are stored; the meta `description` is never read.
+    const agent = { n: agentIndex, parent: 0, model }
+    if (typeof meta?.agentType === "string" && PATTERNS.agentType.test(meta.agentType)) agent.agent_type = meta.agentType
+    if (typeof meta?.model === "string" && PATTERNS.modelId.test(meta.model)) agent.requested_model = meta.model
+    agents.push(agent)
     agentResults.push(result)
     spawnIds.push(typeof meta?.toolUseId === "string" ? meta.toolUseId : null)
   }
