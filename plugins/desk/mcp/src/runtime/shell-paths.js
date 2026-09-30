@@ -30,6 +30,34 @@ export function physicalDirectory(cwd, operand) {
   return parent && path.join(parent, path.basename(lexical))
 }
 
+// Windows keeps a process's current directory as the path it was given, so a later relative operand is resolved against
+// that text: after `git -C link` or `Set-Location link`, where link is a junction, ".." is link's own parent, not its
+// target's. Git still finds the repository from the directory the path names. Measured on Windows 11 with Git for Windows
+// and PowerShell 7, 2026-09-29. Git Bash's `cd` is handled by the shell model, which hands Git the resolved directory.
+export function lexicalDirectory(cwd, operand) {
+  if (operand.includes("\0") || (!path.isAbsolute(operand) && cwd.includes("\0"))) return UNKNOWN
+  const lexical = path.resolve(cwd, operand)
+  if (resolveExisting(lexical) !== null) return lexical
+  if (!path.basename(lexical).startsWith(MKTEMP_PREFIX)) return null
+  return resolveExisting(path.dirname(lexical)) === null ? null : lexical
+}
+
+/** How Git's own `-C` and PowerShell locations move on `platform`: lexically on Windows, one real chdir at a time elsewhere. */
+export function processDirectoryFor(platform) {
+  return platform === "win32" ? lexicalDirectory : physicalDirectory
+}
+
+export const processDirectory = processDirectoryFor(process.platform)
+
+// Where Git works once it starts in `dir`. Git for Windows reads its current directory with junctions resolved, so it finds
+// the repository and resolves its own operands (a worktree to remove, a pathspec) from the physical folder, even after a
+// lexical `-C` chain or PowerShell location brought it there. Elsewhere `dir` is already physical.
+export function gitDirectoryFor(platform) {
+  return platform === "win32" ? (dir) => physicalDirectory(dir, ".") ?? dir : (dir) => dir
+}
+
+export const gitDirectory = gitDirectoryFor(process.platform)
+
 /** The directory Git would inspect for `dir`: itself, or the parent of a pending mktemp directory. */
 export function existingDirectory(dir) {
   return path.basename(dir).startsWith(MKTEMP_PREFIX) ? path.dirname(dir) : dir
@@ -84,5 +112,6 @@ export function staticGitOutput(words, cwd, env) {
   const known = ["git rev-parse --show-toplevel", "git branch --show-current", "git rev-parse --abbrev-ref HEAD"]
   if (!known.includes(text)) return null
   if (Object.keys(env).some((key) => /^GIT_(?:DIR|WORK_TREE)$/iu.test(key))) return UNKNOWN
-  return text === known[0] ? gitToplevel(cwd) : currentBranch(cwd, text === known[2])
+  const dir = gitDirectory(cwd)
+  return text === known[0] ? gitToplevel(dir) : currentBranch(dir, text === known[2])
 }

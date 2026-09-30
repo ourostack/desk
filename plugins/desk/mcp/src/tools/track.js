@@ -30,6 +30,13 @@ const OPTIONAL_TRACK_FIELDS = [
   "planning",
 ]
 
+// Every field track_create/track_update read off `input`, kept next to each
+// handler so a field added to its destructuring or to OPTIONAL_TRACK_FIELDS
+// is a field added here in the same diff. __tests__/tool_schema_parity.test.js
+// checks these against the tool's declared schema in tool-schemas.js.
+export const TRACK_CREATE_FIELDS = ["slug", "title", "scope", "status", "body", ...OPTIONAL_TRACK_FIELDS]
+export const TRACK_UPDATE_FIELDS = ["slug", "frontmatter", "body_append"]
+
 function relPath(deskRoot, absPath) {
   return path.relative(deskRoot, absPath)
 }

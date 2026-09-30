@@ -30,6 +30,9 @@ import * as path from "node:path"
 
 // Resolved from %SystemRoot%, never from PATH: the provider must be the one
 // shipped with the operating system, not the first match on a search path.
+// The script relies on this pin: GetAccessControl and SetAccessControl are
+// instance methods of FileInfo and DirectoryInfo only on .NET Framework, which
+// Windows PowerShell 5.1 runs on; PowerShell 7 does not have them.
 const PROVIDER_SEGMENTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"]
 
 const DEFAULT_LABEL = "desk_feedback"
@@ -64,7 +67,10 @@ try {
     if ($isDirectory -ne ($entry.kind -eq 'directory')) {
       throw "path is not a $($entry.kind): $target"
     }
-    $acl = Get-Acl -LiteralPath $target
+    # Read only the owner and access sections. Get-Acl also loads the audit
+    # section (SACL), and writing that section back needs
+    # SeSecurityPrivilege, which a non-elevated user does not hold.
+    $acl = $item.GetAccessControl('Access,Owner')
     $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
     $reassigned = $false
     if ($owner -ne $self) {
@@ -88,7 +94,7 @@ try {
       $inheritance,
       [System.Security.AccessControl.PropagationFlags]::None,
       [System.Security.AccessControl.AccessControlType]::Allow)))
-    Set-Acl -LiteralPath $target -AclObject $acl
+    $item.SetAccessControl($acl)
     $applied = Get-Acl -LiteralPath $target
     if ($applied.GetOwner([System.Security.Principal.SecurityIdentifier]) -ne $self) {
       throw "owner was not applied: $target"

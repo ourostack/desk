@@ -255,7 +255,8 @@ test("Codex worker source no longer documents healthy-path copy registration", (
 })
 
 test("session-start owns the Desk MCP absence prompt inherited by worker overlays", () => {
-  const sessionStart = readFileSync(path.join(repoRoot, "plugins", "desk", "skills", "session-start", "SKILL.md"), "utf8")
+  const skillFolder = path.join(repoRoot, "plugins", "desk", "skills", "session-start")
+  const sessionStart = `${readFileSync(path.join(skillFolder, "SKILL.md"), "utf8")}\n${readFileSync(path.join(skillFolder, "details.md"), "utf8")}`
 
   assert.match(sessionStart, /Desk MCP availability checkpoint/u)
   assert.match(sessionStart, /this is a first run, not an outage/u)

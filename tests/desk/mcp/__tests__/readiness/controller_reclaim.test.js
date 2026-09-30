@@ -9,6 +9,7 @@ import { spawn } from "node:child_process"
 import { connectOrStartController, endpointIsAbandoned, endpointIsReclaimable, probeEndpoint, socketTakeoverGuards, unlinkIfUnchanged } from "../../../../../plugins/desk/mcp/src/readiness/controller-client.js"
 import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { killAndWait } from "../_kill_and_wait.js"
 
 const posixOnly = process.platform === "win32" ? "POSIX sockets and modes" : false
 
@@ -142,7 +143,7 @@ test("a socket whose recorded owner PID now names a later process (its start tim
   // ps reports whole seconds: the unrelated process starts in a later second than the recorded owner (this test process).
   await new Promise((resolve) => setTimeout(resolve, 1100))
   const unrelated = spawn("sleep", ["60"], { stdio: "ignore" })
-  t.after(() => unrelated.kill("SIGKILL"))
+  t.after(() => killAndWait(unrelated))
   await new Promise((resolve) => unrelated.once("spawn", resolve))
   mkdirSync(stateDir, { recursive: true, mode: 0o700 })
   writeFileSync(path.join(stateDir, "owner.json"), JSON.stringify({
@@ -210,7 +211,7 @@ test("a running owner that is only busy gets one longer handshake and is joined,
   const record = JSON.parse(readFileSync(path.join(stateDir, "owner.json"), "utf8"))
   // Name a running process other than this one as the owner, and answer the first handshake too late.
   const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })
-  t.after(() => sleeper.kill("SIGKILL"))
+  t.after(() => killAndWait(sleeper))
   await new Promise((resolve) => sleeper.once("spawn", resolve))
   // With that process's own start time, so the record names it exactly, as its owner's own record would.
   const { readProcessStart } = await import("../../../../../plugins/desk/mcp/src/readiness/process-start.js")

@@ -12,6 +12,7 @@ import { createExitRelease } from "../../../../../plugins/desk/mcp/src/readiness
 import { controllerIdentity, deriveControllerEndpoint } from "../../../../../plugins/desk/mcp/src/readiness/identity.js"
 import { readProcessStart } from "../../../../../plugins/desk/mcp/src/readiness/process-start.js"
 import { mkTempRoot } from "../_temp_roots.js"
+import { killAndWait } from "../_kill_and_wait.js"
 
 const posixOnly = process.platform === "win32" ? "unix socket files" : false
 const serverModule = fileURLToPath(new URL("../../../../../plugins/desk/mcp/src/readiness/controller-server.js", import.meta.url))
@@ -131,7 +132,7 @@ function spawnOwner({ endpoint, stateDir, identity }, { keepAlive }) {
 test("a real process: the event loop running dry (beforeExit, then exit) releases the rendezvous", { skip: posixOnly, timeout: 30000 }, async (t) => {
   const context = await fixture(t, "desk-release-drain-")
   const owner = spawnOwner(context, { keepAlive: false })
-  t.after(() => owner.child.kill("SIGKILL"))
+  t.after(() => killAndWait(owner.child))
   assert.deepEqual(await owner.ended, { code: 0, signal: null })
   assert.equal(existsSync(context.ownerFile), false)
   assert.equal(existsSync(context.endpoint), false)
@@ -141,7 +142,7 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
   test(`a real process: ${signal} releases the rendezvous and still ends the process by that signal`, { skip: posixOnly, timeout: 30000 }, async (t) => {
     const context = await fixture(t, "desk-release-signal-")
     const owner = spawnOwner(context, { keepAlive: true })
-    t.after(() => owner.child.kill("SIGKILL"))
+    t.after(() => killAndWait(owner.child))
     await owner.up
     assert.ok(existsSync(context.ownerFile))
     assert.ok(lstatSync(context.endpoint).isSocket())

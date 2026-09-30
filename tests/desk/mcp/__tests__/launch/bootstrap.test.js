@@ -456,6 +456,22 @@ test("with no compatible Node the bootstrap serves the MCP handshake itself and 
   assert.match(errors.join(""), /no Node satisfies/u)
 })
 
+test("the degraded responder never crashes on a line that is valid JSON but not a request object: null, a boolean, a number, an array, a bare string", async () => {
+  const root = await mkTempRoot("desk-bootstrap-nonobject-")
+  const input = new PassThrough()
+  const output = new PassThrough()
+  const read = collect(output)
+  const running = bootstrap.run({ ...machine(root), args: [], stdin: input, stdout: output, stderr: { write: () => {} } })
+  for (const value of [null, true, 42, [], "hi"]) input.write(`${JSON.stringify(value)}\n`)
+  input.end()
+  await running
+  const responses = read()
+  assert.equal(responses.length, 5)
+  for (const response of responses) {
+    assert.deepEqual(response, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request" } })
+  }
+})
+
 test("the responder stops cleanly when stdin fails", async () => {
   const input = new EventEmitter()
   input.setEncoding = () => {}

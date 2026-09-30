@@ -30,10 +30,10 @@ import {
   quarantine,
   requestEvaluation,
   setConsent,
-  updateJobsIndex,
   writeLocalFacts,
   writeMarker,
 } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { indexJob } from "./_index_helper.js"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const LOCAL = JSON.parse(readFileSync(path.join(here, "fixtures", "local-golden.json"), "utf8"))
@@ -251,7 +251,7 @@ test("a duplicated key cannot carry free text through: accepted labels are rebui
 async function seed(env, { marker = true } = {}) {
   await setConsent(env, { store: STORE, contribute: true })
   await writeLocalFacts(env, STORE, local())
-  await updateJobsIndex(env, JOB, NAME)
+  await indexJob(env, JOB, NAME)
   if (marker) {
     const log = path.join(env.HOME, "m5-2-session.jsonl")
     await fs.writeFile(log, "{}\n")
@@ -270,7 +270,7 @@ test("prepareEvaluation needs a consented store and a session of the job", () =>
   assert.deepEqual(await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION }), { result: "not_opted_in", job: JOB, briefs: [] })
   await setConsent(env, { store: STORE, contribute: true })
   assert.deepEqual(await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION }), { result: "no_sessions", job: JOB, briefs: [] })
-  await updateJobsIndex(env, JOB, NAME)
+  await indexJob(env, JOB, NAME)
   assert.deepEqual(await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION }), { result: "no_sessions", job: JOB, briefs: [] })
   await assert.rejects(prepareEvaluation(env, { job: SENTINEL, pluginVersion: VERSION }), (error) => !error.message.includes("SENTINEL"))
 }))
@@ -299,7 +299,7 @@ test("prepareEvaluation reads the log as missing without a marker and skips a se
   const notV4 = local()
   notV4.session.id = "3b0c1f5e-8a1d-1c2e-9f3a-1b2c3d4e5f60"
   await writeLocalFacts(env, STORE, notV4)
-  await updateJobsIndex(env, JOB, `claude-code-${notV4.session.id}.json`)
+  await indexJob(env, JOB, `claude-code-${notV4.session.id}.json`)
   assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).briefs.length, 1)
 }))
 
@@ -437,7 +437,7 @@ test("the done step keeps the job's request until every session has ended and ha
   open.session.ended_at = null
   open.session.end_reason = null
   await writeLocalFacts(env, STORE, open)
-  await updateJobsIndex(env, JOB, NAME)
+  await indexJob(env, JOB, NAME)
   const labelsOpen = { ...labels(), unavailable: ["session_log_missing"] }
   labelsOpen.stretches = labelsOpen.stretches.slice(0, 1)
   const [pending] = (await evaluatePending(env, { pluginVersion: VERSION })).jobs
@@ -494,7 +494,7 @@ test("a session of another job in the index, or one that can never publish, is n
   const unbound = local()
   unbound.jobs = unbound.jobs.filter((job) => job.job !== JOB)
   await writeLocalFacts(env, STORE, unbound)
-  await updateJobsIndex(env, JOB, NAME)
+  await indexJob(env, JOB, NAME)
   assert.equal((await prepareEvaluation(env, { job: JOB, pluginVersion: VERSION })).result, "no_sessions")
   assert.deepEqual(await acceptEvaluations(env, { job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", pluginVersion: VERSION }), { job: "5e6f708192a3b4c5d6e7f8091a2b3c4d", sessions: [], request: "kept" })
 }))
@@ -504,7 +504,7 @@ test("a session whose facts are quarantined is not briefed: its labels are quara
   await seed(env)
   await quarantine(env, STORE, NAME, "evidence_unmatched")
   // A name that is not an outbox file name holds nothing back and is not a session.
-  await updateJobsIndex(env, JOB, "bogus")
+  await indexJob(env, JOB, "bogus")
   assert.deepEqual(await evaluateTask(env, { job: JOB, deskRoot, pluginVersion: VERSION }), { result: "complete", job: JOB, briefs: [] })
   assert.deepEqual(await listEvaluationRequests(env), [])
   const root = await factoryStateRoot(env)
@@ -516,7 +516,7 @@ test("a session whose facts are quarantined is not briefed: its labels are quara
   const broken = "copilot-cli-00000009-0000-4000-8000-000000000009.json"
   await fs.writeFile(path.join(root, "outbox", "ourostack__factory", broken), "not json", { mode: 0o600 })
   await quarantine(env, STORE, broken, "invalid")
-  await updateJobsIndex(env, JOB, broken)
+  await indexJob(env, JOB, broken)
   await requestEvaluation(env, { job: JOB, deskRoot })
   assert.deepEqual((await evaluatePending(env, { pluginVersion: VERSION })).jobs, [{ result: "complete", job: JOB, briefs: [] }])
   assert.equal(JSON.parse(await fs.readFile(path.join(root, "quarantine", "ourostack__factory", "labels", JOB, "00000009-0000-4000-8000-000000000009.json"), "utf8")).facts, broken)

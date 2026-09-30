@@ -24,13 +24,17 @@
 //   markers/<host>-<session_id>.json   pending-session bookkeeping
 //   outbox/<store-slug>/<host>-<session_id>.json   local facts, never as-is
 //   delivered/<store-slug>.json        name -> last delivered published blob sha
-//   quarantine/<store-slug>/<name>     { reason, at }, and for labels
+//   quarantine/<store-slug>/<name>     { reason, at, blob? } (blob: the
+//                                      published blob sha the store refused),
+//                                      and for labels
 //                                      held back for quarantined facts
 //                                      { reason: "facts_quarantined", facts, at }
 //   visibility.json                    repo visibility cache (7-day expiry)
 //   status.json                        last flush result per store
 //   finalize/<job>.json                a Desk task tool's sync-at-done request
-//   jobs-index.json                    job -> [outbox file names]
+//   jobs-index.json                    job -> [outbox file names], a mirror
+//                                      of the outbox (`jobs-index.rebuilt`
+//                                      stamps its one-time rebuild)
 //   machine-secret                     32 random bytes, created once
 //   labels/<store-slug>/<job>/<session_id>.json   local waste labels
 //   evaluations/<job>/<store-slug>/<host>-<session_id>.brief.json
@@ -643,31 +647,44 @@ export async function writeLocalFacts(env, store, localFacts, { platform = proce
  * `publishedBytesFor` answers `null` for (nothing publishable yet) is
  * skipped; a file that fails to parse as JSON is quarantined with reason
  * `invalid` instead of blocking the rest. Only regular files matching the
- * outbox name shape are considered.
+ * outbox name shape are considered. With `includeQuarantined`, quarantined
+ * files are candidates too, each entry gaining `quarantine`, its parsed
+ * record or `null`; a record that is not a regular file or does not parse
+ * still keeps its file out.
  */
-export async function pendingFiles(env, store, { publishedBytesFor }, { platform = process.platform, runner = undefined } = {}) {
+export async function pendingFiles(env, store, { publishedBytesFor, includeQuarantined = false }, { platform = process.platform, runner = undefined } = {}) {
   if (typeof publishedBytesFor !== "function") fail("publishedBytesFor", "must be a function")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
   const outboxDir = path.join(root, "outbox", slug)
   const delivered = await readJsonFileSafe(path.join(root, "delivered", `${slug}.json`), {}, platform)
-  const quarantined = new Set(await listRegularFiles(path.join(root, "quarantine", slug), OUTBOX_NAME_PATTERN))
+  const quarantineDir = path.join(root, "quarantine", slug)
+  const quarantined = new Set(await listRegularFiles(quarantineDir, OUTBOX_NAME_PATTERN))
   const pending = []
   for (const name of await listRegularFiles(outboxDir, OUTBOX_NAME_PATTERN)) {
-    if (quarantined.has(name)) continue
+    let held = null
+    if (quarantined.has(name)) {
+      if (!includeQuarantined) continue
+      held = await quarantineReason(path.join(quarantineDir, name))
+      if (held === null) continue
+    } else if (includeQuarantined && (await lstatIfPresent(path.join(quarantineDir, name), NAMING)) !== null) {
+      // A record that is not a regular file keeps its file quarantined.
+      continue
+    }
     let localFacts
     let localBytes
     try {
       localBytes = await fsp.readFile(path.join(outboxDir, name))
       localFacts = JSON.parse(localBytes.toString("utf8"))
     } catch {
-      await quarantine(env, store, name, "invalid", { platform, runner })
+      // A quarantined file that still does not parse keeps its record.
+      if (held === null) await quarantine(env, store, name, "invalid", { platform, runner })
       continue
     }
     const publishedBytes = publishedBytesFor(localFacts)
     if (publishedBytes === null) continue
     const sha = gitBlobSha(publishedBytes)
-    if (delivered[name] !== sha) pending.push({ name, localBytes })
+    if (delivered[name] !== sha) pending.push(includeQuarantined ? { name, localBytes, quarantine: held } : { name, localBytes })
   }
   return pending
 }
@@ -688,15 +705,18 @@ export async function markDelivered(env, store, { name, publishedBlobSha }, { pl
  * labels key, `labels/<job>/<session_id>.json`, which is quarantined at
  * `quarantine/<store-slug>/labels/<job>/<session_id>.json`. `facts`, a facts
  * file name, is recorded beside the reason when given: the quarantined facts
- * a labels key is held back for.
+ * a labels key is held back for. `blob`, the git blob sha the store refused,
+ * is recorded when given, so a later flush can tell whether the published
+ * file has changed since.
  */
-export async function quarantine(env, store, name, reason, { facts = undefined, now = defaultNow, platform = process.platform, runner = undefined } = {}) {
+export async function quarantine(env, store, name, reason, { facts = undefined, blob = undefined, now = defaultNow, platform = process.platform, runner = undefined } = {}) {
   if (!LABELS_KEY_PATTERN.test(String(name))) requirePattern(name, OUTBOX_NAME_PATTERN, "name")
   requirePattern(reason, REASON_PATTERN, "reason")
   if (facts !== undefined) requirePattern(facts, OUTBOX_NAME_PATTERN, "facts")
+  if (blob !== undefined) requirePattern(blob, SHA1, "blob")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
-  const record = facts === undefined ? { reason, at: now() } : { reason, facts, at: now() }
+  const record = { reason, ...(facts === undefined ? {} : { facts }), ...(blob === undefined ? {} : { blob }), at: now() }
   await writeJsonAtomic(root, path.join(root, "quarantine", slug, name), record, { platform, env, runner })
   return record
 }
@@ -951,16 +971,79 @@ export async function readJobsIndex(env, { platform = process.platform, runner =
   return readJsonFileSafe(path.join(root, "jobs-index.json"), {}, platform)
 }
 
-/** Adds `fileName` to `job`'s entry (deduplicated); lets finalize and the boot check find a job's sessions without reading logs. Concurrent updates for different jobs are serialized so none is lost. */
-export async function updateJobsIndex(env, job, fileName, { platform = process.platform, runner = undefined } = {}) {
-  requirePattern(job, PATTERNS.jobId, "job")
+/** Puts `fileName` in exactly `jobIds`' entries, removes it from every other entry and drops entries left empty, so the index mirrors what the file binds now. Lets finalize and the boot check find a job's sessions without reading logs. Concurrent updates are serialized so none is lost. */
+export async function setJobsForFile(env, fileName, jobIds, { platform = process.platform, runner = undefined } = {}) {
   requireString(fileName, "fileName")
+  if (!Array.isArray(jobIds)) fail("jobIds", "must be an array")
+  for (const job of jobIds) requirePattern(job, PATTERNS.jobId, "job")
+  const wanted = new Set(jobIds)
   const root = await factoryStateRoot(env, { platform, runner })
   const file = path.join(root, "jobs-index.json")
   return updateJsonLocked(root, file, {}, (current) => {
-    const existing = current[job] ?? []
-    return { ...current, [job]: existing.includes(fileName) ? existing : [...existing, fileName] }
+    const next = {}
+    for (const [job, names] of Object.entries(current)) {
+      const kept = Array.isArray(names) ? names.filter((name) => name !== fileName) : []
+      if (wanted.has(job)) kept.push(fileName)
+      if (kept.length > 0) next[job] = kept
+    }
+    for (const job of wanted) if (next[job] === undefined) next[job] = [fileName]
+    return next
   }, { platform, env, runner })
+}
+
+/** Names of the regular (non-symlink) store directories directly under `dir`; a stray file such as `.DS_Store` is ignored. */
+async function listStoreDirs(dir) {
+  const kept = []
+  for (const name of await listDirSafe(dir)) {
+    if (!STORE_SLUG_PATTERN.test(name)) continue
+    const stat = await lstatIfPresent(path.join(dir, name), NAMING)
+    if (stat !== null && stat.isDirectory()) kept.push(name)
+  }
+  return kept
+}
+
+/**
+ * `rebuildJobsIndex(env, store?) -> { jobs, files }`: rewrites
+ * `jobs-index.json` from the `jobs[].job` of every regular outbox file (one
+ * store's, or every store's when `store` is omitted; an unparseable file is
+ * skipped), then writes the stamp `jobs-index.rebuilt` holding `{ at }`.
+ */
+export async function rebuildJobsIndex(env, store = undefined, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  const slugs = store === undefined ? await listStoreDirs(path.join(root, "outbox")) : [storeSlug(store)]
+  const rebuilt = {}
+  let files = 0
+  for (const slug of slugs) {
+    const dir = path.join(root, "outbox", slug)
+    for (const name of (await listRegularFiles(dir, OUTBOX_NAME_PATTERN)).sort()) {
+      let facts
+      try {
+        facts = JSON.parse(await fsp.readFile(path.join(dir, name), "utf8"))
+      } catch (error) {
+        // Unparseable or vanished: skip. Any other read error (EACCES, EIO) aborts before the stamp, so the next sweep retries.
+        if (error instanceof SyntaxError || error.code === "ENOENT") continue
+        throw error
+      }
+      files += 1
+      const jobs = Array.isArray(facts?.jobs) ? facts.jobs : []
+      for (const binding of jobs) {
+        const job = binding?.job
+        if (typeof job !== "string" || !PATTERNS.jobId.test(job)) continue
+        const names = (rebuilt[job] ??= [])
+        if (!names.includes(name)) names.push(name)
+      }
+    }
+  }
+  for (const names of Object.values(rebuilt)) names.sort()
+  await updateJsonLocked(root, path.join(root, "jobs-index.json"), {}, () => rebuilt, { platform, env, runner })
+  await updateJsonLocked(root, path.join(root, "jobs-index.rebuilt"), {}, () => ({ at: new Date().toISOString() }), { platform, env, runner })
+  return { jobs: Object.keys(rebuilt).length, files }
+}
+
+/** True once `rebuildJobsIndex` has stamped this state folder. */
+export async function jobsIndexRebuilt(env, { platform = process.platform, runner = undefined } = {}) {
+  const root = await factoryStateRoot(env, { platform, runner })
+  return (await lstatIfPresent(path.join(root, "jobs-index.rebuilt"), NAMING)) !== null
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,6 +1174,40 @@ async function quarantineReason(file) {
 }
 
 /**
+ * `releaseQuarantined(env, store, names) -> { facts, labels }`: removes the
+ * quarantine records of the facts files `names`, and the labels records held
+ * back as `facts_quarantined` for one of them, so the next listing sends
+ * those files again. Only regular files of the right name shape are touched,
+ * a record that does not parse stays, and nothing is followed through a
+ * symlink. Returns the released facts names and labels keys, each sorted.
+ */
+export async function releaseQuarantined(env, store, names) {
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env)
+  const dir = path.join(root, "quarantine", slug)
+  const wanted = new Set(names)
+  const facts = []
+  for (const name of await listRegularFiles(dir, OUTBOX_NAME_PATTERN)) {
+    if (!wanted.has(name) || (await quarantineReason(path.join(dir, name))) === null) continue
+    await fsp.unlink(path.join(dir, name))
+    facts.push(name)
+  }
+  const released = new Set(facts)
+  const labels = []
+  for (const job of await listDirSafe(path.join(dir, "labels"))) {
+    const jobDir = path.join(dir, "labels", job)
+    if (!PATTERNS.jobId.test(job) || !(await lstatIfPresent(jobDir, NAMING)).isDirectory()) continue
+    for (const file of await listRegularFiles(jobDir, LABELS_NAME_PATTERN)) {
+      const record = await quarantineReason(path.join(jobDir, file))
+      if (!(record?.reason === "facts_quarantined" && released.has(record.facts))) continue
+      await fsp.unlink(path.join(jobDir, file))
+      labels.push(`labels/${job}/${file}`)
+    }
+  }
+  return { facts: facts.sort(), labels: labels.sort() }
+}
+
+/**
  * `releaseRefusedPluginNames(env, store) -> { facts, labels }`: removes the
  * quarantine records an older Desk wrote for `store` when the store refused
  * its facts as `private_plugins_missing`, so the next listing sends those
@@ -1104,25 +1221,21 @@ export async function releaseRefusedPluginNames(env, store) {
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env)
   const dir = path.join(root, "quarantine", slug)
-  const facts = []
+  const refused = []
   for (const name of await listRegularFiles(dir, OUTBOX_NAME_PATTERN)) {
-    if ((await quarantineReason(path.join(dir, name)))?.reason !== REFUSED_PLUGIN_NAMES) continue
-    await fsp.unlink(path.join(dir, name))
-    facts.push(name)
+    if ((await quarantineReason(path.join(dir, name)))?.reason === REFUSED_PLUGIN_NAMES) refused.push(name)
   }
-  const released = new Set(facts)
-  const labels = []
+  const { facts, labels } = await releaseQuarantined(env, store, refused)
   for (const job of await listDirSafe(path.join(dir, "labels"))) {
     const jobDir = path.join(dir, "labels", job)
     if (!PATTERNS.jobId.test(job) || !(await lstatIfPresent(jobDir, NAMING)).isDirectory()) continue
     for (const file of await listRegularFiles(jobDir, LABELS_NAME_PATTERN)) {
-      const record = await quarantineReason(path.join(jobDir, file))
-      if (record?.reason !== REFUSED_PLUGIN_NAMES && !(record?.reason === "facts_quarantined" && released.has(record.facts))) continue
+      if ((await quarantineReason(path.join(jobDir, file)))?.reason !== REFUSED_PLUGIN_NAMES) continue
       await fsp.unlink(path.join(jobDir, file))
       labels.push(`labels/${job}/${file}`)
     }
   }
-  return { facts, labels }
+  return { facts, labels: labels.sort() }
 }
 
 /**

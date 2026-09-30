@@ -741,3 +741,21 @@ test("property: 300 seeded random local files publish nothing that identifies a 
   }
   assert.ok(seen.refused > 10 && seen.published > 150 && seen.publicDesk > 50, JSON.stringify(seen))
 })
+
+// --- per-worker bindings carry through the transform ---------------------
+
+test("toPublished carries jobs[].agents and refs.prs[].agent, for private and protected desks", () => {
+  const value = local()
+  value.jobs[0].agents = [0, 1]
+  value.refs.prs[0].agent = 1
+  const { published } = publish(value)
+  assert.deepEqual(published.jobs[0].agents, [0, 1])
+  assert.equal(Object.hasOwn(published.jobs[1], "agents"), false, "a job without agents publishes none")
+  assert.deepEqual(published.refs.prs[0], { repo: "ourostack/desk", number: 9, agent: 1 })
+  assert.equal(validatePublished(published).ok, true)
+  const protectedOut = publish(value, { deskVisibility: "public", machineSecret: SECRET }).published
+  const keyedFirst = protectedOut.jobs.find((job) => job.job === createHmac("sha256", SECRET).update(value.jobs[0].job).digest("hex").slice(0, 32))
+  assert.deepEqual(keyedFirst.agents, [0, 1])
+  assert.equal(protectedOut.jobs.filter((job) => Object.hasOwn(job, "agents")).length, 1)
+  assert.equal(validatePublished(protectedOut).ok, true)
+})

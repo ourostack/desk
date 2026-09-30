@@ -1,0 +1,1035 @@
+// The boot script: one call that does session-start's mechanical steps and
+// returns one JSON result, instead of a chain of prose steps the agent
+// re-derives and re-runs by hand each session (boot-in-one-call, scope items
+// 2, 3, 4, 5, 6, 8, 9, 11, 13).
+//
+// What it fixes:
+//   - the missing `--root` bug: `session-sync.js`'s CLI only reads `--root`
+//     or `$DESK`, but the hook's own root resolution never exports `$DESK`
+//     and never passes `--root`, so sync silently no-ops whenever the root
+//     comes from activation-config or host-project source. This module
+//     resolves the root itself and calls `syncWorkspace` in-process, so
+//     there is no argv boundary to drop the root across.
+//   - the RECOVERING-vs-ready contradiction: this module never calls the
+//     admission-controller readiness convergence `desk_status` does (slow,
+//     network-bound). It reports one `status` word derived only from the
+//     checks it actually ran, and lists what it could not finish under
+//     `pending` rather than blocking or guessing.
+//   - the opaque "1 task card with unreadable repos" line: `card_validation`
+//     below names the task (by redacted track/slug and stable handle) and
+//     the specific reason for every corrupted card, mirroring
+//     `runtime/workspace-tidy.js`'s `skippedIssue`/`cardLabel` pattern.
+//
+// Every step is independently wrapped: a step that throws degrades only
+// that part of the result (an entry in `degraded`, the field left `null` or
+// empty) and never stops the others from reporting. `active_tasks` and
+// `card_validation` come from a plain filesystem walk (this module's own,
+// mirroring `desk/active-tasks.js`'s scan without its terminal-status
+// filter, since every card needs validating, not just the open ones) —
+// never from the slow runtime status. A step that needs the network (the
+// prereq probe's `gh auth status`, and push-account resolution) is bounded
+// by an overall wall-clock budget; anything still unresolved when the
+// budget runs out is reported under `pending`, never left to hang the
+// whole call.
+//
+// `bootOnce` returns `{ boot_complete: true, status, degraded, pending,
+// actions, root, host, desk_export_line, prereqs, sync, active_tasks,
+// card_validation, push_accounts, factory }`. `status` is one of "ready",
+// "degraded" or "setup_required" — never two words, and `degraded` always
+// lists why. `actions` names concrete next steps, each naming the task,
+// repo or file it is about. `boot_complete` is always `true`: it marks that
+// the script finished and returned a complete result, not that everything
+// it found is healthy.
+
+import { spawn as nodeSpawn, spawnSync } from "node:child_process"
+import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs"
+import * as os from "node:os"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
+
+import { normalizeRemote } from "../factory/binding.js"
+import { ghRunner, chooseAccount, signedInAccounts } from "../factory/flush.js"
+import { PATTERNS } from "../factory/schema.js"
+import { activeTasks } from "../desk/active-tasks.js"
+import { folderHandle } from "../desk/handles.js"
+import { loadFrontmatterParser } from "../desk/organization.js"
+import { parseFrontmatterLite } from "../desk/frontmatter-lite.js"
+import { factoryStatus } from "../tools/factory-context.js"
+import {
+  claudeBindingPath,
+  DESK_ROOT_NOT_FOUND,
+  expandHome,
+  resolveActivationConfigPath,
+  resolveDeskRootWithSource,
+} from "../util/paths.js"
+import { redactCredentialLikeText, redactName } from "../util/redact.js"
+import { readSmallText } from "../factory/marker.js"
+import { pendingMigrations, migrationLine } from "./pending-migrations.js"
+import { syncWorkspace } from "./session-sync.js"
+
+const parseFrontmatter = loadFrontmatterParser()
+// Without gray-matter (a plugin run straight from its install folder) the
+// dependency-free reader stands in; it does not parse nested values, so `repos`
+// lists cannot be validated on that path.
+const NESTED_CARD_FIELDS = parseFrontmatter !== parseFrontmatterLite
+const DESK_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
+
+// ── Root resolution ─────────────────────────────────────────────────────
+
+/**
+ * The desk root, classified for boot: `{ status: "ready", path, source,
+ * binding_path }`, `{ status: "setup_required", binding_path, tried }` (no
+ * source names a desk at all — a first run, not an outage), or
+ * `{ status: "degraded", binding_path, tried, reason, message, path?,
+ * source? }` (a source names a desk whose folder is missing, unreadable or
+ * malformed). Mirrors `scripts/resolve-desk-root.js`'s `resolveHookDeskRoot`
+ * but keeps the thrown error's `code` so boot can tell the two failure
+ * shapes apart instead of collapsing them into one message string.
+ */
+export function resolveBootRoot({
+  env = process.env,
+  cwd = process.cwd(),
+  homeDir = env.HOME || os.homedir(),
+  readActivationConfig = (file) => readSmallText(file),
+} = {}) {
+  const bindingPath = claudeBindingPath(env)
+  try {
+    const resolved = resolveDeskRootWithSource({
+      activationConfigPath: resolveActivationConfigPath({ env }),
+      env,
+      cwd,
+      homeDir,
+      // A Bash-spawned boot script has no CLAUDE_PROJECT_DIR (Claude Code only
+      // sets it for the MCP server's own process); its cwd stands in, and like
+      // the host project it only counts when it is itself a desk workspace.
+      // Mirrors `desk/tidy.js`'s `resolveRoot`, which resolves the same way for
+      // the same reason.
+      hostProjectRoot: env.CLAUDE_PROJECT_DIR ?? cwd,
+      readActivationConfig,
+    })
+    return { status: "ready", path: resolved.root, source: resolved.source, binding_path: bindingPath }
+  } catch (error) {
+    const status = error.code === DESK_ROOT_NOT_FOUND ? "setup_required" : "degraded"
+    return {
+      status,
+      path: error.path ?? null,
+      source: error.source ?? null,
+      binding_path: bindingPath,
+      tried: error.tried ?? [],
+      // Every throw out of `resolveDeskRootWithSource` — including through
+      // the injectable `readActivationConfig` seam, which `loadActivationConfig`
+      // always re-wraps in a `codedError` — sets `.code` (see `util/paths.js`),
+      // so this never falls back to a message-only reason.
+      reason: error.code,
+      message: error.message,
+    }
+  }
+}
+
+// ── Host identity ───────────────────────────────────────────────────────
+
+/** `{ hostname, user, cwd, platform, release, probed_at }`. Never throws. */
+export function probeHost({
+  env = process.env,
+  hostname = os.hostname,
+  userInfo = os.userInfo,
+  cwd = process.cwd,
+  platform = os.platform,
+  release = os.release,
+  now = Date.now,
+} = {}) {
+  const envUser = typeof env.USER === "string" && env.USER !== "" ? env.USER : env.USERNAME
+  let user = typeof envUser === "string" && envUser !== "" ? envUser : null
+  if (user === null) {
+    try {
+      user = userInfo().username
+    } catch {
+      user = null
+    }
+  }
+  let host
+  try {
+    host = hostname()
+  } catch {
+    host = null
+  }
+  return {
+    hostname: host,
+    user,
+    cwd: cwd(),
+    platform: platform(),
+    release: release(),
+    probed_at: new Date(now()).toISOString(),
+  }
+}
+
+// ── Prerequisite probe ──────────────────────────────────────────────────
+
+/** A generic subprocess runner shaped like `factory/flush.js`'s `ghRunner`, for commands other than `gh`. */
+export function commandRunner(cmd, { spawn = nodeSpawn, env = process.env, maxOutput = 1024 * 1024 } = {}) {
+  return (args, { timeoutMs = 5000 } = {}) => new Promise((resolve) => {
+    const stdout = []
+    const stderr = []
+    let size = 0
+    let settled = false
+    const finish = (value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    const text = (chunks) => Buffer.concat(chunks).toString("utf8")
+    const child = spawn(cmd, args, { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL")
+      finish({ code: null, stdout: text(stdout), stderr: text(stderr), timedOut: true })
+    }, timeoutMs)
+    const collect = (into) => (chunk) => {
+      size += chunk.length
+      if (size <= maxOutput) into.push(Buffer.from(chunk))
+    }
+    child.stdout.on("data", collect(stdout))
+    child.stderr.on("data", collect(stderr))
+    child.on("error", (error) => finish({ code: null, stdout: "", stderr: "", spawnError: error.code ?? "spawn_failed" }))
+    child.on("close", (code) => finish({ code, stdout: text(stdout), stderr: text(stderr) }))
+  })
+}
+
+const GH_VERSION_FLOOR = [2, 40]
+
+function parseGhVersion(stdout) {
+  const match = /gh version (\d+)\.(\d+)\.(\d+)/u.exec(stdout ?? "")
+  return match === null ? null : [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+
+function meetsGhFloor([major, minor]) {
+  return major > GH_VERSION_FLOOR[0] || (major === GH_VERSION_FLOOR[0] && minor >= GH_VERSION_FLOOR[1])
+}
+
+function trimmed(text, limit = 300) {
+  return (text ?? "").trim().slice(0, limit)
+}
+
+function evaluateGh(result) {
+  if (result.spawnError) return { ok: false, reason: "gh_missing", detail: "the `gh` binary was not found on PATH" }
+  if (result.timedOut) return { ok: false, reason: "gh_timeout", detail: "`gh --version` did not respond in time" }
+  if (result.code !== 0) return { ok: false, reason: "gh_error", detail: trimmed(result.stderr || result.stdout) }
+  const version = parseGhVersion(result.stdout)
+  if (version === null) return { ok: false, reason: "gh_version_unparseable", detail: trimmed(result.stdout) }
+  const versionText = version.join(".")
+  if (!meetsGhFloor(version)) {
+    return {
+      ok: false,
+      reason: "gh_too_old",
+      version: versionText,
+      detail: `gh ${versionText} is older than the 2.40 floor \`gh auth switch -u\` needs`,
+    }
+  }
+  return { ok: true, version: versionText }
+}
+
+function evaluateJq(result) {
+  if (result.spawnError) return { ok: false, reason: "jq_missing", detail: "the `jq` binary was not found on PATH" }
+  if (result.timedOut) return { ok: false, reason: "jq_timeout", detail: "`jq --version` did not respond in time" }
+  if (result.code !== 0) return { ok: false, reason: "jq_error", detail: trimmed(result.stderr || result.stdout) }
+  return { ok: true }
+}
+
+const AUTH_STALE = /no longer valid|not logged into|you are not logged/iu
+
+function evaluateAuth(result) {
+  if (result.spawnError) return { ok: false, reason: "gh_missing", detail: "the `gh` binary was not found on PATH" }
+  if (result.timedOut) return { ok: false, reason: "auth_timeout", detail: "`gh auth status` did not respond in time" }
+  const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
+  if (AUTH_STALE.test(text)) return { ok: false, reason: "auth_stale", detail: trimmed(text, 500) }
+  if (result.code !== 0) return { ok: false, reason: "auth_error", detail: trimmed(text, 500) }
+  return { ok: true }
+}
+
+/**
+ * The five-part prereq probe (`session-start/SKILL.md` Step 0.75), as one
+ * call: `{ gh: {ok, version?, reason?, detail?}, jq: {...}, auth: {...} }`.
+ * Every check resolves rather than rejects — a missing binary, a timeout or
+ * a nonzero exit all come back as `{ ok: false, reason, detail }`, never a
+ * thrown error.
+ */
+export async function checkPrereqs({ gh = ghRunner(), jq = commandRunner("jq"), ghAuth = gh, timeoutMs = 8000 } = {}) {
+  // `ghAuth` runs with the ambient environment: `gh` itself honors GH_TOKEN,
+  // so a host signed in only through that variable is healthy. (`gh`, the
+  // factory's runner, strips ambient tokens on purpose.)
+  const [ghVersion, jqVersion, authStatus] = await Promise.all([
+    gh(["--version"], { timeoutMs }),
+    jq(["--version"], { timeoutMs }),
+    ghAuth(["auth", "status", "--hostname", "github.com"], { timeoutMs }),
+  ])
+  return { gh: evaluateGh(ghVersion), jq: evaluateJq(jqVersion), auth: evaluateAuth(authStatus) }
+}
+
+// ── Task-card frontmatter validation ────────────────────────────────────
+
+const MAX_CARD_BYTES = 64 * 1024
+const VALID_STATUSES = new Set(["drafting", "processing", "validating", "collaborating", "paused", "blocked", "done", "cancelled"])
+const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+const REQUIRED_TEXT_FIELDS = ["title", "status", "created", "updated", "track"]
+
+function isTimestampField(field) {
+  return field === "created" || field === "updated"
+}
+
+function isNumericKeyedObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false
+  const keys = Object.keys(value)
+  return keys.length > 0 && keys.every((key) => /^\d+$/u.test(key))
+}
+
+/**
+ * Every problem with a task card's already-parsed frontmatter, in plain
+ * language naming the field: numeric-string-keyed objects where a list was
+ * expected (the corruption pattern the faster-desk-pr-flow card hit, a
+ * pre-#51 bug — generalized here to every field, not just `repos`), missing
+ * or malformed required fields, an unrecognized `status`, unparseable
+ * `created`/`updated`, and malformed `repos[]` entries. `[]` when the card
+ * is healthy.
+ */
+export function cardProblems(data, { nested = true } = {}) {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    return ["frontmatter did not parse as a YAML mapping"]
+  }
+  const problems = []
+  const corrupted = new Set()
+  for (const [field, value] of Object.entries(data)) {
+    if (isNumericKeyedObject(value)) {
+      corrupted.add(field)
+      const keys = Object.keys(value).slice(0, 5).join(", ")
+      problems.push(`\`${field}\` is an object with numeric-string keys (${keys}) where a list was expected — frontmatter is likely corrupted`)
+    }
+  }
+  for (const field of REQUIRED_TEXT_FIELDS) {
+    if (corrupted.has(field)) continue
+    // An unquoted YAML timestamp parses as a Date; that is a valid timestamp.
+    if (isTimestampField(field) && data[field] instanceof Date) continue
+    if (typeof data[field] !== "string" || data[field].trim() === "") problems.push(`\`${field}\` is missing or not a string`)
+  }
+  if (typeof data.status === "string" && !VALID_STATUSES.has(data.status)) {
+    problems.push(`\`status: ${data.status}\` is not one of the task-lifecycle states`)
+  }
+  for (const field of ["created", "updated"]) {
+    const value = data[field]
+    const unparseable = value instanceof Date ? Number.isNaN(value.getTime()) : typeof value === "string" && Number.isNaN(Date.parse(value))
+    if (unparseable) problems.push(`\`${field}\` is not a parseable timestamp`)
+  }
+  if (nested && !corrupted.has("repos")) {
+    if (!Array.isArray(data.repos)) {
+      problems.push("`repos` is missing or not a list")
+    } else {
+      data.repos.forEach((entry, index) => {
+        if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+          problems.push(`repos[${index}] is not an object`)
+          return
+        }
+        for (const field of ["name", "local_path", "mode"]) {
+          if (typeof entry[field] !== "string") problems.push(`repos[${index}].${field} is missing or not a string`)
+        }
+        if (typeof entry.mode === "string" && entry.mode !== "local" && entry.mode !== "remote") {
+          problems.push(`repos[${index}].mode is "${entry.mode}", not "local" or "remote"`)
+        }
+      })
+    }
+  }
+  return problems
+}
+
+function listDirs(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("_") && !entry.name.startsWith("."))
+      .map((entry) => entry.name)
+      .sort()
+  } catch {
+    return []
+  }
+}
+
+function readCardText(filePath) {
+  let fd
+  try {
+    fd = openSync(filePath, "r")
+  } catch {
+    return null
+  }
+  try {
+    const buffer = Buffer.alloc(MAX_CARD_BYTES)
+    const bytesRead = readSync(fd, buffer, 0, MAX_CARD_BYTES, 0)
+    return buffer.toString("utf8", 0, bytesRead)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function scanTracks(scanRoot, deskRaw) {
+  const cards = []
+  for (const track of listDirs(scanRoot)) {
+    if (deskRaw === null && track === "desks") continue
+    const trackDir = path.join(scanRoot, track)
+    for (const slug of listDirs(trackDir)) {
+      const file = path.join(trackDir, slug, "task.md")
+      const text = readCardText(file)
+      if (text === null) continue
+      let data
+      try {
+        data = parseFrontmatter(text).data
+      } catch {
+        data = {}
+      }
+      cards.push({ track, slug, desk: deskRaw, file, data })
+    }
+  }
+  return cards
+}
+
+/**
+ * Every task card under `root`, raw (unredacted) `{ track, slug, desk,
+ * file, data }` tuples — the desk root plus every `desks/<alias>/` subtree,
+ * skipping `_` and `.` folders, same layout as `desk/active-tasks.js`'s
+ * scan, but without its terminal-status filter: every card is read, not
+ * only the open ones, since a `done` card's frontmatter can be corrupted
+ * too. `data` is `{}` when a card's frontmatter fails to parse at all.
+ */
+export function walkTaskCards(root) {
+  const cards = scanTracks(root, null)
+  for (const alias of listDirs(path.join(root, "desks"))) {
+    cards.push(...scanTracks(path.join(root, "desks", alias), alias))
+  }
+  return cards
+}
+
+/** `card_validation`: every card `walk(root)` finds with `cardProblems(card.data).length > 0`, named by redacted track/slug/desk plus a stable handle — never by re-opening a redacted name. */
+export function cardValidation(root, walk = walkTaskCards, { nested = NESTED_CARD_FIELDS } = {}) {
+  const results = []
+  for (const card of walk(root)) {
+    const problems = cardProblems(card.data, { nested })
+    if (problems.length === 0) continue
+    results.push({
+      track: redactName(card.track),
+      slug: redactName(card.slug),
+      ...(card.desk === null ? {} : { desk: redactName(card.desk) }),
+      handle: folderHandle("task", root, path.dirname(card.file)),
+      problems,
+    })
+  }
+  return results
+}
+
+// ── Per-task-repo push-account resolution ───────────────────────────────
+
+const MIN_ACCOUNT_CALL_MS = 3000
+
+// `spawnGit` follows `runtime/session-sync.js`'s own convention: its result
+// shape (`status`, `stdout`), never an exception, is the contract every
+// caller in this codebase trusts. `normalizeRemote` throws only for a
+// non-string or blank remote (`factory/binding.js`), which the `url === ""`
+// check above already rules out, so neither call needs its own try/catch —
+// a card whose `local_path` cannot be read still degrades cleanly, one
+// level up, through `resolvePushAccounts`'s own caller in `bootOnce`.
+function resolveLocalStore(localPath, { spawnGit, homeDir, timeoutMs }) {
+  if (typeof localPath !== "string" || localPath.trim() === "") return null
+  const resolved = expandHome(localPath, homeDir)
+  const result = spawnGit("git", ["-C", resolved, "config", "--get", "remote.origin.url"], { encoding: "utf8", timeout: timeoutMs })
+  if (!result || result.status !== 0 || typeof result.stdout !== "string") return null
+  const url = result.stdout.trim()
+  if (url === "") return null
+  const normalized = normalizeRemote(url)
+  const match = /^https:\/\/github\.com\/(.+)$/u.exec(normalized)
+  return match !== null && PATTERNS.prRepo.test(match[1]) ? match[1] : null
+}
+
+function repoLabel(card, repo) {
+  return {
+    track: redactName(card.track),
+    slug: redactName(card.slug),
+    ...(card.desk === null ? {} : { desk: redactName(card.desk) }),
+    repo: typeof repo.name === "string" ? redactCredentialLikeText(repo.name) : null,
+  }
+}
+
+/**
+ * The push account for every repo of every non-terminal task card, reusing
+ * `factory/flush.js`'s `chooseAccount` — the same per-store, per-signed-in-
+ * account resolution the factory consent instruction uses, asking each
+ * account's own token about push/fork permission rather than assuming
+ * `gh`'s active account. A repo entry that resolves to a real `owner/repo`
+ * slug (a `remote`-mode `name` matching `PATTERNS.prRepo`, or a
+ * `local`-mode clone's own `git remote` normalized the same way) gets one
+ * `chooseAccount` call per distinct store, shared by every task that
+ * references it; a repo with no resolvable slug is reported with
+ * `result: "not_a_github_repo"` and no network call. A store whose call
+ * would not fit in the remaining wall-clock budget is reported with
+ * `result: "pending"` instead of blocking the rest of boot.
+ */
+export async function resolvePushAccounts({
+  root,
+  cards,
+  runner,
+  now = Date.now,
+  deadlineMs = 20000,
+  spawnGit = spawnSync,
+  homeDir = os.homedir(),
+  perCallTimeoutMs = 12000,
+}) {
+  const deadline = now() + deadlineMs
+  const results = []
+  const entries = []
+  for (const card of cards) {
+    if (TERMINAL_STATUSES.has(card.data?.status)) continue
+    if (!Array.isArray(card.data?.repos)) continue
+    for (const repo of card.data.repos) {
+      if (repo === null || typeof repo !== "object") continue
+      const label = repoLabel(card, repo)
+      let store = null
+      if (repo.mode === "remote" && typeof repo.name === "string" && PATTERNS.prRepo.test(repo.name)) {
+        store = repo.name
+      } else if (repo.mode === "local") {
+        store = resolveLocalStore(repo.local_path, { spawnGit, homeDir, timeoutMs: 5000 })
+      }
+      if (store === null) {
+        results.push({ ...label, result: "not_a_github_repo" })
+        continue
+      }
+      entries.push({ label, store })
+    }
+  }
+
+  const resolved = new Map()
+  for (const store of new Set(entries.map((entry) => entry.store))) {
+    const remaining = deadline - now()
+    if (remaining < MIN_ACCOUNT_CALL_MS) {
+      resolved.set(store, { result: "pending", reason: "boot_budget_exceeded" })
+      continue
+    }
+    // `chooseAccount` resolves every failure of its own into a `{ result }`
+    // code (see `factory/flush.js`); a card whose data makes this loop
+    // itself throw is still caught one level up, by `resolvePushAccounts`'s
+    // caller in `bootOnce`.
+    resolved.set(store, await chooseAccount({ store, runner, deadlineMs: Math.min(remaining, perCallTimeoutMs), now }))
+  }
+  for (const entry of entries) results.push({ ...entry.label, store: entry.store, ...resolved.get(entry.store) })
+  return results
+}
+
+// ── Ambient GitHub token as one account ─────────────────────────────────
+
+export const ENV_TOKEN_ACCOUNT = "env-token"
+
+function ambientToken(env) {
+  for (const name of ["GH_TOKEN", "GITHUB_TOKEN"]) {
+    if (typeof env[name] === "string" && env[name].trim() !== "") return env[name].trim()
+  }
+  return null
+}
+
+/**
+ * Wraps the factory's account runner (which strips ambient tokens on purpose)
+ * so a host signed in to `gh` only through `GH_TOKEN`/`GITHUB_TOKEN` counts
+ * as one account, `env-token`, instead of as no account at all. Accounts
+ * `gh` itself lists are left alone; the token only ever stays in memory and
+ * answers `gh auth token --user env-token`.
+ */
+export function withAmbientToken(runner, env) {
+  const token = ambientToken(env)
+  if (token === null) return runner
+  return async (args, options) => {
+    const result = await runner(args, options)
+    if (args[0] === "auth" && args[1] === "status" && signedInAccounts([result.stdout, result.stderr].join("\n")).length === 0) {
+      return { code: 0, stdout: `github.com\n  ✓ Logged in to github.com account ${ENV_TOKEN_ACCOUNT} (environment token)\n  - Active account: true\n`, stderr: "" }
+    }
+    if (args[0] === "auth" && args[1] === "token" && args[3] === ENV_TOKEN_ACCOUNT) return { code: 0, stdout: `${token}\n`, stderr: "" }
+    return result
+  }
+}
+
+// ── Named task ──────────────────────────────────────────────────────────
+
+/**
+ * Resolves `--task <query>` against the open task cards: an exact match on a
+ * handle, slug, `track/slug` or title (case-insensitive) wins; otherwise a
+ * substring match on those, which must be unique. Returns `{ status:
+ * "resolved", task }`, `{ status: "ambiguous", candidates }` or `{ status:
+ * "not_found" }`; names in the answer are redacted like every other field.
+ */
+export function resolveTaskQuery(query, cards, root) {
+  const needle = String(query).trim().toLowerCase()
+  if (needle === "") return { status: "not_found" }
+  const open = cards.filter((card) => !TERMINAL_STATUSES.has(card.data.status))
+  const keys = (card) => [
+    folderHandle("task", root, path.dirname(card.file)),
+    card.slug,
+    `${card.track}/${card.slug}`,
+    typeof card.data.title === "string" ? card.data.title : "",
+  ].map((key) => key.toLowerCase())
+  const summary = (card) => ({
+    track: redactName(card.track),
+    slug: redactName(card.slug),
+    ...(card.desk === null ? {} : { desk: redactName(card.desk) }),
+    title: typeof card.data.title === "string" ? redactCredentialLikeText(card.data.title) : null,
+    status: card.data.status ?? null,
+    handle: folderHandle("task", root, path.dirname(card.file)),
+  })
+  let matches = open.filter((card) => keys(card).includes(needle))
+  if (matches.length === 0) matches = open.filter((card) => keys(card).some((key) => key.includes(needle)))
+  if (matches.length === 0) return { status: "not_found" }
+  if (matches.length > 1) return { status: "ambiguous", candidates: matches.map(summary) }
+  return { status: "resolved", task: { ...summary(matches[0]), card: `${cardLocation({ desk: matches[0].desk, track: matches[0].track, slug: matches[0].slug })}/task.md`, file: matches[0].file } }
+}
+
+function hostLineHostname(cardText) {
+  const match = /^Host: `([^`]+)`/mu.exec(cardText)
+  return match === null ? null : match[1]
+}
+
+// ── Code repos and open pull requests ───────────────────────────────────
+
+const REPO_FETCH_TIMEOUT_MS = 10000
+
+/** `git fetch` plus branch and dirty state for every locally-cloned repo of every open task, within the deadline. */
+export function repoStates({ cards, spawnGit = spawnSync, homeDir = os.homedir(), now, deadline }) {
+  const states = []
+  const pending = []
+  for (const card of cards) {
+    if (TERMINAL_STATUSES.has(card.data?.status) || !Array.isArray(card.data?.repos)) continue
+    for (const repo of card.data.repos) {
+      if (repo === null || typeof repo !== "object" || repo.mode !== "local" || typeof repo.local_path !== "string") continue
+      const label = repoLabel(card, repo)
+      const dir = expandHome(repo.local_path, homeDir)
+      if (deadline - now() < MIN_ACCOUNT_CALL_MS) {
+        pending.push(`repo state for ${label.repo} (${cardLocation(card)}): boot_budget_exceeded`)
+        continue
+      }
+      const fetched = spawnGit("git", ["-C", dir, "fetch", "--quiet", "origin"], { encoding: "utf8", timeout: REPO_FETCH_TIMEOUT_MS })
+      const status = spawnGit("git", ["-C", dir, "status", "--porcelain", "-b"], { encoding: "utf8", timeout: 5000 })
+      if (!status || status.status !== 0 || typeof status.stdout !== "string") {
+        states.push({ ...label, local_path: repo.local_path, present: false })
+        continue
+      }
+      const lines = status.stdout.split("\n").filter((line) => line !== "")
+      states.push({
+        ...label,
+        present: true,
+        branch: (lines[0] ?? "").replace(/^## (?:No commits yet on )?/u, "").split("...")[0] || null,
+        dirty: lines.length > 1,
+        fetched: Boolean(fetched) && fetched.status === 0,
+      })
+    }
+  }
+  return { states, pending }
+}
+
+/** Open pull requests the signed-in account authored, one `gh pr list` per distinct GitHub repo, within the deadline. */
+export async function openPullRequests({ stores, runner, now, deadline }) {
+  const prs = []
+  const pending = []
+  for (const store of stores) {
+    const remaining = deadline - now()
+    if (remaining < MIN_ACCOUNT_CALL_MS) {
+      pending.push(`open pull requests for ${store}: boot_budget_exceeded`)
+      continue
+    }
+    const result = await runner(["pr", "list", "--repo", store, "--author", "@me", "--state", "open", "--json", "number,title,url,isDraft,reviewDecision"], { timeoutMs: Math.min(remaining, 12000) })
+    if (result.timedOut) {
+      pending.push(`open pull requests for ${store}: timeout`)
+      continue
+    }
+    if (result.code !== 0) continue
+    let list
+    try {
+      list = JSON.parse(result.stdout)
+    } catch {
+      continue
+    }
+    if (!Array.isArray(list)) continue
+    for (const entry of list) {
+      prs.push({ store, number: entry.number, title: redactCredentialLikeText(String(entry.title ?? "")), url: entry.url, draft: entry.isDraft === true, review: entry.reviewDecision ?? null })
+    }
+  }
+  return { prs, pending }
+}
+
+// ── Orchestrator ────────────────────────────────────────────────────────
+
+const DEFAULT_BUDGET_MS = 45000
+const SYNC_BUDGET_MS = 25000
+const AGENT_HOSTS = Object.freeze(["claude", "copilot", "codex"])
+
+const HOST_ENV = Object.freeze({
+  claude: ["CLAUDECODE", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR"],
+  codex: ["CODEX_HOME", "CODEX_SANDBOX", "CODEX_THREAD_ID"],
+  copilot: ["COPILOT_AGENT_SESSION_ID", "COPILOT_CLI", "GITHUB_COPILOT_CLI"],
+})
+
+/** Which of the covered agent hosts this process runs under, from the variables each host sets; "unknown" otherwise. */
+export function detectAgentHost(env) {
+  const found = Object.entries(HOST_ENV).find(([, names]) => names.some((name) => Boolean(env[name])))
+  return found === undefined ? "unknown" : found[0]
+}
+
+function parserName(nested) {
+  return nested ? "gray-matter" : "lite"
+}
+
+function prereqAction(name, check) {
+  if (name === "gh" && check.reason === "gh_missing") {
+    return "Install gh: macOS `brew install gh`, Windows `winget install --id GitHub.cli`, Linux see https://cli.github.com/."
+  }
+  if (name === "gh" && check.reason === "gh_too_old") {
+    return `Upgrade gh (found ${check.version}, need >= 2.40): brew upgrade gh / winget upgrade GitHub.cli / sudo apt upgrade gh.`
+  }
+  if (name === "jq" && check.reason === "jq_missing") {
+    return "Install jq: `brew install jq`, `winget install jqlang.jq`, or `sudo apt install jq`."
+  }
+  if (name === "auth" && check.reason === "auth_stale") {
+    return "Re-authenticate: run `gh auth login --hostname github.com`."
+  }
+  return `Fix the ${name} prerequisite (${check.reason}) before continuing.`
+}
+
+function cardLocation(entry) {
+  return entry.desk ? `desks/${entry.desk}/${entry.track}/${entry.slug}` : `${entry.track}/${entry.slug}`
+}
+
+function emptyResult({ status, degraded, pending, actions, instructions = [], root, host }) {
+  return {
+    boot_complete: true,
+    status,
+    degraded,
+    pending,
+    actions,
+    instructions,
+    covers_hosts: AGENT_HOSTS,
+    root,
+    host,
+    desk_export_line: null,
+    migrations: [],
+    prereqs: null,
+    sync: null,
+    active_tasks: null,
+    card_parser: parserName(NESTED_CARD_FIELDS),
+    card_validation: [],
+    push_accounts: [],
+    repo_states: [],
+    open_prs: [],
+    task: null,
+    factory: null,
+  }
+}
+
+const FACTORY_QUESTION = (store, login) => `Desk can contribute measurement data about your finished tasks to \`${store}\`, which builds a report for each finished job. What it publishes: durations, counts, tool kinds, plugin and model versions, and references to public repositories. What it never publishes: prompt, assistant or tool content, names, or dates and times of day. \`${store}\` is a public repository, and your GitHub account \`${login}\` appears as the author of the intake pull requests that deliver the data. Contribute? (yes or no)`
+
+/**
+ * True when no operator is in the conversation: a headless Claude Code run
+ * (`claude -p` sets `CLAUDE_CODE_ENTRYPOINT` to an `sdk-*` value, and
+ * `CLAUDE_CODE_SESSION_ATTENDED=0` marks an unattended one) or a CI runner.
+ * A host that sets none of these is treated as interactive; the consent
+ * instruction is then still worded so it can never precede the real work.
+ */
+export function isNoninteractive(env) {
+  const entry = String(env.CLAUDE_CODE_ENTRYPOINT ?? "")
+  const flagged = (name) => /^(1|true)$/iu.test(String(env[name] ?? ""))
+  return entry.startsWith("sdk") || env.CLAUDE_CODE_SESSION_ATTENDED === "0" || flagged("CI") || flagged("GITHUB_ACTIONS")
+}
+
+function factoryInstructions(factory, pluginRoot, { noninteractive }) {
+  // No operator to ask: say nothing, record nothing. The next interactive session asks.
+  if (factory?.consent !== "undecided" || noninteractive) return []
+  const store = factory.store
+  const cli = path.join(pluginRoot, "mcp", "scripts", "factory.js")
+  return [
+    `Factory consent is undecided for ${store}. It never comes before the work the operator asked for, and never instead of it: do that work first. Afterwards raise it at most once, as one short line at the end of your reply ("Desk can contribute measurement data about your finished tasks to ${store}; want the details?"), never as its own decision group, and only if the operator is in the conversation. If they say yes to hearing it, find the account that would open the intake pull requests with \`node ${cli} account --store ${store}\` (never assume gh's active account).`,
+    `With result account_found, ask this, naming that account as the login: "${FACTORY_QUESTION(store, "<login>")}" With no_account_can_deliver, do not ask: say in one line that no signed-in GitHub account can open pull requests on ${store} (give each account's reason), and that signing in a personal account with \`gh auth login\` lets a later session ask.`,
+    `Record the answer only with \`node ${cli} consent --store ${store} --contribute yes --account <login>\` or \`node ${cli} consent --store ${store} --contribute no\`; a no is a decision too and is never asked again.`,
+  ]
+}
+
+function buildInstructions(ctx) {
+  const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive, repoStateList } = ctx
+  const out = []
+  for (const entry of migrationEntries) {
+    out.push(migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
+  }
+  if (existsSync(path.join(root.path, "AGENTS.md"))) {
+    out.push(`Read ${path.join(root.path, "AGENTS.md")} now, before the first question or action on the desk: it is the desk's own interaction contract and its rules bind this session (read it again if sync changed it).`)
+  }
+  out.push(`Export the desk root for later shell calls with \`export DESK=${root.path}\`.`)
+  for (const [name, check] of Object.entries(prereqResults)) {
+    if (check.ok || check.reason.endsWith("_timeout")) continue
+    out.push(`Hard stop: ${prereqAction(name, check)} A failed prerequisite is like a compile error: fix it before anything else, never fall back to local-only work; proceed only if the operator explicitly overrides after you name the specific risk.`)
+  }
+  if (sync?.state === "unresolved") out.push(`The desk's git sync is unresolved: run \`git status\` in ${root.path} and read it before changing anything there.`)
+  if (sync?.state === "quarantined") out.push(`Sync moved stray untracked paths to _cache/stray-<date>/ under ${root.path}; mention it in one line and continue.`)
+  for (const entry of cardValidationResult) {
+    out.push(`Fix the frontmatter of ${cardLocation(entry)}/task.md (handle ${entry.handle}): ${entry.problems.join("; ")}.`)
+  }
+  for (const entry of pushAccounts) {
+    if (entry.result === "no_account_can_deliver") out.push(`Do not push ${entry.store} (task ${cardLocation(entry)}): no signed-in account can. Ask the operator which account to use, or fork.`)
+  }
+  out.push("Confirm this session can call the Desk MCP (`desk_status` is the sentinel), again after any context compaction; if it is absent, repair first (see the session-start skill) and never continue silently in local-only mode.")
+  if (taskQuery !== null) {
+    if (task?.status === "resolved") {
+      out.push(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
+      for (const missing of repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)) {
+        out.push(`The named task's local repo ${missing.repo} is not at its recorded path ${missing.local_path}: clone it there (\`gh repo clone <owner>/${missing.repo} ${missing.local_path}\` when the name is owner/repo), or ask the operator where it lives, before doing work that needs it.`)
+      }
+      if (task.host_line_changed) out.push(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
+    } else if (task?.status === "ambiguous") {
+      out.push(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
+    } else {
+      out.push("The name matches no open task: show the active_tasks status block and ask what to resume or start.")
+    }
+  } else {
+    out.push("No task was named: build the status block from active_tasks, open_prs and repo_states, then ask which task to resume or whether to start new.")
+  }
+  out.push(...factoryInstructions(factory, pluginRoot, { noninteractive }))
+  out.push(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`)
+  return out
+}
+
+function withinBudget(promise, ms, timeoutValue) {
+  let timer
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(timeoutValue), Math.max(ms, 0))
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * One call replacing session-start's mechanical steps (migration check, host
+ * probe, prereq probe, sync, active-task scan, card validation, push-account
+ * resolution, repo fetch and open-PR lookup, named-task resolution,
+ * factory-consent context): see the module header for the full result shape
+ * and the design choices behind it. `taskQuery`, when given, names the task
+ * the operator wants to resume.
+ */
+export async function bootOnce({
+  env = process.env,
+  cwd = process.cwd(),
+  now = Date.now,
+  budgetMs = DEFAULT_BUDGET_MS,
+  taskQuery = null,
+  spawnGit = spawnSync,
+  homeDir = env.HOME || os.homedir(),
+  gh: ghArg,
+  ghAuth: ghAuthArg,
+  jq = commandRunner("jq"),
+  pluginRoot = DESK_PLUGIN_ROOT,
+  migrationsFn = pendingMigrations,
+  syncFn = syncWorkspace,
+  activeTasksFn = activeTasks,
+  walkFn = walkTaskCards,
+  repoFn = repoStates,
+  prFn = openPullRequests,
+  factoryStatusFn = factoryStatus,
+  nestedCards = NESTED_CARD_FIELDS,
+} = {}) {
+  const gh = ghArg ?? ghRunner({ env })
+  const ghAuth = ghAuthArg ?? (ghArg ?? commandRunner("gh", { env }))
+  const deadline = now() + budgetMs
+  const host = { ...probeHost({ env, now }), agent: detectAgentHost(env) }
+
+  const degraded = []
+  const pending = []
+  const actions = []
+
+  // Migrations settle before anything touches `$DESK/`: a stale pre-migration
+  // path must never be scanned or synced.
+  let migrationEntries = []
+  try {
+    migrationEntries = await migrationsFn({ pluginRoot, env, cwd })
+  } catch (error) {
+    degraded.push(`migrations: ${error.message}`)
+  }
+  for (const entry of migrationEntries) {
+    if (entry.state === "unchecked") pending.push(`migration ${entry.id}: not checked in time`)
+    if (entry.state === "restart" || entry.state === "run") degraded.push(`migration ${entry.id}: ${entry.state === "restart" ? "needs a restart" : entry.reason}`)
+  }
+  const migrationSummary = migrationEntries.map((entry) => ({ id: entry.id, state: entry.state }))
+  const stopForMigration = migrationEntries.some((entry) => entry.state === "restart" || entry.state === "run")
+
+  const root = resolveBootRoot({ env, cwd, homeDir })
+  if (root.status === "setup_required") {
+    actions.push("No desk is bound yet on this host; hand off to desk:first-run-bootstrap.")
+    return { ...emptyResult({ status: root.status, degraded, pending, actions, root, host }), migrations: migrationSummary, instructions: [
+      "No desk is bound on this host: this is a first run, not an outage. Hand off to desk:first-run-bootstrap Entrance A (or the onboarding path desk_status names in `onboarding_skill`, such as an overlay's own) and skip the rest of session-start.",
+    ] }
+  }
+  if (root.status === "degraded") {
+    // `resolveBootRoot` only ever reaches "degraded" through a thrown error
+    // that `util/paths.js` (directly, or via `loadActivationConfig`'s
+    // `codedError` wrapping) always attaches both `.message` and `.path` to,
+    // so neither field falls back to a placeholder here.
+    degraded.push(`root: ${root.message}`)
+    actions.push(`Restore or clone the desk at ${root.path}, or rebind through desk:first-run-bootstrap with the operator's agreement.`)
+    return { ...emptyResult({ status: root.status, degraded, pending, actions, root, host }), migrations: migrationSummary, instructions: [
+      `Stop: the desk configured at ${root.path} is missing or unreadable. Restore or clone it there, or rebind through desk:first-run-bootstrap with the operator's agreement. Never point $DESK at a different desk to work around this.`,
+    ] }
+  }
+  if (stopForMigration) {
+    actions.push("Finish the pending migration before anything else touches the desk.")
+    const instructions = migrationEntries.map((entry) => migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
+    return { ...emptyResult({ status: "degraded", degraded, pending, actions, root, host }), instructions, migrations: migrationSummary }
+  }
+
+  const prereqs = await checkPrereqs({ gh, jq, ghAuth })
+  for (const [name, check] of Object.entries(prereqs)) {
+    if (check.ok) continue
+    if (check.reason.endsWith("_timeout")) {
+      pending.push(`${name}: ${check.reason}`)
+    } else {
+      degraded.push(`${name}: ${check.reason}`)
+      actions.push(prereqAction(name, check))
+    }
+  }
+
+  let sync = null
+  try {
+    const synced = await withinBudget(syncFn({ root: root.path, env }), Math.min(SYNC_BUDGET_MS, deadline - now()), { timedOut: true })
+    if (synced.timedOut === true) pending.push("sync: boot_budget_exceeded")
+    else sync = synced
+  } catch (error) {
+    degraded.push(`sync: ${error.message}`)
+  }
+  if (sync?.state === "unresolved") {
+    degraded.push(`sync: unresolved${sync.reason ? ` (${sync.reason})` : ""}`)
+    actions.push(`Resolve the desk's git conflict before continuing: run \`git status\` in ${root.path}.`)
+  } else if (sync?.state === "quarantined") {
+    actions.push(`Sync quarantined ${sync.quarantinedPaths?.length ?? 0} stray path(s) at ${root.path}; review them under _cache/ when convenient.`)
+  }
+
+  let tasks = null
+  try {
+    tasks = activeTasksFn(root.path)
+  } catch (error) {
+    degraded.push(`active_tasks: ${error.message}`)
+  }
+
+  let cards = []
+  let cardValidationResult = []
+  try {
+    cards = walkFn(root.path)
+    cardValidationResult = cardValidation(root.path, () => cards, { nested: nestedCards })
+  } catch (error) {
+    degraded.push(`card_validation: ${error.message}`)
+  }
+  if (!nestedCards) pending.push("card repos: not validated, gray-matter is not installed (the dependency-free reader cannot parse repos lists)")
+  if (cardValidationResult.length > 0) {
+    degraded.push(`${cardValidationResult.length} task card${cardValidationResult.length === 1 ? "" : "s"} with corrupted frontmatter`)
+  }
+  for (const entry of cardValidationResult) {
+    actions.push(`Fix the frontmatter in ${cardLocation(entry)}/task.md (handle ${entry.handle}): ${entry.problems.join("; ")}.`)
+  }
+
+  let pushAccounts = []
+  try {
+    pushAccounts = await resolvePushAccounts({ root: root.path, cards, runner: withAmbientToken(gh, env), now, deadlineMs: Math.max(deadline - now(), 0), spawnGit, homeDir })
+  } catch (error) {
+    degraded.push(`push_accounts: ${error.message}`)
+  }
+  for (const entry of pushAccounts) {
+    const where = cardLocation(entry)
+    if (entry.result === "no_account_can_deliver") {
+      degraded.push(`push account: no signed-in account can push ${entry.store} for ${where}`)
+      actions.push(`Task ${where}'s repo ${entry.store} cannot be pushed by any signed-in account; do not push there. Ask the operator which account to use, or fork.`)
+    } else if (entry.result === "pending") {
+      pending.push(`push account for ${entry.store} (${where}): ${entry.reason}`)
+    } else if (entry.result !== "account_found" && entry.result !== "not_a_github_repo") {
+      degraded.push(`push account: ${entry.store} (${where}) — ${entry.result}`)
+    }
+  }
+
+  let repoStateList = []
+  try {
+    const found = repoFn({ cards, spawnGit, homeDir, now, deadline })
+    repoStateList = found.states
+    pending.push(...found.pending)
+  } catch (error) {
+    degraded.push(`repo_states: ${error.message}`)
+  }
+
+  let openPrs = []
+  try {
+    const stores = [...new Set(pushAccounts.filter((entry) => typeof entry.store === "string").map((entry) => entry.store))]
+    const found = await prFn({ stores, runner: ghAuth, now, deadline })
+    openPrs = found.prs
+    pending.push(...found.pending)
+  } catch (error) {
+    degraded.push(`open_prs: ${error.message}`)
+  }
+
+  let factory = null
+  try {
+    factory = factoryStatusFn({ env, deskRoot: root.path })
+  } catch (error) {
+    degraded.push(`factory: ${error.message}`)
+  }
+
+  let task = null
+  if (taskQuery !== null) {
+    const resolved = resolveTaskQuery(taskQuery, cards, root.path)
+    if (resolved.status === "resolved") {
+      const { file, ...shown } = resolved.task
+      const recorded = hostLineHostname(readCardText(file) ?? "")
+      task = { status: "resolved", task: shown, host_line_changed: recorded !== null && recorded !== host.hostname }
+    } else {
+      task = resolved
+    }
+  }
+
+  const status = degraded.length > 0 ? "degraded" : "ready"
+  const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList })
+  return {
+    boot_complete: true,
+    status,
+    degraded,
+    pending,
+    actions,
+    instructions,
+    covers_hosts: AGENT_HOSTS,
+    root,
+    host,
+    desk_export_line: `export DESK=${root.path}`,
+    migrations: migrationSummary,
+    prereqs,
+    sync,
+    active_tasks: tasks,
+    card_parser: parserName(nestedCards),
+    card_validation: cardValidationResult,
+    push_accounts: pushAccounts,
+    repo_states: repoStateList,
+    open_prs: openPrs,
+    task,
+    factory,
+  }
+}
+
+/** `--task <query>` from the command line, or null. */
+export function parseBootArgs(argv) {
+  const index = argv.indexOf("--task")
+  return { taskQuery: index !== -1 && typeof argv[index + 1] === "string" && argv[index + 1].trim() !== "" ? argv[index + 1] : null }
+}
+
+/** The CLI entrypoint: prints `bootOnce`'s result as one line of JSON and always exits 0 — a boot script must never block session start. */
+export async function runBootCli({ argv = [], env = process.env, io = process, bootFn = bootOnce }) {
+  let result
+  try {
+    result = await bootFn({ env, ...parseBootArgs(argv) })
+  } catch (error) {
+    result = emptyResult({
+      status: "degraded",
+      degraded: [`boot: ${error.message}`],
+      pending: [],
+      actions: ["The boot script failed unexpectedly; run session-start's steps by hand and record this as friction."],
+      instructions: ["The boot script failed unexpectedly: check `gh --version`, `jq --version` and `gh auth status` by hand, and record the failure as friction."],
+      root: null,
+      host: null,
+    })
+  }
+  io.stdout.write(`${JSON.stringify(result)}\n`)
+  return 0
+}

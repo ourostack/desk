@@ -49,7 +49,7 @@
 // files.
 
 import { LABEL_WASTES, checkLabelsAgainstFacts } from "../label-schema.js"
-import { covered, fieldCoverage } from "./formulas.js"
+import { covered, fieldCoverage, splitSessions } from "./formulas.js"
 import { compareVersions } from "./versions.js"
 
 export const ROLLUPS_SCHEMA = "desk.factory.rollups/1"
@@ -192,9 +192,10 @@ function pluginRanges(sources) {
 }
 
 // Compactions are counted with turns, so a session without turns cannot say.
-function compactions(sources) {
-  const coverage = fieldCoverage(sources, ["turns"])
-  return fromFormula(covered(coverage, () => ({ class: "measured", value: sources.reduce((total, session) => total + session.counts.compactions, 0) })))
+// A session split across jobs cannot say which job's worker compacted.
+function compactions(sources, split) {
+  const coverage = fieldCoverage(sources, ["turns"], [], split)
+  return fromFormula(covered(coverage, () => ({ class: "measured", value: sources.reduce((total, session) => total + (split.has(session) ? 0 : session.counts.compactions), 0) })))
 }
 
 function wasteTotals(stretches) {
@@ -253,7 +254,7 @@ export function jobRecord({ timeline, formulas }, labelsByJobSession) {
     tool_failures: fromFormula(signals.tool_failures),
     tool_retries: fromFormula(signals.tool_retries),
     api_retries: fromFormula(signals.api_retries),
-    compactions: compactions(sources),
+    compactions: compactions(sources, splitSessions(timeline)),
     retouches: fromFormula(signals.session_retouches),
     ...muda.measures,
     search_waste: { excluded: NOT_PUBLISHED },

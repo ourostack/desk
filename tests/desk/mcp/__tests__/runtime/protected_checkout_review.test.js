@@ -24,7 +24,15 @@ const gitExecutable = process.platform === "win32"
 
 function fixture(t, sharedName = "shared") {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-review-")))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  // Windows refuses to remove a folder while an inspection Git the guard stopped waiting for still runs in it, so cleanup retries for up to 4 s.
+  t.after(async () => {
+    for (let attempt = 0; ; attempt++) {
+      try { rmSync(root, { recursive: true, force: true, maxRetries: 5 }); return } catch (error) {
+        if (error.code !== "EPERM" && error.code !== "EBUSY" || attempt >= 20) throw error
+        await new Promise((resolve) => setTimeout(resolve, 200))
+      }
+    }
+  })
   const env = { ...process.env, HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "no-global") }
   for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|CONFIG_(?:COUNT|KEY_|VALUE_))/u.test(key)) delete env[key]
   const git = (dir, ...args) => execFileSync(gitExecutable, ["-C", dir, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -71,12 +79,16 @@ test("A3-C01: candidate PATH and loader variables never select an inspection exe
 
 test("A3-I01: physical Git traversal and logical/physical cd inspect the same checkout as the real shell", async (t) => {
   const f = fixture(t)
+  // Windows keeps a directory as the path it was given, so ".." after a junction in Git's own -C chain, or inside one
+  // cd -P operand, is the link's own parent. Elsewhere each step is a real chdir, so ".." is the target's parent.
+  const windows = process.platform === "win32"
   for (const [issuer, target, deny] of [[f.ordinary, f.shared, true], [f.shared, f.ordinary, false]]) {
     const link = path.join(issuer, "link")
-    symlinkSync(path.join(target, "child"), link, process.platform === "win32" ? "junction" : "dir")
+    symlinkSync(path.join(target, "child"), link, windows ? "junction" : "dir")
+    const lexical = windows ? [!deny, issuer] : [deny, target]
     const commands = [
-      [`git -C ${q(link)} -C .. checkout --detach HEAD`, deny, target],
-      [`cd -P ${q(link + "/..")} && git checkout --detach HEAD`, deny, target],
+      [`git -C ${q(link)} -C .. checkout --detach HEAD`, ...lexical],
+      [`cd -P ${q(link + "/..")} && git checkout --detach HEAD`, ...lexical],
       [`cd -P ${q(link)} && cd .. && git checkout --detach HEAD`, deny, target],
       [`cd ${q(link)} && git -C .. checkout --detach HEAD`, deny, target],
       [`cd ${q(link)} && cd .. && git checkout --detach HEAD`, !deny, issuer],
@@ -89,6 +101,70 @@ test("A3-I01: physical Git traversal and logical/physical cd inspect the same ch
       assert.equal(result.status, 0, result.stderr)
       assert.notEqual(f.git(actualTarget, "reflog", "--format=%H %gs"), before)
     }
+  }
+})
+
+test("Windows PowerShell locations and Git -C resolve '..' after a junction as the real process does", { skip: process.platform !== "win32" && "Windows directory semantics" }, async (t) => {
+  const f = fixture(t)
+  for (const [issuer, target, deny] of [[f.ordinary, f.shared, true], [f.shared, f.ordinary, false]]) {
+    const link = path.join(issuer, "link")
+    symlinkSync(path.join(target, "child"), link, "junction")
+    // [command, denied, the checkout the command really changes]
+    const commands = [
+      [`Set-Location ${psq(link)}; Set-Location ..; git checkout --detach HEAD`, !deny, issuer],
+      [`Set-Location ${psq(link)}; git -C .. checkout --detach HEAD`, !deny, issuer],
+      [`Set-Location ${psq(link)}; git checkout --detach HEAD`, deny, target],
+      [`git -C ${psq(link)} -C .. checkout --detach HEAD`, !deny, issuer],
+    ]
+    for (const [command, expected, actualTarget] of commands) {
+      f.git(actualTarget, "checkout", "main")
+      const before = f.git(actualTarget, "reflog", "--format=%H %gs")
+      assert.equal((await f.guard(command, { powershell: true })).deny, expected, command)
+      const result = spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", command], { cwd: f.ordinary, env: f.env, encoding: "utf8" })
+      assert.equal(result.status, 0, result.stderr)
+      assert.notEqual(f.git(actualTarget, "reflog", "--format=%H %gs"), before, command)
+    }
+  }
+})
+
+test("Windows Git works from the physical folder once a junction brought it there", { skip: process.platform !== "win32" && "Windows directory semantics" }, async (t) => {
+  const f = fixture(t)
+  const link = path.join(f.ordinary, "link")
+  symlinkSync(path.join(f.shared, "child"), link, "junction")
+  // Git finds the repository, and resolves its own operands, from the junction's target: ../victim is shared's sibling of child.
+  const victim = path.join(f.shared, "victim")
+  const cases = [
+    [`git -C ${q(link)} worktree remove --force ../victim`, false],
+    [`Set-Location ${psq(link)}; git worktree remove --force ../victim`, true],
+    [`git -C ${psq(link)} worktree remove --force ../victim`, true],
+  ]
+  for (const [command, powershell] of cases) {
+    f.git(f.shared, "worktree", "add", "--detach", victim, "HEAD")
+    await protectCheckout({ root: victim })
+    assert.equal((await f.guard(command, { powershell })).deny, true, command)
+    const result = powershell ? spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", command], { cwd: f.ordinary, env: f.env, encoding: "utf8" })
+      : spawnSync("bash", ["--noprofile", "--norc", "-c", command], { cwd: f.ordinary, env: f.env, encoding: "utf8" })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(existsSync(victim), false, `${command} really removes the protected worktree`)
+  }
+  // Desk's model of `git rev-parse --show-toplevel` names the repository Git really finds.
+  const command = `Set-Location ${psq(link)}; $top = git rev-parse --show-toplevel; git -C $top checkout --detach HEAD`
+  f.git(f.shared, "checkout", "main")
+  const before = f.git(f.shared, "reflog", "--format=%H %gs")
+  assert.equal((await f.guard(command, { powershell: true })).deny, true, command)
+  const result = spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", command], { cwd: f.ordinary, env: f.env, encoding: "utf8" })
+  assert.equal(result.status, 0, result.stderr)
+  assert.notEqual(f.git(f.shared, "reflog", "--format=%H %gs"), before)
+})
+
+test("Windows worktree removal finds a protected worktree named in another path form", { skip: process.platform !== "win32" && "Windows path forms" }, async (t) => {
+  const f = fixture(t)
+  const victim = path.join(f.root, "victim")
+  f.git(f.ordinary, "worktree", "add", "--detach", victim, "HEAD")
+  await protectCheckout({ root: victim })
+  // Git lists C:/Users/name/...; a command may name the same folder with backslashes, an 8.3 short name or other letter case.
+  for (const named of [victim, victim.replaceAll("\\", "/"), victim.toUpperCase()]) {
+    assert.equal((await f.guard(`git worktree remove --force ${q(named)}`)).deny, true, named)
   }
 })
 
@@ -117,9 +193,11 @@ test("A3-I02: accepted Git option abbreviations mutate while option values remai
 
 test("A3-I03: ANSI-C quotes and unquoted parameter fields retain Bash command semantics", async (t) => {
   const f = fixture(t)
+  // Git takes forward slashes on Windows too; inside $'...' a Windows backslash would be decoded as an escape.
+  const slashed = f.shared.replaceAll(path.sep, "/")
   const commands = [
-    `git -C $'${f.shared}' checkout --detach HEAD`,
-    `git -C $'${f.shared.replaceAll("/", "\\x2f")}' checkout --detach HEAD`,
+    `git -C $'${slashed}' checkout --detach HEAD`,
+    `git -C $'${slashed.replaceAll("/", "\\x2f")}' checkout --detach HEAD`,
     `G='git -C ${f.shared}'; $G checkout --detach HEAD`,
     `G='git -C ${f.shared}'; \${G} checkout --detach HEAD`,
   ]
@@ -237,6 +315,16 @@ test("inspection trust is independent of candidate runtime search and fails expl
   assert.throws(() => resolveInspectionGit({ platform: "win32", env: { ProgramFiles: "/missing-trusted-location" } }), /trusted Git is unavailable/u)
   assert.throws(() => resolveInspectionGit({ platform: "win32", env: {} }), /trusted Git is unavailable/u)
   assert.throws(() => resolveInspectionGit({ platform: "linux", accessible: () => false }), /trusted Git is unavailable/u)
+  // Windows names are case-insensitive, but a copied environment is a plain object. Claude Code runs hooks through Git Bash, which hands them PROGRAMFILES in capitals.
+  const trusted = (expected) => (file) => file === expected
+  assert.equal(resolveInspectionGit({ platform: "win32", env: { PROGRAMFILES: "C:\\Program Files" }, accessible: trusted("C:\\Program Files\\Git\\cmd\\git.exe") }), "C:\\Program Files\\Git\\cmd\\git.exe")
+  assert.equal(resolveInspectionGit({ platform: "win32", env: { "PROGRAMFILES(X86)": "C:\\Program Files (x86)" }, accessible: trusted("C:\\Program Files (x86)\\Git\\cmd\\git.exe") }), "C:\\Program Files (x86)\\Git\\cmd\\git.exe")
+  // A 32-bit Node sees the x86 folder as ProgramFiles; ProgramW6432 still names the 64-bit one, where Git for Windows installs by default.
+  assert.equal(resolveInspectionGit({ platform: "win32", env: { ProgramFiles: "C:\\Program Files (x86)", ProgramW6432: "C:\\Program Files" }, accessible: trusted("C:\\Program Files\\Git\\cmd\\git.exe") }), "C:\\Program Files\\Git\\cmd\\git.exe")
+  // An exact-case name wins over a differently cased duplicate.
+  assert.equal(resolveInspectionGit({ platform: "win32", env: { programfiles: "C:\\Other", ProgramFiles: "C:\\Trusted" }, accessible: (file) => file.endsWith("git.exe") }), "C:\\Trusted\\Git\\cmd\\git.exe")
+  // Case folding applies only to Windows: elsewhere the fixed system paths are the only candidates and the environment is not read.
+  assert.equal(resolveInspectionGit({ platform: "darwin", env: { PROGRAMFILES: "C:\\Program Files" }, accessible: trusted("/usr/bin/git") }), "/usr/bin/git")
   await assert.rejects(readInspectionGit(f.root + "/absent", ["status"], {}), /ENOENT/u)
   // hash-object --stdin waits on input the inspection never sends, so the hooks' default 2 s limit ends it and says so.
   await assert.rejects(readInspectionGit(f.ordinary, ["hash-object", "--stdin"], {}), /Git inspection timed out after 2000 ms: git hash-object --stdin/u)
@@ -299,10 +387,12 @@ test("operation option parsing consumes values, detects unambiguous prefixes and
 
 test("ANSI-C literal escapes decode without executing code or expanding quoted variables", async (t) => {
   const f = fixture(t)
+  // Git takes forward slashes on Windows too; inside $'...' a Windows backslash would be decoded as an escape.
+  const slashed = f.shared.replaceAll(path.sep, "/")
   for (const command of [
-    `git -C $'${f.shared.replaceAll("/", "\\057")}' checkout HEAD`,
-    `git -C $'${f.shared.replaceAll("/", "\\u002f")}' checkout HEAD`,
-    `git -C $'${f.shared.replaceAll("/", "\\U0000002f")}' checkout HEAD`,
+    `git -C $'${slashed.replaceAll("/", "\\057")}' checkout HEAD`,
+    `git -C $'${slashed.replaceAll("/", "\\u002f")}' checkout HEAD`,
+    `git -C $'${slashed.replaceAll("/", "\\U0000002f")}' checkout HEAD`,
     `$'g\\x69t' -C ${q(f.shared)} checkout HEAD`,
   ]) assert.equal((await f.guard(command)).deny, true, command)
   for (const command of ["printf $'\\a\\b\\e\\E\\f\\n\\r\\t\\v\\\\\\'\\\"'", "printf $'\\cA\\z'"]) assert.equal((await f.guard(command)).deny, false)
@@ -317,7 +407,8 @@ test("ANSI-C literal escapes decode without executing code or expanding quoted v
   assert.equal((await f.guard("$(opaque-command) git status")).deny, false)
   assert.equal((await f.guard("$(command -v git) status")).deny, false)
   assert.match((await f.guard(`$(command -v git) -C ${q(f.shared)} stash`)).reason, /git stash takes other sessions/u)
-  assert.equal((await f.guard(`G='git:-C:${f.shared}'; IFS=:; $G checkout HEAD`)).deny, true)
+  // ';' rather than ':' separates the fields, so a Windows drive letter's colon does not split the path.
+  assert.equal((await f.guard(`G='git;-C;${f.shared}'; IFS=';'; $G checkout HEAD`)).deny, true)
   assert.equal((await f.guard(`G='git -C ${f.shared}'; IFS=; $G checkout HEAD`)).deny, false)
 })
 

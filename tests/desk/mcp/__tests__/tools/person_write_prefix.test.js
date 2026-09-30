@@ -16,6 +16,14 @@ import { lesson_add } from "../../../../../plugins/desk/mcp/src/tools/lesson.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
 import { mkTempRoot } from "../_temp_roots.js"
 
+// A fixture card defaults to `status: drafting` -- non-terminal -- so an
+// archive of one now needs either this evidence or `outcome: "cancelled"`
+// (see task.js's `assertDoneEvidence`/the archive evidence gate). Most of
+// this file's `task_archive` calls are really testing write-prefix or
+// symlink-confinement behavior, not evidence content, so they reach for
+// whichever of the two lets them exercise the archive-move logic under test.
+const DONE_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" }
+
 async function makeOutside() {
   return mkTempRoot("desk-write-outside-")
 }
@@ -106,7 +114,7 @@ test("task_archive person:ari → desks/ari/<track>/_archive/<slug>/", async () 
   const res = await task_archive({
     deskRoot: root,
     person: "ari",
-    input: { track: "t", slug: "book-flights" },
+    input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE },
   })
   assert.equal(res.status, "archived")
   assert.equal(
@@ -646,7 +654,7 @@ test("task_archive rejects a relocation-sensitive task.md symlink before rename"
     task_archive({
       deskRoot: root,
       person: "ari",
-      input: { track: "t", slug: "s" },
+      input: { track: "t", slug: "s", outcome: "cancelled" },
     }),
     containmentError(),
   )
@@ -679,7 +687,7 @@ test("task_archive cannot retarget a relative task.md symlink to another interna
     task_archive({
       deskRoot: root,
       person: "ari",
-      input: { track: "t", slug: "s" },
+      input: { track: "t", slug: "s", outcome: "cancelled" },
     }),
     /symlink would change referent/i,
   )
@@ -704,7 +712,7 @@ test("task_archive preserves a relative task.md symlink whose target moves with 
   const result = await task_archive({
     deskRoot: root,
     person: "ari",
-    input: { track: "t", slug: "s" },
+    input: { track: "t", slug: "s", evidence: DONE_EVIDENCE },
   })
 
   assert.equal(result.status, "archived")
@@ -728,7 +736,7 @@ test("task_archive preserves a stable nested symlink chain that moves with the t
   const result = await task_archive({
     deskRoot: root,
     person: "ari",
-    input: { track: "t", slug: "s" },
+    input: { track: "t", slug: "s", evidence: DONE_EVIDENCE },
   })
 
   assert.equal(result.status, "archived")
@@ -754,7 +762,7 @@ test("task_archive preserves a stable absolute task.md symlink within the person
   const result = await task_archive({
     deskRoot: root,
     person: "ari",
-    input: { track: "t", slug: "s" },
+    input: { track: "t", slug: "s", evidence: DONE_EVIDENCE },
   })
 
   assert.equal(result.status, "archived")
@@ -782,7 +790,7 @@ test("task_archive rejects a nested symlink chain that retargets after relocatio
     task_archive({
       deskRoot: root,
       person: "ari",
-      input: { track: "t", slug: "s" },
+      input: { track: "t", slug: "s", outcome: "cancelled" },
     }),
     /symlink would change referent/i,
   )
@@ -811,7 +819,7 @@ test("task_archive rejects a post-relocation symlink cycle before rename", async
     task_archive({
       deskRoot: root,
       person: "ari",
-      input: { track: "t", slug: "s" },
+      input: { track: "t", slug: "s", outcome: "cancelled" },
     }),
     /symlink would change referent/i,
   )
@@ -837,7 +845,7 @@ test("task_archive canonicalizes a symlinked track ancestor before relocation ch
     task_archive({
       deskRoot: root,
       person: "ari",
-      input: { track: "t", slug: "s" },
+      input: { track: "t", slug: "s", outcome: "cancelled" },
     }),
     /symlink would change referent/i,
   )
@@ -862,7 +870,7 @@ test("task_archive rejects an archive destination nested inside the source direc
     task_archive({
       deskRoot: root,
       person: "ari",
-      input: { track: "t", slug: "s" },
+      input: { track: "t", slug: "s", outcome: "cancelled" },
     }),
     /archive destination cannot be inside source directory/i,
   )
@@ -887,7 +895,7 @@ test("task_archive rejects an internal source-directory symlink before rename", 
     task_archive({
       deskRoot: root,
       person: "ari",
-      input: { track: "t", slug: "s" },
+      input: { track: "t", slug: "s", outcome: "cancelled" },
     }),
     /source directory symlink/i,
   )

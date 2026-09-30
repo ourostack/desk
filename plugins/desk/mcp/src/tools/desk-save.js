@@ -19,6 +19,12 @@ import { personPrefix, isPathContained } from "../util/paths.js"
 import { isGitRepository, hasUnstagedWork, stagePaths, commitPaths } from "../util/git-stage.js"
 import { schedulePush as schedulePushDefault } from "../runtime/sync-worker.js"
 
+// Every field desk_save reads off `input`, kept next to the handler so a
+// field added to its reads is a field added here in the same diff.
+// __tests__/tool_schema_parity.test.js checks this against the tool's
+// declared schema in tool-schemas.js.
+export const DESK_SAVE_FIELDS = ["paths", "message"]
+
 function pathsInput(value) {
   let parsed = value
   if (typeof value === "string") {

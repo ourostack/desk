@@ -256,3 +256,34 @@ test("storePublicPlugins names only plugins that facts carrying the private-plug
   assert.throws(() => storePublicPlugins(5), /storeDir must be a path/u)
   assert.throws(() => storePublicPlugins(ruled), /store must be a real directory/u)
 }))
+
+test("a store mixing legacy and per-worker files builds and legacy numbers are unchanged", () => scratch((root) => {
+  const store = path.join(root, "store")
+  cpSync(STORE, store, { recursive: true })
+  const base = JSON.parse(readFileSync(path.join(STORE, "facts", "copilot-cli-22222222-2222-4222-8222-222222222222.json"), "utf8"))
+  const split = { ...structuredClone(base), session: { ...base.session, id: "55555555-5555-4555-8555-555555555555" } }
+  split.refs.prs = [{ repo: "ourostack/desk", number: 8, agent: 0 }]
+  split.jobs = [
+    { job: "cccccccccccccccccccccccccccccccc", agents: [0], basis: ["desk_tool"], session_offset_ms: 0, transitions: [], observed: { status: "processing", offset_ms: null } },
+    { job: "dddddddddddddddddddddddddddddddd", agents: [1], basis: ["spawn_brief"], session_offset_ms: 0, transitions: [], observed: { status: "processing", offset_ms: null } },
+  ]
+  writeFileSync(path.join(store, "facts", `copilot-cli-${split.session.id}.json`), serializePublished(split))
+  const out = path.join(root, "out")
+  assert.deepEqual(build({ storeDir: store, outDir: out }), { jobs: 4, sessions: 5 })
+  const actual = bytesByPath(out)
+  const expected = bytesByPath(EXPECTED)
+  for (const job of ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]) {
+    for (const extension of ["json", "md"]) {
+      const relative = `jobs/${job}.${extension}`
+      assert.equal(Buffer.compare(actual[relative], expected[relative]), 0, relative)
+    }
+  }
+  const first = JSON.parse(actual["jobs/cccccccccccccccccccccccccccccccc.json"])
+  const second = JSON.parse(actual["jobs/dddddddddddddddddddddddddddddddd.json"])
+  // Worker 0 is active over [0,6000] (turn 0-5000, tool 1000-6000) and worker 1
+  // over [2000,8000] (subagent). The two jobs each get their own 6000 ms; the
+  // session's whole union is 8000 ms, and the 4000 ms both workers overlap is
+  // legitimately credited to each job.
+  assert.equal(first.formulas.active_time_ms.value, 6000)
+  assert.equal(second.formulas.active_time_ms.value, 6000)
+}))

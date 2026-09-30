@@ -82,6 +82,7 @@ test("Superpowers context prints exact paths without introducing a second progre
     reviewPackagePath: path.join(artifactDirectory, "review.patch"),
     reviewReportPath: path.join(artifactDirectory, "review-report.md"),
     briefRules: [
+      "Desk-Task: track/outcome",
       "verify or validate in your own worktree; never in a checkout your task does not own",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
     ],
@@ -470,4 +471,33 @@ test("the CLI maps task-card-only work when the plan option is omitted", async (
   assert.equal(printed.planPath, null)
   assert.equal(printed.progressPath, path.join(input.taskPath, "task.md"))
   assert.deepEqual(printed, await resolve(input))
+})
+
+test("the mapped brief names its task first, in a form the factory binder accepts", async () => {
+  const { parseDeskTaskLine } = await import("../../../../../plugins/desk/mcp/src/factory/desk-task-line.js")
+  const output = await resolve(context())
+  assert.equal(output.briefRules[0], "Desk-Task: track/outcome")
+  assert.deepEqual(parseDeskTaskLine(output.briefRules[0]), { track: "track", slug: "outcome" })
+})
+
+test("a person-off desk names the task from the desk root", async () => {
+  const input = context({ person: null })
+  const taskPath = path.join(input.deskRoot, "desk-plugin", "some-task")
+  const iterationPath = path.join(taskPath, "repo", "2026-09-09-x")
+  const moved = { ...input, taskPath, iterationPath, planPath: path.join(iterationPath, "planning.md") }
+  seedCanonicalFiles(moved)
+  assert.equal((await resolve(moved)).briefRules[0], "Desk-Task: desk-plugin/some-task")
+})
+
+test("a task path that is not exactly track and slug omits the Desk-Task rule", async () => {
+  for (const segments of [["track", "outcome", "deeper"], ["_meta", "outcome"]]) {
+    const input = context()
+    const taskPath = path.join(input.deskRoot, "desks", "member", ...segments)
+    const iterationPath = path.join(taskPath, "repo")
+    const moved = { ...input, taskPath, iterationPath, planPath: path.join(iterationPath, "planning.md") }
+    seedCanonicalFiles(moved)
+    const { briefRules } = await resolve(moved)
+    assert.equal(briefRules.some((rule) => rule.startsWith("Desk-Task:")), false, segments.join("/"))
+    assert.equal(briefRules.length, 2)
+  }
 })
