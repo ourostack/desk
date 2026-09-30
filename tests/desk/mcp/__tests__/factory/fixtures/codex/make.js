@@ -117,6 +117,7 @@ function sessionMeta({ id, startIso, source = "cli", parentThreadId, agentRole, 
     source: subSource,
     ...(parentThreadId ? { thread_source: "subagent", agent_nickname: agentNickname, agent_role: agentRole } : {}),
     model_provider: "openai",
+    history_mode: "legacy",
     base_instructions: BASE_INSTRUCTIONS,
     ...(git
       ? { git: { commit_hash: "0123456789abcdef0123456789abcdef01234567", branch: `${S}-branch`, repository_url: `https://github.com/${S}/repo.git` } }
