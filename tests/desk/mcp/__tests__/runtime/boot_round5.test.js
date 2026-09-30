@@ -107,7 +107,7 @@ test("bootOnce: a fork route names the repo, the account and the route, in instr
   const line = result.instructions.find((entry) => entry.startsWith("Push route for acme/widgets"))
   assert.match(line, /task example-track\/one/u)
   assert.match(line, /account ari cannot push to it directly, so its route is a fork/u)
-  assert.match(line, /never push to acme\/widgets itself/u)
+  assert.match(line, /never push to acme\/widgets itself\. Tell the operator this route in one line/u)
   assert.ok(result.actions.includes(line))
 })
 
@@ -117,13 +117,14 @@ test("bootOnce: when only a non-active account can push, the instruction names b
   const line = result.instructions.find((entry) => entry.startsWith("Push route for acme/widgets"))
   assert.match(line, /account ari is the one with push access \(route direct\), but gh's active account is work/u)
   assert.match(line, /GH_TOKEN=\$\(gh auth token --user ari\)/u)
+  assert.match(line, /Tell the operator this in one line/u)
 })
 
 test("bootOnce: no account can deliver lists each account's reason", async () => {
   const gh = fakeGh({ accounts: [{ login: "work", active: true }, { login: "ari", active: false }], repos: { work: 404, ari: 404 } })
   const result = await boot(await mkDesk({ one: CARD("acme/widgets") }), { gh })
   const line = result.instructions.find((entry) => entry.startsWith("Do not push acme/widgets"))
-  assert.match(line, /no signed-in account can \(work: store_not_visible; ari: store_not_visible\)\. Ask the operator/u)
+  assert.match(line, /no signed-in account can \(work: store_not_visible; ari: store_not_visible\)\. Ask the operator which account to use, or fork, and say so in one line/u)
 })
 
 test("bootOnce: a no-account answer without an account list still says so", async () => {

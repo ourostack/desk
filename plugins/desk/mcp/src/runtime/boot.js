@@ -781,15 +781,15 @@ function pushInstruction(entry) {
     const reasons = Array.isArray(entry.accounts) && entry.accounts.length > 0
       ? ` (${entry.accounts.map((item) => `${item.account}: ${item.reason}`).join("; ")})`
       : ""
-    return `Do not push ${store} (task ${where}): no signed-in account can${reasons}. Ask the operator which account to use, or fork.`
+    return `Do not push ${store} (task ${where}): no signed-in account can${reasons}. Ask the operator which account to use, or fork, and say so in one line when you report on the task.`
   }
   if (entry.result === "account_found") {
     const active = entry.accounts[0].account
     if (entry.route === "fork") {
-      return `Push route for ${store} (task ${where}): account ${entry.account} cannot push to it directly, so its route is a fork. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself.`
+      return `Push route for ${store} (task ${where}): account ${entry.account} cannot push to it directly, so its route is a fork. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself. Tell the operator this route in one line when you report on the task.`
     }
     if (entry.account !== active) {
-      return `Push route for ${store} (task ${where}): account ${entry.account} is the one with push access (route ${entry.route}), but gh's active account is ${active}. Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), not with the active login.`
+      return `Push route for ${store} (task ${where}): account ${entry.account} is the one with push access (route ${entry.route}), but gh's active account is ${active}. Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), not with the active login. Tell the operator this in one line when you report on the task.`
     }
     return null
   }
