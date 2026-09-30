@@ -211,6 +211,32 @@ one the configured account cannot push to).
 GitHub account.
 `
 
+// A second in-progress task whose recorded local clone deliberately does not
+// exist on the harness's isolated HOME. Only the `missing-clone` scenario adds
+// it (see `addMissingCloneTask`), so every other scenario boots with no
+// repo-access problem of its own.
+const TASK_VALVE_FIRMWARE = `---
+schema_version: 1
+title: "valve-firmware-flasher"
+status: processing
+created: "2026-09-21T09:00:00Z"
+updated: "2026-09-27T12:00:00Z"
+track: greenhouse-ops
+repos:
+  - name: valve-firmware
+    local_path: ~/code/valve-firmware
+    mode: local
+---
+
+## Current work
+
+Adding a dry-run flag to the valve-controller flasher on branch
+\`feature/dry-run\`.
+
+**Next step:** thread the \`--dry-run\` flag from \`cli.py\` into
+\`Flasher.write()\` and cover it with one test.
+`
+
 /** Writes every fixture file under `root` (must already exist). Does not touch git. */
 export function writeFixtureFiles(root) {
   mkdirSync(path.join(root, "_meta"), { recursive: true })
@@ -260,6 +286,62 @@ export function materializeFixture(workDir) {
   sh("git", ["-C", deskRoot, "push", "-q", "-u", "origin", "main"])
 
   return { deskRoot, originDir }
+}
+
+/**
+ * The "missing clone" injection: adds a second in-progress task whose
+ * recorded local repo (`~/code/valve-firmware`) is never created on the
+ * isolated HOME, then commits and pushes it to the run's own bare origin.
+ */
+export function addMissingCloneTask(deskRoot) {
+  const dir = path.join(deskRoot, "greenhouse-ops", "valve-firmware-flasher")
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(path.join(dir, "task.md"), TASK_VALVE_FIRMWARE)
+  sh("git", ["-C", deskRoot, "add", "-A"])
+  sh("git", ["-C", deskRoot, "commit", "-q", "-m", "Fixture: add valve-firmware-flasher task"])
+  sh("git", ["-C", deskRoot, "push", "-q", "origin", "main"])
+}
+
+// ---------------------------------------------------------------------------
+// The in-progress task's local clone, on the isolated HOME.
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates `<homeDir>/code/greenhouse-irrigation`, the clone the
+ * `watering-schedule-api` card records as `~/code/greenhouse-irrigation`.
+ * Desk and the agent expand `~` from `HOME`, and every run's HOME is its own
+ * temp directory, so this is a temp path: the operator's real `~/code` is
+ * never read or written. A small real git repo on the card's branch with a
+ * stubbed policy and one stubbed test, so "continue the recorded next step"
+ * has something true to act on.
+ */
+export function materializeGreenhouseClone(homeDir) {
+  const repo = path.join(homeDir, "code", "greenhouse-irrigation")
+  if (path.resolve(homeDir) === path.resolve(REAL_HOME)) throw new Error("refusing to write a fixture clone under the operator's real HOME")
+  mkdirSync(path.join(repo, "src"), { recursive: true })
+  mkdirSync(path.join(repo, "tests"), { recursive: true })
+  writeFileSync(path.join(repo, "README.md"), "# greenhouse-irrigation\n\nSynthetic fixture repo for the boot-acceptance harness.\n")
+  writeFileSync(path.join(repo, "src", "rain_delay.py"), `SENSOR_DEFAULT_THRESHOLD = 25  # vendor default; the ruling is 30
+
+
+class RainDelayPolicy:
+    def should_delay(self, soil_moisture_percent):
+        raise NotImplementedError("wire the moisture threshold check here")
+`)
+  writeFileSync(path.join(repo, "tests", "test_rain_delay.py"), `def test_rain_delay_dry_soil():
+    pass  # TODO
+
+
+def test_rain_delay_boundary():
+    pass  # stub: exactly 30% soil moisture
+`)
+  sh("git", ["init", "-q", "-b", "feature/rain-delay"], { cwd: repo })
+  sh("git", ["-C", repo, "config", "user.email", "fixture@boot-acceptance.local"])
+  sh("git", ["-C", repo, "config", "user.name", "Boot Acceptance Fixture"])
+  sh("git", ["-C", repo, "config", "commit.gpgsign", "false"])
+  sh("git", ["-C", repo, "add", "-A"])
+  sh("git", ["-C", repo, "commit", "-q", "-m", "Stub the rain-delay policy and its boundary test"])
+  return repo
 }
 
 /**

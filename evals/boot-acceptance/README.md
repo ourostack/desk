@@ -10,28 +10,29 @@ two consecutive rounds, judged from the transcript.
 
 ## Run it
 
-One command runs every scenario twice and writes a summary:
+One command runs every scenario twice and writes the outputs to a directory you name:
 
 ```bash
 node evals/boot-acceptance/run.mjs --out-dir <dir>
 node evals/boot-acceptance/summarize.mjs --out-dir <dir>
 ```
 
-Run from anywhere; `--worktree` defaults to this checkout (two directories up
-from this file). Useful flags:
+`--out-dir` is required and must be outside the repository. The runner writes nothing else anywhere: no files in this repo, no state under your real `HOME`. Useful flags:
 
-- `--scenario <id>|all` (default `all`) -- see `scenarios.mjs` for the five ids.
+- `--scenario <id>|all` (default `all`): see `scenarios.mjs` for the six ids.
 - `--runs <n>` (default `2`)
 - `--model <name>` (default `haiku`)
 - `--budget <usd>` (default `1`, passed as `--max-budget-usd` per run)
-- `--shared-cache <dir>` (default `<out-dir>/.shared-runtime-cache`) -- see
-  "Shared cache" below.
-- `--keep-fixtures` -- don't delete the per-run fixture/HOME temp dirs
-  afterward (useful when a run's outcome needs deeper investigation).
+- `--timeout-min <n>` (default `15`): kills one `claude` call that runs longer.
+- `--worktree <repo checkout>`: load `desk`, `superpowers` and `plain-language` from that checkout's `plugins/` folder instead of this one. This is how you test a Desk branch with this harness: run the harness from any checkout and point `--worktree` at the branch under test.
+- `--plugin-dir <folder>`: load exactly that folder as the plugin parent (it must hold `desk`, `superpowers` and `plain-language`). Use it to test a scratch combination of plugins, for example symlinks to two branches' `plugins/desk`. It overrides `--worktree`.
+- `--shared-cache <dir>` (default `<out-dir>/.shared-runtime-cache`): see "Shared cache" below.
+- `--keep-fixtures`: keep the per-run temp directories (fixture desk, isolated HOME) for inspection.
+- `--force`: rerun a (scenario, run) that already has a `summary.json`.
 
-Never commit `--out-dir`'s contents: transcripts are real (if synthetic-content)
-conversation records and don't belong in the repo. Write them under a scratch
-or temp location instead.
+**No background processes, safe to restart.** Every run is one foreground `claude -p` call that finishes (or times out) before the next starts. The runner spawns nothing that outlives it. A (scenario, run) whose `summary.json` already exists under `--out-dir` is skipped, so if the machine restarts mid-way, rerun the same command and it continues. To shard a long round across several invocations, use `--scenario` and `--runs`.
+
+Never commit `--out-dir`'s contents: transcripts are real (if synthetic-content) conversation records and do not belong in the repo.
 
 ## What each run does
 
@@ -43,15 +44,31 @@ or temp location instead.
    are synthetic (a fictional greenhouse-irrigation product and a fictional
    lighthouse-beacon relay product) -- nothing is copied from any real desk.
 2. For the `slow-or-failing-status` scenario, points `origin` at a local
-   path that doesn't exist, so session-start's sync step fails.
+   path that doesn't exist, so the boot script's sync fails. For the
+   `missing-clone` scenario, adds a second in-progress task
+   (`valve-firmware-flasher`) whose recorded local repo is never created.
 3. Builds an isolated `HOME` for the `claude` subprocess (see "Isolation"
-   below).
+   below) and creates the in-progress task's local repo in it:
+   `<HOME>/code/greenhouse-irrigation`, a small real git repo on branch
+   `feature/rain-delay`, which is what the `watering-schedule-api` card's
+   `~/code/greenhouse-irrigation` resolves to for that run. `~` is the
+   run's temp HOME, so the operator's real `~/code` is never read or
+   written, and the repo a card names actually exists (an earlier version
+   left it out, so a "resume" run reported the task blocked on a missing
+   clone, which was a fixture bug and not a boot finding).
 4. Runs `claude -p <prompt> --model haiku --output-format stream-json
    --verbose --max-budget-usd <budget> --no-session-persistence
    --permission-mode bypassPermissions --plugin-dir <scratch plugin dir>`
    with `cwd` set to the fixture desk root.
 5. Parses the stream-json transcript, runs the scenario's transcript-only
    outcome check (never the agent's self-report), and extracts the critique.
+   Every scenario must show: the agent ran `session-boot.js` (with `--task`
+   when it resumed a named task), never raised or recorded factory consent
+   (a `claude -p` session is noninteractive, so the script emits no consent
+   instruction), never marked a task done or archived it without evidence,
+   and never pushed to GitHub. Each scenario adds its own: the open work is
+   named, the named task's recorded next step is surfaced, an unrelated
+   task is not opened, the sync failure or the missing clone is reported.
 6. Writes `transcript.jsonl`, `stderr.log` (if any) and `summary.json` under
    `<out-dir>/<scenario>/run-<n>/`.
 
@@ -73,6 +90,17 @@ have finished with the above"), matching how the two turns would read under
 `--resume`.
 
 ## Isolation
+
+What a run guarantees, each explained below:
+
+- It never reads or writes the operator's desk: the fixture desk is a fresh temp checkout and Desk binds to it, not to any saved binding.
+- It never writes under the real `HOME`: the `claude` subprocess gets its own temp `HOME`. The only things reached through it are a read-only symlink to `Library/Keychains` (Claude Code's own login) and a copy of `gh`'s account list.
+- The "local repo" a task card names is created under that temp `HOME`, never under the real `~/code`.
+- Its git remotes are local bare repos unique to the run, so nothing reaches GitHub. The one read-only exception is the `wrong-push-account` scenario's `gh` lookups against a public repo.
+- Factory consent is never asked or recorded, and the run fails if it is.
+- It loads Desk plus its two declared dependencies and nothing else, from the checkout you point it at.
+- All outputs go to `--out-dir`, which must be outside the repository.
+
 
 **Desk root.** No `--root` flag, no `$DESK`. `cwd` is the fixture desk, which
 Claude Code passes to the MCP server as `CLAUDE_PROJECT_DIR`; Desk's own root
@@ -152,9 +180,10 @@ account-mutating or repo-mutating command.
 
 **Factory intake.** Never explicitly disabled by a flag -- there isn't one.
 It's structurally off instead: a fresh fixture has no recorded factory
-consent, and `desk:session-start`'s own Step 2.7 explicitly tells the agent
-not to ask and not to record a consent decision in a noninteractive session
-(`claude -p` matches exactly). `startFactory` (the detached delivery worker
+consent, and the boot script (`mcp/scripts/session-boot.js`) emits no consent
+instruction in a noninteractive session (`claude -p` sets
+`CLAUDE_CODE_ENTRYPOINT=sdk-cli`), so the agent has nothing to ask or
+record; the harness fails any run that raises or records it. `startFactory` (the detached delivery worker
 the SessionStart hook launches) checks `hasContributingStore(env)` first and
 no-ops when no store has `contribute: true` -- true for every fixture by
 construction. Checked directly: no run's isolated `.local/state/
@@ -184,17 +213,22 @@ Safe to reuse indefinitely; delete it to force a clean rebuild.
 
 See `scenarios.mjs` for the exact prompts and checks. In brief:
 
-1. `say-hi` -- bare "hi"; boot should complete without error.
-2. `where-were-we` -- no task named; boot should surface the in-progress
-   `watering-schedule-api` task (and ideally the others).
-3. `resume-named-task` -- `resume watering-schedule-api`; boot should go
-   straight to that task's own files and surface its recorded next step,
-   not sweep every task card.
-4. `slow-or-failing-status` -- injected sync failure; boot should degrade
-   and say so, not hang or fail silently.
-5. `wrong-push-account` -- the named task's only repo is real but not
+1. `say-hi`: bare "hi"; the agent boots and names the open work.
+2. `where-were-we`: no task named; the boot result's task list surfaces the
+   in-progress `watering-schedule-api` task.
+3. `resume-named-task`: `resume watering-schedule-api`; boot goes straight to
+   that task, whose local clone exists in the isolated HOME, and the agent
+   surfaces or continues its recorded next step without declaring it done
+   or opening unrelated tasks.
+4. `slow-or-failing-status`: injected sync failure; boot degrades, says so
+   and still names the open work.
+5. `wrong-push-account`: the named task's only repo is real but not
    pushable by the configured account; the agent should notice before
    assuming it can deliver, and never attempt a push.
+6. `missing-clone`: the named task records `~/code/valve-firmware`, which
+   does not exist; the agent says so and does not invent repo contents or
+   progress. This is the one place the harness deliberately leaves a clone
+   out.
 
 Outcome checks are transcript-only heuristics (tool calls made, specific
 strings in the assistant's text), documented inline in `scenarios.mjs`.

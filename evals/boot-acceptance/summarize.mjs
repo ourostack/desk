@@ -44,7 +44,7 @@ const THEMES = [
   { id: "tool-discovery", label: "Had to search/guess for the right tool", keywords: ["toolsearch", "had to search", "wasn't sure which tool", "guess", "which tool"] },
   { id: "unclear-next-step", label: "Next step / task state was unclear", keywords: ["unclear", "wasn't clear", "confus", "ambiguous", "didn't know what to do next"] },
   { id: "sync-or-git", label: "Sync / git friction", keywords: ["git pull", "sync failed", "origin", "rebase", "could not sync", "remote"] },
-  { id: "mcp-friction", label: "Desk MCP tool friction", keywords: ["mcp", "desk_status", "tool call failed", "connection failed", "desk-browser"] },
+  { id: "mcp-friction", label: "Desk MCP tool friction", keywords: ["mcp", "desk_status", "tool call failed", "connection failed", "mcp__plugin_desk_web"] },
   { id: "push-account", label: "Push-account / repo access confusion", keywords: ["push access", "wrong account", "can't push", "cannot push", "permission denied", "not a collaborator"] },
   { id: "fine", label: "Reported boot as genuinely fine / no complaints", keywords: ["genuinely fine", "nothing to complain", "no complaints", "worked well", "was fine", "no real issues"] },
 ]

@@ -3,6 +3,12 @@
 //
 //   node evals/boot-acceptance/run.mjs --out-dir <dir> [--scenario <id>|all] [--runs 2] [--model haiku]
 //
+// Everything runs in the foreground, one `claude -p` call at a time, each
+// waited on to completion. Nothing is left running in the background, and a
+// (scenario, run) whose summary.json already exists under --out-dir is
+// skipped, so a run interrupted by a restart resumes by rerunning the same
+// command. All output goes under --out-dir; nothing is written to this repo.
+//
 // For each (scenario, run) pair: builds a fresh synthetic fixture desk with
 // its own local bare-repo origin, an isolated HOME (see lib.mjs), and a
 // scratch plugin-dir holding Desk + its declared dependencies from this
@@ -18,14 +24,14 @@ import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node
 import * as path from "node:path"
 import * as process from "node:process"
 
-import { materializeFixture, breakOriginForFailure, createIsolatedHome, buildPluginDir, freshTempDir, REAL_HOME } from "./lib.mjs"
+import { materializeFixture, breakOriginForFailure, addMissingCloneTask, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, freshTempDir, REAL_HOME } from "./lib.mjs"
 import { SCENARIOS, CRITIQUE_SUFFIX, findScenario } from "./scenarios.mjs"
 
 const HERE = path.dirname(new URL(import.meta.url).pathname)
 const WORKTREE_ROOT = path.resolve(HERE, "..", "..")
 
 function parseArgs(argv) {
-  const args = { scenario: "all", runs: 2, model: "haiku", budget: "1", keepFixtures: false }
+  const args = { scenario: "all", runs: 2, model: "haiku", budget: "1", timeoutMin: 15, keepFixtures: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--scenario") args.scenario = argv[++i]
@@ -34,11 +40,17 @@ function parseArgs(argv) {
     else if (a === "--model") args.model = argv[++i]
     else if (a === "--budget") args.budget = argv[++i]
     else if (a === "--worktree") args.worktree = argv[++i]
+    else if (a === "--plugin-dir") args.pluginDir = argv[++i]
+    else if (a === "--timeout-min") args.timeoutMin = Number(argv[++i])
+    else if (a === "--force") args.force = true
     else if (a === "--keep-fixtures") args.keepFixtures = true
     else if (a === "--shared-cache") args.sharedCache = argv[++i]
     else throw new Error(`unknown arg: ${a}`)
   }
   if (!args.outDir) throw new Error("--out-dir is required")
+  const repoRoot = path.resolve(HERE, "..", "..")
+  const rel = path.relative(repoRoot, path.resolve(args.outDir))
+  if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) throw new Error(`--out-dir must be outside the repository (${repoRoot}): transcripts do not belong in it`)
   return args
 }
 
@@ -59,12 +71,16 @@ function parseStreamJson(text) {
 function buildContext(events) {
   const toolCalls = []
   const textParts = []
+  const assistantTexts = []
   let finalResult = null
   for (const ev of events) {
     if ((ev.type === "assistant" || ev.type === "user") && Array.isArray(ev.message?.content)) {
       for (const block of ev.message.content) {
         if (block.type === "tool_use") toolCalls.push({ name: block.name, input: block.input })
-        if (block.type === "text" && typeof block.text === "string") textParts.push(block.text)
+        if (block.type === "text" && typeof block.text === "string") {
+          textParts.push(block.text)
+          if (ev.type === "assistant") assistantTexts.push(block.text)
+        }
       }
     }
     if (ev.type === "result") finalResult = ev
@@ -72,6 +88,7 @@ function buildContext(events) {
   const allText = textParts.join("\n\n")
   return {
     toolCalls,
+    assistantTexts,
     allText,
     finalResultText: finalResult?.result ?? "",
     isError: finalResult?.is_error ?? null,
@@ -89,14 +106,25 @@ function extractCritique(ctx) {
   return ctx.allText.trim()
 }
 
-function runOne({ scenario, runIndex, args, pluginDir, sharedCacheDir, outDir }) {
+function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, outDir }) {
   const runId = `${scenario.id}/run-${runIndex}`
+  const summaryPath = path.join(outDir, scenario.id, `run-${runIndex}`, "summary.json")
+  if (!args.force && existsSync(summaryPath)) {
+    console.log(`[${runId}] already done, skipping (use --force to rerun)`)
+    return JSON.parse(readFileSync(summaryPath, "utf8"))
+  }
   const runTmp = freshTempDir(`boot-acceptance-${scenario.id}-`)
   const { deskRoot } = materializeFixture(path.join(runTmp, "fixture"))
   if (scenario.inject === "break-origin") breakOriginForFailure(deskRoot)
+  if (scenario.inject === "missing-clone") addMissingCloneTask(deskRoot)
 
   const homeDir = path.join(runTmp, "home")
   createIsolatedHome({ homeDir, sharedCacheDir })
+  // The `watering-schedule-api` card records `~/code/greenhouse-irrigation`;
+  // `~` is this run's temp HOME, so the clone lives under the temp dir.
+  // `valve-firmware` (the `missing-clone` scenario's repo) is never created.
+  materializeGreenhouseClone(homeDir)
+  const pluginDir = args.pluginDir ? path.resolve(args.pluginDir) : buildPluginDir({ worktreeRoot, targetDir: path.join(runTmp, "plugins") })
 
   const prompt = `${scenario.prompt}${CRITIQUE_SUFFIX}`
   const claudeArgs = [
@@ -130,6 +158,7 @@ function runOne({ scenario, runIndex, args, pluginDir, sharedCacheDir, outDir })
     env,
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 256,
+    timeout: args.timeoutMin * 60 * 1000,
   })
   const wallMs = Date.now() - startedAt
 
@@ -150,6 +179,7 @@ function runOne({ scenario, runIndex, args, pluginDir, sharedCacheDir, outDir })
     injected: scenario.inject,
     spawn_exit_code: result.status,
     spawn_signal: result.signal,
+    timed_out: result.error?.code === "ETIMEDOUT",
     wall_ms: wallMs,
     duration_ms: ctx.durationMs,
     duration_api_ms: ctx.durationApiMs,
@@ -176,12 +206,10 @@ function main() {
   const worktreeRoot = args.worktree ? path.resolve(args.worktree) : WORKTREE_ROOT
   mkdirSync(args.outDir, { recursive: true })
 
-  const pluginDirParent = freshTempDir("boot-acceptance-plugins-")
-  const pluginDir = buildPluginDir({ worktreeRoot, targetDir: pluginDirParent })
   const sharedCacheDir = args.sharedCache ? path.resolve(args.sharedCache) : path.join(args.outDir, ".shared-runtime-cache")
 
   console.log(`worktree:     ${worktreeRoot}`)
-  console.log(`plugin-dir:   ${pluginDir}`)
+  console.log(`plugins:      ${args.pluginDir ? path.resolve(args.pluginDir) : `desk, superpowers, plain-language from ${worktreeRoot}/plugins`}`)
   console.log(`real HOME:    ${REAL_HOME} (only Library/Keychains is ever read from it)`)
   console.log(`shared cache: ${sharedCacheDir} (Desk runtime-dependency pack reuse only, no operator content)`)
   console.log(`out-dir:      ${args.outDir}`)
@@ -191,12 +219,11 @@ function main() {
   const allSummaries = []
   for (const scenario of scenarios) {
     for (let runIndex = 1; runIndex <= args.runs; runIndex++) {
-      allSummaries.push(runOne({ scenario, runIndex, args, pluginDir, sharedCacheDir, outDir: args.outDir }))
+      allSummaries.push(runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, outDir: args.outDir }))
     }
   }
 
   writeFileSync(path.join(args.outDir, "all-summaries.json"), JSON.stringify(allSummaries, null, 2))
-  rmSync(pluginDirParent, { recursive: true, force: true })
   console.log(`\nWrote ${allSummaries.length} run summaries under ${args.outDir}`)
   console.log(`Next: node ${path.join(HERE, "summarize.mjs")} --out-dir ${args.outDir}`)
 }

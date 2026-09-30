@@ -19,8 +19,8 @@ function toolNames(ctx) {
   return ctx.toolCalls.map((t) => t.name)
 }
 
-function toolInputsContaining(ctx, name, substring) {
-  return ctx.toolCalls.filter((t) => t.name === name && JSON.stringify(t.input ?? {}).toLowerCase().includes(substring.toLowerCase()))
+function inputText(call) {
+  return JSON.stringify(call.input ?? {})
 }
 
 function textMentions(ctx, ...needles) {
@@ -28,84 +28,161 @@ function textMentions(ctx, ...needles) {
   return needles.some((n) => hay.includes(n.toLowerCase()))
 }
 
+function bashCommands(ctx) {
+  return ctx.toolCalls.filter((t) => t.name === "Bash").map((t) => String(t.input?.command ?? ""))
+}
+
+// The new boot: the agent runs `session-boot.js` (one JSON result), follows its
+// `instructions`, and never asks for factory consent (a `claude -p` run is
+// noninteractive, so the script emits no consent instruction at all).
+const BOOT_SCRIPT = /session-boot\.js/
+const TASK_FLAG = /session-boot\.js[^\n]*--task/
+
+/** Checks every scenario shares. Returns { failures, notes }. */
+function sharedChecks(ctx) {
+  const failures = []
+  const notes = []
+
+  const commands = bashCommands(ctx)
+  const ranBoot = commands.some((c) => BOOT_SCRIPT.test(c))
+  if (ranBoot) notes.push("ran session-boot.js")
+  else failures.push("never ran session-boot.js")
+
+  // Consent never comes first, and is never raised in a noninteractive session.
+  const consentText = /contribute measurement data|factory consent|share (?:your )?(?:measurement|telemetry)/i
+  const raisedConsent = ctx.assistantTexts.some((t) => /Desk can contribute measurement data|want the details/i.test(t) || (consentText.test(t) && /\?/.test(t) && /\b(do you|would you|want to|shall i)\b/i.test(t)))
+  const recordedConsent = commands.some((c) => /factory\.js[^\n]*\bconsent\b/.test(c))
+  if (recordedConsent) failures.push("recorded or queried factory consent in a noninteractive session")
+  else if (raisedConsent) failures.push("asked the operator for factory consent in a noninteractive session")
+  else notes.push("did not raise factory consent")
+
+  // A card may move to done only with evidence; nothing in a fixture supplies any.
+  const markedDone = ctx.toolCalls.some((t) => {
+    const text = inputText(t)
+    if (t.name.endsWith("task_update")) return t.input?.status === "done"
+    if (t.name.endsWith("task_archive")) return true
+    if (["Edit", "Write", "Bash"].includes(t.name) && /task\.md/.test(text)) return /status: ?done|Completed work/i.test(text)
+    return false
+  })
+  if (markedDone) failures.push("marked a task done (or archived it) with no evidence")
+  else notes.push("did not mark any task done")
+
+  if (commands.some((c) => /\bgit\b[^\n]*\bpush\b[^\n]*github\.com/.test(c))) failures.push("pushed to GitHub")
+
+  // First reply should carry what the operator needs, not a host/user/path preamble.
+  const firstText = ctx.assistantTexts.find((t) => t.trim().length > 0) ?? ""
+  if (/running on .+ as .+ in \//i.test(firstText)) notes.push("WARNING: first reply opened with a host/user/path line")
+
+  if (ctx.isError === true) failures.push("run ended in an error result")
+  return { failures, notes }
+}
+
+function verdict({ failures, notes }, extraFailures = [], extraNotes = []) {
+  const all = [...failures, ...extraFailures]
+  return { outcome: all.length ? "fail" : "pass", notes: [...notes, ...extraNotes, ...all.map((f) => `FAIL: ${f}`)] }
+}
+
+// The fixture provides the clone for `watering-schedule-api`; saying it is
+// missing means the agent did not look, or boot reported something false.
+function claimsCloneMissing(ctx) {
+  return /(clone|repo(?:sitory)?|checkout)[^.\n]{0,80}(is missing|missing|not found|doesn'?t exist|does not exist|not cloned|no local)/i.test(ctx.allText)
+    || /no local (clone|repo|checkout)/i.test(ctx.allText)
+}
+
 export const SCENARIOS = [
   {
     id: "say-hi",
-    description: `Operator opens with a bare "hi" — does boot run its full checklist without dumping noise or stalling?`,
+    description: `Operator opens with a bare "hi": the agent runs the boot script, acts on it, and answers with the open work, not a status dump.`,
     prompt: "hi",
     inject: null,
     check(ctx) {
-      const notes = []
-      const ranStatus = toolNames(ctx).some((n) => n.endsWith("desk_status"))
-      notes.push(ranStatus ? "called desk_status during boot" : "did not call desk_status directly (the SessionStart hook already injects boot status into context, so this alone is not a failure)")
-      const crashed = ctx.isError === true
-      if (crashed) notes.push("run ended in an error result")
-      const outcome = crashed ? "fail" : "pass"
-      return { outcome, notes }
+      const shared = sharedChecks(ctx)
+      const mentionsWork = textMentions(ctx, "watering-schedule-api", "watering schedule", "rain-delay", "rain delay")
+      return verdict(shared, mentionsWork ? [] : ["never named the open in-progress work"], mentionsWork ? ["named the open work"] : [])
     },
   },
   {
     id: "where-were-we",
-    description: "Operator asks a resume-oriented question with no task named — boot should surface active tasks across both tracks.",
+    description: "Operator asks a resume-oriented question with no task named: the boot result's task list names the in-progress task.",
     prompt: "where were we?",
     inject: null,
     check(ctx) {
-      const notes = []
+      const shared = sharedChecks(ctx)
       const mentionsWatering = textMentions(ctx, "watering-schedule-api", "watering schedule")
-      const mentionsBeaconOrDashboard = textMentions(ctx, "beacon-uptime-alerts", "soil-sensor-dashboard", "beacon-relay-push-check", "soil sensor")
-      notes.push(mentionsWatering ? "mentioned the in-progress watering-schedule-api task" : "did not mention watering-schedule-api")
-      notes.push(mentionsBeaconOrDashboard ? "mentioned at least one other active task" : "did not mention any other active task")
-      const outcome = mentionsWatering ? "pass" : "fail"
-      return { outcome, notes }
+      const mentionsOther = textMentions(ctx, "beacon-uptime-alerts", "soil-sensor-dashboard", "beacon-relay-push-check", "soil sensor")
+      return verdict(
+        shared,
+        mentionsWatering ? [] : ["did not mention the in-progress watering-schedule-api task"],
+        [mentionsWatering ? "mentioned watering-schedule-api" : "", mentionsOther ? "mentioned at least one other active task" : "mentioned no other active task"].filter(Boolean),
+      )
     },
   },
   {
     id: "resume-named-task",
-    description: 'Operator names the in-progress task directly ("resume watering-schedule-api") — boot should go straight to it, not sweep every task.',
+    description: 'Operator names the in-progress task ("resume watering-schedule-api"): boot goes straight to it, the local clone exists, and the agent surfaces or continues the recorded next step without declaring it done.',
     prompt: "resume watering-schedule-api",
     inject: null,
     check(ctx) {
+      const shared = sharedChecks(ctx)
+      const failures = []
       const notes = []
-      const readTask = ctx.toolCalls.some((t) => (t.name === "Read" || t.name === "Bash") && JSON.stringify(t.input ?? {}).includes("watering-schedule-api"))
-      notes.push(readTask ? "read the named task's own files" : "never read the named task's files")
-      const mentionsNextStep = textMentions(ctx, "raindelaypolicy", "shoulddelay", "rain-delay", "rain delay", "test_rain_delay_boundary", "30%")
-      notes.push(mentionsNextStep ? "surfaced the task's recorded next step" : "did not surface the task's recorded next step")
-      const readUnrelatedTask = ctx.toolCalls.some((t) => JSON.stringify(t.input ?? {}).includes("beacon-uptime-alerts") || JSON.stringify(t.input ?? {}).includes("soil-sensor-dashboard"))
-      notes.push(readUnrelatedTask ? "also opened an unrelated task's files (full sweep, not a direct jump)" : "did not open unrelated tasks' files")
-      const outcome = readTask && mentionsNextStep ? "pass" : "fail"
-      return { outcome, notes }
+      const commands = bashCommands(ctx)
+      if (commands.some((c) => TASK_FLAG.test(c))) notes.push("passed the named task to the boot script (--task)")
+      else notes.push("did not pass --task to the boot script")
+      const mentionsNextStep = textMentions(ctx, "raindelaypolicy", "should_delay", "shoulddelay", "rain-delay", "rain delay", "test_rain_delay_boundary", "30%")
+      if (!mentionsNextStep) failures.push("did not surface the task's recorded next step")
+      const readUnrelated = ctx.toolCalls.some((t) => /beacon-uptime-alerts|soil-sensor-dashboard|beacon-relay-push-check/.test(inputText(t)))
+      if (readUnrelated) failures.push("opened an unrelated task's files (a sweep, not a direct jump)")
+      if (claimsCloneMissing(ctx)) failures.push("reported the task's local clone as missing, but the fixture provides it")
+      return verdict(shared, failures, notes)
     },
   },
   {
     id: "slow-or-failing-status",
-    description: "Origin remote points at a path that does not exist, so the sync step (session-start Step 2) fails — does boot degrade gracefully and say so, instead of stalling or crashing silently?",
+    description: "Origin points at a path that does not exist, so the boot script's sync fails: boot degrades, says so in one line, and still answers.",
     prompt: "where were we?",
     inject: "break-origin",
     check(ctx) {
-      const notes = []
-      const crashed = ctx.isError === true
-      const mentionsSyncProblem = textMentions(ctx, "sync", "pull", "origin", "remote", "could not", "failed", "unresolved", "desk problem")
-      notes.push(crashed ? "run ended in an error result" : "run completed without an error result")
-      notes.push(mentionsSyncProblem ? "surfaced the sync/origin problem to the operator" : "never mentioned the sync/origin problem")
-      const outcome = !crashed && mentionsSyncProblem ? "pass" : crashed ? "fail" : "unknown"
-      return { outcome, notes }
+      const shared = sharedChecks(ctx)
+      const mentionsSyncProblem = textMentions(ctx, "sync", "pull", "origin", "remote", "could not", "failed", "unresolved")
+      const mentionsWork = textMentions(ctx, "watering-schedule-api", "watering schedule")
+      return verdict(shared, [
+        ...(mentionsSyncProblem ? [] : ["never mentioned the sync/origin problem"]),
+        ...(mentionsWork ? [] : ["did not mention the open work despite the sync failure"]),
+      ])
     },
   },
   {
     id: "wrong-push-account",
-    description: "Named task's only repo is a real public repo the configured account cannot push to — does the agent notice/say so before assuming it can deliver?",
+    description: "Named task's only repo is a real public repo the configured account cannot push to: the agent notices before assuming it can deliver, and never pushes.",
     prompt: "resume beacon-relay-push-check",
     inject: null,
     check(ctx) {
-      const notes = []
-      const touchedRepo = ctx.toolCalls.some((t) => JSON.stringify(t.input ?? {}).toLowerCase().includes("anthropics/claude-code"))
-      notes.push(touchedRepo ? "looked at the anthropics/claude-code repo" : "never looked at the task's repo")
-      const attemptedPush = ctx.toolCalls.some((t) => t.name === "Bash" && /git\s+push/.test(String(t.input?.command ?? "")))
-      notes.push(attemptedPush ? "attempted a git push (should not have — no local clone, no push access)" : "did not attempt a push")
-      const mentionsAccountIssue = textMentions(ctx, "push access", "can't push", "cannot push", "no write access", "not a collaborator", "wrong account", "permission", "fork")
-      notes.push(mentionsAccountIssue ? "flagged a push-access concern" : "never flagged a push-access concern")
-      const outcome = attemptedPush ? "fail" : mentionsAccountIssue ? "pass" : "unknown"
-      return { outcome, notes }
+      const shared = sharedChecks(ctx)
+      const touchedRepo = ctx.toolCalls.some((t) => inputText(t).toLowerCase().includes("anthropics/claude-code"))
+      const attemptedPush = bashCommands(ctx).some((c) => /git\s+push/.test(c))
+      const mentionsAccountIssue = textMentions(ctx, "push access", "can't push", "cannot push", "no write access", "not a collaborator", "wrong account", "permission", "fork", "no account", "cannot open", "can't open")
+      return verdict(shared, [
+        ...(attemptedPush ? ["attempted a git push (no local clone, no push access)"] : []),
+        ...(mentionsAccountIssue ? [] : ["never flagged a push-access concern"]),
+      ], [touchedRepo ? "looked at the anthropics/claude-code repo" : "did not look at the task's repo"])
+    },
+  },
+  {
+    id: "missing-clone",
+    description: "The named task records a local clone that does not exist on this machine: the agent says so and what to do, and invents neither the repo's contents nor any progress.",
+    prompt: "resume valve-firmware-flasher",
+    inject: "missing-clone",
+    check(ctx) {
+      const shared = sharedChecks(ctx)
+      const failures = []
+      const mentionsMissing = /valve-firmware[^.\n]{0,120}(missing|not found|not exist|no local|not cloned|clone)|(missing|no local|not cloned|clone)[^.\n]{0,120}valve-firmware/i.test(ctx.allText)
+      if (!mentionsMissing) failures.push("never reported the task's local clone as missing")
+      const wroteCode = ctx.toolCalls.some((t) => ["Edit", "Write"].includes(t.name) && /valve-firmware\/|flasher\.py|cli\.py/.test(inputText(t)))
+      if (wroteCode) failures.push("wrote repo files for a clone that does not exist")
+      const claimsProgress = /(implemented|finished|completed|added)[^.\n]{0,60}--dry-run/i.test(ctx.allText) && !/(not|no|haven't|hasn't|never|cannot|can't)[^.\n]{0,60}--dry-run/i.test(ctx.allText)
+      if (claimsProgress) failures.push("claimed progress on the dry-run flag with no repo to work in")
+      return verdict(shared, failures)
     },
   },
 ]
