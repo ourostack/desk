@@ -17,7 +17,7 @@ Path migrations must complete before any path-dependent startup scans run, inclu
 
 ## When this skill fires
 
-- at the top of `desk:session-start`, before any other path-dependent skill work or startup scans — specifically before Step 1's prereq probes (which assume `$DESK/` resolves correctly), Step 2's workspace sync, and any of the later scans.
+- at the top of `desk:session-start`, before any other path-dependent skill work or startup scans — specifically before Step 0.75's boot script (whose prereq probe, sync and scans all assume `$DESK/` resolves correctly) and any of the later scans.
 - re-runs on every session start. idempotent: a migration that already ran returns non-zero from its `Detect` block on the next session, so the skill skips it silently.
 
 ## Migration file format
@@ -97,7 +97,7 @@ splitting these out means the driver can run Detect cheaply against every migrat
 2. **for each migration in id-order across all plugins:**
    - parse the frontmatter and the four body code blocks.
    - run every block with `DESK_PLUGIN_ROOT` set to the root of the plugin that holds the migration file (the parent of its `migrations/` dir), and, once `desk_status` is callable, `DESK_TOOLS_ROOT` and `DESK_TOOLS_PERSON` set to the `root.path` and `write_scope.person` it reports (the desk MCP's own `--root` and `--person`; leave `DESK_TOOLS_PERSON` empty when it reports none).
-   - an `agent_work: true` migration writes to the desk, so it waits until the desk is synced and bound: `desk:session-start` runs it after Step 2.6, when this session's own desk is known, rather than at Step 0.5. for Desk's own, the startup context's `Desk migrations:` line gives the command (see **Desk's own migrations at startup**).
+   - an `agent_work: true` migration writes to the desk, so it waits until the desk is synced and bound: the boot script of `desk:session-start` names it in its `instructions`, to run once this session's own desk is known, rather than running it during the migration check. for Desk's own, the startup context's `Desk migrations:` line gives the command (see **Desk's own migrations at startup**).
    - run **Detect**. exit 0 = migration is needed; non-zero = skip silently.
    - run **Safety check**. exit 0 = safe. non-zero = surface the printed reason to the operator and **hard-stop** (do NOT run Migrate; do NOT continue to subsequent migrations — the operator needs to resolve the safety issue first).
    - run **Migrate**. if it exits non-zero, surface the stdout+stderr and **hard-stop** with a clear "Migration `<id>` failed mid-run; manual intervention needed" message.
