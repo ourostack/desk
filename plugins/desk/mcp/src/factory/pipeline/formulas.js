@@ -287,23 +287,43 @@ function jobCounted(timeline, split) {
     : session)
 }
 
+// A binding without `agents` is the legacy session-level binding and keeps
+// every reference of the session. Otherwise a pull request is credited to the
+// worker that opened it, and only when no other job of the session lists that
+// worker. A pull request with no worker, or one whose worker several jobs
+// share, goes to the job only when the session binds no other job.
 function ownsPullRequest(session, binding, pr) {
-  if (ownsWholeSession(session, binding)) return true
-  return Object.hasOwn(pr, "agent") ? binding.agents.includes(pr.agent) : session.jobs.length === 1
+  if (!Object.hasOwn(binding, "agents")) return true
+  if (!Object.hasOwn(pr, "agent")) return session.jobs.length === 1
+  return binding.agents.includes(pr.agent)
+    && !session.jobs.some((other) => other !== binding && Object.hasOwn(other, "agents") && other.agents.includes(pr.agent))
+}
+
+// Public commits carry no worker, so a per-worker session credits them only
+// to the one job it binds.
+function ownsCommits(session, binding) {
+  return !Object.hasOwn(binding, "agents") || session.jobs.length === 1
 }
 
 function uniqueReferences(timeline) {
   const prs = new Map()
   const commits = new Map()
+  const withheld = new Set()
   for (const session of timeline.source_sessions) {
     const binding = bindingOf(session, timeline.job)
+    let held = false
     for (const pr of session.refs.prs) {
       if (ownsPullRequest(session, binding, pr)) prs.set(`${pr.repo}#${pr.number}`, { repo: pr.repo, number: pr.number })
+      else held = true
     }
-    for (const commit of session.refs.commits) commits.set(`${commit.repo}@${commit.sha}`, commit)
+    if (ownsCommits(session, binding)) {
+      for (const commit of session.refs.commits) commits.set(`${commit.repo}@${commit.sha}`, commit)
+    } else if (session.refs.commits.length > 0) held = true
+    // Withholding only means the job's list is incomplete when another job of the session may hold the rest.
+    if (held && session.jobs.length > 1) withheld.add(session)
   }
   const pullRequests = [...prs.values()].sort((left, right) => compareText(left.repo, right.repo) || left.number - right.number)
-  return { pullRequests, commits: commits.size }
+  return { pullRequests, commits: commits.size, withheld }
 }
 
 export function calculateFormulas(timeline) {
@@ -395,13 +415,13 @@ export function calculateFormulas(timeline) {
     lead_contributors: leadContributors({ lead, timingUnavailable, activeInLead, queue, waits, waitUnions }),
     flow_efficiency: flowEfficiency,
     tool_calls_by_kind: withCoverage(measured(sumMap(counted, "tool_calls")), splitCoverage),
-    references: measured({
+    references: withCoverage(measured({
       public_pull_requests: references.pullRequests,
       public_prs: references.pullRequests.length,
       public_commits: references.commits,
       private_prs: privatePrs,
       private_commits: privateCommits,
-    }),
+    }), fieldCoverage(sourceSessions, [], [], new Set(), references.withheld)),
     rework_signals: {
       tool_failures: withCoverage(inferred(Object.values(sumMap(counted, "tool_failures")).reduce((total, value) => total + value, 0)), splitCoverage),
       tool_retries: withCoverage(inferred(sumField(counted, "tool_retries")), splitCoverage),

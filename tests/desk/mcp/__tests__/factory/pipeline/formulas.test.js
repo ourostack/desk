@@ -524,6 +524,75 @@ test("a PR is credited to the job of the worker that opened it", () => {
   assert.deepEqual(numbers(JOB_B, [legacy]), [1, 2, 3])
 })
 
+const REFS = (prs, commits = []) => ({ prs, commits, private: { prs: 0, commits: 0 } })
+const prNumbers = (job, input) => calculateFormulas(buildJobTimeline(job, input)).references.value.public_pull_requests.map((pr) => pr.number)
+const referencesOf = (job, input) => calculateFormulas(buildJobTimeline(job, input)).references
+
+test("a pull request whose worker is shared by several jobs is credited to none of them", () => {
+  const prs = [1, 2, 3].map((number) => ({ repo: "ourostack/desk", number, agent: 0 }))
+  const session = splitSession({ refs: REFS(prs) })
+  session.jobs = [JOB_A, JOB_B, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"].map((job) => ({ ...splitSession().jobs[0], job, agents: [0] }))
+  for (const job of session.jobs.map((binding) => binding.job)) {
+    const references = referencesOf(job, [session])
+    assert.deepEqual(references.value.public_pull_requests, [])
+    assert.equal(references.value.public_prs, 0)
+    assert.equal(references.partial, true)
+    assert.equal(references.uncovered_sessions, 1)
+    assert.deepEqual(references.partial_reasons, ["worker_shared"])
+  }
+})
+
+test("a pull request from a worker that belongs to one job alone is credited to that job only", () => {
+  const prs = [{ repo: "ourostack/desk", number: 1, agent: 0 }, { repo: "ourostack/desk", number: 2, agent: 1 }]
+  const session = splitSession({ refs: REFS(prs) })
+  session.jobs[0].agents = [0, 1]
+  session.jobs[1].agents = [0]
+  assert.deepEqual(prNumbers(JOB_A, [session]), [2])
+  assert.deepEqual(prNumbers(JOB_B, [session]), [])
+  assert.deepEqual(referencesOf(JOB_A, [session]).partial_reasons, ["worker_shared"])
+  // A listing every worker still yields the shared worker's PR to nobody.
+  session.jobs[0].agents = [0, 1, 2]
+  assert.deepEqual(prNumbers(JOB_A, [session]), [2])
+})
+
+test("a pull request with no worker in a multi-job per-worker session is credited to none", () => {
+  const prs = [{ repo: "ourostack/desk", number: 3 }]
+  const multi = splitSession({ refs: REFS(prs) })
+  assert.deepEqual(prNumbers(JOB_A, [multi]), [])
+  assert.deepEqual(referencesOf(JOB_A, [multi]).partial_reasons, ["worker_shared"])
+  const single = splitSession({ refs: REFS(prs) })
+  single.jobs = [single.jobs[0]]
+  assert.deepEqual(prNumbers(JOB_A, [single]), [3])
+  assert.equal(Object.hasOwn(referencesOf(JOB_A, [single]), "partial"), false)
+})
+
+test("commits in a multi-job per-worker session are credited to none; in a single-job session they are credited", () => {
+  const commits = [{ repo: "ourostack/desk", sha: "a".repeat(40) }, { repo: "ourostack/desk", sha: "b".repeat(40) }]
+  const multi = splitSession({ refs: REFS([], commits) })
+  assert.equal(referencesOf(JOB_A, [multi]).value.public_commits, 0)
+  assert.deepEqual(referencesOf(JOB_A, [multi]).partial_reasons, ["worker_shared"])
+  const single = splitSession({ refs: REFS([], commits) })
+  single.jobs = [single.jobs[0]]
+  assert.equal(referencesOf(JOB_A, [single]).value.public_commits, 2)
+  assert.equal(Object.hasOwn(referencesOf(JOB_A, [single]), "partial"), false)
+  // Nothing withheld, nothing to mark: a multi-job session with no references is not partial.
+  assert.equal(Object.hasOwn(referencesOf(JOB_A, [splitSession()]), "partial"), false)
+})
+
+test("legacy bindings keep every reference", () => {
+  const prs = [{ repo: "ourostack/desk", number: 1, agent: 0 }, { repo: "ourostack/desk", number: 2 }]
+  const commits = [{ repo: "ourostack/desk", sha: "c".repeat(40) }]
+  const session = splitSession({ refs: REFS(prs, commits) })
+  delete session.jobs[0].agents
+  delete session.jobs[1].agents
+  for (const job of [JOB_A, JOB_B]) {
+    const references = referencesOf(job, [session])
+    assert.deepEqual(references.value.public_pull_requests.map((pr) => pr.number), [1, 2])
+    assert.equal(references.value.public_commits, 1)
+    assert.equal(Object.hasOwn(references, "partial"), false)
+  }
+})
+
 test("time from a worker that several jobs share is partial with worker_shared, and is not split", () => {
   const shared = splitSession()
   shared.jobs[0].agents = [0, 1]
