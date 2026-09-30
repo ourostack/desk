@@ -48,6 +48,23 @@ const CARD_UPDATE = {
   body_append: text("Markdown to append to the card body, separated by a blank line."),
 }
 
+const TASK_DONE_EVIDENCE = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    kind: { type: "string", enum: ["pr", "commit", "ci_run", "non_code"], description: "What kind of reference this is." },
+    ref: text('The verifiable, checkable reference in that kind\'s own shape: a PR URL (GitHub or Azure DevOps) for pr; a 7-40 character hex commit sha, optionally with its repo/branch, or a commit URL for commit; the CI run\'s own https URL for ci_run; or an https URL or desk-relative path to the proof for non_code.'),
+  },
+  required: ["kind", "ref"],
+  description: "Required, as a JSON object (not a string), when this call moves a task into `done` from a non-`done` status: at least one checkable reference backing the completion claim. On task_update, that is any transition whose merged status becomes `done`. On task_archive, that is archiving a task that isn't already `done` or `cancelled`, unless `outcome: \"cancelled\"` is given instead. Omit for every other update, including a transition to `cancelled`. Refused with an error naming what to supply when required and this is missing, malformed, or shaped wrong for its kind.",
+}
+
+const TASK_ARCHIVE_OUTCOME = {
+  type: "string",
+  enum: ["cancelled"],
+  description: 'Pass "cancelled" to archive a task that is not already `done` or `cancelled` as abandoned work, needing no `evidence`. Omit for a completed task and pass `evidence` instead. An already-`done` or already-`cancelled` task, or one with no task.md at all, needs neither.',
+}
+
 export const TOOL_INPUT_SCHEMAS = Object.freeze({
   task_create: schema({
     ...TASK_TARGET,
@@ -92,8 +109,8 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     initiated_by: { type: "string", enum: ["operator", "agent"], description: "Who started the task: the operator asked, or the agent recognized the work." },
     origin_note: text("When the agent started the task: one line on what it noticed."),
   }, ["track", "slug", "title"]),
-  task_update: schema({ ...TASK_TARGET, ...CARD_UPDATE }, ["track", "slug"]),
-  task_archive: schema(TASK_TARGET, ["track", "slug"]),
+  task_update: schema({ ...TASK_TARGET, ...CARD_UPDATE, evidence: TASK_DONE_EVIDENCE }, ["track", "slug"]),
+  task_archive: schema({ ...TASK_TARGET, evidence: TASK_DONE_EVIDENCE, outcome: TASK_ARCHIVE_OUTCOME }, ["track", "slug"]),
   task_move: schema({
     ...TASK_TARGET,
     handle: text("The task's handle from desk_status active_tasks or a desk_doctor finding, in place of track and slug; use it for a name shown as <redacted segment>."),

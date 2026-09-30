@@ -28,6 +28,10 @@ artifacts: [https://github.com/.../pull/123]  # outputs produced by this task (P
 active_bridge: "bridge-abc123"          # set by bridge promotion — bridge ID this task durably records
 bridge_sessions: ["sess-xyz789"]        # set by bridge promotion — session IDs the bridge is coordinating
 factory_report: https://github.com/<store>/blob/reports/jobs/<job>.md  # set by the task tools at done when the factory store has consent
+evidence:                               # required by task_update, or by task_archive archiving a non-terminal task without outcome: cancelled; see task-lifecycle "Resuming a task"
+  kind: pr                              # pr | commit | ci_run | non_code
+  ref: https://github.com/<org>/<repo>/pull/123
+  recorded_at: 2026-04-21T09:00:00Z     # set by task_update; never hand-write
 
 # Optional: adoption signals
 planning_complete: true                 # skip brainstorming and planning; resume at implementation
@@ -91,6 +95,10 @@ these fields are read by the harness, not the agent. set them when the task repr
 - **`factory_report`** — the link to this job's factory report, written by `task_update` or `task_archive` on the transition to `done` when the desk's resolved factory store has consent (see `desk:session-start` Step 2.7). the link is deterministic, so it is written at once and may not resolve until the store has merged the job's facts and rebuilt its reports; `done` never waits for that. cards without consent, cards finished before the field existed and `cancelled` cards have no link. never write or edit it by hand.
 
 agents creating tasks via `desk` skills don't typically set runtime fields directly — they're added by `ouro reminder create`, by bridge promotion, or by the operator. but agents reading task cards should understand what these fields mean so they don't strip them on edits.
+
+## Evidence on `done`
+
+unlike the runtime fields above, **`evidence`** is supplied by the agent, not the harness: a transition to `status: done` — whether made by `task_update`'s `frontmatter: { status: "done" }` or by `task_archive` bumping a non-terminal task on archive — is refused unless the call passes `evidence: { kind, ref }`, and it's written onto the card as `evidence: { kind, ref, recorded_at }` alongside the transition. `kind` is one of `pr`, `commit`, `ci_run` or `non_code`; `ref` is a checkable reference in that kind's own shape — a PR URL, a commit sha (optionally with its repo/branch) or a commit URL, the CI run's own https URL, or an https URL or desk-relative path to a non-code proof — and an error names the exact shape expected when `ref` doesn't match its `kind`. A `non_code` desk-relative path is resolved against the desk root and must land on a file or directory that actually exists there — a path that escapes the desk via `..`, or names nothing on disk, is refused the same as free text with no link. `task_archive` instead accepts `outcome: "cancelled"` in place of `evidence` for genuinely abandoned work, archiving the task as `cancelled` with no evidence required; a task already `done` or already `cancelled` archives as-is, needing neither. a direct edit to `status: done` that bypasses both tools — Write, Edit, or MultiEdit, and so never supplies or records evidence — is denied at the tool-call boundary on Claude Code; see `task-lifecycle`'s "Resuming a task" for the contract this enforces. cards finished before this field existed have no `evidence`, and `cancelled` cards never require one.
 
 consumer agents extending this with their own work-tracker schema (e.g. enterprise overlays with Feature / Epic hierarchies) add their own frontmatter block — typically the overlay ships a card-fields skill defining the tracker-specific `tracker:` + `repos[].org` shape.
 

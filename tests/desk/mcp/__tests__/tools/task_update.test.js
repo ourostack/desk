@@ -210,6 +210,290 @@ test("task_update requires both task identifiers", async () => {
   )
 })
 
+// ── Evidence gate on `done` (the invented-completion finding) ──────────────
+
+test("task_update refuses a bare move to `done`, leaving the card untouched, and names what to supply", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+  const filePath = path.join(root, "t", "book-flights", "task.md")
+  const before = await readFront(filePath)
+
+  await assert.rejects(
+    task_update({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", frontmatter: { status: "done" } },
+    }),
+    /task_update: moving a task to `done` needs evidence.*evidence: \{ kind, ref \}/,
+  )
+
+  const after = await readFront(filePath)
+  assert.deepEqual(after.data, before.data, "a refused done transition writes nothing")
+})
+
+test("task_update refuses `done` with a malformed evidence object, naming the bad value", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  await assert.rejects(
+    task_update({
+      deskRoot: root,
+      input: {
+        track: "t",
+        slug: "book-flights",
+        frontmatter: { status: "done" },
+        evidence: { kind: "vibes", ref: "trust me" },
+      },
+    }),
+    /task_update: `evidence` is not valid.*"kind":"vibes"/,
+  )
+
+  await assert.rejects(
+    task_update({
+      deskRoot: root,
+      input: {
+        track: "t",
+        slug: "book-flights",
+        frontmatter: { status: "done" },
+        evidence: { kind: "pr", ref: "   " },
+      },
+    }),
+    /task_update: `evidence` is not valid/,
+    "a blank ref is not a reference",
+  )
+})
+
+for (const evidence of [
+  { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/42" },
+  { kind: "commit", ref: "a1b2c3d on origin/main" },
+  { kind: "ci_run", ref: "https://ci.example.invalid/runs/9001" },
+  { kind: "non_code", ref: "https://example.invalid/confirmation/abc" },
+]) {
+  test(`task_update accepts a move to \`done\` with ${evidence.kind} evidence, and records it on the card`, async () => {
+    const root = await mkTempDeskRoot()
+    await task_create({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+    })
+
+    const result = await task_update({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", frontmatter: { status: "done" }, evidence },
+    })
+    assert.equal(result.status, "updated")
+
+    const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+    assert.equal(data.status, "done")
+    assert.equal(data.evidence.kind, evidence.kind)
+    assert.equal(data.evidence.ref, evidence.ref)
+    assert.equal(data.evidence.recorded_at, data.updated)
+  })
+}
+
+// ── Per-kind ref-shape checks (network-free, 2026-09-29 review of #106) ────
+//
+// `assertDoneEvidence` checks each kind's `ref` against its own shape --
+// commit and non_code each accept two distinct shapes, and every kind
+// refuses a ref that doesn't look like a reference at all. The loop above
+// only exercises one accepted shape per kind; these two loops round that
+// out to full branch coverage of `DONE_EVIDENCE_REF_CHECKS`.
+
+for (const evidence of [
+  { kind: "commit", ref: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", label: "a full 40-character sha with no repo/branch suffix" },
+  { kind: "commit", ref: "https://github.com/example-org/example-repo/commit/a1b2c3d", label: "a commit URL rather than a bare sha" },
+  { kind: "non_code", ref: "reports/2026-09-29-confirmation.md", label: "a desk-relative path to a file that exists in the desk" },
+]) {
+  test(`task_update accepts ${evidence.kind} evidence in its other checkable shape (${evidence.label})`, async () => {
+    const root = await mkTempDeskRoot()
+    await task_create({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+    })
+    if (evidence.kind === "non_code") {
+      const proofPath = path.join(root, evidence.ref)
+      await fs.mkdir(path.dirname(proofPath), { recursive: true })
+      await fs.writeFile(proofPath, "confirmation\n")
+    }
+
+    const result = await task_update({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", frontmatter: { status: "done" }, evidence: { kind: evidence.kind, ref: evidence.ref } },
+    })
+    assert.equal(result.status, "updated")
+
+    const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+    assert.equal(data.evidence.kind, evidence.kind)
+    assert.equal(data.evidence.ref, evidence.ref)
+  })
+}
+
+for (const evidence of [
+  { kind: "pr", ref: "https://github.com/example-org/example-repo/issues/42", why: "an issue URL, not a pull request URL" },
+  { kind: "pr", ref: "example-org/example-repo#42", why: "a shorthand reference with no URL at all" },
+  { kind: "commit", ref: "abc12", why: "5 hex characters -- shorter than the 7-character minimum" },
+  { kind: "commit", ref: "not-hex-at-all", why: "not a hex string" },
+  { kind: "ci_run", ref: "http://ci.example.invalid/runs/9001", why: "http, not https" },
+  { kind: "ci_run", ref: "ci.example.invalid/runs/9001", why: "no scheme at all" },
+  { kind: "non_code", ref: "the confirmation email ari sent", why: "free text with a space, not a link or path" },
+  { kind: "non_code", ref: "/etc/confirmation.txt", why: "an absolute path, machine-specific" },
+  { kind: "non_code", ref: "~/confirmation.txt", why: "a tilde path, machine-specific" },
+  { kind: "non_code", ref: "ftp://files.example.invalid/confirmation.txt", why: "a non-https URL scheme" },
+  { kind: "non_code", ref: "C:\\Users\\ari\\confirmation.txt", why: "a Windows drive-letter path" },
+]) {
+  test(`task_update refuses ${evidence.kind} evidence whose ref is ${evidence.why}, naming the expected shape`, async () => {
+    const root = await mkTempDeskRoot()
+    await task_create({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+    })
+
+    await assert.rejects(
+      task_update({
+        deskRoot: root,
+        input: { track: "t", slug: "book-flights", frontmatter: { status: "done" }, evidence: { kind: evidence.kind, ref: evidence.ref } },
+      }),
+      new RegExp(`task_update: \`evidence.ref\` is not a checkable ${evidence.kind} reference`),
+    )
+  })
+}
+
+// ── non_code containment + existence check (2026-09-29 controller check of
+// a363c057) ──────────────────────────────────────────────────────────────
+//
+// Format alone let free text like "done" or "trustme" pass as non_code
+// evidence, since a desk-relative path was never actually resolved. Now the
+// tool -- which has the desk root -- resolves the ref against it and
+// requires it land on something that exists, inside the desk.
+
+test("task_update accepts non_code evidence whose ref is a desk-relative path to a directory, not just a file", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+  await fs.mkdir(path.join(root, "reports", "confirmation-photos"), { recursive: true })
+
+  const result = await task_update({
+    deskRoot: root,
+    input: {
+      track: "t",
+      slug: "book-flights",
+      frontmatter: { status: "done" },
+      evidence: { kind: "non_code", ref: "reports/confirmation-photos" },
+    },
+  })
+  assert.equal(result.status, "updated")
+
+  const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+  assert.equal(data.evidence.ref, "reports/confirmation-photos")
+})
+
+test("task_update refuses non_code evidence whose ref escapes the desk root via \"..\", even though the target actually exists", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+  // A sibling temp desk root, so the referenced file genuinely exists on
+  // disk -- a plain existence check with no containment check would wrongly
+  // accept this.
+  const outside = await mkTempDeskRoot()
+  await fs.writeFile(path.join(outside, "proof.md"), "not actually in this desk\n")
+  const ref = path.join("..", path.basename(outside), "proof.md")
+
+  await assert.rejects(
+    task_update({
+      deskRoot: root,
+      input: {
+        track: "t",
+        slug: "book-flights",
+        frontmatter: { status: "done" },
+        evidence: { kind: "non_code", ref },
+      },
+    }),
+    /task_update: `evidence\.ref` is not a checkable non_code reference.*actually present inside the desk/,
+  )
+})
+
+test("task_update refuses non_code evidence whose ref names nothing that exists in the desk", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  await assert.rejects(
+    task_update({
+      deskRoot: root,
+      input: {
+        track: "t",
+        slug: "book-flights",
+        frontmatter: { status: "done" },
+        evidence: { kind: "non_code", ref: "reports/does-not-exist.md" },
+      },
+    }),
+    /task_update: `evidence\.ref` is not a checkable non_code reference.*actually present inside the desk/,
+  )
+})
+
+test("task_update accepts `evidence` as a JSON string, the same tolerance `frontmatter` gets", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  const result = await task_update({
+    deskRoot: root,
+    input: {
+      track: "t",
+      slug: "book-flights",
+      frontmatter: { status: "done" },
+      evidence: JSON.stringify({ kind: "pr", ref: "https://github.com/example-org/example-repo/pull/42" }),
+    },
+  })
+  assert.equal(result.status, "updated")
+  const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+  assert.equal(data.evidence.ref, "https://github.com/example-org/example-repo/pull/42")
+})
+
+test("task_update needs no evidence for a transition to any status other than `done`, including `cancelled`", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  for (const status of ["blocked", "paused", "collaborating", "cancelled"]) {
+    const result = await task_update({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", frontmatter: { status } },
+    })
+    assert.equal(result.status, "updated")
+  }
+})
+
+test("task_update needs no evidence to re-save an already-`done` card", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "done" },
+  })
+
+  const result = await task_update({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", body_append: "A later note." },
+  })
+  assert.equal(result.status, "updated")
+  const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
+  assert.equal(Object.hasOwn(data, "evidence"), false, "re-saving an already-done card writes no evidence field")
+})
+
 // ── M4-6 Part 2: stage + commit ─────────────────────────────────────────────
 
 test("task_update stages and commits exactly the task.md it updated", async () => {
