@@ -1,5 +1,13 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.153 — 2026-09-30
+
+The startup hook's `Desk boot:` line no longer contradicts the one-call boot. The factory check used to add `Factory: this desk hasn't decided whether to contribute measurement data; ask the operator once (desk:session-start)`, which told the agent to raise consent before the operator's work and in noninteractive sessions too. The boot script's `instructions` now own that rule alone (consent comes after the operator's work, at most once, and never in a noninteractive session), so the check says nothing for an undecided store and `desk_doctor`'s Factory section words it the same way.
+
+The workspace-tidy line that read `1 task card with unreadable repos` now names the cards and the problem, for example `2 task cards with unreadable repos: track/task/task.md (repo ~/code/app not found), track/other/task.md (repos list not readable); their repositories were not inspected`. It shows the first three cards in name order followed by `and N more`, and redacts any path segment that looks like a secret.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.152 — 2026-09-30
 
 `desk:session-start` now boots with one command. `mcp/scripts/session-boot.js [--task <name>]` (backed by `bootOnce` in `mcp/src/runtime/boot.js`) checks Desk's own migrations, resolves `$DESK`, probes the host, checks `gh`, `jq` and `gh auth status`, syncs the workspace, reads the cheap filesystem task index, validates every task card's frontmatter, resolves a push-capable GitHub account for every task repo, fetches each open task's local clones, looks up open pull requests, and resolves a named task, all in one line of JSON that always exits 0. Every slow step has a wall-clock budget and comes back under `pending` instead of hanging, and the sync counts against the same budget.
