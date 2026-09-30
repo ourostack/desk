@@ -23,7 +23,8 @@ node evals/boot-acceptance/summarize.mjs --out-dir <dir>
 - `--runs <n>` (default `2`)
 - `--model <name>` (default `haiku`)
 - `--budget <usd>` (default `1`, passed as `--max-budget-usd` per run)
-- `--timeout-min <n>` (default `15`): kills one `claude` call that runs longer.
+- `--timeout-min <n>` (default `15`): kills one `claude` call, and its whole process group, that runs longer.
+- `--dry-run`: print the plan and the child environment's variable names, run nothing. `--help` prints usage.
 - `--worktree <repo checkout>`: load `desk`, `superpowers` and `plain-language` from that checkout's `plugins/` folder instead of this one. This is how you test a Desk branch with this harness: run the harness from any checkout and point `--worktree` at the branch under test.
 - `--plugin-dir <folder>`: load exactly that folder as the plugin parent (it must hold `desk`, `superpowers` and `plain-language`). Use it to test a scratch combination of plugins, for example symlinks to two branches' `plugins/desk`. It overrides `--worktree`.
 - `--shared-cache <dir>` (default `<out-dir>/.shared-runtime-cache`): see "Shared cache" below.
@@ -72,7 +73,7 @@ Never commit `--out-dir`'s contents: transcripts are real (if synthetic-content)
 6. Writes `transcript.jsonl`, `stderr.log` (if any) and `summary.json` under
    `<out-dir>/<scenario>/run-<n>/`.
 
-`summarize.mjs` then reads every `summary.json` and writes `SUMMARY.md`: the
+`rescore.mjs --out-dir <dir>` re-scores saved transcripts with the current checks, with no model calls. `summarize.mjs` then reads every `summary.json` and writes `SUMMARY.md`: the
 outcome table, a mechanical keyword tally over the critiques (a first pass
 only -- real clustering needs a human or a judge model reading the actual
 text), and every critique verbatim.
@@ -94,6 +95,8 @@ have finished with the above"), matching how the two turns would read under
 What a run guarantees, each explained below:
 
 - It never reads or writes the operator's desk: the fixture desk is a fresh temp checkout and Desk binds to it, not to any saved binding.
+- The `claude` subprocess gets an allowlisted environment, never a copy of yours: `PATH`, locale, `TERM`, Anthropic credentials if you have them set, and a temp `HOME` with `XDG_*` pointing inside it. `GH_TOKEN`, `GITHUB_TOKEN`, `CLAUDE_CONFIG_DIR`, `DESK*` and `DESK_RUNTIME_CACHE_DIR` are never passed (`--dry-run` lists the variable names).
+- GitHub is read-only. A `gh` shim is first on `PATH`: read-only subcommands (`auth status`, `pr list/view`, `repo view`, `api` GET, `search`) run, everything else exits 97 and is logged. `git push` to any GitHub URL is rewritten to a dead local path by the run's git config and fails at once; pushes to the fixture's local bare origin work. A run also fails if its transcript shows a `gh` write attempt or a `gh` called by path, even though the shim blocks it. `safety.test.mjs` tests the shim, the policy, the environment and the push block (`node --test evals/boot-acceptance/safety.test.mjs`; no network).
 - It never writes under the real `HOME`: the `claude` subprocess gets its own temp `HOME`. The only things reached through it are a read-only symlink to `Library/Keychains` (Claude Code's own login) and a copy of `gh`'s account list.
 - The "local repo" a task card names is created under that temp `HOME`, never under the real `~/code`.
 - Its git remotes are local bare repos unique to the run, so nothing reaches GitHub. The one read-only exception is the `wrong-push-account` scenario's `gh` lookups against a public repo.
