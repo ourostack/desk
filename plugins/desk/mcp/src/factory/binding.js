@@ -398,7 +398,8 @@ export function bindSession({ events, agents, deskRoot, deskRemote, personPrefix
     jobs.push({
       job: jobId({ deskRemote: remote, personPrefix, track: birth.track, slug: birth.slug }),
       basis: ENUMS.jobBasis.filter((item) => basis.has(item)),
-      agents: workers.sort((x, y) => x - y),
+      // A legacy caller passes no `agents`: the key is left out, which reads as every worker.
+      ...(hasAgents ? { agents: workers.sort((x, y) => x - y) } : {}),
       task_created_at: isTime(card.created_at) ? card.created_at : null,
       transitions: entry.transitions.sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : 0)).slice(0, LIMITS.jobTransitions),
       observed: status === null ? null : { status, at: observedAt },

@@ -121,7 +121,6 @@ test("a successful Desk task tool call alone binds its task, with its status as 
   assert.deepEqual(jobs, [{
     job: expectedId(NORMALIZED, "", TRACK, SLUG),
     basis: ["desk_tool"],
-    agents: [0],
     task_created_at: CARD.created_at,
     transitions: [{ to: "processing", at: "2026-09-25T08:10:00.000Z" }],
     observed: { status: "processing", at: null },
@@ -705,9 +704,9 @@ test("a bound session's jobs pass the local facts validator, agents included", (
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 })
 
-test("legacy call without agents treats everything as agent 0", () => {
+test("a legacy call without agents binds every event and leaves the agents key out", () => {
   const { jobs } = bind({ deskToolCalls: [deskCall({ agent: 3 })], fileWrites: [{ path: `${DESK}/${TRACK}/${OTHER}/x.md`, agent: 2 }] })
-  assert.deepEqual(summary(jobs).map((job) => job.agents), [[0], [0]])
+  assert.deepEqual(jobs.map((job) => Object.hasOwn(job, "agents")), [false, false])
 })
 
 test("a native commit is credited to its worker, and a worker's spawn brief joins its own evidence with the job's other workers", () => {
