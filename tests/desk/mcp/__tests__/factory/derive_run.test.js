@@ -317,3 +317,32 @@ test("quiet wait refuses a marker invalidated while the detached process was wai
   })
   assert.equal((await deriveFile(ctx.env, file, { quietMs: 10 })).result, "invalid")
 }))
+
+test("a session derived under an older binding version re-derives once", () => scratch(async (ctx) => {
+  const { deriveMarker, BINDING_VERSION } = await runner()
+  assert.equal(BINDING_VERSION, 2)
+  const marker = { ...await session(ctx), end_reason: "complete", ended_at: END }
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.deepEqual(await deriveMarker(ctx.env, marker), { result: "written", store: STORE })
+  const name = `claude-code-${ID}.json`
+  const receipt = (await readStatus(ctx.env)).derivations[name]
+  assert.equal(receipt.binding_version, BINDING_VERSION)
+  for (const older of [undefined, 1]) {
+    const { binding_version, ...legacy } = receipt
+    await writeStatus(ctx.env, { derivations: { [name]: older === undefined ? legacy : { ...legacy, binding_version: older } } })
+    assert.equal((await deriveMarker(ctx.env, marker)).result, "written")
+    assert.equal((await readStatus(ctx.env)).derivations[name].binding_version, BINDING_VERSION)
+    assert.equal((await deriveMarker(ctx.env, marker)).result, "skipped", "the second sweep skips it")
+  }
+}))
+
+test("a current receipt still skips", () => scratch(async (ctx) => {
+  const { deriveMarker, BINDING_VERSION } = await runner()
+  const marker = { ...await session(ctx), end_reason: "complete", ended_at: END }
+  await setConsent(ctx.env, { store: STORE, contribute: true })
+  await deriveMarker(ctx.env, marker)
+  const name = `claude-code-${ID}.json`
+  const receipt = (await readStatus(ctx.env)).derivations[name]
+  await writeStatus(ctx.env, { derivations: { [name]: { ...receipt, binding_version: BINDING_VERSION + 1 } } })
+  assert.equal((await deriveMarker(ctx.env, marker)).result, "skipped")
+}))

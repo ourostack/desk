@@ -97,6 +97,7 @@ import * as path from "node:path"
 
 import { toolKind } from "./tool-kinds.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
+import { parseDeskTaskLine } from "./desk-task-line.js"
 import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 
@@ -174,6 +175,14 @@ function classifyUserContent(content) {
 function toolResultBlocksOf(line) {
   const content = line.message?.content
   return Array.isArray(content) ? content.filter((block) => block?.type === "tool_result") : []
+}
+
+// The text of a human prompt's content (a string, or its text blocks joined
+// by newlines; `isHumanPromptLine` guarantees one of the two). Only ever
+// handed to `parseDeskTaskLine`, never kept.
+function promptText(content) {
+  if (typeof content === "string") return content
+  return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n")
 }
 
 function isToolResultLine(line) {
@@ -264,6 +273,9 @@ function createAgentProcessor({ agentIndex }) {
   const pendingGitCommits = new Map() // tool_use id -> { start, cwds }
   const lastFinishedByKind = new Map() // kind -> { end, outcome, retried }
   const issuedIds = new Set()
+  const spawnTaskById = new Map() // spawn tool_use id -> { track, slug } from its prompt
+  let firstPromptSeen = false
+  let firstPromptTask = null
 
   const intervals = []
   const toolCallCounts = new Map()
@@ -330,7 +342,7 @@ function createAgentProcessor({ agentIndex }) {
     const gitPr = toolUseResult?.gitOperation?.pr
     if (gitPr) {
       const repo = repoFromPrUrl(gitPr.url)
-      if (repo !== null && isValidPrRef(repo, gitPr.number)) prRefs.push({ repo, number: gitPr.number })
+      if (repo !== null && isValidPrRef(repo, gitPr.number)) prRefs.push({ repo, number: gitPr.number, agent: agentIndex, created: gitPr.action === "created" })
     }
 
     if (pending.name === "Bash") {
@@ -338,10 +350,10 @@ function createAgentProcessor({ agentIndex }) {
       for (const match of text.matchAll(COMMIT_SHA_PATTERN)) commitShas.add(match[0])
     }
 
-    if (deskCall) deskToolCalls.push({ ...deskCall, ok: outcome === "ok" })
-    if (fileWrite && outcome === "ok") fileWrites.push(fileWrite)
+    if (deskCall) deskToolCalls.push({ ...deskCall, agent: agentIndex, ok: outcome === "ok" })
+    if (fileWrite && outcome === "ok") fileWrites.push({ ...fileWrite, agent: agentIndex })
     if (gitCommit && outcome === "ok" && !exitedNonZero(block)) {
-      for (const cwd of gitCommit.cwds) shellGitCommits.push({ start: gitCommit.start, end: ts, cwd })
+      for (const cwd of gitCommit.cwds) shellGitCommits.push({ start: gitCommit.start, end: ts, cwd, agent: agentIndex })
     }
   }
 
@@ -400,6 +412,11 @@ function createAgentProcessor({ agentIndex }) {
       // Recorded even without a readable time, so a subagent spawned here
       // still finds its parent.
       issuedIds.add(block.id)
+      if (SUBAGENT_SPAWN_TOOLS.has(name)) {
+        // The prompt is matched here and dropped; only a validated pair is kept.
+        const task = parseDeskTaskLine(block.input?.prompt)
+        if (task !== null) spawnTaskById.set(block.id, task)
+      }
       if (ts === null) {
         // A call with no readable start can't be measured: dropped like an
         // unresolved one rather than given an invented start.
@@ -438,6 +455,10 @@ function createAgentProcessor({ agentIndex }) {
   }
 
   function handleUserLine(line, ts) {
+    if (!firstPromptSeen && isHumanPromptLine(line)) {
+      firstPromptSeen = true
+      firstPromptTask = parseDeskTaskLine(promptText(line.message?.content))
+    }
     for (const block of toolResultBlocksOf(line)) {
       if (typeof block.tool_use_id === "string") finalizeToolResult(block, line.toolUseResult, ts)
     }
@@ -476,9 +497,9 @@ function createAgentProcessor({ agentIndex }) {
       } else if (line.type === "system" && line.subtype === "compact_boundary") {
         compactions += 1
       } else if (line.type === "pr-link") {
-        if (isValidPrRef(line.prRepository, line.prNumber)) prRefs.push({ repo: line.prRepository, number: line.prNumber })
+        if (isValidPrRef(line.prRepository, line.prNumber)) prRefs.push({ repo: line.prRepository, number: line.prNumber, agent: agentIndex, created: false })
       } else if (line.type === "file-history-delta") {
-        if (ts !== null && typeof line.trackingPath === "string") fileWrites.push({ at: ts, path: line.trackingPath })
+        if (ts !== null && typeof line.trackingPath === "string") fileWrites.push({ at: ts, path: line.trackingPath, agent: agentIndex })
       } else if (line.type === "user") {
         handleUserLine(line, ts)
       }
@@ -509,6 +530,8 @@ function createAgentProcessor({ agentIndex }) {
         deskToolCalls,
         shellGitCommits,
         issuedIds,
+        spawnTaskById,
+        firstPromptTask,
         hadUnresolvedCall,
         invalidModelSeen,
         earliestTimestamp,
@@ -551,10 +574,19 @@ function comparePrRefs(a, b) {
   return a.repo < b.repo ? -1 : 1
 }
 
+// Claude Code writes a `pr-link` line into the root transcript for every PR of
+// the session, including the ones a subagent created. A `gitOperation.pr` with
+// action `created` is the creating call; any other action (merged, ready,
+// closed, edited) only saw the PR. So the worker whose call created the PR outranks any worker that only saw its link, and among refs of
+// the same kind the lowest worker wins.
 function dedupePrRefs(refs) {
   const seen = new Map()
-  for (const ref of refs) seen.set(`${ref.repo}#${ref.number}`, ref)
-  return [...seen.values()].sort(comparePrRefs)
+  for (const ref of refs) {
+    const key = `${ref.repo}#${ref.number}`
+    const held = seen.get(key)
+    if (held === undefined || (ref.created && !held.created) || (ref.created === held.created && ref.agent < held.agent)) seen.set(key, ref)
+  }
+  return [...seen.values()].map(({ repo, number, agent }) => ({ repo, number, agent })).sort(comparePrRefs)
 }
 
 function compareByStart(a, b) {
@@ -633,14 +665,16 @@ function applyLimits({ agents, intervals, models, prs }, unavailable, limits = L
     addUnavailable(unavailable, "models", "capped")
   }
 
-  return { agents: keptAgents, intervals: keptIntervals, models: keptModels, prs: prs.slice(0, limits.prs) }
+  const keptNs = new Set(keptAgents.map((agent) => agent.n))
+  const keptPrs = prs.slice(0, limits.prs).map(({ agent, ...ref }) => (keptNs.has(agent) ? { ...ref, agent } : ref))
+  return { agents: keptAgents, intervals: keptIntervals, models: keptModels, prs: keptPrs }
 }
 
 // Exposed only for direct unit tests: the two sort comparators (a real
 // session's own ordering can't reliably force a sort comparator through
 // every comparison direction) and `applyLimits`, whose caps are far too
 // large to reach from a fixture.
-export const __internals__ = { compareByStart, comparePrRefs, applyLimits }
+export const __internals__ = { compareByStart, comparePrRefs, applyLimits, dedupePrRefs }
 
 // ---------------------------------------------------------------------------
 // Entry point.
@@ -689,9 +723,11 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     hadUnresolvedAny = hadUnresolvedAny || result.hadUnresolvedCall
     invalidModelSeen = invalidModelSeen || result.invalidModelSeen
 
+    // What the worker itself ran on beats what its meta says it was asked for.
     let model = "unknown"
-    if (meta !== null && isValidModelId(meta.model)) model = meta.model
-    else invalidModelSeen = true
+    if (result.rootModel !== "unknown" && isValidModelId(result.rootModel)) model = result.rootModel
+    else if (meta !== null && isValidModelId(meta.model)) model = meta.model
+    if (model === "unknown") invalidModelSeen = true
 
     agents.push({ n: agentIndex, parent: 0, model })
     agentResults.push(result)
@@ -700,9 +736,19 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
 
   // Parents are resolved once every transcript has been read, so a nested
   // subagent's file may sort before or after its parent's.
+  const spawnOwners = [-1]
   for (let index = 1; index < agents.length; index += 1) {
     const owner = spawnIds[index] === null ? -1 : agentResults.findIndex((result) => result.issuedIds.has(spawnIds[index]))
+    spawnOwners.push(owner)
     if (owner !== -1) agents[index].parent = owner
+  }
+
+  // Each spawned worker's task: its spawn prompt's line, else its own first prompt's.
+  const spawnTasks = []
+  for (let index = 1; index < agents.length; index += 1) {
+    const owner = spawnOwners[index]
+    const task = (owner === -1 ? null : agentResults[owner].spawnTaskById.get(spawnIds[index]) ?? null) ?? agentResults[index].firstPromptTask
+    if (task !== null) spawnTasks.push({ agent: index, track: task.track, slug: task.slug })
   }
 
   const mergedUsage = new Map()
@@ -781,6 +827,7 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     commitShas: [...new Set(agentResults.flatMap((result) => [...result.commitShas]))],
     shellGitCommits: agentResults.flatMap((result) => result.shellGitCommits),
     nativeCommitShas: [],
+    spawnTasks,
   }
 
   return { facts, events }

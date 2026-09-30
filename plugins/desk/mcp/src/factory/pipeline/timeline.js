@@ -54,7 +54,9 @@ export function buildJobTimeline(job, inputSessions) {
 
   const intervals = sessions.flatMap(({ session, binding }) => binding.session_offset_ms === null
     ? []
-    : session.intervals.map((interval) => intervalOnJobClock(session, interval, binding.session_offset_ms)))
+    : session.intervals
+      .filter((interval) => !Object.hasOwn(binding, "agents") || binding.agents.includes(interval.agent))
+      .map((interval) => intervalOnJobClock(session, interval, binding.session_offset_ms)))
   intervals.sort((left, right) => compareValues(
     left.start_ms - right.start_ms,
     left.end_ms - right.end_ms,

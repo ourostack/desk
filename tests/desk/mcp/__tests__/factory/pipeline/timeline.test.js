@@ -130,3 +130,20 @@ test("transitions with unknown offsets sort after every known one instead of pos
   assert.deepEqual(buildJobTimeline(CLOSED, [one]).transitions, expected)
   assert.deepEqual(buildJobTimeline(CLOSED, [reversed]).transitions, expected)
 })
+
+test("normalizePublished sorts a job's workers numerically and leaves jobs without workers alone", () => {
+  const input = structuredClone(sessions[2])
+  input.jobs[0].agents = [2, 0, 10]
+  const normalized = normalizePublished(input)
+  assert.deepEqual(normalized.jobs.find((job) => job.job === input.jobs[0].job).agents, [0, 2, 10])
+  assert.equal(normalized.jobs.filter((job) => Object.hasOwn(job, "agents")).length, 1)
+})
+
+test("a per-worker binding keeps only its workers' intervals, and a binding without agents keeps all", () => {
+  const session = structuredClone(sessions[0])
+  session.jobs[0].agents = [1]
+  const timeline = buildJobTimeline(CLOSED, [session])
+  assert.deepEqual(timeline.intervals.map((item) => item.agent), [1])
+  delete session.jobs[0].agents
+  assert.deepEqual([...new Set(buildJobTimeline(CLOSED, [session]).intervals.map((item) => item.agent))], [0, 1])
+})

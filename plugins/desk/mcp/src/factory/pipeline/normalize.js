@@ -52,6 +52,7 @@ export function normalizePublished(value) {
   normalized.refs.prs.sort((left, right) => compareValues(compareText(left.repo, right.repo), left.number - right.number))
   normalized.refs.commits.sort((left, right) => compareValues(compareText(left.sha, right.sha), compareText(left.repo, right.repo)))
   normalized.jobs.forEach((job) => {
+    if (Object.hasOwn(job, "agents")) job.agents.sort((left, right) => left - right)
     job.basis.sort((left, right) => enumIndex(ENUMS.jobBasis, left) - enumIndex(ENUMS.jobBasis, right))
     job.transitions.sort((left, right) => compareValues(compareNullableNumber(left.offset_ms, right.offset_ms), enumIndex(ENUMS.jobStatus, left.to) - enumIndex(ENUMS.jobStatus, right.to)))
   })

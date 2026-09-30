@@ -30,6 +30,8 @@ import { fileURLToPath } from "node:url"
 const here = path.dirname(fileURLToPath(import.meta.url))
 
 export const SENTINEL = "SENTINEL-7f3a"
+// A spawn prompt carries this line; only its validated track/slug may reach events.
+export const SPAWN_DESK_TASK_LINE = "Desk-Task: desk-plugin/some-task"
 // A 40-character hex token shaped like a commit SHA, planted only inside a
 // Bash result's stdout — the one place `derive-claude.js` is allowed to look
 // for one (`events.commitShas`, never `facts`).
@@ -219,7 +221,7 @@ function buildFullSession() {
     },
     toolUseResult: {
       stdout: `On branch main ${COMMIT_SHA} ${SENTINEL}`,
-      gitOperation: { pr: { number: 42, url: "https://github.com/ourostack/desk/pull/42", action: "opened" } },
+      gitOperation: { pr: { number: 42, url: "https://github.com/ourostack/desk/pull/42", action: "created" } },
     },
   }))
 
@@ -258,7 +260,7 @@ function buildFullSession() {
     message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-bash-5", is_error: false }] },
     toolUseResult: {
       stdout: `created ${SENTINEL}`,
-      gitOperation: { pr: { number: 99, url: `https://dev.azure.com/${SENTINEL}-org/repo/pullrequest/99`, action: "opened" } },
+      gitOperation: { pr: { number: 99, url: `https://dev.azure.com/${SENTINEL}-org/repo/pullrequest/99`, action: "created" } },
     },
   }))
 
@@ -393,7 +395,7 @@ function buildFullSession() {
   const msg8Usage = usage(3, 2, 0, 0)
   lines.push(envelope({
     type: "assistant",
-    message: { id: "msg-8", model: "claude-opus-5-5", usage: msg8Usage, content: [{ type: "tool_use", id: "tool-agent-1", name: "Agent", input: { prompt: `spawn subagent ${SENTINEL}` } }] },
+    message: { id: "msg-8", model: "claude-opus-5-5", usage: msg8Usage, content: [{ type: "tool_use", id: "tool-agent-1", name: "Agent", input: { prompt: `spawn subagent ${SENTINEL}\n${SPAWN_DESK_TASK_LINE}\nmore ${SENTINEL}` } }] },
   }))
   lines.push(envelope({
     type: "user",

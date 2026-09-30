@@ -64,6 +64,8 @@ Include the mapper's `briefRules` in **both the implementer brief and every revi
 
 > verify or validate in your own worktree; never in a checkout your task does not own
 
+The first `briefRules` entry is a `Desk-Task: <track>/<slug>` line, which must be copied verbatim, on its own line, into every implementer and reviewer brief so the factory can credit each subagent's work to its own task.
+
 Also pass the mapper's close-out rule in both brief types: every child returns every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record. `task-lifecycle` owns that return inventory and `git-hygiene` owns its safety gates; the mapper does not infer cleanup paths.
 
 This rule is passed through the adapter, not patched into the vendored Superpowers templates. A [protected-checkout denial](../../docs/protected-checkouts.md) applies to parent agents and subagents alike; it does not grant ownership of a different checkout.
