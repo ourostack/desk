@@ -7,3 +7,7 @@ Each job now gets only its own workers' active time, tool calls and pull request
 Sessions Desk already processed are re-derived once after you upgrade, so their numbers follow the new rules. They are not re-derived again on later sweeps.
 
 The briefs that the Superpowers mapper produces now carry a `Desk-Task: <track>/<slug>` line, and the [`using-superpowers-with-desk`](skills/using-superpowers-with-desk/SKILL.md) skill tells the agent to copy it verbatim into every implementer and reviewer brief.
+
+The first start after you upgrade re-derives every past session, so delivery of the changed sessions may finish on the following start.
+
+Time from a worker that several jobs share is marked partial (`worker_shared`) rather than split between them.
