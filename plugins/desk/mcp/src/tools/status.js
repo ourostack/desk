@@ -151,7 +151,7 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
     root,
     activation,
     runtime,
-    readiness,
+    readiness: presentReadiness(readiness),
     lexical,
     semantic,
     local_db: localDb.local_db,
@@ -172,6 +172,32 @@ export async function desk_status({ deskRoot, person, statusContext = {}, queryR
     host_enforcement: await hostEnforcementStatus({ env }),
     summary: summaryFor({ root, activation, localDb, snapshots, vectorPacks, startupFallback }),
   }
+}
+
+// One word for agents (`ready`, `converging`, `degraded`, `unavailable`, `not_checked`), with the controller's own
+// state name and convergence snapshot under `detail`. The raw controller state used to sit in `readiness.state`, where
+// `RECOVERING` read as an outage next to an admission `state` of `ready` and sent agents chasing a problem that was not
+// there (round 5: 7 of 16 runs raised it). The top-level `state` (admission) still decides whether Desk's tools work;
+// `readiness` only describes the search index's controller.
+const READINESS_MEANING = {
+  ready: "The readiness controller is serving and the index has converged; nothing to do.",
+  converging: "The index is still catching up in the background; reads fall back to the files and stay correct. Nothing to fix.",
+  degraded: "The index controller is recovering or its last convergence failed (see detail.convergence.diagnostic). Task, track and file tools are governed by the top-level `state`; search falls back to direct reads. Mention it in one line only if the work needs search.",
+  unavailable: "The readiness controller did not answer; search falls back to direct reads. The top-level `state` still decides whether Desk's tools work.",
+  not_checked: "desk_status did not ask the readiness controller.",
+}
+
+function readinessWord({ state, convergence }) {
+  if (state === "not_checked" || state === "unavailable") return state
+  if (state === "TERMINAL") return "unavailable"
+  if (state === "RECOVERING" || convergence.status === "failed") return "degraded"
+  if (state === "READY" || state === "LEXICAL_READY") return "ready"
+  return "converging"
+}
+
+function presentReadiness(readiness) {
+  const word = readinessWord(readiness)
+  return { state: word, meaning: READINESS_MEANING[word], detail: { controller_state: readiness.state, convergence: readiness.convergence } }
 }
 
 async function controllerReadiness(admission) {

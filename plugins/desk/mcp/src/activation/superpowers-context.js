@@ -1,4 +1,5 @@
 import * as path from "node:path"
+import { realpathSync } from "node:fs"
 import { realpath, stat } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { parseDeskTaskLine } from "../factory/desk-task-line.js"
@@ -122,7 +123,20 @@ export async function resolveSuperpowersContext(input) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Whether Node was asked to run this file. `import.meta.url` is the real path while `argv[1]` keeps the
+// spelling the caller used, which can run through a symlink (the macOS `$TMPDIR`, a linked plugin cache).
+// Comparing the two unresolved made the CLI exit 0 with no output, so both are compared as real paths
+// (round 5: an agent lost the artifact map to that silence).
+export function isEntrypoint(argv1 = process.argv[1], moduleUrl = import.meta.url) {
+  if (!argv1) return false
+  try {
+    return realpathSync(argv1) === realpathSync(fileURLToPath(moduleUrl))
+  } catch {
+    return false
+  }
+}
+
+if (isEntrypoint()) {
   try {
     const names = {
       "--desk-root": "deskRoot",

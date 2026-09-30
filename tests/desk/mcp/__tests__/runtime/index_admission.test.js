@@ -121,7 +121,7 @@ test("with the real runtime inspector and importer, main restores the runtime af
   })
   try {
     // Wait for background convergence too, so nothing is still writing the index when the fixture is removed.
-    const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.readiness?.state === "LEXICAL_READY", { deadlineMs: 60000 })
+    const ready = await session.statusUntil((payload) => payload.state === "ready" && payload.readiness?.detail.controller_state === "LEXICAL_READY", { deadlineMs: 60000 })
     assert.equal(ready.status, "ok")
     const search = await session.call("desk_search", { query: "lighthouse" })
     assert.equal(search.isError, false)

@@ -1,7 +1,19 @@
 // Desk's task-status guard: a Claude Code `PreToolUse` hook on
-// `Write`/`Edit`/`MultiEdit` that denies a direct edit setting a task
-// card's `status:` frontmatter line to `done`, pointing the agent at
-// `task_update` instead.
+// `Write`/`Edit`/`MultiEdit` that denies a direct edit changing a task
+// card's `status:` frontmatter line (any value, not only `done`), pointing
+// the agent at `task_update` instead. Body edits, other fields and brand
+// new cards (a Write to a path that does not exist yet) pass through; a new
+// card may still not be born `done`.
+//
+// Round 5 widening (2026-09-30): an agent finished real work, then edited
+// task.md straight to `status: validating` with a hand-written "Completed
+// work" section and committed it, bypassing `task_update`. Every status move
+// belongs to `task_update` (valid transitions, `done` evidence, staging and
+// committing), so the guard now compares the card's `status:` before and
+// after the call instead of matching only `done`. It reads the card from
+// disk to apply an Edit/MultiEdit to it; when the card cannot be read or an
+// edit does not apply, it compares the status lines inside the edit's own
+// old and new strings.
 //
 // Why (the invented-completion finding, 2026-09-29): an acceptance run
 // under the `resume-named-task` scenario was told to resume a fixture
@@ -20,19 +32,15 @@
 // Scope, deliberately narrow (the lightest mechanism that works on Claude
 // Code first). This module only recognizes Claude Code's own `PreToolUse`
 // wire shape and its `Write`/`Edit`/`MultiEdit` tool-input shapes
-// (`file_path`, `content`, `old_string`, `new_string`, and MultiEdit's own
-// `edits: [{ old_string, new_string }, ...]` -- the same `Write`/`Edit`
-// fields `runtime/ask-gate.js` already reads for those two tools, plus
-// MultiEdit's array). It denies exactly the write that sets `status:` to
-// `done` -- for MultiEdit, any one of its `edits` doing so is enough, since
-// every edit in the call lands atomically if the call succeeds; every other
-// task-card edit -- a different field, a different status value, a
-// non-`task.md` file -- passes through untouched. Whether that `done` claim
-// carries evidence is `task_update`'s own question, not this hook's: this
-// hook only ever sees the raw bytes a tool call would write, never the
-// card's prior state, so it cannot tell a legitimate
-// `task_update`-mirroring edit from a fabricated one -- it just refuses the
-// direct-edit shortcut either way.
+// (`file_path`, `content`, `old_string`, `new_string`, `replace_all`, and
+// MultiEdit's `edits: [{ old_string, new_string }, ...]` -- the same
+// `Write`/`Edit` fields `runtime/ask-gate.js` already reads for those two
+// tools, plus MultiEdit's array). It denies exactly the write that changes
+// the card's frontmatter `status:` -- for MultiEdit, the edits are applied
+// in order and the final text is compared; every other task-card edit -- a
+// body section, a different field, a non-`task.md` file -- passes through
+// untouched. Whether a `done` claim carries evidence is `task_update`'s own
+// question, not this hook's: it just refuses the direct-edit shortcut.
 //
 // What Copilot and Codex would need (not done here): their own
 // `PreToolUse` tool-name and tool-input field mapping, the way
@@ -50,14 +58,15 @@
 // file that happens to share the basename; denying a legitimate edit to
 // such a file is a minor cost next to letting the actual bypass through.
 
+import { readFileSync } from "node:fs"
+
 const TASK_CARD_BASENAME = "task.md"
 
-// Matches a frontmatter-shaped `status:` line whose value is `done`, quoted
-// or not, anywhere in the given text -- the same line `patchMarkdownFrontmatter`
-// and a hand edit would both produce. It does not require YAML frontmatter
-// delimiters around it: `content` (Write) and `new_string` (Edit) may hold
-// only a fragment of the file, not the whole document.
-const DONE_STATUS_LINE = /(^|\r?\n)[ \t]*status:[ \t]*["']?done["']?[ \t]*(\r?\n|$)/u
+// Matches a frontmatter-shaped `status:` line, quoted or not, anywhere in the given text. It does
+// not require YAML frontmatter delimiters around it: `content` (Write) and `new_string` (Edit)
+// may hold only a fragment of the file, not the whole document.
+const ANY_STATUS_LINE = /(^|\r?\n)[ \t]*status:[ \t]*["']?([^"'\r\n]*?)["']?[ \t]*(?=\r?\n|$)/u
+const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---/u
 
 /** True for a `file_path` whose final path segment is exactly `task.md`. */
 function isTaskCardPath(filePath) {
@@ -66,33 +75,104 @@ function isTaskCardPath(filePath) {
   return normalized === TASK_CARD_BASENAME || normalized.endsWith(`/${TASK_CARD_BASENAME}`)
 }
 
-/** True when this call's own write would leave a `status: done` line behind. */
-function setsStatusToDone(toolName, args) {
-  if (toolName === "Write") return DONE_STATUS_LINE.test(String(args?.content ?? ""))
-  if (toolName === "Edit") return DONE_STATUS_LINE.test(String(args?.new_string ?? ""))
-  if (toolName === "MultiEdit") {
-    const edits = Array.isArray(args?.edits) ? args.edits : []
-    return edits.some((edit) => DONE_STATUS_LINE.test(String(edit?.new_string ?? "")))
-  }
-  return false
+/**
+ * The value of the `status:` line in `text`, or null when there is none.
+ * A whole card is read inside its frontmatter block only, so a `status:`
+ * line quoted in the body never counts; a fragment (no frontmatter block)
+ * is searched whole.
+ */
+function statusOf(text) {
+  const block = FRONTMATTER.exec(text)
+  const found = ANY_STATUS_LINE.exec(block === null ? text : block[1])
+  return found === null ? null : found[2].trim()
 }
 
-const DENY_REASON =
-  "Desk denies a direct edit that sets a task card's `status:` to `done`. Use `task_update` " +
-  "instead, with `frontmatter: { status: \"done\" }` and an `evidence: { kind, ref }` " +
-  "reference (kind one of pr, commit, ci_run, non_code; ref the PR URL, a commit on a remote " +
-  "branch, the CI run URL, or the non-code outcome's own proof link) -- it validates the " +
-  "evidence, then stages and commits the write itself. A direct Edit/Write/MultiEdit to task.md " +
-  "does none of that, and \"resume <task>\" never authorizes declaring it done without evidence."
+function readCard(filePath) {
+  try {
+    return readFileSync(filePath, "utf8")
+  } catch {
+    return null
+  }
+}
+
+function editsOf(toolName, args) {
+  if (toolName === "Edit") return [args]
+  return Array.isArray(args?.edits) ? args.edits : []
+}
+
+// Applies the edits to the card's text in order, the way the host would;
+// null when an edit's old_string is empty or absent, so the caller falls back to the fragments.
+function applyEdits(text, edits) {
+  let current = text
+  for (const edit of edits) {
+    const oldString = String(edit?.old_string ?? "")
+    if (oldString === "" || !current.includes(oldString)) return null
+    const newString = String(edit?.new_string ?? "")
+    current = edit.replace_all === true ? current.split(oldString).join(newString) : current.replace(oldString, () => newString)
+  }
+  return current
+}
+
+/**
+ * `{ from, to }` when this call would change the card's `status:` (either
+ * side null for an added or removed line), or null when it leaves it alone.
+ * A Write to a path with no card yet is a new card: only a `done` birth
+ * counts as a change.
+ */
+function statusChange(toolName, args, read = readCard) {
+  const existing = read(args.file_path)
+  if (toolName === "Write") {
+    const to = statusOf(String(args.content ?? ""))
+    if (existing === null) return to === "done" ? { from: null, to } : null
+    const from = statusOf(existing)
+    return from === to ? null : { from, to }
+  }
+  const edits = editsOf(toolName, args)
+  if (existing !== null) {
+    const applied = applyEdits(existing, edits)
+    if (applied !== null) {
+      const from = statusOf(existing)
+      const to = statusOf(applied)
+      return from === to ? null : { from, to }
+    }
+  }
+  for (const edit of edits) {
+    const from = statusOf(String(edit?.old_string ?? ""))
+    const to = statusOf(String(edit?.new_string ?? ""))
+    if (from !== to) return { from, to }
+  }
+  return null
+}
+
+function taskCoordinates(filePath) {
+  const parts = filePath.replace(/\\/gu, "/").split("/").filter((part) => part !== "")
+  return { track: parts.at(-3) ?? "<track>", slug: parts.at(-2) ?? "<slug>" }
+}
+
+function denyReason(filePath, change) {
+  const { track, slug } = taskCoordinates(filePath)
+  const shown = (value) => (value === null ? "no status" : `\`${value}\``)
+  const target = change.to === null ? "<new status>" : change.to
+  const evidence = change.to === "done"
+    ? " A move to `done` also needs `evidence: { kind, ref }` (kind one of pr, commit, ci_run, non_code; ref the PR URL, a commit on a remote branch, the CI run URL, or the non-code outcome's own proof link) -- it validates the evidence, and \"resume <task>\" never authorizes declaring a task done without it."
+    : ""
+  return (
+    `Desk denies a direct edit that changes a task card's \`status:\` (${shown(change.from)} to ${shown(change.to)}). ` +
+    `Call \`task_update\` instead with \`{ track: "${track}", slug: "${slug}", frontmatter: { status: "${target}" } }\`: ` +
+    "it checks the transition, stages and commits the write itself, and keeps the card's history honest." +
+    evidence +
+    " Editing the card's body or other fields directly is fine; only the status line belongs to `task_update`."
+  )
+}
 
 /**
  * `input` is the hook's JSON stdin (Claude Code's `PreToolUse` payload).
- * Returns Claude Code's `PreToolUse` deny shape when this call would write
- * `status: done` straight into a task card's frontmatter, or `{}` to let the
- * call through untouched. Only `host === "claude"` is recognized today (see
- * the module doc comment for what Copilot/Codex would need).
+ * Returns Claude Code's `PreToolUse` deny shape when this call would change
+ * a task card's `status:` (or create a card already `done`), or `{}` to let
+ * the call through untouched. Only `host === "claude"` is recognized today
+ * (see the module doc comment for what Copilot/Codex would need).
  */
-export function taskStatusGuardHook(input, host) {
+export function taskStatusGuardHook(input, host, read = readCard) {
   if (host !== "claude") return {}
   const toolName = String(input?.tool_name ?? input?.toolName ?? "")
   if (toolName !== "Write" && toolName !== "Edit" && toolName !== "MultiEdit") return {}
@@ -107,9 +187,10 @@ export function taskStatusGuardHook(input, host) {
   }
   if (!args || typeof args !== "object") return {}
   if (!isTaskCardPath(args.file_path)) return {}
-  if (!setsStatusToDone(toolName, args)) return {}
+  const change = statusChange(toolName, args, read)
+  if (change === null) return {}
 
-  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: DENY_REASON } }
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(args.file_path, change) } }
 }
 
-export { isTaskCardPath, setsStatusToDone }
+export { isTaskCardPath, statusOf, statusChange }
