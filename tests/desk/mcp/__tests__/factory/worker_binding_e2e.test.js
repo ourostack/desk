@@ -35,7 +35,7 @@ function writeSession(dir) {
   const prompt = (minute, text) => line(minute, { type: "user", message: { role: "user", content: text } })
   const created = (minute, id, number) => [
     assistant(minute, [use(id, "Bash", { command: "gh pr create" })]),
-    result(minute + 1, id, { toolUseResult: { stdout: "ok", gitOperation: { pr: { number, url: `https://github.com/o/r/pull/${number}`, action: "opened" } } } }),
+    result(minute + 1, id, { toolUseResult: { stdout: "ok", gitOperation: { pr: { number, url: `https://github.com/o/r/pull/${number}`, action: "created" } } } }),
   ]
   const prLink = (minute, number) => line(minute, { type: "pr-link", prRepository: "o/r", prNumber: number })
 

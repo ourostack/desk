@@ -858,10 +858,10 @@ test("a first user line given as text blocks is read too", async () => {
 // Claude Code writes every `pr-link` line into the ROOT transcript, including
 // for the PRs a subagent created; the creating call is in the subagent's own
 // transcript as `gitOperation.pr`.
-function createdPr(line, id, repo, number) {
+function createdPr(line, id, repo, number, action = "created") {
   return [
     line({ type: "assistant", message: { id: `m-${id}`, model: "claude-sonnet-5", content: [{ type: "tool_use", id, name: "Bash", input: { command: "gh pr create" } }] } }),
-    line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] }, toolUseResult: { stdout: "ok", gitOperation: { pr: { number, url: `https://github.com/${repo}/pull/${number}`, action: "opened" } } } }),
+    line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] }, toolUseResult: { stdout: "ok", gitOperation: { pr: { number, url: `https://github.com/${repo}/pull/${number}`, action } } } }),
   ]
 }
 
@@ -882,6 +882,15 @@ test("a PR is credited to the worker whose call created it, not to the root that
     { repo: "o/r", number: 4, agent: 0 },
   ])
   assert.equal(validateLocalFacts(facts).ok, true)
+})
+
+test("a merge or any other action on a PR does not take the credit from the worker that created it", async () => {
+  const { line, assistant } = workerLines()
+  const { facts } = await deriveWithSubagents(
+    [line({ type: "user", message: { role: "user", content: "go" } }), ...createdPr(line, "m1", "o/r", 1, "merged"), ...createdPr(line, "m2", "o/r", 2, null)],
+    [{ stem: "agent-1", lines: [assistant("s1", "claude-sonnet-5"), ...createdPr(line, "c1", "o/r", 1), ...createdPr(line, "c2", "o/r", 2)] }],
+  )
+  assert.deepEqual(facts.refs.prs, [{ repo: "o/r", number: 1, agent: 1 }, { repo: "o/r", number: 2, agent: 1 }])
 })
 
 test("dedupePrRefs: a creating ref outranks a link whatever the worker, and the lowest worker wins among the same kind", () => {

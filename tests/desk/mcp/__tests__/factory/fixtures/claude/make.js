@@ -221,7 +221,7 @@ function buildFullSession() {
     },
     toolUseResult: {
       stdout: `On branch main ${COMMIT_SHA} ${SENTINEL}`,
-      gitOperation: { pr: { number: 42, url: "https://github.com/ourostack/desk/pull/42", action: "opened" } },
+      gitOperation: { pr: { number: 42, url: "https://github.com/ourostack/desk/pull/42", action: "created" } },
     },
   }))
 
@@ -260,7 +260,7 @@ function buildFullSession() {
     message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-bash-5", is_error: false }] },
     toolUseResult: {
       stdout: `created ${SENTINEL}`,
-      gitOperation: { pr: { number: 99, url: `https://dev.azure.com/${SENTINEL}-org/repo/pullrequest/99`, action: "opened" } },
+      gitOperation: { pr: { number: 99, url: `https://dev.azure.com/${SENTINEL}-org/repo/pullrequest/99`, action: "created" } },
     },
   }))
 

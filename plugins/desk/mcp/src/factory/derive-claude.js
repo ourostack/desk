@@ -342,7 +342,7 @@ function createAgentProcessor({ agentIndex }) {
     const gitPr = toolUseResult?.gitOperation?.pr
     if (gitPr) {
       const repo = repoFromPrUrl(gitPr.url)
-      if (repo !== null && isValidPrRef(repo, gitPr.number)) prRefs.push({ repo, number: gitPr.number, agent: agentIndex, created: true })
+      if (repo !== null && isValidPrRef(repo, gitPr.number)) prRefs.push({ repo, number: gitPr.number, agent: agentIndex, created: gitPr.action === "created" })
     }
 
     if (pending.name === "Bash") {
@@ -575,8 +575,9 @@ function comparePrRefs(a, b) {
 }
 
 // Claude Code writes a `pr-link` line into the root transcript for every PR of
-// the session, including the ones a subagent created. So the worker whose call
-// created the PR outranks any worker that only saw its link, and among refs of
+// the session, including the ones a subagent created. A `gitOperation.pr` with
+// action `created` is the creating call; any other action (merged, ready,
+// closed, edited) only saw the PR. So the worker whose call created the PR outranks any worker that only saw its link, and among refs of
 // the same kind the lowest worker wins.
 function dedupePrRefs(refs) {
   const seen = new Map()
