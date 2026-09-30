@@ -117,19 +117,30 @@ function unavailableGroups(sessions) {
 // How many of `sessions` declare any of `fields` (or `partialFields`)
 // unavailable, and why. Only `fields` can make a value wholly unavailable;
 // `partialFields` gaps leave it partial.
-export function fieldCoverage(sessions, fields, partialFields = []) {
+//
+// `split` holds the sessions whose counts belong to several jobs. Each is
+// uncovered once, and the coverage says how many were cut for that reason.
+// `shared` holds the sessions whose workers also belong to another job, so
+// their time is counted for each of those jobs; it is reported the same way.
+export function fieldCoverage(sessions, fields, partialFields = [], split = new Set(), shared = new Set()) {
   const reasons = new Set()
   let uncovered = 0
   let lacking = 0
+  let splitCount = 0
+  let sharedCount = 0
   for (const session of sessions) {
     const missing = session.unavailable.filter((entry) => fields.includes(entry.field))
     const incomplete = session.unavailable.some((entry) => partialFields.includes(entry.field))
-    if (missing.length > 0 || incomplete) uncovered += 1
+    const divided = split.has(session)
+    if (divided) splitCount += 1
+    const overlapping = shared.has(session)
+    if (overlapping) sharedCount += 1
+    if (missing.length > 0 || incomplete || divided || overlapping) uncovered += 1
     if (missing.length === 0) continue
     lacking += 1
     for (const entry of missing) reasons.add(entry.reason)
   }
-  return { uncovered, none: lacking === sessions.length, reasons: [...reasons].sort(compareText) }
+  return { uncovered, none: lacking === sessions.length, reasons: [...reasons].sort(compareText), split: splitCount, shared: sharedCount }
 }
 
 function missingValue(coverage) {
@@ -138,7 +149,9 @@ function missingValue(coverage) {
 
 function withCoverage(value, coverage) {
   if (value.class === "unavailable" || coverage.uncovered === 0) return value
-  return { ...value, partial: true, uncovered_sessions: coverage.uncovered }
+  const marked = { ...value, partial: true, uncovered_sessions: coverage.uncovered }
+  const reasons = [...(coverage.split > 0 ? ["worker_split"] : []), ...(coverage.shared > 0 ? ["worker_shared"] : [])]
+  return reasons.length > 0 ? { ...marked, partial_reasons: reasons } : marked
 }
 
 // Missing data is never a measured zero: a value no covering session could
@@ -223,15 +236,94 @@ function leadContributors({ lead, timingUnavailable, activeInLead, queue, waits,
   return inferred(entries, { censored: lead.censored, method: "clipped_to_lead_window" })
 }
 
-function uniqueReferences(sessions) {
+function bindingOf(session, job) {
+  return session.jobs.find((binding) => binding.job === job)
+}
+
+// A binding without `agents` is the legacy session-level binding: every
+// worker counts. One listing every worker of the session is the same thing.
+function ownsWholeSession(session, binding) {
+  return !Object.hasOwn(binding, "agents") || session.agents.every((agent) => binding.agents.includes(agent.n))
+}
+
+// The source sessions in which the job owns only some of the workers, so the
+// session-wide counts are not the job's own.
+export function splitSessions(timeline) {
+  return new Set(timeline.source_sessions.filter((session) => !ownsWholeSession(session, bindingOf(session, timeline.job))))
+}
+
+// The source sessions in which one of the job's workers also belongs to
+// another job. That worker's time is counted for each job that owns it, so
+// the job's time is partial; splitting it is left to a later milestone. A
+// legacy binding lists no workers and never counts as sharing.
+export function sharedSessions(timeline) {
+  return new Set(timeline.source_sessions.filter((session) => {
+    const own = bindingOf(session, timeline.job)
+    if (!Object.hasOwn(own, "agents")) return false
+    return session.jobs.some((other) => other !== own && Object.hasOwn(other, "agents") && other.agents.some((agent) => own.agents.includes(agent)))
+  }))
+}
+
+// The counts of a split session that belong to the job: tool calls and
+// failures from the job's own tool intervals (a subagent interval is an
+// `agent` call, and carries no outcome). Retries and compactions have no
+// worker, so they are left out and the measure is marked partial.
+function ownCounts(session, agents) {
+  const calls = {}
+  const failures = {}
+  for (const interval of session.intervals) {
+    if (!agents.includes(interval.agent)) continue
+    if (interval.kind === "subagent") calls.agent = (calls.agent ?? 0) + 1
+    if (interval.kind !== "tool") continue
+    calls[interval.tool] = (calls[interval.tool] ?? 0) + 1
+    if (interval.outcome !== "ok") failures[interval.tool] = (failures[interval.tool] ?? 0) + 1
+  }
+  return { tool_calls: calls, tool_failures: failures, tool_retries: 0, api_retries: 0, compactions: 0 }
+}
+
+function jobCounted(timeline, split) {
+  return timeline.source_sessions.map((session) => split.has(session)
+    ? { counts: ownCounts(session, bindingOf(session, timeline.job).agents) }
+    : session)
+}
+
+// A binding without `agents` is the legacy session-level binding and keeps
+// every reference of the session. Otherwise a pull request is credited to the
+// worker that opened it, and only when no other job of the session lists that
+// worker. A pull request with no worker, or one whose worker several jobs
+// share, goes to the job only when the session binds no other job.
+function ownsPullRequest(session, binding, pr) {
+  if (!Object.hasOwn(binding, "agents")) return true
+  if (!Object.hasOwn(pr, "agent")) return session.jobs.length === 1
+  return binding.agents.includes(pr.agent)
+    && !session.jobs.some((other) => other !== binding && Object.hasOwn(other, "agents") && other.agents.includes(pr.agent))
+}
+
+// Public commits carry no worker, so a per-worker session credits them only
+// to the one job it binds.
+function ownsCommits(session, binding) {
+  return !Object.hasOwn(binding, "agents") || session.jobs.length === 1
+}
+
+function uniqueReferences(timeline) {
   const prs = new Map()
   const commits = new Map()
-  for (const session of sessions) {
-    for (const pr of session.refs.prs) prs.set(`${pr.repo}#${pr.number}`, { repo: pr.repo, number: pr.number })
-    for (const commit of session.refs.commits) commits.set(`${commit.repo}@${commit.sha}`, commit)
+  const withheld = new Set()
+  for (const session of timeline.source_sessions) {
+    const binding = bindingOf(session, timeline.job)
+    let held = false
+    for (const pr of session.refs.prs) {
+      if (ownsPullRequest(session, binding, pr)) prs.set(`${pr.repo}#${pr.number}`, { repo: pr.repo, number: pr.number })
+      else held = true
+    }
+    if (ownsCommits(session, binding)) {
+      for (const commit of session.refs.commits) commits.set(`${commit.repo}@${commit.sha}`, commit)
+    } else if (session.refs.commits.length > 0) held = true
+    // Withholding only means the job's list is incomplete when another job of the session may hold the rest.
+    if (held && session.jobs.length > 1) withheld.add(session)
   }
   const pullRequests = [...prs.values()].sort((left, right) => compareText(left.repo, right.repo) || left.number - right.number)
-  return { pullRequests, commits: commits.size }
+  return { pullRequests, commits: commits.size, withheld }
 }
 
 export function calculateFormulas(timeline) {
@@ -265,7 +357,7 @@ export function calculateFormulas(timeline) {
     byAgent.get(agentKey).push(interval)
   }
 
-  const activeCoverage = fieldCoverage(timedSources, ACTIVE_FIELDS, ACTIVE_PARTIAL_FIELDS)
+  const activeCoverage = fieldCoverage(timedSources, ACTIVE_FIELDS, ACTIVE_PARTIAL_FIELDS, new Set(), sharedSessions(timeline))
   const activeValue = (compute) => timed(() => covered(activeCoverage, compute))
   const whenActive = (compute) => activeValue(() => activeMs === 0 ? unavailable("no_active_intervals") : compute())
   const active = activeValue(() => measured(activeMs))
@@ -298,7 +390,10 @@ export function calculateFormulas(timeline) {
 
   const hosts = {}
   for (const session of sourceSessions) hosts[session.session.host] = (hosts[session.session.host] ?? 0) + 1
-  const references = uniqueReferences(sourceSessions)
+  const references = uniqueReferences(timeline)
+  const split = splitSessions(timeline)
+  const counted = jobCounted(timeline, split)
+  const splitCoverage = fieldCoverage(sourceSessions, [], [], split)
   const privatePrs = sourceSessions.reduce((total, session) => total + session.refs.private.prs, 0)
   const privateCommits = sourceSessions.reduce((total, session) => total + session.refs.private.commits, 0)
 
@@ -319,18 +414,18 @@ export function calculateFormulas(timeline) {
     longest_wait: longest,
     lead_contributors: leadContributors({ lead, timingUnavailable, activeInLead, queue, waits, waitUnions }),
     flow_efficiency: flowEfficiency,
-    tool_calls_by_kind: measured(sumMap(sourceSessions, "tool_calls")),
-    references: measured({
+    tool_calls_by_kind: withCoverage(measured(sumMap(counted, "tool_calls")), splitCoverage),
+    references: withCoverage(measured({
       public_pull_requests: references.pullRequests,
       public_prs: references.pullRequests.length,
       public_commits: references.commits,
       private_prs: privatePrs,
       private_commits: privateCommits,
-    }),
+    }), fieldCoverage(sourceSessions, [], [], new Set(), references.withheld)),
     rework_signals: {
-      tool_failures: inferred(Object.values(sumMap(sourceSessions, "tool_failures")).reduce((total, value) => total + value, 0)),
-      tool_retries: inferred(sumField(sourceSessions, "tool_retries")),
-      api_retries: covered(fieldCoverage(sourceSessions, ["api_retries"]), () => inferred(sumField(sourceSessions, "api_retries"))),
+      tool_failures: withCoverage(inferred(Object.values(sumMap(counted, "tool_failures")).reduce((total, value) => total + value, 0)), splitCoverage),
+      tool_retries: withCoverage(inferred(sumField(counted, "tool_retries")), splitCoverage),
+      api_retries: covered(fieldCoverage(sourceSessions, ["api_retries"], [], split), () => inferred(sumField(counted, "api_retries"))),
       session_retouches: inferred(Math.max(0, sourceSessions.length - 1)),
     },
     unavailable: measured(unavailableGroups(sourceSessions)),

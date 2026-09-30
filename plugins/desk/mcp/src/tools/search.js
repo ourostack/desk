@@ -31,6 +31,18 @@ import {
 const DEFAULT_LIMIT = 10
 const MAX_LIMIT = 50
 const SNIPPET_MAX_CHARS = 280
+
+// Every field each search tool reads off `input` — not in the exported
+// `desk_search`/`desk_recall`/`desk_similar`/`desk_timeline` themselves
+// (they spread `...input` into the query router unread) but in the paired
+// `indexed*` function below that actually destructures it. Kept next to
+// this module so a field added to one of those reads is a field added here
+// in the same diff. __tests__/tool_schema_parity.test.js checks these
+// against each tool's declared schema in tool-schemas.js.
+export const DESK_SEARCH_FIELDS = ["query", "limit", "filters", "scope"]
+export const DESK_RECALL_FIELDS = ["topic", "limit", "scope"]
+export const DESK_SIMILAR_FIELDS = ["path", "limit", "scope"]
+export const DESK_TIMELINE_FIELDS = ["from", "to", "query", "limit", "scope"]
 const SEMANTIC_REPAIR_COMMAND =
   "Start Ollama, pull nomic-embed-text, then run desk_reindex; no force is required after v1.2.2 because missing vectors are repaired automatically."
 

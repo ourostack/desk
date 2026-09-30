@@ -5,7 +5,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -78,7 +78,7 @@ function fixtureRepo(t, { weights, tests = testFiles } = {}) {
 }
 
 /** Run the command against a fixture with a fake Git and a fake producer. `producer` answers the node invocation. */
-function run(fixture, argv, { producer = () => ({ status: 0, stdout: "", stderr: "" }), changedFiles = [sourceFile] } = {}) {
+function run(fixture, argv, { producer = () => ({ status: 0, stdout: "", stderr: "" }), changedFiles = [sourceFile], fsOps: fsOpsOverrides = {} } = {}) {
   const output = { stdout: "", stderr: "" }
   const invocations = []
   const reportDirectories = []
@@ -99,6 +99,9 @@ function run(fixture, argv, { producer = () => ({ status: 0, stdout: "", stderr:
       removeDir: (directory) => rmSync(directory, { recursive: true, force: true }),
       readText: (file) => readFileSync(file, "utf8"),
       writeText: (file, text) => writeFileSync(file, text),
+      removeDirRetrying: (directory, options) => rmSync(directory, options),
+      listDir: (directory) => readdirSync(directory),
+      ...fsOpsOverrides,
     },
     spawn: (command, args, options) => {
       if (command === process.execPath) {
@@ -286,6 +289,48 @@ test("a shard refuses an output directory that already has content", (t) => {
   assert.equal(invocations.length, 0)
   assert.match(io.stderr, /already has content; no coverage was measured/u)
   assert.equal(readFileSync(path.join(output, "keep.txt"), "utf8"), "keep")
+})
+
+test("a shard whose processinfo cleanup still fails after the retry warns by name and keeps its own status", (t) => {
+  const fixture = fixtureRepo(t)
+  const output = path.join(fixture.root, "leftover")
+  const { result, output: io } = run(fixture, ["--shard", "1/1", "--output", output], {
+    producer: shardProducer(),
+    fsOps: { removeDirRetrying: () => { throw Object.assign(new Error("directory not empty"), { code: "ENOTEMPTY" }) } },
+  })
+  assert.equal(result, 0, "process bookkeeping left behind must not fail an otherwise-passing shard")
+  assert.match(io.stderr, /could not remove .*processinfo.* after the retry \(ENOTEMPTY\); it is process bookkeeping, not coverage, so the shard continues/u)
+  assert.match(io.stderr, /leftover file\(s\): index\.json/u)
+  // The retry's own failure is left as it was, not papered over by a second, different deletion attempt.
+  assert.deepEqual(readdirSync(path.join(output, "raw", "processinfo")), ["index.json"])
+  assert.equal(JSON.parse(readFileSync(path.join(output, "shard.json"), "utf8")).status, 0)
+})
+
+test("a shard warns 'none listed' when the leftover directory cannot even be read back", (t) => {
+  const fixture = fixtureRepo(t)
+  const output = path.join(fixture.root, "leftover-unreadable")
+  const { result, output: io } = run(fixture, ["--shard", "1/1", "--output", output], {
+    producer: shardProducer(),
+    fsOps: {
+      removeDirRetrying: () => { throw Object.assign(new Error("directory not empty"), { code: "ENOTEMPTY" }) },
+      listDir: () => { throw Object.assign(new Error("no such file or directory"), { code: "ENOENT" }) },
+    },
+  })
+  assert.equal(result, 0)
+  assert.match(io.stderr, /leftover file\(s\): \(none listed; the directory itself could not be read\)/u)
+})
+
+test("a shard whose processinfo removal fails with no error code names the warning by the error's message instead", (t) => {
+  const fixture = fixtureRepo(t)
+  const output = path.join(fixture.root, "leftover-no-code")
+  // Not every thrown error carries `.code` (a real fs error like ENOTEMPTY always does; this covers the case where
+  // it does not), so the warning falls back to the error's own message instead of leaving that half blank.
+  const { result, output: io } = run(fixture, ["--shard", "1/1", "--output", output], {
+    producer: shardProducer(),
+    fsOps: { removeDirRetrying: () => { throw new Error("some other removal failure") } },
+  })
+  assert.equal(result, 0, "process bookkeeping left behind must not fail an otherwise-passing shard")
+  assert.match(io.stderr, /could not remove .*processinfo.* after the retry \(some other removal failure\); it is process bookkeeping, not coverage, so the shard continues/u)
 })
 
 test("the merge reports every shard's raw coverage once and applies the gate to the combined result", (t) => {
@@ -484,6 +529,109 @@ test("real shards each cover part of a file, and only their merged coverage pass
   output.stderr = ""
   assert.equal(command(["--merge", shards]), 1)
   assert.match(output.stderr, /covered\.js (?:branches|lines|statements) coverage \d+(?:\.\d+)? is below 100/u)
+})
+
+test("a real shard's own processinfo bookkeeping, genuinely undeletable, warns with the real leftover names and the default fs hooks", { skip: process.platform === "win32" ? "POSIX permission bits only" : false }, (t) => {
+  const root = makeRoot(t, "desk-coverage-shards-real-leftover-")
+  const repoRoot = path.join(root, "repo")
+  const templateDirectory = path.join(root, "empty-template")
+  mkdirSync(templateDirectory)
+  const env = Object.fromEntries(
+    ["PATH", "HOME", "SystemRoot", "WINDIR", "TEMP", "TMP"]
+      .filter((name) => process.env[name] !== undefined)
+      .map((name) => [name, process.env[name]]),
+  )
+  Object.assign(env, {
+    DESK_COVERAGE_BASE_REF: "HEAD",
+    GIT_CONFIG_GLOBAL: write(root, "empty-git-config"),
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TEMPLATE_DIR: templateDirectory,
+  })
+  const git = (...args) => {
+    const result = spawnSync("git", ["-c", "user.name=Coverage Shards Test", "-c", "user.email=coverage-shards@example.invalid", ...args], { cwd: repoRoot, env, encoding: "utf8" })
+    assert.equal(result.status, 0, result.stderr)
+  }
+  mkdirSync(repoRoot)
+  git("init", "--quiet")
+  git("commit", "--allow-empty", "--quiet", "-m", "fixture baseline")
+  const paths = {
+    repoRoot,
+    mcpRoot: path.join(repoRoot, "plugins/desk/mcp"),
+    configPath: write(repoRoot, "plugins/desk/mcp/config/coverage-gate.json", JSON.stringify({
+      thresholds: { lines: 100, branches: 100, functions: 100, statements: 100 },
+      exclusions: [],
+    })),
+    packageJsonPath: write(repoRoot, "plugins/desk/mcp/package.json", JSON.stringify({
+      type: "module",
+      scripts: { "test:coverage": "node scripts/run-coverage.js" },
+    })),
+    workflowPath: write(repoRoot, ".github/workflows/desk-mcp-tests.yml", [
+      "on:",
+      "  pull_request:",
+      "    paths:",
+      '      - "scripts/*.cjs"',
+      "  push:",
+      "    paths:",
+      '      - "scripts/*.cjs"',
+      "jobs:",
+      "  tests:",
+      "    steps:",
+      "      - run: npm run test:coverage",
+    ].join("\n")),
+  }
+  write(repoRoot, sourceFile, "export const covered = true\n")
+  write(repoRoot, "tests/desk/mcp/__tests__/only.test.js", [
+    'import { test } from "node:test"',
+    'import { strict as assert } from "node:assert"',
+    'import { covered } from "../../../../plugins/desk/mcp/src/covered.js"',
+    'test("only arm", () => assert.equal(covered, true))',
+    "",
+  ].join("\n"))
+  const output = { stdout: "", stderr: "" }
+  const processInfoDirectories = []
+  // Restored in `finally`, not `t.after`: `makeRoot`'s own `t.after` (registered above, when `root` was made) must
+  // never run its whole-tree removal while a directory here is still deliberately locked, and hook order across
+  // several `t.after` registrations is registration order, not reverse order.
+  try {
+    // No fsOps override here (unlike every other test in this file): this exercises the real default
+    // `removeDirRetrying`/`listDir` hooks against a real instrumented subprocess's own real processinfo directory,
+    // not a mock of either.
+    const result = runCoverageCommand({
+      argv: ["--shard", "1/1", "--output", path.join(root, "shard")],
+      paths,
+      env,
+      io: {
+        stdout: { write: (text) => { output.stdout += text } },
+        stderr: { write: (text) => { output.stderr += text } },
+      },
+      spawn: (program, args, options) => {
+        if (program !== process.execPath) return spawnSync(program, args, { ...options, env: options?.env ?? env })
+        const isolateProducer = (child) => { child.env = { ...(options.env ?? env) } }
+        processOnSpawn.addListener(isolateProducer)
+        let outcome
+        try {
+          outcome = spawnSync(program, args, { env, ...options, timeout: 60_000 })
+        } finally {
+          processOnSpawn.removeListener(isolateProducer)
+        }
+        // The real instrumented run just wrote its own real processinfo bookkeeping. Deny write on that directory
+        // itself (not its parent), so the runner's own recursive removal can still list it afterward but genuinely
+        // fails to delete the file(s) inside -- the same shape as the CI race (a file the removal cannot clear),
+        // proven against real content, not a fabricated error.
+        const configPath = args[args.indexOf("--nycrc-path") + 1]
+        const processInfoDirectory = path.join(JSON.parse(readFileSync(configPath, "utf8")).tempDir, "processinfo")
+        assert.notEqual(readdirSync(processInfoDirectory).length, 0, "the real run must leave real bookkeeping to protect")
+        processInfoDirectories.push(processInfoDirectory)
+        chmodSync(processInfoDirectory, 0o500)
+        return outcome
+      },
+    })
+    assert.equal(result, 0, "process bookkeeping left behind must not fail an otherwise-passing shard")
+    assert.match(output.stderr, /\[coverage-gate\] could not remove .*processinfo after the retry \(EACCES\); it is process bookkeeping, not coverage, so the shard continues; leftover file\(s\): /u)
+    assert.doesNotMatch(output.stderr, /none listed/u, "a real, readable leftover directory names its real files, not the unreadable fallback")
+  } finally {
+    for (const directory of processInfoDirectories) chmodSync(directory, 0o700)
+  }
 })
 
 test("CI runs the merge after a failed shard, so the aggregate check fails instead of being skipped", () => {

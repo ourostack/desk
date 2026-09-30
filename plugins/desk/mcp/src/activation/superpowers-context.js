@@ -1,6 +1,7 @@
 import * as path from "node:path"
 import { realpath, stat } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
+import { parseDeskTaskLine } from "../factory/desk-task-line.js"
 import { expandHome, isPathContained, personPrefix, resolveWriteTarget } from "../util/paths.js"
 
 function requiredPath(input, name) {
@@ -50,6 +51,14 @@ async function assertTaskLocal(taskPath, file, name) {
   if (!isPathContained(realTaskPath, realFile)) {
     throw new Error(`Superpowers context: ${name} must be within taskPath`)
   }
+}
+
+// The factory binder reads this line from every spawn prompt. It names the task relative to the person prefix,
+// and only when that is exactly `<track>/<slug>` and the binder would accept it; anything else omits the rule
+// rather than naming the wrong task.
+function deskTaskRule(deskRoot, person, taskPath) {
+  const line = `Desk-Task: ${path.relative(personPrefix(deskRoot, person), taskPath).split(path.sep).join("/")}`
+  return parseDeskTaskLine(line) === null ? [] : [line]
 }
 
 export async function resolveSuperpowersContext(input) {
@@ -105,6 +114,7 @@ export async function resolveSuperpowersContext(input) {
     reviewPackagePath: path.join(artifactDirectory, "review.patch"),
     reviewReportPath: path.join(artifactDirectory, "review-report.md"),
     briefRules: [
+      ...deskTaskRule(deskRoot, person, taskPath),
       "verify or validate in your own worktree; never in a checkout your task does not own",
       "on return list every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record; close out only exact-owned safe resources through desk:git-hygiene",
     ],

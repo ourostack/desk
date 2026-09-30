@@ -159,7 +159,13 @@
 //     followed. Only the directory is kept, never the command. A call
 //     without both times, or lost at a resume, gives no event.
 //     `nativeCommitShas` is the session's `session_refs` commits (the same
-//     list as `commitShas`), which M3-4 binds directly.
+//     list as `commitShas`) as `{ sha, agent: 0 }`, which M3-4 binds
+//     directly; `session_refs` names no worker, so they count as the root's.
+//     Every `deskToolCalls`, `fileWrites` and `shellGitCommits` event carries
+//     `agent`, its worker's index in `agents[]` (0 is the root). Refs carry
+//     no `agent`. `spawnTasks` is `{ agent, track, slug }` for each subagent
+//     whose `task` call's prompt holds one valid `Desk-Task:` line
+//     (`./desk-task-line.js`); the prompt is matched and dropped.
 //   - Capped arrays (intervals, agents, models, plugins, commits) are trimmed
 //     to their schema limits with a `capped` entry (`log_truncated` is kept
 //     for a log that ends mid-record); an interval whose end precedes its
@@ -178,6 +184,7 @@ import { createInterface } from "node:readline"
 import { SHORT_SHA, createCommitResolver } from "./commit-resolve.js"
 import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows } from "./copilot-usage.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
+import { parseDeskTaskLine } from "./desk-task-line.js"
 import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
@@ -351,6 +358,7 @@ function createSessionFold() {
   const deskToolCalls = []
   const fileWrites = []
   const shellGitCommits = []
+  const spawnTasks = []
   let sessionCwd = null
 
   const agentOf = (parentCall) => (parentCall === null ? 0 : subagentByCall.get(parentCall) ?? 0)
@@ -446,6 +454,8 @@ function createSessionFold() {
         agent,
         parentCall,
         spawns: name === "task",
+        // The prompt is matched here and dropped; only a validated pair is kept.
+        spawnTask: name === "task" && isObject(data.arguments) ? parseDeskTaskLine(data.arguments.prompt) : null,
         desk: deskCallOf(name, data.arguments, at),
         writes: fileWritesOf(name, data.arguments, at),
         gitCommits: gitCommitsOf(name, data.arguments, sessionCwd),
@@ -463,10 +473,10 @@ function createSessionFold() {
       if (!pending.spawns && !subagentByCall.has(toolCallId)) {
         addTimed({ kind: "tool", agent: pending.agent, tool: pending.kind, outcome }, pending.start, at, "tool_durations")
       }
-      if (pending.desk !== null) deskToolCalls.push({ ...pending.desk, ok: outcome === "ok" })
-      if (pending.writes !== null && data.success === true) fileWrites.push(...pending.writes)
+      if (pending.desk !== null) deskToolCalls.push({ ...pending.desk, agent: pending.agent, ok: outcome === "ok" })
+      if (pending.writes !== null && data.success === true) fileWrites.push(...pending.writes.map((write) => ({ ...write, agent: pending.agent })))
       if (pending.gitCommits !== null && pending.start !== null && at !== null && data.success === true && outcome === "ok") {
-        for (const cwd of pending.gitCommits) shellGitCommits.push({ start: pending.start, end: at, cwd })
+        for (const cwd of pending.gitCommits) shellGitCommits.push({ start: pending.start, end: at, cwd, agent: pending.agent })
       }
     },
     "permission.requested"(data, at) {
@@ -497,6 +507,8 @@ function createSessionFold() {
       const n = agents.length
       agents.push({ n, parent, model })
       subagentByCall.set(toolCallId, n)
+      const task = pendingTools.get(toolCallId)?.spawnTask ?? null
+      if (task !== null) spawnTasks.push({ agent: n, track: task.track, slug: task.slug })
       pendingSubagents.set(toolCallId, { start: at, agent: parent })
     },
     "subagent.completed": endSubagent,
@@ -567,6 +579,7 @@ function createSessionFold() {
         deskToolCalls,
         fileWrites,
         shellGitCommits,
+        spawnTasks,
         unfinishedCalls: lostCalls || pendingTools.size + pendingSubagents.size > 0,
         openTurns: lostTurns,
       }
@@ -815,7 +828,8 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
     fileWrites: state.fileWrites,
     commitShas: refs.commits.map((commit) => commit.sha),
     shellGitCommits: state.shellGitCommits,
-    nativeCommitShas: refs.commits.map((commit) => commit.sha),
+    nativeCommitShas: refs.commits.map((commit) => ({ sha: commit.sha, agent: 0 })),
+    spawnTasks: state.spawnTasks,
   }
 
   return { facts, events }

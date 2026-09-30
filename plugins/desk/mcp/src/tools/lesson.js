@@ -22,6 +22,12 @@ function relPath(deskRoot, absPath) {
   return path.relative(deskRoot, absPath)
 }
 
+// Every field lesson_add reads off `input`, kept next to the handler so a
+// field added to its reads is a field added here in the same diff.
+// __tests__/tool_schema_parity.test.js checks this against the tool's
+// declared schema in tool-schemas.js.
+export const LESSON_ADD_FIELDS = ["topic", "body"]
+
 async function availableLessonPath(canonicalName, resolveCandidate) {
   let candidateName = `_${canonicalName}`
   let candidatePath = await resolveCandidate(candidateName)

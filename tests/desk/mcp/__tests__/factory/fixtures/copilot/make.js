@@ -239,7 +239,7 @@ function fullSession() {
     ev("skill.invoked", 29.2, { name: S, path: `/tmp/${S}/other/SKILL.md`, content: S, pluginName: "superpowers", pluginVersion: "5.1.0", description: S }),
     ev("skill.invoked", 29.4, { name: S, path: `/tmp/${S}/local/SKILL.md`, content: S }),
     // A subagent, whose own turns, tools, permission and nested subagent are its own.
-    toolStart(ev, 30, "c11", "task", { prompt: S, description: S, agent_type: "explore" }),
+    toolStart(ev, 30, "c11", "task", { prompt: `${S}\nDesk-Task: eng/m3-3\n${S}`, description: S, agent_type: "explore" }),
     ev("subagent.started", 31, { toolCallId: "c11", agentName: S, agentDisplayName: S, agentDescription: S, model: "claude-sonnet-5" }),
     ev("user.message", 31.2, { content: S, source: `agent-${S}`, isAutopilotContinuation: false }, sub),
     ev("assistant.turn_start", 31.3, { turnId: "0", interactionId: `${S}-sub` }, sub),
@@ -254,6 +254,8 @@ function fullSession() {
     ev("subagent.started", 35, { toolCallId: "c13", agentName: S, agentDisplayName: S, agentDescription: S, model: "gpt-5.2" }),
     toolStart(ev, 36, "c14", "view", { path: `/tmp/${S}/x` }, { parentToolCallId: "c13" }),
     toolComplete(ev, 37, "c14", { parentToolCallId: "c13" }),
+    toolStart(ev, 37.2, "c15", "edit", { path: `/tmp/${S}/desk/eng/m3-3/sub.md` }, { parentToolCallId: "c13" }),
+    toolComplete(ev, 37.4, "c15", { parentToolCallId: "c13" }),
     ev("subagent.completed", 38, { toolCallId: "c13", agentName: S, agentDisplayName: S, model: "gpt-5.2", totalToolCalls: 1, totalTokens: 10, durationMs: 3000 }),
     toolComplete(ev, 39, "c13", { parentToolCallId: "c11" }),
     ev("subagent.completed", 40, { toolCallId: "c11", agentName: S, agentDisplayName: S, model: "claude-sonnet-5", totalToolCalls: 2, totalTokens: 20, durationMs: 9000, cancelled: false }),

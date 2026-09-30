@@ -16,6 +16,7 @@ import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { REPEAT_TIMEOUT_THRESHOLD } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout-repeat.js"
 import { protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
+import { killAndWait } from "../_kill_and_wait.js"
 
 const require = createRequire(import.meta.url)
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
@@ -61,7 +62,7 @@ function slowGit(t, prot, env, delayMs) {
     const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
     for (;;) { const fd = fs.openSync(${JSON.stringify(fifo)}, "w"); sleep(${delayMs}); fs.closeSync(fd) }
   `], { stdio: "ignore" })
-  t.after(() => writer.kill("SIGKILL"))
+  t.after(() => killAndWait(writer))
 }
 
 test("commandTextFromRawInput reads tool_input.command from a Claude-shaped payload", () => {

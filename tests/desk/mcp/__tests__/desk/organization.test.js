@@ -817,8 +817,14 @@ test("redaction holds across every finding a credential-like directory can touch
   assert.ok(findings.some((f) => f.path.endsWith("/<redacted segment>")))
 
   // The whole-result check the review asked for: neither secret, nor any
-  // substring of either longer than 3 characters, appears anywhere.
-  const haystack = JSON.stringify(findings)
+  // substring of either longer than 3 characters, appears anywhere. A handle
+  // is ten hex characters of an HMAC under a random key, so it can contain a
+  // 4-character run of a hex secret by chance; check its shape, then leave it
+  // out of the substring scan.
+  for (const finding of findings) {
+    if (Object.hasOwn(finding, "handle")) assert.match(finding.handle, /^(task|track)-[0-9a-f]{10}$/u)
+  }
+  const haystack = JSON.stringify(findings.map(({ handle, ...rest }) => rest))
   assertNoSubstringLeak(TRACK_SECRET, haystack)
   assertNoSubstringLeak(TASK_SECRET, haystack)
 })

@@ -21,10 +21,14 @@ import {
 } from "./paths.js"
 import { redactCredentialLikeText } from "./redact.js"
 
-const START = "Invoke desk:session-start now for the authoritative workspace scan before other work."
+// A child agent with a bounded brief (dispatched with a scoped outcome, authority and return contract) is not the
+// root operator's session, even when it receives this same startup text; it stands down from this imperative and
+// follows its brief, the same way Superpowers' own entry skill stands its subagents down (equivalent to
+// `using-superpowers`'s `<SUBAGENT-STOP>`). Folded into `START` so every branch below carries it exactly once.
+const START = "Invoke desk:session-start now for the authoritative workspace scan before other work. A child agent with a bounded brief follows the brief instead and skips this."
 
 export const DESK_SETUP_DIRECTION =
-  "Desk startup: no desk is bound yet, so Desk is in setup mode. Run the onboarding path desk_status names now — desk:first-run-bootstrap by default, which looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one; an overlay that owns its workspace names its own, such as crew:join-crew. Do not offer to continue without Desk. After setup, desk:session-start remains the authoritative workspace scan."
+  "Desk startup: no desk is bound yet, so Desk is in setup mode. Run the onboarding path desk_status names now — desk:first-run-bootstrap by default, which looks for an existing local desk, then the operator's desk repository on GitHub, and otherwise offers to create one; an overlay that owns its workspace names its own, such as crew:join-crew. Do not offer to continue without Desk. After setup, desk:session-start remains the authoritative workspace scan. A child agent with a bounded brief follows the brief instead and skips this."
 
 function sourceLabel(source) {
   if (source === "host-project") return "this session's project folder is a desk"

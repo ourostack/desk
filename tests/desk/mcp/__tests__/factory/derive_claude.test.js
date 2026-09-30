@@ -6,7 +6,7 @@
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -15,6 +15,7 @@ import { deriveClaudeSession, __internals__ } from "../../../../../plugins/desk/
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import {
   SENTINEL,
+  SPAWN_DESK_TASK_LINE,
   COMMIT_SHA,
   SESSION_IDS,
   NON_UUID_FILE_STEM,
@@ -120,7 +121,7 @@ test("string message content, a missing message field, a non-GitHub PR URL and a
   const { facts } = await deriveFull()
   assert.equal(facts.refs.prs.some((ref) => ref.number === 99), false)
   const metaless = facts.agents.find((agent) => agent.n === 3)
-  assert.deepEqual(metaless, { n: 3, parent: 0, model: "unknown" })
+  assert.deepEqual(metaless, { n: 3, parent: 0, model: "claude-sonnet-5" })
 })
 
 test("odd but parseable shapes (non-object lines, non-numeric usage, missing input/usage/file_path, bad tool_use_id, untimed errors, free-text pr-link, untimed or pathless deltas) never throw or leak, and still validate", async () => {
@@ -160,9 +161,30 @@ test("isApiErrorMessage lines and the <synthetic> model are excluded from usage,
   assert.equal(facts.counts.api_retries, 1)
 })
 
-test("a subagent with no meta.json marks models unavailable (source_unreadable)", async () => {
-  const { facts } = await deriveFull()
-  assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "models"), [{ field: "models", reason: "source_unreadable" }])
+test("a subagent whose model resolves from its own lines does not mark models unavailable, even with no meta.json", async () => {
+  const { line, assistant } = workerLines()
+  const { facts } = await deriveWithSubagents(
+    [line({ type: "user", message: { role: "user", content: "go" } }), assistant("r1", "claude-opus-5-5")],
+    [{ stem: "agent-1", lines: [assistant("s1", "claude-sonnet-5", [{ type: "text", text: "hi" }])] }],
+  )
+  assert.equal(facts.agents[1].model, "claude-sonnet-5")
+  assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "models"), [])
+})
+
+test("a subagent whose model resolves nowhere still marks models unavailable (source_unreadable)", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-unresolved-"))
+  try {
+    const root = path.join(dir, `${SUB_SESSION_ID}.jsonl`)
+    const base = { sessionId: SUB_SESSION_ID, version: "2.1.282", timestamp: "2026-09-25T08:00:00.000Z" }
+    writeFileSync(root, `${JSON.stringify({ ...base, type: "user", message: { role: "user", content: "go" } })}\n`)
+    mkdirSync(path.join(dir, SUB_SESSION_ID, "subagents"), { recursive: true })
+    writeFileSync(path.join(dir, SUB_SESSION_ID, "subagents", "agent-1.jsonl"), `${JSON.stringify({ ...base, type: "user", message: { role: "user", content: "hi" } })}\n`)
+    const { facts } = await deriveClaudeSession({ transcriptPath: root, plugins: PLUGINS, endReason: "prompt_input_exit" })
+    assert.equal(facts.agents[1].model, "unknown")
+    assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "models"), [{ field: "models", reason: "source_unreadable" }])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test("a real (non-synthetic) model that fails the model-id pattern is dropped, not put through invalid", async () => {
@@ -333,13 +355,13 @@ test("a depth-2 subagent gets the agent that spawned it as parent, even when its
     { n: 0, parent: null, model: "claude-opus-5-5" },
     { n: 1, parent: 0, model: "claude-sonnet-5" },
     // agent-a2 was spawned by agent-a4's Agent call (n 4, read after it).
-    { n: 2, parent: 4, model: "claude-opus-4-1" },
-    // agent-a3 has no meta.json at all; agent-a4 has one, but its model
-    // doesn't match the pattern and its toolUseId matches no call — both
-    // fall back to "unknown"/parent 0, for different reasons, and both
-    // still count.
-    { n: 3, parent: 0, model: "unknown" },
-    { n: 4, parent: 0, model: "unknown" },
+    // A subagent's model is what its own assistant lines used, before its meta.
+    { n: 2, parent: 4, model: "claude-opus-5-5" },
+    // agent-a3 has no meta.json at all; agent-a4 has one, but its toolUseId
+    // matches no call — both fall back to parent 0, for different reasons,
+    // and both still count.
+    { n: 3, parent: 0, model: "claude-sonnet-5" },
+    { n: 4, parent: 0, model: "claude-sonnet-5" },
   ])
 })
 
@@ -365,9 +387,9 @@ test("unavailable gets tool_durations when an orphan tool_use exists, keyed to w
 test("pr-link and gitOperation.pr refs are deduplicated and sorted by repo then number; a non-GitHub URL is dropped", async () => {
   const { facts } = await deriveFull()
   assert.deepEqual(facts.refs.prs, [
-    { repo: "another-org/repo", number: 3 },
-    { repo: "ourostack/desk", number: 7 },
-    { repo: "ourostack/desk", number: 42 },
+    { repo: "another-org/repo", number: 3, agent: 0 },
+    { repo: "ourostack/desk", number: 7, agent: 0 },
+    { repo: "ourostack/desk", number: 42, agent: 0 },
   ])
   assert.deepEqual(facts.refs.commits, [])
 })
@@ -420,6 +442,7 @@ test("a 40-hex token in a Bash result's stdout becomes a commitShas event, dedup
 // The commit message and every other argument carry this; only directories
 // may come back, and never into facts.
 const COMMIT_MESSAGE_SENTINEL = "COMMIT-MESSAGE-SENTINEL-9b1e"
+const SUB_SESSION_ID = "2a3b4c5d-6e7f-4809-9a0b-1c2d3e4f5a6b"
 const GIT_SESSION_ID = "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b"
 
 async function deriveLines(lines, endReason = "prompt_input_exit") {
@@ -479,7 +502,7 @@ function shellGitSession() {
 test("only a successful Bash git commit call becomes a shellGitCommits event, with its start, end and directory", async () => {
   const { facts, events } = await deriveLines(shellGitSession())
   const base = `/tmp/${SENTINEL}-cwd`
-  const span = (from, to, cwd) => ({ start: `2026-09-25T08:00:${from}.000Z`, end: `2026-09-25T08:00:${to}.000Z`, cwd })
+  const span = (from, to, cwd) => ({ start: `2026-09-25T08:00:${from}.000Z`, end: `2026-09-25T08:00:${to}.000Z`, cwd, agent: 0 })
   assert.deepEqual(events.shellGitCommits, [
     span("01", "02", base),
     span("03", "04", `/tmp/${SENTINEL}-desk`),
@@ -740,4 +763,164 @@ test("applyLimits trims over-cap agents (with their intervals), intervals, model
     { field: "human_waits", reason: "capped" },
     { field: "models", reason: "capped" },
   ])
+})
+
+
+// --- Worker-tagged events and Desk-Task lines (milestone 2) --------------------
+
+test("every binding event carries the worker that produced it", async () => {
+  const { events } = await deriveFull()
+  for (const list of [events.deskToolCalls, events.fileWrites, events.shellGitCommits]) {
+    for (const entry of list) assert.ok(Number.isInteger(entry.agent), JSON.stringify(entry))
+  }
+  assert.ok(events.deskToolCalls.every((call) => call.agent === 0))
+  assert.equal(events.fileWrites.find((entry) => entry.path === `${SENTINEL}-sub-edit-path`).agent, 1)
+  assert.equal(events.fileWrites.find((entry) => entry.path === `${SENTINEL}-tracked/path.txt`).agent, 0)
+})
+
+test("a spawn prompt's Desk-Task line becomes events.spawnTasks for the spawned child, and nothing else of the prompt leaves", async () => {
+  const { facts, events } = await deriveFull()
+  assert.equal(SPAWN_DESK_TASK_LINE, "Desk-Task: desk-plugin/some-task")
+  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "desk-plugin", slug: "some-task" }])
+  assert.equal(JSON.stringify(events.spawnTasks).includes(SENTINEL), false)
+  assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
+  assert.equal("spawnTasks" in facts, false)
+})
+
+
+// A session on disk: root lines plus subagent files ({ stem, lines, meta }).
+async function deriveWithSubagents(rootLines, subagents) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-workers-"))
+  try {
+    writeFileSync(path.join(dir, `${SUB_SESSION_ID}.jsonl`), `${rootLines.map((line) => JSON.stringify(line)).join("\n")}\n`)
+    mkdirSync(path.join(dir, SUB_SESSION_ID, "subagents"), { recursive: true })
+    for (const { stem, lines, meta } of subagents) {
+      const base = path.join(dir, SUB_SESSION_ID, "subagents", stem)
+      writeFileSync(`${base}.jsonl`, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`)
+      if (meta !== undefined) writeFileSync(`${base}.meta.json`, JSON.stringify(meta))
+    }
+    return await deriveClaudeSession({ transcriptPath: path.join(dir, `${SUB_SESSION_ID}.jsonl`), plugins: PLUGINS, endReason: "prompt_input_exit" })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+function workerLines() {
+  let second = 0
+  const line = (extra) => ({ sessionId: SUB_SESSION_ID, version: "2.1.282", timestamp: `2026-09-25T08:00:${String(second++).padStart(2, "0")}.000Z`, ...extra })
+  const spawn = (id, prompt) => line({ type: "assistant", message: { id: `m-${id}`, model: "claude-opus-5-5", content: [{ type: "tool_use", id, name: "Agent", input: prompt === undefined ? {} : { prompt } }] } })
+  const prompt = (text) => line({ type: "user", message: { role: "user", content: text } })
+  const assistant = (id, model, content = []) => line({ type: "assistant", message: { id, model, content } })
+  return { line, spawn, prompt, assistant }
+}
+
+test("the child's first user line is the fallback source of Desk-Task, and the spawn prompt wins when both carry one", async () => {
+  const { line, spawn, prompt } = workerLines()
+  const { events } = await deriveWithSubagents(
+    [
+      line({ type: "user", message: { role: "user", content: "go" } }),
+      spawn("spawn-a", "no task line here"),
+      spawn("spawn-b", "Desk-Task: track-one/task-one"),
+      spawn("spawn-c", "Desk-Task: bad/one\nDesk-Task: bad/two"),
+      spawn("spawn-d"),
+    ],
+    [
+      // agent 1: prompt has no line, so the child's own first line is used.
+      { stem: "agent-1", meta: { toolUseId: "spawn-a" }, lines: [prompt("Desk-Task: track-two/task-two\nbody")] },
+      // agent 2: both carry one; the spawn prompt wins.
+      { stem: "agent-2", meta: { toolUseId: "spawn-b" }, lines: [prompt("Desk-Task: track-two/other")] },
+      // agent 3: an ambiguous prompt binds nothing, and the child's line does not rescue it when it is ambiguous too.
+      { stem: "agent-3", meta: { toolUseId: "spawn-c" }, lines: [prompt("Desk-Task: bad/one\nDesk-Task: bad/two")] },
+      // agent 4: no meta at all; its first line still counts, and only the first.
+      { stem: "agent-4", lines: [prompt("Desk-Task: track-three/task-three"), prompt("Desk-Task: track-four/task-four")] },
+      // agent 5: a malformed line and a spawn with no prompt at all.
+      { stem: "agent-5", meta: { toolUseId: "spawn-d" }, lines: [prompt("Desk-Task: ../x")] },
+      // agent 6: only tool results, so no first user line.
+      { stem: "agent-6", lines: [{ sessionId: SUB_SESSION_ID, type: "user", timestamp: "2026-09-25T08:01:00.000Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "x" }] } }] },
+    ],
+  )
+  assert.deepEqual(events.spawnTasks, [
+    { agent: 1, track: "track-two", slug: "task-two" },
+    { agent: 2, track: "track-one", slug: "task-one" },
+    { agent: 4, track: "track-three", slug: "task-three" },
+  ])
+})
+
+test("a first user line given as text blocks is read too", async () => {
+  const { line } = workerLines()
+  const { events } = await deriveWithSubagents(
+    [line({ type: "user", message: { role: "user", content: "go" } })],
+    [{ stem: "agent-1", lines: [line({ type: "user", message: { role: "user", content: [{ type: "text", text: "intro" }, { type: "text", text: "Desk-Task: a/b" }, { type: "image" }] } })] }],
+  )
+  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "a", slug: "b" }])
+})
+
+// Claude Code writes every `pr-link` line into the ROOT transcript, including
+// for the PRs a subagent created; the creating call is in the subagent's own
+// transcript as `gitOperation.pr`.
+function createdPr(line, id, repo, number, action = "created") {
+  return [
+    line({ type: "assistant", message: { id: `m-${id}`, model: "claude-sonnet-5", content: [{ type: "tool_use", id, name: "Bash", input: { command: "gh pr create" } }] } }),
+    line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] }, toolUseResult: { stdout: "ok", gitOperation: { pr: { number, url: `https://github.com/${repo}/pull/${number}`, action } } } }),
+  ]
+}
+
+test("a PR is credited to the worker whose call created it, not to the root that only holds its pr-link", async () => {
+  const { line, assistant } = workerLines()
+  const pr = (repo, number) => line({ type: "pr-link", prRepository: repo, prNumber: number })
+  const { facts } = await deriveWithSubagents(
+    [line({ type: "user", message: { role: "user", content: "go" } }), pr("o/r", 1), pr("o/r", 2), pr("o/r", 3), pr("o/r", 4)],
+    [
+      { stem: "agent-1", lines: [assistant("s1", "claude-sonnet-5"), ...createdPr(line, "c1", "o/r", 1), ...createdPr(line, "c2", "o/r", 2)] },
+      { stem: "agent-2", lines: [assistant("s2", "claude-sonnet-5"), ...createdPr(line, "c3", "o/r", 2), ...createdPr(line, "c4", "o/r", 3)] },
+    ],
+  )
+  assert.deepEqual(facts.refs.prs, [
+    { repo: "o/r", number: 1, agent: 1 },
+    { repo: "o/r", number: 2, agent: 1 },
+    { repo: "o/r", number: 3, agent: 2 },
+    { repo: "o/r", number: 4, agent: 0 },
+  ])
+  assert.equal(validateLocalFacts(facts).ok, true)
+})
+
+test("a merge or any other action on a PR does not take the credit from the worker that created it", async () => {
+  const { line, assistant } = workerLines()
+  const { facts } = await deriveWithSubagents(
+    [line({ type: "user", message: { role: "user", content: "go" } }), ...createdPr(line, "m1", "o/r", 1, "merged"), ...createdPr(line, "m2", "o/r", 2, null)],
+    [{ stem: "agent-1", lines: [assistant("s1", "claude-sonnet-5"), ...createdPr(line, "c1", "o/r", 1), ...createdPr(line, "c2", "o/r", 2)] }],
+  )
+  assert.deepEqual(facts.refs.prs, [{ repo: "o/r", number: 1, agent: 1 }, { repo: "o/r", number: 2, agent: 1 }])
+})
+
+test("dedupePrRefs: a creating ref outranks a link whatever the worker, and the lowest worker wins among the same kind", () => {
+  const ref = (agent, created) => ({ repo: "o/r", number: 1, agent, created })
+  const dedupe = (...refs) => __internals__.dedupePrRefs(refs)
+  assert.deepEqual(dedupe(ref(0, false), ref(2, true)), [{ repo: "o/r", number: 1, agent: 2 }])
+  assert.deepEqual(dedupe(ref(2, true), ref(0, false)), [{ repo: "o/r", number: 1, agent: 2 }])
+  assert.deepEqual(dedupe(ref(3, true), ref(1, true), ref(2, true)), [{ repo: "o/r", number: 1, agent: 1 }])
+  assert.deepEqual(dedupe(ref(3, false), ref(1, false), ref(2, false)), [{ repo: "o/r", number: 1, agent: 1 }])
+})
+
+test("a subagent's model is its own assistant model, else a valid meta model, else unknown", async () => {
+  const { line, assistant } = workerLines()
+  const { facts } = await deriveWithSubagents(
+    [line({ type: "user", message: { role: "user", content: "go" } })],
+    [
+      { stem: "agent-1", meta: { model: "sonnet" }, lines: [assistant("s1", "claude-sonnet-5")] },
+      { stem: "agent-2", meta: { model: "claude-haiku-5" }, lines: [assistant("s2", "<synthetic>")] },
+      { stem: "agent-3", lines: [assistant("s3", "<synthetic>")] },
+    ],
+  )
+  assert.deepEqual(facts.agents.slice(1).map((agent) => agent.model), ["claude-sonnet-5", "claude-haiku-5", "unknown"])
+})
+
+test("applyLimits drops a PR's worker when that worker was capped away", () => {
+  const result = __internals__.applyLimits({
+    agents: [{ n: 0, parent: null, model: "m" }, { n: 1, parent: 0, model: "m" }],
+    intervals: [],
+    models: [],
+    prs: [{ repo: "a/a", number: 1, agent: 0 }, { repo: "a/a", number: 2, agent: 1 }],
+  }, [], { agents: 1, intervals: 10, models: 10, prs: 10 })
+  assert.deepEqual(result.prs, [{ repo: "a/a", number: 1, agent: 0 }, { repo: "a/a", number: 2 }])
 })

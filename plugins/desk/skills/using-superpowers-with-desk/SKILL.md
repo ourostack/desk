@@ -7,6 +7,10 @@ description: Map an existing Desk task, approval, plan and progress record onto 
 
 Desk owns work identity, authority, durable state and the agreed delivery endpoint. Superpowers owns engineering discovery, planning, implementation and verification. This adapter is the only seam between them: it reads what Desk already recorded, selects one provider entry, and hands over explicit existing paths. It is not a second lifecycle, contract, store or scheduler.
 
+## This entry satisfies Superpowers' "1% chance" rule
+
+`superpowers:using-superpowers` requires invoking a skill the moment there is even a 1% chance it applies; for engineering work on a Desk task, this adapter is that skill, so invoking it at the start of engineering work, a reconciled resume or a material redesign is how that rule gets satisfied, not a workaround to weigh against it. Invoke this adapter first rather than reasoning about which raw `superpowers:*` skill might apply instead; its own Boundary below then selects and hands off to the specific one (brainstorming, writing-plans, subagent-driven-development, or the executing-plans fallback), which is the next required invocation the same rule already covers, not a redundant second decision.
+
 ## Boundary
 
 ```text
@@ -59,6 +63,8 @@ Apply the outputs in place of upstream SDD's path-producing helpers: `planPath` 
 Include the mapper's `briefRules` in **both the implementer brief and every reviewer brief**, including re-reviews. The Desk-owned addition to each brief template is:
 
 > verify or validate in your own worktree; never in a checkout your task does not own
+
+The first `briefRules` entry is a `Desk-Task: <track>/<slug>` line, which must be copied verbatim, on its own line, into every implementer and reviewer brief so the factory can credit each subagent's work to its own task.
 
 Also pass the mapper's close-out rule in both brief types: every child returns every created worktree and branch, its exact repository/path/ref, current state, owner and verified disposition in the mapped Resources record. `task-lifecycle` owns that return inventory and `git-hygiene` owns its safety gates; the mapper does not infer cleanup paths.
 

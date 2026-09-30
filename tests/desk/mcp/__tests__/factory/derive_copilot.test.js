@@ -213,9 +213,10 @@ test("tool outcomes: exit code 1 is an error, a failure is an error, a denial is
       { agent: 0, tool: "mcp", outcome: "ok", ...span(28.6, 28.8) },
       { agent: 1, tool: "search", outcome: "ok", ...span(32, 33) },
       { agent: 2, tool: "read", outcome: "ok", ...span(36, 37) },
+      { agent: 2, tool: "edit", outcome: "ok", ...span(37.2, 37.4) },
     ])
     assert.deepEqual(facts.counts, {
-      tool_calls: { shell: 3, edit: 3, read: 2, desk: 3, mcp: 1, agent: 2, search: 1 },
+      tool_calls: { shell: 3, edit: 4, read: 2, desk: 3, mcp: 1, agent: 2, search: 1 },
       tool_failures: { shell: 1, edit: 1, read: 1, desk: 1 },
       tool_retries: 3,
       api_retries: 4,
@@ -337,15 +338,17 @@ test("binding events: Desk task tools with track and slug, and only successful f
   try {
     const { events } = await derive(home, SESSIONS.full)
     assert.deepEqual(events.deskToolCalls, [
-      { at: at(25), name: "desk-task_update", track: `${SENTINEL}-track`, slug: `${SENTINEL}-slug`, person: null, status: `${SENTINEL}-status`, ok: true },
-      { at: at(27), name: "desk-task_create", track: `${SENTINEL}-track`, slug: `${SENTINEL}-other`, person: `${SENTINEL}-person`, status: null, ok: false },
+      { at: at(25), name: "desk-task_update", track: `${SENTINEL}-track`, slug: `${SENTINEL}-slug`, person: null, status: `${SENTINEL}-status`, agent: 0, ok: true },
+      { at: at(27), name: "desk-task_create", track: `${SENTINEL}-track`, slug: `${SENTINEL}-other`, person: `${SENTINEL}-person`, status: null, agent: 0, ok: false },
     ])
     assert.deepEqual(events.fileWrites, [
-      { at: at(10), path: `/tmp/${SENTINEL}/desk/eng/m3-3/task.md` },
-      { at: at(14), path: `/tmp/${SENTINEL}/desk/eng/m3-3/notes.md` },
-      { at: at(14), path: `/tmp/${SENTINEL}/desk/eng/m3-3/task.md` },
-      { at: at(14), path: `/tmp/${SENTINEL}/desk/eng/m3-3/old.md` },
+      { at: at(10), path: `/tmp/${SENTINEL}/desk/eng/m3-3/task.md`, agent: 0 },
+      { at: at(14), path: `/tmp/${SENTINEL}/desk/eng/m3-3/notes.md`, agent: 0 },
+      { at: at(14), path: `/tmp/${SENTINEL}/desk/eng/m3-3/task.md`, agent: 0 },
+      { at: at(14), path: `/tmp/${SENTINEL}/desk/eng/m3-3/old.md`, agent: 0 },
+      { at: at(37.2), path: `/tmp/${SENTINEL}/desk/eng/m3-3/sub.md`, agent: 2 },
     ])
+    assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "eng", slug: "m3-3" }], "only the prompt with a Desk-Task line binds a worker; the nested spawn has none")
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
@@ -606,7 +609,7 @@ test("odd turn, tool, permission, subagent and compaction shapes are skipped or 
   assert.deepEqual(intervalsOf(facts, "api_retry"), [{ kind: "api_retry", agent: 0, ...span(83, 85) }])
   assert.equal(intervalsOf(facts, "permission_wait").length, 0)
   assert.deepEqual(facts.plugins, [...PLUGINS, { name: "extra", version: "1.0.0", source: null }])
-  assert.deepEqual(events.fileWrites, [{ at: at(34), path: `/tmp/${SENTINEL}/raw.md` }])
+  assert.deepEqual(events.fileWrites, [{ at: at(34), path: `/tmp/${SENTINEL}/raw.md`, agent: 0 }])
   assert.deepEqual(events.deskToolCalls, [])
   assert.deepEqual(facts.unavailable, [
     { field: "tool_durations", reason: "source_unreadable" },
@@ -952,12 +955,12 @@ test("only a successful bash or powershell git commit call becomes a shellGitCom
   )
   const { facts, events } = await deriveText(lines)
   assert.deepEqual(events.shellGitCommits, [
-    { start: at(1), end: at(2), cwd: `/tmp/${SENTINEL}` },
-    { start: at(3), end: at(4), cwd: `/tmp/${SENTINEL}/desk` },
-    { start: at(5), end: at(6), cwd: `C:\\${SENTINEL}` },
-    { start: at(14), end: at(15), cwd: `/tmp/${SENTINEL}/resumed` },
-    { start: at(17), end: at(18), cwd: null },
-    { start: at(22), end: at(23), cwd: null },
+    { start: at(1), end: at(2), cwd: `/tmp/${SENTINEL}`, agent: 0 },
+    { start: at(3), end: at(4), cwd: `/tmp/${SENTINEL}/desk`, agent: 0 },
+    { start: at(5), end: at(6), cwd: `C:\\${SENTINEL}`, agent: 0 },
+    { start: at(14), end: at(15), cwd: `/tmp/${SENTINEL}/resumed`, agent: 0 },
+    { start: at(17), end: at(18), cwd: null, agent: 0 },
+    { start: at(22), end: at(23), cwd: null, agent: 0 },
   ])
   assert.ok(!JSON.stringify(facts).includes(COMMIT_MESSAGE_SENTINEL))
   assert.ok(!JSON.stringify(facts).includes(SENTINEL), "the planted directories never reach facts")
@@ -975,14 +978,14 @@ test("a session.start with no readable context leaves the directory unknown", as
     ev("tool.execution_complete", 4, { toolCallId: "g2", success: true }),
   ]
   const { events } = await deriveText(lines)
-  assert.deepEqual(events.shellGitCommits, [{ start: at(1), end: at(2), cwd: null }, { start: at(3), end: at(4), cwd: "/abs" }])
+  assert.deepEqual(events.shellGitCommits, [{ start: at(1), end: at(2), cwd: null, agent: 0 }, { start: at(3), end: at(4), cwd: "/abs", agent: 0 }])
 })
 
 test("nativeCommitShas carries this session's session_refs commits, which bind directly", async () => {
   const home = makeHome()
   try {
     const { events } = await derive(home, SESSIONS.full)
-    assert.deepEqual(events.nativeCommitShas, ["abcdef0000000000000000000000000000000001", "abcdef0120000000000000000000000000000001", "fc6ea8a0000000000000000000000000000000aa"], "full SHAs only, so binding gets full hashes")
+    assert.deepEqual(events.nativeCommitShas, ["abcdef0000000000000000000000000000000001", "abcdef0120000000000000000000000000000001", "fc6ea8a0000000000000000000000000000000aa"].map((sha) => ({ sha, agent: 0 })), "full SHAs only, so binding gets full hashes")
     assert.deepEqual(events.shellGitCommits, [], "the fixture's bash calls hold no git commit")
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -1038,7 +1041,7 @@ test("a commit carries sessions.repository only when the resolving repository's 
     { repo: null, sha: "c".repeat(40) },
   ], "a 40-hex row the repository lacks is kept, unlabeled, once")
   assert.deepEqual(result.refs.unresolved, { prs: 0, commits: 2 })
-  assert.deepEqual(result.native, [FULL_A, FULL_B, "c".repeat(40)])
+  assert.deepEqual(result.native, [FULL_A, FULL_B, "c".repeat(40)].map((sha) => ({ sha, agent: 0 })))
 
   for (const origin of ["https://github.com/octo-org/fork", "https://gitlab.com/octo-org/widgets", null]) {
     result = await refsOf({ context: { cwd: "/x", gitRoot: "/repo/root" }, refs: [["commit", "abc1234"], ["commit", FULL_B]], resolveCommits: answering(answers, origin) })
@@ -1070,4 +1073,26 @@ test("readSessionRecord reads repository and cwd, each null when absent, not tex
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+test("spawn prompts: each worker gets its own Desk-Task line; a malformed or repeated one binds nothing and no prompt text is kept", async () => {
+  const ev = eventWriter()
+  const sub = (toolCallId) => ({ parentToolCallId: toolCallId })
+  const lines = [
+    start(ev, 0),
+    ev("tool.execution_start", 1, { toolCallId: "t1", toolName: "task", arguments: { prompt: `${SENTINEL}\nDesk-Task: eng/one` } }),
+    ev("subagent.started", 2, { toolCallId: "t1", model: "gpt-5.2" }),
+    ev("tool.execution_start", 3, { toolCallId: "t2", toolName: "task", arguments: { prompt: "Desk-Task: ../x" } }),
+    ev("subagent.started", 4, { toolCallId: "t2", model: "gpt-5.2" }),
+    ev("tool.execution_start", 5, { toolCallId: "t3", toolName: "task", arguments: { prompt: "Desk-Task: a/b\nDesk-Task: a/c" } }),
+    ev("subagent.started", 6, { toolCallId: "t3", model: "gpt-5.2" }),
+    ev("tool.execution_start", 7, { toolCallId: "t4", toolName: "task", arguments: SENTINEL }),
+    ev("subagent.started", 8, { toolCallId: "t4", model: "gpt-5.2" }),
+    ev("tool.execution_start", 9, { toolCallId: "t5", toolName: "task", arguments: { prompt: "Desk-Task: eng/two" }, ...sub("t1") }),
+    ev("subagent.started", 10, { toolCallId: "t5", model: "gpt-5.2" }),
+    ev("subagent.started", 11, { toolCallId: "no-task-call", model: "gpt-5.2" }),
+  ]
+  const { events } = await deriveText(lines)
+  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "eng", slug: "one" }, { agent: 5, track: "eng", slug: "two" }])
+  assert.ok(!JSON.stringify(events.spawnTasks).includes(SENTINEL))
 })

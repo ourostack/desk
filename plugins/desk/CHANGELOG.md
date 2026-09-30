@@ -1,5 +1,69 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.149 — 2026-09-30
+
+A pull request or commit whose owner several jobs share is no longer copied to each of those jobs, and the job's references are marked partial.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.148 — 2026-09-30
+
+The factory now credits each subagent's work to its own task. A subagent is bound to the task named in the `Desk-Task` line of its brief, or inherits the task of its parent when the parent is on exactly one task. A subagent with no `Desk-Task` line whose parent works on several tasks stays unattributed instead of being spread across them.
+
+A desk commit that touches task cards in more than 3 tasks no longer credits any of them, because such a commit is housekeeping and not work on those tasks.
+
+Each job now gets only its own workers' active time, tool calls and pull requests, so a session that served several jobs no longer gives each of them the whole session. A subagent's model now comes from its own replies, and Copilot events are attributed per worker.
+
+Sessions Desk already processed are re-derived once after you upgrade, so their numbers follow the new rules. They are not re-derived again on later sweeps.
+
+The briefs that the Superpowers mapper produces now carry a `Desk-Task: <track>/<slug>` line, and the [`using-superpowers-with-desk`](skills/using-superpowers-with-desk/SKILL.md) skill tells the agent to copy it verbatim into every implementer and reviewer brief.
+
+The first start after you upgrade re-derives every past session, so delivery of the changed sessions may finish on the following start.
+
+Time from a worker that several jobs share is marked partial (`worker_shared`) rather than split between them.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.147 — 2026-09-29
+
+Session start's workspace sync now names the desk it syncs. The [`session-start`](skills/session-start/SKILL.md) skill gave `node <Desk plugin folder>/mcp/scripts/session-sync.js` with no arguments, but the script needs `--root` or a `DESK` environment variable, which hosts do not set, so an agent that followed the skill printed a usage line and skipped the sync without noticing. The skill now passes `--root` with the desk root that `desk_status` reports.
+
+Windows store protection no longer fails for a non-elevated user with "The process does not possess the 'SeSecurityPrivilege' privilege". The native ACL routine read each protected folder with `Get-Acl` and wrote it back with `Set-Acl`, and that pair also carries the audit section (SACL) whenever a folder has one. Writing a SACL needs a privilege that only an elevated process holds, so every Desk factory command and the readiness convergence stopped on such a machine. The routine now reads only the owner and access sections and writes them back with `SetAccessControl`, so the audit section is never touched. The protection it applies and verifies is unchanged: one Allow rule for the current user, inherited rules cut off, and the same read-back checks.
+
+The protected-checkout guard works on Windows. Under Claude Code it could not find Git at all: the hook copied the environment into a plain object, which loses Windows' case-insensitive names, and Claude Code runs hooks through Git Bash, which passes `PROGRAMFILES` in capitals. Every command the guard needed to inspect was therefore refused with "trusted Git is unavailable". The trusted-Git lookup in [`mcp/src/runtime/git-inspection.js`](mcp/src/runtime/git-inspection.js) now matches those names without regard to case on Windows, and also tries `ProgramW6432`, where Git for Windows installs for a 32-bit Node.
+
+With Git reachable, the guard's decisions on Windows were checked against what really runs, and two gaps were fixed. First, `git worktree remove` did not recognize a protected worktree, because Git lists it as `C:/Users/name/...` while a command names it with backslashes or an 8.3 short name; the guard now compares Windows paths by their long, normalized, case-folded form. Second, Windows keeps a directory as the path it was given, so after `git -C <junction>` or PowerShell's `Set-Location <junction>`, a later `..` is the junction's own parent rather than its target's; the guard modelled the POSIX behavior, so a command could reach a protected checkout the guard had judged elsewhere. Git's own `-C` chain and PowerShell locations now resolve lexically on Windows ([`mcp/src/runtime/shell-paths.js`](mcp/src/runtime/shell-paths.js)), and trusted Git still finds the repository from there. Git Bash's `cd` already hands Git the resolved directory and is unchanged. On macOS and Linux every one of these paths behaves exactly as before.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.146 — 2026-09-29
+
+The factory intake now delivers files it used to leave frozen, and its local diagnostics agree with the store.
+
+Quarantine records now keep the sha of the blob the factory store refused. A flush now retries a quarantined facts file when its published blob differs from the refused one, so files frozen by an older Desk or a stale refusal are delivered again; a held file whose repository visibility cannot be resolved stays quarantined without blocking other files, and a quarantine record that is not a regular file (a symlink, a directory or a hard-linked file) is left alone and never blocks a flush. A held file that has not changed costs no state-folder check, and the files that go again are released together, once, so a store with hundreds of held files no longer slows every flush. The local jobs index now mirrors the outbox: a re-derive that drops a job removes it, and existing indexes are rebuilt once.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.145 — 2026-09-29
+
+A child agent dispatched with a bounded brief could receive the same startup text a root session gets — the `using-desk` foundation and the `Desk startup:` line, including its "invoke `desk:session-start` now" imperative — whenever it runs as its own top-level session rather than an in-process subagent (Claude Code's `SessionStart` hook has no field that marks a session as a bounded child; only `SubagentStart`, a separate hook Desk does not register, carries `agent_id`/`agent_type`). Reading that text at face value, such a child could run host probes, sync and other real-desk boot steps that were never its job. The foundation's "Child agents" section and every `Desk startup:` line (including the Claude and Copilot degraded fallbacks) now carry a short stand-down clause: a child agent with a bounded brief follows the brief instead and skips the imperative, the same way Superpowers' own entry skill stands its subagents down.
+
+The `workspace-tidy budget exceeded` boot line no longer just says "run the repair" with no command: it now says plainly that no agent action is required (the check retries automatically at the next session start) and gives the exact, copy-pasteable repair command for an agent that wants to run it sooner, with the desk root left to `desk_status` rather than guessed.
+
+`using-superpowers-with-desk` now says plainly that invoking it at the start of engineering work is how Superpowers' "even a 1% chance, you must invoke" rule gets satisfied for entering Superpowers, so an agent doing engineering work is not left to weigh that rule against the Desk adapter's own entry point.
+
+A test coverage shard could fail after every one of its own tests had already passed: [`mcp/src/coverage/runner.js`](mcp/src/coverage/runner.js) deletes a per-process bookkeeping folder (`processinfo`, not coverage data itself) once a shard finishes, and a still-writing child process a test had spawned but only signal-killed — never actually awaited to exit — could still be dropping a file into that folder in the instant the cleanup listed it as empty, failing the whole shard with `ENOTEMPTY` even though every test in it passed. Twelve such spots across eight `mcp/__tests__` files now wait for the real `exit` event before moving on (a shared `killAndWait` test helper), closing the race at its source. The cleanup itself is also now non-fatal: `processinfo` is bookkeeping, not coverage, so if it still cannot be removed after the existing retry, the shard logs one warning naming the leftover file(s) and keeps its own pass/fail status rather than failing on a bookkeeping deletion.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.144 — 2026-09-29
+
+`friction_add`'s declared input schema (`mcp/src/tool-schemas.js`) listed only `track`, `theme` and `body`, but its handler (`mcp/src/tools/friction.js`) has read `about`, `file_card`, `title`, `plugin`, `friction_class`, `signal` and `evidence_jobs` since the kaizen-candidate work landed — a host builds its tool-call arguments from the declared schema, so none of those fields could ever actually be sent. The schema now declares all seven: `about` (`"setup" | "system"`, describing what a host would need to know to choose between them), `file_card` (curator-only, after signoff), and the system-friction fields the tool's own description already documented.
+
+A new parity test, `tests/desk/mcp/__tests__/tool_schema_parity.test.js`, now checks every Desk MCP tool's declared schema against the fields its handler actually reads, so this class of gap fails CI instead of silently blocking a host. Each handler module exports an explicit `<TOOL>_FIELDS` list colocated with the function that reads `input` — including `desk_doctor`, whose top-level fields are read by its session-layer dispatcher (`mcp/src/runtime/desk-session.js`) rather than by the module `server.js` registers for it — which the new test compares against `tool-schemas.js`. Auditing all eighteen tools against their handlers this way turned up no other drift: `friction_add` was the only tool whose schema and handler disagreed.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.143 — 2026-09-29
 
 Desk's state-directory resolution now refuses to touch the real `ouroboros-skills/desk` state folder from anything that looks like a `node:test` run, whether or not that run loaded the test suite's own isolation setup — closing a gap where a test file executed directly with a bare `node --test <file>` (skipping the `--import` that normally redirects state under a temporary folder) could still write real records, such as factory evaluate-requests, onto a developer's own machine.
