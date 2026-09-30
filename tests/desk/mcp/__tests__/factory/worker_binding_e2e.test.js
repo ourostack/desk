@@ -115,11 +115,17 @@ test("a multi-worker Claude session goes from transcript to built store with per
     const built = (job) => JSON.parse(readFileSync(path.join(out, "jobs", `${job}.json`), "utf8")).formulas
     const numbers = (formulas) => formulas.references.value.public_pull_requests.map((pr) => pr.number)
 
-    // PR credit follows the creating worker. The root is in A and B, so both get
-    // its PR 10. C holds only child 2, so it gets PR 12 and nothing the root only linked.
-    assert.deepEqual(numbers(built(A)), [10, 11, 14])
-    assert.deepEqual(numbers(built(B)), [10])
+    // PR credit follows the creating worker, and a PR whose worker several jobs share goes to none of
+    // them. The root is in A and B, so its PR 10 is credited to neither. A holds children 1 and 4 alone,
+    // so it gets PRs 11 and 14. C holds only child 2, so it gets PR 12. PR 13 belongs to worker 3, who is in no job.
+    assert.deepEqual(numbers(built(A)), [11, 14])
+    assert.deepEqual(numbers(built(B)), [])
     assert.deepEqual(numbers(built(C)), [12])
+    // Each job's list leaves something out (PR 10 or PR 13) while the session binds other jobs, so all three are worker_shared.
+    for (const job of [A, B, C]) {
+      assert.equal(built(job).references.partial, true, job)
+      assert.deepEqual(built(job).references.partial_reasons, ["worker_shared"], job)
+    }
 
     // Every job holds a strict subset of the session's workers, so its tool measures are worker_split.
     for (const job of [A, B, C]) {
