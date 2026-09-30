@@ -1024,7 +1024,8 @@ contract("session-start asks the factory contribution question once, in plain wo
   assert.match(step, /consent --store \$\{store\} --contribute yes --account <login>/u);
   assert.match(step, /consent --store \$\{store\} --contribute no/u);
   assert.match(step, /a no is a decision too/u);
-  assert.match(step, /[Nn]oninteractive session[\s\S]+do not ask and do not record anything/u);
+  assert.match(step, /never comes before the work the operator asked for[\s\S]+one short line at the end of your reply/u);
+  assert.match(step, /noninteractive\) return \[\]/u);
   assert.doesNotMatch(step, /consent\.json/u, "the script records consent only through factory.js");
   assert.match(step, /never assume gh's active account/u);
   assert.match(step, /account --store \$\{store\}/u);

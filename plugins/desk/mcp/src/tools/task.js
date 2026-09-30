@@ -33,6 +33,107 @@ import { objectInput } from "../util/object-input.js"
 import { reportLink } from "./factory-context.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
+const DONE_EVIDENCE_EXAMPLE = '{"kind": "pr", "ref": "https://github.com/org/repo/pull/123"}'
+const DONE_EVIDENCE_USAGE =
+  "`evidence.kind` is one of pr, commit, ci_run, non_code; `evidence.ref` is a reference in that " +
+  "kind's own checkable shape -- a PR URL for pr, a commit sha or commit URL for commit, an " +
+  "https URL for ci_run, or an https URL or desk-relative path for non_code."
+
+// Per-kind ref shape, checkable without a network call (2026-09-29 review of
+// #106): a reviewer pointed out that an unconstrained `ref` string let
+// "trust me" pass as evidence so long as it was non-blank. Each kind's
+// `test` only checks shape -- it cannot and does not confirm the PR, commit
+// or CI run actually exists -- but a shape that cannot possibly be a real
+// reference (no scheme, no hex, no URL at all) is refused up front rather
+// than recorded as if it proved something.
+const PR_REF = /^https:\/\/\S+\/pull(?:request)?\/\d+(?:[/?#]\S*)?$/iu
+const COMMIT_SHA_REF = /^[0-9a-f]{7,40}(?![0-9a-f])/iu
+const COMMIT_URL_REF = /^https:\/\/\S+\/commit\/[0-9a-f]{7,40}(?:[/?#]\S*)?$/iu
+const HTTPS_URL_REF = /^https:\/\/\S+$/iu
+
+// A ref that names a file inside the desk instead of a URL: no scheme, no
+// leading `/` or `~` (both machine-specific, see task-card-format's "Local
+// path portability"), no Windows drive letter, and no whitespace (a real
+// desk path is a kebab-case-segmented relative path, never free prose).
+// Format alone still let free text like "done" or "trustme" through, so
+// (2026-09-29 controller check of a363c057) the tool -- which has the desk
+// root in hand -- also resolves the ref against it and requires that it
+// land on an existing file or directory *inside* the desk, rejecting any
+// `..` segment that would walk the reference back out of it.
+async function isDeskRelativeProofPath(ref, deskRoot) {
+  if (/\s/u.test(ref)) return false
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//u.test(ref)) return false
+  if (ref.startsWith("/") || ref.startsWith("~")) return false
+  if (/^[a-zA-Z]:[\\/]/u.test(ref)) return false
+  const candidate = path.resolve(deskRoot, ref)
+  if (!isPathContained(deskRoot, candidate)) return false
+  return pathExists(candidate)
+}
+
+const DONE_EVIDENCE_REF_CHECKS = {
+  pr: {
+    test: (ref) => PR_REF.test(ref),
+    shape: 'a PR URL, such as "https://github.com/org/repo/pull/123" or an Azure DevOps ".../pullrequest/123" URL',
+  },
+  commit: {
+    test: (ref) => COMMIT_SHA_REF.test(ref) || COMMIT_URL_REF.test(ref),
+    shape: 'a 7-40 character hex commit sha, optionally followed by its repo/branch (such as "a1b2c3d on origin/main"), or a commit URL such as "https://github.com/org/repo/commit/a1b2c3d"',
+  },
+  ci_run: {
+    test: (ref) => HTTPS_URL_REF.test(ref),
+    shape: "the CI run's own https URL",
+  },
+  non_code: {
+    test: async (ref, deskRoot) => HTTPS_URL_REF.test(ref) || (await isDeskRelativeProofPath(ref, deskRoot)),
+    shape:
+      "an https URL to the proof, or a desk-relative path to it (not an absolute path, and not free-text with no link) " +
+      "that resolves to a file or directory actually present inside the desk -- not a path that escapes it via \"..\", " +
+      "and not one that names nothing there",
+  },
+}
+
+// A move to `done` needs at least one verifiable reference backing the
+// completion claim (the invented-completion finding, 2026-09-29): an
+// acceptance run told to resume a task instead edited the card directly
+// with the host's own Edit tool -- bypassing this function entirely --
+// set `status: done` and wrote a "Completed work" section claiming tests
+// passed and a branch merged, none of which had happened. `task_update`
+// and `task_archive` (when archiving a non-terminal task as completed
+// rather than abandoned) are the only tools that can carry a task to
+// `done`, so they are the only places this is enforced -- `toolName`
+// names whichever one is calling, for the error message. The direct-edit
+// bypass that run took is separately caught by the task-status-guard hook
+// (../runtime/task-status-guard.js), which points an agent back here.
+//
+// Only called on the transition into `done`: each caller already guards
+// this behind its own "moving from a non-`done` status" check, so
+// re-saving an already-`done` card, and moving to any other status
+// (including `cancelled`, which makes no completion claim to back), never
+// reach this function at all.
+async function assertDoneEvidence(evidence, deskRoot, toolName) {
+  if (evidence === undefined) {
+    throw new Error(
+      `${toolName}: moving a task to \`done\` needs evidence -- pass \`evidence: { kind, ref }\`. ` +
+        `${DONE_EVIDENCE_USAGE} Example: ${DONE_EVIDENCE_EXAMPLE}.`,
+    )
+  }
+  const kindOk = DONE_EVIDENCE_KINDS.has(evidence.kind)
+  const refPresent = typeof evidence.ref === "string" && evidence.ref.trim().length > 0
+  if (!kindOk || !refPresent) {
+    throw new Error(
+      `${toolName}: \`evidence\` is not valid (got ${JSON.stringify(evidence)}) -- ${DONE_EVIDENCE_USAGE} ` +
+        `Example: ${DONE_EVIDENCE_EXAMPLE}.`,
+    )
+  }
+  const check = DONE_EVIDENCE_REF_CHECKS[evidence.kind]
+  if (!(await check.test(evidence.ref.trim(), deskRoot))) {
+    throw new Error(
+      `${toolName}: \`evidence.ref\` is not a checkable ${evidence.kind} reference (got ${JSON.stringify(evidence.ref)}) -- ` +
+        `for kind "${evidence.kind}", \`ref\` must be ${check.shape}.`,
+    )
+  }
+}
 
 /**
  * The task's job identity as binding computes it: the desk's real path, its
@@ -134,8 +235,8 @@ const OPTIONAL_RUNTIME_FIELDS = [
 // __tests__/tool_schema_parity.test.js checks these against the tool's
 // declared schema in tool-schemas.js.
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", ...OPTIONAL_RUNTIME_FIELDS]
-export const TASK_UPDATE_FIELDS = ["track", "slug", "frontmatter", "body_append"]
-export const TASK_ARCHIVE_FIELDS = ["track", "slug"]
+export const TASK_UPDATE_FIELDS = ["track", "slug", "frontmatter", "body_append", "evidence"]
+export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
 
 function relPath(deskRoot, absPath) {
   return path.relative(deskRoot, absPath)
@@ -400,6 +501,9 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
  *                             // JSON-string object is parsed, anything else
  *                             // is refused before the card is touched
  *     body_append?: string,   // appended to existing body (blank line sep)
+ *     evidence?: { kind, ref },  // required only when this call moves the
+ *                             // task into `done` from a non-`done` status;
+ *                             // see "Evidence gate on `done`" below
  *   }
  *
  * Side effects: rewrites `<root>/<track>/<slug>/task.md` in place, and on a
@@ -408,6 +512,21 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
  * Preserves: `schema_version`, `created`. Always refreshes `updated` to now.
  *
  * Errors: refuses if the task doesn't exist.
+ *
+ * Evidence gate on `done` (the invented-completion finding): a call whose
+ * merged `status` becomes `done` from a different previous status must
+ * carry `evidence: { kind, ref }`, `kind` one of `pr`, `commit`, `ci_run`,
+ * `non_code`, `ref` a checkable reference in that kind's own shape (a PR
+ * URL, a commit sha or commit URL, the CI run's URL, or an https URL or
+ * desk-relative path to a non-code proof). Refused with an error that says
+ * what to supply, before the card is touched, when `evidence` is missing,
+ * malformed, or shaped wrong for its kind. The tool then writes it onto
+ * the card as `evidence: { kind, ref, recorded_at }`, alongside
+ * `factory_report`. Re-saving an already-`done` card, and every transition
+ * to a status other than `done` (including `cancelled`), needs none of
+ * this. `task_archive`'s own bump of a non-terminal task to `done` on
+ * archive requires the same `evidence` (see its own doc comment) -- it is
+ * not a separate, unaffected path.
  *
  * On a Git desk, also commits exactly the file it staged (M4-6 Part 2). A
  * commit failure never loses the write: it comes back as `commit: { status:
@@ -428,6 +547,12 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   // Checked before anything is read or written: a string spread into the
   // card would write one key per character.
   const frontmatter = objectInput(values.frontmatter, { tool: "task_update", field: "frontmatter" })
+  const evidence = objectInput(values.evidence, {
+    tool: "task_update",
+    field: "evidence",
+    effect: "the `done` transition was not recorded",
+    example: DONE_EVIDENCE_EXAMPLE,
+  })
 
   const filePath = await resolveWriteTarget({
     deskRoot,
@@ -454,6 +579,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   }
   merged.updated = nowIso()
   if (merged.status === "done" && existing.data.status !== "done") {
+    await assertDoneEvidence(evidence, deskRoot, "task_update")
+    merged.evidence = { kind: evidence.kind, ref: evidence.ref, recorded_at: merged.updated }
     const link = await factoryReportFor({ deskRoot, person, track, slug, env })
     if (link !== null) merged.factory_report = link
   }
@@ -495,14 +622,40 @@ async function archivedTaskStatus(archivedFile) {
 /**
  * task_archive
  *
- * Input: { track, slug }
+ * Input:
+ *   {
+ *     track: string,
+ *     slug: string,
+ *     evidence?: { kind, ref },  // required only when this call bumps a
+ *                             // non-terminal task to `done` on archive --
+ *                             // see "Evidence gate on the archive bump"
+ *     outcome?: "cancelled",  // archive a non-terminal task as abandoned
+ *                             // instead, with no evidence required
+ *   }
  *
  * Side effects: moves `<root>/<track>/<slug>/` → `<root>/<track>/_archive/<slug>/`.
- * Marks the task `done` if not already in a terminal status.
+ * Bumps a non-terminal task to `done` or `cancelled` (see below) as part of
+ * the same call.
  *
  * Idempotent: if the source dir doesn't exist AND `_archive/<slug>` does,
  * returns `{ status: "already_archived" }` without staging or committing
  * anything (nothing changed). Throws if neither exists.
+ *
+ * Evidence gate on the archive bump (the invented-completion finding): a
+ * card already in a terminal status (`done` or `cancelled`) archives as-is,
+ * needing neither `evidence` nor `outcome` -- archiving is itself the record
+ * of intentional closure once a status already carries one. A card with no
+ * `task.md` at all (a bare directory) makes no completion claim either, so
+ * it archives untouched too. Otherwise -- a live, non-terminal card -- this
+ * call must say which kind of closure it is: `evidence: { kind, ref }` for
+ * completed work (checked by the same `assertDoneEvidence` `task_update`
+ * uses, see its own doc comment for the shape each `kind` needs), or
+ * `outcome: "cancelled"` for abandoned work, which needs no evidence and
+ * bumps the card to `cancelled` instead of `done`. Neither, or both, is
+ * refused with an error before anything is touched: "edit the body with
+ * invented work, then task_archive with nothing" is exactly the bypass this
+ * closes, and it must fail the same way a bare `task_update` to `done`
+ * does, not silently fall back to fabricating a completion.
  *
  * On a Git desk, stages the move (a plain `fs.rename`, never `git mv`) with
  * `git add -- <source> <destination>` — Git detects the rename itself from
@@ -521,6 +674,24 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     !Object.hasOwn(values, "slug")
   ) {
     throw new Error("task_archive: `track` and `slug` are required")
+  }
+  const evidence = objectInput(values.evidence, {
+    tool: "task_archive",
+    field: "evidence",
+    effect: "the task was not archived",
+    example: DONE_EVIDENCE_EXAMPLE,
+  })
+  const outcome = values.outcome
+  if (outcome !== undefined && outcome !== "cancelled") {
+    throw new Error(
+      `task_archive: \`outcome\`, when given, must be "cancelled" (got ${JSON.stringify(outcome)}) -- ` +
+        "omit it for a completed task and pass `evidence` instead.",
+    )
+  }
+  if (evidence !== undefined && outcome !== undefined) {
+    throw new Error(
+      'task_archive: pass either `evidence` (completed work) or `outcome: "cancelled"` (abandoned work), not both',
+    )
   }
 
   const target = (segments) =>
@@ -555,6 +726,26 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     )
   }
 
+  // Decide, before touching the filesystem, whether this archive would
+  // itself carry a completion claim -- a bump from a non-terminal status --
+  // and validate `evidence`/`outcome` for it up front, the same
+  // "refuse before the card is touched" discipline task_update's own
+  // assertDoneEvidence keeps (invented-completion finding). A card already
+  // terminal, or no card at all, makes no completion claim and needs
+  // neither.
+  let archiveBump = null
+  if (await pathExists(srcFile)) {
+    const sourceCard = await readMarkdown(srcFile)
+    if (!TERMINAL_STATUSES.has(sourceCard.data.status)) {
+      if (outcome === "cancelled") {
+        archiveBump = { status: "cancelled" }
+      } else {
+        await assertDoneEvidence(evidence, deskRoot, "task_archive")
+        archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: evidence.ref } }
+      }
+    }
+  }
+
   await assertArchiveSourceIsRelocationSafe({
     srcDir,
     srcFile,
@@ -570,24 +761,28 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
     { path: relPath(deskRoot, archiveDir), operation: "write" },
   ] })
 
-  // Bump task status to `done` (and refresh `updated`) if not already terminal.
+  // Bump task status per the decision above (and refresh `updated`) if not
+  // already terminal.
   await target([track, "_archive", slug])
   const filePath = await target([track, "_archive", slug, "task.md"])
   let finalStatus = null
   if (await pathExists(filePath)) {
     const existing = await readMarkdown(filePath)
-    const currentStatus = existing.data.status
-    finalStatus = currentStatus
-    if (!TERMINAL_STATUSES.has(currentStatus)) {
-      // Patch only `status:`/`updated:`/`factory_report:` in place: every
-      // other byte of the card — quoting, date formats, block scalars, key
-      // order — survives.
-      const patchFields = { status: "done", updated: nowIso() }
-      const link = await factoryReportFor({ deskRoot, person, track, slug, env })
-      if (link !== null) patchFields.factory_report = link
+    finalStatus = existing.data.status
+    if (archiveBump) {
+      // Patch only `status:`/`updated:`/`evidence:`/`factory_report:` in
+      // place: every other byte of the card — quoting, date formats, block
+      // scalars, key order — survives.
+      const updated = nowIso()
+      const patchFields = { status: archiveBump.status, updated }
+      if (archiveBump.status === "done") {
+        patchFields.evidence = { ...archiveBump.evidence, recorded_at: updated }
+        const link = await factoryReportFor({ deskRoot, person, track, slug, env })
+        if (link !== null) patchFields.factory_report = link
+      }
       await patchMarkdownFrontmatter(filePath, patchFields)
       await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
-      finalStatus = "done"
+      finalStatus = archiveBump.status
     }
   }
 

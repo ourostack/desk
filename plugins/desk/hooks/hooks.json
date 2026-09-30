@@ -61,6 +61,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/task-status-guard.cjs\" claude",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

@@ -723,19 +723,33 @@ function emptyResult({ status, degraded, pending, actions, instructions = [], ro
 
 const FACTORY_QUESTION = (store, login) => `Desk can contribute measurement data about your finished tasks to \`${store}\`, which builds a report for each finished job. What it publishes: durations, counts, tool kinds, plugin and model versions, and references to public repositories. What it never publishes: prompt, assistant or tool content, names, or dates and times of day. \`${store}\` is a public repository, and your GitHub account \`${login}\` appears as the author of the intake pull requests that deliver the data. Contribute? (yes or no)`
 
-function factoryInstructions(factory, pluginRoot) {
-  if (factory?.consent !== "undecided") return []
+/**
+ * True when no operator is in the conversation: a headless Claude Code run
+ * (`claude -p` sets `CLAUDE_CODE_ENTRYPOINT` to an `sdk-*` value, and
+ * `CLAUDE_CODE_SESSION_ATTENDED=0` marks an unattended one) or a CI runner.
+ * A host that sets none of these is treated as interactive; the consent
+ * instruction is then still worded so it can never precede the real work.
+ */
+export function isNoninteractive(env) {
+  const entry = String(env.CLAUDE_CODE_ENTRYPOINT ?? "")
+  const flagged = (name) => /^(1|true)$/iu.test(String(env[name] ?? ""))
+  return entry.startsWith("sdk") || env.CLAUDE_CODE_SESSION_ATTENDED === "0" || flagged("CI") || flagged("GITHUB_ACTIONS")
+}
+
+function factoryInstructions(factory, pluginRoot, { noninteractive }) {
+  // No operator to ask: say nothing, record nothing. The next interactive session asks.
+  if (factory?.consent !== "undecided" || noninteractive) return []
   const store = factory.store
   const cli = path.join(pluginRoot, "mcp", "scripts", "factory.js")
   return [
-    `Factory consent is undecided for ${store}. Noninteractive session (claude -p, a scheduled run, or a subagent with no operator in the conversation): do not ask and do not record anything; that is expected, and the next interactive session asks. Interactive session: ask once, as its own decision group in your first reply, never holding up the rest of startup for the answer.`,
-    `Before asking, find the account that would open the intake pull requests with \`node ${cli} account --store ${store}\` (never assume gh's active account). With result account_found, ask this, naming that account as the login: "${FACTORY_QUESTION(store, "<login>")}" With no_account_can_deliver, do not ask: say in one line that no signed-in GitHub account can open pull requests on ${store} (give each account's reason), and that signing in a personal account with \`gh auth login\` lets the next session ask.`,
+    `Factory consent is undecided for ${store}. It never comes before the work the operator asked for, and never instead of it: do that work first. Afterwards raise it at most once, as one short line at the end of your reply ("Desk can contribute measurement data about your finished tasks to ${store}; want the details?"), never as its own decision group, and only if the operator is in the conversation. If they say yes to hearing it, find the account that would open the intake pull requests with \`node ${cli} account --store ${store}\` (never assume gh's active account).`,
+    `With result account_found, ask this, naming that account as the login: "${FACTORY_QUESTION(store, "<login>")}" With no_account_can_deliver, do not ask: say in one line that no signed-in GitHub account can open pull requests on ${store} (give each account's reason), and that signing in a personal account with \`gh auth login\` lets a later session ask.`,
     `Record the answer only with \`node ${cli} consent --store ${store} --contribute yes --account <login>\` or \`node ${cli} consent --store ${store} --contribute no\`; a no is a decision too and is never asked again.`,
   ]
 }
 
 function buildInstructions(ctx) {
-  const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost } = ctx
+  const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive } = ctx
   const out = []
   for (const entry of migrationEntries) {
     out.push(migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
@@ -757,7 +771,6 @@ function buildInstructions(ctx) {
     if (entry.result === "no_account_can_deliver") out.push(`Do not push ${entry.store} (task ${cardLocation(entry)}): no signed-in account can. Ask the operator which account to use, or fork.`)
   }
   out.push("Confirm this session can call the Desk MCP (`desk_status` is the sentinel), again after any context compaction; if it is absent, repair first (see the session-start skill) and never continue silently in local-only mode.")
-  out.push(...factoryInstructions(factory, pluginRoot))
   if (taskQuery !== null) {
     if (task?.status === "resolved") {
       out.push(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
@@ -770,6 +783,7 @@ function buildInstructions(ctx) {
   } else {
     out.push("No task was named: build the status block from active_tasks, open_prs and repo_states, then ask which task to resume or whether to start new.")
   }
+  out.push(...factoryInstructions(factory, pluginRoot, { noninteractive }))
   out.push(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`)
   return out
 }
@@ -965,7 +979,7 @@ export async function bootOnce({
   }
 
   const status = degraded.length > 0 ? "degraded" : "ready"
-  const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent })
+  const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env) })
   return {
     boot_complete: true,
     status,

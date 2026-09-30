@@ -28,6 +28,10 @@ A job is one outcome, and it is recorded as exactly one task for its whole life.
 
 `desk_doctor` reports `duplicate_job` when two live task cards reference the same pull request. Fold them into one: keep the task that holds the most history, move the other's iteration folders under it with Git, and archive the emptied card, under the tidying rules in `interaction-style` section 2.
 
+## Resuming a task
+
+"Resume `<task>`" means report the task card's recorded state (its `status` and the next step already written there) and continue exactly that step — not a different task, and not a silently reinterpreted scope. Never declare completion without evidence: an agent that has not actually finished the recorded next step must not report it done, set `status: done`, or write a "Completed work" section describing tests, merges or reviews that did not happen. `task_update` and `task_archive` both enforce this on any move into `done`, refusing one with no `evidence` reference (a PR, a commit on a remote branch, a CI run, or a stated non-code outcome's own proof link) checkable in that reference's own shape; genuinely abandoned work moves to `cancelled` instead (`task_archive` takes this as `outcome: "cancelled"`), which needs none of that. A direct edit to a task card's `status:` line — Write, Edit, or MultiEdit — that bypasses both tools is denied at the tool-call boundary for the same reason. When the recorded next step is unclear, blocked, or contradicted by what you actually find, say so and move the task to `blocked` or `collaborating` rather than guessing or inventing progress.
+
 ## Checkpoint-type annotations on transitions (folded in from AIDLC 2026-05-18)
 
 Each transition has a checkpoint type declaring how humans interact at that gate. AIDLC's `feature-orchestration` skill used 5 types (GATE / CHECKPOINT / AUTO / CONFIRM / NOTIFY); desk adopts them as a sibling layer on the existing state machine (annotations, not a replacement).
@@ -78,7 +82,7 @@ Every transition writes the applicable durable surfaces in order. Commit-message
 - Body updates as transition dictates:
   - Transitioning to `processing`: add a "Current work" line pointing at the active branch and mapped progress record.
   - Transitioning to `validating`: record the authorized delivery refs and applicable PR URLs (one per repo in multi-repo tasks), with repo name, title and status; a no-push or local handoff endpoint does not require a PR.
-  - Transitioning to `done`: move the PR list to a "Landed" section with merge shas and record applicable release/install, smoke, and cleanup evidence. For an explicitly unmerged terminal outcome, use "Delivered" with the preview or PR ref and its proof; never invent a merge.
+  - Transitioning to `done`: move the PR list to a "Landed" section with merge shas and record applicable release/install, smoke, and cleanup evidence. For an explicitly unmerged terminal outcome, use "Delivered" with the preview or PR ref and its proof; never invent a merge. `task_update` (and `task_archive`, when archiving a task that isn't already terminal) requires an `evidence: { kind, ref }` argument on this transition (`task-card-format`'s "Evidence on `done`") and refuses a bare `done` without one.
   - Transitioning to `blocked` / `collaborating`: a "Blocker" / "Waiting on" line with the specific reason.
 
 ### 2. Mapped progress/rulings (for `processing`, `validating`, `done` transitions)

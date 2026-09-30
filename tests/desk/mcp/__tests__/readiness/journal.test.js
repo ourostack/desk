@@ -201,7 +201,11 @@ test("canonical mutation cannot return success while durable recording is pendin
 const mutations = [
   ["task_create", task_create, { track: "track", slug: "durable-task", title: "new" }, "track/durable-task/task.md"],
   ["task_update", task_update, { track: "track", slug: "durable-task", body_append: "updated" }, "track/durable-task/task.md"],
-  ["task_archive", task_archive, { track: "track", slug: "durable-task" }, "track/_archive/durable-task/task.md"],
+  // A fixture card defaults to `status: drafting` -- non-terminal -- so
+  // archiving one now needs evidence (task.js's `assertDoneEvidence`/the
+  // archive evidence gate) to reach the canonical-write step this table
+  // actually exercises.
+  ["task_archive", task_archive, { track: "track", slug: "durable-task", evidence: { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" } }, "track/_archive/durable-task/task.md"],
   ["track_create", track_create, { slug: "track-name", title: "new", scope: "journal mutation coverage; not anything else" }, "track-name/track.md"],
   ["track_update", track_update, { slug: "track-name", body_append: "updated" }, "track-name/track.md"],
   ["friction_add", friction_add, { body: "new friction" }, "_meta/friction.md"],
@@ -260,7 +264,14 @@ test("archive and legacy lesson rename record both removed and new paths", async
   const changes = []
   const readiness = { async recordChange(change) { changes.push(change); return { recorded: true } } }
   await task_create({ deskRoot: root, input: { track: "track", slug: "durable-task", title: "before" } })
-  await task_archive({ deskRoot: root, input: { track: "track", slug: "durable-task" }, readiness })
+  // A fixture card defaults to `status: drafting` -- non-terminal -- so
+  // archiving one now needs evidence (task.js's `assertDoneEvidence`/the
+  // archive evidence gate) to reach `done` and record the third change below.
+  await task_archive({
+    deskRoot: root,
+    input: { track: "track", slug: "durable-task", evidence: { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" } },
+    readiness,
+  })
   assert.deepEqual(changes.map(({ path, operation }) => ({ path, operation })), [
     { path: "track/durable-task", operation: "delete" },
     { path: "track/_archive/durable-task", operation: "write" },

@@ -1,5 +1,27 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.151 — 2026-09-30
+
+`task_update` now refuses a transition to `status: done` unless the call also supplies `evidence: { kind, ref }` — `kind` one of `pr`, `commit`, `ci_run` or `non_code`, `ref` a reference in that kind's own checkable shape: a PR URL for `pr`, a commit sha (optionally with its repo/branch) or a commit URL for `commit`, the CI run's own https URL for `ci_run`, or an https URL or desk-relative path to the proof for `non_code`. A bare `done`, or a `ref` that doesn't match its kind's shape, is rejected with an error naming exactly what to supply, and the accepted evidence is recorded on the card as `evidence: { kind, ref, recorded_at }`.
+
+`task_archive` closes the same gap on the archive path: archiving a task that isn't already `done` or `cancelled` now requires either the same `evidence` (the task completed, and archiving records it as `done`) or `outcome: "cancelled"` (the task was abandoned, and archiving records it as `cancelled` with no evidence needed). A task already `done` or `cancelled` archives as before, needing neither.
+
+A `PreToolUse` hook (`task-status-guard.cjs`, Claude Code only for now) denies a direct `Write`, `Edit` or `MultiEdit` to a task card's `task.md` that sets its `status:` frontmatter to `done` outside `task_update`, pointing the agent at `task_update` and its evidence requirement instead. Both close the same gap: an agent asked to resume a task that instead edited the task card's `status` directly, wrote a fabricated "Completed work" section describing tests and a merge that never happened, and committed it — and the same bypass was reachable through `task_archive` alone, with no direct edit at all, until this round's fix. `task-lifecycle/SKILL.md` and `task-card-format/SKILL.md` describe the same contract directly — report the recorded state, continue the recorded next step, never declare completion without evidence, and never archive an in-flight task as done without it either.
+
+`non_code` evidence's `ref` shape check closes a further gap: previously any whitespace-free string that wasn't a URL, absolute path, tilde path or Windows drive-letter path passed as a "desk-relative path" — including free text like `"done"` or `"trustme"` naming nothing at all. Now, since the tool already has the desk root, a `non_code` desk-relative `ref` is resolved against it and must land on a file or directory that actually exists there; a `ref` that escapes the desk via `..`, or that names nothing on disk, is rejected with the same "not a checkable reference" error, naming the requirement.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
+## 3.2.0-alpha.150 — 2026-09-30
+
+Desk's browser MCP server is now named `web`, not `desk-browser`. Its tools read `mcp__plugin_desk_web__browser_navigate` and so on, matching `desk`'s own `mcp__plugin_desk_desk__*` naming instead of standing out as the one server with a hyphenated, plugin-prefixed name of its own. The launcher file moves with it, `mcp/browser.cjs` to `mcp/web.cjs`, and every reference moves too: the Claude (`.mcp.json`) and Copilot (`.mcp.copilot.json`) server declarations, `SETUP.md`'s verification step, the plugin `README.md`, and `desk:cdp-headed-browser`'s frontmatter and prose. `DENIED_SURFACES` and the rest of host enforcement never named the browser server, so nothing there changes, and Codex does not declare this server at all.
+
+The `web` server now fails the same readable way `desk` does. Before today, anything that kept the browser from starting — no compatible Node, no npm beside it, an unreachable registry, a Node that refuses to spawn, or anything else that threw during setup — exited the launcher process with code 1 and a single stderr line, which most MCP hosts never surface to the agent: the server just looked dead. `mcp/web.cjs` now stays alive instead and serves a degraded MCP handshake, mirroring `desk`'s own bootstrap: `tools/list` returns every `browser_*` tool marked unavailable, and every `tools/call` answers with `isError: true` and a JSON payload carrying `status`, `state`, `code` and `fix` — the browser has no `desk_status`/`desk_doctor` equivalent of its own, so the fix travels in the payload itself rather than in a side channel. The Claude inline launcher's own degraded stub, served when it cannot even find the plugin's files, follows the same shape.
+
+An existing Claude Code `settings.json` allow rule written for the old `mcp__plugin_desk_desk-browser__*` tools does not carry over automatically; the first browser tool call after upgrading prompts once for the new `mcp__plugin_desk_web__*` names, exactly as a first-time grant would. This is deliberately left as a one-time host prompt rather than new `desk_doctor` or migration code to rewrite `settings.json`: the failure mode is self-healing and costs one extra approval, which does not carry the weight of new settings-scanning machinery on pre-release software.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.149 — 2026-09-30
 
 A pull request or commit whose owner several jobs share is no longer copied to each of those jobs, and the job's references are marked partial.

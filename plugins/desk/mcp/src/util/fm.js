@@ -93,6 +93,28 @@ function encodeScalar(value) {
   return `"${text.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n")}"`
 }
 
+function isPlainObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+// A field's own encoded lines: a one-line `key: value` for a scalar, or a
+// `key:` header plus one `  subkey: value` line per own-enumerable entry
+// for a plain object (one level deep -- the only shape a patched field
+// needs today, `task_archive`'s `evidence: { kind, ref, recorded_at }`).
+// Every line but the first is indented, so the surgical-replace loop's own
+// `/^\s/u.test(line)` guard skips back over them on the next iteration
+// instead of misreading one as another top-level field.
+function encodeFieldLines(key, value) {
+  if (!isPlainObject(value)) return [`${key}: ${encodeScalar(value)}`]
+  const lines = [`${key}:`]
+  for (const [subKey, subValue] of Object.entries(value)) {
+    lines.push(`  ${subKey}: ${encodeScalar(subValue)}`)
+  }
+  return lines
+}
+
 const FRONTMATTER_TOP_LEVEL_KEY = /^([A-Za-z_][A-Za-z0-9_-]*):(?:\s|$)/u
 
 // A block scalar's own header value: `|` or `>`, plus an optional chomp
@@ -165,13 +187,17 @@ function collectionFollows(patched, from) {
  * (`{ key: value }`), leaving every other byte untouched: other fields'
  * quoting, key order, comments, date formats, and block scalars, plus the
  * body, survive exactly as written. A field not already present is
- * appended as a new plain-scalar line just before the closing fence; a
- * field that is present, however it was written (quoted, folded, a block
- * scalar, with a trailing comment), is replaced by one new plain-scalar
- * line carrying that same trailing comment, dropping only that field's own
- * continuation lines (a block scalar's body, or a nested map/list under an
- * otherwise-empty value) — never a blank line that merely separates it
- * from the next field. The file's own line ending (LF or CRLF) is kept.
+ * appended just before the closing fence; a field that is present, however
+ * it was written (quoted, folded, a block scalar, with a trailing
+ * comment), is replaced, dropping only that field's own continuation lines
+ * (a block scalar's body, or a nested map/list under an otherwise-empty
+ * value) — never a blank line that merely separates it from the next
+ * field. A scalar value becomes one plain-scalar line, carrying that same
+ * trailing comment when there was one; a plain-object value (one level
+ * deep -- `task_archive`'s `evidence: { kind, ref, recorded_at }`) becomes
+ * a `key:` header plus one indented `subkey: value` line per own entry
+ * (`encodeFieldLines`), the trailing comment, if any, moving to that header
+ * line. The file's own line ending (LF or CRLF) is kept.
  *
  * Returns `null` — the caller's cue to fall back to a full parse + re-dump
  * instead — when `rawText` has no `---`-fenced frontmatter to patch at
@@ -216,11 +242,12 @@ export function patchFrontmatterFields(rawText, fields) {
     if (BLOCK_SCALAR_VALUE.test(value) || (value === "" && collectionFollows(patched, index + 1))) {
       while (dropEnd < patched.length && (patched[dropEnd] === "" || /^\s/u.test(patched[dropEnd]))) dropEnd += 1
     }
-    const encoded = `${match[1]}: ${encodeScalar(remaining.get(match[1]))}`
-    patched.splice(index, dropEnd - index, comment ? `${encoded} ${comment}` : encoded)
+    const encodedLines = encodeFieldLines(match[1], remaining.get(match[1]))
+    if (comment) encodedLines[0] = `${encodedLines[0]} ${comment}`
+    patched.splice(index, dropEnd - index, ...encodedLines)
     remaining.delete(match[1])
   }
-  for (const [key, value] of remaining) patched.push(`${key}: ${encodeScalar(value)}`)
+  for (const [key, value] of remaining) patched.push(...encodeFieldLines(key, value))
   return [...patched, ...lines.slice(end)].join(eol)
 }
 

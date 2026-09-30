@@ -19,6 +19,7 @@ import {
   cardValidation,
   checkPrereqs,
   detectAgentHost,
+  isNoninteractive,
   ENV_TOKEN_ACCOUNT,
   commandRunner,
   openPullRequests,
@@ -1425,14 +1426,37 @@ test("bootOnce: prereq, sync, card and push-account problems each become one pla
   assert.ok(quarantined.instructions.some((line) => line.includes("Sync moved stray untracked paths")))
 })
 
-test("bootOnce: undecided factory consent becomes instructions, with the noninteractive expectation stated", async () => {
+const UNDECIDED = () => ({ store: "ourostack/factory-intake", source: "x", consent: "undecided", stores: [], warnings: [] })
+
+test("isNoninteractive: headless Claude Code, an unattended session and CI runners are noninteractive; everything else is not", () => {
+  assert.equal(isNoninteractive({ CLAUDE_CODE_ENTRYPOINT: "sdk-cli" }), true)
+  assert.equal(isNoninteractive({ CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_CODE_SESSION_ATTENDED: "0" }), true)
+  assert.equal(isNoninteractive({ CI: "true" }), true)
+  assert.equal(isNoninteractive({ GITHUB_ACTIONS: "1" }), true)
+  assert.equal(isNoninteractive({ CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_CODE_SESSION_ATTENDED: "1" }), false)
+  assert.equal(isNoninteractive({ CI: "false" }), false)
+  assert.equal(isNoninteractive({}), false)
+})
+
+test("bootOnce: undecided factory consent, interactive, is raised only after the work, as one short line, never first", async () => {
   const root = await mkDeskWorkspace()
-  const result = await healthyBoot(root, { factoryStatusFn: () => ({ store: "ourostack/factory-intake", source: "x", consent: "undecided", stores: [], warnings: [] }) })
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const result = await healthyBoot(root, { taskQuery: "open-task", factoryStatusFn: UNDECIDED })
   const text = result.instructions.join("\n")
-  assert.match(text, /Noninteractive session.*do not ask and do not record anything; that is expected/u)
+  assert.match(text, /never comes before the work the operator asked for, and never instead of it: do that work first/u)
+  assert.match(text, /at most once, as one short line at the end of your reply/u)
   assert.match(text, /factory\.js account --store ourostack\/factory-intake/u)
   assert.match(text, /consent --store ourostack\/factory-intake --contribute yes --account <login>/u)
   assert.match(text, /Contribute\? \(yes or no\)/u)
+  const handoff = result.instructions.findIndex((line) => line.includes("desk:session-resumption"))
+  const consent = result.instructions.findIndex((line) => line.startsWith("Factory consent is undecided"))
+  assert.ok(handoff !== -1 && consent > handoff, "the resume hand-off comes before any consent instruction")
+})
+
+test("bootOnce: undecided factory consent in a noninteractive session emits no consent instruction at all", async () => {
+  const root = await mkDeskWorkspace()
+  const result = await healthyBoot(root, { env: { DESK: root, CLAUDE_CODE_ENTRYPOINT: "sdk-cli" }, factoryStatusFn: UNDECIDED })
+  assert.ok(!result.instructions.some((line) => /[Ff]actory consent|consent --store/u.test(line)))
 })
 
 test("bootOnce: a sync that outlives the budget is pending, not a hang", async () => {

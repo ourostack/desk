@@ -16,6 +16,13 @@ import { STORE, json, scratch } from "./_session_helpers.js"
 
 const OTHER = "example-org/team-factory"
 
+// task_update's evidence gate (the invented-completion finding) only fires on the
+// transition into `done`; fixture calls that move a task to `done` carry
+// this so they still exercise the report-link path they're actually
+// testing, not the evidence gate itself. `task_archive`'s own implicit
+// bump to `done` is unaffected and needs none of this.
+const DONE_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" }
+
 /** The scratch env with the host plugin set pinned to Desk alone, so routing never depends on the machine running the tests. */
 async function hostEnv(base, env) {
   const desk = path.join(base, "installed", "desk")
@@ -37,7 +44,7 @@ test("done with consent writes the deterministic report link, and still queues t
   const env = await hostEnv(base, scratchEnv)
   await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture", status: "processing" } })
-  await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" } } })
+  await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
   const data = await card(desk, "track/finished-work/task.md")
   assert.equal(data.status, "done")
   assert.equal(data.factory_report, await expectedLink(desk))
@@ -52,7 +59,7 @@ for (const [label, prepare] of [
     const env = await hostEnv(base, scratchEnv)
     await prepare(env)
     await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
-    await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" } } })
+    await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
     const data = await card(desk, "track/finished-work/task.md")
     assert.equal(data.status, "done")
     assert.equal(Object.hasOwn(data, "factory_report"), false)
@@ -74,10 +81,10 @@ test("a crew desk's link carries the person prefix, and archiving an open task w
   const env = await hostEnv(base, scratchEnv)
   await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
   await task_create({ deskRoot: desk, person: "alice", input: { track: "track", slug: "finished-work", title: "fixture", status: "validating" } })
-  await task_update({ deskRoot: desk, env, person: "alice", input: { track: "track", slug: "finished-work", frontmatter: { status: "done" } } })
+  await task_update({ deskRoot: desk, env, person: "alice", input: { track: "track", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
   assert.equal((await card(desk, "desks/alice/track/finished-work/task.md")).factory_report, await expectedLink(desk, { personPrefix: "desks/alice" }))
   await task_create({ deskRoot: desk, input: { track: "track", slug: "archived-work", title: "fixture", status: "processing" } })
-  assert.equal((await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "archived-work" } })).status, "archived")
+  assert.equal((await task_archive({ deskRoot: desk, env, input: { track: "track", slug: "archived-work", evidence: DONE_EVIDENCE } })).status, "archived")
   const archived = await card(desk, "track/_archive/archived-work/task.md")
   assert.equal(archived.status, "done")
   assert.equal(archived.factory_report, await expectedLink(desk, { slug: "archived-work" }))
@@ -88,11 +95,11 @@ test("the desk's declared store decides the link; an invalid declaration writes 
   await setConsent(env, { store: OTHER, contribute: true, account: "example-user" })
   await json(path.join(desk, "_meta", "factory.json"), { schema_version: 1, store: OTHER })
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
-  await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" } } })
+  await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })
   assert.equal((await card(desk, "track/finished-work/task.md")).factory_report, await expectedLink(desk, { store: OTHER }))
   await json(path.join(desk, "_meta", "factory.json"), { schema_version: 1, store: OTHER, extra: true })
   await task_create({ deskRoot: desk, input: { track: "track", slug: "held-work", title: "fixture" } })
-  assert.equal((await task_update({ deskRoot: desk, env, input: { track: "track", slug: "held-work", frontmatter: { status: "done" } } })).status, "updated")
+  assert.equal((await task_update({ deskRoot: desk, env, input: { track: "track", slug: "held-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })).status, "updated")
   assert.equal(Object.hasOwn(await card(desk, "track/held-work/task.md"), "factory_report"), false)
 }))
 
@@ -101,7 +108,7 @@ test("unreadable factory state never fails done and writes no link", () => scrat
   await fs.mkdir(env.XDG_STATE_HOME, { recursive: true })
   await fs.writeFile(path.join(env.XDG_STATE_HOME, "ouroboros-skills"), "unsafe")
   await task_create({ deskRoot: desk, input: { track: "track", slug: "finished-work", title: "fixture" } })
-  assert.equal((await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" } } })).status, "updated")
+  assert.equal((await task_update({ deskRoot: desk, env, input: { track: "track", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })).status, "updated")
   assert.equal(Object.hasOwn(await card(desk, "track/finished-work/task.md"), "factory_report"), false)
 }))
 
@@ -109,6 +116,6 @@ test("a task whose job has no identity gets no link, and done still succeeds", (
   const env = await hostEnv(base, scratchEnv)
   await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
   await task_create({ deskRoot: desk, input: { track: "_scratch", slug: "finished-work", title: "fixture" } })
-  assert.equal((await task_update({ deskRoot: desk, env, input: { track: "_scratch", slug: "finished-work", frontmatter: { status: "done" } } })).status, "updated")
+  assert.equal((await task_update({ deskRoot: desk, env, input: { track: "_scratch", slug: "finished-work", frontmatter: { status: "done" }, evidence: DONE_EVIDENCE } })).status, "updated")
   assert.equal(Object.hasOwn(await card(desk, "_scratch/finished-work/task.md"), "factory_report"), false)
 }))

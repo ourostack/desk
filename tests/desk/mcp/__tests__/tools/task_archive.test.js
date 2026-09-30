@@ -1,5 +1,8 @@
-// task_archive — happy path moves dir, bumps status to done, idempotent on
-// already-archived; refuses if neither source nor archive exists.
+// task_archive — happy path moves dir, bumps status to done (given
+// evidence) or cancelled (given outcome: "cancelled"), idempotent on
+// already-archived; refuses if neither source nor archive exists, and
+// refuses to bump a non-terminal task to done without evidence (the
+// invented-completion finding: see the "Evidence/outcome gate" section).
 
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
@@ -11,6 +14,8 @@ import {
   task_archive,
 } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { mkTempDeskRoot, readFront, exists } from "./_helpers.js"
+
+const DONE_EVIDENCE = { kind: "pr", ref: "https://github.com/example-org/example-repo/pull/1" }
 
 function initGit(root) {
   const run = (args) => {
@@ -34,8 +39,15 @@ function lastCommitMessage(root) {
   return result.stdout.trim()
 }
 
+// `--no-renames` keeps this deterministic across git versions and content
+// sizes: without it, whether `git show` reports a moved-and-edited task.md
+// as one collapsed rename or as a separate delete + add depends on git's
+// own content-similarity heuristic, which an archive bump's own byte count
+// (an added `evidence:` block, say) can tip either way on a small fixture
+// card. The move always touches exactly the old and new paths regardless;
+// this only fixes how git's own report of that renders.
 function lastCommitFiles(root) {
-  const result = spawnSync("git", ["-C", root, "show", "--stat", "--format=", "--name-only", "HEAD"], { encoding: "utf8" })
+  const result = spawnSync("git", ["-C", root, "show", "--stat", "--format=", "--name-only", "--no-renames", "HEAD"], { encoding: "utf8" })
   assert.equal(result.status, 0, result.stderr)
   return result.stdout.split("\n").filter(Boolean).sort()
 }
@@ -48,7 +60,7 @@ test("task_archive moves the dir into _archive/ and marks status=done", async ()
   })
   const result = await task_archive({
     deskRoot: root,
-    input: { track: "t", slug: "book-flights" },
+    input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE },
   })
   assert.equal(result.status, "archived")
 
@@ -59,6 +71,9 @@ test("task_archive moves the dir into _archive/ and marks status=done", async ()
 
   const { data } = await readFront(archived)
   assert.equal(data.status, "done")
+  assert.equal(data.evidence.kind, DONE_EVIDENCE.kind)
+  assert.equal(data.evidence.ref, DONE_EVIDENCE.ref)
+  assert.equal(data.evidence.recorded_at, data.updated)
 })
 
 test("task_archive preserves an already-terminal status", async () => {
@@ -85,7 +100,7 @@ test("task_archive is idempotent when source already archived", async () => {
     deskRoot: root,
     input: { track: "t", slug: "book-flights", title: "T" },
   })
-  await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE } })
   const second = await task_archive({
     deskRoot: root,
     input: { track: "t", slug: "book-flights" },
@@ -165,7 +180,7 @@ test("task_archive creates _archive/ dir if missing", async () => {
   // No _archive dir exists yet — the tool must create it.
   await task_archive({
     deskRoot: root,
-    input: { track: "fresh", slug: "task-one" },
+    input: { track: "fresh", slug: "task-one", evidence: DONE_EVIDENCE },
   })
   const stat = await fs.stat(path.join(root, "fresh", "_archive"))
   assert.ok(stat.isDirectory())
@@ -201,7 +216,7 @@ test("task_archive's status bump preserves every other frontmatter byte untouche
   ].join("\n")
   await fs.writeFile(filePath, handWritten, "utf8")
 
-  await task_archive({ deskRoot: root, input: { track: "t", slug: "byte-preserve" } })
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "byte-preserve", evidence: DONE_EVIDENCE } })
 
   const archivedPath = path.join(root, "t", "_archive", "byte-preserve", "task.md")
   const raw = await fs.readFile(archivedPath, "utf8")
@@ -225,13 +240,16 @@ test("task_archive stages and commits exactly the moved paths", async () => {
   initGit(root)
   await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" }, schedulePush: () => {} })
 
-  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" }, schedulePush: () => {} })
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE }, schedulePush: () => {} })
 
   assert.equal(result.status, "archived")
   assert.equal(result.commit, undefined, "no commit field on a normal, silent success")
   assert.equal(gitStatus(root), "")
   assert.equal(lastCommitMessage(root), "task_archive: t/book-flights")
-  assert.deepEqual(lastCommitFiles(root), [path.join("t", "_archive", "book-flights", "task.md")])
+  assert.deepEqual(
+    lastCommitFiles(root),
+    [path.join("t", "_archive", "book-flights", "task.md"), path.join("t", "book-flights", "task.md")].sort(),
+  )
 })
 
 test("task_archive calls schedulePush exactly once with { root: deskRoot } on a successful commit", async () => {
@@ -242,7 +260,7 @@ test("task_archive calls schedulePush exactly once with { root: deskRoot } on a 
   const calls = []
   const result = await task_archive({
     deskRoot: root,
-    input: { track: "t", slug: "book-flights" },
+    input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE },
     schedulePush: (opts) => calls.push(opts),
   })
 
@@ -260,10 +278,13 @@ test("task_archive commits only its own paths, leaving another process's staged,
   await fs.writeFile(path.join(root, "unrelated.txt"), "another process's work\n")
   spawnSync("git", ["-C", root, "add", "--", "unrelated.txt"], { encoding: "utf8" })
 
-  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" }, schedulePush: () => {} })
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE }, schedulePush: () => {} })
 
   assert.equal(result.commit, undefined, "task_archive's own commit succeeded")
-  assert.deepEqual(lastCommitFiles(root), [path.join("t", "_archive", "book-flights", "task.md")])
+  assert.deepEqual(
+    lastCommitFiles(root),
+    [path.join("t", "_archive", "book-flights", "task.md"), path.join("t", "book-flights", "task.md")].sort(),
+  )
   const status = gitStatus(root)
   assert.match(status, /^A  unrelated\.txt$/m, "the unrelated path is still staged, not swept into this commit")
 })
@@ -280,7 +301,7 @@ test("task_archive reports a commit failure without losing the move", async () =
   const calls = []
   const result = await task_archive({
     deskRoot: root,
-    input: { track: "t", slug: "book-flights" },
+    input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE },
     spawnGit,
     schedulePush: (opts) => calls.push(opts),
   })
@@ -300,7 +321,7 @@ test("task_archive reports a staging failure without losing the move", async () 
     return spawnSync(cmd, args, opts)
   }
 
-  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" }, spawnGit })
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE }, spawnGit })
 
   assert.equal(result.status, "archived", "the move itself is never lost to a staging failure")
   assert.deepEqual(result.commit, { status: "failed", reason: "add boom" }, "a stage failure is reported, not swallowed as a silent success")
@@ -313,7 +334,7 @@ test("task_archive skips staging and committing silently on a non-Git desk", asy
   const calls = []
   const result = await task_archive({
     deskRoot: root,
-    input: { track: "t", slug: "book-flights" },
+    input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE },
     schedulePush: (opts) => calls.push(opts),
   })
   assert.equal(result.status, "archived")
@@ -325,7 +346,7 @@ test("already_archived stages and commits nothing", async () => {
   const root = await mkTempDeskRoot()
   initGit(root)
   await task_create({ deskRoot: root, input: { track: "t", slug: "book-flights", title: "Some task" }, schedulePush: () => {} })
-  await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" }, schedulePush: () => {} })
+  await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE }, schedulePush: () => {} })
 
   const before = lastCommitMessage(root)
   const calls = []
@@ -340,4 +361,123 @@ test("already_archived stages and commits nothing", async () => {
   assert.equal(lastCommitMessage(root), before, "nothing changed, so nothing was committed")
   assert.equal(gitStatus(root), "")
   assert.equal(calls.length, 0, "schedulePush is never called on the idempotent already_archived path")
+})
+
+// ── Evidence/outcome gate on the archive bump (the invented-completion finding) ──
+
+test("task_archive refuses to archive a non-terminal task with neither evidence nor outcome, moving nothing", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  await assert.rejects(
+    task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } }),
+    /task_archive: moving a task to `done` needs evidence.*evidence: \{ kind, ref \}/,
+  )
+
+  assert.equal(await exists(path.join(root, "t", "book-flights")), true, "the source directory is untouched")
+  assert.equal(await exists(path.join(root, "t", "_archive", "book-flights")), false, "nothing was archived")
+})
+
+test("task_archive refuses `evidence` and `outcome` together, moving nothing", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  await assert.rejects(
+    task_archive({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", evidence: DONE_EVIDENCE, outcome: "cancelled" },
+    }),
+    /task_archive: pass either `evidence`.*or `outcome: "cancelled"`.*not both/,
+  )
+
+  assert.equal(await exists(path.join(root, "t", "book-flights")), true, "the source directory is untouched")
+})
+
+test("task_archive refuses an `outcome` other than \"cancelled\", naming the bad value", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  await assert.rejects(
+    task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights", outcome: "abandoned" } }),
+    /task_archive: `outcome`, when given, must be "cancelled" \(got "abandoned"\)/,
+  )
+
+  assert.equal(await exists(path.join(root, "t", "book-flights")), true, "the source directory is untouched")
+})
+
+test('task_archive accepts `outcome: "cancelled"` for a non-terminal task, archiving it as cancelled with no evidence recorded', async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  const result = await task_archive({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", outcome: "cancelled" },
+  })
+  assert.equal(result.status, "archived")
+
+  const { data } = await readFront(path.join(root, "t", "_archive", "book-flights", "task.md"))
+  assert.equal(data.status, "cancelled")
+  assert.equal(data.evidence, undefined, "an outcome: cancelled archive records no evidence")
+})
+
+test("task_archive archives an already-`done` task with no evidence or outcome, unchanged", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "done" },
+  })
+
+  const result = await task_archive({ deskRoot: root, input: { track: "t", slug: "book-flights" } })
+  assert.equal(result.status, "archived")
+
+  const { data } = await readFront(path.join(root, "t", "_archive", "book-flights", "task.md"))
+  assert.equal(data.status, "done")
+})
+
+test("task_archive refuses malformed `evidence` the same way task_update does, moving nothing", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  await assert.rejects(
+    task_archive({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", evidence: { kind: "vibes", ref: "trust me" } },
+    }),
+    /task_archive: `evidence` is not valid.*"kind":"vibes"/,
+  )
+
+  assert.equal(await exists(path.join(root, "t", "book-flights")), true, "the source directory is untouched")
+})
+
+test("task_archive's evidence is shape-checked per kind, the same as task_update's, moving nothing on a bad ref", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({
+    deskRoot: root,
+    input: { track: "t", slug: "book-flights", title: "T", status: "processing" },
+  })
+
+  await assert.rejects(
+    task_archive({
+      deskRoot: root,
+      input: { track: "t", slug: "book-flights", evidence: { kind: "pr", ref: "not a url" } },
+    }),
+    /task_archive: `evidence\.ref` is not a checkable pr reference.*PR URL/,
+  )
+
+  assert.equal(await exists(path.join(root, "t", "book-flights")), true, "the source directory is untouched")
 })
