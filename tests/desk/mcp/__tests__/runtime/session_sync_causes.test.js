@@ -65,6 +65,7 @@ test("a genuine conflict keeps the conflict cause, the conflicted paths and the 
   const { origin, root } = await mkOriginWithClone()
   const other = await mkTempRoot("desk-sync-cause-b-")
   git(other, ["clone", "-q", origin, "."])
+  git(other, ["checkout", "-q", "-B", "main", "origin/main"])
   git(other, ["config", "user.email", "t@example.com"])
   git(other, ["config", "user.name", "T"])
   await fs.writeFile(path.join(other, "seed.md"), "seed\nfrom origin\n")
