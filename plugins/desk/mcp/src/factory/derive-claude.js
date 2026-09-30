@@ -342,7 +342,7 @@ function createAgentProcessor({ agentIndex }) {
     const gitPr = toolUseResult?.gitOperation?.pr
     if (gitPr) {
       const repo = repoFromPrUrl(gitPr.url)
-      if (repo !== null && isValidPrRef(repo, gitPr.number)) prRefs.push({ repo, number: gitPr.number, agent: agentIndex })
+      if (repo !== null && isValidPrRef(repo, gitPr.number)) prRefs.push({ repo, number: gitPr.number, agent: agentIndex, created: true })
     }
 
     if (pending.name === "Bash") {
@@ -497,7 +497,7 @@ function createAgentProcessor({ agentIndex }) {
       } else if (line.type === "system" && line.subtype === "compact_boundary") {
         compactions += 1
       } else if (line.type === "pr-link") {
-        if (isValidPrRef(line.prRepository, line.prNumber)) prRefs.push({ repo: line.prRepository, number: line.prNumber, agent: agentIndex })
+        if (isValidPrRef(line.prRepository, line.prNumber)) prRefs.push({ repo: line.prRepository, number: line.prNumber, agent: agentIndex, created: false })
       } else if (line.type === "file-history-delta") {
         if (ts !== null && typeof line.trackingPath === "string") fileWrites.push({ at: ts, path: line.trackingPath, agent: agentIndex })
       } else if (line.type === "user") {
@@ -574,13 +574,18 @@ function comparePrRefs(a, b) {
   return a.repo < b.repo ? -1 : 1
 }
 
+// Claude Code writes a `pr-link` line into the root transcript for every PR of
+// the session, including the ones a subagent created. So the worker whose call
+// created the PR outranks any worker that only saw its link, and among refs of
+// the same kind the lowest worker wins.
 function dedupePrRefs(refs) {
   const seen = new Map()
   for (const ref of refs) {
     const key = `${ref.repo}#${ref.number}`
-    if (!seen.has(key) || ref.agent < seen.get(key).agent) seen.set(key, ref)
+    const held = seen.get(key)
+    if (held === undefined || (ref.created && !held.created) || (ref.created === held.created && ref.agent < held.agent)) seen.set(key, ref)
   }
-  return [...seen.values()].sort(comparePrRefs)
+  return [...seen.values()].map(({ repo, number, agent }) => ({ repo, number, agent })).sort(comparePrRefs)
 }
 
 function compareByStart(a, b) {
@@ -668,7 +673,7 @@ function applyLimits({ agents, intervals, models, prs }, unavailable, limits = L
 // session's own ordering can't reliably force a sort comparator through
 // every comparison direction) and `applyLimits`, whose caps are far too
 // large to reach from a fixture.
-export const __internals__ = { compareByStart, comparePrRefs, applyLimits }
+export const __internals__ = { compareByStart, comparePrRefs, applyLimits, dedupePrRefs }
 
 // ---------------------------------------------------------------------------
 // Entry point.

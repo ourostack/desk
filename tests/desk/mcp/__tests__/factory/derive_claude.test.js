@@ -855,22 +855,42 @@ test("a first user line given as text blocks is read too", async () => {
   assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "a", slug: "b" }])
 })
 
-test("PR refs carry the worker that saw them, and a PR seen by several keeps the lowest worker", async () => {
+// Claude Code writes every `pr-link` line into the ROOT transcript, including
+// for the PRs a subagent created; the creating call is in the subagent's own
+// transcript as `gitOperation.pr`.
+function createdPr(line, id, repo, number) {
+  return [
+    line({ type: "assistant", message: { id: `m-${id}`, model: "claude-sonnet-5", content: [{ type: "tool_use", id, name: "Bash", input: { command: "gh pr create" } }] } }),
+    line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] }, toolUseResult: { stdout: "ok", gitOperation: { pr: { number, url: `https://github.com/${repo}/pull/${number}`, action: "opened" } } } }),
+  ]
+}
+
+test("a PR is credited to the worker whose call created it, not to the root that only holds its pr-link", async () => {
   const { line, assistant } = workerLines()
   const pr = (repo, number) => line({ type: "pr-link", prRepository: repo, prNumber: number })
   const { facts } = await deriveWithSubagents(
-    [line({ type: "user", message: { role: "user", content: "go" } }), pr("o/r", 1)],
+    [line({ type: "user", message: { role: "user", content: "go" } }), pr("o/r", 1), pr("o/r", 2), pr("o/r", 3), pr("o/r", 4)],
     [
-      { stem: "agent-1", lines: [assistant("s1", "claude-sonnet-5"), pr("o/r", 1), pr("o/r", 2)] },
-      { stem: "agent-2", lines: [pr("o/r", 2), pr("o/r", 3)] },
+      { stem: "agent-1", lines: [assistant("s1", "claude-sonnet-5"), ...createdPr(line, "c1", "o/r", 1), ...createdPr(line, "c2", "o/r", 2)] },
+      { stem: "agent-2", lines: [assistant("s2", "claude-sonnet-5"), ...createdPr(line, "c3", "o/r", 2), ...createdPr(line, "c4", "o/r", 3)] },
     ],
   )
   assert.deepEqual(facts.refs.prs, [
-    { repo: "o/r", number: 1, agent: 0 },
+    { repo: "o/r", number: 1, agent: 1 },
     { repo: "o/r", number: 2, agent: 1 },
     { repo: "o/r", number: 3, agent: 2 },
+    { repo: "o/r", number: 4, agent: 0 },
   ])
   assert.equal(validateLocalFacts(facts).ok, true)
+})
+
+test("dedupePrRefs: a creating ref outranks a link whatever the worker, and the lowest worker wins among the same kind", () => {
+  const ref = (agent, created) => ({ repo: "o/r", number: 1, agent, created })
+  const dedupe = (...refs) => __internals__.dedupePrRefs(refs)
+  assert.deepEqual(dedupe(ref(0, false), ref(2, true)), [{ repo: "o/r", number: 1, agent: 2 }])
+  assert.deepEqual(dedupe(ref(2, true), ref(0, false)), [{ repo: "o/r", number: 1, agent: 2 }])
+  assert.deepEqual(dedupe(ref(3, true), ref(1, true), ref(2, true)), [{ repo: "o/r", number: 1, agent: 1 }])
+  assert.deepEqual(dedupe(ref(3, false), ref(1, false), ref(2, false)), [{ repo: "o/r", number: 1, agent: 1 }])
 })
 
 test("a subagent's model is its own assistant model, else a valid meta model, else unknown", async () => {
