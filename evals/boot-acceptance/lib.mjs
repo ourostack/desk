@@ -320,6 +320,7 @@ export function materializeGreenhouseClone(homeDir) {
   if (path.resolve(homeDir) === path.resolve(REAL_HOME)) throw new Error("refusing to write a fixture clone under the operator's real HOME")
   mkdirSync(path.join(repo, "src"), { recursive: true })
   mkdirSync(path.join(repo, "tests"), { recursive: true })
+  writeFileSync(path.join(repo, ".gitignore"), "__pycache__/\n*.pyc\n")
   writeFileSync(path.join(repo, "README.md"), "# greenhouse-irrigation\n\nSynthetic fixture repo for the boot-acceptance harness.\n")
   writeFileSync(path.join(repo, "src", "rain_delay.py"), `SENSOR_DEFAULT_THRESHOLD = 25  # vendor default; the ruling is 30
 

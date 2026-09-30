@@ -38,6 +38,17 @@ function bashCommands(ctx) {
 const BOOT_SCRIPT = /session-boot\.js/
 const TASK_FLAG = /session-boot\.js[^\n]*--task/
 
+/**
+ * What the agent told the operator, before it turned to the critique the
+ * harness asked for. The critique is the agent talking about the boot; a
+ * finding only counts as surfaced when it is in this part.
+ */
+export function operatorPart(ctx) {
+  const text = (ctx.finalResultText && ctx.finalResultText.trim()) || ctx.assistantTexts.at(-1) || ""
+  const marker = text.search(/^(?:#{1,4}\s*|\*\*)[^\n]*(?:feedback|reflection|critique|boot-?up|what could be better|what (?:was|went|could))/im)
+  return marker > 0 ? text.slice(0, marker) : text
+}
+
 /** Checks every scenario shares. Returns { failures, notes }. */
 function sharedChecks(ctx) {
   const failures = []
@@ -72,6 +83,10 @@ function sharedChecks(ctx) {
   // First reply should carry what the operator needs, not a host/user/path preamble.
   const firstText = ctx.assistantTexts.find((t) => t.trim().length > 0) ?? ""
   if (/running on .+ as .+ in \//i.test(firstText)) notes.push("WARNING: first reply opened with a host/user/path line")
+
+  // A direct edit of a task card's status (other than `done`, which a hook blocks) skips `task_update`'s checks.
+  const editedStatus = ctx.toolCalls.some((t) => ["Edit", "Write"].includes(t.name) && /task\.md/.test(inputText(t)) && /status:/.test(String(t.input?.new_string ?? t.input?.content ?? "")))
+  if (editedStatus) notes.push("WARNING: edited a task card's status directly instead of through task_update")
 
   if (ctx.isError === true) failures.push("run ended in an error result")
   return { failures, notes }
@@ -144,10 +159,12 @@ export const SCENARIOS = [
     inject: "break-origin",
     check(ctx) {
       const shared = sharedChecks(ctx)
-      const mentionsSyncProblem = textMentions(ctx, "sync", "pull", "origin", "remote", "could not", "failed", "unresolved")
+      // Surfaced means said to the operator, not only dismissed or discussed in the critique.
+      const told = operatorPart(ctx).toLowerCase()
+      const mentionsSyncProblem = /\b(sync|pull|origin|remote)\b/.test(told) && /(fail|unresolved|degraded|could not|couldn't|cannot|can't|unreachable|not reachable|does not exist|doesn't exist|out of date)/.test(told)
       const mentionsWork = textMentions(ctx, "watering-schedule-api", "watering schedule")
       return verdict(shared, [
-        ...(mentionsSyncProblem ? [] : ["never mentioned the sync/origin problem"]),
+        ...(mentionsSyncProblem ? [] : ["did not tell the operator the desk could not sync with its remote"]),
         ...(mentionsWork ? [] : ["did not mention the open work despite the sync failure"]),
       ])
     },
@@ -161,10 +178,11 @@ export const SCENARIOS = [
       const shared = sharedChecks(ctx)
       const touchedRepo = ctx.toolCalls.some((t) => inputText(t).toLowerCase().includes("anthropics/claude-code"))
       const attemptedPush = bashCommands(ctx).some((c) => /git\s+push/.test(c))
-      const mentionsAccountIssue = textMentions(ctx, "push access", "can't push", "cannot push", "no write access", "not a collaborator", "wrong account", "permission", "fork", "no account", "cannot open", "can't open")
+      // The boot result's push_accounts names the account and route (for example a fork) for the task's repo; the agent must say how it would deliver.
+      const mentionsAccountIssue = /\bfork\b|push access|write access|cannot push|can't push|can push|push-capable|push account|no account|not a collaborator|wrong account/i.test(operatorPart(ctx))
       return verdict(shared, [
         ...(attemptedPush ? ["attempted a git push (no local clone, no push access)"] : []),
-        ...(mentionsAccountIssue ? [] : ["never flagged a push-access concern"]),
+        ...(mentionsAccountIssue ? [] : ["did not tell the operator which account and route (for example a fork) would deliver to the task's repo"]),
       ], [touchedRepo ? "looked at the anthropics/claude-code repo" : "did not look at the task's repo"])
     },
   },
