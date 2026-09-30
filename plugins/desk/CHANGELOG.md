@@ -1,5 +1,11 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.149 — 2026-09-30
+
+A pull request or commit whose owner several jobs share is no longer copied to each of those jobs, and the job's references are marked partial.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.148 — 2026-09-30
 
 The factory now credits each subagent's work to its own task. A subagent is bound to the task named in the `Desk-Task` line of its brief, or inherits the task of its parent when the parent is on exactly one task. A subagent with no `Desk-Task` line whose parent works on several tasks stays unattributed instead of being spread across them.
