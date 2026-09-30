@@ -1247,6 +1247,7 @@ test("repoStates: fetches and reports branch and dirty state for each local repo
   ]
   const { states, pending } = repoStates({ cards, spawnGit, now: () => 0, deadline: 60000 })
   assert.deepEqual(pending, [])
+  assert.equal(states.find((state) => state.repo === "gone").local_path, "/clones/gone")
   assert.deepEqual(states.map((state) => [state.repo, state.present, state.branch, state.dirty, state.fetched]), [
     ["clean", true, "main", false, true],
     ["dirty", true, "feature", true, true],
@@ -1344,6 +1345,20 @@ test("bootOnce: --task resolves the named task, hands off to session-resumption,
   assert.equal((await healthyBoot(root, { taskQuery: "open-task" })).task.host_line_changed, false)
   const unreadable = await healthyBoot(root, { taskQuery: "open-task", walkFn: () => [{ track: "track-a", slug: "open-task", desk: null, file: path.join(dir, "missing.md"), data: { status: "processing" } }] })
   assert.equal(unreadable.task.host_line_changed, false)
+})
+
+test("bootOnce: the named task's missing local clone becomes an instruction; another task's missing clone does not", async () => {
+  const root = await mkDeskWorkspace()
+  await writeCard(root, "track-a", "open-task", VALID_CARD)
+  const states = [
+    { track: "track-a", slug: "open-task", repo: "acme/widgets", local_path: "~/code/widgets", present: false },
+    { track: "track-a", slug: "open-task", repo: "present-one", local_path: "~/code/p", present: true },
+    { track: "track-a", slug: "other-task", repo: "elsewhere", local_path: "~/code/e", present: false },
+  ]
+  const result = await healthyBoot(root, { taskQuery: "open-task", repoFn: () => ({ states, pending: [] }) })
+  const lines = result.instructions.filter((line) => line.includes("is not at its recorded path"))
+  assert.equal(lines.length, 1)
+  assert.match(lines[0], /acme\/widgets.*~\/code\/widgets.*gh repo clone/u)
 })
 
 test("bootOnce: an ambiguous or unknown --task is reported in instructions, not guessed", async () => {

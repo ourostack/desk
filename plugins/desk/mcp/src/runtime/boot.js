@@ -607,7 +607,7 @@ export function repoStates({ cards, spawnGit = spawnSync, homeDir = os.homedir()
       const fetched = spawnGit("git", ["-C", dir, "fetch", "--quiet", "origin"], { encoding: "utf8", timeout: REPO_FETCH_TIMEOUT_MS })
       const status = spawnGit("git", ["-C", dir, "status", "--porcelain", "-b"], { encoding: "utf8", timeout: 5000 })
       if (!status || status.status !== 0 || typeof status.stdout !== "string") {
-        states.push({ ...label, present: false })
+        states.push({ ...label, local_path: repo.local_path, present: false })
         continue
       }
       const lines = status.stdout.split("\n").filter((line) => line !== "")
@@ -749,7 +749,7 @@ function factoryInstructions(factory, pluginRoot, { noninteractive }) {
 }
 
 function buildInstructions(ctx) {
-  const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive } = ctx
+  const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive, repoStateList } = ctx
   const out = []
   for (const entry of migrationEntries) {
     out.push(migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
@@ -774,6 +774,9 @@ function buildInstructions(ctx) {
   if (taskQuery !== null) {
     if (task?.status === "resolved") {
       out.push(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
+      for (const missing of repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)) {
+        out.push(`The named task's local repo ${missing.repo} is not at its recorded path ${missing.local_path}: clone it there (\`gh repo clone <owner>/${missing.repo} ${missing.local_path}\` when the name is owner/repo), or ask the operator where it lives, before doing work that needs it.`)
+      }
       if (task.host_line_changed) out.push(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
     } else if (task?.status === "ambiguous") {
       out.push(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
@@ -979,7 +982,7 @@ export async function bootOnce({
   }
 
   const status = degraded.length > 0 ? "degraded" : "ready"
-  const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env) })
+  const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList })
   return {
     boot_complete: true,
     status,
