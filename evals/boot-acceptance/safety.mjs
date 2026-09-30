@@ -1,0 +1,200 @@
+// What keeps a harness run from writing anywhere real.
+//
+// A run gives the agent `bypassPermissions`, the real login keychain and a
+// copy of the real `gh` account list, so isolation cannot rest on the agent
+// behaving. Three layers, each independent:
+//
+//   1. `buildChildEnv`: the `claude` child gets an allowlisted environment,
+//      never a copy of the parent's. Every location Desk or Claude Code
+//      resolves from the environment points inside the run's temp HOME.
+//   2. `gh` shim first on PATH: `classifyGh` allows read-only subcommands and
+//      the shim exits 97 on anything else, logging the attempt. Tokens are
+//      not passed through the environment.
+//   3. `git push` to any GitHub URL is rewritten to a dead local path by a
+//      run-private global git config (`pushInsteadOf`), so it fails at once
+//      with no network traffic. Pushes to the fixture's local bare origin work.
+//
+// The transcript check (`ghWriteAttempts`) then fails any run whose commands
+// show a write attempt, in case something bypassed the shim (for example by
+// calling the real binary by path).
+
+import { chmodSync, mkdirSync, writeFileSync, existsSync } from "node:fs"
+import * as path from "node:path"
+import * as process from "node:process"
+
+// ---------------------------------------------------------------------------
+// Layer 2: which `gh` invocations are read-only.
+// ---------------------------------------------------------------------------
+
+const READ_VERBS = {
+  auth: ["status"],
+  pr: ["list", "view", "status", "diff", "checks"],
+  issue: ["list", "view", "status"],
+  repo: ["view", "list", "clone"],
+  run: ["list", "view"],
+  release: ["list", "view"],
+  gist: ["list", "view"],
+  label: ["list"],
+  workflow: ["list", "view"],
+  ruleset: ["list", "view", "check"],
+  config: ["get", "list"],
+  cache: ["list"],
+  secret: [],
+  variable: ["list", "get"],
+}
+const READ_ONLY_GROUPS = new Set(["search", "status", "version", "completion", "help"])
+const WRITE_API_FLAGS = /^(-X|--method|-f|-F|--field|--raw-field|--input)(=|$)/
+
+/**
+ * `{ allowed, reason }` for one `gh` argument list. Unknown commands are
+ * denied: only what is listed as read-only passes.
+ */
+export function classifyGh(args) {
+  const words = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (a === "--version" || a === "-h" || a === "--help") return { allowed: true, reason: "informational" }
+    // A global `-R/--repo` takes a value; skip it so it is not read as the command.
+    if ((a === "-R" || a === "--repo") && words.length === 0) { i++; continue }
+    if (a.startsWith("-") && words.length === 0) continue
+    words.push(a)
+  }
+  const [group, verb] = words
+  if (!group) return { allowed: true, reason: "no subcommand" }
+  if (READ_ONLY_GROUPS.has(group)) return { allowed: true, reason: `gh ${group} is read-only` }
+  if (group === "api") {
+    const rest = args.slice(args.indexOf("api") + 1)
+    for (let i = 0; i < rest.length; i++) {
+      if (WRITE_API_FLAGS.test(rest[i])) {
+        const method = rest[i] === "-X" || rest[i] === "--method" ? String(rest[i + 1] ?? "").toUpperCase() : rest[i].startsWith("--method=") ? rest[i].slice(9).toUpperCase() : null
+        if (method === "GET" || method === "HEAD") continue
+        return { allowed: false, reason: `gh api with ${rest[i]} can write` }
+      }
+    }
+    if (words[1] === "graphql") return { allowed: false, reason: "gh api graphql is a POST" }
+    return { allowed: true, reason: "gh api GET" }
+  }
+  const verbs = READ_VERBS[group]
+  if (verbs && verbs.includes(verb)) return { allowed: true, reason: `gh ${group} ${verb} is read-only` }
+  return { allowed: false, reason: `gh ${group}${verb ? ` ${verb}` : ""} is not on the read-only list` }
+}
+
+/** Splits a shell command line into the `gh ...` argument lists it runs (naive, and deliberately over-inclusive). */
+export function ghInvocations(command) {
+  const out = []
+  for (const segment of String(command).split(/&&|\|\||;|\||\n|\$\(|`/)) {
+    const m = segment.trim().match(/^(?:\w+=\S+\s+)*(?:\S*\/)?gh(?:\s+(.*))?$/)
+    if (m) out.push(tokenize(m[1] ?? ""))
+  }
+  return out
+}
+
+function tokenize(text) {
+  return [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3])
+}
+
+/** Every `gh` write the transcript's Bash commands attempted, plus any call to a `gh` binary by path (which skips the shim). */
+export function ghWriteAttempts(commands) {
+  const found = []
+  for (const command of commands) {
+    if (/(^|[\s;&|(])(?:\/\S*\/)gh(\s|$)/.test(command)) found.push(`called gh by path: ${command.slice(0, 120)}`)
+    for (const args of ghInvocations(command)) {
+      const verdict = classifyGh(args)
+      if (!verdict.allowed) found.push(`${verdict.reason}: gh ${args.join(" ").slice(0, 100)}`)
+    }
+  }
+  return found
+}
+
+// ---------------------------------------------------------------------------
+// Shim installation.
+// ---------------------------------------------------------------------------
+
+/**
+ * Writes `<shimDir>/gh`, a script that classifies its arguments with
+ * `classifyGh`, runs the real `gh` for read-only calls and otherwise exits 97
+ * after appending the attempt to `logFile`. `realGh` is the real binary.
+ */
+export function installGhShim({ shimDir, realGh, logFile }) {
+  mkdirSync(shimDir, { recursive: true })
+  const policy = new URL("./safety.mjs", import.meta.url).href
+  const script = `#!${process.execPath}
+import { classifyGh } from ${JSON.stringify(policy)}
+import { spawnSync } from "node:child_process"
+import { appendFileSync } from "node:fs"
+const args = process.argv.slice(2)
+const verdict = classifyGh(args)
+if (!verdict.allowed) {
+  try { appendFileSync(${JSON.stringify(logFile)}, JSON.stringify({ args, reason: verdict.reason }) + "\\n") } catch {}
+  process.stderr.write("gh blocked by the boot-acceptance harness: " + verdict.reason + ". Runs may only read from GitHub.\\n")
+  process.exit(97)
+}
+const r = spawnSync(${JSON.stringify(realGh)}, args, { stdio: "inherit" })
+process.exit(r.status ?? 1)
+`
+  const file = path.join(shimDir, "gh.mjs")
+  writeFileSync(file, script)
+  chmodSync(file, 0o755)
+  // The entry point has no extension so `gh` resolves on PATH.
+  writeFileSync(path.join(shimDir, "gh"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(file)} "$@"\n`)
+  chmodSync(path.join(shimDir, "gh"), 0o755)
+  return path.join(shimDir, "gh")
+}
+
+/** The real `gh` on `searchPath`, ignoring `skipDir`. */
+export function findRealGh(searchPath, skipDir = null) {
+  for (const dir of String(searchPath ?? "").split(path.delimiter)) {
+    if (!dir || dir === skipDir) continue
+    const candidate = path.join(dir, "gh")
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Layers 1 and 3: the child environment and the run-private git config.
+// ---------------------------------------------------------------------------
+
+// Only these come from the parent. PATH is prefixed with the shim directory
+// by the caller; HOME is always the run's temp HOME. Anthropic credentials
+// are passed only if the parent has them (on macOS login is normally the
+// keychain, reached through the HOME symlink).
+export const PASS_THROUGH = [
+  "PATH", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TERM", "TZ", "USER", "LOGNAME", "SHELL", "TMPDIR",
+  "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "AWS_REGION", "AWS_PROFILE",
+]
+
+/** Writes the run's private global git config: no credential helper, and pushes to GitHub URLs rewritten to a dead local path. */
+export function writeGitConfig(homeDir) {
+  const dead = "file:///nonexistent/boot-acceptance-github-push-blocked/"
+  const prefixes = ["https://github.com/", "http://github.com/", "git://github.com/", "git@github.com:", "ssh://git@github.com/"]
+  const body = [
+    "[user]", "\tname = Boot Acceptance Fixture", "\temail = fixture@boot-acceptance.local",
+    "[commit]", "\tgpgsign = false",
+    `[url "${dead}"]`, ...prefixes.map((p) => `\tpushInsteadOf = ${p}`),
+  ].join("\n") + "\n"
+  const file = path.join(homeDir, ".gitconfig")
+  writeFileSync(file, body)
+  return file
+}
+
+/** The allowlisted environment for the `claude` child. */
+export function buildChildEnv({ parentEnv, homeDir, shimDir, gitConfig, ghLog }) {
+  const env = {}
+  for (const name of PASS_THROUGH) if (parentEnv[name] !== undefined) env[name] = parentEnv[name]
+  env.PATH = [shimDir, parentEnv.PATH ?? "/usr/bin:/bin"].join(path.delimiter)
+  env.HOME = homeDir
+  env.XDG_CONFIG_HOME = path.join(homeDir, ".config")
+  env.XDG_STATE_HOME = path.join(homeDir, ".local", "state")
+  env.XDG_CACHE_HOME = path.join(homeDir, ".cache")
+  // DESK_RUNTIME_CACHE_DIR, DESK_*, GH_TOKEN, GITHUB_TOKEN and CLAUDE_CONFIG_DIR are never passed: absent, Desk and Claude Code use the paths below.
+  env.XDG_DATA_HOME = path.join(homeDir, ".local", "share")
+  env.GIT_CONFIG_GLOBAL = gitConfig
+  env.GIT_CONFIG_NOSYSTEM = "1"
+  env.GIT_TERMINAL_PROMPT = "0"
+  env.GH_PROMPT_DISABLED = "1"
+  env.GH_CONFIG_DIR = path.join(homeDir, ".config", "gh")
+  env.GH_SHIM_LOG = ghLog
+  return env
+}
