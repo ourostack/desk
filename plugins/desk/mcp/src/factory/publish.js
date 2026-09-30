@@ -105,6 +105,7 @@
 
 import { createHmac } from "node:crypto"
 
+import { publishedAgentType } from "./agent-types.js"
 import { validateLabels } from "./label-schema.js"
 import { LIMITS, validateLocalFacts } from "./schema.js"
 import { DATE_SHAPE, PUBLISHED_LIMITS, PUBLISHED_SCHEMA, SESSION_ID_V4, TIME_SHAPE, validatePublished } from "./published-schema.js"
@@ -145,6 +146,18 @@ function scrub(id) {
   // Each pass removes at least one character, so this ends.
   while (DATE_SHAPE.test(text) || TIME_SHAPE.test(text)) text = text.replace(DATE_PARTS, "$1$2$3").replace(TIME_PARTS, "$1$2")
   return text
+}
+
+// The worker's number, parent and models, plus its agent type when it has one: kept
+// for a built-in type or a public plugin's type, `custom` for any other.
+function publishAgent(agent, host, publicPluginNames) {
+  return {
+    n: agent.n,
+    parent: agent.parent,
+    model: scrub(agent.model),
+    ...(Object.hasOwn(agent, "agent_type") ? { agent_type: scrub(publishedAgentType(host, agent.agent_type, publicPluginNames)) } : {}),
+    ...(Object.hasOwn(agent, "requested_model") ? { requested_model: scrub(agent.requested_model) } : {}),
+  }
 }
 
 function publishSession(session, durationMs) {
@@ -213,15 +226,18 @@ function publishRefs(refs, askPublic) {
 // A plugin is named in a public store only when it was installed from a public
 // repository; the rest are counted. A store known not to be public names them all.
 function publishPlugins(plugins, isPublic, storeVisibility) {
-  if (PRIVATE_STORES.has(storeVisibility)) return { plugins: plugins.map((plugin) => ({ name: scrub(plugin.name), version: plugin.version })), hidden: 0 }
+  if (PRIVATE_STORES.has(storeVisibility)) return { plugins: plugins.map((plugin) => ({ name: scrub(plugin.name), version: plugin.version })), hidden: 0, names: plugins.map((plugin) => plugin.name) }
   const kept = []
+  const names = []
   let hidden = 0
   for (const plugin of plugins) {
     const source = plugin.source ?? null
-    if (source !== null && isPublic(source)) kept.push({ name: scrub(plugin.name), version: plugin.version })
-    else hidden += 1
+    if (source !== null && isPublic(source)) {
+      kept.push({ name: scrub(plugin.name), version: plugin.version })
+      names.push(plugin.name)
+    } else hidden += 1
   }
-  return { plugins: kept, hidden }
+  return { plugins: kept, hidden, names }
 }
 
 // The per-machine keyed form of a job ID, for a desk that is not known to be private.
@@ -353,7 +369,7 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
         reasoning: model.tokens.reasoning,
       },
     })),
-    agents: local.agents.map((agent) => ({ n: agent.n, parent: agent.parent, model: scrub(agent.model) })),
+    agents: local.agents.map((agent) => publishAgent(agent, local.session.host, plugins.names)),
     intervals,
     counts: {
       tool_calls: { ...local.counts.tool_calls },

@@ -668,6 +668,22 @@ test("a closed intake PR rejected by the store's automation quarantines exactly 
   assert.equal(apiCalls({ calls: github.calls.slice(before) }, "GET", /\/issues\/\d+\/comments$/u).length, 0, "a PR already read is not read again")
 }))
 
+test("a codex-cli facts file is delivered and a rejection of it quarantines the file by its host-prefixed name", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const base = localFacts(1)
+  const first = await put(env, { ...base, session: { ...base.session, host: "codex-cli" } })
+  assert.match(first, /^codex-cli-/u)
+  const github = fakeGitHub()
+  await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  assert.deepEqual([...github.headFacts(STORE, await intakeBranch(env)).keys()], [first])
+  github.rejectOpenPr("factory-rejected: date")
+  await put(env, localFacts(2))
+  await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  const record = JSON.parse(await fs.readFile(path.join(await factoryStateRoot(env), "quarantine", "ourostack__factory", first), "utf8"))
+  assert.equal(record.reason, "date")
+}))
+
 test("rejection reading ignores other authors, merged PRs, other heads and codes not on the first line", () => scratch(async ({ env }) => {
   const { flush } = await load()
   await optIn(env)
@@ -1282,6 +1298,24 @@ test("a stale lock replaced by another flush between its two reads is left to th
   const github = fakeGitHub()
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup }), { result: "locked" })
   assert.equal(existsSync(lock), true, "the replacement lock is not removed")
+}))
+
+test("a flush whose lock file vanished mid-run finishes without error", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  await put(env, localFacts(1))
+  const lock = path.join(await factoryStateRoot(env), "flush.lock")
+  const github = fakeGitHub()
+  let removed = false
+  const runner = async (...args) => {
+    if (!removed) {
+      removed = true
+      await fs.rm(lock, { force: true })
+    }
+    return github.runner(...args)
+  }
+  assert.equal((await flush(env, { store: STORE, runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
+  assert.equal(removed, true)
 }))
 
 test("reading the desk's remote counts against the flush deadline", () => scratch(async ({ base, env }) => {

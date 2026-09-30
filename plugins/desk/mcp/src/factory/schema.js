@@ -35,7 +35,7 @@
 // every other check here is plain object/regex/Date arithmetic.
 
 export const ENUMS = Object.freeze({
-  host: Object.freeze(["claude-code", "copilot-cli"]),
+  host: Object.freeze(["claude-code", "copilot-cli", "codex-cli"]),
   entrypoint: Object.freeze(["cli", "desktop", "sdk", "launcher", "unknown"]),
   endReason: Object.freeze([
     "clear", "resume", "logout", "prompt_input_exit", "complete", "user_exit", "error", "other",
@@ -81,6 +81,9 @@ export const PATTERNS = Object.freeze({
   timestamp: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u,
   pluginName: /^[a-z0-9][a-z0-9-]{0,63}$/u,
   modelId: /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/u,
+  // The harness's own agent type (`general-purpose`, `plugin:name`). A requested model
+  // uses `modelId`: a short alias such as `sonnet` is a subset of that pattern.
+  agentType: /^[A-Za-z0-9][A-Za-z0-9:_.-]{0,63}$/u,
   prRepo: /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/u,
   commitSha: /^[0-9a-f]{40}$/u,
   jobId: /^[0-9a-f]{32}$/u,
@@ -348,6 +351,18 @@ export const AGENT_SPEC = {
   model: patternField(PATTERNS.modelId),
 }
 
+/** `base` plus the optional worker keys `agent_type` and `requested_model`, each only when the entry carries it, so files written before they existed stay valid. Local and published validation both build their agent spec here. */
+export function agentFields(value, base, agentType, requestedModel) {
+  return {
+    ...base,
+    ...(Object.hasOwn(value, "agent_type") ? { agent_type: agentType } : {}),
+    ...(Object.hasOwn(value, "requested_model") ? { requested_model: requestedModel } : {}),
+  }
+}
+
+const LOCAL_AGENT_TYPE = patternField(PATTERNS.agentType)
+const localAgentFields = (value) => agentFields(value, AGENT_SPEC, LOCAL_AGENT_TYPE, patternField(PATTERNS.modelId))
+
 export const PR_SPEC = {
   repo: patternField(PATTERNS.prRepo),
   number: positiveIntField(),
@@ -541,7 +556,7 @@ const TOP_SPEC = {
   session: objectField(SESSION_SPEC, sessionOrderCheck),
   plugins: arrayField(objectField(localPluginFields), LIMITS.plugins),
   models: arrayField(objectField(MODEL_SPEC), LIMITS.models),
-  agents: arrayField(objectField(AGENT_SPEC), LIMITS.agents),
+  agents: arrayField(objectField(localAgentFields), LIMITS.agents),
   intervals: arrayField(INTERVAL_FIELD, LIMITS.intervals),
   counts: objectField(COUNTS_SPEC),
   refs: objectField(REFS_SPEC),

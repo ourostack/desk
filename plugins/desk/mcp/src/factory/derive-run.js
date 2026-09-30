@@ -19,7 +19,7 @@ async function sourceStamp(file) {
 }
 
 /** Bump when binding changes what a derived session credits; sessions with a lower or missing receipt version re-derive once. */
-export const BINDING_VERSION = 2
+export const BINDING_VERSION = 3
 
 const sameSource = (a, b) => a.size === b.size && a.mtime === b.mtime && a.ino === b.ino && a.dev === b.dev
 

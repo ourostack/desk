@@ -159,9 +159,9 @@ const BRANCH = /^[A-Za-z0-9._-]{1,100}$/u
 const REJECTED = /^factory-rejected: ([a-z][a-z0-9_]{0,63})$/u
 // A PR is open for delivery after either result.
 const DELIVERED_OPEN = new Set(["delivered_pr_open", "intake_stale_retried"])
-const FACTS_NAME = /^(?:claude-code|copilot-cli)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/u
-const FACTS_PATH = /^facts\/((?:claude-code|copilot-cli)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json)$/u
-const HOSTS = Object.freeze(["claude-code", "copilot-cli"])
+const FACTS_NAME = /^(?:claude-code|copilot-cli|codex-cli)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/u
+const FACTS_PATH = /^facts\/((?:claude-code|copilot-cli|codex-cli)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json)$/u
+const HOSTS = Object.freeze(["claude-code", "copilot-cli", "codex-cli"])
 const HTTP_STATUS = /\(HTTP (\d{3})\)/u
 const RATE_LIMIT = /rate limit/iu
 const OFFLINE = /error connecting to|could not resolve|no such host|dial tcp|connection refused|connection reset|network is unreachable|i\/o timeout|TLS handshake timeout|timed out/iu

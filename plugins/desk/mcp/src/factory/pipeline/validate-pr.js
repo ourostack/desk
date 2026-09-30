@@ -12,7 +12,7 @@
 import { checkLabelsAgainstFacts, evaluatorDowngrade, validateLabelsBytes } from "../label-schema.js"
 import { validatePublishedBytes } from "../published-schema.js"
 
-const FACT_HOSTS = Object.freeze(["claude-code", "copilot-cli"])
+const FACT_HOSTS = Object.freeze(["claude-code", "copilot-cli", "codex-cli"])
 const SESSION_ID = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
 const FACT_PATH = new RegExp(`^facts/(${FACT_HOSTS.join("|")})-(${SESSION_ID})\\.json$`, "u")
 const LABEL_PATH = new RegExp(`^labels/([0-9a-f]{32})/(${SESSION_ID})\\.json$`, "u")

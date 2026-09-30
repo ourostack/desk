@@ -57,6 +57,7 @@
 
 import {
   AGENT_SPEC,
+  agentFields,
   COUNTS_SPEC,
   ENUMS,
   LIMITS,
@@ -185,6 +186,9 @@ const AGENT = {
   model: modelIdField(),
 }
 
+// A requested model carries the same public rules as a resolved one.
+const publishedAgentFields = (value) => agentFields(value, AGENT, publicTokenField(PATTERNS.agentType), modelIdField())
+
 const PR = {
   ...PR_SPEC,
   repo: publicTokenField(PATTERNS.prRepo),
@@ -273,7 +277,7 @@ const TOP = {
   session: objectField(SESSION),
   plugins: arrayField(objectField(PLUGIN), LIMITS.plugins),
   models: arrayField(objectField(MODEL), LIMITS.models),
-  agents: arrayField(objectField(AGENT), LIMITS.agents),
+  agents: arrayField(objectField(publishedAgentFields), LIMITS.agents),
   intervals: arrayField(objectField(intervalFields, intervalOrderCheck), LIMITS.intervals),
   counts: objectField(COUNTS_SPEC),
   refs: objectField(REFS),

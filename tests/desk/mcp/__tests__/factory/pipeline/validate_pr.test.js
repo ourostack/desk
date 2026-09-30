@@ -224,7 +224,7 @@ test("isLabelsPath and factsPathsForSession recognize only the exact contracts",
     `facts/${LABELS.job}/${LABELS.session}.json`,
   ]) assert.equal(isLabelsPath(candidate), false, String(candidate))
   assert.equal(isFactsPath(LABEL_PATH), false)
-  assert.deepEqual(factsPathsForSession(LABELS.session), [`facts/claude-code-${LABELS.session}.json`, `facts/copilot-cli-${LABELS.session}.json`])
+  assert.deepEqual(factsPathsForSession(LABELS.session), [`facts/claude-code-${LABELS.session}.json`, `facts/copilot-cli-${LABELS.session}.json`, `facts/codex-cli-${LABELS.session}.json`])
   for (const factsPath of factsPathsForSession(LABELS.session)) assert.equal(isFactsPath(factsPath), true)
 })
 
@@ -409,4 +409,12 @@ test("validatePr accepts a modification that adds job workers, and refuses an un
   value.jobs[0].agents = [1, 0]
   const unsorted = Buffer.from(`${JSON.stringify(value)}\n`)
   assert.equal(validatePr({ changes: [{ path: VALID_PATH, status: "modified", bytes: unsorted, previousBytes: GOLDEN_BYTES }] }).ok, false)
+})
+
+test("validatePr accepts a codex-cli facts file whose host and name agree", () => {
+  const codex = sessionBytes({ host: "codex-cli" })
+  assert.equal(isFactsPath(`facts/codex-cli-${GOLDEN.session.id}.json`), true)
+  assert.deepEqual(validatePr({
+    changes: [{ path: `facts/codex-cli-${GOLDEN.session.id}.json`, status: "added", bytes: codex }],
+  }), { ok: true, errors: [] })
 })
