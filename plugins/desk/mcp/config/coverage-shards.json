@@ -190,6 +190,7 @@
     "tests/desk/mcp/__tests__/indexer/vector_rebuild.test.js": 1.9,
     "tests/desk/mcp/__tests__/integration/dependency_activation_flow.test.js": 0.9,
     "tests/desk/mcp/__tests__/launch/bootstrap.test.js": 1.9,
+    "tests/desk/mcp/__tests__/launch/web.test.js": 12,
     "tests/desk/mcp/__tests__/protected/shared_store.test.js": 0.5,
     "tests/desk/mcp/__tests__/readiness/controller_child.test.js": 2,
     "tests/desk/mcp/__tests__/readiness/controller_convergence.test.js": 3.1,
