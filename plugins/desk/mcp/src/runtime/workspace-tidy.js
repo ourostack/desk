@@ -76,6 +76,13 @@ function skippedIssue(root, skipped) {
   return `${skipped.length} task card${skipped.length === 1 ? "" : "s"} skipped: ${shown}${more}`
 }
 
+function unreadableReposIssue(root, unreadable) {
+  const sorted = [...unreadable].sort((a, b) => a.file.localeCompare(b.file, "en"))
+  const shown = sorted.slice(0, 3).map(({ file, reason }) => `${cardLabel(root, file)} (${reason})`).join(", ")
+  const more = unreadable.length > 3 ? `, and ${unreadable.length - 3} more` : ""
+  return `${unreadable.length} task card${unreadable.length === 1 ? "" : "s"} with unreadable repos: ${shown}${more}; their repositories were not inspected`
+}
+
 async function smallFile(file) {
   const { raw, truncated } = await boundedRead(file, Error)
   if (truncated) throw new Error("oversized file")
@@ -154,13 +161,33 @@ export async function canonicalDeskRoot(deskRoot) {
 // a relative or missing path) throws here; the inventory then counts it in
 // one issue and gives that card no repositories at all, so it authorizes no
 // removal, while every other card still counts.
+//
+// The error's message is what the boot line shows for the card, so it names
+// the repository path as the card wrote it (redacted like a card path) when
+// the path is the problem, and is a fixed phrase otherwise.
+class RepoProblem extends Error {}
+
+function shownPath(value) {
+  return value.split("/").map((segment) => (isCredentialLike(segment) ? "<redacted segment>" : segment)).join("/")
+}
+
 async function resolveCardRepositories(matter, homeDir) {
   if (!/^repos:/mu.test(matter)) return []
+  let values
+  try {
+    values = cardRepositories(matter)
+  } catch {
+    throw new RepoProblem("repos list not readable")
+  }
   const resolved = []
-  for (const value of cardRepositories(matter)) {
+  for (const value of values) {
     const repo = value.startsWith("~/") ? path.join(homeDir, value.slice(2)) : value
-    if (!path.isAbsolute(repo)) throw new Error("unresolved repo path")
-    resolved.push(await fs.realpath(repo))
+    if (!path.isAbsolute(repo)) throw new RepoProblem(`repo ${shownPath(value)} is not an absolute or ~/ path`)
+    try {
+      resolved.push(await fs.realpath(repo))
+    } catch {
+      throw new RepoProblem(`repo ${shownPath(value)} not found`)
+    }
   }
   return resolved
 }
@@ -198,7 +225,7 @@ export async function inspectWorkspace({
     const queue = [{ dir: root, depth: 0 }]
     let directories = 0
     let entryCount = 0
-    let unreadableRepos = 0
+    const unreadableRepos = []
     const skipped = []
     while (queue.length) {
       stop()
@@ -233,8 +260,8 @@ export async function inspectWorkspace({
           let cardRepos
           try {
             cardRepos = [root, ...await resolveCardRepositories(matter, homeDir)]
-          } catch {
-            unreadableRepos += 1
+          } catch (error) {
+            unreadableRepos.push({ file, reason: error.message })
             cardRepos = []
           }
           stop()
@@ -256,7 +283,7 @@ export async function inspectWorkspace({
       }
     }
     if (skipped.length) result.issues.push(skippedIssue(root, skipped))
-    if (unreadableRepos) result.issues.push(`${unreadableRepos} task card${unreadableRepos === 1 ? "" : "s"} with unreadable repos; their repositories were not inspected`)
+    if (unreadableRepos.length) result.issues.push(unreadableReposIssue(root, unreadableRepos))
     result.repositories = [...repositories]
     const commonDirs = new Set()
     for (const repo of repositories) {

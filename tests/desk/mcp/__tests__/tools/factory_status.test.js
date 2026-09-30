@@ -100,7 +100,7 @@ test("desk_doctor reports the factory as data and as a summary section, and says
   const host = await plugins(base, env, { declare: false })
   let body = doctorRuntime({ deskRoot: desk, env: host.env })
   assert.equal(body.factory.consent, "undecided")
-  assert.match(body.summary, /\n\nFactory\n  this desk reports to ourostack\/factory \(default\); contribution not decided yet: ask the operator once \(desk:session-start\)\n  ourostack\/factory: undecided, 0 pending, 0 quarantined, no flush yet/u)
+  assert.match(body.summary, /\n\nFactory\n  this desk reports to ourostack\/factory \(default\); contribution not decided yet \(raised once, after the operator's own work; never first or in a noninteractive session\)\n  ourostack\/factory: undecided, 0 pending, 0 quarantined, no flush yet/u)
   await setConsent(host.env, { store: STORE, contribute: true, account: "example-user" })
   await writeStatus(host.env, { last_flush: { [STORE]: { at: "2026-09-27T12:00:00.000Z", result: "auth_failed" } } })
   body = doctorRuntime({ deskRoot: desk, env: host.env })

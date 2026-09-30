@@ -63,7 +63,7 @@ export function factorySummary(status) {
   if (status.store === null) {
     lines.push(`  no store resolved (${status.source}); facts are held on this machine`)
   } else if (status.consent === "undecided") {
-    lines.push(`  this desk reports to ${status.store} (${status.source}); contribution not decided yet: ask the operator once (desk:session-start)`)
+    lines.push(`  this desk reports to ${status.store} (${status.source}); contribution not decided yet (raised once, after the operator's own work; never first or in a noninteractive session)`)
   } else {
     lines.push(`  this desk reports to ${status.store} (${status.source}); contribution: ${status.consent}`)
   }
