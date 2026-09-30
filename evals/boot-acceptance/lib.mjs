@@ -4,7 +4,7 @@
 //
 // Isolation model (see README.md "How isolation was verified" for the
 // evidence): every runtime path Desk's own code resolves from `HOME` --
-// `~/.claude` (Claude Code's own config/plugin cache), `~/.local/state/
+// the `.claude` folder in HOME (Claude Code's own config/plugin cache), `~/.local/state/
 // ouroboros-skills` (Desk's protected state: identity cache, factory
 // consent/outbox, last-start records), and `~/.cache/ouroboros-skills`
 // (the readiness-controller cache and the downloaded runtime-dependency

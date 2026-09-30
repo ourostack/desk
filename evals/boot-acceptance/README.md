@@ -115,7 +115,7 @@ Verified empirically: a `desk_status` call from inside a fixture run reports
 the real desk.
 
 **HOME.** Every other piece of Desk state that matters here --
-`~/.claude` (Claude Code's own config/plugin cache), `~/.local/state/
+the `.claude` folder in HOME (Claude Code's own config/plugin cache), `~/.local/state/
 ouroboros-skills` (Desk's protected state: identity cache, factory
 consent/outbox, last-start records) and `~/.cache/ouroboros-skills` (the
 readiness-controller cache and the downloaded runtime-dependency pack) -- is
@@ -165,8 +165,8 @@ event: `mcp_servers` shows `plugin:desk:desk` connected and nothing else
 Desk-shaped, `plugins` lists exactly `desk`, `superpowers`, `plain-language`
 plus the two Claude Code builtins (`agents-md`, `telemetry`) that are always
 present. A fresh, isolated `HOME` also means there is no marketplace-
-installed copy of Desk to double-load in the first place -- `~/.claude/
-plugins/` starts empty every run.
+installed copy of Desk to double-load in the first place -- the isolated
+HOME's `.claude/plugins/` folder starts empty every run.
 
 **GitHub.** The fixture's own git remote is a local bare repo, so ordinary
 sync/push activity never reaches GitHub. The `wrong-push-account` scenario
