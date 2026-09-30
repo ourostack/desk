@@ -240,7 +240,7 @@ function fullSession() {
     ev("skill.invoked", 29.4, { name: S, path: `/tmp/${S}/local/SKILL.md`, content: S }),
     // A subagent, whose own turns, tools, permission and nested subagent are its own.
     toolStart(ev, 30, "c11", "task", { prompt: `${S}\nDesk-Task: eng/m3-3\n${S}`, description: S, agent_type: "explore" }),
-    ev("subagent.started", 31, { toolCallId: "c11", agentName: S, agentDisplayName: S, agentDescription: S, model: "claude-sonnet-5" }),
+    ev("subagent.started", 31, { toolCallId: "c11", agentName: "explore", agentDisplayName: S, agentDescription: S, model: "claude-sonnet-5" }),
     ev("user.message", 31.2, { content: S, source: `agent-${S}`, isAutopilotContinuation: false }, sub),
     ev("assistant.turn_start", 31.3, { turnId: "0", interactionId: `${S}-sub` }, sub),
     ev("assistant.turn_end", 31.8, { turnId: "0" }, sub),
@@ -251,14 +251,14 @@ function fullSession() {
     toolComplete(ev, 33, "c12", { parentToolCallId: "c11" }),
     ev("assistant.turn_end", 33.5, { turnId: "1" }, sub),
     toolStart(ev, 34, "c13", "task", { prompt: S, description: S }, { parentToolCallId: "c11" }),
-    ev("subagent.started", 35, { toolCallId: "c13", agentName: S, agentDisplayName: S, agentDescription: S, model: "gpt-5.2" }),
+    ev("subagent.started", 35, { toolCallId: "c13", agentName: "my-private-agent", agentDisplayName: S, agentDescription: S, model: "gpt-5.2" }),
     toolStart(ev, 36, "c14", "view", { path: `/tmp/${S}/x` }, { parentToolCallId: "c13" }),
     toolComplete(ev, 37, "c14", { parentToolCallId: "c13" }),
     toolStart(ev, 37.2, "c15", "edit", { path: `/tmp/${S}/desk/eng/m3-3/sub.md` }, { parentToolCallId: "c13" }),
     toolComplete(ev, 37.4, "c15", { parentToolCallId: "c13" }),
-    ev("subagent.completed", 38, { toolCallId: "c13", agentName: S, agentDisplayName: S, model: "gpt-5.2", totalToolCalls: 1, totalTokens: 10, durationMs: 3000 }),
+    ev("subagent.completed", 38, { toolCallId: "c13", agentName: "my-private-agent", agentDisplayName: S, model: "gpt-5.2", totalToolCalls: 1, totalTokens: 10, durationMs: 3000 }),
     toolComplete(ev, 39, "c13", { parentToolCallId: "c11" }),
-    ev("subagent.completed", 40, { toolCallId: "c11", agentName: S, agentDisplayName: S, model: "claude-sonnet-5", totalToolCalls: 2, totalTokens: 20, durationMs: 9000, cancelled: false }),
+    ev("subagent.completed", 40, { toolCallId: "c11", agentName: "explore", agentDisplayName: S, model: "claude-sonnet-5", totalToolCalls: 2, totalTokens: 20, durationMs: 9000, cancelled: false }),
     toolComplete(ev, 41, "c11"),
     assistantMessage(ev, 42),
     ev("assistant.turn_end", 43, { turnId: "1" }),
@@ -333,7 +333,7 @@ function noShutdownSession() {
     toolStart(ev, 3, "d1", "bash", { command: `run ${S}` }),
     toolComplete(ev, 4, "d1", { exitCode: 0 }),
     toolStart(ev, 5, "d2", "task", { prompt: S }),
-    ev("subagent.started", 6, { toolCallId: "d2", agentName: S, agentDisplayName: S, agentDescription: S, model: `bad model ${S}` }),
+    ev("subagent.started", 6, { toolCallId: "d2", agentName: `bad agent name ${S}`, agentDisplayName: S, agentDescription: S, model: `bad model ${S}` }),
     ev("subagent.failed", 8, { toolCallId: "d2", agentName: S, agentDisplayName: S, error: S }),
     toolComplete(ev, 9, "d2", { success: false, errorCode: "failure" }),
     // Started, never completed.
@@ -605,7 +605,7 @@ export function manySubagentsText(sessionId, count) {
   const lines = [JSON.stringify(sessionStart(ev, 0, sessionId))]
   for (let index = 0; index < count; index += 1) {
     const seconds = 1 + index * 0.001
-    lines.push(JSON.stringify(ev("subagent.started", seconds, { toolCallId: `s${index}`, agentName: S, agentDisplayName: S, agentDescription: S, model: "gpt-5.2" })))
+    lines.push(JSON.stringify(ev("subagent.started", seconds, { toolCallId: `s${index}`, agentName: "explore", agentDisplayName: S, agentDescription: S, model: "gpt-5.2" })))
   }
   // A tool inside the last (dropped) subagent falls back to agent 0.
   lines.push(JSON.stringify(toolStart(ev, 20, "last", "view", { path: S }, { parentToolCallId: `s${count - 1}` })))

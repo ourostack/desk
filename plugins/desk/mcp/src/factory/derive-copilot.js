@@ -394,6 +394,10 @@ function createSessionFold() {
       if (hostVersion === null && at !== null && typeof data.copilotVersion === "string" && PATTERNS.semver.test(data.copilotVersion)) {
         hostVersion = data.copilotVersion
       }
+      // The model the session was started with; the resolved root model comes from usage at the end.
+      if (!Object.hasOwn(agents[0], "requested_model") && isValidModel(data.selectedModel)) {
+        agents[0].requested_model = data.selectedModel
+      }
     },
     "session.resume"(data) {
       sessionCwd = contextCwd(data)
@@ -505,7 +509,11 @@ function createSessionFold() {
       else if (data.model !== undefined) flag("models", "source_unreadable")
       const parent = agentOf(pendingTools.get(toolCallId)?.parentCall ?? null)
       const n = agents.length
-      agents.push({ n, parent, model })
+      // Only `agentName` is read, and only when it passes the local pattern; the display name and description never are.
+      const agent = { n, parent, model }
+      if (typeof data.agentName === "string" && PATTERNS.agentType.test(data.agentName)) agent.agent_type = data.agentName
+      if (isValidModel(data.model)) agent.requested_model = data.model
+      agents.push(agent)
       subagentByCall.set(toolCallId, n)
       const task = pendingTools.get(toolCallId)?.spawnTask ?? null
       if (task !== null) spawnTasks.push({ agent: n, track: task.track, slug: task.slug })
