@@ -177,7 +177,7 @@ test("desk_status normalizes controller snapshots without convergence payloads",
         }),
       },
     })
-    assert.deepEqual(body.readiness.convergence, {
+    assert.deepEqual(body.readiness.detail.convergence, {
       status: "not_checked",
       semantic: null,
       diagnostic: null,
@@ -208,7 +208,7 @@ test("desk_status reports non-Error controller readiness failures", async () => 
       },
     })
     assert.equal(body.readiness.state, "unavailable")
-    assert.equal(body.readiness.convergence.diagnostic.message, "controller offline")
+    assert.equal(body.readiness.detail.convergence.diagnostic.message, "controller offline")
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

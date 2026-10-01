@@ -208,8 +208,49 @@ export function queueDeskProblemFiling({ root, env, reason, host, spawnImpl }) {
   return { file: "filing in background" }
 }
 
-function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPaths }) {
+// Why a failed pull failed, from what git said: a real conflict, a diverged history, credentials the
+// remote refused, a remote that could not be reached, or something else. Session start used to call
+// every failure a conflict, so an unreachable origin sent agents to a `git status` that read clean.
+const CONFLICT_TEXT = /CONFLICT|could not apply|Cannot rebase|would be overwritten|overwritten by/iu
+const AUTH_TEXT = /Authentication failed|could not read Username|could not read Password|Permission denied \(publickey|Invalid username or password|Host key verification failed|Repository not found|returned error: 40[13]|HTTP 40[13]|terminal prompts disabled/iu
+const UNREACHABLE_TEXT = /Could not resolve host|unable to access '(?:https?|git|ssh):\/\/|Could not read from remote|Connection (?:refused|timed out|reset)|Network is unreachable|No route to host|Failed to connect|unable to connect|Operation timed out|timed out|Temporary failure in name resolution|ssh: connect to host/iu
+const DIVERGED_TEXT = /diverg|not possible to fast-forward|Need to specify how to reconcile/iu
+
+export function classifyPullFailure({ stderr = "", conflicted = [], timedOut = false, deadline = false } = {}) {
+  if (deadline || timedOut) return "deadline"
+  if (conflicted.length > 0 || CONFLICT_TEXT.test(stderr)) return "conflict"
+  if (AUTH_TEXT.test(stderr)) return "auth_failed"
+  if (UNREACHABLE_TEXT.test(stderr)) return "unreachable"
+  if (DIVERGED_TEXT.test(stderr)) return "diverged"
+  return "other"
+}
+
+// The first meaningful line of git's own complaint, without any credentials a remote URL carried.
+function firstErrorLine(stderr) {
+  const line = String(stderr ?? "").split(/\r?\n/u).map((value) => value.trim()).find((value) => value !== "" && !/^hint:/iu.test(value)) ?? ""
+  return line.replace(/\/\/[^/@\s]+@/gu, "//").slice(0, 200)
+}
+
+function originUrl(root, spawnGit, timeoutMs) {
+  const result = run(spawnGit, root, ["remote", "get-url", "origin"], timeoutMs)
+  const url = result.status === 0 && typeof result.stdout === "string" ? result.stdout.trim() : ""
+  return url === "" ? null : url.replace(/\/\/[^/@\s]+@/u, "//")
+}
+
+const TELL = {
+  unreachable: "The remote could not be reached, so `git status` will read clean: work continues on local state; retry sync before pushing.",
+  auth_failed: "The remote refused this host's credentials, so `git status` will read clean: sign in again (`gh auth status`), then retry sync before pushing.",
+  deadline: "Sync ran out of time before finishing: retry it before pushing.",
+}
+
+function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPaths, failed, spawnGit, timeoutMs }) {
   const filing = fileProblem({ root, env, reason, host: hostFromEnv(env) })
+  const cause = classifyPullFailure({
+    stderr: failed?.stderr,
+    conflicted,
+    timedOut: failed?.error?.code === "ETIMEDOUT" || failed?.signal === "SIGTERM",
+    deadline: reason === "sync_deadline_exceeded",
+  })
   const diagnostic = formatDeskProblem({
     mechanism: "session-sync",
     symptom: "session-start pull did not resolve",
@@ -217,9 +258,9 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
     means: "this desk did not sync with its remote at session start; local work continues, but it may be out of date or diverged from the remote",
     fix: "not auto-repaired past one retry (and one quarantine attempt) -- inspect the conflict and resolve it, or ask the operator",
     file: filing?.file ?? "filing in background",
-    tell: "Run `git status` in the desk to see what is in the way before making further changes there.",
+    tell: TELL[cause] ?? "Run `git status` in the desk to see what is in the way before making further changes there.",
   })
-  const result = { state: "unresolved", diagnostic }
+  const result = { state: "unresolved", diagnostic, cause, remote: originUrl(root, spawnGit, timeoutMs), error: firstErrorLine(failed?.stderr), conflicted }
   if (quarantinedPaths !== undefined) result.quarantinedPaths = quarantinedPaths
   return result
 }
@@ -253,7 +294,7 @@ export async function syncWorkspace({
   const remaining = () => deadlineAt - now()
   const budgetedTimeout = () => Math.min(GIT_TIMEOUT_MS, remaining())
   const deadlineExceeded = (conflicted, quarantinedPaths) => unresolved({
-    root, env, fileProblem, reason: "sync_deadline_exceeded", conflicted, quarantinedPaths,
+    root, env, fileProblem, reason: "sync_deadline_exceeded", conflicted, quarantinedPaths, spawnGit, timeoutMs: GIT_TIMEOUT_MS,
   })
 
   if (remaining() <= 0) return deadlineExceeded([])
@@ -264,7 +305,7 @@ export async function syncWorkspace({
     const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeFirst)
     if (!conflicted) return { state: "synced" }
     abortRebase(root, spawnGit, budgetedTimeout())
-    return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict", conflicted: paths })
+    return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict", conflicted: paths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   }
   // Captured before the abort below, which is what actually clears a genuine
   // mid-rebase conflict: reading it after cleanup would always see nothing.
@@ -273,9 +314,12 @@ export async function syncWorkspace({
 
   if (remaining() <= 0) return deadlineExceeded(firstConflicted)
 
-  const stray = untrackedPaths(root, spawnGit, budgetedTimeout())
+  // A remote that cannot be reached, or that refuses our credentials, is not a dirty index: moving
+  // stray files aside and pulling again would change nothing and only disturb the desk.
+  const firstCause = classifyPullFailure({ stderr: first.stderr, conflicted: firstConflicted, timedOut: first.error?.code === "ETIMEDOUT" || first.signal === "SIGTERM" })
+  const stray = firstCause === "unreachable" || firstCause === "auth_failed" ? [] : untrackedPaths(root, spawnGit, budgetedTimeout())
   if (stray.length === 0) {
-    return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed", conflicted: firstConflicted })
+    return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed", conflicted: firstConflicted, failed: first, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   }
 
   const quarantinedPaths = await quarantine(root, stray)
@@ -287,12 +331,12 @@ export async function syncWorkspace({
     const { conflicted, paths } = popConflicted(root, spawnGit, budgetedTimeout(), stashBeforeSecond)
     if (!conflicted) return { state: "quarantined", quarantinedPaths }
     abortRebase(root, spawnGit, budgetedTimeout())
-    return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict_after_quarantine", conflicted: paths, quarantinedPaths })
+    return unresolved({ root, env, fileProblem, reason: "autostash_pop_conflict_after_quarantine", conflicted: paths, quarantinedPaths, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
   }
 
   const secondConflicted = conflictedPaths(root, spawnGit, budgetedTimeout())
   abortRebase(root, spawnGit, budgetedTimeout())
-  return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed_after_quarantine", conflicted: secondConflicted, quarantinedPaths })
+  return unresolved({ root, env, fileProblem, reason: "pull_rebase_failed_after_quarantine", conflicted: secondConflicted, quarantinedPaths, failed: second, spawnGit, timeoutMs: GIT_TIMEOUT_MS })
 }
 
 // ---------------------------------------------------------------------------

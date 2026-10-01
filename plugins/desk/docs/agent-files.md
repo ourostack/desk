@@ -66,8 +66,8 @@ desk substrate -> desk:worker -> ms-desk:worker -> area overlay
 
 ### Live readiness diagnostics
 
-With a readiness controller, `desk_status.readiness.state` reports the current
-controller state. `readiness.convergence` contains only the latest convergence
+`desk_status.readiness.state` is one word for agents: `ready`, `converging`, `degraded`, `unavailable` or `not_checked`. It describes the search index's readiness controller only; the top-level `state` (admission) decides whether Desk's tools work, so a `ready` admission with a `degraded` readiness means tools work and search falls back to direct reads. `readiness.meaning` says so in a sentence. The controller's own state name (`READY`, `LEXICAL_READY`, `RECOVERING`, and so on) is `readiness.detail.controller_state`.
+`readiness.detail.convergence` contains only the latest convergence
 snapshot: `status` (`not_checked`, `pending`, `succeeded`, or `failed`),
 `semantic` coverage, and a failure `diagnostic` when present. A disconnected
 controller reports `unavailable` with a diagnostic, not a stale ready state.
@@ -77,7 +77,7 @@ owner metadata are not included in the tool response.
 Background startup exposes the server before convergence. Initial query
 embedding availability is `not_checked`; once the controller finishes,
 `query_embedding.available` and its diagnostic reflect the active query probe.
-A failed probe leaves the controller `LEXICAL_READY`, reports availability
+A failed probe leaves the controller `LEXICAL_READY` (`readiness.detail.controller_state`), reports availability
 `false`, and adds `query_embedding_unavailable` to `degraded_modes`. Complete
 semantic coverage with a successful probe produces `READY`. Required mode
 finishes convergence before exposing the server. A convergence exception adds

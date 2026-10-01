@@ -64,6 +64,7 @@ import {
 } from "../util/paths.js"
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { readSmallText } from "../factory/marker.js"
+import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
 import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 
@@ -748,6 +749,83 @@ function factoryInstructions(factory, pluginRoot, { noninteractive }) {
   ]
 }
 
+// What a failed sync means for the agent, by why it failed. A conflict or an unknown failure sends the agent to
+// `git status`; an unreachable or refusing origin must not, because `git status` then reads clean and the
+// degraded state gets dismissed (round 5). Returns null for a sync that did not fail.
+function syncInstruction(sync, root) {
+  if (sync?.state !== "unresolved") return null
+  const where = sync.remote ? `origin ${sync.remote}` : "origin"
+  const why = sync.error ? ` (${sync.error})` : ""
+  if (sync.cause === "unreachable") {
+    return `The desk could not sync: ${where} is unreachable${why}. Work continues on local state; say so in one line, and retry sync (\`git -C ${root.path} pull --rebase --autostash\`) before pushing anything. \`git status\` will read clean, because nothing is conflicted: that does not mean the desk is in sync.`
+  }
+  if (sync.cause === "auth_failed") {
+    return `The desk could not sync: ${where} refused this host's credentials${why}. Work continues on local state; say so in one line, check \`gh auth status\` (sign in again with \`gh auth login\` if it is stale), then retry sync before pushing anything. \`git status\` will read clean: that does not mean the desk is in sync.`
+  }
+  if (sync.cause === "deadline" && sync.reason !== "sync_deadline_exceeded") {
+    return `A git call timed out while syncing the desk${where === "origin" ? "" : ` with ${where}`}: the remote is slow or unreachable. Work continues on local state; say so in one line, and retry sync (\`git -C ${root.path} pull --rebase --autostash\`) before pushing anything.`
+  }
+  if (sync.cause === "deadline") {
+    return `The desk sync ran out of time before it finished. Work continues on local state; say so in one line and retry sync (\`git -C ${root.path} pull --rebase --autostash\`) before pushing anything.`
+  }
+  if (sync.cause === "diverged") {
+    return `The desk has diverged from ${where}${why}: each side has commits the other lacks. Run \`git -C ${root.path} status\` and \`git -C ${root.path} log --oneline --left-right @{u}...HEAD\`, reconcile with a rebase, and do not push until they agree.`
+  }
+  const paths = Array.isArray(sync.conflicted) && sync.conflicted.length > 0 ? ` (conflicted: ${sync.conflicted.join(", ")})` : ""
+  return `The desk's git sync is unresolved${paths}: run \`git status\` in ${root.path} and resolve what it shows before changing anything there.`
+}
+
+// A push route worth telling the agent about: no account can deliver, the route goes through a fork, or the only
+// account with access is not the one gh has active (the agent would push with the wrong login). A plain direct push
+// by the active account needs no line. `accounts` lists gh's active account first.
+function pushInstruction(entry, where) {
+  const store = entry.store
+  if (entry.result === "no_account_can_deliver") {
+    const reasons = Array.isArray(entry.accounts) && entry.accounts.length > 0
+      ? ` (${entry.accounts.map((item) => `${item.account}: ${item.reason}`).join("; ")})`
+      : ""
+    return `Do not push ${store} (${where}): no signed-in account can${reasons}. Ask the operator which account to use, or fork, and say so in one line when you report on the task.`
+  }
+  if (entry.result === "account_found") {
+    const active = entry.accounts[0].account
+    if (entry.route === "fork") {
+      return `Push route for ${store} (${where}): account ${entry.account} cannot push to it directly, so its route is a fork. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself. Tell the operator this route in one line when you report on the task.`
+    }
+    if (entry.account !== active) {
+      return `Push route for ${store} (${where}): account ${entry.account} is the one with push access (route ${entry.route}), but gh's active account is ${active}. Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), not with the active login. Tell the operator this in one line when you report on the task.`
+    }
+    return null
+  }
+  if (entry.result === "pending" || entry.result === "not_a_github_repo") return null
+  return `Push access for ${store} (${where}) could not be checked (${entry.result}): treat it as unknown and verify with \`gh auth status\` before pushing.`
+}
+
+const PUSH_LINE_CAP = 5
+
+function taskList(locations) {
+  const shown = locations.slice(0, 3).join(", ")
+  const more = locations.length > 3 ? ` and ${locations.length - 3} more` : ""
+  return `${locations.length === 1 ? "task" : "tasks"} ${shown}${more}`
+}
+
+// One line per store and outcome, not per task and repo: a repo shared by many tasks is one line naming the first
+// few. At most PUSH_LINE_CAP lines, then one summary. `namedTask`, when the operator named one, narrows to its repos.
+function pushLines(pushAccounts, namedTask) {
+  const groups = new Map()
+  for (const entry of pushAccounts) {
+    if (namedTask !== null && (entry.track !== namedTask.track || entry.slug !== namedTask.slug)) continue
+    if (pushInstruction(entry, "") === null) continue
+    const key = [entry.store, entry.result, entry.account, entry.route].join("|")
+    const group = groups.get(key) ?? { entry, locations: [] }
+    const location = cardLocation(entry)
+    if (!group.locations.includes(location)) group.locations.push(location)
+    groups.set(key, group)
+  }
+  const lines = [...groups.values()].map(({ entry, locations }) => pushInstruction(entry, taskList(locations)))
+  if (lines.length <= PUSH_LINE_CAP) return lines
+  return [...lines.slice(0, PUSH_LINE_CAP), `...and ${lines.length - PUSH_LINE_CAP} more repos with push-route notes: check \`push_accounts\` in the boot result before pushing anywhere.`]
+}
+
 function buildInstructions(ctx) {
   const { root, prereqResults, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost, noninteractive, repoStateList } = ctx
   const out = []
@@ -762,14 +840,15 @@ function buildInstructions(ctx) {
     if (check.ok || check.reason.endsWith("_timeout")) continue
     out.push(`Hard stop: ${prereqAction(name, check)} A failed prerequisite is like a compile error: fix it before anything else, never fall back to local-only work; proceed only if the operator explicitly overrides after you name the specific risk.`)
   }
-  if (sync?.state === "unresolved") out.push(`The desk's git sync is unresolved: run \`git status\` in ${root.path} and read it before changing anything there.`)
+  const syncLine = syncInstruction(sync, root)
+  if (syncLine !== null) out.push(syncLine)
   if (sync?.state === "quarantined") out.push(`Sync moved stray untracked paths to _cache/stray-<date>/ under ${root.path}; mention it in one line and continue.`)
   for (const entry of cardValidationResult) {
     out.push(`Fix the frontmatter of ${cardLocation(entry)}/task.md (handle ${entry.handle}): ${entry.problems.join("; ")}.`)
   }
-  for (const entry of pushAccounts) {
-    if (entry.result === "no_account_can_deliver") out.push(`Do not push ${entry.store} (task ${cardLocation(entry)}): no signed-in account can. Ask the operator which account to use, or fork.`)
-  }
+  // The named task's repos when the operator named one, every active task's otherwise.
+  const namedTask = taskQuery !== null && task?.status === "resolved" ? task.task : null
+  out.push(...pushLines(pushAccounts, namedTask))
   out.push("Confirm this session can call the Desk MCP (`desk_status` is the sentinel), again after any context compaction; if it is absent, repair first (see the session-start skill) and never continue silently in local-only mode.")
   if (taskQuery !== null) {
     if (task?.status === "resolved") {
@@ -896,8 +975,9 @@ export async function bootOnce({
     degraded.push(`sync: ${error.message}`)
   }
   if (sync?.state === "unresolved") {
-    degraded.push(`sync: unresolved${sync.reason ? ` (${sync.reason})` : ""}`)
-    actions.push(`Resolve the desk's git conflict before continuing: run \`git status\` in ${root.path}.`)
+    const detail = [sync.reason, sync.cause].filter((value) => typeof value === "string" && value !== "")
+    degraded.push(`sync: unresolved${detail.length > 0 ? ` (${detail.join(", ")})` : ""}`)
+    actions.push(syncInstruction(sync, root))
   } else if (sync?.state === "quarantined") {
     actions.push(`Sync quarantined ${sync.quarantinedPaths?.length ?? 0} stray path(s) at ${root.path}; review them under _cache/ when convenient.`)
   }
@@ -917,7 +997,10 @@ export async function bootOnce({
   } catch (error) {
     degraded.push(`card_validation: ${error.message}`)
   }
-  if (!nestedCards) pending.push("card repos: not validated, gray-matter is not installed (the dependency-free reader cannot parse repos lists)")
+  if (!nestedCards) {
+    const why = runtimeResolverFailure()
+    pending.push(`card repos: not validated, gray-matter is not installed (the dependency-free reader cannot parse repos lists)${why === null ? "" : `; restoring the runtime dependencies failed: ${redactCredentialLikeText(why)}`}`)
+  }
   if (cardValidationResult.length > 0) {
     degraded.push(`${cardValidationResult.length} task card${cardValidationResult.length === 1 ? "" : "s"} with corrupted frontmatter`)
   }
@@ -935,7 +1018,6 @@ export async function bootOnce({
     const where = cardLocation(entry)
     if (entry.result === "no_account_can_deliver") {
       degraded.push(`push account: no signed-in account can push ${entry.store} for ${where}`)
-      actions.push(`Task ${where}'s repo ${entry.store} cannot be pushed by any signed-in account; do not push there. Ask the operator which account to use, or fork.`)
     } else if (entry.result === "pending") {
       pending.push(`push account for ${entry.store} (${where}): ${entry.reason}`)
     } else if (entry.result !== "account_found" && entry.result !== "not_a_github_repo") {
@@ -981,6 +1063,7 @@ export async function bootOnce({
     }
   }
 
+  actions.push(...pushLines(pushAccounts, taskQuery !== null && task?.status === "resolved" ? task.task : null))
   const status = degraded.length > 0 ? "degraded" : "ready"
   const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList })
   return {
