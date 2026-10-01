@@ -52,7 +52,7 @@ diff "$HOME/<runtime>.toml" "$DESK/<runtime>.toml" >/dev/null && echo "content m
 ### 2. Read the existing `<runtime>.toml`
 
 ```bash
-cat "$DESK/<runtime>.toml"
+cat "<desk path>/<runtime>.toml"
 ```
 
 Pick a non-colliding alias under both `[mcps.builtins.<alias>]` and `[mcps.servers.<alias>]`. Conventions:
@@ -122,7 +122,7 @@ Six months later, the operator (or another agent) needs to answer "is this still
 **Schema parse:**
 
 ```bash
-cd "$DESK" && <runtime> config list
+cd "<desk path>" && <runtime> config list
 ```
 
 Expected: the new entry appears under its section alongside existing entries. If the listing errors out (e.g. `Invalid builtin MCP '<alias>': missing "type" field`), re-read Step 3 / `<runtime> mcp <name> --help`, fix, re-verify.

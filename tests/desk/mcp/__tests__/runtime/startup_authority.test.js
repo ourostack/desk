@@ -66,7 +66,7 @@ for (const scenario of [
         assert.equal(result.isError, true)
         assert.equal(result.payload.status, "degraded")
         assert.equal(result.payload.code, "authority_invalid")
-        assert.equal((await desk.call("desk_status")).payload.state, "degraded:authority_invalid")
+        assert.equal((await desk.call("desk_status", { detail: true })).payload.state, "degraded:authority_invalid")
         assert.deepEqual(readdirSync(root), [], "refusal must leave every possible write target untouched")
         assert.deepEqual(controllerEvents, [])
         return

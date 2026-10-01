@@ -17,7 +17,7 @@ Use this entrance when no desk is bound: the startup hook says so, or `desk_stat
 
 #### A1. Look for a desk that already exists, locally
 
-Many operators already have a desk clone that simply is not bound. A desk has `_meta/` plus `_archive/` (solo) or `desks/` (crew). Check the paths `desk_status` already tried, then scan the usual places without writing anything. This works in both bash and zsh; a glob loop does not, because zsh aborts on a pattern that matches nothing:
+Many operators already have a desk clone that simply is not bound. A desk has `_meta/` plus `_archive/` (solo) or `desks/` (crew). Check the paths `desk_status` (with `{ detail: true }`: `root.tried`) already tried, then scan the usual places without writing anything. This works in both bash and zsh; a glob loop does not, because zsh aborts on a pattern that matches nothing:
 
 ```bash
 find ~ ~/code ~/Projects ~/src ~/dev ~/repos ~/github -maxdepth 2 -type d -name _meta 2>/dev/null | while read -r m; do d=$(dirname "$m"); { [ -d "$d/_archive" ] || [ -d "$d/desks" ]; } && echo "$d $(git -C "$d" remote get-url origin 2>/dev/null)"; done | sort -u
@@ -56,7 +56,7 @@ If nothing was found, lead with creating a fresh desk. Never offer "continue wit
 
 Make the binding survive new sessions and plugin updates:
 
-- **Claude Code:** write `{"schema_version": 1, "desk": {"root": "<absolute desk path>"}}` to the `binding_path` that `desk_status` reports (`$CLAUDE_PLUGIN_DATA/desk.activation.json`). Opening the desk folder itself as the project also binds it.
+- **Claude Code:** write `{"schema_version": 1, "desk": {"root": "<absolute desk path>"}}` to the `binding_path` that `desk_status` with `{ detail: true }` reports (`$CLAUDE_PLUGIN_DATA/desk.activation.json`). Opening the desk folder itself as the project also binds it.
 - **Codex:** use the activation adapter through `desk:codex-onboarding`.
 - **Other hosts:** set `DESK` in the host's environment.
 
@@ -80,7 +80,7 @@ Entrance B must never route into Entrance A choices or initialize over the exist
 
 Both entrances end at one Desk, one active plugin chain, admitted MCPs, startup foundations present, and the operator ready to resume or start the first real job from the same durable workspace. Later healthy sessions resume through ordinary `session-start` flow instead of replaying onboarding.
 
-At the endpoint, ask the factory contribution question once when `desk_status` reports `factory.consent` as `undecided`. Use the words and the recording commands that `desk:session-start`'s boot script puts in its `instructions` (`mcp/src/runtime/boot.js`): what is published, what never is, that the store is public, and that the contributor's GitHub account appears as the intake pull request's author. Record yes or no through `factory.js consent`, so the next session start does not ask again. Skip the question in a noninteractive session, and never block onboarding on it.
+At the endpoint, ask the factory contribution question once when `desk_status` with `{ detail: true }` reports `factory.consent` as `undecided`. Use the words and the recording commands that `desk:session-start`'s boot script puts in its `instructions` (`mcp/src/runtime/boot.js`): what is published, what never is, that the store is public, and that the contributor's GitHub account appears as the intake pull request's author. Record yes or no through `factory.js consent`, so the next session start does not ask again. Skip the question in a noninteractive session, and never block onboarding on it.
 
 The public RFC stays optional and on demand. Use it when the operator wants design context; do not require healthy startup or resumption to reread it.
 

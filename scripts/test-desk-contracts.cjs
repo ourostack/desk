@@ -1039,12 +1039,12 @@ contract("session-start still owns the factory consent question", () => {
 // Kaizen card 4: the desk's own interaction contract (its AGENTS.md) binds before the first question or action.
 contract("session-start reads the bound desk's AGENTS.md before the first question or action", () => {
   const body = text(sessionStart);
-  assert.match(body, /Read `\$DESK\/AGENTS\.md` when the instructions say to\. Its rules bind the whole session/u);
+  assert.match(body, /Read the desk's `AGENTS\.md` \(in `root\.path`\) when the instructions say to\. Its rules bind the whole session/u);
   assert.match(body, /reads the desk's `AGENTS\.md`/u);
   const source = text(bootSource);
   assert.match(source, /before the first question or action on the desk/u);
   assert.match(source, /its rules bind this session \(read it again if sync changed it\)/u);
-  assert.ok(source.indexOf("AGENTS.md") < source.indexOf("Export the desk root"), "AGENTS.md is read before anything else is asked");
+  assert.ok(source.indexOf("AGENTS.md") < source.indexOf("Use the absolute path ${root.path} for the desk"), "AGENTS.md is read before anything else is asked");
 });
 // Kaizen card 5: archiving stages only the paths it moved, as git-hygiene's targeted staging requires.
 contract("archive-workflow stages only the paths it moved", () => {
@@ -1185,6 +1185,19 @@ contract("the tidy renames a redacted folder by its handle, never by listing its
   const tidy = text("plugins/desk/migrations/02-tidy-desk.md");
   assert.doesNotMatch(tidy, /listing its parent yourself/u);
   assert.match(tidy, /by the handle its finding shows: a task with task_move \(handle, to_slug\), a track with track_rename \(handle, to\)/u);
+});
+
+contract("a task with no plan routes to writing-plans or brainstorming, never to executing-plans", () => {
+  const skill = text("plugins/desk/skills/using-superpowers-with-desk/SKILL.md");
+  const rows = skill.split("\n").filter((line) => line.startsWith("| ") && /`superpowers:/u.test(line));
+  const rowFor = (skillName) => rows.find((line) => line.includes(`| \`superpowers:${skillName}\``));
+  assert.match(rowFor("brainstorming") ?? "", /No approved design/u);
+  assert.match(rowFor("writing-plans") ?? "", /\*\*no plan\*\*/u);
+  assert.match(rowFor("writing-plans") ?? "", /task card/u);
+  assert.match(rowFor("subagent-driven-development") ?? "", /An approved plan/u);
+  assert.match(rowFor("executing-plans") ?? "", /^\| An approved plan/u);
+  assert.match(skill, /never the entry for a task with no plan/u);
+  assert.doesNotMatch(skill, /executing-plans[^.\n]*task-card-only work/u);
 });
 
 assert.equal(

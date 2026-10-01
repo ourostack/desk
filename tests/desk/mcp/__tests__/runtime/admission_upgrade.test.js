@@ -100,7 +100,7 @@ test("a detached HEAD with a local-only commit recovers once the commit is pushe
   assert.match(degraded.fix, /then call desk_doctor with \{"repair":"switch_state_branch"\}/u)
   git(fixture.desk, "push", "origin", "HEAD:refs/heads/rescue-work")
   // Only the first admission attempt switches on its own; after it, the doctor repair does.
-  assert.equal((await session.call("desk_status")).payload.state, "degraded:state_branch_detached")
+  assert.equal((await session.call("desk_status", { detail: true })).payload.state, "degraded:state_branch_detached")
   const doctored = (await session.call("desk_doctor", { repair: "switch_state_branch" })).payload
   assert.equal(doctored.repair, `repaired: detached HEAD → main (was ${sha.slice(0, 12)})`)
   const ready = await session.statusUntil((payload) => payload.state === "ready")
@@ -184,7 +184,7 @@ test("a session that never reaches ready never switches a deliberate git switch 
   const later = await session.statusUntil((payload) => payload.admission.attempts >= first.admission.attempts + 3, { deadlineMs: 30000, intervalMs: 500 })
   assert.equal(later.state, "degraded:identity_unavailable")
   assert.equal(later.admission.state_branch.ok, false)
-  assert.equal((await session.call("desk_status")).payload.admission.state_branch.kind, later.admission.state_branch.kind)
+  assert.equal((await session.call("desk_status", { detail: true })).payload.admission.state_branch.kind, later.admission.state_branch.kind)
   assert.equal(git(fixture.desk, "symbolic-ref", "--short", "HEAD"), "feature", "Desk never switched the checkout back")
   assert.doesNotMatch(session.stderr(), /repaired: branch feature/u)
   const write = await session.call("task_create", { track: "ops", slug: "never-ready-switch", title: "Blocked" })
@@ -231,7 +231,7 @@ for (const launch of crashPaths) {
     assert.deepEqual(armed.sort(), (launch.reexec ? [session.child.pid, deskPid] : [deskPid]).sort(), session.stderr())
     process.kill(deskPid, "SIGUSR2")
     await waitFor(() => /caught unhandled_rejection/u.test(session.stderr()))
-    const status = (await session.call("desk_status")).payload
+    const status = (await session.call("desk_status", { detail: true })).payload
     assert.deepEqual(status.admission.exceptions.map((entry) => [entry.kind, entry.message]), [
       ["uncaught_exception", "injected unhandled error event"],
       ["unhandled_rejection", "injected unhandled rejection"],

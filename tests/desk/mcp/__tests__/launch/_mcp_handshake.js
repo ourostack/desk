@@ -127,7 +127,7 @@ export function runHandshake({ command, args = [], env, cwd, timeoutMs = 20000 }
           setTimeout(() => send(child, 2, "tools/list"), 30)
         } else if (message.id === 2) {
           handshakeMs = Date.now() - started
-          send(child, 3, "tools/call", { name: "desk_status", arguments: {} })
+          send(child, 3, "tools/call", { name: "desk_status", arguments: { detail: true } })
         } else if (message.id === 3) {
           finish(null, {
             initialize: responses.get(1),

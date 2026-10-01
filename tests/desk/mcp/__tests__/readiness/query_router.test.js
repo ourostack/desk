@@ -1217,7 +1217,7 @@ test("production MCP lexical smoke", { timeout: 180_000 }, async (t) => {
   // This returns the first detail whose computation started after `since`: one is always running or next to start, and it is kept when it finishes late.
   async function statusAfter(session, since = new Date().toISOString()) {
     for (;;) {
-      const status = await session.call("desk_status")
+      const status = await session.call("desk_status", { detail: true })
       assert.equal(status.status_error, undefined, status.status_error)
       if (status.lexical && (status.status_detail === undefined || status.status_detail_from >= since)) return status
       await new Promise((resolve) => setTimeout(resolve, 20))

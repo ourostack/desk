@@ -37,7 +37,7 @@ Claude and Copilot end/stop hooks write protected local markers; detached deriva
 - `track_rename` — rename a track, rewriting `track:` on every task card under it, live and archived; on a Git desk it refuses a track with unstaged changes or untracked files unless `allow_dirty: true`, and stages the task cards it rewrites
 
 **Status:**
-- `desk_status` — session-start-safe MCP health, root, activation, index, snapshot, and vector-pack status
+- `desk_status` — session-start-safe MCP health. Compact by default (one health word, why it is not ready, what to do, the search-index word, root, sync and pointers); `detail: true` returns the full root, activation, index, snapshot, and vector-pack payload
 - `desk_doctor` — healthy-runtime confirmation or precise failure diagnosis and remediation; `{"repair":"switch_state_branch"}`, `{"repair":"reclaim_controller"}` and `{"repair":"prune_readiness_state"}` run the repairs described under [Handshake first, then admission](#handshake-first-then-admission); it also counts the private partitions the retired manual measurement ledger left under `<state home>/ouroboros-skills/desk/work-ledger/`, without opening, moving or deleting them
 
 **Search:**

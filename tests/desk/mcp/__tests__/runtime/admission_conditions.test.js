@@ -215,7 +215,7 @@ test("a stopped owner is never taken over: the other session reports controller_
   assert.match(hung.fix, /reclaim_controller/u)
   // Keep the other session retrying: every attempt must leave the stopped owner's controller in place.
   for (let round = 0; round < 10; round += 1) {
-    const status = (await other.call("desk_status")).payload
+    const status = (await other.call("desk_status", { detail: true })).payload
     assert.equal(status.state, "degraded:controller_hung")
     await new Promise((resolve) => setTimeout(resolve, 1000))
   }
@@ -709,7 +709,7 @@ async function assertAnswersFast(session, { forMs = 4000, budgetMs = 200, interv
   const timings = []
   const states = []
   while (Date.now() < until) {
-    for (const [method, params] of [["tools/list", {}], ["ping", {}], ["tools/call", { name: "desk_status", arguments: {} }]]) {
+    for (const [method, params] of [["tools/list", {}], ["ping", {}], ["tools/call", { name: "desk_status", arguments: { detail: true } }]]) {
       const { ms, response } = await session.timed(method, params)
       assert.equal(response.error, undefined)
       timings.push([method, ms])
@@ -734,7 +734,7 @@ test("a 30 s restore on the admission worker never delays tools/list, ping or de
   assert.ok(session.handshakeMs < HANDSHAKE_BUDGET_MS, `handshake took ${session.handshakeMs} ms`)
   const { timings } = await assertAnswersFast(session)
   t.diagnostic(`slowest answer during the stalled restore: ${Math.max(...timings.map(([, ms]) => ms))} ms over ${timings.length} requests`)
-  assert.equal((await session.call("desk_status")).payload.state, "admitting", "the restore is still stalled")
+  assert.equal((await session.call("desk_status", { detail: true })).payload.state, "admitting", "the restore is still stalled")
 })
 
 test("the transition to ready never delays tools/list, ping or desk_status: the runtime import, the controller election and the start of convergence", async (t) => {
@@ -761,7 +761,7 @@ test("a runtime publication lock held by another process never delays tools/list
   t.after(() => session.close())
   const { timings } = await assertAnswersFast(session)
   t.diagnostic(`slowest answer while the lock was held: ${Math.max(...timings.map(([, ms]) => ms))} ms over ${timings.length} requests`)
-  assert.equal((await session.call("desk_status")).payload.state, "admitting")
+  assert.equal((await session.call("desk_status", { detail: true })).payload.state, "admitting")
   rmSync(lockDir, { recursive: true, force: true })
   assert.equal((await session.statusUntil((payload) => payload.state === "ready", { deadlineMs: 40000 })).state, "ready")
 })

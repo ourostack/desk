@@ -108,7 +108,7 @@ test("diagnostic mode lists the full tool set, advertises listChanged, and gates
   const [init, list, status, gated] = await serveDiagnostic(diagnostic, [
     { id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } },
     { id: 2, method: "tools/list" },
-    { id: 3, method: "tools/call", params: { name: "desk_status", arguments: {} } },
+    { id: 3, method: "tools/call", params: { name: "desk_status", arguments: { detail: true } } },
     { id: 4, method: "tools/call", params: { name: "task_create", arguments: {} } },
   ])
   assert.deepEqual(init.result.capabilities, { tools: { listChanged: true } })
@@ -220,7 +220,7 @@ test("the default startup-exception starter serves the diagnostic on stdio with 
   const running = entrypoint.startStartupExceptionDiagnostic({ error: new Error("boom"), input, output })
   input.end([
     { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
-    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "desk_status" } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "desk_status", arguments: { detail: true } } },
   ].map((message) => JSON.stringify(message)).join("\n") + "\n")
   await running
   const [init, status] = Buffer.concat(chunks).toString("utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))

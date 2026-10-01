@@ -33,11 +33,15 @@
 // whole call.
 //
 // `bootOnce` returns `{ boot_complete: true, status, degraded, pending,
-// actions, root, host, desk_export_line, prereqs, sync, active_tasks,
-// card_validation, push_accounts, factory }`. `status` is one of "ready",
-// "degraded" or "setup_required" — never two words, and `degraded` always
-// lists why. `actions` names concrete next steps, each naming the task,
-// repo or file it is about. `boot_complete` is always `true`: it marks that
+// instructions, root, host, prereqs, sync, active_tasks, card_validation,
+// push_accounts, factory }`. `status` is one of "ready", "degraded" or
+// "setup_required" — never two words, and `degraded` always lists why.
+// `instructions` is the one list of next steps an agent acts on, each naming
+// the task, repo or file it is about (it used to be mirrored by an `actions`
+// list; nothing read that, and agents saw every line twice, so it is gone).
+// There is no `export DESK` line either: an environment variable does not
+// survive an agent's separate shell calls, so the instructions give the
+// desk's absolute path to use directly. `boot_complete` is always `true`: it marks that
 // the script finished and returned a complete result, not that everything
 // it found is healthy.
 
@@ -696,18 +700,16 @@ function cardLocation(entry) {
   return entry.desk ? `desks/${entry.desk}/${entry.track}/${entry.slug}` : `${entry.track}/${entry.slug}`
 }
 
-function emptyResult({ status, degraded, pending, actions, instructions = [], root, host }) {
+function emptyResult({ status, degraded, pending, instructions = [], root, host }) {
   return {
     boot_complete: true,
     status,
     degraded,
     pending,
-    actions,
     instructions,
     covers_hosts: AGENT_HOSTS,
     root,
     host,
-    desk_export_line: null,
     migrations: [],
     prereqs: null,
     sync: null,
@@ -835,7 +837,7 @@ function buildInstructions(ctx) {
   if (existsSync(path.join(root.path, "AGENTS.md"))) {
     out.push(`Read ${path.join(root.path, "AGENTS.md")} now, before the first question or action on the desk: it is the desk's own interaction contract and its rules bind this session (read it again if sync changed it).`)
   }
-  out.push(`Export the desk root for later shell calls with \`export DESK=${root.path}\`.`)
+  out.push(`Use the absolute path ${root.path} for the desk in every command and tool call. Each shell call starts fresh, so an exported \`$DESK\` would not persist; where a Desk skill says \`$DESK\`, it means this path.`)
   for (const [name, check] of Object.entries(prereqResults)) {
     if (check.ok || check.reason.endsWith("_timeout")) continue
     out.push(`Hard stop: ${prereqAction(name, check)} A failed prerequisite is like a compile error: fix it before anything else, never fall back to local-only work; proceed only if the operator explicitly overrides after you name the specific risk.`)
@@ -849,7 +851,7 @@ function buildInstructions(ctx) {
   // The named task's repos when the operator named one, every active task's otherwise.
   const namedTask = taskQuery !== null && task?.status === "resolved" ? task.task : null
   out.push(...pushLines(pushAccounts, namedTask))
-  out.push("Confirm this session can call the Desk MCP (`desk_status` is the sentinel), again after any context compaction; if it is absent, repair first (see the session-start skill) and never continue silently in local-only mode.")
+  out.push("Confirm this session can call the Desk MCP (`desk_status` is the sentinel; its compact answer's `state` uses the same words as this result's `status`, and a degraded `search` there is only the index, never an outage), again after any context compaction; if it is absent, repair first (see the session-start skill) and never continue silently in local-only mode.")
   if (taskQuery !== null) {
     if (task?.status === "resolved") {
       out.push(`The operator named a task: hand off to desk:session-resumption for ${task.task.card} (handle ${task.task.handle}) and skip the status block. Every check above still applies.`)
@@ -914,7 +916,6 @@ export async function bootOnce({
 
   const degraded = []
   const pending = []
-  const actions = []
 
   // Migrations settle before anything touches `$DESK/`: a stale pre-migration
   // path must never be scanned or synced.
@@ -933,8 +934,7 @@ export async function bootOnce({
 
   const root = resolveBootRoot({ env, cwd, homeDir })
   if (root.status === "setup_required") {
-    actions.push("No desk is bound yet on this host; hand off to desk:first-run-bootstrap.")
-    return { ...emptyResult({ status: root.status, degraded, pending, actions, root, host }), migrations: migrationSummary, instructions: [
+    return { ...emptyResult({ status: root.status, degraded, pending, root, host }), migrations: migrationSummary, instructions: [
       "No desk is bound on this host: this is a first run, not an outage. Hand off to desk:first-run-bootstrap Entrance A (or the onboarding path desk_status names in `onboarding_skill`, such as an overlay's own) and skip the rest of session-start.",
     ] }
   }
@@ -944,15 +944,13 @@ export async function bootOnce({
     // `codedError` wrapping) always attaches both `.message` and `.path` to,
     // so neither field falls back to a placeholder here.
     degraded.push(`root: ${root.message}`)
-    actions.push(`Restore or clone the desk at ${root.path}, or rebind through desk:first-run-bootstrap with the operator's agreement.`)
-    return { ...emptyResult({ status: root.status, degraded, pending, actions, root, host }), migrations: migrationSummary, instructions: [
-      `Stop: the desk configured at ${root.path} is missing or unreadable. Restore or clone it there, or rebind through desk:first-run-bootstrap with the operator's agreement. Never point $DESK at a different desk to work around this.`,
+    return { ...emptyResult({ status: root.status, degraded, pending, root, host }), migrations: migrationSummary, instructions: [
+      `Stop: the desk configured at ${root.path} is missing or unreadable. Restore or clone it there, or rebind through desk:first-run-bootstrap with the operator's agreement. Never use a different desk to work around this.`,
     ] }
   }
   if (stopForMigration) {
-    actions.push("Finish the pending migration before anything else touches the desk.")
     const instructions = migrationEntries.map((entry) => migrationLine([entry], pluginRoot).replace(/^Desk migrations: /u, ""))
-    return { ...emptyResult({ status: "degraded", degraded, pending, actions, root, host }), instructions, migrations: migrationSummary }
+    return { ...emptyResult({ status: "degraded", degraded, pending, root, host }), instructions, migrations: migrationSummary }
   }
 
   const prereqs = await checkPrereqs({ gh, jq, ghAuth })
@@ -962,7 +960,6 @@ export async function bootOnce({
       pending.push(`${name}: ${check.reason}`)
     } else {
       degraded.push(`${name}: ${check.reason}`)
-      actions.push(prereqAction(name, check))
     }
   }
 
@@ -977,9 +974,6 @@ export async function bootOnce({
   if (sync?.state === "unresolved") {
     const detail = [sync.reason, sync.cause].filter((value) => typeof value === "string" && value !== "")
     degraded.push(`sync: unresolved${detail.length > 0 ? ` (${detail.join(", ")})` : ""}`)
-    actions.push(syncInstruction(sync, root))
-  } else if (sync?.state === "quarantined") {
-    actions.push(`Sync quarantined ${sync.quarantinedPaths?.length ?? 0} stray path(s) at ${root.path}; review them under _cache/ when convenient.`)
   }
 
   let tasks = null
@@ -1003,9 +997,6 @@ export async function bootOnce({
   }
   if (cardValidationResult.length > 0) {
     degraded.push(`${cardValidationResult.length} task card${cardValidationResult.length === 1 ? "" : "s"} with corrupted frontmatter`)
-  }
-  for (const entry of cardValidationResult) {
-    actions.push(`Fix the frontmatter in ${cardLocation(entry)}/task.md (handle ${entry.handle}): ${entry.problems.join("; ")}.`)
   }
 
   let pushAccounts = []
@@ -1063,7 +1054,6 @@ export async function bootOnce({
     }
   }
 
-  actions.push(...pushLines(pushAccounts, taskQuery !== null && task?.status === "resolved" ? task.task : null))
   const status = degraded.length > 0 ? "degraded" : "ready"
   const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList })
   return {
@@ -1071,12 +1061,10 @@ export async function bootOnce({
     status,
     degraded,
     pending,
-    actions,
     instructions,
     covers_hosts: AGENT_HOSTS,
     root,
     host,
-    desk_export_line: `export DESK=${root.path}`,
     migrations: migrationSummary,
     prereqs,
     sync,
@@ -1107,7 +1095,6 @@ export async function runBootCli({ argv = [], env = process.env, io = process, b
       status: "degraded",
       degraded: [`boot: ${error.message}`],
       pending: [],
-      actions: ["The boot script failed unexpectedly; run session-start's steps by hand and record this as friction."],
       instructions: ["The boot script failed unexpectedly: check `gh --version`, `jq --version` and `gh auth status` by hand, and record the failure as friction."],
       root: null,
       host: null,

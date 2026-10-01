@@ -684,9 +684,10 @@ test("bootOnce: no desk anywhere → setup_required, with a concrete first-run a
   const result = await bootOnce({ env: {}, cwd: emptyHome, homeDir: emptyHome, gh, jq })
   assert.equal(result.boot_complete, true)
   assert.equal(result.status, "setup_required")
-  assert.equal(result.desk_export_line, null)
+  assert.equal(Object.hasOwn(result, "actions"), false)
+  assert.equal(Object.hasOwn(result, "desk_export_line"), false)
   assert.equal(result.active_tasks, null)
-  assert.ok(result.actions[0].includes("first-run-bootstrap"))
+  assert.ok(result.instructions[0].includes("first-run-bootstrap"))
 })
 
 test("bootOnce: a bound desk whose folder is missing → degraded, naming the path to restore", async () => {
@@ -696,7 +697,7 @@ test("bootOnce: a bound desk whose folder is missing → degraded, naming the pa
   const result = await bootOnce({ env: { DESK: missing }, cwd: emptyHome, homeDir: emptyHome, gh, jq })
   assert.equal(result.status, "degraded")
   assert.ok(result.degraded.some((line) => line.startsWith("root:")))
-  assert.ok(result.actions.some((line) => line.includes(missing)))
+  assert.ok(result.instructions.some((line) => line.includes(missing)))
 })
 
 test("bootOnce: a healthy desk with no problems boots ready, with the export line and every field populated", async () => {
@@ -714,7 +715,6 @@ test("bootOnce: a healthy desk with no problems boots ready, with the export lin
   })
   assert.equal(result.status, "ready")
   assert.deepEqual(result.degraded, [])
-  assert.equal(result.desk_export_line, `export DESK=${root}`)
   assert.equal(result.active_tasks.task_count, 1)
   assert.deepEqual(result.card_validation, [])
   assert.deepEqual(result.push_accounts, [])
@@ -732,7 +732,7 @@ test("bootOnce: a failing prereq degrades status and names a concrete remediatio
   })
   assert.equal(result.status, "degraded")
   assert.ok(result.degraded.some((line) => line.includes("gh_missing")))
-  assert.ok(result.actions.some((line) => line.includes("brew install gh")))
+  assert.ok(result.instructions.some((line) => line.includes("brew install gh")))
 })
 
 test("bootOnce: a timed-out prereq is pending, not degraded, and does not flip status by itself", async () => {
@@ -758,14 +758,14 @@ test("bootOnce: every other named prereq remediation — an old gh, a missing jq
     gh: fixedRunner({ "--version": { code: 0, stdout: "gh version 2.10.0\n", stderr: "" }, "auth status": { code: 0, stdout: "", stderr: "" } }),
     jq: fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } }),
   })
-  assert.ok(oldGh.actions.some((line) => line.includes("Upgrade gh")))
+  assert.ok(oldGh.instructions.some((line) => line.includes("Upgrade gh")))
 
   const missingJq = await bootOnce({
     env: { DESK: root }, cwd: root, homeDir: root, syncFn, factoryStatusFn,
     gh: fixedRunner({ "--version": { code: 0, stdout: "gh version 2.54.0\n", stderr: "" }, "auth status": { code: 0, stdout: "", stderr: "" } }),
     jq: async () => ({ code: null, stdout: "", stderr: "", spawnError: "ENOENT" }),
   })
-  assert.ok(missingJq.actions.some((line) => line.includes("Install jq")))
+  assert.ok(missingJq.instructions.some((line) => line.includes("Install jq")))
 
   const staleAuth = await bootOnce({
     env: { DESK: root }, cwd: root, homeDir: root, syncFn, factoryStatusFn,
@@ -775,7 +775,7 @@ test("bootOnce: every other named prereq remediation — an old gh, a missing jq
     }),
     jq: fixedRunner({ "--version": { code: 0, stdout: "jq-1.7\n", stderr: "" } }),
   })
-  assert.ok(staleAuth.actions.some((line) => line.includes("gh auth login")))
+  assert.ok(staleAuth.instructions.some((line) => line.includes("gh auth login")))
 })
 
 test("bootOnce: a corrupted task card degrades status and names the task, file location and handle in one action", async () => {
@@ -789,7 +789,7 @@ test("bootOnce: a corrupted task card degrades status and names the task, file l
   })
   assert.equal(result.status, "degraded")
   assert.equal(result.card_validation.length, 1)
-  const action = result.actions.find((line) => line.includes("track-a/corrupted-task/task.md"))
+  const action = result.instructions.find((line) => line.includes("track-a/corrupted-task/task.md"))
   assert.ok(action, "the action names the track, slug and file")
   assert.ok(action.includes(result.card_validation[0].handle))
 })
@@ -808,7 +808,7 @@ test("bootOnce: a crew-workspace (desk-set) corrupted card is located under desk
     factoryStatusFn: () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] }),
   })
   assert.equal(result.status, "degraded")
-  const action = result.actions.find((line) => line.includes("desks/alex/track-a/crew-task/task.md"))
+  const action = result.instructions.find((line) => line.includes("desks/alex/track-a/crew-task/task.md"))
   assert.ok(action, "the action names the crew-workspace location")
   assert.equal(result.push_accounts.length, 1)
   assert.equal(result.push_accounts[0].result, "account_found")
@@ -851,11 +851,11 @@ test("bootOnce: a repo no signed-in account can push degrades status and tells t
   })
   assert.equal(result.status, "degraded")
   assert.ok(result.degraded.some((line) => line.includes("acme/widgets")))
-  const action = result.actions.find((line) => line.startsWith("Do not push acme/widgets"))
+  const action = result.instructions.find((line) => line.startsWith("Do not push acme/widgets"))
   assert.ok(action && action.includes("track-a/push-task"))
 })
 
-test("bootOnce: sync states surface as actions — unresolved degrades and points at git status, quarantined stays ready and notes the review", async () => {
+test("bootOnce: sync states surface as instructions — unresolved degrades and points at git status, quarantined stays ready and notes the review", async () => {
   const root = await mkDeskWorkspace()
   const { gh, jq } = okPrereqRunners()
   const factoryStatusFn = () => ({ store: null, source: "no_remote", consent: "held", stores: [], warnings: [] })
@@ -866,14 +866,14 @@ test("bootOnce: sync states surface as actions — unresolved degrades and point
   })
   assert.equal(unresolved.status, "degraded")
   assert.ok(unresolved.degraded.some((line) => line.includes("unresolved")))
-  assert.ok(unresolved.actions.some((line) => line.includes("git status")))
+  assert.ok(unresolved.instructions.some((line) => line.includes("git status")))
 
   const quarantined = await bootOnce({
     env: { DESK: root }, cwd: root, homeDir: root, gh, jq, factoryStatusFn,
     syncFn: async () => ({ state: "quarantined", quarantinedPaths: ["stray.txt"] }),
   })
   assert.equal(quarantined.status, "ready")
-  assert.ok(quarantined.actions.some((line) => line.includes("quarantined 1 stray path")))
+  assert.ok(quarantined.instructions.some((line) => line.includes("moved stray untracked paths")))
 
   const unresolvedNoReason = await bootOnce({
     env: { DESK: root }, cwd: root, homeDir: root, gh, jq, factoryStatusFn,
@@ -885,7 +885,7 @@ test("bootOnce: sync states surface as actions — unresolved degrades and point
     env: { DESK: root }, cwd: root, homeDir: root, gh, jq, factoryStatusFn,
     syncFn: async () => ({ state: "quarantined" }),
   })
-  assert.ok(quarantinedNoPaths.actions.some((line) => line.includes("quarantined 0 stray path")))
+  assert.ok(quarantinedNoPaths.instructions.some((line) => line.includes("moved stray untracked paths")))
 })
 
 test("bootOnce: each step's own failure degrades only that part, never the whole call", async () => {
@@ -1335,7 +1335,7 @@ test("bootOnce: a healthy boot lists instructions (export line, MCP check, statu
   await writeCard(root, "track-a", "open-task", VALID_CARD)
   const result = await healthyBoot(root)
   assert.deepEqual(result.covers_hosts, ["claude", "copilot", "codex"])
-  assert.ok(result.instructions.some((line) => line.includes(`export DESK=${root}`)))
+  assert.ok(result.instructions.some((line) => line.includes(`Use the absolute path ${root} for the desk`) && !line.includes("export DESK=")))
   assert.ok(result.instructions.some((line) => line.includes("desk_status")))
   assert.ok(!result.instructions.some((line) => line.includes("AGENTS.md")))
   assert.ok(result.instructions.some((line) => line.startsWith("No task was named")))
@@ -1435,7 +1435,7 @@ test("bootOnce: setup_required and a missing bound desk each come back with thei
   assert.match(setup.instructions[0], /first run, not an outage/u)
   const missing = await bootOnce({ env: { DESK: path.join(emptyHome, "gone") }, cwd: emptyHome, homeDir: emptyHome })
   assert.equal(missing.status, "degraded")
-  assert.match(missing.instructions[0], /Never point \$DESK at a different desk/u)
+  assert.match(missing.instructions[0], /Never use a different desk to work around this/u)
 })
 
 test("bootOnce: prereq, sync, card and push-account problems each become one plain instruction", async () => {

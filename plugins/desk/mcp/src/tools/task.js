@@ -31,6 +31,7 @@ import { jobId } from "../factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../factory/desk-repo.js"
 import { objectInput } from "../util/object-input.js"
 import { reportLink } from "./factory-context.js"
+import { assertCodeRepoEvidence, recordedRepos } from "./done-evidence.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
@@ -111,7 +112,12 @@ const DONE_EVIDENCE_REF_CHECKS = {
 // re-saving an already-`done` card, and moving to any other status
 // (including `cancelled`, which makes no completion claim to back), never
 // reach this function at all.
-async function assertDoneEvidence(evidence, deskRoot, toolName) {
+//
+// A card that records `repos:` names code, so only code evidence finishes it: see `./done-evidence.js` (a PR URL in one
+// of those repos, or a pushed commit that resolves in a recorded clone; never `non_code`, `ci_run` or a desk commit).
+// `card` carries what the check needs of the task itself: its recorded `repos`, the card file(s) the task lives in
+// (a `non_code` ref may not be the card, which any agent can write to say anything) and the git seams.
+async function assertDoneEvidence(evidence, deskRoot, toolName, card) {
   if (evidence === undefined) {
     throw new Error(
       `${toolName}: moving a task to \`done\` needs evidence -- pass \`evidence: { kind, ref }\`. ` +
@@ -133,6 +139,17 @@ async function assertDoneEvidence(evidence, deskRoot, toolName) {
         `for kind "${evidence.kind}", \`ref\` must be ${check.shape}.`,
     )
   }
+  const repos = recordedRepos(card.repos)
+  if (evidence.kind === "non_code" && repos.length === 0) {
+    const target = path.resolve(deskRoot, evidence.ref.trim())
+    if (card.files.some((file) => path.resolve(file) === target)) {
+      throw new Error(
+        `${toolName}: \`evidence.ref\` ${JSON.stringify(evidence.ref)} is the task card itself, which proves nothing: the card is what the evidence backs. ` +
+          "For kind \"non_code\", point at a separate proof (a file or folder in the desk that holds the outcome, or an https URL to it).",
+      )
+    }
+  }
+  assertCodeRepoEvidence({ toolName, evidence, repos, deskRoot, spawnGit: card.spawnGit, homeDir: card.homeDir })
 }
 
 /**
@@ -237,6 +254,8 @@ const OPTIONAL_RUNTIME_FIELDS = [
 export const TASK_CREATE_FIELDS = ["track", "slug", "title", "status", "body", ...OPTIONAL_RUNTIME_FIELDS]
 export const TASK_UPDATE_FIELDS = ["track", "slug", "frontmatter", "body_append", "evidence"]
 export const TASK_ARCHIVE_FIELDS = ["track", "slug", "evidence", "outcome"]
+
+const asList = (value) => (Array.isArray(value) ? value : [])
 
 function relPath(deskRoot, absPath) {
   return path.relative(deskRoot, absPath)
@@ -579,7 +598,11 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   }
   merged.updated = nowIso()
   if (merged.status === "done" && existing.data.status !== "done") {
-    await assertDoneEvidence(evidence, deskRoot, "task_update")
+    await assertDoneEvidence(evidence, deskRoot, "task_update", {
+      // The card's repos before this call, plus any this call adds: a card cannot shed its repos to dodge the check.
+      repos: [...asList(existing.data.repos), ...asList(frontmatter.repos)],
+      files: [filePath], spawnGit, homeDir: env.HOME,
+    })
     merged.evidence = { kind: evidence.kind, ref: evidence.ref, recorded_at: merged.updated }
     const link = await factoryReportFor({ deskRoot, person, track, slug, env })
     if (link !== null) merged.factory_report = link
@@ -740,7 +763,7 @@ export async function task_archive({ deskRoot, input, person = null, readiness, 
       if (outcome === "cancelled") {
         archiveBump = { status: "cancelled" }
       } else {
-        await assertDoneEvidence(evidence, deskRoot, "task_archive")
+        await assertDoneEvidence(evidence, deskRoot, "task_archive", { repos: sourceCard.data.repos, files: [srcFile, archivedFile], spawnGit, homeDir: env.HOME })
         archiveBump = { status: "done", evidence: { kind: evidence.kind, ref: evidence.ref } }
       }
     }

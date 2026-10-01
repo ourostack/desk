@@ -428,7 +428,7 @@ async function runMcpListToolsSession(fixture, { timeoutMs = 10000, activationCo
   // The handshake comes first; the runtime restore runs during admission afterwards. desk_status waits for it.
   let status
   for (let id = 3; status === undefined || status.state === "admitting"; id += 1) {
-    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "desk_status", arguments: {} } }) + "\n")
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "desk_status", arguments: { detail: true } } }) + "\n")
     status = JSON.parse((await waitForResponse(id)).result.content[0].text)
   }
   child.kill("SIGTERM")
@@ -576,11 +576,11 @@ async function runMcpStatusSession(fixture, {
     })
     const tools = await request("tools/list", {})
     // The handshake comes first and desk_status answers at once, so the first answers can still be admitting.
-    let initialStatus = await callTool("desk_status")
+    let initialStatus = await callTool("desk_status", { detail: true })
     let body = observeStatus(initialStatus)
     for (const admittingDeadline = performance.now() + timeoutMs; body.state === "admitting" && performance.now() < admittingDeadline;) {
       await new Promise((resolve) => setTimeout(resolve, 50))
-      initialStatus = await callTool("desk_status")
+      initialStatus = await callTool("desk_status", { detail: true })
       body = observeStatus(initialStatus)
     }
     await onInitialStatus?.({ initialize, tools, initialStatus })
@@ -600,7 +600,7 @@ async function runMcpStatusSession(fixture, {
         if (performance.now() >= deadline) {
           throw sessionError("timed out waiting for converged desk_status")
         }
-        status = await callTool("desk_status", {}, deadline)
+        status = await callTool("desk_status", { detail: true }, deadline)
         body = observeStatus(status)
       }
     }
