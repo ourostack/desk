@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.170 — 2026-10-01
+
+### Guard: inspection Git no longer outlives its hook, and the tests clean up after themselves
+
+The protected-checkout guard reads repository state through `git symbolic-ref` and `git config`. When a read hung (a FIFO include, a stalled filesystem) and the hook was then killed or hit its own deadline, the Git child kept running with its parent gone, sleeping forever; 116 such processes up to 19 hours old were found on one Mac. Each inspection Git now leads its own process group, and the group is killed when the hook exits or receives SIGTERM, SIGINT or SIGHUP (the signal still takes its normal course afterwards). A kernel alarm armed inside the child (`perl` sets `alarm` and then execs Git, so no extra process exists) ends the read one second after its own timeout even if the parent is SIGKILLed or only the hook PID is killed. Windows has neither process groups nor perl, so there only the child itself is killed.
+
+The tests that make Git block on a FIFO now share one helper that wakes or kills blocked readers, and every guard fixture folder is only deleted after anything still running inside it has been killed and has exited. A new regression test kills a parent mid-read with SIGTERM and SIGKILL and asserts no Git process is left in the fixture.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.169 — 2026-10-01
 
 On Copilot, Desk's browser MCP server is now named `desk-web` instead of `web`. Copilot sends each MCP tool to the model under the server's name as a namespace, and OpenAI-backed models reserve the `web` namespace, so every request failed with `400 Invalid Value: 'tools'. Function 'web.web-browser_click' is not allowed in reserved namespace 'web'`. Claude Code keeps the `web` name, and its `mcp__plugin_desk_web__*` tool names are unchanged.
