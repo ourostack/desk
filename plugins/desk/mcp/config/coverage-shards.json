@@ -327,6 +327,7 @@
     "tests/desk/mcp/__tests__/desk/card_commit_guard.test.js": 9,
     "tests/desk/mcp/__tests__/runtime/task_status_guard_shell.test.js": 3,
     "tests/desk/mcp/__tests__/runtime/boot_round12.test.js": 2,
-    "tests/desk/mcp/__tests__/tools/desk_save_card.test.js": 0.5
+    "tests/desk/mcp/__tests__/tools/desk_save_card.test.js": 0.5,
+    "tests/desk/mcp/__tests__/runtime/done_claim_gate.test.js": 1.5
   }
 }
