@@ -65,6 +65,8 @@ export function fakeGitHub({
   intercept = null,
 } = {}) {
   const calls = []
+  // Which tree listings GitHub reports as truncated: `(sha, entries) -> boolean`, set by `setTruncated`.
+  let truncated = () => false
   const trees = new Map()
   const commits = new Map()
   const blobs = new Map()
@@ -106,6 +108,20 @@ export function fakeGitHub({
     else {
       const child = entries.get(parts[0])
       entries.set(parts[0], { type: "tree", sha: withPath(child?.type === "tree" ? child.sha : null, parts.slice(1), sha) })
+    }
+    return putTree([...entries])
+  }
+  // A new tree from `treeSha` without `parts`; a folder left empty goes too, as Git has it.
+  const withoutPath = (treeSha, parts) => {
+    const entries = new Map(trees.get(treeSha) ?? [])
+    if (parts.length === 1) entries.delete(parts[0])
+    else {
+      const child = entries.get(parts[0])
+      if (child?.type === "tree") {
+        const sub = withoutPath(child.sha, parts.slice(1))
+        if ((trees.get(sub) ?? new Map()).size === 0) entries.delete(parts[0])
+        else entries.set(parts[0], { type: "tree", sha: sub })
+      }
     }
     return putTree([...entries])
   }
@@ -185,11 +201,15 @@ export function fakeGitHub({
     if (method === "GET" && (m = /^repos\/([^/]+\/[^/]+)\/git\/trees\/([0-9a-f]+)$/u.exec(pathPart))) {
       const tree = trees.get(m[2])
       if (!tree) return httpError(404, "Not Found")
-      return ok({ sha: m[2], truncated: false, tree: [...tree].map(([name, entry]) => ({ path: name, mode: entry.type === "tree" ? "040000" : "100644", ...entry })) })
+      return ok({ sha: m[2], truncated: truncated(m[2], tree), tree: [...tree].map(([name, entry]) => ({ path: name, mode: entry.type === "tree" ? "040000" : "100644", ...entry })) })
     }
     if (method === "POST" && (m = /^repos\/([^/]+\/[^/]+)\/git\/trees$/u.exec(pathPart))) {
       let sha = body.base_tree
       for (const entry of body.tree) {
+        if (entry.sha === null) {
+          sha = withoutPath(sha, entry.path.split("/"))
+          continue
+        }
         const blob = gitBlobSha(Buffer.from(entry.content, "utf8"))
         blobs.set(blob, entry.content)
         sha = withPath(sha, entry.path.split("/"), blob)
@@ -236,9 +256,14 @@ export function fakeGitHub({
       pulls.push(pr)
       return ok(publicPr(pr), 201)
     }
+    if (method === "GET" && (m = new RegExp(`^repos/${store}/pulls/(\\d+)$`, "u").exec(pathPart))) {
+      const pr = pulls.find((item) => item.number === Number(m[1]))
+      return pr ? ok(publicPr(pr)) : httpError(404, "Not Found")
+    }
     if (method === "PATCH" && (m = new RegExp(`^repos/${store}/pulls/(\\d+)$`, "u").exec(pathPart))) {
       const pr = pulls.find((item) => item.number === Number(m[1]))
-      pr.body = body.body
+      if (Object.hasOwn(body, "body")) pr.body = body.body
+      if (body.state) pr.state = body.state
       return ok(publicPr(pr))
     }
     if (method === "GET" && (m = new RegExp(`^repos/${store}/issues/(\\d+)/comments$`, "u").exec(pathPart))) {
@@ -301,6 +326,24 @@ export function fakeGitHub({
       const sha = repo(repoName)?.refs.get(`heads/${branch}`)
       return sha ? factsOf(sha) : null
     },
+    /** Marks tree listings truncated from now on, as GitHub does for a very large tree: `(sha, entries) -> boolean`. */
+    setTruncated(predicate) {
+      truncated = predicate
+    },
+    /** The tree SHA of a commit. */
+    treeOf: (sha) => commits.get(sha).tree,
+    /** The account's push permission on the store changes, as when a maintainer grants it. */
+    setPush(value) {
+      storeRepo().meta.permissions.push = value
+    },
+    /** Another account is signed in and answers for the token from now on; the old account's fork stays as it was. */
+    setAccount(name) {
+      account = name
+    },
+    /** Deletes a branch, as a store that removes head branches after a merge does. */
+    dropBranch(repoName, branch) {
+      repo(repoName).refs.delete(`heads/${branch}`)
+    },
     ref: (repoName, branch) => repo(repoName)?.refs.get(`heads/${branch}`) ?? null,
     commit: (sha) => commits.get(sha),
     setForkReady() {
@@ -321,7 +364,10 @@ export function fakeGitHub({
       const headSha = repo(pr.headRepo).refs.get(`heads/${pr.head.ref}`)
       const main = storeRepo().refs.get("heads/main")
       let tree = commits.get(main).tree
-      for (const [name, sha] of filesOf(commits.get(headSha).tree)) if (DATA.test(name)) tree = withPath(tree, name.split("/"), sha)
+      const headFiles = filesOf(commits.get(headSha).tree)
+      for (const [name, sha] of headFiles) if (DATA.test(name)) tree = withPath(tree, name.split("/"), sha)
+      // A data file the branch dropped is a delete the merge applies.
+      for (const name of filesOf(tree).keys()) if (DATA.test(name) && !headFiles.has(name)) tree = withoutPath(tree, name.split("/"))
       storeRepo().refs.set("heads/main", putCommit(tree, [main, headSha], "merge"))
       pr.state = "closed"
       pr.merged_at = "merged"

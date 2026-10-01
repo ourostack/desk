@@ -11,7 +11,7 @@ import { deriveFile, deriveMarker, sweep } from "../../../../../plugins/desk/mcp
 import { deriveCopilotSession } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
 import { task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { runStatusCommand } from "../../../../../plugins/desk/mcp/scripts/factory.js"
-import { END, ID, STORE, json, scratch, session } from "./_session_helpers.js"
+import { END, ID, STORE, json, recent, scratch, session } from "./_session_helpers.js"
 
 test("I1 direct, sweep and status refuse an external marker directory without reading or pruning its files", () => scratch(async (ctx) => {
   const marker = { ...await session(ctx), ended_at: END, end_reason: "complete" }
@@ -193,7 +193,7 @@ async function localFacts(ctx, host = "copilot-cli") {
 }
 
 test("I5 stale end then resume/open turn respects quietness and derives an open lifetime", () => scratch(async (ctx) => {
-  const marker = { ...await session(ctx, "copilot-cli"), ended_at: END, end_reason: "complete", updated_at: END }
+  const marker = { ...await session(ctx, "copilot-cli"), ended_at: END, end_reason: "complete", updated_at: recent() }
   await writeMarker(ctx.env, marker)
   await setConsent(ctx.env, { store: STORE, contribute: true })
   await resumeOpen(marker)
@@ -207,14 +207,14 @@ test("I5 stale end then resume/open turn respects quietness and derives an open 
   assert.equal(facts.session.end_reason, null)
   assert.ok(facts.unavailable.some((u) => u.field === "turns" && u.reason === "session_open"))
   assert.equal(facts.unavailable.some((u) => u.field === "turns" && u.reason === "log_truncated"), false)
-  await writeMarker(ctx.env, { ...marker, ended_at: CURRENT_END, updated_at: CURRENT_END })
+  await writeMarker(ctx.env, { ...marker, ended_at: CURRENT_END, updated_at: recent(1000) })
   await fs.utimes(marker.log_path, new Date(), new Date())
   assert.equal((await sweep(ctx.env)).written, 1)
   assert.equal((await localFacts(ctx)).session.end_reason, "complete")
 }))
 
 test("I5 a concurrent stale derivation cannot publish closure across a native resume", () => scratch(async (ctx) => {
-  const stale = { ...await session(ctx, "copilot-cli"), ended_at: END, end_reason: "complete", updated_at: END }
+  const stale = { ...await session(ctx, "copilot-cli"), ended_at: END, end_reason: "complete", updated_at: recent() }
   await writeMarker(ctx.env, stale)
   await setConsent(ctx.env, { store: STORE, contribute: true })
   let entered, release
@@ -233,9 +233,9 @@ test("I5 a concurrent stale derivation cannot publish closure across a native re
 }))
 
 test("I5 stale queued marker input uses a newer protected end marker for the same session", () => scratch(async (ctx) => {
-  const stale = { ...await session(ctx, "copilot-cli"), ended_at: END, end_reason: "complete", updated_at: END }
+  const stale = { ...await session(ctx, "copilot-cli"), ended_at: END, end_reason: "complete", updated_at: recent() }
   await resumeOpen(stale)
-  const current = { ...stale, ended_at: CURRENT_END, updated_at: CURRENT_END }
+  const current = { ...stale, ended_at: CURRENT_END, updated_at: recent(1000) }
   await writeMarker(ctx.env, current)
   await setConsent(ctx.env, { store: STORE, contribute: true })
   const results = await Promise.all([deriveMarker(ctx.env, stale), deriveMarker(ctx.env, current)])
@@ -254,17 +254,17 @@ test("I5 Claude activity after an end marker reopens that lifetime rather than i
 }))
 
 test("I5 current marker corruption or loss of binding cannot be bypassed with stale input", () => scratch(async (ctx) => {
-  const marker = { ...await session(ctx), updated_at: END }
+  const marker = { ...await session(ctx), updated_at: recent() }
   await writeMarker(ctx.env, marker)
   const file = path.join(await factoryStateRoot(ctx.env), "markers", `${marker.host}-${ID}.json`)
   await json(file, {})
   assert.equal((await deriveMarker(ctx.env, marker)).result, "source_unreadable")
-  await writeMarker(ctx.env, { ...marker, desk_root: null, updated_at: CURRENT_END })
+  await writeMarker(ctx.env, { ...marker, desk_root: null, updated_at: recent(1000) })
   assert.equal((await deriveMarker(ctx.env, marker)).result, "held")
 }))
 
 test("I5 a resume arriving during lifetime inspection is retried without invoking the native deriver", (t) => scratch(async (ctx) => {
-  const marker = { ...await session(ctx, "copilot-cli"), ended_at: END, end_reason: "complete", updated_at: END }
+  const marker = { ...await session(ctx, "copilot-cli"), ended_at: END, end_reason: "complete", updated_at: recent() }
   await setConsent(ctx.env, { store: STORE, contribute: true })
   const lstat = fs.lstat
   let stamps = 0
@@ -321,7 +321,7 @@ test("I1 pruning refuses to unlink a replaced leaf and propagates protection fai
 
 for (const activity of ["resume", "late-shutdown"]) {
   test(`I5 detached quietness is rechecked under the lock after ${activity} wins the race`, (t) => scratch(async (ctx) => {
-    const marker = { ...await session(ctx, "copilot-cli"), ended_at: END, end_reason: "complete", updated_at: END }
+    const marker = { ...await session(ctx, "copilot-cli"), ended_at: END, end_reason: "complete", updated_at: recent() }
     const old = new Date(Date.now() - 60000)
     await fs.utimes(marker.log_path, old, old)
     await writeMarker(ctx.env, marker)

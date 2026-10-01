@@ -261,9 +261,9 @@ test("subagents get the next agent numbers, their own tools, their model and the
   try {
     const { facts } = await derive(home, SESSIONS.full)
     assert.deepEqual(facts.agents, [
-      { n: 0, parent: null, model: "claude-opus-5-5", requested_model: "claude-opus-5-5" },
-      { n: 1, parent: 0, model: "claude-sonnet-5", agent_type: "explore", requested_model: "claude-sonnet-5" },
-      { n: 2, parent: 1, model: "gpt-5.2", agent_type: "my-private-agent", requested_model: "gpt-5.2" },
+      { n: 0, parent: null, model: "claude-opus-5-5" },
+      { n: 1, parent: 0, model: "claude-sonnet-5", agent_type: "explore" },
+      { n: 2, parent: 1, model: "gpt-5.2", agent_type: "my-private-agent" },
     ])
     assert.deepEqual(intervalsOf(facts, "subagent"), [
       { kind: "subagent", agent: 0, ...span(31, 40) },
@@ -348,7 +348,7 @@ test("binding events: Desk task tools with track and slug, and only successful f
       { at: at(14), path: `/tmp/${SENTINEL}/desk/eng/m3-3/old.md`, agent: 0 },
       { at: at(37.2), path: `/tmp/${SENTINEL}/desk/eng/m3-3/sub.md`, agent: 2 },
     ])
-    assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "eng", slug: "m3-3" }], "only the prompt with a Desk-Task line binds a worker; the nested spawn has none")
+    assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "eng", slug: "m3-3", start: "2026-09-25T08:00:31.000Z", end: "2026-09-25T08:00:40.000Z" }], "only the prompt with a Desk-Task line binds a worker; the nested spawn has none")
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
@@ -383,7 +383,7 @@ test("an open session: open turn, orphan tool, failed subagent, truncated last l
     assert.equal(facts.session.end_reason, null)
     assert.equal(facts.session.derived_through, at(22))
     // The subagent's name and model both fail their local patterns, so neither is stored.
-    assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "claude-opus-5-5", requested_model: "claude-opus-5-5" }, { n: 1, parent: 0, model: "unknown" }])
+    assert.deepEqual(facts.agents, [{ n: 0, parent: null, model: "claude-opus-5-5" }, { n: 1, parent: 0, model: "unknown" }])
     assert.deepEqual(intervalsOf(facts, "subagent"), [{ kind: "subagent", agent: 0, ...span(6, 8) }])
     assert.deepEqual(intervalsOf(facts, "turn"), [{ kind: "turn", agent: 0, ...span(2, 11) }])
     assert.deepEqual(intervalsOf(facts, "human_wait"), [{ kind: "human_wait", agent: 0, ...span(11, 20) }])
@@ -753,15 +753,9 @@ test("the agent cap: past 9999 subagents, later ones are dropped and their tools
 })
 
 test("the sort comparators order every direction", () => {
-  const { compareByStart, compareModels, comparePrs } = __internals__
-  assert.equal(compareByStart({ start: at(1) }, { start: at(2) }), -1)
-  assert.equal(compareByStart({ start: at(2) }, { start: at(1) }), 1)
-  assert.equal(compareByStart({ start: at(1) }, { start: at(1) }), 0)
+  const { compareModels } = __internals__
   assert.equal(compareModels({ id: "a" }, { id: "b" }), -1)
   assert.equal(compareModels({ id: "b" }, { id: "a" }), 1)
-  assert.equal(comparePrs({ repo: "a/x", number: 2 }, { repo: "b/x", number: 1 }), -1)
-  assert.equal(comparePrs({ repo: "b/x", number: 1 }, { repo: "a/x", number: 2 }), 1)
-  assert.equal(comparePrs({ repo: "a/x", number: 1 }, { repo: "a/x", number: 2 }), -1)
 })
 
 test("readSessionRefs reads the ambient COPILOT_HOME when no environment is passed", () => {

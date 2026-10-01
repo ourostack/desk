@@ -196,7 +196,8 @@ function publicRepos(visibility) {
   }
 }
 
-function publishRefs(refs, askPublic) {
+// `timedPrs`: whether a controller PR keeps its `at_ms` (see `toPublished`).
+function publishRefs(refs, askPublic, timedPrs) {
   const isPublic = (repo) => repo !== null && !DATE_SHAPE.test(repo) && askPublic(repo)
   const dropped = { prs: refs.unresolved.prs, commits: refs.unresolved.commits }
   // Keeps each public reference once (by `keyOf`) and counts the others.
@@ -212,21 +213,57 @@ function publishRefs(refs, askPublic) {
     }
     return kept
   }
-  const prs = keep(refs.prs, "prs", (pr) => `${pr.repo}#${pr.number}`, (pr) => ({ repo: pr.repo, number: pr.number, ...(Object.hasOwn(pr, "agent") ? { agent: pr.agent } : {}) }))
+  const prs = keep(refs.prs, "prs", (pr) => `${pr.repo}#${pr.number}`, (pr) => ({
+    repo: pr.repo,
+    number: pr.number,
+    ...(Object.hasOwn(pr, "agent") ? { agent: pr.agent } : {}),
+    ...(timedPrs && pr.agent === 0 && Object.hasOwn(pr, "at_ms") ? { at_ms: pr.at_ms } : {}),
+  }))
   const commits = keep(refs.commits, "commits", (commit) => commit.sha, (commit) => ({ repo: commit.repo, sha: commit.sha }))
   return { prs, commits, dropped }
 }
 
+const TOKEN_KEYS = ["input", "output", "cache_read", "cache_write", "reasoning"]
+
+// The sum of two counts; unknown (`null`) when either is unknown or the sum is unsafe, as everywhere else.
+function sumKnown(a, b) {
+  if (a === null || b === null) return null
+  const sum = a + b
+  return Number.isSafeInteger(sum) ? sum : null
+}
+
+// A model id the published validator would refuse publishes as `unknown`. Models that end up with the same id merge, so the published ids stay unique, and the result is sorted by id. A merged count that cannot be summed is unknown, and says so in `unavailable`.
+function publishModels(models, flag) {
+  const byId = new Map()
+  const merged = (field, a, b) => {
+    const sum = sumKnown(a, b)
+    if (sum === null && !(a === null && b === null)) flag(field, "source_unreadable")
+    return sum
+  }
+  for (const model of models) {
+    const id = publishableToken(scrub(model.id)) ? scrub(model.id) : "unknown"
+    const held = byId.get(id)
+    if (held === undefined) {
+      byId.set(id, { id, requests: model.requests, tokens: Object.fromEntries(TOKEN_KEYS.map((key) => [key, model.tokens[key]])) })
+    } else {
+      held.requests = merged("requests", held.requests, model.requests)
+      for (const key of TOKEN_KEYS) held.tokens[key] = merged("tokens", held.tokens[key], model.tokens[key])
+    }
+  }
+  return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : 1))
+}
+
 // A plugin is named in a public store only when it was installed from a public
 // repository; the rest are counted. A store known not to be public names them all.
+// A name the published validator would refuse (a credential-shaped one) is hidden the same way.
 function publishPlugins(plugins, isPublic, storeVisibility) {
-  if (PRIVATE_STORES.has(storeVisibility)) return { plugins: plugins.map((plugin) => ({ name: scrub(plugin.name), version: plugin.version })), hidden: 0, names: plugins.map((plugin) => plugin.name) }
+  const privateStore = PRIVATE_STORES.has(storeVisibility)
   const kept = []
   const names = []
   let hidden = 0
   for (const plugin of plugins) {
     const source = plugin.source ?? null
-    if (source !== null && isPublic(source)) {
+    if (publishableToken(scrub(plugin.name)) && (privateStore || (source !== null && isPublic(source)))) {
       kept.push({ name: scrub(plugin.name), version: plugin.version })
       names.push(plugin.name)
     } else hidden += 1
@@ -235,7 +272,7 @@ function publishPlugins(plugins, isPublic, storeVisibility) {
 }
 
 // The per-machine keyed form of a job ID, for a desk that is not known to be private.
-function keyedJobId(job, machineSecret) {
+export function keyedJobId(job, machineSecret) {
   return createHmac("sha256", machineSecret).update(job).digest("hex").slice(0, 32)
 }
 
@@ -311,7 +348,10 @@ function publishJob(job, startedMs, flag) {
   }
   if (lost) flag("job_offsets", "source_unreadable")
 
-  return { job: job.job, basis: [...job.basis], session_offset_ms: sessionOffset, transitions, observed, ...agentsOf(job) }
+  return {
+    job: job.job, basis: [...job.basis], session_offset_ms: sessionOffset, transitions, observed, ...agentsOf(job),
+    ...(Object.hasOwn(job, "segments") ? { segments: job.segments.map((segment) => ({ ...segment })) } : {}),
+  }
 }
 
 /**
@@ -356,7 +396,9 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
 
   const intervals = publishIntervals(local.intervals, startedMs, durationMs, flag)
   const isPublic = publicRepos(visibility)
-  const refs = publishRefs(local.refs, isPublic)
+  // Job segments and controller PR times are job timing: a desk that withholds its timing publishes neither.
+  // Elsewhere a PR's `at_ms` is published only where it decides a PR's job: a controller (worker 0) PR in a session whose jobs carry segments.
+  const refs = publishRefs(local.refs, isPublic, deskPrivate && local.jobs.some((job) => Object.hasOwn(job, "segments")))
   const plugins = publishPlugins(local.plugins, isPublic, storeVisibility)
   const dropped = { ...refs.dropped, plugins: plugins.hidden }
   const jobs = deskPrivate
@@ -368,17 +410,7 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
     schema: PUBLISHED_SCHEMA,
     session: publishSession(local.session, durationMs, sessionId),
     plugins: plugins.plugins,
-    models: local.models.map((model) => ({
-      id: scrub(model.id),
-      requests: model.requests,
-      tokens: {
-        input: model.tokens.input,
-        output: model.tokens.output,
-        cache_read: model.tokens.cache_read,
-        cache_write: model.tokens.cache_write,
-        reasoning: model.tokens.reasoning,
-      },
-    })),
+    models: publishModels(local.models, flag),
     agents: local.agents.map((agent) => publishAgent(agent, local.session.host, plugins.names)),
     intervals,
     counts: {

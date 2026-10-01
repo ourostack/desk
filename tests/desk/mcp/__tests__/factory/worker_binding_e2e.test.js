@@ -78,7 +78,8 @@ test("a multi-worker Claude session goes from transcript to built store with per
     })
     assert.deepEqual(facts.agents.map((agent) => [agent.n, agent.parent]), [[0, null], [1, 0], [2, 0], [3, 0], [4, 1]])
     // Each worker's PR is credited to that worker, though the root holds every pr-link.
-    assert.deepEqual(facts.refs.prs, [10, 11, 12, 13, 14].map((number, index) => ({ repo: "o/r", number, agent: index })))
+    // Each PR carries the time of its creating call, in ms from the session's start.
+    assert.deepEqual(facts.refs.prs, [[10, 6], [11, 9], [12, 43], [13, 83], [14, 13]].map(([number, minute], index) => ({ repo: "o/r", number, agent: index, at_ms: minute * 60000 })))
 
     const cards = Object.fromEntries(["task-a", "task-b", "task-c"].map((slug) => [`t/${slug}`, { status: "processing", created_at: at(-60), updated_at: at(0) }]))
     facts.jobs = bindSession({

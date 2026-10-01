@@ -13,6 +13,7 @@
 //   node scripts/factory.js evaluate-accept --job <job>
 //   node scripts/factory.js kaizen-check --store <directory> --repo <owner/repo> [--author <login>]
 //   node scripts/factory.js andon --store <directory> --repo <owner/repo> [--author <login>]
+//   node scripts/factory.js reconcile --desk <absolute desk root> --since <iso> --until <iso> [--store <directory>] [--person-prefix desks/<alias>]
 //
 // `account` names the signed-in GitHub account that can open intake pull
 // requests on the store, asking GitHub with each account's own token rather
@@ -35,7 +36,9 @@
 // comparable version makes a quality measure clearly worse; the tracked
 // plugins are the `andon.plugins` list in the store's `factory.json`, and a
 // store without that file tracks none. Both print their JSON result and exit
-// 1 when any card or issue failed, after checking the rest.
+// 1 when any card or issue failed, after checking the rest. `reconcile` compares
+// a desk's real task activity in a window with the factory's jobs and prints each
+// mismatch with a reason code (`src/factory/reconcile.js`); it only reads.
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync, realpathSync } from "node:fs"
 import * as path from "node:path"
@@ -46,13 +49,15 @@ import { readDeskRemote, resolveJobIdentity } from "../src/factory/desk-repo.js"
 import { acceptEvaluations, evaluatePending, evaluateTask } from "../src/factory/evaluate-run.js"
 import { listFinalizeRequests, listMarkers, readStatus, setConsent } from "../src/factory/outbox.js"
 import { PATTERNS } from "../src/factory/schema.js"
+import { normalizeTimestamp } from "../src/factory/time.js"
+import { reconcile } from "../src/factory/reconcile.js"
 import { build, jobLink, storePublicPlugins, storeRecords } from "../src/factory/pipeline/build.js"
 import { parseStoreConfig, syncAndon } from "../src/factory/pipeline/andon.js"
 import { syncKaizenCards } from "../src/factory/pipeline/kaizen.js"
 import { issuesClient } from "../src/factory/store-issues.js"
 import { factsPathsForSession, isFactsPath, labelsPathParts, validatePr } from "../src/factory/pipeline/validate-pr.js"
 
-export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon"])
+export const SUPPORTED_COMMANDS = Object.freeze(["account", "consent", "derive", "status", "flush", "finalize", "validate-pr", "build", "job-link", "evaluate", "evaluate-accept", "kaizen-check", "andon", "reconcile"])
 const CONSENT_OPTIONS = new Set(["store", "contribute", "account"])
 const CONTRIBUTE_VALUES = new Set(["yes", "no"])
 const MAINTAINER_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
@@ -84,7 +89,7 @@ export async function runDeriveCommand({ argv, env }) {
   return deriveFile(env, options.get("marker"), { quietMs: Number(raw) })
 }
 
-/** `flush --store <owner/repo>`: one delivery attempt; prints `{ result, pr? }`. */
+/** `flush --store <owner/repo>`: one delivery attempt; prints `{ result, pr?, stale_retries?, rejections_unmatched? }`. */
 export async function runFlushCommand({ argv, env, runner }) {
   const options = parseOptions(argv)
   if (options === null || options.size !== 1 || !options.has("store")) throw new Error("Usage: factory.js flush --store <owner/repo>")
@@ -222,8 +227,10 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
     return { ...result, maintenance: false }
   }
   // Anything but a published facts or labels file, including a non-fact file
-  // under `facts/` or `labels/`, and a maintainer's removal of a facts or
-  // labels file are maintenance: the store's merge workflow never merges them.
+  // under `facts/` or `labels/`, is maintenance: the store's merge workflow
+  // never merges it. A maintainer's deletion of a facts or labels file is a
+  // retraction and validates like any other change at those paths; anyone
+  // else's deletion is refused (`removal`).
   let maintenance = false
   const errors = []
   listed.forEach((change, index) => {
@@ -233,12 +240,8 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
       if (!trustedMaintainer) errors.push({ code: "path", path: `changes.${index}` })
       return
     }
-    if (change.status === "removed" && trustedMaintainer) {
-      maintenance = true
-      return
-    }
     if (change.status === "removed" || change.status === "unknown") {
-      errors.push(...validatePr({ changes: [change] }).errors)
+      errors.push(...validatePr({ changes: [change], trustedMaintainer }).errors)
       return
     }
     // The bytes the merge lands, and the bytes they replace on the base.
@@ -402,6 +405,27 @@ export async function runAndonCommand({ argv, env, runner }) {
   return syncAndon({ ...context, plugins: config.plugins, publicPlugins: storePublicPlugins(parseOptions(argv).get("store")) })
 }
 
+const RECONCILE_USAGE = "Usage: factory.js reconcile --desk <absolute desk root> --since <iso> --until <iso> [--store <directory>] [--person-prefix desks/<alias>]"
+const RECONCILE_OPTIONS = ["desk", "since", "until", "store", "person-prefix"]
+
+/** Runs `reconcile`: bad arguments give `{ ok: false, error }`; see `src/factory/reconcile.js`. */
+export async function runReconcileCommand({ argv, env, git = "git" }) {
+  const options = parseOptions(argv)
+  const fail = (error = RECONCILE_USAGE) => ({ ok: false, error })
+  if (options === null || ["desk", "since", "until"].some((key) => !options.has(key)) || [...options.keys()].some((key) => !RECONCILE_OPTIONS.includes(key))) return fail()
+  if (!path.isAbsolute(options.get("desk"))) return fail()
+  if (options.has("store") && options.get("store") === "") return fail()
+  const since = normalizeTimestamp(options.get("since"))
+  const until = normalizeTimestamp(options.get("until"))
+  if (since === null || until === null || !PATTERNS.timestamp.test(since) || !PATTERNS.timestamp.test(until)) return fail("factory.js reconcile: --since and --until must be exact UTC timestamps")
+  if (!(Date.parse(since) < Date.parse(until))) return fail("factory.js reconcile: --since must be before --until")
+  return reconcile({
+    deskRoot: options.get("desk"), personPrefix: options.get("person-prefix") ?? "", since, until,
+    storeDir: options.has("store") ? path.resolve(options.get("store")) : null, env,
+    ...(typeof git === "string" ? { git } : {}),
+  })
+}
+
 /** Runs the `consent` subcommand: validates `argv`, calls `setConsent`, and returns the JSON-ready result. */
 export async function runConsentCommand({ argv, env }) {
   const options = parseOptions(argv)
@@ -439,10 +463,11 @@ export async function main({ argv = process.argv.slice(2), env = process.env, cw
       "evaluate-accept": runEvaluateAcceptCommand,
       "kaizen-check": runKaizenCheckCommand,
       andon: runAndonCommand,
+      reconcile: runReconcileCommand,
     }[subcommand]
     const result = await command({ argv: rest, env, cwd, git, runner })
     write(`${JSON.stringify(result)}\n`)
-    const failed = (subcommand === "validate-pr" && result.ok === false) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
+    const failed = ((subcommand === "validate-pr" || subcommand === "reconcile") && result.ok === false) || (subcommand === "account" && result.result !== "account_found") || Object(result).failed > 0
     return failed ? 1 : 0
   } catch (error) {
     logError(`${error.message}\n`)
@@ -456,7 +481,11 @@ export function isMainModule(importMetaUrl, argv1) {
   return importMetaUrl === pathToFileURL(argv1).href
 }
 
-if (isMainModule(import.meta.url, process.argv[1])) {
-  const code = await main()
-  process.exitCode = code
+/** Runs `run` and sets the exit code when `argv1` names this module; otherwise does nothing. Returns whether it ran. */
+export async function runIfMain(importMetaUrl, argv1, run = main) {
+  if (!isMainModule(importMetaUrl, argv1)) return false
+  process.exitCode = await run()
+  return true
 }
+
+await runIfMain(import.meta.url, process.argv[1])

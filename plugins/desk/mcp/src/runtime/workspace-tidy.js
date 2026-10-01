@@ -8,6 +8,7 @@ import { readProcessStart } from "../readiness/process-start.js"
 import { withWorkspaceClaim } from "./workspace-claim.js"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { dispositionRecord } from "./workspace-evidence.js"
+import { TERMINAL_STATES } from "../desk/lifecycle.js"
 
 const RECENT_MS = 30 * 24 * 60 * 60 * 1000
 const MAX_BYTES = 64 * 1024
@@ -253,7 +254,7 @@ export async function inspectWorkspace({
           skipped.push({ file, reason: error instanceof CardSkip ? error.message : "unreadable card" })
           continue
         }
-        const terminal = ["done", "cancelled"].includes(data.status)
+        const terminal = TERMINAL_STATES.includes(data.status)
         const updated = Date.parse(data.updated)
         if (!terminal || !Number.isFinite(updated) || now - updated <= RECENT_MS) {
           result.cards.push(file)

@@ -11,7 +11,8 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { deriveClaudeSession, __internals__ } from "../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
+import { deriveClaudeSession } from "../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
+import * as common from "../../../../../plugins/desk/mcp/src/factory/derive-common.js"
 import { validateLocalFacts } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import {
   SENTINEL,
@@ -135,8 +136,9 @@ test("odd but parseable shapes (non-object lines, non-numeric usage, missing inp
   // Back-to-back prompts: the first turn has no activity and ends where it starts.
   const turns = findInterval(facts.intervals, (iv) => iv.kind === "turn")
   assert.equal(turns[0].start, turns[0].end)
-  // "12", -3 and null usage values count as 0; the missing usage object too.
-  assert.deepEqual(facts.models, [{ id: "claude-opus-5-5", requests: 3, tokens: { input: 1, output: 1, cache_read: 0, cache_write: 4, reasoning: null } }])
+  // A missing usage object counts as 0; "12" and -3 are no counts, so the input and output totals are unknown.
+  assert.deepEqual(facts.models, [{ id: "claude-opus-5-5", requests: 3, tokens: { input: null, output: null, cache_read: 0, cache_write: 4, reasoning: null } }])
+  assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
   // Both retryable errors count; neither can form an interval.
   assert.equal(facts.counts.api_retries, 2)
   assert.deepEqual(findInterval(facts.intervals, (iv) => iv.kind === "api_retry"), [])
@@ -414,9 +416,9 @@ test("unavailable gets tool_durations when an orphan tool_use exists, keyed to w
 test("pr-link and gitOperation.pr refs are deduplicated and sorted by repo then number; a non-GitHub URL is dropped", async () => {
   const { facts } = await deriveFull()
   assert.deepEqual(facts.refs.prs, [
-    { repo: "another-org/repo", number: 3, agent: 0 },
-    { repo: "ourostack/desk", number: 7, agent: 0 },
-    { repo: "ourostack/desk", number: 42, agent: 0 },
+    { repo: "another-org/repo", number: 3, agent: 0, at_ms: 37000 },
+    { repo: "ourostack/desk", number: 7, agent: 0, at_ms: 36000 },
+    { repo: "ourostack/desk", number: 42, agent: 0, at_ms: 18000 },
   ])
   assert.deepEqual(facts.refs.commits, [])
 })
@@ -704,7 +706,7 @@ test("a non-final malformed line with no assistant lines yields models: [] and m
 // can't reliably force every direction of a sort comparison ------------------
 
 test("compareByStart orders by start time, both directions and a tie", () => {
-  const { compareByStart } = __internals__
+  const { compareByStart } = common
   const earlier = { start: "2026-01-01T00:00:00.000Z" }
   const later = { start: "2026-01-01T00:00:01.000Z" }
   const sameAsEarlier = { start: "2026-01-01T00:00:00.000Z" }
@@ -714,7 +716,7 @@ test("compareByStart orders by start time, both directions and a tie", () => {
 })
 
 test("comparePrRefs orders by number within a repo, and by repo name across repos in both directions", () => {
-  const { comparePrRefs } = __internals__
+  const { comparePrRefs } = common
   assert.equal(comparePrRefs({ repo: "a/a", number: 1 }, { repo: "a/a", number: 2 }), -1)
   assert.equal(comparePrRefs({ repo: "a/a", number: 2 }, { repo: "a/a", number: 1 }), 1)
   assert.equal(comparePrRefs({ repo: "a/a", number: 1 }, { repo: "b/b", number: 1 }) < 0, true)
@@ -733,13 +735,13 @@ test("applyLimits leaves in-limit, well-ordered data untouched", () => {
     models: [{ id: "m", requests: 1 }],
     prs: [{ repo: "a/a", number: 1 }],
   }
-  assert.deepEqual(__internals__.applyLimits(input, unavailable), input)
+  assert.deepEqual(common.applyLimits(input, unavailable), input)
   assert.deepEqual(unavailable, [])
 })
 
 test("applyLimits drops intervals whose end precedes their start, recording the matching field once per field", () => {
   const unavailable = []
-  const { intervals } = __internals__.applyLimits({
+  const { intervals } = common.applyLimits({
     agents: [{ n: 0, parent: null, model: "m" }],
     intervals: [
       { kind: "turn", agent: 0, start: at(5), end: at(4) },
@@ -764,7 +766,7 @@ test("applyLimits drops intervals whose end precedes their start, recording the 
 test("applyLimits trims over-cap agents (with their intervals), intervals, models and PR refs", () => {
   const unavailable = []
   const limits = { agents: 2, intervals: 2, models: 1, prs: 1 }
-  const result = __internals__.applyLimits({
+  const result = common.applyLimits({
     agents: [{ n: 0, parent: null, model: "m" }, { n: 1, parent: 0, model: "m" }, { n: 2, parent: 0, model: "m" }],
     intervals: [
       { kind: "turn", agent: 2, start: at(0), end: at(1) },
@@ -808,7 +810,8 @@ test("every binding event carries the worker that produced it", async () => {
 test("a spawn prompt's Desk-Task line becomes events.spawnTasks for the spawned child, and nothing else of the prompt leaves", async () => {
   const { facts, events } = await deriveFull()
   assert.equal(SPAWN_DESK_TASK_LINE, "Desk-Task: desk-plugin/some-task")
-  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "desk-plugin", slug: "some-task" }])
+  // Timed by the root's spawning call.
+  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "desk-plugin", slug: "some-task", start: "2026-09-25T08:00:52.000Z", end: "2026-09-25T08:00:53.000Z" }])
   assert.equal(JSON.stringify(events.spawnTasks).includes(SENTINEL), false)
   assert.equal(JSON.stringify(facts).includes(SENTINEL), false)
   assert.equal("spawnTasks" in facts, false)
@@ -906,7 +909,8 @@ test("a PR is credited to the worker whose call created it, not to the root that
     { repo: "o/r", number: 1, agent: 1 },
     { repo: "o/r", number: 2, agent: 1 },
     { repo: "o/r", number: 3, agent: 2 },
-    { repo: "o/r", number: 4, agent: 0 },
+    // The root's pr-link is timed; the children's creations come after the root's last line, past the session, so they carry no time.
+    { repo: "o/r", number: 4, agent: 0, at_ms: 4000 },
   ])
   assert.equal(validateLocalFacts(facts).ok, true)
 })
@@ -922,7 +926,7 @@ test("a merge or any other action on a PR does not take the credit from the work
 
 test("dedupePrRefs: a creating ref outranks a link whatever the worker, and the lowest worker wins among the same kind", () => {
   const ref = (agent, created) => ({ repo: "o/r", number: 1, agent, created })
-  const dedupe = (...refs) => __internals__.dedupePrRefs(refs)
+  const dedupe = (...refs) => common.dedupePrRefs(refs)
   assert.deepEqual(dedupe(ref(0, false), ref(2, true)), [{ repo: "o/r", number: 1, agent: 2 }])
   assert.deepEqual(dedupe(ref(2, true), ref(0, false)), [{ repo: "o/r", number: 1, agent: 2 }])
   assert.deepEqual(dedupe(ref(3, true), ref(1, true), ref(2, true)), [{ repo: "o/r", number: 1, agent: 1 }])
@@ -943,11 +947,86 @@ test("a subagent's model is its own assistant model, else a valid meta model, el
 })
 
 test("applyLimits drops a PR's worker when that worker was capped away", () => {
-  const result = __internals__.applyLimits({
+  const result = common.applyLimits({
     agents: [{ n: 0, parent: null, model: "m" }, { n: 1, parent: 0, model: "m" }],
     intervals: [],
     models: [],
     prs: [{ repo: "a/a", number: 1, agent: 0 }, { repo: "a/a", number: 2, agent: 1 }],
   }, [], { agents: 1, intervals: 10, models: 10, prs: 10 })
   assert.deepEqual(result.prs, [{ repo: "a/a", number: 1, agent: 0 }, { repo: "a/a", number: 2 }])
+})
+
+// --- Unsafe token counts become unknown, never an invalid file ---------------
+
+async function deriveInline(lines) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-tokens-"))
+  try {
+    const file = path.join(dir, "9b5a6c7d-1e2f-4a3b-8c4d-5e6f70819203.jsonl")
+    const envelope = { sessionId: "9b5a6c7d-1e2f-4a3b-8c4d-5e6f70819203", version: "2.1.282", entrypoint: "cli" }
+    writeFileSync(file, lines.map((line, index) => JSON.stringify({ ...envelope, timestamp: `2026-09-25T13:00:${String(index).padStart(2, "0")}.000Z`, ...line })).join("\n") + "\n")
+    return await deriveClaudeSession({ transcriptPath: file, plugins: PLUGINS, endReason: "prompt_input_exit" })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+const assistant = (id, usage, model = "claude-opus-5-5") => ({ type: "assistant", message: { id, model, usage, content: "x" } })
+
+test("a fractional or unsafe token count is unknown with a tokens entry, and the facts stay valid", async () => {
+  for (const bad of [1.5, 2 ** 53 + 2, -1]) {
+    const { facts } = await deriveInline([assistant("a", { input_tokens: bad, output_tokens: 7 })])
+    assert.deepEqual(facts.models[0].tokens, { input: null, output: 7, cache_read: 0, cache_write: 0, reasoning: null }, String(bad))
+    assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
+    assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+  }
+})
+
+test("a good repeat of a message recovers an unreadable count, and a malformed repeat never erases a good one", async () => {
+  const { facts } = await deriveInline([
+    assistant("a", { input_tokens: 1.5, output_tokens: 7 }),
+    assistant("a", { input_tokens: 4, output_tokens: 9 }),
+    assistant("b", { input_tokens: 4, output_tokens: 1 }),
+  ])
+  assert.deepEqual(facts.models[0].tokens, { input: 8, output: 10, cache_read: 0, cache_write: 0, reasoning: null })
+  assert.ok(facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
+  assert.equal(facts.models[0].requests, 2)
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+  // A malformed repeat of a message keeps the earlier good value and is flagged; a good repeat recovers an earlier bad one.
+  const kept = await deriveInline([assistant("a", { input_tokens: 4, output_tokens: 7 }), assistant("a", { input_tokens: 1.5, output_tokens: 9 })])
+  assert.deepEqual(kept.facts.models[0].tokens, { input: 4, output: 9, cache_read: 0, cache_write: 0, reasoning: null })
+  assert.ok(kept.facts.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
+  const recovered = await deriveInline([assistant("a", { input_tokens: 1.5 }), assistant("a", { input_tokens: 6 })])
+  assert.equal(recovered.facts.models[0].tokens.input, 6)
+  // Sums past the safe range are unknown, not an invalid file.
+  const huge = await deriveInline([assistant("a", { input_tokens: Number.MAX_SAFE_INTEGER }), assistant("b", { input_tokens: 5 })])
+  assert.equal(huge.facts.models[0].tokens.input, null)
+  assert.ok(huge.facts.unavailable.some((entry) => entry.field === "tokens"))
+  assert.deepEqual(validateLocalFacts(huge.facts), { ok: true, errors: [] })
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+})
+
+test("a subagent whose meta model equals the model it ran on has no requested_model", async () => {
+  const { facts } = await deriveFull()
+  for (const agent of facts.agents) assert.notEqual(agent.requested_model, agent.model)
+})
+
+// --- The shared helpers ------------------------------------------------------
+
+test("countOrNull keeps safe non-negative integers only", () => {
+  assert.deepEqual([0, 5, 1.5, -1, 2 ** 53, "3", null, undefined, NaN].map(common.countOrNull), [0, 5, null, null, null, null, null, null, null])
+})
+
+test("addNullable sums known counts and is null for an unknown or an unsafe sum", () => {
+  assert.equal(common.addNullable(2, 3), 5)
+  assert.equal(common.addNullable(null, 3), null)
+  assert.equal(common.addNullable(3, null), null)
+  assert.equal(common.addNullable(Number.MAX_SAFE_INTEGER, 1), null)
+})
+
+test("withRequestedModel sets the key only for a valid id that differs from the model", () => {
+  assert.deepEqual(common.withRequestedModel({ n: 1, model: "a" }, "b"), { n: 1, model: "a", requested_model: "b" })
+  assert.deepEqual(common.withRequestedModel({ n: 1, model: "a" }, "a"), { n: 1, model: "a" })
+  assert.deepEqual(common.withRequestedModel({ n: 1, model: "a" }, "bad model!"), { n: 1, model: "a" })
+  assert.deepEqual(common.withRequestedModel({ n: 1, model: "a" }, undefined), { n: 1, model: "a" })
+  assert.deepEqual(common.withRequestedModel({ n: 1, model: "a" }, 5), { n: 1, model: "a" })
 })

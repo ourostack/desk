@@ -33,9 +33,9 @@ function declare(deskRoot, store = STORE) {
   writeFileSync(path.join(deskRoot, "_meta", "factory.json"), JSON.stringify({ schema_version: 1, store }))
 }
 
-async function marker(env, { n = 1, deskRoot, routing, updatedAt = new Date().toISOString() }) {
+async function marker(env, { n = 1, host = "claude-code", deskRoot, routing, updatedAt = new Date().toISOString() }) {
   const log = path.join(env.HOME, `${n}.jsonl`)
-  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(n), log_path: log, cwd: env.HOME, desk_root: deskRoot, end_reason: null, ended_at: null, plugins: [], updated_at: updatedAt, ...(routing === undefined ? {} : { routing }) })
+  await writeMarker(env, { schema_version: 1, host, session_id: sessionId(n), log_path: log, cwd: env.HOME, desk_root: deskRoot, end_reason: null, ended_at: null, plugins: [], updated_at: updatedAt, ...(routing === undefined ? {} : { routing }) })
 }
 
 // A fake gh: `auth token`, `GET repos/<store>` (visibility), the open kaizen issue list and issue creation.
@@ -146,9 +146,9 @@ test("the route is the facts route: the desk's declaration, else the session's r
   await marker(env, { n: 3, deskRoot: null })
   assert.deepEqual(await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner }), { result: "route_unknown" })
   // An overlay declaration recorded at session start wins over the public default, and the newest session decides.
-  await marker(env, { n: 4, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: "2026-09-26T10:00:00.000Z" })
+  await marker(env, { n: 4, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: new Date(Date.now() - 60000).toISOString() })
   await marker(env, { n: 5, deskRoot, routing: { source: "overlay", store: WORK_STORE, warnings: [] }, updatedAt: new Date().toISOString() })
-  await marker(env, { n: 6, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: "2026-09-26T10:00:00.000Z" })
+  await marker(env, { n: 6, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: new Date(Date.now() - 60000).toISOString() })
   assert.equal((await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner })).store, WORK_STORE)
   // A session whose scan could not read every manifest recorded no store: fail closed.
   await marker(env, { n: 7, deskRoot, routing: { source: "invalid_declaration", store: null, warnings: [] }, updatedAt: new Date(Date.now() + 1000).toISOString() })
@@ -159,6 +159,25 @@ test("the route is the facts route: the desk's declaration, else the session's r
   writeFileSync(path.join(deskRoot, "_meta", "factory.json"), "{ not json")
   assert.deepEqual(await fileKaizenCard(env, { deskRoot, title: "D title", body: "b", runner }), { result: "store_invalid" })
   assert.equal(created().length, 2)
+}))
+
+test("a Codex marker's default route proves nothing, so kaizen files only by a Claude Code marker or the desk's declaration", () => scratch(async ({ env, deskRoot }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  const { runner, created } = fakeGh()
+  await marker(env, { n: 1, host: "codex-cli", deskRoot, routing: { source: "default", store: STORE, warnings: [] } })
+  assert.deepEqual(await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner }), { result: "route_unknown" })
+  assert.equal(created().length, 0)
+  await marker(env, { n: 2, host: "claude-code", deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: new Date(Date.now() - 1000).toISOString() })
+  assert.equal((await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner })).store, STORE)
+}))
+
+test("two recorded routings for the desk with the same time still give one route", () => scratch(async ({ env, deskRoot }) => {
+  await setConsent(env, { store: STORE, contribute: true, account: "contributor" })
+  const { runner } = fakeGh()
+  const at = new Date().toISOString()
+  await marker(env, { n: 1, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: at })
+  await marker(env, { n: 2, deskRoot, routing: { source: "default", store: STORE, warnings: [] }, updatedAt: at })
+  assert.equal((await fileKaizenCard(env, { deskRoot, title: "A title", body: "b", runner })).store, STORE)
 }))
 
 test("a retry finds the open card by its fingerprint and files nothing again", () => scratch(async ({ env, deskRoot }) => {

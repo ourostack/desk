@@ -136,7 +136,7 @@ test("server.callTool surfaces tool errors as isError with structured body", asy
   const res = await callTool({
     deskRoot: root,
     name: "task_update",
-    input: { track: "nope", slug: "nada", frontmatter: { status: "x" } },
+    input: { track: "nope", slug: "nada", frontmatter: { status: "paused" } },
   })
   assert.ok(res.isError, "missing-task should surface as isError")
   const body = parseResult(res)
@@ -209,7 +209,7 @@ test("server.callTool surfaces tool errors as isError with person set", async ()
   const res = await callTool({
     deskRoot: root,
     name: "task_update",
-    input: { track: "nope", slug: "nada", frontmatter: { status: "x" } },
+    input: { track: "nope", slug: "nada", frontmatter: { status: "paused" } },
     person: "ari",
   })
   assert.ok(res.isError)

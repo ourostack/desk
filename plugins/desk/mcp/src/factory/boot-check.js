@@ -106,7 +106,7 @@ export function factoryStateDir(env) {
 }
 
 /** A JSON state file: `fallback` when absent, `null` when unsafe or unreadable. */
-function readState(file, fallback) {
+export function readState(file, fallback) {
   let text
   try {
     text = readSmallText(file, STATE_BYTES)
@@ -272,30 +272,55 @@ export function labelsBootCheck({ env = process.env, now = Date.now() } = {}) {
   return { count, quarantined: quarantined.size }
 }
 
+// Every task folder the desk layout allows, live and archived, in a stable order:
+// `{ track, slug, file, archived }` with `file` the card's path.
+function* cardLocations(deskRoot, alias) {
+  const base = alias === null ? deskRoot : path.join(deskRoot, "desks", alias)
+  const tracks = []
+  for (const name of subdirectories(base)) {
+    if (name === "_archive") for (const archived of subdirectories(path.join(base, name))) if (!archived.startsWith("_")) tracks.push({ dir: path.join(base, name, archived), archived: true })
+    if (name.startsWith("_") || (alias === null && name === "desks")) continue
+    tracks.push({ dir: path.join(base, name), archived: false })
+  }
+  for (const trackDir of tracks) {
+    const track = path.basename(trackDir.dir)
+    for (const folder of [trackDir.dir, path.join(trackDir.dir, "_archive")]) {
+      for (const slug of subdirectories(folder)) {
+        if (slug.startsWith("_")) continue
+        yield { track, slug, file: path.join(folder, slug, "task.md"), archived: trackDir.archived || folder !== trackDir.dir }
+      }
+    }
+  }
+}
+
 /** `[{ track, slug }]` for finished, recent cards of the desk; see the header. */
 export function finishedTasks({ deskRoot, personPrefix = "", now = Date.now(), deadline = Infinity, clock = () => performance.now() }) {
   const alias = checkPersonPrefix(personPrefix, "finishedTasks")
-  const base = alias === null ? deskRoot : path.join(deskRoot, "desks", alias)
   const tasks = []
-  const tracks = []
-  for (const name of subdirectories(base)) {
-    if (name === "_archive") for (const archived of subdirectories(path.join(base, name))) if (!archived.startsWith("_")) tracks.push(path.join(base, name, archived))
-    if (name.startsWith("_") || (alias === null && name === "desks")) continue
-    tracks.push(path.join(base, name))
+  for (const { track, slug, file } of cardLocations(deskRoot, alias)) {
+    if (clock() > deadline) throw new BudgetExceeded()
+    const head = readCardHead(file)
+    if (head === null) continue
+    const fields = frontmatter(head)
+    const updated = updatedAt(fields.updated)
+    if (TERMINAL.has(fields.status) && Number.isFinite(updated) && now - updated <= RECENT_MS && updated - now <= RECENT_MS) tasks.push({ track, slug })
   }
-  for (const trackDir of tracks) {
-    const track = path.basename(trackDir)
-    for (const folder of [trackDir, path.join(trackDir, "_archive")]) {
-      for (const slug of subdirectories(folder)) {
-        if (clock() > deadline) throw new BudgetExceeded()
-        if (slug.startsWith("_")) continue
-        const head = readCardHead(path.join(folder, slug, "task.md"))
-        if (head === null) continue
-        const fields = frontmatter(head)
-        const updated = updatedAt(fields.updated)
-        if (TERMINAL.has(fields.status) && Number.isFinite(updated) && now - updated <= RECENT_MS && updated - now <= RECENT_MS) tasks.push({ track, slug })
-      }
-    }
+  return tasks
+}
+
+/**
+ * `[{ track, slug, archived, status, created, updated }]`: every readable card of the desk, live or archived, with no
+ * status or age filter (`finishedTasks` is this walk with one). `status` is the card's raw text, `created` and `updated`
+ * are exact UTC timestamps or `null`. A person prefix reads `desks/<alias>`.
+ */
+export function allTasks({ deskRoot, personPrefix = "" }) {
+  const alias = checkPersonPrefix(personPrefix, "allTasks")
+  const tasks = []
+  for (const { track, slug, file, archived } of cardLocations(deskRoot, alias)) {
+    const head = readCardHead(file)
+    if (head === null) continue
+    const fields = frontmatter(head)
+    tasks.push({ track, slug, archived, status: fields.status ?? null, created: normalizeTimestamp(fields.created), updated: normalizeTimestamp(fields.updated) })
   }
   return tasks
 }

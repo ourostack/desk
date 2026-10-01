@@ -10,7 +10,7 @@ import { existsSync, promises as fs, readFileSync } from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { factoryStateRoot, markDelivered, quarantine, readMachineSecret, setConsent, writeLocalFacts, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
+import { factoryStateRoot, markDelivered, quarantine, readMachineSecret, setConsent, writeLocalFacts, writeMarker, writeStatus } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
 import { factoryBootCheck } from "../../../../../plugins/desk/mcp/src/factory/boot-check.js"
 import { jobLink } from "../../../../../plugins/desk/mcp/src/factory/pipeline/build.js"
 import { main as factoryCli } from "../../../../../plugins/desk/mcp/scripts/factory.js"
@@ -48,7 +48,7 @@ test("with no factory state the bound desk reports to the default store, undecid
     store: STORE,
     source: "default",
     consent: "undecided",
-    stores: [{ store: STORE, consent: "undecided", pending: 0, quarantined: 0, last_flush: null }],
+    stores: [{ store: STORE, consent: "undecided", pending: 0, route_changed: 0, quarantined: 0, last_flush: null }],
     warnings: [],
   })
   assert.equal(existsSync(env.XDG_STATE_HOME), false, "status never creates factory state")
@@ -77,7 +77,57 @@ test("counts are per store: undelivered outbox files, quarantined files and the 
   await quarantine(env, STORE, rejected, "timestamp_in_field")
   await writeStatus(env, { last_flush: { [STORE]: { at: "2026-09-27T12:00:00.000Z", result: "delivered_pr_open" } } })
   const status = factoryLocalStatus({ env, deskRoot: desk })
-  assert.deepEqual(status.stores, [{ store: STORE, consent: "yes", pending: 2, quarantined: 1, last_flush: "delivered_pr_open" }])
+  assert.deepEqual(status.stores, [{ store: STORE, consent: "yes", pending: 2, route_changed: 0, quarantined: 1, last_flush: "delivered_pr_open" }])
+}))
+
+test("an outbox file whose session now routes to another store is route_changed, never pending, read as the flush reads routes", () => scratch(async ({ base, desk, env }) => {
+  const { factoryLocalStatus } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
+  const away = path.join(base, "away-desk")
+  await json(path.join(away, "_meta", "factory.json"), { schema_version: 1, store: OTHER })
+  const plain = path.join(base, "plain-desk")
+  await fs.mkdir(plain)
+  const marker = (n, deskRoot, host = "claude-code") => writeMarker(env, { schema_version: 1, host, session_id: sessionId(n), log_path: path.join(base, `log-${n}.jsonl`), cwd: base, desk_root: deskRoot, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  // 1 and 2: routed to the other store, one delivered and one not. 3: routed here. 4: no marker, so its derive-time route (this store).
+  // 5: a malformed marker says nothing new. 6: a Codex default route nothing proves keeps its derive-time route too.
+  const names = []
+  for (const n of [1, 2, 3, 4, 5]) names.push(await outboxFile(env, STORE, n))
+  await marker(1, away)
+  await marker(2, away)
+  await marker(3, desk)
+  await fs.writeFile(path.join(await factoryStateRoot(env), "markers", names[4]), "{ not json", { mode: 0o600 })
+  const codex = structuredClone(GOLDEN)
+  codex.session.id = sessionId(6)
+  codex.session.host = "codex-cli"
+  assert.equal((await writeLocalFacts(env, STORE, codex)).written, true)
+  await marker(6, plain, "codex-cli")
+  await markDelivered(env, STORE, { name: names[0], publishedBlobSha: "a".repeat(40) })
+  const status = factoryLocalStatus({ env, deskRoot: desk })
+  assert.deepEqual(status.stores, [{ store: STORE, consent: "yes", pending: 4, route_changed: 2, quarantined: 0, last_flush: null }])
+}))
+
+test("tombstoned, stale and stalled copies count as route_changed, never pending; an unknown route still waits as pending", () => scratch(async ({ base, env }) => {
+  const { factoryLocalStatus } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
+  const root = await factoryStateRoot(env)
+  const moved = path.join(base, "moved-desk")
+  await json(path.join(moved, "_meta", "factory.json"), { schema_version: 1, store: OTHER })
+  const broken = path.join(base, "broken-desk")
+  await fs.mkdir(path.join(broken, "_meta"), { recursive: true })
+  await fs.writeFile(path.join(broken, "_meta", "factory.json"), "{ not json")
+  // 1: a finished retraction (tombstone), marker pruned. 2: a stale copy, its receipt naming the other store. 3: a retraction still open with
+  // no positive route. 4: marker pruned, its receipt's desk root now declares the other store. 5: an unresolvable marker and nothing known.
+  const names = []
+  for (const n of [1, 2, 3, 4, 5]) names.push(await outboxFile(env, STORE, n))
+  const blob = "b".repeat(40)
+  const retracting = path.join(root, "retracting", `${STORE.replace("/", "__")}.json`)
+  await json(retracting, { [names[0]]: { path: `facts/${names[0]}`, blob, done: true }, [names[2]]: { path: `facts/${names[2]}`, blob }, junk: 7 })
+  await writeStatus(env, { derivations: { [names[1]]: { store: OTHER }, [names[3]]: { store: STORE, desk_root: moved } } })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(5), log_path: path.join(base, "log-5.jsonl"), cwd: base, desk_root: broken, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: base }).stores[0], { store: STORE, consent: "yes", pending: 1, route_changed: 4, quarantined: 0, last_flush: null })
+  // An unreadable retracting file reads as none: the tombstoned and stalled copies count as pending again.
+  await fs.writeFile(retracting, "{ not json")
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: base }).stores[0], { store: STORE, consent: "yes", pending: 3, route_changed: 2, quarantined: 0, last_flush: null })
 }))
 
 test("the desk's declaration picks the store, and every other decided store is listed after it", () => scratch(async ({ desk, env }) => {
@@ -92,8 +142,8 @@ test("the desk's declaration picks the store, and every other decided store is l
   assert.equal(status.source, "desk")
   assert.equal(status.consent, "yes")
   assert.deepEqual(status.stores, [
-    { store: OTHER, consent: "yes", pending: 1, quarantined: 0, last_flush: "offline" },
-    { store: STORE, consent: "no", pending: 0, quarantined: 0, last_flush: null },
+    { store: OTHER, consent: "yes", pending: 1, route_changed: 0, quarantined: 0, last_flush: "offline" },
+    { store: STORE, consent: "no", pending: 0, route_changed: 0, quarantined: 0, last_flush: null },
   ])
 }))
 
@@ -134,7 +184,7 @@ test("no bound desk, and unreadable consent, are reported as codes", () => scrat
   await fs.writeFile(path.join(root, "consent.json"), "{ corrupt", { mode: 0o600 })
   const status = factoryLocalStatus({ env, deskRoot: desk })
   assert.equal(status.consent, "unreadable")
-  assert.deepEqual(status.stores, [{ store: STORE, consent: "unreadable", pending: 0, quarantined: 0, last_flush: null }])
+  assert.deepEqual(status.stores, [{ store: STORE, consent: "unreadable", pending: 0, route_changed: 0, quarantined: 0, last_flush: null }])
 }))
 
 test("status carries no machine secret, account, intake ID, token, path or content", () => scratch(async ({ base, desk, env }) => {
@@ -180,7 +230,7 @@ test("unsafe or malformed state files read as unreadable, never as a guess", () 
   await fs.writeFile(path.join(base, "elsewhere.json"), "{}")
   await fs.symlink(path.join(base, "elsewhere.json"), path.join(root, "delivered", "ourostack__factory.json"))
   let status = factoryLocalStatus({ env, deskRoot: desk })
-  assert.deepEqual(status.stores, [{ store: STORE, consent: "yes", pending: 1, quarantined: 0, last_flush: null }], "an unreadable delivered record counts the file as pending")
+  assert.deepEqual(status.stores, [{ store: STORE, consent: "yes", pending: 1, route_changed: 0, quarantined: 0, last_flush: null }], "an unreadable delivered record counts the file as pending")
   for (const consent of ["[]", JSON.stringify({ schema_version: 1, stores: [] })]) {
     await fs.writeFile(path.join(root, "consent.json"), consent, { mode: 0o600 })
     status = factoryLocalStatus({ env, deskRoot: desk })
@@ -239,4 +289,19 @@ test("an unparseable status or delivery record reads as no last flush and nothin
   const entry = factoryLocalStatus({ env, deskRoot: desk }).stores[0]
   assert.equal(entry.last_flush, null)
   assert.equal(entry.pending, 1, `${name} counts as pending`)
+}))
+
+test("an invalid declaration freezes the session: it counts as pending, never route_changed, whether its marker is present or pruned", () => scratch(async ({ base, env }) => {
+  const { factoryLocalStatus } = await load()
+  await setConsent(env, { store: STORE, contribute: true, account: "example-user" })
+  const broken = path.join(base, "broken-desk")
+  await fs.mkdir(path.join(broken, "_meta"), { recursive: true })
+  await fs.writeFile(path.join(broken, "_meta", "factory.json"), "{ not json")
+  // Both sessions last routed to the other store, so a readable route would make them stale here. 1 has a marker in the broken desk;
+  // 2's marker is pruned and its receipt names the broken desk.
+  const one = await outboxFile(env, STORE, 1)
+  const two = await outboxFile(env, STORE, 2)
+  await writeStatus(env, { derivations: { [one]: { store: STORE, route: OTHER }, [two]: { store: STORE, route: OTHER, desk_root: broken } } })
+  await writeMarker(env, { schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: path.join(base, "log-1.jsonl"), cwd: base, desk_root: broken, end_reason: null, ended_at: null, plugins: [], updated_at: new Date().toISOString() })
+  assert.deepEqual(factoryLocalStatus({ env, deskRoot: base }).stores[0], { store: STORE, consent: "yes", pending: 2, route_changed: 0, quarantined: 0, last_flush: null })
 }))

@@ -43,7 +43,7 @@ const CARD_UPDATE = {
   frontmatter: {
     type: "object",
     additionalProperties: true,
-    description: "Fields to shallow-merge into the card's frontmatter, as a JSON object (not a string). `schema_version` and `created` are kept; `updated` is refreshed.",
+    description: "Fields to shallow-merge into the card's frontmatter, as a JSON object (not a string). `schema_version` and `created` are kept; `updated` is refreshed. A `status` here must be exactly one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled; any other value is refused.",
   },
   body_append: text("Markdown to append to the card body, separated by a blank line."),
 }
@@ -77,7 +77,7 @@ export const TOOL_INPUT_SCHEMAS = Object.freeze({
     ...TASK_TARGET,
     slug: text("The task folder name: an outcome name, 2-6 lowercase kebab-case words."),
     title: text("The task title."),
-    status: text("Initial status; defaults to drafting."),
+    status: text("Initial status; defaults to drafting. Must be exactly one of drafting, processing, validating, collaborating, paused, blocked, done, cancelled."),
     body: text("Markdown body, without frontmatter."),
     category: text("general | reminder | coordination | infrastructure | another category."),
     cadence: text("Recurring cadence, such as 30m."),

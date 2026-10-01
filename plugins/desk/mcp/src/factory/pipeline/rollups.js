@@ -49,7 +49,7 @@
 // files.
 
 import { LABEL_WASTES, checkLabelsAgainstFacts } from "../label-schema.js"
-import { covered, fieldCoverage, splitSessions } from "./formulas.js"
+import { covered, retryCoverage, splitSessions } from "./formulas.js"
 import { compareVersions } from "./versions.js"
 
 export const ROLLUPS_SCHEMA = "desk.factory.rollups/1"
@@ -192,9 +192,10 @@ function pluginRanges(sources) {
 }
 
 // Compactions are counted with turns, so a session without turns cannot say.
-// A session split across jobs cannot say which job's worker compacted.
+// A session split across jobs cannot say which job's worker compacted, so a job whose sessions are all split
+// has none to report (`worker_split`), as for retries.
 function compactions(sources, split) {
-  const coverage = fieldCoverage(sources, ["turns"], [], split)
+  const coverage = retryCoverage(sources, ["turns"], split)
   return fromFormula(covered(coverage, () => ({ class: "measured", value: sources.reduce((total, session) => total + (split.has(session) ? 0 : session.counts.compactions), 0) })))
 }
 

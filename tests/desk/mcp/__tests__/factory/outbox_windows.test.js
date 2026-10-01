@@ -56,7 +56,7 @@ test("native: the factory state root, the machine secret and an outbox file each
       end_reason: "prompt_input_exit",
       ended_at: "2026-09-25T09:30:00.000Z",
       plugins: [{ name: "desk", version: "3.2.0-alpha.37" }],
-      updated_at: "2026-09-25T09:30:00.000Z",
+      updated_at: new Date().toISOString(),
     }
     await writeMarker(env, marker)
 

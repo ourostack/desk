@@ -143,6 +143,16 @@ export function fieldCoverage(sessions, fields, partialFields = [], split = new 
   return { uncovered, none: lacking === sessions.length, reasons: [...reasons].sort(compareText), split: splitCount, shared: sharedCount }
 }
 
+// Retries have no worker, so a split session cannot say which of them were the
+// job's. A job whose sessions are all split therefore has none to report: that
+// is unavailable, never a measured zero. With some whole sessions the sum
+// covers those only, and the measure stays partial (`worker_split`).
+export function retryCoverage(sessions, fields, split, shared) {
+  const coverage = fieldCoverage(sessions, fields, [], split, shared)
+  if (sessions.length === 0 || split.size < sessions.length) return coverage
+  return { ...coverage, none: true, reasons: [...new Set([...coverage.reasons, "worker_split"])].sort(compareText) }
+}
+
 function missingValue(coverage) {
   return coverage.reasons.length === 1 ? unavailable(coverage.reasons[0]) : unavailable("mixed", { reasons: coverage.reasons })
 }
@@ -246,33 +256,60 @@ function ownsWholeSession(session, binding) {
   return !Object.hasOwn(binding, "agents") || session.agents.every((agent) => binding.agents.includes(agent.n))
 }
 
-// The source sessions in which the job owns only some of the workers, so the
-// session-wide counts are not the job's own.
+// Whether the job's binding splits the controller's (worker 0's) time by segments.
+// Segments on a binding that does not list worker 0 (which the validators refuse) are ignored.
+function segmented(binding) {
+  return Object.hasOwn(binding, "segments") && Object.hasOwn(binding, "agents") && binding.agents.includes(0)
+}
+
+// The source sessions in which the job owns only some of the workers, or only
+// some of the controller's time, so the session-wide counts are not the job's own.
 export function splitSessions(timeline) {
-  return new Set(timeline.source_sessions.filter((session) => !ownsWholeSession(session, bindingOf(session, timeline.job))))
+  return new Set(timeline.source_sessions.filter((session) => {
+    const binding = bindingOf(session, timeline.job)
+    return segmented(binding) || !ownsWholeSession(session, binding)
+  }))
+}
+
+// The segmented source sessions in which the job holds a shared span of the controller's time.
+function sharedSegmentSessions(timeline) {
+  return new Set(timeline.source_sessions.filter((session) => {
+    const binding = bindingOf(session, timeline.job)
+    return segmented(binding) && binding.segments.some((segment) => segment.shared === true)
+  }))
 }
 
 // The source sessions in which one of the job's workers also belongs to
 // another job. That worker's time is counted for each job that owns it, so
-// the job's time is partial; splitting it is left to a later milestone. A
-// legacy binding lists no workers and never counts as sharing.
+// the job's time is partial. A legacy binding lists no workers and never
+// counts as sharing. A job with `segments` holds only its own spans of the
+// controller's (worker 0's) time, so the controller makes it shared only
+// through a span marked `shared`; its other workers count as before.
 export function sharedSessions(timeline) {
   return new Set(timeline.source_sessions.filter((session) => {
     const own = bindingOf(session, timeline.job)
     if (!Object.hasOwn(own, "agents")) return false
-    return session.jobs.some((other) => other !== own && Object.hasOwn(other, "agents") && other.agents.some((agent) => own.agents.includes(agent)))
+    const split = segmented(own)
+    if (split && own.segments.some((segment) => segment.shared === true)) return true
+    const workers = split ? own.agents.filter((agent) => agent !== 0) : own.agents
+    return session.jobs.some((other) => other !== own && Object.hasOwn(other, "agents") && other.agents.some((agent) => workers.includes(agent)))
   }))
 }
 
 // The counts of a split session that belong to the job: tool calls and
 // failures from the job's own tool intervals (a subagent interval is an
-// `agent` call, and carries no outcome). Retries and compactions have no
+// `agent` call, and carries no outcome). A segmented job counts a controller
+// (worker 0) interval only when one of its segments holds the interval's
+// start, so the controller's calls are split with its time; one starting in a
+// shared span counts for each job sharing it. Retries and compactions have no
 // worker, so they are left out and the measure is marked partial.
-function ownCounts(session, agents) {
+function ownCounts(session, binding) {
   const calls = {}
   const failures = {}
+  const durationMs = session.session.duration_ms
   for (const interval of session.intervals) {
-    if (!agents.includes(interval.agent)) continue
+    if (!binding.agents.includes(interval.agent)) continue
+    if (interval.agent === 0 && segmented(binding) && !binding.segments.some((segment) => holds(segment, interval.start_ms, durationMs))) continue
     if (interval.kind === "subagent") calls.agent = (calls.agent ?? 0) + 1
     if (interval.kind !== "tool") continue
     calls[interval.tool] = (calls[interval.tool] ?? 0) + 1
@@ -283,15 +320,37 @@ function ownCounts(session, agents) {
 
 function jobCounted(timeline, split) {
   return timeline.source_sessions.map((session) => split.has(session)
-    ? { counts: ownCounts(session, bindingOf(session, timeline.job).agents) }
+    ? { counts: ownCounts(session, bindingOf(session, timeline.job)) }
     : session)
 }
 
+// Whether a segment holds the instant `at` (milliseconds from session start).
+// Segments are half-open, so a boundary belongs to the later segment; the
+// session's own last instant belongs to the segment that ends there.
+function holds(segment, at, durationMs) {
+  return (segment.start_ms <= at && at < segment.end_ms) || (at === durationMs && segment.end_ms === durationMs)
+}
+
+// The job binding a controller (worker 0) PR's time decides: the one job
+// whose unshared segment holds the PR's `at_ms`. `undefined` when the time
+// decides nothing: the PR is another worker's or has no time, or the instant
+// falls in a shared span or in no job's segment.
+function segmentOwner(session, pr) {
+  if (pr.agent !== 0 || !Object.hasOwn(pr, "at_ms")) return undefined
+  const holders = session.jobs.filter((binding) => segmented(binding)
+    && binding.segments.some((segment) => holds(segment, pr.at_ms, session.session.duration_ms)))
+  if (holders.length !== 1) return undefined
+  const shared = holders[0].segments.some((segment) => segment.shared === true && holds(segment, pr.at_ms, session.session.duration_ms))
+  return shared ? undefined : holders[0]
+}
+
 // A binding without `agents` is the legacy session-level binding and keeps
-// every reference of the session. Otherwise a pull request is credited to the
-// worker that opened it, and only when no other job of the session lists that
-// worker. A pull request with no worker, or one whose worker several jobs
-// share, goes to the job only when the session binds no other job.
+// every reference of the session. A controller PR whose time falls in one
+// job's own segment goes to that job (`segmentOwner`). Otherwise a pull
+// request is credited to the worker that opened it, and only when no other
+// job of the session lists that worker. A pull request with no worker, or
+// one whose worker several jobs share, goes to the job only when the session
+// binds no other job.
 function ownsPullRequest(session, binding, pr) {
   if (!Object.hasOwn(binding, "agents")) return true
   if (!Object.hasOwn(pr, "agent")) return session.jobs.length === 1
@@ -313,8 +372,10 @@ function uniqueReferences(timeline) {
     const binding = bindingOf(session, timeline.job)
     let held = false
     for (const pr of session.refs.prs) {
-      if (ownsPullRequest(session, binding, pr)) prs.set(`${pr.repo}#${pr.number}`, { repo: pr.repo, number: pr.number })
-      else held = true
+      // A PR its time gives to another job is that job's, not one held back from this one.
+      const owner = Object.hasOwn(binding, "agents") ? segmentOwner(session, pr) : undefined
+      if (owner === undefined ? ownsPullRequest(session, binding, pr) : owner === binding) prs.set(`${pr.repo}#${pr.number}`, { repo: pr.repo, number: pr.number })
+      else if (owner === undefined) held = true
     }
     if (ownsCommits(session, binding)) {
       for (const commit of session.refs.commits) commits.set(`${commit.repo}@${commit.sha}`, commit)
@@ -393,7 +454,8 @@ export function calculateFormulas(timeline) {
   const references = uniqueReferences(timeline)
   const split = splitSessions(timeline)
   const counted = jobCounted(timeline, split)
-  const splitCoverage = fieldCoverage(sourceSessions, [], [], split)
+  const sharedSegments = sharedSegmentSessions(timeline)
+  const splitCoverage = fieldCoverage(sourceSessions, [], [], split, sharedSegments)
   const privatePrs = sourceSessions.reduce((total, session) => total + session.refs.private.prs, 0)
   const privateCommits = sourceSessions.reduce((total, session) => total + session.refs.private.commits, 0)
 
@@ -424,8 +486,8 @@ export function calculateFormulas(timeline) {
     }), fieldCoverage(sourceSessions, [], [], new Set(), references.withheld)),
     rework_signals: {
       tool_failures: withCoverage(inferred(Object.values(sumMap(counted, "tool_failures")).reduce((total, value) => total + value, 0)), splitCoverage),
-      tool_retries: withCoverage(inferred(sumField(counted, "tool_retries")), splitCoverage),
-      api_retries: covered(fieldCoverage(sourceSessions, ["api_retries"], [], split), () => inferred(sumField(counted, "api_retries"))),
+      tool_retries: covered(retryCoverage(sourceSessions, [], split, sharedSegments), () => inferred(sumField(counted, "tool_retries"))),
+      api_retries: covered(retryCoverage(sourceSessions, ["api_retries"], split, sharedSegments), () => inferred(sumField(counted, "api_retries"))),
       session_retouches: inferred(Math.max(0, sourceSessions.length - 1)),
     },
     unavailable: measured(unavailableGroups(sourceSessions)),

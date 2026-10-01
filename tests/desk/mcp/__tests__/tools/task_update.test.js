@@ -55,13 +55,13 @@ test("task_update merges frontmatter and refreshes `updated`", async () => {
     input: {
       track: "t",
       slug: "book-flights",
-      frontmatter: { status: "in_progress", category: "general" },
+      frontmatter: { status: "processing", category: "general" },
     },
   })
   assert.equal(result.status, "updated")
 
   const after = await readFront(filePath)
-  assert.equal(after.data.status, "in_progress")
+  assert.equal(after.data.status, "processing")
   assert.equal(after.data.category, "general")
   assert.equal(after.data.title, "T", "title preserved")
   assert.notEqual(after.data.updated, before.data.updated, "updated bumped")
@@ -103,7 +103,7 @@ test("task_update adds schema_version to a legacy task without inventing created
 
   await task_update({
     deskRoot: root,
-    input: { track: "t", slug: "s", frontmatter: { status: "active" } },
+    input: { track: "t", slug: "s", frontmatter: { status: "paused" } },
   })
 
   const after = await readFront(filePath)
@@ -182,7 +182,7 @@ test("task_update refuses to update a missing task", async () => {
     () =>
       task_update({
         deskRoot: root,
-        input: { track: "nope", slug: "nada", frontmatter: { status: "x" } },
+        input: { track: "nope", slug: "nada", frontmatter: { status: "paused" } },
       }),
     /does not exist/,
   )
@@ -503,7 +503,7 @@ test("task_update stages and commits exactly the task.md it updated", async () =
 
   const result = await task_update({
     deskRoot: root,
-    input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
+    input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } },
     schedulePush: () => {},
   })
 
@@ -522,7 +522,7 @@ test("task_update calls schedulePush exactly once with { root: deskRoot } on a s
   const calls = []
   const result = await task_update({
     deskRoot: root,
-    input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
+    input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } },
     schedulePush: (opts) => calls.push(opts),
   })
 
@@ -542,7 +542,7 @@ test("task_update commits only its own file, leaving another process's staged, u
 
   const result = await task_update({
     deskRoot: root,
-    input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
+    input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } },
     schedulePush: () => {},
   })
 
@@ -564,14 +564,14 @@ test("task_update reports a commit failure without losing the write", async () =
   const calls = []
   const result = await task_update({
     deskRoot: root,
-    input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
+    input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } },
     spawnGit,
     schedulePush: (opts) => calls.push(opts),
   })
 
   assert.equal(result.status, "updated", "the write itself is never lost to a commit failure")
   const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
-  assert.equal(data.status, "in_progress")
+  assert.equal(data.status, "processing")
   assert.deepEqual(result.commit, { status: "failed", reason: "commit boom" })
   assert.equal(calls.length, 0, "schedulePush is never called when the commit fails")
 })
@@ -589,14 +589,14 @@ test("task_update skips staging and committing when the file held unstaged chang
   const calls = []
   const result = await task_update({
     deskRoot: root,
-    input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
+    input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } },
     schedulePush: (opts) => calls.push(opts),
   })
 
   assert.equal(result.status, "updated", "the write always happens")
   assert.equal(result.commit, undefined, "no commit attempted when the file was already dirty")
   const { data } = await readFront(filePath)
-  assert.equal(data.status, "in_progress")
+  assert.equal(data.status, "processing")
   assert.match(gitStatus(root), /t\/book-flights\/task\.md/, "the file is left as an uncommitted change")
   assert.equal(calls.length, 0, "schedulePush is never called when staging was skipped for a pre-existing dirty file")
 })
@@ -615,15 +615,38 @@ test("task_update reports a real staging failure without losing the write, when 
   try {
     const result = await task_update({
       deskRoot: root,
-      input: { track: "t", slug: "book-flights", frontmatter: { status: "in_progress" } },
+      input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } },
     })
 
     assert.equal(result.status, "updated", "the write itself is never lost to a genuinely held lock")
     const { data } = await readFront(path.join(root, "t", "book-flights", "task.md"))
-    assert.equal(data.status, "in_progress", "the frontmatter merge is on disk despite the lock")
+    assert.equal(data.status, "processing", "the frontmatter merge is on disk despite the lock")
     assert.equal(result.commit.status, "failed", "a real `git add` failure is reported, not swallowed as a silent success")
     assert.match(result.commit.reason, /index\.lock/)
   } finally {
     await fs.rm(lockPath, { force: true })
   }
+})
+
+test("task_update rejects a frontmatter status outside the eight states and leaves the card alone", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "guard-status", title: "T" } })
+  const file = path.join(root, "t", "guard-status", "task.md")
+  const before = await fs.readFile(file, "utf8")
+  for (const status of ["IN_PROGRESS", "needs_review", "Active", null, 7]) {
+    await assert.rejects(
+      task_update({ deskRoot: root, input: { track: "t", slug: "guard-status", frontmatter: { status } } }),
+      (error) => /^task_update: invalid status /.test(error.message) && error.message.includes(JSON.stringify(status)) && /drafting, processing, validating, collaborating, paused, blocked, done, cancelled/.test(error.message),
+    )
+  }
+  assert.equal(await fs.readFile(file, "utf8"), before)
+})
+
+test("task_update validates status only when the key is present", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "keep-status", title: "T" } })
+  await task_update({ deskRoot: root, input: { track: "t", slug: "keep-status", frontmatter: { category: "general" } } })
+  await task_update({ deskRoot: root, input: { track: "t", slug: "keep-status" } })
+  await task_update({ deskRoot: root, input: { track: "t", slug: "keep-status", frontmatter: { status: "processing" } } })
+  assert.equal((await readFront(path.join(root, "t", "keep-status", "task.md"))).data.status, "processing")
 })

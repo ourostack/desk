@@ -93,6 +93,8 @@ test("a Codex marker waits for consent: the sweep derives nothing and queues not
   const root = await factoryStateRoot(ctx.env)
   assert.equal(existsSync(path.join(root, "outbox")), false)
   await setConsent(ctx.env, { store: STORE, contribute: true })
+  assert.deepEqual(await deriveMarker(ctx.env, marker, { quietMs: 0, requireStored: true }), { result: "held", store: null, reason: "route_unverified" })
+  await fs.writeFile(path.join(ctx.desk, "_meta", "factory.json"), JSON.stringify({ schema_version: 1, store: STORE }))
   assert.equal((await deriveMarker(ctx.env, marker, { quietMs: 0, requireStored: true })).result, "written")
   assert.equal(existsSync(path.join(root, "outbox", STORE.replace("/", "__"), `codex-cli-${ID}.json`)), true)
 }))

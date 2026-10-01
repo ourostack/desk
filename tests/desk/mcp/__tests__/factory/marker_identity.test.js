@@ -4,14 +4,14 @@ import fsSync, { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { deriveFile, deriveMarker, sweep } from "../../../../../plugins/desk/mcp/src/factory/derive-run.js"
 import { factoryStateRoot, listMarkers, readMarker, setConsent, writeMarker } from "../../../../../plugins/desk/mcp/src/factory/outbox.js"
-import { END, ID, STORE, json, scratch, session } from "./_session_helpers.js"
+import { END, ID, STORE, json, recent, scratch, session } from "./_session_helpers.js"
 
 const NEWER = "2026-09-26T09:02:00.000Z"
 const posix = { skip: process.platform === "win32" }
 
 for (const [at, kind] of [["enumeration", "valid"], ["leaf-inspection", "valid"], ["leaf-inspection", "corrupt"], ["leaf-inspection", "expired"]]) {
   test(`I1 directory swap at ${at}, ${kind} external open and restoration cannot derive or mutate external data`, posix, (t) => scratch(async (ctx) => {
-    const owned = { ...await session(ctx), updated_at: END }
+    const owned = { ...await session(ctx), updated_at: recent() }
     await writeMarker(ctx.env, owned)
     await setConsent(ctx.env, { store: STORE, contribute: true })
     const root = await factoryStateRoot(ctx.env)
@@ -23,7 +23,7 @@ for (const [at, kind] of [["enumeration", "valid"], ["leaf-inspection", "valid"]
     const log = path.join(ctx.base, "external-log", `${ID}.jsonl`)
     await fs.mkdir(path.dirname(log), { recursive: true })
     await fs.copyFile(owned.log_path, log)
-    const externalMarker = { ...owned, log_path: log, ended_at: NEWER, end_reason: "complete", updated_at: NEWER }
+    const externalMarker = { ...owned, log_path: log, ended_at: NEWER, end_reason: "complete", updated_at: recent(1000) }
     await json(externalFile, externalMarker)
     if (kind === "corrupt") await fs.writeFile(externalFile, "{")
     if (kind === "expired") await json(externalFile, { ...externalMarker, updated_at: "2025-01-01T00:00:00.000Z" })
@@ -84,10 +84,10 @@ for (const [at, kind] of [["enumeration", "valid"], ["leaf-inspection", "valid"]
 }
 
 test("I1 sweep's locked read is authoritative even when the enumerated marker has a later timestamp", () => scratch(async (ctx) => {
-  const owned = { ...await session(ctx), updated_at: END }
+  const owned = { ...await session(ctx), updated_at: recent() }
   await writeMarker(ctx.env, owned)
   await setConsent(ctx.env, { store: STORE, contribute: true })
-  const stale = { ...owned, ended_at: NEWER, end_reason: "complete", updated_at: NEWER }
+  const stale = { ...owned, ended_at: NEWER, end_reason: "complete", updated_at: recent(1000) }
   const result = await deriveMarker(ctx.env, stale, { quietMs: 600000, requireStored: true })
   assert.equal(result.result, "skipped", "the current protected open marker stays busy, rather than using the newer-looking input")
   const root = await factoryStateRoot(ctx.env)
@@ -98,8 +98,8 @@ test("I1 sweep's locked read is authoritative even when the enumerated marker ha
 
 for (const change of ["replace", "remove"]) {
   test(`I1 production sweep rejects the stale enumerated state when the locked marker is ${change}d`, (t) => scratch(async (ctx) => {
-    const current = { ...await session(ctx), updated_at: END }
-    const enumerated = { ...current, ended_at: NEWER, end_reason: "complete", updated_at: NEWER }
+    const current = { ...await session(ctx), updated_at: recent() }
+    const enumerated = { ...current, ended_at: NEWER, end_reason: "complete", updated_at: recent(1000) }
     await writeMarker(ctx.env, enumerated)
     await setConsent(ctx.env, { store: STORE, contribute: true })
     const root = await factoryStateRoot(ctx.env)
@@ -156,8 +156,8 @@ test("I1 a different physical marker directory cannot inherit the protected dire
 }))
 
 test("I1 file-based derivation cannot prefer its pre-lock copy over the current protected marker", (t) => scratch(async (ctx) => {
-  const current = { ...await session(ctx), updated_at: END }
-  await writeMarker(ctx.env, { ...current, ended_at: NEWER, end_reason: "complete", updated_at: NEWER })
+  const current = { ...await session(ctx), updated_at: recent() }
+  await writeMarker(ctx.env, { ...current, ended_at: NEWER, end_reason: "complete", updated_at: recent(1000) })
   await setConsent(ctx.env, { store: STORE, contribute: true })
   const root = await factoryStateRoot(ctx.env)
   const name = `${current.host}-${ID}.json`

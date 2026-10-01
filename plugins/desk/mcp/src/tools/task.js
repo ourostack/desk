@@ -29,6 +29,7 @@ import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
 import { jobId } from "../factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../factory/desk-repo.js"
+import { LIFECYCLE_STATES, TERMINAL_STATES, invalidStatusMessage } from "../desk/lifecycle.js"
 import { objectInput } from "../util/object-input.js"
 import { reportLink } from "./factory-context.js"
 import { assertCodeRepoEvidence, recordedRepos } from "./done-evidence.js"
@@ -42,7 +43,7 @@ import { redactCredentialLikeText } from "../util/redact.js"
 // Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
 const DESK_COMMIT_NOTE = "No git needed: Desk already committed this card and is pushing it in the background. Do not run git add, git commit or git push for it."
 
-const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
 const DONE_EVIDENCE_EXAMPLE = '{"kind": "pr", "ref": "https://github.com/org/repo/pull/123"}'
 const DONE_EVIDENCE_USAGE =
@@ -490,6 +491,10 @@ export async function task_create({ deskRoot, input, person = null, readiness, e
     throw new Error("task_create: `title` is required (string)")
   }
 
+  if (values.status != null && !LIFECYCLE_STATES.includes(values.status)) {
+    throw new Error(`task_create: ${invalidStatusMessage(values.status)}`)
+  }
+
   const filePath = await resolveWriteTarget({
     deskRoot,
     person,
@@ -631,6 +636,10 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     effect: "the `done` transition was not recorded",
     example: DONE_EVIDENCE_EXAMPLE,
   })
+
+  if (frontmatter != null && Object.hasOwn(frontmatter, "status") && !LIFECYCLE_STATES.includes(frontmatter.status)) {
+    throw new Error(`task_update: ${invalidStatusMessage(frontmatter.status)} (set in \`frontmatter.status\`)`)
+  }
 
   const filePath = await resolveWriteTarget({
     deskRoot,

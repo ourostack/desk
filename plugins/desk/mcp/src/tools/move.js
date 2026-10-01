@@ -15,6 +15,7 @@
 import { promises as fs } from "node:fs"
 import { spawnSync } from "node:child_process"
 import * as path from "node:path"
+import { TERMINAL_STATES } from "../desk/lifecycle.js"
 import {
   nowIso,
   readMarkdown,
@@ -45,8 +46,7 @@ const SKIP_DIRS = new Set(["node_modules", ".git", ".state"])
 export const TASK_MOVE_FIELDS = ["track", "slug", "handle", "to_track", "to_slug", "unarchive", "into_task", "allow_dirty"]
 export const TRACK_RENAME_FIELDS = ["track", "handle", "to", "allow_dirty"]
 
-// Mirrors tools/task.js's TERMINAL_STATUSES.
-const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 
 function relPath(root, absPath) {
   return path.relative(root, absPath)

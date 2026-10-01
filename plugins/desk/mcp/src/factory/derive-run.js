@@ -10,7 +10,8 @@ import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
 import { factoryStateRoot, listMarkers, readConsent, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
-import { resolveStore } from "./store-route.js"
+import { backfillPluginSources } from "./plugin-registry.js"
+import { markerRoute, proofIndex, provenBy } from "./session-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
 
 async function sourceStamp(file) {
@@ -20,7 +21,7 @@ async function sourceStamp(file) {
 }
 
 /** Bump when binding changes what a derived session credits; sessions with a lower or missing receipt version re-derive once. */
-export const BINDING_VERSION = 3
+export const BINDING_VERSION = 4
 
 const sameSource = (a, b) => a.size === b.size && a.mtime === b.mtime && a.ino === b.ino && a.dev === b.dev
 
@@ -79,14 +80,21 @@ function isStaleDeriver(ownVersion, plugins, updatedAt, now) {
   return isVersion(own) && compareVersions(own, declared) < 0
 }
 
-export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, codex = deriveCodexSession, quietMs = 0, requireQuiet = false, requireStored = false, ownVersion = ownDeskVersion, now = Date.now } = {}) {
+export async function deriveMarker(env, marker, { claude = deriveClaudeSession, copilot = deriveCopilotSession, codex = deriveCodexSession, quietMs = 0, requireQuiet = false, requireStored = false, ownVersion = ownDeskVersion, now = Date.now, siblings = lazyProofIndex(() => listMarkers(env)) } = {}) {
   if (!validMarker(marker)) return { result: "invalid", store: null }
   if (marker.desk_root === null) return { result: "held", store: null }
   try {
-    return await withDerivationLock(env, `${marker.host}-${marker.session_id}.json`, (root) => deriveUnlocked(env, marker, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now }), { deskRoot: marker.desk_root })
+    return await withDerivationLock(env, `${marker.host}-${marker.session_id}.json`, (root) => deriveUnlocked(env, marker, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now, siblings }), { deskRoot: marker.desk_root })
   } catch {
     return { result: "source_unreadable", store: null }
   }
+}
+
+// A Codex marker records no plugins, so its default route never saw a plugin overlay; it is proven as the flush and reconcile prove it
+// (`session-route.js`). One memoized proof index for a whole sweep; a single derive builds its own.
+const lazyProofIndex = (load) => {
+  let pending = null
+  return () => (pending ??= load().then(proofIndex))
 }
 
 async function newestMarker(env, root, marker, requireStored) {
@@ -101,20 +109,20 @@ async function newestMarker(env, root, marker, requireStored) {
   }
 }
 
-async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now }) {
+async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, requireQuiet, requireStored, root, ownVersion, now, siblings }) {
   let store = null
   try {
     let marker = await newestMarker(env, root, input, requireStored)
     if (marker.desk_root === null) return { result: "held", store }
     if (isStaleDeriver(ownVersion, marker.plugins, marker.updated_at, now)) return { result: "held", store }
     await factoryStateRoot(env, { deskRoot: marker.desk_root })
-    const current = resolveStore({ deskRoot: marker.desk_root })
-    const route = current.source === "default" && marker.routing ? marker.routing : current
+    const route = markerRoute(marker)
     store = route.store
     const name = `${marker.host}-${marker.session_id}.json`
     if (route.warnings.length) await writeStatus(env, { routing_warnings: route.warnings })
     if (store === null) return { result: "held", store }
     if ((await readConsent(env)).stores[store]?.contribute !== true) return { result: "not_opted_in", store }
+    if (marker.host === "codex-cli" && route.source === "default" && !provenBy(marker, await siblings())) return { result: "held", store: null, reason: "route_unverified" }
     const before = await sourceStamp(marker.log_path)
     marker = await reconcileMarker(marker)
     if (!sameSource(before, await sourceStamp(marker.log_path))) return { result: "skipped", store }
@@ -131,16 +139,18 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
       }
     }
     let derived
+    // A marker from a hook older than 58adb141 names plugins without `source`; the host's plugin cache and install records fill it in for this derivation only.
+    const plugins = backfillPluginSources(marker.host, marker.plugins, { env })
     if (marker.host === "claude-code") {
-      derived = await claude({ transcriptPath: marker.log_path, plugins: marker.plugins, endReason: marker.end_reason })
+      derived = await claude({ transcriptPath: marker.log_path, plugins, endReason: marker.end_reason })
     } else if (marker.host === "codex-cli") {
       // A rollout lives at <codexHome>/sessions/YYYY/MM/DD/rollout-*.jsonl; when it does not, the deriver resolves the home itself.
       const sessions = path.resolve(marker.log_path, "..", "..", "..", "..")
-      derived = await codex({ rolloutPath: marker.log_path, codexHome: path.basename(sessions) === "sessions" ? path.dirname(sessions) : undefined, plugins: marker.plugins, endReason: marker.end_reason })
+      derived = await codex({ rolloutPath: marker.log_path, codexHome: path.basename(sessions) === "sessions" ? path.dirname(sessions) : undefined, plugins, endReason: marker.end_reason })
     } else {
       const home = path.resolve(marker.log_path, "..", "..", "..")
       if (path.join(home, "session-state", marker.session_id, "events.jsonl") !== marker.log_path) return { result: "invalid", store }
-      derived = await copilot({ sessionId: marker.session_id, copilotHome: home, plugins: marker.plugins, endReason: marker.end_reason, entrypoint: marker.entrypoint })
+      derived = await copilot({ sessionId: marker.session_id, copilotHome: home, plugins, endReason: marker.end_reason, entrypoint: marker.entrypoint })
     }
     if (!sameSource(before, await sourceStamp(marker.log_path))) return { result: "skipped", store }
     if (derived.facts === null) return { result: derived.reason, store }
@@ -148,14 +158,15 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     const personPrefix = marker.person_prefix ?? ""
     const deskRoot = marker.desk_root
     const { jobs } = bindSession({
-      events: derived.events, agents: derived.facts.agents, deskRoot, deskRemote: readDeskRemote({ deskRoot }), personPrefix,
+      events: derived.events, agents: derived.facts.agents, session: derived.facts.session, deskRoot, deskRemote: readDeskRemote({ deskRoot }), personPrefix,
       ...createDeskReaders({ deskRoot, personPrefix }),
     })
     derived.facts.jobs = jobs
     const written = await writeLocalFacts(env, store, derived.facts)
     if (!written.written) return { result: written.errors.length ? "invalid" : "not_opted_in", store }
     await setJobsForFile(env, written.name, jobs.map((j) => j.job))
-    await writeStatus(env, { derivations: { [name]: { store, marker: hash, binding_version: BINDING_VERSION, ...before } } })
+    // `desk_root` stays local: the flush reads the desk's declaration from it once the marker is pruned (`session-route.js`).
+    await writeStatus(env, { derivations: { [name]: { store, marker: hash, binding_version: BINDING_VERSION, desk_root: deskRoot, ...before } } })
     return { result: "written", store }
   } catch (error) {
     return { result: error.code === "ENOENT" ? "log_missing" : "source_unreadable", store }
@@ -163,15 +174,24 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
 }
 
 export async function sweep(env, { quietMs = 600000 } = {}) {
-  const summary = { written: 0, held: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0 }
+  const summary = { written: 0, held: 0, route_unverified: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0 }
   try {
     if (!(await jobsIndexRebuilt(env))) await rebuildJobsIndex(env)
   } catch {
     // The rebuild retries on the next sweep; it must never stop this one deriving.
   }
-  for (const marker of await listMarkers(env)) {
-    const { result } = await deriveMarker(env, marker, { quietMs, requireStored: true })
+  const markers = await listMarkers(env)
+  const siblings = lazyProofIndex(async () => markers)
+  for (const marker of markers) {
+    const { result, reason } = await deriveMarker(env, marker, { quietMs, requireStored: true, siblings })
     summary[result] += 1
+    if (reason === "route_unverified") summary.route_unverified += 1
+  }
+  // `route_unverified` counts the Codex markers held inside `held`; `factory.js status` shows it.
+  try {
+    await writeStatus(env, { held_markers: { route_unverified: summary.route_unverified } })
+  } catch {
+    // The status line is only a report; it must never stop a sweep.
   }
   return summary
 }

@@ -99,6 +99,7 @@ export const LIMITS = Object.freeze({
   agents: 10000,
   jobs: 1000,
   jobTransitions: 1000,
+  jobSegments: 200,
   unavailable: 64,
 })
 
@@ -371,8 +372,14 @@ export const PR_SPEC = {
 // `agent` (the worker that opened the PR) is optional, so files written before
 // workers were attributed stay valid. Whether it names a real worker is a
 // cross-field check (`checkAgentReferences`).
+// `at_ms` (when the creating tool result came, in milliseconds from session
+// start) is optional too: files written before PRs were timed stay valid.
 export function prFields(value) {
-  return Object.hasOwn(value, "agent") ? { ...PR_SPEC, agent: rangeIntField(0, 9999) } : PR_SPEC
+  return {
+    ...PR_SPEC,
+    ...(Object.hasOwn(value, "agent") ? { agent: rangeIntField(0, 9999) } : {}),
+    ...(Object.hasOwn(value, "at_ms") ? { at_ms: nonNegIntField() } : {}),
+  }
 }
 
 // `jobs[].agents`: the workers whose work belongs to the job. A non-empty,
@@ -406,9 +413,94 @@ export function checkJobAgents(value, path, errors) {
   return ok
 }
 
-// Adds the optional `agents` key to a job spec when the job carries it.
+// `jobs[].segments`: the spans of the session, in milliseconds from its start,
+// that the controller's (worker 0's) evidence gives to the job. Each is
+// half-open, `[start_ms, end_ms)`, and `shared: true` marks a span another job
+// of the session holds too. Within a job they are ascending and never overlap.
+export const SEGMENT_SPEC = {
+  start_ms: nonNegIntField(),
+  end_ms: nonNegIntField(),
+}
+
+const trueField = () => leaf((value, path, errors) => {
+  if (value !== true) {
+    addError(errors, "type", path)
+    return false
+  }
+  return true
+})
+
+const segmentFields = (value) => (Object.hasOwn(value, "shared") ? { ...SEGMENT_SPEC, shared: trueField() } : SEGMENT_SPEC)
+
+export function checkSegments(value, path, errors) {
+  if (!Array.isArray(value)) {
+    addError(errors, "type", path)
+    return false
+  }
+  // A job the controller holds no time in has no segments at all, never an empty list.
+  if (value.length === 0) {
+    addError(errors, "empty", path)
+    return false
+  }
+  if (value.length > LIMITS.jobSegments) {
+    addError(errors, "too_many", path)
+    return false
+  }
+  const before = errors.length
+  let previousEnd = null
+  value.forEach((segment, index) => {
+    const itemPath = joinPath(path, index)
+    const results = validateObject(segment, itemPath, segmentFields, errors)
+    if (results?.start_ms !== true || results.end_ms !== true) {
+      previousEnd = null
+      return
+    }
+    if (segment.end_ms <= segment.start_ms) addError(errors, "order", joinPath(itemPath, "end_ms"))
+    else if (previousEnd !== null && segment.start_ms < previousEnd) addError(errors, "order", joinPath(itemPath, "start_ms"))
+    previousEnd = segment.end_ms
+  })
+  return errors.length === before
+}
+
+// Adds the optional `agents` and `segments` keys to a job spec when the job carries them.
 export function jobFields(value, base) {
-  return Object.hasOwn(value, "agents") ? { ...base, agents: customField(checkJobAgents) } : base
+  return {
+    ...base,
+    ...(Object.hasOwn(value, "agents") ? { agents: customField(checkJobAgents) } : {}),
+    ...(Object.hasOwn(value, "segments") ? { segments: customField(checkSegments) } : {}),
+  }
+}
+
+/**
+ * Segments split the controller's (worker 0's) time, so a job carries them
+ * only when its `agents` lists worker 0; anything else is `inconsistent`.
+ * Shared by the local and published validators.
+ */
+export function checkSegmentAgents(value, results, errors) {
+  results.jobs?.forEach((jobResult, index) => {
+    if (jobResult?.segments === undefined) return
+    const job = value.jobs[index]
+    if (!Array.isArray(job.agents) || !job.agents.includes(0)) addError(errors, "inconsistent", `jobs.${index}.segments`)
+  })
+}
+
+/**
+ * No job segment and no PR time may run past the session's end
+ * (`durationMs`, or `null` when the session's own times are unsound, which
+ * skips the check so one bad time is one error). Shared by the local and
+ * published validators.
+ */
+export function checkSessionBounds(value, results, errors, durationMs) {
+  if (durationMs === null) return
+  results.jobs?.forEach((jobResult, index) => {
+    if (jobResult?.segments !== true) return
+    value.jobs[index].segments.forEach((segment, entry) => {
+      if (segment.end_ms > durationMs) addError(errors, "range", `jobs.${index}.segments.${entry}.end_ms`)
+    })
+  })
+  results.refs?.prs?.forEach((prResult, index) => {
+    if (prResult?.at_ms === true && value.refs.prs[index].at_ms > durationMs) addError(errors, "range", `refs.prs.${index}.at_ms`)
+  })
 }
 
 // A commit's repository, when the deriver can attribute one; `null` when it
@@ -576,7 +668,8 @@ export const __SPECS__ = Object.freeze({
   tokens: TOKENS_SPEC,
   plugin: localPluginFields({ source: null }),
   agent: AGENT_SPEC,
-  pr: PR_SPEC,
+  pr: prFields({ agent: 0, at_ms: 0 }),
+  segment: segmentFields({ shared: true }),
   commit: COMMIT_SPEC,
   refs: REFS_SPEC,
   unresolved: UNRESOLVED_SPEC,
@@ -654,6 +747,10 @@ export function validateLocalFacts(value) {
   const results = validateObject(value, "", TOP_SPEC, errors)
   if (results === undefined) return { ok: false, errors }
   checkAgentReferences(value, results, errors)
+  checkSegmentAgents(value, results, errors)
+  const sessionSound = results.session?.started_at === true && results.session.derived_through === true
+  const durationMs = sessionSound ? Date.parse(value.session.derived_through) - Date.parse(value.session.started_at) : -1
+  checkSessionBounds(value, results, errors, durationMs >= 0 ? durationMs : null)
   return { ok: errors.length === 0, errors }
 }
 

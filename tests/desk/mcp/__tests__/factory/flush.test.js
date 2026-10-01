@@ -1272,7 +1272,7 @@ test("the real runner keeps output bounded and names a spawn failure without a c
 
 const manyNames = (count, from = 1000) => Array.from({ length: count }, (_, index) => nameOf(from + index))
 
-test("every page of a rejected PR's files is read: all 500 files of a full batch are quarantined", () => scratch(async ({ env }) => {
+test("every page of a rejected PR's files is read: the one file with a local key is quarantined and the other 499 are only counted", () => scratch(async ({ env }) => {
   const { flush } = await load()
   await optIn(env)
   const name = await put(env, localFacts(1))
@@ -1280,10 +1280,10 @@ test("every page of a rejected PR's files is read: all 500 files of a full batch
   const github = fakeGitHub()
   const names = [...manyNames(499), name]
   github.addClosedPr({ comment: "factory-rejected: date", fileNames: names, headLabel: `ourostack:${branch}` })
-  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup }), { result: "nothing_pending" })
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup }), { result: "nothing_pending", rejections_unmatched: 499 })
   const quarantined = await fs.readdir(path.join(await factoryStateRoot(env), "quarantine", "ourostack__factory"))
-  assert.equal(quarantined.length, 500)
-  assert.ok(quarantined.includes(names[100]) && quarantined.includes(names[499]), "files 101 to 500 are quarantined")
+  assert.deepEqual(quarantined, [name], "a rejected file with no local key writes no quarantine record")
+  assert.equal((await readStatus(env)).last_flush[STORE].rejections_unmatched, 499)
   const pages = apiCalls(github, "GET", /\/files\?/u).map((call) => new URLSearchParams(routeOf(call).split("?")[1]).get("page"))
   assert.deepEqual(pages, ["1", "2", "3", "4", "5"])
 }))
@@ -1300,8 +1300,10 @@ test("a page that fails leaves the read marker where it was, so the PR is read a
   assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup }), { result: "unexpected" })
   assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 7)
   failing = false
-  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
-  assert.equal((await fs.readdir(path.join(await factoryStateRoot(env), "quarantine", "ourostack__factory"))).length, 150)
+  const delivered = await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  assert.equal(delivered.result, "delivered_pr_open")
+  assert.equal(delivered.rejections_unmatched, 150, "no pending file carries these names, so they are counted")
+  await assert.rejects(fs.readdir(path.join(await factoryStateRoot(env), "quarantine", "ourostack__factory")), { code: "ENOENT" })
   assert.equal((await readStatus(env)).last_flush[STORE].rejections_through, 101)
 }))
 

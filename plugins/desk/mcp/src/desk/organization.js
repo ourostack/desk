@@ -73,6 +73,7 @@ import { closeSync, lstatSync, openSync, readSync, readdirSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
 import { parseFrontmatterLite } from "./frontmatter-lite.js"
+import { TERMINAL_STATES } from "./lifecycle.js"
 import { folderHandle } from "./handles.js"
 import { requireFromRuntime } from "./runtime-resolver.js"
 import { isCredentialLike, validateName, validateTrackName, validateScope } from "./naming.js"
@@ -104,10 +105,7 @@ export function loadFrontmatterParser(load = loadGrayMatter) {
 
 const parseFrontmatter = loadFrontmatterParser()
 
-// Mirrors tools/task.js's TERMINAL_STATUSES — duplicated rather than
-// imported to keep this read-only reporting module independent of the CRUD
-// tool's internals.
-const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 
 const STALE_MS = 30 * 24 * 60 * 60 * 1000
 

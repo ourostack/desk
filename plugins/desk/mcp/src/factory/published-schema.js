@@ -46,6 +46,13 @@
 //     are `null` and its `transitions` empty, else `inconsistent` names the
 //     job (fix round 3). The store's CI then does not have to trust the
 //     flush's answer about the desk.
+//   - A job's optional `segments` (the controller's spans of the session,
+//     in milliseconds from its start) and a PR's optional `at_ms` never run
+//     past `session.duration_ms`, else `range`. A file marked
+//     `{job_offsets, desk_public}` carries neither, else `inconsistent`:
+//     with a public desk's commit history or a public PR's creation time,
+//     they would date the session. A job carries `segments` only when its
+//     `agents` lists worker 0, else `inconsistent`.
 //   - `jobs[].session_offset_ms` and every `offset_ms` are safe integers
 //     (signed: a session may begin before its task card exists) or `null`,
 //     and at most `PUBLISHED_LIMITS.maxOffsetMs` (ten years) either way. The
@@ -71,6 +78,8 @@ import {
   booleanField,
   checkAgentReferences,
   checkBasis,
+  checkSegmentAgents,
+  checkSessionBounds,
   customField,
   enumField,
   isPlainObject,
@@ -120,39 +129,40 @@ export function scrub(id) {
 }
 
 /** Whether a free token passes the public rules `publicTokenField` applies beyond its pattern: no date, no time of day, not credential-like. Publishing asks this so it never emits a value the validator rejects. */
-export const publishableToken = (value) => !DATE_SHAPE.test(value) && !TIME_SHAPE.test(value) && !isCredentialLike(value)
+export const publishableToken = (value) => tokenRefusal(value) === null
 
-// A pattern-checked string that must also carry no date and no time of day.
-// Exported for `label-schema.js`, which applies the same public rules.
-export function publicPatternField(pattern) {
+// The one rule list: why a free token is unfit to publish (`date`, `time` or `credential_like`), or `null`.
+function tokenRefusal(value) {
+  return shapeRefusal(value) ?? (isCredentialLike(value) ? "credential_like" : null)
+}
+
+// `date` or `time` when the value carries an ISO date or a time of day, else `null`.
+function shapeRefusal(value) {
+  if (DATE_SHAPE.test(value)) return "date"
+  return TIME_SHAPE.test(value) ? "time" : null
+}
+
+// A pattern-checked string that also passes `refusal` (a function from a value to a refusal code or `null`).
+function refusingField(pattern, refusal) {
   const base = patternField(pattern)
   return leaf((value, path, errors) => {
     if (!base.check(value, path, errors)) return false
-    if (DATE_SHAPE.test(value)) {
-      addError(errors, "date", path)
-      return false
-    }
-    if (TIME_SHAPE.test(value)) {
-      addError(errors, "time", path)
+    const reason = refusal(value)
+    if (reason !== null) {
+      addError(errors, reason, path)
       return false
     }
     return true
   })
 }
 
+// A pattern-checked string that must also carry no date and no time of day.
+// Exported for `label-schema.js`, which applies the same public rules.
+export const publicPatternField = (pattern) => refusingField(pattern, shapeRefusal)
+
 // A free token (a name chosen elsewhere, not a fixed-format ID): the public
 // rules, then no credential-shaped value (`credential.js`).
-function publicTokenField(pattern) {
-  const base = publicPatternField(pattern)
-  return leaf((value, path, errors) => {
-    if (!base.check(value, path, errors)) return false
-    if (isCredentialLike(value)) {
-      addError(errors, "credential_like", path)
-      return false
-    }
-    return true
-  })
-}
+const publicTokenField = (pattern) => refusingField(pattern, tokenRefusal)
 
 /** The one model-ID validator for every published model field, in facts and labels alike. */
 export const modelIdField = () => publicTokenField(PATTERNS.modelId)
@@ -331,6 +341,7 @@ export function validatePublished(value) {
   const results = validateObject(value, "", TOP, errors)
   if (results === undefined) return { ok: false, errors }
   checkAgentReferences(value, results, errors)
+  checkSegmentAgents(value, results, errors)
 
   // No entry or reference twice. Only items whose own fields are sound are
   // compared, and the later one is named.
@@ -355,14 +366,23 @@ export function validatePublished(value) {
     value.jobs.forEach((job, index) => {
       if (!isPlainObject(job)) return
       const timed = job.session_offset_ms !== null
+        || Object.hasOwn(job, "segments")
         || (Array.isArray(job.transitions) && job.transitions.length > 0)
         || (isPlainObject(job.observed) && job.observed.offset_ms !== null)
       if (timed) addError(errors, "inconsistent", `jobs.${index}`)
     })
   }
+  // Nor a PR time, which with a public PR's own creation time would date the session.
+  if (deskPublic && refs?.prs) {
+    value.refs.prs.forEach((pr, index) => {
+      if (isPlainObject(pr) && Object.hasOwn(pr, "at_ms")) addError(errors, "inconsistent", `refs.prs.${index}`)
+    })
+  }
 
-  // No interval may run past the session's end. Checked only when the
-  // duration itself is sound, so one bad duration is one error.
+  // No interval, job segment or PR time may run past the session's end.
+  // Checked only when the duration itself is sound, so one bad duration is
+  // one error.
+  checkSessionBounds(value, results, errors, results.session?.duration_ms === true ? value.session.duration_ms : null)
   if (results.session?.duration_ms === true && results.intervals) {
     value.intervals.forEach((item, index) => {
       if (results.intervals[index]?.end_ms === true && item.end_ms > value.session.duration_ms) {

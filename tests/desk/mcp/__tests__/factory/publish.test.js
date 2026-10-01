@@ -312,7 +312,7 @@ test("a date inside a model id or plugin name loses its hyphens so no date shape
   value.agents[1].model = "x-2024-08-06-01-02"
   value.plugins[0].name = "notes-2026-09-25"
   const { published } = publish(value)
-  assert.equal(published.models[0].id, "gpt-4o-20240806")
+  assert.ok(published.models.some((model) => model.id === "gpt-4o-20240806"))
   assert.equal(published.agents[0].model, "gpt-4o-20240806")
   assert.equal(published.agents[1].model, "x-202408060102", "a date shape the first rewrite uncovers is rewritten too")
   assert.equal(published.plugins[0].name, "notes-20260925")
@@ -539,8 +539,7 @@ test("a time of day inside a model ID loses its colons, repeatedly, even when th
   value.agents[0].model = "m-2024-08-06:08:30"
   value.agents[1].model = "m:20:26-09-25"
   const { published } = publish(value)
-  assert.equal(published.models[0].id, "m:083000")
-  assert.equal(published.models[1].id, "m20260925")
+  assert.deepEqual(published.models.map((model) => model.id), ["m20260925", "m:083000"])
   assert.equal(published.agents[0].model, "m-202408060830")
   assert.equal(published.agents[1].model, "m:20260925")
   assert.equal(validatePublished(published).ok, true)
@@ -803,4 +802,65 @@ test("toPublished carries jobs[].agents and refs.prs[].agent, for private and pr
   assert.deepEqual(keyedFirst.agents, [0, 1])
   assert.equal(protectedOut.jobs.filter((job) => Object.hasOwn(job, "agents")).length, 1)
   assert.equal(validatePublished(protectedOut).ok, true)
+})
+
+// ---------------------------------------------------------------------------
+// Credential-shaped model ids and plugin names never block the publish.
+// ---------------------------------------------------------------------------
+
+const CREDENTIAL_SHAPES = ["ghp_0123456789abcdef0123", "sk-live-abc", "pwd-hunter2", "a1b2c3d4e5f60718293a"]
+
+test("a credential-shaped model id publishes as unknown and the file validates", () => {
+  for (const shape of CREDENTIAL_SHAPES) {
+    const input = local()
+    input.models[0].id = shape
+    input.agents[0].model = shape
+    assert.deepEqual(validateLocalFacts(input), { ok: true, errors: [] }, shape)
+    const { published } = publish(input)
+    assert.deepEqual(published.models.map((model) => model.id), ["claude-sonnet-5", "unknown"], shape)
+    assert.equal(published.agents[0].model, "unknown")
+    assert.deepEqual(validatePublished(published), { ok: true, errors: [] }, shape)
+  }
+})
+
+test("models whose ids become the same published id merge, so ids stay unique", () => {
+  const input = local()
+  input.models = [
+    { id: "ghp_0123456789abcdef0123", requests: 2, tokens: { input: 5, output: null, cache_read: 1, cache_write: null, reasoning: null } },
+    { id: "sk-live-abc", requests: 3, tokens: { input: 7, output: null, cache_read: null, cache_write: null, reasoning: 4 } },
+    { id: "claude-sonnet-5", requests: 1, tokens: { input: 1, output: 1, cache_read: 1, cache_write: 1, reasoning: 1 } },
+  ]
+  const { published } = publish(input)
+  // Sorted by id; an unknown count merged with a known one stays unknown, and the file says so.
+  assert.deepEqual(published.models, [
+    { id: "claude-sonnet-5", requests: 1, tokens: { input: 1, output: 1, cache_read: 1, cache_write: 1, reasoning: 1 } },
+    { id: "unknown", requests: 5, tokens: { input: 12, output: null, cache_read: null, cache_write: null, reasoning: null } },
+  ])
+  assert.ok(published.unavailable.some((entry) => entry.field === "tokens" && entry.reason === "source_unreadable"))
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+  // A sum that would pass 2**53 - 1 is unknown, not an invalid file.
+  input.models = [
+    { id: "ghp_0123456789abcdef0123", requests: Number.MAX_SAFE_INTEGER, tokens: { input: 1, output: 1, cache_read: 1, cache_write: 1, reasoning: 1 } },
+    { id: "sk-live-abc", requests: 1, tokens: { input: 1, output: 1, cache_read: 1, cache_write: 1, reasoning: 1 } },
+  ]
+  const overflow = publish(input).published
+  assert.equal(overflow.models[0].requests, null)
+  assert.ok(overflow.unavailable.some((entry) => entry.field === "requests" && entry.reason === "source_unreadable"))
+  assert.deepEqual(validatePublished(overflow), { ok: true, errors: [] })
+})
+
+test("a credential-shaped plugin name is hidden and counted, in a public and in a private store", () => {
+  for (const [storeVisibility, shape] of [["public", "a1b2c3d4e5f60718293a"], ["private", "pwd-hunter2"]]) {
+    const input = local()
+    input.plugins = [
+      { name: shape, version: "1.0.0", source: "ourostack/desk" },
+      { name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" },
+    ]
+    assert.deepEqual(validateLocalFacts(input), { ok: true, errors: [] })
+    const { published, dropped } = publish(input, { storeVisibility })
+    assert.deepEqual(published.plugins, [{ name: "desk", version: "3.2.0-alpha.24" }], storeVisibility)
+    assert.equal(published.refs.private.plugins, 1)
+    assert.equal(dropped.plugins, 1)
+    assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+  }
 })

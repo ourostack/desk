@@ -94,12 +94,12 @@ test("task_update under person:ari finds + rewrites the person-scoped task", asy
   const res = await task_update({
     deskRoot: root,
     person: "ari",
-    input: { track: "t", slug: "book-flights", frontmatter: { status: "doing" } },
+    input: { track: "t", slug: "book-flights", frontmatter: { status: "processing" } },
   })
   assert.equal(res.status, "updated")
   assert.equal(res.path, path.join("desks", "ari", "t", "book-flights", "task.md"))
   const { data } = await readFront(path.join(root, "desks", "ari", "t", "book-flights", "task.md"))
-  assert.equal(data.status, "doing")
+  assert.equal(data.status, "processing")
 })
 
 // ── task_archive ──────────────────────────────────────────────────────────────

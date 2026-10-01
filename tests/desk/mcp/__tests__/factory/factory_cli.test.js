@@ -15,6 +15,7 @@ import {
   SUPPORTED_COMMANDS,
   deskVersion,
   isMainModule,
+  runIfMain,
   main,
   parseOptions,
   runBuildCommand,
@@ -194,7 +195,7 @@ test("validate-pr reads base and head as Git data, enforces facts for contributo
   assert.equal(existsSync(marker), false)
 }))
 
-test("validate-pr marks non-fact files under facts/ and maintainer removals as maintenance, and refuses a head whose merge conflicts", () => scratch(async (env) => {
+test("validate-pr marks non-fact files under facts/ as maintenance, validates a delete of a facts file for a maintainer only, and refuses a head whose merge conflicts", () => scratch(async (env) => {
   const repo = path.join(env.HOME, "store")
   const facts = path.join(repo, "facts")
   await fs.mkdir(facts, { recursive: true })
@@ -248,16 +249,43 @@ test("validate-pr marks non-fact files under facts/ and maintainer removals as m
   git("rm", "-q", path.join("facts", names[1]))
   git("commit", "-q", "-m", "cleanup")
   const cleanupHead = git("rev-parse", "HEAD")
-  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", "OWNER"], cwd: repo }), {
-    ok: true,
-    maintenance: true,
-    errors: [],
+  // Deleting a facts file is a retraction: it validates like any change at that path for a maintainer and is not maintenance; anyone else's is refused.
+  for (const association of ["OWNER", "MEMBER", "COLLABORATOR"]) {
+    assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", association], cwd: repo }), {
+      ok: true,
+      maintenance: false,
+      errors: [],
+    })
+  }
+  for (const association of ["NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR"]) {
+    assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", association], cwd: repo }), {
+      ok: false,
+      maintenance: false,
+      errors: [{ code: "removal", path: `facts/${names[1]}` }],
+    })
+  }
+
+  // A maintainer's removal of a non-data file stays maintenance, and a mixed PR of adds plus valid removals is accepted.
+  git("checkout", "-q", "-b", "mixed", forkPoint)
+  git("rm", "-q", path.join("facts", names[1]))
+  await fs.writeFile(path.join(repo, "README.md"), "maintainer readme")
+  git("add", "README.md")
+  git("commit", "-q", "-m", "mixed")
+  const mixedHead = git("rev-parse", "HEAD")
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", mixedHead, "--author-association", "OWNER"], cwd: repo }), { ok: true, maintenance: true, errors: [] })
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", mixedHead, "--author-association", "NONE"], cwd: repo }), {
+    ok: false, maintenance: false, errors: [{ code: "path", path: "changes.0" }, { code: "removal", path: `facts/${names[1]}` }],
   })
-  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", "NONE"], cwd: repo }), {
-    ok: false,
-    maintenance: false,
-    errors: [{ code: "removal", path: `facts/${names[1]}` }],
-  })
+  git("checkout", "-q", "-b", "mixed-data", forkPoint)
+  git("rm", "-q", path.join("facts", names[1]))
+  const added = JSON.parse(readFileSync(path.join(facts, names[0]), "utf8"))
+  const newName = "claude-code-33333333-3333-4333-8333-333333333333.json"
+  added.session.id = "33333333-3333-4333-8333-333333333333"
+  await fs.writeFile(path.join(facts, newName), `${JSON.stringify(added)}\n`)
+  git("add", "facts")
+  git("commit", "-q", "-m", "mixed data")
+  const mixedData = git("rev-parse", "HEAD")
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", mixedData, "--author-association", "MEMBER"], cwd: repo }), { ok: true, maintenance: false, errors: [] })
 }))
 
 const LABEL_1111 = "labels/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/11111111-1111-4111-8111-111111111111.json"
@@ -344,12 +372,12 @@ test("validate-pr gates labels as data against the facts the merge would leave i
     errors: [{ code: "evaluator_downgrade", path: LABEL_1111 }],
   })
 
-  // Removing labels is maintenance for a maintainer and refused for anyone else.
+  // Removing labels is a retraction: it validates for a maintainer and is refused for anyone else.
   git("checkout", "-q", "-b", "drop-label", label1111Head)
   git("rm", "-q", LABEL_1111)
   git("commit", "-q", "-m", "drop label")
   const dropHead = git("rev-parse", "HEAD")
-  assert.deepEqual(await validate(label1111Head, dropHead, "MEMBER"), { ok: true, maintenance: true, errors: [] })
+  assert.deepEqual(await validate(label1111Head, dropHead, "MEMBER"), { ok: true, maintenance: false, errors: [] })
   assert.deepEqual(await validate(label1111Head, dropHead, "NONE"), { ok: false, maintenance: false, errors: [{ code: "removal", path: LABEL_1111 }] })
 
   // A labels file that is not valid JSON data is refused without being echoed or run.
@@ -510,10 +538,12 @@ test("validate-pr handles added, removed, unknown, invalid-path, malformed, over
   assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
   assert.equal(calls, 2)
 
-  for (const [status, code] of [["D", "removal"], ["X", "status"]]) {
-    result = await runValidatePrCommand({ argv: args, git: mergeGit(() => `${status}\0${validPath}\0`) })
-    assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code, path: validPath }] })
-  }
+  result = await runValidatePrCommand({ argv: args, git: mergeGit(() => `D\0${validPath}\0`) })
+  assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "removal", path: validPath }] })
+  result = await runValidatePrCommand({ argv: args.map((arg) => (arg === "NONE" ? "OWNER" : arg)), git: mergeGit(() => `D\0${validPath}\0`) })
+  assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
+  result = await runValidatePrCommand({ argv: args, git: mergeGit(() => `X\0${validPath}\0`) })
+  assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "status", path: validPath }] })
 
   calls = 0
   result = await runValidatePrCommand({
@@ -573,12 +603,12 @@ test("validate-pr rejects malformed options and main exits one while still print
   const invalidCode = await main({
     argv: ["validate-pr", "--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "NONE"],
     env,
-    git: mergeGit(() => `D\0${validPath}\0`),
+    git: mergeGit(() => `X\0${validPath}\0`),
     write: (text) => { output += text },
     logError: (text) => { logged += text },
   })
   assert.equal(invalidCode, 1)
-  assert.deepEqual(JSON.parse(output), { ok: false, maintenance: false, errors: [{ code: "removal", path: validPath }] })
+  assert.deepEqual(JSON.parse(output), { ok: false, maintenance: false, errors: [{ code: "status", path: validPath }] })
   assert.equal(logged, "")
 }))
 
@@ -905,3 +935,36 @@ test("andon reads the store's jobs and syncs its alarms through gh with GH_TOKEN
   await assert.rejects(runAndonCommand({ argv: ["--repo", "ourostack/factory"], env: { ...env, GH_TOKEN: "x" }, runner }), /Usage: factory\.js andon/u)
   assert.ok(SUPPORTED_COMMANDS.includes("andon"))
 }))
+
+test("runIfMain runs the command and sets the exit code only for this module's own path", async () => {
+  const before = process.exitCode
+  try {
+    assert.equal(await runIfMain("file:///a/b.js", "/a/other.js", async () => assert.fail("must not run")), false)
+    assert.equal(await runIfMain("file:///a/b.js", "/a/b.js", async () => 3), true)
+    assert.equal(process.exitCode, 3)
+  } finally {
+    process.exitCode = before
+  }
+})
+
+test("main writes to stdout and stderr by default", async () => {
+  const out = []
+  const err = []
+  const write = process.stdout.write
+  const error = process.stderr.write
+  process.stdout.write = (text) => { out.push(String(text)); return true }
+  process.stderr.write = (text) => { err.push(String(text)); return true }
+  try {
+    assert.equal(await main({ argv: ["no-such-command"] }), 1)
+    // With no argv, main reads the process arguments, which name no subcommand here.
+    assert.equal(await main(), 1)
+    assert.equal(await main({ argv: ["validate-pr"] }), 1)
+    assert.equal(await main({ argv: ["reconcile", "--desk", "/nonexistent-desk-for-test", "--since", "2026-09-28T00:00:00Z", "--until", "2026-09-29T00:00:00Z"], env: { HOME: "/nonexistent-home-for-test" } }), 1)
+  } finally {
+    process.stdout.write = write
+    process.stderr.write = error
+  }
+  assert.match(err.join(""), /unknown subcommand/u)
+  assert.equal(out.length, 1)
+  assert.equal(JSON.parse(out[0]).ok, false)
+})

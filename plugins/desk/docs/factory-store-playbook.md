@@ -6,7 +6,7 @@ The store design, the published schema and the "no who, no when, just how" stanc
 
 ## What you end with
 
-- A repository whose `main` holds `README.md`, `factory.json`, `.github/workflows/` and two data paths: published facts at `facts/<host>-<session id>.json` and published waste labels at `labels/<job>/<session id>.json`. Anyone may add data files, grow a facts file or replace labels with a newer evaluator's; every other change, including any other file under those folders and every removal, is maintenance.
+- A repository whose `main` holds `README.md`, `factory.json`, `.github/workflows/` and two data paths: published facts at `facts/<host>-<session id>.json` and published waste labels at `labels/<job>/<session id>.json`. Anyone may add data files, grow a facts file or replace labels with a newer evaluator's; a maintainer (`OWNER`, `MEMBER` or `COLLABORATOR`) may also delete a facts or labels file, a retraction that `factory-merge` merges like any intake; every other change, including any other file under those folders and any removal at a path outside those two shapes, is maintenance, and anyone else's removal is refused (`removal`, or `path` outside the data paths).
 - A ruleset on `main`: every change arrives by pull request, the `factory-validate` check must pass, and nobody can force-push or delete the branch. Admins can bypass only while merging a pull request.
 - `factory-validate`, which checks every pull request with Desk's validator. Our workflow file never runs the candidate's files, but GitHub runs a pull request's own workflow files, so the check alone is not evidence (see "Merging by hand" below).
 - `factory-merge`, which validates each intake pull request again and merges it or closes it with `factory-rejected: <code>` comments. It never merges maintenance pull requests.
@@ -755,7 +755,7 @@ Why the workflows are shaped this way:
 
 ### Merging by hand
 
-Maintainers merge by hand only maintenance pull requests. Follow these rules:
+Maintainers merge by hand only maintenance pull requests; a maintainer's retraction of a facts or labels file is not one. Follow these rules:
 
 - **Your own maintenance pull requests.** Merge after `factory-validate` passes; you know what the pull request contains.
 - **Anyone else's pull request.** Let `factory-merge` merge it, or run `validate-pr` yourself at its exact head before merging. A green `factory-validate` on someone else's pull request is not evidence on its own, because the pull request's own workflow files may have produced it. This matters most when `factory-merge` took no action (`validator_unavailable`) or the pull request carries `maintenance`.

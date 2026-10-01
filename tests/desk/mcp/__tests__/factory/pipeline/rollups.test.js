@@ -221,6 +221,11 @@ test("jobRecord excludes compactions of a session split across jobs as partial, 
   }
   assert.deepEqual(record([bound([0]), sessions[1]]), { excluded: "partial" })
   assert.deepEqual(record([bound([0, 1]), sessions[1]]), record(sessions))
+  const second = { ...sessions[1], agents: [...sessions[1].agents, { n: 1, parent: 0, model: sessions[1].agents[0].model }] }
+  const split = (session, extra = {}) => ({ ...second, ...extra, jobs: second.jobs.map((binding) => ({ ...binding, agents: [0] })) })
+  assert.deepEqual(record([bound([0]), split(second)]), { excluded: "worker_split" }, "a job whose sessions are all split has no compactions to report, and never a zero")
+  const noTurns = { ...bound([0]), unavailable: [...sessions[0].unavailable, { field: "turns", reason: "log_truncated" }] }
+  assert.deepEqual(record([noTurns, split(second)]), { excluded: "mixed" }, "an all-split job that also lacks turns names both reasons")
 })
 
 test("the measure rollups report median, p75 and counted jobs per group, and list each exclusion reason", () => {

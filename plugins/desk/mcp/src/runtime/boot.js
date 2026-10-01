@@ -71,6 +71,7 @@ import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { shellQuote, shellQuotePath } from "../util/shell-quote.js"
 import { readSmallText } from "../factory/marker.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
+import { LIFECYCLE_STATES, TERMINAL_STATES } from "../desk/lifecycle.js"
 import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
@@ -280,8 +281,8 @@ export async function checkPrereqs({ gh = ghRunner(), jq = commandRunner("jq"), 
 // ── Task-card frontmatter validation ────────────────────────────────────
 
 const MAX_CARD_BYTES = 64 * 1024
-const VALID_STATUSES = new Set(["drafting", "processing", "validating", "collaborating", "paused", "blocked", "done", "cancelled"])
-const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+const VALID_STATUSES = new Set(LIFECYCLE_STATES)
+const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const REQUIRED_TEXT_FIELDS = ["title", "status", "created", "updated", "track"]
 
 function isTimestampField(field) {

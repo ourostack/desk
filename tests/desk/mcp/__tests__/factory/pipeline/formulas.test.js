@@ -486,8 +486,22 @@ test("a session split across jobs credits each job only its workers", () => {
   assert.deepEqual(b.tool_calls_by_kind, { class: "measured", value: { shell: 1 }, ...partial })
   assert.deepEqual(a.rework_signals.tool_failures, { class: "inferred", value: 1, ...partial })
   assert.deepEqual(b.rework_signals.tool_failures, { class: "inferred", value: 1, ...partial })
-  assert.deepEqual(a.rework_signals.tool_retries, { class: "inferred", value: 0, ...partial })
-  assert.deepEqual(b.rework_signals.api_retries, { class: "inferred", value: 0, ...partial })
+  // Retries have no worker: a job whose only session is split cannot say how many were its own, and an unknown count is not a measured zero.
+  assert.deepEqual(a.rework_signals.tool_retries, { class: "unavailable", value: null, reason: "worker_split" })
+  assert.deepEqual(b.rework_signals.api_retries, { class: "unavailable", value: null, reason: "worker_split" })
+  assert.deepEqual(a.rework_signals.api_retries, { class: "unavailable", value: null, reason: "worker_split" })
+})
+
+test("a job with some whole sessions sums their retries and marks the measure partial; a split session also missing the field says mixed", () => {
+  const whole = splitSession({ session: { ...splitSession().session, id: "66666666-6666-4666-8666-666666666666" } })
+  whole.jobs = [{ ...whole.jobs[0], agents: [0, 1, 2] }]
+  const formulas = calculateFormulas(buildJobTimeline(JOB_A, [splitSession(), whole]))
+  const partial = { partial: true, uncovered_sessions: 1, partial_reasons: ["worker_split"] }
+  assert.deepEqual(formulas.rework_signals.tool_retries, { class: "inferred", value: 2, ...partial })
+  assert.deepEqual(formulas.rework_signals.api_retries, { class: "inferred", value: 1, ...partial })
+  const lacking = splitSession()
+  lacking.unavailable.push({ field: "api_retries", reason: "log_missing" })
+  assert.deepEqual(calculateFormulas(buildJobTimeline(JOB_A, [lacking])).rework_signals.api_retries, { class: "unavailable", value: null, reason: "mixed", reasons: ["log_missing", "worker_split"] })
 })
 
 test("a binding that covers every worker behaves like the legacy session-level binding", () => {
