@@ -33,11 +33,11 @@ test("task_update never spreads a JSON-string frontmatter into character keys", 
   const { root, filePath } = await taskFixture()
   await task_update({
     deskRoot: root,
-    input: { track: "t", slug: "book-flights", frontmatter: JSON.stringify({ status: "implementing" }) },
+    input: { track: "t", slug: "book-flights", frontmatter: JSON.stringify({ status: "processing" }) },
   })
   const after = await readFront(filePath)
   assert.equal(Object.hasOwn(after.data, "0"), false, "no character keys")
-  assert.equal(after.data.status, "implementing", "the JSON object's fields are merged")
+  assert.equal(after.data.status, "processing", "the JSON object's fields are merged")
   assert.equal(after.data.title, "T")
 })
 

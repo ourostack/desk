@@ -29,12 +29,13 @@ import { validateName, describeNameRejection } from "../desk/naming.js"
 import { factoryStateRoot, requestEvaluation, requestFinalize } from "../factory/outbox.js"
 import { jobId } from "../factory/binding.js"
 import { readDeskRemote, resolveJobIdentity } from "../factory/desk-repo.js"
+import { LIFECYCLE_STATES, TERMINAL_STATES, invalidStatusMessage } from "../desk/lifecycle.js"
 import { objectInput } from "../util/object-input.js"
 import { reportLink } from "./factory-context.js"
 import { assertCodeRepoEvidence, recordedRepos } from "./done-evidence.js"
 import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 
-const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
 const DONE_EVIDENCE_EXAMPLE = '{"kind": "pr", "ref": "https://github.com/org/repo/pull/123"}'
 const DONE_EVIDENCE_USAGE =
@@ -464,6 +465,10 @@ export async function task_create({ deskRoot, input, person = null, readiness, s
     throw new Error("task_create: `title` is required (string)")
   }
 
+  if (values.status != null && !LIFECYCLE_STATES.includes(values.status)) {
+    throw new Error(`task_create: ${invalidStatusMessage(values.status)}`)
+  }
+
   const filePath = await resolveWriteTarget({
     deskRoot,
     person,
@@ -583,6 +588,10 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     effect: "the `done` transition was not recorded",
     example: DONE_EVIDENCE_EXAMPLE,
   })
+
+  if (frontmatter != null && Object.hasOwn(frontmatter, "status") && !LIFECYCLE_STATES.includes(frontmatter.status)) {
+    throw new Error(`task_update: ${invalidStatusMessage(frontmatter.status)} (set in \`frontmatter.status\`)`)
+  }
 
   const filePath = await resolveWriteTarget({
     deskRoot,

@@ -26,8 +26,9 @@ import * as path from "node:path"
 import { loadFrontmatterParser } from "./organization.js"
 import { redactCredentialLikeText, redactName, redactTitle, REDACTED_SEGMENT, REDACTED_TITLE } from "../util/redact.js"
 import { folderHandle } from "./handles.js"
+import { TERMINAL_STATES } from "./lifecycle.js"
 
-const TERMINAL_STATUSES = new Set(["done", "cancelled"])
+const TERMINAL_STATUSES = new Set(TERMINAL_STATES)
 const MAX_CARD_BYTES = 64 * 1024
 // gray-matter in the server, so nested fields such as `repos` are read.
 const parseFrontmatter = loadFrontmatterParser()

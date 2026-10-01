@@ -88,7 +88,7 @@ test("task_create accepts optional runtime fields and passes them through", asyn
       track: "infra",
       slug: "reminder-x",
       title: "Reminder",
-      status: "scheduled",
+      status: "paused",
       category: "reminder",
       cadence: "30m",
       requester: "ari",
@@ -98,7 +98,7 @@ test("task_create accepts optional runtime fields and passes them through", asyn
   })
   const filePath = path.join(root, "infra", "reminder-x", "task.md")
   const { data, content } = await readFront(filePath)
-  assert.equal(data.status, "scheduled")
+  assert.equal(data.status, "paused")
   assert.equal(data.category, "reminder")
   assert.equal(data.cadence, "30m")
   assert.equal(data.requester, "ari")
@@ -231,11 +231,11 @@ test("reading (updating) an existing badly named task still works — only creat
 
   const result = await task_update({
     deskRoot: root,
-    input: { track: "engineering", slug: "hi-do-the-thing", frontmatter: { status: "doing" } },
+    input: { track: "engineering", slug: "hi-do-the-thing", frontmatter: { status: "processing" } },
   })
   assert.equal(result.status, "updated")
   const { data } = await readFront(filePath)
-  assert.equal(data.status, "doing")
+  assert.equal(data.status, "processing")
 })
 
 // ── M4-6 Part 2: stage + commit ─────────────────────────────────────────────
@@ -337,4 +337,25 @@ test("task_create skips staging and committing silently on a non-Git desk", asyn
   assert.equal(result.status, "created")
   assert.equal(result.commit, undefined)
   assert.equal(calls.length, 0, "schedulePush is never called on a non-Git desk")
+})
+
+test("task_create rejects a status outside the eight lifecycle states and names them", async () => {
+  const root = await mkTempDeskRoot()
+  for (const status of ["active", "Processing", "in-progress", "", 3]) {
+    await assert.rejects(
+      task_create({ deskRoot: root, input: { track: "t", slug: "bad-status-task", title: "T", status } }),
+      (error) => /^task_create: invalid status /.test(error.message) && error.message.includes(JSON.stringify(status)) && /drafting, processing, validating, collaborating, paused, blocked, done, cancelled/.test(error.message),
+    )
+  }
+  assert.equal(await exists(path.join(root, "t", "bad-status-task", "task.md")), false)
+})
+
+test("task_create accepts each lifecycle state and defaults to drafting", async () => {
+  const root = await mkTempDeskRoot()
+  await task_create({ deskRoot: root, input: { track: "t", slug: "default-status", title: "T" } })
+  assert.equal((await readFront(path.join(root, "t", "default-status", "task.md"))).data.status, "drafting")
+  await task_create({ deskRoot: root, input: { track: "t", slug: "null-status", title: "T", status: null } })
+  assert.equal((await readFront(path.join(root, "t", "null-status", "task.md"))).data.status, "drafting")
+  await task_create({ deskRoot: root, input: { track: "t", slug: "paused-status", title: "T", status: "paused" } })
+  assert.equal((await readFront(path.join(root, "t", "paused-status", "task.md"))).data.status, "paused")
 })
