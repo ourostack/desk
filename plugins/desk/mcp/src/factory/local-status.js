@@ -47,7 +47,7 @@ import { consentDecision, consentRecords as readConsentRecords, factoryStateDir 
 import { readSmallText, validMarker } from "./marker.js"
 import { jobLink } from "./pipeline/build.js"
 import { ENUMS, PATTERNS, isPlainObject } from "./schema.js"
-import { derivedStoreOf, deskRootOf, sessionPlace, sessionRoute } from "./session-route.js"
+import { RETRACTED_COPIES, derivedStoreOf, deskRootOf, sessionPlace, sessionRoute } from "./session-route.js"
 import { resolveStore } from "./store-route.js"
 
 const STATE_BYTES = 8 * 1024 * 1024
@@ -124,7 +124,8 @@ function storeEntry(dir, records, store, lastFlush, place) {
   const delivered = readState(path.join(dir, "delivered", `${slug}.json`), {})
   const quarantined = new Set(outboxNames(path.join(dir, "quarantine", slug)))
   const retracting = readState(path.join(dir, "retracting", `${slug}.json`), {})
-  const listed = outboxNames(path.join(dir, "outbox", slug)).filter((name) => !quarantined.has(name))
+  // The kept copies of retracted sessions (`session-route.js`) count with the outbox files: they are what `route_changed` reports.
+  const listed = [...new Set([...outboxNames(path.join(dir, "outbox", slug)), ...outboxNames(path.join(dir, RETRACTED_COPIES, slug))])].filter((name) => !quarantined.has(name))
   const away = new Set(listed.filter((name) => ELSEWHERE.has(place(store, name, retracting === UNREADABLE ? {} : retracting))))
   const pending = listed.filter((name) => !away.has(name) && (delivered === UNREADABLE || !Object.hasOwn(delivered, name))).length
   const flush = isPlainObject(lastFlush) && isPlainObject(lastFlush[store]) ? lastFlush[store].result : null

@@ -51,6 +51,14 @@ export const MARKER_TTL_MS = 30 * DAY_MS
 /** A Codex default route is proven by a non-Codex marker for the same desk within this window, as the sweep proves it. */
 export const ROUTE_PROOF_WINDOW_MS = 30 * DAY_MS
 
+/**
+ * The state folder (`<factory state>/retracted-copies/<store-slug>/`) that keeps the local copies of a session whose files this machine
+ * retracted from a store. They leave `outbox/<store-slug>/` when the delete is pushed, because an older Desk's flush publishes every file it
+ * lists there and cannot tell a retracted session from a pending one. Facts keep their outbox name, labels keep `labels/<job>/<session>.json`.
+ * A route back moves them home before they publish. The route decisions here stay the only ones: this is only where the copies live.
+ */
+export const RETRACTED_COPIES = "retracted-copies"
+
 const UNKNOWN = Object.freeze({ kind: "unknown" })
 const DERIVED = Object.freeze({ kind: "derived" })
 const isStore = (value) => typeof value === "string" && PATTERNS.prRepo.test(value) && !/(?:^|\/)\.\.?$/u.test(value)
