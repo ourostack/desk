@@ -54,12 +54,12 @@ export function findCopilotBinary({ env = process.env, home = os.homedir(), exis
 
 export const COPILOT_TOKEN_VAR = "COPILOT_GITHUB_TOKEN"
 
-/** The login Copilot itself last signed in as, read from its config without touching any secret field. Returns null when there is none. */
+/** The login Copilot itself last signed in as, read from its config (a JSON file that may carry `//` comment lines); nothing else in the file is kept. Returns null when there is none. */
 export function copilotLastLogin(home = os.homedir()) {
   try {
-    const text = readFileSync(path.join(home, ".copilot", "config.json"), "utf8")
-    const block = text.match(/"lastLoggedInUser"\s*:\s*\{[^}]*\}/)?.[0] ?? ""
-    return block.match(/"login"\s*:\s*"([^"]+)"/)?.[1] ?? null
+    const text = readFileSync(path.join(home, ".copilot", "config.json"), "utf8").split("\n").filter((line) => !/^\s*\/\//.test(line)).join("\n")
+    const login = JSON.parse(text).lastLoggedInUser?.login
+    return typeof login === "string" && login !== "" ? login : null
   } catch {
     return null
   }
@@ -67,28 +67,49 @@ export function copilotLastLogin(home = os.homedir()) {
 
 /**
  * The Copilot credential for one harness invocation, or `{ token: null, problem }`. Copilot checks `COPILOT_GITHUB_TOKEN`, then `GH_TOKEN`, then `GITHUB_TOKEN`
- * (`copilot help environment`) ahead of any stored login, so the child needs exactly one environment variable and no `~/.copilot` login state, keychain entry or
- * file. Where the value comes from, in order:
- *   1. `COPILOT_GITHUB_TOKEN` in the parent's environment: use it as is. A fine-grained personal access token with only the "Copilot Requests" permission is the
- *      narrowest credential Copilot accepts, so this is the recommended way to run the harness unattended;
- *   2. otherwise the GitHub CLI's stored token for the account Copilot itself last signed in as (`gh auth token --user <login>`, run in the parent with the
- *      real HOME). The login name is public; the token comes back on a pipe, is held in memory and goes only into the child's environment.
- * Classic tokens (`ghp_`) are not accepted by Copilot, and the value is never put in an argument list, a file or a log line.
+ * (`copilot help environment`) ahead of any stored login, so the child needs exactly one environment variable and no `~/.copilot` login state or file.
+ *
+ * The default, and the only source unless the operator opts in, is `COPILOT_GITHUB_TOKEN` in the parent's environment: use a fine-grained personal access token
+ * with only the "Copilot Requests" permission, which is the narrowest credential Copilot accepts. The reason it matters: the child's environment can be read from the
+ * same account by a process-listing tool (`ps -Eww`) or the `kern.procargs2` sysctl, and `sandbox-exec` cannot close either (see README "Copilot host"), so the credential
+ * must be one whose loss costs nothing but Copilot requests.
+ *
+ * `allowGhToken` (the `--copilot-use-gh-token` flag) opts in to the fallback: the GitHub CLI's stored token for the account Copilot itself last signed in as
+ * (`gh auth token --user <login>`, run in the parent). That is the account's full gh OAuth token (repo and workflow scopes), so the caller prints a loud warning.
+ * Classic tokens (`ghp_`) are not accepted by Copilot, and a value is never put in an argument list, a file, a log line or a problem text.
  */
-export function resolveCopilotAuth({ parentEnv = process.env, home = os.homedir(), run = (cmd, args) => spawnSync(cmd, args, { encoding: "utf8" }), lastLogin = copilotLastLogin } = {}) {
+export function resolveCopilotAuth({ parentEnv = process.env, home = os.homedir(), allowGhToken = false, run = (cmd, args) => spawnSync(cmd, args, { encoding: "utf8" }), lastLogin = copilotLastLogin } = {}) {
   const fromEnv = (parentEnv[COPILOT_TOKEN_VAR] ?? "").trim()
   if (fromEnv) return checkToken(fromEnv, `${COPILOT_TOKEN_VAR} in the parent environment`)
+  if (!allowGhToken) return { token: null, problem: `no Copilot credential: ${COPILOT_TOKEN_VAR} is unset. Set it to a fine-grained personal access token with only the "Copilot Requests" permission. To use the gh keychain token of Copilot's signed-in account instead (a full OAuth token with repo and workflow scopes that a process listing in the run can read), pass --copilot-use-gh-token` }
   const login = (parentEnv.DESK_HARNESS_COPILOT_LOGIN ?? "").trim() || lastLogin(home)
-  if (!login) return { token: null, problem: `no Copilot credential: ${COPILOT_TOKEN_VAR} is unset and Copilot has no last-signed-in login in ~/.copilot/config.json (set ${COPILOT_TOKEN_VAR}, or DESK_HARNESS_COPILOT_LOGIN to a gh account that has Copilot)` }
+  if (!login) return { token: null, problem: `no Copilot credential: Copilot has no last-signed-in login in ~/.copilot/config.json (set ${COPILOT_TOKEN_VAR}, or DESK_HARNESS_COPILOT_LOGIN to a gh account that has Copilot)` }
   const r = run("gh", ["auth", "token", "--user", login])
   const token = (r.stdout ?? "").trim()
   if (r.status !== 0 || !token) return { token: null, problem: `no Copilot credential: \`gh auth token --user ${login}\` returned nothing (is that account signed in to gh? set ${COPILOT_TOKEN_VAR} instead)` }
-  return checkToken(token, `the gh keychain token for ${login}`)
+  const checked = checkToken(token, `the gh keychain token for ${login}`)
+  return checked.token === null ? checked : { ...checked, broad: true }
 }
+
+/** The warning printed whenever the full gh token is the run's credential. */
+export const GH_TOKEN_WARNING = "WARNING: --copilot-use-gh-token is on. The Copilot child gets the account's full gh OAuth token (repo and workflow scopes) in its environment, and a process listing run by the agent (ps -Eww, or the kern.procargs2 sysctl) can read it. Use a fine-grained token with only the \"Copilot Requests\" permission in COPILOT_GITHUB_TOKEN instead."
 
 function checkToken(token, source) {
   if (token.startsWith("ghp_")) return { token: null, problem: `the credential from ${source} is a classic token (ghp_...), which Copilot does not accept; use a fine-grained token with the "Copilot Requests" permission, or a gh/Copilot OAuth token` }
-  return { token, source }
+  return { token, source, fineGrained: token.startsWith("github_pat_") }
+}
+
+const AUTH_FAILURE = /\b(?:401|403)\b|unauthori[sz]ed|not authenticated|authentication (?:failed|required)|bad credentials|no (?:valid )?(?:copilot )?(?:access|subscription)|copilot requests/i
+
+/**
+ * A clear error for a first turn that never reached the model because the credential was refused, or null. A fine-grained token (`github_pat_`) that lacks the "Copilot Requests" permission fails this way, as does an expired or revoked one.
+ */
+export function authFailureProblem({ turn, auth }) {
+  const text = `${turn.stdout ?? ""}\n${turn.stderr ?? ""}`
+  const reachedModel = text.includes("assistant.message")
+  if (reachedModel || !AUTH_FAILURE.test(text)) return null
+  const why = auth.fineGrained ? 'a fine-grained token (github_pat_...) must have the "Copilot Requests" permission' : "the token may be expired, revoked or from an account without Copilot"
+  return `Copilot refused the credential from ${auth.source}: ${why}. Fix ${COPILOT_TOKEN_VAR} (the value is not shown).`
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +193,11 @@ export const copilotResumeArgs = (sessionId) => [`--resume=${sessionId}`]
 // The transcript
 // ---------------------------------------------------------------------------
 
+// Copilot's own bookkeeping tools: they change nothing and are not what the agent did, so they are left out of the transcript and the call counts.
+// `report_intent` states the agent's next step in words; the shell-session tools only read or feed a shell that a `bash` call already started.
+export const IGNORED_TOOLS = new Set(["report_intent"])
+export const META_TOOLS = new Set(["report_intent", "read_bash", "write_bash", "stop_bash", "list_bash", "read_powershell", "write_powershell", "stop_powershell", "list_powershell", "task_complete"])
+
 // Copilot's own tool names, mapped to the names claims.mjs and scenarios.mjs test for.
 const TOOL_NAMES = {
   bash: "Bash",
@@ -191,9 +217,56 @@ const TOOL_NAMES = {
   ask_user: "AskUserQuestion",
 }
 
+/**
+ * The patch text of an `apply_patch` call, whatever shape Copilot gave its arguments (the bare string, or an object holding it), or null.
+ */
+function patchText(args) {
+  if (typeof args === "string") return args
+  for (const key of ["input", "patch", "text"]) if (typeof args?.[key] === "string") return args[key]
+  return null
+}
+
+/**
+ * The files an `apply_patch` text writes, one `{ name, input }` each: `*** Add File:` is a `Write` (`content` is the added lines), `*** Update File:` an `Edit`
+ * (`old_string` the removed lines, `new_string` the added lines), `*** Delete File:` an `Edit` with an empty `new_string`. `file_path` is the file and `patch` is that file's
+ * own section, so a check that looks for a card path or `status: done` anywhere in the call still finds it.
+ */
+export function parseApplyPatch(text) {
+  const files = []
+  let current = null
+  for (const line of String(text).split("\n")) {
+    const header = line.match(/^\*\*\* (Add|Update|Delete) File: (.+?)\s*$/)
+    if (header) {
+      current = { kind: header[1], file: header[2], added: [], removed: [], lines: [line] }
+      files.push(current)
+    } else if (/^\*\*\* (?:Begin|End) Patch\s*$/.test(line)) {
+      current = null
+    } else if (current) {
+      current.lines.push(line)
+      if (line.startsWith("+")) current.added.push(line.slice(1))
+      else if (line.startsWith("-")) current.removed.push(line.slice(1))
+    }
+  }
+  return files.map((f) => {
+    const patch = f.lines.join("\n")
+    if (f.kind === "Add") return { name: "Write", input: { file_path: f.file, content: f.added.join("\n"), patch } }
+    return { name: "Edit", input: { file_path: f.file, old_string: f.removed.join("\n"), new_string: f.kind === "Delete" ? "" : f.added.join("\n"), patch } }
+  })
+}
+
+/** Every `{ name, input }` one Copilot tool request stands for: normally one, one per file for an `apply_patch`. */
+export function mapToolCalls(request) {
+  const patch = request.toolName === "apply_patch" && !request.mcpServerName ? patchText(request.arguments) : null
+  if (patch !== null) {
+    const calls = parseApplyPatch(patch)
+    if (calls.length > 0) return calls
+  }
+  return [mapToolCall(request)]
+}
+
 /** `{ name, input }` of one Copilot tool call in the names and argument shapes the checks read. */
 export function mapToolCall({ toolName, arguments: args, mcpServerName, mcpToolName }) {
-  const input = { ...(args ?? {}) }
+  const input = typeof args === "string" ? { input: args } : { ...(args ?? {}) }
   // An MCP tool is `mcp__<server>__<tool>` on Claude Code; every check that names one matches the end (`task_update`).
   if (mcpServerName && mcpToolName) return { name: `mcp__${mcpServerName}__${mcpToolName}`, input }
   const name = TOOL_NAMES[toolName] ?? toolName
@@ -231,7 +304,6 @@ export function parseCopilotJsonl(text) {
  */
 export function copilotToStreamEvents(copilotEvents) {
   const out = []
-  const seen = new Set()
   const names = new Map()
   let sessionId = null
   let finalText = ""
@@ -240,11 +312,19 @@ export function copilotToStreamEvents(copilotEvents) {
   let turns = 0
   let started = null
   let ended = null
-  const emitCall = (id, call) => {
-    if (seen.has(id)) return
-    seen.add(id)
-    names.set(id, call.name)
-    out.push({ type: "assistant", message: { content: [{ type: "tool_use", id, name: call.name, input: call.input }] } })
+  // One Copilot tool call can stand for several (an apply_patch of three files is three writes), and a meta tool stands for none: `ids` maps its id to the ids it became.
+  const ids = new Map()
+  const register = (request) => {
+    if (ids.has(request.toolCallId)) return []
+    if (IGNORED_TOOLS.has(request.toolName) && !request.mcpServerName) {
+      ids.set(request.toolCallId, [])
+      return []
+    }
+    const calls = mapToolCalls(request)
+    const mapped = calls.map((call, index) => ({ id: index === 0 ? request.toolCallId : `${request.toolCallId}#${index}`, call }))
+    ids.set(request.toolCallId, mapped.map((m) => m.id))
+    for (const { id, call } of mapped) names.set(id, call.name)
+    return mapped.map(({ id, call }) => ({ type: "tool_use", id, name: call.name, input: call.input }))
   }
   for (const event of copilotEvents) {
     const data = event.data ?? {}
@@ -258,14 +338,7 @@ export function copilotToStreamEvents(copilotEvents) {
         const text = typeof data.content === "string" ? data.content : ""
         if (text.trim()) blocks.push({ type: "text", text })
         const requests = Array.isArray(data.toolRequests) ? data.toolRequests : []
-        for (const request of requests) {
-          const call = mapToolCall({ toolName: request.name, arguments: request.arguments, mcpServerName: request.mcpServerName, mcpToolName: request.mcpToolName })
-          if (!seen.has(request.toolCallId)) {
-            seen.add(request.toolCallId)
-            names.set(request.toolCallId, call.name)
-            blocks.push({ type: "tool_use", id: request.toolCallId, name: call.name, input: call.input })
-          }
-        }
+        for (const request of requests) blocks.push(...register({ toolCallId: request.toolCallId, toolName: request.name, arguments: request.arguments, mcpServerName: request.mcpServerName, mcpToolName: request.mcpToolName }))
         if (blocks.length > 0) out.push({ type: "assistant", message: { content: blocks } })
         if (requests.length === 0 && text.trim()) finalText = text
         break
@@ -275,15 +348,16 @@ export function copilotToStreamEvents(copilotEvents) {
         break
       case "tool.execution_start": {
         // Normally already announced by the assistant message; this covers a call that arrives without one.
-        const call = mapToolCall({ toolName: data.toolName, arguments: data.arguments, mcpServerName: data.mcpServerName, mcpToolName: data.mcpToolName })
-        emitCall(data.toolCallId, call)
+        const blocks = register({ toolCallId: data.toolCallId, toolName: data.toolName, arguments: data.arguments, mcpServerName: data.mcpServerName, mcpToolName: data.mcpToolName })
+        if (blocks.length > 0) out.push({ type: "assistant", message: { content: blocks } })
         break
       }
       case "tool.execution_complete": {
         const text = completeText(data)
         const exit = data.shellExecution?.exitCode
         const isError = data.success === false || (typeof exit === "number" && exit !== 0)
-        out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: data.toolCallId, content: wasRefused(data) ? denialPrefix(names.get(data.toolCallId), text) : text, is_error: isError }] } })
+        // Every call an id became gets the one answer.
+        for (const id of ids.get(data.toolCallId) ?? (ids.has(data.toolCallId) ? [] : [data.toolCallId])) out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: wasRefused(data) ? denialPrefix(names.get(id), text) : text, is_error: isError }] } })
         break
       }
       case "result":

@@ -28,7 +28,7 @@ import * as process from "node:process"
 import { cleanupRunDir, materializeFixture, breakOriginForFailure, addMissingCloneTask, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, sourcePaths, freshTempDir, REAL_HOME } from "./lib.mjs"
 import { SCENARIOS, CRITIQUE_PROMPT, findScenario } from "./scenarios.mjs"
 import { buildChildEnv, countTokenLeaks, findRealGh, installGhShim, redactSecrets, writeGitConfig } from "./safety.mjs"
-import { COPILOT_DEFAULT_MODEL, COPILOT_TOKEN_VAR, compactCopilotTranscript, copilotFlags, copilotResumeArgs, findCopilotBinary, installCopilotPlugins, installedBootScript, notApplicableFor, parseCopilotTranscript, resolveCopilotAuth, shareCopilotPackageCache, writeCopilotProfile } from "./copilot.mjs"
+import { COPILOT_DEFAULT_MODEL, COPILOT_TOKEN_VAR, GH_TOKEN_WARNING, META_TOOLS, authFailureProblem, compactCopilotTranscript, copilotFlags, copilotResumeArgs, findCopilotBinary, installCopilotPlugins, installedBootScript, notApplicableFor, parseCopilotTranscript, resolveCopilotAuth, shareCopilotPackageCache, writeCopilotProfile } from "./copilot.mjs"
 
 export const HOSTS = ["claude", "copilot"]
 
@@ -46,7 +46,8 @@ const USAGE = `Usage: node evals/boot-acceptance/run.mjs --out-dir <dir> [option
   --timeout-min <n>     kill one claude call (and its process group) after n minutes, default 15
   --worktree <checkout> load desk, superpowers and plain-language from that checkout's plugins/
   --plugin-dir <dir>    load exactly this folder of plugins (overrides --worktree)
-  --copilot-bind env|project  how the Desk MCP server finds the fixture desk on copilot: "env" (default) sets DESK, which is how a Copilot user binds a desk; "project" leaves it to the session folder, which only Desk's boot script and hook read (see README)
+  --copilot-bind project|env  how the Desk MCP server finds the fixture desk on copilot: "project" (default) leaves it to the session folder, which only Desk's boot script and hook read, as for a user who just opens the desk; "env" sets DESK, the workaround (see README)
+  --copilot-use-gh-token  copilot only: when COPILOT_GITHUB_TOKEN is unset, use the gh keychain token of Copilot's signed-in account. That is a full OAuth token (repo, workflow); a process listing in the run can read it. Default: refuse
   --shared-cache <dir>  Desk runtime-dependency pack reuse, default <out-dir>/.shared-runtime-cache
   --keep-fixtures       keep each run's temp fixture desk and HOME
   --force               rerun a run that already has a summary.json
@@ -55,7 +56,7 @@ const USAGE = `Usage: node evals/boot-acceptance/run.mjs --out-dir <dir> [option
 `
 
 export function parseArgs(argv) {
-  const args = { scenario: "all", runs: 2, host: "claude", model: undefined, budget: "1", timeoutMin: 15, keepFixtures: false, copilotBind: "env" }
+  const args = { scenario: "all", runs: 2, host: "claude", model: undefined, budget: "1", timeoutMin: 15, keepFixtures: false, copilotBind: "project", copilotUseGhToken: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === "--scenario") args.scenario = argv[++i]
@@ -72,6 +73,7 @@ export function parseArgs(argv) {
     else if (a === "--help" || a === "-h") args.help = true
     else if (a === "--keep-fixtures") args.keepFixtures = true
     else if (a === "--copilot-bind") args.copilotBind = argv[++i]
+    else if (a === "--copilot-use-gh-token") args.copilotUseGhToken = true
     else if (a === "--shared-cache") args.sharedCache = argv[++i]
     else throw new Error(`unknown arg: ${a}`)
   }
@@ -257,7 +259,17 @@ function runBinary({ binary, args, cwd, env, timeoutMs }) {
   })
 }
 
-async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, outDir, auth }) {
+/** What the shim gives the real `gh`: the operator's own HOME and `gh` folder, and none of the run's redirected locations. */
+export function realGhEnv(parentEnv = process.env) {
+  const config = parentEnv.GH_CONFIG_DIR || path.join(parentEnv.XDG_CONFIG_HOME || path.join(REAL_HOME, ".config"), "gh")
+  return { set: { HOME: REAL_HOME, GH_CONFIG_DIR: config }, unset: ["XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GH_SHIM_LOG"] }
+}
+
+/**
+ * One run, and the removal of its temp folder whatever happens in it: a failed install, a refused credential or a crash in a check still removes the folder (unless `--keep-fixtures`). `cleanupRunDir` removes a symlink (the shared caches) and never what it points at.
+ */
+async function runOne(options) {
+  const { scenario, runIndex, args, outDir } = options
   const runId = `${scenario.id}/run-${runIndex}`
   const summaryPath = path.join(outDir, scenario.id, `run-${runIndex}`, "summary.json")
   if (!args.force && existsSync(summaryPath)) {
@@ -265,12 +277,22 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
     return JSON.parse(readFileSync(summaryPath, "utf8"))
   }
   const runTmp = freshTempDir(`boot-acceptance-${scenario.id}-`)
+  try {
+    return await runInTemp({ ...options, runTmp, runId })
+  } finally {
+    if (!args.keepFixtures) await cleanupRunDir(runTmp)
+  }
+}
+
+async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, outDir, auth, runTmp, runId }) {
   const { deskRoot } = materializeFixture(path.join(runTmp, "fixture"))
   if (scenario.inject === "break-origin") breakOriginForFailure(deskRoot)
   if (scenario.inject === "missing-clone") addMissingCloneTask(deskRoot)
 
   const homeDir = path.join(runTmp, "home")
-  createIsolatedHome({ homeDir, sharedCacheDir, host: args.host })
+  // The login keychain is linked into the run's HOME only for Claude Code without `CLAUDE_CODE_OAUTH_TOKEN` (its sign-in reads it); `gh` reaches the operator's login through the shim, never through this HOME.
+  const keychain = args.host === "claude" && !process.env.CLAUDE_CODE_OAUTH_TOKEN
+  createIsolatedHome({ homeDir, sharedCacheDir, host: args.host, keychain, ghAccounts: false })
   // The `watering-schedule-api` card records `~/code/greenhouse-irrigation`;
   // `~` is this run's temp HOME, so the clone lives under the temp dir.
   // `valve-firmware` (the `missing-clone` scenario's repo) is never created.
@@ -313,10 +335,14 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
   }
   // Only the plugin under test's own boot script may receive a raw `gh auth token`.
   const bootScript = existsSync(bootScriptFile) ? realpathSync(bootScriptFile) : null
-  if (realGh) installGhShim({ shimDir, realGh, logFile: ghLog, bootScript })
+  if (realGh) installGhShim({ shimDir, realGh, logFile: ghLog, bootScript, realEnv: realGhEnv() })
 
   const startedAt = Date.now()
   const { ctx, critique, critiqueSkipped, turns } = await runTurns({ claude: runHost(args.binary), prompt: scenario.prompt, critiquePrompt: CRITIQUE_PROMPT, flags, cwd: deskRoot, env, timeoutMs: args.timeoutMin * 60 * 1000, host: args.host, secrets })
+  if (args.host === "copilot") {
+    const refused = authFailureProblem({ turn: turns[0], auth })
+    if (refused !== null) throw new Error(refused)
+  }
   ctx.host = args.host
   ctx.deskRoot = deskRoot
   ctx.homeDir = homeDir
@@ -343,6 +369,7 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
   if (ctx.ghDenials.length) writeFileSync(path.join(runDir, "gh-denied.jsonl"), ctx.ghDenials.map((d) => JSON.stringify(d)).join("\n") + "\n")
   const checkResult = scoreRun(scenario, ctx, args.host)
 
+  const counted = ctx.toolCalls.filter((t) => !META_TOOLS.has(t.name))
   const summary = {
     host: args.host,
     model: args.model,
@@ -364,19 +391,21 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
     num_turns: ctx.numTurns,
     subtype: ctx.subtype,
     is_error: ctx.isError,
-    tool_call_count: ctx.toolCalls.length,
-    tool_call_names: ctx.toolCalls.map((t) => t.name),
+    // Copilot's bookkeeping tools (shell-session readers and the like) are not counted: they are not what the agent did.
+    tool_call_count: counted.length,
+    tool_call_names: counted.map((t) => t.name),
     outcome: checkResult.outcome,
     outcome_notes: checkResult.notes,
     not_applicable: checkResult.notApplicable,
+    // Every check this host could run passed; the checks it could not run are the `not_applicable` list, counted here, never credited as passes.
+    judged_pass: checkResult.outcome === "pass",
+    not_applicable_count: checkResult.notApplicable.length,
     // The scenario turn's final reply and the critique turn's reply are separate fields.
     final_reply: ctx.finalResultText,
     critique,
     critique_skipped: critiqueSkipped,
   }
   writeFileSync(path.join(runDir, "summary.json"), JSON.stringify(summary, null, 2))
-
-  if (!args.keepFixtures) await cleanupRunDir(runTmp)
 
   console.log(`[${runId}] outcome=${summary.outcome} tools=${summary.tool_call_count} wall_ms=${wallMs} ${args.host === "copilot" ? `premium_requests=${summary.premium_requests ?? "?"}` : `cost=$${summary.total_cost_usd ?? "?"}`}`)
   return summary
@@ -412,9 +441,10 @@ async function main() {
   // The Copilot credential is resolved once, here, held in memory and handed to each run's child environment only (see copilot.mjs `resolveCopilotAuth`).
   let auth = null
   if (args.host === "copilot") {
-    auth = resolveCopilotAuth()
+    auth = resolveCopilotAuth({ allowGhToken: args.copilotUseGhToken })
     if (!auth.token) throw new Error(auth.problem)
     console.log(`auth:         ${COPILOT_TOKEN_VAR} from ${auth.source} (the value is never printed or written)`)
+    if (auth.broad) console.warn(`\n${GH_TOKEN_WARNING}\n`)
   }
   const allSummaries = []
   for (const scenario of scenarios) {

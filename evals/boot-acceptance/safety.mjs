@@ -167,11 +167,13 @@ export function countTokenLeaks(text) {
 // ---------------------------------------------------------------------------
 
 /**
+ * `realEnv` (`{ set, unset }`, optional) changes the environment the shim gives the real `gh`: the harness uses it to run `gh` against the operator's real login while the agent's own HOME holds no keychain link and no `gh` account list, so a model that calls `gh` by path, or reads its HOME, finds no credential.
+ *
  * Writes `<shimDir>/gh`, a script that classifies its arguments with
  * `classifyGh`, runs the real `gh` for read-only calls and otherwise exits 97
  * after appending the attempt to `logFile`. `realGh` is the real binary.
  */
-export function installGhShim({ shimDir, realGh, logFile, bootScript = null }) {
+export function installGhShim({ shimDir, realGh, logFile, bootScript = null, realEnv = null }) {
   mkdirSync(shimDir, { recursive: true })
   const policy = new URL("./safety.mjs", import.meta.url).href
   // Who gets a raw token: only the plugin under test's own boot script (an exact realpath match, baked in at install time), found by the shim's parent process (`ps`), never by an environment variable the model's shell could also set. The boot script spawns `gh` with a piped stdout, so its token goes to the script and not into the transcript. Everyone else (the model's shell, a hook) gets the child's output captured and passed through `redactTokens`, with the exit code kept.
@@ -179,6 +181,12 @@ export function installGhShim({ shimDir, realGh, logFile, bootScript = null }) {
 import { classifyGh, isBootScriptCommand, processCommand, redactTokens } from ${JSON.stringify(policy)}
 import { spawnSync } from "node:child_process"
 import { appendFileSync } from "node:fs"
+const realEnv = ${JSON.stringify(realEnv)}
+const ghEnv = { ...process.env }
+if (realEnv) {
+  for (const name of realEnv.unset ?? []) delete ghEnv[name]
+  Object.assign(ghEnv, realEnv.set ?? {})
+}
 const args = process.argv.slice(2)
 const verdict = classifyGh(args)
 if (!verdict.allowed) {
@@ -187,10 +195,10 @@ if (!verdict.allowed) {
   process.exit(97)
 }
 if (isBootScriptCommand(processCommand(process.ppid), ${JSON.stringify(bootScript)})) {
-  const raw = spawnSync(${JSON.stringify(realGh)}, args, { stdio: "inherit" })
+  const raw = spawnSync(${JSON.stringify(realGh)}, args, { stdio: "inherit", env: ghEnv })
   process.exit(raw.status ?? 1)
 }
-const r = spawnSync(${JSON.stringify(realGh)}, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+const r = spawnSync(${JSON.stringify(realGh)}, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: ghEnv })
 process.stdout.write(redactTokens(r.stdout ?? ""))
 process.stderr.write(redactTokens(r.stderr ?? ""))
 process.exit(r.status ?? 1)

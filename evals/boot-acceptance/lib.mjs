@@ -393,10 +393,11 @@ export function breakOriginForFailure(deskRoot) {
  * per run -- it holds no operator content, only Desk's own installed code.
  * Everything else in the isolated HOME starts empty.
  */
-export function createIsolatedHome({ homeDir, sharedCacheDir, host = "claude" }) {
+export function createIsolatedHome({ homeDir, sharedCacheDir, host = "claude", keychain = host !== "copilot", ghAccounts = host !== "copilot" }) {
   mkdirSync(homeDir, { recursive: true })
   mkdirSync(path.join(homeDir, "Library"), { recursive: true })
-  symlinkSync(path.join(REAL_HOME, "Library", "Keychains"), path.join(homeDir, "Library", "Keychains"))
+  // The login keychain is linked in only when the host cannot sign in without it (Claude Code, unless `CLAUDE_CODE_OAUTH_TOKEN` is set). Copilot signs in from an environment variable, and the `gh` shim reaches the operator's `gh` login through the real HOME (see `installGhShim` `realEnv`), so its run gets no link at all.
+  if (keychain) symlinkSync(path.join(REAL_HOME, "Library", "Keychains"), path.join(homeDir, "Library", "Keychains"))
   if (sharedCacheDir) {
     mkdirSync(sharedCacheDir, { recursive: true })
     symlinkSync(sharedCacheDir, path.join(homeDir, ".cache"))
@@ -410,7 +411,7 @@ export function createIsolatedHome({ homeDir, sharedCacheDir, host = "claude" })
   // symlinked, so nothing this session does (e.g. `gh auth switch`) can
   // write back to the operator's real gh config.
   const realGhConfig = path.join(REAL_HOME, ".config", "gh")
-  if (existsSync(realGhConfig)) {
+  if (ghAccounts && existsSync(realGhConfig)) {
     const ghConfig = path.join(homeDir, ".config", "gh")
     mkdirSync(ghConfig, { recursive: true })
     for (const file of ["hosts.yml", "config.yml"]) {
