@@ -7,6 +7,7 @@ import { responseMessage } from "./protocol.js"
 import { transitionReadiness } from "./state.js"
 import { semanticContractDiagnostic, validateControllerEndpoint, validatePrivateDirectory } from "./identity.js"
 import { JournalIntegrityError, openChangeJournal } from "./journal.js"
+import { resolveStateDirectory } from "./state-path.js"
 import { fenceEvents } from "./watcher.js"
 import { exitRelease as defaultExitRelease } from "./exit-release.js"
 import { readOwnProcessStart } from "./process-start.js"
@@ -67,7 +68,7 @@ export async function startReadinessController({
 
   function withJournal(operation) {
     const result = journalWork.then(async () => {
-      journal ??= await openChangeJournal({ root: identity.root, stateDir: path.join(stateDir, "journal") })
+      journal ??= await openChangeJournal({ root: identity.root, stateDir: resolveStateDirectory(path.join(stateDir, "journal")) })
       return operation(journal)
     })
     journalWork = result.catch(() => {})

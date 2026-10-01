@@ -1,0 +1,92 @@
+// A readiness state directory under a symlinked ancestor is a real user's layout (a home under /home linked elsewhere,
+// ~/.cache on another disk, macOS /var -> /private/var), not an attack; only a link at the directory itself is refused.
+// Boot acceptance round 6 lost the search index to "journal has unsafe state directory ancestry" on a /var temp HOME.
+
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import * as fs from "node:fs"
+import * as path from "node:path"
+import { mkTempRoot } from "../_temp_roots.js"
+import { resolveStateDirectory } from "../../../../../plugins/desk/mcp/src/readiness/state-path.js"
+import { callTool, connectOrStartController } from "../../../../../plugins/desk/mcp/src/server.js"
+import { startInProcess } from "../runtime/_in_process_desk.js"
+
+test("a state directory under a symlinked ancestor resolves to the real path, existing or not", async () => {
+  const root = await mkTempRoot("desk-state-path-")
+  const real = path.join(root, "real-cache")
+  fs.mkdirSync(real)
+  const link = path.join(root, "linked-cache")
+  fs.symlinkSync(real, link, "junction")
+  assert.equal(resolveStateDirectory(path.join(link, "desk", "readiness", "id", "journal")), path.join(fs.realpathSync(real), "desk", "readiness", "id", "journal"))
+  fs.mkdirSync(path.join(real, "existing"))
+  assert.equal(resolveStateDirectory(path.join(link, "existing")), path.join(fs.realpathSync(real), "existing"))
+})
+
+test("a state directory that is itself a link, or a file, is still refused", async () => {
+  const root = await mkTempRoot("desk-state-path-own-")
+  const target = path.join(root, "target")
+  fs.mkdirSync(target)
+  const link = path.join(root, "journal")
+  fs.symlinkSync(target, link, "junction")
+  assert.throws(() => resolveStateDirectory(link), /unsafe state directory ancestry/)
+  const file = path.join(root, "file")
+  fs.writeFileSync(file, "x")
+  assert.throws(() => resolveStateDirectory(file), /unsafe state directory ancestry/)
+})
+
+test("an ancestor that is a file or a dangling link is refused", async () => {
+  const root = await mkTempRoot("desk-state-path-bad-")
+  const file = path.join(root, "file")
+  fs.writeFileSync(file, "x")
+  assert.throws(() => resolveStateDirectory(path.join(file, "journal")), /unsafe state directory ancestry/)
+  assert.throws(() => resolveStateDirectory(path.join(file, "deeper", "journal")), /unsafe state directory ancestry/)
+  const dangling = path.join(root, "dangling")
+  fs.symlinkSync(path.join(root, "nowhere"), dangling)
+  assert.throws(() => resolveStateDirectory(path.join(dangling, "journal")), /unsafe state directory ancestry/)
+})
+
+test("an ancestor that resolves to a non-directory is refused", async () => {
+  const root = await mkTempRoot("desk-state-path-nondir-")
+  const io = { ...fs, lstatSync: (file) => (file === "/resolved" ? { isDirectory: () => false } : fs.lstatSync(file)), realpathSync: () => "/resolved" }
+  assert.throws(() => resolveStateDirectory(path.join(root, "journal"), io), /unsafe state directory ancestry/)
+})
+
+test("an unexpected filesystem error is not hidden as an ancestry problem", async () => {
+  const root = await mkTempRoot("desk-state-path-io-")
+  const io = { ...fs, lstatSync: () => { throw Object.assign(new Error("denied"), { code: "EACCES" }) } }
+  assert.throws(() => resolveStateDirectory(path.join(root, "journal"), io), /denied/)
+})
+
+test("a controller whose state home sits under a symlinked ancestor journals a real MCP mutation (a home under /var -> /private/var)", async () => {
+  const directory = await mkTempRoot("desk-state-path-linked-home-")
+  const root = path.join(directory, "workspace")
+  fs.mkdirSync(root)
+  const realHome = path.join(directory, "real-home")
+  fs.mkdirSync(realHome)
+  const linkedHome = path.join(directory, "linked-home")
+  fs.symlinkSync(realHome, linkedHome, "junction")
+  let controller
+  const desk = await startInProcess({
+    argv: ["--root", root],
+    env: {},
+    readinessPolicy: { write_authority: "workspace", semantic: "unsupported", authority_provider: null },
+    runtimeImporter: async () => ({
+      callTool,
+      async connectOrStartController(options) {
+        controller = await connectOrStartController({ ...options, stateHome: path.join(linkedHome, ".cache", "desk", "readiness"), ephemeral: true })
+        return controller
+      },
+    }),
+  })
+  try {
+    const result = await desk.call("task_create", { track: "ops", slug: "linked", title: "durable" })
+    assert.equal(result.isError, false, JSON.stringify(result.payload))
+    await controller.barrier({ capability: "lexical", wait: true })
+    const status = await controller.status()
+    assert.equal(status.freshness.cursor.sequence, 1)
+    assert.notEqual(status.convergence?.status, "failed", JSON.stringify(status.convergence))
+  } finally {
+    await desk.close()
+    await controller?.close()
+  }
+})

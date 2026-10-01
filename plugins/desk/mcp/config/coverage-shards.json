@@ -215,6 +215,7 @@
     "tests/desk/mcp/__tests__/readiness/query_router.test.js": 10.3,
     "tests/desk/mcp/__tests__/readiness/semantic_policy.test.js": 3.5,
     "tests/desk/mcp/__tests__/readiness/state.test.js": 0.4,
+    "tests/desk/mcp/__tests__/readiness/state_path.test.js": 2,
     "tests/desk/mcp/__tests__/readiness/watcher.test.js": 0.7,
     "tests/desk/mcp/__tests__/release/release_coupling.test.js": 0.9,
     "tests/desk/mcp/__tests__/runtime/activation_config.test.js": 13.3,

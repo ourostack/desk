@@ -59,7 +59,7 @@ function activationContext({ hostRoot, workspaceRoot, mode }) {
   }
 }
 
-function activationSummary(activationHostRoot, activation, { includeSelectedActivation = false } = {}) {
+function activationSummary(activationHostRoot, activation, { includeSelectedActivation }) {
   const summary = {
     config_path: hostPath(activationHostRoot, activation.configPath),
     activation_config_path: hostPath(activationHostRoot, activation.activationConfigPath),
@@ -104,7 +104,7 @@ function parseProof(stdout) {
   }
 }
 
-function assertDeskStatusProof(proof, deskRoot, selectedActivation = null) {
+function assertDeskStatusProof(proof, deskRoot, selectedActivation) {
   const deskStatus = proof.desk_status ?? {}
   const root = deskStatus.root ?? {}
   if (`${deskStatus.status}:${root.path}` !== `ok:${deskRoot}`) {
