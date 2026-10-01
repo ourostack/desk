@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { lstatSync, readdirSync, watch as watchNative } from "node:fs"
 import { mkdir, unlink, writeFile } from "node:fs/promises"
 import * as path from "node:path"
+import { ensureStateIgnored } from "../util/state-ignore.js"
 
 const IGNORED_ROOTS = new Set([".git", ".state", "node_modules"])
 
@@ -13,6 +14,7 @@ export async function createWorkspaceWatcher({
 } = {}) {
   const markerDir = path.join(root, ".state", "readiness-fences")
   await mkdir(markerDir, { recursive: true, mode: 0o700 })
+  ensureStateIgnored(root)
 
   const changes = new Map()
   const markers = new Map()

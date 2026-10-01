@@ -10,9 +10,9 @@
 //   2. `gh` shim first on PATH: `classifyGh` allows read-only subcommands and
 //      the shim exits 97 on anything else, logging the attempt. Tokens are
 //      not passed through the environment.
-//   3. `git push` to any GitHub URL is rewritten to a dead local path by a
-//      run-private global git config (`pushInsteadOf`), so it fails at once
-//      with no network traffic. Pushes to the fixture's local bare origin work.
+//   3. A `git clone`, `fetch` or `push` to any GitHub URL is rewritten to a dead local path by a
+//      run-private global git config (`insteadOf` and `pushInsteadOf`), so it fails at once
+//      with no network traffic. The fixture's local bare origin works.
 //
 // The transcript check (`ghWriteAttempts`) then fails any run whose commands
 // show a write attempt, in case something bypassed the shim (for example by
@@ -221,14 +221,16 @@ export const PASS_THROUGH = [
   "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "AWS_REGION", "AWS_PROFILE",
 ]
 
-/** Writes the run's private global git config: no credential helper, and pushes to GitHub URLs rewritten to a dead local path. */
+/** Writes the run's private global git config: no credential helper, and fetches and pushes to GitHub URLs rewritten to a dead local path, so a clone or fetch fails at once instead of downloading a real repository. */
 export function writeGitConfig(homeDir) {
   const dead = "file:///nonexistent/offline-remotes/"
-  const prefixes = ["https://github.com/", "http://github.com/", "git://github.com/", "git@github.com:", "ssh://git@github.com/"]
+  // GitHub's spellings first, then every network scheme as a catch-all, so another host, `www.github.com` and a URL with embedded credentials are rewritten too.
+  // `file://` and plain paths (the fixture's own origin) match none of these. Left open: an scp-style `user@host:path` on a host other than github.com.
+  const prefixes = ["https://github.com/", "http://github.com/", "https://www.github.com/", "http://www.github.com/", "git://github.com/", "git@github.com:", "ssh://git@github.com/", "https://", "http://", "git://", "ssh://"]
   const body = [
     "[user]", "\tname = Desk Operator", "\temail = operator@example.com",
     "[commit]", "\tgpgsign = false",
-    `[url "${dead}"]`, ...prefixes.map((p) => `\tpushInsteadOf = ${p}`),
+    `[url "${dead}"]`, ...prefixes.flatMap((p) => [`\tinsteadOf = ${p}`, `\tpushInsteadOf = ${p}`]),
   ].join("\n") + "\n"
   const file = path.join(homeDir, ".gitconfig")
   writeFileSync(file, body)

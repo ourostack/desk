@@ -83,11 +83,22 @@ test("git push to any GitHub URL fails at once against the run's git config, whi
     assert.equal(git(repo, "commit", "-q", "--allow-empty", "-m", "x").status, 0)
     assert.equal(git(dir, "init", "-q", "--bare", bare).status, 0)
     assert.equal(git(repo, "push", "-q", bare, "main").status, 0, "local remote pushes")
-    for (const url of ["https://github.com/example/none.git", "git@github.com:example/none.git", "ssh://git@github.com/example/none.git", "https://user@github.com/example/none.git".replace("user@", "")]) {
+    for (const url of ["https://github.com/example/none.git", "git@github.com:example/none.git", "ssh://git@github.com/example/none.git", "https://www.github.com/example/none.git", "http://www.github.com/example/none.git", "https://user:secret@github.com/example/none.git", "https://gitlab.example.org/example/none.git", "http://git.example.org/none.git", "git://git.example.org/none.git", "ssh://git@git.example.org/none.git"]) {
       const r = git(repo, "push", url, "main")
       assert.notEqual(r.status, 0, url)
       assert.match(r.stderr, /offline-remotes|does not appear to be a git repository|not found|No such/i, url)
+      // A clone or fetch is rewritten the same way, so it fails at once instead of downloading a real repository.
+      const clone = git(dir, "clone", "-q", url, path.join(dir, "cloned"))
+      assert.notEqual(clone.status, 0, `clone ${url}`)
+      assert.match(clone.stderr, /offline-remotes|does not appear to be a git repository|not found|No such/i, `clone ${url}`)
+      const fetched = git(repo, "fetch", url)
+      assert.notEqual(fetched.status, 0, `fetch ${url}`)
+      assert.match(fetched.stderr, /offline-remotes|does not appear to be a git repository|not found|No such/i, `fetch ${url}`)
     }
+    assert.equal(git(dir, "clone", "-q", bare, path.join(dir, "local-clone")).status, 0, "a local bare repository still clones")
+    assert.equal(git(dir, "clone", "-q", `file://${bare}`, path.join(dir, "file-clone")).status, 0, "a file:// URL still clones")
+    assert.equal(git(path.join(dir, "file-clone"), "fetch", "-q", "origin").status, 0, "and fetches from its local origin")
+    assert.equal(git(path.join(dir, "file-clone"), "ls-remote", "-q", bare).status, 0, "a path remote is still readable")
   } finally { done() }
 })
 

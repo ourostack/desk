@@ -251,6 +251,17 @@ export function gitCommands(command, { cwd } = {}) {
   return found
 }
 
+/**
+ * A `gh` command's group, verb and the words after them, skipping gh's global options (`-R a/b`, `--repo a/b`, `--repo=a/b`, `--hostname h`), or null when
+ * `words` is not a gh command. `gh -R a/b repo clone` and `gh repo clone` both read as `repo clone`.
+ */
+export function ghParts(words) {
+  if (words[0] !== "gh") return null
+  let index = 1
+  while (index < words.length && words[index].startsWith("-")) index += ["-R", "--repo", "--hostname"].includes(words[index]) ? 2 : 1
+  return { group: words[index], verb: words[index + 1], args: words.slice(index + 2) }
+}
+
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------
@@ -311,6 +322,12 @@ export function shellWrites(command, { cwd, home }) {
         if (target !== undefined && target !== "") note(target, name)
       }
       else if (positional(rest).length >= 2) note(positional(rest).at(-1), name)
+    } else if (name === "gh" && ghParts(words)?.group === "repo" && ghParts(words).verb === "clone") {
+      // Words after a bare `--` are git's own flags, not the repository or the folder.
+      const { args } = ghParts(words)
+      const dashes = args.indexOf("--")
+      const named = positional(dashes === -1 ? args : args.slice(0, dashes), ["-u", "--upstream-remote-name"])
+      if (named.length > 0) note(named[1] ?? path.posix.basename(named[0]), "gh repo clone")
     } else if (name === "git") {
       const git = gitParts(words)
       if (git === null) continue
@@ -327,4 +344,61 @@ export function shellWrites(command, { cwd, home }) {
     }
   }
   return [...new Map(found.map((write) => [`${write.via}\0${write.path}`, write])).values()]
+}
+
+// ---------------------------------------------------------------------------
+// Network fetches
+// ---------------------------------------------------------------------------
+
+// A URL or scp-style address that reaches another machine: any scheme URL whose host is not this one, and `user@host:path`.
+// A bare path and `file://` are local, so the fixture desk's own bare `origin` never matches.
+const REAL_REMOTE = /^(?:(?:https?|git|ssh|ftps?):\/\/(?!(?:localhost|127\.0\.0\.1|\[::1\])(?:[:/]|$))|[\w.-]+@[\w.-]+:)/iu
+const FETCHING_SUBCOMMANDS = new Set(["clone", "fetch", "pull", "ls-remote"])
+
+/**
+ * The network fetches a shell command makes from a real host, as `{ via, target, dest }`: `git clone|fetch|pull|ls-remote` with a URL that is
+ * not local (`https://github.com/...`, `git@github.com:...`), `git remote add|set-url` with one (it points a remote at a real host; the fetch
+ * that follows names the remote, not the URL, so this is where the host shows), and `gh repo clone` (also `gh -R a/b repo clone`), which always
+ * reaches GitHub. A bare path or `file://` URL (the fixture's own origin) is not one. `dest` is where the clone lands, or the folder a fetch or
+ * remote change runs in (following `cd` and `git -C`, `~` expanded from `home`, relative paths from `cwd`), or null when it cannot be resolved.
+ */
+export function remoteFetches(command, { cwd, home } = {}) {
+  const found = []
+  let directory = cwd
+  const resolve = (value, from = directory) => resolveShellPath(value, { cwd: from, home })
+  for (const { words } of simpleCommands(command)) {
+    if (words[0] === "cd" && words[1] !== undefined) {
+      directory = resolve(words[1]) ?? directory
+      continue
+    }
+    const git = gitParts(words)
+    if (git !== null) {
+      const where = git.directory === undefined ? directory : resolve(git.directory)
+      if (git.subcommand === "remote") {
+        const target = ["add", "set-url"].includes(git.args[0]) ? git.args.slice(1).find((arg) => REAL_REMOTE.test(arg)) : undefined
+        if (target !== undefined) found.push({ via: `git ${git.subcommand}`, target, dest: where ?? null })
+      } else if (FETCHING_SUBCOMMANDS.has(git.subcommand)) {
+        const target = git.args.find((arg) => REAL_REMOTE.test(arg))
+        if (target === undefined) continue
+        if (git.subcommand === "clone") {
+          const named = positional(git.args, CLONE_VALUE_OPTIONS)
+          const folder = named[1] ?? path.posix.basename(named[0] ?? target).replace(/\.git$/u, "")
+          found.push({ via: "git clone", target, dest: resolve(folder, where) })
+        } else {
+          found.push({ via: `git ${git.subcommand}`, target, dest: where ?? null })
+        }
+      }
+    } else if (ghParts(words)?.group === "repo" && ghParts(words).verb === "clone") {
+      // `gh -R a/b repo clone` names the repository as the global option's value, so the clone's own argument may be absent.
+      const { args } = ghParts(words)
+      const dashes = args.indexOf("--")
+      const named = positional(dashes === -1 ? args : args.slice(0, dashes), ["-u", "--upstream-remote-name"])
+      const globalRepo = words.slice(1, words.indexOf("repo")).find((word, index, list) => list[index - 1] === "-R" || list[index - 1] === "--repo" || word.startsWith("--repo="))
+      // With a global repository the clone's own first argument is the folder; without one it is the repository.
+      const target = globalRepo === undefined ? named[0] ?? "" : globalRepo.replace(/^--repo=/u, "")
+      const folder = globalRepo === undefined ? named[1] : named[0]
+      found.push({ via: "gh repo clone", target, dest: resolve(folder ?? path.posix.basename(target).replace(/\.git$/u, "")) })
+    }
+  }
+  return found
 }

@@ -149,18 +149,31 @@ function repoLine(state) {
   return `- ${state.repo} (${where}): branch ${state.branch ?? "unknown"}, ${state.dirty ? "uncommitted changes" : "clean"}, ${sync}`
 }
 
+// What Desk's own access check found for the active account, in words that claim nothing the check did not show.
+const ACCESS_FINDINGS = {
+  store_not_visible: "could not see the repository",
+  auth_failed: "failed to sign in",
+  forking_disabled: "found forking disabled",
+  managed_account: "found a managed account",
+}
+
 /**
- * How to push a repo, naming the account every time and the fork when the route is one: "push as arimendelow via fork
- * arimendelow/widgets; the active gh account (work) is not the push account for this repo" when gh's active account
- * differs. An agent that reads only "route confirmed" once wrote the active account into a card as the push account.
+ * How to push a repo, naming the account every time and the fork when the route is one, and saying plainly what was and
+ * was not checked about gh's active account when it is a different one: "push as arimendelow via fork
+ * arimendelow/widgets. The active gh account is work; Desk routes this repo's pushes through the fork and did not check
+ * that account's own access." An agent that read "is not the push account" once wrote "work cannot push" as fact, and
+ * another wrote the active account into a card as the push account.
  */
 export function pushRoute(entry) {
   const store = typeof entry.store === "string" ? entry.store : ""
   const repoName = store.split("/")[1]
-  const via = entry.route === "fork" ? ` via fork ${repoName ? `${entry.account}/${repoName}` : `${entry.account}'s fork of ${store}`}` : entry.route ? ` (route ${entry.route})` : ""
+  const fork = entry.route === "fork"
+  const via = fork ? ` via fork ${repoName ? `${entry.account}/${repoName}` : `${entry.account}'s fork of ${store}`}` : entry.route ? ` (route ${entry.route})` : ""
   const active = Array.isArray(entry.accounts) ? entry.accounts[0]?.account : undefined
-  const differs = typeof active === "string" && active !== entry.account ? `; the active gh account (${active}) is not the push account for this repo` : ""
-  return `push as ${entry.account}${via}${differs}`
+  if (typeof active !== "string" || active === entry.account) return `push as ${entry.account}${via}`
+  const reason = entry.accounts[0].reason
+  const checked = typeof reason === "string" && reason !== "" ? `its own access check ${ACCESS_FINDINGS[reason] ?? `returned ${reason}`}` : "did not check that account's own access"
+  return `push as ${entry.account}${via}. The active gh account is ${active}; Desk routes this repo's pushes through ${fork ? "the fork" : entry.account} and ${checked}.`
 }
 
 // One line per distinct store, outcome, account and route, naming the task(s) it is for: the full list behind the few

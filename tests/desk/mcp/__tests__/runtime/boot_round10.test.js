@@ -91,9 +91,9 @@ test("active_tasks reads the blocker from a section, a labelled line or a label 
 // ── The push route names the account, and the fork ──────────────────────
 
 test("pushRoute names the account, the fork it pushes to, and the active account when that is a different one", () => {
-  assert.equal(pushRoute({ store: "acme/widgets", account: "arimendelow", route: "fork", accounts: [{ account: "arimendelow_microsoft" }] }), "push as arimendelow via fork arimendelow/widgets; the active gh account (arimendelow_microsoft) is not the push account for this repo")
+  assert.equal(pushRoute({ store: "acme/widgets", account: "arimendelow", route: "fork", accounts: [{ account: "arimendelow_microsoft" }] }), "push as arimendelow via fork arimendelow/widgets. The active gh account is arimendelow_microsoft; Desk routes this repo's pushes through the fork and did not check that account's own access.")
   assert.equal(pushRoute({ store: "acme/widgets", account: "ari", route: "fork", accounts: [{ account: "ari" }] }), "push as ari via fork ari/widgets")
-  assert.equal(pushRoute({ store: "acme/widgets", account: "ari", route: "direct", accounts: [{ account: "work" }] }), "push as ari (route direct); the active gh account (work) is not the push account for this repo")
+  assert.equal(pushRoute({ store: "acme/widgets", account: "ari", route: "direct", accounts: [{ account: "work" }] }), "push as ari (route direct). The active gh account is work; Desk routes this repo's pushes through ari and did not check that account's own access.")
   assert.equal(pushRoute({ store: "acme/widgets", account: "ari", accounts: [] }), "push as ari")
   assert.equal(pushRoute({ account: "ari", route: "fork" }), "push as ari via fork ari's fork of ")
   assert.equal(pushRoute({ store: "weird", account: "ari", route: "fork" }), "push as ari via fork ari's fork of weird")
@@ -104,7 +104,7 @@ test("boot text's Push routes section carries the explicit line", () => {
     status: "ready",
     push_accounts: [{ track: "lighthouse", slug: "push-check", repo: "anthropics/claude-code", store: "anthropics/claude-code", result: "account_found", account: "arimendelow", route: "fork", accounts: [{ account: "arimendelow_microsoft" }, { account: "arimendelow" }] }],
   })
-  assert.match(text, /- anthropics\/claude-code: push as arimendelow via fork arimendelow\/claude-code; the active gh account \(arimendelow_microsoft\) is not the push account for this repo \(lighthouse\/push-check\)\n/u)
+  assert.match(text, /- anthropics\/claude-code: push as arimendelow via fork arimendelow\/claude-code\. The active gh account is arimendelow_microsoft; Desk routes this repo's pushes through the fork and did not check that account's own access\. \(lighthouse\/push-check\)\n/u)
 })
 
 const VERSION_OK = "gh version 2.54.0 (2024-07-31)\n"
@@ -141,15 +141,15 @@ test("bootOnce: a fork route with a different active account says to push as the
   const gh = fakeGh({ accounts: [{ login: "work", active: true }, { login: "ari", active: false }], repos: { work: 404, ari: NO_PUSH } })
   const result = await bootWith(gh)
   const line = result.instructions.find((entry) => entry.startsWith("Push route for acme/widgets"))
-  assert.match(line, /: push as \S+ via fork \S+\/widgets; the active gh account \(work\) is not the push account for this repo; account \S+ cannot push to it directly\. Push your branch/u)
+  assert.match(line, /: push as \S+ via fork \S+\/widgets\. The active gh account is work; Desk routes this repo's pushes through the fork and its own access check could not see the repository\. Account \S+ cannot push to it directly\. Push your branch/u)
   assert.match(line, /Push as \S+ \(`GH_TOKEN=\$\(gh auth token --user \S+\)` for the git or gh call\), and write \S+, never work, as the push account in any note\./u)
 })
 
-test("bootOnce: a fork route by the active account adds no 'not the push account' sentence", async () => {
+test("bootOnce: a fork route by the active account adds no active-account sentence", async () => {
   const result = await bootWith(fakeGh({ accounts: [{ login: "ari", active: true }], repos: { ari: NO_PUSH } }))
   const line = result.instructions.find((entry) => entry.startsWith("Push route for acme/widgets"))
   assert.match(line, /push as ari via fork ari\/widgets; account ari cannot push/u)
-  assert.doesNotMatch(line, /not the push account|, never ari,/u)
+  assert.doesNotMatch(line, /active gh account|, never ari,/u)
 })
 
 test("bootOnce: a direct push by the active account still adds no route line", async () => {

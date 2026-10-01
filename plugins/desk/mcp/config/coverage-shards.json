@@ -230,6 +230,7 @@
     "tests/desk/mcp/__tests__/runtime/boot_round8.test.js": 1,
     "tests/desk/mcp/__tests__/runtime/boot_round9.test.js": 1.5,
     "tests/desk/mcp/__tests__/runtime/boot_round10.test.js": 1.5,
+    "tests/desk/mcp/__tests__/runtime/boot_round11.test.js": 1.5,
     "tests/desk/mcp/__tests__/runtime/boot_dependencies.test.js": 1.5,
     "tests/desk/mcp/__tests__/runtime/bootstrap.test.js": 0.8,
     "tests/desk/mcp/__tests__/runtime/cache_and_launch.test.js": 12.1,

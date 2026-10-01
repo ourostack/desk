@@ -76,6 +76,8 @@ note: `status`, `planning_complete` (if set), `repos[]`, any `collaborating`/`bl
 
 For each `mode: local` repo, inspect `git status`, the current branch, local-only commits and the recorded publication ref through `git-hygiene`. Compare with the mapped progress record and protected checkpoint, not an assumed `doing.md` or upstream branch. A missing upstream is not proof of publication. Preserve and reconcile any unexpected source or ownership before resuming.
 
+A repo recorded as `mode: remote`, or with no local clone, stays uncloned unless the next step needs its code. When it does, clone it into the operator's code location (`defaults.clone_root` in `$DESK/.machine-local.yml`, default `~/code/`), never `/tmp` or another shared temp folder, then record the clone on the card through `task_update` (`local_path`, `mode: local`). `repo-handling` has the flow.
+
 ## Step 2.5 — Required MCPs hard-gate
 
 If the resumption target's mapped progress record or referenced active iteration doc (an existing `doing.md`, `investigation.md` or per-iteration doc named in the task card's `iterations.active`) declares `required_mcps:` in frontmatter, treat that list as a **hard requirement** for resuming, not a recommendation. Consume all applicable declared requirements; an explicit provider progress path does not erase the iteration's requirements.

@@ -47,7 +47,7 @@
 // it found is healthy.
 
 import { spawn as nodeSpawn, spawnSync } from "node:child_process"
-import { closeSync, openSync, readdirSync, readSync } from "node:fs"
+import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -604,6 +604,46 @@ export function resolveTaskQuery(query, cards, root) {
   return { status: "resolved", task: { ...summary(matches[0]), card: `${cardLocation({ desk: matches[0].desk, track: matches[0].track, slug: matches[0].slug })}/task.md`, file: matches[0].file } }
 }
 
+// `$DESK/.machine-local.yml`'s `repos:` map (repo name to the path of this machine's clone), read with a small line parser
+// because boot runs before any YAML dependency is certain to be installed. A missing, unreadable or malformed file is an
+// empty map. Only `name: path` lines indented under `repos:` count; quotes and trailing comments are dropped.
+function machineLocalRepos(root) {
+  let text
+  try {
+    text = readSmallText(path.join(root, ".machine-local.yml"))
+  } catch {
+    return new Map()
+  }
+  const repos = new Map()
+  let inRepos = false
+  for (const line of text.split(/\r?\n/u)) {
+    if (/^\S/u.test(line)) inRepos = /^repos:\s*(?:#.*)?$/u.test(line)
+    else if (inRepos) {
+      const entry = /^\s+["']?([^:"'#]+?)["']?\s*:\s*(?:"([^"]*)"|'([^']*)'|([^#\s][^#]*?))\s*(?:#.*)?$/u.exec(line)
+      const value = entry?.[2] ?? entry?.[3] ?? entry?.[4]
+      if (entry !== null && value !== undefined && value !== "") repos.set(entry[1], value)
+    }
+  }
+  return repos
+}
+
+/**
+ * Names of the card's repos that are remote-only: recorded as `mode: remote`, or with no local path, and with no clone
+ * this machine's `.machine-local.yml` points at (a `repos:` entry under the repo's name, or its name after the owner, whose path exists).
+ */
+function remoteRepoNames(card, { root, homeDir }) {
+  const repos = Array.isArray(card.data.repos) ? card.data.repos : []
+  const overrides = machineLocalRepos(root)
+  const hasLocalClone = (repo) => {
+    if (typeof repo.name !== "string" || repo.name === "") return false
+    const target = overrides.get(repo.name) ?? overrides.get(repo.name.split("/").at(-1))
+    return target !== undefined && existsSync(resolveLocalPath(target, { homeDir, deskRoot: root }))
+  }
+  return repos
+    .filter((repo) => repo !== null && typeof repo === "object" && (repo.mode === "remote" || typeof repo.local_path !== "string" || repo.local_path.trim() === "") && !hasLocalClone(repo))
+    .map((repo) => (typeof repo.name === "string" && repo.name !== "" ? redactCredentialLikeText(repo.name) : "a repo without a name"))
+}
+
 function hostLineHostname(cardText) {
   const match = /^Host: `([^`]+)`/mu.exec(cardText)
   return match === null ? null : match[1]
@@ -815,7 +855,8 @@ function pushInstruction(entry, where) {
     const active = entry.accounts[0].account
     if (entry.route === "fork") {
       const notActive = entry.account === active ? "" : ` Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), and write ${entry.account}, never ${active}, as the push account in any note.`
-      return `Push route for ${store} (${where}): ${pushRoute(entry)}; account ${entry.account} cannot push to it directly. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself.${notActive} Tell the operator this route in one line when you report on the task.`
+      const route = pushRoute(entry)
+      return `Push route for ${store} (${where}): ${route}${route.endsWith(".") ? " Account" : "; account"} ${entry.account} cannot push to it directly. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself.${notActive} Tell the operator this route in one line when you report on the task.`
     }
     if (entry.account !== active) {
       return `Push route for ${store} (${where}): account ${entry.account} is the one with push access (route ${entry.route}), but gh's active account is ${active}. Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), not with the active login. Tell the operator this in one line when you report on the task.`
@@ -859,12 +900,18 @@ function missingCloneInstruction(missing) {
   const where = shellQuotePath(missing.local_path)
   const lead = `The named task's local repo ${missing.repo} is not at its recorded path ${missing.local_path}`
   if (typeof missing.url === "string") {
-    return `${lead}: clone it with \`git clone -- ${shellQuote(missing.url)} ${where}\` (the card's recorded url), then do the work that needs it.`
+    return `${lead}: only if the next step needs its code, clone it with \`git clone -- ${shellQuote(missing.url)} ${where}\` (the card's recorded url); otherwise do not clone it.`
   }
   if (typeof missing.repo === "string" && /^[\w.-]+\/[\w.-]+$/u.test(missing.repo)) {
-    return `${lead}: clone it with \`gh repo clone ${shellQuote(missing.repo)} ${where}\`, then do the work that needs it.`
+    return `${lead}: only if the next step needs its code, clone it with \`gh repo clone ${shellQuote(missing.repo)} ${where}\`; otherwise do not clone it.`
   }
   return `${lead}, and the card records no usable clone url for it. Do not invent the repo or any progress in it. Ask the operator one question: "Where is ${missing.repo} cloned, or what URL should I clone it from?" Then clone it to ${missing.local_path} (or record the path they give) and save the answer on the card with task_update (a \`url\` or \`local_path\` on that repos entry) so the next session does not ask.`
+}
+
+// A repo the card records as remote-only, or with no local path: it is read through the hosting service, and cloned only
+// when the next step needs its code (an agent once cloned a public repo into the shared /tmp just to look at it).
+function remoteRepoInstruction(names, root) {
+  return `The named task's remote-only repos (no local clone): ${names.join(", ")}. Do not clone any of them unless the next step needs its code. If it does, clone into the operator's code location (\`defaults.clone_root\` in ${root.path}/.machine-local.yml, default ~/code/), never /tmp, and record the clone on the card with task_update (the repo's \`local_path\`, with \`mode: local\`).`
 }
 
 function buildInstructions(ctx) {
@@ -894,6 +941,7 @@ function buildInstructions(ctx) {
       for (const missing of repoStateList.filter((state) => state.present === false && state.track === task.task.track && state.slug === task.task.slug)) {
         out.push(missingCloneInstruction(missing))
       }
+      if (task.task.remote_repos.length > 0) out.push(remoteRepoInstruction(task.task.remote_repos, root))
       if (task.host_line_changed) out.push(`That card's Host line names a different host; replace it with: Host: \`${host.hostname}\` / user: \`${host.user}\` / cwd: \`${host.cwd}\` / OS: \`${host.platform}\` / probed: ${host.probed_at}.`)
     } else if (task?.status === "ambiguous") {
       out.push(`The name matches more than one open task (${task.candidates.map((c) => c.handle).join(", ")}): ask which one, in one line.`)
@@ -904,6 +952,7 @@ function buildInstructions(ctx) {
     out.push("No task was named: build the status block from active_tasks, open_prs and repo_states, then ask which task to resume or whether to start new.")
   }
   out.push(...factoryInstructions(factory, pluginRoot, { noninteractive }))
+  out.push("When you report on a task, say its real status; say 'done' only for a task whose status is done.")
   out.push(`This boot covers the ${AGENT_HOSTS.join(", ")} hosts${agentHost === "unknown" ? "" : `; this session looks like ${agentHost}`}.`)
   return out
 }
@@ -1109,7 +1158,7 @@ export async function bootOnce({
     if (resolved.status === "resolved") {
       const { file, ...shown } = resolved.task
       const recorded = hostLineHostname(readCardText(file) ?? "")
-      task = { status: "resolved", task: shown, host_line_changed: recorded !== null && recorded !== host.hostname }
+      task = { status: "resolved", task: { ...shown, remote_repos: remoteRepoNames(cards.find((card) => card.file === file), { root: root.path, homeDir }) }, host_line_changed: recorded !== null && recorded !== host.hostname }
     } else {
       task = resolved
     }
