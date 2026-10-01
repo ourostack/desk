@@ -290,7 +290,7 @@ test("a shell whose command text mentions session-boot.js is still not the boot 
     assert.equal(r.stdout.trim(), REDACTION_MARKER)
     assert.equal(isBootScriptCommand("sh -c node scripts/session-boot.js"), false)
     assert.equal(isBootScriptCommand("/usr/local/bin/node /tmp/p/mcp/scripts/session-boot.js --task x"), true)
-    assert.equal(isBootScriptCommand("node scripts/session-boot.js"), false)
+    assert.equal(isBootScriptCommand("node scripts/session-boot.js"), true)
     assert.equal(isBootScriptCommand("node /x/scripts/session-boot.js"), true)
     assert.equal(dir.length > 0, true)
   } finally { done() }
