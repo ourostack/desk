@@ -48,7 +48,8 @@ test("the editor tools some Copilot builds expose map by their command", () => {
 })
 
 test("a tool that writes nothing, or that Desk does not know, is nothing to judge", () => {
-  for (const name of ["view", "grep", "glob", "task", "web_fetch", "report_intent", "skill", "desk-task_update", undefined, 7]) assert.deepEqual(call(name, { path: "/p" }), [], String(name))
+  for (const name of ["view", "grep", "glob", "read_file", "read_bash", "ls", "list_dir", "web_fetch", undefined, 7]) assert.deepEqual(call(name, { path: "/p" }), [], String(name))
+  for (const name of ["task", "report_intent", "skill", "desk-task_update"]) assert.deepEqual(call(name, { description: "no file" }), [], String(name))
   assert.deepEqual(copilotToolCalls(undefined), [])
   assert.deepEqual(copilotToolCalls({}), [])
   assert.deepEqual(copilotToolCalls({ toolName: "edit" }), [], "no arguments")
@@ -207,4 +208,24 @@ test("odd inputs are nothing to judge: a create with no arguments object, a non-
   assert.equal(isTaskToolName("desk-task_update"), true)
   const calls = patchCalls("*** Begin Patch\n*** Update File: /w/x.md\n@@\n-a\n+b\n\\ No newline at end of file\n*** End Patch\n")
   assert.equal(calls.length, 1)
+})
+
+test("any tool that is not read-only and aims a path or file_path at a file is an Edit: the guard denies by default", () => {
+  for (const name of ["str_replace", "write", "multi_edit", "insert", "write_file", "some-future-tool"]) {
+    const [shaped, ...rest] = call(name, { path: "/d/t/s/task.md", old_str: "a", new_str: "b" })
+    assert.equal(rest.length, 0, name)
+    assert.equal(shaped.toolName, "Edit", name)
+    assert.deepEqual(shaped.args, { file_path: "/d/t/s/task.md", old_string: "a", new_string: "b" }, name)
+  }
+  assert.deepEqual(call("edit", { file_path: "/d/t/s/task.md", old_str: "a", new_str: "b" }), [{ toolName: "Edit", args: { file_path: "/d/t/s/task.md", old_string: "a", new_string: "b" } }], "edit with file_path")
+  assert.deepEqual(call("create", { file_path: "/d/t/s/task.md", file_text: "x" }), [{ toolName: "Write", args: { file_path: "/d/t/s/task.md", content: "x" } }], "create with file_path")
+  assert.deepEqual(call("write", { file_path: "/d/x.md", new_string: "n", old_string: "o" })[0].args, { file_path: "/d/x.md", old_string: "o", new_string: "n" }, "Claude-style field names")
+  assert.deepEqual(call("write", { file_path: "/d/x.md", content: "whole" })[0].args.new_string, "whole", "a whole-file body counts as the new text")
+  // Read-only tools, a view command, and calls with no path stay allowed.
+  assert.deepEqual(call("view", { path: "/d/t/s/task.md" }), [])
+  assert.deepEqual(call("read_file", { file_path: "/d/t/s/task.md" }), [])
+  assert.deepEqual(call("str_replace", { command: "view", path: "/d/t/s/task.md" }), [])
+  assert.deepEqual(call("write", { text: "no path" }), [])
+  assert.deepEqual(call("write", { path: 7 }), [])
+  assert.deepEqual(call("write", "text"), [])
 })

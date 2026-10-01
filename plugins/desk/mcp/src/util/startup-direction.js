@@ -45,9 +45,9 @@ export function startDirection(command = bootCommand()) {
 }
 const START = startDirection()
 
-// Copilot weighs sessionStart context lightly: on a bare greeting the model answered without booting (boot acceptance rounds F and G), while the same imperative delivered as `userPromptSubmitted` context, next to the message itself, was followed every time it was probed. So the first prompt of a recorded session carries this shorter line (see hooks/copilot-boot-prompt.cjs).
+// Copilot weighs sessionStart context lightly: on a bare greeting the model answered without booting (boot acceptance rounds F and G), while the same imperative delivered as `userPromptSubmitted` context, next to the message itself, was followed every time it was probed. So the first prompt of a recorded session carries this shorter line, worded as a pointer rather than a claim about the boot's state (see hooks/copilot-boot-prompt.cjs).
 export function promptBootDirection(command = bootCommand()) {
-  return `Desk boot: the boot has not run in this session. Before you reply to this message, run \`${command}\` (add \`--task "<what the operator named>"\` when this message names a task), even when this message is only a greeting, then do what its \`instructions\` say. A child agent with a bounded brief follows the brief instead and skips this.`
+  return `Desk boot is pending for this session: run \`${command}\` first (one quick call), then answer this message. A child agent with a bounded brief skips this.`
 }
 
 export const DESK_SETUP_DIRECTION =

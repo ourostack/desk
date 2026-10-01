@@ -166,13 +166,17 @@ test("a stale record falls through to the other bindings: a folder that is no lo
   assert.equal(resolveStartupDeskRoot({ env: { ...env, DESK: fallback }, homeDir: env.HOME }).root, path.resolve(other))
 })
 
-test("Claude Code's project folder, when the host passes one, wins over the record", () => {
+test("the Copilot session record, when one exists, wins over an inherited CLAUDE_PROJECT_DIR; without a record CLAUDE_PROJECT_DIR binds", () => {
   const env = envFor({ COPILOT_AGENT_SESSION_ID: "s-claude" })
   const recorded = desk("recorded")
   const projectDir = desk("project")
   recordCopilotSession({ sessionId: "s-claude", folder: recorded, env })
-  assert.equal(resolveStartupDeskRoot({ env: { ...env, CLAUDE_PROJECT_DIR: projectDir }, homeDir: env.HOME }).root, path.resolve(projectDir))
+  assert.equal(resolveStartupDeskRoot({ env: { ...env, CLAUDE_PROJECT_DIR: projectDir }, homeDir: env.HOME }).root, path.resolve(recorded), "a CLAUDE_PROJECT_DIR the shell inherited does not override the session's own folder")
   assert.equal(resolveStartupDeskRoot({ env: { ...env, CLAUDE_PROJECT_DIR: "" }, homeDir: env.HOME }).root, path.resolve(recorded), "an empty value is no value")
+  const norecord = envFor({ COPILOT_AGENT_SESSION_ID: "s-none" })
+  assert.equal(resolveStartupDeskRoot({ env: { ...norecord, CLAUDE_PROJECT_DIR: projectDir }, homeDir: norecord.HOME }).root, path.resolve(projectDir), "no record: Claude's project folder binds")
+  const claude = envFor()
+  assert.equal(resolveStartupDeskRoot({ env: { ...claude, CLAUDE_PROJECT_DIR: projectDir }, homeDir: claude.HOME }).root, path.resolve(projectDir), "no session id at all: Claude's project folder binds")
 })
 
 test("the saved binding the hook saw is the server's too, because Copilot gives the server no plugin data folder", () => {

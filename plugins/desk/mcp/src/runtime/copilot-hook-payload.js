@@ -28,8 +28,12 @@ function toolArgsOf(input) {
   }
 }
 
-const writeCall = (args) => ({ toolName: "Write", args: { file_path: args.path, content: args.file_text ?? "" } })
-const editCall = (args) => ({ toolName: "Edit", args: { file_path: args.path, old_string: args.old_str ?? "", new_string: args.new_str ?? "" } })
+const targetOf = (args) => (typeof args.path === "string" ? args.path : args.file_path)
+const writeCall = (args) => ({ toolName: "Write", args: { file_path: targetOf(args), content: args.file_text ?? args.content ?? "" } })
+const editCall = (args) => ({ toolName: "Edit", args: { file_path: targetOf(args), old_string: args.old_str ?? args.old_string ?? "", new_string: args.new_str ?? args.new_string ?? args.file_text ?? args.content ?? "" } })
+
+// Tools that only read, search or list. Anything else that aims a `path` or `file_path` at a file is treated as an edit of it, so a tool name Desk has never seen (a new Copilot release, a custom tool) is denied by default rather than allowed by default.
+const READ_ONLY_TOOL = /^(?:view|grep|glob|ls|cat|head|tail|find|stat|read(?:_\w+)?|list(?:_\w+)?|search(?:_\w+)?|get(?:_\w+)?|show(?:_\w+)?|fetch(?:_\w+)?|web_\w+)$/iu
 
 /**
  * The patch text of an `apply_patch` call: the bare string, or an object holding it under `input`, `patch` or `text`. Null when there is none.
@@ -106,6 +110,8 @@ export function copilotToolCalls(input) {
     return [args.command === "create" ? writeCall(args) : editCall(args)]
   }
   if (name === "apply_patch") return patchCalls(patchText(args))
+  // Deny by default: a tool not known to be read-only that names a file is an edit of it (the guard then judges whether the file is a live card).
+  if (typeof name === "string" && !READ_ONLY_TOOL.test(name) && isObject(args) && args.command !== "view" && typeof targetOf(args) === "string") return [editCall(args)]
   return []
 }
 

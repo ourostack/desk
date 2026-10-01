@@ -12,9 +12,9 @@ import {
   resolveDeskRootWithSource,
 } from "../util/paths.js"
 
-// The project folder the host opened: Claude Code passes it in the environment; Copilot's `sessionStart` hook records it for the session (see copilot-session.js).
+// The project folder the host opened. Copilot's `sessionStart` hook records it for the session (see copilot-session.js), and that record is this session's own, so it comes first: a CLAUDE_PROJECT_DIR that Copilot inherited from the shell that launched it (for example from inside a Claude Code session) must not override it. Without a record, Claude Code passes the folder in the environment.
 function hostProjectFolder(env) {
-  return hasText(env.CLAUDE_PROJECT_DIR) ? env.CLAUDE_PROJECT_DIR : readCopilotSession({ env })?.folder
+  return readCopilotSession({ env })?.folder ?? (hasText(env.CLAUDE_PROJECT_DIR) ? env.CLAUDE_PROJECT_DIR : undefined)
 }
 
 export function resolveStartupDeskRoot({ args, env = process.env, homeDir } = {}) {

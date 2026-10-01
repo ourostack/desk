@@ -210,11 +210,9 @@ test("the startup line gives the boot command by absolute path, says the boot ha
   assert.doesNotMatch(line, /Desk boot pre-checks:/u, "a hook with no pre-check line never mentions one")
 })
 
-test("the per-prompt boot direction is short, gives the exact command, and holds even for a greeting", () => {
+test("the per-prompt boot direction is a short pointer that gives the exact command", () => {
   const line = promptBootDirection("node /x/session-boot.js")
-  assert.match(line, /^Desk boot: the boot has not run in this session\. Before you reply to this message, run `node \/x\/session-boot\.js`/u)
-  assert.match(line, /--task "<what the operator named>"/u)
-  assert.match(line, /even when this message is only a greeting/u)
-  assert.match(line, /A child agent with a bounded brief follows the brief instead and skips this/u)
+  assert.match(line, /^Desk boot is pending for this session: run `node \/x\/session-boot\.js` first \(one quick call\), then answer this message\. A child agent with a bounded brief skips this\.$/u)
+  assert.doesNotMatch(line, /has not run/u, "a pointer, not an unconditional claim")
   assert.ok(promptBootDirection().includes(bootCommand()))
 })

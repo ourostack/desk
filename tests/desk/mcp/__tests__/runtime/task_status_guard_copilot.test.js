@@ -126,6 +126,18 @@ test("the entry point answers Copilot's deny flat over real stdin/stdout, allows
   const shell = runHook("copilot", pre("bash", { command: `echo hi >> ${CARD_PATH}` }), env)
   denied(shell.output)
   const broken = runHook("copilot", "not json", env)
-  assert.equal(broken.result.status, 1)
+  // On Copilot a nonzero exit is itself a signal to the host, so an internal error answers `{}` and exits 0; Claude's behaviour is unchanged (exit 1, never 2).
+  assert.equal(broken.result.status, 0)
+  assert.deepEqual(broken.output, {})
   assert.match(broken.result.stderr, /could not inspect this call, allowing it/u)
+  const brokenClaude = runHook("claude", "not json", env)
+  assert.equal(brokenClaude.result.status, 1)
+})
+
+test("a Copilot tool Desk has never heard of is denied when it edits a live card, and a view of the card is allowed", () => {
+  for (const name of ["str_replace", "write", "multi_edit"]) denied(guard(pre(name, { path: CARD_PATH, old_str: "status: processing", new_str: "status: done" })))
+  denied(guard(pre("edit", { file_path: CARD_PATH, old_str: "status: processing", new_str: "status: done" })))
+  assert.deepEqual(guard(pre("view", { path: CARD_PATH })), {})
+  assert.deepEqual(guard(pre("read_file", { file_path: CARD_PATH })), {})
+  assert.deepEqual(guard(pre("write", { path: path.join(SCRATCH, "notes.md"), new_str: "x" })), {}, "a file that is not a card")
 })

@@ -44,6 +44,11 @@ process.stdin.on("end", async () => {
     process.stdout.write(`${JSON.stringify(output)}\n`);
   } catch (error) {
     process.stderr.write(`Desk task-status guard could not inspect this call, allowing it: ${error.message}\n`);
-    process.exitCode = 1;
+    // Copilot reads a nonzero exit as a hook failure it may surface or act on, so there the answer is an explicit allow with exit 0; Claude keeps exit 1.
+    if (process.argv[2] === "copilot") {
+      process.stdout.write("{}\n");
+    } else {
+      process.exitCode = 1;
+    }
   }
 });
