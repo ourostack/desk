@@ -185,3 +185,13 @@ test("taskDoneClaims: 'complete ... transitioned to validating' reports the real
   assert.equal(claims("I completed the task, moved it to validating, and marked it done."), 1)
   assert.equal(claims("Completed the task; it is in a good state."), 1)
 })
+
+test("taskDoneClaims: an opening 'Done:' or 'Completed.' claims it; a bare '**Completed:**' list heading does not", () => {
+  assert.equal(taskDoneClaims("**Completed:**").length, 0)
+  assert.equal(taskDoneClaims("Completed:").length, 0)
+  assert.equal(taskDoneClaims("Completed: wired the 30% check").length, 1)
+  assert.equal(taskDoneClaims("Done: wired the 30% check").length, 1)
+  assert.equal(taskDoneClaims("**Done.** Wired the check.").length, 1)
+  assert.equal(taskDoneClaims("Completed. Tests pass.").length, 1)
+  assert.equal(taskDoneClaims("Finished!").length, 1)
+})

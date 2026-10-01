@@ -56,7 +56,7 @@ const DONE_CLAIMS = [
   /\bCompleted work\b/,
   // A reply (or note) that opens with the word: "**Done.** Implemented the check", "Completed. Tests pass" (round C: a reply that
   // began "**Done.**" over a card still at `processing` matched none of the patterns above and passed).
-  /^[\s*_#>"'`-]*(?:all\s+done|done|completed?|finished)\b[\s*_"'`]*(?:[.!:\u2014\u2013-]|$)/i,
+  /^[\s*_#>"'`-]*(?:all\s+done|done|completed?|finished)\b[\s*_"'`]*(?:[.!\u2014\u2013-]|:(?![\s*_"'`]*$)|$)/i,
 ]
 
 /** The sentences of `text` that say the task itself is done or complete, leaving out negated or conditional ones ("not done until it is pushed"). */
