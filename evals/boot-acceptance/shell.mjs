@@ -13,7 +13,10 @@ function readWord(text, at) {
   let index = at
   while (index < text.length) {
     const char = text[index]
-    if (char === "\\") {
+    if (char === "\\" && text[index + 1] === "\n") {
+      // A backslash before a line break continues the line: it is no character of the word.
+      index += 2
+    } else if (char === "\\") {
       word += text[index + 1] ?? ""
       index += 2
     } else if (char === "'") {
@@ -71,8 +74,8 @@ export function tokenize(command) {
   let index = 0
   while (index < text.length) {
     const char = text[index]
-    if (char === " " || char === "\t") {
-      index += 1
+    if (char === " " || char === "\t" || (char === "\\" && text[index + 1] === "\n")) {
+      index += char === "\\" ? 2 : 1
     } else if (char === "\n") {
       tokens.push({ kind: "op", value: "\n" })
       index = skipHeredocBodies(text, index + 1, heredocs.splice(0))
