@@ -11,7 +11,7 @@
 import { test } from "node:test"
 import { strict as assert } from "node:assert"
 import { spawnSync } from "node:child_process"
-import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -408,7 +408,10 @@ test("a symlink to a card, a case-different name and a symlinked folder cannot h
     try {
       assert.equal(denies(taskStatusGuardHook(GUARD_ARGS(link), "claude")), true, "file symlink")
       assert.equal(denies(taskStatusGuardHook(GUARD_ARGS(path.join(folderLink, "watering-api", "task.md")), "claude")), true, "folder symlink")
-      assert.equal(denies(taskStatusGuardHook(GUARD_ARGS(path.join(DESK, "Greenhouse", "Watering-API", "TASK.md")), "claude")), true, "other case")
+      // Another spelling reaches the card only on a case-insensitive disk; on a case-sensitive one it names nothing.
+      const caseInsensitive = existsSync(path.join(DESK, "Greenhouse"))
+      assert.equal(denies(taskStatusGuardHook(GUARD_ARGS(path.join(DESK, "Greenhouse", "Watering-API", "TASK.md")), "claude")), caseInsensitive, "other case")
+      assert.equal(classifyCard(path.join(DESK, "Greenhouse", "Watering-API", "TASK.md"), { root: DESK, cwd: DESK, home: DESK }).kind, "live", "names are compared case-insensitively")
     } finally {
       rmSync(link, { force: true })
       rmSync(folderLink, { force: true })
