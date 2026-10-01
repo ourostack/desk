@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.156 — 2026-10-01
+
+Boot and status fixes from the sixth Haiku acceptance round. A task whose card lists `repos:` can no longer be finished on stand-in evidence: `task_update` and `task_archive` now accept only a `pr` URL in one of those repos (a fork route's upstream and fork both match; no network call) or a `commit` that resolves in a recorded local clone and is already contained in a remote-tracking branch, and refuse a desk commit, an unpushed commit, `ci_run` and `non_code`, each with an error naming exactly what to supply. A `non_code` proof may no longer be the task card itself. The `task-lifecycle` and `task-card-format` skills carry the rule, including that a task whose PR cannot be opened stays `blocked`.
+
+The boot result's `instructions` are now the single list of next steps: the duplicate `actions` list and the `desk_export_line` field are gone, and the `export DESK=...` instruction (which cannot persist across an agent's separate shell calls) is replaced by one line giving the desk's absolute path to use directly. `desk_status` now answers compactly by default (`state` in boot's own words `ready`, `degraded`, `admitting` or `setup_required`; why and what to do when not ready; `search` as its own one-word index state that never makes `state` degraded) and returns the full payload only for `detail: true`. `using-superpowers-with-desk` now routes a task with no plan to `brainstorming` or `writing-plans`, never to `executing-plans`.
+
+The readiness controller no longer hands its journal a state directory that sits under a symlinked ancestor (a home under `/home` linked elsewhere, `~/.cache` moved to another disk, macOS's `/var` to `/private/var`): it resolves the existing ancestors to their real path first, and still refuses a state directory that is itself a link or a file. Before this, such a machine lost the search index to "journal has unsafe state directory ancestry" and `desk_status` read degraded.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.155 — 2026-10-01
 
 `scripts/session-boot.js` now restores the plugin's runtime dependencies the way the MCP server does, so the one-command boot works from an installed plugin folder. Before, the script ran with no `node_modules` beside it, could not load `gray-matter`, and so could not read the `repos:` lists in task cards: `push_accounts` came back empty and every card's repos showed "not validated". The script now restores the shipped runtime pack into the same cache folder the server uses (`DESK_RUNTIME_CACHE_DIR`, `XDG_CACHE_HOME`), with the same atomic publication, before the boot code loads. A machine the pack does not cover keeps the dependency-free reader, and the "card repos: not validated" line now says why the restore failed.
