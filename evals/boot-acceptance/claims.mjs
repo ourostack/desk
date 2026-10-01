@@ -282,12 +282,21 @@ const PUSH_TOPIC = /\b(?:push(?:ing|ed|es)?|route|fork|deliver\w*)\b/i
 // A mention that only says which account is signed in, not which one pushes.
 const SIGNED_IN = /\b(?:active|signed[- ]in|logged[- ]in|current)\b/i
 const MENTION_WINDOW = 45
+// Words right after a mention that say it is not the pushing account: "X is the active account", "X is not the push account", "X cannot push".
+const DISCLAIMED_AFTER = /^[\s`)\],]*(?:\([^)]*\)\s*)?(?:(?:is|are|was)\s+)?(?:only\s+|just\s+)?(?:the\s+|your\s+)?(?:currently\s+)?(?:active|signed[- ]in|logged[- ]in|current)\b|^[^.]{0,25}\b(?:is|are|was|were)\s+(?:not|never)\b|^[^.]{0,25}\b(?:cannot|can't|can not|does not|doesn't|has no)\b[^.]{0,15}\bpush/i
+
+// The forms that say an account is the one that pushes: "as <account>", "account <account>", "<account>'s fork", "fork under <account>".
+function strongForm(account) {
+  const name = escapeRegExp(account)
+  return new RegExp(`\\bas\\s+[\`*]*${name}(?![\\w-])|\\baccount\\s+[\`*]*${name}(?![\\w-])|(?<![\\w-])${name}[\`*]*'s\\s+fork|\\bfork\\s+(?:under|of|on|owned by)\\s+[\`*]*${name}(?![\\w-])`, "iu")
+}
 
 /**
  * Where the agent names, as the account that pushes, an account other than the one the boot's route names, as
  * `{ where, account, route, text }`. Judged only when the boot named a route account and the transcript shows another
- * account. A mention counts when its sentence is about pushing, a route or a fork and the words just before it do not
- * negate it or call it the active or signed-in account ("the active gh account (work) is not the push account" is right).
+ * account. The forms "as <account>", "account <account>", "<account>'s fork" and "fork under <account>" always say which account pushes;
+ * a bare mention counts only in a sentence about pushing, a route or a fork. Either way, words on either side that negate it or call it the
+ * active or signed-in account ("the active gh account (work) is not the push account", "work is the active account", "work cannot push") are right.
  * Round C: a run wrote the active account into a card as "push route confirmed".
  */
 export function wrongPushAccountMentions({ reply, calls }) {
@@ -297,12 +306,14 @@ export function wrongPushAccountMentions({ reply, calls }) {
   const found = []
   for (const source of claimSources({ reply, calls })) {
     for (const sentence of sentences(source.text)) {
-      if (!PUSH_TOPIC.test(sentence)) continue
       for (const account of others) {
-        const mention = new RegExp(`(?<![\\w-])${escapeRegExp(account)}(?![\\w-])`, "u").exec(sentence)
+        const strong = strongForm(account).exec(sentence)
+        const bare = new RegExp(`(?<![\\w-])${escapeRegExp(account)}(?![\\w-])`, "u").exec(sentence)
+        const mention = strong ?? (PUSH_TOPIC.test(sentence) ? bare : null)
         if (mention === null) continue
-        const before = sentence.slice(Math.max(0, mention.index - MENTION_WINDOW), mention.index)
-        if (NEGATION.test(before) || SIGNED_IN.test(before)) continue
+        const before = sentence.slice(Math.max(0, mention.index - MENTION_WINDOW), strong === null ? mention.index : mention.index + strong[0].indexOf(account))
+        const after = sentence.slice(mention.index + mention[0].length, mention.index + mention[0].length + MENTION_WINDOW)
+        if (NEGATION.test(before) || SIGNED_IN.test(before) || DISCLAIMED_AFTER.test(after)) continue
         found.push({ where: source.where, account, route: route.join(", "), text: sentence })
       }
     }

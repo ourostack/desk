@@ -103,6 +103,24 @@ export const TASKS_SHOWN_CAP = 15
 
 const NO_NEXT_STEP = "no next step recorded"
 
+/** The longest next step or blocker boot prints; longer ones are cut at a word boundary and point at the card. */
+export const TEXT_CEILING = 600
+
+/**
+ * `text` as it is printed: whole when it fits `TEXT_CEILING`, otherwise cut at the last space inside the ceiling, backing
+ * out of an open `code` span, so an identifier or a path is never split, then "... (see card)".
+ */
+export function ceiling(text, limit = TEXT_CEILING) {
+  if (text.length <= limit) return text
+  let cut = text.slice(0, limit + 1)
+  const space = cut.lastIndexOf(" ")
+  // One unbroken word longer than the limit stays whole, up to the next space.
+  if (space > 0) cut = cut.slice(0, space)
+  else cut = text.indexOf(" ", limit) === -1 ? text : text.slice(0, text.indexOf(" ", limit))
+  if ((cut.match(/`/gu) ?? []).length % 2 === 1 && cut.lastIndexOf("`") > 0) cut = cut.slice(0, cut.lastIndexOf("`"))
+  return `${cut.trimEnd()} ... (see card)`
+}
+
 // A task's next step or blocker is printed whole: a cut line made agents guess the rest or open the card. A blocked
 // task shows the card's blocker reason (falling back to its next step); a card that records neither says so, so no
 // agent invents filler.
@@ -110,10 +128,10 @@ function stepLine(task) {
   const next = typeof task.next_step === "string" && task.next_step !== "" ? task.next_step : null
   const blocker = typeof task.blocker === "string" && task.blocker !== "" ? task.blocker : null
   if (task.status === "blocked") {
-    if (blocker !== null) return `\n  blocked: ${blocker}${next === null ? "" : `\n  next: ${next}`}`
-    return `\n  blocked: ${next === null ? "no blocker or next step recorded" : `no blocker recorded; next: ${next}`}`
+    if (blocker !== null) return `\n  blocked: ${ceiling(blocker)}${next === null ? "" : `\n  next: ${ceiling(next)}`}`
+    return `\n  blocked: ${next === null ? "no blocker or next step recorded" : `no blocker recorded; next: ${ceiling(next)}`}`
   }
-  return `\n  next: ${next ?? NO_NEXT_STEP}`
+  return `\n  next: ${next === null ? NO_NEXT_STEP : ceiling(next)}`
 }
 
 function taskLine(track, task) {
@@ -200,7 +218,11 @@ export function formatBootText(result) {
   if (Array.isArray(tracks)) {
     lines.push("", `Active tasks (${result.active_tasks.task_count}):`)
     if (tracks.length === 0) lines.push("- none")
-    const everyTask = tracks.flatMap((track) => track.tasks.map((task) => ({ track, task })))
+    // Blocked tasks first, then the most recently updated, before the cap cuts the list.
+    const rank = ({ task }) => (task.status === "blocked" ? 0 : 1)
+    const everyTask = tracks
+      .flatMap((track) => track.tasks.map((task) => ({ track, task })))
+      .sort((a, b) => rank(a) - rank(b) || (typeof b.task.updated === "string" ? b.task.updated : "").localeCompare(typeof a.task.updated === "string" ? a.task.updated : ""))
     for (const { track, task } of everyTask.slice(0, TASKS_SHOWN_CAP)) lines.push(taskLine(track, task))
     if (everyTask.length > TASKS_SHOWN_CAP) lines.push(`- ...and ${everyTask.length - TASKS_SHOWN_CAP} more active tasks (all of them are in \`active_tasks\` with \`--json\`)`)
   } else if (result.status !== "setup_required") {

@@ -5,7 +5,7 @@ description: Find or set up local clones for code repos referenced by a task car
 
 # Repo handling
 
-> Boot first: if the Desk boot has not run in this session, run `node <plugin>/mcp/scripts/session-boot.js` first (the `Desk startup:` line in your context has the exact command; add `--task "<name>"` when the operator named a task).
+> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
 
 When a task references a code repo, the agent needs to know where the code lives locally. Operators routinely move between machines with different layouts (`~/code/` on Mac, `Q:\src\` on Windows, `/repos/` on a Linux dev box) — task cards committed on one machine shouldn't block resume on another. This skill handles the cross-machine reality gracefully.
 

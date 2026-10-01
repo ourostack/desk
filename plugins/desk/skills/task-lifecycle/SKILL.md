@@ -5,7 +5,7 @@ description: The 8-state task lifecycle machine — one job as one task, states,
 
 # Task lifecycle
 
-> Boot first: if the Desk boot has not run in this session, run `node <plugin>/mcp/scripts/session-boot.js` first (the `Desk startup:` line in your context has the exact command; add `--task "<name>"` when the operator named a task).
+> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
 
 Invoke `desk:using-superpowers-with-desk` for engineering, at its `start` entry for new work and at its `material-redesign` entry when an approved outcome changes design or scope materially. This skill owns Desk state transitions, not a second implementation lifecycle; Superpowers consumes the existing task, approval, plan and terminal boundary.
 

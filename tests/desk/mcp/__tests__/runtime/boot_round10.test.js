@@ -6,7 +6,7 @@ import { promises as fs } from "node:fs"
 import * as path from "node:path"
 import { mkTempRoot } from "../_temp_roots.js"
 import { bootOnce } from "../../../../../plugins/desk/mcp/src/runtime/boot.js"
-import { TASKS_SHOWN_CAP, formatBootText, pushRoute } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
+import { TASKS_SHOWN_CAP, TEXT_CEILING, ceiling, formatBootText, pushRoute } from "../../../../../plugins/desk/mcp/src/runtime/boot-text.js"
 import { activeTasks, nextStepOf } from "../../../../../plugins/desk/mcp/src/desk/active-tasks.js"
 import { task_archive, task_create, task_update } from "../../../../../plugins/desk/mcp/src/tools/task.js"
 import { withCreatedDirs } from "../../../../../plugins/desk/mcp/src/util/created-dirs.js"
@@ -141,7 +141,7 @@ test("bootOnce: a fork route with a different active account says to push as the
   const gh = fakeGh({ accounts: [{ login: "work", active: true }, { login: "ari", active: false }], repos: { work: 404, ari: NO_PUSH } })
   const result = await bootWith(gh)
   const line = result.instructions.find((entry) => entry.startsWith("Push route for acme/widgets"))
-  assert.match(line, /: push as \S+ via fork \S+\/widgets; the active gh account \(work\) is not the push account for this repo; account \S+ cannot push to it directly, so its route is a fork\./u)
+  assert.match(line, /: push as \S+ via fork \S+\/widgets; the active gh account \(work\) is not the push account for this repo; account \S+ cannot push to it directly\. Push your branch/u)
   assert.match(line, /Push as \S+ \(`GH_TOKEN=\$\(gh auth token --user \S+\)` for the git or gh call\), and write \S+, never work, as the push account in any note\./u)
 })
 
@@ -247,4 +247,123 @@ test("a task_archive whose rename fails leaves no empty _archive folder", async 
     fs.rename = realRename
   }
   assert.deepEqual(await tree(root), before)
+})
+
+test("two concurrent calls into a new folder: the one that made it fails, the other still finds it, and the folder stays", async () => {
+  const root = await mkTempRoot("desk-round10-race-")
+  const target = path.join(root, "new", "dest")
+  let releaseFirst
+  let releaseSecond
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve })
+  const secondGate = new Promise((resolve) => { releaseSecond = resolve })
+  const first = withCreatedDirs(target, async () => { await firstGate; throw new Error("first failed") })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  const second = withCreatedDirs(target, async () => { await secondGate; return (await fs.stat(target)).isDirectory() })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  releaseFirst()
+  await assert.rejects(first, /first failed/u)
+  assert.ok((await fs.stat(target)).isDirectory(), "the folder the second call is using survives the first call's failure")
+  releaseSecond()
+  assert.equal(await second, true)
+  assert.ok((await fs.stat(target)).isDirectory(), "and stays after the second succeeds")
+})
+
+test("a parent folder is kept while another in-flight call works under it, and removed once nothing does", async () => {
+  const root = await mkTempRoot("desk-round10-race2-")
+  let releaseChild
+  const childGate = new Promise((resolve) => { releaseChild = resolve })
+  const child = withCreatedDirs(path.join(root, "a", "b"), async () => { await childGate })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  await assert.rejects(withCreatedDirs(path.join(root, "a"), async () => { throw new Error("parent failed") }), /parent failed/u)
+  assert.ok((await fs.stat(path.join(root, "a", "b"))).isDirectory())
+  let releaseOther
+  const other = withCreatedDirs(path.join(root, "unrelated"), async () => { await new Promise((resolve) => { releaseOther = resolve }) })
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  await assert.rejects(withCreatedDirs(path.join(root, "x", "y"), async () => { throw new Error("alone") }), /alone/u)
+  await assert.rejects(fs.stat(path.join(root, "x")), { code: "ENOENT" }, "an unrelated in-flight folder does not keep it")
+  releaseOther()
+  releaseChild()
+  await Promise.all([child, other])
+})
+
+// ── Review: ceiling, blocker forms, sort order, terminal status ─────────
+
+test("a next step or blocker over the ceiling is cut at a word boundary, keeps identifiers and code spans whole, and points at the card", () => {
+  assert.equal(ceiling("short"), "short")
+  assert.equal(ceiling("a".repeat(TEXT_CEILING)), "a".repeat(TEXT_CEILING))
+  const words = `${"word ".repeat(150)}RainDelayPolicy.shouldDelay()`
+  const cut = ceiling(words)
+  assert.ok(cut.endsWith(" ... (see card)"))
+  assert.ok(cut.length <= TEXT_CEILING + 20)
+  assert.doesNotMatch(cut, /\bwor\b|\bwo\b/u)
+  const span = `${"x ".repeat(295)}\`some identifier with spaces\` and more words after it`
+  assert.ok(!ceiling(span).includes("`"), "an open code span is dropped whole, never split")
+  const bigWord = `${"y".repeat(700)} tail`
+  assert.equal(ceiling(bigWord), `${"y".repeat(700)} ... (see card)`)
+  assert.equal(ceiling("z".repeat(700)), "z".repeat(700) + " ... (see card)".replace(/^/u, "") )
+  const printed = textFor(task({ status: "blocked", blocker: `${"reason ".repeat(120)}end`, next_step: `${"step ".repeat(200)}end` }))
+  assert.equal((printed.match(/\(see card\)/gu) ?? []).length, 2)
+  assert.match(textFor(task({ status: "blocked", blocker: null, next_step: "n ".repeat(400) })), /no blocker recorded; next: .* \.\.\. \(see card\)/u)
+})
+
+test("blocked tasks come first, then the most recently updated, before the cap applies", () => {
+  const rows = [
+    ...Array.from({ length: TASKS_SHOWN_CAP }, (_, index) => task({ slug: `new${index}`, title: `new${index}`, updated: `2026-09-${String(10 + index).padStart(2, "0")}T00:00:00Z`, next_step: "n" })),
+    task({ slug: "old-blocked", title: "old-blocked", status: "blocked", updated: "2026-01-01T00:00:00Z", blocker: "the key" }),
+    task({ slug: "no-date", title: "no-date", updated: undefined, next_step: "n" }),
+  ]
+  const text = formatBootText({ status: "ready", active_tasks: { task_count: rows.length, tracks: [{ track: "ops", tasks: rows }] } })
+  const order = [...text.matchAll(/^- ops\/(\S+?):/gmu)].map((match) => match[1])
+  assert.equal(order[0], "old-blocked")
+  assert.equal(order[1], `new${TASKS_SHOWN_CAP - 1}`, "then newest first")
+  assert.ok(!order.includes("no-date"), "an undated task sorts last and falls under the cap")
+  assert.match(text, /and 2 more active tasks/u)
+})
+
+test("active_tasks reads the blocker from a Blockers list, a list item, a quote and a wrapped line, skips fences and 'none'", async () => {
+  const blockers = await cards({
+    list: "## Blockers\n\n- Waiting on the key\n  from the ops team\n- Legal review\n- n/a\n\n## Other\n",
+    numbered: "## Blockers\n\n1. Design\n2. Budget\n",
+    allNone: "## Blockers\n\n- none\n",
+    listItem: "- **Blocker:** the vendor is down\n- other\n",
+    quote: "> Blocker: waiting on QA\n> still waiting\n",
+    stopsAtLabel: "**Blocker:** needs a key\n**Owner:** ops\n",
+    fenced: "```\n**Blocker:** inside a fence\n```\nBlocker: the real one\n",
+    tilde: "~~~md\n## Blockers\n- no\n~~~\n",
+    none: "Blocker: none\n",
+    na: "**Blocker:** N/A.\n",
+    sectionPara: "## Blocker\n\nA paragraph\nthat wraps.\n\n**Owner:** x\n",
+    sectionLabelFirst: "## Blocker\n\n**Owner:** x\n",
+    sectionEmpty: "## Blocker\n",
+    nothingThenReal: "Blocker: none\n\nWaiting on: the key\n",
+  })
+  assert.equal(blockers.list, "Waiting on the key from the ops team; Legal review")
+  assert.equal(blockers.numbered, "Design; Budget")
+  assert.equal(blockers.allNone, null)
+  assert.equal(blockers.listItem, "the vendor is down")
+  assert.equal(blockers.quote, "waiting on QA still waiting")
+  assert.equal(blockers.stopsAtLabel, "needs a key")
+  assert.equal(blockers.fenced, "the real one")
+  assert.equal(blockers.tilde, null)
+  assert.equal(blockers.none, null)
+  assert.equal(blockers.na, null)
+  assert.equal(blockers.sectionPara, "A paragraph that wraps.")
+  assert.equal(blockers.sectionLabelFirst, null)
+  assert.equal(blockers.sectionEmpty, null)
+  assert.equal(blockers.nothingThenReal, "the key")
+})
+
+test("a next step stops at the next labelled field and ignores a fenced marker", () => {
+  assert.equal(nextStepOf("**Next step:** wire it\nthen test it\n**Owner:** ops\n"), "wire it then test it")
+  assert.equal(nextStepOf("```\n**Next step:** inside\n```\n**Next step:** real\n"), "real")
+  assert.equal(nextStepOf("```\n**Next step:** never closed\n"), null)
+  assert.equal(nextStepOf("~~~\ncode\n~~~\n**Next step:** after\n"), "after")
+  assert.equal(nextStepOf("````\n```\n**Next step:** deep\n````\n**Next step:** out\n"), "out")
+})
+
+test("task_update into a terminal status adds no next-step reminder", async () => {
+  const root = await deskWithTask()
+  const result = await task_update({ deskRoot: root, input: { track: "t", slug: "s", note: "abandoned", frontmatter: { status: "cancelled" } } })
+  assert.equal(Object.hasOwn(result, "next_step_note"), false)
+  assert.equal(Object.hasOwn(result, "next_step"), false)
 })

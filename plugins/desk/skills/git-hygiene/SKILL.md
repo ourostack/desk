@@ -5,7 +5,7 @@ description: Keep the code repos the agent touches synced and never leave state 
 
 # Git hygiene
 
-> Boot first: if the Desk boot has not run in this session, run `node <plugin>/mcp/scripts/session-boot.js` first (the `Desk startup:` line in your context has the exact command; add `--task "<name>"` when the operator named a task).
+> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
 
 > **overlay users**: consumer overlays may add their own state-sync workflow for the `$DESK/` repo, identity context (e.g. enterprise-managed git accounts), and overlay-specific anti-patterns. This skill stays generic.
 

@@ -687,8 +687,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   if (commit) result.commit = commit
   // A note or a status change that leaves the next step alone is the common way a card ends up describing work that
   // is already done (a run finished the step, logged it, and reported "Done" over a card still pointing at it): show
-  // the step the card still carries and say it was not touched.
-  if (nextStep === undefined && (note !== undefined || merged.status !== existing.data.status)) {
+  // the step the card still carries and say it was not touched. A terminal status leaves no next step to keep current.
+  if (nextStep === undefined && !TERMINAL_STATUSES.has(merged.status) && (note !== undefined || merged.status !== existing.data.status)) {
     result.next_step = nextStepOf(newBody)
     result.next_step_note = "next_step unchanged \u2014 update it if this work changed it"
   }

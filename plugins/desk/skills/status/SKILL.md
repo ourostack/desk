@@ -5,7 +5,7 @@ description: Emit a one-screen resume-friendly dashboard of all active worker st
 
 # Status
 
-> Boot first: if the Desk boot has not run in this session, run `node <plugin>/mcp/scripts/session-boot.js` first (the `Desk startup:` line in your context has the exact command; add `--task "<name>"` when the operator named a task).
+> Boot first: if the Desk boot has not run in this session, run the absolute command on the `Desk startup:` line in your context (without it, `node <this skill's base directory>/../../mcp/scripts/session-boot.js`; add `--task "<name>"` when the operator named a task). A child agent with a bounded brief follows its brief and skips this.
 
 A single-screen dashboard that answers "where are we?" without manual archaeology across workspace markdown, external work trackers, and local code repos.
 
