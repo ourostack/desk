@@ -283,7 +283,7 @@ const PUSH_TOPIC = /\b(?:push(?:ing|ed|es)?|route|fork|deliver\w*)\b/i
 const SIGNED_IN = /\b(?:active|signed[- ]in|logged[- ]in|current)\b/i
 const MENTION_WINDOW = 45
 // Words right after a mention that say it is not the pushing account: "X is the active account", "X is not the push account", "X cannot push".
-const DISCLAIMED_AFTER = /^[\s`)\],]*(?:\([^)]*\)\s*)?(?:(?:is|are|was)\s+)?(?:only\s+|just\s+)?(?:the\s+|your\s+)?(?:currently\s+)?(?:active|signed[- ]in|logged[- ]in|current)\b|^[^.]{0,25}\b(?:is|are|was|were)\s+(?:not|never)\b|^[^.]{0,25}\b(?:cannot|can't|can not|does not|doesn't|has no)\b[^.]{0,15}\bpush/i
+const DISCLAIMED_AFTER = /^[\s`)\],]*(?:\([^)]*\)\s*)?(?:(?:is|are|was)\s+)?(?:only\s+|just\s+)?(?:the\s+|your\s+)?(?:currently\s+)?(?:active|signed[- ]in|logged[- ]in|current)\b|^[^.]{0,25}\b(?:is|are|was|were)\s+(?:not|never)\b|^[^.]{0,25}\b(?:cannot|can't|can not|does not|doesn't|has no)\b[^.]{0,15}\bpush|^[^.]{0,25}\b(?:has|have)\s+no\s+(?:push\s+|write\s+)?access\b|^[^.]{0,25}\blacks\s+(?:push\s+|write\s+)?access\b/i
 
 // The forms that say an account is the one that pushes: "as <account>", "account <account>", "<account>'s fork", "fork under <account>".
 function strongForm(account) {

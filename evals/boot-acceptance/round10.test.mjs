@@ -369,3 +369,10 @@ test("shellWrites: clone options with values, cp and mv -t, >| and arithmetic", 
   assert.deepEqual(writes("echo $((3 > 2)) $(( a>b ))"), [])
   assert.deepEqual(writes("sh -c 'mkdir -p /elsewhere/x' && echo $(touch /y/z)"), ["mkdir:/elsewhere/x", "touch:/y/z"])
 })
+
+test("an account named as lacking access is a disclaimer, not the push account", () => {
+  const boot = { name: "Bash", input: { command: "node session-boot.js" }, result: "Desk boot: degraded\npush as me via fork me/b; the active gh account (work) is not the push account for this repo" }
+  assert.equal(wrongPushAccountMentions({ reply: "The route is a fork under me; work has no access.", calls: [boot] }).length, 0)
+  assert.equal(wrongPushAccountMentions({ reply: "The route is a fork under me; work lacks push access.", calls: [boot] }).length, 0)
+  assert.equal(wrongPushAccountMentions({ reply: "I'll push as work.", calls: [boot] }).length, 1)
+})
