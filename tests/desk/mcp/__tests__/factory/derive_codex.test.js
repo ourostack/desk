@@ -740,6 +740,7 @@ function codexMarker(ctx, overrides = {}) {
 
 test("derive-run sends codex-cli markers to the Codex deriver, with the home found from the rollout's folder", () => scratch(async (ctx) => {
   await setConsent(ctx.env, { store: STORE, contribute: true })
+  writeFileSync(path.join(ctx.desk, "_meta", "factory.json"), JSON.stringify({ schema_version: 1, store: STORE }))
   const marker = codexMarker(ctx)
   const seen = []
   const spy = async (input) => {
@@ -759,6 +760,7 @@ test("derive-run sends codex-cli markers to the Codex deriver, with the home fou
 
 test("derive-run lets the deriver resolve the home when the rollout is not under a sessions folder", () => scratch(async (ctx) => {
   await setConsent(ctx.env, { store: STORE, contribute: true })
+  writeFileSync(path.join(ctx.desk, "_meta", "factory.json"), JSON.stringify({ schema_version: 1, store: STORE }))
   const marker = codexMarker(ctx)
   const moved = path.join(ctx.base, "elsewhere", "rollout.jsonl")
   mkdirSync(path.dirname(moved), { recursive: true })

@@ -90,6 +90,25 @@ export async function deriveMarker(env, marker, { claude = deriveClaudeSession, 
   }
 }
 
+const ROUTE_PROOF_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+
+const realDesk = async (deskRoot) => fs.realpath(deskRoot).catch(() => path.resolve(deskRoot))
+const markerTime = (marker) => Date.parse(marker.ended_at ?? marker.updated_at)
+
+// A Codex marker records no plugins, so its default route never saw a plugin overlay. It is proven only by a
+// Claude Code or Copilot CLI marker for the same desk, within 30 days, whose own default route did check the
+// plugin registry.
+async function defaultRouteProven(env, marker) {
+  const desk = await realDesk(marker.desk_root)
+  const at = markerTime(marker)
+  for (const other of await listMarkers(env)) {
+    if (other.host === "codex-cli" || other.desk_root === null || other.routing?.source !== "default") continue
+    if (Math.abs(markerTime(other) - at) > ROUTE_PROOF_WINDOW_MS) continue
+    if ((await realDesk(other.desk_root)) === desk) return true
+  }
+  return false
+}
+
 async function newestMarker(env, root, marker, requireStored) {
   try {
     const stored = await readMarker(env, path.join(root, "markers", `${marker.host}-${marker.session_id}.json`))
@@ -116,6 +135,7 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
     if (route.warnings.length) await writeStatus(env, { routing_warnings: route.warnings })
     if (store === null) return { result: "held", store }
     if ((await readConsent(env)).stores[store]?.contribute !== true) return { result: "not_opted_in", store }
+    if (marker.host === "codex-cli" && route.source === "default" && !(await defaultRouteProven(env, marker))) return { result: "held", store: null, reason: "route_unverified" }
     const before = await sourceStamp(marker.log_path)
     marker = await reconcileMarker(marker)
     if (!sameSource(before, await sourceStamp(marker.log_path))) return { result: "skipped", store }
@@ -166,16 +186,19 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
 }
 
 export async function sweep(env, { quietMs = 600000 } = {}) {
-  const summary = { written: 0, held: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0 }
+  const summary = { written: 0, held: 0, route_unverified: 0, skipped: 0, not_opted_in: 0, log_missing: 0, source_unreadable: 0, invalid: 0 }
   try {
     if (!(await jobsIndexRebuilt(env))) await rebuildJobsIndex(env)
   } catch {
     // The rebuild retries on the next sweep; it must never stop this one deriving.
   }
   for (const marker of await listMarkers(env)) {
-    const { result } = await deriveMarker(env, marker, { quietMs, requireStored: true })
+    const { result, reason } = await deriveMarker(env, marker, { quietMs, requireStored: true })
     summary[result] += 1
+    if (reason === "route_unverified") summary.route_unverified += 1
   }
+  // `route_unverified` counts the Codex markers held inside `held`; `factory.js status` shows it.
+  await writeStatus(env, { held_markers: { route_unverified: summary.route_unverified } })
   return summary
 }
 
