@@ -645,6 +645,51 @@ test("sessions the transform refuses or the published gate rejects are quarantin
   assert.equal(github.pulls[0].body, "1")
 }))
 
+test("a Codex session (v7 id) goes to the store under its keyed v4 file name, passes validatePr, and leaks no part of the real id", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  const { validatePr } = await import("../../../../../plugins/desk/mcp/src/factory/pipeline/validate-pr.js")
+  await optIn(env)
+  const codex = localFacts(1)
+  codex.session.host = "codex-cli"
+  codex.session.id = "01927a3b-8c00-7abc-8def-0123456789ab"
+  const name = await put(env, codex)
+  assert.equal(name, `codex-cli-${codex.session.id}.json`)
+  const github = fakeGitHub()
+  assert.equal((await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })).result, "delivered_pr_open")
+  const head = github.headFacts(STORE, await intakeBranch(env))
+  const [stored] = [...head.keys()]
+  assert.equal(head.size, 1)
+  assert.match(stored, /^codex-cli-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/u)
+  assert.notEqual(stored, name)
+  const bytes = Buffer.from(github.blobs.get(head.get(stored).sha))
+  assert.deepEqual(validatePr({ changes: [{ path: `facts/${stored}`, status: "added", bytes }] }), { ok: true, errors: [] })
+  for (const part of [codex.session.id, "01927a3b", "8c00-7abc", "0123456789ab"]) {
+    assert.equal(stored.includes(part) || bytes.toString("utf8").includes(part) || JSON.stringify([...github.pulls]).includes(part), false, part)
+  }
+  // Delivered: the lookup by published name finds it on main, so a second flush has nothing to send.
+  github.mergeOpenPr()
+  assert.deepEqual(await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup }), { result: "nothing_pending" })
+  const root = await factoryStateRoot(env)
+  const delivered = JSON.parse(await fs.readFile(path.join(root, "delivered", "ourostack__factory.json"), "utf8"))
+  assert.deepEqual(Object.keys(delivered), [name], "delivery is recorded under the local name")
+}))
+
+test("a store rejection of a Codex session's keyed file quarantines the local file", () => scratch(async ({ env }) => {
+  const { flush } = await load()
+  await optIn(env)
+  const codex = localFacts(1)
+  codex.session.host = "codex-cli"
+  codex.session.id = "01927a3b-8c00-7abc-8def-0123456789ab"
+  const name = await put(env, codex)
+  const github = fakeGitHub()
+  await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  github.rejectOpenPr("factory-rejected: date")
+  await put(env, localFacts(2))
+  await flush(env, { store: STORE, runner: github.runner, anonymousLookup: github.anonymousLookup })
+  const root = await factoryStateRoot(env)
+  assert.equal(JSON.parse(await fs.readFile(path.join(root, "quarantine", "ourostack__factory", name), "utf8")).reason, "date")
+}))
+
 test("a closed intake PR rejected by the store's automation quarantines exactly its files with the posted code", () => scratch(async ({ env }) => {
   const { flush } = await load()
   await optIn(env)

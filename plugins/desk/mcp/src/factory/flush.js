@@ -515,7 +515,8 @@ function publishOne(local, name, { transform, known, desk, store, secret }) {
   const bytes = Buffer.from(serializePublished(out.published), "utf8")
   const checked = validatePublishedBytes(bytes)
   if (!checked.ok) return { reason: checked.errors[0].code }
-  return { bytes }
+  // The store knows the file by its published name: a keyed session ID (a Codex thread) differs from the local name.
+  return { bytes, file: `${out.published.session.host}-${out.published.session.id}.json` }
 }
 
 // The facts file names a labels file's session can have, one per host.
@@ -636,7 +637,7 @@ async function readRejections(env, client, { store, head, through, labelKeys }) 
     // A batch holds up to MAX_FILES files; GitHub pages them 100 at a time.
     for (const file of await readPages(client, `repos/${store}/pulls/${pr.number}/files`, { perPage: 100, maxItems: MAX_FILES })) {
       // A labels file is known by its published path; only labels still waiting here can be named back to their local key.
-      const name = FACTS_PATH.exec(String(file?.filename))?.[1] ?? labelKeys.get(String(file?.filename))
+      const name = labelKeys.get(String(file?.filename)) ?? FACTS_PATH.exec(String(file?.filename))?.[1]
       if (name === undefined) continue
       await quarantine(env, store, name, code, SHA.test(String(file.sha)) ? { blob: file.sha } : {})
       rejected.add(name)
@@ -699,7 +700,7 @@ async function pushBatch(client, { target, branch, base, batch }) {
   // The tree must hold exactly the bytes that were checked.
   const landed = await factsOnBranch(client, target.repo, tree)
   const landedLabels = await labelsOnBranch(client, target.repo, tree, batch.filter((item) => item.labels).map((item) => item.path))
-  for (const item of batch) if ((item.labels ? landedLabels.get(item.path) : landed.get(item.name)) !== item.sha) stop("unexpected")
+  for (const item of batch) if ((item.labels ? landedLabels.get(item.path) : landed.get(item.file)) !== item.sha) stop("unexpected")
   const current = await client.api("GET", `repos/${target.repo}/git/ref/heads/${branch}`)
   if (current.status !== 200 && current.status !== 404) stop("unexpected")
   const headSha = current.status === 200 ? requireSha(current.json?.object?.sha) : null
@@ -782,9 +783,11 @@ async function deliver(env, context) {
   const secret = await readMachineSecret(env)
 
   const bytesByName = new Map()
+  const publishedFile = new Map()
   const released = []
   for (const { name, held, local } of parsed) {
     const out = publishOne(local, name, { transform, known, desk: desks.get(name), store, secret })
+    if (out.file) publishedFile.set(name, out.file)
     if (held !== null) {
       if (unresolved.has(name)) continue
       // A quarantined file goes again only when what it publishes now differs from what the store refused; otherwise its record stays as it is.
@@ -813,7 +816,7 @@ async function deliver(env, context) {
   }
   // A file without bytes is one whose record is not a regular file (its file stays where it is) or a held file that stays held; the listing skips it.
   const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts.session.host}-${facts.session.id}.json`) ?? null }))
-    .map(({ name }) => ({ name, path: `facts/${name}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)) }))
+    .map(({ name }) => ({ name, file: publishedFile.get(name), path: `facts/${publishedFile.get(name)}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)) }))
   const labelsPending = (await pendingLabels(env, store, { publishedBytesFor: (labels) => labelsByKey.get(`labels/${labels.job}/${labels.session}.json`).bytes }))
     .map(({ name }) => {
       const { path: published, bytes } = labelsByKey.get(name)
@@ -839,7 +842,8 @@ async function deliver(env, context) {
   const head = { ref: branch, label: `${target.owner}:${branch}` }
 
   const through = (await readStatus(env)).last_flush?.[store]?.rejections_through
-  const labelKeys = new Map(labelsPending.map((item) => [item.path, item.name]))
+  // A rejected file is named back to its local key by its published path.
+  const labelKeys = new Map([...labelsPending, ...factsPending].map((item) => [item.path, item.name]))
   const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys })
   progress.rejectionsThrough = rejections.through
   pending = await withoutHeld(pending.filter((item) => !rejections.rejected.has(item.name)))
@@ -850,7 +854,7 @@ async function deliver(env, context) {
   const labelsOnMain = await labelsOnBranch(client, store, base.tree, pending.filter((item) => item.labels).map((item) => item.path))
   const remaining = []
   for (const item of pending) {
-    if ((item.labels ? labelsOnMain.get(item.path) : onMain.get(item.name)) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha })
+    if ((item.labels ? labelsOnMain.get(item.path) : onMain.get(item.file)) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha })
     else remaining.push(item)
   }
   progress.pending = remaining.map((item) => item.name)
@@ -858,7 +862,7 @@ async function deliver(env, context) {
 
   // Facts go first. Labels go only with their session's facts, on the default branch or in the same batch: the store's gate refuses labels without facts, and that refusal would quarantine every file of the PR.
   const taken = takeBatch(remaining, { maxFiles, maxBytes })
-  const factsReady = new Set([...onMain.keys(), ...taken.filter((item) => !item.labels).map((item) => item.name)])
+  const factsReady = new Set([...onMain.keys(), ...pending.filter((item) => !item.labels && onMain.has(item.file)).map((item) => item.name), ...taken.filter((item) => !item.labels).map((item) => item.name)])
   const batch = taken.filter((item) => !item.labels || factsNamesOf(item.session).some((name) => factsReady.has(name)))
   if (batch.length === 0) return { result: "nothing_pending" }
   await pushBatch(client, { target, branch, base, batch })

@@ -410,7 +410,10 @@ export function publishedFileName(published) {
  * `publishedClock(local) -> { clock: { duration_ms, ended, intervals } }`,
  * or `{ clock: null, reason }` with a reason from `REFUSALS`: the published
  * session clock `toPublished` would produce for valid local facts, and
- * nothing else. An interval `toPublished` drops is dropped here too.
+ * nothing else. An interval `toPublished` drops is dropped here too. A
+ * version-7 session (Codex) has a clock, because `toPublished` publishes it
+ * under a keyed ID; the labels path cannot carry that ID, so callers that
+ * label sessions test `SESSION_ID_V4` on the local ID themselves.
  */
 export function publishedClock(local) {
   if (!validateLocalFacts(local).ok) throw new TypeError("publishedClock: local facts must pass validateLocalFacts")
