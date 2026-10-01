@@ -24,7 +24,7 @@ test("gh: writes and unknown commands are denied", () => {
   for (const args of [
     ["pr", "create", "--title", "x"], ["pr", "merge", "1"], ["repo", "fork", "a/b"], ["repo", "create", "x"], ["issue", "create"], ["issue", "comment", "1"],
     ["api", "-X", "POST", "repos/a/b/issues"], ["api", "-X", "DELETE", "x"], ["api", "x", "-f", "a=b"], ["api", "x", "-F", "a=b"], ["api", "x", "--field", "a=b"], ["api", "x", "--input", "f.json"], ["api", "graphql", "-f", "query=x"],
-    ["auth", "login"], ["auth", "switch"], ["auth", "refresh"], ["auth", "setup-git"], ["config", "set", "a", "b"], ["extension", "install", "x"], ["release", "create"], ["workflow", "run", "x"], ["secret", "set", "x"], ["gist", "create"], ["somethingnew"],
+    ["auth", "status", "--show-token"], ["auth", "status", "-t"], ["auth", "login"], ["auth", "switch"], ["auth", "refresh"], ["auth", "setup-git"], ["config", "set", "a", "b"], ["extension", "install", "x"], ["release", "create"], ["workflow", "run", "x"], ["secret", "set", "x"], ["gist", "create"], ["somethingnew"],
   ]) assert.equal(allowed(...args), false, args.join(" "))
 })
 

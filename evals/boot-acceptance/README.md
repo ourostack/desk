@@ -95,7 +95,12 @@ Each run is two turns of one session. Turn 1 sends the scenario prompt alone. Tu
 
 ## Tokens
 
-The boot script calls `gh auth token` to resolve each account's push route, so the shim allows that one subcommand. A token must never reach the model or a saved file, so every output is redacted (`gh[pousr]_...` and `github_pat_...` shapes become `[REDACTED-TOKEN]`) before it is parsed or written, and a run fails if its transcript, either turn or `stderr.log` held one (`token_leaks` in `summary.json`). An agent that runs `gh auth token` itself and prints the result fails the same way.
+The boot script calls `gh auth token` to resolve each account's push route, so the shim allows that subcommand, in two ways:
+
+- **Caller is the boot script:** the shim looks at its parent process (`ps`) and, when that is `node .../scripts/session-boot.js`, runs the real `gh` with the script's own piped stdout. The raw token goes to the script and not into the transcript. The shim does not use an environment variable for this, because the model's shell could set it too. The one route left is the model running `session-boot.js` itself, which does not print tokens.
+- **Any other caller (the model's shell, a hook):** the shim captures the real `gh`'s stdout and stderr, passes them through `redactTokens` and keeps the exit code, so `gh auth token` in a model-visible shell prints `[REDACTED-TOKEN]`. `gh auth status -t/--show-token` is denied outright.
+
+As a second layer, every `claude` output is redacted (`gh[pousr]_...` and `github_pat_...` shapes, with no boundary requirement, so `\nghp_...` and `x_ghp_...` count) before it is parsed or written, and a run fails if its transcript, either turn or `stderr.log` held one or a redaction marker (`token_leaks` in `summary.json`). A shell that bypasses the shim (the real `gh` by path) is already a failure. Anything the model reads from `claude` itself, such as a token in a file, is outside what the shim covers.
 
 ## Isolation
 

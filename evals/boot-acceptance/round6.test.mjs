@@ -12,7 +12,7 @@ import { test } from "node:test"
 import { buildContext, loadRunContext, parseStreamJson, runTurns } from "./run.mjs"
 import { rescoreAll } from "./rescore.mjs"
 import { asksForConsent, CRITIQUE_PROMPT, findScenario, operatorPart, SCENARIOS } from "./scenarios.mjs"
-import { classifyGh, countTokenLeaks, findTokens, ghWriteAttempts, redactTokens, REDACTION_MARKER } from "./safety.mjs"
+import { classifyGh, countTokenLeaks, findRealGh, findTokens, ghWriteAttempts, installGhShim, isBootScriptCommand, redactTokens, REDACTION_MARKER } from "./safety.mjs"
 
 // Shaped like real tokens, built so no literal token sits in this file.
 const CLASSIC = ["ghp", "_", "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"].join("")
@@ -255,4 +255,72 @@ test("every scenario prompt is just the scenario: the critique is no longer appe
   assert.match(CRITIQUE_PROMPT, /What could be better about this boot-up/)
   const source = readFileSync(new URL("./run.mjs", import.meta.url), "utf8")
   assert.equal(source.includes("--no-session-persistence\","), false)
+})
+
+// ---------------------------------------------------------------------------
+// The shim redacts for every caller except the boot script.
+// ---------------------------------------------------------------------------
+
+function shimFixture() {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "boot-acceptance-shim-"))
+  const realDir = path.join(dir, "real")
+  mkdirSync(realDir)
+  writeFileSync(path.join(realDir, "gh"), `#!/bin/sh\nif [ "$1" = auth ] && [ "$2" = token ]; then echo ${CLASSIC}; echo "err ${OAUTH}" >&2; exit 3; fi\necho "real gh: $@"\n`, { mode: 0o755 })
+  const shim = installGhShim({ shimDir: path.join(dir, "shim"), realGh: findRealGh(realDir), logFile: path.join(dir, "log.jsonl") })
+  return { dir, shim, done: () => rmSync(dir, { recursive: true, force: true }) }
+}
+
+test("a model-visible gh auth token prints a redacted value, keeps the exit code, and redacts stderr too", () => {
+  const { shim, done } = shimFixture()
+  try {
+    const r = spawnSync(shim, ["auth", "token"], { encoding: "utf8" })
+    assert.equal(r.status, 3)
+    assert.equal(r.stdout.trim(), REDACTION_MARKER)
+    assert.equal(r.stderr.trim(), `err ${REDACTION_MARKER}`)
+    assert.equal(findTokens(r.stdout + r.stderr).length, 0)
+    // Ordinary read-only calls pass through unchanged.
+    assert.match(spawnSync(shim, ["pr", "list"], { encoding: "utf8" }).stdout, /real gh: pr list/)
+  } finally { done() }
+})
+
+test("a shell whose command text mentions session-boot.js is still not the boot script", () => {
+  const { dir, shim, done } = shimFixture()
+  try {
+    const r = spawnSync("sh", ["-c", `echo session-boot.js >/dev/null; ${JSON.stringify(shim)} auth token`], { encoding: "utf8" })
+    assert.equal(r.stdout.trim(), REDACTION_MARKER)
+    assert.equal(isBootScriptCommand("sh -c node scripts/session-boot.js"), false)
+    assert.equal(isBootScriptCommand("/usr/local/bin/node /tmp/p/mcp/scripts/session-boot.js --task x"), true)
+    assert.equal(isBootScriptCommand("node scripts/session-boot.js"), false)
+    assert.equal(isBootScriptCommand("node /x/scripts/session-boot.js"), true)
+    assert.equal(dir.length > 0, true)
+  } finally { done() }
+}  )
+
+test("the boot script itself, spawning gh with a piped stdout, still receives the raw token", () => {
+  const { dir, shim, done } = shimFixture()
+  try {
+    const scriptsDir = path.join(dir, "mcp", "scripts")
+    mkdirSync(scriptsDir, { recursive: true })
+    writeFileSync(path.join(scriptsDir, "session-boot.js"), `import { spawnSync } from "node:child_process"\nconst r = spawnSync(${JSON.stringify(shim)}, ["auth", "token"], { encoding: "utf8" })\nprocess.stdout.write(JSON.stringify({ out: r.stdout.trim(), status: r.status }))\n`)
+    const r = spawnSync(process.execPath, [path.join(scriptsDir, "session-boot.js")], { encoding: "utf8" })
+    // The script got the raw value (and, run directly here, printed it only so this test can see it).
+    assert.deepEqual(JSON.parse(r.stdout), { out: CLASSIC, status: 3 })
+  } finally { done() }
+})
+
+test("gh auth status is allowed, but not with -t, --show-token or a flag cluster that includes t", () => {
+  assert.equal(classifyGh(["auth", "status"]).allowed, true)
+  assert.equal(classifyGh(["auth", "status", "--hostname", "github.com"]).allowed, true)
+  for (const flag of ["-t", "--show-token", "-ht"]) assert.equal(classifyGh(["auth", "status", flag]).allowed, false, flag)
+})
+
+test("tokens after a JSON-escaped newline or glued to a prefix are found, redacted and counted", () => {
+  const escaped = `{"text":"line\\n${CLASSIC}"}`
+  const glued = `x_${OAUTH} and 9${FINE}`
+  assert.equal(findTokens(escaped).length, 1)
+  assert.equal(findTokens(glued).length, 2)
+  assert.equal(redactTokens(escaped), `{"text":"line\\n${REDACTION_MARKER}"}`)
+  assert.equal(countTokenLeaks(escaped + glued), 3)
+  const events = parseStreamJson(stream(assistantText(`first line\n${CLASSIC}`)))
+  assert.equal(buildContext(events).tokenLeaks, 1)
 })
