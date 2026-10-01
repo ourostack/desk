@@ -194,7 +194,7 @@ test("validate-pr reads base and head as Git data, enforces facts for contributo
   assert.equal(existsSync(marker), false)
 }))
 
-test("validate-pr marks non-fact files under facts/ as maintenance, validates a delete of a facts file for anyone, and refuses a head whose merge conflicts", () => scratch(async (env) => {
+test("validate-pr marks non-fact files under facts/ as maintenance, validates a delete of a facts file for a maintainer only, and refuses a head whose merge conflicts", () => scratch(async (env) => {
   const repo = path.join(env.HOME, "store")
   const facts = path.join(repo, "facts")
   await fs.mkdir(facts, { recursive: true })
@@ -248,14 +248,43 @@ test("validate-pr marks non-fact files under facts/ as maintenance, validates a 
   git("rm", "-q", path.join("facts", names[1]))
   git("commit", "-q", "-m", "cleanup")
   const cleanupHead = git("rev-parse", "HEAD")
-  // Deleting a facts file is a retraction: it validates like any change at that path, for a maintainer as for anyone, and is not maintenance.
-  for (const association of ["OWNER", "NONE"]) {
+  // Deleting a facts file is a retraction: it validates like any change at that path for a maintainer and is not maintenance; anyone else's is refused.
+  for (const association of ["OWNER", "MEMBER", "COLLABORATOR"]) {
     assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", association], cwd: repo }), {
       ok: true,
       maintenance: false,
       errors: [],
     })
   }
+  for (const association of ["NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR"]) {
+    assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", association], cwd: repo }), {
+      ok: false,
+      maintenance: false,
+      errors: [{ code: "removal", path: `facts/${names[1]}` }],
+    })
+  }
+
+  // A maintainer's removal of a non-data file stays maintenance, and a mixed PR of adds plus valid removals is accepted.
+  git("checkout", "-q", "-b", "mixed", forkPoint)
+  git("rm", "-q", path.join("facts", names[1]))
+  await fs.writeFile(path.join(repo, "README.md"), "maintainer readme")
+  git("add", "README.md")
+  git("commit", "-q", "-m", "mixed")
+  const mixedHead = git("rev-parse", "HEAD")
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", mixedHead, "--author-association", "OWNER"], cwd: repo }), { ok: true, maintenance: true, errors: [] })
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", mixedHead, "--author-association", "NONE"], cwd: repo }), {
+    ok: false, maintenance: false, errors: [{ code: "path", path: "changes.0" }, { code: "removal", path: `facts/${names[1]}` }],
+  })
+  git("checkout", "-q", "-b", "mixed-data", forkPoint)
+  git("rm", "-q", path.join("facts", names[1]))
+  const added = JSON.parse(readFileSync(path.join(facts, names[0]), "utf8"))
+  const newName = "claude-code-33333333-3333-4333-8333-333333333333.json"
+  added.session.id = "33333333-3333-4333-8333-333333333333"
+  await fs.writeFile(path.join(facts, newName), `${JSON.stringify(added)}\n`)
+  git("add", "facts")
+  git("commit", "-q", "-m", "mixed data")
+  const mixedData = git("rev-parse", "HEAD")
+  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", mixedData, "--author-association", "MEMBER"], cwd: repo }), { ok: true, maintenance: false, errors: [] })
 }))
 
 const LABEL_1111 = "labels/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/11111111-1111-4111-8111-111111111111.json"
@@ -342,13 +371,13 @@ test("validate-pr gates labels as data against the facts the merge would leave i
     errors: [{ code: "evaluator_downgrade", path: LABEL_1111 }],
   })
 
-  // Removing labels is a retraction: it validates for anyone.
+  // Removing labels is a retraction: it validates for a maintainer and is refused for anyone else.
   git("checkout", "-q", "-b", "drop-label", label1111Head)
   git("rm", "-q", LABEL_1111)
   git("commit", "-q", "-m", "drop label")
   const dropHead = git("rev-parse", "HEAD")
   assert.deepEqual(await validate(label1111Head, dropHead, "MEMBER"), { ok: true, maintenance: false, errors: [] })
-  assert.deepEqual(await validate(label1111Head, dropHead, "NONE"), { ok: true, maintenance: false, errors: [] })
+  assert.deepEqual(await validate(label1111Head, dropHead, "NONE"), { ok: false, maintenance: false, errors: [{ code: "removal", path: LABEL_1111 }] })
 
   // A labels file that is not valid JSON data is refused without being echoed or run.
   git("checkout", "-q", "-b", "bad-label", forkPoint)
@@ -415,7 +444,7 @@ test("validate-pr asks Git nothing about base facts when the pull request touche
       return bytes[gitArgs[1].slice(41)]
     }),
   })
-  assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
+  assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "removal", path: copilot1111 }, { code: "removal", path: codex1111 }] })
   assert.deepEqual(calls, ["diff", "show", "show", "show"])
 })
 
@@ -509,6 +538,8 @@ test("validate-pr handles added, removed, unknown, invalid-path, malformed, over
   assert.equal(calls, 2)
 
   result = await runValidatePrCommand({ argv: args, git: mergeGit(() => `D\0${validPath}\0`) })
+  assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "removal", path: validPath }] })
+  result = await runValidatePrCommand({ argv: args.map((arg) => (arg === "NONE" ? "OWNER" : arg)), git: mergeGit(() => `D\0${validPath}\0`) })
   assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
   result = await runValidatePrCommand({ argv: args, git: mergeGit(() => `X\0${validPath}\0`) })
   assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "status", path: validPath }] })

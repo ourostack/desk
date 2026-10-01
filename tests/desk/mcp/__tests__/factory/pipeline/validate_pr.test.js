@@ -71,8 +71,14 @@ test("validatePr rejects more than 500 changes without reading candidate values"
 })
 
 test("validatePr accepts a delete at a facts path and refuses one at any other path, and unknown statuses", () => {
-  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "removed" }] }), { ok: true, errors: [] })
+  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "removed" }], trustedMaintainer: true }), { ok: true, errors: [] })
+  // Without the caller vouching for the author a delete is refused, whatever the path.
+  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "removed" }, { path: LABEL_PATH, status: "removed" }] }), {
+    ok: false, errors: [{ code: "removal", path: VALID_PATH }, { code: "removal", path: LABEL_PATH }],
+  })
+  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "removed" }], trustedMaintainer: "yes" }).ok, false)
   assert.deepEqual(validatePr({
+    trustedMaintainer: true,
     changes: [
       { path: VALID_PATH, status: "removed" },
       { path: `facts/${SENTINEL}.json`, status: "removed" },
@@ -92,7 +98,7 @@ test("validatePr accepts a delete at a facts path and refuses one at any other p
 })
 
 test("a pull request of only valid deletes validates and needs no content", () => {
-  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "removed" }, { path: LABEL_PATH, status: "removed" }] }), { ok: true, errors: [] })
+  assert.deepEqual(validatePr({ changes: [{ path: VALID_PATH, status: "removed" }, { path: LABEL_PATH, status: "removed" }], trustedMaintainer: true }), { ok: true, errors: [] })
 })
 
 test("validatePr rejects paths outside the exact facts filename contract without echoing them", () => {
@@ -241,6 +247,7 @@ test("isLabelsPath and factsPathsForSession recognize only the exact contracts",
 test("validatePr rejects label paths outside the exact contract and unknown statuses, and lets a labels file be deleted", () => {
   const badPaths = [`labels/${LABELS.job}/${TOKEN_SENTINEL}.json`, `labels/${TOKEN_SENTINEL}/${LABELS.session}.json`]
   const result = validatePr({
+    trustedMaintainer: true,
     changes: [
       ...badPaths.map((candidatePath) => ({ path: candidatePath, status: "added", bytes: LABELS_BYTES, facts: LABEL_FACTS })),
       { path: LABEL_PATH, status: "removed" },

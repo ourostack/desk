@@ -1,6 +1,6 @@
 // The store's intake gate. A pull request may add or modify two kinds of
-// data file, and delete them (a retraction: a session whose desk now routes to
-// another store), and nothing else:
+// data file, and a trusted maintainer may also delete them (a retraction: a
+// session whose desk now routes to another store), and nothing else:
 //   - published facts at `facts/<host>-<session id>.json`, and
 //   - published labels at `labels/<job>/<session id>.json` (`label-schema.js`),
 //     each checked against that session's facts file, which the caller reads
@@ -8,8 +8,11 @@
 //     in as `facts: [{ path, bytes }]`. A modified labels file also needs its
 //     `previousBytes`: a replacement must come from an evaluator whose plugin
 //     version and rubric are both no lower (else `evaluator_downgrade`).
-// A delete is accepted only at one of those two path shapes and has no content
-// to validate; any other path is `removal_path`, and a rename stays refused.
+// A delete is accepted only when the caller says the author is a trusted
+// maintainer (`trustedMaintainer: true`; `scripts/factory.js` derives it from
+// the author association), else it is `removal`. It must be at one of those two
+// path shapes (any other path is `removal_path`), has no content to validate,
+// and a rename stays refused.
 // Every value arrives as bytes and is only parsed as JSON, never loaded or
 // run, and errors carry only stable codes and safe paths.
 import { checkLabelsAgainstFacts, evaluatorDowngrade, validateLabelsBytes } from "../label-schema.js"
@@ -97,6 +100,7 @@ export function validatePr(input) {
   if (!Array.isArray(changes)) return { ok: false, errors: [error("type", "changes")] }
   if (changes.length > MAX_CHANGES) return { ok: false, errors: [error("too_many_changes", "changes")] }
 
+  const trusted = input.trustedMaintainer === true
   const errors = []
   for (let index = 0; index < changes.length; index += 1) {
     const change = changes[index]
@@ -112,7 +116,10 @@ export function validatePr(input) {
       continue
     }
     const safePath = change.path
-    if (change.status === "removed") continue
+    if (change.status === "removed") {
+      if (!trusted) errors.push(error("removal", safePath))
+      continue
+    }
     if (!STATUSES.has(change.status)) {
       errors.push(error("status", safePath))
       continue

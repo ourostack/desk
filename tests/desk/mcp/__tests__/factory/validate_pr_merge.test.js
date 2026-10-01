@@ -65,7 +65,7 @@ function validate(root, base, head, { hideMerges = false } = {}) {
   return runValidatePrCommand({ argv: ["--base", base, "--head", head, "--author-association", "NONE"], cwd: root, git })
 }
 
-test("a stranger's second pull request with two merge bases cannot revert a workflow fix (review mb2)", () => repository(async ({ root, git, blob, tree, commit }) => {
+test("a stranger's second pull request with two merge bases cannot revert a workflow fix or delete another contributor's facts (review mb2)", () => repository(async ({ root, git, blob, tree, commit }) => {
   const workflow = "name: factory-validate\n"
   const wf1 = blob(workflow)
   const wf2 = blob(`# fixed\n${workflow}`)
@@ -101,6 +101,7 @@ test("a stranger's second pull request with two merge bases cannot revert a work
     maintenance: false,
     errors: [
       { code: "path", path: "changes.0" },
+      { code: "removal", path: `facts/${VICTIM}` },
     ],
   })
 }))
