@@ -47,7 +47,7 @@
 // it found is healthy.
 
 import { spawn as nodeSpawn, spawnSync } from "node:child_process"
-import { closeSync, openSync, readdirSync, readSync } from "node:fs"
+import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -604,11 +604,43 @@ export function resolveTaskQuery(query, cards, root) {
   return { status: "resolved", task: { ...summary(matches[0]), card: `${cardLocation({ desk: matches[0].desk, track: matches[0].track, slug: matches[0].slug })}/task.md`, file: matches[0].file } }
 }
 
-/** Names of the card's repos that are remote-only: recorded as `mode: remote`, or with no local path. */
-function remoteRepoNames(card) {
-  const repos = Array.isArray(card.data.repos) ? card.data.repos : []
+// `$DESK/.machine-local.yml`'s `repos:` map (repo name to the path of this machine's clone), read with a small line parser
+// because boot runs before any YAML dependency is certain to be installed. A missing, unreadable or malformed file is an
+// empty map. Only `name: path` lines indented under `repos:` count; quotes and trailing comments are dropped.
+function machineLocalRepos(root) {
+  let text
+  try {
+    text = readSmallText(path.join(root, ".machine-local.yml"))
+  } catch {
+    return new Map()
+  }
+  const repos = new Map()
+  let inRepos = false
+  for (const line of text.split(/\r?\n/u)) {
+    if (/^\S/u.test(line)) inRepos = /^repos:\s*(?:#.*)?$/u.test(line)
+    else if (inRepos) {
+      const entry = /^\s+["']?([^:"'#]+?)["']?\s*:\s*(?:"([^"]*)"|'([^']*)'|([^#\s][^#]*?))\s*(?:#.*)?$/u.exec(line)
+      const value = entry?.[2] ?? entry?.[3] ?? entry?.[4]
+      if (entry !== null && value !== undefined && value !== "") repos.set(entry[1], value)
+    }
+  }
   return repos
-    .filter((repo) => repo !== null && typeof repo === "object" && (repo.mode === "remote" || typeof repo.local_path !== "string" || repo.local_path.trim() === ""))
+}
+
+/**
+ * Names of the card's repos that are remote-only: recorded as `mode: remote`, or with no local path, and with no clone
+ * this machine's `.machine-local.yml` points at (a `repos:` entry under the repo's name, or its name after the owner, whose path exists).
+ */
+function remoteRepoNames(card, { root, homeDir }) {
+  const repos = Array.isArray(card.data.repos) ? card.data.repos : []
+  const overrides = machineLocalRepos(root)
+  const hasLocalClone = (repo) => {
+    if (typeof repo.name !== "string" || repo.name === "") return false
+    const target = overrides.get(repo.name) ?? overrides.get(repo.name.split("/").at(-1))
+    return target !== undefined && existsSync(resolveLocalPath(target, { homeDir, deskRoot: root }))
+  }
+  return repos
+    .filter((repo) => repo !== null && typeof repo === "object" && (repo.mode === "remote" || typeof repo.local_path !== "string" || repo.local_path.trim() === "") && !hasLocalClone(repo))
     .map((repo) => (typeof repo.name === "string" && repo.name !== "" ? redactCredentialLikeText(repo.name) : "a repo without a name"))
 }
 
@@ -823,7 +855,8 @@ function pushInstruction(entry, where) {
     const active = entry.accounts[0].account
     if (entry.route === "fork") {
       const notActive = entry.account === active ? "" : ` Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), and write ${entry.account}, never ${active}, as the push account in any note.`
-      return `Push route for ${store} (${where}): ${pushRoute(entry)}; account ${entry.account} cannot push to it directly. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself.${notActive} Tell the operator this route in one line when you report on the task.`
+      const route = pushRoute(entry)
+      return `Push route for ${store} (${where}): ${route}${route.endsWith(".") ? " Account" : "; account"} ${entry.account} cannot push to it directly. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself.${notActive} Tell the operator this route in one line when you report on the task.`
     }
     if (entry.account !== active) {
       return `Push route for ${store} (${where}): account ${entry.account} is the one with push access (route ${entry.route}), but gh's active account is ${active}. Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), not with the active login. Tell the operator this in one line when you report on the task.`
@@ -1125,7 +1158,7 @@ export async function bootOnce({
     if (resolved.status === "resolved") {
       const { file, ...shown } = resolved.task
       const recorded = hostLineHostname(readCardText(file) ?? "")
-      task = { status: "resolved", task: { ...shown, remote_repos: remoteRepoNames(cards.find((card) => card.file === file)) }, host_line_changed: recorded !== null && recorded !== host.hostname }
+      task = { status: "resolved", task: { ...shown, remote_repos: remoteRepoNames(cards.find((card) => card.file === file), { root: root.path, homeDir }) }, host_line_changed: recorded !== null && recorded !== host.hostname }
     } else {
       task = resolved
     }

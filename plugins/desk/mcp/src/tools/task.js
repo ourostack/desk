@@ -37,6 +37,7 @@ import { setTaskState } from "./track-row.js"
 import { appendProgressNote, localDate, replaceNextStep } from "./task-body.js"
 import { withCreatedDirs } from "../util/created-dirs.js"
 import { nextStepOf } from "../desk/active-tasks.js"
+import { redactCredentialLikeText } from "../util/redact.js"
 
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
@@ -290,6 +291,24 @@ function stageAndCommitCard(filePath, message, spawnGit, alsoRelative = []) {
   if (!staged.ok) return { status: "failed", reason: staged.stderr }
   const committed = commitPaths(dir, paths, message, spawnGit)
   return committed.ok ? undefined : { status: "failed", reason: committed.stderr }
+}
+
+// The next step as `report_as` shows it: credential-like text redacted (the card's text is the agent's own, and the sentence
+// is meant to be repeated to the operator), and cut at a word once it passes the cap, pointing at the card for the rest.
+const REPORT_STEP_CAP = 300
+function reportStep(step) {
+  if (step === null) return "no next step recorded"
+  const text = redactCredentialLikeText(step)
+  if (text.length <= REPORT_STEP_CAP) return text
+  const cut = text.slice(0, REPORT_STEP_CAP)
+  const space = cut.lastIndexOf(" ")
+  return `${(space > 0 ? cut.slice(0, space) : cut).trimEnd()} ... (see card)`
+}
+
+// The short sha of the desk's HEAD after a card commit, or null when git cannot say.
+function headSha(dir, spawnGit) {
+  const answer = spawnGit("git", ["-C", dir, "rev-parse", "--short", "HEAD"], { encoding: "utf8", timeout: 5000 })
+  return answer?.status === 0 && typeof answer.stdout === "string" && answer.stdout.trim() !== "" ? answer.stdout.trim() : null
 }
 
 // task_archive moves a folder with a plain `fs.rename`, never `git mv` (see
@@ -576,7 +595,7 @@ async function updateTrackRow({ filePath, slug, status, spawnGit }) {
  * "failed", reason }` on the result, omitted entirely on a normal, silent
  * success, when the file was already dirty, or on a non-Git desk.
  *
- * Returns: { status: "updated", path, commit?, next_step?, next_step_note?, report_as?, report_note? } (`next_step` and
+ * Returns: { status: "updated", path, commit?, next_step?, next_step_note?, report_as?, report_note?, desk_commit?, desk_pushed?, desk_note? } (`desk_commit` is the short sha of the commit Desk made of the card, `desk_pushed` false because the push is scheduled, not yet done; `next_step` and
  * `next_step_note` when the call added a note or changed the status without passing `next_step`: the card's current next
  * step, or null, and a reminder; `report_as` and `report_note` whenever the status is not terminal: the sentence to
  * report the task with, and a line against calling it done)
@@ -683,10 +702,18 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   const trackRow = merged.status !== existing.data.status ? await updateTrackRow({ filePath, slug, status: merged.status, spawnGit }) : null
   const commit = stage ? stageAndCommitCard(filePath, `task_update: ${track}/${slug}`, spawnGit, trackRow === null ? [] : ["../track.md"]) : undefined
   if (stage && !commit) schedulePush({ root: deskRoot })
+  const deskCommit = stage && !commit ? headSha(path.dirname(filePath), spawnGit) : null
   await recordCanonicalChanges({ root: deskRoot, readiness, changes: [{ path: relPath(deskRoot, filePath) }] })
   if (TERMINAL_STATUSES.has(merged.status)) await requestTaskTerminalSync({ deskRoot, person, track, slug, env, status: merged.status })
   const result = { status: "updated", path: relPath(deskRoot, filePath) }
   if (commit) result.commit = commit
+  // Said outright so no agent makes a redundant `git commit` of the card: Desk committed it, and its push is scheduled
+  // in the background (so `desk_pushed` is false at this moment, not a failure).
+  if (deskCommit !== null) {
+    result.desk_commit = deskCommit
+    result.desk_pushed = false
+    result.desk_note = "Desk committed this card and scheduled its push in the background; do not commit or push it yourself."
+  }
   // A note or a status change that leaves the next step alone is the common way a card ends up describing work that
   // is already done (a run finished the step, logged it, and reported "Done" over a card still pointing at it): show
   // the step the card still carries and say it was not touched. A terminal status leaves no next step to keep current.
@@ -701,7 +728,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   // in four acceptance rounds running).
   if (!terminal) {
     const status = typeof merged.status === "string" && merged.status !== "" ? merged.status : "no recorded status"
-    result.report_as = `Task ${slug} is at ${status} (not done): ${currentStep ?? "no next step recorded"}`
+    result.report_as = `Task ${slug} is at ${status} (not done): ${reportStep(currentStep)}`
     result.report_note = `Do not tell the operator this task is done; it is at ${status}.`
   }
   return result

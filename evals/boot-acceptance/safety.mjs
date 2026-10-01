@@ -224,7 +224,9 @@ export const PASS_THROUGH = [
 /** Writes the run's private global git config: no credential helper, and fetches and pushes to GitHub URLs rewritten to a dead local path, so a clone or fetch fails at once instead of downloading a real repository. */
 export function writeGitConfig(homeDir) {
   const dead = "file:///nonexistent/offline-remotes/"
-  const prefixes = ["https://github.com/", "http://github.com/", "git://github.com/", "git@github.com:", "ssh://git@github.com/"]
+  // GitHub's spellings first, then every network scheme as a catch-all, so another host, `www.github.com` and a URL with embedded credentials are rewritten too.
+  // `file://` and plain paths (the fixture's own origin) match none of these. Left open: an scp-style `user@host:path` on a host other than github.com.
+  const prefixes = ["https://github.com/", "http://github.com/", "https://www.github.com/", "http://www.github.com/", "git://github.com/", "git@github.com:", "ssh://git@github.com/", "https://", "http://", "git://", "ssh://"]
   const body = [
     "[user]", "\tname = Desk Operator", "\temail = operator@example.com",
     "[commit]", "\tgpgsign = false",

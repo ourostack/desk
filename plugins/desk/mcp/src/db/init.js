@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url"
 import * as path from "node:path"
 import Database from "better-sqlite3"
 import * as sqliteVec from "sqlite-vec"
+import { ensureStateIgnored } from "../util/state-ignore.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -41,6 +42,8 @@ export function openDb(deskRoot, opts = {}) {
   if (!existsSync(dbDir)) {
     mkdirSync(dbDir, { recursive: true })
   }
+  // Only the index in its own place: a test's `dbPath` override says nothing about the desk.
+  if (opts.dbPath === undefined) ensureStateIgnored(deskRoot)
   const db = new Database(dbPath)
   // Pragmas: WAL gives concurrent-reader friendliness (the search tools will
   // read while the indexer writes). foreign_keys lets ON DELETE CASCADE
