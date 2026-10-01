@@ -272,7 +272,7 @@ function publishPlugins(plugins, isPublic, storeVisibility) {
 }
 
 // The per-machine keyed form of a job ID, for a desk that is not known to be private.
-function keyedJobId(job, machineSecret) {
+export function keyedJobId(job, machineSecret) {
   return createHmac("sha256", machineSecret).update(job).digest("hex").slice(0, 32)
 }
 

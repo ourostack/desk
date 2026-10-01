@@ -564,7 +564,7 @@ function isHousekeepingEdit(oldText, newText, substitutions) {
 // `git diff-tree --name-status -z` output: `status\0path` for an add,
 // modify or delete, `status\0oldPath\0newPath` for a rename or copy (status
 // starts `R` or `C`, optionally followed by a similarity percentage).
-function parseNameStatus(output) {
+export function parseNameStatus(output) {
   const parts = output.split("\0").filter((part) => part !== "")
   const entries = []
   let i = 0

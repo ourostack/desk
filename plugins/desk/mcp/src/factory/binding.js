@@ -313,6 +313,33 @@ export function controllerSegments({ evidence, keys, startedMs, endMs }) {
   return lists.some((list) => list.length > LIMITS.jobSegments) ? null : segments
 }
 
+/**
+ * `taskCommitRule({ alias, isCardHousekeeping })` -> `(sha, taskPaths) => { tasks, real, touched, mass }`:
+ * how one desk commit counts toward tasks, shared by the binder and `factory reconcile`.
+ * `touched` is every task a path names. `real` leaves out a bare card whose diff in that commit
+ * is identity or placement only (`isCardHousekeeping` is the judge). `mass` is true when `real`
+ * spans more than MASS_COMMIT_TASKS tasks, a housekeeping sweep rather than work on any one of
+ * them. `tasks` is what the commit binds: `real`, or nothing for a mass commit. Each task is
+ * `{ track, slug, bare }`.
+ */
+export function taskCommitRule({ alias, isCardHousekeeping }) {
+  return (sha, taskPaths) => {
+    const touched = new Map()
+    const real = new Map()
+    for (const taskPath of asArray(taskPaths)) {
+      if (typeof taskPath !== "string") continue
+      const task = taskOfSegments(relativeSegments(taskPath), alias)
+      if (task === null) continue
+      const key = `${task.track}/${task.slug}`
+      touched.set(key, task)
+      if (task.bare && isCardHousekeeping(sha, taskPath)) continue
+      real.set(key, task)
+    }
+    const mass = real.size > MASS_COMMIT_TASKS
+    return { tasks: mass ? [] : [...real.values()], real: [...real.values()], touched: [...touched.values()], mass }
+  }
+}
+
 function requireFunction(value, name) {
   if (typeof value !== "function") throw new TypeError(`bindSession: ${name} must be a function`)
 }
@@ -371,21 +398,9 @@ export function bindSession({ events, agents, session, deskRoot, deskRemote, per
   }
   // Worker 0's spawn calls, timed by the spawning call: they place worker 0 in time but bind nothing for it.
   const spawnSpans = []
-  // The tasks a commit's paths bind. A bare card only binds when its diff in
-  // that commit is real, not identity or placement (`isCardHousekeeping` is
-  // the judge). A commit left spanning more than MASS_COMMIT_TASKS tasks is a
-  // housekeeping sweep, not work on any one of them, and binds none.
-  const commitTasks = (sha, taskPaths) => {
-    const found = new Map()
-    for (const taskPath of asArray(taskPaths)) {
-      if (typeof taskPath !== "string") continue
-      const task = taskOfSegments(relativeSegments(taskPath), alias)
-      if (task === null) continue
-      if (task.bare && isCardHousekeeping(sha, taskPath)) continue
-      found.set(`${task.track}/${task.slug}`, task)
-    }
-    return found.size > MASS_COMMIT_TASKS ? [] : [...found.values()]
-  }
+  // The tasks a commit's paths bind (`taskCommitRule` judges).
+  const rule = taskCommitRule({ alias, isCardHousekeeping })
+  const commitTasks = (sha, taskPaths) => rule(sha, taskPaths).tasks
 
   for (const call of asArray(source.deskToolCalls)) {
     if (call?.ok !== true || !isTaskSegment(call.track) || !isTaskSegment(call.slug)) continue
