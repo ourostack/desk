@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import { GUARD_INSPECTION_BUDGET_MS, guardShellCommand, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
-import { killAndWait } from "../_kill_and_wait.js"
+import { removeFixtureAfter, slowGit as sharedSlowGit } from "../_process_hygiene.js"
 import { MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
 import { POWERSHELL_GIT_FORMS } from "../../../../../plugins/desk/mcp/src/runtime/powershell-commands.js"
 
@@ -24,7 +24,7 @@ const pwsh = !spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]).error
 // desk.stateBranch=main, an ordinary clone and a foreign bare repository.
 async function fixture(t) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-a3b-review-")))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, root)
   const home = path.join(root, "home")
   mkdirSync(home)
   writeFileSync(path.join(home, ".gitconfig"), "[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n[init]\n\tdefaultBranch = main\n[advice]\n\tdetachedHead = false\n[pull]\n\trebase = false\n")
@@ -292,18 +292,8 @@ test("A3b review: the reviewer's payloads are denied by both registered hooks fo
   }
 })
 
-// timeout2.mjs: every inspection read of the protected checkout blocks on a FIFO included from its configuration.
-async function slowGit(t, f, delayMs) {
-  const fifo = path.join(f.root, "slow.cfg")
-  execFileSync("mkfifo", [fifo])
-  f.git(f.prot, "config", "include.path", fifo)
-  const writer = spawn(process.execPath, ["-e", `
-    const fs = require("node:fs")
-    const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
-    for (;;) { const fd = fs.openSync(${JSON.stringify(fifo)}, "w"); sleep(${delayMs}); fs.closeSync(fd) }
-  `], { stdio: "ignore" })
-  t.after(() => killAndWait(writer))
-}
+// timeout2.mjs: every inspection read of the protected checkout blocks on a FIFO included from its configuration (see slowGit in ../_process_hygiene.js).
+const slowGit = (t, f, delayMs) => sharedSlowGit(t, f.prot, f.env, delayMs)
 
 test("A3b review: one inspection budget bounds the decision below the hosts' 10 s hook deadline", { skip: process.platform === "win32" ? "mkfifo is POSIX-only" : false }, async (t) => {
   assert.ok(GUARD_INSPECTION_BUDGET_MS <= 7000, "the budget leaves room inside the 10 s hook timeout")
@@ -314,7 +304,7 @@ test("A3b review: one inspection budget bounds the decision below the hosts' 10 
   const f = await fixture(t)
   // Git that answers only long after the 2 s budget, so every command that needs a Git read takes the budget path on any
   // runner. (With Git that answered in 1.5 s, a fast runner decided allowed commands such as a pull into main on content.)
-  await slowGit(t, f, 60000)
+  slowGit(t, f, 60000)
   // Allowed commands need no reads, so slow Git does not delay them.
   for (const command of ["git status", "git add file.txt && git commit -qm x", "git log -1"]) {
     const started = Date.now()

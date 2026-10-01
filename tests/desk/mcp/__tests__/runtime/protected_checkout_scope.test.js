@@ -13,6 +13,7 @@ import { classifyGit, MESSAGES } from "../../../../../plugins/desk/mcp/src/runti
 import { hasOption, parseGitOptions, SPECS } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-options.js"
 import { mayInvokeGit, UNKNOWN } from "../../../../../plugins/desk/mcp/src/runtime/guard-unknowns.js"
 import { existingDirectory, lexicalDirectory, mktempPath, gitDirectoryFor, physicalDirectory, processDirectory, processDirectoryFor } from "../../../../../plugins/desk/mcp/src/runtime/shell-paths.js"
+import { removeFixtureAfter } from "../_process_hygiene.js"
 
 const plugin = fileURLToPath(new URL("../../../../../plugins/desk/", import.meta.url))
 const hook = path.join(plugin, "hooks", "protected-checkout.cjs")
@@ -23,7 +24,7 @@ const pwsh = !spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]).error
 // A bare origin, a protected desk clone on main whose state branch is recorded, and an ordinary clone.
 function desk(t) {
   const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), "desk-guard-scope-")))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, root)
   const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" }
   for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_(?:COUNT|KEY_|VALUE_))/u.test(key)) delete env[key]
   const git = (dir, ...args) => execFileSync("git", ["-C", dir, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -372,7 +373,7 @@ test("A3b: the Git-reach rule, option parser and mktemp model", (t) => {
 test("A3b: Desk admission records the host's state branch beside the protection marker", async (t) => {
   const { createDeskSession } = await import("../../../../../plugins/desk/mcp/src/runtime/desk-session.js")
   const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), "desk-guard-admission-")))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, root)
   for (const child of ["_meta", "_archive"]) mkdirSync(path.join(root, child))
   const calls = []
   for (const activation of [{ stateBranch: "main" }, undefined]) {

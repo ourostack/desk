@@ -12,10 +12,11 @@ import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { guardShellCommand, protectCheckout } from "../../../../../plugins/desk/mcp/src/runtime/protected-checkout.js"
 import { MESSAGES } from "../../../../../plugins/desk/mcp/src/runtime/git-guard-policy.js"
+import { removeFixtureAfter } from "../_process_hygiene.js"
 
 async function fixture(t) {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), "desk-guard-pwsh-allow-")))
-  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 5 }))
+  removeFixtureAfter(t, root)
   const env = { ...process.env, HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "F", GIT_AUTHOR_EMAIL: "f@example.invalid", GIT_COMMITTER_NAME: "F", GIT_COMMITTER_EMAIL: "f@example.invalid" }
   for (const key of Object.keys(env)) if (/^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|CONFIG_(?:COUNT|KEY_|VALUE_|PARAMETERS|GLOBAL))/u.test(key)) delete env[key]
   const git = (dir, ...args) => execFileSync("git", ["-C", dir, ...args], { env, stdio: "ignore" })

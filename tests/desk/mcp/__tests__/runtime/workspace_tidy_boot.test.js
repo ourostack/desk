@@ -193,11 +193,12 @@ for (const host of ["copilot", "claude"]) test(`R5 actual ${host} hook process c
   await fs.writeFile(preload, `
 const cp = require("node:child_process");
 const fs = require("node:fs");
-const original = cp.execFile;
+const original = cp.spawn;
 const born = Date.now();
 const children = [];
-cp.execFile = function(file, args, options, callback) {
-  const child = original(process.execPath, ["-e", "setTimeout(() => {}, 1400)"], options, callback);
+cp.spawn = function(file, args, options) {
+  if (!/(?:^|[\\\\/])(?:git|perl)(?:\\.exe)?$/.test(file)) return original.apply(this, arguments);
+  const child = original(process.execPath, ["-e", "setTimeout(() => {}, 1400)"], options);
   children.push({pid: child.pid, spawned: Date.now()});
   child.once("close", () => { children.find(x => x.pid === child.pid).closed = Date.now(); });
   return child;
