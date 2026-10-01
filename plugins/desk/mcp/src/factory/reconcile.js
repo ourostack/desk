@@ -47,7 +47,7 @@ import { BINDING_VERSION } from "./derive-run.js"
 import { createDeskReaders, gitEnv, parseNameStatus, readDeskRemote } from "./desk-repo.js"
 import { readSmallText, validMarker } from "./marker.js"
 import { validatePublishedBytes } from "./published-schema.js"
-import { keyedJobId } from "./publish.js"
+import { REFUSALS, keyedJobId } from "./publish.js"
 import { RECONCILE_REASONS } from "./reconcile-reasons.js"
 import { ENUMS, PATTERNS } from "./schema.js"
 import { resolveStore } from "./store-route.js"
@@ -57,8 +57,8 @@ const SESSION_SRC = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const OUTBOX_NAME = new RegExp(`^(?:${ENUMS.host.join("|")})-${SESSION_SRC}\\.json$`, "u")
 const STORE_SLUG = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}__[A-Za-z0-9._-]{1,100}$/u
 // The refusal codes the flush records in a quarantine record (`outbox.js`, `flush.js`, `publish.js`); any other
-// reason in a local file is printed as `other`.
-const REFUSAL_CODES = new Set(["invalid", "facts_quarantined", "private_plugins_missing", "implausible_session_span", "session_id_not_v4"])
+// reason in a local file, including the open-ended gate and store-CI codes, is printed as `refused_other`.
+const REFUSAL_CODES = new Set(["invalid", "facts_quarantined", "private_plugins_missing", ...REFUSALS])
 const GITHUB_REMOTE = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})$/u
 const PRIVATE_DESKS = new Set(["private", "internal"])
 const OPEN_PR_RESULTS = new Set(["delivered_pr_open", "intake_stale_retried"])
