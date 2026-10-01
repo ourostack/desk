@@ -134,9 +134,12 @@ test("ensureBootDependencies with its real defaults either restores the shipped 
   const mcpRoot = path.join(pluginCopy, "mcp")
   await fs.cp(MCP_ROOT, mcpRoot, { recursive: true, filter: (src) => !src.split(path.sep).includes("node_modules") })
   const result = ensureBootDependencies({ mcpRoot, env: { DESK_RUNTIME_CACHE_DIR: await mkTempRoot("desk-boot-deps-real-cache-") } })
-  assert.match(result.source, /^(runtime-cache|none)$/)
+  // A host that puts gray-matter on NODE_PATH (the coverage runner does) resolves it beside the plugin; that is "installed", and nothing is restored.
+  assert.match(result.source, /^(installed|runtime-cache|none)$/)
   if (result.source === "runtime-cache") {
     assert.equal(typeof requireFromRuntime("gray-matter"), "function")
+  } else if (result.source === "installed") {
+    assert.throws(() => requireFromRuntime("gray-matter"), /Cannot find module/)
   } else {
     assert.equal(typeof result.reason, "string")
   }
@@ -167,12 +170,16 @@ test("session-boot.js run from a plugin folder with no node_modules still parses
   await fs.writeFile(path.join(desk, "t", "bad", "task.md"), card("Bad", "repos:\n  - name: acme/widgets\n    mode: sideways"))
 
   const home = await mkTempRoot("desk-boot-plugin-home-")
+  const cacheDir = await mkTempRoot("desk-boot-plugin-cache-")
   const stdout = execFileSync(process.execPath, [path.join(mcpRoot, "scripts", "session-boot.js")], {
     encoding: "utf8",
     cwd: desk,
-    env: { ...process.env, HOME: home, DESK: desk, XDG_CACHE_HOME: path.join(home, ".cache"), DESK_RUNTIME_CACHE_DIR: "", CLAUDE_PROJECT_DIR: "" },
+    // NODE_PATH is cleared so nothing but the restored runtime pack can supply gray-matter (the coverage runner sets it).
+    env: { ...process.env, HOME: home, DESK: desk, NODE_PATH: "", DESK_RUNTIME_CACHE_DIR: cacheDir, CLAUDE_PROJECT_DIR: "" },
   })
   const result = JSON.parse(stdout)
+  // The runtime pack was restored into the cache folder the server would use, and that is where gray-matter came from.
+  await fs.access(path.join(cacheDir, "node_modules", "gray-matter", "package.json"))
   assert.equal(result.card_parser, "gray-matter")
   assert.equal(result.pending.some((line) => line.includes("card repos: not validated")), false)
   // The bad card's repos entry is judged (it could not be without the parser).
