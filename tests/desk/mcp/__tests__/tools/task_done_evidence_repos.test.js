@@ -143,7 +143,7 @@ test("a commit in a recorded clone that no remote-tracking branch contains is re
   const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
   await assert.rejects(
     done(root, { kind: "commit", ref: unpushed }),
-    new RegExp(`commit ${unpushed} exists in acme/widgets \\(.*\\) but no remote-tracking branch contains it.*Push the branch`, "s"),
+    new RegExp(`commit ${unpushed} exists in acme/widgets \\(.*\\) but no remote-tracking branch contains it.*push the branch`, "s"),
   )
 })
 
@@ -193,12 +193,90 @@ test("a recorded clone that does not exist on disk resolves nothing", async () =
 })
 function root0() { return path.join("/", "definitely-not-here") }
 
-test("a call cannot drop the card's repos to skip the check: the repos on the card before the call still count", async () => {
+test("a call cannot drop the card's repos to skip the check, in one call or across two", async () => {
   const root = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }])
-  await assert.rejects(
-    task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", frontmatter: { status: "done", repos: [] }, evidence: { kind: "non_code", ref: "https://example.invalid/x" } } }),
-    /cannot complete a task that names code repos/,
-  )
+  const update = (frontmatter, extra = {}) => task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", frontmatter, ...extra } })
+  const proof = { kind: "non_code", ref: "https://example.invalid/x" }
+  await assert.rejects(update({ status: "done", repos: [] }, { evidence: proof }), /would remove every repo from a card that names code repos.*status: "cancelled"/s)
+  await assert.rejects(update({ repos: [] }), /would remove every repo/)
+  await assert.rejects(update({ repos: [{ name: " " }, null] }), /would remove every repo/)
+  await assert.rejects(update({ repos: "none" }), /would remove every repo/)
+  const { data } = await readFront(path.join(root, "t", "ship-it", "task.md"))
+  assert.equal(data.repos.length, 1)
+  // Replacing the repos, adding to them and leaving them alone are fine; so is clearing them while cancelling.
+  assert.equal((await update({ repos: [{ name: "acme/other", local_path: "", mode: "remote" }] })).status, "updated")
+  assert.equal((await update({ title: "renamed" })).status, "updated")
+  assert.equal((await update({ status: "cancelled", repos: [] })).status, "updated")
+  // A card with no repos may set them to an empty list.
+  const plain = await mkTempDeskRoot()
+  await task_create({ deskRoot: plain, input: { track: "t", slug: "p", title: "T", status: "processing" } })
+  assert.equal((await task_update({ deskRoot: plain, input: { track: "t", slug: "p", frontmatter: { repos: [] } } })).status, "updated")
+})
+
+test("a card whose repos are plain names counts as having repos", async () => {
+  const root = await codeTask(["widgets"])
+  await fs.writeFile(path.join(root, "t", "proof.md"), "proof\n")
+  await assert.rejects(done(root, { kind: "non_code", ref: "t/proof.md" }), /`non_code` evidence cannot complete a task that names code repos.*\(widgets \(no local clone recorded\)\)/s)
+  assert.equal((await done(root, { kind: "pr", ref: "https://github.com/acme/widgets/pull/4" })).status, "updated")
+})
+
+test("a GitHub PR URL must have exactly owner/repo/pull/N, so a repo name smuggled into a path or another host does not match", async () => {
+  const { clone } = await makeClone("acme/widgets")
+  const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+  const bad = [
+    "https://github.com/evil/x/issues/https://github.com/acme/widgets/pull/5",
+    "https://github.com/evil/x/pull/1/https://github.com/acme/widgets/pull/5",
+    "https://evil.example/a/widgets/pull/1",
+    "https://evil.example/acme/widgets/pull/1",
+    "https://github.com/acme/widgets/issues/5",
+    "https://github.com/acme/widgets/pull/x",
+    "https://github.com/acme/pull/5",
+  ]
+  for (const ref of bad) await assert.rejects(done(root, { kind: "pr", ref }), /is not in this task's repos|not a checkable pr reference/, ref)
+  for (const ref of ["https://github.com/acme/widgets/pull/5", "https://www.github.com/Acme/Widgets/pull/5/files", "https://github.com/acme/widgets/pull/5#issuecomment-1", "https://github.com/acme/widgets/pull/5?diff=split"]) {
+    const fresh = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+    assert.equal((await done(fresh, { kind: "pr", ref })).status, "updated", ref)
+  }
+})
+
+test("a non-GitHub PR URL needs an Azure DevOps shape or a host a recorded clone has a remote on", async () => {
+  const { clone } = await makeClone("acme/widgets")
+  git(clone, "remote", "set-url", "origin", "https://ghe.corp.example/acme/widgets.git")
+  const root = await codeTask([{ name: "widgets", local_path: clone, mode: "local" }])
+  assert.equal((await done(root, { kind: "pr", ref: "https://ghe.corp.example/acme/widgets/pull/3" })).status, "updated")
+  const other = await codeTask([{ name: "widgets", local_path: clone, mode: "local" }])
+  await assert.rejects(done(other, { kind: "pr", ref: "https://evil.example/acme/widgets/pull/3" }), /is not in this task's repos/)
+  const ado = await codeTask([{ name: "widgets", local_path: "", mode: "remote" }])
+  await assert.rejects(done(ado, { kind: "pr", ref: "https://evil.example/org/proj/_git/widgets/pullrequest/3" }), /is not in this task's repos/)
+  await assert.rejects(done(ado, { kind: "pr", ref: "https://dev.azure.com/org/proj/widgets/pullrequest/3" }), /is not in this task's repos/)
+  for (const ref of ["https://org.visualstudio.com/proj/_git/widgets/pullrequest/3", "https://dev.azure.com/org/_git/widgets/pullrequest/3?x=1"]) {
+    const fresh = await codeTask([{ name: "widgets", local_path: "", mode: "remote" }])
+    assert.equal((await done(fresh, { kind: "pr", ref })).status, "updated", ref)
+  }
+})
+
+test("a commit URL is held to the same exact shapes", async () => {
+  const { clone, pushed } = await makeClone("acme/widgets")
+  const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+  await assert.rejects(done(root, { kind: "commit", ref: `https://github.com/evil/x/issues/https://github.com/acme/widgets/commit/${pushed}` }), /not in this task's repos/)
+  await assert.rejects(done(root, { kind: "commit", ref: `https://evil.example/a/widgets/commit/${pushed}` }), /not in this task's repos/)
+  const ado = await codeTask([{ name: "widgets", local_path: clone, mode: "local" }])
+  assert.equal((await done(ado, { kind: "commit", ref: `https://dev.azure.com/o/p/_git/widgets/commit/${pushed}` })).status, "updated")
+})
+
+test("commit errors say to git fetch in the recorded clone first", async () => {
+  const { clone, unpushed } = await makeClone("acme/widgets")
+  const root = await codeTask([{ name: "acme/widgets", local_path: clone, mode: "local" }])
+  await assert.rejects(done(root, { kind: "commit", ref: unpushed }), /run `git fetch` in that clone and repeat this call.*Otherwise push the branch/s)
+  await assert.rejects(done(root, { kind: "commit", ref: "a1b2c3d4" }), /run `git fetch` in the recorded clone first and repeat this call/)
+})
+
+test("a relative local_path resolves against the desk root, not the process's working directory", async () => {
+  const { clone, pushed } = await makeClone("acme/widgets")
+  const root = await mkTempDeskRoot()
+  await fs.symlink(clone, path.join(root, "clone-link"))
+  await task_create({ deskRoot: root, input: { track: "t", slug: "ship-it", title: "T", status: "processing", repos: [{ name: "acme/widgets", local_path: "clone-link", mode: "local" }] } })
+  assert.equal((await done(root, { kind: "commit", ref: pushed })).status, "updated")
 })
 
 test("a call that adds repos while finishing the task is checked against them too", async () => {
@@ -241,7 +319,8 @@ test("task_archive also refuses the card itself as non_code proof", async () => 
 test("recordedRepos reads only usable entries and treats anything else as no repos", () => {
   assert.deepEqual(recordedRepos("acme/widgets"), [])
   assert.deepEqual(recordedRepos(undefined), [])
-  assert.deepEqual(recordedRepos([null, 3, { name: "  " }, { local_path: "x" }]), [])
+  assert.deepEqual(recordedRepos([null, 3, { name: "  " }, { local_path: "x" }, "  "]), [])
+  assert.deepEqual(recordedRepos([" foo "]), [{ name: "foo", localPath: "", mode: undefined }])
   assert.deepEqual(recordedRepos([{ name: " a/b ", local_path: " ~/b ", mode: "local" }, { name: "c" }]), [
     { name: "a/b", localPath: "~/b", mode: "local" },
     { name: "c", localPath: "", mode: undefined },
@@ -265,4 +344,57 @@ test("assertCodeRepoEvidence does nothing without repos, and survives odd git re
     () => assertCodeRepoEvidence({ toolName: "t", evidence: { kind: "pr", ref: "https://github.com/other/x/pull/1" }, repos, deskRoot: "/d", spawnGit: odd({ config }) }),
     /not in this task's repos/,
   )
+})
+
+test("resolveLocalPath expands ~, resolves a relative path against the desk root, and falls back to the working directory", async () => {
+  const { resolveLocalPath } = await import("../../../../../plugins/desk/mcp/src/util/paths.js")
+  assert.equal(resolveLocalPath("a/b", { homeDir: "/h", deskRoot: "/desk" }), "/desk/a/b")
+  assert.equal(resolveLocalPath("~/a", { homeDir: "/h", deskRoot: "/desk" }), "/h/a")
+  assert.equal(resolveLocalPath("/abs", { homeDir: "/h", deskRoot: "/desk" }), "/abs")
+  assert.equal(resolveLocalPath("a"), path.resolve("a"))
+})
+
+test("removing every repo needs a repos_removed_reason, is recorded on the card, and never finishes the task in the same call", async () => {
+  const root = await codeTask([{ name: "acme/widgets", local_path: "", mode: "remote" }, { name: "acme/other", local_path: "", mode: "remote" }])
+  const update = (input) => task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", ...input } })
+  const proof = { kind: "non_code", ref: "https://example.invalid/x" }
+  await assert.rejects(update({ frontmatter: { repos: [] } }), /repos_removed_reason: "<one line on why>".*separate call.*status: "cancelled".*task-lifecycle/s)
+  await assert.rejects(update({ frontmatter: { repos: [] }, repos_removed_reason: "   " }), /repos_removed_reason/)
+  await assert.rejects(update({ frontmatter: { repos: [] }, repos_removed_reason: 7 }), /repos_removed_reason/)
+  await assert.rejects(
+    update({ frontmatter: { status: "done", repos: [] }, repos_removed_reason: "never touched them", evidence: proof }),
+    /cannot also set `status: "done"`.*separate call with `non_code` evidence that is not the task card itself/s,
+  )
+  let { data } = await readFront(path.join(root, "t", "ship-it", "task.md"))
+  assert.equal(data.repos.length, 2)
+  assert.equal(data.repos_removed, undefined)
+  assert.equal((await update({ frontmatter: { repos: [] }, repos_removed_reason: " the work was docs only " })).status, "updated")
+  ;({ data } = await readFront(path.join(root, "t", "ship-it", "task.md")))
+  assert.deepEqual(data.repos_removed.map((entry) => [entry.name, entry.reason]), [["acme/widgets", "the work was docs only"], ["acme/other", "the work was docs only"]])
+  assert.match(data.repos_removed[0].at, /^\d{4}-\d{2}-\d{2}T/)
+  // Finishing is a separate call; non_code works now, but not the card itself.
+  await assert.rejects(update({ frontmatter: { status: "done" }, evidence: { kind: "non_code", ref: "t/ship-it/task.md" } }), /is the task card itself/)
+  await fs.writeFile(path.join(root, "t", "outcome.md"), "outcome\n")
+  assert.equal((await update({ frontmatter: { status: "done" }, evidence: { kind: "non_code", ref: "t/outcome.md" } })).status, "updated")
+})
+
+test("an earlier repos_removed list is kept when a later removal appends to it", async () => {
+  const root = await codeTask([{ name: "a/one", local_path: "", mode: "remote" }])
+  const update = (input) => task_update({ deskRoot: root, input: { track: "t", slug: "ship-it", ...input } })
+  await update({ frontmatter: { repos: [] }, repos_removed_reason: "first" })
+  await update({ frontmatter: { repos: [{ name: "a/two" }] } })
+  await update({ frontmatter: { repos: [] }, repos_removed_reason: "second" })
+  const { data } = await readFront(path.join(root, "t", "ship-it", "task.md"))
+  assert.deepEqual(data.repos_removed.map((entry) => [entry.name, entry.reason]), [["a/one", "first"], ["a/two", "second"]])
+})
+
+test("ssh remotes with a login and a port match the same host in an https PR URL, and legacy visualstudio.com DefaultCollection URLs match", async () => {
+  const { clone } = await makeClone("acme/widgets")
+  git(clone, "remote", "set-url", "origin", "ssh://git@ghe.corp.example:2222/acme/widgets.git")
+  const root = await codeTask([{ name: "widgets", local_path: clone, mode: "local" }])
+  assert.equal((await done(root, { kind: "pr", ref: "https://ghe.corp.example:8443/acme/widgets/pull/3" })).status, "updated")
+  const ado = await codeTask([{ name: "widgets", local_path: "", mode: "remote" }])
+  assert.equal((await done(ado, { kind: "pr", ref: "https://org.visualstudio.com/DefaultCollection/proj/_git/widgets/pullrequest/3" })).status, "updated")
+  const bare = await codeTask([{ name: "widgets", local_path: "", mode: "remote" }])
+  assert.equal((await done(bare, { kind: "pr", ref: "https://org.visualstudio.com/DefaultCollection/_git/widgets/pullrequest/3" })).status, "updated")
 })
