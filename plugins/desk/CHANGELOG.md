@@ -1,5 +1,15 @@
 # desk plugin — changelog
 
+## 3.2.0-alpha.157 — 2026-10-01
+
+Follow-ups to the code-repo done evidence check. A `pr` or `commit` URL must now have exactly the host's own shape: `https://github.com/<owner>/<repo>/pull/<N>` (a sub-page, query or fragment may follow), an Azure DevOps `.../_git/<repo>/pullrequest/<N>` URL, or, for any other host, a host that one of the recorded clones has a remote on. A repo name smuggled into another URL's path, or on an unrelated host, no longer matches. A commit that does not resolve, or is not pushed, now tells the agent to run `git fetch` in the recorded clone first, because a squash-merged PR's commit reaches the default branch only after a fetch. A card whose `repos:` lists plain names (`repos: [widgets]`) counts as naming code repos. A relative `local_path` is resolved against the desk root, not the process's working directory, by one shared helper (`resolveLocalPath`) that boot's repo checks use too.
+
+`task_update` refuses to remove every repo from a card that names them, so one call can no longer empty `repos` and a second finish the task on `non_code` evidence. Two exits remain: set `status: cancelled` in the same call, or pass `repos_removed_reason` (one line) because the work turned out not to touch the repos. The reason is recorded on the card as `repos_removed: [{ name, reason, at }]`, and that call may not also set `status: done`; finishing is a separate call with `non_code` evidence that is not the card itself. Ports and logins are ignored when comparing an ssh remote's host with a PR URL's, and legacy `visualstudio.com/DefaultCollection/<project>` URLs are accepted.
+
+`task-lifecycle`, `session-start` and `codex-onboarding` now say `desk_status` returns `sync` and the index and database fields only with `detail: true`, and the `using-superpowers-with-desk` routing table separates its two plan rows (subagent-driven or inline) so `executing-plans` is reachable.
+
+Ships `desk-mcp@1.4.0-alpha.6`.
+
 ## 3.2.0-alpha.156 — 2026-10-01
 
 Boot and status fixes from the sixth Haiku acceptance round. A task whose card lists `repos:` can no longer be finished on stand-in evidence: `task_update` and `task_archive` now accept only a `pr` URL in one of those repos (a fork route's upstream and fork both match; no network call) or a `commit` that resolves in a recorded local clone and is already contained in a remote-tracking branch, and refuse a desk commit, an unpushed commit, `ci_run` and `non_code`, each with an error naming exactly what to supply. A `non_code` proof may no longer be the task card itself. The `task-lifecycle` and `task-card-format` skills carry the rule, including that a task whose PR cannot be opened stays `blocked`.
