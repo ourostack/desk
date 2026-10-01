@@ -10,6 +10,7 @@ import { createDeskReaders, readDeskRemote } from "./desk-repo.js"
 import { validMarker } from "./marker.js"
 import { factoryStateRoot, listMarkers, readConsent, readMarker, jobsIndexRebuilt, rebuildJobsIndex, readStatus, setJobsForFile, withDerivationLock, writeLocalFacts, writeStatus } from "./outbox.js"
 import { compareVersions, isVersion } from "./pipeline/versions.js"
+import { backfillPluginSources } from "./plugin-registry.js"
 import { resolveStore } from "./store-route.js"
 import { reconcileMarker } from "./session-lifetime.js"
 
@@ -131,16 +132,18 @@ async function deriveUnlocked(env, input, { claude, copilot, codex, quietMs, req
       }
     }
     let derived
+    // A marker from a hook older than 58adb141 names plugins without `source`; the installed registry fills it in for this derivation only.
+    const plugins = backfillPluginSources(marker.host, marker.plugins, { env })
     if (marker.host === "claude-code") {
-      derived = await claude({ transcriptPath: marker.log_path, plugins: marker.plugins, endReason: marker.end_reason })
+      derived = await claude({ transcriptPath: marker.log_path, plugins, endReason: marker.end_reason })
     } else if (marker.host === "codex-cli") {
       // A rollout lives at <codexHome>/sessions/YYYY/MM/DD/rollout-*.jsonl; when it does not, the deriver resolves the home itself.
       const sessions = path.resolve(marker.log_path, "..", "..", "..", "..")
-      derived = await codex({ rolloutPath: marker.log_path, codexHome: path.basename(sessions) === "sessions" ? path.dirname(sessions) : undefined, plugins: marker.plugins, endReason: marker.end_reason })
+      derived = await codex({ rolloutPath: marker.log_path, codexHome: path.basename(sessions) === "sessions" ? path.dirname(sessions) : undefined, plugins, endReason: marker.end_reason })
     } else {
       const home = path.resolve(marker.log_path, "..", "..", "..")
       if (path.join(home, "session-state", marker.session_id, "events.jsonl") !== marker.log_path) return { result: "invalid", store }
-      derived = await copilot({ sessionId: marker.session_id, copilotHome: home, plugins: marker.plugins, endReason: marker.end_reason, entrypoint: marker.entrypoint })
+      derived = await copilot({ sessionId: marker.session_id, copilotHome: home, plugins, endReason: marker.end_reason, entrypoint: marker.entrypoint })
     }
     if (!sameSource(before, await sourceStamp(marker.log_path))) return { result: "skipped", store }
     if (derived.facts === null) return { result: derived.reason, store }
