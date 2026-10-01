@@ -804,3 +804,61 @@ test("toPublished carries jobs[].agents and refs.prs[].agent, for private and pr
   assert.equal(protectedOut.jobs.filter((job) => Object.hasOwn(job, "agents")).length, 1)
   assert.equal(validatePublished(protectedOut).ok, true)
 })
+
+// ---------------------------------------------------------------------------
+// Credential-shaped model ids and plugin names never block the publish.
+// ---------------------------------------------------------------------------
+
+const CREDENTIAL_SHAPES = ["ghp_0123456789abcdef0123", "sk-live-abc", "pwd-hunter2", "a1b2c3d4e5f60718293a"]
+
+test("a credential-shaped model id publishes as unknown and the file validates", () => {
+  for (const shape of CREDENTIAL_SHAPES) {
+    const input = local()
+    input.models[0].id = shape
+    input.agents[0].model = shape
+    assert.deepEqual(validateLocalFacts(input), { ok: true, errors: [] }, shape)
+    const { published } = publish(input)
+    assert.deepEqual(published.models.map((model) => model.id), ["unknown", "claude-sonnet-5"], shape)
+    assert.equal(published.agents[0].model, "unknown")
+    assert.deepEqual(validatePublished(published), { ok: true, errors: [] }, shape)
+  }
+})
+
+test("models whose ids become the same published id merge, so ids stay unique", () => {
+  const input = local()
+  input.models = [
+    { id: "ghp_0123456789abcdef0123", requests: 2, tokens: { input: 5, output: null, cache_read: 1, cache_write: null, reasoning: null } },
+    { id: "sk-live-abc", requests: 3, tokens: { input: 7, output: null, cache_read: null, cache_write: null, reasoning: 4 } },
+    { id: "claude-sonnet-5", requests: 1, tokens: { input: 1, output: 1, cache_read: 1, cache_write: 1, reasoning: 1 } },
+  ]
+  const { published } = publish(input)
+  assert.deepEqual(published.models, [
+    { id: "unknown", requests: 5, tokens: { input: 12, output: null, cache_read: 1, cache_write: null, reasoning: 4 } },
+    { id: "claude-sonnet-5", requests: 1, tokens: { input: 1, output: 1, cache_read: 1, cache_write: 1, reasoning: 1 } },
+  ])
+  assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+  // A sum that would pass 2**53 - 1 is unknown, not an invalid file.
+  input.models = [
+    { id: "ghp_0123456789abcdef0123", requests: Number.MAX_SAFE_INTEGER, tokens: { input: 1, output: 1, cache_read: 1, cache_write: 1, reasoning: 1 } },
+    { id: "sk-live-abc", requests: 1, tokens: { input: 1, output: 1, cache_read: 1, cache_write: 1, reasoning: 1 } },
+  ]
+  const overflow = publish(input).published
+  assert.equal(overflow.models[0].requests, null)
+  assert.deepEqual(validatePublished(overflow), { ok: true, errors: [] })
+})
+
+test("a credential-shaped plugin name is hidden and counted, in a public and in a private store", () => {
+  for (const [storeVisibility, shape] of [["public", "a1b2c3d4e5f60718293a"], ["private", "pwd-hunter2"]]) {
+    const input = local()
+    input.plugins = [
+      { name: shape, version: "1.0.0", source: "ourostack/desk" },
+      { name: "desk", version: "3.2.0-alpha.24", source: "ourostack/desk" },
+    ]
+    assert.deepEqual(validateLocalFacts(input), { ok: true, errors: [] })
+    const { published, dropped } = publish(input, { storeVisibility })
+    assert.deepEqual(published.plugins, [{ name: "desk", version: "3.2.0-alpha.24" }], storeVisibility)
+    assert.equal(published.refs.private.plugins, 1)
+    assert.equal(dropped.plugins, 1)
+    assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+  }
+})

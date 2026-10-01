@@ -160,7 +160,6 @@ const REJECTED = /^factory-rejected: ([a-z][a-z0-9_]{0,63})$/u
 // A PR is open for delivery after either result.
 const DELIVERED_OPEN = new Set(["delivered_pr_open", "intake_stale_retried"])
 const FACTS_NAME = /^(?:claude-code|copilot-cli|codex-cli)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/u
-const FACTS_PATH = /^facts\/((?:claude-code|copilot-cli|codex-cli)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json)$/u
 const HOSTS = Object.freeze(["claude-code", "copilot-cli", "codex-cli"])
 const HTTP_STATUS = /\(HTTP (\d{3})\)/u
 const RATE_LIMIT = /rate limit/iu
@@ -604,6 +603,7 @@ async function readPages(client, route, { perPage, maxItems, stopAt = () => fals
 async function readRejections(env, client, { store, head, through, labelKeys }) {
   const rejected = new Set()
   let stale = 0
+  let unmatched = 0
   let highest = through
   // Newest first; PR numbers grow with creation, so the listing stops at the first PR already read.
   const closed = await readPages(client, `repos/${store}/pulls?state=closed&head=${encodeURIComponent(head.label)}&sort=created&direction=desc`, {
@@ -636,14 +636,17 @@ async function readRejections(env, client, { store, head, through, labelKeys }) 
     }
     // A batch holds up to MAX_FILES files; GitHub pages them 100 at a time.
     for (const file of await readPages(client, `repos/${store}/pulls/${pr.number}/files`, { perPage: 100, maxItems: MAX_FILES })) {
-      // A labels file is known by its published path; only labels still waiting here can be named back to their local key.
-      const name = labelKeys.get(String(file?.filename)) ?? FACTS_PATH.exec(String(file?.filename))?.[1]
-      if (name === undefined) continue
+      // A file is named back to its local key by its published path. One with no local key (a session already delivered or gone, or a keyed name no outbox file carries) has nothing to quarantine and is only counted.
+      const name = labelKeys.get(String(file?.filename))
+      if (name === undefined) {
+        unmatched += 1
+        continue
+      }
       await quarantine(env, store, name, code, SHA.test(String(file.sha)) ? { blob: file.sha } : {})
       rejected.add(name)
     }
   }
-  return { rejected, stale, through: highest }
+  return { rejected, stale, unmatched, through: highest }
 }
 
 function treeEntries(json) {
@@ -846,6 +849,7 @@ async function deliver(env, context) {
   const labelKeys = new Map([...labelsPending, ...factsPending].map((item) => [item.path, item.name]))
   const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys })
   progress.rejectionsThrough = rejections.through
+  progress.rejectionsUnmatched = rejections.unmatched
   pending = await withoutHeld(pending.filter((item) => !rejections.rejected.has(item.name)))
 
   const main = await client.need("GET", `repos/${store}/branches/${target.branch}`)
@@ -887,7 +891,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
     return { result: "unexpected", pending: null }
   }
   if (lock === null) return { result: "locked", pending: null }
-  const progress = { pending: null, rejectionsThrough: null }
+  const progress = { pending: null, rejectionsThrough: null, rejectionsUnmatched: 0 }
   let outcome
   try {
     const client = createClient({ runner, deadline, now, anonymousLookup })
@@ -895,6 +899,8 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
   } catch (error) {
     outcome = { result: error instanceof Stop ? error.code : "unexpected" }
   }
+  // Rejected files with no local key are counted, never quarantined.
+  if (progress.rejectionsUnmatched > 0) outcome = { ...outcome, rejections_unmatched: progress.rejectionsUnmatched }
   try {
     const previous = (await readStatus(env)).last_flush?.[store]?.rejections_through
     const through = progress.rejectionsThrough ?? (Number.isSafeInteger(previous) ? previous : null)
@@ -905,6 +911,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
           result: outcome.result,
           ...(outcome.pr ? { pr: outcome.pr.number } : {}),
           ...(outcome.stale_retries ? { stale_retries: outcome.stale_retries } : {}),
+          ...(outcome.rejections_unmatched ? { rejections_unmatched: outcome.rejections_unmatched } : {}),
           ...(through !== null ? { rejections_through: through } : {}),
         },
       },
@@ -922,7 +929,7 @@ async function flushDetailed(env, { store, runner = ghRunner(), deadlineMs = DEF
  * `flush(env, { store, runner, deadlineMs = 120000 }) -> { result, pr?,
  * stale_retries? }`, `result` one of `FLUSH_CODES`, `pr` `{ number, url }`
  * with `delivered_pr_open` and `intake_stale_retried`, which also gives how
- * many stale-refused intake PRs this flush read before opening a new one. Also takes `now` (a millisecond clock), `transform`
+ * many stale-refused intake PRs this flush read before opening a new one. Any result may also carry `rejections_unmatched`, the number of rejected files with no local key, which are counted and never quarantined. Also takes `now` (a millisecond clock), `transform`
  * (the publishing transform), the batch caps `maxFiles`/`maxBytes`, and `anonymousLookup` (`anonymousGithub()`
  * by default; a fake in tests) for the unauthenticated repository retry.
  */

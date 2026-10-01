@@ -120,39 +120,40 @@ export function scrub(id) {
 }
 
 /** Whether a free token passes the public rules `publicTokenField` applies beyond its pattern: no date, no time of day, not credential-like. Publishing asks this so it never emits a value the validator rejects. */
-export const publishableToken = (value) => !DATE_SHAPE.test(value) && !TIME_SHAPE.test(value) && !isCredentialLike(value)
+export const publishableToken = (value) => tokenRefusal(value) === null
 
-// A pattern-checked string that must also carry no date and no time of day.
-// Exported for `label-schema.js`, which applies the same public rules.
-export function publicPatternField(pattern) {
+// The one rule list: why a free token is unfit to publish (`date`, `time` or `credential_like`), or `null`.
+function tokenRefusal(value) {
+  return shapeRefusal(value) ?? (isCredentialLike(value) ? "credential_like" : null)
+}
+
+// `date` or `time` when the value carries an ISO date or a time of day, else `null`.
+function shapeRefusal(value) {
+  if (DATE_SHAPE.test(value)) return "date"
+  return TIME_SHAPE.test(value) ? "time" : null
+}
+
+// A pattern-checked string that also passes `refusal` (a function from a value to a refusal code or `null`).
+function refusingField(pattern, refusal) {
   const base = patternField(pattern)
   return leaf((value, path, errors) => {
     if (!base.check(value, path, errors)) return false
-    if (DATE_SHAPE.test(value)) {
-      addError(errors, "date", path)
-      return false
-    }
-    if (TIME_SHAPE.test(value)) {
-      addError(errors, "time", path)
+    const reason = refusal(value)
+    if (reason !== null) {
+      addError(errors, reason, path)
       return false
     }
     return true
   })
 }
 
+// A pattern-checked string that must also carry no date and no time of day.
+// Exported for `label-schema.js`, which applies the same public rules.
+export const publicPatternField = (pattern) => refusingField(pattern, shapeRefusal)
+
 // A free token (a name chosen elsewhere, not a fixed-format ID): the public
 // rules, then no credential-shaped value (`credential.js`).
-function publicTokenField(pattern) {
-  const base = publicPatternField(pattern)
-  return leaf((value, path, errors) => {
-    if (!base.check(value, path, errors)) return false
-    if (isCredentialLike(value)) {
-      addError(errors, "credential_like", path)
-      return false
-    }
-    return true
-  })
-}
+const publicTokenField = (pattern) => refusingField(pattern, tokenRefusal)
 
 /** The one model-ID validator for every published model field, in facts and labels alike. */
 export const modelIdField = () => publicTokenField(PATTERNS.modelId)

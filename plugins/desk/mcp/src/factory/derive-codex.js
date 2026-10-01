@@ -94,14 +94,12 @@ import * as os from "node:os"
 import * as path from "node:path"
 import { createInterface } from "node:readline"
 
-import { __internals__ as claude } from "./derive-claude.js"
+import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, sanitizePlugins, withRequestedModel } from "./derive-common.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, isPlainObject } from "./schema.js"
 import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
 import { toolKind } from "./tool-kinds.js"
-
-const { applyLimits, dedupePrRefs, sanitizePlugins, addUnavailable } = claude
 
 const HOST = "codex-cli"
 const DESK_CALL_PATTERN = /^mcp__.*desk.*__(task_create|task_update|task_archive)$/u
@@ -122,7 +120,8 @@ const RUNNING_HEADER = /^Process running with session ID /mu
 // Small, defensive helpers. None of these ever throw on an unexpected shape.
 // ---------------------------------------------------------------------------
 
-const nonNeg = (value) => (Number.isFinite(value) && value >= 0 ? value : 0)
+// A usage field the log leaves out counts as 0; one it carries that is no safe non-negative integer is unknown (`null`).
+const usageCount = (value) => (value === undefined || value === null ? 0 : countOrNull(value))
 const matching = (pattern, ...candidates) => candidates.find((value) => typeof value === "string" && pattern.test(value)) ?? null
 const validModel = (value) => typeof value === "string" && PATTERNS.modelId.test(value)
 
@@ -433,24 +432,25 @@ function createThreadProcessor({ agentIndex, meta }) {
     const total = info?.total_token_usage
     if (!isPlainObject(total)) return
     const current = {
-      input: nonNeg(total.input_tokens),
-      cached: nonNeg(total.cached_input_tokens),
-      write: nonNeg(total.cache_write_input_tokens),
-      output: nonNeg(total.output_tokens),
-      reasoning: nonNeg(total.reasoning_output_tokens),
+      input: usageCount(total.input_tokens),
+      cached: usageCount(total.cached_input_tokens),
+      write: usageCount(total.cache_write_input_tokens),
+      output: usageCount(total.output_tokens),
+      reasoning: usageCount(total.reasoning_output_tokens),
     }
-    // A total that went down is a new baseline, not negative usage.
-    const base = current.input + current.output < previousTotal.input + previousTotal.output ? { input: 0, cached: 0, write: 0, output: 0, reasoning: 0 } : previousTotal
-    const delta = Object.fromEntries(Object.keys(current).map((key) => [key, Math.max(0, current[key] - base[key])]))
+    // A total that went down is a new baseline, not negative usage. An unknown count compares as 0.
+    const sumOf = (counts) => (counts.input ?? 0) + (counts.output ?? 0)
+    const base = sumOf(current) < sumOf(previousTotal) ? { input: 0, cached: 0, write: 0, output: 0, reasoning: 0 } : previousTotal
+    const delta = Object.fromEntries(Object.keys(current).map((key) => [key, current[key] === null || base[key] === null ? null : Math.max(0, current[key] - base[key])]))
     previousTotal = current
-    if (delta.input + delta.output === 0) return
+    if (delta.input === 0 && delta.output === 0) return
     if (currentModel === null) {
       invalidModelSeen = true
       return
     }
     const entry = usage.get(currentModel) ?? { requests: 0, input: 0, cached: 0, write: 0, output: 0, reasoning: 0 }
     entry.requests += 1
-    for (const key of Object.keys(delta)) entry[key] += delta[key]
+    for (const key of Object.keys(delta)) entry[key] = addNullable(entry[key], delta[key])
     usage.set(currentModel, entry)
   }
 
@@ -517,6 +517,9 @@ function createThreadProcessor({ agentIndex, meta }) {
 // Session-wide aggregation.
 // ---------------------------------------------------------------------------
 
+// `a - b` floored at 0, or `null` when either is unknown.
+const minusNullable = (a, b) => (a === null || b === null ? null : Math.max(0, a - b))
+
 function aggregateModels(results) {
   const byModel = new Map()
   for (const result of results) {
@@ -524,11 +527,11 @@ function aggregateModels(results) {
       const total = byModel.get(id) ?? { requests: 0, input: 0, output: 0, cache_read: 0, cache_write: 0, reasoning: 0 }
       total.requests += entry.requests
       // Unconfirmed: cached input is part of `input_tokens`, reasoning part of `output_tokens`.
-      total.input += Math.max(0, entry.input - entry.cached)
-      total.output += Math.max(0, entry.output - entry.reasoning)
-      total.cache_read += entry.cached
-      total.cache_write += entry.write
-      total.reasoning += entry.reasoning
+      total.input = addNullable(total.input, minusNullable(entry.input, entry.cached))
+      total.output = addNullable(total.output, minusNullable(entry.output, entry.reasoning))
+      total.cache_read = addNullable(total.cache_read, entry.cached)
+      total.cache_write = addNullable(total.cache_write, entry.write)
+      total.reasoning = addNullable(total.reasoning, entry.reasoning)
       byModel.set(id, total)
     }
   }
@@ -603,8 +606,7 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
       if (task !== null) spawnTasks.push({ agent: n, track: task.track, slug: task.slug })
       intervals.push({ kind: "subagent", agent: parent, start: result.earliest, end: result.latest })
     }
-    const requested = spawnModel ?? result.firstModel
-    if (requested !== null && requested !== result.model) agent.requested_model = requested
+    withRequestedModel(agent, spawnModel ?? result.firstModel)
     agents.push(agent)
     intervals.push(...result.intervals)
   }
@@ -624,7 +626,7 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
   if (safeEndReason === null) addUnavailable(unavailable, "ended_at", "session_open")
   const models = aggregateModels(results)
   if (models.length === 0 || results.some((result) => result.invalidModelSeen)) addUnavailable(unavailable, "models", "source_unreadable")
-  if (results.some((result) => result.firstModel !== null && result.usage.size === 0)) addUnavailable(unavailable, "tokens", "source_unreadable")
+  if (results.some((result) => result.firstModel !== null && result.usage.size === 0) || models.some(({ tokens }) => Object.values(tokens).includes(null))) addUnavailable(unavailable, "tokens", "source_unreadable")
   addUnavailable(unavailable, "permission_waits", "host_does_not_record")
   addUnavailable(unavailable, "api_retries", "host_does_not_record")
   addUnavailable(unavailable, "ci_runs", "not_collected_in_slice_1")

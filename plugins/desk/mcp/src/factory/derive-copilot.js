@@ -184,6 +184,7 @@ import { createInterface } from "node:readline"
 import { SHORT_SHA, createCommitResolver } from "./commit-resolve.js"
 import { normalizeRow, readSessionRecord, readSessionRefs, readSessionRows } from "./copilot-usage.js"
 import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
+import { addNullable, compareByStart, comparePrRefs, countOrNull, withRequestedModel } from "./derive-common.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
@@ -202,14 +203,7 @@ const SHELL_DIALECT = Object.freeze({ bash: "posix", powershell: "powershell" })
 
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
 const stringOrNull = (value) => (typeof value === "string" ? value : null)
-const countOrNull = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : null)
 const isValidModel = (value) => typeof value === "string" && PATTERNS.modelId.test(value)
-
-function addNullable(total, value) {
-  if (total === null || value === null) return null
-  const sum = total + value
-  return Number.isSafeInteger(sum) ? sum : null
-}
 
 function increment(map, key) {
   map.set(key, (map.get(key) ?? 0) + 1)
@@ -290,25 +284,14 @@ function prRefOf(value, repository) {
   return { repo: match[1], number }
 }
 
-function compareByStart(a, b) {
-  if (a.start < b.start) return -1
-  if (a.start > b.start) return 1
-  return 0
-}
-
 function compareModels(a, b) {
   return a.id < b.id ? -1 : 1
 }
 
-function comparePrs(a, b) {
-  if (a.repo !== b.repo) return a.repo < b.repo ? -1 : 1
-  return a.number - b.number
-}
-
-// Exposed only so a unit test can drive each comparator through every
+// Exposed only so a unit test can drive the comparator through every
 // direction; which pairs a sort compares depends on the input's incidental
 // order, which a fixture cannot reliably force.
-export const __internals__ = { compareByStart, compareModels, comparePrs }
+export const __internals__ = { compareModels }
 
 // ---------------------------------------------------------------------------
 // The single streaming pass.
@@ -386,6 +369,8 @@ function createSessionFold() {
 
   // Where the session's short commit SHAs are resolved.
   let gitRoot = null
+  // The model the session was asked to start with, compared with the resolved root model at the end.
+  let selectedModel = null
 
   const handlers = {
     "session.start"(data, at) {
@@ -395,9 +380,7 @@ function createSessionFold() {
         hostVersion = data.copilotVersion
       }
       // The model the session was started with; the resolved root model comes from usage at the end.
-      if (!Object.hasOwn(agents[0], "requested_model") && isValidModel(data.selectedModel)) {
-        agents[0].requested_model = data.selectedModel
-      }
+      if (selectedModel === null && isValidModel(data.selectedModel)) selectedModel = data.selectedModel
     },
     "session.resume"(data) {
       sessionCwd = contextCwd(data)
@@ -512,7 +495,7 @@ function createSessionFold() {
       // Only `agentName` is read, and only when it passes the local pattern; the display name and description never are.
       const agent = { n, parent, model }
       if (typeof data.agentName === "string" && PATTERNS.agentType.test(data.agentName)) agent.agent_type = data.agentName
-      if (isValidModel(data.model)) agent.requested_model = data.model
+      withRequestedModel(agent, data.model)
       agents.push(agent)
       subagentByCall.set(toolCallId, n)
       const task = pendingTools.get(toolCallId)?.spawnTask ?? null
@@ -572,6 +555,7 @@ function createSessionFold() {
       return {
         flags,
         gitRoot,
+        selectedModel,
         hostVersion,
         earliest,
         latest,
@@ -703,7 +687,7 @@ function refsFromDatabase({ sessionId, env, flag, gitRoot, resolveCommits }) {
   const sortedCommits = [...commits.keys()].sort()
   if (sortedCommits.length > LIMITS.commits) flag("commits", "capped")
   return {
-    prs: [...prs.values()].sort(comparePrs).slice(0, LIMITS.prs),
+    prs: [...prs.values()].sort(comparePrRefs).slice(0, LIMITS.prs),
     commits: sortedCommits.slice(0, LIMITS.commits).map((sha) => ({ repo: commits.get(sha), sha })),
     unresolved,
   }
@@ -792,6 +776,7 @@ export async function deriveCopilotSession({ sessionId, copilotHome, plugins, en
   if (models.length > LIMITS.models) flag("models", "capped")
   models = models.slice(0, LIMITS.models)
   state.agents[0].model = rootModel(models)
+  withRequestedModel(state.agents[0], state.selectedModel)
 
   if (safeEndReason === null) flag("ended_at", "session_open")
   if (read.truncated) flag("turns", "log_truncated")

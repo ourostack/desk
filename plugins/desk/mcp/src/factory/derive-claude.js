@@ -96,7 +96,8 @@ import { createInterface } from "node:readline"
 import * as path from "node:path"
 
 import { toolKind } from "./tool-kinds.js"
-import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS, validPluginSource } from "./schema.js"
+import { addNullable, addUnavailable, applyLimits, countOrNull, dedupePrRefs, sanitizePlugins, withRequestedModel } from "./derive-common.js"
+import { ENUMS, LIMITS, LOCAL_SCHEMA, PATTERNS } from "./schema.js"
 import { parseDeskTaskLine } from "./desk-task-line.js"
 import { gitCommitCwds } from "./shell-git.js"
 import { normalizeTimestamp } from "./time.js"
@@ -113,8 +114,14 @@ const SYNTHETIC_MODEL = "<synthetic>"
 // Small, defensive helpers. None of these ever throw on an unexpected shape.
 // ---------------------------------------------------------------------------
 
-function safeNonNegNumber(value) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0
+// A usage field the log leaves out counts as 0; one it carries that is no safe non-negative integer is unknown (`null`).
+function usageCount(value) {
+  return value === undefined || value === null ? 0 : countOrNull(value)
+}
+
+// The larger of two counts, or `null` when either is unknown.
+function maxNullable(a, b) {
+  return a === null || b === null ? null : Math.max(a, b)
 }
 
 function repoFromPrUrl(url) {
@@ -383,10 +390,10 @@ function createAgentProcessor({ agentIndex }) {
     if (id !== undefined && !line.isApiErrorMessage && model !== SYNTHETIC_MODEL) {
       const usage = message.usage ?? {}
       const fields = {
-        input: safeNonNegNumber(usage.input_tokens),
-        output: safeNonNegNumber(usage.output_tokens),
-        cache_read: safeNonNegNumber(usage.cache_read_input_tokens),
-        cache_write: safeNonNegNumber(usage.cache_creation_input_tokens),
+        input: usageCount(usage.input_tokens),
+        output: usageCount(usage.output_tokens),
+        cache_read: usageCount(usage.cache_read_input_tokens),
+        cache_write: usageCount(usage.cache_creation_input_tokens),
       }
       if (!usageById.has(id)) {
         if (isValidModelId(model)) {
@@ -398,10 +405,10 @@ function createAgentProcessor({ agentIndex }) {
         }
       } else {
         const existing = usageById.get(id)
-        existing.input = Math.max(existing.input, fields.input)
-        existing.output = Math.max(existing.output, fields.output)
-        existing.cache_read = Math.max(existing.cache_read, fields.cache_read)
-        existing.cache_write = Math.max(existing.cache_write, fields.cache_write)
+        existing.input = maxNullable(existing.input, fields.input)
+        existing.output = maxNullable(existing.output, fields.output)
+        existing.cache_read = maxNullable(existing.cache_read, fields.cache_read)
+        existing.cache_write = maxNullable(existing.cache_write, fields.cache_write)
       }
     }
 
@@ -554,10 +561,10 @@ function aggregateModels(usageById) {
     if (!byModel.has(model)) byModel.set(model, { requests: 0, input: 0, output: 0, cache_read: 0, cache_write: 0 })
     const entry = byModel.get(model)
     entry.requests += 1
-    entry.input += input
-    entry.output += output
-    entry.cache_read += cacheRead
-    entry.cache_write += cacheWrite
+    entry.input = addNullable(entry.input, input)
+    entry.output = addNullable(entry.output, output)
+    entry.cache_read = addNullable(entry.cache_read, cacheRead)
+    entry.cache_write = addNullable(entry.cache_write, cacheWrite)
   }
   return [...byModel.keys()].sort().map((id) => {
     const entry = byModel.get(id)
@@ -569,32 +576,6 @@ function aggregateModels(usageById) {
   })
 }
 
-function comparePrRefs(a, b) {
-  if (a.repo === b.repo) return a.number - b.number
-  return a.repo < b.repo ? -1 : 1
-}
-
-// Claude Code writes a `pr-link` line into the root transcript for every PR of
-// the session, including the ones a subagent created. A `gitOperation.pr` with
-// action `created` is the creating call; any other action (merged, ready,
-// closed, edited) only saw the PR. So the worker whose call created the PR outranks any worker that only saw its link, and among refs of
-// the same kind the lowest worker wins.
-function dedupePrRefs(refs) {
-  const seen = new Map()
-  for (const ref of refs) {
-    const key = `${ref.repo}#${ref.number}`
-    const held = seen.get(key)
-    if (held === undefined || (ref.created && !held.created) || (ref.created === held.created && ref.agent < held.agent)) seen.set(key, ref)
-  }
-  return [...seen.values()].map(({ repo, number, agent }) => ({ repo, number, agent })).sort(comparePrRefs)
-}
-
-function compareByStart(a, b) {
-  if (a.start < b.start) return -1
-  if (a.start > b.start) return 1
-  return 0
-}
-
 function mergeCounts(target, source) {
   for (const [key, value] of source) target.set(key, (target.get(key) ?? 0) + value)
 }
@@ -602,80 +583,6 @@ function mergeCounts(target, source) {
 function countsToObject(map) {
   return Object.fromEntries(map)
 }
-
-// The `unavailable` field an interval kind's data belongs to.
-const INTERVAL_FIELD = Object.freeze({
-  turn: "turns",
-  human_wait: "human_waits",
-  tool: "tool_durations",
-  subagent: "tool_durations",
-  api_retry: "api_retries",
-})
-
-function addUnavailable(unavailable, field, reason) {
-  if (!unavailable.some((entry) => entry.field === field && entry.reason === reason)) {
-    unavailable.push({ field, reason })
-  }
-}
-
-// Keeps only caller-supplied plugin entries that already match the schema,
-// up to the cap.
-function sanitizePlugins(plugins, limits, unavailable) {
-  const list = Array.isArray(plugins) ? plugins : []
-  const valid = list.filter((entry) => typeof entry?.name === "string" && PATTERNS.pluginName.test(entry.name)
-    && typeof entry.version === "string" && PATTERNS.semver.test(entry.version) && validPluginSource(entry))
-  if (!Array.isArray(plugins) || valid.length !== list.length) addUnavailable(unavailable, "plugins", "source_unreadable")
-  if (valid.length > limits.plugins) addUnavailable(unavailable, "plugins", "capped")
-  return valid.slice(0, limits.plugins).map(({ name, version, source }) => ({ name, version, source: source ?? null }))
-}
-
-// Trims every derived array to what `validateLocalFacts` accepts: drops
-// intervals whose end precedes their start, agents past the `n` range (with
-// their intervals), and anything past a schema cap, recording each loss in
-// `unavailable`. Pure, so tests can drive it with small limits.
-function applyLimits({ agents, intervals, models, prs }, unavailable, limits = LIMITS) {
-  let keptAgents = agents
-  let keptIntervals = intervals
-  if (agents.length > limits.agents) {
-    keptAgents = agents.slice(0, limits.agents)
-    const keptNs = new Set(keptAgents.map((agent) => agent.n))
-    keptIntervals = keptIntervals.filter((interval) => keptNs.has(interval.agent))
-    addUnavailable(unavailable, "turns", "capped")
-    addUnavailable(unavailable, "tool_durations", "capped")
-  }
-
-  const ordered = []
-  for (const interval of keptIntervals) {
-    if (interval.end < interval.start) addUnavailable(unavailable, INTERVAL_FIELD[interval.kind], "source_unreadable")
-    else ordered.push(interval)
-  }
-  keptIntervals = ordered.sort(compareByStart)
-  if (keptIntervals.length > limits.intervals) {
-    for (const interval of keptIntervals.slice(limits.intervals)) {
-      addUnavailable(unavailable, INTERVAL_FIELD[interval.kind], "capped")
-    }
-    keptIntervals = keptIntervals.slice(0, limits.intervals)
-  }
-
-  let keptModels = models
-  if (models.length > limits.models) {
-    // Keep the most-used models; `models` arrives sorted by id, so ties keep id order.
-    const top = new Set([...models].sort((a, b) => b.requests - a.requests).slice(0, limits.models))
-    keptModels = models.filter((model) => top.has(model))
-    addUnavailable(unavailable, "models", "capped")
-  }
-
-  const keptNs = new Set(keptAgents.map((agent) => agent.n))
-  const keptPrs = prs.slice(0, limits.prs).map(({ agent, ...ref }) => (keptNs.has(agent) ? { ...ref, agent } : ref))
-  return { agents: keptAgents, intervals: keptIntervals, models: keptModels, prs: keptPrs }
-}
-
-// Exposed only for direct unit tests: the two sort comparators (a real
-// session's own ordering can't reliably force a sort comparator through
-// every comparison direction) and `applyLimits`, whose caps are far too
-// large to reach from a fixture. The Codex deriver reuses `applyLimits`,
-// `dedupePrRefs`, `sanitizePlugins` and `addUnavailable` from here.
-export const __internals__ = { compareByStart, comparePrRefs, applyLimits, dedupePrRefs, sanitizePlugins, addUnavailable }
 
 // ---------------------------------------------------------------------------
 // Entry point.
@@ -735,7 +642,7 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     // Only values that pass the local patterns are stored; the meta `description` is never read.
     const agent = { n: agentIndex, parent: 0, model }
     if (typeof meta?.agentType === "string" && PATTERNS.agentType.test(meta.agentType)) agent.agent_type = meta.agentType
-    if (typeof metaModel === "string" && PATTERNS.modelId.test(metaModel)) agent.requested_model = metaModel
+    withRequestedModel(agent, metaModel)
     agents.push(agent)
     agentResults.push(result)
     spawnIds.push(typeof meta?.toolUseId === "string" ? meta.toolUseId : null)
@@ -785,6 +692,9 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
   const models = aggregateModels(mergedUsage)
   if ((models.length === 0 && totalParseFailures > 0) || invalidModelSeen) {
     addUnavailable(unavailable, "models", "source_unreadable")
+  }
+  if (models.some(({ tokens }) => [tokens.input, tokens.output, tokens.cache_read, tokens.cache_write].includes(null))) {
+    addUnavailable(unavailable, "tokens", "source_unreadable")
   }
   addUnavailable(unavailable, "permission_waits", "host_does_not_record")
   addUnavailable(unavailable, "ci_runs", "not_collected_in_slice_1")

@@ -217,16 +217,42 @@ function publishRefs(refs, askPublic) {
   return { prs, commits, dropped }
 }
 
+const TOKEN_KEYS = ["input", "output", "cache_read", "cache_write", "reasoning"]
+
+// The sum of two counts where `null` means unknown: unknown only when both are, or when the sum is unsafe.
+function sumKnown(a, b) {
+  if (a === null && b === null) return null
+  const sum = (a ?? 0) + (b ?? 0)
+  return Number.isSafeInteger(sum) ? sum : null
+}
+
+// A model id the published validator would refuse publishes as `unknown`. Models that end up with the same id merge, so the published ids stay unique.
+function publishModels(models) {
+  const byId = new Map()
+  for (const model of models) {
+    const id = publishableToken(scrub(model.id)) ? scrub(model.id) : "unknown"
+    const held = byId.get(id)
+    if (held === undefined) {
+      byId.set(id, { id, requests: model.requests, tokens: Object.fromEntries(TOKEN_KEYS.map((key) => [key, model.tokens[key]])) })
+    } else {
+      held.requests = sumKnown(held.requests, model.requests)
+      for (const key of TOKEN_KEYS) held.tokens[key] = sumKnown(held.tokens[key], model.tokens[key])
+    }
+  }
+  return [...byId.values()]
+}
+
 // A plugin is named in a public store only when it was installed from a public
 // repository; the rest are counted. A store known not to be public names them all.
+// A name the published validator would refuse (a credential-shaped one) is hidden the same way.
 function publishPlugins(plugins, isPublic, storeVisibility) {
-  if (PRIVATE_STORES.has(storeVisibility)) return { plugins: plugins.map((plugin) => ({ name: scrub(plugin.name), version: plugin.version })), hidden: 0, names: plugins.map((plugin) => plugin.name) }
+  const privateStore = PRIVATE_STORES.has(storeVisibility)
   const kept = []
   const names = []
   let hidden = 0
   for (const plugin of plugins) {
     const source = plugin.source ?? null
-    if (source !== null && isPublic(source)) {
+    if (publishableToken(scrub(plugin.name)) && (privateStore || (source !== null && isPublic(source)))) {
       kept.push({ name: scrub(plugin.name), version: plugin.version })
       names.push(plugin.name)
     } else hidden += 1
@@ -368,17 +394,7 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
     schema: PUBLISHED_SCHEMA,
     session: publishSession(local.session, durationMs, sessionId),
     plugins: plugins.plugins,
-    models: local.models.map((model) => ({
-      id: scrub(model.id),
-      requests: model.requests,
-      tokens: {
-        input: model.tokens.input,
-        output: model.tokens.output,
-        cache_read: model.tokens.cache_read,
-        cache_write: model.tokens.cache_write,
-        reasoning: model.tokens.reasoning,
-      },
-    })),
+    models: publishModels(local.models),
     agents: local.agents.map((agent) => publishAgent(agent, local.session.host, plugins.names)),
     intervals,
     counts: {

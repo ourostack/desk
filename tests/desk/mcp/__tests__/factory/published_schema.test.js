@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url"
 
 import {
   validatePublished,
+  publishableToken,
   validatePublishedBytes,
   PUBLISHED_SCHEMA,
   PUBLISHED_LIMITS,
@@ -647,3 +648,17 @@ test("an unsorted jobs[].agents is refused with order (canonical form is ascendi
   assertSingle(validatePublished(setPath(golden(), ["jobs", 0, "agents"], [1, 0])), "order", "jobs.0.agents")
   assert.equal(validatePublished(setPath(golden(), ["jobs", 0, "agents"], [0, 1])).ok, true)
 })
+
+test("publishableToken and the published token fields apply one rule", () => {
+  const samples = ["desk", "claude-opus-5-5", "x-2024-08-06", "m-08:30", "ghp_0123456789abcdef0123", "sk-live-abc", "pwd-hunter2", "a1b2c3d4e5f60718293a", "10-0-0-1"]
+  for (const sample of samples) {
+    const fieldOk = validatePublished(withModelId(sample)).errors.every((error) => !error.path.startsWith("models.0.id"))
+    assert.equal(publishableToken(sample), fieldOk, sample)
+  }
+})
+
+function withModelId(id) {
+  const value = JSON.parse(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "published-golden.json"), "utf8"))
+  value.models[0].id = id
+  return value
+}
