@@ -77,8 +77,10 @@ async function hostEnforcementStatus({ env }) {
 function syncStatus({ deskRoot, env, spawnGit = spawnSync }) {
   if (!hasRemoteConfigured(deskRoot, spawnGit)) return "no remote configured"
   const recorded = readSyncStatus({ root: deskRoot, env })
+  // How the last pull ended, when it failed: ahead/behind alone read "in sync" after an unreachable remote.
+  const lastPull = recorded?.last_pull?.state === "unresolved" ? { last_pull: recorded.last_pull } : {}
   if (recorded?.blocked) {
-    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [] }
+    return { blocked: true, reason: recorded.reason ?? null, paths: recorded.paths ?? [], ...lastPull }
   }
   const counts = aheadBehindCounts({ root: deskRoot, spawnGit })
   return {
@@ -86,6 +88,7 @@ function syncStatus({ deskRoot, env, spawnGit = spawnSync }) {
     ahead: counts?.ahead ?? 0,
     behind: counts?.behind ?? 0,
     last_push_at: recorded?.last_push_at ?? null,
+    ...lastPull,
   }
 }
 

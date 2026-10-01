@@ -291,6 +291,24 @@ function updateSyncStatus(root, env, patch) {
   return next
 }
 
+/**
+ * Records how the last desk sync (`syncWorkspace`'s pull) ended, for `desk_status`'s one health word: a failed pull
+ * changes no ahead/behind count, so without this record `desk_status` reads "in sync" beside a boot that said
+ * `degraded`. A synced outcome clears the record; so does a later successful push. Best effort, never throws.
+ */
+export function recordPullOutcome({ root, env, result }) {
+  try {
+    const failed = result?.state === "unresolved"
+    updateSyncStatus(root, env, {
+      last_pull: failed
+        ? { state: "unresolved", reason: result.reason ?? null, cause: result.cause ?? null, at: new Date().toISOString() }
+        : null,
+    })
+  } catch {
+    // The record is a convenience for the next reader, never a reason to fail a sync.
+  }
+}
+
 /** `desk_status`'s own read of the worker's last recorded outcome, or `null` when nothing has run yet. Never throws. */
 export function readSyncStatus({ root, env }) {
   return readJsonIfPresent(syncStatusPath({ root, env }))
@@ -400,7 +418,10 @@ export async function runPushWorker({
       const counts = aheadBehindCounts({ root, spawnGit })
       if (counts === null || counts.ahead <= 0) {
         const patch = { blocked: false, reason: null, paths: [] }
-        if (pushed) patch.last_push_at = new Date().toISOString()
+        if (pushed) {
+          patch.last_push_at = new Date().toISOString()
+          patch.last_pull = null
+        }
         updateSyncStatus(root, env, patch)
         return { result: "ok" }
       }

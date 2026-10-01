@@ -31,7 +31,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { formatDeskProblem } from "./index-drift.js"
-import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv } from "./sync-worker.js"
+import { aheadBehindCounts, hasRemoteConfigured, hostFromEnv, recordPullOutcome } from "./sync-worker.js"
 import { argvSafeReason } from "./argv-safe-reason.js"
 import { shouldLaunchFiler } from "./filer-throttle.js"
 
@@ -284,7 +284,14 @@ function unresolved({ root, env, fileProblem, reason, conflicted, quarantinedPat
  * `unresolved` (reason `sync_deadline_exceeded`) rather than pushing ahead
  * with an unbounded or zero-timeout git call.
  */
-export async function syncWorkspace({
+export async function syncWorkspace(options) {
+  const result = await runSync(options)
+  // `desk_status` reads this back, so its health word carries a failed sync the way boot's does.
+  recordPullOutcome({ root: options.root, env: options.env, result })
+  return result
+}
+
+async function runSync({
   root, env, spawnGit = spawnSync, fileProblem = queueDeskProblemFiling, now = () => Date.now(),
 }) {
   if (!hasRemoteConfigured(root, spawnGit)) return { state: "synced" }

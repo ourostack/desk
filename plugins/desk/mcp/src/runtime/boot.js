@@ -69,6 +69,7 @@ import {
 import { redactCredentialLikeText, redactName } from "../util/redact.js"
 import { readSmallText } from "../factory/marker.js"
 import { runtimeResolverFailure } from "../desk/runtime-resolver.js"
+import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 
@@ -971,10 +972,8 @@ export async function bootOnce({
   } catch (error) {
     degraded.push(`sync: ${error.message}`)
   }
-  if (sync?.state === "unresolved") {
-    const detail = [sync.reason, sync.cause].filter((value) => typeof value === "string" && value !== "")
-    degraded.push(`sync: unresolved${detail.length > 0 ? ` (${detail.join(", ")})` : ""}`)
-  }
+  const syncProblem = syncDegradation(sync)
+  if (syncProblem !== null) degraded.push(syncProblem)
 
   let tasks = null
   try {
@@ -1054,7 +1053,7 @@ export async function bootOnce({
     }
   }
 
-  const status = degraded.length > 0 ? "degraded" : "ready"
+  const status = healthWord(degraded)
   const instructions = buildInstructions({ root, prereqResults: prereqs, pushAccounts, cardValidationResult, sync, factory, task, host, migrationEntries, pluginRoot, taskQuery, agentHost: host.agent, noninteractive: isNoninteractive(env), repoStateList })
   return {
     boot_complete: true,

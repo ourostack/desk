@@ -46,6 +46,8 @@ const CARD_UPDATE = {
     description: "Fields to shallow-merge into the card's frontmatter, as a JSON object (not a string). `schema_version` and `created` are kept; `updated` is refreshed.",
   },
   body_append: text("Markdown to append to the card body, separated by a blank line."),
+  note: text("One line of progress to record: appended as `- <date>: <note>` under the card's `## Progress log` section (created if missing). Say only what actually happened; completion needs `status: done` with `evidence`, never a note."),
+  next_step: text("The card's recorded next step: replaces its `**Next step:**` paragraph (added if missing). Use it when the next action changes."),
 }
 
 const TASK_DONE_EVIDENCE = {
