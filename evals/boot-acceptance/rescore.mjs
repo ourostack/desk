@@ -12,7 +12,7 @@ import * as path from "node:path"
 import * as process from "node:process"
 import { fileURLToPath } from "node:url"
 
-import { loadRunContext } from "./run.mjs"
+import { CRITIQUE_UNAVAILABLE, loadRunContext } from "./run.mjs"
 import { SCENARIOS } from "./scenarios.mjs"
 
 /** `[{ id, outcome, notes }]` for every saved run under `outDir`, in scenario then run order. */
@@ -23,8 +23,10 @@ export function rescoreAll(outDir) {
     if (!existsSync(scenarioDir)) continue
     for (const run of readdirSync(scenarioDir).sort()) {
       if (!existsSync(path.join(scenarioDir, run, "transcript.jsonl"))) continue
-      const result = scenario.check(loadRunContext(path.join(scenarioDir, run)))
-      rows.push({ id: `${scenario.id}/${run}`, outcome: result.outcome, notes: result.notes })
+      const ctx = loadRunContext(path.join(scenarioDir, run))
+      const result = scenario.check(ctx)
+      // A critique turn that hit a limit or an error is reported as unavailable, never as a critique.
+      rows.push({ id: `${scenario.id}/${run}`, outcome: result.outcome, notes: ctx.critiqueIsError === true ? [CRITIQUE_UNAVAILABLE, ...result.notes] : result.notes })
     }
   }
   return rows
