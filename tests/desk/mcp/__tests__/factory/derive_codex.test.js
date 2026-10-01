@@ -576,6 +576,20 @@ test("a bad cached or reasoning field never nulls a good input or output, and a 
   assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
 }))
 
+test("token sums past the safe range are unknown and flagged, never an invalid file", () => withHome(async (home) => {
+  const big = Number.MAX_SAFE_INTEGER - 1
+  const lines = [meta(), turnContext(1, ROOT_MODEL)]
+  // Each cycle climbs to a huge total, then resets low, so the deltas add up past 2**53.
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    lines.push(tokens(2 + cycle * 2, { input_tokens: big, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 }))
+    lines.push(tokens(3 + cycle * 2, { input_tokens: 0, output_tokens: 0 }))
+  }
+  const { facts } = await deriveRoot(home, lines)
+  assert.equal(facts.models[0].tokens.input, null)
+  assert.ok(unavailable(facts, "tokens", "source_unreadable"))
+  assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+}))
+
 test("tokens with no known model, a bad model, or no usage at all are flagged, not invented", () => withHome(async (home) => {
   const noModel = await deriveRoot(home, [meta(), tokens(2, { input_tokens: 10, output_tokens: 5 })])
   assert.deepEqual(noModel.facts.models, [])
