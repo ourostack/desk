@@ -133,6 +133,10 @@ Each machine records one decision per store. When the bound desk's store has non
 
 On the transition to `done`, `task_update` and `task_archive` write `factory_report: https://github.com/<store>/blob/reports/jobs/<job>.md` into the task card when the resolved store has `contribute: true`. It is `factory.js job-link` for the task, computed from the same job identity as binding. The link is deterministic, so it is written at once and resolves once the store merges the job's facts and rebuilds its reports; done never waits for delivery. Without consent, for `cancelled`, and for edits of a card that is already `done`, the card is written exactly as before, and a failure to compute the link never fails the task operation.
 
+## Reconcile
+
+`factory.js reconcile --desk <absolute path> --since <time> --until <time> [--store <directory>]` compares a desk's real task activity in a window with the factory's jobs and prints each mismatch with a reason code (see [reconcile.js](../mcp/src/factory/reconcile.js)). It only reads. A task with no bound session is always `no_marker`, with the detail `unbound_markers_<n>`; the top-level `unbound_markers` list gives each unbound marker in the window its own reason (`held`, `not_opted_in`, `route_changed`, `log_missing`, or `null` for none), so a marker is never blamed on a task. Markers count only between `--since` and `--until`. A `pr_open` read from the last flush without `--store` has the detail `pr_<n>_unchecked`. A `store_only` row for a job this desk cannot map prints `job: null`. On a keyed (public) desk the store's job ids are keyed, so `store_only` fires only for jobs with local facts on this machine.
+
 ## Completion and remaining boundary
 
 The [task tools](../mcp/src/tools/task.js) write `finalize/<job>.json` on `done`, `cancelled` and archive, including repeat archive calls, only when factory state already exists. They use the same job identity as binding; a factory failure emits a fixed diagnostic code without failing the completed task operation. This does not wait for a store, create consent or mark a report delivered.

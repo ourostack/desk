@@ -13,14 +13,24 @@
 //
 // Reasons, per task with activity (first that explains it wins; see the table in the task report):
 //   card_missing   no readable card (a task with no card is never a job)
-//   no_marker      no bound session in local facts and no marker for the desk in the window
-//   not_opted_in, route_changed, held, log_missing   the session's marker (or, with no bound session, the
-//                  desk's markers in the window), pipeline order
+//   no_marker      no bound session in local facts; the detail counts the desk's unbound markers in the
+//                  window (`unbound_markers_<n>`). A task is never blamed on a marker: nothing ties an unbound
+//                  marker to a task.
+//   not_opted_in, route_changed, held, log_missing   the bound session's marker, pipeline order
 //   stale_binding  receipt below BINDING_VERSION
 //   quarantined, not_delivered   the outbox file is held, or was never delivered
 //   pr_open        delivered, and the store's intake pull request is still open
 //   invalid_status the card's status is outside the eight (reported in addition to any other reason)
-// `store_only`: a store job whose session falls in the window while the desk shows no real activity for it.
+// `store_only`: a store job whose session falls in the window while the desk shows no real activity for it. A
+// job the desk cannot map to a task (unknown, or keyed and not known on this machine) prints `job: null`. On a
+// keyed (public) desk the store's job ids are keyed, so `store_only` fires only for jobs with local facts on this
+// machine, which place the session in time; the card's `created` plus the offset is not published there.
+//
+// The top-level `unbound_markers` lists the desk's markers in the window (`since <= time <= until`) that have no
+// local facts, each with its own reason from the same pipeline order (`held`, `not_opted_in`, `route_changed`,
+// `log_missing`) or `reason: null` when the marker has no problem. It is how `held` and `not_opted_in` stay
+// visible without claiming that a marker belongs to a task. `pr_open` read from the last flush alone, with no
+// `--store` to check, has the detail `pr_<n>_unchecked`.
 //
 // Privacy: names tracks and slugs only for the desk given; details are short codes and counts, never prompt
 // text, file contents, store names or the machine secret.
@@ -46,7 +56,9 @@ import { normalizeTimestamp } from "./time.js"
 const SESSION_SRC = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 const OUTBOX_NAME = new RegExp(`^(?:${ENUMS.host.join("|")})-${SESSION_SRC}\\.json$`, "u")
 const STORE_SLUG = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}__[A-Za-z0-9._-]{1,100}$/u
-const REASON_CODE = /^[a-z0-9_]{1,64}$/u
+// The refusal codes the flush records in a quarantine record (`outbox.js`, `flush.js`, `publish.js`); any other
+// reason in a local file is printed as `other`.
+const REFUSAL_CODES = new Set(["invalid", "facts_quarantined", "private_plugins_missing", "implausible_session_span", "session_id_not_v4"])
 const GITHUB_REMOTE = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100})$/u
 const PRIVATE_DESKS = new Set(["private", "internal"])
 const OPEN_PR_RESULTS = new Set(["delivered_pr_open", "intake_stale_retried"])
@@ -266,7 +278,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   const markerTime = (marker) => msOf(marker.ended_at ?? marker.updated_at)
   // Markers with no outbox file: sessions that never became facts. A marker with facts is explained by its own job.
   const deskMarkers = markerNames.filter((name) => !withFacts.has(name)).map((name) => ({ name, marker: markerOf(name) })).filter(({ marker }) => marker !== null && marker.desk_root !== null
-    && realOf(marker.desk_root) === root && (marker.person_prefix ?? "") === personPrefix && markerTime(marker) >= sinceMs)
+    && realOf(marker.desk_root) === root && (marker.person_prefix ?? "") === personPrefix && markerTime(marker) >= sinceMs && markerTime(marker) <= untilMs)
   // A Codex marker's default route is proven only by a Claude Code or Copilot marker for the desk within 30 days.
   const proven = (marker) => markerNames.some((name) => {
     const other = markerOf(name)
@@ -348,7 +360,8 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
   const openPr = (slug) => {
     const flush = status.last_flush?.[slug.replace("__", "/")]
     if (!OPEN_PR_RESULTS.has(flush?.result)) return null
-    return Number.isSafeInteger(flush.pr) ? `pr_${flush.pr}` : "pr_open"
+    if (!Number.isSafeInteger(flush.pr)) return "pr_open"
+    return storeDir === null ? `pr_${flush.pr}_unchecked` : `pr_${flush.pr}`
   }
 
   // Why one outbox file's session is not delivered facts in the store, or `null` when it is.
@@ -359,22 +372,15 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     const receipt = status.derivations?.[session.name]
     if (!(receipt?.binding_version >= BINDING_VERSION)) return { reason: "stale_binding", detail: `binding_version_${Number.isSafeInteger(receipt?.binding_version) ? receipt.binding_version : "none"}` }
     const held = readState(path.join(dir, "quarantine", session.slug, session.name), undefined)
-    if (held !== undefined) return { reason: "quarantined", detail: REASON_CODE.test(String(held?.reason)) ? `refused_${held.reason}` : "refused" }
+    if (held !== undefined) return { reason: "quarantined", detail: `refused_${REFUSAL_CODES.has(held?.reason) ? held.reason : "other"}` }
     if (!Object.hasOwn(deliveredOf(session.slug), session.name)) return { reason: "not_delivered", detail: "outbox_only" }
     const open = inStore ? null : openPr(session.slug)
     return open === null ? null : { reason: "pr_open", detail: open }
   }
 
-  // The reason a task with real activity is not counted, or `null`: the best session's, else the desk's markers'.
+  // The reason a task with real activity is not counted, or `null`: the best bound session's. No bound session is `no_marker`.
   const taskProblem = (bound, inStore) => {
-    if (bound.length === 0) {
-      let worst = null
-      for (const { name, marker } of deskMarkers) {
-        const problem = markerProblem(name, marker)
-        if (problem !== null && (worst === null || rank(problem.reason) < rank(worst.reason))) worst = problem
-      }
-      return worst ?? { reason: "no_marker", detail: deskMarkers.length === 0 ? "no_session_or_marker" : "marker_not_bound" }
-    }
+    if (bound.length === 0) return { reason: "no_marker", detail: `unbound_markers_${deskMarkers.length}` }
     let furthest = null
     for (const session of bound) {
       const problem = sessionProblem(session, inStore)
@@ -431,7 +437,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     const created = key === null ? sessionsByJob.get(plain)?.[0]?.created ?? null : createdMs(cards.get(key))
     if (!sessions.some((session) => inWindow(session, created))) continue
     const [track, slug] = key === null ? [null, null] : key.split("/")
-    mismatches.push({ track, slug, job: plain ?? storeId, reason: "store_only", detail: "store_session_in_window" })
+    mismatches.push({ track, slug, job: plain ?? (deskPrivate ? storeId : null), reason: "store_only", detail: "store_session_in_window" })
     if (key !== null) report.push({ track, slug, job: plain, activity: [], store: { checked: true, sessions: sessions.length }, mismatched: true })
   }
 
@@ -448,6 +454,7 @@ function run({ deskRoot, personPrefix = "", since, until, storeDir = null, env, 
     desk: { root, person: alias },
     tasks: outTasks,
     mismatches,
+    unbound_markers: deskMarkers.map(({ name, marker }) => ({ session: name.slice(0, -5), ...(markerProblem(name, marker) ?? { reason: null, detail: "marker_not_bound" }) })),
     counts: { tasks: report.length, matched: report.filter((item) => !item.mismatched).length, mismatched: mismatches.length, by_reason: byReason },
     ...(warnings.size > 0 ? { warnings: [...warnings] } : {}),
   }

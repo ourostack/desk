@@ -149,7 +149,7 @@ test("a real commit with a bound, delivered session is no mismatch; every other 
   await addSession(context, 1, "t", "matched")
   await addSession(context, 2, "t", "stale", { receipt: 3 })
   await addSession(context, 3, "t", "routed", { store: OTHER })
-  await addSession(context, 4, "t", "quar", { held: "invalid_published" })
+  await addSession(context, 4, "t", "quar", { held: "implausible_session_span" })
   await addSession(context, 5, "t", "undelivered", { delivered: false })
   await addSession(context, 6, "t", "logless", { log: false })
   await addSession(context, 7, "t", "badstatus", { status: "processing" })
@@ -180,6 +180,7 @@ test("a real commit with a bound, delivered session is no mismatch; every other 
   assert.deepEqual(result.warnings, undefined)
   assert.deepEqual(reasonsOf(result, "matched"), [])
   assert.deepEqual(reasonsOf(result, "nomarker"), ["no_marker"])
+  assert.equal(mismatchOf(result, "nomarker")[0].detail, "unbound_markers_0")
   assert.deepEqual(reasonsOf(result, "tidy"), ["mechanical_only"])
   assert.deepEqual(reasonsOf(result, "new-name"), ["mechanical_only"], "a pure rename is mechanical, and the old path folds into the renamed task")
   assert.deepEqual(reasonsOf(result, "old-name"), [])
@@ -189,14 +190,14 @@ test("a real commit with a bound, delivered session is no mismatch; every other 
   assert.equal(mismatchOf(result, "stale")[0].detail, "binding_version_3")
   assert.deepEqual(reasonsOf(result, "routed"), ["route_changed"])
   assert.deepEqual(reasonsOf(result, "quar"), ["quarantined"])
-  assert.equal(mismatchOf(result, "quar")[0].detail, "refused_invalid_published")
+  assert.equal(mismatchOf(result, "quar")[0].detail, "refused_implausible_session_span")
   assert.deepEqual(reasonsOf(result, "undelivered"), ["not_delivered"])
   assert.deepEqual(reasonsOf(result, "logless"), ["log_missing"])
   assert.deepEqual(reasonsOf(result, "badstatus"), ["invalid_status"], "an invalid status is a mismatch even when everything else matches")
   assert.deepEqual(reasonsOf(result, "badboth"), ["stale_binding", "invalid_status"], "an invalid status is reported beside any other reason")
   assert.equal(mismatchOf(result, "noreceipt")[0].detail, "binding_version_none")
   assert.deepEqual(reasonsOf(result, "quarbare"), ["quarantined"])
-  assert.equal(mismatchOf(result, "quarbare")[0].detail, "refused")
+  assert.equal(mismatchOf(result, "quarbare")[0].detail, "refused_other", "a reason that is not a known refusal code is printed as other")
   assert.deepEqual(mismatchOf(result, "twosess").map((item) => item.reason), ["not_delivered"], "the session furthest along the pipeline explains the task")
   assert.deepEqual(reasonsOf(result, "okplus"), [], "one good session is enough")
   assert.deepEqual(reasonsOf(result, "noroute"), [], "a marker with no recorded route routes where the desk does")
@@ -223,7 +224,9 @@ test("an open intake pull request is pr_open, and the store having the job clear
   await writeStatus(env, { last_flush: { [STORE]: { at: "2026-09-25T10:00:00.000Z", result: "delivered_pr_open", pr: 7 } } })
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
   assert.deepEqual(reasonsOf(result, "open"), ["pr_open"])
-  assert.equal(mismatchOf(result, "open")[0].detail, "pr_7")
+  assert.equal(mismatchOf(result, "open")[0].detail, "pr_7_unchecked", "without --store the open pull request is not checked against the store")
+  const checked = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: path.join(base, "store"), env })
+  assert.equal(mismatchOf(checked, "open")[0].detail, "pr_7", "with --store it is")
   await writeStatus(env, { last_flush: { [STORE]: { at: "2026-09-25T10:00:00.000Z", result: "delivered_pr_open" } } })
   assert.equal(mismatchOf(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }), "open")[0].detail, "pr_open")
   assert.ok(base)
@@ -238,14 +241,16 @@ test("a marker routed to a store with no consent is not_opted_in, and a store-le
   await writeFile(logPath, SENTINEL)
   await writeMarker(root, { name: `claude-code-${sessionId(1)}.json`, host: "claude-code", id: sessionId(1), desk, logPath, store: "acme/unconsented" })
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.deepEqual(reasonsOf(result, "nope"), ["not_opted_in"])
-  assert.equal(mismatchOf(result, "nope")[0].detail, "store_without_consent")
+  assert.deepEqual(reasonsOf(result, "nope"), ["no_marker"])
+  assert.deepEqual(result.unbound_markers, [{ session: `claude-code-${sessionId(1)}`, reason: "not_opted_in", detail: "store_without_consent" }])
   await writeFile(path.join(root, "markers", `claude-code-${sessionId(1)}.json`), JSON.stringify({
     schema_version: 1, host: "claude-code", session_id: sessionId(1), log_path: logPath, cwd: desk, desk_root: desk, end_reason: null,
     ended_at: "2026-09-25T09:30:00.000Z", plugins: [], updated_at: "2026-09-25T09:30:00.000Z",
     routing: { store: null, source: "invalid_declaration", warnings: [] },
   }))
-  assert.equal(mismatchOf(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env }), "decl")[0].reason, "held")
+  const declared = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
+  assert.equal(mismatchOf(declared, "decl")[0].reason, "no_marker")
+  assert.deepEqual(declared.unbound_markers, [{ session: `claude-code-${sessionId(1)}`, reason: "held", detail: "store_unresolved" }])
 }))
 
 test("a default-routed Codex marker nothing proves is held as route_unverified; a Claude marker for the desk releases it", () => scratch(async (context) => {
@@ -258,11 +263,14 @@ test("a default-routed Codex marker nothing proves is held as route_unverified; 
   await writeFile(logPath, SENTINEL)
   await writeMarker(root, { name: `codex-cli-${sessionId(2)}.json`, host: "codex-cli", id: sessionId(2), desk, logPath, store: STORE })
   const held = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.deepEqual(mismatchOf(held, "codex").map(({ reason, detail }) => ({ reason, detail })), [{ reason: "held", detail: "route_unverified" }])
+  assert.deepEqual(mismatchOf(held, "codex").map(({ reason, detail }) => ({ reason, detail })), [{ reason: "no_marker", detail: "unbound_markers_1" }], "an unbound marker is never blamed on the task")
+  assert.deepEqual(held.unbound_markers, [{ session: `codex-cli-${sessionId(2)}`, reason: "held", detail: "route_unverified" }])
   await writeMarker(root, { name: `claude-code-${sessionId(3)}.json`, host: "claude-code", id: sessionId(3), desk, logPath, store: STORE })
   const released = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
   assert.deepEqual(reasonsOf(released, "codex"), ["no_marker"], "no bound session, and neither marker has a problem")
-  assert.equal(mismatchOf(released, "codex")[0].detail, "marker_not_bound")
+  assert.equal(mismatchOf(released, "codex")[0].detail, "unbound_markers_2")
+  assert.deepEqual(released.unbound_markers.map((item) => item.reason), [null, null])
+  assert.deepEqual(released.unbound_markers.map((item) => item.detail), ["marker_not_bound", "marker_not_bound"])
 }))
 
 test("a task with no card is card_missing, a marker with a missing desk root is held, and a desk with no markers is no_marker", () => scratch(async (context) => {
@@ -272,7 +280,7 @@ test("a task with no card is card_missing, a marker with a missing desk root is 
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
   assert.deepEqual(reasonsOf(result, "gone"), ["card_missing"])
   assert.deepEqual(reasonsOf(result, "kept"), ["no_marker"])
-  assert.equal(mismatchOf(result, "kept")[0].detail, "no_session_or_marker")
+  assert.equal(mismatchOf(result, "kept")[0].detail, "unbound_markers_0")
   assert.equal(result.tasks.length, 2, "only task folders are tasks")
   const root = await factoryStateRoot(env)
   await mkdir(path.join(root, "markers"), { recursive: true })
@@ -356,6 +364,21 @@ test("a store job the desk does not know is store_only with no track or slug, pl
   publishTo(store, local, { deskVisibility: "private" })
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env })
   assert.deepEqual(result.mismatches.map(({ track, slug, job, reason }) => ({ track, slug, job, reason })), [{ track: null, slug: null, job: stranger, reason: "store_only" }])
+}))
+
+test("a private desk prints the plain id of a store job it cannot map, which is public in the store", () => scratch(async (context) => {
+  const { desk, env, base } = context
+  const repo = await makeDesk(desk, { remote: "https://github.com/acme/desk.git" })
+  repo.commit("2026-09-20T00:00:00Z", { "t/known/task.md": cardText() }, "seed")
+  const root = await factoryStateRoot(env)
+  await writeFile(path.join(root, "visibility.json"), JSON.stringify({ "acme/desk": { visibility: "private", checked_at: "2026-09-25T00:00:00.000Z" } }))
+  await setConsent(env, { store: STORE, contribute: true })
+  assert.equal((await writeLocalFacts(env, STORE, localFor(9, "00000000000000000000000000000001"))).written, true)
+  const store = path.join(base, "store")
+  const other = "00000000000000000000000000000002"
+  publishTo(store, localFor(9, other), { deskVisibility: "private" })
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env })
+  assert.deepEqual(result.mismatches.map(({ track, slug, job, reason }) => ({ track, slug, job, reason })), [{ track: null, slug: null, job: other, reason: "store_only" }])
 }))
 
 test("a public desk's keyed store job matches its local job, and the secret never appears", () => scratch(async (context) => {
@@ -526,27 +549,93 @@ test("no prompt text, log content or secret appears in the output", () => scratc
   assert.ok(text.length > 100)
   assert.ok(!text.includes("PRIVATE") && !text.includes("SENTINEL") && !text.includes("must never persist"))
   assert.ok(!text.includes("machine-secret"))
-  assert.deepEqual(Object.keys(result).sort(), ["counts", "desk", "mismatches", "ok", "tasks", "window"])
+  assert.deepEqual(Object.keys(result).sort(), ["counts", "desk", "mismatches", "ok", "tasks", "unbound_markers", "window"])
 }))
 
-test("a task with no bound session is blamed on the desk's unbound markers in pipeline order, and markers that have facts are left out", () => scratch(async (context) => {
+test("a task with no bound session is always no_marker; the desk's unbound markers are listed with their own reasons, inside the window only", () => scratch(async (context) => {
   const { desk, env } = context
   const repo = await standardDesk(desk, [["t", "orphan"], ["t", "fine"]])
   repo.commit("2026-09-25T10:00:00Z", { "t/orphan/work.md": "x\n", "t/fine/work.md": "x\n" })
   await addSession(context, 1, "t", "fine", { store: OTHER, markerStore: OTHER })
+  await setConsent(env, { store: STORE, contribute: true })
   const root = await factoryStateRoot(env)
   const logPath = path.join(desk, "..", "orphan.jsonl")
   await writeFile(logPath, SENTINEL)
-  const marker = (n, store, log = logPath) => writeMarker(root, { name: `claude-code-${sessionId(n)}.json`, host: "claude-code", id: sessionId(n), desk, logPath: log, store })
+  const marker = (n, store, log = logPath, extra = {}) => writeMarker(root, { name: `claude-code-${sessionId(n)}.json`, host: "claude-code", id: sessionId(n), desk, logPath: log, store, ...extra })
   await marker(2, STORE, path.join(desk, "..", "missing.jsonl"))
   await marker(3, "acme/unconsented")
   await marker(4, STORE, path.join(desk, "..", "also-missing.jsonl"))
   await writeMarker(root, { name: `claude-code-${sessionId(5)}.json`, host: "claude-code", id: sessionId(5), desk, logPath: path.join(desk, "..", "open.jsonl"), store: STORE, endedAt: null })
   // A marker's file name must be its own session's.
   await writeFile(path.join(root, "markers", `claude-code-${sessionId(6)}.json`), readFileSync(path.join(root, "markers", `claude-code-${sessionId(4)}.json`)))
+  // Markers outside the window do not count: one from after the window, one from before it, and one exactly at its end.
+  await marker(7, "acme/unconsented", logPath, { endedAt: "2026-09-27T00:00:00.000Z" })
+  await marker(8, "acme/unconsented", logPath, { endedAt: "2026-09-01T00:00:00.000Z" })
+  await marker(9, STORE, logPath, { endedAt: UNTIL })
   const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, env })
-  assert.deepEqual(mismatchOf(result, "orphan").map((item) => item.reason), ["not_opted_in"])
+  assert.deepEqual(mismatchOf(result, "orphan").map(({ reason, detail }) => ({ reason, detail })), [{ reason: "no_marker", detail: "unbound_markers_5" }])
   assert.deepEqual(reasonsOf(result, "fine"), [])
+  assert.deepEqual(result.unbound_markers, [
+    { session: `claude-code-${sessionId(2)}`, reason: "log_missing", detail: "log_absent" },
+    { session: `claude-code-${sessionId(3)}`, reason: "not_opted_in", detail: "store_without_consent" },
+    { session: `claude-code-${sessionId(4)}`, reason: "log_missing", detail: "log_absent" },
+    { session: `claude-code-${sessionId(5)}`, reason: "log_missing", detail: "log_absent" },
+    { session: `claude-code-${sessionId(9)}`, reason: null, detail: "marker_not_bound" },
+  ])
+  assert.equal(result.counts.by_reason.no_marker, 1, "counts stay task-based")
+}))
+
+test("planted sentinels in state files, store files, quarantine records and markers never reach the output", () => scratch(async (context) => {
+  const { desk, env, base } = context
+  const repo = await standardDesk(desk, [["t", "a"], ["t", "q"]])
+  repo.commit("2026-09-25T10:00:00Z", { "t/a/work.md": "x\n", "t/q/work.md": "x\n" })
+  const quarantined = await addSession(context, 1, "t", "q", { held: "invalid" })
+  const root = await factoryStateRoot(env)
+  const planted = `${SENTINEL} ${"private_prompt_must_never_persist"}`
+  const forms = [SENTINEL, "PRIVATE", "must never persist", "must_never_persist"]
+  const clean = (result, label) => {
+    const text = JSON.stringify(result)
+    for (const form of forms) assert.ok(!text.includes(form), `${label}: ${form}`)
+    return result
+  }
+  // A quarantine record whose reason is the sentinel, and a marker file that carries it.
+  await writeFile(path.join(root, "quarantine", quarantined.slug, quarantined.name), JSON.stringify({ reason: planted, at: planted }))
+  await writeFile(path.join(root, "markers", `claude-code-${sessionId(2)}.json`), `{ ${planted}`)
+  await writeMarker(root, { name: `claude-code-${sessionId(3)}.json`, host: "claude-code", id: sessionId(3), desk, logPath: path.join(base, `${planted}.jsonl`), store: STORE })
+  const store = path.join(base, "store")
+  mkdirSync(path.join(store, "facts"), { recursive: true })
+  writeFileSync(path.join(store, "facts", "claude-code-bad.json"), `{ ${planted}`)
+  writeFileSync(path.join(root, "machine-secret"), Buffer.from(planted.padEnd(32, "!")))
+  const first = clean(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env }), "quarantine")
+  assert.equal(mismatchOf(first, "q")[0].detail, "refused_other")
+  assert.ok(first.warnings.includes("store_file_unreadable") && first.warnings.includes("marker_unreadable"))
+  assert.ok(first.unbound_markers.length > 0)
+  // Corrupt state files, each holding the sentinel.
+  for (const file of ["status.json", "consent.json", "visibility.json"]) await writeFile(path.join(root, file), `{ ${planted}`)
+  await writeFile(path.join(root, "delivered", `${quarantined.slug}.json`), `{ ${planted}`)
+  const second = clean(reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env }), "state")
+  for (const code of ["consent_unreadable", "status_unreadable", "visibility_unreadable"]) assert.ok(second.warnings.includes(code), code)
+}))
+
+test("a store_only row for a keyed job this desk cannot map prints job null, never the keyed id", () => scratch(async (context) => {
+  const { desk, env, base } = context
+  const remote = "https://github.com/acme/public-desk.git"
+  const repo = await makeDesk(desk, { remote })
+  repo.commit("2026-09-20T00:00:00Z", { "t/known/task.md": cardText() }, "seed")
+  const root = await factoryStateRoot(env)
+  const secret = Buffer.from(Array.from({ length: 32 }, (_, index) => (index * 5 + 3) % 256))
+  writeFileSync(path.join(root, "machine-secret"), secret)
+  chmodSync(path.join(root, "machine-secret"), 0o600)
+  await writeFile(path.join(root, "visibility.json"), JSON.stringify({ "acme/public-desk": { visibility: "public", checked_at: "2026-09-25T00:00:00.000Z" } }))
+  await setConsent(env, { store: STORE, contribute: true })
+  // This machine has facts for session 9 (placing it in the window) under one job; the store holds the session under another, keyed.
+  assert.equal((await writeLocalFacts(env, STORE, localFor(9, "00000000000000000000000000000001"))).written, true)
+  const store = path.join(base, "store")
+  const stranger = "00000000000000000000000000000002"
+  const published = publishTo(store, localFor(9, stranger), { deskVisibility: "public", machineSecret: new Uint8Array(secret) })
+  const result = reconcile({ deskRoot: desk, since: SINCE, until: UNTIL, storeDir: store, env })
+  assert.deepEqual(result.mismatches.map(({ track, slug, job, reason }) => ({ track, slug, job, reason })), [{ track: null, slug: null, job: null, reason: "store_only" }])
+  assert.ok(!JSON.stringify(result).includes(published.jobs[0].job))
 }))
 
 test("an unexpected failure is a result, not a throw", () => scratch(async ({ desk }) => {

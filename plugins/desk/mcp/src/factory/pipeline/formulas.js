@@ -147,7 +147,7 @@ export function fieldCoverage(sessions, fields, partialFields = [], split = new 
 // job's. A job whose sessions are all split therefore has none to report: that
 // is unavailable, never a measured zero. With some whole sessions the sum
 // covers those only, and the measure stays partial (`worker_split`).
-function retryCoverage(sessions, fields, split, shared) {
+export function retryCoverage(sessions, fields, split, shared) {
   const coverage = fieldCoverage(sessions, fields, [], split, shared)
   if (sessions.length === 0 || split.size < sessions.length) return coverage
   return { ...coverage, none: true, reasons: [...new Set([...coverage.reasons, "worker_split"])].sort(compareText) }
