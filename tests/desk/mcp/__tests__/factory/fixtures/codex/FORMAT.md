@@ -117,5 +117,5 @@ Codex has hooks. The event names are `PreToolUse`, `PermissionRequest`, `PostToo
 
 - The deriver treats `session_meta.payload.session_id` as the root thread id when present. The fixtures set it on every thread, as the recorder does.
 - The fixtures' CLI version (`0.142.0`) and model names (`gpt-5.5`, `gpt-5.5-mini`) are invented; the source only says they are strings.
-- The `exec_command` output strings in the fixtures are free text chosen to hold a commit line and a PR URL. A real output may have a header we have not seen.
+- The `exec_command` output strings in the fixtures are free text chosen to hold a commit line and a PR URL. The `gh pr create` output starts with a `Process exited with code 0` header line, because the deriver credits a PR creation only on a recognised exit code of 0. A real output may have a header we have not seen.
 - A truncated file is an interrupted write: the writer appends one full `json + "\n"` per item and flushes, so a half line is only possible after a crash or a copy in progress ([recorder.rs#L2091-L2098](https://github.com/openai/codex/blob/60947e234156ac12bdb7fba2477d3965f166bd34/codex-rs/rollout/src/recorder.rs#L2091-L2098)). The recorder repairs a missing final newline on reopen (`ensure_rollout_is_newline_terminated`, recorder.rs line 2043).

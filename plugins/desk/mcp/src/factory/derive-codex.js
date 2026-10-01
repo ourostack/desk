@@ -30,14 +30,18 @@
 //     `session_meta`. Then the day folders from the root's start date minus
 //     one day through its last record's date plus one day are scanned (rollout
 //     folders use local time, so a day of slack each way covers any offset).
+//     The scan ends no later than today plus one day, or a year after the
+//     start, so a far-future timestamp cannot stretch it.
 //     Only each candidate's first record is read, and only an exact parent
 //     thread id match joins, repeated until no thread joins. A thread from
 //     another session that shares a folder or a minute never joins.
 //   - Numbering. The root is worker 0; joined threads are numbered 1.. in
 //     order of start time, then id. `parent` is the joining thread's number.
 //   - `model` is the most-used `turn_context.model` of the thread (`unknown`
-//     when none). `requested_model` is its first `turn_context.model`, left out
-//     when it equals `model`. `agent_type` is the child's `agent_role` (or
+//     when none). `requested_model` is, for a child, the `model` argument of
+//     the `spawn_agent` call that named it when that is a valid model id, else
+//     the thread's first `turn_context.model`; left out when it equals `model`.
+//     A mid-thread model switch shows only as the resolved (most-used) `model`. `agent_type` is the child's `agent_role` (or
 //     `agent_type`) from its `session_meta`, else the `agent_type` argument of
 //     the `spawn_agent` call that named it; the root has none.
 //   - A turn is `task_started` to `task_complete`/`turn_aborted` (and their
@@ -51,7 +55,9 @@
 //     only when the output says the command exited non-zero (a
 //     `Process exited with code N` line in the header, or a JSON
 //     `metadata.exit_code`); the real `exec_command` output layout is
-//     unconfirmed, so an unrecognized layout reads as `ok`.
+//     unconfirmed, so an unrecognized layout reads as `ok`. An output reading
+//     `Process running with session ID N` is not a result: no commit, file,
+//     PR or Desk-call credit. A PR needs a recognised exit code of 0.
 //   - Tokens. The thread total in `token_count.info.total_token_usage` is
 //     cumulative; each increase is credited to the model of the latest
 //     `turn_context` and counts as one request. Assumption, unconfirmed:
@@ -64,8 +70,8 @@
 //     `fileWrites` (`*** Add File`, `*** Update File` and `*** Move to` paths
 //     of a successful `apply_patch`), `shellGitCommits` (successful
 //     `git … commit` commands, through `./shell-git.js`), `spawnTasks` (the
-//     `Desk-Task:` line of the spawn prompt, else of the child's first user
-//     message, through `./desk-task-line.js`) and PR refs (only from a
+//     `Desk-Task:` line of the spawn prompt, else of the child's first three user
+//     messages, through `./desk-task-line.js`) and PR refs (only from a
 //     successful `gh pr create` whose output holds the PR URL, with
 //     `created: true` for the worker that ran it, which outranks any other).
 //   - A child rollout's records below its `subagent_history_start_ordinal`
@@ -108,6 +114,8 @@ const TURN_END = new Set(["task_complete", "turn_complete", "turn_aborted"])
 const ENTRYPOINTS = Object.freeze({ cli: "cli", exec: "cli" })
 const MAX_FIRST_RECORD_BYTES = 4 * 1024 * 1024
 const DAY_MS = 24 * 60 * 60 * 1000
+const MAX_SCAN_DAYS = 366
+const RUNNING_HEADER = /^Process running with session ID /mu
 
 // ---------------------------------------------------------------------------
 // Small, defensive helpers. None of these ever throw on an unexpected shape.
@@ -248,8 +256,11 @@ async function streamJsonl(file, onLine) {
 
 /** The `sessions/YYYY/MM/DD` folders from `startedAt` minus a day through `lastAt` plus a day. */
 function dayFolders(sessionsDir, startedAt, lastAt) {
-  const first = Math.floor(Date.parse(startedAt) / DAY_MS) * DAY_MS - DAY_MS
-  const last = Math.floor(Math.max(Date.parse(lastAt), Date.parse(startedAt)) / DAY_MS) * DAY_MS + DAY_MS
+  const dayOf = (instant) => Math.floor(instant / DAY_MS) * DAY_MS
+  const start = dayOf(Date.parse(startedAt))
+  // A far-future timestamp must not stretch the scan: it ends at the earliest of the last record's day, today, and a year after the start, each plus a day.
+  const last = Math.min(Math.max(dayOf(Date.parse(lastAt)), start), dayOf(Date.now()), start + MAX_SCAN_DAYS * DAY_MS) + DAY_MS
+  const first = start - DAY_MS
   const folders = []
   for (let day = first; day <= last; day += DAY_MS) {
     const [year, month, date] = new Date(day).toISOString().slice(0, 10).split("-")
@@ -326,7 +337,7 @@ function createThreadProcessor({ agentIndex, meta }) {
   let currentCwd = meta.cwd
   let openTurnStart = null
   let lastTurnEnd = null
-  let firstUserSeen = false
+  let userMessages = 0
   let firstPromptTask = null
   let toolRetries = 0
   let compactions = 0
@@ -349,7 +360,7 @@ function createThreadProcessor({ agentIndex, meta }) {
     const patchText = [input, args.input, command].find((value) => typeof value === "string") ?? ""
     const isPatch = name === "apply_patch" || /^\s*apply_patch\b/u.test(command ?? "")
     const isSpawn = name === "spawn_agent"
-    if (isSpawn) spawnByCall.set(callId, { task: parseDeskTaskLine(args.message), agentType: matching(PATTERNS.agentType, args.agent_type) })
+    if (isSpawn) spawnByCall.set(callId, { task: parseDeskTaskLine(args.message), agentType: matching(PATTERNS.agentType, args.agent_type), model: matching(PATTERNS.modelId, args.model) })
     const cwds = kind === "shell" && command !== undefined ? gitCommitCwds({ command, cwd, home: os.homedir() }) : []
     const previous = lastFinishedByKind.get(kind)
     if (previous && previous.outcome !== "ok" && !previous.retried && ts > previous.end) {
@@ -381,13 +392,16 @@ function createThreadProcessor({ agentIndex, meta }) {
     }
     const code = exitCode(text)
     const outcome = code !== null && code !== 0 ? "error" : "ok"
+    // Output saying the command is still running (`Process running with session ID N`) is not a result: nothing is credited for it.
+    const credited = outcome === "ok" && !RUNNING_HEADER.test(text.slice(0, 1000))
     if (!pending.isSpawn) intervals.push({ kind: "tool", agent: agentIndex, tool: pending.kind, outcome, start: pending.start, end: ts })
     toolCallCounts.set(pending.kind, (toolCallCounts.get(pending.kind) ?? 0) + 1)
     if (outcome !== "ok") toolFailureCounts.set(pending.kind, (toolFailureCounts.get(pending.kind) ?? 0) + 1)
     lastFinishedByKind.set(pending.kind, { end: ts, outcome, retried: false })
-    if (pending.desk !== null) deskToolCalls.push({ ...pending.desk, agent: agentIndex, ok: outcome === "ok" })
-    if (outcome !== "ok") return
-    if (pending.isPrCreate) {
+    if (pending.desk !== null) deskToolCalls.push({ ...pending.desk, agent: agentIndex, ok: credited })
+    if (!credited) return
+    // A creation needs a recognised exit code of 0: a failed `gh pr create` can still print an existing PR URL.
+    if (pending.isPrCreate && code === 0) {
       const ref = prRef(text, agentIndex)
       if (ref !== null) prRefs.push(ref)
     }
@@ -406,9 +420,10 @@ function createThreadProcessor({ agentIndex, meta }) {
       startCall({ callId: payload.call_id, name: "local_shell_call", args: { cmd: argvCommand(action?.command), workdir: action?.working_directory }, ts })
     } else if (type === "function_call_output" || type === "custom_tool_call_output") {
       if (typeof payload.call_id === "string") finishCall(payload.call_id, outputText(payload.output), ts)
-    } else if (type === "message" && payload.role === "user" && !firstUserSeen) {
-      firstUserSeen = true
-      firstPromptTask = parseDeskTaskLine(messageText(payload.content))
+    } else if (type === "message" && payload.role === "user" && userMessages < 3) {
+      // Codex may inject context as the first user messages, so the first three are checked.
+      userMessages += 1
+      firstPromptTask ??= parseDeskTaskLine(messageText(payload.content))
     }
   }
 
@@ -574,17 +589,20 @@ async function derive({ rolloutPath, codexHome, plugins, endReason, maxThreads }
   const intervals = []
   for (const [n, result] of results.entries()) {
     const agent = { n, parent: null, model: result.model }
+    let spawnModel = null
     if (n > 0) {
       const parent = numberOf.get(result.meta.parent)
       const spawn = results[parent].spawnedChildren.get(result.meta.id)
       agent.parent = parent
+      spawnModel = spawn?.model ?? null
       const agentType = result.meta.agentType ?? spawn?.agentType ?? null
       if (agentType !== null) agent.agent_type = agentType
       const task = spawn?.task ?? result.firstPromptTask
       if (task !== null) spawnTasks.push({ agent: n, track: task.track, slug: task.slug })
       intervals.push({ kind: "subagent", agent: parent, start: result.earliest, end: result.latest })
     }
-    if (result.firstModel !== null && result.firstModel !== result.model) agent.requested_model = result.firstModel
+    const requested = spawnModel ?? result.firstModel
+    if (requested !== null && requested !== result.model) agent.requested_model = requested
     agents.push(agent)
     intervals.push(...result.intervals)
   }

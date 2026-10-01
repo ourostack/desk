@@ -192,7 +192,7 @@ function rootThread() {
   t.rec("response_item", functionCall("call_git", "exec_command", { cmd: `git commit -m "fix ${S}"`, workdir: `/tmp/${S}/repo` }), 4)
   t.rec("response_item", functionOutput("call_git", `[main ${COMMIT_SHA.slice(0, 7)}] fix ${S}\n 1 file changed ${COMMIT_SHA} ${S}`), 5)
   t.rec("response_item", functionCall("call_pr", "exec_command", { cmd: `gh pr create --title "t ${S}" --body "b ${S}"`, workdir: `/tmp/${S}/repo` }), 6)
-  t.rec("response_item", functionOutput("call_pr", `${PR_URL}\n${S}`), 9)
+  t.rec("response_item", functionOutput("call_pr", `Process exited with code 0\nOutput:\n${PR_URL}\n${S}`), 9)
   t.rec("response_item", {
     type: "custom_tool_call",
     status: "completed",

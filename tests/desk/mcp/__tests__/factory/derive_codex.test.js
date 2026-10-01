@@ -343,7 +343,9 @@ test("spawn calls and child metas give parents, agent types, requested models an
     meta({ id: V3, parent: ROOT, startIso: at(22), extra: { parent_thread_id: undefined, source: { subagent: { thread_spawn: { parent_thread_id: ROOT, agent_role: "custom-role" } } } } }),
     item(1, { type: "message", role: "assistant", content: "hello" }, at(22)),
     user(2, "hello", at(22)),
-    user(3, "Desk-Task: trk/second-message-ignored", at(22)),
+    user(3, "more context", at(22)),
+    user(4, "third", at(22)),
+    user(5, "Desk-Task: trk/fourth-message-ignored", at(22)),
   ])
   put(home, V4, at(23), [
     meta({ id: V4, parent: ROOT, startIso: at(23), extra: { agent_role: "bad role!", agent_type: 5 } }),
@@ -378,6 +380,31 @@ test("a child's records below its subagent_history_start_ordinal are inherited c
   assert.equal(events.shellGitCommits.length, 1)
   assert.equal(events.shellGitCommits[0].agent, 1)
   assert.equal(facts.counts.tool_calls.shell, 3, "the root keeps its own low ordinals")
+}))
+
+test("the Desk-Task fallback looks at the first three user messages, not just the first", () => withHome(async (home) => {
+  const [B, C] = [uuid(2), uuid(3)]
+  put(home, B, at(20), [meta({ id: B, parent: ROOT, startIso: at(20) }), user(1, "injected AGENTS.md context", at(20)), user(2, "Desk-Task: trk/second", at(20))])
+  put(home, C, at(21), [meta({ id: C, parent: ROOT, startIso: at(21) }), user(1, "a", at(21)), user(2, "b", at(21)), user(3, "Desk-Task: trk/third", at(21))])
+  const { events } = await deriveRoot(home, [meta()])
+  assert.deepEqual(events.spawnTasks, [{ agent: 1, track: "trk", slug: "second" }, { agent: 2, track: "trk", slug: "third" }])
+}))
+
+test("a child's requested model is the spawn call's model argument when valid, else its first turn model", () => withHome(async (home) => {
+  const [A, B, C] = [uuid(2), uuid(3), uuid(4)]
+  const rootLines = [
+    meta(),
+    call(1, "s1", "spawn_agent", { model: "gpt-5.5-high" }, "multi_agent_v1"), output(2, "s1", JSON.stringify({ agent_id: A })),
+    call(3, "s2", "spawn_agent", { model: ROOT_MODEL }, "multi_agent_v1"), output(4, "s2", JSON.stringify({ agent_id: B })),
+    call(5, "s3", "spawn_agent", { model: "bad model!" }, "multi_agent_v1"), output(6, "s3", JSON.stringify({ agent_id: C })),
+  ]
+  put(home, A, at(20), [meta({ id: A, parent: ROOT, startIso: at(20) }), turnContext(1, ROOT_MODEL, {}, at(20))])
+  put(home, B, at(21), [meta({ id: B, parent: ROOT, startIso: at(21) }), turnContext(1, ROOT_MODEL, {}, at(21))])
+  put(home, C, at(22), [meta({ id: C, parent: ROOT, startIso: at(22) }), turnContext(1, "first-model", {}, at(22)), turnContext(2, ROOT_MODEL, {}, at(22)), turnContext(3, ROOT_MODEL, {}, at(22))])
+  const { facts } = await deriveRoot(home, rootLines)
+  assert.equal(agentOf(facts, 1).requested_model, "gpt-5.5-high")
+  assert.equal(Object.hasOwn(agentOf(facts, 2), "requested_model"), false, "equal to the resolved model")
+  assert.equal(agentOf(facts, 3).requested_model, "first-model", "an invalid argument falls back to the first turn model")
 }))
 
 // --- Tools, outcomes and binding events --------------------------------------
@@ -446,15 +473,15 @@ test("shell outcomes, retries, commits, MCP names, patches and PRs", () => withH
     item(50, { type: "function_call_output", call_id: 7, output: "x" }),
     // PRs: created, created again (same PR), no URL, a bad repo, number zero, failed, not a create.
     call(51, "r1", "exec_command", { cmd: "gh pr create --fill" }),
-    output(52, "r1", "https://github.com/acme/widgets.git/pull/7\n"),
+    output(52, "r1", "Process exited with code 0\nhttps://github.com/acme/widgets.git/pull/7\n"),
     call(53, "r2", "exec_command", { cmd: "gh  pr  create" }),
-    output(54, "r2", "https://github.com/acme/widgets/pull/7"),
+    output(54, "r2", "Process exited with code 0\nhttps://github.com/acme/widgets/pull/7"),
     call(55, "r3", "exec_command", { cmd: "gh pr create" }),
     output(56, "r3", "no url here"),
     call(57, "r4", "exec_command", { cmd: "gh pr create" }),
-    output(58, "r4", "https://github.com/ac!me/widgets/pull/9"),
+    output(58, "r4", "Process exited with code 0\nhttps://github.com/ac!me/widgets/pull/9"),
     call(59, "r5", "exec_command", { cmd: "gh pr create" }),
-    output(60, "r5", "https://github.com/acme/widgets/pull/0"),
+    output(60, "r5", "Process exited with code 0\nhttps://github.com/acme/widgets/pull/0"),
     call(61, "r6", "exec_command", { cmd: "gh pr create" }),
     output(62, "r6", "Process exited with code 1\nhttps://github.com/acme/widgets/pull/11"),
     call(63, "r7", "exec_command", { cmd: "gh pr view 12" }),
@@ -579,6 +606,42 @@ test("a patch path that cannot be made absolute is dropped, not guessed", () => 
     output(4, "p2", "ok"),
   ])
   assert.deepEqual(events.fileWrites, [])
+}))
+
+test("a command still running is credited nothing, and a PR needs a recognised exit code of 0", () => withHome(async (home) => {
+  const patch = "*** Begin Patch\n*** Update File: /abs/running.md\n*** End Patch"
+  const { facts, events } = await deriveRoot(home, [
+    meta(),
+    call(1, "g1", "exec_command", { cmd: "git commit -m x", workdir: "/work/repo" }),
+    output(2, "g1", "Process running with session ID 7\nOutput:\n"),
+    call(3, "g2", "exec_command", { cmd: `apply_patch <<'EOF'\n${patch}\nEOF` }),
+    output(4, "g2", "Chunk ID: 1\nProcess running with session ID 8"),
+    call(5, "g3", "exec_command", { cmd: "gh pr create" }),
+    output(6, "g3", "Process running with session ID 9\nhttps://github.com/acme/widgets/pull/1"),
+    call(7, "g4", "exec_command", { cmd: "gh pr create" }),
+    output(8, "g4", "https://github.com/acme/widgets/pull/2"),
+    call(9, "g5", "exec_command", { cmd: "gh pr create" }),
+    output(10, "g5", "Process exited with code 0\nhttps://github.com/acme/widgets/pull/3"),
+    call(11, "d1", "task_create", { track: "trk", slug: "one" }, "mcp__desk__"),
+    output(12, "d1", "Process running with session ID 3"),
+  ])
+  assert.deepEqual(events.shellGitCommits, [])
+  assert.deepEqual(events.fileWrites, [])
+  assert.deepEqual(events.deskToolCalls.map((entry) => entry.ok), [false])
+  assert.deepEqual(facts.refs.prs, [{ repo: "acme/widgets", number: 3, agent: 0 }], "an unrecognised layout is not a creation; exit code 0 is")
+  assert.equal(facts.counts.tool_calls.shell, 5, "the calls themselves still count")
+}))
+
+test("a far-future timestamp never stretches the child scan or breaks the derivation", () => withHome(async (home) => {
+  const child = uuid(2)
+  put(home, child, at(20), [meta({ id: child, parent: ROOT, startIso: at(20) })])
+  for (const stamp of ["2999-01-01T00:00:00.000Z", "9999-12-31T23:59:59.000Z"]) {
+    const started = Date.now()
+    const { facts } = await deriveRoot(home, [meta(), turnContext(1, ROOT_MODEL), { timestamp: stamp, type: "event_msg", payload: { type: "task_started" } }])
+    assert.deepEqual(facts.agents.map((agent) => agent.n), [0, 1], stamp)
+    assert.deepEqual(validateLocalFacts(facts), { ok: true, errors: [] })
+    assert.ok(Date.now() - started < 3000, `${stamp} derives quickly`)
+  }
 }))
 
 // --- Identity edge cases -----------------------------------------------------
