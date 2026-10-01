@@ -418,3 +418,20 @@ test("validatePr accepts a codex-cli facts file whose host and name agree", () =
     changes: [{ path: `facts/codex-cli-${GOLDEN.session.id}.json`, status: "added", bytes: codex }],
   }), { ok: true, errors: [] })
 })
+
+test("validatePr accepts the mapped facts and labels paths of a Codex (v7) session", async () => {
+  const { toPublished, toPublishedLabels, serializePublished } = await import("../../../../../../plugins/desk/mcp/src/factory/publish.js")
+  const local = JSON.parse(readFileSync(path.join(here, "..", "fixtures", "local-golden.json"), "utf8"))
+  local.session.id = "01927a3b-8c00-7abc-8def-0123456789ab"
+  local.session.host = "codex-cli"
+  const machineSecret = Buffer.alloc(32, 5)
+  const { published } = toPublished(local, { visibility: () => "public", deskVisibility: "private", machineSecret })
+  const factsBytes = Buffer.from(serializePublished(published))
+  const factsPath = `facts/codex-cli-${published.session.id}.json`
+  assert.deepEqual(validatePr({ changes: [{ path: factsPath, status: "added", bytes: factsBytes }] }), { ok: true, errors: [] })
+  const labels = structuredClone(LABELS)
+  labels.session = local.session.id
+  const mapped = toPublishedLabels(labels, { deskVisibility: "private", machineSecret })
+  assert.equal(isLabelsPath(mapped.path), true)
+  assert.equal(mapped.published.session, published.session.id)
+})

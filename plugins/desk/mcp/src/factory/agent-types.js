@@ -20,7 +20,7 @@ export const CUSTOM_AGENT_TYPE = "custom"
  */
 export const BUILTIN_AGENT_TYPES = Object.freeze({
   "claude-code": Object.freeze([
-    "general-purpose", "Explore", "Plan", "statusline-setup", "claude-code-guide", "output-style-setup",
+    "general-purpose", "Explore", "Plan", "statusline-setup", "claude-code-guide", "output-style-setup", "fork",
   ]),
   "copilot-cli": Object.freeze([]),
   "codex-cli": Object.freeze(["default", "explorer", "worker"]),

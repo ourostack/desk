@@ -40,8 +40,13 @@
 //     (`2020-01-01`) inside the ten-year cap would otherwise still turn every
 //     interval offset back into absolute time.
 //   - A session ID that is not a version-4 UUID could carry a timestamp or a
-//     machine identifier, in the file and in its name, so it is refused
-//     with `reason: "session_id_not_v4"`.
+//     machine identifier, in the file and in its name. A version-4 ID
+//     publishes unchanged. A version-7 ID (Codex threads) carries its
+//     creation time, so it publishes as a keyed version-4-shaped ID,
+//     `HMAC-SHA256(machineSecret, "session:" + id)`, on every desk: the same
+//     ID in the facts, the store path and the labels, stable per machine so
+//     a re-derive updates the same file. Anything else is refused with
+//     `reason: "session_id_not_v4"`.
 //   - A desk that is public, or not known to be private, keeps its job
 //     timing private (controller ruling, fix round 2): anyone could compute
 //     a public desk's plain job IDs from its task paths and read each card's
@@ -149,10 +154,10 @@ function publishAgent(agent, host, publicPluginNames) {
   }
 }
 
-function publishSession(session, durationMs) {
+function publishSession(session, durationMs, id) {
   return {
     host: session.host,
-    id: session.id,
+    id,
     host_version: session.host_version,
     entrypoint: session.entrypoint,
     duration_ms: durationMs,
@@ -234,10 +239,25 @@ function keyedJobId(job, machineSecret) {
   return createHmac("sha256", machineSecret).update(job).digest("hex").slice(0, 32)
 }
 
+const SESSION_ID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+
+function validSecret(machineSecret) {
+  return machineSecret instanceof Uint8Array && machineSecret.length >= MIN_SECRET_BYTES
+}
+
+/** The session ID as it publishes: a v4 unchanged, a v7 as a keyed v4-shaped ID, which needs the machine secret on any desk. */
+function publishedSessionId(id, machineSecret, caller) {
+  if (!SESSION_ID_V7.test(id)) return id
+  if (!validSecret(machineSecret)) throw new TypeError(`${caller}: a version-7 session ID needs a machineSecret of at least 32 bytes`)
+  const hex = createHmac("sha256", machineSecret).update(`session:${id}`).digest("hex").slice(0, 32)
+  const variant = "89ab"[Number.parseInt(hex[16], 16) % 4]
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
+
 // Whether job timing is kept; a desk that withholds it needs the key for its job IDs.
 function deskIsPrivate(deskVisibility, machineSecret, caller) {
   const deskPrivate = PRIVATE_DESKS.has(deskVisibility)
-  if (!deskPrivate && !(machineSecret instanceof Uint8Array && machineSecret.length >= MIN_SECRET_BYTES)) {
+  if (!deskPrivate && !validSecret(machineSecret)) {
     throw new TypeError(`${caller}: a desk that is not private needs a machineSecret of at least 32 bytes`)
   }
   return deskPrivate
@@ -246,7 +266,7 @@ function deskIsPrivate(deskVisibility, machineSecret, caller) {
 // Why a session cannot be published at all, or `null`.
 function refusalOf(local, startedMs, durationMs) {
   if (durationMs > PUBLISHED_LIMITS.maxOffsetMs || startedMs < Date.parse(EARLIEST_SESSION_START)) return "implausible_session_span"
-  if (!SESSION_ID_V4.test(local.session.id)) return "session_id_not_v4"
+  if (!SESSION_ID_V4.test(local.session.id) && !SESSION_ID_V7.test(local.session.id)) return "session_id_not_v4"
   return null
 }
 
@@ -316,6 +336,7 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
   if (typeof visibility !== "function") throw new TypeError("toPublished: visibility must be a function")
   if (!validateLocalFacts(local).ok) throw new TypeError("toPublished: local facts must pass validateLocalFacts")
   const deskPrivate = deskIsPrivate(deskVisibility, machineSecret, "toPublished")
+  const sessionId = publishedSessionId(local.session.id, machineSecret, "toPublished")
 
   const startedMs = Date.parse(local.session.started_at)
   const durationMs = Date.parse(local.session.derived_through) - startedMs
@@ -345,7 +366,7 @@ export function toPublished(local, { visibility, deskVisibility, storeVisibility
 
   const published = {
     schema: PUBLISHED_SCHEMA,
-    session: publishSession(local.session, durationMs),
+    session: publishSession(local.session, durationMs, sessionId),
     plugins: plugins.plugins,
     models: local.models.map((model) => ({
       id: scrub(model.id),
@@ -415,12 +436,14 @@ export function publishedClock(local) {
  * names no value.
  */
 export function toPublishedLabels(labels, { deskVisibility, machineSecret } = {}) {
-  if (!validateLabels(labels).ok) throw new TypeError("toPublishedLabels: labels must pass validateLabels")
+  // The labels schema is the published one (version-4 sessions), so a version-7 session is mapped before it is checked.
+  const session = publishedSessionId(String(labels?.session), machineSecret, "toPublishedLabels")
+  if (!validateLabels({ ...labels, session }).ok) throw new TypeError("toPublishedLabels: labels must pass validateLabels")
   const job = deskIsPrivate(deskVisibility, machineSecret, "toPublishedLabels") ? labels.job : keyedJobId(labels.job, machineSecret)
   const published = {
     schema: labels.schema,
     job,
-    session: labels.session,
+    session,
     evaluator: { plugin_version: labels.evaluator.plugin_version, model: labels.evaluator.model, rubric: labels.evaluator.rubric },
     stretches: labels.stretches.map((stretch) => ({
       start_ms: stretch.start_ms,
@@ -433,5 +456,5 @@ export function toPublishedLabels(labels, { deskVisibility, machineSecret } = {}
     })),
     unavailable: [...labels.unavailable],
   }
-  return { path: `labels/${job}/${labels.session}.json`, published }
+  return { path: `labels/${job}/${session}.json`, published }
 }

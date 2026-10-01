@@ -171,6 +171,15 @@ test("a subagent whose model resolves from its own lines does not mark models un
   assert.deepEqual(facts.unavailable.filter((entry) => entry.field === "models"), [])
 })
 
+test("a subagent meta model of `inherit` is no request and no fallback model", async () => {
+  const { line, assistant } = workerLines()
+  const root = [line({ type: "user", message: { role: "user", content: "go" } }), assistant("r1", "claude-opus-5-5")]
+  const own = await deriveWithSubagents(root, [{ stem: "agent-1", meta: { agentType: "fork", model: "inherit" }, lines: [assistant("s1", "claude-sonnet-5", [{ type: "text", text: "hi" }])] }])
+  assert.deepEqual(own.facts.agents[1], { n: 1, parent: 0, model: "claude-sonnet-5", agent_type: "fork" })
+  const bare = await deriveWithSubagents(root, [{ stem: "agent-1", meta: { agentType: "fork", model: "inherit" }, lines: [line({ type: "user", message: { role: "user", content: "hi" } })] }])
+  assert.deepEqual(bare.facts.agents[1], { n: 1, parent: 0, model: "unknown", agent_type: "fork" })
+})
+
 test("a subagent whose model resolves nowhere still marks models unavailable (source_unreadable)", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "desk-claude-unresolved-"))
   try {

@@ -103,7 +103,7 @@ test("the built-in allowlist is one frozen object keyed by host", () => {
   assert.ok(Object.isFrozen(BUILTIN_AGENT_TYPES))
   assert.deepEqual(Object.keys(BUILTIN_AGENT_TYPES), ENUMS.host)
   for (const list of Object.values(BUILTIN_AGENT_TYPES)) assert.ok(Object.isFrozen(list))
-  assert.deepEqual(BUILTIN_AGENT_TYPES["claude-code"], ["general-purpose", "Explore", "Plan", "statusline-setup", "claude-code-guide", "output-style-setup"])
+  assert.deepEqual(BUILTIN_AGENT_TYPES["claude-code"], ["general-purpose", "Explore", "Plan", "statusline-setup", "claude-code-guide", "output-style-setup", "fork"])
 })
 
 test("the Codex allowlist is the built-in roles in codex-rs/core/src/agent/role.rs", () => {

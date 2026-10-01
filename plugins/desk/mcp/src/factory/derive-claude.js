@@ -725,15 +725,17 @@ export async function deriveClaudeSession({ transcriptPath, plugins, endReason }
     invalidModelSeen = invalidModelSeen || result.invalidModelSeen
 
     // What the worker itself ran on beats what its meta says it was asked for.
+    // A meta model of `inherit` means "use the parent's model", so it is no request and no fallback.
+    const metaModel = meta?.model === "inherit" ? undefined : meta?.model
     let model = "unknown"
     if (result.rootModel !== "unknown" && isValidModelId(result.rootModel)) model = result.rootModel
-    else if (meta !== null && isValidModelId(meta.model)) model = meta.model
+    else if (meta !== null && isValidModelId(metaModel)) model = metaModel
     if (model === "unknown") invalidModelSeen = true
 
     // Only values that pass the local patterns are stored; the meta `description` is never read.
     const agent = { n: agentIndex, parent: 0, model }
     if (typeof meta?.agentType === "string" && PATTERNS.agentType.test(meta.agentType)) agent.agent_type = meta.agentType
-    if (typeof meta?.model === "string" && PATTERNS.modelId.test(meta.model)) agent.requested_model = meta.model
+    if (typeof metaModel === "string" && PATTERNS.modelId.test(metaModel)) agent.requested_model = metaModel
     agents.push(agent)
     agentResults.push(result)
     spawnIds.push(typeof meta?.toolUseId === "string" ? meta.toolUseId : null)

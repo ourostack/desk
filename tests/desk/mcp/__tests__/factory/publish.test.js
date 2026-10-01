@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url"
 import { createHmac } from "node:crypto"
 
 import { toPublished, serializePublished, publishedFileName, REFUSALS, EARLIEST_SESSION_START } from "../../../../../plugins/desk/mcp/src/factory/publish.js"
-import { validatePublished, validatePublishedBytes, PUBLISHED_LIMITS, DATE_SHAPE } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
+import { validatePublished, validatePublishedBytes, PUBLISHED_LIMITS, DATE_SHAPE, SESSION_ID_V4 } from "../../../../../plugins/desk/mcp/src/factory/published-schema.js"
 import { validateLocalFacts, LIMITS, ENUMS } from "../../../../../plugins/desk/mcp/src/factory/schema.js"
 import { deriveClaudeSession } from "../../../../../plugins/desk/mcp/src/factory/derive-claude.js"
 import { deriveCopilotSession } from "../../../../../plugins/desk/mcp/src/factory/derive-copilot.js"
@@ -426,11 +426,56 @@ test("a session that starts before 2025, when neither host existed, is refused e
   assert.equal(publish(value).published.session.duration_ms, Date.parse(value.session.derived_through) - Date.parse(EARLIEST_SESSION_START))
 })
 
+const V7_ID = "01927a3b-8c00-7abc-8def-0123456789ab"
+
+test("a version-7 session ID (a Codex thread) publishes under a keyed v4-shaped ID, on every desk, stable per machine secret", async () => {
+  const { deriveCodexSession } = await import("../../../../../plugins/desk/mcp/src/factory/derive-codex.js")
+  const { rolloutRelPath, STARTS, THREAD_IDS } = await import("./fixtures/codex/make.js")
+  const home = path.join(FIXTURES, "codex")
+  const { facts } = await deriveCodexSession({ rolloutPath: path.join(home, rolloutRelPath(STARTS.root, THREAD_IDS.root)), codexHome: home, plugins: [], endReason: "complete" })
+  assert.match(facts.session.id, /^[0-9a-f]{8}-[0-9a-f]{4}-7/u, "the Codex fixture id is a v7")
+  const expected = createHmac("sha256", SECRET).update(`session:${facts.session.id}`).digest("hex").slice(0, 32)
+  for (const deskVisibility of ["private", "public"]) {
+    const { published } = toPublished(facts, { visibility, deskVisibility, machineSecret: SECRET })
+    assert.ok(published, deskVisibility)
+    const id = published.session.id
+    assert.match(id, SESSION_ID_V4)
+    assert.notEqual(id, facts.session.id)
+    assert.equal(id.replaceAll("-", "").slice(0, 12) + id.replaceAll("-", "").slice(13, 16), expected.slice(0, 12) + expected.slice(13, 16), "derived from the keyed hash")
+    assert.deepEqual(validatePublished(published), { ok: true, errors: [] })
+    assert.equal(publishedFileName(published), `codex-cli-${id}.json`)
+    assert.equal(toPublished(facts, { visibility, deskVisibility, machineSecret: SECRET }).published.session.id, id, "stable across calls")
+    assert.notEqual(toPublished(facts, { visibility, deskVisibility, machineSecret: Buffer.alloc(32, 9) }).published.session.id, id, "differs per machine secret")
+    assert.equal(JSON.stringify(published).includes(facts.session.id), false, "the real id never publishes")
+  }
+  assert.throws(() => toPublished(facts, { visibility, deskVisibility: "private" }), (error) => error instanceof TypeError && /machineSecret/u.test(error.message) && !error.message.includes(facts.session.id))
+})
+
+test("a version-7 session's labels publish under the same mapped ID as its facts, and a v4 ID is unchanged", async () => {
+  const { toPublishedLabels } = await import("../../../../../plugins/desk/mcp/src/factory/publish.js")
+  const labels = JSON.parse(readFileSync(path.join(FIXTURES, "labels-golden.json"), "utf8"))
+  const v4 = labels.session
+  assert.equal(toPublishedLabels(labels, { deskVisibility: "private" }).published.session, v4)
+  labels.session = V7_ID
+  const value = local()
+  value.session.id = V7_ID
+  const facts = toPublished(value, { visibility, deskVisibility: "private", machineSecret: SECRET }).published
+  const result = toPublishedLabels(labels, { deskVisibility: "private", machineSecret: SECRET })
+  assert.equal(result.published.session, facts.session.id)
+  assert.equal(result.path, `labels/${labels.job}/${facts.session.id}.json`)
+  assert.match(result.path, /^labels\/[0-9a-f]{32}\/[0-9a-f-]{36}\.json$/u)
+  assert.throws(() => toPublishedLabels(labels, { deskVisibility: "private" }), /machineSecret/u)
+  assert.throws(() => toPublishedLabels(null, { deskVisibility: "private" }), /validateLabels/u)
+  labels.session = "not-a-uuid"
+  assert.throws(() => toPublishedLabels(labels, { deskVisibility: "private", machineSecret: SECRET }), /validateLabels/u)
+})
+
 test("a session ID that is not version 4 is refused; a v4 one is published", () => {
-  for (const id of ["c232ab00-9414-11ec-b3c8-9f6bdeced846", "01927a3b-8c00-7abc-8def-0123456789ab"]) {
+  for (const id of ["c232ab00-9414-11ec-b3c8-9f6bdeced846", "01927a3b-8c00-5abc-8def-0123456789ab", "not-a-uuid"]) {
     const value = local()
     value.session.id = id
-    assert.equal(validateLocalFacts(value).ok, true, "the local schema keeps every version")
+    if (id !== "not-a-uuid") assert.equal(validateLocalFacts(value).ok, true, "the local schema keeps every version")
+    else continue
     assert.deepEqual(publish(value), { published: null, dropped: null, reason: "session_id_not_v4" }, id)
   }
   const value = local()

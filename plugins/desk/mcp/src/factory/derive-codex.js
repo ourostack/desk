@@ -9,6 +9,7 @@
 // `tests/desk/mcp/__tests__/factory/fixtures/codex/FORMAT.md` (commit
 // 60947e23), never from a real rollout. Unconfirmed parts are read
 // defensively: an unknown shape is skipped, never thrown on.
+// A v2 child's `requested_model` falls back to its first `turn_context.model`, because v2 spawn outputs do not name the child thread.
 //
 // What is read. Of each line only `type`, `timestamp`, `ordinal` and these
 // `payload` fields: `session_meta.{id, cli_version, source, parent_thread_id,
