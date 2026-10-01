@@ -74,15 +74,27 @@ import { createRequire } from "node:module"
 import * as path from "node:path"
 import { parseFrontmatterLite } from "./frontmatter-lite.js"
 import { folderHandle } from "./handles.js"
+import { requireFromRuntime } from "./runtime-resolver.js"
 import { isCredentialLike, validateName, validateTrackName, validateScope } from "./naming.js"
 
 const requireFromHere = createRequire(import.meta.url)
+
+// Beside the plugin first (the server, a repo checkout); otherwise the runtime
+// dependencies a script run from the bare plugin folder restored (see
+// `runtime/boot-dependencies.js`).
+export function loadGrayMatter(besidePlugin = () => requireFromHere("gray-matter"), restored = requireFromRuntime) {
+  try {
+    return besidePlugin()
+  } catch {
+    return restored("gray-matter")
+  }
+}
 
 /**
  * gray-matter when it can be loaded, the dependency-free reader otherwise.
  * `load` is a test seam; real callers never pass it.
  */
-export function loadFrontmatterParser(load = () => requireFromHere("gray-matter")) {
+export function loadFrontmatterParser(load = loadGrayMatter) {
   try {
     return load()
   } catch {

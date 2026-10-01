@@ -12,7 +12,7 @@ import { syncBuiltinESMExports } from "node:module"
 import * as os from "node:os"
 import * as path from "node:path"
 import matter from "gray-matter"
-import { loadFrontmatterParser, organizationFindings } from "../../../../../plugins/desk/mcp/src/desk/organization.js"
+import { loadFrontmatterParser, loadGrayMatter, organizationFindings } from "../../../../../plugins/desk/mcp/src/desk/organization.js"
 import { parseFrontmatterLite } from "../../../../../plugins/desk/mcp/src/desk/frontmatter-lite.js"
 import { resolveTaskHandle } from "../../../../../plugins/desk/mcp/src/desk/handles.js"
 
@@ -1424,6 +1424,14 @@ test("loadFrontmatterParser uses gray-matter when it loads and the dependency-fr
     throw new Error("Cannot find module 'gray-matter'")
   })
   assert.equal(fallback, parseFrontmatterLite)
+})
+
+test("loadGrayMatter prefers gray-matter beside the plugin and falls back to the restored runtime dependencies", () => {
+  assert.equal(loadGrayMatter(() => "beside", () => assert.fail("not needed")), "beside")
+  const missing = () => { throw new Error("Cannot find module 'gray-matter'") }
+  assert.equal(loadGrayMatter(missing, (name) => `restored ${name}`), "restored gray-matter")
+  assert.throws(() => loadGrayMatter(missing, () => { throw new Error("no restore") }), /no restore/)
+  assert.equal(loadGrayMatter(), matter)
 })
 
 // The migrations suite runs the checks with no npm dependency installed end
