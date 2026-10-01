@@ -254,7 +254,7 @@ function taskCoordinates({ kind, segments }) {
   return { track: segments.at(kind === "archived" ? -4 : -3), slug: segments.at(-2) }
 }
 
-function denyReason(card, change, via = null, host = "unknown") {
+function denyReason(card, change, via, host) {
   const { track, slug } = taskCoordinates(card)
   const target = `{ track: "${track}", slug: "${slug}"`
   const shown = (value) => (value === null ? "no status" : `\`${value}\``)
