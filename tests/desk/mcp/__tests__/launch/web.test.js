@@ -720,8 +720,8 @@ test("the Claude and Copilot configs declare the web server beside Desk, never a
   assert.equal(server.cwd, ".")
   assert.deepEqual(server.env, { DESK_PLUGIN_ROOT: "${CLAUDE_PLUGIN_ROOT}" })
   const copilot = JSON.parse(readFileSync(path.join(pluginRoot, ".mcp.copilot.json"), "utf8")).mcpServers
-  assert.deepEqual(Object.keys(copilot), ["desk", "web"])
-  assert.deepEqual(copilot.web, { type: "stdio", command: "node", args: ["${COPILOT_PLUGIN_ROOT}/mcp/web.cjs"], env: {} })
+  assert.deepEqual(Object.keys(copilot), ["desk", "desk-web"])
+  assert.deepEqual(copilot["desk-web"], { type: "stdio", command: "node", args: ["${COPILOT_PLUGIN_ROOT}/mcp/web.cjs"], env: {} })
 })
 
 // ---- spawned: the real entry points against a fixture plugin ----
