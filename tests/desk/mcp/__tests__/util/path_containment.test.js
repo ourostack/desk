@@ -27,7 +27,7 @@ test("resolveWriteTarget resolves a workspace target beneath the desk root", asy
   assert.equal(target, path.join(root, "track", "task", "task.md"))
 })
 
-test("resolveWriteTarget creates and resolves a missing person root safely", async () => {
+test("resolveWriteTarget resolves a missing person root without creating it, so a failed call leaves nothing behind", async () => {
   const root = await makeRoot()
   const target = await resolveWriteTarget({
     deskRoot: root,
@@ -35,7 +35,7 @@ test("resolveWriteTarget creates and resolves a missing person root safely", asy
     segments: ["track", "task.md"],
   })
   assert.equal(target, path.join(root, "desks", "ari", "track", "task.md"))
-  assert.equal((await fs.stat(path.join(root, "desks", "ari"))).isDirectory(), true)
+  await assert.rejects(fs.stat(path.join(root, "desks")), { code: "ENOENT" })
 })
 
 test("resolveWriteTarget rejects a missing segment list", async () => {

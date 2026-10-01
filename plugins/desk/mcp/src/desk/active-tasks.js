@@ -43,15 +43,49 @@ function listDirs(dir) {
   }
 }
 
-const NEXT_STEP_CAP = 200
-
 // The card's `**Next step:**` paragraph (task-body.js writes it), one line, redacted like any other text, or null.
-function nextStepOf(content) {
+export function nextStepOf(content) {
   const match = /^\*\*Next step:\*\*[ \t]*(.*(?:\n(?![ \t]*\n|[ \t]*(?:[-*+]|\d+[.)])\s|#{1,6}\s).+)*)/mu.exec(content)
   if (match === null) return null
   const line = redactCredentialLikeText(match[1].replace(/\s+/gu, " ").trim())
-  if (line === "") return null
-  return line.length > NEXT_STEP_CAP ? `${line.slice(0, NEXT_STEP_CAP - 3)}...` : line
+  return line === "" ? null : line
+}
+
+const BLOCKER_LABELS = "(?:blockers?|waiting on|blocked on|blocked by)"
+const BLOCKER_LINE = new RegExp(`^(?:\\*\\*${BLOCKER_LABELS}:?\\*\\*:?|${BLOCKER_LABELS}:)[ \\t]*(.*)$`, "iu")
+const BLOCKER_HEADING = new RegExp(`^#{1,6}[ \\t]+${BLOCKER_LABELS}[ \\t]*:?[ \\t]*$`, "iu")
+
+// The paragraph at or after `lines[start]` (blank lines before it are skipped), joined on one line: it ends at a blank
+// line, a heading or a list item.
+function paragraphFrom(lines, start) {
+  const out = []
+  let first = start
+  while (first < lines.length && lines[first].trim() === "") first += 1
+  for (let index = first; index < lines.length; index += 1) {
+    const line = lines[index]
+    if (line.trim() === "" || /^#{1,6}\s/u.test(line) || /^\s*(?:[-*+]|\d+[.)])\s/u.test(line)) break
+    out.push(line.trim())
+  }
+  return out.join(" ")
+}
+
+// Why the card says the task is blocked, one line, redacted like any other text, or null. Cards record it as a
+// `## Blocker` (or `## Waiting on`) section, or as a `**Blocker:**` / `Waiting on:` line (task-lifecycle: the
+// transition to `blocked` writes a "Blocker" / "Waiting on" line with the specific reason).
+function blockerOf(content) {
+  const lines = content.split(/\r?\n/u)
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim()
+    let text = null
+    if (BLOCKER_HEADING.test(line)) text = paragraphFrom(lines, index + 1)
+    else {
+      const inline = BLOCKER_LINE.exec(line)
+      if (inline !== null) text = inline[1] === "" ? paragraphFrom(lines, index + 1) : paragraphFrom(lines, index).replace(BLOCKER_LINE, "$1")
+    }
+    const clean = text === null ? "" : redactCredentialLikeText(text.replace(/\s+/gu, " ").trim())
+    if (clean !== "") return clean
+  }
+  return null
 }
 
 // null when the card is missing or unreadable; `{ data: {}, content: "" }` when its frontmatter is malformed.
@@ -131,6 +165,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
         updated: asText(data.updated),
         repos: shownRepos(data.repos),
         next_step: nextStepOf(content),
+        blocker: blockerOf(content),
       })
     }
     if (tasks.length === 0) continue
@@ -146,7 +181,7 @@ function scanDesk(deskRoot, scanRoot, desk, counts) {
  * activeTasks(deskRoot) -> { tracks, task_count, track_count, redacted }
  *
  * `tracks`: `[{ desk?, track, handle, tasks: [{ desk?, slug, handle, title, status, updated, repos, next_step }] }]`,
- * where `next_step` is the card's `**Next step:**` paragraph on one line (at most 200 characters) or null,
+ * where `next_step` is the card's `**Next step:**` paragraph on one line, in full, or null, `blocker` is why the card says the task is blocked (a `## Blocker` section or a `Blocker:` line) on one line, or null,
  * where `repos` is `[{ name?, local_path?, mode? }]`.
  * `handle`: the folder's stable handle (./handles.js), which task_move and
  * track_rename take in place of a name, so a redacted folder can be renamed.

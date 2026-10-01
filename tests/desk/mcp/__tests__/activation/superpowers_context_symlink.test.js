@@ -22,7 +22,7 @@ test("the context CLI reports its diagnostic when started through a symlink inst
   const result = spawnSync(process.execPath, [link, "--desk-root", "/desk"], { encoding: "utf8" })
   assert.equal(result.status, 1)
   assert.equal(result.stdout, "")
-  assert.equal(result.stderr, "Superpowers context: taskPath is required\n")
+  assert.match(result.stderr, /^Superpowers context: taskPath is required: pass --task-path <desk>\/<track>\/<task>, the task's folder .* for example \/desk\/<track>\/<task>\n$/u)
 })
 
 test("isEntrypoint compares real paths, and is false for no argv entry, a missing file or another module", async (t) => {

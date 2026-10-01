@@ -5,6 +5,8 @@ description: Emit a one-screen resume-friendly dashboard of all active worker st
 
 # Status
 
+> Boot first: if the Desk boot has not run in this session, run `node <plugin>/mcp/scripts/session-boot.js` first (the `Desk startup:` line in your context has the exact command; add `--task "<name>"` when the operator named a task).
+
 A single-screen dashboard that answers "where are we?" without manual archaeology across workspace markdown, external work trackers, and local code repos.
 
 > **Overlay users:** consumer overlays often ship tracker-formatted status entries (work-item IDs, tracker URLs, identity-aware paths) via an overlay-specific card-fields skill.

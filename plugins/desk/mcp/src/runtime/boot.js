@@ -75,7 +75,7 @@ import { healthWord, syncDegradation } from "./health.js"
 import { pendingMigrations, migrationLine } from "./pending-migrations.js"
 import { syncWorkspace } from "./session-sync.js"
 import { recordLocalOnlyOnCards } from "../tools/local-only.js"
-import { formatBootText, lastSyncedAt, readAgentsMd, syncSummary } from "./boot-text.js"
+import { formatBootText, lastSyncedAt, pushRoute, readAgentsMd, syncSummary } from "./boot-text.js"
 import { DEFERRED_TOOLS_HINT } from "../util/deferred-tools.js"
 
 const parseFrontmatter = loadFrontmatterParser()
@@ -814,7 +814,8 @@ function pushInstruction(entry, where) {
   if (entry.result === "account_found") {
     const active = entry.accounts[0].account
     if (entry.route === "fork") {
-      return `Push route for ${store} (${where}): account ${entry.account} cannot push to it directly, so its route is a fork. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself. Tell the operator this route in one line when you report on the task.`
+      const notActive = entry.account === active ? "" : ` Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), and write ${entry.account}, never ${active}, as the push account in any note.`
+      return `Push route for ${store} (${where}): ${pushRoute(entry)}; account ${entry.account} cannot push to it directly, so its route is a fork. Push your branch to ${entry.account}'s fork and open the pull request from there; never push to ${store} itself.${notActive} Tell the operator this route in one line when you report on the task.`
     }
     if (entry.account !== active) {
       return `Push route for ${store} (${where}): account ${entry.account} is the one with push access (route ${entry.route}), but gh's active account is ${active}. Push as ${entry.account} (\`GH_TOKEN=$(gh auth token --user ${entry.account})\` for the git or gh call), not with the active login. Tell the operator this in one line when you report on the task.`

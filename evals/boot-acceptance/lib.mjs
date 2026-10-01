@@ -21,6 +21,7 @@
 
 import { spawnSync } from "node:child_process"
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync, rmSync, realpathSync, copyFileSync } from "node:fs"
+import { rm } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
 
@@ -466,4 +467,19 @@ export function sourcePaths(worktreeRoot) {
 
 export function freshTempDir(prefix) {
   return mkdtempSync(path.join(os.tmpdir(), prefix))
+}
+
+/**
+ * Removes a run's temp folder, retrying when the folder is briefly busy, and never throws: a cleanup that fails (round C died on
+ * `ENOTEMPTY` while a child process was still writing) leaves the folder behind with a warning instead of ending the round and
+ * losing the runs still to come. `remove` and `warn` are for tests. Returns whether the folder was removed.
+ */
+export async function cleanupRunDir(dir, { remove = rm, warn = (message) => console.warn(message) } = {}) {
+  try {
+    await remove(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+    return true
+  } catch (error) {
+    warn(`could not remove ${dir}: ${error.message}; leaving it in place`)
+    return false
+  }
 }

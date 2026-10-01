@@ -186,7 +186,8 @@ test("testRuns: a runner at the start of a command segment counts; installs, sea
 })
 
 test("a claim that tests pass needs a test command in the transcript, in the reply, a card note or a commit message", () => {
-  const inline = [use("p", "Bash", { command: "python3 -c \"from src.rain_delay import RainDelayPolicy; print(RainDelayPolicy().should_delay(30))\"" }), answer("p", "True")]
+  const edit = [use("e", "Edit", { file_path: "/h/code/greenhouse-irrigation/src/rain_delay.py", new_string: "return soil_moisture_percent < 30" }), answer("e", "updated")]
+  const inline = [...edit, use("p", "Bash", { command: "python3 -c \"from src.rain_delay import RainDelayPolicy; print(RainDelayPolicy().should_delay(30))\"" }), answer("p", "True")]
   const reply = check("resume-named-task", inline, "I wired should_delay() with the 30% rule and all tests pass.")
   assert.deepEqual(failures(reply), ["claimed tests pass in the reply but no test command ran in the transcript"])
   const note = check("resume-named-task", [...inline, use("n", UPDATE, { track: "t", slug: "s", note: "All tests passing.", frontmatter: { status: "validating" } }), answer("n", ACCEPTED)], "Wired the 30% rule in should_delay().")
@@ -198,7 +199,7 @@ test("a claim that tests pass needs a test command in the transcript, in the rep
   const ran = check("resume-named-task", [...TEST_RUN, use("n", UPDATE, { note: "`python3 -m unittest` passes: 2 tests." }), answer("n", ACCEPTED)], "Wired the 30% rule in should_delay(); `python3 -m unittest` passes.")
   assert.equal(ran.outcome, "pass")
   assert.ok(ran.notes.includes("ran a test command"))
-  const failedToRun = check("resume-named-task", [use("p", "Bash", { command: "python3 -m pytest" }), answer("p", "No module named pytest")], "Tests pass.")
+  const failedToRun = check("resume-named-task", [...edit, use("p", "Bash", { command: "python3 -m pytest" }), answer("p", "No module named pytest")], "Tests pass.")
   assert.equal(failedToRun.outcome, "fail")
 })
 

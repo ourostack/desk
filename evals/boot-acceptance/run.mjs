@@ -20,12 +20,12 @@
 // See README.md for the isolation verification this relies on.
 
 import { spawn } from "node:child_process"
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from "node:fs"
+import { mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as path from "node:path"
 import * as process from "node:process"
 
-import { materializeFixture, breakOriginForFailure, addMissingCloneTask, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, sourcePaths, freshTempDir, REAL_HOME } from "./lib.mjs"
+import { cleanupRunDir, materializeFixture, breakOriginForFailure, addMissingCloneTask, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, sourcePaths, freshTempDir, REAL_HOME } from "./lib.mjs"
 import { SCENARIOS, CRITIQUE_PROMPT, findScenario } from "./scenarios.mjs"
 import { buildChildEnv, countTokenLeaks, findRealGh, installGhShim, redactTokens, writeGitConfig } from "./safety.mjs"
 
@@ -269,6 +269,8 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
   const startedAt = Date.now()
   const { ctx, critique, critiqueSkipped, turns } = await runTurns({ claude: runClaude, prompt: scenario.prompt, critiquePrompt: CRITIQUE_PROMPT, flags, cwd: deskRoot, env, timeoutMs: args.timeoutMin * 60 * 1000 })
   ctx.deskRoot = deskRoot
+  ctx.homeDir = homeDir
+  ctx.runTmp = runTmp
   // With the harness's own plugin copy, the source checkout's path must never appear in a tool call. A `--plugin-dir` run names its own folder, which is then the plugin under test, so there is no source to hide.
   ctx.sourcePaths = args.pluginDir ? [] : sourcePaths(worktreeRoot)
   const wallMs = Date.now() - startedAt
@@ -318,7 +320,7 @@ async function runOne({ scenario, runIndex, args, worktreeRoot, sharedCacheDir, 
   }
   writeFileSync(path.join(runDir, "summary.json"), JSON.stringify(summary, null, 2))
 
-  if (!args.keepFixtures) rmSync(runTmp, { recursive: true, force: true })
+  if (!args.keepFixtures) await cleanupRunDir(runTmp)
 
   console.log(`[${runId}] outcome=${summary.outcome} tools=${summary.tool_call_count} wall_ms=${wallMs} cost=$${summary.total_cost_usd ?? "?"}`)
   return summary

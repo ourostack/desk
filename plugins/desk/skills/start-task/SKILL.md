@@ -13,6 +13,8 @@ description: >-
 
 # Start a task
 
+> Boot first: if the Desk boot has not run in this session, run `node <plugin>/mcp/scripts/session-boot.js` first (the `Desk startup:` line in your context has the exact command; add `--task "<name>"` when the operator named a task).
+
 Invoke `desk:using-superpowers-with-desk` at its `start` entry for the engineering handoff. Desk retains outcome identity, scope and the explicit go; Superpowers consumes them without another intake or lifecycle.
 
 A task enters the workspace through one of two paths. Both end in the same place: a new `task.md` under a track directory in `$DESK/`. The agent names and files the task itself and never asks the human to choose a name, a track or a location (`interaction-style` section 2).
