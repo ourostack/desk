@@ -43,7 +43,7 @@ test("the Copilot deny names the Copilot tool (desk-task_update), not Claude Cod
   const reason = denied(guard(pre("edit", edit)))
   assert.match(reason, /`desk-task_update`/u)
   assert.doesNotMatch(reason, /ToolSearch|mcp__plugin_desk_desk__/u)
-  const shell = denied(guard(pre("bash", `sed -i 's/processing/done/' ${CARD_PATH}`)))
+  const shell = denied(guard(pre("bash", { command: `sed -i 's/processing/done/' ${CARD_PATH}` })))
   assert.match(shell, /`desk-task_update`/u)
   const claude = taskStatusGuardHook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: CARD_PATH, old_string: "Next: write the test.", new_string: "Next: celebrate." }, cwd: DESK }, "claude", undefined, { root: DESK }).hookSpecificOutput.permissionDecisionReason
   assert.match(claude, /ToolSearch/u)
