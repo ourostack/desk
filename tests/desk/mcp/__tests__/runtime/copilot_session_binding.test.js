@@ -210,34 +210,56 @@ test("the record file is plain JSON a person can read, naming only the folder, t
   assert.deepEqual(record, { version: 1, folder, activation_config: null, recorded_at: new Date(1790000000000).toISOString() })
 })
 
-test("the boot direction is claimed once per recorded session, and a session the hook never recorded (a child agent's) never claims it", () => {
+test("the boot direction is claimed once per session id, before or after the sessionStart hook has recorded the session", () => {
   const env = envFor()
-  recordCopilotSession({ sessionId: "boot-1", folder: desk(), env })
-  assert.equal(markBootDirected({ sessionId: "boot-1", env }), true, "the first prompt is directed")
-  assert.equal(markBootDirected({ sessionId: "boot-1", env }), false, "a later prompt is not")
-  assert.equal(markBootDirected({ sessionId: "never-recorded", env }), false)
+  // Copilot fires the first prompt's hook before sessionStart: no record exists yet, and the first prompt is directed anyway.
+  assert.equal(markBootDirected({ sessionId: "boot-new", env }), true, "the first prompt is directed with no record")
+  assert.equal(markBootDirected({ sessionId: "boot-new", env }), false, "a later prompt is not")
+  const stub = JSON.parse(readFileSync(copilotSessionFile(stateDirOf(env), "boot-new"), "utf8"))
+  assert.deepEqual(stub, { version: 1, boot_directed: true })
+  // The claim file binds nothing: the server reads no folder from it.
+  assert.equal(readCopilotSession({ env: { ...env, COPILOT_AGENT_SESSION_ID: "boot-new" } }), null)
+  // sessionStart then records the folder and keeps the claim, so the second prompt is not directed.
+  const folder = desk()
+  assert.equal(recordCopilotSession({ sessionId: "boot-new", folder, env }), true)
+  assert.equal(readCopilotSession({ env: { ...env, COPILOT_AGENT_SESSION_ID: "boot-new" } }).folder, folder)
+  assert.equal(JSON.parse(readFileSync(copilotSessionFile(stateDirOf(env), "boot-new"), "utf8")).boot_directed, true)
+  assert.equal(markBootDirected({ sessionId: "boot-new", env }), false)
+  // A resumed session records again and is not directed again: its history holds the boot.
+  recordCopilotSession({ sessionId: "boot-new", folder, env })
+  assert.equal(markBootDirected({ sessionId: "boot-new", env }), false)
+
+  // The other order (a record written first, as a hook that ran earlier would leave it): the first prompt is directed once and the record still binds.
+  recordCopilotSession({ sessionId: "boot-1", folder, env })
+  assert.equal(JSON.parse(readFileSync(copilotSessionFile(stateDirOf(env), "boot-1"), "utf8")).boot_directed, undefined)
+  assert.equal(markBootDirected({ sessionId: "boot-1", env }), true)
+  assert.equal(markBootDirected({ sessionId: "boot-1", env }), false)
+  assert.ok(readCopilotSession({ env: { ...env, COPILOT_AGENT_SESSION_ID: "boot-1" } }).folder.includes("desk"))
+
+  // A session with no usable id claims nothing.
   assert.equal(markBootDirected({ sessionId: "", env }), false)
   assert.equal(markBootDirected({ sessionId: undefined, env }), false)
-  // The record still binds after it is marked, and a resumed session (which records again) is directed again.
-  const folder = readCopilotSession({ env: { ...env, COPILOT_AGENT_SESSION_ID: "boot-1" } }).folder
-  assert.ok(folder.includes("desk"))
-  recordCopilotSession({ sessionId: "boot-1", folder, env })
-  assert.equal(markBootDirected({ sessionId: "boot-1", env }), true)
-  // A record it cannot read, or cannot rewrite, claims nothing.
-  const file = copilotSessionFile(stateDirOf(env), "boot-bad")
-  writeFileSync(file, "{broken")
+  // A record it cannot read or parse as a record, or a file it cannot write, claims nothing.
+  writeFileSync(copilotSessionFile(stateDirOf(env), "boot-bad"), "{broken")
   assert.equal(markBootDirected({ sessionId: "boot-bad", env }), false)
+  writeFileSync(copilotSessionFile(stateDirOf(env), "boot-old"), JSON.stringify({ version: 99 }))
+  assert.equal(markBootDirected({ sessionId: "boot-old", env }), false)
+  writeFileSync(copilotSessionFile(stateDirOf(env), "boot-null"), "null")
+  assert.equal(markBootDirected({ sessionId: "boot-null", env }), false)
   recordCopilotSession({ sessionId: "boot-ro", folder, env })
   const ro = copilotSessionFile(stateDirOf(env), "boot-ro")
   rmSync(ro)
   mkdirSync(ro)
   assert.equal(markBootDirected({ sessionId: "boot-ro", env }), false)
+  assert.equal(recordCopilotSession({ sessionId: "boot-ro", folder, env }), false)
 })
 
 test("every entry point has a safe default environment: no argument, no session id and no record claim nothing", () => {
   assert.equal(recordCopilotSession(), false)
   assert.equal(readCopilotSession(), null)
   assert.equal(markBootDirected(), false)
-  assert.equal(markBootDirected({ sessionId: "never-recorded-default-env" }), false)
+  // With no environment given, the claim goes under the process's own state folder (the isolated one under test) and is still once per session id.
+  assert.equal(markBootDirected({ sessionId: "default-env-session" }), true)
+  assert.equal(markBootDirected({ sessionId: "default-env-session" }), false)
   assert.equal(readCopilotSession({}), null)
 })

@@ -39,6 +39,9 @@ import { withCreatedDirs } from "../util/created-dirs.js"
 import { nextStepOf } from "../desk/active-tasks.js"
 import { redactCredentialLikeText } from "../util/redact.js"
 
+// Said in the first lines of the response and in plain imperatives: an agent that has just made a change expects to publish it, and one that read only the tail of the response ran `git push` on the desk after this call.
+const DESK_COMMIT_NOTE = "STOP, no git needed: Desk already committed this card and scheduled its push in the background; do not commit or push it yourself. Do not run git add, git commit or git push for it."
+
 const TERMINAL_STATUSES = new Set(["done", "cancelled"])
 const DONE_EVIDENCE_KINDS = new Set(["pr", "commit", "ci_run", "non_code"])
 const DONE_EVIDENCE_EXAMPLE = '{"kind": "pr", "ref": "https://github.com/org/repo/pull/123"}'
@@ -712,7 +715,7 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
   if (deskCommit !== null) {
     result.desk_commit = deskCommit
     result.desk_pushed = false
-    result.desk_note = "Desk committed this card and scheduled its push in the background; do not commit or push it yourself."
+    result.desk_note = DESK_COMMIT_NOTE
   }
   // A note or a status change that leaves the next step alone is the common way a card ends up describing work that
   // is already done (a run finished the step, logged it, and reported "Done" over a card still pointing at it): show
@@ -731,7 +734,8 @@ export async function task_update({ deskRoot, input, person = null, readiness, e
     result.report_as = `Task ${slug} is at ${status} (not done): ${reportStep(currentStep)}`
     result.report_note = `Do not tell the operator this task is done; it is at ${status}.`
   }
-  return result
+  // The note is the second field, right after `status`, so it is read before the rest of the response (in boot round H a Copilot run ran `git push` on the desk after this response, with the note as the last of several fields).
+  return deskCommit !== null ? { status: result.status, desk_note: result.desk_note, ...result } : result
 }
 
 // The already-archived card's status, read fail-safe: a missing file reads

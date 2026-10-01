@@ -22,6 +22,15 @@ const STALE_MS = 30 * 24 * 60 * 60 * 1000
 
 const hasText = (value) => typeof value === "string" && value.trim() !== ""
 
+// Whether the session's file already carries the first-prompt claim; an unreadable or absent file carries none.
+function bootClaimed(file) {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"))?.boot_directed === true
+  } catch {
+    return false
+  }
+}
+
 /** The record file for a session: a digest of its id, so no id can name another path. */
 export function copilotSessionFile(stateDir, sessionId) {
   return path.join(stateDir, COPILOT_SESSION_DIR, `${createHash("sha256").update(String(sessionId)).digest("hex").slice(0, 32)}.json`)
@@ -51,6 +60,8 @@ export function recordCopilotSession({ sessionId, folder, activationConfig = nul
     const file = copilotSessionFile(stateDir, sessionId)
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     const record = { version: RECORD_VERSION, folder, activation_config: hasText(activationConfig) ? activationConfig : null, recorded_at: new Date(now()).toISOString() }
+    // The first-prompt hook runs before this one on a new session, and its claim must survive this write.
+    if (bootClaimed(file)) record.boot_directed = true
     const temp = `${file}.${process.pid}.tmp`
     writeFileSync(temp, `${JSON.stringify(record)}\n`, { mode: 0o600 })
     renameSync(temp, file)
@@ -81,15 +92,23 @@ export function readCopilotSession({ env = process.env, stateDir = resolveDeskSt
 }
 
 /**
- * The first-prompt hook's half: true exactly once per record, the first time it is asked after the `sessionStart` hook wrote the record (a resumed session records again, so it is directed again).
- * A session with no record (a child agent's, or one the hook could not record) and a record it cannot read or rewrite claim nothing, so the direction is never repeated for a failure. Never throws.
+ * The first-prompt hook's half: true exactly once per session id, the first time it is asked, whether or not the `sessionStart` hook has recorded the session yet.
+ * It must not wait for the record: Copilot fires `userPromptSubmitted` for a new session's first prompt before it fires `sessionStart` (Copilot CLI 1.0.89, `-p` and interactive), so a pointer that required the record was never delivered with the first prompt, which is the one that matters.
+ * The claim is kept in the session's own file (a stub with no folder when the hook has not run yet; `recordCopilotSession` keeps the claim when it writes the folder), so a resumed session is not directed again: its history already holds the boot.
+ * A record it cannot read or a file it cannot write claims nothing, so a failure never repeats the direction. Never throws.
  */
 export function markBootDirected({ sessionId, env = process.env, stateDir = resolveDeskStateDir({ env }) } = {}) {
   if (!hasText(sessionId)) return false
   try {
+    assertNotRealStateUnderTest(stateDir)
     const file = copilotSessionFile(stateDir, sessionId)
-    const record = JSON.parse(readFileSync(file, "utf8"))
-    if (record === null || typeof record !== "object" || record.version !== RECORD_VERSION || record.boot_directed === true) return false
+    let record = { version: RECORD_VERSION }
+    if (existsSync(file)) {
+      record = JSON.parse(readFileSync(file, "utf8"))
+      if (record === null || typeof record !== "object" || record.version !== RECORD_VERSION || record.boot_directed === true) return false
+    } else {
+      mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    }
     const temp = `${file}.${process.pid}.tmp`
     writeFileSync(temp, `${JSON.stringify({ ...record, boot_directed: true })}\n`, { mode: 0o600 })
     renameSync(temp, file)

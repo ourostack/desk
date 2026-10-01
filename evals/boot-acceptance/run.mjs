@@ -27,6 +27,7 @@ import * as process from "node:process"
 
 import { cleanupRunDir, materializeFixture, breakOriginForFailure, addMissingCloneTask, materializeGreenhouseClone, createIsolatedHome, buildPluginDir, sourcePaths, freshTempDir, REAL_HOME } from "./lib.mjs"
 import { SCENARIOS, CRITIQUE_PROMPT, findScenario } from "./scenarios.mjs"
+import { gateReport, readCopilotSessionEvents, reduceCopilotEvents } from "./gates.mjs"
 import { buildChildEnv, countTokenLeaks, findRealGh, installGhShim, redactSecrets, writeGitConfig } from "./safety.mjs"
 import { COPILOT_DEFAULT_MODEL, COPILOT_TOKEN_VAR, GH_TOKEN_WARNING, META_TOOLS, authFailureProblem, compactCopilotTranscript, copilotFlags, copilotResumeArgs, findCopilotBinary, installCopilotPlugins, installedBootScript, notApplicableFor, parseCopilotTranscript, resolveCopilotAuth, shareCopilotPackageCache, writeCopilotProfile } from "./copilot.mjs"
 
@@ -364,6 +365,17 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
   const keep = args.host === "copilot" ? compactCopilotTranscript : (text) => text
   writeFileSync(path.join(runDir, "transcript.jsonl"), keep(first.stdout))
   if (turns[1]) writeFileSync(path.join(runDir, "critique-transcript.jsonl"), keep(turns[1].stdout))
+  // Which Desk gates fired. Copilot's stream carries no hook events, so the session's own log is read from the run's profile (it goes with the temp HOME) and a reduced, redacted copy is saved.
+  let copilotEventsText = null
+  if (args.host === "copilot") {
+    const sessionLog = readCopilotSessionEvents(path.join(homeDir, ".copilot"))
+    const reduced = sessionLog === null ? "" : reduceCopilotEvents(sessionLog, { secrets })
+    if (reduced !== "") {
+      copilotEventsText = reduced
+      writeFileSync(path.join(runDir, "copilot-events.jsonl"), reduced)
+    }
+  }
+  const gates = gateReport({ host: args.host, claudeEvents: turns.flatMap((t) => parseStreamJson(t.stdout)), copilotEventsText })
   const stderr = turns.map((t) => t.stderr).filter(Boolean).join("\n")
   if (stderr) writeFileSync(path.join(runDir, "stderr.log"), stderr)
 
@@ -406,6 +418,8 @@ async function runInTemp({ scenario, runIndex, args, worktreeRoot, sharedCacheDi
     // Every check this host could run passed; the checks it could not run are the `not_applicable` list, counted here, never credited as passes.
     judged_pass: checkResult.outcome === "pass",
     not_applicable_count: checkResult.notApplicable.length,
+    // Which of Desk's own gates fired (see gates.mjs): hook feedback and denials on Claude; the first-prompt pointer, denials and stop blocks on Copilot.
+    gates,
     // The scenario turn's final reply and the critique turn's reply are separate fields.
     final_reply: ctx.finalResultText,
     critique,

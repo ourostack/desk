@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 
-// Copilot userPromptSubmitted: on the first prompt of a session the sessionStart hook recorded, hand the model the boot
-// direction as context beside the message (see promptBootDirection for why sessionStart alone is not enough). Later
-// prompts, sessions the hook never recorded (child agents) and any failure answer `{}`; it always exits 0.
+// Copilot userPromptSubmitted: on the first prompt of a session, hand the model the boot direction as context beside the message
+// (see promptBootDirection for why sessionStart alone is not enough). Copilot runs this hook before sessionStart on a new session, so it
+// claims the session itself and needs no record. Later prompts and any failure answer `{}`; it always exits 0.
 
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
