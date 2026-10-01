@@ -84,7 +84,7 @@ function critiqueDump(summaries) {
   for (const [scenario, runs] of byScenario) {
     sections.push(`### ${scenario}\n`)
     for (const s of runs.sort((a, b) => a.run - b.run)) {
-      sections.push(`**run-${s.run}** (outcome: ${s.outcome})\n\n> ${(s.critique ?? "").split("\n").join("\n> ")}\n`)
+      sections.push(`**run-${s.run}** (outcome: ${s.outcome})\n\n> ${(s.critique ? s.critique : `(no critique: ${s.critique_skipped ?? "not recorded"})`).split("\n").join("\n> ")}\n`)
     }
   }
   return sections.join("\n")

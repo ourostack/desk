@@ -15,7 +15,7 @@ const allowed = (...args) => classifyGh(args).allowed
 
 test("gh: read-only subcommands pass", () => {
   for (const args of [
-    ["auth", "status"], ["pr", "list", "--repo", "a/b", "--author", "@me"], ["pr", "view", "3"], ["repo", "view", "a/b"],
+    ["auth", "status"], ["auth", "token"], ["auth", "token", "--user", "someone"], ["pr", "list", "--repo", "a/b", "--author", "@me"], ["pr", "view", "3"], ["repo", "view", "a/b"],
     ["api", "repos/a/b"], ["api", "-X", "GET", "repos/a/b"], ["api", "--method=GET", "x"], ["issue", "list"], ["search", "prs", "x"], ["--version"], ["-R", "a/b", "pr", "list"],
   ]) assert.equal(allowed(...args), true, args.join(" "))
 })
@@ -24,7 +24,7 @@ test("gh: writes and unknown commands are denied", () => {
   for (const args of [
     ["pr", "create", "--title", "x"], ["pr", "merge", "1"], ["repo", "fork", "a/b"], ["repo", "create", "x"], ["issue", "create"], ["issue", "comment", "1"],
     ["api", "-X", "POST", "repos/a/b/issues"], ["api", "-X", "DELETE", "x"], ["api", "x", "-f", "a=b"], ["api", "x", "-F", "a=b"], ["api", "x", "--field", "a=b"], ["api", "x", "--input", "f.json"], ["api", "graphql", "-f", "query=x"],
-    ["auth", "login"], ["auth", "switch"], ["auth", "token"], ["auth", "setup-git"], ["config", "set", "a", "b"], ["extension", "install", "x"], ["release", "create"], ["workflow", "run", "x"], ["secret", "set", "x"], ["gist", "create"], ["somethingnew"],
+    ["auth", "status", "--show-token"], ["auth", "status", "-t"], ["auth", "login"], ["auth", "switch"], ["auth", "refresh"], ["auth", "setup-git"], ["config", "set", "a", "b"], ["extension", "install", "x"], ["release", "create"], ["workflow", "run", "x"], ["secret", "set", "x"], ["gist", "create"], ["somethingnew"],
   ]) assert.equal(allowed(...args), false, args.join(" "))
 })
 

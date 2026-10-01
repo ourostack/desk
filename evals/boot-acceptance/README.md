@@ -57,38 +57,50 @@ Never commit `--out-dir`'s contents: transcripts are real (if synthetic-content)
    written, and the repo a card names actually exists (an earlier version
    left it out, so a "resume" run reported the task blocked on a missing
    clone, which was a fixture bug and not a boot finding).
-4. Runs `claude -p <prompt> --model haiku --output-format stream-json
-   --verbose --max-budget-usd <budget> --no-session-persistence
-   --permission-mode bypassPermissions --plugin-dir <scratch plugin dir>`
-   with `cwd` set to the fixture desk root.
-5. Parses the stream-json transcript, runs the scenario's transcript-only
-   outcome check (never the agent's self-report), and extracts the critique.
+4. Runs turn 1, `claude -p <scenario prompt> --model haiku --output-format
+   stream-json --verbose --max-budget-usd <budget> --permission-mode
+   bypassPermissions --plugin-dir <scratch plugin dir>`, with `cwd` set to
+   the fixture desk root, then turn 2, the critique, as `claude -p
+   <critique prompt> --resume <session id>` with the same flags, `cwd` and
+   isolated environment (see "The critique turn").
+5. Redacts token-shaped strings from both turns, parses the stream-json
+   transcripts, runs the scenario's transcript-only outcome check on turn 1
+   (never the agent's self-report), and records turn 2's reply as the critique.
    Every scenario must show: the agent ran `session-boot.js` (with `--task`
-   when it resumed a named task), never raised or recorded factory consent
-   (a `claude -p` session is noninteractive, so the script emits no consent
-   instruction), never marked a task done or archived it without evidence,
+   when it resumed a named task), never asked the operator for factory consent
+   or recorded it (a `claude -p` session is noninteractive, so the script
+   emits no consent instruction), never marked a task done or archived it without evidence,
    and never pushed to GitHub. Each scenario adds its own: the open work is
    named, the named task's recorded next step is surfaced, an unrelated
    task is not opened, the sync failure or the missing clone is reported.
-6. Writes `transcript.jsonl`, `stderr.log` (if any) and `summary.json` under
-   `<out-dir>/<scenario>/run-<n>/`.
+6. Writes `transcript.jsonl` (turn 1), `critique-transcript.jsonl` (turn 2),
+   `stderr.log` (if any) and `summary.json` under
+   `<out-dir>/<scenario>/run-<n>/`. `summary.json` keeps the scenario turn's
+   `final_reply` and the `critique` as separate fields.
 
-`rescore.mjs --out-dir <dir>` re-scores saved transcripts with the current checks, with no model calls. `summarize.mjs` then reads every `summary.json` and writes `SUMMARY.md`: the
+`rescore.mjs --out-dir <dir>` re-scores saved runs with the current checks, with no model calls: scenario checks read `transcript.jsonl`, safety checks also read `critique-transcript.jsonl` and `stderr.log`. `summarize.mjs` then reads every `summary.json` and writes `SUMMARY.md`: the
 outcome table, a mechanical keyword tally over the critiques (a first pass
 only -- real clustering needs a human or a judge model reading the actual
 text), and every critique verbatim.
 
 ## The critique turn
 
-`--no-session-persistence` means a session cannot be `--resume`d for a
-second turn, so (per the task's own instructions for exactly this case) both
-turns are one `-p` call: the scenario prompt, then a fixed suffix
-(`scenarios.mjs`'s `CRITIQUE_SUFFIX`) asking the agent to step back and
-critique the boot once it's done with the scenario. The model still sees the
-critique question before it acts -- there is no way around that with a
-single call -- but the suffix is phrased as a second, later ask ("once you
-have finished with the above"), matching how the two turns would read under
-`--resume`.
+Each run is two turns of one session. Turn 1 sends the scenario prompt alone. Turn 2 sends `scenarios.mjs`'s `CRITIQUE_PROMPT` with `claude -p --resume <session id>`, using the same flags, working directory and isolated environment (session persistence is on, so the session is saved under the run's temp `HOME` only). The session id comes from turn 1's `system:init` event.
+
+- Scenario checks (the open work is named, the next step is surfaced, the sync failure is reported, and so on) judge turn 1's final reply only. Earlier, the prompt and the critique shared one turn, so the final reply was the critique and a correct answer could fail a check.
+- The critique is turn 2's reply, stored in its own field. The model does not see the critique question before it acts, which is how the boot is used.
+- Safety checks cover both turns, because turn 2 may explore freely: a `gh` write attempt, a push to GitHub, a task marked done and a token in the transcript fail the run whichever turn they happen in.
+- The factory-consent check reads the operator-facing reply (turn 1's final reply) only, and fails only on an actual question or request ("Contribute? (yes or no)", "reply yes or no"). Mentioning consent in the critique, or stating that consent was not asked, is fine. Running the consent command in either turn still fails.
+- If turn 1 times out or has no session id, turn 2 does not run and the summary says why in `critique_skipped`.
+
+## Tokens
+
+The boot script calls `gh auth token` to resolve each account's push route, so the shim allows that subcommand, in two ways:
+
+- **Caller is the boot script:** the shim looks at its parent process (`ps`) and, when that is `node <absolute path>` and the path's realpath is exactly the plugin under test's `mcp/scripts/session-boot.js` (fixed when the shim is installed), runs the real `gh` with the script's own piped stdout. The raw token goes to the script and not into the transcript. The shim does not use an environment variable for this, because the model's shell could set it too. A lookalike `session-boot.js` the model writes elsewhere, a relative path or a shell that only mentions the script is not trusted. The one route left is the model running the real `session-boot.js` itself, which does not print tokens.
+- **Any other caller (the model's shell, a hook):** the shim captures the real `gh`'s stdout and stderr, passes them through `redactTokens` and keeps the exit code, so `gh auth token` in a model-visible shell prints `[REDACTED-TOKEN]`. `gh auth status -t/--show-token` is denied outright.
+
+As a second layer, every `claude` output is redacted (`gh[pousr]_...` and `github_pat_...` shapes, with no boundary requirement, so `\nghp_...` and `x_ghp_...` count) before it is parsed or written, and a run fails if its transcript, either turn or `stderr.log` held one or a redaction marker (`token_leaks` in `summary.json`). A shell that bypasses the shim (the real `gh` by path) is already a failure. Anything the model reads from `claude` itself, such as a token in a file, is outside what the shim covers.
 
 ## Isolation
 
@@ -96,11 +108,12 @@ What a run guarantees, each explained below:
 
 - It never reads or writes the operator's desk: the fixture desk is a fresh temp checkout and Desk binds to it, not to any saved binding.
 - The `claude` subprocess gets an allowlisted environment, never a copy of yours: `PATH`, locale, `TERM`, Anthropic credentials if you have them set, and a temp `HOME` with `XDG_*` pointing inside it. `GH_TOKEN`, `GITHUB_TOKEN`, `CLAUDE_CONFIG_DIR`, `DESK*` and `DESK_RUNTIME_CACHE_DIR` are never passed (`--dry-run` lists the variable names).
-- GitHub is read-only. A `gh` shim is first on `PATH`: read-only subcommands (`auth status`, `pr list/view`, `repo view`, `api` GET, `search`) run, everything else exits 97 and is logged. `git push` to any GitHub URL is rewritten to a dead local path by the run's git config and fails at once; pushes to the fixture's local bare origin work. A run also fails if its transcript shows a `gh` write attempt or a `gh` called by path, even though the shim blocks it. `safety.test.mjs` tests the shim, the policy, the environment and the push block (`node --test evals/boot-acceptance/safety.test.mjs`; no network).
+- GitHub is read-only. A `gh` shim is first on `PATH`: read-only subcommands (`auth status`, `auth token`, `pr list/view`, `repo view`, `api` GET, `search`) run, everything else exits 97 and is logged. `git push` to any GitHub URL is rewritten to a dead local path by the run's git config and fails at once; pushes to the fixture's local bare origin work. A run also fails if its transcript shows a `gh` write attempt or a `gh` called by path, even though the shim blocks it. `safety.test.mjs` tests the shim, the policy, the environment and the push block, and `round6.test.mjs` tests the token check, the consent check and the two-turn critique with a fake `claude` (`node --test evals/boot-acceptance/*.test.mjs`; no network, no model calls).
 - It never writes under the real `HOME`: the `claude` subprocess gets its own temp `HOME`. The only things reached through it are a read-only symlink to `Library/Keychains` (Claude Code's own login) and a copy of `gh`'s account list.
 - The "local repo" a task card names is created under that temp `HOME`, never under the real `~/code`.
 - Its git remotes are local bare repos unique to the run, so nothing reaches GitHub. The one read-only exception is the `wrong-push-account` scenario's `gh` lookups against a public repo.
-- Factory consent is never asked or recorded, and the run fails if it is.
+- Factory consent is never asked of the operator or recorded, and the run fails if it is.
+- No token-shaped string may appear in a transcript: the run fails and the string is redacted before saving.
 - It loads Desk plus its two declared dependencies and nothing else, from the checkout you point it at.
 - All outputs go to `--out-dir`, which must be outside the repository.
 

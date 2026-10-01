@@ -18,8 +18,9 @@
 // show a write attempt, in case something bypassed the shim (for example by
 // calling the real binary by path).
 
-import { chmodSync, mkdirSync, writeFileSync, existsSync } from "node:fs"
+import { chmodSync, mkdirSync, writeFileSync, existsSync, realpathSync } from "node:fs"
 import * as path from "node:path"
+import { spawnSync } from "node:child_process"
 import * as process from "node:process"
 
 // ---------------------------------------------------------------------------
@@ -27,7 +28,8 @@ import * as process from "node:process"
 // ---------------------------------------------------------------------------
 
 const READ_VERBS = {
-  auth: ["status"],
+  // `auth token` is read-only and the boot script needs it to resolve each account's push route. The shim prints the raw token only to that script (the one `session-boot.js` of the plugin under test; see `isBootScriptCommand`); to any other caller its output is redacted.
+  auth: ["status", "token"],
   pr: ["list", "view", "status", "diff", "checks"],
   issue: ["list", "view", "status"],
   repo: ["view", "list", "clone"],
@@ -62,6 +64,7 @@ export function classifyGh(args) {
   const [group, verb] = words
   if (!group) return { allowed: true, reason: "no subcommand" }
   if (READ_ONLY_GROUPS.has(group)) return { allowed: true, reason: `gh ${group} is read-only` }
+  if (group === "auth" && verb === "status" && args.some((a) => a === "--show-token" || /^-[A-Za-z]*t[A-Za-z]*$/.test(a))) return { allowed: false, reason: "gh auth status -t/--show-token prints a token" }
   if (group === "api") {
     const rest = args.slice(args.indexOf("api") + 1)
     for (let i = 0; i < rest.length; i++) {
@@ -93,6 +96,26 @@ function tokenize(text) {
   return [...text.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3])
 }
 
+/**
+ * True when `commandLine` is `node [flags] <absolute path> ...` and that path, resolved with `realpath`, is exactly `bootScript` (the realpath of the plugin under test's `mcp/scripts/session-boot.js`, fixed when the shim is installed). A relative path is refused (the shim cannot know the parent's cwd), as is a lookalike script anywhere else, a script reached through a symlink to somewhere else, and a shell whose command text only mentions the script. Anything unparseable, such as a path with a space in it, fails closed.
+ */
+export function isBootScriptCommand(commandLine, bootScript, resolve = realpathSync) {
+  if (!bootScript) return false
+  const m = String(commandLine).trim().match(/^(?:\S*\/)?node(?:\.exe)?(?:\s+--?\S+)*\s+(\S+)(?:\s|$)/)
+  if (!m || !path.isAbsolute(m[1])) return false
+  try {
+    return resolve(m[1]) === bootScript
+  } catch {
+    return false
+  }
+}
+
+/** The command line of process `pid` (`ps`), or "" when it cannot be read. */
+export function processCommand(pid) {
+  const r = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" })
+  return r.status === 0 ? r.stdout.trim() : ""
+}
+
 /** Every `gh` write the transcript's Bash commands attempted, plus any call to a `gh` binary by path (which skips the shim). */
 export function ghWriteAttempts(commands) {
   const found = []
@@ -107,6 +130,32 @@ export function ghWriteAttempts(commands) {
 }
 
 // ---------------------------------------------------------------------------
+// Token-shaped strings. `gh auth token` is allowed (to the boot script only;
+// the shim redacts it for every other caller), and a transcript check fails
+// any run in which a token-shaped string still shows up, as a second layer.
+// ---------------------------------------------------------------------------
+
+export const REDACTION_MARKER = "[REDACTED-TOKEN]"
+// No boundary in front: a token after a JSON-escaped newline (`\nghp_...`) or glued to a prefix (`x_ghp_...`) must still be found.
+const TOKEN_SHAPE = /(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/g
+
+/** Every token-shaped string (gh[pousr]_..., github_pat_...) in `text`. */
+export function findTokens(text) {
+  return String(text).match(TOKEN_SHAPE) ?? []
+}
+
+/** `text` with every token-shaped string replaced by the redaction marker, so a leak never reaches a saved file. */
+export function redactTokens(text) {
+  return String(text).replace(TOKEN_SHAPE, REDACTION_MARKER)
+}
+
+/** How many token-shaped strings or redaction markers `text` holds: a leak that was seen, or one already redacted when the text was saved. */
+export function countTokenLeaks(text) {
+  const t = String(text)
+  return findTokens(t).length + t.split(REDACTION_MARKER).length - 1
+}
+
+// ---------------------------------------------------------------------------
 // Shim installation.
 // ---------------------------------------------------------------------------
 
@@ -115,11 +164,12 @@ export function ghWriteAttempts(commands) {
  * `classifyGh`, runs the real `gh` for read-only calls and otherwise exits 97
  * after appending the attempt to `logFile`. `realGh` is the real binary.
  */
-export function installGhShim({ shimDir, realGh, logFile }) {
+export function installGhShim({ shimDir, realGh, logFile, bootScript = null }) {
   mkdirSync(shimDir, { recursive: true })
   const policy = new URL("./safety.mjs", import.meta.url).href
+  // Who gets a raw token: only the plugin under test's own boot script (an exact realpath match, baked in at install time), found by the shim's parent process (`ps`), never by an environment variable the model's shell could also set. The boot script spawns `gh` with a piped stdout, so its token goes to the script and not into the transcript. Everyone else (the model's shell, a hook) gets the child's output captured and passed through `redactTokens`, with the exit code kept.
   const script = `#!${process.execPath}
-import { classifyGh } from ${JSON.stringify(policy)}
+import { classifyGh, isBootScriptCommand, processCommand, redactTokens } from ${JSON.stringify(policy)}
 import { spawnSync } from "node:child_process"
 import { appendFileSync } from "node:fs"
 const args = process.argv.slice(2)
@@ -129,7 +179,13 @@ if (!verdict.allowed) {
   process.stderr.write("gh blocked by the boot-acceptance harness: " + verdict.reason + ". Runs may only read from GitHub.\\n")
   process.exit(97)
 }
-const r = spawnSync(${JSON.stringify(realGh)}, args, { stdio: "inherit" })
+if (isBootScriptCommand(processCommand(process.ppid), ${JSON.stringify(bootScript)})) {
+  const raw = spawnSync(${JSON.stringify(realGh)}, args, { stdio: "inherit" })
+  process.exit(raw.status ?? 1)
+}
+const r = spawnSync(${JSON.stringify(realGh)}, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+process.stdout.write(redactTokens(r.stdout ?? ""))
+process.stderr.write(redactTokens(r.stderr ?? ""))
 process.exit(r.status ?? 1)
 `
   const file = path.join(shimDir, "gh.mjs")
