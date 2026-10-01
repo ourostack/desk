@@ -24,6 +24,7 @@
 //   markers/<host>-<session_id>.json   pending-session bookkeeping
 //   outbox/<store-slug>/<host>-<session_id>.json   local facts, never as-is
 //   delivered/<store-slug>.json        name -> last delivered published blob sha
+//   delivered-paths/<store-slug>.json  name -> the path it was delivered at
 //   quarantine/<store-slug>/<name>     { reason, at, blob? } (blob: the
 //                                      published blob sha the store refused),
 //                                      and for labels
@@ -689,14 +690,57 @@ export async function pendingFiles(env, store, { publishedBytesFor, includeQuara
   return pending
 }
 
-/** Records `name` as delivered with `publishedBlobSha` for `store`. Concurrent deliveries for the same store are serialized so none is lost. */
-export async function markDelivered(env, store, { name, publishedBlobSha }, { platform = process.platform, runner = undefined } = {}) {
+/**
+ * Records `name` as delivered with `publishedBlobSha` for `store`. Concurrent deliveries for the same store are serialized so none is lost.
+ * `publishedPath`, the path the file has in the store (`facts/<name>` or `labels/<job>/<session>.json`, the keyed one for a desk not known to be private), is kept in
+ * `delivered-paths/<store-slug>.json` so a later retraction deletes exactly what was delivered.
+ */
+export async function markDelivered(env, store, { name, publishedBlobSha, publishedPath = undefined }, { platform = process.platform, runner = undefined } = {}) {
   requireString(name, "name")
   requirePattern(publishedBlobSha, SHA1, "publishedBlobSha")
+  if (publishedPath !== undefined) requireString(publishedPath, "publishedPath")
   const slug = storeSlug(store)
   const root = await factoryStateRoot(env, { platform, runner })
+  if (publishedPath !== undefined) {
+    await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, (current) => ({ ...current, [name]: publishedPath }), { platform, env, runner })
+  }
   const file = path.join(root, "delivered", `${slug}.json`)
   return updateJsonLocked(root, file, {}, (current) => ({ ...current, [name]: publishedBlobSha }), { platform, env, runner })
+}
+
+/**
+ * `readDelivered(env, store) -> { blobs, paths, quarantined }`: what this machine delivered to `store`. `blobs` maps each delivered name (a facts file
+ * name or a labels key) to its published blob SHA, `paths` maps the names delivered by a Desk that recorded it to the published path, and `quarantined` is
+ * the set of names with a quarantine record.
+ */
+export async function readDelivered(env, store, { platform = process.platform } = {}) {
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env, { platform })
+  const blobs = await readJsonFileSafe(path.join(root, "delivered", `${slug}.json`), {}, platform)
+  const paths = await readJsonFileSafe(path.join(root, "delivered-paths", `${slug}.json`), {}, platform)
+  const dir = path.join(root, "quarantine", slug)
+  const quarantined = new Set(await listRegularFiles(dir, OUTBOX_NAME_PATTERN))
+  for (const job of await listDirSafe(path.join(dir, "labels"))) {
+    for (const file of await listRegularFiles(path.join(dir, "labels", job), LABELS_NAME_PATTERN)) quarantined.add(`labels/${job}/${file}`)
+  }
+  return { blobs, paths, quarantined }
+}
+
+/**
+ * `forgetDelivered(env, store, names)`: drops the delivered records of `names` (facts file names and labels keys) once their retraction is confirmed, and the
+ * local outbox and labels files for `store` that produced them, so the next listing does not publish them again. A name of another shape is ignored.
+ */
+export async function forgetDelivered(env, store, names, { platform = process.platform, runner = undefined } = {}) {
+  const slug = storeSlug(store)
+  const root = await factoryStateRoot(env, { platform, runner })
+  const own = [...new Set(names)].filter((name) => typeof name === "string" && (OUTBOX_NAME_PATTERN.test(name) || LABELS_KEY_PATTERN.test(name)))
+  if (own.length === 0) return
+  const drop = (current) => Object.fromEntries(Object.entries(current).filter(([name]) => !own.includes(name)))
+  await updateJsonLocked(root, path.join(root, "delivered", `${slug}.json`), {}, drop, { platform, env, runner })
+  await updateJsonLocked(root, path.join(root, "delivered-paths", `${slug}.json`), {}, drop, { platform, env, runner })
+  for (const name of own) {
+    await fsp.rm(OUTBOX_NAME_PATTERN.test(name) ? path.join(root, "outbox", slug, name) : path.join(root, "labels", slug, name.slice("labels/".length)), { force: true })
+  }
 }
 
 /**

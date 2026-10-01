@@ -109,6 +109,20 @@ export function fakeGitHub({
     }
     return putTree([...entries])
   }
+  // A new tree from `treeSha` without `parts`; a folder left empty goes too, as Git has it.
+  const withoutPath = (treeSha, parts) => {
+    const entries = new Map(trees.get(treeSha) ?? [])
+    if (parts.length === 1) entries.delete(parts[0])
+    else {
+      const child = entries.get(parts[0])
+      if (child?.type === "tree") {
+        const sub = withoutPath(child.sha, parts.slice(1))
+        if ((trees.get(sub) ?? new Map()).size === 0) entries.delete(parts[0])
+        else entries.set(parts[0], { type: "tree", sha: sub })
+      }
+    }
+    return putTree([...entries])
+  }
   const DATA = /^(?:facts|labels)\//u
 
   const factsEntries = Object.entries(mainFacts).map(([name, bytes]) => {
@@ -190,6 +204,10 @@ export function fakeGitHub({
     if (method === "POST" && (m = /^repos\/([^/]+\/[^/]+)\/git\/trees$/u.exec(pathPart))) {
       let sha = body.base_tree
       for (const entry of body.tree) {
+        if (entry.sha === null) {
+          sha = withoutPath(sha, entry.path.split("/"))
+          continue
+        }
         const blob = gitBlobSha(Buffer.from(entry.content, "utf8"))
         blobs.set(blob, entry.content)
         sha = withPath(sha, entry.path.split("/"), blob)
@@ -321,7 +339,10 @@ export function fakeGitHub({
       const headSha = repo(pr.headRepo).refs.get(`heads/${pr.head.ref}`)
       const main = storeRepo().refs.get("heads/main")
       let tree = commits.get(main).tree
-      for (const [name, sha] of filesOf(commits.get(headSha).tree)) if (DATA.test(name)) tree = withPath(tree, name.split("/"), sha)
+      const headFiles = filesOf(commits.get(headSha).tree)
+      for (const [name, sha] of headFiles) if (DATA.test(name)) tree = withPath(tree, name.split("/"), sha)
+      // A data file the branch dropped is a delete the merge applies.
+      for (const name of filesOf(tree).keys()) if (DATA.test(name) && !headFiles.has(name)) tree = withoutPath(tree, name.split("/"))
       storeRepo().refs.set("heads/main", putCommit(tree, [main, headSha], "merge"))
       pr.state = "closed"
       pr.merged_at = "merged"

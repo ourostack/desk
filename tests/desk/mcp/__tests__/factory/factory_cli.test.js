@@ -194,7 +194,7 @@ test("validate-pr reads base and head as Git data, enforces facts for contributo
   assert.equal(existsSync(marker), false)
 }))
 
-test("validate-pr marks non-fact files under facts/ and maintainer removals as maintenance, and refuses a head whose merge conflicts", () => scratch(async (env) => {
+test("validate-pr marks non-fact files under facts/ as maintenance, validates a delete of a facts file for anyone, and refuses a head whose merge conflicts", () => scratch(async (env) => {
   const repo = path.join(env.HOME, "store")
   const facts = path.join(repo, "facts")
   await fs.mkdir(facts, { recursive: true })
@@ -248,16 +248,14 @@ test("validate-pr marks non-fact files under facts/ and maintainer removals as m
   git("rm", "-q", path.join("facts", names[1]))
   git("commit", "-q", "-m", "cleanup")
   const cleanupHead = git("rev-parse", "HEAD")
-  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", "OWNER"], cwd: repo }), {
-    ok: true,
-    maintenance: true,
-    errors: [],
-  })
-  assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", "NONE"], cwd: repo }), {
-    ok: false,
-    maintenance: false,
-    errors: [{ code: "removal", path: `facts/${names[1]}` }],
-  })
+  // Deleting a facts file is a retraction: it validates like any change at that path, for a maintainer as for anyone, and is not maintenance.
+  for (const association of ["OWNER", "NONE"]) {
+    assert.deepEqual(await runValidatePrCommand({ argv: ["--base", forkPoint, "--head", cleanupHead, "--author-association", association], cwd: repo }), {
+      ok: true,
+      maintenance: false,
+      errors: [],
+    })
+  }
 }))
 
 const LABEL_1111 = "labels/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/11111111-1111-4111-8111-111111111111.json"
@@ -344,13 +342,13 @@ test("validate-pr gates labels as data against the facts the merge would leave i
     errors: [{ code: "evaluator_downgrade", path: LABEL_1111 }],
   })
 
-  // Removing labels is maintenance for a maintainer and refused for anyone else.
+  // Removing labels is a retraction: it validates for anyone.
   git("checkout", "-q", "-b", "drop-label", label1111Head)
   git("rm", "-q", LABEL_1111)
   git("commit", "-q", "-m", "drop label")
   const dropHead = git("rev-parse", "HEAD")
-  assert.deepEqual(await validate(label1111Head, dropHead, "MEMBER"), { ok: true, maintenance: true, errors: [] })
-  assert.deepEqual(await validate(label1111Head, dropHead, "NONE"), { ok: false, maintenance: false, errors: [{ code: "removal", path: LABEL_1111 }] })
+  assert.deepEqual(await validate(label1111Head, dropHead, "MEMBER"), { ok: true, maintenance: false, errors: [] })
+  assert.deepEqual(await validate(label1111Head, dropHead, "NONE"), { ok: true, maintenance: false, errors: [] })
 
   // A labels file that is not valid JSON data is refused without being echoed or run.
   git("checkout", "-q", "-b", "bad-label", forkPoint)
@@ -417,7 +415,7 @@ test("validate-pr asks Git nothing about base facts when the pull request touche
       return bytes[gitArgs[1].slice(41)]
     }),
   })
-  assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "removal", path: copilot1111 }, { code: "removal", path: codex1111 }] })
+  assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
   assert.deepEqual(calls, ["diff", "show", "show", "show"])
 })
 
@@ -510,10 +508,10 @@ test("validate-pr handles added, removed, unknown, invalid-path, malformed, over
   assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
   assert.equal(calls, 2)
 
-  for (const [status, code] of [["D", "removal"], ["X", "status"]]) {
-    result = await runValidatePrCommand({ argv: args, git: mergeGit(() => `${status}\0${validPath}\0`) })
-    assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code, path: validPath }] })
-  }
+  result = await runValidatePrCommand({ argv: args, git: mergeGit(() => `D\0${validPath}\0`) })
+  assert.deepEqual(result, { ok: true, maintenance: false, errors: [] })
+  result = await runValidatePrCommand({ argv: args, git: mergeGit(() => `X\0${validPath}\0`) })
+  assert.deepEqual(result, { ok: false, maintenance: false, errors: [{ code: "status", path: validPath }] })
 
   calls = 0
   result = await runValidatePrCommand({
@@ -573,12 +571,12 @@ test("validate-pr rejects malformed options and main exits one while still print
   const invalidCode = await main({
     argv: ["validate-pr", "--base", "a".repeat(40), "--head", "b".repeat(40), "--author-association", "NONE"],
     env,
-    git: mergeGit(() => `D\0${validPath}\0`),
+    git: mergeGit(() => `X\0${validPath}\0`),
     write: (text) => { output += text },
     logError: (text) => { logged += text },
   })
   assert.equal(invalidCode, 1)
-  assert.deepEqual(JSON.parse(output), { ok: false, maintenance: false, errors: [{ code: "removal", path: validPath }] })
+  assert.deepEqual(JSON.parse(output), { ok: false, maintenance: false, errors: [{ code: "status", path: validPath }] })
   assert.equal(logged, "")
 }))
 

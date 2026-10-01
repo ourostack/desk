@@ -227,8 +227,9 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
     return { ...result, maintenance: false }
   }
   // Anything but a published facts or labels file, including a non-fact file
-  // under `facts/` or `labels/`, and a maintainer's removal of a facts or
-  // labels file are maintenance: the store's merge workflow never merges them.
+  // under `facts/` or `labels/`, is maintenance: the store's merge workflow
+  // never merges it. Deleting a facts or labels file is a retraction and
+  // validates like any other change at those paths.
   let maintenance = false
   const errors = []
   listed.forEach((change, index) => {
@@ -236,10 +237,6 @@ export async function runValidatePrCommand({ argv, cwd = process.cwd(), git = ru
     if (!isFactsPath(change.path) && labels === null) {
       maintenance = true
       if (!trustedMaintainer) errors.push({ code: "path", path: `changes.${index}` })
-      return
-    }
-    if (change.status === "removed" && trustedMaintainer) {
-      maintenance = true
       return
     }
     if (change.status === "removed" || change.status === "unknown") {

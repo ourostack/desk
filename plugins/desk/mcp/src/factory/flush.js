@@ -69,8 +69,24 @@
 //      intake`, and the task-owned branch `intake/<intake_id>` is
 //      force-updated to exactly that commit (left alone when it already holds
 //      the same tree on the same base). The open PR for that head is reused,
-//      or one is opened titled `Factory intake` whose body is only the file
-//      count.
+//      or one is opened titled `Factory intake` whose body is the file
+//      count, plus `Retracted: <n> files (route_changed)` when it deletes any.
+//
+//   Retraction. A file this machine delivered to a store is deleted from it,
+//   in that same intake PR, when its session's marker now positively routes to
+//   a different store (`retractions`): the route is resolved the way the sweep
+//   does (`resolveStore` from the marker's desk root). A missing or unreadable
+//   marker, a missing desk root, a declaration that does not resolve, a Codex
+//   default route nothing has verified, and a default route with no recorded
+//   overlay check all leave the file in place. The deletes are the session's
+//   facts file and every labels file delivered for it, at the published paths
+//   recorded when they were delivered (a record from an older Desk is trusted
+//   only when republishing now gives the same blob). Their delivered records
+//   stay until the store's default branch no longer has the file, which is
+//   how a merged delete is seen, and are then dropped with the local files
+//   that produced them; until then every flush retries. A session is never
+//   both published and deleted in one PR, and a delete the store refuses is
+//   quarantined like any other refused file.
 //
 // Every step's result is one stable `FlushCode`. The account token comes from
 // `gh auth token --user <account>`, lives only in memory and reaches `gh` only
@@ -108,6 +124,7 @@ import { deriveFile, sweep as sweepMarkers } from "./derive-run.js"
 import {
   clearFinalize,
   factoryStateRoot,
+  forgetDelivered,
   gitBlobSha,
   holdLabels,
   listFinalizeRequests,
@@ -117,8 +134,10 @@ import {
   pendingLabels,
   quarantine,
   readConsent,
+  readDelivered,
   readJobsIndex,
   readMachineSecret,
+  readMarker,
   readStatus,
   readVisibilityCache,
   releaseQuarantined,
@@ -130,7 +149,9 @@ import { refreshAndon } from "./andon-watch.js"
 import { validateLabelsBytes } from "./label-schema.js"
 import { serializePublished, toPublished, toPublishedLabels } from "./publish.js"
 import { validatePublishedBytes } from "./published-schema.js"
+import { isFactsPath, labelsPathParts } from "./pipeline/validate-pr.js"
 import { PATTERNS, isPlainObject } from "./schema.js"
+import { resolveStore } from "./store-route.js"
 
 /** Every result `flush` can return. */
 export const FLUSH_CODES = Object.freeze([
@@ -170,6 +191,7 @@ const TIMEOUT = Symbol("timeout")
 // delivered record can match, so every outbox file that is not quarantined
 // is listed.
 const LIST_ALL = Buffer.alloc(0)
+export const RETRACT_REASON = "route_changed"
 
 class Stop extends Error {
   constructor(code) {
@@ -522,6 +544,7 @@ function publishOne(local, name, { transform, known, desk, store, secret }) {
 // A local labels key; `pendingLabels` lists only keys of this shape.
 const LABELS_KEY = /^labels\/([0-9a-f]{32})\/(.+)\.json$/u
 const factsNamesOf = (session) => HOSTS.map((host) => `${host}-${session}.json`)
+const FACTS_SESSION = /^(?:claude-code|copilot-cli|codex-cli)-(.+)\.json$/u
 
 // A local labels file as the store receives it: the job keyed exactly as its
 // facts are (the desk remote of the session's marker decides), then the
@@ -539,6 +562,63 @@ function publishLabelsOne(local, key, { known, desks, secret }) {
   const checked = validateLabelsBytes(bytes)
   if (!checked.ok) return { reason: checked.errors[0].code }
   return { path: out.path, bytes }
+}
+
+// ---------------------------------------------------------------------------
+// Retraction.
+// ---------------------------------------------------------------------------
+
+// The store a session's marker routes to now, resolved as the sweep resolves it, or `null` when that cannot be said for certain.
+async function currentRoute(env, root, names) {
+  let marker = null
+  for (const name of names) {
+    try {
+      marker = await readMarker(env, path.join(root, "markers", name))
+    } catch {
+      marker = null
+    }
+    if (marker !== null) break
+  }
+  if (marker === null || typeof marker.desk_root !== "string" || !path.isAbsolute(marker.desk_root)) return null
+  try {
+    if (!(await fsp.stat(marker.desk_root)).isDirectory()) return null
+    const current = resolveStore({ deskRoot: marker.desk_root })
+    // A default route is settled only by the overlay check the session's own hook recorded; a Codex marker has none.
+    if (current.source === "default" && (marker.routing === undefined || marker.host === "codex-cli")) return null
+    const route = current.source === "default" ? marker.routing : current
+    return isRepo(route.store) ? route.store : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The files to delete from `store` because their session's marker now routes to another one: `[{ name, path, labels, session }]`, `name` the delivered
+ * record's key. `published` answers `{ path, sha }` for a name whose delivered record carries no path (an older Desk's).
+ */
+async function retractions(env, { store, delivered, published }) {
+  const root = await factoryStateRoot(env)
+  const sessions = new Map()
+  for (const name of Object.keys(delivered.blobs)) {
+    const labels = LABELS_KEY.exec(name)
+    const session = labels === null ? FACTS_SESSION.exec(name)?.[1] : labels[2]
+    if (session === undefined || delivered.quarantined.has(name)) continue
+    let where = delivered.paths[name]
+    const valid = labels === null ? isFactsPath(where) : labelsPathParts(where)?.session === session
+    if (!valid) {
+      const recomputed = published(name)
+      where = recomputed?.sha === delivered.blobs[name] ? recomputed.path : undefined
+    }
+    if (where === undefined) continue
+    if (!sessions.has(session)) sessions.set(session, [])
+    sessions.get(session).push({ name, path: where, labels: labels !== null, session })
+  }
+  const out = []
+  for (const [session, items] of sessions) {
+    const route = await currentRoute(env, root, factsNamesOf(session))
+    if (route !== null && route !== store) out.push(...items)
+  }
+  return out
 }
 
 // ---------------------------------------------------------------------------
@@ -697,13 +777,13 @@ function takeBatch(remaining, { maxFiles, maxBytes }) {
 async function pushBatch(client, { target, branch, base, batch }) {
   const created = await client.need("POST", `repos/${target.repo}/git/trees`, {
     base_tree: base.tree,
-    tree: batch.map((item) => ({ path: item.path, mode: "100644", type: "blob", content: item.bytes.toString("utf8") })),
+    tree: batch.map((item) => (item.retract ? { path: item.path, mode: "100644", type: "blob", sha: null } : { path: item.path, mode: "100644", type: "blob", content: item.bytes.toString("utf8") })),
   })
   const tree = requireSha(created?.sha)
   // The tree must hold exactly the bytes that were checked.
   const landed = await factsOnBranch(client, target.repo, tree)
   const landedLabels = await labelsOnBranch(client, target.repo, tree, batch.filter((item) => item.labels).map((item) => item.path))
-  for (const item of batch) if ((item.labels ? landedLabels.get(item.path) : landed.get(item.file)) !== item.sha) stop("unexpected")
+  for (const item of batch) if ((item.labels ? landedLabels.get(item.path) : landed.get(item.file)) !== (item.retract ? undefined : item.sha)) stop("unexpected")
   const current = await client.api("GET", `repos/${target.repo}/git/ref/heads/${branch}`)
   if (current.status !== 200 && current.status !== 404) stop("unexpected")
   const headSha = current.status === 200 ? requireSha(current.json?.object?.sha) : null
@@ -720,8 +800,8 @@ async function pushBatch(client, { target, branch, base, batch }) {
   return commit
 }
 
-async function openPr(client, { store, head, base, count }) {
-  const body = String(count)
+async function openPr(client, { store, head, base, count, retracted }) {
+  const body = retracted > 0 ? `${count}\n\nRetracted: ${retracted} files (${RETRACT_REASON})` : String(count)
   const open = await client.need("GET", `repos/${store}/pulls?state=open&head=${encodeURIComponent(head.label)}&per_page=10`)
   const existing = list(open).find((pr) => isPlainObject(pr) && Number.isSafeInteger(pr.number) && pr.head?.ref === head.ref)
   let pr = existing
@@ -752,7 +832,8 @@ async function deliver(env, context) {
   // Quarantined files are candidates too: a store may have refused an older publication that this Desk now publishes differently.
   const candidates = await pendingFiles(env, store, { publishedBytesFor: () => LIST_ALL, includeQuarantined: true })
   const labelCandidates = await pendingLabels(env, store, { publishedBytesFor: () => LIST_ALL })
-  if (candidates.length === 0 && labelCandidates.length === 0) return { result: "nothing_pending" }
+  const delivered = await readDelivered(env, store)
+  if (candidates.length === 0 && labelCandidates.length === 0 && Object.keys(delivered.blobs).length === 0) return { result: "nothing_pending" }
 
   // `pendingFiles` already quarantined every file that does not parse, and `pendingLabels` lists only labels that parse.
   const parsed = candidates.map(({ name, localBytes, quarantine: held }) => ({ name, held, local: JSON.parse(localBytes.toString("utf8")) }))
@@ -819,21 +900,32 @@ async function deliver(env, context) {
   }
   // A file without bytes is one whose record is not a regular file (its file stays where it is) or a held file that stays held; the listing skips it.
   const factsPending = (await pendingFiles(env, store, { publishedBytesFor: (facts) => bytesByName.get(`${facts.session.host}-${facts.session.id}.json`) ?? null }))
-    .map(({ name }) => ({ name, file: publishedFile.get(name), path: `facts/${publishedFile.get(name)}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)) }))
+    .map(({ name }) => ({ name, session: FACTS_SESSION.exec(name)[1], file: publishedFile.get(name), path: `facts/${publishedFile.get(name)}`, bytes: bytesByName.get(name), sha: gitBlobSha(bytesByName.get(name)) }))
   const labelsPending = (await pendingLabels(env, store, { publishedBytesFor: (labels) => labelsByKey.get(`labels/${labels.job}/${labels.session}.json`).bytes }))
     .map(({ name }) => {
       const { path: published, bytes } = labelsByKey.get(name)
       const [, job, session] = LABELS_KEY.exec(name)
       return { name, path: published, bytes, sha: gitBlobSha(bytes), labels: true, job, session }
     })
+  // What this machine delivered to the store whose session now routes to another store is deleted; nothing of such a session is published.
+  const retract = await retractions(env, {
+    store,
+    delivered,
+    published: (name) => {
+      const labels = labelsByKey.get(name)
+      if (labels !== undefined) return { path: labels.path, sha: gitBlobSha(labels.bytes) }
+      return publishedFile.has(name) && bytesByName.has(name) ? { path: `facts/${publishedFile.get(name)}`, sha: gitBlobSha(bytesByName.get(name)) } : undefined
+    },
+  })
+  const retracting = new Set(retract.map((item) => item.session))
   // Labels whose facts are quarantined never go; `holdLabels` quarantines them instead. Checked again after rejections, which may quarantine facts.
   const withoutHeld = async (items) => {
     const kept = []
     for (const item of items) if (!item.labels || (await holdLabels(env, store, { job: item.job, session: item.session })) === null) kept.push(item)
     return kept
   }
-  let pending = await withoutHeld([...factsPending, ...labelsPending])
-  if (pending.length === 0) return { result: "nothing_pending" }
+  let pending = await withoutHeld([...factsPending, ...labelsPending].filter((item) => !retracting.has(item.session)))
+  if (pending.length === 0 && retract.length === 0) return { result: "nothing_pending" }
   progress.pending = pending.map((item) => item.name)
 
   await client.session(account)
@@ -846,7 +938,7 @@ async function deliver(env, context) {
 
   const through = (await readStatus(env)).last_flush?.[store]?.rejections_through
   // A rejected file is named back to its local key by its published path.
-  const labelKeys = new Map([...labelsPending, ...factsPending].map((item) => [item.path, item.name]))
+  const labelKeys = new Map([...labelsPending, ...factsPending, ...retract].map((item) => [item.path, item.name]))
   const rejections = await readRejections(env, client, { store, head, through: Number.isSafeInteger(through) ? through : 0, labelKeys })
   progress.rejectionsThrough = rejections.through
   progress.rejectionsUnmatched = rejections.unmatched
@@ -855,22 +947,34 @@ async function deliver(env, context) {
   const main = await client.need("GET", `repos/${store}/branches/${target.branch}`)
   const base = { sha: requireSha(main?.commit?.sha), tree: requireSha(main?.commit?.commit?.tree?.sha) }
   const onMain = await factsOnBranch(client, store, base.tree)
-  const labelsOnMain = await labelsOnBranch(client, store, base.tree, pending.filter((item) => item.labels).map((item) => item.path))
+  const labelsOnMain = await labelsOnBranch(client, store, base.tree, [...pending, ...retract].filter((item) => item.labels).map((item) => item.path))
   const remaining = []
   for (const item of pending) {
-    if ((item.labels ? labelsOnMain.get(item.path) : onMain.get(item.file)) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha })
+    if ((item.labels ? labelsOnMain.get(item.path) : onMain.get(item.file)) === item.sha) await markDelivered(env, store, { name: item.name, publishedBlobSha: item.sha, publishedPath: item.path })
     else remaining.push(item)
   }
+  // A retraction is confirmed the way a delivery is: by the store's default branch. A file already gone from it (the delete merged, or it never stayed) drops its record; one still there is deleted again.
+  const deletes = []
+  const gone = []
+  for (const item of retract) {
+    if (rejections.rejected.has(item.name)) continue
+    if (item.labels ? labelsOnMain.has(item.path) : onMain.has(item.path.slice("facts/".length))) deletes.push({ ...item, retract: true, bytes: Buffer.alloc(0) })
+    else gone.push(item.name)
+  }
+  await forgetDelivered(env, store, gone)
   progress.pending = remaining.map((item) => item.name)
-  if (remaining.length === 0) return { result: "nothing_pending" }
+  if (remaining.length === 0 && deletes.length === 0) return { result: "nothing_pending" }
 
   // Facts go first. Labels go only with their session's facts, on the default branch or in the same batch: the store's gate refuses labels without facts, and that refusal would quarantine every file of the PR.
-  const taken = takeBatch(remaining, { maxFiles, maxBytes })
+  const takenAll = takeBatch([...deletes, ...remaining], { maxFiles, maxBytes })
+  const takenDeletes = takenAll.filter((item) => item.retract)
+  const taken = takenAll.filter((item) => !item.retract)
   const factsReady = new Set([...onMain.keys(), ...pending.filter((item) => !item.labels && onMain.has(item.file)).map((item) => item.name), ...taken.filter((item) => !item.labels).map((item) => item.name)])
-  const batch = taken.filter((item) => !item.labels || factsNamesOf(item.session).some((name) => factsReady.has(name)))
+  const publishing = taken.filter((item) => !item.labels || factsNamesOf(item.session).some((name) => factsReady.has(name)))
+  const batch = [...takenDeletes, ...publishing]
   if (batch.length === 0) return { result: "nothing_pending" }
   await pushBatch(client, { target, branch, base, batch })
-  const pr = await openPr(client, { store, head, base: target.branch, count: batch.length })
+  const pr = await openPr(client, { store, head, base: target.branch, count: publishing.length, retracted: takenDeletes.length })
   // A stale refusal is not a delivery failure, but it is not a plain delivery either: say so, with how many stale PRs this flush read.
   if (rejections.stale > 0) return { result: "intake_stale_retried", pr, stale_retries: rejections.stale }
   return { result: "delivered_pr_open", pr }
