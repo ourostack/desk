@@ -125,7 +125,7 @@ function pushRouteLines(accounts) {
         : entry.result === "no_account_can_deliver"
           ? "no signed-in account can push"
           : entry.result === "not_a_github_repo"
-            ? "not a GitHub repo, no push route checked"
+            ? "no GitHub remote, so no push route to check"
             : `not checked (${entry.result}${entry.reason ? `: ${entry.reason}` : ""})`
     const key = `${entry.store ?? entry.repo}|${how}`
     const group = groups.get(key) ?? { subject: entry.store ?? entry.repo, how, where: [] }

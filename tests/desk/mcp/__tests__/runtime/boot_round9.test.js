@@ -229,7 +229,7 @@ test("formatBootText leads with the status and the numbered instructions, then t
   assert.match(text, /- acme\/plain: push as ari \(ops\/flash-valves\)\n/u)
   assert.match(text, /- acme\/forked: push as me \(route fork\) \(crew\/t\/s\)\n/u)
   assert.match(text, /- acme\/x: no signed-in account can push \(ops\/flash-valves\)\n/u)
-  assert.match(text, /- local: not a GitHub repo, no push route checked \(ops\/flash-valves\)\n/u)
+  assert.match(text, /- local: no GitHub remote, so no push route to check \(ops\/flash-valves\)\n/u)
   assert.match(text, /- acme\/slow: not checked \(pending: boot_budget_exceeded\) \(ops\/flash-valves\)\n/u)
   assert.match(text, /- acme\/odd: not checked \(gh_failed\) \(ops\/flash-valves\)\n/u)
   assert.match(text, /- ops\/same: no status\n/u)
