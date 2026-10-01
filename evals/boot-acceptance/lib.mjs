@@ -421,8 +421,9 @@ export function createIsolatedHome({ homeDir, sharedCacheDir }) {
   // is no AI attribution anywhere). Left on, the harness's temporary home made Claude Code tell agents to add a
   // `Co-Authored-By` trailer, which contradicted the desk and confused them. `attribution` is the current key;
   // `includeCoAuthoredBy` is its deprecated predecessor, set too so an older Claude Code obeys the same setting.
-  mkdirSync(path.join(homeDir, ".claude"), { recursive: true })
-  writeFileSync(path.join(homeDir, ".claude", "settings.json"), `${JSON.stringify({ attribution: { commit: "", pr: "" }, includeCoAuthoredBy: false }, null, 2)}\n`)
+  const claudeDir = path.join(homeDir, ".claude") // the run never gets CLAUDE_CONFIG_DIR (buildChildEnv), so Claude Code's profile is under this home
+  mkdirSync(claudeDir, { recursive: true })
+  writeFileSync(path.join(claudeDir, "settings.json"), `${JSON.stringify({ attribution: { commit: "", pr: "" }, includeCoAuthoredBy: false }, null, 2)}\n`)
   return homeDir
 }
 

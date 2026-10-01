@@ -412,7 +412,8 @@ test("the isolated home carries Claude Code settings with commit and pull-reques
   const home = mkdtempSync(path.join(os.tmpdir(), "r9-home-"))
   try {
     createIsolatedHome({ homeDir: path.join(home, "h") })
-    const settings = JSON.parse(readFileSync(path.join(home, "h", ".claude", "settings.json"), "utf8"))
+    const claudeDir = path.join(home, "h", ".claude") // CLAUDE_CONFIG_DIR is not set for a run, so the profile is under its home
+    const settings = JSON.parse(readFileSync(path.join(claudeDir, "settings.json"), "utf8"))
     assert.deepEqual(settings.attribution, { commit: "", pr: "" })
     assert.equal(settings.includeCoAuthoredBy, false)
   } finally {
