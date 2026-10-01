@@ -188,7 +188,7 @@ test("formatBootText leads with the status and the numbered instructions, then t
   assert.match(text, /- acme\/w#5 Plain: /u)
   assert.match(text, /- valves \(ops\/flash-valves\): branch main, uncommitted changes, fetched\n/u)
   assert.match(text, /- other \(ops\/flash-valves\): branch unknown, clean, fetch failed\n/u)
-  assert.match(text, /- solo \(ops\/flash-valves\): branch feature\/x, clean, no remote \(local-only: a commit here is valid done evidence\)\n/u)
+  assert.match(text, /- solo \(ops\/flash-valves\): branch feature\/x, clean, no remote configured\n/u)
   assert.match(text, /- gone \(crew\/t\/s\): not at ~\/code\/gone; clone url https:\/\/example\.com\/g\.git\n/u)
   assert.match(text, /- gone2 \(ops\/flash-valves\): not at ~\/code\/gone2\n/u)
   assert.match(text, /-----\nRule one\.\n-----\n$/u)

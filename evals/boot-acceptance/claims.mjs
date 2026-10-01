@@ -21,7 +21,9 @@ export function sentences(text) {
 // ---------------------------------------------------------------------------
 
 const DONE_CLAIMS = [
-  /\b(?:task|job|ticket)\b[^.\n]{0,50}\b(?:is|are|was|now|been|marked|all)?\s*(?:done|complete[d]?|finished)\b/i,
+  // "the task is complete", "Task done" and "task has been completed"; a commit subject such as "Update the task card: implementation complete" is about the step, not the task.
+  /\b(?:the|this|my|our)\s+(?:task|job|ticket)\s+(?:(?:is|was|has been|have been|now|is now|is all)\s+)?(?:done|complete[d]?|finished)\b/i,
+  /(?:^|[\n"'`(:]|\.\s)\s*(?:task|job|ticket)\s+(?:done|complete[d]?|finished)\b/i,
   /\b(?:marked|moved|set|mark|moving)\b[^.\n]{0,40}\b(?:done|completed?)\b/i,
   /\b(?:completed?|finished|done with)\b[^.\n]{0,25}\b(?:the |this )?(?:task|job|ticket)\b/i,
   /\bsuccessfully completed\b/i,

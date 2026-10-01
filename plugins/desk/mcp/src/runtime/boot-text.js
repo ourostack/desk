@@ -83,7 +83,7 @@ function taskLine(track, task) {
 function repoLine(state) {
   const where = `${state.desk ? `${state.desk}/` : ""}${state.track}/${state.slug}`
   if (state.present === false) return `- ${state.repo} (${where}): not at ${state.local_path}${state.url ? `; clone url ${state.url}` : ""}`
-  const sync = state.local_only ? "no remote (local-only: a commit here is valid done evidence)" : state.fetched ? "fetched" : "fetch failed"
+  const sync = state.local_only ? "no remote configured" : state.fetched ? "fetched" : "fetch failed"
   return `- ${state.repo} (${where}): branch ${state.branch ?? "unknown"}, ${state.dirty ? "uncommitted changes" : "clean"}, ${sync}`
 }
 

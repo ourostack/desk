@@ -122,10 +122,10 @@ test("words saying the task is done fail when no move to done was accepted, wher
 })
 
 test("taskDoneClaims: claims about the task being done, not about a step, a negation or a promise", () => {
-  for (const claim of ["The task is complete.", "Task done.", "I have marked the task as done.", "I've successfully completed the work.", "Moved it to done.", "Everything is done and verified.", "I finished the task.", "## Completed work"]) {
+  for (const claim of ["The task is complete.", "Task done.", "I have marked the task as done.", "I've successfully completed the work.", "Moved it to done.", "Everything is done and verified.", "I finished the task.", "## Completed work", "The task has been completed.", "This task is now done."]) {
     assert.equal(taskDoneClaims(claim).length, 1, claim)
   }
-  for (const fine of ["I finished the recorded next step and moved the task to validating.", "The task is not done: the commit is local-only.", "The task will be done once the commit is pushed.", "If the task is done, archive it.", "Implementation complete locally; ready for review.", "The task has no remote, so it cannot be marked done.", ""]) {
+  for (const fine of ["I finished the recorded next step and moved the task to validating.", "The task is not done: the commit is local-only.", "The task will be done once the commit is pushed.", "If the task is done, archive it.", "Implementation complete locally; ready for review.", "Update watering-schedule-api task: implementation complete, ready for validation", "Task transitioned from processing to validating.", "The task card was updated.", "The task has no remote, so it cannot be marked done.", ""]) {
     assert.equal(taskDoneClaims(fine).length, 0, fine)
   }
 })
