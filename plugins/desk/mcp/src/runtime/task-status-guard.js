@@ -29,9 +29,10 @@
 // tool-call boundary, before the write lands, and tells the agent which
 // tool call does carry the evidence check.
 //
-// Scope. This module only recognizes Claude Code's own `PreToolUse` wire shape and its `Write`/`Edit`/`MultiEdit`
-// tool-input shapes (`file_path`, `content`, `old_string`, `new_string`, `replace_all`, and MultiEdit's
-// `edits: [{ old_string, new_string }, ...]` -- the same fields `runtime/ask-gate.js` already reads).
+// Scope. Claude Code's own `PreToolUse` wire shape and its `Write`/`Edit`/`MultiEdit` tool-input shapes (`file_path`, `content`, `old_string`, `new_string`, `replace_all`, and MultiEdit's
+// `edits: [{ old_string, new_string }, ...]` -- the same fields `runtime/ask-gate.js` already reads), and Copilot CLI's: a `copilotToolCalls` payload (`runtime/copilot-hook-payload.js`) turns Copilot's
+// `bash`, `powershell`, `create`, `edit` and `apply_patch` calls into the same Claude-shaped calls, so the logic below is shared and the deny is the only thing written per host (flat for Copilot).
+// Codex stays unguarded (this module returns `{}` for it): Codex's hook trust gate leaves any Desk hook inactive (`docs/host-enforcement-live-proof.md`), and its edit tool's payload has not been seen live.
 //
 // Which files count (review of #123). The path is expanded (`~`), trimmed, resolved against the session folder and
 // realpath'd (the file, or its parent when the file does not exist yet), so a symlink or `TASK.md` on a
@@ -52,16 +53,6 @@
 // see (a path held in a variable or built in pieces with no slug in the command). It is a best-effort net: the desk's own pre-commit hook
 // (`../desk/card-commit-guard.js`) is the layer underneath, and the evidence check inside `task_update` remains the real gate for `done`.
 //
-// What Copilot and Codex would need (not done here): their own
-// `PreToolUse` tool-name and tool-input field mapping, the way
-// `host-enforcement.js`'s `toolNameFromPayload`/`sessionIdFromPayload`
-// already do per host, plus confirmation of each host's own
-// Edit/Write/MultiEdit tool-input shape before trusting
-// `file_path`/`content`/`edits` there. This
-// module returns `{}` (allow) for any host but `"claude"` until that
-// evidence exists, the same restriction `ask-gate.js` already documents
-// and applies to itself.
-//
 import { spawnSync } from "node:child_process"
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import * as os from "node:os"
@@ -71,6 +62,8 @@ import { resolveHookDeskRoot } from "../../scripts/resolve-desk-root.js"
 import { loadFrontmatterParser } from "../desk/organization.js"
 import { isDeskWorkspace } from "../util/paths.js"
 import { DEFERRED_TOOLS_LOAD_HINT } from "../util/deferred-tools.js"
+import { COPILOT_SESSION_ENV, readCopilotSession } from "./copilot-session.js"
+import { copilotDeny, copilotToolCalls } from "./copilot-hook-payload.js"
 import { shellCardWrites } from "./shell-card-writes.js"
 
 const TASK_CARD_BASENAME = "task.md"
@@ -286,46 +279,64 @@ function denyReason(card, change, via = null) {
   )
 }
 
-/**
- * `input` is the hook's JSON stdin (Claude Code's `PreToolUse` payload).
- * Returns Claude Code's `PreToolUse` deny shape when this call would edit an
- * existing live task card of the bound desk, change an archived card's
- * status, or create a card already `done`, or `{}` to let the call through
- * untouched. `context` is a test seam: `{ root, env, home }`. Only `host === "claude"` is recognized today
- * (see the module doc comment for what Copilot/Codex would need).
- */
-export function taskStatusGuardHook(input, host, read = readCard, context = {}) {
-  if (host !== "claude") return {}
+/** Claude Code's call in the shape `copilotToolCalls` returns: `[{ toolName, args }]`, or none for a tool this hook does not judge or arguments it cannot read. */
+function claudeToolCalls(input) {
   const toolName = String(input?.tool_name ?? input?.toolName ?? "")
-  const shell = toolName === "Bash" || toolName === "PowerShell"
-  if (!shell && toolName !== "Write" && toolName !== "Edit" && toolName !== "MultiEdit") return {}
-
+  if (toolName !== "Bash" && toolName !== "PowerShell" && toolName !== "Write" && toolName !== "Edit" && toolName !== "MultiEdit") return []
   let args = input?.tool_input ?? input?.toolArgs
   if (typeof args === "string") {
     try {
       args = JSON.parse(args)
     } catch {
-      return {}
+      return []
     }
   }
-  if (!args || typeof args !== "object") return {}
-  const cwd = typeof input?.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd()
-  const root = context.root === undefined ? boundRoot(context.env ?? process.env, cwd) : context.root
-  if (shell) return shellDecision(args.command, { root, cwd, home: context.home ?? os.homedir(), read })
-  const card = classifyCard(args.file_path, { root, cwd, home: context.home ?? os.homedir() })
-  if (card === null) return {}
+  return args && typeof args === "object" ? [{ toolName, args }] : []
+}
+
+/** Claude's deny for one call, or null when the call may go ahead. */
+function decide({ toolName, args }, { root, cwd, home, read }) {
+  if (toolName === "Bash" || toolName === "PowerShell") return shellDecision(args.command, { root, cwd, home, read })
+  const card = classifyCard(args.file_path, { root, cwd, home })
+  if (card === null) return null
 
   const target = { ...args, file_path: card.absolute }
   const change = statusChange(toolName, target, read)
   const existing = read(card.absolute)
   // A path with no card yet is `task_create`'s, and an archived card keeps the status-only guard.
   if (card.kind === "archived" || existing === null) {
-    if (change === null) return {}
+    if (change === null) return null
   } else if (!isReadableCard(existing)) {
-    return {}
+    return null
   }
 
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, change) } }
+}
+
+/**
+ * `input` is the hook's JSON stdin: Claude Code's `PreToolUse` payload for `host === "claude"`, Copilot's for `"copilot"`.
+ * Returns the host's deny shape (Claude Code's `hookSpecificOutput` wrapper, Copilot's flat pair) when this call would edit an
+ * existing live task card of the bound desk, change an archived card's status, or create a card already `done`, or `{}` to let
+ * the call through untouched. `context` is a test seam: `{ root, env, home }`. Any other host is allowed (see the module doc comment).
+ */
+export function taskStatusGuardHook(input, host, read = readCard, context = {}) {
+  if (host !== "claude" && host !== "copilot") return {}
+  const calls = host === "copilot" ? copilotToolCalls(input) : claudeToolCalls(input)
+  if (calls.length === 0) return {}
+  const cwd = typeof input?.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd()
+  const env = context.env ?? process.env
+  const root = context.root === undefined ? boundRoot(env, cwd, host === "copilot" ? copilotProjectFolder(input, env, cwd) : undefined) : context.root
+  const home = context.home ?? os.homedir()
+  for (const call of calls) {
+    const denied = decide(call, { root, cwd, home, read })
+    if (denied !== null) return host === "copilot" ? copilotDeny(denied) : denied
+  }
+  return {}
+}
+
+/** The folder Copilot's `sessionStart` hook recorded for this session, which is the project folder the server binds, or else the session's current folder. */
+function copilotProjectFolder(input, env, cwd) {
+  return readCopilotSession({ env: { ...env, [COPILOT_SESSION_ENV]: input?.sessionId } })?.folder ?? cwd
 }
 
 /** The live, readable card `word` names when it is resolved against any of `bases` (absolute folders), or null. A card that no longer parses stays hand-repairable. */
@@ -372,7 +383,7 @@ function cardIsConflicted(file) {
  * it cannot see), or `{}`. The words are resolved against the session folder, the desk and any folder the command moves into.
  */
 function shellDecision(command, { root, cwd, home, read }) {
-  if (typeof command !== "string") return {}
+  if (typeof command !== "string") return null
   const resolve = (word, directories) => {
     const bases = [cwd, ...(root === null ? [] : [root]), ...directories.map((directory) => absolutePath(directory, { cwd, home }))]
     return liveCardNamed(word, bases, { root, home, read })
@@ -380,14 +391,14 @@ function shellDecision(command, { root, cwd, home, read }) {
   const vars = root === null ? { HOME: home } : { DESK: root, HOME: home }
   const conflicted = (card) => cardIsConflicted(card.absolute)
   const writes = shellCardWrites(command, { resolve, vars, conflicted, slugCards: () => liveCardsOf(root, home, read) })
-  if (writes.length === 0) return {}
+  if (writes.length === 0) return null
   const [{ card, via }] = writes
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, null, via) } }
 }
 
-/** The desk root this session binds, or null when it cannot be determined (the marker fallback then applies). */
-function boundRoot(env, cwd) {
-  return resolveHookDeskRoot({ env, cwd }).root
+/** The desk root this session binds, or null when it cannot be determined (the marker fallback then applies). `hostProjectRoot` defaults to Claude's project folder. */
+function boundRoot(env, cwd, hostProjectRoot = env.CLAUDE_PROJECT_DIR) {
+  return resolveHookDeskRoot({ env, cwd, hostProjectRoot }).root
 }
 
 export { classifyCard, isReadableCard, statusOf, statusChange }

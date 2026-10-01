@@ -442,8 +442,8 @@ export function compactCopilotTranscript(text) {
  */
 export const COPILOT_NOT_APPLICABLE = [
   "dollar cost: Copilot reports premium requests, not USD (summary.premium_requests holds the figure); there is no per-run budget cap",
-  "the Claude-only guards: Desk registers only the protected-checkout guard for Copilot (its host enforcement denies nothing there), so the card-status guard, the ask gate and the denial of Claude's own task and plan tools have no Copilot counterpart",
-  "hook-denied notes: a refusal reaches the checks as Claude's `PreToolUse:<Tool> hook error:` text (normalized from Copilot's `Denied by preToolUse hook`), so a direct card edit that no guard refuses on Copilot is judged as the write it is",
+  "the guards Copilot cannot run: Copilot gives hooks no attended-or-not signal, so the ask gate has no Copilot counterpart, and Desk's host enforcement denies nothing there (Copilot's own tool names for Claude's task and plan tools are unconfirmed); the card guard and the done-claim gate do run on Copilot",
+  "hook-denied notes: a refusal reaches the checks as Claude's `PreToolUse:<Tool> hook error:` text (normalized from Copilot's `Denied by preToolUse hook`), so a direct card edit is judged as the write it is when a guard lets it through",
 ]
 
 /** The not-applicable list a run on `host` reports (empty on Claude Code). */

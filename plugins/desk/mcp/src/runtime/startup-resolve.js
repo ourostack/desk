@@ -4,6 +4,7 @@
 
 import * as path from "node:path"
 import { normalizeReadinessPolicy } from "../activation/readiness-policy.js"
+import { readCopilotSession } from "./copilot-session.js"
 import {
   expandHome,
   loadActivationConfig,
@@ -11,19 +12,25 @@ import {
   resolveDeskRootWithSource,
 } from "../util/paths.js"
 
+// The project folder the host opened. Copilot's `sessionStart` hook records it for the session (see copilot-session.js), and that record is this session's own, so it comes first: a CLAUDE_PROJECT_DIR that Copilot inherited from the shell that launched it (for example from inside a Claude Code session) must not override it. Without a record, Claude Code passes the folder in the environment.
+function hostProjectFolder(env) {
+  return readCopilotSession({ env })?.folder ?? (hasText(env.CLAUDE_PROJECT_DIR) ? env.CLAUDE_PROJECT_DIR : undefined)
+}
+
 export function resolveStartupDeskRoot({ args, env = process.env, homeDir } = {}) {
   return resolveDeskRootWithSource({
     activationConfigPath: resolveStartupActivationConfigPath({ args, env }),
     env,
     explicitRoot: args?.root,
     homeDir,
-    hostProjectRoot: env.CLAUDE_PROJECT_DIR,
+    hostProjectRoot: hostProjectFolder(env),
     hostSessionRoot: args?.hostSessionRoot,
   })
 }
 
+// The server's own configuration first; then the saved binding Copilot's hook saw, because Copilot keeps its plugin data folder out of the server's environment.
 export function resolveStartupActivationConfigPath({ args, env = process.env } = {}) {
-  return resolveActivationConfigPath({ explicit: args?.activationConfig, env })
+  return resolveActivationConfigPath({ explicit: args?.activationConfig, env }) ?? readCopilotSession({ env })?.activationConfig ?? null
 }
 
 export function resolveStartupRuntimeCacheDir({

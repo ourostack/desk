@@ -232,6 +232,16 @@ surfaces (Claude/Codex hook `tool_name`, Copilot hook `toolName`, Copilot
 CLI-flag pattern) — a `matcher`/tool-name string written for one host is never
 assumed to match on another.
 
+### Hooks beyond `preToolUse` (Copilot CLI 1.0.89, live-checked)
+
+- `toolArgs` is an object for `bash` (`{ command, description }`), `create` (`{ path, file_text }`) and `edit` (`{ path, old_str, new_str }`), and the raw patch text (`*** Begin Patch ...`) for `apply_patch`. Which of these a model uses depends on the model: Claude models edit with `create` and `edit`, GPT models with `apply_patch`.
+- A flat deny from `preToolUse` reaches the model as `Denied by preToolUse hook: <reason>` (the tool result carries code `denied`).
+- `postToolUse` adds `toolResult: { resultType, textResultForLlm }`; an MCP call is `<server>-<tool>`, such as `desk-task_update`.
+- `userPromptSubmitted` input is `{ sessionId, timestamp, cwd, prompt }`; `sessionStart` input is `{ sessionId, timestamp, cwd, source, initialPrompt }`. Neither carries an attended-or-not flag, so the ask gate cannot be wired.
+- `sessionStart` context reaches the model but is weighed lightly: on a bare greeting ("hi") the model answered without booting, in boot acceptance rounds F and G. The same boot imperative returned as `userPromptSubmitted` `additionalContext` was followed 2 of 2 times in a probe on the same model. So `copilot-boot-prompt.cjs` hands the model a short boot line beside the first prompt of each recorded session (once per record; a resumed session records again and is directed again), and the `sessionStart` line stays as the full direction.
+- `agentStop` input is `{ sessionId, timestamp, cwd, transcriptPath, stopReason, stop_hook_active }` and fires for the main agent only. `{ "decision": "block", "reason": "..." }` continues the agent with the reason as a follow-up message, and the next stop has `stop_hook_active: true`. The reply is not in the payload, and the transcript does not hold it when the hook starts; it appears about 200 ms later.
+- Hooks run with the plugin folder as their working folder and receive `COPILOT_PROJECT_DIR`, `CLAUDE_PROJECT_DIR`, `COPILOT_PLUGIN_ROOT` and `COPILOT_PLUGIN_DATA`; an MCP server receives none of the project or plugin-data variables, has the plugin folder as its working folder, and gets only `COPILOT_AGENT_SESSION_ID` (equal to the hooks' `sessionId`) as a per-session value. Copilot starts MCP servers before it fires `sessionStart`. `roots/list` answers an empty list.
+
 ## Summary table
 
 | Question | Answer |
@@ -268,4 +278,10 @@ assumed to match on another.
   that looks wired but never actually populates the session allowlist, which
   is worse than the documented gap it would paper over. `UserPromptSubmit`
   stays Claude-Code-only until a live-fired Copilot or Codex payload confirms
-  the real field names.
+  the real field names. (Update: Copilot's `userPromptSubmitted` payload is now
+  confirmed, `{ sessionId, timestamp, cwd, prompt }`, and the done-claim gate uses
+  it; `desk-naming.cjs` stays unwired because Copilot's tool names for the denied
+  surfaces are still unconfirmed, so its allowlist would have nothing to allow.)
+- Codex supports hooks, but an untrusted hook is silently skipped and its edit
+  tool's payload has not been seen live, so the card guard and the done-claim gate
+  are not wired for Codex.

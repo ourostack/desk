@@ -297,11 +297,12 @@ function validateFactoryHooks(claude, copilot) {
     const factoryEnd = { type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot', powershell: 'node "${PLUGIN_ROOT}/hooks/factory-end.cjs" copilot', timeoutSec: 3 };
     const expected = event === "sessionEnd"
       ? [factoryEnd, { type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/sync-end.cjs" copilot', powershell: 'node "${PLUGIN_ROOT}/hooks/sync-end.cjs" copilot', timeoutSec: 3 }]
-      : [factoryEnd];
+      // agentStop also carries the done-claim gate, which blocks a "Done." reply over a task that is not done.
+      : [factoryEnd, { type: "command", bash: 'node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot stop', powershell: 'node "${PLUGIN_ROOT}/hooks/done-claim-gate.cjs" copilot stop', timeoutSec: 5 }];
     if (!sameJson(copilot.hooks?.[event], expected)) {
       errors.push(event === "sessionEnd"
         ? "factory-hooks sessionEnd must register the bounded, silent factory end hook and sync-end.cjs (M4-6 Part 3), and nothing else"
-        : `factory-hooks ${event} must register the bounded, silent factory end hook, and never sync-end.cjs (M4-6 Part 3: it fires after every turn)`);
+        : `factory-hooks ${event} must register the bounded, silent factory end hook and the done-claim gate, and never sync-end.cjs (M4-6 Part 3: it fires after every turn)`);
     }
   }
   return errors;

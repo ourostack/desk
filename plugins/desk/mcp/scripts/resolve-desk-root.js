@@ -19,13 +19,13 @@ import {
 import { claudeStartupDirection } from "../src/util/startup-direction.js"
 import { readSmallText } from "../src/factory/marker.js"
 
-export function resolveHookDeskRoot({ env = process.env, cwd = process.cwd() } = {}) {
+export function resolveHookDeskRoot({ env = process.env, cwd = process.cwd(), hostProjectRoot = env.CLAUDE_PROJECT_DIR } = {}) {
   const bindingPath = claudeBindingPath(env)
   try {
     const resolved = resolveDeskRootWithSource({
       activationConfigPath: resolveActivationConfigPath({ env }),
       env, cwd, homeDir: env.HOME || os.homedir(),
-      hostProjectRoot: env.CLAUDE_PROJECT_DIR,
+      hostProjectRoot,
       readActivationConfig: (file) => readSmallText(file),
     })
     return { root: resolved.root, source: resolved.source, binding_path: bindingPath }

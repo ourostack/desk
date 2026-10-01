@@ -157,8 +157,8 @@ function checkStartupHooks(skill) {
     assert.match(claudeOverlay, new RegExp(`\\$DESK is ${escapeRegExp(crew)} \\(this session's project folder is a desk\\)`, "u"), "claude must name the desk-shaped project folder");
     assert.ok(!claudeOverlay.includes(fallback), "claude must not name the home fallback when the project folder is a desk");
 
-    // Overlay case on Copilot: only an overlay launcher binds the session folder; plain Desk binds the fallback. The
-    // line names both and never asserts a single root the server may not use.
+    // Copilot: the sessionStart hook records the session folder for the Desk server, so a session folder that is a desk is
+    // the root Desk binds, the same as Claude's project folder, and the line names it whichever way the hook learned it.
     const copilotOverlay = {
       "copilot (session folder from hook input)": runCopilotHook({ env, cwd: codeRepo, sessionCwd: crew }),
       "copilot (session folder from process cwd)": runCopilotHook({ env, cwd: crew }),
@@ -166,16 +166,15 @@ function checkStartupHooks(skill) {
     };
     for (const [host, context] of Object.entries(copilotOverlay)) {
       const line = startupLine(context);
-      assert.ok(line.startsWith(`Desk startup: this session's folder ${crew} is a desk, but Desk without an overlay binds ${fallback} (a home-folder fallback); an overlay that launches Desk in this folder binds ${crew} instead.`), `${host}: ${line}`);
-      assert.match(line, /desk_status reports the root Desk actually bound, and it wins\./u, `${host} must say desk_status wins`);
-      assert.doesNotMatch(line, /\$DESK is/u, `${host} must not assert a single root`);
+      assert.match(line, new RegExp(`\\$DESK is ${escapeRegExp(crew)} \\(this session's project folder is a desk\\)`, "u"), `${host}: ${line}`);
+      assert.ok(!line.includes(fallback), `${host} must not name the home fallback when the session folder is a desk`);
     }
 
-    // A plain Copilot session opened inside a desk other than the bound one names both, and agrees when they match.
+    // The session folder wins over DESK on Copilot, as the project folder does on Claude.
     const other = runCopilotHook({ env: { ...env, DESK: solo }, cwd: crew, sessionCwd: crew });
-    assert.ok(startupLine(other).startsWith(`Desk startup: this session's folder ${crew} is a desk, but Desk without an overlay binds ${solo} (the DESK environment variable);`), startupLine(other));
+    assert.ok(startupLine(other).startsWith(`Desk startup: $DESK is ${crew} (this session's project folder is a desk)`), startupLine(other));
     const same = runCopilotHook({ env: { ...env, DESK: crew }, cwd: crew, sessionCwd: crew });
-    assert.ok(startupLine(same).startsWith(`Desk startup: $DESK is ${crew} (the DESK environment variable).`), startupLine(same));
+    assert.ok(startupLine(same).startsWith(`Desk startup: $DESK is ${crew} (this session's project folder is a desk)`), startupLine(same));
 
     // An unreadable saved binding is reported as unreadable on both hosts, never as "no desk is bound yet".
     const unreadable = {
@@ -210,7 +209,7 @@ function checkStartupHooks(skill) {
     const elapsed = Date.now() - started;
     assert.equal(open.status, 0, open.stderr);
     assert.ok(elapsed < 4000, `copilot hook must stop waiting for stdin; took ${elapsed} ms`);
-    assert.ok(startupLine(JSON.parse(open.stdout).additionalContext).startsWith(`Desk startup: this session's folder ${crew} is a desk`), "after the stdin timeout the hook uses the process folder");
+    assert.ok(startupLine(JSON.parse(open.stdout).additionalContext).startsWith(`Desk startup: $DESK is ${crew} (this session's project folder is a desk)`), "after the stdin timeout the hook uses the process folder");
   });
 }
 

@@ -21,6 +21,12 @@
         "bash": "node \"${PLUGIN_ROOT}/hooks/factory-end.cjs\" copilot",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/factory-end.cjs\" copilot",
         "timeoutSec": 3
+      },
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot stop",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot stop",
+        "timeoutSec": 5
       }
     ],
     "preToolUse": [
@@ -35,6 +41,12 @@
         "bash": "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot",
         "powershell": "node \"${PLUGIN_ROOT}/hooks/host-enforcement.cjs\" copilot",
         "timeoutSec": 10
+      },
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/task-status-guard.cjs\" copilot",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/task-status-guard.cjs\" copilot",
+        "timeoutSec": 10
       }
     ],
     "sessionStart": [
@@ -42,6 +54,28 @@
         "type": "command",
         "bash": "node \"${PLUGIN_ROOT}/hooks/copilot-session-start.cjs\"",
         "powershell": "node \"${PLUGIN_ROOT}\\hooks\\copilot-session-start.cjs\"",
+        "timeoutSec": 5
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot track",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot track",
+        "timeoutSec": 5
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot prompt",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/done-claim-gate.cjs\" copilot prompt",
+        "timeoutSec": 5
+      },
+      {
+        "type": "command",
+        "bash": "node \"${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs\"",
+        "powershell": "node \"${PLUGIN_ROOT}/hooks/copilot-boot-prompt.cjs\"",
         "timeoutSec": 5
       }
     ]

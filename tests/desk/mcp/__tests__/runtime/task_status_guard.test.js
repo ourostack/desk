@@ -322,8 +322,8 @@ test("recognizes toolName/toolArgs as well as tool_name/tool_input, the same ali
   assertDenied(result)
 })
 
-test("allows every call for any host but claude, even one that would otherwise be denied", () => {
-  for (const host of [undefined, "copilot", "codex", "some-future-host"]) {
+test("allows every call for any host but claude and copilot, even one that would otherwise be denied (copilot has its own tests)", () => {
+  for (const host of [undefined, "codex", "some-future-host"]) {
     const result = taskStatusGuardHook(
       writeInput({ toolName: "Write", toolInput: { file_path: path.join(DESK, "track", "my-task", "task.md"), content: "status: done" } }),
       host,
