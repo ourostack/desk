@@ -46,8 +46,11 @@
 //   - an ARCHIVED card (`.../_archive/<slug>/task.md`) stays on the earlier status-only guard;
 //   - a path with no card yet is `task_create`'s, so only a card born `done` is denied;
 //   - any other `task.md`, in particular one outside a desk, is none of this hook's business.
-// It cannot see a shell command that writes the file (`sed -i`, a heredoc): that is the reach of any tool-call hook,
-// and the evidence check inside `task_update` remains the real gate for `done`.
+// Shell commands (round 12, after round E run 8: a node script run through Bash rewrote a live card and the agent committed it by hand). A `Bash` or
+// `PowerShell` command that names a live card of the bound desk and writes it (a redirect, `tee`, `sed -i`, a script that writes files, `mv`/`cp` onto it,
+// `git checkout` of it) is denied the same way; reading it (`cat`, `grep`, `git diff`) passes. `shell-card-writes.js` has the forms and what it cannot
+// see (a path held in a variable or built in pieces with no slug in the command). It is a best-effort net: the desk's own pre-commit hook
+// (`../desk/card-commit-guard.js`) is the layer underneath, and the evidence check inside `task_update` remains the real gate for `done`.
 //
 // What Copilot and Codex would need (not done here): their own
 // `PreToolUse` tool-name and tool-input field mapping, the way
@@ -67,6 +70,7 @@ import { resolveHookDeskRoot } from "../../scripts/resolve-desk-root.js"
 import { loadFrontmatterParser } from "../desk/organization.js"
 import { isDeskWorkspace } from "../util/paths.js"
 import { DEFERRED_TOOLS_LOAD_HINT } from "../util/deferred-tools.js"
+import { shellCardWrites } from "./shell-card-writes.js"
 
 const TASK_CARD_BASENAME = "task.md"
 
@@ -256,7 +260,7 @@ function taskCoordinates({ kind, segments }) {
   return { track: segments.at(kind === "archived" ? -4 : -3), slug: segments.at(-2) }
 }
 
-function denyReason(card, change) {
+function denyReason(card, change, via = null) {
   const { track, slug } = taskCoordinates(card)
   const target = `{ track: "${track}", slug: "${slug}"`
   const shown = (value) => (value === null ? "no status" : `\`${value}\``)
@@ -267,7 +271,10 @@ function denyReason(card, change) {
         ? " A move to `done` also needs `evidence: { kind, ref }` (kind one of pr, commit, ci_run, non_code; ref the PR URL, a commit on a remote branch, the CI run URL, or the non-code outcome's own proof link; a card that lists `repos` accepts only a PR URL in one of them, a pushed commit from one of them, or a commit in a clone that has no remote at all) -- it validates the evidence, and \"resume <task>\" never authorizes declaring a task done without it."
         : "")
   return (
-    "Desk denies a direct edit of an existing task card: every write to a card goes through `task_update`, which commits it for you and keeps its history honest." +
+    (via === null
+      ? "Desk denies a direct edit of an existing task card: "
+      : `Desk denies a shell command that writes an existing task card (${via}; reading a card with cat, grep or git diff is fine): `) +
+    "every write to a card goes through `task_update`, which commits it for you and keeps its history honest. A commit that changes a card is refused by the desk's own git hook unless Desk makes it." +
     statusPart +
     ` To record progress: \`task_update\` with ${target}, note: "<one line of what actually happened>" } (a dated line under \`## Progress log\`). ` +
     `To change what is next: ${target}, next_step: "<the next action>" }. ` +
@@ -289,7 +296,8 @@ function denyReason(card, change) {
 export function taskStatusGuardHook(input, host, read = readCard, context = {}) {
   if (host !== "claude") return {}
   const toolName = String(input?.tool_name ?? input?.toolName ?? "")
-  if (toolName !== "Write" && toolName !== "Edit" && toolName !== "MultiEdit") return {}
+  const shell = toolName === "Bash" || toolName === "PowerShell"
+  if (!shell && toolName !== "Write" && toolName !== "Edit" && toolName !== "MultiEdit") return {}
 
   let args = input?.tool_input ?? input?.toolArgs
   if (typeof args === "string") {
@@ -302,6 +310,7 @@ export function taskStatusGuardHook(input, host, read = readCard, context = {}) 
   if (!args || typeof args !== "object") return {}
   const cwd = typeof input?.cwd === "string" && input.cwd !== "" ? input.cwd : process.cwd()
   const root = context.root === undefined ? boundRoot(context.env ?? process.env, cwd) : context.root
+  if (shell) return shellDecision(args.command, { root, cwd, home: context.home ?? os.homedir(), read })
   const card = classifyCard(args.file_path, { root, cwd, home: context.home ?? os.homedir() })
   if (card === null) return {}
 
@@ -316,6 +325,56 @@ export function taskStatusGuardHook(input, host, read = readCard, context = {}) 
   }
 
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, change) } }
+}
+
+/** The live, readable card `word` names when it is resolved against any of `bases` (absolute folders), or null. A card that no longer parses stays hand-repairable. */
+function liveCardNamed(word, bases, { root, home, read }) {
+  for (const base of bases) {
+    const card = classifyCard(word, { root, cwd: base, home })
+    if (card === null || card.kind !== "live") continue
+    const existing = read(card.absolute)
+    if (existing !== null && isReadableCard(existing)) return card
+  }
+  return null
+}
+
+/** `{ card, slug }` of every live card of the desk at `root` (and of each `desks/<alias>`), for a path a script builds in pieces. */
+function liveCardsOf(root, home, read) {
+  if (root === null) return []
+  const folders = (dir) => {
+    try {
+      return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith("_") && !entry.name.startsWith(".")).map((entry) => path.join(dir, entry.name))
+    } catch {
+      return []
+    }
+  }
+  const found = []
+  for (const base of [root, ...folders(path.join(root, "desks"))]) {
+    for (const track of folders(base)) {
+      for (const slug of folders(track)) {
+        const card = liveCardNamed(path.join(slug, TASK_CARD_BASENAME), [root], { root, home, read })
+        if (card !== null) found.push({ card, slug: path.basename(slug) })
+      }
+    }
+  }
+  return found
+}
+
+/**
+ * The deny for a `Bash` or `PowerShell` command that writes a live card of the bound desk (see `shell-card-writes.js` for the forms it reads and what
+ * it cannot see), or `{}`. The words are resolved against the session folder, the desk and any folder the command moves into.
+ */
+function shellDecision(command, { root, cwd, home, read }) {
+  if (typeof command !== "string") return {}
+  const resolve = (word, directories) => {
+    const bases = [cwd, ...(root === null ? [] : [root]), ...directories.map((directory) => absolutePath(directory, { cwd, home }))]
+    return liveCardNamed(word, bases, { root, home, read })
+  }
+  const vars = root === null ? { HOME: home } : { DESK: root, HOME: home }
+  const writes = shellCardWrites(command, { resolve, vars, slugCards: () => liveCardsOf(root, home, read) })
+  if (writes.length === 0) return {}
+  const [{ card, via }] = writes
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denyReason(card, null, via) } }
 }
 
 /** The desk root this session binds, or null when it cannot be determined (the marker fallback then applies). */

@@ -1337,3 +1337,24 @@ test("scripts/tidy-status.js runs the command line", () => {
   const detect = spawnSync(process.execPath, [SCRIPT, "--detect", "--root", soloDesk({ messy: false })], { env, cwd: home })
   assert.equal(detect.status, 1)
 })
+
+// ── The desk's pre-commit hook comes with the tidy (round 12) ─────────────
+
+test("a tidy report installs the desk's pre-commit hook; a tidy that stops early does not", () => {
+  const root = soloDesk()
+  const calls = []
+  const report = cli(["--report", "--root", root], { env: { DESK: root }, spawnGh: noGh, installGuard: (guardRoot, options) => calls.push([guardRoot, typeof options.spawnGit]) })
+  assert.equal(report.code, 0)
+  assert.deepEqual(calls, [[root, "function"]])
+  const plain = soloDesk({ git: false })
+  const none = []
+  assert.equal(cli(["--report", "--root", plain], { env: { DESK: plain }, spawnGh: noGh, installGuard: (guardRoot) => none.push(guardRoot) }).code, 1)
+  assert.deepEqual(none, [])
+})
+
+test("a tidy report really writes the hook into the desk's hooks folder", () => {
+  const root = soloDesk()
+  const report = cli(["--report", "--root", root], { env: { DESK: root }, spawnGh: noGh })
+  assert.equal(report.code, 0)
+  assert.match(readFileSync(path.join(root, ".git", "hooks", "pre-commit"), "utf8"), /desk-card-commit-guard/u)
+})
